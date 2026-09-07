@@ -1,16 +1,14 @@
 """Per-stack daemon radio-parameter catalogue and view logic (pure, no I/O).
 
-Each daemon-client stack (chat/kiss/voice/meshcom/meshcore) drives the LoRaHAM daemon's
-radio via the CONF socket. lhpc applies this stack's configured values to the daemon ONCE, after
-the daemon is up and before the stack's own components start. The client app then SETs its own
-radio parameters (FREQ, SF, BW, CR, CRC, PREAMBLE, SYNC, POWER, TXMODE) — so those are marked
+Per-stack daemon radio-parameter catalogue and view logic (pure, no I/O). Which params are app-owned vs operator-owned, when lhpc applies them and where the defaults come from is documented in `docs/stacks/daemon.md`; values are validated by `daemon_control` before any apply., after
+the daemon is up and before the stack's own components start. radio parameters (MODE, FREQ, SF, BW, CR, CRC, LDRO, PREAMBLE, SYNC, POWER, TXMODE) — so those are marked
 **app-owned**: lhpc still applies them, but the app overwrites them on connect (the panel greys
-them only as a visual hint). The listen-before-talk timing (CADWAIT, CADIDLE) is operator-owned:
+them only as a visual hint). The LBT/CAD tuning (OPERATOR_PARAMS) is operator-owned:
 the app does not touch it, so it sticks.
 
 Every value here is editable and persists per stack+band; the app-owned DEFAULTS are taken from
 each app's ORIGINAL source (cross-checked against upstream) so lhpc's values match what the app
-sets — see `docs/operations.md`. Values are validated by `daemon_control` before any apply; this
+sets — see `docs/stacks/daemon.md`. Values are validated by `daemon_control` before any apply; this
 module is data + selection only and performs no I/O.
 """
 
@@ -108,7 +106,7 @@ STACK_DEFAULTS: dict[str, dict[str, dict[str, str]]] = {
     "meshcore": {
         # PREAMBLE 16 / POWER 14 are what every preset in the MeshCore host actually
         # applies on connect (eu_uk_long/medium/narrow all do). Declaring 8/20 made the daemon
-        # start on a preamble and a power the app then overwrote — a live-found mismatch.
+        # start on a preamble and a power the app then overwrote — a mismatch.
         "868": {"TXMODE": "MANAGED", "FREQ": "869.618", "SF": "8", "BW": "62.5", "CR": "8",
                 "CRC": "1", "LDRO": "AUTO", "PREAMBLE": "16", "SYNC": "0x12", "POWER": "14"},
     },

@@ -1,8 +1,7 @@
 {# Canonical flash colouring: map a category/level to exactly one severity class —
    green = success, yellow = warning, red = failure, grey = neutral/info — so every message is
    coloured consistently regardless of which category string a route used. The FIRST token is the
-   severity; any remaining tokens (e.g. "transient"/"transient-long" used by flash.js to auto-dismiss)
-   are preserved verbatim as extra classes. #}
+   severity; any remaining tokens are preserved verbatim as extra classes. #}
 {% macro flash_classes(category) -%}
 {%- set parts = ((category or '')|string).split() -%}
 {%- set sev = parts[0]|lower if parts else '' -%}
@@ -206,9 +205,3 @@
 {% endmacro %}
 
 
-{# Dual status: running state + install/source state + version. #}
-{% macro dual_status(status) %}
-<span class="badge badge-{{ status.run_state.value }}">{{ status.run_state.value }}</span>
-<span class="pill" title="match = clean at manifest pin; differs = clean but at another commit; dirty = tracked files modified; untracked build output is ignored.">src: {{ status.source_state.value }}</span>
-{% if status.source_version %}<span class="pill mono">{{ status.source_version }}</span>{% endif %}
-{% endmacro %}

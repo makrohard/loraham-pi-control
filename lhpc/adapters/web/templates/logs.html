@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}logs {{ target }} — LoRaHAM Pi Control{% endblock %}
 {% block content %}
-  <div class="card" id="log-card" data-target="{{ target }}" data-job="{{ job or '' }}">
+  <div class="card" id="log-card" data-target="{{ target }}" data-job="{{ job or '' }}" data-band="{{ band or '' }}">
     <header>
       <h2>Logs <span class="pill">{{ target }}</span></h2>
       <span class="badge badge-{{ 'running' if running else 'stopped' }}" id="log-status">

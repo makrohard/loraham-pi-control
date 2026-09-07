@@ -7,7 +7,7 @@ local WebGUI. `lhpc` installs each stack from the channel you pick — a pinned 
 or the development tip — or from a verified prebuilt binary, writes every app's own configuration
 from one set of settings, starts and stops them in dependency order, and arbitrates the radios so two
 stacks can never fight over a band. It runs rootless, as your own user. Nine stacks: the LoRaHAM
-daemon with chat, voice, KISS TNC and APRS, plus Meshtastic, MeshCom, MeshCore and Reticulum — on a
+daemon with chat, voice, KISS TNC and Graywolf (APRS), plus Meshtastic, MeshCom, MeshCore and Reticulum — on a
 Pi Zero 2W or Pi 5.
 
 - **Have a Pi with a suitable [LoRa HAT](#hardware)?**
@@ -60,7 +60,7 @@ Other boards with those chips should work — choose the preset whose wiring mat
 (`lhpc hardware`, [catalog](docs/cli.md#hardware)) — but they are not validated here.
 
 Tested on **Pi Zero 2W** and **Pi 5**. On the air: LoRaHAM Pi HAT dual-module controller,
-Uputronics dual stack, Waveshare SX1262 433M. Not tested on silicon: Waveshare SX1262 868M. Dated evidence:
+Uputronics dual stack, Waveshare SX1262 433M. Not tested on silicon: Waveshare SX1262 868M. Dated evidence for the LoRaHAM Pi HAT runs:
 [live tests](docs/live-test.md).
 
 **SPI mode:** `soft-cs` (`dtparam=spi=on` + `dtoverlay=spi0-0cs`) covers LoRaHAM Pi / Uputronics /
@@ -106,8 +106,8 @@ switch. `lhpc gps --source gpsd`, then `lhpc config meshtastic use_gps on`. See
 > walkthrough: flash the card, get in, pick your board, set your callsign, start a stack, close the
 > shipped defaults — twelve short steps, in English and German. **Nothing below is needed.**
 
-First boot configures the box on its own and reads an optional `lhpc-config.txt` from the boot
-partition. The rest of this page is for building it yourself.
+The image's first boot configures the box on its own and reads an optional `lhpc-config.txt` from
+the boot partition. The rest of this page is for building it yourself.
 
 From a freshly flashed card to running stacks. Steps run in order.
 
@@ -143,7 +143,7 @@ ssh <user>@lhpc-zero.local       # the user + hostname you set in the imager
 Then, on the Pi — everything from here to the end of the install runs there:
 
 ```bash
-sudo apt install -y tmux
+sudo apt update && sudo apt install -y tmux
 tmux new -s lhpc                 # run everything below inside this session
 #   detach: Ctrl-B then D
 ```
@@ -162,8 +162,11 @@ ssh <user>@lhpc-zero.local       # on your machine: the terminal froze or droppe
 tmux attach -t lhpc              # on the Pi: back in the session, output and all; `tmux ls` lists them
 ```
 
-If `attach` answers *no sessions*, the step was not running inside tmux — reconnect and re-run it:
-every step is idempotent and resumes from cache.
+If `attach` answers *no sessions*, the step was not running inside tmux — reconnect and re-run it.
+`bootstrap-deps.sh` and `lhpc auto-install` can be re-run as often as needed (they resume from
+cache); before re-running `install.sh`, check whether the controller install already completed
+(`~/loraham-pi-control/venv/lhpc/bin/lhpc --version` answers) — it is a fresh installer and
+refuses an existing checkout.
 
 #### 3. Check what will be installed
 
@@ -194,8 +197,9 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs
   ~600 MB RAM as OOM insurance for the long builds · disables Wi-Fi power-save, but **only when the
   install actually runs over Wi-Fi** (a Zero 2W's Wi-Fi drops under sustained build load; a
   LAN-carried install leaves Wi-Fi untouched, and a warning prints the revert) · installs two
-  polkit rules so the WebGUI's Reboot/Shut down buttons and its Network panel are authorised
-  (`--no-power-controls` / `--no-network-controls` skip them).
+  polkit rules (and the `polkitd` package) so the WebGUI's Reboot/Shut down buttons and its Network
+  panel are authorised (`--no-power-controls` / `--no-network-controls` skip them) · enables a
+  persistent journal (`/var/log/journal`) · disables a packaged `meshtasticd.service` if one exists.
 
 <details><summary><em>Manual — install only what the stacks you'll run need (bootstrap-deps.sh is the source of truth; preview with <code>--dry-run</code>, regenerate with <code>lhpc deps --script</code>)</em></summary>
 
@@ -215,11 +219,14 @@ sudo apt install -y --no-install-recommends libgtk-3-dev libx11-dev python3-dev 
 sudo systemctl disable --now nginx.service               # keep the package, disable the ROOT service
 # small-RAM boards (<600 MB): a disk swapfile stops the meshtasticd/meshcom builds OOM-ing
 sudo fallocate -l 768M /var/swap.lhpc && sudo chmod 600 /var/swap.lhpc && sudo mkswap /var/swap.lhpc
-echo '/var/swap.lhpc none swap sw,pri=-2 0 0' | sudo tee -a /etc/fstab && sudo swapon -a
+echo '/var/swap.lhpc none swap sw,pri=10 0 0' | sudo tee -a /etc/fstab && sudo swapon -a
 printf 'dtparam=spi=on\ndtoverlay=spi0-0cs\n' | sudo tee -a /boot/firmware/config.txt   # SPI overlay
 sudo usermod -aG spi,gpio "$USER"                        # → applied by the reboot in step 6
 ```
 <!-- test:deps-manual:end -->
+
+The WebGUI's Reboot/Shut down buttons and its Network panel additionally need `polkitd` plus two
+polkit rules — `lhpc deps` (or Apps → LoRaHAM Pi Control → Dependencies) prints the exact commands.
 </details>
 
 #### 5. Install lhpc
@@ -294,7 +301,7 @@ The install already started it: **`https://127.0.0.1:8443/`** — local access i
 loopback; the self-signed-CA browser warning is expected). If you skipped it (`--no-service`):
 
 ```bash
-lhpc webserver init && lhpc webserver start-service   # local-only, no auth — nothing exposed yet
+lhpc self-update --repair-integration && lhpc webserver init && lhpc webserver start-service   # installs the units, then local-only, no auth
 ```
 
 **Reaching it from another machine** is five steps, in this order. The certificate comes first: the
@@ -322,10 +329,13 @@ out.
 4. **Apply the managed firewall — on the Pi.** Once the managed integration is in use, exposure is
    gated on it: `webserver apply` is refused while the firewall is unapplied, and nginx binds
    loopback-only at boot until the live check passes. Until you install it, nothing is filtered and
-   nothing gates. The WebGUI shows the same copy-paste command:
+   nothing gates. The script exists from the install on (every Firewall save refreshes it); the
+   WebGUI shows the same two copy-paste lines — the root script, then the Apply that activates the
+   listeners it was gating:
 
    ```bash
    sudo bash ~/loraham-pi-control/config/files/firewall/firewall-apply.sh
+   lhpc webserver apply
    ```
 
    LHPC never edits your own firewall, and a port on your router stays yours. See
@@ -337,21 +347,24 @@ out.
    lhpc webserver apply
    ```
 
-   Either way it validates and activates the listeners. If Apply was refused because the firewall
-   was pending, run it again after step 4.
+   Either way it validates and activates the listeners. An Apply refused while the firewall was
+   pending is recorded and completes on its own once step 4 has run; run it again only if the panel
+   still shows it pending.
 
 <details><summary><em>The same five steps from a shell</em></summary>
 
 All of these run **on the Pi**. The WebGUI's one-policy-for-every-stack form has no CLI equivalent —
-from a shell you set each page by name (`lhpc webserver proxy <page>`, one per stack web UI;
-`lhpc list` shows them):
+from a shell you set each page by name (`lhpc webserver proxy <page> --port <port>`, one per stack
+web UI, with the port the panel suggests for it;
+`<page>` is the stack id, or `<stack>-<component>` for a stack's further web UIs — see
+[`docs/cli.md`](docs/cli.md)):
 
 ```bash
 lhpc webserver configure --dns lhpc-zero.local --ip 192.168.1.10   # 0 — name/address you will use
 lhpc webserver tls-renew                   # re-issue the server cert with those SANs
 lhpc webserver cert issue lhpc-laptop      # 1 — prints a ONE-TIME passphrase; record it now
 lhpc webserver cert export lhpc-laptop ~/lhpc-laptop.p12
-lhpc webserver proxy <page> --mode lan --scheme https \
+lhpc webserver proxy <page> --port <port> --mode lan --scheme https \      # --port is required (0 = not proxied)
     --access-mode local-open-remote-auth --cidr 192.168.1.0/24 --confirm-phrase enable-remote
 lhpc webserver expose --cidr 192.168.1.0/24 \
     --access-mode local-open-remote-auth --confirm-phrase enable-remote   # 2 — the WebGUI itself
@@ -386,14 +399,14 @@ Then `https://127.0.0.1:8443/` in your browser. Useful for a quick look or for d
   systemctl --user stop lhpc-web lhpc-nginx      # start them again after auto-install
   ```
 - **Pi 5 / desktop-class box:** the WebGUI's load doesn't matter — use it. First steps there: the
-  **Auto-install** page, then the Webserver panel for the three steps above. Ports stay per page
+  **Auto-install** page, then the Webserver panel for the five steps above. Ports stay per page
   (missing ones get the normal suggested default; a stack with two web UIs has two), and the
   per-stack panels remain available for exceptions.
 
 Run it on the box (inside your SSH session — not on your desktop), and inside tmux:
 
 ```bash
-tmux new -s lhpc                 # on the Pi; reattach after a drop: tmux attach -t lhpc
+tmux attach -t lhpc || tmux new -s lhpc   # on the Pi: the session from step 6, or a new one
 lhpc auto-install --yes
 ```
 
@@ -486,7 +499,7 @@ shows the value. Start it once; you do not have to log in yet.
 
 | Stack | Login | Where it is stored (under the runtime root) |
 |---|---|---|
-| **Graywolf APRS** | `admin` | `state/graywolf/graywolf-admin.txt` — Graywolf creates it itself |
+| **Graywolf APRS** | `admin` | `state/graywolf/graywolf-admin.txt` — LHPC creates it on the first start |
 | **MeshCore** repeater dashboard | `admin` | `config/secrets/openhop_repeater_admin.txt` — only once **Mode** is `chat+repeater` or `repeater`; until then the panel says so |
 | **MeshCom** | HMAC password, not a web login | `config/secrets/xr_pw` — changed only through the stack's HMAC actions, never by editing the file |
 
@@ -501,8 +514,9 @@ cat ~/loraham-pi-control/state/graywolf/graywolf-admin.txt
 
 **Start on Home, configure on Apps.** *Home* is the overview — what is running, the radios and
 their bands, and a link to each running stack's own web UI. *Apps* is where you work: one row per
-stack with Settings, Start and Stop, logs and the Password section. Every mutating action names
-what it will do and asks first.
+stack with Settings, Start and Stop, logs and the Password section. Install, update, clean, power,
+Wi-Fi and self-update show a plan and ask first; a routine Start runs at once and asks only when it
+would stop another stack; Settings save on the first click.
 
 <details><summary><em>The same from the CLI</em></summary>
 
@@ -556,7 +570,7 @@ When restore runs, what happens on a failed restore, and the WebGUI units at boo
 ### Updating
 
 **Apps → LoRaHAM Pi Control (the first row) → Update → Check for updates → Update now**, or from a
-shell — back up `config/` + `profiles/` first
+shell — back up `config/`, `profiles/` and the app data under `state/` first
 ([`docs/operations.md`](docs/operations.md#backup--restore)):
 
 ```bash

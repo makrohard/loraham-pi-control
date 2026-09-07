@@ -105,16 +105,6 @@ class LifecycleOpsMixin:
         return [c.message for c in conflicts
                 if comp.id in c.holders and c.observed and not c.advisory]
 
-    # Marker states the GPS feed publishes, and what each MEANS for readiness.
-    #   ready       — sentences are flowing: healthy.
-    #   connected   — the source answered but no fix yet (cold start can take minutes):
-    #                 acceptable to start, surfaced as a warning, NOT a failure.
-    #   source-lost — the source is unreachable: never a successful start, and DEGRADED if it
-    #                 happens later.
-    #   stale       — was flowing, then stopped: DEGRADED.
-    _GPS_READY_OK = ("ready", "connected")
-    _GPS_READY_DEGRADED = ("source-lost", "stale", "starting")
-
     def gps_feed_state(self, comp) -> dict:
         """The feed's own readiness marker, or {} when absent/unreadable.
 
@@ -173,7 +163,7 @@ class LifecycleOpsMixin:
     def _gps_feed_admission(self, comp) -> tuple[bool, str]:
         """The START gate's verdict on a GPS feed: `_gps_feed_ready`, softened for `auto`.
 
-        AUDIT-FOUND: freezing the auto verdict was not enough — a gpsd that disappeared (or
+        Freezing the auto verdict was not enough — a gpsd that disappeared (or
         owns no receiver and streams nothing) after admission left the feed in
         starting/source-lost, the gate refused it, the feed was STOPPED, and the stack did
         not start: a refusal produced purely by `auto`, which promises "no gpsd → run
@@ -326,7 +316,7 @@ class LifecycleOpsMixin:
             # the daemon. meshtasticd is the real-world case: it claims the BAND (not the bus), so a
             # bus-only test would miss exactly the process that matters. DEGRADED counts as live:
             # the process is running with an endpoint/readiness missing, and it still holds the
-            # hardware — the same rule every other ownership path here applies (audit).
+            # hardware — the same rule every other ownership path here applies.
             hw = (ResourceKind.SPI_BUS, ResourceKind.RADIO_BAND)
             live = (RunState.RUNNING, RunState.DEGRADED)
             spi_users = sorted({
@@ -507,8 +497,8 @@ class LifecycleOpsMixin:
         if g is not None and not getattr(g, "valid", True):
             return (f"the global position source is invalid ({g.reason}) and has been disabled — "
                     "fix it or set it to off", ["lhpc gps"])
-        # `use_gps = on` with the source `off` (or `auto` finding nothing) is NOT a refusal
-        # any more: with the switch defaulting to ON, "on" no longer proves the operator asked
+        # `use_gps = on` with the source `off` (or `auto` finding nothing) is NOT a refusal:
+        # with the switch defaulting to ON, "on" does not prove the operator asked
         # for position, so refusing would break every stack on a box with no gpsd — the stack
         # starts WITHOUT position instead, and the GPS card/`lhpc gps` say why. Fail-closed
         # protection now lives with EXPLICIT intent: a named source that cannot be used
@@ -605,8 +595,7 @@ class LifecycleOpsMixin:
               position: dict | None = None, position_note: str = "") -> ActionResult:
         """Public, LOCKED entry — acquires the full lifecycle lock bundle (incl. owners
         when stop_owners) so a DIRECT call gets the same coordination as CLI/web.
-        A start runs EXACTLY the saved configuration: there are no per-launch values (Settings is
-        the only place configuration changes — 0.2.9). The plan (`apply=False`) and the apply take
+        A start runs EXACTLY the saved configuration: there are no per-launch values (Settings is the only place configuration changes). The plan (`apply=False`) and the apply take
         every decision alike, identity enforcement included, so a refused start is known before
         anything is queued or mutated.
 
@@ -616,8 +605,8 @@ class LifecycleOpsMixin:
         (incl. the feed clear) — it revalidates the restore evidence and durably journals the
         attempt; returning an ActionResult cancels the start with ZERO side effects. It must
         never be routed through ambient/thread-local state (Waitress shares this service across
-        threads). Lock order (admission → config → lifecycle) is unchanged — enforced by
-        test_hook_runs_only_under_all_locks."""
+        threads). Lock order (admission → config → lifecycle) is enforced by
+        test_hook_runs_after_every_lock_before_any_mutation (tests/test_boot_restore.py)."""
         if (_r := self._controller_refusal(target)) is not None:
             return _r
         if (_r := self._gui_fallback_refusal(target)) is not None:
@@ -641,7 +630,7 @@ class LifecycleOpsMixin:
         try:
             with self._admission_guard("start", target):
                 # ONE effective band for the WHOLE operation, resolved ONCE under admission and
-                # never recomputed (audit-found: planning/locks used the raw band while the inner
+                # never recomputed (planning/locks used the raw band while the inner
                 # launch resolved the running band; then the identity save and this resolution
                 # each read the mutable interactive marker, so a dismiss in the window could store
                 # the identity on 868 and launch on 433). "" only for bandless stacks, which the
@@ -662,9 +651,7 @@ class LifecycleOpsMixin:
                                                    stop_owners=stop_owners, radio=_radio):
                             # IDENTITY ENFORCEMENT: FIRST refusal under the stable configuration,
                             # BEFORE the GPS snapshot, the boot-restore hook and feed clearing —
-                            # a start with a missing/invalid identity must mutate NOTHING
-                            # (audit-found: CLI/API/boot-restore starts previously ran the hook
-                            # and cleared the feed before _start_impl_inner's check refused).
+                            # a start with a missing/invalid identity must mutate NOTHING.
                             # The inner check remains as the authoritative backstop for direct
                             # internal callers.
                             if _order:
@@ -713,7 +700,7 @@ class LifecycleOpsMixin:
                                                     stop_owners=stop_owners, band=_op_band,
                                                     position=position, position_note=_pos_note)
                             # An OPERATOR stack start that actually brought something up
-                            # supersedes any standing stop intent. Three review-found refinements:
+                            # supersedes any standing stop intent. Three refinements:
                             # a REFUSED start (nothing launched) must NOT clear; a PARTIAL start
                             # (e.g. manual_required on an interactive component, ok=False but
                             # components launched) MUST clear — the stack is running, a stale
@@ -721,7 +708,7 @@ class LifecycleOpsMixin:
                             # start (auto-install's daemon ensure, _operator=False) must not
                             # clear an operator's tombstone its paired internal stop never rewrites.
                             # ...and, like the stop side, only rows of the TARGET stack count
-                            # (REVIEW-FOUND round 3: the daemon's always-appended VERIFIED ensure
+                            # (the daemon's always-appended VERIFIED ensure
                             # row cleared the target's tombstone when nothing of the target
                             # launched at all).
                             if (_operator and self.stack(target) is not None
@@ -746,7 +733,7 @@ class LifecycleOpsMixin:
             return ActionResult(False, f"Cannot start '{target}': {busy}",
                                 next_commands=[f"lhpc status {target}"])
         except SourceTxnBlocked as blocked:
-            # The config-stability guard itself was busy (e.g. a auto-install auto-install run holds config
+            # The config-stability guard itself was busy (e.g. an auto-install run holds config
             # EXCLUSIVE for its whole lifetime) — refuse typed rather than hang or crash.
             return ActionResult(False, f"Cannot start '{target}': {blocked}",
                                 next_commands=[f"lhpc status {target}"])
@@ -773,7 +760,7 @@ class LifecycleOpsMixin:
         except AdmissionRefused as _adm:
             return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except SourceTxnBlocked as blocked:
-            # The config-stability guard itself was busy (e.g. a auto-install auto-install run holds config
+            # The config-stability guard itself was busy (e.g. an auto-install run holds config
             # EXCLUSIVE for its whole lifetime) — refuse typed rather than hang or crash.
             return ActionResult(False, f"Cannot start '{target}': {blocked}",
                                 next_commands=[f"lhpc status {target}"])
@@ -790,7 +777,7 @@ class LifecycleOpsMixin:
 
     def band_refusal(self, target: str, band: str, op: str):
         """An EXPLICITLY requested band this box cannot serve — or that this stack cannot run on —
-        is a TYPED REFUSAL, never a silent remap (audit-found: `--band 433` on 868-only hardware
+        is a TYPED REFUSAL, never a silent remap (`--band 433` on 868-only hardware
         planned and launched 868, and a daemon preview promised 433 while the launch clamped it to
         868). Returns a refusal or None; a bandless request keeps resolving normally, and plan and
         apply take this same decision because both go through the public entry."""
@@ -895,22 +882,21 @@ class LifecycleOpsMixin:
                                 next_commands=["lhpc hardware"])
         # Band-switchable stack: resolve the chosen band (default = first allowed).
         # An explicit band wins; otherwise inherit the band the stack is ALREADY running
-        # on, and only then fall back to the declared primary. Starting an optional
-        # client (sideband) inside a stack running on 433 used to resolve to the primary
-        # (868) and OVERWRITE the running-band marker with it — the console then showed,
-        # and would have configured, the wrong band for a live 433 node.
+        # on, and only then fall back to the declared primary — otherwise starting an
+        # optional client (sideband) inside a stack running on 433 would resolve to the
+        # primary (868) and OVERWRITE the running-band marker, and the console would show,
+        # and configure, the wrong band for a live 433 node.
         cfg_band = self._config_band(target, self._launch_band_hint(target, band))
         # The OPERATING band (what the radios actually do) is NOT the config-store band. The daemon
         # has no per-band store, so `_config_band` flattens its concrete band to "" — and a start
         # planned, locked and feed-cleared for 433 then asked the daemon for ALL active bands
-        # (audit-found: `_ensure_daemon` received radio="" for `start daemon --band 433`). The two
+        # (`_ensure_daemon` received radio="" for `start daemon --band 433`). The two
         # values are equal for every client stack; they differ only for the daemon, which is exactly
         # the case this separation exists for.
         op_band = self.operation_band(target, band)
         # A band-switchable stack runs on ONE band. Asking for the other one while its
-        # band owner is up used to be a silent no-op: every component read
-        # already_healthy, the console said "Run applied", and the radio stayed put.
-        # Refuse with the reason and the commands that actually switch it.
+        # band owner is up must not be a silent no-op (every component reads
+        # already_healthy and the radio stays put). Refuse with the reason and the commands that actually switch it.
         _sid = self.stack_of(target) or target
         _live = self.running_band(_sid, "")
         if band and _live and band != _live and self.stack_bands(_sid) \
@@ -926,8 +912,8 @@ class LifecycleOpsMixin:
         # The SAME rule, one stack removed: a chain member of ANOTHER stack already up on a
         # different band. Checked on the band this start will ACTUALLY use (cfg_band), not only
         # an explicitly requested one — the CLI has no band flag, so a bandless `lhpc stack
-        # start graywolf` resolves to the declared primary and used to sail past an `if band:`
-        # gate straight into the cross-band state the rule exists to refuse.
+        # start graywolf` resolves to the declared primary and must not bypass this gate into
+        # the cross-band state the rule exists to refuse.
         _dep_block = self._dep_band_block(target, order, band or cfg_band)
         if _dep_block is not None:
             return _dep_block
@@ -1043,7 +1029,7 @@ class LifecycleOpsMixin:
             return ActionResult(False, f"Cannot start '{target}': {_fw_msg}",
                                 next_commands=_fw_cmds, data={"firewall_gate": "pending"})
 
-        # A component about to start must never SILENTLY inherit an AMBIGUOUS flat legacy value (a
+        # A component about to start must never SILENTLY inherit an AMBIGUOUS flat value (a
         # run/file param name declared by >= 2 owner-stack components, with a flat value present and
         # no component-scoped value). Fail TYPED here — BEFORE any owner stop, daemon launch, daemon
         # mutation, config-file write, process spawn or post-start scheduling.
@@ -1105,7 +1091,7 @@ class LifecycleOpsMixin:
         # writes a sibling's config nor leaks the target's run params into a dependency: each
         # component renders its OWN saved/default values (plus its own inherited identity).
         _target_is_stack = self.stack(target) is not None
-        # AUDIT-FOUND: the successful-start tail cleared restart-required UNCONDITIONALLY, so a
+        # The successful-start tail cleared restart-required UNCONDITIONALLY, so a
         # save landing while the required post-start had released config stability had its warning
         # deleted by the very launch that did NOT apply it — saved config said B, the radio still
         # identified as A, and nothing said so. Remember the marker HERE, while configuration is
@@ -1203,7 +1189,7 @@ class LifecycleOpsMixin:
                        "needs a graphical session; none is running on this box "
                        "(start it from the desktop, not over SSH)")
                 continue
-            if comp.source and not life.source_dir(comp).exists():
+            if comp.source and not self._source_present(comp):
                 record(comp, stack, Outcome.BLOCKED, f"not installed (lhpc install {stack.id})")
                 continue
             if comp.interactive:
@@ -1437,10 +1423,10 @@ class LifecycleOpsMixin:
             # multi-band decisions + dashboard state, so a write failure must surface in
             # the typed result (UNVERIFIED), not hide behind a clean VERIFIED.
             band_ok = True
-            # Only a BAND-CARRYING component may define the stack's band. Starting an
-            # optional client with band=868 used to write that marker while `rns` was
-            # still tuned to 433 — status, the dashboard, arbitration and per-band
-            # config all then described a band the radio was not on.
+            # Only a BAND-CARRYING component may define the stack's band: an optional
+            # client started with band=868 must not write that marker while `rns` is
+            # tuned to 433, or status, the dashboard, arbitration and per-band config
+            # all describe a band the radio is not on.
             if cfg_band and self.stack_bands(stack.id) and (comp.band or comp.bands):
                 band_ok = self._set_running_band(stack.id, cfg_band)
             if band_ok:
@@ -1505,7 +1491,7 @@ class LifecycleOpsMixin:
             # Clear ONLY a marker this launch actually satisfied. Two ways it can fail to:
             #   * CREATED or CHANGED while the required post-start ran unguarded — it describes
             #     configuration this launch never applied;
-            #   * REVIEW-FOUND: a component of THIS stack was ALREADY_HEALTHY, so it was never
+            # * a component of THIS stack was ALREADY_HEALTHY, so it was never
             #     relaunched and still runs the OLD configuration. A partly-up stack (main
             #     healthy, a sidecar down) reported ok=True and erased the warning its own
             #     identity save had just written — the node kept transmitting the previous
@@ -1598,16 +1584,16 @@ class LifecycleOpsMixin:
                      for _stack, comp in order if comp.post_steps]
             return ActionResult(True, f"Would re-run post-start for '{target}'.", details=lines,
                                 data={"changes": len(lines)})
-        # IDENTITY GATE (audit-found bypass): a post-start step can transmit/apply an
-        # identity (MeshCom --setcall, Meshtastic --set-owner), and this path previously
-        # built its payload from raw {callsign}-substituted stack_config — a legacy global
+        # IDENTITY GATE: a post-start step can transmit/apply an
+        # identity (MeshCom --setcall, Meshtastic --set-owner), so its payload must never
+        # come from raw {callsign}-substituted stack_config — a global
         # that a normal start refuses could ride straight into --setcall, and a missing
         # unlicensed identity slipped through. Enforce on the ACTUAL running band BEFORE
         # any runner cancellation or command execution.
         # THE one operation-band rule (explicit -> running -> active Lite marker -> primary),
         # so a post-start judges the identity on the same band the launch used — a hand-rolled
         # `band or running_band(...)` here missed the Voice-on-Lite case the rest of the feature
-        # handles (review-found).
+        # handles.
         _pid_band = self.operation_band(target, band)
         id_ok, id_fields, id_msg = self.enforce_identity(target, _pid_band)
         if not id_ok:
@@ -1642,12 +1628,10 @@ class LifecycleOpsMixin:
                                       outcome=outcome, summary=summary))
             out.append(f"  [{outcome.value}] {comp.id}: {summary}")
 
-        # IDENTITY PRE-PASS (audit-found): resolve + validate EVERY identity-bearing
+        # IDENTITY PRE-PASS: resolve + validate EVERY identity-bearing
         # post-start component on its actual running band UNDER this stable-config guard,
         # BEFORE any runner cancellation or step — the public preflight is UX only, and a
         # config change between it and this locked path must refuse with ZERO mutation
-        # (previously the live runner was already cancelled, and with several components
-        # earlier work ran before a later identity problem surfaced).
         _id_stash: dict = {}
         _id_problems: list = []
         _id_fields: list = []
@@ -1885,7 +1869,7 @@ class LifecycleOpsMixin:
             lines.append(f"  [note] radio mode {self.radio_mode()}: daemon serves {'+'.join(needed)}")
         for b in not_ready:
             ok_all = False
-            # A bare RADIO=FAILED leaves the operator with nothing to do (live-found: a MeshCom start
+            # A bare RADIO=FAILED leaves the operator with nothing to do (a MeshCom start
             # blocked on it for an hour). Name the two causes that actually produce it on this
             # hardware: another process clocking the SHARED SPI bus while the daemon probes the chip
             # (the daemon's /run/lock/loraham serialises its own instances, never a foreign binary),
@@ -1899,14 +1883,14 @@ class LifecycleOpsMixin:
                          f"still holds the radio — not relaunched (resolve the stuck instance first)")
         started: set = set()
         if absent:
-            if comp.source and not life.source_dir(comp).exists():
+            if comp.source and not self._source_present(comp):
                 lines.append("  [skip] daemon: not installed (lhpc install daemon)")
                 return lines, False
             if not self.is_built(comp):
                 lines.append("  [BLOCKED] daemon: not built — build it first (lhpc build daemon)")
                 return lines, False
             # Start ONE per-band instance for EACH missing band — lhpc NEVER launches `--radio
-            # both` (a legacy mode the operator may still start manually); it runs an independent
+            # both` (a mode the operator may still start manually); it runs an independent
             # `--radio <band>` per band. The TX mode is applied LIVE once the socket is up.
             for b in sorted(absent):
                 dparams = dict(self.stack_config("daemon"))
@@ -2033,6 +2017,11 @@ class LifecycleOpsMixin:
         band = self._effective_daemon_band(target, band)
         if not self._has_daemon_params(target):
             return ActionResult(False, f"{target} has no configurable daemon parameters")
+        if not band:
+            # No served band -> the keys would be `dp__<PARAM>`: stored, never read, reported saved.
+            return ActionResult(False, f"Cannot save daemon parameters for '{target}': no radio "
+                                       "hardware configured — choose your board in the daemon "
+                                       "Hardware settings first")
         updates: dict[str, str] = {}
         for name in daemon_params.ALL_PARAMS:
             if name not in values:
@@ -2212,7 +2201,7 @@ class LifecycleOpsMixin:
         """Non-daemon dependency STACKS a stopping client no longer needs — stacks a component
         of `stk` depends on that are running with NO other running dependent (the stopping
         client itself excluded). The daemon is deliberately NOT in this set: its teardown
-        stays band-scoped via `_daemon_bands_to_release`. Live-found: stopping graywolf left
+        stays band-scoped via `_daemon_bands_to_release`. Stopping graywolf left
         the KISS TNC (and through it the daemon) running — the chain its start pulled up must
         come down with the stack that needed it. Each released stack re-enters stop() with
         release_daemon=True, so KISS in turn releases the daemon band it alone was using."""
@@ -2270,7 +2259,7 @@ class LifecycleOpsMixin:
                 # Durable OPERATOR INTENT — ONLY for a DIRECT, WHOLE-STACK operator stop.
                 # `_operator` is False on every internal route (cascade dependents, the daemon
                 # band release, owner stops for a start, restart's stop leg, uninstall/clean,
-                # auto-install): REVIEW-FOUND, those tombstoned the shared daemon and whole
+                # auto-install): those tombstoned the shared daemon and whole
                 # stacks the operator never named, and boot-restore then pruned evidence for
                 # things legitimately running at shutdown. Band- and component-scoped stops
                 # never tombstone. Written when the stop stopped something (verified or
@@ -2278,7 +2267,7 @@ class LifecycleOpsMixin:
                 # left the stack running writes nothing, so a still-running stack is never
                 # silently dropped from restore.
                 # The UNVERIFIED escape hatch counts ONLY the target stack's OWN components
-                # (REVIEW-FOUND: a dependent's UNVERIFIED row satisfied it while the daemon's
+                # (a dependent's UNVERIFIED row satisfied it while the daemon's
                 # own stop was BLOCKED and the daemon kept running — tombstoning a live stack).
                 if (_operator and not band and self.stack(target) is not None
                         and (res.ok
@@ -2302,6 +2291,11 @@ class LifecycleOpsMixin:
         items = list(reversed(items))
         _sid = self.stack_of(target)
         _stk = self.stack(_sid) if _sid else None
+        # Only a WHOLE-STACK stop may release what other stacks share (a daemon band, a dependency
+        # stack): the release helpers ask "does anything else still need this?" with the target's
+        # own stack excluded, which is only sound when that whole stack just stopped. A component-
+        # scoped stop leaves its siblings running and releases nothing.
+        _target_is_stack = self.stack(target) is not None
         target_is_daemon = bool(_stk and _stk.main == self.DAEMON_ID)
         # The daemon is shared infrastructure: stopping it ALWAYS orphans its dependents, so the
         # cascade is forced (a client is never left pointing at a dead daemon).
@@ -2315,7 +2309,7 @@ class LifecycleOpsMixin:
         # Fail closed: a PER-BAND daemon stop must not guess the band of a running band-switchable
         # dependent that has no trustworthy marker — block, name it, and stop NOTHING.
         if _daemon_band_stop:
-            uncertain = self._uncertain_daemon_dependents(target)
+            uncertain = self._uncertain_daemon_dependents(_sid or target)
             if uncertain:
                 results = [CompResult(component=d, stack=d, action="stop", outcome=Outcome.BLOCKED,
                     summary="active radio band unknown (no running-band marker) — cannot safely "
@@ -2328,7 +2322,7 @@ class LifecycleOpsMixin:
                                     details=det, results=tuple(results),
                                     next_commands=[f"lhpc status {target}"])
         # Orphaned dependents are scoped to the band(s) actually being stopped.
-        dependents = self.stop_dependents(target, bands=stopped_bands)
+        dependents = self.stop_dependents(_sid or target, bands=stopped_bands)
         # systemd services lhpc doesn't own (e.g. meshtasticd) — stop them as root.
         sysd = [f"sudo systemctl stop {c.units[0].name}"
                 for _, c in items if c.units and not c.run_argv]
@@ -2336,7 +2330,7 @@ class LifecycleOpsMixin:
             details = [f"  [stop] {comp.id}" for _, comp in items]
             for cmd in sysd:
                 details.append(f"    {cmd}")
-            # AUDIT-FOUND: the plan hid the collateral — disclose the dependency stacks and the
+            # The plan hid the collateral — disclose the dependency stacks and the
             # daemon band this stop would also take down (predicted from current topology; the
             # apply re-decides under its locks). Only a stop that will actually stop something
             # releases anything (see the actually-stopped gate below).
@@ -2391,7 +2385,7 @@ class LifecycleOpsMixin:
                 for dep in dependents:
                     # release_daemon=False: the OUTER daemon stop owns teardown — a dependent must
                     # not recursively stop the daemon (it just clears its own marker on cessation).
-                    # REVIEW-FOUND: a dependent stopped by an OPERATOR cascade (stop daemon) was the
+                    # a dependent stopped by an OPERATOR cascade (stop daemon) was the
                     # operator's word too — dropping its tombstone reintroduced resurrect-after-
                     # reboot for exactly the unverified-dependent case. Internal cascades
                     # (restart, uninstall, auto-install) still pass False from the outer stop.
@@ -2457,10 +2451,10 @@ class LifecycleOpsMixin:
         # Clear band/interactive markers after the target's OWN verified cessation — even if the
         # later daemon-release fails, a stopped client must never look running.
         if sid and own_ok:
-            # Only the BAND OWNER's cessation retires the band marker. Stopping an
-            # optional client (sideband, lxmd) used to wipe it while `rns` was still
-            # on 868, which erased the stack's band evidence: the dashboard then had
-            # nothing to place it by and it dropped out of its own band column.
+            # Only the BAND OWNER's cessation retires the band marker: stopping an
+            # optional client (sideband, lxmd) must not wipe it while `rns` is still
+            # on 868 — that erases the stack's band evidence and the dashboard has
+            # nothing to place it by.
             #
             # Decided from the TYPED STOP RESULTS, not from a snapshot: the snapshot
             # is memoised per operation, so a read taken here still showed the
@@ -2474,12 +2468,12 @@ class LifecycleOpsMixin:
         # re-enters stop() with release_daemon=True and thereby releases the daemon band it
         # used, after which the daemon-release below no-ops via its reachable guard. A failed
         # release feeds the aggregate success like every other typed result.
-        # AUDIT-FOUND (High): gated on this stop having ACTUALLY stopped something — an
+        # Gated on this stop having ACTUALLY stopped something — an
         # entirely ALREADY_STOPPED target (stop of a not-running graywolf) must never tear
         # down a dependency stack the operator may have started independently. The daemon
         # release below keeps its long-standing semantics unchanged (operator ruling).
         _own_stopped = any(r.outcome is Outcome.STOPPED for r in own_results)
-        if own_ok and not target_is_daemon and release_daemon and _own_stopped:
+        if own_ok and not target_is_daemon and release_daemon and _own_stopped and _target_is_stack:
             for dep_sid in self._dep_stacks_to_release(_stk, sid):
                 dep_stk = self.stack(dep_sid)
                 rres = self.stop(dep_sid, apply=True, _operator=False)
@@ -2495,7 +2489,7 @@ class LifecycleOpsMixin:
         # dependent needs it. Its typed result feeds the aggregate success (a failed release makes
         # the whole client stop non-success). The just-stopped client is excluded from that check,
         # so there is no recursive re-stop of it.
-        if own_ok and not target_is_daemon and release_daemon:
+        if own_ok and not target_is_daemon and release_daemon and _target_is_stack:
             daemon_sid, release = self._daemon_bands_to_release(_stk, sid, active_bands)
             for b in release:
                 dres = self.stop(daemon_sid, apply=True, band=b, _operator=False)
@@ -2522,12 +2516,11 @@ class LifecycleOpsMixin:
         # the saved config).
         if ok and apply and self.stack(target) is not None:
             from . import known_working
-            # AUDIT ER4: report a candidate-clear failure instead of swallowing it. A
-            # still-present candidate marker keeps the "confirm this stack as working"
-            # offer eligible for a stack that was just stopped — the operator could
-            # confirm a no-longer-running composition. `read_candidate` does not check
-            # liveness, so the "re-validated on read" rationale of the silent path is
-            # false. A failed clear downgrades the stop to NOT-fully-verified.
+            # A candidate-clear failure is reported, never swallowed: a still-present candidate
+            # marker keeps the "confirm this stack as working" offer eligible for a stack that
+            # was just stopped (`read_candidate` does not check liveness), so the operator could
+            # confirm a no-longer-running composition. A failed clear downgrades the stop to
+            # NOT-fully-verified.
             cleared, why = known_working.clear_candidate_checked(self._paths, target)
             if not cleared:
                 ok = False
@@ -2571,10 +2564,9 @@ class LifecycleOpsMixin:
         # (not the configured default) — resolve it BEFORE the guard so locking and the restart use
         # the same band (KISS/Voice on 868, restart no-band → lock 868 only, not 433). It uses THE
         # ONE resolver — the same explicit → running → ACTIVE-fallback-marker → primary rule as
-        # start() and the identity form (audit-found: this used `_effective_band`, which takes an
-        # interactive marker UNCONDITIONALLY, so a stopped Voice with a stale 868 marker whose GUI
-        # fallback is no longer active read the 433 identity on the panel and wrote it to the 868
-        # store — persisted config drift, and a blank 433 field cleared a deliberate 868 override).
+        # start() and the identity form (never `_effective_band`, which takes an interactive
+        # marker UNCONDITIONALLY: a stopped Voice with a stale 868 marker would read the 433
+        # identity on the panel and write it to the 868 store — persisted config drift).
         # Hold saved configuration STABLE from PREFLIGHT through the whole stop→start transition, so
         # a valid target is never stopped and then rejected by a concurrently-mutated config (LOCK
         # ORDER: config guard BEFORE the lifecycle/resource lock; re-entrant with _restart_impl).
@@ -2585,7 +2577,7 @@ class LifecycleOpsMixin:
             with self._admission_guard("restart", target):
                 # ONE CONCRETE OPERATION BAND, resolved ONCE and only HERE — under admission, so the
                 # running/marker state it reads cannot change under another admitted operation before
-                # this one owns the box (audit-found: resolving before admission let a concurrently
+                # this one owns the box (resolving before admission let a concurrently
                 # admitted start put the stack on 868 in the window, after which the identity was
                 # saved on the primary 433 while stop/preflight/launch ran on 868). `_config_band`
                 # maps the primary choice to its CONCRETE band, so "" never travels onward for a
@@ -2737,7 +2729,7 @@ class LifecycleOpsMixin:
         if (_r := self._meshcore_mode_refusal(target)) is not None:
             return _r
         if not band:
-            # THE ONE resolver, same as public restart(), start() and the identity form (review-found:
+            # THE ONE resolver, same as public restart(), start() and the identity form (otherwise
             # this kept `_effective_band`, which takes an interactive marker UNCONDITIONALLY. Once the
             # public entry stopped doing that, a stale marker made the inner launch pick 868 while the
             # identity was saved and judged on 433 — the store/launch divergence this feature exists
@@ -2753,7 +2745,7 @@ class LifecycleOpsMixin:
             # `restart()` (the public, snapshot-invalidating entry) has already taken the
             # controller/GUI/mode/band refusals the public `start()`/`stop()` would repeat, and
             # going through them again would drop the request memo and the snapshot between the
-            # two legs — a second full assessment inside the web Restart click (review-found).
+            # two legs — a second full assessment inside the web Restart click.
             res = self._start_impl(target, apply=False, band=band)
             if not res.ok:
                 return ActionResult(False, res.summary.replace("start", "restart", 1),
@@ -2809,7 +2801,7 @@ class LifecycleOpsMixin:
                          position=position, position_note=position_note)
         # Restart's typed results are the stop results followed by the start results — and so
         # are its details: a cascading restart's job log shows the dependents stopping BEFORE
-        # the target comes back (live-found: the stop leg's lines were dropped).
+        # the target comes back (the stop leg's lines were dropped).
         return ActionResult(res.ok, f"Restarted '{target}'. {res.summary}",
                             details=[*stopped.details, *res.details],
                             results=tuple(stopped.results) + tuple(res.results),
@@ -2857,7 +2849,7 @@ class LifecycleOpsMixin:
         # a stack the operator is about to install.
         _is_component_target = target != "" and self.stack(target) is None
         _absent = [(s, c) for s, c in buildable
-                   if c.source and not life.source_dir(c).exists()] if apply else []
+                   if c.source and not self._source_present(c)] if apply else []
         if apply:
             # A `build_requires` dependency is consumed by the build (pip-installed from its
             # checkout), so its absence would surface as a bare pip "Directory does not exist"
@@ -2870,7 +2862,7 @@ class LifecycleOpsMixin:
             _deps_absent = sorted({(s.id, d.id) for s, c in buildable
                                    for d in (_by_id.get(x) for x in c.build_requires)
                                    if d is not None and d.source and not d.build_steps
-                                   and not life.source_dir(d).exists()})
+                                   and not self._source_present(d)})
             if _deps_absent:
                 return ActionResult(
                     False,
@@ -2960,7 +2952,7 @@ class LifecycleOpsMixin:
                                 details=details,
                                 next_commands=[f"lhpc build {target} --yes"] if buildable else [],
                                 data={"changes": len(buildable)})
-        # P0.1: ONE atomic guard — index lock, recover, block on any unresolved journal,
+        # ONE atomic guard — index lock, recover, block on any unresolved journal,
         # then the source-path lock(s) (handoff) held for the whole build. No
         # preflight/acquire race: a journal that appears after a failed transaction is
         # caught under the index lock before the source locks are taken.
@@ -3158,7 +3150,7 @@ class LifecycleOpsMixin:
             _sid = self.stack_of(target) or target
             if op == "install":
                 # The web may request any CHANNEL this stack allows (binary included); the
-                # source-only selectors are validated against the historical tuple.
+                # source-only selectors are validated against the source tuple.
                 if (_cerr := self.channel_error(_sid, source)):
                     return None, "blocked", _cerr
             elif op in ("build", "test") and (_blk := self.binary_block_reason(
@@ -3212,7 +3204,6 @@ class LifecycleOpsMixin:
             post_dir = self._paths.under("state", "jobs")
             runtime_fs.ensure_dir(self._paths, post_dir)
             index_lock = str(reslock.lock_file_path(self._paths, self._installer()._index_key()))
-            txn_dir = str(self._paths.under("state", "source-txn"))
 
             def _settle_track(log, aid, pid, terr) -> str:
                 """Turn a `_track_or_terminate` outcome into a terminal reservation + a TYPED code the orchestrator
@@ -3265,7 +3256,7 @@ class LifecycleOpsMixin:
                     marker_text = (BUILD_MARKER_TEXT + self._consumed_source_lines(c)
                                    if _mark else "")
                     script = commands.render_build_launcher(
-                        steps, runtime, src, lock_paths, index_lock=index_lock, txn_dir=txn_dir,
+                        steps, runtime, src, lock_paths, index_lock=index_lock,
                         result_name=log, attempt_id=aid, op=op, target=c.id, stack=self.stack_of(c.id) or "",
                         marker_path=marker_path, marker_text=marker_text)
                 except commands.CommandError as exc:
@@ -3284,7 +3275,7 @@ class LifecycleOpsMixin:
                 capture the child's complete identity → RELEASE the parent's admission → publish the
                 `.job` tracking marker. The child's `verify_tracked` gate passes only once the marker
                 exists, so by the time it takes task admission itself the parent no longer holds the
-                flock (audit-found: the parent held admission across the handshake, so the child saw
+                flock (the parent held admission across the handshake, so the child saw
                 it as an external holder). Returns (log, aid, outcome) — outcome "" | "orphan" |
                 "terminated", or the spawn error when log is None."""
                 log, aid, spawned = spawn_fn()
@@ -3516,7 +3507,7 @@ class LifecycleOpsMixin:
                     pass                               # refused/failed delete -> retain,
                     # never raise, never increment the count (a leaf swapped to a dir or
                     # symlink between stat and unlink lands here safely)
-        # AUDIT ER1: the transient launcher scripts (`state/jobs/<uid>.py`,
+        # The transient launcher scripts (`state/jobs/<uid>.py`,
         # `state/post/<uid>.py`) were created every build/start and NEVER pruned —
         # unbounded inode growth, and (before the secrets-at-exec fix) a resting place for
         # baked secrets. Python reads a launcher wholly at interpreter start, so once its
@@ -3750,7 +3741,24 @@ class LifecycleOpsMixin:
                                     details=details,
                                     next_commands=[f"lhpc test {target} --yes"],
                                     data={"changes": sum(1 for _, c in items if c.test_argv)})
-            # P0.1: ONE atomic guard (index→recover→block→source-lock handoff) held for
+            # MISSING-SOURCE PREFLIGHT (as in build): a host test runs inside the checkout, so
+            # an absent source is refused explicitly — never discovered as a bare rc 127. A
+            # NAMED component is always refused; within a stack an OPTIONAL one is skipped.
+            _named = target != "" and self.stack(target) is None
+            _absent = {c.id for _, c in items
+                       if c.source and c.test_argv and not self._source_present(c)}
+            _refused = [c for _, c in items if c.id in _absent and (_named or not c.optional)]
+            if _refused:
+                return ActionResult(
+                    False,
+                    f"Refusing to test '{target}': "
+                    f"{', '.join(sorted(c.id for c in _refused))} is not installed.",
+                    details=[f"  [not-installed] {c.id}: no source at {life.source_dir(c)}"
+                             for c in _refused],
+                    next_commands=[f"lhpc install {sid}" for sid in
+                                   sorted({self.stack_of(c.id) or c.id for c in _refused})])
+            items = [(s, c) for s, c in items if c.id not in _absent]
+            # ONE atomic guard (index→recover→block→source-lock handoff) held for
             # the whole host-test run — a host test depends on the source's build
             # artifacts, so a concurrent update can't swap the tree mid-test, and a
             # retained journal blocks it with no preflight race.
@@ -3764,7 +3772,7 @@ class LifecycleOpsMixin:
             try:
                 with self._source_operation_guard(src_paths, op="host-test"):
                     for _, comp in items:
-                        # An integration test needs the stack already running. A auto-install/auto-install
+                        # An integration test needs the stack already running. An auto-install/auto-install
                         # sweep builds without starting, so DEFER it there (never a false failure);
                         # an explicit `lhpc test` (no auto_install_ctx) runs it against the running stack.
                         if comp.test_argv and comp.test_requires_running and auto_install_ctx is not None:
@@ -3822,7 +3830,7 @@ class LifecycleOpsMixin:
         if not bands:
             return ActionResult(
                 False, f"Cannot TX-test '{target}': no daemon-served radio is READY on "
-                f"{' or '.join(wanted)} MHz. A daemon stack (chat/kiss/meshcom/meshcore) needs the "
+                f"{' or '.join(wanted)} MHz. A daemon stack (chat/kiss/voice/meshcom/meshcore) needs the "
                 f"daemon started + RADIO=READY first; a stack that drives its OWN radio (e.g. meshtastic) "
                 f"is not daemon-TX-testable — verify its TX from its own app/logs instead.",
                 next_commands=[f"lhpc status {target}"])
@@ -3833,13 +3841,13 @@ class LifecycleOpsMixin:
         # the global operator identity: that transmission is the operator's own.
         # A TX operation MUST identify the station. There is no unidentified payload to fall back
         # to: an empty identity refuses the whole test, before the plan is rendered and before any
-        # frame is transmitted (audit-found: the suffix was conditional, so a box with no global
+        # frame is transmitted (the suffix was conditional, so a box with no global
         # callsign put a bare `LHPC TX TEST` frame on the air).
         # Per-BAND: a band-scoped local override identifies the transmission on ITS band.
         # The identity must be VALID, not merely present. A stack's own identity was validated
-        # when it was stored; the global fallback (daemon, kiss) was not — a 0.2.5 box can hold a
-        # placeholder or malformed global that this version refuses to inherit, and transmitting
-        # `DE N0CALL` is no better than transmitting unidentified (audit-found). Judged by the
+        # when it was stored; the global fallback (daemon, kiss) was not — the stored global may be a
+        # placeholder or malformed value that this code refuses to inherit, and transmitting
+        # `DE N0CALL` is no better than transmitting unidentified. Judged by the
         # same base-callsign rule that decides whether a global is usable as an identity at all.
         from . import validators
         _idents = {}
@@ -3849,7 +3857,7 @@ class LifecycleOpsMixin:
                 # explicit local value that the current rules reject must REFUSE, never fall back
                 # to the global: `effective_identity` returns "" both when no local value exists
                 # and when one exists but is invalid, and treating those alike transmitted under a
-                # different callsign than the operator configured (audit-found).
+                # different callsign than the operator configured.
                 ok, _fields, msg = self.enforce_identity(target, b)
                 if not ok:
                     return ActionResult(
@@ -3859,7 +3867,7 @@ class LifecycleOpsMixin:
                 _idents[b] = self.effective_identity(target, b)
                 continue
             # Only a target with NO identity field of its own (the daemon, kiss) identifies with
-            # the operator's global — validated, because a 0.2.5 box can hold a placeholder there.
+            # the operator's global — validated, because the stored global may be a placeholder.
             try:
                 _idents[b] = validators.callsign_base(self._global_operator_callsign(),
                                                       field="operator callsign", allow_empty=False)
@@ -3975,7 +3983,7 @@ class LifecycleOpsMixin:
                 pass
         # KEY is `has_update`, never `update`: Jinja `dict.update` resolves to the built-in
         # METHOD (always truthy), so a template `.update` would show the pill unconditionally
-        # (LIVE-FOUND). `installed`/`pinned` do not collide with any dict attribute.
+        # `installed`/`pinned` do not collide with any dict attribute.
         # FORWARD-only: only a pin AHEAD of installed is an update — an operator who ran the
         # upstream update sits ahead of the pin and must NOT be shown a downgrade prompt.
         return {"installed": installed, "pinned": pinned,
@@ -4070,7 +4078,7 @@ class LifecycleOpsMixin:
             ["curl", "-fsSL", "--max-time", "12", "-H", "Accept: application/vnd.github+json",
              url], 15.0)
         if getattr(r, "returncode", 1) != 0:
-            # REVIEW-FOUND: a transient failure must NOT wipe a previously found version — keep
+            # A transient failure must NOT wipe a previously found version — keep
             # the last known `latest` so the pill/Update button survive a flaky/rate-limited check.
             _write(_prev_latest(), "could not reach the GitHub releases API")
             return ActionResult(False, f"upstream check failed for '{target}': network/API error",
@@ -4083,13 +4091,13 @@ class LifecycleOpsMixin:
             _write(_prev_latest(), "no tag_name in the API response (rate-limited?)")
             return ActionResult(False, f"upstream check for '{target}': no release tag found "
                                        "(GitHub may be rate-limiting unauthenticated requests)")
-        # AUDIT-FOUND: decide availability from the OBSERVED tag, never from a re-read of the
+        # Decide availability from the OBSERVED tag, never from a re-read of the
         # cache we just tried to write — a failed write would otherwise report a stale/empty
         # cache as "up to date" AND return ok. Surface the persistence failure explicitly.
         installed = (self.fetched_version_state(target) or {}).get("installed", "")
         ahead = bool(tag and installed
                      and self._ver_tuple(tag) > self._ver_tuple(installed))
-        # AUDIT-FOUND: with NO version stamp on disk, "up to date" was claimed for an unknown
+        # With NO version stamp on disk, "up to date" was claimed for an unknown
         # install. Say what is actually known; never claim currency without a stamp.
         if installed:
             inst_txt = f"installed {installed}"
@@ -4125,7 +4133,7 @@ class LifecycleOpsMixin:
             return ActionResult(True, f"Update plan for '{target}': fetch upstream {version} "
                                       "(verified against its checksums.txt) and restart.",
                                 next_commands=[f"lhpc update {target} --upstream --yes"])
-        # AUDIT-FOUND: this mutates and replaces the installed tree, so it MUST hold the same
+        # This mutates and replaces the installed tree, so it MUST hold the same
         # task admission every peer op takes (build/update/uninstall/clean/self-update) — a
         # concurrent build or clean would otherwise race the fetch. RE-VALIDATE under the lock:
         # another op may have moved the version or the running state while we waited.
@@ -4136,7 +4144,7 @@ class LifecycleOpsMixin:
         except AdmissionRefused as _adm:
             return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
         except reslock.ResourceBusy as busy:
-            # AUDIT-FOUND: admission contention with ANOTHER process raises ResourceBusy, not
+            # Admission contention with ANOTHER process raises ResourceBusy, not
             # AdmissionRefused — return the same typed refusal every peer op gives.
             return ActionResult(False, f"Cannot update '{target}': {busy}",
                                 next_commands=[f"lhpc status {target}"])
@@ -4173,7 +4181,7 @@ class LifecycleOpsMixin:
             return ActionResult(False, f"fetched {version} but could not re-mark built: {exc}")
         notes = [f"  [ok] fetched upstream {version} (verified vs checksums.txt)"]
         restart_ok = True
-        # AUDIT-FOUND: `was_running` was sampled BEFORE a fetch that can run for minutes; an
+        # `was_running` was sampled BEFORE a fetch that can run for minutes; an
         # operator stop during the fetch (stop needs no task admission) was then overridden by
         # the restart. Re-sample: restart only what is STILL running now.
         if was_running and not self.stack_running(target):
@@ -4183,7 +4191,7 @@ class LifecycleOpsMixin:
             res = self.restart(target, apply=True)
             restart_ok = res.ok
             notes.append(f"  [restart] {'ok' if res.ok else 'FAILED — restart manually'}")
-        # REVIEW-FOUND: a failed restart leaves the station OFFLINE — report it as NOT ok so
+        # a failed restart leaves the station OFFLINE — report it as NOT ok so
         # the CLI exits non-zero and the console flashes a warning, not a green success.
         return ActionResult(
             restart_ok,
@@ -4451,8 +4459,6 @@ class LifecycleOpsMixin:
         """Dependencies of `comp` (transitively, within this run order) that did NOT
         reach a successful outcome. Empty when every one of them is up.
 
-        Only the daemon used to be gated this way; an ordinary `depends_on` was
-        launched regardless of whether its dependency had failed.
         """
         by_id = {c.id: c for _, c in order}
         want, seen = list(comp.depends_on or ()), set()
@@ -4518,17 +4524,25 @@ class LifecycleOpsMixin:
                 return c.band
         return allowed[0]
 
+    def _source_present(self, comp) -> bool:
+        """The ONE presence policy for a component's managed source (`source_fs.source_present`:
+        a real directory leaf, no-follow) — build, test, start and the install planner all ask
+        this, never a symlink-following `exists()`."""
+        from . import source_fs
+        return source_fs.source_present(self._paths, self._lifecycle().source_dir(comp))
+
     def is_installed(self, target: str) -> bool:
         """Whether a stack's managed material is present (nothing to install if it declares no
         source). A binary-covered main component counts as installed on its RECEIPT, not on a
         source directory it has no reason to own."""
+        from . import source_fs
         s = self.stack(target)
         main = s.main_component if s else None
         if not main or not main.source:
             return True
         if self.binary_covers(main.id):
             return True
-        return self._paths.resolve_source(main.source.path).is_dir()
+        return source_fs.source_present(self._paths, self._paths.resolve_source(main.source.path))
 
     def _radio_competitors(self, entries: list[dict]) -> list[str]:
         """Names of the stacks in `entries` that genuinely compete for one radio's tuning.
@@ -4563,7 +4577,6 @@ class LifecycleOpsMixin:
         showed no "build needed" state at all for such a stack, while the start gate still
         refused it as not built.
         """
-        life = self._lifecycle()
         s = self.stack(target)
         # A gui_optional component whose GUI toolkit is absent can NEVER be built here —
         # the build preflight drops it by design (voice's GTK app on a Lite box, whose
@@ -4575,9 +4588,9 @@ class LifecycleOpsMixin:
             if c.id in gui_dropped and (c.optional or c.gui_optional):
                 continue
             if c.source:
-                if life.source_dir(c).exists() and not self.is_built(c):
+                if self._source_present(c) and not self.is_built(c):
                     out.append(c.id)
-            elif (c.build_steps or c.build_cmd) and not self.is_built(c):
+            elif c.build_steps and not self.is_built(c):
                 out.append(c.id)
         return out
 
@@ -4654,7 +4667,7 @@ class LifecycleOpsMixin:
         process-match NAME, never a build-output PATH, so it is NOT used here — using it made venv
         components (exec_name="python") check a non-existent `<src>/python` and read "not built"
         forever."""
-        if not (comp.build_cmd or comp.build_steps):
+        if not comp.build_steps:
             return None
         return comp.bin or None
 
@@ -4698,7 +4711,7 @@ class LifecycleOpsMixin:
         `bin`: it is the authoritative completion signal, so a build killed mid-way — leaving `bin`
         present but the build incomplete (e.g. a venv whose interpreter exists but whose pip installs
         never finished) — correctly reads NOT built."""
-        if comp.build_marker and (comp.build_cmd or comp.build_steps):
+        if comp.build_marker and comp.build_steps:
             from . import runtime_fs
             from .lifecycle import _BUILD_MARKER_MAX, BUILD_MARKER_TEXT
             marker = self._lifecycle().source_dir(comp) / comp.build_marker
@@ -4728,13 +4741,12 @@ class LifecycleOpsMixin:
         """Why a component can't be launched yet ("" = ready): its source isn't
         installed, or it compiles to a binary that isn't built. Avoids handing the
         operator (or the spawner) a command that points at a missing binary."""
-        life = self._lifecycle()
         sid = self.stack_of(comp.id) or comp.id
         # A binary-covered component has no clone by design (the artifact provides its build
         # output directly) — only the physical artifact check below decides readiness. Every
         # other component keeps the byte-identical source-dir requirement.
         covered = self.binary_covers(comp.id)
-        if comp.source and not covered and not life.source_dir(comp).exists():
+        if comp.source and not covered and not self._source_present(comp):
             return f"not installed — run: lhpc install {sid}"
         if not self.is_built(comp):
             return f"not built — run: lhpc build {sid}"
@@ -4788,7 +4800,7 @@ class LifecycleOpsMixin:
         swc = self.config().stackweb.get(page.page_id) if page is not None else None
         try:
             # ONE /proc read per REQUEST for every component's pins (the Dashboard asks for each
-            # running component; before 0.2.9 that was one /proc/net/tcp read per component).
+            # running component).
             snap = self._request_memo(("tcp-listeners",),
                                       self._system.procfs.tcp_listeners)
         except Exception:
@@ -4913,8 +4925,7 @@ class LifecycleOpsMixin:
         That path writes a sidecar but NO ownership record, so the file is found by recomputing its
         leaf from the CURRENT verified main binding. The binding must be looked up on the band the
         stack is ACTUALLY running: a multi-band stack (meshtastic serves 433 or 868) records its
-        ownership band-scoped, so the band-less lookup this used to do could never match a real
-        record and the region outcome silently never rendered.
+        ownership band-scoped, so a band-less lookup could never match a real record.
 
         Three independent checks must all pass before anything is shown, and every one of them
         fails soft (returns no lines, never raises into status):
@@ -5020,8 +5031,6 @@ class LifecycleOpsMixin:
             other_served = [b for b in usable_bands if b != band]
             running, startable, interactive = [], [], []
             for s in self.stacks():
-                if s.id == self.DAEMON_ID:
-                    continue
                 # Bands this stack can run on (multi-band stacks list several).
                 sbands = set()
                 for c in s.components:

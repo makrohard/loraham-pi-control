@@ -68,12 +68,10 @@ class IndexEntry:
     url: str
     sha256: str
     size: int
-    built_from: str
     components: dict
     runtime_deps: tuple[str, ...]
     target: str
-    os_name: str
-    provenance: dict
+    provenance: dict            # the index's own metadata (built_from, target, os, …), verbatim
 
 
 # --- index ---------------------------------------------------------------------------------
@@ -141,10 +139,10 @@ def index_entry(idx: dict, stack_id: str) -> IndexEntry:
     try:
         entry = IndexEntry(
             stack=stack_id, filename=str(e["filename"]), url=str(e["url"]),
-            sha256=str(e["sha256"]), size=int(e["size"]), built_from=str(e["built_from"]),
+            sha256=str(e["sha256"]), size=int(e["size"]),
             components=dict(e["components"]),
             runtime_deps=tuple(str(x) for x in e.get("runtime_deps", ())),
-            target=str(e["target"]), os_name=str(e.get("os", "")),
+            target=str(e["target"]),
             provenance={k: e.get(k) for k in
                         ("lhpc_commit", "builder_commit", "container_digest", "smoke",
                          "built_from", "target", "os")},
@@ -281,7 +279,7 @@ def validate_and_extract(tar_path, stage_dir, publish_roots) -> list:
                 # The compressed artifact is sha256-verified, but its EXPANSION is not bounded
                 # by that: a decompression bomb (or a duplicate member overwriting an
                 # already-validated file) must be refused before it fills the SD card. Same
-                # bounds the publisher enforces (audit finding).
+                # bounds the publisher enforces.
                 members += 1
                 if members > _MAX_MEMBERS:
                     raise BinaryInstallError(
@@ -428,14 +426,13 @@ def backup_path(txn: str, rel: str) -> str:
 def displace(paths: Paths, txn: str, rels) -> dict:
     """Move existing files aside INTO the transaction (journaled BEFORE the move). Used for the
     previous meshtastic venv and for files only the OLD artifact owned — without this they were
-    unlinked with no way back (audit finding)."""
+    unlinked with no way back."""
     j, state = read_journal(paths)
     if state != "valid" or j is None:
         raise BinaryInstallError("the binary-install journal disappeared mid-transaction")
     # Any NON-DIRECTORY leaf, symlinks included: a virtualenv's `bin/python3` is a symlink, and
     # leaving those behind made `python3 -m venv` believe the environment still existed — it then
-    # skipped ensurepip and the next step failed with "pip install failed" (live-found on the
-    # Zero). `os.replace` moves the symlink itself; a dangling one is moved too.
+    # skipped ensurepip and the next step failed with "pip install failed". `os.replace` moves the symlink itself; a dangling one is moved too.
     planned = {rel: backup_path(txn, rel) for rel in rels
                if os.path.lexists(paths.under(*rel.split("/")))
                and not os.path.isdir(paths.under(*rel.split("/")))}
@@ -456,7 +453,7 @@ def displace_dir(paths: Paths, txn: str, rel_dir: str) -> bool:
     so it can neither be owned file-by-file nor emptied leaf-by-leaf through the runtime path
     guard. One rename moves it intact — no traversal, no symlink ever followed — and an unwind
     renames it straight back, which is the only way a failed provisioning can hand the operator
-    their WORKING venv again (live-found on the Zero: displacing only the regular files left
+    their WORKING venv again (displacing only the regular files left
     `bin/python3` behind, `python3 -m venv` then skipped ensurepip, and pip was missing)."""
     live = paths.under(*rel_dir.split("/"))
     if not os.path.isdir(live) or os.path.islink(live):
@@ -476,23 +473,12 @@ def note_created_dir(paths: Paths, rel_dir: str) -> None:
     """Record a directory this transaction CREATES from nothing (a first-time venv), BEFORE the
     first command runs. `displace_dir` covers the replace case; without this, a hard crash
     mid-provisioning left a half-built directory that no journal, receipt or recovery knew
-    about (audit finding)."""
+    about."""
     j, state = read_journal(paths)
     if state != "valid" or j is None:
         raise BinaryInstallError("the binary-install journal disappeared mid-transaction")
     _journal_update(paths,
                     created_dirs=sorted(set(j.get("created_dirs", [])) | {rel_dir}))
-
-
-def note_created(paths: Paths, rels) -> None:
-    """Record extra files this transaction created (e.g. the provisioned venv) so recovery
-    removes them. They have no backup by definition."""
-    j, state = read_journal(paths)
-    if state != "valid" or j is None:
-        raise BinaryInstallError("the binary-install journal disappeared mid-transaction")
-    _journal_update(paths, created=sorted(set(j.get("created", [])) | set(rels)))
-
-
 def publish(paths: Paths, stack_id: str, stage_dir, files, txn: str) -> None:
     """Promote the staged artifact FILE BY FILE inside the OPEN transaction.
 
@@ -538,7 +524,7 @@ def rollback_files(paths: Paths, j: dict) -> tuple[bool, str]:
     ORDER IS THE CONTRACT: remove what this transaction created, then restore DIRECTORIES, then
     restore FILES. A displaced file can live INSIDE a displaced directory — the artifact's own
     binary sits in the source checkout a channel switch sets aside — so restoring files first
-    would put them back only for the directory restore to wipe them (audit finding).
+    would put them back only for the directory restore to wipe them.
     """
     for rel in sorted(j.get("created", []), key=len, reverse=True):
         try:

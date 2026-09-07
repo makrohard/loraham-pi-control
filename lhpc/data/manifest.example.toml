@@ -77,7 +77,6 @@ main = "loraham-daemon"
   readiness = "daemon-band"
   bin = "loraham_daemon/loraham_daemon"
   test = "loraham_daemon/run_tests.sh"
-  pre = 'export LORAHAM_RUNTIME_DIR="{runtime}/state/loraham"; mkdir -p "$LORAHAM_RUNTIME_DIR"; chmod 700 "$LORAHAM_RUNTIME_DIR"'
 
     [[stack.component.param]]
     name = "radio"
@@ -97,8 +96,7 @@ main = "loraham-daemon"
     kind = "enum"
     choices = ["loraham", "uputronics-ce0", "uputronics-ce1", "waveshare-sx1262"]
     # Friendly labels for the GUI (the wire value still submits). `loraham` is the daemon's renamed
-    # dual-module preset (was `legacy`, now removed by the daemon).
-    choice_labels = [["loraham", "LoRaHAM"], ["uputronics-ce0", "Uputronics CE0"], ["uputronics-ce1", "Uputronics CE1"], ["waveshare-sx1262", "Waveshare SX1262"]]
+    # dual-module preset.
     default = "loraham"
     label = "Hardware preset (--hw)"
     [[stack.component.param]]
@@ -202,8 +200,7 @@ main = "loraham-daemon"
     key = "spi.bus.0"
     kind = "spi-bus"
     mode = "cooperative"
-    group = "spi.bus.0"
-    note = "Shared SPI bus; serialized via /run/lock/loraham. Different modules use different CS."
+    note = "Shared SPI bus; serialized via spi0.lock in LORAHAM_RUNTIME_DIR. Different modules use different CS."
     [[stack.component.resource]]
     key = "loraham.radio.433"
     kind = "radio-band"
@@ -254,9 +251,7 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/RadioLib"
-    # Known-working fallback only (the default 'dev' selector installs the newest branch HEAD
-    # regardless of this pin). Verified 2026-07-24: daemon built + RF-proven on the Zero 2W
-    # acceptance runs against RadioLib 7.7.1-45.
+    # `--source pinned` adopts this pin (a known-working composition entry overrides it); a bare install takes the binary channel above where published, else `dev` — docs/cli.md § install.
     pin_commit = "187ef24791c3d844939b2be13a68bd890bd04e4c"
     pin_tag = "7.7.1-57-g187ef247"
     remote = "https://github.com/jgromes/RadioLib"
@@ -345,7 +340,7 @@ main = "loraham-chat"
     exec_name = "loraham_chat"
 
 # =====================================================================
-# Stack: voice — daemon-backed voice (not present locally)
+# Stack: voice — daemon-backed voice (GTK app + terminal variant)
 # =====================================================================
 [[stack]]
 id = "voice"
@@ -362,7 +357,7 @@ main = "loraham-voice"
   # GUI-OPTIONAL: on a headless/Lite box (GTK dev chain absent) the GUI preflight drops
   # this component and the stack stays fully usable through the terminal variant below.
   # NOT plain `optional` — that would also remove it from default stack-start seeding,
-  # and a desktop must keep starting the GTK app exactly as before.
+  # and a desktop keeps starting the GTK app by default.
   gui_optional = true
   purpose = "Codec2 voice over LoRa via the daemon (GTK desktop app; needs an audio device)."
   tx_capable = true
@@ -377,7 +372,6 @@ main = "loraham-voice"
   # voice reads loraham_voice.conf from dirname(argv0), NOT the CWD — so we run it
   # via a symlink in the runtime config dir (where lhpc seeds the conf), keeping the
   # conf out of the repo. GUI app: lhpc Start/Stops it; opens on the Pi display.
-  pre = 'mkdir -p "{runtime}/config/files" && ln -sf "{source}/loraham_voice" "{runtime}/config/files/loraham_voice"'
   run = 'env DISPLAY="${DISPLAY:-:0}" "{runtime}/config/files/loraham_voice"'
   build_steps = [ { argv = ["gcc", "-o", "loraham_voice", "loraham_voice_v107.c", "{pkgconfig:gtk+-3.0}", "-lcodec2", "-lasound", "-lncurses", "-lpthread", "-lm"] } ]
   pre_steps = [ { kind = "mkdir", path = "{runtime}/config/files" }, { kind = "symlink", src = "{source}/loraham_voice", dst = "{runtime}/config/files/loraham_voice" } ]
@@ -397,8 +391,7 @@ main = "loraham-voice"
     note = "Codec2 development headers (Voice only)"
     [[stack.component.require]]
     # GUI-ONLY: libgtk-3-dev drags the whole GTK3/X11/Wayland/Pango/Cairo dev chain in, which has no
-    # business on a headless Trixie lite image (a from-zero acceptance run was aborted over exactly
-    # that). `gui = true` keeps it OUT of the default bootstrap; `--with-gui` installs it on a machine
+    # business on a headless Trixie lite image . `gui = true` keeps it OUT of the default bootstrap; `--with-gui` installs it on a machine
     # that actually has a display. codec2/ALSA are Voice-only and share this opt-in scope; ncurses
     # is ALSO declared by chat, so the core-wins merge keeps it in the headless default.
     gui = true
@@ -589,8 +582,7 @@ main = "loraham-voice"
     [[stack.component.require]]
     # NOT gui-scoped: this is exactly the variant a headless/Lite box builds. codec2 and
     # ALSA are lean (no graphical chain); the core-wins merge with the GTK component's
-    # gui-scoped copies makes them part of the standard bootstrap now that Voice is a
-    # first-class headless stack.
+    # gui-scoped copies makes them part of the standard bootstrap.
     check_file = "/usr/include/codec2/codec2.h"
     install = "sudo apt install -y libcodec2-dev"
     note = "Codec2 development headers (Voice)"
@@ -642,7 +634,7 @@ main = "loraham-kiss-tnc"
   depends_on = ["loraham-daemon"]
   requires_daemon_tx = "MANAGED"
   start_order = 1
-  # loraham-kiss-tnc is now its OWN repo (flat layout): build.sh + the binary live at the checkout
+  # loraham-kiss-tnc has a flat layout: build.sh + the binary live at the checkout
   # root, and the binary is named after the checkout dir (src/loraham-kiss-tnc -> "loraham-kiss-tnc").
   # Explicit run_argv/build_steps + run_cwd so the root binary/script resolve cwd-relative.
   build = "bash build.sh"
@@ -667,7 +659,7 @@ main = "loraham-kiss-tnc"
     # automated stations -> 869.525 MHz. 433 defaults to SINGLE-CHANNEL 433.775 both
     # ways — the frequency standard ESP32 trackers (CA2RXU/OE5BPA) both TX and LISTEN
     # on; the classic LoRa-APRS split (RX 433.775 / TX 433.900) left our beacons
-    # unheard by every stock tracker (live-found) and stays available by config.
+    # unheard by every stock tracker and stays available by config.
     # Per-band defaults are picked from the band the stack runs on.
     [[stack.component.param]]
     name = "rx_freq"
@@ -740,9 +732,9 @@ main = "loraham-kiss-tnc"
     branch = "main"
 
     [stack.component.process]
-    # Must match the ACTUAL binary basename (run_argv[0]/bin = "loraham-kiss-tnc", hyphens) — the
-    # repo split renamed it from loraham_kiss_tnc; a stale underscore name made probe_process never
-    # match the running TNC, so status read "stopped" and known-working refused to confirm it.
+    # Must match the ACTUAL binary basename (run_argv[0]/bin = "loraham-kiss-tnc", hyphens): with
+    # a wrong name probe_process never matches the running TNC, status reads "stopped" and
+    # known-working refuses to confirm it.
     exec_name = "loraham-kiss-tnc"
 
     [[stack.component.endpoint]]
@@ -882,7 +874,7 @@ main = "graywolf"
   # (host:port is ONE argv token), and the UI is password-authenticated operator surface that
   # belongs on loopback. Reach it through this stack's web proxy, or an SSH tunnel; exposing it
   # directly would need a real bind param.
-  note = "Upstream .deb fetched + unpacked into build/tools/graywolf by the build step (rootless, sha256-pinned). Config lives in a SQLite DB, not a file, so every start re-applies the params below through graywolf's REST API (post-start `provision` step). The generated web-UI password is written to <runtime>/state/graywolf/graywolf-admin.txt (0600). Single KISS client: do NOT run loraham-kiss-serial at the same time, and graywolf replaces loraham-igate rather than joining it. RX-only is set on the kiss stack (`lhpc config kiss rx_only on`) — that gates the actual transmitter, not just graywolf's intent."
+  note = "Upstream .deb fetched + unpacked into build/tools/graywolf by the build step (rootless, sha256-pinned). Config lives in a SQLite DB, not a file, so every start re-applies the params below through graywolf's REST API (post-start `provision` step). The generated web-UI password is written to <runtime>/state/graywolf/graywolf-admin.txt (0600). Single KISS client: do NOT run loraham-kiss-serial at the same time. RX-only is set on the kiss stack (`lhpc config kiss rx_only on`) — that gates the actual transmitter, not just graywolf's intent."
   pre_steps = [ { kind = "mkdir", path = "{runtime}/state/graywolf", mode = "700" } ]
   # No tcp_wait: its port must be a manifest literal, and the provisioning step below does
   # its own bounded readiness wait against the API it is about to write to.
@@ -1096,7 +1088,6 @@ main = "meshtastic"
   # The feed is optional, so this edge is inert unless the global GPS plan admits it (see
   # `_gps_components_for`); it exists to fix the ORDER, not to force the component.
   depends_on = ["meshtastic-gps"]
-  pre = 'mkdir -p "{runtime}/state/meshtasticd/ssl"'
   # RUNTIME-OWNED binary, built from the managed source below. Never /usr/bin/meshtasticd: the
   # OBS package is built from the upstream `native-tft` environment and therefore links
   # X11/libinput/xkbcommon (and its Depends drag SDL2 -> PulseAudio/Wayland/Mesa/LLVM) onto a
@@ -1422,7 +1413,7 @@ main = "meshtastic"
     [[stack.component.endpoint]]
     kind = "tcp"
     address = "127.0.0.1:9443"
-    # Managed Firewall DENY-DEFAULT (see 4403): the proxy (:8445) is the sanctioned path.
+    # Managed Firewall DENY-DEFAULT (see 4403): the stack web proxy (suggested :8447) is the sanctioned path.
     firewall = { auth = "none", deny = true }
     role = "listener"
     description = "Meshtastic web GUI"
@@ -1580,7 +1571,7 @@ main = "meshcom-qemu"
     default = ""
     label = "HMAC password file (blank = open auth)"
     advanced = true
-    # XR KEEPALIVE, QEMU-STACK deployment values (live finding): the firmware runs under
+    # XR KEEPALIVE, QEMU-STACK deployment values: the firmware runs under
     # QEMU/TCG, whose stalls (JIT warmup, GC, SD-card contention) delay a PONG by tens of
     # seconds. The bridge-binary defaults (ping 15 s / pong 10 s — right for real hardware)
     # made every session flap: connect -> configured -> "disconnected: pong-timeout" in a
@@ -1757,7 +1748,7 @@ main = "meshcom-qemu"
   start_order = 3
   # Shown as a transient note right after start — the emulated node is slow to boot, so set
   # expectations (and steer heavy GUI viewing off this Pi during boot).
-  start_note = "MeshCom node launched under QEMU — the emulated firmware boots in ~1 min on a Pi 5 and ~5–6 min on a Pi Zero 2W. Its web UI at :18083 is sluggish until then, and its callsign switches to yours once the node finishes booting."
+  start_note = "MeshCom node launched under QEMU — the emulated firmware boots in ~1 min on a Pi 5 and ~6–14 min on a Pi Zero 2W. Its web UI at :18083 is sluggish until then, and its callsign switches to yours once the node finishes booting."
   # The EXTERNAL_RADIO firmware bakes the bridge host/port (and optional HMAC
   # password) from the XR_* env vars — the qemu overlay's platformio.ini reads
   # ${sysenv.XR_HOST}/${sysenv.XR_PORT}. Without them set, -D EXTERNAL_RADIO_PORT=
@@ -1770,18 +1761,16 @@ main = "meshcom-qemu"
   # The firmware source MUST be the external-radio feature branch: the default
   # (upstream icssw-org pinned tag) has NO external-radio transport, so the extradio
   # build boots with "LoRa radio disabled (no backend)" and never talks to the bridge —
-  # no messages in either direction (live finding).
+  # no messages in either direction.
   # SELF-CONTAINED tools, located-and-versioned INSIDE the runtime root (no reliance on $HOME/pipx):
-  #  * PlatformIO -> a managed venv at {root}/build/tools/platformio (retires the pipx system dep;
-  #    passed to the build scripts by ABSOLUTE path via PIO=). pipx stays a documented standalone-dev
-  #    alternative.
+  #  * PlatformIO -> a managed venv at {root}/build/tools/platformio (passed to the build scripts by
+  #    ABSOLUTE path via PIO=). pipx stays a documented standalone-dev alternative.
   #  * QEMU (qemu-system-xtensa) -> build-qemu.sh builds it FROM SOURCE at the pinned Espressif commit,
   #    HEADLESS (no SDL/GTK/VNC/OpenGL/audio), transactionally into {root}/build/tool-cache; the produced
   #    binary is LINK-GATED (no display/audio library) and hashed before its marker is written. run.sh
-  #    receives the resolved binary via the `qemu` param (default below). This replaces the prebuilt
-  #    Espressif tarball, which hard-links libSDL2 and cannot load on a headless box (the source build has
-  #    no such dependency). The prebuilt tarball path (scripts/fetch-qemu.sh, offline via LHPC_QEMU_TARBALL)
-  #    remains a documented MANUAL opt-in, but is no longer part of the managed build.
+  #    receives the resolved binary via the `qemu` param (default below). The prebuilt tarball
+  #    (scripts/fetch-qemu.sh, offline via LHPC_QEMU_TARBALL) is a manual, standalone-only path — see
+  #    docs/stacks/meshcom.md.
   # PLATFORMIO_CORE_DIR is an explicit RUNTIME-OWNED package/tool cache under the root, passed to BOTH
   # framework-install (prepare-openeth) and build (build.sh) so a CLI build and a web-service build use
   # the SAME in-root store (prepare-openeth.sh/build.sh honor `${PLATFORMIO_CORE_DIR:-$HOME/.platformio}`).
@@ -1798,9 +1787,8 @@ main = "meshcom-qemu"
     { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" } },
   ]
   readiness = "endpoint"
-  # The emulated ESP32 boots slowly — live-measured ~1 min on a Pi 5 and ~5–6 min on a Pi Zero 2W to
-  # console-ready (run-2/3 + the 2026-07-23 debug session; the old "~190 s" figure was one lucky Zero
-  # run). The ready ENDPOINTS (net-console/web sockets) usually open much earlier, but a heavily
+  # The emulated ESP32 boots slowly — live-measured ~1 min on a Pi 5 and ~6–14 min on a Pi Zero 2W to
+  # console-ready. The ready ENDPOINTS (net-console/web sockets) usually open much earlier, but a heavily
   # loaded Zero can be slow even to open them — 600 s so the window never TERM-kills a boot that
   # just needs minutes. The start path prints the component's start_note before polling.
   readiness_timeout = 600.0
@@ -1810,8 +1798,7 @@ main = "meshcom-qemu"
   # itself and stops exactly that instance afterwards — so auto-install runs it right after the
   # build (no running stack needed). A guest that is already running is probed and left alone.
   # The MANAGED qemu path is passed explicitly: test.sh's self-boot otherwise inherits run.sh's
-  # PATH/IDF discovery, which cannot find the in-root source build on a fresh install (live find:
-  # Pi 5 reinstall failed exactly here while every box with a legacy ~/.espressif passed).
+  # PATH/IDF discovery, which cannot find the in-root source build on a fresh install.
   # MUST be a COMPONENT-level key — placed after the [[…param]] sub-tables it would bind to the
   # last param table (TOML), leaving the component with no test ("skipped (no host tests)").
   test = "scripts/test.sh --qemu {runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa"
@@ -1841,7 +1828,7 @@ main = "meshcom-qemu"
   # --setcall for an empty / N0CALL callsign (the structured equivalent of the old shell guard).
   post_steps = [
     { kind = "tcp_wait", port = 12323, timeout = 180 },
-    # ACK-AWARE + IDEMPOTENT (live finding: 17 blind connects starved the node's heap
+    # ACK-AWARE + IDEMPOTENT (17 blind connects starved the node's heap
     # and killed its web UI): probe `--info` first and SKIP when the callsign is already
     # set (it persists in NVS across restarts); otherwise send until the firmware ACKs
     # ("Call:<CALL> ... set") — ONE acknowledged send, never the full blind window.
@@ -1849,10 +1836,10 @@ main = "meshcom-qemu"
     # brackets); stop_on matches the setcall ACK `Call:N0CALL-1 Short:... set`. They DIFFER —
     # with the ACK pattern used for the probe too, a persisted callsign was never detected, so
     # every start re-sent --setcall, the firmware saved + auto-rebooted, and the QEMU guest
-    # wedged in the bootloader (guest reset is not survivable in qemu-xtensa) — live finding.
-    # ZERO-2W COLD-BOOT WINDOW (live finding): a QEMU/TCG cold boot on a Pi Zero 2W brings the
-    # console up only after MINUTES — the old fixed window (repeat=21, interval=8 -> 168 s)
-    # expired with every probe hitting a deaf console, zero sends, and the node ran with the
+    # wedged in the bootloader (guest reset is not survivable in qemu-xtensa).
+    # ZERO-2W COLD-BOOT WINDOW: a QEMU/TCG cold boot on a Pi Zero 2W brings the
+    # console up only after MINUTES — a fixed window (repeat=21, interval=8 -> 168 s)
+    # would expire with every probe hitting a deaf console, zero sends, and the node ran with the
     # default callsign. The stepped `schedule` keeps the tight 8 s cadence for the first minute
     # (fast path on Pi 4/5 and warm boots), eases to 15 s, then a 30 s cap: 36 attempts over a
     # ~13 min window — well past the slowest observed cold boot, still only ~36 one-line
@@ -2023,18 +2010,10 @@ main = "meshcom-qemu"
     # repo at release v4.35p.08.06 (feature verbatim vs the tested fork tip).
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD build surface unchanged.
     #
-    # Bumped to v4.35p.08.29 (== `dev` HEAD at the time of writing). icssw-org DELETED the
-    # old v4.35p.08.06 tag, so `setup.sh --ref v4.35p.08.06` no longer resolves at all; the
-    # QEMU overlay patch was REBASED onto 08.29 in makrohard/meshcom-qemu-raspi (32268d0) —
-    # same 26 hunks, byte-identical added/removed lines, only context offsets moved — and it
-    # now applies through apply-overlay.sh's fail-closed `git apply --check`.
-    # 0.2.10: bumped to the `dev` tip 674413c (34 commits past v4.35p.08.29: v4.35s BP-09
-    # backpressure, GPS Kalman filter, the KISS/TCP interface PR merged AND reverted upstream);
-    # `setup.sh --ref` now names the SHA itself, so the checkout IS the pin. The QEMU overlay
-    # patch was rebased onto this commit in makrohard/meshcom-qemu-raspi (5c50c1e; one hunk
-    # moved around upstream's GPS-03 filter reset); setup.sh fetches BY REF (a SHA is not a
-    # `clone --branch` name); the overlay also bounds the dev tip's new per-loop GPS UART drain
-    # under QEMU (unpaced socket UART starved loop(), net-console deaf); pinned there as 579e463.
+    # Cloned BY REF by meshcom-qemu's `setup.sh --ref <sha>` step: the checkout IS this pin, and the
+    # QEMU overlay in makrohard/meshcom-qemu-raspi 579e463 applies to exactly this commit (it also
+    # bounds the per-loop GPS UART drain under QEMU: an unpaced socket UART starves loop() and
+    # leaves the net-console deaf). EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
     path = "src/MeshCom-Firmware"
     pin_commit = "674413ce38bebcc02969a4c1b754a6f1850bf4ba"
     pin_tag = "v4.35p.08.29-34-g674413c"
@@ -2108,11 +2087,8 @@ main = "meshcore-node"
   build_timeout = 1800.0
   test_timeout = 900.0
   # The MeshCore implementation is upstream openhop_core, pinned below, plus ONE
-  # LHPC-shipped patch applied idempotently at build time. The two ACK fixes it used to carry
-  # (deliver PATH-embedded ACKs to companion clients, then suppress client-repeat retransmission
-  # of consumed ACKs) were UPSTREAMED and are in `dev` — they were dropped from the patch on the
-  # rebase to 8cdb04e. What remains is the one still-unlanded fix: the radio noise floor surfaced
-  # into STATS_TYPE_RADIO. The host application
+  # LHPC-shipped patch applied idempotently at build time: the radio noise floor surfaced into
+  # STATS_TYPE_RADIO. The host application
   # glue (LoRaHAM radio adapter, identity loading, persistence, GPS feed consumer) ships WITH lhpc as
   # the `meshcore_host` package-data asset and is installed into the same venv — so the checkout
   # stays an unmodified upstream tree plus a reviewable patch, never a fork.
@@ -2310,7 +2286,7 @@ main = "meshcore-node"
       hidden = true
       default = "{runtime}/state/openhop"
 
-    # openHop Core release discipline (inspected 2026-08-29): `dev` is the active
+    # openHop Core release discipline: `dev` is the active
     # development branch; `main` carries the stable releases that also go to PyPI; the
     # two are NOT equivalent. Selection policy: Development = `dev` head, Latest stable =
     # `main`, Known working = the pin below — the exact SHA this integration was
@@ -2441,7 +2417,7 @@ main = "meshcore-node"
   show_log_link = true
   depends_on = ["meshcore-node"]
   # A FastAPI/uvicorn backend that connects to the openHop-backed Companion node on 5000 and
-  # serves a prebuilt React SPA. Unlike the retired Tk Node Manager it has NO graphical
+  # serves a prebuilt React SPA. It has NO graphical
   # dependency, so it installs and runs on a headless Pi. The backend binds LOOPBACK; LHPC's
   # nginx reverse proxy is the only public path (TLS + optional mTLS + CIDR gate), and the
   # proxy REFUSES the endpoints that would mutate LHPC-owned state (see proxy_deny_paths).
@@ -2500,7 +2476,7 @@ main = "meshcore-node"
     # start. The ONLY exposed path is the LHPC nginx stack-web proxy (TLS/mTLS/CIDR), whose own
     # listener IS firewall-managed on the Webserver page.
     firewall = { auth = "none" }
-    # LHPC-owned operations the proxy REFUSES (403), enforced server-side at the perimeter —
+    # LHPC-owned operations the proxy REFUSES (404), enforced server-side at the perimeter —
     # the backend is loopback-only, so these paths are unreachable from any browser/LAN client.
     # Factory reset would destroy the LHPC-managed identity; radio/tx/tuning fight the daemon's
     # LoRa config; position bypasses LHPC's GPS policy; admin/reset can reboot/wipe device state;
@@ -2574,7 +2550,7 @@ main = "meshcore-node"
   build_steps = [
     { argv = ["python3", "-m", "venv", ".venv"] },
     { argv = [".venv/bin/pip", "install", "."], announce = "[install] meshcli into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
-    # AUDIT-FOUND guard: upstream has shipped Python-3.12-only f-string syntax (PEP 701)
+    # Upstream has shipped Python-3.12-only f-string syntax (PEP 701)
     # while LHPC supports >=3.11 — the pin below avoids it, and this step keeps it avoided:
     # a future pin that regresses fails the BUILD with the exact file and line, instead of
     # installing fine and dying with a SyntaxError at first run.
@@ -2627,17 +2603,10 @@ main = "meshcore-node"
 
     [stack.component.source]
     path = "src/meshcore-cli"
-    # The previous pin (v1.5.0-63-g56b246b) had to move for TWO independent reasons:
-    #   1. Upstream rewrote `main`, leaving that commit in NO branch and NO tag. A plain
-    #      `git clone` + `git checkout <pin>` — exactly what install.py does — FAILED, so a
-    #      fresh install could not build the CLI at all. (A `--filter=blob:none` clone still
-    #      succeeded, lazily fetching the unreachable object; don't test reachability that way.)
-    #   2. It was held back because upstream had shipped Python-3.12-only f-string syntax
-    #      (PEP 701) while LHPC supports >=3.11 (Bookworm). That is fixed: v1.6.3 byte-compiles
-    #      under a real 3.11, as do v1.6.0-v1.6.2, and pyproject declares requires-python>=3.10.
     # v1.6.3 is a tag reachable from main, and the four flags THIS manifest renders
-    # (-t -p -j -D) are all still present. The byte-compile build step above remains the guard
-    # that fails the BUILD with file+line if a future pin regresses on 3.11.
+    # (-t -p -j -D) are all present; it byte-compiles under Python 3.11 (LHPC supports >=3.11),
+    # and the byte-compile build step above fails the BUILD with file+line if a future pin
+    # regresses on 3.11.
     pin_commit = "568d158bc780c318c3d8706f71bfb980cb1ca588"
     pin_tag = "v1.6.3"
     remote = "https://github.com/meshcore-dev/meshcore-cli.git"
@@ -2825,13 +2794,10 @@ groups = ["spi", "gpio"]
 install = "sudo usermod -aG spi,gpio $USER"
 note = "spi + gpio group membership — needed to drive the radio without root"
 [[stack.component.require]]
-# dpkg RECEIPTS, not dist-packages paths and not `module`. The old check was a
-# dist-packages path (Python-version and arch specific) covering gpiod ONLY, so a box
-# with gpiod present and spidev missing passed install/doctor and failed later in the
-# build's import probe. `module` cannot work here either: it resolves inside the
-# CONTROLLER venv, which is built with include-system-site-packages = false and can
-# never see an apt binding (verified live — it refused to install on a box where both
-# were present). The package receipt is stable across Python and arch.
+# dpkg RECEIPTS, not dist-packages paths and not `module`: a dist-packages path is
+# Python-version and arch specific, and `module` resolves inside the CONTROLLER venv,
+# which is built with include-system-site-packages = false and can never see an apt
+# binding. The package receipt is stable across Python and arch.
 check_file = "/var/lib/dpkg/info/python3-libgpiod.list"
 install = "sudo apt install -y python3-libgpiod python3-spidev"
 note = "Python libgpiod binding as a SYSTEM package. The stack venv is built with --system-site-packages and inherits it, so the radio needs no compiler — which is what makes this installable on a Pi Zero, where the pip wheels cannot build."
@@ -3127,10 +3093,7 @@ path = "{runtime}/state/sideband/location.conf"
 fmt = "env"
 # POSITION IS NOT A PER-STACK CHOICE. Every field below is CONTROLLER-OWNED, filled from
 # the global `[gps]` setting (`lhpc gps`) and marked `hidden` so it can never be edited per
-# stack. Before this, Sideband carried its own independent source selector, which meant two
-# stacks could disagree about where position came from — and a stale saved value here would
-# silently win over the global setting. The plugin itself stays source-agnostic; it is simply
-# handed the resolved answer.
+# stack. The plugin itself stays source-agnostic; it is simply handed the resolved answer.
 [[stack.component.config_file.param]]
 name = "location_source"
 key = "location_source"
@@ -3164,9 +3127,7 @@ hidden = true
 omit_if_empty = true
 group = "Position"
 label = "NMEA device (global)"
-# The direct-NMEA reader configures the port itself, so it needs the baud rate. It was in the
-# plugin's own defaults but had no way to be set from lhpc — an operator with a 4800-baud
-# receiver had no lever at all.
+# The direct-NMEA reader configures the port itself, so it needs the baud rate.
 [[stack.component.config_file.param]]
 name = "nmea_baud"
 key = "nmea_baud"

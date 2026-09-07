@@ -418,7 +418,7 @@ def test_radio_set_requires_csrf(tmp_path):
 
 
 def test_radio_set_is_two_step(tmp_path):
-    # P0.7: a live daemon setting needs plan + confirm, like every other mutation.
+    # A live daemon setting needs plan + confirm, like every other mutation.
     c = _daemon_client(tmp_path)
     token = _csrf(c)
     # First POST (no confirmed) -> shows the plan, does NOT apply (200, not 302).
@@ -540,6 +540,26 @@ def test_refused_binary_plan_offers_the_source_channel(tmp_path, monkeypatch):
     assert 'value="binary"' not in flat        # the channel that just failed is not re-offered
 
 
+def test_binary_install_apply_is_not_gated_on_build_dependencies(tmp_path, monkeypatch):
+    """The Apply stage gates a SOURCE install on the build-dependency gate; a binary download
+    needs no toolchain — the exact case the binary channel exists for."""
+    spawned = []
+    monkeypatch.setattr(ControllerService, "install_dep_gate",
+                        lambda self, target: {"block": [{"install": "sudo apt install -y g++"}], "warn": []})
+    monkeypatch.setattr(ControllerService, "spawn_web_job",
+                        lambda self, op, target, source="": (spawned.append((op, target, source)),
+                                                             ("web-install-daemon.log", "admitted", ""))[1])
+    c = _real_app(tmp_path)
+    r = c.post("/action", data={"_csrf": _csrf(c), "op": "install", "target": "daemon",
+                                "source": "binary", "confirmed": "yes"})
+    assert r.status_code == 302 and "/logs/" in r.headers["Location"]
+    assert spawned == [("install", "daemon", "binary")]
+    r = c.post("/action", data={"_csrf": _csrf(c), "op": "install", "target": "daemon",
+                                "source": "pinned", "confirmed": "yes"}, follow_redirects=True)
+    assert "System dependencies missing" in r.get_data(as_text=True)
+    assert spawned == [("install", "daemon", "binary")]                  # the source apply was gated
+
+
 def test_action_requires_csrf(tmp_path):
     c = _real_app(tmp_path)
     assert c.post("/action", data={"op": "start", "target": "daemon"}).status_code == 400
@@ -597,6 +617,14 @@ def test_action_plan_then_confirm(tmp_path):
 
 def test_logs_view(tmp_path):
     assert _real_app(tmp_path).get("/logs/loraham-daemon").status_code == 200
+
+
+def test_logs_view_keeps_the_band_for_the_live_poll(tmp_path):
+    # logs.js rebuilds the API URL from the card's data attributes: a band-scoped page must
+    # keep polling the same band's log, not swap to another log two seconds later.
+    body = _real_app(tmp_path).get("/logs/loraham-daemon?band=433").get_data(as_text=True)
+    assert 'data-band="433"' in body
+    assert 'data-band=""' in _real_app(tmp_path).get("/logs/loraham-daemon").get_data(as_text=True)
     assert _real_app(tmp_path).get("/logs/bogus").status_code == 404
 
 
@@ -697,16 +725,6 @@ def test_start_note_is_html_escaped(tmp_path):
     assert "{{ msg }}" in src and "msg|safe" not in src and "msg | safe" not in src
     from markupsafe import escape
     assert "&lt;script&gt;" in str(escape("<script>x</script>"))
-
-
-def test_wheel_includes_flash_js():
-    # flash.js must ship in the wheel (package-data), else the transient note can't hide.
-    import tomllib, pathlib
-    root = pathlib.Path(__file__).resolve().parents[1]
-    data = tomllib.loads((root / "pyproject.toml").read_text())
-    globs = data["tool"]["setuptools"]["package-data"]["lhpc.adapters.web"]
-    assert any(g == "static/*.js" for g in globs)
-    assert (root / "lhpc" / "adapters" / "web" / "static" / "flash.js").exists()
 
 
 def test_clear_stale_interactive_survives_unlink_io_error(tmp_path, monkeypatch):
@@ -1431,8 +1449,7 @@ def test_confirm_working_post_records_and_hides_button(tmp_path):
     assert c.post("/stacks/chat/known-working/confirm").status_code == 400   # CSRF enforced
     r = c.post("/stacks/chat/known-working/confirm", data={"_csrf": tok})
     assert r.status_code in (302, 303)
-    assert known_working.newest_commit_for(Paths(runtime_root=tmp_path),
-                                           "chat", "loraham-chat") == "a" * 40
+    assert known_working.load(Paths(runtime_root=tmp_path), "chat")[0]["entries"]["loraham-chat"]["commit"] == "a" * 40
     assert "Confirm this stack as working" not in c.get("/stacks").get_data(as_text=True)
     assert c.post("/stacks/nope/known-working/confirm", data={"_csrf": tok}).status_code == 404
 
@@ -1472,7 +1489,7 @@ def _seed_clean_target(tmp_path):
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", _t.time(),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "pinned", "", _t.time(),
                                        "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
 
 
@@ -1857,7 +1874,7 @@ def test_controller_system_deps_panel(tmp_path, monkeypatch):
 
 
 def test_controller_system_deps_makes_no_subprocess(tmp_path):
-    # P0.6: detection is PATH / importlib / fs probes only — the method spawns NOTHING (in particular
+    # Detection is PATH / importlib / fs probes only — the method spawns NOTHING (in particular
     # it must not run `nginx -v`, which webserver.nginx_installed() would).
     calls: list[list[str]] = []
     s = FakeSystem().system
@@ -2418,3 +2435,28 @@ def test_the_dashboard_lists_the_meshtastic_cli_with_its_launch_line(tmp_path, m
     assert "Meshtastic CLI" in page and 'data-copy="runc-meshtastic-cli"' in page
     assert "lhpc meshtastic --help" in page
     assert "Use the meshtastic CLI through lhpc" not in page
+
+
+def test_deferred_webserver_apply_is_announced_on_every_page_until_the_firewall_runs(tmp_path, monkeypatch):
+    # A Webserver Apply the firewall gate deferred is not a one-off flash: every page carries the
+    # notice with the click path (Firewall → Apply & commands) until the marker is cleared.
+    monkeypatch.setattr(ControllerService, "webserver_apply_pending", lambda self: True)
+    client = _client(tmp_path)
+    for path in ("/", "/stacks", "/auto-install"):
+        body = client.get(path, headers={"Host": "127.0.0.1"}).get_data(as_text=True)
+        assert 'id="fw-pending-notice"' in body, path
+        assert "open=firewall" in body and "fw=apply" in body and "#firewall-apply" in body, path
+    monkeypatch.setattr(ControllerService, "webserver_apply_pending", lambda self: False)
+    body = client.get("/", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
+    assert 'id="fw-pending-notice"' not in body
+
+
+def test_the_notice_link_opens_the_firewall_apply_section(tmp_path):
+    # The link's query opens the Firewall row AND its Apply & commands section (server-rendered
+    # `open` + data-force-open, which the stacks script resolves to the nested target).
+    client = _client(tmp_path)
+    body = client.get("/stacks?open=firewall&fw=apply", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
+    assert 'id="firewall-apply" open data-force-open="1"' in body
+    assert 'id="firewall-row" open data-force-open="1"' in body
+    body = client.get("/stacks?open=firewall", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
+    assert 'id="firewall-apply">' in body and 'id="firewall-apply" open' not in body

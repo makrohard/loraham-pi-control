@@ -99,7 +99,7 @@ def read_password(state_dir: str) -> str | None:
     # O_NOFOLLOW: a credential-path symlink must never be read THROUGH (it would leak
     # whatever it points at as the password). A symlink leaf raises ELOOP -> None.
     # O_NONBLOCK + S_ISREG: a planted FIFO at this path would otherwise BLOCK the open
-    # forever and silently wedge the whole chain start (AUDIT-FOUND); anything that is
+    # forever and silently wedge the whole chain start; anything that is
     # not a regular file reads as absent. (A regular file ignores O_NONBLOCK on read.)
     # ACCEPTED RISK (operator ruling): a symlinked PARENT directory is still followed —
     # state_dir lives under the operator's own runtime root, so planting one requires

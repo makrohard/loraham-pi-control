@@ -40,7 +40,7 @@ def test_requested_provider_fails_closed(tmp_path, monkeypatch):
 
 
 def test_audit_prune_ephemeral_launchers(tmp_path):
-    # AUDIT ER1: transient launcher scripts under state/jobs and state/post must be pruned
+    # Transient launcher scripts under state/jobs and state/post must be pruned
     # (they were created every build/start and never removed).
     svc = _svc(tmp_path)
     for sub in ("jobs", "post"):
@@ -56,7 +56,7 @@ def test_audit_prune_ephemeral_launchers(tmp_path):
 
 
 def test_audit_config_reloads_on_mtime_change(tmp_path):
-    # AUDIT CC4: a long-lived process must observe an out-of-band local.toml edit.
+    # A long-lived process must observe an out-of-band local.toml edit.
     (tmp_path / "config").mkdir()
     lp = tmp_path / "config" / "local.toml"
     lp.write_text('[operator]\ncallsign = "OE1AAA"\n')
@@ -69,7 +69,7 @@ def test_audit_config_reloads_on_mtime_change(tmp_path):
 
 
 def test_audit_resolve_addr_escaping_reads_absent(tmp_path):
-    # AUDIT ER3: an endpoint address that escapes containment must resolve to a
+    # An endpoint address that escapes containment must resolve to a
     # guaranteed-absent sentinel, never the CWD-relative original (which a same-named
     # file in the process CWD would satisfy -> false 'present').
     from lhpc.core.status import StatusProber
@@ -82,7 +82,7 @@ def test_audit_resolve_addr_escaping_reads_absent(tmp_path):
 
 
 def test_audit_verified_stop_reports_candidate_clear_failure(tmp_path, monkeypatch):
-    # AUDIT ER4: a verified stop that cannot retire the known-working candidate must
+    # A verified stop that cannot retire the known-working candidate must
     # downgrade to NOT-fully-verified, not report full success with a stale offer.
     from lhpc.core import known_working
     svc = _svc(tmp_path)

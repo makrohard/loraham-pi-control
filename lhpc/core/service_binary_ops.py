@@ -93,6 +93,10 @@ class BinaryOpsMixin:
             bi.check_pins(entry, self._binary_pins(stack_id))
         except bi.BinaryInstallError as exc:
             return ActionResult(False, f"Binary install of '{stack_id}' refused: {exc.message}",
+                                details=["  Switching to the source channel means a full local "
+                                         "build (this can take hours on a Pi).",
+                                         f"  Staying on the binary keeps {stack_id} exactly as "
+                                         "it is."],
                                 next_commands=[src_cmd],
                                 data={"binary_failed": True, "offer_source": True})
         missing = bi.missing_runtime_deps(entry, self._dpkg_installed)
@@ -141,7 +145,7 @@ class BinaryOpsMixin:
             return ActionResult(False, f"Binary install of '{stack_id}' blocked: {_blocked}")
         with _stack:
             # ---- ONE lock-held boundary. Everything that reads or changes state lives
-            # here, in this order (audit): recover an interrupted transaction, read the current
+            # here, in this order: recover an interrupted transaction, read the current
             # receipt + registry baseline, verify/adopt the required clone, prove the stack is
             # stopped, THEN open the journal and mutate.
             _rec_ok, _rec_why = self.binary_recover()
@@ -163,7 +167,7 @@ class BinaryOpsMixin:
             # HYBRID stacks: some covered components still need their PINNED clone, because the
             # artifact only overlays build OUTPUT while the run scripts live in the repo (meshcom's
             # run.sh / gps-relay.py). Adopt them first — without this the stack installs "fine" and
-            # then cannot start on a box that never had the checkout (live-found on the Zero, where
+            # then cannot start on a box that never had the checkout (where
             # an older clone had masked it).
             clone_notes = []
             if spec.clone_required:
@@ -259,8 +263,7 @@ class BinaryOpsMixin:
 
             # OPEN THE TRANSACTION FIRST — before the auth change and before any file moves.
             # The journal carries the previous receipt and the previous mesh-password value, so
-            # even a hard crash during download/extract is recoverable (audit finding: auth used
-            # to be blanked before any journal existed).
+            # even a hard crash during download/extract is recoverable.
             auth_journal: dict = {}
             _auth_restore = None
             if getattr(self, "hmac_applies", None) and self.hmac_applies(stack_id):
@@ -269,8 +272,13 @@ class BinaryOpsMixin:
                     _prev = self._resolved_param_value(stack_id, "run", _hc.id, "password_file")
                     if _prev:
                         auth_journal = {"param": "password_file", "previous": _prev}
-            bi.open_txn(self._paths, stack_id, txn,
-                        old_receipt=prev_receipt_raw, auth=auth_journal)
+            try:
+                bi.open_txn(self._paths, stack_id, txn,
+                            old_receipt=prev_receipt_raw, auth=auth_journal)
+            except bi.BinaryInstallError as exc:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                return ActionResult(False, f"Binary install of '{stack_id}' blocked: {exc.message}",
+                                    next_commands=[src_cmd], data={"binary_failed": True})
             if auth_journal:
                 # The published firmware has no mesh password: the bridge must not be launched
                 # with --password-file. Journaled above, so this is undoable either way.
@@ -292,7 +300,7 @@ class BinaryOpsMixin:
                 # The transaction stays OPEN across promotion, probes and the receipt write:
                 # the journal carries the displaced files, the newly created ones, the PREVIOUS
                 # receipt and the previous auth value, so any failure below restores the old
-                # working install instead of destroying it (audit finding).
+                # working install instead of destroying it.
                 bi.publish(self._paths, stack_id, stage, files, txn)
                 # PROOF and PROBE paths must be supplied by THIS artifact — a stale file left
                 # by the previous install must never satisfy them.
@@ -315,7 +323,7 @@ class BinaryOpsMixin:
                     raise bi.BinaryInstallError("the written receipt does not read back valid")
                 # Files the PREVIOUS artifact owned that this one no longer ships are DISPLACED
                 # into the transaction (journaled + backed up), never unlinked: a later rollback
-                # must be able to put the old install back completely (audit finding).
+                # must be able to put the old install back completely.
                 bi.displace(self._paths, txn,
                             self._stale_paths(prev_files, files, owned_dirs))
                 if not bi.commit(self._paths):        # THE commit point
@@ -324,7 +332,7 @@ class BinaryOpsMixin:
                 # A failure AFTER publish (probe, missing proof path, unwritable receipt) must not
                 # leave published files behind: with no receipt nothing would ever remove them, and
                 # a later `--source pinned` install would see a "healthy" directory and skip the
-                # clone (live-audit finding). Remove exactly what we put there.
+                # clone. Remove exactly what we put there.
                 # An OSError here (disk full, permissions) is a failed install like any other:
                 # unwind and offer the source channel — never a raw traceback.
                 exc = exc if isinstance(exc, bi.BinaryInstallError) else \
@@ -363,12 +371,11 @@ class BinaryOpsMixin:
     def binary_recover(self) -> tuple[bool, str]:
         """THE authoritative recovery for an open/interrupted binary transaction — files,
         receipt AND auth in one operation. Called under the locks before any new binary work
-        and by the in-process failure path, so a crash and an exception recover identically
-        (they used to have separate, unequal paths — audit finding)."""
+        and by the in-process failure path, so a crash and an exception recover identically."""
         # A KILLED run (OOM, power cut) cannot run its own cleanup, and each staging directory
         # holds a whole artifact — tens of megabytes on an SD card. Every binary operation is
         # serialized under the same locks, so anything left here is stale by definition
-        # (live-found on the Zero: one orphan from an earlier crashed run).
+        # (one orphan from an earlier crashed run).
         self._sweep_binary_staging()
         j, jstate = bi.read_journal(self._paths)
         if jstate == "absent":
@@ -390,7 +397,7 @@ class BinaryOpsMixin:
         elif not brx.remove_receipt(self._paths, stack_id):
             # There was no receipt before this run, so the failed install's one must go. If it
             # cannot, the journal and backups MUST stay: dropping them would discard the only
-            # evidence a later attempt could converge from (audit finding).
+            # evidence a later attempt could converge from.
             return False, "the failed install's binary receipt could not be removed"
         prev_auth = (j.get("auth") or {}).get("previous")
         if prev_auth:
@@ -410,7 +417,7 @@ class BinaryOpsMixin:
 
         The directory clause matters: an older receipt listed the provisioned venv file by file
         while the new one owns it as a directory, and treating those entries as stale deleted
-        the CLI the very same run had just provisioned (live-found on the Zero)."""
+        the CLI the very same run had just provisioned."""
         owned = tuple(owned_dirs or ())
         return sorted(rel for rel in set(prev_files) - set(new_files)
                       if not any(rel == d or rel.startswith(d + "/") for d in owned))
@@ -420,7 +427,7 @@ class BinaryOpsMixin:
 
         Symlinks COUNT: a virtualenv is half symlinks (`bin/python3`), and owning only the
         regular files left them behind on removal — enough for `python3 -m venv` to treat the
-        environment as existing, skip ensurepip, and fail the next step (live-found)."""
+        environment as existing, skip ensurepip, and fail the next step."""
         base = self._paths.under(*rel_dir.split("/"))
         if not os.path.isdir(base):
             return []
@@ -438,7 +445,7 @@ class BinaryOpsMixin:
         `rmdir` refuses a non-empty directory, so a shared one (the daemon binary sits inside a
         git checkout) is never touched — and we only consider ancestors of the receipt's own file
         paths, never whole publish roots. DEPTH ORDER is the contract: a parent must be tried only
-        after every child, or an emptied tree keeps its upper levels (live-found — four empty
+        after every child, or an emptied tree keeps its upper levels (four empty
         directories survived a meshtastic retire because a first, failed attempt on a
         not-yet-empty parent was never retried). Leaving an emptied publish directory behind
         would read as "destination already exists" to a following source adoption. The runtime
@@ -498,15 +505,15 @@ class BinaryOpsMixin:
         # half-overwritten: move the WHOLE directory into the transaction with one rename.
         # Emptying it leaf-by-leaf is not an option — half a venv is symlinks pointing outside
         # the runtime root — and leaving those behind made `python3 -m venv` skip ensurepip, so
-        # the next step failed with "pip install failed" (live-found on the Zero).
+        # the next step failed with "pip install failed".
         # When there was NO previous venv, journal the directory we are about to create instead:
         # a hard crash mid-provisioning would otherwise leave a half-built one that no journal,
-        # receipt or recovery knows about (audit finding). The `except` below covers the
+        # receipt or recovery knows about. The `except` below covers the
         # in-process failure; this covers the power cut.
         if not bi.displace_dir(self._paths, txn, venv_rel):
             bi.note_created_dir(self._paths, venv_rel)
         # The binary channel has NO source checkout for this component — the build steps must
-        # run from the runtime root, not from a directory that does not exist (audit finding).
+        # run from the runtime root, not from a directory that does not exist.
         life = self._lifecycle()
         src = str(self._paths.runtime_root)
         if comp.source is not None:
@@ -557,7 +564,7 @@ class BinaryOpsMixin:
         CHANNEL SWITCH that is not enough: the operator asked for a specific selector, and a
         checkout left over from the binary install (meshcom keeps its pinned clone) can sit at a
         completely different commit. Reporting a switch to `dev` while the tree stays pinned is
-        a lie about provenance (audit finding).
+        a lie about provenance.
 
         Every judgement here reuses the existing mechanisms — `verify_identity` for ownership
         and the canonical remote, `dirty_report` for cleanliness, `_frozen_ref` for the
@@ -630,7 +637,7 @@ class BinaryOpsMixin:
             return self._retire_body(stack_id, state, rec, why, force=force, locked=locked,
                                      txn=txn)
         # An OPEN transaction makes every receipt non-authoritative: recover FIRST, so what we
-        # retire is the settled install and not a half-published one (audit finding).
+        # retire is the settled install and not a half-published one.
         if bi.read_journal(self._paths)[1] != "absent":
             _rok, _rwhy = self.binary_recover()
             if not _rok:
@@ -654,7 +661,7 @@ class BinaryOpsMixin:
                                 next_commands=[f"lhpc clean {stack_id} --purge --yes"])
         if rec is None:
             # "Ownership unknown" is never a successful cleanup: the receipt is KEPT as the only
-            # remaining evidence, and the caller reports INCOMPLETE (audit finding).
+            # remaining evidence, and the caller reports INCOMPLETE.
             return ActionResult(
                 False, f"Retirement of '{stack_id}' is INCOMPLETE — its binary receipt cannot "
                        "be read, so the installed files cannot be identified.",
@@ -716,7 +723,7 @@ class BinaryOpsMixin:
             except OSError as exc:
                 failed.append(f"{rel} ({exc})")
         # PROVE removal before dropping the receipt: a swallowed unlink failure would leave
-        # binary files behind with no ownership record at all (audit finding).
+        # binary files behind with no ownership record at all.
         still_there = [rel for rel in rec.files
                        if os.path.exists(self._paths.under(*rel.split("/")))]
         if still_there or failed:

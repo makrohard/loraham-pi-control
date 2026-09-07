@@ -1,4 +1,4 @@
-"""auto-install auto-install driver: lease boundary, immutable plan + reconciliation, dependency
+"""auto-install driver: lease boundary, immutable plan + reconciliation, dependency
 semantics, durable run marker (write-failure aborts; interrupted derivation; ack), TX
 coupling, run_id-bound log access. Deterministic: FakeSystem + disposable roots + real tmp
 git repos where identity proof is exercised."""
@@ -53,7 +53,7 @@ def _make_repo(path, remote=""):
 
 def test_running_required_host_test_is_deferred_in_auto_install_but_runs_explicitly(tmp_path, monkeypatch):
     """A component with `test_requires_running` (generic mechanism; no packaged stack uses it
-    today — meshcom's test.sh is self-sufficient) is DEFERRED in a auto-install sweep (never a false
+    today — meshcom's test.sh is self-sufficient) is DEFERRED in an auto-install sweep (never a false
     failure) and RUN by an explicit `lhpc test` (no auto_install_ctx)."""
     from contextlib import nullcontext
     svc = _svc(tmp_path)
@@ -71,6 +71,7 @@ def test_running_required_host_test_is_deferred_in_auto_install_but_runs_explici
         monkeypatch.setattr(svc, "_lifecycle", lambda: _FakeLife())
         monkeypatch.setattr(svc, "_auto_install_ctx_error", lambda ctx, paths: "")   # lock check elsewhere
         monkeypatch.setattr(svc, "_source_operation_guard", lambda *a, **k: nullcontext())
+        monkeypatch.setattr(svc, "_source_present", lambda c: True)            # fake sources
 
         # auto-install context present -> the flagged test is deferred, NOT run, NOT failed.
         r_bulk = svc.test("meshcom", tx=False, apply=True, auto_install_ctx=object())
@@ -322,7 +323,7 @@ def test_reconcile_absent_installs_unowned_blocks_orphan_blocks(tmp_path):
     import shutil
     shutil.rmtree(dest)                                          # orphaned record
     assert source_registry.write_record(svc._paths, source_registry.RegistryRecord(
-        "src/loraham-kiss-tnc", "", "backfilled", "", time.time(), "",
+        "src/loraham-kiss-tnc", "", "pinned", "", time.time(), "",
         ("loraham-kiss-tnc",)))
     action, why = svc._reconcile_group("src/loraham-kiss-tnc", comp)
     assert action == "blocked" and "orphaned" in why.lower()
@@ -335,7 +336,7 @@ def test_reconcile_valid_identity_updates_dirty_blocks(tmp_path):
     head = _make_repo(dest, remote=remote)
     paths = Paths(runtime_root=tmp_path)
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/loraham-kiss-tnc", remote, "backfilled", head, time.time(), "",
+        "src/loraham-kiss-tnc", remote, "pinned", head, time.time(), "",
         ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = ControllerService(system=RealSystem(), paths=paths)
     comp = next(c for s in svc.stacks() if s.id == "kiss"
@@ -2141,8 +2142,8 @@ def test_scope_partitions_work_and_never_leaks_a_sourceless_component(tmp_path):
     svc = _svc(tmp_path)
     for st, w in svc._auto_install_scope():
         assert all(c.source for c in w.source), st.id      # the load-bearing invariant
-        assert all(c.build_steps or c.build_cmd for c in w.build), st.id
-        assert all(c.test_argv or c.test_cmd for c in w.test), st.id
+        assert all(c.build_steps for c in w.build), st.id
+        assert all(c.test_argv for c in w.test), st.id
     svc2, _st = _sourceless_svc(tmp_path)
     pm = next(w for st, w in svc2._auto_install_scope() if st.id == "pkgmgd")
     assert pm.source == () and pm.build, "no sources, but real build work"
@@ -2227,7 +2228,7 @@ def test_gui_optional_component_skips_without_skipping_voice(tmp_path, monkeypat
 
 
 def test_runtime_blockers_ignore_the_gui_dropped_voice_main(tmp_path):
-    """IMAGE-BUILD-FOUND (v0.2.4 Lite): the REAL post-provision readiness gate counted the GTK
+    """The REAL post-provision readiness gate counted the GTK
     headers of voice's gui_optional MAIN as a stack blocker, failing the whole Lite image with
     'voice: BLOCKED (not startable — GTK 3 development headers ...)'. The gate must drop a
     gui-blocked gui_optional component exactly like build and start do. (_happy_ops stubs this
@@ -2281,3 +2282,43 @@ def test_marker_accepts_a_binary_row_selection():
         assert ai.valid_marker(marker) is True
     row["selected"]["version"] = "nonsense"                  # still strict
     assert ai.valid_marker(marker) is False
+
+
+def test_selection_refuses_a_source_channel_for_a_binary_installed_stack(tmp_path, monkeypatch):
+    """A stack installed from a binary has no source tree for the reconciler; choosing a source
+    selector for it is a channel switch, which only `lhpc install --source` performs. Refused up
+    front with that command (before this the row was BLOCKED mid-run with guidance that would
+    have destroyed the install)."""
+    from lhpc.core.services import ControllerService
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(ControllerService, "on_binary_channel", lambda self, sid: sid == "daemon")
+    scope = svc._auto_install_scope()
+    sel = {st.id: {"install": True, "version": "pinned", "tests": False, "tx": False}
+           for st, _ in scope}
+    errs = svc._auto_install_selection_errors(scope, sel)
+    assert errs == ["daemon: installed from a binary — switching to the pinned source channel "
+                    "is an install, not an auto-install run (lhpc install daemon --source pinned --yes)"]
+    sel["daemon"]["version"] = "binary"
+    assert not any("installed from a binary" in e for e in svc._auto_install_selection_errors(scope, sel))
+
+
+
+def test_binary_row_is_blocked_when_the_start_prerequisites_are_unmet(tmp_path, monkeypatch):
+    # Parity with the source path: a binary install that succeeded but cannot be started (an
+    # ungranted device group, a missing packaged binary, ...) is a BLOCKED row and the run is
+    # completed-with-failures — never "success" for a stack the operator cannot start.
+    _happy_ops(monkeypatch)
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    monkeypatch.setattr(ControllerService, "binary_install",
+                        lambda self, sid, apply=False, locked=False:
+                        ActionResult(True, f"installed {sid} from its published artifact"))
+    monkeypatch.setattr(ControllerService, "_auto_install_runtime_blockers",
+                        lambda self, st: (["meshtasticd is not installed"]
+                                          if st.id == "meshtastic" else []))
+    svc = _svc(tmp_path)
+    r = svc.auto_install(apply=True, tests=False, emit=lambda s: None)
+    status = svc.auto_install_status()
+    rows = {x["id"]: x for x in status["stacks"]}
+    assert rows["meshtastic"]["status"] == "blocked"
+    assert "not startable" in rows["meshtastic"]["detail"]
+    assert not r.ok and status["state"] == "completed-with-failures"

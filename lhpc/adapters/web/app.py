@@ -2,8 +2,10 @@
 
 The web layer is thin: every route renders fresh state or dispatches an action
 through `ControllerService` (the same service layer as the CLI — it never shells
-out to the CLI). GET routes are read-only; state-changing actions are POST-only,
-CSRF-protected, and show a plan + confirmation before applying.
+out to the CLI). GET routes are read-only; state-changing actions are POST-only and
+CSRF-protected. Lifecycle actions (`/action`), power, Wi-Fi changes, live radio settings and
+self-update show a plan + confirmation before applying (a routine Start/Restart runs directly);
+settings saves apply on the first POST.
 
 Security posture:
   * loopback bind only (enforced in `run_server`); never 0.0.0.0;
@@ -82,8 +84,7 @@ _HOST_MAX = 260                          # a Host header can never legitimately 
 def _host_only(raw: str) -> str:
     """The bare host from a `Host` header value: port stripped, IPv6 brackets stripped, lowercased.
 
-    `"[::1]:8443"` -> `"::1"`, `"pi.local:8443"` -> `"pi.local"`. A naive `split(":")[0]` yields `"["`
-    for the bracketed IPv6 form, which is why the hardcoded `::1` entry could never match. Bounded,
+    `"[::1]:8443"` -> `"::1"`, `"pi.local:8443"` -> `"pi.local"`.  Bounded,
     because the result is echoed back in the 400 body.
     """
     h = (raw or "").strip()[:_HOST_MAX]
@@ -116,7 +117,7 @@ def _ws_fetch_commands(host: str, root: str, active_labels=None) -> dict:
     shell-hostile string.
 
     `active_labels` gates the .p12 commands to CURRENTLY-ACTIVE certificates, matching the
-    browser Download link (LIVE-FOUND: a revoked cert's lingering export was still offered a
+    browser Download link (a revoked cert's lingering export was still offered a
     fetch command — a bundle that cannot authenticate). None = no gating (kept for the direct
     unit tests of command construction)."""
     import getpass
@@ -210,11 +211,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         app.secret_key = service.web_session_secret()
     except Exception:
         app.secret_key = _secrets.token_bytes(32)
-    # Cookie hardening. Secure (HTTPS-only) cookies are correct behind the nginx TLS boundary;
-    # disabled only when a caller explicitly marks the app non-productive (e.g. the bare
+    # Cookie hardening. Secure is OFF here so the bare interactive http mode and the test clients
+    # round-trip the session; run_server() turns it on for productive socket serving when the
+    # configured listener scheme is https. (e.g. the bare
     # interactive TCP mode / tests) so an http test client still round-trips the session.
     app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
-                      SESSION_COOKIE_SECURE=bool(app.config.get("LHPC_SECURE_COOKIES", False)))
+                      SESSION_COOKIE_SECURE=False)
 
     def _csrf_token() -> str:
         if "_csrf" not in session:
@@ -237,6 +239,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             return {"selfupdate": {"version": __version__, "head_short": "", "available": False,
                                    "ver_color": "grey", "commit_color": "grey",
                                    "update_available": False}}
+
+    @app.context_processor
+    def _inject_firewall_pending():
+        # A Webserver Apply the firewall gate deferred leaves a durable marker until the watchdog
+        # completes it after the firewall is verified. Every page shows a persistent notice with
+        # the click path while that marker exists: one `stat`, no network, fail-safe.
+        try:
+            return {"ws_apply_pending": bool(service.webserver_apply_pending())}
+        except Exception:
+            return {"ws_apply_pending": False}
 
     @app.context_processor
     def _inject_hardware():
@@ -362,8 +374,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                         addr = ""
                     else:                          # loopback (or unset) -> loopback address
                         addr = f"127.0.0.1:{w['port']}"
-                elif w.get("enabled"):
-                    # Enabled proxy: link to the proxy socket ONLY where it LIVE-listens. Exposed →
+                elif w.get("enabled") or w.get("live"):
+                    # Enabled (or still-live after a saved Disable) proxy: link to the proxy
+                    # socket ONLY where it LIVE-listens. Exposed →
                     # reached host; loopback → 127.0.0.1 for a LOCAL viewer only; loopback-remote or
                     # absent → no service address (the template shows an internal Settings/Apply link).
                     ls = w.get("listen_scope")
@@ -462,14 +475,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     _SRC_LABELS = (("binary", "Binary (prebuilt)"), ("pinned", "Known working"),
                    ("dev", "Development"), ("stable", "Latest stable"))
 
-    def auto_install_mod2_run_id_re():
-        from lhpc.core import auto_install as ai_mod
-        return ai_mod.RUN_ID_RE
-
-    def auto_install_mod_terminal_ok():
-        from lhpc.core import auto_install as ai_mod
-        return ai_mod.TERMINAL_OK
-
     @app.get("/auto-install")
     def auto_install_page():
         st = service.auto_install_status()
@@ -482,9 +487,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # ... including when the previous run's TERMINAL marker is still on disk (a new
         # run may start over it without acknowledgement) and during the brief "spawning"
         # phase — the POST redirect lands within milliseconds of the spawn.
-        if st is None or (not st.get("unsafe")
-                          and st.get("state") in auto_install_mod_terminal_ok()):
-            from lhpc.core import auto_install as ai_mod
+        from lhpc.core import auto_install as ai_mod
+        if st is None or (not st.get("unsafe") and st.get("state") in ai_mod.TERMINAL_OK):
             from lhpc.core import procident
             rstate, res = ai_mod.read_reservation(service._paths)
             if (rstate == "valid"
@@ -498,7 +502,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # actual output instead of silently falling back to the old run's card.
         spawn_failed = ""
         spawn_arg = request.args.get("spawn", "")
-        if (spawn_arg and auto_install_mod2_run_id_re().match(spawn_arg)
+        if (spawn_arg and ai_mod.RUN_ID_RE.match(spawn_arg)
                 and (st is None or st.get("run_id") != spawn_arg)):
             chunk = service.auto_install_log_chunk(spawn_arg, 0)
             if chunk.get("data"):
@@ -525,7 +529,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     and st.get("state") in ("completed", "completed-with-failures", "aborted")):
                 complog_seed = service.auto_install_component_log_seed(st["run_id"])
         return render_template(
-            "auto_install.html", version=__version__, runtime_root=_runtime_root(),
+            "auto_install.html", version=__version__,
             st=st, mode=mode, running=running, gate=gate, needs_ack=needs_ack,
             recovery=recovery, orphan_risk=orphan_risk,
             needs_process_confirmation=needs_process_confirmation,
@@ -544,7 +548,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         for row in service.auto_install_rows():
             sid = row["id"]
             sel[sid] = {"install": request.form.get(f"install:{sid}") == "yes",
-                        # per-stack default: binary where published, else the historical "dev"
+                        # per-stack default: binary where published, else "dev"
                         "version": request.form.get(f"version:{sid}", row["default_channel"]),
                         "tests": request.form.get(f"tests:{sid}") == "yes",
                         "tx": request.form.get(f"tx:{sid}") == "yes"}
@@ -600,8 +604,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 # page carrying the bound selection + one-time token.
                 token = _stage_tx_confirmation(canonical)
                 return render_template(
-                    "auto_install_confirm.html", version=__version__,
-                    runtime_root=_runtime_root(), selection=selection, canonical=canonical,
+                    "auto_install_confirm.html", version=__version__, selection=selection, canonical=canonical,
                     confirm_token=token, src_labels=_SRC_LABELS)
             why = _consume_tx_confirmation(token, canonical)
             if why:
@@ -685,7 +688,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             complog_seed = service.hmac_component_log_seed(st["run_id"])
         label, warning = _HMAC_ACTIONS[action]
         return render_template(
-            "hmac_apply.html", version=__version__, runtime_root=_runtime_root(),
+            "hmac_apply.html", version=__version__,
             sid=sid, action=action, action_label=label, warning=warning,
             disable_phrase=service.HMAC_DISABLE_CONFIRM,
             binary_block=service.hmac_binary_block(sid),
@@ -777,7 +780,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     def _stack_groups(band="", only_sid=None, cfg_sid="", *, fw_status=None, listeners=None):
         """Per-stack overview rows for the Stacks page. Each row now carries the FULL per-stack
-        detail (formerly the /stacks/<id> page): component statuses/evidence, system+build+runtime
+        detail: component statuses/evidence, system+build+runtime
         dependency diagnosis, needs-build, daemon parameters, known-working offer, restart-required
         and stack-scoped conflicts — all read-only, GET-safe. `band` is threaded (as the detail page
         did) into the band-aware views. `only_sid` limits the heavy per-stack build to ONE row (the
@@ -828,10 +831,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # offers Run, the start gate refuses "not built", and no button can fix it.
             # SOURCE-LESS ONLY: a sourced stack must be installed (cloned) before Build makes
             # sense, and offering it earlier would just fail.
-            buildable = bool(main and not main.source
-                             and (main.build_steps or main.build_cmd))
+            buildable = bool(main and not main.source and main.build_steps)
             installed = bool(has_source and main_status and main_status.source_state.value
-                             in ("match", "dirty", "differs", "unknown", "not-a-repo"))
+                             in ("match", "dirty", "differs", "unknown", "not-a-repo", "binary"))
             _unbuilt = service.unbuilt_components(stack.id)
             # A fetched-binary stack has no clone, so the source-gated Uninstall/Clean line never
             # rendered for it — yet `lhpc uninstall graywolf` works and DOES remove the fetched
@@ -1000,7 +1002,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         except Exception:
             _ws = None
         ctx = {
-            "version": __version__, "runtime_root": _runtime_root(), "snapshot": snapshot,
+            "version": __version__, "snapshot": snapshot,
             "summary": summarize(snapshot), "groups": groups, "auto_install_mode": service.auto_install_mode(),
             "observed_conflicts": service.observed_conflicts(snapshot),   # band-aware
             "controller": service.controller_status(),
@@ -1051,8 +1053,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                                   hw_probe=session.pop("hw_probe", None))
         # GPS is a GLOBAL box setting and belongs to NO stack — it is not a daemon setting and
         # not a per-stack one. Rendered as its own card on this page so it is visible without
-        # expanding any row; the per-stack pages still show it beside their `use_gps` switch,
-        # and every copy edits the same setting.
+        # expanding any row; the per-stack Settings carry only their own `use_gps` switch.
         try:
             ctx.setdefault("gps_global", service.gps_view())
         except (OSError, ValueError, AttributeError, KeyError):
@@ -1089,7 +1090,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # Read-only: every dependency of LHPC, the web server and each INSTALLED stack, with a fulfill
         # action or copyable command for each unmet one. No mutation / subprocess on load.
         return render_template("dependencies.html", overview=service.dependency_overview(),
-                               version=__version__, runtime_root=_runtime_root())
+                               version=__version__)
 
     @app.post("/self-update/check")
     def self_update_check():
@@ -1255,7 +1256,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # Stage 2 — trigger. Consent only sets the request marker's payload bit
         # (normal|overwrite); a stale overwrite tick with a meanwhile-clean, fast-forwardable tree
         # drops to normal. repair_and_trigger delegates straight to the marker trigger when the units
-        # are already canonical, and otherwise migrates a legacy same-root deployment (old/%h units,
+        # are already canonical, and otherwise migrates a non-canonical same-root deployment (old/%h units,
         # no .path) to the canonical set first — all in this one click.
         overwrite = (request.form.get("overwrite") == "yes"
                      and (service.self_update_local_dirty() or service.self_update_ff_blocked()))
@@ -1263,14 +1264,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not res.ok:
             flash(res.summary, "warn")
             return _render_stacks()
-        return render_template("updating.html", version=__version__,
-                               runtime_root=_runtime_root())
+        return render_template("updating.html", version=__version__)
 
     @app.get("/stacks/<stack_id>")
     def stack_detail(stack_id: str):
-        # The per-stack detail page was folded into the /stacks overview (collapsible sections
-        # per stack). This URL is kept as a redirect so bookmarks/links survive: it opens the
-        # stack's row on the overview. Unknown stack -> 404 (as before).
+        # Redirects to the stack's row on the /stacks overview. Unknown stack -> 404.
         if service.build_snapshot().stack(stack_id) is None:
             abort(404)
         return redirect(url_for("stacks_overview", open=stack_id) + "#stackrow-" + stack_id)
@@ -1332,8 +1330,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.post("/radio/<band>/set")
     def radio_set(band: str):
-        # Apply a LIVE daemon setting (runtime) — same two-step plan + confirm as
-        # every other mutation (P0.7). First POST shows the plan; a confirmed POST
+        # Apply a LIVE daemon setting (runtime) — a two-step plan + confirm, like install/update/clean.. First POST shows the plan; a confirmed POST
         # applies. The key is whitelisted by the service; nothing transmits.
         if band not in ("433", "868"):
             abort(404)
@@ -1344,8 +1341,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if request.form.get("confirmed") != "yes":
             plan = service.daemon_set(band, key, value, apply=False)
             fsk = key.upper() == "MODE" and value.upper() == "FSK"
-            return render_template("confirm_radio.html", version=__version__,
-                                   runtime_root=_runtime_root(), band=band,
+            return render_template("confirm_radio.html", version=__version__, band=band,
                                    key=key, value=value, plan=plan, fsk=fsk,
                                    warn_stacks=service.running_lora_stacks(band) if fsk else [])
         result = service.daemon_set(band, key, value, apply=True)
@@ -1358,7 +1354,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     def _redirect_for(target: str):
         # Actions launched from the dashboard return to the dashboard; otherwise land on the
-        # target's stack row on the /stacks overview (the detail page was folded in there).
+        # target's stack row on the /stacks overview .
         if request.form.get("from") == "dash":
             return redirect(url_for("dashboard"))
         sid = service.stack_of(target)
@@ -1403,7 +1399,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         cancel_href = (url_for("dashboard") if (frm == "dash" or not sid)
                        else url_for("stacks_overview", open=sid) + "#stackrow-" + sid)
         return render_template(
-            "confirm.html", version=__version__, runtime_root=_runtime_root(),
+            "confirm.html", version=__version__,
             op=op, target=target, plan=plan, tx=("tx" in op),
             source=source, band=band,
             blockers=(plan.data.get("blockers") if op in ("start", "restart") else None),
@@ -1448,7 +1444,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 return _redirect_for(target)
         # Source version selector (only meaningful for install/update). A MISSING selector defaults
         # to the CLI's `default_channel` — binary wherever it is published (a fresh Pi must not
-        # silently start a four-hour compile because nobody touched the selector), the historical
+        # silently start a four-hour compile because nobody touched the selector), the
         # "dev" everywhere else. An INVALID selector is rejected by run_action (never silently
         # rewritten). A binary plan does fetch the index, so an offline box renders a typed refusal
         # that offers the source channel — the honest outcome, not a source build nobody asked for.
@@ -1507,7 +1503,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # dev package / header / device node of a non-optional component is missing. Optional
             # deps only warn (surfaced on the confirm page), so they never block here.
             missing = (service.install_dep_gate(target)["block"]
-                       if op in ("install", "build") else [])
+                       if (op == "build" or (op == "install" and source != service.BINARY_CHANNEL))
+                       else [])                     # a binary download needs no build toolchain
             if missing:
                 flash("System dependencies missing — install them first: "
                       + "; ".join(d["install"] for d in missing if d["install"]), "warn")
@@ -1570,8 +1567,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         job = _safe_job(request.args.get("job"))
         band = _safe_band(request.args.get("band"))
         path, lines = service.log_tail(target, 300, job=job, band=band)
-        return render_template("logs.html", version=__version__,
-                               runtime_root=_runtime_root(), target=target, job=job,
+        return render_template("logs.html", version=__version__, target=target, job=job, band=band,
                                stack_id=service.stack_of(target), path=path, lines=lines,
                                running=service.log_running(target, job))
 
@@ -1801,7 +1797,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                message="Internal error — see the server log."), 500
 
     # ---- Webserver: controller-owned component, rendered INLINE in the controller row on
-    # /stacks (no separate page). This route only redirects old bookmarks to that anchor.
+    # /stacks (no separate page). This route redirects to that anchor.
     @app.route("/stacks/loraham-pi-control")
     def controller_webserver():
         return redirect(url_for("stacks_overview") + "#webserver-row")
@@ -1812,16 +1808,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # a bounded no-follow tail (no service probe). `src` is whitelisted to error|access.
         src = "access" if request.args.get("src") == "access" else "error"
         path, lines = service.webserver_log_tail(src, 300)
-        return render_template("webserver_logs.html", version=__version__,
-                               runtime_root=_runtime_root(), src=src, path=path, lines=lines)
+        return render_template("webserver_logs.html", version=__version__, src=src, path=path, lines=lines)
 
     @app.get("/firewall/logs")
     def firewall_logs():
         # The managed firewall's per-check diagnostic log (/run/lhpc-firewall/firewall.log),
         # written by the root helper and read GET-safe (bounded no-follow). tmpfs — per boot.
         path, lines = service.firewall_log_tail(300)
-        return render_template("firewall_logs.html", version=__version__,
-                               runtime_root=_runtime_root(), path=path, lines=lines)
+        return render_template("firewall_logs.html", version=__version__, path=path, lines=lines)
 
     @app.get("/controller/logs")
     def controller_logs():
@@ -1836,8 +1830,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             src = "web"
         unit = _SRC_UNITS[src]
         path, lines = service.controller_log_tail(src, 300)
-        return render_template("controller_logs.html", version=__version__,
-                               runtime_root=_runtime_root(), src=src, unit=unit,
+        return render_template("controller_logs.html", version=__version__, src=src, unit=unit,
                                path=path, lines=lines)
 
     def _ws_back():
@@ -1849,8 +1842,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         res = service.set_boot_restore(request.form.get("restore") == "on")
         flash(res.summary, "ok" if res.ok else "warn")
-        # The switch lives on the dashboard's System box; return where it was pressed.
-        return redirect(url_for("dashboard")) if request.form.get("from") == "dash" else _ws_back()
+        return redirect(url_for("dashboard"))          # the switch lives on the dashboard's System box
 
     @app.route("/webserver/configure", methods=["POST"])
     def webserver_configure():
@@ -2033,10 +2025,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         f = request.form
         op, label = f.get("op", ""), f.get("label", "")
-        if op in ("issue", "reissue"):
+        if op == "issue":
             pw = _secrets.token_urlsafe(18)     # one-time; shown once, never persisted/logged
-            fn = service.webserver_cert_issue if op == "issue" else service.webserver_cert_reissue
-            r = fn(label, pw)
+            r = service.webserver_cert_issue(label, pw)
             if r.ok:
                 flash(f"{r.summary}. One-time passphrase (record it now): {pw}", "ok")
                 if peer_is_loopback():
@@ -2053,8 +2044,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             else:
                 r = service.webserver_cert_revoke(label)
                 flash(r.summary, "ok" if r.ok else "err")
-        elif op == "discard":
-            flash(service.webserver_cert_discard_export(label).summary, "ok")
         else:
             flash("unknown certificate action", "err")
         return _ws_back()
@@ -2102,7 +2091,7 @@ UPDATE_CHECK_MAX_HOURS = 168
 
 def update_check_interval_s() -> float:
     """Resolve `[web] update_check_hours` from config/local.toml to seconds (0 = disabled).
-    Bad type / out-of-range values fall back to the clamped default — never an exception
+    A bad type falls back to the default; out-of-range values are clamped to 1..168 — never an exception
     (this runs on server startup)."""
     try:
         from lhpc.core.config import load_config
@@ -2169,15 +2158,13 @@ def run_server(host: str = "127.0.0.1", port: int = 8770, socket: bool = False) 
             #   * the trusted-host policy must be enforced whenever we serve through nginx;
             #   * Secure cookies only make sense when the LISTENER is https — a browser DROPS a
             #     Secure cookie over plain http, which would silently break the CSRF session.
-            # Gating `_trusted_host` on SESSION_COOKIE_SECURE (as before) would therefore have
-            # switched the host allowlist OFF the moment an operator chose an http console.
+            #
             try:
                 from lhpc.core.config import load_config as _load_config
                 _scheme = _load_config(_resolve_paths()).webserver.scheme
             except Exception:
                 _scheme = "https"
-            app.config.update(LHPC_PRODUCTIVE=True,
-                              SESSION_COOKIE_SECURE=(_scheme == "https"))
+            app.config.update(SESSION_COOKIE_SECURE=(_scheme == "https"))
         # Best-effort, NON-BLOCKING upstream freshness checks (process startup + a slow
         # periodic loop — NOT GET routes) so the footer's "Update →" indicator appears
         # without the operator pressing "Check for updates". One check right away (existing

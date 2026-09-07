@@ -5,8 +5,6 @@
 # is safe to commit.
 
 [web]
-host = "127.0.0.1"     # loopback only; non-loopback is rejected by the server
-port = 8770
 # Background upstream update check (git fetch) inside the web console, so the footer's
 # "Update ->" indicator appears without pressing "Check for updates". Hours between
 # checks; clamped 1..168; 0 disables the loop (one check at startup still runs).
@@ -39,7 +37,7 @@ port = 8443                 # standard high port (no root / privileged bind requ
 access_mode = "local-open-remote-auth"
 remote_exposed = false      # remote access is opt-in and stays off until explicitly enabled + proven
 # Lists are stored as comma-separated scalars (local.toml is flat-scalar). IPv4 CIDRs only
-# for remote allowed sources (IPv6 remote exposure is rejected this milestone; ::1 is local).
+# for remote allowed sources (IPv6 remote CIDRs are rejected; ::1 is local).
 allowed_cidrs = ""          # e.g. "192.168.0.0/24" — at least one required before remote exposure
 dns_sans = ""               # e.g. "pi.local,lhpc.example" — real hostnames for the server cert
 ip_sans = ""                # e.g. "192.168.0.10" — LAN IP SANs (never 0.0.0.0)

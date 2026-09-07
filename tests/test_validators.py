@@ -198,7 +198,7 @@ def test_voice_params_all_validate_defaults():
 
 
 def test_audit_port_rejects_zero():
-    # AUDIT IN4: port 0 passed field validation but parse_endpoint requires >0.
+    # Port 0 passed field validation but parse_endpoint requires >0.
     import pytest
     from lhpc.core import validators
     with pytest.raises(validators.ValidationError):
@@ -207,7 +207,7 @@ def test_audit_port_rejects_zero():
 
 
 def test_audit_float_kind_enforces_bounds():
-    # AUDIT IN3: float kind ignored declared min/max.
+    # Float kind ignored declared min/max.
     import pytest
     from lhpc.core import validators
     class P:
@@ -220,7 +220,7 @@ def test_audit_float_kind_enforces_bounds():
 
 
 def test_audit_positional_free_text_rejects_leading_dash():
-    # AUDIT S2: a positional (no arg, no named validator) value starting with '-' would
+    # A positional (no arg, no named validator) value starting with '-' would
     # be parsed as an option by a GNU target.
     import pytest
     from lhpc.core import validators

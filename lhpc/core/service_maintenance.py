@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import ClassVar
 
-from . import runtime_fs
+from . import runtime_fs, source_fs, source_registry
 from .model import RunState
 from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
@@ -33,8 +33,7 @@ class MaintenanceOpsMixin:
         Update/Clean invalidates it) — it costs nothing, the probe already runs `rev-parse HEAD`.
 
         UNKNOWN vs ERROR: "no remote / not installed / invalid remote" is `unknown` (nothing to
-        compare), while a probe that RAN and failed (ls-remote or rev-parse) is `error`. Collapsing
-        both — as the old `update_status` did — reported an unreachable network as "nothing to
+        compare), while a probe that RAN and failed (ls-remote or rev-parse) is `error`. Collapsing both — as `update_status` does — reports an unreachable network as "nothing to
         compare", which reads far too much like "fine".
         """
         from . import stackupdates
@@ -47,14 +46,19 @@ class MaintenanceOpsMixin:
                 and getattr(self, "binary_covers", None) and self.binary_covers(comp.id)):
             sid = self.stack_of(comp.id) or comp.id
             fresh = self.binary_freshness(sid)
+            _st, rec, _why = self.binary_receipt_state(sid)
+            # The verdict is tied to the head it was computed against; on the binary channel
+            # that is the receipt's component commit (the status probe reports the same one),
+            # else effective_status() downgrades the entry to "unchecked" and nothing renders.
             return {**entry, "source_path": comp.source.path, "channel": "binary",
+                    "local_head_at_check": rec.components.get(comp.id, "") if rec else "",
                     "status": (stackupdates.BEHIND if fresh["state"] == "behind"
                                else stackupdates.UP_TO_DATE)}
         if comp is None or comp.source is None or not comp.source.remote:
             return {**entry, "status": stackupdates.UNKNOWN}
         entry["source_path"] = comp.source.path
         src = self._paths.resolve_source(comp.source.path)
-        if not src.is_dir():
+        if not source_fs.source_present(self._paths, src):
             return {**entry, "status": stackupdates.UNKNOWN}      # not installed -> NO network
         remote = self.config().remotes.get(comp.id) or comp.source.remote
         # Revalidate the (possibly hand-edited) remote IMMEDIATELY before git — an invalid
@@ -96,7 +100,7 @@ class MaintenanceOpsMixin:
             return "up-to-date"
         if status == stackupdates.BEHIND:
             return "update-available"
-        return "unknown"                                          # incl. ERROR — legacy contract
+        return "unknown"                                          # incl. ERROR
 
     def _source_check_targets(self, target: str):
         """(components, error) for a source-freshness sweep. Unlike `_resolve`, this selects on
@@ -149,7 +153,7 @@ class MaintenanceOpsMixin:
             required = {dep for c in comps if not c.optional for dep in c.build_requires}
             for c in comps:
                 if c.optional and c.id not in required and c.source and \
-                        not self._paths.resolve_source(c.source.path).is_dir():
+                        not source_fs.source_present(self._paths, self._paths.resolve_source(c.source.path)):
                     excused.add(c.id)
         results, details = {}, []
         counts = {stackupdates.BEHIND: 0, stackupdates.UP_TO_DATE: 0,
@@ -237,7 +241,8 @@ class MaintenanceOpsMixin:
                     if dep is not None and dep.source is not None:  # noqa: SIM102
                         # the build edge holds only while the CONSUMER's own source is
                         # installed (an uninstalled daemon no longer references RadioLib)
-                        if c.source is None or self._paths.resolve_source(c.source.path).exists():
+                        if c.source is None or source_fs.source_present(
+                                self._paths, self._paths.resolve_source(c.source.path)):
                             consumers.setdefault(dep.source.path, set()).add(c.id)
         return consumers
 
@@ -254,9 +259,8 @@ class MaintenanceOpsMixin:
     def _shared_remote_conflict(self, source_path: str) -> str | None:
         """A source path is ONE checkout and must have ONE effective remote. Returns a typed
         detail when the current consumers' normalized effective remotes diverge (e.g. a
-        legacy hand-edited per-component override) — destructive operations and known-working
+        a hand-edited per-component override) — destructive operations and known-working
         confirmation must fail closed on it, with zero source mutation."""
-        from . import source_registry
         seen: dict = {}
         for c in self._path_declarers(source_path):
             seen.setdefault(source_registry.norm_remote(self._effective_remote(c)),
@@ -515,7 +519,7 @@ class MaintenanceOpsMixin:
             for d in grp["deps"]:
                 # `bootstrap: False` = surfaced on the panel/doctor ONLY, never folded into the
                 # generated bootstrap script (the power-rule copybox embeds THIS box's username
-                # and has its own dedicated, opt-out scaffold — folding it here would duplicate
+                # And has its own dedicated, opt-out scaffold — folding it here would duplicate
                 # the install, defeat --no-power-controls, and bake the generator machine's
                 # username into the committed snapshot).
                 if d.get("bootstrap", True) is False:
@@ -574,7 +578,7 @@ class MaintenanceOpsMixin:
 
     def _power_authorized(self, kind: str) -> bool:
         """Cached PER-ACTION logind verdict gating VISIBILITY (buttons, /power routes, the
-        dependency panel's satisfied flag). LIVE-FOUND: the original presence probe stat()ed
+        dependency panel's satisfied flag). The original presence probe stat()ed
         the rule file, but Debian ships /etc/polkit-1/rules.d as 0750 root:polkitd —
         unreadable to the operator process, so the probe read False on a perfectly authorized
         box. logind's own CanReboot/CanPowerOff answer is the same ground truth the apply
@@ -626,7 +630,7 @@ class MaintenanceOpsMixin:
             kind = rec["kind"]
             bid = rec["boot_id"]
             up0 = rec["requested_uptime"]
-            # AUDIT-FOUND: validate TYPES before use — `str()`/`float()` coercion laundered a
+            # Validate TYPES before use — `str()`/`float()` coercion laundered a
             # null boot_id ("None") and a NaN uptime (every comparison False) straight into the
             # fail-open prune path. Closed-set kind, nonempty string boot id, finite
             # nonnegative numeric uptime — anything else is MALFORMED and refuses below.
@@ -642,7 +646,7 @@ class MaintenanceOpsMixin:
         from .lifecycle import current_boot_id
         cur = current_boot_id()
         if not cur:
-            # AUDIT-FOUND: an UNREADABLE current boot id must not read as "different boot" —
+            # an UNREADABLE current boot id must not read as "different boot" —
             # the marker may belong to THIS boot with the delayed action still live. Refuse
             # and RETAIN (fail closed); admission reopens when the boot id reads again.
             return (f"a {kind} may be pending and this boot's identity cannot be read — "
@@ -680,7 +684,7 @@ class MaintenanceOpsMixin:
                            "to unplug once shutdown completes; running stacks come back via "
                            "boot-restore on the next power-on")
             if kind == "reboot":
-                # LIVE-FOUND: a rebooting AP box "looks shut down" from the outside — the AP
+                # A rebooting AP box "looks shut down" from the outside — the AP
                 # vanishes for a minute or two and phones/PCs silently fall back to another
                 # network instead of re-joining. Say so before the operator concludes failure.
                 details.append("  [note] this box's Wi-Fi AP disappears for a minute or two "
@@ -808,7 +812,6 @@ class MaintenanceOpsMixin:
     def _parse_utc(self, ts):
         """Bounded parse of the canonical persisted UTC timestamp -> epoch seconds, or None."""
         import calendar
-        import time
         try:
             return calendar.timegm(time.strptime(str(ts), "%Y-%m-%dT%H:%M:%SZ"))
         except (ValueError, TypeError):
@@ -831,8 +834,8 @@ class MaintenanceOpsMixin:
         never masks this attempt's derived unsafe. Read-only (never `active_jobs(cleanup=True)`)."""
         from . import webjob_gate
         op, st = rec.get("op", ""), rec.get("state")
-        # A start/restart job's hint is the operation's own summary (the result the synchronous
-        # start used to flash), carried in the marker detail — never a secret, never a path.
+        # A start/restart job's hint is the operation's own summary (the operation's own summary),
+        # carried in the marker detail — never a secret, never a path.
         _detail = rec.get("detail", "") if op in ("start", "restart") else None
         if st == "done":
             return "done", self._JOB_HINT.get((op, "done")) or _detail
@@ -852,7 +855,6 @@ class MaintenanceOpsMixin:
         ✕-dismissible, unsafe needs Recover). Every helper is file+/proc read only — no marker mutation
         (jobs use `active_jobs(cleanup=False)`/`log_running`/`jobresult.read_results`, all no-follow, bounded).
         Colours: running=yellow, done=green, failed/unsafe=red."""
-        import time
 
         from . import jobresult
         now = int(time.time())
@@ -864,10 +866,7 @@ class MaintenanceOpsMixin:
 
             Rejects the FUTURE as well as the past. A Pi has no RTC, and the image ships an
             auto-install marker stamped at BUILD time, so a freshly flashed box starts with its
-            clock at the base-image date — weeks BEFORE that marker. The old test was
-            `age >= EXPIRY`, and a negative age never satisfies it, so the green "finished" pin
-            stayed up permanently; on a box with no route to NTP (Lite serving its own AP) it never
-            cleared at all. Measured: clock 2026-06-18, marker 2026-08-07, age -4.4e6 s.
+            clock at the base-image date — weeks BEFORE that marker.
 
             A clock we cannot trust cannot measure age, and a transient success notice must fail
             toward hidden — the run's real outcome is on its own page either way. The symmetric
@@ -1111,7 +1110,6 @@ class MaintenanceOpsMixin:
         """True once the operator dismissed the "nothing installed yet" welcome banner. Plain
         marker, no signature: the banner is an onboarding hint, and an operator who has seen it
         does not need it again. It reappears only if the marker is removed."""
-        from . import runtime_fs
         try:
             runtime_fs.read_text(self._paths, self._welcome_note_marker())
             return True
@@ -1135,7 +1133,6 @@ class MaintenanceOpsMixin:
 
     def dep_note_dismissed(self, summary) -> bool:
         """True when the CURRENT optional/GUI shortfall is the one already dismissed."""
-        from . import runtime_fs
         try:
             return (runtime_fs.read_text(self._paths, self._dep_note_marker()).strip()
                     == self.dep_note_signature(summary))
@@ -1236,31 +1233,22 @@ class MaintenanceOpsMixin:
         never captured (coherence over coverage); an OPTIONAL component whose source was never
         adopted here (skipped GUI sidecar) is simply not part of it. Mutation-context only (may
         run local git)."""
-        from . import source_registry
         stack = self.stack(stack_id)
         if stack is None:
             return None
-        consumers = self._source_consumers()
         entries: dict = {}
         for c in stack.components:
             if c.source is None:
                 continue
             rel = c.source.path
             rec = source_registry.read_record(self._paths, rel)
-            if rec is None and c.optional and not self._paths.resolve_source(rel).exists():
+            if rec is None and c.optional and not source_fs.source_present(
+                    self._paths, self._paths.resolve_source(rel)):
                 # An OPTIONAL component whose source was never adopted on this box (a GUI
                 # sidecar skipped on a headless install) is not part of what runs here, so it
                 # is not part of the composition either — otherwise a Lite box could never
                 # confirm the stack. An adopted-but-unprovable source still refuses below.
                 continue
-            if rec is None or not rec.resolved_commit:
-                # Pre-registry adoption: origin-verify + BACKFILL a legacy record here in the
-                # mutation path (the same ownership proof update/uninstall require), so the
-                # composition — and the later offer validation — rests on registry truth.
-                dest = self._paths.resolve_source(rel)
-                rec, _why = source_registry.verify_or_backfill(
-                    self._paths, self._system, self.config(), c, dest,
-                    components=tuple(sorted(consumers.get(rel, {c.id}))))
             if rec is None or not rec.resolved_commit:
                 return None                              # unprovable component -> no composition
             entries[c.id] = {"commit": rec.resolved_commit, "selector": rec.selector,
@@ -1281,7 +1269,7 @@ class MaintenanceOpsMixin:
         """True when LHPC cannot start ANY component of this stack (each is interactive or
         externally supervised) — no lhpc start ⇒ no last-start candidate can ever exist, so
         the known-working offer/confirm may rest on the live probe + ownership registry
-        instead (F4: chat could never be confirmed)."""
+        instead ."""
         return not any(c.run_argv and not c.interactive for c in stack.components)
 
     def _registry_candidate(self, stack) -> dict | None:
@@ -1354,6 +1342,11 @@ class MaintenanceOpsMixin:
         cand = known_working.read_candidate(self._paths, stack_id)
         probe_basis = False
         if cand is None:
+            if not any(c.source and not self.binary_covers(c.id) for c in stack.components):
+                # Binary install or fetched release: nothing LHPC built, so there is no source
+                # composition to record — the offer never appears for such a stack, by design.
+                return ActionResult(False, f"'{stack_id}' has no source composition to record "
+                                    "(binary install or fetched release) — nothing to confirm.")
             if not self._manual_only_stack(stack):
                 return ActionResult(False, f"No healthy start is recorded for '{stack_id}' — "
                                     "start the stack first.")
@@ -1383,7 +1376,6 @@ class MaintenanceOpsMixin:
         src_paths = sorted({e.get("source_rel", "") for e in cand["entries"].values()
                             if e.get("source_rel")})
         comp_by_path = {c.source.path: c for c in stack.components if c.source}
-        from . import source_fs
         handles: dict = {}
         try:
             with self._source_operation_guard(src_paths or [stack_id], op="confirm"):
@@ -1455,16 +1447,16 @@ class MaintenanceOpsMixin:
     @invalidates_snapshot
     def update(self, target: str = "", apply: bool = False,
                source: str = "pinned", auto_install_ctx=None) -> ActionResult:
-        """Refresh the managed source(s) from GitHub (version per `source`:
-        dev/stable/pinned), falling back to the local checkout on failure. Skips
+        """Refresh the managed source(s) from the remote (version per `source`:
+        dev/stable/pinned); a failed `dev` adoption retries once at the known-working (else
+        manifest-pin) identity, disclosed. Skips
         optional libs/firmware unless one is targeted directly.
         """
         if (_r := self._controller_refusal(target)) is not None:
             return _r
         # ---- BINARY channel dispatch ----------------------------------------------------
         # Moving a SOURCE-installed stack (back) onto the published artifact is an install, and
-        # must be routed as one: the source planners only understand pinned/dev/stable, so a
-        # "binary" selector reaching them silently performed a SOURCE update instead.
+        # must be routed as one: the source planners only understand pinned/dev/stable, so a "binary" selector must never reach them.
         if source == self.BINARY_CHANNEL and not (target and self.on_binary_channel(target)):
             if not target:
                 return ActionResult(
@@ -1475,24 +1467,12 @@ class MaintenanceOpsMixin:
                                     next_commands=[f"lhpc update {target} --source pinned "
                                                    "--yes"])
             return self.binary_install(target, apply=apply)
-        # A binary-installed stack updates binary→binary when the publisher has caught up with
-        # the manifest pins; when the artifact LAGS, switching to source is a long compile, so
-        # it is offered as an explicit choice, never performed implicitly.
+        # A binary-installed stack updates binary→binary: whether the PUBLISHED artifact has
+        # caught up with the manifest pins is decided by the install's pin check against the
+        # index (the installed receipt lagging the pins says nothing about the publisher).
+        # A lagging artifact is refused there with the source channel as an explicit offer.
         if target and self.on_binary_channel(target):
             if source == self.BINARY_CHANNEL:
-                fresh = self.binary_freshness(target)
-                if fresh["state"] == "behind":
-                    return ActionResult(
-                        False,
-                        f"A newer version of '{target}' exists, but only as source: the "
-                        "published binary was built from older commits.",
-                        details=["  behind for: " + ", ".join(fresh["behind"]),
-                                 "  Switching to the source channel means a full local build "
-                                 "(this can take hours on a Pi).",
-                                 f"  Staying on the binary keeps {target} exactly as it is."],
-                        next_commands=[f"lhpc install {target} --source pinned --yes"],
-                        data={"binary_behind": fresh["behind"], "offer_source": True,
-                              "channel": "binary"})
                 return self.binary_install(target, apply=apply)
             # An EXPLICIT source selector is an intentional channel switch: install handles the
             # retirement + clone, so point there rather than half-updating a binary tree.
@@ -1528,7 +1508,7 @@ class MaintenanceOpsMixin:
                                f"{c.source.remote or 'local checkout'}")
             return ActionResult(
                 True, f"Update plan for '{target or 'all'}': refresh {len(items)} source(s) "
-                "from GitHub (local fallback).",
+                "from the remote.",
                 details=details,
                 next_commands=[f"lhpc update {target} --yes"] if items else [],
                 data={"changes": len(items)})
@@ -1647,9 +1627,7 @@ class MaintenanceOpsMixin:
              captured leaf, re-proven after the detach, and only then removed. An external
              substitution at any point is preserved and reported — never deleted.
 
-        A linked source loses only its verified runtime symlink LEAF; the external target is
-        never modified. Returns (removed, detail-lines)."""
-        from . import source_fs, source_registry
+         Returns (removed, detail-lines)."""
         conflict = self._shared_remote_conflict(path)
         if conflict:
             return False, [f"  [refused] {path}: {conflict}"]
@@ -1710,8 +1688,6 @@ class MaintenanceOpsMixin:
         edges; an ABSENT leaf with a lingering ownership record becomes an ORPHAN-cleanup
         item. The APPLY path calls this again UNDER the operation locks so the destructive
         set is derived from post-lock reality, never a stale preflight."""
-        from . import source_fs as _sfs
-        from . import source_registry as _sreg
         consumers = self._source_consumers()
         to_remove: dict = {}
         kept: list = []
@@ -1719,11 +1695,11 @@ class MaintenanceOpsMixin:
         for _, c in items:
             path = c.source.path
             try:
-                kind = _sfs.leaf_kind(self._paths, self._paths.resolve_source(path))
+                kind = source_fs.leaf_kind(self._paths, self._paths.resolve_source(path))
             except PathContainmentError:
                 kind = "special"
             if kind == "absent":
-                if _sreg.read_record(self._paths, path) is not None and path not in orphans:
+                if source_registry.read_record(self._paths, path) is not None and path not in orphans:
                     orphans.append(path)
                 continue
             remaining = sorted(self._live_consumers(path, consumers) - target_ids)
@@ -1738,10 +1714,9 @@ class MaintenanceOpsMixin:
         """LIVE consumer membership of a shared source path: the manifest declarers
         INTERSECTED with the ownership record's `components` (departures are decremented
         there by uninstall/clean, so a sibling that already departed no longer keeps the
-        leaf alive). Absent/legacy record -> manifest fallback (safe-side keep)."""
-        from . import source_registry as _sreg
+        leaf alive). Absent/unowned record -> manifest fallback (safe-side keep)."""
         manifest = set(consumers.get(path, set()))
-        state, rec, _why = _sreg.record_state(self._paths, path)
+        state, rec, _why = source_registry.record_state(self._paths, path)
         if state == "valid" and rec.components:
             # Membership tracks DIRECT declarers only; DERIVED consumers (build_requires
             # edges, e.g. the daemon needing RadioLib) are live by construction and are
@@ -1755,18 +1730,17 @@ class MaintenanceOpsMixin:
         """Durably record the departing stack's components leaving each KEPT shared
         path's ownership record (under the caller's held source locks). A failed rewrite
         is a truthful INCOMPLETE — the retry converges. Returns overall ok."""
-        from . import source_registry as _sreg
         ok = True
         for path, _remaining in kept:
-            state, rec, _why = _sreg.record_state(self._paths, path)
+            state, rec, _why = source_registry.record_state(self._paths, path)
             if state != "valid":
-                continue                          # legacy/unowned: manifest fallback rules
+                continue                          # unowned: manifest fallback rules
             new_members = set(rec.components) - set(target_ids)
             if set(rec.components) == new_members:
                 continue                          # nothing of ours recorded there
             if not new_members:
                 continue                          # would be empty -> removal path owns it
-            if _sreg.update_components(self._paths, path, new_members):
+            if source_registry.update_components(self._paths, path, new_members):
                 out.append(f"  [departed] {path}: now used by "
                            f"{', '.join(sorted(new_members))}")
             else:
@@ -1798,7 +1772,6 @@ class MaintenanceOpsMixin:
             return self._uninstall_prep_locked()
 
     def _uninstall_prep_locked(self) -> ActionResult:
-        from .model import RunState
         LIVE = (RunState.RUNNING, RunState.DEGRADED)
         # 1) a controller self-update in flight is incompatible with tearing the controller down
         try:
@@ -1948,7 +1921,6 @@ class MaintenanceOpsMixin:
         import json
 
         from . import reslock, runtime_fs, updater_units
-        from .paths import PathContainmentError
         path = self._paths.under(updater_units.UNINSTALL_GUARD)
         try:
             with reslock.operation_lock(self._paths, "uninstall.guard", "guard-release"):
@@ -1985,8 +1957,7 @@ class MaintenanceOpsMixin:
             st = self.stack(target)
             if st is not None:
                 # A PACKAGE-MANAGED stack (its artifact is fetched, not cloned) has no adopted
-                # source for uninstall to remove. Reporting "Unknown stack" was simply false —
-                # the same message then listed it among the known stacks. Uninstall stays
+                # source for uninstall to remove.  Uninstall stays
                 # source-scoped; the destructive purge is what owns the artifact.
                 arts = [c.build_root for c in st.components if c.build_root]
                 details = [f"  Its build artifact lives in {a} — removed by clean, not uninstall."
@@ -2161,8 +2132,6 @@ class MaintenanceOpsMixin:
 
         # Removal set (computed up front so the dry-run names EXACTLY what apply removes).
         consumers = self._source_consumers()
-        from . import source_fs as _sfs
-        from . import source_registry as _sreg
         src_remove, src_keep = [], []
         orphans: list = []                       # absent leaves with a stale ownership record
         for c in stack.components:
@@ -2173,11 +2142,11 @@ class MaintenanceOpsMixin:
                     or path in orphans:
                 continue
             try:
-                kind = _sfs.leaf_kind(self._paths, self._paths.resolve_source(path))
+                kind = source_fs.leaf_kind(self._paths, self._paths.resolve_source(path))
             except PathContainmentError:
                 kind = "special"
             if kind == "absent":
-                if _sreg.read_record(self._paths, path) is not None:
+                if source_registry.read_record(self._paths, path) is not None:
                     orphans.append(path)         # explicit retry clears the orphan record
                 continue
             remaining = sorted(self._live_consumers(path, consumers) - comp_ids)
@@ -2201,7 +2170,7 @@ class MaintenanceOpsMixin:
                    known_working.candidate_path(self._paths, sid),
                    self._restart_marker_path(sid),
                    known_working.store_path(self._paths, sid),
-                   # REVIEW-FOUND: a clean that promises a fresh slate must not leave a stale
+                   # a clean that promises a fresh slate must not leave a stale
                    # operator stop intent behind for the reinstall to inherit.
                    self._stop_intent_path(sid)]
 
@@ -2257,7 +2226,7 @@ class MaintenanceOpsMixin:
                 # ONLY NOW, with the stack PROVEN stopped under the locks, retire the
                 # binary — FORCEFULLY, because "remove every trace" must also survive an
                 # edited artifact file or an unsafe receipt. Retiring before the recheck
-                # could delete a running stack's binary and then abort (audit finding).
+                # could delete a running stack's binary and then abort.
                 if self.binary_receipt_state(sid)[0] != "absent":
                     _br = self.binary_retire(sid, force=True, locked=True)
                     out.append(f"  [binary] {_br.summary}")

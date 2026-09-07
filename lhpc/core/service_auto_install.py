@@ -1,4 +1,4 @@
-"""auto-install / ai-run driver: gates, claim, log streaming, markers, reconciliation.
+"""auto-install driver: gates, claim, log streaming, markers, reconciliation.
 
 Mixin of ControllerService (state/constants on the facade). Adapters import lhpc.core.services only."""
 from __future__ import annotations
@@ -48,7 +48,7 @@ class StackWork:
     """The DISJOINT work lists for one auto-install row.
 
     Carrying a single mixed component list and re-filtering it at each use is how a source-less
-    component reached source-only machinery (grouping, path/strategy resolution, adoption,
+    component reached source-only machinery (grouping, path resolution, adoption,
     update, transactions) and blew up on `c.source.path`. The partition is explicit instead:
     ONLY `source` may enter that machinery, `build` drives the build phase, `test` the host-test
     phase. A stack may legitimately have all three empty (a purely package-managed stack), which
@@ -68,8 +68,8 @@ class StackWork:
         skip = frozenset(skip or ())
         comps = tuple(c for c in stack.components if c.id not in skip)
         return cls(source=tuple(c for c in comps if c.source),
-                   build=tuple(c for c in comps if c.build_steps or c.build_cmd),
-                   test=tuple(c for c in comps if c.test_argv or c.test_cmd),
+                   build=tuple(c for c in comps if c.build_steps),
+                   test=tuple(c for c in comps if c.test_argv),
                    skipped=tuple(c.id for c in stack.components if c.id in skip))
 
 
@@ -106,11 +106,9 @@ class AutoInstallOpsMixin:
 
     def _auto_install_gate(self) -> str:
         """Typed reason a NEW auto-install run must not start; "" when clear — with the exact
-        recovery COMMAND appended to any acknowledgement-required refusal. Recovery used to be a
-        web-only action (auto_install_ack), and each refusal named only the guard it hit, so a
-        headless operator discovered the three leftover state files one at a time and cleared them
-        by hand. `lhpc auto-install --recover` clears them all in one acknowledged action; naming it
-        HERE means every consumer (start refusal, doctor, dashboard, status) tells the operator how."""
+        recovery COMMAND appended to any acknowledgement-required refusal: `lhpc auto-install
+        --recover` clears every leftover state file in one acknowledged action, and naming it HERE
+        means every consumer (start refusal, doctor, dashboard, status) tells the operator how."""
         return _recover_cmd_hint(self._auto_install_gate_raw())
 
     def _auto_install_gate_raw(self) -> str:
@@ -141,7 +139,7 @@ class AutoInstallOpsMixin:
                         f"): {res.get('reason', '')} — inspect/terminate the process, "
                         "then acknowledge (recover) with the confirmation")
             if procident.identity_matches(res.get("ident", {}), res.get("pid", -1)):
-                return "a auto-install run is already reserved/in progress"
+                return "an auto-install run is already reserved/in progress"
             return ("a previous auto-install start died holding its reservation — acknowledge "
                     "(recover) it before starting a new run")
         lstate, lease = ai_mod.read_lease(self._paths)
@@ -150,7 +148,7 @@ class AutoInstallOpsMixin:
                     "(recover) it before starting a new run")
         if lstate == "valid":
             if procident.identity_matches(lease.get("ident", {}), lease.get("pid", -1)):
-                return "a auto-install run is already in progress (lease held)"
+                return "an auto-install run is already in progress (lease held)"
             return ("a previous auto-install run died while holding its operation lease — "
                     "acknowledge (recover) it before starting a new run")
         st = self.auto_install_status()
@@ -160,7 +158,7 @@ class AutoInstallOpsMixin:
             return ("the auto-install run state is unreadable or malformed — acknowledge "
                     "(recover) it before starting a new run")
         if st["state"] in ("preparing", "running"):
-            return "a auto-install run is already in progress"
+            return "an auto-install run is already in progress"
         if st["state"] == "interrupted":
             return ("the previous auto-install run was interrupted — acknowledge (recover) it "
                     "before starting a new run")
@@ -189,7 +187,7 @@ class AutoInstallOpsMixin:
                     if res.get("run_id") != run_id:
                         if procident.identity_matches(res.get("ident", {}),
                                                       res.get("pid", -1)):
-                            return "a auto-install run is already reserved/in progress"
+                            return "an auto-install run is already reserved/in progress"
                         return _recover_cmd_hint(
                             "a previous auto-install start died holding its reservation — "
                             "acknowledge (recover) it before starting a new run")
@@ -218,7 +216,7 @@ class AutoInstallOpsMixin:
                                                      phase="claimed")
                 return "" if ok else f"auto-install run refused: {why}"
         except reslock.ResourceBusy:
-            return "a auto-install start is already in progress (start lock contended)"
+            return "an auto-install start is already in progress (start lock contended)"
 
     def auto_install_recovery_reason(self) -> str:
         """SAFE-SIDE recovery signal for GET rendering: the typed reason acknowledgement
@@ -324,7 +322,7 @@ class AutoInstallOpsMixin:
             with runtime_fs._walk_parent(self._paths, path, create=False) as (pfd, leaf):
                 fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=pfd)
         except FileNotFoundError:
-            # ABSENT: the log leaf does not exist YET. A auto-install component's step logs are
+            # ABSENT: the log leaf does not exist YET. An auto-install component's step logs are
             # registered in the marker before they are created (created one at a time as
             # the build runs), so an absent leaf is a FUTURE log — distinct from an unsafe
             # one, and the stream must WAIT at it, never frame or advance past it.
@@ -585,7 +583,7 @@ class AutoInstallOpsMixin:
         return ActionResult(True, "Abort requested — the driver is stopping the run.")
 
     def spawn_auto_install_job(self, selection: dict) -> tuple:
-        """Spawn the detached auto-install driver (`python -u -m lhpc auto-install --run-id …`) with
+        """Spawn the detached auto-install driver (`python -u -m lhpc auto-install --yes --run-id …`) with
         an identity-tracked job marker; the per-stack `selection` is carried via the plan file, not
         argv. Returns (log_name, error)."""
         from . import auto_install as ai_mod
@@ -733,7 +731,7 @@ class AutoInstallOpsMixin:
         except AdmissionRefused as _adm:
             return None, _adm.reason
         except reslock.ResourceBusy:
-            return None, "a auto-install start is already in progress"
+            return None, "an auto-install start is already in progress"
 
     def auto_install_dep_preflight(self, source: str = "") -> dict:
         """Per-stack install-time dependency gate across the auto-install scope, for the /auto-install page.
@@ -763,15 +761,16 @@ class AutoInstallOpsMixin:
         """Is this stack's managed material actually present?
 
         Every SOURCED component must be on disk AND every managed BUILD ARTIFACT must exist. The
-        artifact half matters because `all(...)` over an empty generator is True: a source-less
-        stack used to answer "installed" unconditionally, so a package-managed stack whose managed
-        CLI had never been provisioned reported itself complete. Mandatory RUNTIME prerequisites
+        artifact half matters because `all(...)` over an empty generator is True: without it a
+        source-less stack answers "installed" unconditionally, and a package-managed stack whose
+        managed CLI was never provisioned reports itself complete. Mandatory RUNTIME prerequisites
         (packaged binary, device groups, SPI, no conflicting service) are checked separately by
         `_auto_install_runtime_blockers` — they are a start gate, not an install fact."""
+        from . import source_fs
         work = StackWork.of(st)
         # Binary-covered components have no clone (the artifact IS the build output); their
         # readiness is decided by the physical artifact check in `is_built` alone.
-        if not all(self._paths.resolve_source(c.source.path).is_dir()
+        if not all(source_fs.source_present(self._paths, self._paths.resolve_source(c.source.path))
                    for c in work.source if not self.binary_covers(c.id)):
             return False
         return all(self.is_built(c) for c in work.build if not self.binary_covers(c.id))
@@ -792,8 +791,7 @@ class AutoInstallOpsMixin:
             # A gui_optional component whose GUI toolkit is absent is DROPPED by build and
             # start (headless-safe default) — the same predicate must hold here, or a Lite
             # box's auto-install reads voice as BLOCKED over the GTK headers it deliberately
-            # does not install (image-build-found: the v0.2.4 Lite image failed on exactly
-            # this). Non-GUI requirements of such a component still block normally.
+            # does not install . Non-GUI requirements of such a component still block normally.
             if getattr(c, "gui_optional", False) and any(getattr(r, "gui", False)
                                                          for r in reqs):
                 continue
@@ -863,6 +861,14 @@ class AutoInstallOpsMixin:
             if sel.get("version") == self.BINARY_CHANNEL and sel.get("tests"):
                 errs.append(f"{sid}: host tests need the source channel "
                             "(a binary install has no test tree)")
+            if (sel.get("install") and sel.get("version") != self.BINARY_CHANNEL
+                    and self.on_binary_channel(sid)):
+                # A binary install has no source tree to reconcile; the channel switch is an
+                # install (it retires the artifact transactionally), not an auto-install row.
+                errs.append(f"{sid}: installed from a binary — switching to the "
+                            f"{sel.get('version')} source channel is an install, not an "
+                            f"auto-install run (lhpc install {sid} --source "
+                            f"{sel.get('version')} --yes)")
             if sel.get("tx"):
                 if not self._auto_install_tx_capable(sid):
                     errs.append(f"{sid}: the TX test is not available for this stack")
@@ -942,7 +948,7 @@ class AutoInstallOpsMixin:
                        f"{', '.join(c.id for c in (w.source or w.build or st.components))}"
                        for st, w in scope]
             # No run-wide `--source` means every row uses its OWN default (binary where published,
-            # else dev) — say so instead of printing an empty value (live-found on the Zero).
+            # else dev) — say so instead of printing an empty value.
             details.append(f"  host tests: {'on' if tests else 'off'}; "
                            f"TX test: {'ON (real RF!)' if tx else 'off'}; "
                            f"source: {source or 'per stack (binary where published, else dev)'}")
@@ -1179,7 +1185,6 @@ class AutoInstallOpsMixin:
                         elif not any(c.test_argv for c in dstack[1].test):
                             tx_refused = "the daemon has no host test planned"
                 mode = self.auto_install_mode()
-                mode = {"mixed": "mixed"}.get(mode, mode)
                 rows = [{"id": st.id, "name": st.name,
                          "op": ("+".join(sorted({plan[c.source.path][0] for c in w.source}))
                                 or "system"),
@@ -1265,6 +1270,17 @@ class AutoInstallOpsMixin:
                         emit(f"  [ok] {st.id}: {br.summary}")
                         r["tests"] = {"ran": False, "ok": None,
                                       "detail": "skipped (binary install — no source tree)"}
+                        # The SAME start-prerequisite gate the source path runs: a provisioned
+                        # artifact with a missing device group, SPI device or packaged service
+                        # still cannot start, and the row must not read success.
+                        blockers = self._auto_install_runtime_blockers(st)
+                        if blockers:
+                            r["status"] = "blocked"
+                            r["detail"] = "not startable — " + "; ".join(blockers[:3])
+                            failed_stacks.add(st.id)
+                            emit(f"==== {st.id}: BLOCKED ({r['detail']}) ====")
+                            bw()
+                            continue
                         # "success" is THE terminal token every consumer keys on (run verdict,
                         # counters, TX gate, web badge) — "ok" silently reported failure.
                         r["status"] = "success"
@@ -1636,7 +1652,7 @@ class AutoInstallOpsMixin:
             if not stop_failed:
                 bw()
 
-    # ---- auto-install reconciliation + global plan (M2.0b) -------------------------
+    # ---- auto-install reconciliation + global plan -------------------------
 
     def _reconcile_group(self, path: str, comp) -> tuple:
         """Per-SOURCE-GROUP action decision (never `is_installed(stack)` guessing):
@@ -1672,7 +1688,7 @@ class AutoInstallOpsMixin:
             dirty = inst.dirty_report(dest, path)
             if dirty:
                 return "blocked", ("local changes present — commit/stash or Clean before "
-                                   "a auto-install update touches this checkout")
+                                   "an auto-install update touches this checkout")
         return "update", ""
 
     def auto_install_mode(self) -> str:
@@ -1737,7 +1753,7 @@ class AutoInstallOpsMixin:
                         # ever adopted — so there is no ownership record by design. That is a
                         # managed install, not an unmanaged tree; calling it one told the operator
                         # to "move it away or Clean", which would have destroyed a working binary
-                        # install (live-found on a fresh box).
+                        # install.
                         return None
                     return {"fresh": False, "recovery":
                             f"unmanaged tree at {c.source.path} — move it away or Clean"}
@@ -1754,8 +1770,7 @@ class AutoInstallOpsMixin:
         THE MANIFEST IS AUTHORITATIVE: a stack is never dropped for lacking a managed source. A
         package-managed stack (meshtastic: apt binary + lhpc-shipped config + a managed CLI venv)
         gets a normal row and is provisioned, validated and made startable like any other —
-        otherwise it silently disappears from a run that claims to cover every stack, which is
-        exactly how its broken start state went unnoticed. Each row carries the three DISJOINT
+        otherwise it would silently disappear from a run that claims to cover every stack. Each row carries the three DISJOINT
         work lists (see StackWork) so source-specific machinery can never see a source-less
         component. OPTIONAL components are INCLUDED — they are only excluded from auto-START,
         which stays autostart-gated."""
@@ -1782,7 +1797,7 @@ class AutoInstallOpsMixin:
         return [(by_id[sid], StackWork.of(by_id[sid], skip=self.gui_unavailable_components(by_id[sid])))
                 for sid in ordered]
 
-    # ---- auto-install-operation boundary (M2.0) ----------------------------------
+    # ---- auto-install-operation boundary ----------------------------------
 
     def _current_auto_install_ctx(self):
         return getattr(self._lock_state, "auto_install_ctx", None)
@@ -1804,8 +1819,8 @@ class AutoInstallOpsMixin:
 
     @contextmanager
     def _auto_install_boundary(self, run_id: str, stacks, source_paths):
-        """The ONE outer boundary of a auto-install run, held for its whole lifetime:
-        config-stable (shared; a concurrent remote/config save waits) → source-txn
+        """The ONE outer boundary of an auto-install run, held for its whole lifetime:
+        config-stable (EXCLUSIVE; a concurrent config save waits) → source-txn
         index/recovery → ALL affected source-path locks (same coordination locks
         Start/Restart contend on) → durable LEASE bound to this process's full identity →
         the explicit `AutoInstallOperationContext` active for this thread. Composed ops nest via

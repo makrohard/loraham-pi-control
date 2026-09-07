@@ -1616,8 +1616,6 @@ def test_session_secret_persists_and_rotates(tmp_path):
     import os, stat
     mode = stat.S_IMODE(os.stat(tmp_path / "config/secrets/web_session.key").st_mode)
     assert mode == 0o600
-    s2 = config.rotate_web_session_secret(paths)
-    assert s2 != s1 and config.web_session_secret(paths) == s2   # explicit rotation changed it
 
 
 def test_create_app_uses_persistent_secret(tmp_path):

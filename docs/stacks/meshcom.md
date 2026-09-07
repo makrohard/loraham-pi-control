@@ -81,7 +81,7 @@ scripts/fetch-qemu.sh <dest-dir> --from-file /absolute/path/qemu-...tar.xz
 LHPC_QEMU_TARBALL=/absolute/path/qemu-...tar.xz scripts/fetch-qemu.sh <dest-dir>
 ```
 
-The path must be absolute and readable; the file is subject to the same pinned sha256 check.
+The file must exist; it is subject to the same pinned sha256 check.
 
 ## Position (GPS)
 
@@ -104,7 +104,7 @@ position.
   the threshold, not the TX mode, is the lever. Evidence: [live tests](../live-test.md).
 - Net-console commands end in CRLF; `::text` sends a message.
 - Memory: on a 512 MB Zero 2W run MeshCom **or** Meshtastic, not both, and stop the console
-  while the node boots — see [operations](../operations.md).
+  while the node boots — see [maintenance](../maintenance.md).
 
 ## Conflicts
 

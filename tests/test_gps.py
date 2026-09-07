@@ -2787,3 +2787,21 @@ def test_explicit_gpsd_with_an_empty_gpsd_still_refuses_the_start(tmp_path, fake
     svc._invalidate_config()
     ok, ev = svc._gps_feed_admission(comp)
     assert ok is False and "not reachable" in ev
+
+
+def test_partial_gps_save_while_off_keeps_the_stored_fields(tmp_path):
+    """Switching the source off and back on is a common operator move; the device/host/port
+    saved before must survive it (the parsed GpsConfig blanks them while off — the STORED
+    table is what a partial save merges onto)."""
+    from lhpc.core.paths import Paths
+    paths = Paths(runtime_root=tmp_path)
+    save_gps(paths, source="nmea", device="/dev/ttyACM0", nmea_baud=4800, host="gps.lan", port=2948)
+    save_gps(paths, source="off")
+    assert load_config(paths).gps.device == ""              # off: resolved config carries nothing
+    save_gps(paths, source="nmea")
+    g = load_config(paths).gps
+    assert (g.device, g.nmea_baud) == ("/dev/ttyACM0", 4800)
+    save_gps(paths, source="gpsd")
+    g = load_config(paths).gps
+    assert (g.host, g.port) == ("gps.lan", 2948)
+

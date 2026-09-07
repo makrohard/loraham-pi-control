@@ -41,7 +41,6 @@ def _client(tmp_path: Path, spy: dict | None = None):
         return svc
     app = create_app(service_factory=factory)
     app.config["SESSION_COOKIE_SECURE"] = False        # interactive plain-HTTP console (the risky mode)
-    app.config["LHPC_PRODUCTIVE"] = False
     return app.test_client()
 
 

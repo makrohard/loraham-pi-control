@@ -78,7 +78,7 @@ def log_name_for(run_id: str) -> str:
     return f"auto-install-{run_id[:8]}"
 
 
-# A component build/test log created BY a auto-install run: a single flat leaf under logs/ whose
+# A component build/test log created BY an auto-install run: a single flat leaf under logs/ whose
 # name embeds the FULL 32-hex run id, so it is EXACTLY owned by one run (a prior run's log
 # can never collide with — or be mistaken for — this run's, even when two run ids share
 # their first eight hex characters) and is a strict, controller-derived character set.
@@ -322,7 +322,7 @@ def write_reservation(paths: Paths, run_id: str, pid: int, ident: dict,
         m.close()
         return True, ""
     except FileExistsError:
-        return False, "a auto-install-start reservation already exists"
+        return False, "an auto-install-start reservation already exists"
     except (OSError, PathContainmentError) as exc:
         return False, f"auto-install-start reservation could not be persisted ({exc})"
 

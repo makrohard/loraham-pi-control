@@ -50,8 +50,8 @@ None — voice has no position setting.
 ## Notes
 
 - **Headless:** `lhpc install voice && lhpc build voice` works on a Lite image. The build's GUI
-  preflight drops the GTK component where the toolkit is absent; only then is the terminal variant
-  offered (where the GTK app can run it owns the audio device and the terminal variant is not).
+  preflight drops the GTK component where the toolkit is absent; the terminal variant is offered
+  only where the GTK app cannot run here — toolkit or display missing (where the GTK app can run it owns the audio device and the terminal variant is not).
 - The terminal variant is interactive like chat: `lhpc stack start voice` brings up the daemon,
   generates the config and prints the command (the Dashboard's Voice card shows the same); run it
   locally or over SSH. Space = PTT. Starting `loraham-voice-cli` on its own is refused — only a

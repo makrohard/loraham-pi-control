@@ -4,12 +4,11 @@ Read side (safe, no RF): `GET STATUS`, `GET STATS`, `GET CHANNEL` parsed into
 field maps — used by the web monitor (RSSI bars, counters) and the CLI.
 
 Write side (mutating): a STRICT whitelist of `SET <key>=<value>` commands applied
-to the CONF socket. Only non-RF tuning is allowed (TX mode, CAD/LBT parameters,
-result/queue flags). Enabling a TX-capable mode does not itself transmit — TX
+to the CONF socket. TX mode, CAD/LBT parameters, result/queue flags and the radio params are allowed. Enabling a TX-capable mode does not itself transmit — TX
 still only happens when a client sends data — but SET is treated as a mutating
 action: the web layer requires POST + CSRF + confirmation before calling it.
 
-Verified against daemon 111a (config_status.h / daemon_stats.cpp).
+
 """
 
 from __future__ import annotations

@@ -44,8 +44,8 @@ def test_unit_has_least_privilege_hardening():
                       "ProtectKernelModules=true", "RestrictNamespaces=true", "PrivateTmp=false"):
         assert directive in active, directive
     assert any(ln.startswith("RestrictAddressFamilies=") for ln in active)
-    # Writable areas: the runtime root, /tmp, and the meshcore-nodegui data dir
-    # (%h/.meshcore_nm) ONLY — never broad $HOME or /var.
+    # Writable areas: the runtime root, /tmp, and the optional -%h/.meshcore_nm entry ONLY
+    # (no shipped component uses it) — never broad $HOME or /var.
     rw = [ln for ln in active if ln.startswith("ReadWritePaths=")]
     assert len(rw) == 1 and "%h/loraham-pi-control" in rw[0] and "/tmp" in rw[0]
     assert "%h/.meshcore_nm" in rw[0]
@@ -167,3 +167,14 @@ def test_update_check_interval_clamps_and_disables(tmp_path, monkeypatch):
     assert with_value(-3) == 1 * 3600.0                          # clamped low
     assert with_value('"junk"') == 12 * 3600.0                   # wrong type -> default
     assert with_value("true") == 12 * 3600.0                     # bool is not an int here
+
+
+def test_devcontainer_no_sudo_boundary_fails_closed():
+    """The lab's no-sudo boundary is one RUN chain (unprivileged user, sudoers drop-ins removed,
+    vscode out of sudo). Only the optional `deluser` may tolerate failure — a bare trailing
+    `|| true` would let a failed useradd or sudoers removal build a layer that claims the boundary."""
+    text = (Path(__file__).resolve().parents[1] / ".devcontainer" / "Dockerfile").read_text()
+    chain = next(b for b in text.split("\nRUN ") if b.startswith("useradd")).split("\n\n", 1)[0]
+    assert "&& rm -f /etc/sudoers.d/*" in chain
+    assert chain.count("|| true") == 1 and "&& (deluser vscode sudo 2>/dev/null || true)" in chain
+

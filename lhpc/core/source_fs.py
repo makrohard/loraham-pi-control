@@ -2,8 +2,7 @@
 
 Separate from `runtime_fs` on purpose: a managed-source mutation must never follow a symlink
 out of the tree or recurse outside the held source parent. This module reuses `runtime_fs`'s validated
-parent-walk primitive but owns the source-specific operations (recursive removal today;
-candidate/rename/activation are added incrementally).
+parent-walk primitive but owns the source-specific operations (recursive removal, candidate creation, no-clobber rename, leaf capture/verification, quarantine removal).
 
 The core guarantee: every mutation walks the source parent from the runtime-root fd with
 `O_DIRECTORY|O_NOFOLLOW` and operates relative to the held parent fd — a swapped/symlinked
@@ -13,7 +12,6 @@ escape the held parent inode or follow a symlink out of the tree.
 
 from __future__ import annotations
 
-import contextlib
 import os
 import stat as _stat
 from pathlib import Path
@@ -29,14 +27,11 @@ __all__ = [
     "PathContainmentError",
     "SourceLeafHandle",
     "capture_leaf",
-    "create_candidate_dir",
     "detach_and_remove",
     "leaf_kind",
-    "pinned_parent",
     "quarantine_siblings",
     "race_seam",
     "remove_bound",
-    "rename_child",
     "require_atomic_rename",
     "rmtree_at",
     "verify_leaf_path",
@@ -100,9 +95,8 @@ def _verify_leaf_at(parent_fd: int, name: str, handle: SourceLeafHandle) -> bool
     return False
 
 
-# renameat2(2) with RENAME_NOREPLACE: the Linux atomic no-clobber rename. glibc exposes the
-# wrapper since 2.28; when unavailable we fall back to check-then-rename (a narrow residual
-# race, flagged via `RENAMEAT2_AVAILABLE` so tests can assert the atomic path is in use).
+# renameat2(2) with RENAME_NOREPLACE: the Linux atomic no-clobber rename (glibc >= 2.28).
+# Without it `require_atomic_rename` refuses the transaction — there is no fallback.
 _RENAME_NOREPLACE = 1
 try:
     import ctypes as _ctypes
@@ -110,7 +104,6 @@ try:
     _renameat2_fn = getattr(_libc, "renameat2", None)
 except OSError:                                             # pragma: no cover
     _renameat2_fn = None
-RENAMEAT2_AVAILABLE = _renameat2_fn is not None
 
 
 class AtomicRenameUnavailable(OSError):
@@ -186,16 +179,6 @@ def require_atomic_rename(paths: Paths = None, parent: Path | None = None) -> st
             return ""
     except (OSError, PathContainmentError) as exc:
         return f"cannot probe atomic rename (source parent unsafe): {exc}"
-
-
-def _ident_of_stat(st, *, with_ctime: bool):
-    """[dev, ino] or [dev, ino, ctime_ns] from a stat result. `ctime_ns` is kernel-controlled —
-    `utimensat` can forge atime/mtime but never sets ctime to an arbitrary past value — so a v5
-    ident survives inode RECYCLING (a recreated leaf on the same recycled inode gets a fresh
-    ctime, which will not match the journaled one)."""
-    return [st.st_dev, st.st_ino, st.st_ctime_ns] if with_ctime else [st.st_dev, st.st_ino]
-
-
 def _ident_cmp(st, ident) -> bool:
     """dev+ino always; ctime_ns ONLY when the stored `ident` carries a third element. So a 2-element
     (live/in-process) ident compares exactly as before, and a 3-element (v5 journal) ident also
@@ -253,7 +236,7 @@ def remove_bound(parent_fd: int, name: str, ident, *, allow_ipc: bool = False) -
                 return False, "contents could not be fully removed (remainder retained)"
         except (OSError, PathContainmentError) as exc:
             # A refused leaf must be a TYPED failure, never an exception escaping into a
-            # caller that reports it as "managed source parent is unsafe" (audit finding).
+            # caller that reports it as "managed source parent is unsafe".
             return False, f"bound removal incomplete: {exc} (remainder retained)"
         finally:
             os.close(fd)
@@ -440,22 +423,6 @@ class ManagedSourceTransaction:
             pass
 
 
-@contextlib.contextmanager
-def pinned_parent(paths: Paths, parent: Path):
-    """Hold the managed-source `parent` open `O_DIRECTORY|O_NOFOLLOW` and yield a STABLE
-    CONTROLLER-pinned path `/proc/<lhpc-pid>/fd/<fd>` for it. Clone/copy/symlink into
-    `<pinned>/<candidate>` then writes into the HELD inode and cannot be redirected by a
-    parent-path swap after the check. The path is bound to the LHPC controller pid (NOT
-    `/proc/self/...`) so it resolves to LHPC's held fd even from a CHILD process — Git's own
-    `self` is Git, so `/proc/self/fd/<n>` would refer to Git's descriptors, not ours. A
-    symlinked/non-directory/escaping source parent fails closed with PathContainmentError."""
-    # `_walk_parent` opens `parent` no-follow and yields its fd (the ".pin" leaf need not
-    # exist — we only use the parent fd). The fd stays open for the whole `with`, so the
-    # controller `/proc/<pid>/fd/<fd>` magic symlink resolves to the held inode throughout.
-    with runtime_fs._walk_parent(paths, parent / ".pin", create=False) as (parent_fd, _leaf):
-        yield f"/proc/{os.getpid()}/fd/{parent_fd}"
-
-
 def leaf_kind(paths: Paths, path: Path) -> str:
     """No-follow classification of a runtime source leaf, relative to its no-follow-walked
     parent: 'absent' | 'dir' | 'symlink' | 'file' | 'special'. Used as the descriptor-safe
@@ -479,37 +446,18 @@ def leaf_kind(paths: Paths, path: Path) -> str:
         return "absent"
 
 
-def create_candidate_dir(paths: Paths, parent: Path, name: str) -> None:
-    """EXCLUSIVELY create candidate directory `name` under the managed-source `parent`
-    through the no-follow-walked parent fd, and verify it is a fresh EMPTY directory. Raises
-    PathContainmentError on an unsafe/swapped parent, if a leaf with that name ALREADY exists
-    (symlink / file / special / dir — no clobber, atomic O_EXCL-style `mkdir`), or if the
-    created leaf is somehow not a real empty directory. Git/copy then write INTO this
-    verified candidate, never letting an attacker pre-seed the destination."""
-    with runtime_fs._walk_parent(paths, parent / name, create=False) as (parent_fd, leaf):
-        try:
-            os.mkdir(leaf, 0o700, dir_fd=parent_fd)      # fails closed if the leaf exists
-        except FileExistsError as exc:
-            raise PathContainmentError(
-                f"candidate {leaf!r} already exists — refusing to reuse it") from exc
-        st = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
-        if not _stat.S_ISDIR(st.st_mode):
-            raise PathContainmentError(f"candidate {leaf!r} is not a directory after create")
-        dfd = os.open(leaf, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
-        try:
-            if os.listdir(dfd):
-                raise PathContainmentError(f"candidate {leaf!r} not empty after create")
-        finally:
-            os.close(dfd)
+def source_present(paths: Paths, path: Path) -> bool:
+    """The ONE test for "is this managed source present": a real DIRECTORY leaf, no-follow.
 
-
-def rename_child(paths: Paths, parent: Path, old_name: str, new_name: str) -> None:
-    """Descriptor-anchored rename of a SIBLING leaf `old_name` -> `new_name`, both direct
-    children of the managed-source `parent`. Walks `parent` no-follow and renames relative
-    to its held fd (`src_dir_fd == dst_dir_fd`), so a swapped/symlinked source parent fails
-    closed and the rename can never cross into a different directory inode."""
-    with runtime_fs._walk_parent(paths, parent / old_name, create=False) as (parent_fd, oname):
-        os.rename(oname, new_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+    A symlink is never a managed source — LHPC does not adopt by link — so it reads as ABSENT
+    here, which is what the source transaction already decides when it refuses to mutate it.
+    Using this everywhere keeps status, build, start, test, post-start and every maintenance
+    decision agreeing with the transaction instead of following the link out of the runtime root.
+    """
+    try:
+        return leaf_kind(paths, path) == "dir"
+    except PathContainmentError:
+        return False
 
 
 def _rmtree_fd(parent_fd: int, name: str, *, allow_ipc: bool = False) -> None:
@@ -522,8 +470,7 @@ def _rmtree_fd(parent_fd: int, name: str, *, allow_ipc: bool = False) -> None:
     inode-bound `.prev` quarantine. A stack that runs FROM its checkout legitimately leaves a
     runtime socket there (meshcom's `.run/gps-uart1.sock`), and refusing it aborted the archive
     cleanup HALFWAY: the partial removal bumped `.prev`'s ctime, its recorded v5 identity could
-    never be re-proven again, and every source operation on the box stayed blocked (live-found
-    on the Zero). Block/char DEVICE nodes still fail closed — nothing legitimate creates one."""
+    never be re-proven again, and every source operation on the box stayed blocked. Block/char DEVICE nodes still fail closed — nothing legitimate creates one."""
     try:
         st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)   # lstat, no-follow
     except FileNotFoundError:
@@ -554,8 +501,7 @@ def rmtree_at(paths: Paths, path: Path) -> None:
 
     Walks `path`'s parent no-follow, then removes the leaf relative to the held parent fd:
       * a MISSING leaf is a no-op;
-      * a symlink or regular-file leaf is unlinked (never followed) — so a LINKED external
-        source is removed by dropping only its runtime symlink leaf, never its target;
+      * a symlink or regular-file leaf is unlinked (never followed) —       * a symlink or regular-file leaf is unlinked (never followed — the target is untouched);
       * a directory is recursed NO-FOLLOW and rmdir'd;
       * a special/unknown leaf fails closed (`PathContainmentError`).
     A swapped/symlinked/non-directory source PARENT raises `PathContainmentError` before any
@@ -568,8 +514,6 @@ def rmtree_at(paths: Paths, path: Path) -> None:
 
 
 # ---- race-safe destructive removal (uninstall / Clean all) -----------------------------------
-
-_QUARANTINE_RE = None
 
 
 def _quarantine_name(name: str) -> str:
@@ -595,7 +539,7 @@ def quarantine_siblings(paths: Paths, path: Path) -> list:
 def verify_leaf_path(paths: Paths, path: Path, handle: SourceLeafHandle) -> bool:
     """Module-level re-proof: the leaf at `path` is STILL the captured `handle` (no-follow
     parent walk + kind/dev/ino[/readlink] comparison). Used to re-prove a handle immediately
-    before persisting state derived from it (e.g. a backfill ownership record)."""
+    before persisting state derived from it (e.g. an ownership record)."""
     try:
         with runtime_fs._walk_parent(paths, path, create=False) as (parent_fd, name):
             return _verify_leaf_at(parent_fd, name, handle)
@@ -694,8 +638,11 @@ def detach_and_remove(paths: Paths, path: Path, handle: SourceLeafHandle,
                     return False, f"{why} (source restored at its original path)"
             # IDENT-BOUND deletion of the quarantined leaf: contents through a bound fd,
             # the entry only after a final identity re-proof — a leaf substituted even at
-            # the quarantine name is retained, never deleted.
-            ok, why = remove_bound(txn.fd, qname, [handle.st_dev, handle.st_ino])
+            # the quarantine name is retained, never deleted. `allow_ipc`: the quarantine is
+            # THIS transaction's own verified leaf, and a checkout a stack runs from holds
+            # runtime sockets/FIFOs — refusing them here would abort AFTER the detach and
+            # leave every retry refused by the quarantine gate.
+            ok, why = remove_bound(txn.fd, qname, [handle.st_dev, handle.st_ino], allow_ipc=True)
             if not ok:
                 return False, f"quarantined removal refused — {why} (evidence at {qname!r})"
             if txn.leaf_kind(qname) != "absent":

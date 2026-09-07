@@ -1,5 +1,4 @@
-{# Per-stack daemon radio-parameter panel (Settings): its own form with Save/Apply/Reset — the
-   ONLY place daemon parameters change; a start applies the saved ones. Requires `daemon_params`
+{# Per-stack daemon radio-parameter panel (Settings): its own form with Save/Apply/Reset — the only WebGUI place daemon parameters change (CLI: `lhpc config <stack> --daemon-param|--apply-daemon|--reset-daemon`); a start applies the saved ones. Requires `daemon_params`
    + `stack_id`. #}
 {% if daemon_params %}
   {% set dp_pref = "dp_" %}

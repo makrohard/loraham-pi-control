@@ -25,8 +25,7 @@ import re
 CANDIDATE_SCHEMA = 1
 # Version of the controller<->helper protocol (candidate schema + receipt + snapshot shapes).
 # A controller/helper mismatch is surfaced as "setup/update required" and fails closed.
-# Bumped 1->2: the persisted receipt/snapshot contract changed (integration_rev added, band
-# scope-key dimension) — an old-protocol snapshot/receipt is rejected -> forces a fresh apply.
+
 PROTOCOL_VERSION = 2
 
 # Live receipt freshness window (seconds, CLOCK_BOOTTIME). ~3 checker periods (60s): a couple
@@ -351,7 +350,7 @@ def intent_hash(cand: dict) -> str:
 # The controller RENDERS everything root will run — helper source, three systemd units, the
 # first-install/apply script and the reset script — and never executes any of it. The helper
 # source is the packaged lhpc/core/firewall_helper.py byte-for-byte (its tests run in-repo;
-# root runs the installed root-owned copy). Unit constraints from the approved plan: host
+# root runs the installed root-owned copy). Unit constraints: host
 # network namespace (NEVER PrivateNetwork/NetworkNamespacePath — nft must see the real
 # firewall), CAP_NET_ADMIN-only, RuntimeDirectoryPreserve=yes (a completed oneshot must not
 # take the receipt directory with it), loader ordered after nftables.service and before

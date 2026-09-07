@@ -792,15 +792,17 @@ def test_a_missing_webserver_action_is_a_usage_error(capsys):
 
 @pytest.mark.contract
 def test_firewall_cli_points_at_the_deferred_webserver_apply(tmp_path, monkeypatch, capsys):
-    # The console's Firewall panel shows the deferred Webserver apply; a CLI operator standing
-    # after the sudo step must be told the same thing — and only while one is actually pending.
+    # The Apply block always ends with `lhpc webserver apply` (the line that activates the gated
+    # listeners); the DEFERRED-apply note and its `Next:` appear only while one is actually pending.
     from lhpc.core.services import ControllerService
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
     assert main(["bootstrap", "--yes"]) == 0
     capsys.readouterr()
     monkeypatch.setattr(ControllerService, "webserver_apply_pending", lambda self: False)
     assert main(["firewall"]) == 0
-    assert "lhpc webserver apply" not in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Apply:\n" in out and out.split("Apply:\n", 1)[1].splitlines()[2].strip() == "lhpc webserver apply"
+    assert "Next:\n  lhpc webserver apply" not in out and "completes it automatically" not in out
     monkeypatch.setattr(ControllerService, "webserver_apply_pending", lambda self: True)
     assert main(["firewall"]) == 0
     out = capsys.readouterr().out
@@ -816,3 +818,46 @@ def test_explain_models_the_meshtastic_cli_as_tx_capable(tmp_path, monkeypatch, 
     out = capsys.readouterr().out
     line = next(ln for ln in out.splitlines() if "meshtastic-cli" in ln)
     assert "TX-capable" in line and "RX-only" not in line
+
+
+def test_daemon_unreachable_hint_names_a_real_target(capsys):
+    from types import SimpleNamespace
+    from lhpc.adapters.cli.main import _render_daemon
+    view = SimpleNamespace(reachable=False, band="433", error="no CONF socket")
+    assert _render_daemon(view) == 1
+    out = capsys.readouterr().out
+    assert "lhpc stack start daemon" in out and "loraham-daemon-433" not in out
+
+
+def test_install_source_fallback_is_gated_and_confirmed(monkeypatch, capsys):
+    """The 'Build from source instead?' fallback after a failed binary install goes through the
+    same gates as any source install: the system-dependency gate and the plan confirmation —
+    and it is offered for a NAMED stack only (the all-stacks form has no binary channel)."""
+    from lhpc.adapters.cli import main as m
+    from lhpc.core.service_base import ActionResult
+    from lhpc.core.services import ControllerService
+    calls = []
+    monkeypatch.setattr(ControllerService, "default_channel", lambda self, sid: "binary")
+    monkeypatch.setattr(ControllerService, "install",
+                        lambda self, sid=None, apply=False, source="pinned": (
+                            calls.append((sid, apply, source)),
+                            ActionResult(True, "source plan", data={"changes": 1}) if source == "pinned" else
+                            ActionResult(False, f"Binary install of '{sid}' refused: no index.",
+                                         data={"binary_failed": True, "offer_source": True}))[1])
+    asked = []
+    monkeypatch.setattr(m, "_confirm", lambda prompt: (asked.append(prompt), True)[1])
+    # (i) dependency gate blocks the fallback: nothing applied from source
+    monkeypatch.setattr(m, "_print_install_dep_gate", lambda svc, sid, check=False: True)
+    assert m.main(["install", "daemon"]) == 1
+    assert asked and "Build from source" in asked[0]
+    assert all(src == "binary" for _, _, src in calls), calls
+    # (ii) gate passes: the SOURCE plan is rendered and confirmed like any other apply
+    calls.clear(); asked.clear()
+    monkeypatch.setattr(m, "_print_install_dep_gate", lambda svc, sid, check=False: False)
+    m.main(["install", "daemon"])
+    assert ("daemon", True, "pinned") in calls and len(asked) == 2        # fallback + plan confirm
+    # (iii) all-stacks form with the binary channel forced: refused, never a fallback prompt
+    calls.clear(); asked.clear()
+    assert m.main(["install", "--source", "binary"]) != 0
+    assert not asked
+

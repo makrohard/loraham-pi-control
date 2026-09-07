@@ -1,7 +1,7 @@
 
 
 def test_audit_capture_refuses_non_session_leader(monkeypatch):
-    # AUDIT S3: a captured token must be a self-led session (sid==pgid==pid); a recycled
+    # A captured token must be a self-led session (sid==pgid==pid); a recycled
     # pid that is a mere member of a foreign session must yield None (fail closed).
     from lhpc.core import proctree
     import builtins

@@ -107,7 +107,7 @@ def _print_install_dep_gate(svc, stack, check: bool = False) -> bool:
 def _render_daemon(view) -> int:
     if not view.reachable:
         print(f"ERR   daemon {view.band}: not reachable ({view.error or 'no CONF socket'})")
-        print(f"\nNext:\n  lhpc stack start loraham-daemon-{view.band}")
+        print("\nNext:\n  lhpc stack start daemon")
         return 1
     s, st, ch = view.status, view.stats, view.channel
     if view.ready:
@@ -159,7 +159,7 @@ def _config_list(svc, stack: str, band: str) -> int:
             mark = " *" if r["is_identity"] else ""
             val = r["value"] if r["value"] != "" else "(empty)"
             # An inheriting identity field is EMPTY locally — say what it inherits instead
-            # of presenting the inherited value as though it were stored (audit-found).
+            # of presenting the inherited value as though it were stored.
             if r["value"] == "" and r.get("identity_hint"):
                 val = f"(empty — {r['identity_hint']})"
             dflt = "" if r["value"] == r["default"] else f"   [default: {r['default'] or '(empty)'}]"
@@ -488,19 +488,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_hw.add_argument("setup", nargs="?", choices=tuple(_HW_SETUPS),
                       help="e.g. loraham | uputronics | waveshare-433 (no arg: show current + list)")
 
-    # GPS is a GLOBAL setting like `hardware`, not a per-stack parameter: every stack that
-    # can use a position takes it from here, so two stacks can never disagree about where
-    # position comes from. Per-stack settings only turn GPS on or off.
     # Guarded passthrough to the managed Meshtastic CLI (parsed by _cmd_meshtastic, not here — it
     # forwards arbitrary upstream argv). Registered only so it appears in the command list.
     sub.add_parser("meshtastic", add_help=False,
                    help="Run the managed Meshtastic CLI against the local node "
                         "(forwards upstream args; try `lhpc meshtastic --help`)")
 
+    # GPS is a GLOBAL setting like `hardware`, not a per-stack parameter: every stack that
+    # can use a position takes it from here, so two stacks can never disagree about where
+    # position comes from. Per-stack settings only turn GPS on or off.
     p_gps = sub.add_parser("gps",
                            help="Show or set the position source shared by all stacks")
     p_gps.add_argument("--source", choices=tuple(_GPS_SOURCES),
-                       help="off | gpsd | nmea | fixed")
+                       help="auto (default) | off | gpsd | nmea | fixed")
     p_gps.add_argument("--host", help="gpsd host (default 127.0.0.1; a remote box is fine)")
     p_gps.add_argument("--port", type=int, help="gpsd port (default 2947)")
     p_gps.add_argument("--device", help="NMEA character device, for --source nmea")
@@ -792,7 +792,7 @@ def _run(argv: list[str] | None = None) -> int:
             # toolchain would defeat the entire point of the channel. Its own runtime_deps are
             # checked inside the transaction.
             # Resolve the effective channel ONCE: an explicit --source wins; otherwise the
-            # stack's default (binary where published, else the historical "dev").
+            # stack's default (binary where published, else "dev").
             # NOTE: the all-stacks form (`lhpc install` with no stack) stays on the source
             # channel — one plan covers many stacks, and the binary channel installs one stack
             # at a time. Name a stack to use it.
@@ -805,12 +805,16 @@ def _run(argv: list[str] | None = None) -> int:
                                  yes=args.yes)
                 if rc == 0:
                     return 0
-                # THE settled fallback: ask explicitly, never switch silently. Only for a real
-                # binary failure, and only when a human is there to answer.
-                if not args.yes and _confirm("\nBuild from source instead? [y/N] "):
+                # THE settled fallback: ask explicitly, never switch silently. Only for a named
+                # stack (the all-stacks form has no binary channel to fail), only when a human is
+                # there to answer, and through the same gates as any source install: the
+                # system-dependency gate and the plan's own confirmation.
+                if args.stack and not args.yes and _confirm("\nBuild from source instead? [y/N] "):
+                    if _print_install_dep_gate(svc, args.stack, check=False):
+                        return 1
                     return _apply_flow(
                         lambda apply: svc.install(args.stack, apply=apply, source="pinned"),
-                        yes=True)
+                        yes=args.yes)
                 return rc
             if args.check:
                 # Read-only preview: render the plan FIRST (so the bootstrap precondition and adoptions
@@ -1125,10 +1129,9 @@ def _run(argv: list[str] | None = None) -> int:
             if rc or not (args.script or args.reset_script):
                 return rc
         if args.script or args.reset_script:
-            # An EXPLICIT operator request also WRITES the canonical scripts. Rendering used to
-            # happen only on mutation paths (the exposure gate, a helper revision, saving the web
-            # panel), so a CLI-only operator was told by `lhpc firewall` to run a
-            # firewall-apply.sh that had never been created (live-found on a fresh box).
+            # An EXPLICIT operator request also WRITES the canonical scripts (firewall_render), so a
+            # CLI-only operator can create the firewall-apply.sh that the status output tells them
+            # to run.
             _r = svc.firewall_render()
             if args.script:
                 print(_fw_mod.render_apply_script(_json.dumps(svc.firewall_candidate(),
@@ -1153,8 +1156,7 @@ def _run(argv: list[str] | None = None) -> int:
             if not _os.path.exists(paths["firewall-apply.sh"]):
                 print("\nThe apply script has not been rendered yet — create it with:"
                       "\n  lhpc firewall --script | less        # writes it and shows what it does")
-            print(f"\nApply:\n  sudo bash {paths['firewall-apply.sh']}"
-                  f"\n  sudo systemctl start lhpc-firewall-check.service")
+            print("\nApply:\n  " + "\n  ".join(svc._fw_apply_lines()))
         if svc.webserver_apply_pending():
             # The Webserver Apply the firewall gate deferred (the console's Firewall panel shows the
             # same box). Only the RUNNING console's watchdog completes it, so say so — and keep
@@ -1182,7 +1184,7 @@ def _run(argv: list[str] | None = None) -> int:
             return _apply_flow(lambda a: svc.graywolf_upstream_update(args.target, apply=a),
                                yes=args.yes)
         # An unspecified selector KEEPS the stack on its current channel: a binary-installed
-        # stack updates binary→binary, everything else keeps the historical "dev" default.
+        # stack updates binary→binary, everything else keeps the "dev" default.
         _usrc = args.source or ("binary" if (args.target
                                              and svc.on_binary_channel(args.target)) else "dev")
         return _apply_flow(lambda a: svc.update(args.target, apply=a, source=_usrc),
@@ -1352,7 +1354,7 @@ def _run(argv: list[str] | None = None) -> int:
         # Lowercase "usage:" and stderr — argparse's shape, so every lhpc usage error
         # reads and redirects the same way.
         print("usage: lhpc webserver {status|verify|init|configure|expose|proxy|"
-              "disable-remote|reset-defaults|tls-renew|logs|cert ...}", file=sys.stderr)
+              "apply|start-service|disable-remote|reset-defaults|tls-renew|logs|cert ...}", file=sys.stderr)
         return 2
 
     parser.print_help()

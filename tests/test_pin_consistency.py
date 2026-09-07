@@ -37,7 +37,7 @@ def _referenced_scripts(comp: dict) -> set:
         for tok in step.get("argv", []):
             if _TOKEN_RE.match(str(tok)):
                 scripts.add(str(tok))
-    for key in ("run", "test", "build", "pre"):
+    for key in ("run", "test", "build"):
         val = comp.get(key)
         if isinstance(val, str):
             scripts.update(_EMBED_RE.findall(val))

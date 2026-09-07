@@ -27,6 +27,15 @@
         <p class="flash {{ flash_classes(category) }}">{{ msg }}</p>
       {% endfor %}
     {% endwith %}
+    {# Persistent (not a one-off flash): a Webserver Apply the firewall gate deferred stays
+       announced on EVERY page until the firewall is applied and verified, with the click path. #}
+    {% if ws_apply_pending %}
+      <p class="depnote depnote-warn" id="fw-pending-notice">A Webserver Apply is waiting for the
+        firewall — the new listeners stay off until it runs.
+        <a href="{{ url_for('stacks_overview', open='firewall', fw='apply') }}#firewall-apply">Open
+        Firewall → Apply &amp; commands</a> and run the lines shown there; the Apply completes on its
+        own once the firewall is verified.</p>
+    {% endif %}
     {% block content %}{% endblock %}
   </main>
   <footer class="site-footer">
@@ -50,7 +59,6 @@
   <script src="{{ url_for('static', filename='daemoncfg.js') }}" defer></script>
   <script src="{{ url_for('static', filename='dparams.js') }}" defer></script>
   <script src="{{ url_for('static', filename='schemeauth.js') }}" defer></script>
-  <script src="{{ url_for('static', filename='flash.js') }}" defer></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

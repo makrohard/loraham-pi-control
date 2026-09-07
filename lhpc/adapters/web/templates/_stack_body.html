@@ -1,5 +1,4 @@
-{# Per-stack row body on /stacks — folds in the former /stacks/<id> detail page as collapsible
-   sections: Install (open) → actions + Dependencies + System dependencies; Info (main component,
+{# Per-stack row body on /stacks — the collapsible sections: Install (open) → actions + Dependencies + System dependencies; Info (main component,
    no actions); Settings; Daemon parameters. Requires the `g` group dict. #}
 {% from "_macros.html" import action_btn, stack_actions, cmdbox, secretbox, source_check_btn, freshness_pill, hmac_actions, banner %}
 <div class="stackrow-body">
@@ -37,7 +36,7 @@
   {# ===== Install (open by default) — all stack actions + dependency sub-menus =====
      Addressable (`#stack-install-<id>`) so a REFUSED start can land the operator here. `?inst=<id>`
      force-opens it against a stale sessionStorage map, and data-force-scroll makes stacks_state.js
-     scroll here (see A in the plan) — the reason lives in the banners below, not only in the top
+     scroll here  — the reason lives in the banners below, not only in the top
      flash, which scrolls out of view. #}
   <details class="advcfg" id="stack-install-{{ g.stack.id }}"
     {%- if request.args.get('inst') == g.stack.id %} open data-force-open="1" data-force-scroll="1"{% endif %}>
@@ -140,10 +139,8 @@
                       {{ action_btn('update', comp.id,
                                     'Update' if st.source_state.value in ('match', 'differs', 'dirty') else 'Install') }}
                     {% endif %}
-                    {# Build runs `build_steps` (build_cmd is only a doc string) — gate on either so a
-                       build_steps-only component (e.g. RadioLib) gets a working Build button. #}
-                    {% if comp.build_steps or comp.build_cmd %}{{ action_btn('build', comp.id, 'Build') }}{% endif %}
-                    {% if comp.test_cmd %}{{ action_btn('test', comp.id, 'Test') }}{% endif %}
+                    {% if comp.build_steps %}{{ action_btn('build', comp.id, 'Build') }}{% endif %}
+                    {% if comp.test_argv %}{{ action_btn('test', comp.id, 'Test') }}{% endif %}
                     {% if comp.tx_capable and comp.band %}{{ action_btn('test-tx', comp.id, 'TX test') }}{% endif %}
                     {% if comp.band %}<a class="act" href="{{ url_for('stacks_overview', band=comp.band, cfg='daemon') ~ '#stack-settings-daemon' }}"><button type="button">Radio config</button></a>{% endif %}
                     {# Last button: per-component remote freshness probe. #}

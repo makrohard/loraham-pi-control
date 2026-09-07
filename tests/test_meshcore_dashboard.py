@@ -1,4 +1,4 @@
-"""The openHop repeater dashboard as the MeshCore stack's SECOND proxied page (0.2.8):
+"""The openHop repeater dashboard as the MeshCore stack's SECOND proxied page:
 `meshcore` stays the MeshCore Web UI with every saved `meshcore_*` proxy setting, the dashboard is
 `meshcore-meshcore-node`, and LHPC's proxy refuses every dashboard route that would mutate the
 repeater's configuration (the deny list is source-derived from the pinned upstream)."""
@@ -12,6 +12,16 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 from lhpc.core.webserver import StackWebProxy
+
+def _web_upstream(svc, page_id):
+    p = svc.web_page(page_id)
+    return (p.address, p.scheme) if p is not None else None
+
+
+def _web_deny(svc, page_id):
+    p = svc.web_page(page_id)
+    return tuple(p.deny_paths) if p is not None else ()
+
 
 
 def _svc(tmp_path, mode="chat+repeater"):
@@ -137,7 +147,7 @@ def test_repeater_dashboard_proxy_denies_every_config_mutating_route(tmp_path):
         "/api/companion/set_advert_location", "/api/update/install", "/api/update/check",
         "/api/update/set_channel", "/auth/change_password", "/ws/companion_frame",
     }
-    deny = set(svc.stack_web_deny_paths("meshcore-meshcore-node"))
+    deny = set(_web_deny(svc, "meshcore-meshcore-node"))
     missing = required - deny
     assert not missing, f"repeater dashboard proxy no longer denies: {sorted(missing)}"
     assert "/api/auth/tokens" in deny                             # a second credential
@@ -145,9 +155,9 @@ def test_repeater_dashboard_proxy_denies_every_config_mutating_route(tmp_path):
                "/api/needs_setup", "/api/recent_packets"}
     assert not (allowed & deny)
     # and the MeshCore Web UI's own list is untouched by the sibling page
-    assert "/api/device/reset" in svc.stack_web_deny_paths("meshcore")
-    assert "/api/set_mode" not in svc.stack_web_deny_paths("meshcore")
-    up = svc.stack_web_upstream("meshcore-meshcore-node")
+    assert "/api/device/reset" in _web_deny(svc, "meshcore")
+    assert "/api/set_mode" not in _web_deny(svc, "meshcore")
+    up = _web_upstream(svc, "meshcore-meshcore-node")
 
     class _SWC:
         stack_id = "meshcore-meshcore-node"; enabled = True; remote = False; allowed_cidrs = []
@@ -155,7 +165,7 @@ def test_repeater_dashboard_proxy_denies_every_config_mutating_route(tmp_path):
 
     out = ws.render_nginx_config(
         svc._paths, svc.config().webserver,
-        [StackWebProxy(_SWC(), up[0], up[1], svc.stack_web_deny_paths("meshcore-meshcore-node"))])
+        [StackWebProxy(_SWC(), up[0], up[1], _web_deny(svc, "meshcore-meshcore-node"))])
     for p in required:
         assert f"location ~ {ws.deny_location_regex(p)} {{ return 404; }}" in out, p
     assert "location = " not in out.split("# meshcore-meshcore-node web UI")[1]   # no exact-only form

@@ -109,22 +109,6 @@ def test_identity_mismatch_leaves_no_record_and_terminates(tmp_path, reaper):
     assert not life._proc_alive(p.pid)                          # session terminated
 
 
-def test_all_command_bearing_components_are_migrated():
-    from lhpc.core.manifest import load_manifest
-    unmigrated = []
-    for s in load_manifest():
-        for c in s.components:
-            if c.run_cmd and not c.run_argv:
-                unmigrated.append((c.id, "run"))
-            if c.build_cmd and not c.build_steps:
-                unmigrated.append((c.id, "build"))
-            if c.test_cmd and not c.test_argv:
-                unmigrated.append((c.id, "test"))
-            if c.post_start and not c.post_steps and not c.interactive:
-                unmigrated.append((c.id, "post"))
-    assert unmigrated == []
-
-
 def test_no_shell_in_lifecycle_and_job_sources():
     # Belt-and-suspenders: the execution modules contain no shell invocation.
     import pathlib

@@ -43,8 +43,7 @@ packet. The driver is [loraham-rns-interface](https://github.com/makrohard/lorah
 
 The IFAC passphrase lives only in `<runtime>/config/secrets.toml` (`[reticulum] ifac_netkey`),
 written as RNS's `passphrase`; lhpc refuses to load that file with any group/other permission
-bit (`install -m 0600 /dev/null <runtime>/config/secrets.toml` before editing). Set **both** the
-network name and the passphrase or IFAC stays off; a missing key never becomes an empty key.
+bit (`install -m 0600 /dev/null <runtime>/config/secrets.toml` before editing). Set **both** the network name and the passphrase, or neither — a half-configured IFAC fails the start ("interface … was not registered"); a missing key never becomes an empty key.
 Pins, chip type, TCXO and PA settings are **not** settings: they come from `lhpc hardware`,
 because a wrong PA or TCXO value can damage the module.
 
@@ -70,8 +69,7 @@ libgpiod 2.x, whose `gpiod.line.Value` is not int-convertible — the driver rea
 Only Sideband reads position: its location plugin (`lhpc_location.py` from the driver, enabled
 by `enable_sideband_plugins.py` at build) reads `LHPC_LOCATION_CONF` →
 `<runtime>/state/sideband/location.conf`, generated at stack start from the global plan
-(source, gpsd host/port, NMEA device/baud, fixed lat/lon/alt, `max_age` 30 s — all
-controller-owned). A change to `lhpc gps` takes effect on the next start. `rns`, nomadnet and
+(source, gpsd host/port, NMEA device/baud, fixed lat/lon/alt — all controller-owned; `max_age` 30 s is the one advanced setting). A change to `lhpc gps` takes effect on the next start. `rns`, nomadnet and
 lxmd read none, so a start without Sideband brings up no feed. Model: [GPS](../gps.md).
 
 ## Clients
@@ -139,7 +137,7 @@ accounting state blocks transmit but never receive.
 |---|---|
 | start fails, "another Reticulum shared instance already owns this configuration" | a stray `rnsd`/node is running; stop it |
 | start fails, "interface … was not registered" | the radio or the SPI lock failed — the log above it names which |
-| start fails, "refusing to expose an unauthenticated RNS interface" | a non-loopback bind |
+| start fails, "client access is bound to … loopback only" | a non-loopback bind |
 | "SPI bus lock not acquired within 2s" | a peer holding `spi0.lock` is wedged (usually a stuck daemon) |
 | TX seems to stall | the duty-cycle limiter is holding packets; check the airtime limits |
 

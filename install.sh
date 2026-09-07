@@ -115,20 +115,23 @@ while :; do
 	_anc="$(dirname "$_anc")"
 	{ [ "$_anc" = "/" ] || [ "$_anc" = "." ]; } && break
 done
-# 2) freshness: absent, empty, or ONLY a recognised controller remainder {config, backups, .lhpc-root}.
+# 2) freshness: absent, empty, or ONLY what a default uninstall keeps: config/, backups/, .lhpc-root,
+#    profiles/ and the stacks' app data under state/ — ONE list, byte-identical in uninstall.sh
+#    (tests/test_deploy_scripts.py asserts they match).
+APP_DATA="state/graywolf state/meshcore state/openhop state/meshtasticd state/reticulum state/nomadnet state/lxmd state/sideband"
 if [ -e "$TARGET_DIR" ]; then
 	no_symlink "$TARGET_DIR" "runtime root $TARGET_DIR"
 	[ -d "$TARGET_DIR" ] || die "$TARGET_DIR exists and is not a directory."
 	for _e in "$TARGET_DIR"/* "$TARGET_DIR"/.[!.]* "$TARGET_DIR"/..?*; do
-		[ -e "$_e" ] || continue
-		case "$(basename "$_e")" in
-			config|backups|.lhpc-root) ;;
-			*) die "$TARGET_DIR is not empty and not a config-only remainder (found $(basename "$_e")) — refusing." ;;
+		[ -e "$_e" ] || [ -L "$_e" ] || continue
+		case "${_e##*/}" in
+			config|backups|.lhpc-root|profiles|state) no_symlink "$_e" ;;
+			*) die "$TARGET_DIR is not empty and not an uninstall remainder (found ${_e##*/}) — refusing." ;;
 		esac
 	done
-	# a reused config/backups/.lhpc-root must itself be a real file/dir, never a symlink.
-	for _r in config backups .lhpc-root; do
-		[ ! -e "${TARGET_DIR}/${_r}" ] || no_symlink "${TARGET_DIR}/${_r}" "${TARGET_DIR}/${_r}"
+	for _e in "$TARGET_DIR"/state/* "$TARGET_DIR"/state/.[!.]* "$TARGET_DIR"/state/..?*; do
+		[ -e "$_e" ] || [ -L "$_e" ] || continue
+		case " $APP_DATA " in *" state/${_e##*/} "*) no_symlink "$_e" ;; *) die "$_e is not a managed stack's app data — refusing (move it aside)." ;; esac
 	done
 	[ ! -e "${TARGET_DIR}/.git" ] || die "$TARGET_DIR is itself a git checkout (tangled) — move it aside."
 fi

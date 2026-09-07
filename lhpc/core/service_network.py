@@ -321,7 +321,7 @@ class NetworkOpsMixin:
         self._net_scan_cache = (rows, time.monotonic())
         self._net_view_invalidate()
         if not rows and (self._nm_active() or {}).get("name") == self.AP_PROFILE:
-            # LIVE-FOUND: while wlan0 HOSTS the AP the radio cannot survey other channels —
+            # While wlan0 HOSTS the AP the radio cannot survey other channels —
             # the scan sees only itself (fresh and cached alike). Manual entry is the
             # commissioning path; say so instead of a bare "found 0".
             return ActionResult(True, "found 0 networks — scanning is limited while this "
@@ -381,11 +381,10 @@ class NetworkOpsMixin:
                                        "NetworkManager control.",
                                 details=["  install the authorization, then retry:",
                                          *(f"    {ln}" for ln in fix.splitlines())])
-        # AUDIT: an EXISTING install may still run the OLD AP-scoped nft ruleset — joining
-        # would strand the console on the new network (SSH-only), exactly the lockout the
-        # de-scoping removed. Refuse BEFORE dropping the AP until the one-time firewall
-        # migration has been applied; the gate names the exact command. Checkbox-off joins
-        # skip this (the operator explicitly accepted an SSH-only box).
+                # Joining drops the AP: if the firewall is not live-verified for the current console
+        # intent, the console would be unreachable on the new network (SSH-only). Refuse BEFORE
+        # dropping the AP; the gate names the exact command. Checkbox-off joins skip this (the
+        # operator explicitly accepted an SSH-only box).
         if allow_console:
             try:
                 allowed, gate_msg, gate_cmds = self.firewall_gate_activation(
@@ -397,10 +396,10 @@ class NetworkOpsMixin:
                                                 f"firewall state unverifiable ({exc})", [])
             if not allowed:
                 return ActionResult(False,
-                                    "Cannot join yet: this box's firewall still runs "
-                                    "rules that would block the console on the new "
-                                    "network. Apply the migrated firewall ONCE (over SSH "
-                                    "or from this AP session), then join.",
+                                    "Cannot join yet: this box's firewall is not verified "
+                                    "for the current console rules, which would block the "
+                                    "console on the new network. Apply the firewall (over "
+                                    "SSH or from this AP session), then join.",
                                     details=[f"  {gate_msg}"],
                                     next_commands=gate_cmds)
         from .lifecycle import current_boot_id
@@ -639,14 +638,14 @@ class NetworkOpsMixin:
     def _network_extend_console(self, cidr: str, ip: str = "",
                                 extra_dns=()) -> tuple[bool, str, str]:
         """(applied, pending_sudo_cmd, message). Phase 1 under the RAW config lock: fresh
-        load -> union (CIDRs AND the joined address/names as certificate SANs — LIVE-FOUND:
+        load -> union (CIDRs AND the joined address/names as certificate SANs —
         a phone reaching the box by LAN IP or router name got a cert with no matching SAN
         and refused the chain) -> exposure gate -> save via the lock-aware
         `hold_lock=False` save (neither `_config_stable` nor a re-acquiring save — they
         would self-contend). Between phases: reissue the server certificate for the new
         SANs (fail-soft). Phase 2 OUTSIDE any lock: `webserver_apply()`, which serves the
-        fresh cert and fails closed at the firewall gate only until the one-time migration
-        apply has run."""
+        fresh cert and fails closed at the firewall gate while the firewall is not verified for
+        the current intent."""
         from . import config as _config
         from . import webserver as _ws
         from .config import WebserverConfig
@@ -674,8 +673,8 @@ class NetworkOpsMixin:
                                               remote_exposed=True,
                                               allowed_cidrs=union, ip_sans=ip_sans,
                                               dns_sans=dns_sans, hold_lock=False)
-                # The STACK PROXIES (8444..8446) carry their OWN per-stack allowlists —
-                # LIVE-FOUND: extending only the console left every proxy answering 403
+                # The STACK PROXIES (8444..8447) carry their OWN per-stack allowlists —
+                # Extending only the console left every proxy answering 403
                 # from the joined network. Union the joined CIDR into each enabled remote
                 # proxy under the same held lock.
                 full = _config.load_config(self._paths)
@@ -872,7 +871,7 @@ class NetworkOpsMixin:
         a connected client (fail-safe by design)."""
         import shutil
         # PATH first, then the sbin locations: a shell-started `lhpc web` can have a PATH
-        # without /usr/sbin (live-found: the ssh user's PATH lacks it, the user unit's has it).
+        # without /usr/sbin (the ssh user's PATH lacks it, the user unit's has it).
         exe = shutil.which("iw") or "/usr/sbin/iw"
         try:
             r = self._system.runner.run([exe, "dev", device, "station", "dump"], 10.0)

@@ -29,7 +29,7 @@ _HMAC_PARAM = "password_file"
 # phrase, not a bare CSRF POST / `--yes`. Gated in the SERVICE so BOTH web and CLI are covered.
 _HMAC_DISABLE_CONFIRM = "remove-auth"
 
-# --- apply-run infrastructure (modeled on the auto-install auto-install driver, scoped to one stack) ---------
+# --- apply-run infrastructure (modeled on the auto-install driver, scoped to one stack) ---------
 _MARKER = ("state", "hmac_apply.json")
 _RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _STEP_ORDER = ("secret", "firmware", "bridge", "node")

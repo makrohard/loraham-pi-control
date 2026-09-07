@@ -126,6 +126,16 @@ depends_on = ["x"]
   scheme = "http"
 '''
 
+def _web_upstream(svc, page_id):
+    p = svc.web_page(page_id)
+    return (p.address, p.scheme) if p is not None else None
+
+
+def _web_deny(svc, page_id):
+    p = svc.web_page(page_id)
+    return tuple(p.deny_paths) if p is not None else ()
+
+
 
 def _svc(tmp_path, listeners=()):
     m = tmp_path / "pages.toml"
@@ -158,10 +168,10 @@ def test_eligible_lists_stack_keyed_pages_first_then_component_keyed(tmp_path):
     svc = _svc(tmp_path)
     assert svc.stack_web_eligible() == ["solo", "two", "two-b"]      # manifest order
     assert svc._page_positions() == ["solo", "two", "two-b"]        # first pages, then the rest
-    assert svc.stack_web_upstream("two") == ("127.0.0.1:18100", "http")
-    assert svc.stack_web_upstream("two-b") == ("127.0.0.1:18200", "https")
-    assert svc.stack_web_deny_paths("two-b") == ("/api/update", "/ws/frame")
-    assert svc.stack_web_deny_paths("two") == ()
+    assert _web_upstream(svc, "two") == ("127.0.0.1:18100", "http")
+    assert _web_upstream(svc, "two-b") == ("127.0.0.1:18200", "https")
+    assert _web_deny(svc, "two-b") == ("/api/update", "/ws/frame")
+    assert _web_deny(svc, "two") == ()
 
 
 def _no_web(block: str) -> str:

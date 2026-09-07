@@ -1,6 +1,6 @@
 """LoRaHAMRadio adapter tests against the scriptable fake daemon.
 
-Covers the full Phase-1 contract: start/readiness, config negotiation, RX injection
+Covers the full adapter contract: start/readiness, config negotiation, RX injection
 with RSSI/SNR, TX capture and every TX_RESULT shape (ok / failed / delayed / malformed
 / missing), socket loss and daemon restart, shutdown during blocked reads,
 cancellation, and bounded buffering.

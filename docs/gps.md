@@ -145,8 +145,7 @@ Recovery needs no restart: when the source returns, the stack goes back to `runn
 own. A stopped feed removes its endpoint and its readiness marker together.
 
 Readiness rests on **checksum-valid navigation sentences** (GGA/RMC/GLL/GNS with legal status
-fields); "flowing" additionally requires the fix flag set *and* populated coordinates. GSV/GSA
-and a GGA with fix quality `0` are navigation traffic without a fix (the warning state). The
+fields); "flowing" additionally requires the fix flag set *and* populated coordinates. A GGA with fix quality `0` (or an RMC/GLL flagged `V`) is navigation traffic without a fix (the warning state); GSV/GSA count as sentences only and admit nothing. The
 lone `$GPTXT` a u-blox emits in UBX mode is not navigation traffic and never admits a start. The
 marker reports `sentences`, `nav` and `fixes` so the three are distinguishable.
 

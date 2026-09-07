@@ -90,7 +90,7 @@ POLKIT_PKG="polkitd"
 [ -n "$NO_POWER" ] && [ -n "$NO_NETWORK" ] && POLKIT_PKG=""
 
 # --- --dry-run: simulate the DEFAULT apt transaction, change NOTHING -----------------------
-# The blocker this guards against: the real package closure used to be discovered only while
+# The blocker this guards against: discovering the real package closure only while
 # installing on hardware. `apt-get install -s` resolves it against the local apt database
 # without touching the system, so a from-zero run can be vetted first. The GUI opt-in is NOT
 # part of this verdict — the default transaction is what a headless image gets.
@@ -133,18 +133,14 @@ fi
 # above: the pre-flight is deliberately READ-ONLY and ZERO-TRUST — an operator vets what the
 # script would install BEFORE ever granting it root. Every mutating path below runs as root:
 # the documented call is `sudo bash bootstrap-deps.sh`, and the script never invokes sudo
-# itself (internal sudo prefixes used to fail where sudo is absent, unconfigured, or cannot
-# prompt — unattended runs). Operator resolution below is UNCHANGED: $OP comes from SUDO_USER
-# (or --operator-user) and uid-0 operators are refused — root never receives group grants.
+# itself, so it also works where sudo is absent, unconfigured, or cannot prompt (unattended
+# runs). Operator resolution: $OP comes from SUDO_USER (or --operator-user) and uid-0
+# operators are refused — root never receives group grants.
 if [ "$(id -u)" -ne 0 ]; then
 	echo "ERROR: bootstrap-deps.sh must run as root — run: sudo bash bootstrap-deps.sh ${SPI_MODE:+--spi-mode $SPI_MODE}" >&2
 	echo "       (only --dry-run and -h/--help work unprivileged)" >&2
 	exit 10
 fi
-# Historic call sites below carry a `sudo` prefix; the script is root (checked above), so route
-# them through a no-op. A shell FUNCTION shadows PATH lookup, so this also works on systems
-# with no sudo binary at all.
-sudo() { "$@"; }
 
 # Validate ALL options up front — BEFORE any apt / repository / boot-config / group mutation.
 case "$SPI_MODE" in
@@ -210,8 +206,8 @@ unit_present() {
 # --no-install-recommends: Recommends are what turned a headless install into a desktop one.
 # Nothing here needs them — e.g. git Recommends openssh-client, which Recommends xauth, which
 # Depends on libX11. Only hard Depends are installed, so the closure stays display-free.
-sudo apt-get update
-sudo apt-get install -y --no-install-recommends \
+apt-get update
+apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     cmake \
@@ -257,7 +253,7 @@ case "$nginx_rc" in
 		# Only ANNOUNCE a change if there is one: an already-disabled+inactive unit is
 		# reported as such rather than claiming we 'disabled' it.
 		if systemctl is-enabled --quiet nginx.service 2>/dev/null || systemctl is-active --quiet nginx.service 2>/dev/null; then
-			if sudo systemctl disable --now nginx.service; then
+			if systemctl disable --now nginx.service; then
 				echo "[bootstrap-deps] disabled the system nginx.service (lhpc serves via the lhpc-nginx user unit; the nginx PACKAGE stays installed)."
 			else
 				echo "ERROR: could not stop/disable the system nginx.service. A root nginx still owns the web ports, so the lhpc frontend cannot bind them. Resolve this and re-run." >&2
@@ -278,7 +274,7 @@ esac
 # are opt-in. This installs LIBRARIES ONLY — never a desktop, display manager or X/Wayland
 # server: it assumes the machine already has a graphical session.
 if [ -n "$WITH_GUI" ]; then
-	sudo apt-get install -y \
+	apt-get install -y \
 		libgtk-3-dev \
 		libx11-dev \
 		python3-dev
@@ -291,7 +287,7 @@ fi
 # another machine, a directly-read device, or a fixed position need nothing here — so this is
 # opt-in rather than part of the default set, and lhpc never configures gpsd itself.
 if [ -n "$WITH_GPS" ]; then
-	sudo apt-get install -y \
+	apt-get install -y \
 		gpsd
 else
 	echo "[bootstrap-deps] gpsd skipped (opt-in). Re-run with --with-gps if the position source will be a GPS attached to this box."
@@ -301,7 +297,7 @@ fi
 # The read-only CONFLICT check ran UP FRONT (before any mutation, item P); here we only APPEND
 # the idempotent lines for the chosen mode. CONFIG_TXT was set in the pre-flight above.
 add_cfg() {  # append $1 iff absent (idempotent)
-	if ! grep -qxF "$1" "$CONFIG_TXT" 2>/dev/null; then printf "%s\n" "$1" | sudo tee -a "$CONFIG_TXT" >/dev/null; fi
+	if ! grep -qxF "$1" "$CONFIG_TXT" 2>/dev/null; then printf "%s\n" "$1" | tee -a "$CONFIG_TXT" >/dev/null; fi
 }
 case "$SPI_MODE" in
 	soft-cs)
@@ -376,42 +372,42 @@ else
 		if [ -e "$FSTAB" ] && [ ! -f "$FSTAB" ]; then
 			echo "[bootstrap-deps] swap: $FSTAB is not a regular file — refusing to publish." >&2; return 1
 		fi
-		_ftmp="$(sudo mktemp "$(dirname "$FSTAB")/.fstab.lhpc.XXXXXX")" || return 1
+		_ftmp="$(mktemp "$(dirname "$FSTAB")/.fstab.lhpc.XXXXXX")" || return 1
 		if [ -f "$FSTAB" ]; then
 			# cp carries mode+ownership onto the 0600 root-owned temp; the filter then rewrites
 			# its CONTENT: every EXACT first-field match is dropped (stale options, duplicates),
 			# while comments and longer paths keep their own first field and survive verbatim.
-			if ! sudo cp --preserve=mode,ownership "$FSTAB" "$_ftmp"; then
-				sudo rm -f "$_ftmp"; return 1
+			if ! cp --preserve=mode,ownership "$FSTAB" "$_ftmp"; then
+				rm -f "$_ftmp"; return 1
 			fi
-			if ! sudo awk -v f="$SWAPFILE" '$1 != f' "$FSTAB" | sudo tee "$_ftmp" >/dev/null; then
-				sudo rm -f "$_ftmp"; return 1
+			if ! awk -v f="$SWAPFILE" '$1 != f' "$FSTAB" | tee "$_ftmp" >/dev/null; then
+				rm -f "$_ftmp"; return 1
 			fi
-		elif ! sudo chmod 644 "$_ftmp"; then
-			sudo rm -f "$_ftmp"; return 1
+		elif ! chmod 644 "$_ftmp"; then
+			rm -f "$_ftmp"; return 1
 		fi
-		if ! printf "%s\n" "$SWAP_FSTAB_LINE" | sudo tee -a "$_ftmp" >/dev/null; then
-			sudo rm -f "$_ftmp"; return 1
+		if ! printf "%s\n" "$SWAP_FSTAB_LINE" | tee -a "$_ftmp" >/dev/null; then
+			rm -f "$_ftmp"; return 1
 		fi
 		# Durable BEFORE the rename: a power loss must not publish an empty/partial fstab.
-		if ! sudo sync "$_ftmp"; then sudo rm -f "$_ftmp"; return 1; fi
-		if ! sudo mv -f "$_ftmp" "$FSTAB"; then sudo rm -f "$_ftmp"; return 1; fi
-		sudo sync "$(dirname "$FSTAB")" || true   # dir entry durable (best-effort)
+		if ! sync "$_ftmp"; then rm -f "$_ftmp"; return 1; fi
+		if ! mv -f "$_ftmp" "$FSTAB"; then rm -f "$_ftmp"; return 1; fi
+		sync "$(dirname "$FSTAB")" || true   # dir entry durable (best-effort)
 	}
 	# Fresh allocation NEVER writes to the final path: a UNIQUE same-directory temp is
 	# allocated, chmod 600'd, formatted and FSYNCED, and only a complete, valid swap image is
 	# renamed into place. An interrupted run leaves an inert .swap.lhpc.XXXXXX, never a
 	# half-formatted $SWAPFILE that the next run would try to swapon.
 	_swap_alloc_temp() {
-		_stmp="$(sudo mktemp "$(dirname "$SWAPFILE")/.swap.lhpc.XXXXXX")" || return 1
-		if ! sudo fallocate -l "${SWAP_TARGET_MB}M" "$_stmp" 2>/dev/null; then
-			if ! sudo dd if=/dev/zero of="$_stmp" bs=1M count="$SWAP_TARGET_MB" status=none; then
-				sudo rm -f "$_stmp"; return 1
+		_stmp="$(mktemp "$(dirname "$SWAPFILE")/.swap.lhpc.XXXXXX")" || return 1
+		if ! fallocate -l "${SWAP_TARGET_MB}M" "$_stmp" 2>/dev/null; then
+			if ! dd if=/dev/zero of="$_stmp" bs=1M count="$SWAP_TARGET_MB" status=none; then
+				rm -f "$_stmp"; return 1
 			fi
 		fi
-		if ! sudo chmod 600 "$_stmp"; then sudo rm -f "$_stmp"; return 1; fi
-		if ! sudo mkswap "$_stmp" >/dev/null; then sudo rm -f "$_stmp"; return 1; fi
-		if ! sudo sync "$_stmp"; then sudo rm -f "$_stmp"; return 1; fi
+		if ! chmod 600 "$_stmp"; then rm -f "$_stmp"; return 1; fi
+		if ! mkswap "$_stmp" >/dev/null; then rm -f "$_stmp"; return 1; fi
+		if ! sync "$_stmp"; then rm -f "$_stmp"; return 1; fi
 		printf "%s\n" "$_stmp"
 	}
 	# swapon stderr is NOT suppressed: its message ('read swap header failed', 'Device or
@@ -420,14 +416,14 @@ else
 	_swap_install() {
 		_new="$(_swap_alloc_temp)" || return 1
 		if _swap_active; then
-			if ! sudo swapoff "$SWAPFILE"; then
+			if ! swapoff "$SWAPFILE"; then
 				echo "[bootstrap-deps] swap: $SWAPFILE is in use and swapoff failed — refusing to replace it." >&2
-				sudo rm -f "$_new"; return 1
+				rm -f "$_new"; return 1
 			fi
 		fi
-		if ! sudo mv -f "$_new" "$SWAPFILE"; then sudo rm -f "$_new"; return 1; fi
-		sudo sync "$(dirname "$SWAPFILE")" || true
-		sudo swapon -p 10 "$SWAPFILE"
+		if ! mv -f "$_new" "$SWAPFILE"; then rm -f "$_new"; return 1; fi
+		sync "$(dirname "$SWAPFILE")" || true
+		swapon -p 10 "$SWAPFILE"
 	}
 	_provision=""
 	_swap_state="fail"
@@ -447,7 +443,7 @@ else
 			# unsuppressed on the REAL activation attempts (reactivate below, and _swap_install).
 			echo "[bootstrap-deps] swap: fstab entry pointed at a missing file — recreating."
 			_provision="reuse"
-		elif sudo swapon -p 10 "$SWAPFILE" && _swap_active; then
+		elif swapon -p 10 "$SWAPFILE" && _swap_active; then
 			_swap_state="reactivated"
 		else
 			_provision="reuse"
@@ -525,24 +521,24 @@ else
 	echo "[bootstrap-deps] Wi-Fi: DISABLING power-save on $WIFI_DEV (default)."
 	echo "[bootstrap-deps]   Reason: brcmfmac Wi-Fi on a Pi Zero 2W crashes/drops under a long build"
 	echo "[bootstrap-deps]   with power-save on; --keep-wifi-powersave leaves Wi-Fi untouched."
-	# Persistent config, fail-closed: refuse a symlink/non-regular leaf (never write THROUGH it under
-	# sudo); write a ROOT-OWNED same-dir temp (sudo mktemp), chmod 0644, atomically rename into place,
+	# Persistent config, fail-closed: refuse a symlink/non-regular leaf (never write THROUGH it as
+	# root); write a ROOT-OWNED same-dir temp, chmod 0644, atomically rename into place,
 	# and clean the temp up on ANY failure after creation. _persisted tracks success so the live-apply
 	# report below never promises "after reboot" when nothing was actually written.
 	_persisted=0
 	if [ -L "$WIFI_PSAVE_CONF" ] || { [ -e "$WIFI_PSAVE_CONF" ] && [ ! -f "$WIFI_PSAVE_CONF" ]; }; then
 		echo "[bootstrap-deps]   WARNING: $WIFI_PSAVE_CONF is a symlink or non-regular file - NOT touching it; power-save config left as-is." >&2
 	else
-		sudo mkdir -p "$(dirname "$WIFI_PSAVE_CONF")" 2>/dev/null || true
-		if _wtmp="$(sudo mktemp "$(dirname "$WIFI_PSAVE_CONF")/.wifi-nopowersave.XXXXXX")" \
-				&& printf '[connection]\nwifi.powersave = 2\n' | sudo tee "$_wtmp" >/dev/null \
-				&& sudo chmod 0644 "$_wtmp" \
-				&& sudo mv -- "$_wtmp" "$WIFI_PSAVE_CONF"; then
+		mkdir -p "$(dirname "$WIFI_PSAVE_CONF")" 2>/dev/null || true
+		if _wtmp="$(mktemp "$(dirname "$WIFI_PSAVE_CONF")/.wifi-nopowersave.XXXXXX")" \
+				&& printf '[connection]\nwifi.powersave = 2\n' | tee "$_wtmp" >/dev/null \
+				&& chmod 0644 "$_wtmp" \
+				&& mv -- "$_wtmp" "$WIFI_PSAVE_CONF"; then
 			_persisted=1
 			echo "[bootstrap-deps]   persistent config written: $WIFI_PSAVE_CONF (wifi.powersave=2)"
 			echo "[bootstrap-deps]   REVERT: sudo rm $WIFI_PSAVE_CONF && sudo systemctl restart NetworkManager"
 		else
-			[ -n "${_wtmp:-}" ] && sudo rm -f -- "$_wtmp"
+			[ -n "${_wtmp:-}" ] && rm -f -- "$_wtmp"
 			echo "[bootstrap-deps]   WARNING: could not write $WIFI_PSAVE_CONF - power-save NOT persisted." >&2
 		fi
 	fi
@@ -553,13 +549,13 @@ else
 	_live_ok=0
 	_wcon="$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | grep ":${WIFI_DEV}$" | cut -d: -f1 | head -1 || true)"
 	if [ -n "$_wcon" ]; then
-		if sudo nmcli connection modify "$_wcon" wifi.powersave 2 >/dev/null 2>&1 \
-				&& sudo nmcli device reapply "$WIFI_DEV" >/dev/null 2>&1; then
+		if nmcli connection modify "$_wcon" wifi.powersave 2 >/dev/null 2>&1 \
+				&& nmcli device reapply "$WIFI_DEV" >/dev/null 2>&1; then
 			_live_ok=1
 		fi
 	fi
 	if command -v iw >/dev/null 2>&1; then
-		sudo iw dev "$WIFI_DEV" set power_save off >/dev/null 2>&1 && _live_ok=1
+		iw dev "$WIFI_DEV" set power_save off >/dev/null 2>&1 && _live_ok=1
 	fi
 	if [ "$_live_ok" = 1 ]; then
 		echo "[bootstrap-deps]   Wi-Fi power-save disabled now (live)."
@@ -573,14 +569,14 @@ fi
 # --- persistent journal (crash forensics survive reboots; Storage=auto honours the dir) ------
 JOURNAL_DIR="${JOURNAL_DIR:-/var/log/journal}"
 if [ ! -d "$JOURNAL_DIR" ]; then
-	sudo mkdir -p "$JOURNAL_DIR" || { echo "ERROR: could not create $JOURNAL_DIR — persistent journal NOT enabled." >&2; exit 1; }
+	mkdir -p "$JOURNAL_DIR" || { echo "ERROR: could not create $JOURNAL_DIR — persistent journal NOT enabled." >&2; exit 1; }
 fi
 # ACL fixup is best-effort: the directory alone already makes Storage=auto persistent.
-sudo systemd-tmpfiles --create --prefix="$JOURNAL_DIR" 2>/dev/null || echo "[bootstrap-deps] WARNING: systemd-tmpfiles ACL adjustment failed — the journal is persistent but may carry default permissions." >&2
+systemd-tmpfiles --create --prefix="$JOURNAL_DIR" 2>/dev/null || echo "[bootstrap-deps] WARNING: systemd-tmpfiles ACL adjustment failed — the journal is persistent but may carry default permissions." >&2
 echo "[bootstrap-deps] persistent journal enabled (takes effect after the reboot)."
 
 # --- hardware group membership (granted to the resolved operator, never root) ------------
-if sudo usermod -aG spi,gpio "$OP"; then
+if usermod -aG spi,gpio "$OP"; then
 	echo "[bootstrap-deps] granted spi,gpio to $OP — log out/in (or reboot) to take effect."
 else
 	echo "ERROR: could not grant spi,gpio to $OP — do those groups exist on this system? Rootless SPI/GPIO access will NOT work until this is resolved." >&2
@@ -629,7 +625,7 @@ fi
 unit_rc=0; unit_present meshtasticd.service || unit_rc=$?
 case "$unit_rc" in
 	0)
-		sudo systemctl disable --now meshtasticd
+		systemctl disable --now meshtasticd
 		echo "[bootstrap-deps] disabled the OS-packaged meshtasticd (lhpc manages its own)." ;;
 	1) echo "[bootstrap-deps] no packaged meshtasticd service present — nothing to disable." ;;
 	2) echo "ERROR: could not inspect systemd unit files — cannot confirm a packaged meshtasticd is stopped. Refusing to continue." >&2; exit 9 ;;
@@ -643,4 +639,4 @@ if [ -n "$_SWAP_FAILED" ]; then
 	echo "[bootstrap-deps] swap was REQUIRED on this low-memory host but could not be provisioned (see above). Fix the reported problem and re-run, or pass --no-swapfile to proceed without it (builds may be OOM-killed)." >&2
 	exit 4
 fi
-echo "[bootstrap-deps] done. Next: install lhpc (install.sh), then ONE reboot applies SPI + groups + PATH — see README steps 4-5."
+echo "[bootstrap-deps] done. Next: install lhpc (install.sh), then ONE reboot applies SPI + groups + PATH — see README steps 5-6."

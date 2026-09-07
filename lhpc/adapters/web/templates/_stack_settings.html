@@ -1,7 +1,6 @@
-{# Per-stack Settings section (the former Config page). Shared by the stack-detail page and the
-   Apps (/stacks) list. Requires `stack`, `view`, `config_groups`; optional `settings_id` (default
+{# Per-stack Settings section Included by _stack_body.html on the Apps (/stacks) list. Requires `stack`, `view`, `config_groups`; optional `settings_id` (default
    'stack-settings' — pass a per-stack id when several are rendered on one page). Collapsed by
-   default; opens on `?cfg=1` only when THIS section's id is the page's single 'stack-settings'. #}
+   default; opens when `?cfg=<stack id>` names THIS stack. #}
 {% from "_macros.html" import action_btn %}
 {% set _sid = settings_id | default('stack-settings') %}
 {# `?bad=<field>[,<field>]` (a start refused over the saved identity) marks those rows — only

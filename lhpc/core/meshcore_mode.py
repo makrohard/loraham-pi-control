@@ -2,7 +2,7 @@
 
 `mode` is a plain setting on `meshcore-node` (`[repeater] role` in the generated config):
 
-    chat           today's Companion host on TCP 5000 — the default, every existing box
+    chat           the Companion host on TCP 5000 — the default
     chat+repeater  upstream openhop_repeater hosting the SAME Companion inside it (5000 + 8000)
     repeater       the repeater alone: no Companion, so no chat GUI / CLI (8000 only)
 

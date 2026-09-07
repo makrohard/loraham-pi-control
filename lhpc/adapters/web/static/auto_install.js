@@ -1,4 +1,4 @@
-/* auto-install auto-install run view: 2 s poll of /api/auto-install.
+/* auto-install run view: 2 s poll of /api/auto-install.
  * - task rows + run badge updated via textContent ONLY (never innerHTML)
  * - append-only log via cursor/offset chunks (byte-capped server-side)
  * - the cursor RESETS when run_id changes (a new run never appends onto the old one)

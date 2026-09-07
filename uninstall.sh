@@ -6,12 +6,13 @@
 # (daemon, MeshCom, MeshCore, direct-radio apps) FIRST — and aborts without removing anything if it
 # cannot prove they ceased or a build/test/auto-install/HMAC job is unresolved.
 #
-#   default : remove src/, venv/, state/, logs/ and generated controller dirs, the
-#             ~/.local/bin/lhpc link and the managed systemd units — KEEP config/, backups/,
-#             .lhpc-root (so a reinstall reuses them).
-#   --purge : also remove config/ and the runtime root itself.
+#   default : remove src/, venv/, logs/, the generated controller dirs, the controller's own
+#             state/ entries, the ~/.local/bin/lhpc link and the managed systemd units — KEEP
+#             config/, backups/, .lhpc-root, profiles/ and the stacks' app data under state/
+#             (APP_DATA below) so a reinstall reuses them.
+#   --purge : also remove config/, profiles/, app data and the runtime root itself.
 #
-# Usage:  ./uninstall.sh [--target <dir>] [--purge] [--purge-legacy-config-only] [--yes]
+# Usage:  ./uninstall.sh [--target <dir>] [--purge] [--yes]
 #
 # Runs as your normal user — no root. Only touches the CANONICAL web/updater units + PATH link
 # that provably belong to the selected target; noncanonical/foreign units are left untouched.
@@ -21,9 +22,7 @@ set -euo pipefail
 
 TARGET_DIR="${HOME}/loraham-pi-control"
 PURGE=0
-LEGACY_ACK=0
 ASSUME_YES=0
-INCOMPLETE=0            # set when a noncanonical same-root unit is left behind
 GUARD=""               # teardown guard path (set after resolution)
 
 usage() {
@@ -31,16 +30,14 @@ usage() {
 LoRaHAM Pi Control — controller uninstaller.
 
 Usage:
-  ./uninstall.sh [--target <dir>] [--purge] [--purge-legacy-config-only] [--yes]
+  ./uninstall.sh [--target <dir>] [--purge] [--yes]
 
   --target <dir>              runtime root to remove (default: ~/loraham-pi-control)
   --purge                     COMPLETE wipe — also remove config/ + secrets and the root
-  --purge-legacy-config-only  allow --purge of a config-only LEGACY root that has no marker
-                              (needed only when identity cannot otherwise be proven)
   --yes, -y                   do not prompt for confirmation
   -h, --help                  show this help
 
-Default keeps config/, backups/ and .lhpc-root. Managed stacks are STOPPED and VERIFIED first;
+Default keeps config/, backups/, .lhpc-root, profiles/ and app data under state/. Managed stacks are STOPPED and VERIFIED first;
 if they cannot be proven stopped, the uninstall aborts and removes nothing.
 EOF
 	exit "${1:-0}"
@@ -48,14 +45,12 @@ EOF
 
 die()  { printf 'ERR  %s\n' "$*" >&2; exit 1; }
 note() { printf 'OK   %s\n' "$*"; }
-warn() { printf 'WARN %s\n' "$*" >&2; INCOMPLETE=1; }
 step() { printf '\n==> %s\n' "$*"; }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--target)                     TARGET_DIR="${2:?--target needs a directory}"; shift 2 ;;
 		--purge)                      PURGE=1; shift ;;
-		--purge-legacy-config-only)   PURGE=1; LEGACY_ACK=1; shift ;;
 		--yes|-y)                     ASSUME_YES=1; shift ;;
 		-h|--help)                    usage 0 ;;
 		*)                            die "unknown argument: $1 (try --help)" ;;
@@ -103,11 +98,19 @@ has_triple() {
 	[ -f "${TARGET_DIR}/config/local.toml" ] && [ -d "${TARGET_DIR}/venv/lhpc" ] \
 		&& [ -d "${TARGET_DIR}/src/loraham-pi-control" ]
 }
-is_config_only() {                        # entries ⊆ {config, backups, .lhpc-root}, config present
+# Operator data that survives a default uninstall and that a reinstall accepts: ONE list,
+# byte-identical in install.sh (tests/test_deploy_scripts.py asserts they match).
+APP_DATA="state/graywolf state/meshcore state/openhop state/meshtasticd state/reticulum state/nomadnet state/lxmd state/sideband"
+is_app_data() { case " $APP_DATA " in *" $1 "*) return 0 ;; esac; return 1; }
+is_remainder() {   # nothing but config/, backups/, .lhpc-root, profiles/ and app data; config present
 	local e
 	for e in "$TARGET_DIR"/* "$TARGET_DIR"/.[!.]* "$TARGET_DIR"/..?*; do
-		[ -e "$e" ] || continue
-		case "$(basename "$e")" in config|backups|.lhpc-root) ;; *) return 1 ;; esac
+		[ -e "$e" ] || [ -L "$e" ] || continue
+		case "${e##*/}" in config|backups|.lhpc-root|profiles|state) ;; *) return 1 ;; esac
+	done
+	for e in "$TARGET_DIR"/state/* "$TARGET_DIR"/state/.[!.]* "$TARGET_DIR"/state/..?*; do
+		[ -e "$e" ] || [ -L "$e" ] || continue
+		is_app_data "state/${e##*/}" || return 1
 	done
 	[ -e "${TARGET_DIR}/config" ]
 }
@@ -117,12 +120,7 @@ if marker_valid; then
 	note "identity: valid .lhpc-root marker"
 elif has_triple; then
 	note "identity: full controller structure (config + venv + checkout)"
-elif [ "$PURGE" -eq 1 ] && [ "$LEGACY_ACK" -eq 1 ] && is_config_only; then
-	warn "purging a config-only LEGACY root without a marker (explicit --purge-legacy-config-only)"
 else
-	if [ "$PURGE" -eq 1 ] && is_config_only; then
-		die "$TARGET_DIR looks like a config-only remainder with no valid .lhpc-root — its LHPC identity cannot be proven. If you are sure, re-run with --purge-legacy-config-only."
-	fi
 	die "$TARGET_DIR does not prove it is an LHPC controller root (need a valid .lhpc-root or config/local.toml + venv/lhpc + src/loraham-pi-control). Refusing."
 fi
 
@@ -170,7 +168,7 @@ fi
 if [ "$PURGE" -eq 1 ]; then
 	printf '\nCOMPLETE removal of the runtime root and ALL its contents (config + secrets included):\n\n  %s\n\nThis cannot be undone.\n' "$TARGET_DIR"
 else
-	printf '\nUninstall LoRaHAM Pi Control from:\n\n  %s\n\nREMOVE : src/ venv/ state/ logs/ build/ bin/ profiles/ systemd/ docs/ + managed units + PATH link\nKEEP   : config/ (settings + secrets), backups/, .lhpc-root\n' "$TARGET_DIR"
+	printf '\nUninstall LoRaHAM Pi Control from:\n\n  %s\n\nREMOVE : src/ venv/ logs/ build/ bin/ systemd/ docs/ + controller state + managed units + PATH link\nKEEP   : config/ (settings + secrets), backups/, .lhpc-root, profiles/, app data (%s)\n' "$TARGET_DIR" "$APP_DATA"
 fi
 printf 'Managed stacks are STOPPED and VERIFIED before removal (clients before the shared daemon);\nif quiescence cannot be proven, this aborts and removes nothing.\n\n'
 if [ "$ASSUME_YES" -ne 1 ]; then
@@ -183,22 +181,14 @@ fi
 # Written FIRST (root-level, with process identity). The web unit conditions on its ABSENCE, so
 # the updater's OnFailure=lhpc-web.service cannot resurrect the console mid-teardown. Recovery
 # can clear a stale guard after proving this pid is gone.
-# Capture config-only-ness BEFORE writing the guard — the guard file itself would otherwise make
-# `is_config_only` false (it is not in the allowed remainder set).
-CONFIG_ONLY=0; is_config_only && CONFIG_ONLY=1
+# Capture remainder-ness BEFORE writing the guard — the guard file itself would otherwise make
+# `is_remainder` false (it is not in the allowed remainder set).
+REMAINDER=0; is_remainder && REMAINDER=1
 
 # Guard identity: a per-invocation nonce + this shell's pid/start-time, so a live owner is
 # distinguishable from PID reuse and the RELEASE removes only the guard THIS run owns.
 NONCE="${RANDOM}${RANDOM}${RANDOM}"
 GUARD_START="$(awk '{print $22}' /proc/$$/stat 2>/dev/null || echo 0)"
-guard_release() {   # remove ONLY the guard this invocation owns (never a pre-existing/foreign one)
-	if [ -x "${VENV}/bin/lhpc" ]; then
-		"${VENV}/bin/lhpc" _uninstall-guard-release --root "$TARGET_DIR" --nonce "$NONCE" >/dev/null 2>&1 || true
-	else
-		rm -f "$GUARD" 2>/dev/null || true   # config-only remainder: no controller op, no web/tasks
-	fi
-}
-
 abort_die() {   # a refusal BEFORE any teardown mutation: release the guard THIS run owns, then die.
 	# An aborted uninstall means "not uninstalling" — the web console must be startable again. After
 	# the FIRST stop/disable/stage mutation, refusals must use plain `die` instead (guard RETAINED: a
@@ -219,7 +209,7 @@ abort_die() {   # a refusal BEFORE any teardown mutation: release the guard THIS
 
 # ATOMIC, EXCLUSIVE, NO-FOLLOW guard claim — NEVER truncates/follows/replaces a pre-existing guard of
 # any type, and a live concurrent uninstall is refused. Descriptor-based controller op for a real
-# deployment; a `set -C` (noclobber) create as the fallback for a config-only remainder with no lhpc.
+# deployment; a `set -C` (noclobber) create as the fallback for an uninstall remainder with no lhpc.
 if [ -x "${VENV}/bin/lhpc" ]; then
 	"${VENV}/bin/lhpc" _uninstall-guard-claim --root "$TARGET_DIR" --pid "$$" --nonce "$NONCE" --start "$GUARD_START" \
 		|| die "could not claim the uninstall guard — a concurrent/interrupted uninstall may own it, or ${GUARD} is unsafe. Recover it (verify no uninstall is running, then remove ${GUARD}), and re-run."
@@ -234,7 +224,7 @@ fi
 # build/test/web jobs or unresolved auto-install/HMAC state, blocks on any UNKNOWN component state,
 # then STOPS the managed stacks (clients before the shared daemon) and VERIFIES cessation. If it cannot
 # prove quiescence it fails closed — we remove the guard we just wrote and abort WITHOUT deleting
-# anything. Skipped only for a legacy config-only remainder (no venv/executable/state to inspect).
+# anything. Skipped only for an uninstall remainder (no venv/executable/controller state to inspect).
 if [ -x "${VENV}/bin/lhpc" ]; then
 	step "Prepare uninstall — stop managed stacks and verify cessation"
 	if ! "${VENV}/bin/lhpc" _controller-uninstall-prep --root "$TARGET_DIR"; then
@@ -242,14 +232,14 @@ if [ -x "${VENV}/bin/lhpc" ]; then
 		# everything else, and exit nonzero.
 		abort_die "Uninstall preparation could not prove the managed stacks are stopped (see the message above) — aborting. Nothing was removed; the checkout, state, and units are untouched."
 	fi
-elif [ "$CONFIG_ONLY" -eq 1 ]; then
-	# The ONLY case that skips workload prep: a legacy config-only remainder with no executable/state
-	# to inspect (nothing can be running). (Captured BEFORE the guard was written.)
-	note "no ${VENV}/bin/lhpc — config-only remainder, nothing to stop"
+elif [ "$REMAINDER" -eq 1 ]; then
+	# The ONLY case that skips workload prep: an uninstall remainder with no executable/controller
+	# state to inspect (nothing can be running). (Captured BEFORE the guard was written.)
+	note "no ${VENV}/bin/lhpc — uninstall remainder, nothing to stop"
 else
 	# A normal deployment whose controller command is missing/broken — we cannot prove quiescence, so
 	# we must NOT delete anything. Release the guard THIS run owns and abort.
-	abort_die "the controller command ${VENV}/bin/lhpc is missing, but $TARGET_DIR is not a config-only remainder — cannot prove the managed stacks are stopped. Aborting without removing anything (reinstall/repair, then retry)."
+	abort_die "the controller command ${VENV}/bin/lhpc is missing, but $TARGET_DIR is not an uninstall remainder — cannot prove the managed stacks are stopped. Aborting without removing anything (reinstall/repair, then retry)."
 fi
 
 sysctl_ok() { command -v systemctl >/dev/null 2>&1; }
@@ -409,21 +399,22 @@ if [ "$PURGE" -eq 1 ]; then
 	rm -rf -- "${TARGET_DIR:?}"          # guard + everything goes with the root
 	note "removed $TARGET_DIR (complete wipe)"
 else
-	step "Remove controller files (config preserved)"
-	for sub in src venv state logs build bin profiles systemd docs; do
+	step "Remove controller files (config, profiles and app data preserved)"
+	for sub in src venv logs build bin systemd docs; do
 		if [ -e "${TARGET_DIR}/${sub}" ]; then rm -rf -- "${TARGET_DIR:?}/${sub}"; note "removed ${sub}/"; fi
 	done
+	for e in "${TARGET_DIR}"/state/* "${TARGET_DIR}"/state/.[!.]* "${TARGET_DIR}"/state/..?*; do
+		[ -e "$e" ] || [ -L "$e" ] || continue
+		is_app_data "state/${e##*/}" || { rm -rf -- "${e:?}"; note "removed state/${e##*/}"; }
+	done
 	rm -f "$GUARD"                        # clear the teardown guard so a reinstall's console can start
-	note "kept ${TARGET_DIR}/config/, backups/, .lhpc-root (settings + secrets preserved)"
+	note "kept ${TARGET_DIR}/config/, backups/, .lhpc-root, profiles/ and app data under state/"
 fi
 
 # --------------------------------------------------------------------------- done
 step "Done"
-if [ "$INCOMPLETE" -eq 1 ]; then
-	printf '\nController files removed, but some steps were INCOMPLETE (see WARN above) — unmanaged\nsystemd units may remain. Review with: systemctl --user list-unit-files "lhpc-*"\n'
-fi
 if [ "$PURGE" -eq 1 ]; then
 	printf '\nLoRaHAM Pi Control completely removed. (Lingering, if enabled, left untouched —\ndisable with: loginctl disable-linger "%s")\n' "$USER"
 else
-	printf '\nLoRaHAM Pi Control uninstalled; config preserved at %s/config/.\nReinstall with install.sh (it reuses that config); add --purge to also remove it.\n' "$TARGET_DIR"
+	printf '\nLoRaHAM Pi Control uninstalled; config, profiles and app data preserved under %s/.\nReinstall with install.sh (it reuses them); add --purge to remove everything.\n' "$TARGET_DIR"
 fi

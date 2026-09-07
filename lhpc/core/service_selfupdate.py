@@ -16,9 +16,9 @@ class SelfUpdateOpsMixin:
 
     def controller_log_tail(self, source: str = "web", lines: int = 300):
         """Raw (path, lines) for the controller's OWN process logs — the lhpc-web / lhpc-selfupdate
-        units now log to on-disk FILES under logs/ (StandardOutput=append:), so the GUI reads them
+        units log to on-disk FILES under logs/ (StandardOutput=append:), so the GUI reads them
         the same way as the nginx logs (the box's user journal is not reliably populated). `source`
-        selects the file: 'selfupdate' -> lhpc-selfupdate.log, anything else -> lhpc-web.log. Same
+        selects the file: 'web', 'selfupdate' or 'boot-restore'; any other source yields ("", []). Same
         containment-safe, O_NOFOLLOW, bounded read as `webserver_log_tail`; never raises into GET."""
         from . import runtime_fs, updater_units
         # EXPLICIT immutable source map — an unknown source is rejected (empty result), never
@@ -254,7 +254,7 @@ class SelfUpdateOpsMixin:
         lock covers candidate capture, journal persistence, fetch/ref resolution, merge/reset/clean,
         cache writes, config migration and journal finalization). BLOCKED while an lhpc job is active;
         a concurrent apply returns 'busy' with zero mutation. A DIRTY tree is refused unless
-        `force=True`. Legacy default-equal config is migrated to the new defaults only when the source
+        `force=True`. Default-equal config is migrated to the new defaults only when the source
         transition it was captured against actually completed — recorded DURABLY before source changes
         and recovered from the journal after a crash. Cleanup failure on force is a truthful partial."""
         from . import reslock, selfupdate
@@ -484,7 +484,7 @@ class SelfUpdateOpsMixin:
         #    so delete its anchor and drop it, keeping the prior completed intact.
         if prepared:
             if head_now == prepared["to_head"]:
-                completed = self._promote(completed, prepared)          # keep the anchor for the completed slot
+                completed = self._promote(prepared)          # keep the anchor for the completed slot
                 self._write_envelope(completed, None)
             elif selfupdate.clear_migration_journal(self._paths):       # git never happened -> drop stale
                 selfupdate.delete_anchor(self._system, prepared.get("txid"))   # prepared + its anchor
@@ -582,7 +582,7 @@ class SelfUpdateOpsMixin:
         instr = selfupdate.restart_instructions(res.get("deps_changed", False),
                                                 self._controller_deps_sync_cmd())
         data = {**res, "restart": instr, "migrated": migrated, "pending_migrations": len(remaining)}
-        migrated_note = f"{migrated} legacy default(s) migrated to the new defaults." if migrated else ""
+        migrated_note = f"{migrated} default(s) migrated to the new defaults." if migrated else ""
         pending_note = (f"{len(remaining)} config default migration(s) could NOT be completed and will "
                         "be retried on the next self-update.") if remaining else ""
 
@@ -1028,10 +1028,9 @@ class SelfUpdateOpsMixin:
                             data={**req_res.data, **guard_res.data})
 
     def _recover_uninstall_guard(self):
-        """Release a STALE uninstall guard, identity-proven: `pid` + `start_time` as integers or
-        decimal strings (the form releases up to 0.2.10 wrote); REJECTS booleans, any non-decimal
-        value and non-positive pid/start times (strict `_guard_owner_ints`) — malformed/unprovable
-        keeps the guard with its path named. The whole
+        """Release a STALE uninstall guard, identity-proven: `pid` + `start_time` as positive
+        integers (strict `_guard_owner_ints`) — malformed/unprovable keeps the guard with its
+        path named. The whole
         read -> prove -> unlink sequence runs under the ONE per-root guard lock that also serializes
         claim/reclaim/release, so the guard proven stale is GUARANTEED to be the same guard removed —
         recovery can never delete a replacement guard a concurrent uninstall just claimed. Returns
@@ -1109,9 +1108,7 @@ class SelfUpdateOpsMixin:
     # ---- integration repair (operator shell, HAS bus) ----------------------------------------
 
     def self_update_repair_integration(self, *, restart: bool = True) -> ActionResult:
-        """OPERATOR / migration: install/restore the COMPLETE canonical unit set (web + helper +
-        path) for this runtime root, then daemon-reload, verify the active fragments, enable the
-        watcher (`--now`) + web. With `restart=True` (CLI default) also restart the console; with
+        """OPERATOR / migration: install/restore the COMPLETE canonical unit set (`updater_units.ALL_UNITS`) for this runtime root, then daemon-reload, verify the active fragments, enable both request watchers (`--now`), the web unit and the boot-restore unit. With `restart=True` (CLI default) also restart the console; with
         `restart=False` (the web self-repair bridge) leave the running console alone so the update
         itself bounces it. Refuses while an uninstall guard or request/in-flight evidence exists,
         or when an existing unit is not provably this deployment's."""
@@ -1229,11 +1226,8 @@ class SelfUpdateOpsMixin:
                                     "restart FAILED — the repair is NOT marked complete. Check "
                                     "`journalctl --user -u lhpc-web.service`.",
                                     data={"web_restart_failed": True})
-        ov_note = self._remove_stale_overwrite_unit(ud)
         self._write_root_marker()          # ONLY after every required integration step succeeded
         details = [f"  {k}: {a}" for k, a in actions]
-        if ov_note:
-            details.append(f"  {ov_note}")
         details.append(self._enable_linger(S))
         return ActionResult(True, "Web + one-click updater integration installed/repaired.",
                             details=tuple(details), data={"actions": dict(actions)})
@@ -1243,7 +1237,7 @@ class SelfUpdateOpsMixin:
         Installed roots get this from install.sh; a repaired one did not — so repair enables it too.
 
         ALWAYS attempted (never gated on INVOCATION_ID): the web self-repair bridge runs from a
-        managed LEGACY web unit that still has the user bus, and gating would silently deny it boot
+        managed non-canonical web unit that still has the user bus, and gating would silently deny it boot
         autostart. FAIL-SOFT by contract — a linger failure NEVER fails the repair/update; where the
         bus is unavailable (the canonical web unit blocks %t/bus) we return the shell command."""
         import getpass
@@ -1257,48 +1251,8 @@ class SelfUpdateOpsMixin:
                     f"loginctl enable-linger {user}")
         return f"  linger: enabled for {user} — the console now autostarts at boot"
 
-    def _remove_stale_overwrite_unit(self, ud) -> str | None:
-        """Remove the obsolete `lhpc-selfupdate-overwrite.service` ONLY when it is PROVABLY this
-        deployment's old overwrite helper variant — BOTH a same-root `LHPC_RUNTIME_ROOT` (literal
-        or `%h`) AND the old variant's exact `ExecStart` shape
-        (`<root>/venv/lhpc/bin/lhpc self-update --run-service --overwrite`). Anything else (edited /
-        foreign / unreadable / symlinked) is LEFT untouched. Returns a manual-cleanup note when a
-        same-named unit is present but not proven ours, else None."""
-        from . import updater_units
-        name = "lhpc-selfupdate-overwrite.service"
-        p = ud / name
-        try:
-            text = updater_units._read_unit(p)               # no-follow, bounded
-        except FileNotFoundError:
-            # ABSENT is the normal case — nothing to clean up, and NOT evidence of anything. A bare
-            # `except Exception` here reported every clean box as "present but unreadable/symlinked",
-            # because `_read_unit` raises (never returns None) when the unit does not exist.
-            return None
-        except OSError:
-            # Genuinely present but unusable: symlinked (O_NOFOLLOW -> ELOOP), non-regular,
-            # oversized, or unreadable. Never touch it; tell the operator.
-            return f"{name} is present but unreadable/symlinked — remove it by hand if unused."
-        home = os.path.expanduser("~")
-        root = str(self._paths.runtime_root)
-        lines = text.splitlines()
-        envs = [ln[len("Environment=LHPC_RUNTIME_ROOT="):] for ln in lines
-                if ln.startswith("Environment=LHPC_RUNTIME_ROOT=")]
-        execs = [ln[len("ExecStart="):] for ln in lines if ln.startswith("ExecStart=")]
-        want_exec = f"{root}/venv/lhpc/bin/lhpc self-update --run-service --overwrite"
-        root_ours = any(updater_units._expand_h(v, home) == root for v in envs)
-        exec_ours = any(updater_units._expand_h(v, home) == want_exec for v in execs)
-        if not (root_ours and exec_ours):
-            return (f"{name} is present but not the recognised old overwrite helper — left in "
-                    "place; remove it by hand if unused.")
-        self._system.runner.run(["systemctl", "--user", "disable", "--now", name], timeout=20.0)
-        try:
-            os.remove(str(p))                                # regular file proven by _read_unit
-        except OSError:
-            pass
-        return None
-
     def self_update_repair_and_trigger(self, *, overwrite: bool = False) -> ActionResult:
-        """WEB one-click that also MIGRATES a legacy same-root deployment (old/`%h` units, no
+        """WEB one-click that also MIGRATES a non-canonical same-root deployment (old/`%h` units, no
         `.path`) to the canonical set, then updates — in one click. Compatibility bridge ONLY: it
         needs the user bus, which succeeds only while the console runs the not-yet-hardened unit;
         once the canonical bus-blocked web unit is active the bus preflight fails and this returns
@@ -1306,7 +1260,7 @@ class SelfUpdateOpsMixin:
         `missing`/`modified_ours` units — never `ambiguous`/`foreign`/`overridden`/`unsafe`/
         `unreadable`/recovery states."""
         from . import updater_units
-        # Managed-service gate FIRST — the web->systemctl bridge must run only for the legacy
+        # Managed-service gate FIRST — the web->systemctl bridge must run only for the non-canonical
         # managed unit, never a foreground `lhpc web`, so no units/marker are written by one.
         if not os.environ.get("INVOCATION_ID"):
             return ActionResult(
@@ -1378,7 +1332,7 @@ class SelfUpdateOpsMixin:
                                                              "prepared": prepared})
 
     @staticmethod
-    def _promote(completed, prepared) -> dict:
+    def _promote(prepared) -> dict:
         """Promote a prepared transition whose git DID complete (head reached its to_head) into the
         completed slot, carrying its durable-anchor `txid` and its (immutable, anchor-matched) pending
         payload. The classifier's invariant guarantees no prior completed pending coexists."""

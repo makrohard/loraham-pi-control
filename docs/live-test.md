@@ -35,9 +35,9 @@ Every row: purge → install → build → start → verify → stop, timed by t
 ⁽1⁾ build refused for a binary install, as designed.
 ⁽2⁾ interactive: start ensures the daemon and prints the command (manual start required).
 ⁽7⁾ min avail 43 MB during the openHop build, no OOM.
-⁽9⁾ pin unchanged since 0.2.10; measured there (row 10: build 2:42:58, pass).
+⁽9⁾ pin unchanged since 0.2.10; measured there (row 10: build 2:42:58, pass). Waived for 0.3.0 by the maintainer on 2026-09-07: the release test runs the binary channel for this stack.
 ⁽11⁾ start 0:13:45 = the controller's wait for the first firmware boot under QEMU (0:07:31 in 0.2.10); web UI usable 46 s later.
-⁽12⁾ pins unchanged since 0.2.10; measured there (row 13: build 0:45:45, pass).
+⁽12⁾ pins unchanged since 0.2.10; measured there (row 13: build 0:45:45, pass). Waived for 0.3.0 by the maintainer on 2026-09-07: the release test runs the binary channel for this stack.
 
 Live gates of this release on the same reference box, each measured in the run rather than
 derived. The matrix above ran on `58a9fbe`; the dated gates below were run on the
@@ -56,6 +56,57 @@ then-current release-branch head, after the amendment each one covers:
 | daemon RX/TX feed per band (`/api/daemon/433`, `/api/daemon/868`) | pass — 433 answers with feed lines, 868 empty, no band-less file read |
 | boot restore across a reboot (2026-09-06 11:00) | pass — daemon (both bands), kiss and graywolf running before `systemctl reboot`; the box came back after 1:15 with a new kernel boot id (`ea6cf0c6…` → `d0405550…`) and `lhpc autostart` reported *done — 3 restored, 0 failed, 0 cancelled, 0 pending, 0 skipped*; `lhpc status` showed the same three running and the unit's journal listed the relaunched processes, including both daemon bands. Exercises the schema-v1 ownership records and the stamped/unstamped classifier this release simplified. |
 | from-zero reinstall (`uninstall.sh --purge` after the root-owned firewall reset) | not run (root step); owed |
+
+### Cross-cutting checks on the second-round head da1ae62, 2026-09-07
+
+Run on the same box on `main` = `da1ae62` (deployed 08:30 local, `/healthz` 200), the head the
+second external-audit round produced; the from-source rows 9 and 12 are waived (footnotes above,
+matrix *Fast lane*). All nine stacks were purged first (`lhpc clean <stack> --purge --yes`, 4–9 s
+each). This 0.3.0 run leaves the from-zero reinstall owed under the accepted root-step exception
+(last two rows), so the normal matrix was not fully completed.
+
+| check | result |
+|---|---|
+| auto-install consistency (CLI path): purge every stack, `lhpc auto-install --yes`, console stopped | pass — 9/9 successful, 0 blocked, 0 failed, 0 skipped, in 17:53; daemon, meshtastic and meshcom from the published binaries (1.0 / 50.4 / 11.6 MB), the rest from source; min free+buffers+cache 127 MB, no OOM line in `dmesg` |
+| pins vs binaries (`lhpc status --versions`) | pass — loraham-daemon, radiolib, meshtastic, meshcom-bridge, meshcom-qemu, meshcom-firmware: `built_from` equals the manifest pin for each |
+| web console after the run | pass — Dashboard, Apps, `/healthz`, every stack's open panel and lazy body (21 requests) answer 200; 0 tracebacks in the console journal |
+| start / stop, one band at a time | pass for daemon (start 0:13, stop 0:08), kiss (0:08 verified `127.0.0.1:8001`, stop 0:06), graywolf (0:12 verified `:8080` + post-start, stop 0:12), reticulum (0:09 ready marker, stop 0:05), meshcom (6:00 verified bridge `:7000`, GPS 5 sentences, QEMU `:12323`; stop 0:12), meshcore (0:10 verified node `:5000` + GPS, stop 0:11). meshtastic: the first start after the purge was the typed identity refusal (`node_name`, `node_short` required — as designed, the purge removed the stack config); after `lhpc config meshtastic node_name/node_short` the start was refused by the firewall gate — see the last row |
+| known-working after each green start | pass — recorded for kiss, reticulum, meshcore (one click / `lhpc known-working <stack>`); no offer for daemon, meshtastic, meshcom (binary) and graywolf (fetched) by design. Finding: the CLI answered *No healthy start is recorded — start the stack first* to a running binary stack; subsequently fixed in `621d33e` to name the missing source composition, with regression coverage |
+| host tests, last | kiss pass (0:19); daemon refused as designed (binary channel — host tests need the source channel); meshcore pass (2:29 — node pytest and webui backend import); meshtastic and meshcom refused as designed (binary channel); chat, voice, graywolf, reticulum declare no host test (*Nothing to do*) |
+| firewall after the controller update | *Update required — re-apply the firewall after the update* (documented gate, `docs/firewall.md`): the meshtastic listener start is refused until `firewall-apply.sh` runs as root. Not run: root step, owed with the from-zero reinstall |
+| from-zero reinstall | not run — both the default and the `--purge` uninstall refuse while the managed firewall integration is installed (root-owned reset first); the matrix row now says so. Owed |
+
+### From-zero reinstall on 3ceb55a, 2026-09-07
+
+The shortened lane (matrix *Fast lane*: the published binaries for daemon, meshtastic and meshcom, no
+heavy source build), driven line by line from the README on the same box, 10:35 to 11:41 local, after
+the maintainer had run the root-owned `firewall-reset.sh` (the managed firewall stays absent for
+the whole run — nothing gates, as documented). Logs on the box under `~/fromzero/3ceb55a/`.
+
+| step | result |
+|---|---|
+| 1. uninstall + wipe (`uninstall.sh --purge --yes` from the old checkout) | pass — stacks quiescent and verified, the seven managed units removed, runtime root and the `~/.local/bin/lhpc` link gone; 0:28 |
+| 2. install (`curl … install.sh \| bash` from `main`) | pass — cloned `3ceb55a`, venv, bootstrap (12 actions), identity ok, units enabled, console at `https://127.0.0.1:8443/` answering 200; 1:47 |
+| 3. network | the purge deletes the preferred-network record by design, so the box falls back to its AP at the next link loss or reboot: the LAN Wi-Fi dropped at 11:04 during the MeshCom boot (the documented Zero 2 W behaviour under load), the AP came up, and after a power cycle the box stayed on the AP. Re-declared the operator's network as preferred through the Network panel (`state/network-preferred.json` written, profile autoconnect on, priority 10); the retry re-joined the LAN within 0:30. The step is mandatory after a purge, not optional |
+| 4. first start with nothing but kiss installed | the typed dependency refusal (`[skip] daemon: not installed (lhpc install daemon)`, kiss blocked), no crash |
+| 5. identity, hardware, then `lhpc auto-install --yes` (console stopped) | pass — 9/9 successful, 0 blocked, 0 failed; daemon 1.0 MB, meshtastic 50.4 MB, meshcom 11.6 MB from the published binaries, the rest built from source; 17:13, no OOM |
+| 6. passwords | graywolf's stored admin password file present after its first start and the stack page's Password section rendered |
+| 7. console from another machine (README step 8, CLI form) | pass — `configure --dns/--ip`, `tls-renew`, `cert issue` + `export`, four `proxy … --port` lines, `expose`, `apply`, `verify`: console 8443 and proxies 8444–8447 listening on all interfaces; from the workstation 8443 and the Meshtastic proxy 8447 answer 403 without and 200 with the exported client certificate (the Meshtastic web UI's title served). Doc defect found on `3ceb55a` during this run and fixed in `7b9b0df`: the README's proxy line lacked `--port`, which is required (0 = not proxied) — as written it produced no listener |
+| 8. start and stop of every stack, one band at a time | pass — daemon 0:13, kiss 0:08, graywolf 0:12, meshtastic 0:35 (verified `:4403`), meshcore 0:10, reticulum 0:09, meshcom 6:01 (verified bridge, GPS, QEMU); every stop clean; known-working recorded for kiss, reticulum, meshcore |
+| host tests, last | kiss 0:20 pass, meshcore 2:31 pass; binary stacks refused as designed |
+| boot restore | pass — daemon, kiss, graywolf running, `systemctl reboot`, back on the LAN after 1:09 on the preferred profile, `3 restored, 0 failed`, console 200; box left with nothing running |
+| web console after the run | Dashboard, Apps, `/healthz` 200; 0 tracebacks in the console journal |
+
+The shortened run omitted four repetitions the matrix's from-zero table asks for. On 2026-09-07 13:41–13:45 the
+three that need no reinstall were measured on the same box (head `9c4b608`, the operator's Meshtastic session
+left running on 868); the fourth carries the maintainer's waiver with the evidence relied on instead:
+
+| omitted step | result |
+|---|---|
+| first licensed start with the global callsign unset | measured — `lhpc config operator --callsign ""` then `lhpc stack start graywolf --yes`: the typed refusal *a callsign is required to start 'graywolf' — set 'call' (or the global operator callsign)* with both remedies printed, nothing started (running count unchanged); callsign restored |
+| conflicting pairs on the fresh install (plan only, nothing applied) | measured — 433: daemon, kiss and graywolf running, `lhpc stack start meshcom` plans `[conflict] radio 433 MHz is held by running stack 'kiss'` and `'graywolf'`; 868: `lhpc stack start reticulum` against the running Meshtastic plans the three held resources (`radio 868 MHz`, `loraham.radio.868`, `spi.bus.0.unlocked`) and `lhpc stack start meshcore --yes` is refused *meshtastic must be stopped first* |
+| password surfaces beyond graywolf | MeshCom measured — `lhpc hmac status` *disabled*, the stack page's Password section says so and offers Enable / Disable / Renew. MeshCore repeater password waived by the maintainer (868 was held by the operator's Meshtastic session): the page shows *Password not created yet — start a repeater mode first*; evidence relied on: the exact-head `tests/test_stackweb.py` password cases and the 0.3.0 matrix row 7 (chat+repeater start on this box) |
+| auto-install from the web console | waived by the maintainer — the run used `lhpc auto-install --yes` (README's small-box path); evidence relied on: the exact-head `tests/test_web_auto_install.py` (71 cases: form, CSRF, selection, spawn, recovery) driving the same controller run the CLI drove live, and the 0.2.10 release test's check 22 (web auto-install from zero on this box) |
 
 ## 0.2.10 — release test, 2026-09-05/06
 
@@ -130,18 +181,15 @@ Checks after the rows — every planned check of this release, filled as it is m
 | 42 | release | images v0.2.10: milestone tag, both variants built, assets published | loraham-images milestone adcee81 tagged v0.2.10 after the binaries were live: lint, precheck, build (lite), build (desktop), publish-tag all success; assets loraham-lhpc-desktop.img.xz 1913 MiB (135 MiB under the 2 GiB limit), loraham-lhpc-lite.img.xz 892 MiB, components/packages/provenance per variant, SHA256SUMS, signature | pass |
 <!-- checks:end -->
 
-| host tests | outcome | duration | OOM | TX test |
-|---|---|---|---|---|
-| daemon | | | | |
-| other stacks (one row each) | | | | |
+
 
 
 ## Silicon test, 2026-09-05
 
 On-air acceptance of the stacks against real ESP32 peers running each project's own original firmware —
 not emulated peers, not LHPC talking to itself. Only what was actually transmitted and heard is recorded.
-Times are CEST unless marked UTC. Scoreboard: 40 rows across four stacks — 34 pass, 1 fail (Graywolf's
-scheduled beacon), 1 inconclusive, 4 not covered (no indoor GPS fix on the tracker; content verification
+Times are CEST unless marked UTC. Scoreboard: 40 rows across four stacks — 34 pass, 0 fail, 2 inconclusive (Graywolf's
+scheduled beacon, one repeat), 4 not covered (no indoor GPS fix on the tracker; content verification
 on the MeshCom peer).
 
 ### Test bench
@@ -353,7 +401,7 @@ MANAGED mode, KISS TNC listening on `127.0.0.1:8001` with the client attached, G
 | 9 | RF → APRS-IS gating | the acknowledgment appears as `DJ0CHE-7>APLRT1,WIDE1-1,qAR,DJ0CHE::DJ0CHE :ack005` | PASS |
 | 10 | Tracker's own position beacon → box | not exercised: no GPS fix indoors, so the tracker never beacons | NOT COVERED |
 | 11 | Box → tracker, position beacon on manual trigger | `POST /api/beacons/1/send` → `{"status":"sent"}`; tracker console: `[LoRa Rx] DJ0CHE>APGRWO,WIDE1-1,WIDE2-1:!4825.81N\\01140.09EO/A=001649Hello from Joe!`; daemon `TXOK` 1→3, no CAD timeouts | PASS |
-| 12 | Box → tracker, position beacon on its own schedule | beacon is `enabled`, GPS-sourced, `interval: 600`, gpsd holds a 3D fix, scheduler heap built — yet nothing transmitted in the 19 minutes after start and a 6-minute tracker capture was silent | **FAIL** |
+| 12 | Box → tracker, position beacon on its own schedule | beacon is `enabled`, GPS-sourced, `interval: 600`, `slot_seconds: 146`, gpsd holds a 3D fix, scheduler heap built — nothing transmitted in the 19 minutes after start and a 6-minute tracker capture was silent. With a slot configured the scheduler's first fire is at HH:02:26 and `interval` governs only after it; the start time was not recorded, so the window may not have contained that slot | INCONCLUSIVE |
 | 13 | Beacon carries a real position | `!4825.81N\\01140.09EO/A=001649` — the box's gpsd fix, altitude in feet | PASS |
 | 14 | Tracker → box, position beacon | the operator cannot trigger a beacon by hand on this build and there is no indoor GPS fix, so the tracker never beacons. Its transmit path is already proven by row 6 (the acknowledgment), so this row adds nothing and was skipped by agreement | NOT COVERED (skipped) |
 | 15 | Digipeating of a peer packet | not exercised | NOT COVERED |
@@ -382,15 +430,17 @@ MANAGED mode, KISS TNC listening on `127.0.0.1:8001` with the client attached, G
 6. **The beacon transmits on demand but never on its own schedule.** `POST /api/beacons/1/send`
    puts a correct position beacon on the air within a second, twice in a row, received intact by the
    tracker — so the radio path, the position source and the beacon definition are all sound. What
-   does not happen is the scheduled transmission: the beacon is `enabled` with `interval: 600`,
+   was observed is no scheduled transmission: the beacon is `enabled` with `interval: 600`,
    `delay_seconds: 30`, `slot_seconds: 146`, the scheduler logged
-   `beacon scheduler heap built count=1`, and nothing fired in 19 minutes. That isolates the defect
-   to Graywolf's beacon scheduling, not to LHPC's radio chain. Worth reproducing and, if it holds,
-   reporting upstream.
+   `beacon scheduler heap built count=1`, and nothing fired in 19 minutes. That is not proof of a
+   scheduler defect: in the shipped Graywolf 0.14.13 a configured slot overrides the delay, the
+   first fire is at `slot_seconds` past the hour (HH:02:26 here), a slot already passed moves to the
+   next hour, and `interval` governs only after that first fire. The chain's start time was not
+   recorded, so the observation window may simply not have contained the slot. Inconclusive.
 
 #### Follow-ups (not done)
 
-- **Investigate the beacon that never fired** (finding 6) — the main open item from this section.
+- **Re-observe the scheduled beacon across an HH:02:26 slot boundary** (finding 6), with the start time recorded — or configure it without a slot.
 - Decide the iGate policy for bench testing and record it.
 - Test digipeating of a peer packet.
 - Take the tracker outdoors for a GPS fix if peer-initiated beacons ever need covering; the peer's

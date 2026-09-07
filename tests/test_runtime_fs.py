@@ -219,7 +219,7 @@ def test_run_job_log_write_does_not_follow_symlink(tmp_path):
 
 
 def test_spawn_job_rejects_symlink_log_leaf(tmp_path):
-    # P0.3: spawn_job must not truncate/create a log through a symlink leaf.
+    # Spawn_job must not truncate/create a log through a symlink leaf.
     from lhpc.core.lifecycle import Lifecycle
     from lhpc.core.config import Config, OperatorConfig
     p = Paths(runtime_root=tmp_path)
@@ -1092,7 +1092,7 @@ def test_stack_build_includes_buildable_libraries_dep_first(tmp_path):
 
 
 def test_build_launcher_never_bakes_secret_plaintext():
-    # AUDIT S1: build-step @file secrets were resolved at RENDER time and baked cleartext
+    # Build-step @file secrets were resolved at RENDER time and baked cleartext
     # into the on-disk launcher .py (which is never pruned). The launcher must carry the
     # UNRESOLVED token and resolve on-host at exec time.
     import tempfile
@@ -1109,7 +1109,7 @@ def test_build_launcher_never_bakes_secret_plaintext():
 
 
 def test_open_source_parent_refuses_intermediate_symlink(tmp_path):
-    # AUDIT FS1: opening the resolved source root in one os.open guarded only its final
+    # Opening the resolved source root in one os.open guarded only its final
     # component; an intermediate `src` symlink escaped the root. The walk now starts at
     # the runtime root and refuses a swapped intermediate at the syscall.
     import os
@@ -1139,7 +1139,7 @@ def test_open_source_parent_refuses_intermediate_symlink(tmp_path):
 
 
 def test_norm_survives_hostile_daemon_value():
-    # AUDIT IN1: int(float("1e400")) raised uncaught OverflowError, crashing a mutating
+    # Int(float("1e400")) raised uncaught OverflowError, crashing a mutating
     # action on a garbled daemon reply.
     from lhpc.core import daemon_control as dc
     for v in ("1e400", "inf", "-inf", "9" * 400):
@@ -1148,7 +1148,7 @@ def test_norm_survives_hostile_daemon_value():
 
 
 def test_source_config_works_through_symlinked_runtime_root(tmp_path):
-    # RE-AUDIT F1: the FS1 walk over-applied O_NOFOLLOW to the runtime ROOT, breaking the
+    # The FS1 walk over-applied O_NOFOLLOW to the runtime ROOT, breaking the
     # documented symlinked-root setup (writes went via atomic_write and worked, but reads
     # via _open_source_parent raised ELOOP — asymmetric). The root is the trusted anchor
     # and may be a symlink; only components UNDER it are O_NOFOLLOW.
@@ -1168,7 +1168,7 @@ def test_source_config_works_through_symlinked_runtime_root(tmp_path):
 
 
 def test_open_marker_excl_no_fd_leak_when_dup_fails(tmp_path, monkeypatch):
-    # RE-AUDIT F2: hoisting os.dup(parent_fd) before the try leaked file_fd if os.dup
+    # Hoisting os.dup(parent_fd) before the try leaked file_fd if os.dup
     # raised under fd exhaustion. The dup is now guarded; file_fd is always closed.
     import os
     from lhpc.core import runtime_fs

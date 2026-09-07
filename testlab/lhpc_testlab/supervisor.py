@@ -19,8 +19,6 @@ from lhpc.core import runtime_fs
 
 from . import scenarios
 
-NGINX_UNIT = "lhpc-nginx.service"
-
 
 def _units_path(paths) -> Path:
     return paths.under("state", "testlab", "units.json")

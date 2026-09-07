@@ -99,5 +99,5 @@ def test_status_owner_pid_from_matched_listener_not_wrong_family(tmp_path):
         listeners=[L("ipv6", "::1", 9000, inode=11),          # wrong family, owner 111
                    L("ipv4", "127.0.0.1", 9000, inode=22)],   # matched,      owner 222
         owners={11: 111, 22: 222}).system
-    present, ev, pid, inc = tcp_endpoint_match(sys, "127.0.0.1:9000")
-    assert present and pid == 222 and "owner_pid=222" in ev
+    present, ev = tcp_endpoint_match(sys, "127.0.0.1:9000")
+    assert present and "owner_pid=222" in ev

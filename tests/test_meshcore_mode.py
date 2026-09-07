@@ -74,7 +74,7 @@ def test_start_readiness_and_status_agree_per_mode(tmp_path, mode, live, ready):
     node = _node(svc)
     # Ongoing status: the prober is handed the same mode the service computes.
     prober = StatusProber(svc._system, svc._paths, meshcore_mode=svc.meshcore_mode())
-    _eps, all_ready, _any, has_expected = prober._assess_endpoints(node)
+    _eps, all_ready, has_expected = prober._assess_endpoints(node)
     assert has_expected and all_ready is ready
     # Start readiness selects the same endpoints (an absent endpoint would make this poll for
     # the node's readiness window, so only the present cases are driven through it).

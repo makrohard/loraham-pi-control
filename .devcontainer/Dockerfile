@@ -56,7 +56,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
 # of sudo/apt/nft fail in the ENVIRONMENT no matter how they are spawned.
 RUN useradd -m -s /bin/bash lhpclab \
     && rm -f /etc/sudoers.d/* \
-    && deluser vscode sudo 2>/dev/null || true
+    && (deluser vscode sudo 2>/dev/null || true)
 
 USER lhpclab
 WORKDIR /home/lhpclab

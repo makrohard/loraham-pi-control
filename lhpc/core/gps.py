@@ -33,7 +33,7 @@ OUT_PTY = "pty"
 OUT_UNIX = "unix"
 # Normalized line-JSON position feed served on a Unix socket the consumer connects to:
 # {"fix": true, "lat": .., "lon": ..} / {"fix": false}. MeshCore's openHop host consumes
-# this instead of the old device-shaped NMEA PTY — the consumer needs a position, not a
+# this — the consumer needs a position, not a
 # simulated GPS chip, so no probe-drain complexity and no NMEA parsing on its side.
 OUT_POSJSON = "posjson"
 
@@ -41,11 +41,7 @@ _OUTPUT_FOR = {CONSUMER_MESHTASTIC: OUT_PTY, CONSUMER_MESHCOM: OUT_UNIX,
                CONSUMER_MESHCORE: OUT_POSJSON}
 
 # consumer -> the manifest component that carries its production feed. THE one mapping:
-# every site that needs it derives from here. There used to be four independent copies of
-# this knowledge (run-order selection, the start gate's readiness reader, the status
-# prober, and the bridge's own accepted-consumer list), and adding a feed to some but not
-# all of them produced a component that started, streamed, and was still reported as
-# "no readiness marker" forever — healthy and invisible at the same time.
+# every site that needs it derives from here.
 FEED_COMPONENTS = {CONSUMER_MESHTASTIC: "meshtastic-gps",
                    CONSUMER_MESHCOM: "meshcom-gps",
                    CONSUMER_MESHCORE: "meshcore-gps"}
@@ -179,7 +175,7 @@ USE_GPS_PARAM = "use_gps"
 def use_gps_default(stacks, stack_id: str) -> str:
     """The manifest-declared default of a stack's `use_gps` switch ("on"/"off"; "off" for a
     stack without the param). Saved config knows only what was SAVED — an untouched box must
-    follow the manifest default, which is "on" now that the global source defaults to `auto`.
+    follow the manifest default, which is "on" (the global source defaults to `auto`)..
     Shared by the service and Lifecycle so their answers cannot diverge."""
     for s in stacks:
         if s.id != stack_id:
@@ -211,7 +207,7 @@ _V4_ANY = "00000000"
 def _tcp4_shows_local_gpsd(text: str) -> bool:
     """Does one /proc/net/tcp dump show a listener REACHABLE at 127.0.0.1:2947?
 
-    AUDIT-FOUND: matching only state+port also matched an ::1-only, a 192.168.x-bound, or a
+    Matching only state+port also matched an ::1-only, a 192.168.x-bound, or a
     non-gpsd 2947 listener — and the plan then told every consumer to dial 127.0.0.1:2947,
     where nothing listened: the soft "no gpsd → run without position" promise turned into
     GPS-feed start failures. Only 127.0.0.1 and the IPv4 wildcard are provably that
@@ -317,10 +313,9 @@ def gpsd_devices(host: str, port: int, timeout: float = 3.0) -> tuple[list, str]
     already owns — opening it behind gpsd's back yields two readers fighting over one
     receiver, which presents as intermittent position loss rather than a clean failure.
 
-    `timeout` is the TOTAL budget for the whole exchange, connect included. It used to be a
-    per-`recv` timeout applied across up to 40 reads, so a chatty-but-unhelpful gpsd could hold
-    the caller for 40x the number it was given — which is not a bound at all, and `doctor`
-    promises a bounded check.
+    `timeout` is the TOTAL budget for the whole exchange, connect included (never a per-`recv`
+    timeout: across up to 40 reads a chatty-but-unhelpful gpsd would hold the caller for 40x the
+    number given, and `doctor` promises a bounded check).
     """
     import json
     import socket

@@ -46,7 +46,6 @@ INFLIGHT_REL = ("state", "selfupdate.inflight")
 # creating this marker; lhpc-nginx-restart.path consumes it. Same claim discipline as self-update.
 NGINX_RESTART_REQUEST_REL = ("state", "nginx-restart.request")
 NGINX_RESTART_INFLIGHT_REL = ("state", "nginx-restart.inflight")
-RESTART_LOG_REL = ("logs", "lhpc-nginx-restart.log")
 UNINSTALL_GUARD = ".lhpc-uninstalling"
 ROOT_MARKER = ".lhpc-root"
 
@@ -72,6 +71,8 @@ _DROPIN_DIRS = ("/usr/lib/systemd/user", "/etc/systemd/user")   # ~/.config/syst
 #
 # tests/test_updater_units.py::test_unit_bytes_are_the_frozen_render enforces this.
 
+# The ReadWritePaths comment inside _WEB names a `meshcore-nodegui` component that does not exist;
+# no shipped component uses ~/.meshcore_nm. It is frozen with the rest of the unit bytes (see above).
 _WEB = """\
 # LoRaHAM Pi Control web console — CANONICAL managed unit (generated; do not hand-edit).
 # Rendered by lhpc.core.updater_units; the one-click updater proves this file BYTE-EXACT.
@@ -530,8 +531,6 @@ def verify(user_dir: Path, kind: str, root: str, checkout: str, venv: str) -> st
         # ELOOP / symlink leaf (e.g. a mask → /dev/null) is O_NOFOLLOW-rejected → unsafe;
         # other read errors → unreadable.
         return UNSAFE if getattr(exc, "errno", None) == _errno.ELOOP else UNREADABLE
-    if text is None:
-        return MISSING
     if _has_dropin(user_dir, kind):
         return OVERRIDDEN
     if text == render(kind, root, checkout, venv):

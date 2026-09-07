@@ -38,8 +38,7 @@ Out of the box: `bind = 127.0.0.1`, `port = 8443`, HTTPS on, **local access unau
 **remote exposure disabled**. Loopback clients use HTTPS with no client certificate; remote
 access is off until you explicitly enable it.
 
-`8443` is the default, not a fixed value: `lhpc webserver configure --port <n>` (any
-`1–65535`). This page uses `8443` throughout.
+`8443` is the default, not a fixed value: `lhpc webserver configure --port <n>` (accepted `1–65535`; the rootless nginx can only bind `≥ 1024`). This page uses `8443` throughout.
 
 ## First-time bootstrap
 
@@ -85,7 +84,9 @@ exposure is not supported: IPv6 bind/CIDR values are rejected; `::1` is honoured
 access only.
 
 **The managed firewall gates exposure.** With it in use, `lhpc webserver apply` is refused while
-the firewall is unapplied (*Firewall changes pending*, with the command to run), and at boot
+the firewall is unapplied (*Firewall changes pending*, with the command to run); a notice at the top
+of every console page then links to *Firewall → Apply & commands* until the firewall is verified, and the
+running console completes that Apply on its own once it is; at boot
 nginx binds loopback-only until the live check passes. LHPC never edits your own firewall
 configuration; a port at your router stays yours. See [firewall](firewall.md).
 
@@ -153,8 +154,8 @@ Back to loopback: `lhpc webserver disable-remote && lhpc webserver apply`, then 
 
 **Public, no client authentication** (a trusted test rig or LAN only): `lhpc webserver expose
 --cidr 0.0.0.0/0 --access-mode no-auth --confirm-phrase enable-remote-danger`, then `apply` and
-`verify`. The console is then at `https://<host-ip>:8443/` with a self-signed server certificate
-(the browser warns), reachable by **anyone who can route to the host**, with no client
+`verify`. The console is then at `https://<host-ip>:8443/` with a server certificate signed by the
+box's own server TLS CA (the browser warns), reachable by **anyone who can route to the host**, with no client
 authentication. The elevated phrase is required because the public range and `no-auth` are both
 elevated cases; plain `enable-remote` is refused.
 
@@ -188,8 +189,7 @@ lhpc webserver apply
   page is addressed by the stack id (`lhpc webserver proxy meshcore`), further pages by
   `<stack>-<component>`; the stack's Webserver panel shows one sub-panel per page. Pages:
   graywolf, meshcom, meshtastic (one each) and meshcore (two: `meshcore` = the MeshCore Web UI,
-  `meshcore-meshcore-node` = the openHop repeater dashboard). kiss and the daemon speak non-HTTP
-  protocols and cannot be proxied. A new web component becomes eligible automatically but is
+  `meshcore-meshcore-node` = the openHop repeater dashboard). The other stacks (daemon, kiss, chat, voice, reticulum) declare no HTTP endpoint and cannot be proxied. A new web component becomes eligible automatically but is
   configured only when you save its panel or submit the bulk form; nothing is exposed on its own.
 
 **One policy for all stack WebGUIs.** The **Webserver → Stacks WebGUIs** subpanel applies one
@@ -232,10 +232,7 @@ label. A bundle that reached the wrong hands is a credential to withdraw, not on
 new CRL.
 
 Each client certificate is exported as an encrypted PKCS#12 `.p12` bundle under
-`config/tls/exports/` (0600); the private key exists only inside that bundle. The fetch
-commands in the Certificates panel (username, paths, labels) are shown only to a **trusted
-session**: loopback, or a remote session whose *applied* policy already requires a client
-certificate. Under no-auth remote exposure they are withheld.
+`config/tls/exports/` (0600); the private key exists only inside that bundle. The fetch commands in the Certificates panel (username, paths, labels) render in every serving mode — operator conveniences, not secret material; a `.p12` command is listed only for a certificate that is currently active.
 
 ### Install the client certificate in a browser
 
@@ -301,8 +298,7 @@ reload` (or restarts it through the watcher when a bind changed). The web proces
   performs no start. Starting happens only in operator context: `lhpc webserver
   start-service` (or `systemctl --user enable --now lhpc-nginx.service`).
 
-`lhpc webserver reset-defaults` returns desired config to loopback:8443 / local-unauthenticated
-/ remote-off and clears remote CIDRs. It never deletes CA keys, certificates, the CRL,
+`lhpc webserver reset-defaults` returns desired config to loopback:8443 / local-unauthenticated / remote-off, clears remote CIDRs and disables every stack web-UI proxy (port cleared; mode/CIDRs kept for re-enabling). It never deletes CA keys, certificates, the CRL,
 revocation history, `.p12` exports or the session secret; `verify` afterwards proves the remote
 listener has ceased. If a box comes up loopback-only (firewall gate at boot), recover over an
 [SSH tunnel](ssh-tunnel.md) and re-apply.

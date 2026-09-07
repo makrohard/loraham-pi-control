@@ -24,7 +24,7 @@ def test_simulated_reboot_advances_boot_identity_and_recovers(lab, client):
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline and _boot_id(lab) == before:
         time.sleep(0.5)
-    assert _boot_id(lab) != before                 # the _testlab-power helper fired
+    assert _boot_id(lab) != before                 # the _power helper fired
     # admission recovered on the "new boot": a mutating verb runs again immediately
     r = run_lab(lab.env, "scenario", "healthy", timeout=60)
     assert r.returncode == 0

@@ -75,31 +75,31 @@ def tcp_endpoint_match(system: System, address: str,
                        resolve_owner: bool = True,
                        listeners=None) -> tuple[bool, str, int | None, bool]:
     """Family/host-aware TCP endpoint match — the ONE matcher shared by status, start
-    readiness, and stop cessation. Returns (present, evidence, owner_pid, owner_incomplete).
+    readiness, and stop cessation. Returns (present, evidence).
     The owner PID, when resolved, is that of the MATCHED loopback listener — never a
     wrong-family listener that merely shares the port. `listeners` is a caller-shared
     `tcp_listeners()` snapshot (one /proc read for a whole assessment); None reads fresh."""
     try:
         _host, port, family = parse_endpoint(address)
     except ValueError as exc:
-        return False, f"{address}: invalid ({exc})", None, False
+        return False, f"{address}: invalid ({exc})"
     if listeners is None:
         listeners = system.procfs.tcp_listeners()
     matched = _matched_listeners(listeners, port, family)
     fam = family or "localhost"
     if not matched:
-        return False, f"{address}: absent (family={fam})", None, False
-    owner_pid, incomplete = (None, False)
+        return False, f"{address}: absent (family={fam})"
+    owner_pid = None
     if resolve_owner:
-        owner_pid, incomplete = system.procfs.owner_pid(matched[0].inode, _OWNER_BUDGET_S)
+        owner_pid, _incomplete = system.procfs.owner_pid(matched[0].inode, _OWNER_BUDGET_S)
     ev = f"{address}: present (family={fam}"
     ev += f", owner_pid={owner_pid})" if owner_pid is not None else ")"
-    return True, ev, owner_pid, incomplete
+    return True, ev
 
 
 def tcp_endpoint_present(system: System, address: str) -> tuple[bool, str]:
     """True iff a loopback listener of the DECLARED family is present on the endpoint's
     port. Returns (present, evidence). A wrong-family/host listener on the same port does
     NOT count. Thin wrapper over `tcp_endpoint_match` (no owner-PID resolution)."""
-    present, evidence, _pid, _inc = tcp_endpoint_match(system, address, resolve_owner=False)
+    present, evidence = tcp_endpoint_match(system, address, resolve_owner=False)
     return present, evidence

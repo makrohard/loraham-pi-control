@@ -63,7 +63,7 @@ body {
 a { color: var(--brand); text-decoration: underline; }   /* inline links must not rely on color alone */
 /* Standalone chrome links (header/nav buttons, card titles) are distinguishable by placement
    and styling — no underline needed there. */
-.site-header a, .stack-group > header h2 a, .theme-toggle { text-decoration: none; }
+.site-header a, .theme-toggle { text-decoration: none; }
 a:hover { text-decoration: underline; }
 code, pre, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
 /* Wide content stays reachable: pre scrolls inside its box; long unbroken commands wrap. */
@@ -116,7 +116,6 @@ body.dash-narrow .radiogrid { grid-template-columns: 1fr; }
 .deps { font-size: .9rem; color: var(--muted); }
 .deps .badge { font-size: .7rem; }
 .links { font-size: .9rem; margin-top: .6rem; }
-.stack-group > header h2 a { color: var(--ink); }
 .jobrun { background: var(--warnbox-bg); border: 1px solid var(--warnbox-border); color: var(--warnbox-ink);
           padding: .4rem .7rem; border-radius: 6px; font-size: .9rem; }
 .banner {
@@ -206,9 +205,6 @@ pre.next { background: var(--code-bg); color: var(--code-ink); border: 1px solid
 
 /* Flash messages + daemon monitor ------------------------------------- */
 .flash { padding: .5rem .8rem; border-radius: 6px; margin: 0 0 .8rem; transition: opacity .6s ease; }
-/* Preserve newlines and wrap long tokens for flashes that may carry (sanitized) command output. */
-.flash-pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-.flash-hide { opacity: 0; }
 .flash-ok { background: var(--flash-ok-bg); border: 1px solid var(--flash-ok-border); color: var(--flash-ok-ink); }
 .flash-warn { background: var(--flash-warn-bg); border: 1px solid var(--flash-warn-border); color: var(--flash-warn-ink); }
 .flash-bad { background: var(--flash-bad-bg); border: 1px solid var(--flash-bad-border); color: var(--flash-bad-ink); }
@@ -237,7 +233,6 @@ input[type=checkbox], input[type=radio] { accent-color: var(--brand); }
 button { font: inherit; padding: .3rem .8rem; border-radius: 6px; border: 1px solid var(--brand);
          background: var(--surface); color: var(--brand); cursor: pointer; }
 button:hover { background: var(--btn-bg); color: var(--btn-ink); border-color: var(--btn-bg); }
-.monitor-links a { margin-right: 1rem; }
 .actbar { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin: .3rem 0; }
 .actrow { display: flex; flex-wrap: wrap; gap: 1.3rem; align-items: center; margin: .4rem 0; }
 .actgroup { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center;
@@ -310,7 +305,6 @@ a.iface { text-decoration: none; color: var(--brand); }
 .stackrow[open] > summary { background: var(--bg); }
 .stackrow-body { padding: .3rem .8rem 1rem; }
 .ss-name { font-weight: 600; }
-.ss-main { font-size: .8rem; }
 /* The action links (logs + "Update") sit in a .row-actions OVERLAY OUTSIDE the <summary> (so no
    interactive element is nested in the summary toggle — a11y) but are positioned over the row's right
    edge, staying visible + clickable on the collapsed row. pointer-events:none on the container lets clicks
@@ -380,11 +374,6 @@ a.iface { text-decoration: none; color: var(--brand); }
   .radio-col .monitor table td { min-width: 0; overflow-wrap: anywhere; }
   .radio-col .feed { white-space: pre-wrap; overflow-wrap: anywhere; }
 }
-.stackrow-link { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
-                 padding: .6rem .8rem; border-bottom: 1px solid var(--line);
-                 text-decoration: none; color: var(--ink); }
-.stackrow-link:hover { background: var(--bg); }
-.stackrow-link .links { margin-left: auto; }
 table.deps { width: 100%; }
 input.wide { width: 100%; min-width: 16rem; }
 /* Segmented band chooser: clear active state (brand fill + white ink). */
@@ -457,7 +446,6 @@ input.wide { width: 100%; min-width: 16rem; }
 .paramgrid { width: auto; margin: .3rem 0 .8rem; }
 .paramgrid th { width: 11rem; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--ink); font-size: .92rem; }
 .paramgrid td { padding: .3rem .8rem; }
-.paramgrid .bandhead { width: auto; text-align: center; color: var(--muted); text-transform: uppercase; font-size: .78rem; }
 .setform { display: inline-flex; gap: .4rem; align-items: center; margin: 0; }
 .setform button { padding: .15rem .6rem; }
 /* FREQ / SYNC etc. are short values — keep the live-setting inputs compact, not full-width. */
@@ -486,15 +474,13 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 
 /* Utility classes (avoid inline styles under CSP default-src 'self') ----- */
 .header-wrap { padding-top: 0; padding-bottom: 0; }
-.pill-light { background: rgba(255, 255, 255, .15); color: #fff; border-color: transparent; }
-.details-link { margin: .6rem 0 0; }
 .fs-sm { font-size: .8rem; }
 .loglabel { margin: .6rem 0 .2rem; }
 /* Yellow operator-action buttons (Confirm known-working, Restart required) ----- */
 .warnbtn { background: var(--warnbtn-bg); color: var(--warnbtn-ink); border: 1px solid var(--warnbtn-border); font-weight: 600; }
 .warnbtn:hover { background: var(--warn); color: #fff; }
 
-/* auto-install auto-install run view */
+/* auto-install run view */
 .logbox-tall { max-height: 44rem; }
 .logbox-half { max-height: 22rem; }
 .tasklist { width: 100%; border-collapse: collapse; margin-bottom: 0.8rem; }

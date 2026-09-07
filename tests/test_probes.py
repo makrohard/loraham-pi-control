@@ -290,3 +290,14 @@ def test_source_probe_is_two_subprocesses_and_parses_status_v2():
             CommandResult(0, "", "", timed_out=True)})
     assert probe_source(fake3.system, SourceSpec(path="src/comp", pin_commit=_PIN),
                         _ABS).state is SourceState.UNKNOWN
+
+
+def test_source_symlink_leaf_is_missing_and_runs_no_git():
+    # The ONE presence policy: a symlink at the managed path is not a managed source — the
+    # probe reports MISSING without inspecting (or running git on) whatever it points at.
+    fake = _fake(_PIN)                                   # a repo IS reachable through the link
+    fake.links[_ABS] = "/somewhere/else"
+    p = probe_source(fake.system, SourceSpec(path="src/comp", pin_commit=_PIN), _ABS)
+    assert p.state is SourceState.MISSING and p.evidence["state"] == "symlink"
+    assert fake.calls == []
+

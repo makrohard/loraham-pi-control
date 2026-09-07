@@ -6,7 +6,11 @@
   if (!card) return;
   var target = card.getAttribute("data-target");
   var job = card.getAttribute("data-job");
-  var url = "/api/logs/" + encodeURIComponent(target) + (job ? "?job=" + encodeURIComponent(job) : "");
+  var band = card.getAttribute("data-band");
+  var q = [];
+  if (job) q.push("job=" + encodeURIComponent(job));
+  if (band) q.push("band=" + encodeURIComponent(band));
+  var url = "/api/logs/" + encodeURIComponent(target) + (q.length ? "?" + q.join("&") : "");
   var box = document.getElementById("logbox");
   var status = document.getElementById("log-status");
 

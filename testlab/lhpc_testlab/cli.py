@@ -43,8 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     pw = sub.add_parser("web", help="serve the console with the lab web panel")
     pw.add_argument("--port", type=int, default=8770)
     # hidden helpers spawned detached by the lab
-    pg = sub.add_parser("_gpsd")
-    pg.add_argument("--dummy", action="store_true")
+    sub.add_parser("_gpsd")
     pp = sub.add_parser("_power")
     pp.add_argument("--kind", required=True, choices=("reboot", "poweroff"))
     sub.add_parser("_populate")   # background bring-up of the remaining headless stacks

@@ -18,7 +18,7 @@ once you are on the network is the [remote exposure runbook](webserver.md).
 
 On the Lite image, first boot creates `lhpc-ap`: `802-11-wireless.mode ap`, band `bg`,
 `ipv4.method shared` (the box is `10.42.0.1/24` and runs DHCP + DNS for its clients), WPA2-PSK,
-`autoconnect yes`. Its SSID is the box's hostname; the passphrase comes with the image's first
+`autoconnect yes`. Its SSID defaults to the same `lhpc-<suffix>` as the hostname; the passphrase comes with the image's first
 steps. It is a **recovery** network: it is up after every boot unless a preferred WLAN is
 visible, it returns within seconds of losing a WLAN, and the panel can never delete it.
 
@@ -35,7 +35,7 @@ needs the polkit rule that authorizes the operator for NetworkManager; `bootstra
 installs it (opt-out `--no-network-controls`), and the panel shows the install command when it
 is missing.
 
-- **Scan** and **Join** (SSID + password). The join is two-stage (a confirm page: your AP
+- **Join** (SSID typed in + password). **Scan** renders only while the box is not hosting its AP (a radio hosting the AP cannot survey other channels). The join is two-stage (a confirm page: your AP
   session ends the moment the box joins) and respond-first: a detached helper activates the
   profile, waits for the lease and writes the outcome the panel shows afterwards. The password
   goes to NetworkManager through a 0600 secrets file (never argv, logs or state) and is
@@ -43,9 +43,7 @@ is missing.
   display-only.
 - **Allow console from that network** (checkbox, default on): the helper extends the console
   allow-list to the joined subnet, adds the joined address and names as server-certificate
-  SANs, re-issues the server certificate and applies. With the managed firewall the apply is
-  deferred until you run the shown sudo command (over SSH, port 22 is open there); the
-  watchdog then completes it. A join that would leave the console blocked on the new network
+  SANs, re-issues the server certificate and applies. With the managed firewall and its AP rules **off**, the joined CIDR changes the ruleset, so the apply is deferred until you run the shown sudo command (over SSH, port 22 is open there); the watchdog then completes it. With the AP rules on the ingress rule is unscoped and the apply completes at once. A join that would leave the console blocked on the new network
   is refused *before* the AP drops. With the checkbox off the box is SSH-only there.
 - **AP fallback.** Client profiles are created `autoconnect no`, so after a reboot the box is
   its AP again; a lost WLAN brings the AP back within seconds, a failed join (wrong password,

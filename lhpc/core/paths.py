@@ -48,8 +48,7 @@ class Paths:
         """`realpath(runtime_root)`, resolved ONCE per `Paths` (a frozen dataclass; the cache
         lives in the instance dict). One process has one runtime root, whose own symlinks exist
         before the controller starts — the TARGET of every `under()`/`contains()` is still
-        resolved per call, so a symlink-escape of a mutable path is caught exactly as before.
-        A render used to resolve the root a thousand times (2.5 s on a Zero 2 W)."""
+        resolved per call, so a symlink-escape of a mutable path is caught exactly as before."""
         return Path(os.path.realpath(self.runtime_root))
 
     def _lexical_under(self, rel: str) -> Path:
@@ -87,7 +86,7 @@ class Paths:
     def safe_unlink(self, path: Path) -> None:
         """Delete a runtime-owned leaf safely: contained, and never through a symlink
         leaf OR a swapped parent. A missing file is a no-op; an escaping or symlinked
-        target raises. Descriptor-anchored (AUDIT FS2): the parent is walked O_NOFOLLOW
+        target raises. Descriptor-anchored: the parent is walked O_NOFOLLOW
         and the leaf unlinked relative to that fd, so a check-then-unlink TOCTOU where the
         parent dir is swapped to a symlink between validation and the syscall cannot
         redirect the delete outside the root."""
@@ -95,9 +94,9 @@ class Paths:
         runtime_fs.unlink(self, path)
 
     def resolve_source(self, relative: str) -> Path:
-        """Resolve a manifest `source.path` (runtime-root-relative) to absolute,
-        with lexical containment. A source may be a symlink (adopt-by-link); LHPC
-        only OBSERVES/reads it and never writes generated files into it."""
+        """Resolve a manifest `source.path` (runtime-root-relative) to absolute, with lexical
+        containment. Resolution says nothing about presence: whether the leaf is a usable
+        managed source is `source_fs.source_present()` (no-follow, directory only)."""
         return self._lexical_under(relative)
 
 

@@ -20,7 +20,7 @@ does is available here too.
 
 - [list](#list) · [status](#status) · [explain](#explain) · [doctor](#doctor) · [deps](#deps) · [source-check](#source-check)
 - [bootstrap](#bootstrap) · [install](#install) · [auto-install](#auto-install)
-- [config](#config) · [hardware](#hardware) · [autostart](#autostart) · [firewall](#firewall) · [hmac](#hmac)
+- [config](#config) · [hardware](#hardware) · [gps](#gps) · [autostart](#autostart) · [firewall](#firewall) · [hmac](#hmac) · [meshtastic](#meshtastic)
 - [stack](#stack) · [build](#build) · [test](#test) · [update](#update) · [uninstall](#uninstall) · [clean](#clean) · [known-working](#known-working)
 - [daemon](#daemon) · [logs](#logs)
 - [web](#web) · [webserver](#webserver)
@@ -167,13 +167,14 @@ configured**, and the daemon refuses to start until a setup is chosen.
 
 ```
 lhpc hardware                # show the current setup + served band(s) + the catalog
+lhpc hardware unset          # back to 'not configured' (the daemon refuses to start)
 lhpc hardware loraham        # LoRaHAM dual-module (SX1278 + RFM95) — serves 433 + 868
 lhpc hardware uputronics     # Uputronics dual (CE0 433 + CE1 868)
 lhpc hardware uputronics-x   # Uputronics dual, crossed modules (CE0 868 + CE1 433)
 lhpc hardware uputronics-433 # Uputronics 433 only (CE0)
 lhpc hardware uputronics-868 # Uputronics 868 only (CE1)
-lhpc hardware waveshare-433  # Waveshare SX1262 433M (tested on the air)
-lhpc hardware waveshare-868  # Waveshare SX1262 868M (not tested on silicon)
+lhpc hardware waveshare-433  # Waveshare SX1262 (433)
+lhpc hardware waveshare-868  # Waveshare SX1262 (868)
 ```
 
 - Only **legit** board combinations are offered (illegal ones — e.g. Waveshare + Uputronics — are
@@ -229,7 +230,7 @@ lhpc gps --source fixed --lat 51.4779 --lon -0.0015 --alt 45   # a station that 
   like the source — it cannot be changed while that stack is running.
 - Everything the console's **Position (GPS)** card offers is available here — the two surfaces
   call the same code, so validation and refusals are identical.
-- `gpsd` is opt-in at bootstrap: `./bootstrap-deps.sh --spi-mode <mode> --with-gps`, and only
+- `gpsd` is opt-in at bootstrap: `sudo bash bootstrap-deps.sh --spi-mode <mode> --with-gps`, and only
   when the source is a gpsd on *this* box.
 
 ---
@@ -275,7 +276,8 @@ lhpc firewall --recommended                # safe preset; not combinable with th
 
 - **Config/Boot/Live** are independent: the dashboard turns the firewall green ONLY with a
   verified current-boot live check — declared-and-persistent alone is never green.
-- Also configurable in the web console under **Webserver → Firewall** (mode, per-listener
+- Also configurable in the web console: the controller row's **Firewall** panel on the Apps
+  page (mode, per-listener
   direct-access exceptions, AP controls, and the copyable apply/check/reset commands).
 
 ---
@@ -296,7 +298,7 @@ after a slow QEMU cold boot outlived its retry window (`lhpc status <stack>` sho
 `lhpc test <target> [--tx] [--yes]` — run host tests, or a bounded TX test with `--tx` (real RF, dummy loads).
 
 ### update
-`lhpc update [<target>] [--source binary|pinned|dev|stable] [--yes]` — update a stack/component to
+`lhpc update [<target>] [--source binary|pinned|dev|stable] [--upstream] [--yes]` — update a stack/component to
 the selected source.
 
 - Without `--source` the target KEEPS its current channel: a binary-installed stack updates
@@ -304,6 +306,8 @@ the selected source.
 - When the published binary lags this lhpc's pins, the update refuses and names the source build as
   the only way forward — cancelling keeps the working binary.
 - Switching channels is an `install`, not an update, and the CLI says so.
+- `--upstream` (fetched packages, i.e. graywolf): move to the latest upstream release, verified
+  against its `checksums.txt`.
 
 ### uninstall
 `lhpc uninstall [<target>] [--yes]` — uninstall a stack/component.
@@ -374,7 +378,7 @@ password between bridge and firmware (default stack: meshcom).
 - `enable`/`disable`/`renew` **rebuild the firmware and restart the link** (several minutes).
   Without `--yes` they warn and print the confirm hint; with `--yes` they stream each step
   (secret → firmware → bridge → node). The secret value is never printed.
-- `disable` also requires `--confirm-phrase disable-hmac-auth` — it downgrades the link to
+- `disable` also requires `--confirm-phrase remove-auth` — it downgrades the link to
   unauthenticated.
 - Password auth is on by default for a **source** install. On the **binary** channel the
   published firmware has no password, so meshcom runs open auth and every change here is refused

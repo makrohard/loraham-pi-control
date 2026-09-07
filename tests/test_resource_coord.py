@@ -56,7 +56,7 @@ def test_stop_also_takes_resource_locks(tmp_path):
 
 
 def test_start_blocked_by_held_source_lock(tmp_path):
-    # P0.5: a start holds the canonical source lock; a concurrent update/uninstall
+    # A start holds the canonical source lock; a concurrent update/uninstall
     # holding it must block the start (no racing the source during startup setup).
     # Uses a SOURCED stack (chat -> src/LoRaHAM_Daemon); meshtastic declares no source.
     svc = _svc(tmp_path)

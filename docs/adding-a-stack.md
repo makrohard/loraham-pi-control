@@ -1,7 +1,7 @@
 # Adding & maintaining a stack
 
 Everything LHPC manages is declared in **one manifest** (`lhpc/data/manifest.example.toml`,
-copied to `config/manifest.toml` on bootstrap). LHPC never hard-codes an app: you add a stack by
+shipped as package data). LHPC never hard-codes an app: you add a stack by
 describing it in TOML, and the CLI/web get install / build / test / start / stop / update for
 free. This guide uses the **MeshCom (QEMU)** stack as a worked example.
 
@@ -23,8 +23,7 @@ free. This guide uses the **MeshCom (QEMU)** stack as a worked example.
 - LHPC verifies a start by **readiness** (a process is alive, or a `ready = true` endpoint came
   up) and reports a typed outcome; it never assumes.
 
-The MeshCom stack chains `daemon → meshcom-bridge → meshcom-gps → meshcom-qemu` (plus the
-`meshcom-gps-relay` test fixture). The daemon owns the radio; the bridge exposes a TCP port the
+The MeshCom stack chains `loraham-daemon → meshcom-bridge → meshcom-gps → meshcom-qemu` (plus the `meshcom-firmware` source component and the `meshcom-gps-relay` test fixture). The daemon owns the radio; the bridge exposes a TCP port the
 firmware talks to; the GPS feed carries the global position; QEMU runs the MeshCom firmware.
 
 ## Anatomy of a stack (MeshCom)
@@ -35,7 +34,7 @@ firmware talks to; the GPS feed carries the global position; QEMU runs the MeshC
 [[stack]]
 id = "meshcom"
 name = "MeshCom (QEMU)"
-summary = "MeshCom firmware under QEMU, bridged to the daemon. 433 MHz, daemon DIRECT."
+summary = "MeshCom firmware under QEMU, bridged to the daemon. 433 MHz, daemon MANAGED."
 main = "meshcom-qemu"          # the app; the others are its dependencies
 ```
 
@@ -62,7 +61,7 @@ remotes fail destructive operations closed.
 ```toml
     [stack.component.source]
     path = "src/meshcom-loraham-bridge"   # runtime-root-relative
-    pin_commit = "fe85c7900f7c095b2e28011ce5fec6125f5fe02a"
+    pin_commit = "<40-char commit>"   # the manifest carries the real pin
     remote = "https://github.com/makrohard/meshcom-loraham-bridge.git"
     branch = "main"
 ```
@@ -73,8 +72,7 @@ Every component executes **shell-free**. Two ways to say a command:
 
 - **Shorthand** `run` / `build` / `test`: a plain `prog arg arg` line with no shell syntax. At
   load it is split on whitespace into `run_argv` (with `run_cwd = "{source}"`), a one-step
-  `build_steps`, or `test_argv`. `{name}` placeholders become `{param:name}` (`{callsign}`
-  becomes `{operator:callsign}`; `{runtime}`, `{source}` and `{band}` stay as they are).
+  `build_steps`, or `test_argv`. In `run`, `{name}` placeholders become `{param:name}` (`{callsign}` becomes `{operator:callsign}`; `{runtime}`, `{source}` and `{band}` stay as they are); `build`/`test` shorthand is split verbatim.
 - **Structured** `run_argv` / `build_steps` / `test_argv`: required for anything with shell
   semantics, i.e. any of `&& || | ; $( \` > < ${ &` or a shell word (`cd`, `env`, `export`,
   `exec`, `sleep`, `mkdir`, `chmod`, `ln`, `rm`, `set`) as a token. There is no shell fallback:
@@ -105,7 +103,11 @@ verifies the start:
 
 - `process`: the matching process is alive (see `[….process]` `exec_name`);
 - `endpoint`: every `ready = true` endpoint came up (below);
-- `manual`: an interactive TUI the operator runs themselves.
+- `manual`: an interactive TUI the operator runs themselves;
+- `gps-feed`: the feed's own readiness marker (never the endpoint path existing);
+- `daemon-band`: the LoRaHAM daemon, verified like `process`;
+- `external-systemd`: a `units`-only component (no `run_argv`): LHPC prints
+  `sudo systemctl start <unit>` and probes the unit.
 
 `interactive = true` marks such a TUI: LHPC generates its config and prints the exact launch
 command instead of spawning it. `gui_optional = true` on a stack's MAIN component marks a GUI
@@ -115,7 +117,7 @@ stack. A non-main interactive component in such a stack (voice's ncurses variant
 
 ```toml
   readiness = "endpoint"
-  run = "build/meshcom-loraham-bridge {bind} {port} {backend} {password_file}"
+  run = "build/meshcom-loraham-bridge {bind} {port} {backend} {password_file} {ping_interval} {pong_timeout}"
 
     [stack.component.process]
     exec_name = "meshcom-loraham-bridge"   # identity for ownership + stop
@@ -197,12 +199,12 @@ socket). `depends_on` + `start_order` sequence the stack.
 ## The lifecycle
 
 ```bash
-lhpc install meshcom --yes   # adopt + verify every component's source (pinned)
+lhpc install meshcom --source pinned --yes   # adopt + verify every component's source at its pin (bare install takes the binary where published)
 lhpc build meshcom           # run each component's build_steps
 lhpc test meshcom            # host tests (RX-safe), optional
 lhpc stack start meshcom     # start in order; verify readiness per component
 lhpc stack stop meshcom      # identity-verified stop (SIGTERM only), endpoints confirmed gone
-lhpc update meshcom --yes    # refresh sources to their pinned/branch state
+lhpc update meshcom --yes    # refresh on the current channel (see cli.md § update); --source pinned for the pin
 ```
 
 The web console exposes the same actions per stack, each with a plan + confirmation.

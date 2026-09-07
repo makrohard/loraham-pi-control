@@ -66,7 +66,7 @@ class BinaryChannelMixin:
 
     def default_channel(self, stack_id: str) -> str:
         """The channel a bare `install`/`update` uses. Binary WHERE AVAILABLE (that is the
-        feature: a fresh Pi should not compile for hours), else the historical default."""
+        feature: a fresh Pi should not compile for hours), else the default."""
         ok, _why = self.binary_available(stack_id)
         return self.BINARY_CHANNEL if ok else "dev"
 
@@ -75,7 +75,7 @@ class BinaryChannelMixin:
         if channel in self.SOURCE_CHOICES:
             return ""
         if channel != self.BINARY_CHANNEL:
-            # Keep the historical wording — adapters and tests match on "invalid source".
+            # Keep this wording — adapters and tests match on "invalid source".
             return (f"invalid source '{channel}' (choose "
                     f"{', '.join(self.allowed_channels(stack_id))})")
         ok, why = self.binary_available(stack_id)
@@ -89,7 +89,7 @@ class BinaryChannelMixin:
         if self.binary_spec(stack_id) is None:
             return "absent", None, ""
         # A receipt written INSIDE an open transaction is not authoritative yet: recovery may
-        # still unwind it. Report unsafe until the transaction commits (audit finding).
+        # still unwind it. Report unsafe until the transaction commits.
         from . import binary_install as _bi
         _j, _js = _bi.read_journal(self._paths)
         if _js == "unsafe":
@@ -116,7 +116,7 @@ class BinaryChannelMixin:
 
     # The remedy an artifact-managed runtime dependency needs — ONE string, so the dependency
     # report and the start refusal cannot drift apart (they did: the report said "not needed" for
-    # exactly what the start gate refused to start without — audit).
+    # exactly what the start gate refused to start without).
     ARTIFACT_MISSING_NOTE = ("binary-managed runtime dependency is missing — the artifact was "
                              "supposed to deliver it; reinstall the binary artifact")
 
@@ -129,7 +129,7 @@ class BinaryChannelMixin:
 
           * PURE BUILD TOOLS (PlatformIO) are nothing the artifact ships and nothing the operator
             can act on -> "irrelevant". Blocking start on one is a dead end: MeshCom refused to
-            start with "missing pio" on a box whose firmware came prebuilt (live-found on a Zero).
+            start with "missing pio" on a box whose firmware came prebuilt.
           * Things the ARTIFACT delivers (the Meshtastic CLI venv, the QEMU binary) are real runtime
             prerequisites -> "artifact-missing". The manifest is explicit that a box lacking the CLI
             venv must be "refused up front instead of starting and silently failing to apply the

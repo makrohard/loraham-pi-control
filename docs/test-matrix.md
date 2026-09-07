@@ -5,7 +5,7 @@ on the box**, one stack at a time, with the install, build and start times recor
 watched during the heavy compiles. CI proves the code, the [testlab](testlab.md) proves the
 console, the [live tests](live-test.md) hold the dated evidence — the on-air silicon test and every
 release's result table; this matrix proves that a release **installs and comes up** from nothing on
-the reference box. It is run before a release is tagged and its results are appended to live-test.md.
+the reference box. It is run before a release is tagged and its results go into live-test.md (newest first).
 
 Evidence is the controller's own typed outcome plus the stack's own state (`lhpc status`, the
 node's info, an HTTP answer, `rnstatus` counters). Log greps are not evidence.
@@ -15,6 +15,7 @@ node's info, an HTTP answer, `rnstatus` counters). Log greps are not evidence.
 - [Bench](#bench)
 - [Procedure per stack](#procedure-per-stack)
 - [Matrix](#matrix)
+- [Fast lane](#fast-lane)
 - [Cross-cutting checks](#cross-cutting-checks)
 - [From-zero reinstall](#from-zero-reinstall)
 - [Refused as designed](#refused-as-designed)
@@ -65,18 +66,18 @@ sources) is still purged and reinstalled on its own.
 |---|---|---|---|---|---|
 | 1 | `daemon` | binary | — | both bands | `lhpc status daemon`: READY on 433 and 868; `lhpc daemon 433` answers |
 | 2 | `chat` | pinned | daemon sources | interactive | the printed command runs in a terminal and exits cleanly |
-| 4 | `voice` | pinned | `loraham-voice-cli` (GTK variant skipped on Lite) | interactive | the terminal variant's printed command runs; GTK reported skipped, not failed |
-| 5 | `kiss` | pinned | `loraham-kiss-tnc` | 433 | verified; TCP `127.0.0.1:8001` answers |
-| 6 | `graywolf` | fetched release | — | 433 (needs kiss) | verified; web UI `127.0.0.1:8080` answers; the KISS client is held |
-| 7 | `reticulum` | pinned | rns, nomadnet, lxmd (sideband skipped on Lite) | the free band | `rnstatus` lists the LoRa interface; the ready marker present |
-| 8 | `meshcore` | pinned | node, webui, openhop repeater source | 868, mode chat+repeater | node and repeater verified; web UI `:8788` and dashboard `:8000` answer; `meshcore-cli` listed on the Dashboard |
-| 9 | `meshtastic` | binary | — | 868 (MeshCore stopped) | verified; `lhpc meshtastic --info` returns the node; `meshtastic-cli` listed |
-| 10 | `meshtastic` | pinned (from source) | meshtasticd | 868 | as row 9; build time and memory recorded |
-| 11 | `daemon` | pinned (from source) | RadioLib + daemon | both bands | as row 1; build time and memory recorded |
-| 12 | `meshcom` | binary | bridge | 433 (graywolf/kiss stopped) | verified; web UI `:18083` 502 until boot then 200; callsign switches from the placeholder |
-| 13 | `meshcom` | pinned (from source) | QEMU, firmware, bridge | 433 | as row 12 — the longest row; QEMU ~68 min and the firmware ~26 min cold at `-j1`; memory watched throughout |
+| 3 | `voice` | pinned | `loraham-voice-cli` (GTK variant skipped on Lite) | interactive | the terminal variant's printed command runs; GTK reported skipped, not failed |
+| 4 | `kiss` | pinned | `loraham-kiss-tnc` | 433 | verified; TCP `127.0.0.1:8001` answers |
+| 5 | `graywolf` | fetched release | — | 433 (needs kiss) | verified; web UI `127.0.0.1:8080` answers; the KISS client is held |
+| 6 | `reticulum` | pinned | rns, nomadnet, lxmd (sideband skipped on Lite) | the free band | `rnstatus` lists the LoRa interface; the ready marker present |
+| 7 | `meshcore` | pinned | node, webui, openhop repeater source | 868, mode chat+repeater | node and repeater verified; web UI `:8788` and dashboard `:8000` answer; `meshcore-cli` listed on the Dashboard |
+| 8 | `meshtastic` | binary | — | 868 (MeshCore stopped) | verified; `lhpc meshtastic --info` returns the node; `meshtastic-cli` listed |
+| 9 | `meshtastic` | pinned (from source) | meshtasticd | 868 | as row 8; build time and memory recorded |
+| 10 | `daemon` | pinned (from source) | RadioLib + daemon | both bands | as row 1; build time and memory recorded |
+| 11 | `meshcom` | binary | bridge | 433 (graywolf/kiss stopped) | verified; web UI `:18083` 502 until boot then 200; callsign switches from the placeholder |
+| 12 | `meshcom` | pinned (from source) | QEMU, firmware, bridge | 433 | as row 11 — the longest row; QEMU ~68 min and the firmware ~26 min cold at `-j1`; memory watched throughout |
 
-Rows 10–13 are the heavy compiles: console stopped, `vmstat` running, `dmesg` checked after each.
+Rows 9–12 are the heavy compiles: console stopped, `vmstat` running, `dmesg` checked after each.
 
 ### Coverage
 
@@ -87,17 +88,28 @@ all-stacks install (and the image builder) uses.
 
 | stack | binary | pinned (source) | dev (default install) |
 |---|---|---|---|
-| daemon | row 1 | row 11 | auto-install (binary is its default) |
+| daemon | row 1 | row 10 | auto-install (binary is its default) |
 | chat | — | row 2 | auto-install |
-| voice | — | row 4 | auto-install |
-| kiss | — | row 5 | auto-install |
-| graywolf | — (fetched release) | row 6 | auto-install |
-| reticulum | — | row 7 | auto-install |
-| meshcore | — | row 8 | auto-install |
-| meshtastic | row 9 | row 10 | auto-install (binary is its default) |
-| meshcom | row 12 | row 13 | auto-install (binary is its default) |
+| voice | — | row 3 | auto-install |
+| kiss | — | row 4 | auto-install |
+| graywolf | — (fetched release) | row 5 | auto-install |
+| reticulum | — | row 6 | auto-install |
+| meshcore | — | row 7 | auto-install |
+| meshtastic | row 8 | row 9 | auto-install (binary is its default) |
+| meshcom | row 11 | row 12 | auto-install (binary is its default) |
 
 No empty cell: this is the full pre-release check.
+
+## Fast lane
+
+A release whose heavy-stack pins are unchanged since the last measured run may skip the three
+from-source rows (9 meshtastic, 10 daemon, 12 meshcom) **on the maintainer's explicit waiver**: the
+binary rows (1, 8, 11) still prove the artifacts that ship, and the compiles they would repeat are
+the ones already timed under the same pins. Everything else runs unchanged — every light stack's
+build, the cross-cutting checks, the from-zero reinstall (with the published binaries) and the host
+tests. A skipped row is written into the result table as *not re-run* with a footnote naming the
+run that measured it and the waiver's date; the pins column must show the pin is the same. A changed
+pin, a changed toolchain or a changed builder image takes the row out of the fast lane.
 
 ## Cross-cutting checks
 
@@ -105,8 +117,8 @@ After the per-stack rows, with the box holding every stack installed and built:
 
 | check | how | evidence |
 |---|---|---|
-| **auto-install consistency (CLI path)** | purge every stack, then `lhpc auto-install --yes` — the exact command the image builder runs and README step 8; every log file the run announces (`tail -f …`) must exist afterwards | every stack ends installed on its default channel (binary where published, else `dev` = the branch tip) and built; `lhpc status --versions` is recorded as-is: a `dev` checkout reads `match` only while the branch tip equals the pin and `differs` once upstream moved (the image's `components-*.txt` shows the same lines); nothing reads "not built"; total time recorded |
-| **known-working** | after each stack's green start, the stack page must offer to record the composition; confirm it there for every stack (the CLI form is `lhpc known-working <stack>`) | the offer is visible and plainly worded (one click, no commit ids to understand); `profiles/known-working/<stack>.json` and `lhpc status --versions` show the run-proven pins (the per-release step in [maintenance](maintenance.md#policy)) |
+| **auto-install consistency (CLI path)** | purge every stack, then `lhpc auto-install --yes` — the exact command the image builder runs and README step 9; every log file the run announces (`tail -f …`) must exist afterwards | every stack ends installed on its default channel (binary where published, else `dev` = the branch tip) and built; `lhpc status --versions` is recorded as-is: a `dev` checkout reads `match` only while the branch tip equals the pin and `differs` once upstream moved (the image's `components-*.txt` shows the same lines); nothing reads "not built"; total time recorded |
+| **known-working** | after each stack's green start, the stack page must offer to record the composition; confirm it there for every source-built stack (a binary install and the fetched graywolf release have no source composition and show no offer, by design) (the CLI form is `lhpc known-working <stack>`) | the offer is visible and plainly worded (one click, no commit ids to understand); `profiles/known-working/<stack>.json` and `lhpc status --versions` show the run-proven pins (the per-release step in [maintenance](maintenance.md#moving-a-pin)) |
 | **boot restore** | power-cycle once with the release's default running set | `N restored, 0 failed`, console reachable |
 | **web console** | Dashboard, Apps rows, Settings of every stack after the run | no traceback in the console log; every row opens |
 | **pins vs binaries** | `lhpc status --versions` on the three binary stacks | the installed binary's components equal the manifest pins |
@@ -118,11 +130,11 @@ After the rows, the controller itself is reinstalled from nothing on the same bo
 the way a new operator would drive it — the happy path only: the defaults install the three heavy
 stacks from the published binaries, the light stacks build from source. The from-source rows above
 already proved and timed every compile, and a Zero 2 W's Wi-Fi can drop under a long compile
-(it did once in this release's run), so no heavy compile is repeated before the host tests:
+, so no heavy compile is repeated before the host tests:
 
 | step | how | evidence |
 |---|---|---|
-| 1. uninstall + wipe | `bash uninstall.sh --purge` from the old checkout | stacks stopped and verified, runtime root gone, no managed unit left |
+| 1. uninstall + wipe | `sudo bash config/files/firewall/firewall-reset.sh` first when the managed firewall is installed (every uninstall refuses while it is), then `bash uninstall.sh --purge` from the old checkout | stacks stopped and verified, runtime root gone, no managed unit left |
 | 2. install | the documented happy path, line by line (README → `install.sh` → console); a doc line that does not work as written is corrected in the same release | `lhpc --version`, console answers; the commands run are the evidence |
 | 3. network | the Apps page's Network panel: the box joins (or re-joins) the operator's Wi-Fi; the AP stays the fallback | console reachable on the joined network |
 | 4. first start, global callsign unset | one licensed stack started before any identity is set | the typed refusal (CLI hint `lhpc config operator --callsign`, the Settings row highlighted in the console); nothing started |
@@ -135,7 +147,7 @@ Remote exposure with mTLS and the managed firewall needs the operator's one root
 `sudo` line the console prints); it is exercised as the last from-zero step when the operator enters
 that line, otherwise its contracts rest on the unit tests.
 
-The result lines go into the release's results section below.
+The result lines go into the release's section of [live-test.md](live-test.md).
 
 ## Refused as designed
 
@@ -147,7 +159,7 @@ the first three; note them when they occur.
 | a second owner of a band (meshtastic while MeshCore or Reticulum holds 868; kiss while Reticulum holds 433) | `tests/test_run_order.py`, `tests/test_reticulum_stack.py` |
 | meshtastic with Reticulum on the bus (`spi.bus.0.unlocked`) | `tests/test_reticulum_stack.py` |
 | a start with a missing identity (Meshtastic / MeshCore node name, MeshCom callsign) — plan and apply, CLI and web | `tests/test_identity.py` |
-| a source update while a consumer runs; a drifted checkout is not overwritten | `tests/test_source.py` |
+| a source update while a consumer runs; a drifted checkout is not overwritten | `tests/test_uninstall_safety.py`, `tests/test_source.py` |
 | a start against a build receipt that no longer matches its sources | `tests/test_reticulum_stack.py` |
-| a dependent component when its dependency failed to start | `tests/test_deps.py` |
+| a dependent component when its dependency failed to start | `tests/test_reticulum_stack.py` |
 | changing the GPS source, or a stack's `use_gps`, while a consumer runs | `tests/test_gps.py` |

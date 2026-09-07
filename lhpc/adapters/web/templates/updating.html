@@ -12,7 +12,7 @@
       <p><a class="act" href="/"><button type="button">Return to the console &rarr;</button></a></p>
       <p class="muted">This page does <strong>not</strong> refresh on its own — click the button when
         you are ready, and reload once more if the console is still coming up.</p>
-      <p class="muted">Still stuck? <code>journalctl --user -u lhpc-selfupdate -n 50</code> shows what
+      <p class="muted">Still stuck? <code>tail -n 50 ~/loraham-pi-control/logs/lhpc-selfupdate.log</code> shows what
         happened; <code>systemctl --user start lhpc-web</code> starts the console manually.</p>
     </div>
   </div>

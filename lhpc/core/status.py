@@ -95,9 +95,9 @@ class StatusProber:
         realpath-following it: a path endpoint may LEGITIMATELY be a SYMLINK to a device
         node OUTSIDE the root — e.g. a socat PTY link `state/loraham_kiss -> /dev/pts/N`.
         Strict `under()` realpath-resolves that to `/dev/pts/N`, sees it escape the root,
-        and refuses — so the running PTY bridge read as ABSENT and the component was stuck
-        DEGRADED. Lexical containment keeps the resolved path the in-root leaf (never
-        CWD-relative), mirroring how observe-only source dirs allow a symlink leaf."""
+        and refuses — which would read the running PTY bridge as ABSENT. Lexical
+        containment keeps the resolved path the in-root leaf (never CWD-relative),
+        mirroring how observe-only source dirs allow a symlink leaf."""
         import os
         from pathlib import Path as _P
         if address and not _P(address).is_absolute():
@@ -106,11 +106,10 @@ class StatusProber:
                 return str(self._paths._lexical_under(rel) if lenient
                            else self._paths.under(*_P(address).parts))
             except Exception:
-                # AUDIT ER3: containment refusal must read as ABSENT. Returning the
-                # ORIGINAL relative address let the probe resolve it against the
-                # controller's CWD — a same-named file/socket there falsely reported the
-                # component present/ready. Return a guaranteed-absent absolute sentinel
-                # under the runtime root instead (never CWD-relative).
+                # A containment refusal must read as ABSENT: return a guaranteed-absent
+                # absolute sentinel under the runtime root, never the CWD-relative original
+                # (a same-named file/socket in the controller's CWD would otherwise report
+                # the component present/ready).
                 return str(self._paths.runtime_root / "state" / ".unresolved-endpoint")
         return address
 
@@ -167,7 +166,7 @@ class StatusProber:
         status.profile_state = self._profile_state(comp, src)
 
         # Libraries/firmware have no run state. Oneshots normally don't either —
-        # EXCEPT interactive apps (chat/voice/meshcli/GUI), which are long-running
+        # EXCEPT interactive apps (meshtastic-cli, meshcore-cli), which are long-running
         # processes the operator starts by hand: assess them by process so the dash
         # shows running/stopped (not "not applicable").
         if comp.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE) or (
@@ -188,7 +187,7 @@ class StatusProber:
             status.pids = pm.pids
             status.evidence.update({f"process.{k}": v for k, v in pm.evidence.items()})
 
-        endpoints, all_ready, _any_present, has_expected = self._assess_endpoints(comp)
+        endpoints, all_ready, has_expected = self._assess_endpoints(comp)
         status.endpoints = endpoints
 
         # A GPS feed's health is its UPSTREAM SOURCE, not a path. Its endpoint exists from the
@@ -327,11 +326,9 @@ class StatusProber:
                 # on the wrong address family/host must NOT satisfy this endpoint, and the
                 # retained owner PID is that of the MATCHED listener. Keeps status in exact
                 # agreement with start readiness and stop cessation.
-                present, detail, owner_pid, owner_incomplete = tcp_endpoint_match(
+                present, detail = tcp_endpoint_match(
                     self._system, spec.address, listeners=self._listeners)
                 obs.present = present
-                obs.owner_pid = owner_pid
-                obs.owner_incomplete = owner_incomplete
                 obs.detail = detail
             elif spec.kind == "unix":
                 sock = probe_socket(self._system, self._resolve_addr(spec.address))
@@ -363,8 +360,7 @@ class StatusProber:
 
         has_expected = bool(expected_present)
         all_ready = all(expected_present) if has_expected else False
-        any_present = any(expected_present) if has_expected else False
-        return observations, all_ready, any_present, has_expected
+        return observations, all_ready, has_expected
 
 
 def _run_state_for_service(
@@ -445,8 +441,7 @@ def rollup_states(snapshot: Snapshot) -> dict[str, str]:
     """Worst (highest-severity) run state per stack, as a value string.
 
     An OPTIONAL component that was never installed does not count. `NOT_INSTALLED` outranks
-    `STOPPED`, so one never-cloned optional helper (MeshCore's Tk Node Manager) rolled an
-    otherwise fine stack's badge to "not-installed" — telling the operator their installed,
+    `STOPPED`, so a never-installed optional helper would otherwise roll an installed, merely stopped stack's badge to "not-installed" — telling the operator their installed,
     merely stopped stack was missing. The COMPONENT still reports `not-installed`
     truthfully; only this summary looks past it.
 

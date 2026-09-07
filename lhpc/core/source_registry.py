@@ -1,11 +1,10 @@
 """Durable source ownership registry — LHPC's record of WHAT it adopted and WHY.
 
 One JSON record per managed source path under `state/source-registry/`, written INSIDE the
-source-activation transaction (install.py): the journal carries the record data (v3 payload), the
+source-activation transaction (install.py): the journal carries the record data (v5 payload), the
 record is persisted after the activation rename and BEFORE the journal is cleared, and recovery
 re-completes the write from the journal — so an activated source always has an ownership record,
-and a source without one is either a pre-registry (backfilled) adoption that must pass origin-URL
-verification (`verify_or_backfill`) or is NOT LHPC's to update/uninstall.
+and a source without one is NOT LHPC's to update/uninstall (re-adopt it with `lhpc install`).
 
 Records are strictly-validated, descriptor-safe reads (`runtime_fs.read_text_regular`): a
 symlinked/malformed/unversioned record is treated as ABSENT (fail toward "no ownership proven",
@@ -16,7 +15,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,17 +22,17 @@ from . import runtime_fs, validators
 from .paths import PathContainmentError, Paths
 
 REGISTRY_VERSION = 2
-_SELECTORS = ("pinned", "dev", "stable", "backfilled")
+_SELECTORS = ("pinned", "dev", "stable")
 
 
 @dataclass(frozen=True)
 class RegistryRecord:
     source_rel: str            # runtime-relative managed source path (e.g. "src/RadioLib")
     remote: str                # the remote URL actually used ("" for pure local adoptions)
-    selector: str              # pinned | dev | stable | backfilled (pre-registry adoption)
+    selector: str              # pinned | dev | stable
     resolved_commit: str       # exact commit adopted ("" when the tree is not a git checkout)
     adopted_at: float
-    txn_id: str                # source-transaction id ("" for backfilled records)
+    txn_id: str                # source-transaction id
     components: tuple[str, ...]  # every manifest component consuming this source path
 
 
@@ -53,8 +51,7 @@ def record_path(paths: Paths, source_rel: str) -> Path:
 def _valid(d: object, source_rel: str) -> bool:
     if not isinstance(d, dict) or d.get("version") != REGISTRY_VERSION:
         return False
-    # A record written by <= 0.2.10 also carries `strategy`; it is read as an unknown extra
-    # field and ignored, like any other. Nothing validates or persists it any more.
+    # Unknown extra fields (e.g. `strategy`) are ignored.
     for f in ("source_rel", "remote", "selector", "resolved_commit", "txn_id"):
         if not isinstance(d.get(f), str):
             return False
@@ -93,8 +90,8 @@ def record_state(paths: Paths, source_rel: str) -> tuple:
       * ("unsafe", None, reason)   — PRESENT but malformed, symlinked, a directory, special,
                                      inaccessible, mismatched, or otherwise unreadable.
 
-    Only "absent" may permit backfill; every "unsafe" state must BLOCK destructive
-    operations and confirmation with zero mutation (the leaf is retained as evidence)."""
+    "absent" proves no ownership; every "unsafe" state must BLOCK destructive operations
+    and confirmation with zero mutation (the leaf is retained as evidence)."""
     rp = record_path(paths, source_rel)
     try:
         raw = runtime_fs.read_text_regular(paths, rp)
@@ -150,87 +147,13 @@ def remove_record(paths: Paths, source_rel: str) -> bool:
         return False
 
 
-def verify_or_backfill(paths: Paths, system, config, comp, dest: Path,
-                       components: tuple = (), handle=None) -> tuple:
-    """Ownership proof for a destructive operation on `dest`. Returns `(record, reason)`:
-
-      * registry SAFELY VALID    -> (record, "registered");
-      * registry SAFELY ABSENT   -> origin-verified backfill, HANDLE-BOUND: every
-        Git/origin inspection runs against the captured leaf's fd-pinned path, and the SAME
-        handle is re-proven immediately before the record is persisted — a substituted path
-        leaf is never inspected, authorized, or registered;
-      * registry PRESENT-BUT-UNSAFE (malformed/symlinked/special/inaccessible) -> BLOCK with
-        a typed reason and zero mutation;
-      * anything else -> (None, reason): ownership NOT proven, the caller must refuse.
-
-    Never mutates the source tree; the only write is the backfill record — which MUST persist
-    (a failed backfill never authorizes mutation)."""
-    from . import source_fs
-    spec = comp.source
-    rel = _rel(paths, dest)
-    state, rec, why = record_state(paths, rel)
-    if state == "unsafe":
-        return None, why
-    if state == "valid":
-        return rec, "registered"
-    expected = (config.remotes.get(comp.id) or spec.remote or "")
-    try:
-        expected = validators.remote_url(expected, field="remote") if expected else ""
-    except validators.ValidationError:
-        return None, "configured remote is invalid — ownership not provable"
-    comps = tuple(components) or (comp.id,)
-    own_handle = False
-    if handle is None:
-        try:
-            handle = source_fs.capture_leaf(paths, dest)
-            own_handle = True
-        except (OSError, PathContainmentError) as exc:
-            return None, f"no ownership record and the leaf is not capturable: {exc}"
-    try:
-        def _persist(record) -> tuple:
-            # RE-PROVE the captured handle immediately before persistence: a leaf replaced
-            # after inspection is never registered.
-            if not source_fs.verify_leaf_path(paths, dest, handle):
-                return None, ("destination was concurrently replaced during ownership "
-                              "verification — nothing registered")
-            if not write_record(paths, record):
-                return None, ("ownership verified but the record could not be persisted — "
-                              "refusing")
-            return record, None
-        if handle.kind != "dir":
-            # CONTAINMENT: a managed source is a directory under the runtime root. A symlink
-            # (or any other leaf) at its destination is not an LHPC adoption.
-            return None, (f"no ownership record and the destination is a {handle.kind} "
-                          "leaf, not a managed source directory — refusing")
-        pinned = Path(handle.pinned_path())
-        if not (pinned / ".git").exists():
-            return None, "no ownership record and not a git checkout — refusing (unknown tree)"
-        if not expected:
-            return None, "no ownership record and no configured remote — ownership not provable"
-        r = system.runner.run(["git", "-C", str(pinned), "config", "--get",
-                               "remote.origin.url"], 5.0)
-        actual = (r.stdout or "").strip()
-        if r.returncode != 0 or not actual:
-            return None, "no ownership record and the tree has no origin remote — refusing"
-        if _norm_remote(actual) != _norm_remote(expected):
-            return None, (f"origin remote {actual!r} does not match the configured remote "
-                          f"{expected!r} — not an LHPC-adopted tree")
-        rec = RegistryRecord(rel, expected, "backfilled", _head(system, pinned), time.time(), "",
-                             comps)
-        got, err = _persist(rec)
-        return (got, "backfilled") if err is None else (None, err)
-    finally:
-        if own_handle:
-            handle.close()
-
-
 def verify_identity(paths: Paths, system, config, comp, dest: Path,
                     components: tuple = (), handle=None) -> tuple:
     """THE authoritative CURRENT ownership-and-identity proof for an EXISTING managed source
     leaf — required (under the applicable source lock) before every destructive action
     (update overwrite, uninstall, clean) and before a known-working confirmation. A valid
     registry file alone is NOT sufficient: the leaf must match it NOW, with a POSITIVE
-    identity proof per strategy. Returns `(record, "verified")` or `(None, typed-reason)` —
+    identity proof. Returns `(record, "verified")` or `(None, typed-reason)` —
     the caller must fail closed.
 
       * registry PRESENT-BUT-UNSAFE -> BLOCK (never treated as absent);
@@ -239,7 +162,7 @@ def verify_identity(paths: Paths, system, config, comp, dest: Path,
         recorded resolved commit, or the actual origin matches the recorded/effective
         remote. Path + leaf kind alone (a non-Git directory with nothing provable) is NOT
         ownership: destructive authorization is refused (re-adopt or remove manually);
-      * a source without a record takes the handle-bound BACKFILL path.
+      * a source without a record is not LHPC's: refused (re-adopt it with `lhpc install`).
 
     `handle` (a `source_fs.SourceLeafHandle`) BINDS the proof to a captured leaf: the kind
     comes from the capture and every git query runs against the handle's fd-pinned path —
@@ -250,8 +173,8 @@ def verify_identity(paths: Paths, system, config, comp, dest: Path,
     if state == "unsafe":
         return None, why
     if state == "absent":
-        return verify_or_backfill(paths, system, config, comp, dest, components,
-                                  handle=handle)
+        return None, ("no ownership record — not an LHPC-adopted source (re-adopt it with "
+                      "lhpc install)")
     git_dest = dest if handle is None or handle.kind != "dir" else Path(handle.pinned_path())
     if handle is not None:
         kind = handle.kind

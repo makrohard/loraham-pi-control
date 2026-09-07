@@ -22,7 +22,6 @@ from pathlib import Path
 from . import scenarios, supervisor  # noqa: F401  (re-exported for ops/provider)
 
 ENV_KEY = "LHPC_TESTLAB"
-BOOT_FILE_ENV = "LHPC_BOOT_ID_FILE"
 
 
 def env_enabled() -> bool:

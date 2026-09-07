@@ -36,7 +36,6 @@ __all__ = [
     "atomic_write_bytes",
     "chmod",
     "ensure_dir",
-    "listdir",
     "mkdir",
     "open_existing_marker",
     "open_lock",
@@ -346,7 +345,7 @@ def open_marker_excl(paths: Paths, path: Path, text: str, mode: int = 0o600) -> 
                           dir_fd=parent_fd)
         try:
             # os.dup can itself fail under fd exhaustion (EMFILE/ENFILE); build the marker
-            # INSIDE the try so file_fd is always closed on any failure (AUDIT FS4 — and
+            # INSIDE the try so file_fd is always closed on any failure (and
             # its re-review: the dup must be guarded too, not just the write).
             marker = OwnedMarker(name, os.dup(parent_fd), file_fd, 0, 0)
             marker._write_all(data)             # COMPLETE write (loops over partial writes)
@@ -536,24 +535,6 @@ def tail_since(paths: Paths, path: Path, floor: int, lines: int = 200,
     except (OSError, PathContainmentError):
         return []
     return data.decode("utf-8", errors="replace").splitlines()[-lines:]
-
-
-def listdir(paths: Paths, path: Path) -> list[str]:
-    """List the entry NAMES of a contained runtime directory through a descriptor-anchored,
-    no-follow directory fd (the dir is opened `O_DIRECTORY|O_NOFOLLOW` relative to its
-    parent fd). A missing or symlinked/non-directory target returns []. Callers must still
-    open each entry no-follow via `read_bytes`/etc."""
-    try:
-        with _walk_parent(paths, path, create=False) as (parent_fd, name):
-            dfd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
-            try:
-                return sorted(os.listdir(dfd))
-            finally:
-                os.close(dfd)
-    except (OSError, PathContainmentError):
-        return []
-
-
 def scandir_nofollow(paths: Paths, path: Path) -> list[tuple[str, bool]]:
     """Enumerate a runtime directory through a descriptor-anchored, no-follow dir fd,
     returning a sorted list of (entry_name, is_symlink). Unlike `listdir`, this makes the

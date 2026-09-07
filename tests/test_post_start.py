@@ -479,11 +479,6 @@ def _meshcom_launcher(mc_callsign, saved=None):
                                          "/rt", "/src", "433"), svc
 
 
-def test_meshcom_legacy_shell_post_start_removed():
-    _, svc = _meshcom_launcher("XX0XXA")
-    assert svc.stack("meshcom").component("meshcom-qemu").post_start == ""
-
-
 def test_meshcom_n0call_refuses_to_render_the_required_setcall():
     """Same contract for the N0CALL placeholder: never silently satisfied, never sent."""
     from lhpc.core.commands import CommandError

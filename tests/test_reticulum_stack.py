@@ -240,7 +240,7 @@ def test_clients_attach_to_the_owner_config_not_a_private_one():
     radio claim, not by hiding the config."""
     for cid in ("nomadnet", "lxmd", "sideband"):
         c = _comp(cid)
-        cmd = (c.run_cmd or "") + " " + " ".join(c.run_argv or ())
+        cmd = " ".join(c.run_argv)
         assert "--rnsconfig" in cmd
         assert "/state/reticulum" in cmd, f"{cid} must share the owner's RNS config"
 

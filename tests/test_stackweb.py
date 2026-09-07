@@ -26,6 +26,16 @@ FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
 GOLDEN_ROOT = pathlib.Path("/GOLDEN")        # stable absolute paths; never touched
 
+def _web_upstream(svc, page_id):
+    p = svc.web_page(page_id)
+    return (p.address, p.scheme) if p is not None else None
+
+
+def _web_deny(svc, page_id):
+    p = svc.web_page(page_id)
+    return tuple(p.deny_paths) if p is not None else ()
+
+
 
 def _paths():
     return Paths(runtime_root=GOLDEN_ROOT)
@@ -449,9 +459,9 @@ def test_eligible_stacks_are_derived_from_client_web_endpoints(tmp_path):
 
 def test_upstream_is_read_from_the_manifest_endpoint(tmp_path):
     svc = _svc(tmp_path)
-    assert svc.stack_web_upstream("meshcom") == ("127.0.0.1:18083", "http")
-    assert svc.stack_web_upstream("meshtastic") == ("127.0.0.1:9443", "https")
-    assert svc.stack_web_upstream("daemon") is None
+    assert _web_upstream(svc, "meshcom") == ("127.0.0.1:18083", "http")
+    assert _web_upstream(svc, "meshtastic") == ("127.0.0.1:9443", "https")
+    assert _web_upstream(svc, "daemon") is None
 
 
 def test_view_is_empty_for_a_stack_without_a_web_ui(tmp_path):
@@ -888,7 +898,6 @@ def test_http_console_keeps_the_trusted_host_policy_without_secure_cookies(tmp_p
     app, _ = _app(tmp_path)
     c = app.test_client()
     app.config["SESSION_COOKIE_SECURE"] = False
-    app.config["LHPC_PRODUCTIVE"] = True
     assert c.get("/stacks", headers={"Host": "evil.example"}).status_code == 400
     assert c.get("/stacks", headers={"Host": "127.0.0.1"}).status_code == 200
 
@@ -1612,11 +1621,11 @@ def test_meshcore_webui_proxy_denies_all_lhpc_owned_operations(tmp_path):
         "/api/device/tuning", "/api/device/position", "/api/device/name",
         "/api/admin/reset",
     }
-    deny = set(svc.stack_web_deny_paths("meshcore"))
+    deny = set(_web_deny(svc, "meshcore"))
     missing = required - deny
     assert not missing, f"MeshCore Web UI proxy no longer denies LHPC-owned operations: {missing}"
     # And they actually render as nginx 404s (a 403 logs the operator out of a SPA dashboard).
-    up = svc.stack_web_upstream("meshcore")
+    up = _web_upstream(svc, "meshcore")
 
     class _SWC:
         stack_id = "meshcore"; enabled = True; remote = False; allowed_cidrs = []
@@ -1624,7 +1633,7 @@ def test_meshcore_webui_proxy_denies_all_lhpc_owned_operations(tmp_path):
 
     out = ws.render_nginx_config(
         svc._paths, svc.config().webserver,
-        [StackWebProxy(_SWC(), up[0], up[1], svc.stack_web_deny_paths("meshcore"))])
+        [StackWebProxy(_SWC(), up[0], up[1], _web_deny(svc, "meshcore"))])
     for p in required:
         assert f"location ~ {ws.deny_location_regex(p)} {{ return 404; }}" in out, \
             f"{p} not denied in nginx config"
@@ -1934,3 +1943,57 @@ def test_a_stored_password_never_reaches_the_json_apis_or_flashes(tmp_path):
         assert "ONLY-IN-THE-PRE" not in r.get_data(as_text=True), api
     assert "ONLY-IN-THE-PRE" not in c.get("/").get_data(as_text=True)     # the dashboard never
     assert "ONLY-IN-THE-PRE" not in str(svc.running_tasks())
+
+
+def test_a_saved_disable_keeps_the_live_proxy_visible_until_apply(tmp_path):
+    # A saved Disable takes effect at Apply. Until then nginx still serves the APPLIED proxy, so
+    # the panel, the dashboard and the exposure warnings must describe that live socket (as a
+    # pending disable), never hide an off-loopback listener behind the saved intent.
+    import os
+    from lhpc.core import runtime_fs
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    boot = ControllerService(system=FakeSystem().system, paths=paths)
+    boot.webserver_init(dns_sans=["pi.local"])
+    boot.stack_web_configure("meshtastic", mode="lan", port=8445, scheme="https",
+                             access_mode="no-auth", cidrs=["192.168.0.0/24"],
+                             confirm=True, confirm_public=True)
+    runtime_fs.mkdir(paths, "state", "run")
+    runtime_fs.write_marker(paths, paths.under(*webserver.NGINX_PID), str(os.getpid()))
+    staged, live = (str(paths.under(*webserver.NGINX_CONF_STAGED)),
+                    str(paths.under(*webserver.NGINX_CONF)))
+    fake = FakeSystem(
+        commands={("nginx", "-v"): CR(0, "", "nginx/1.24"),
+                  ("nginx", "-t", "-c", staged): CR(0, "", "ok"),
+                  ("nginx", "-s", "reload", "-c", live): CR(0, "", "")},
+        cmdlines_data={70: ["/opt/meshtasticd", "-c", "meshtasticd.yaml"]},
+        listeners=[Listener("ipv4", "127.0.0.1", 8443, 1),
+                   Listener("ipv4", "0.0.0.0", 8445, 2),      # the APPLIED proxy, still up
+                   Listener("ipv4", "127.0.0.1", 9443, 3)])
+    svc = ControllerService(system=fake.system, paths=paths)
+    assert svc.webserver_apply().ok
+
+    # Save the Disable — no Apply. The 8445 socket is still served.
+    assert svc.stack_web_configure("meshtastic", port=0, confirm=True).ok
+    v = svc.stack_web_view("meshtastic")
+    assert v["cfg"].enabled is False                           # desired, for the Settings form
+    assert v["live_port"] == 8445 and v["listen_scope"] == "exposed"
+    assert v["pending"] is True and v["pending_disable"] is True
+    assert v["posture"] is not None and v["urls"]              # still reachable — say so
+    assert any(w["level"] == "danger" and "without client authentication" in w["text"]
+               for w in v["warnings"]), v["warnings"]           # the APPLIED policy is judged
+
+    row = next(r for r in svc.dashboard_webservers()
+               if r["kind"] == "stack" and r["sid"] == "meshtastic")
+    assert row["enabled"] is False and row["live"] is True and row["pending_disable"] is True
+    assert row["port"] == 8445 and row["posture"] is not None
+
+    app = create_app(lambda: svc)
+    client = app.test_client()
+    body = client.get("/", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
+    assert "127.0.0.1:8445" in body and "disable pending" in body
+    panel = client.get("/stacks?open=meshtastic",
+                       headers={"Host": "127.0.0.1"}).get_data(as_text=True)
+    assert "disable pending" in panel
+    assert "Currently listening on port 8445 on all interfaces" in panel
+    assert "not proxied" not in panel.split('id="stack-webserver-meshtastic"')[1].split("</summary>")[0]

@@ -1,7 +1,7 @@
 """End-to-end Companion integration: real meshcore_py client over TCP, real openHop
 node underneath, RF exercised through the fake LoRaHAM daemon.
 
-Proves the Phase-3 gate: app start, device query, self info, contacts, channels,
+Proves the Companion gate: app start, device query, self info, contacts, channels,
 message send path, incoming message/push path, reconnect, idle survival, and
 malformed-framing containment — against the CURRENT official client library.
 """

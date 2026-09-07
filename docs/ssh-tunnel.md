@@ -31,8 +31,7 @@ you chose `auth-everywhere` the tunnel needs no certificate.
 ssh -N -L 8443:127.0.0.1:8443 lhpc@<host>
 ```
 
-Then open `https://127.0.0.1:8443/` on your machine. The certificate warning is the box's
-self-signed server certificate, expected on loopback. `-N` opens no shell; end the tunnel with
+Then open `https://127.0.0.1:8443/` on your machine. The certificate warning is the box's server certificate, signed by its own server TLS CA, expected on loopback. `-N` opens no shell; end the tunnel with
 Ctrl+C. Add `-o ServerAliveInterval=30` for a tunnel that lives for hours.
 
 ## One tunnel per stack

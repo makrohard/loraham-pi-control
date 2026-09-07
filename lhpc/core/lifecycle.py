@@ -142,7 +142,7 @@ class TxTestPlan:
 # already bounded — finite retry counts, bounded socket operations, bounded tcp_wait, a 120 s cap
 # per exec — so this only has to be comfortably larger than the longest supported declared
 # sequence (MeshCom's stepped ~13-minute cold-boot window). A per-manifest calculator was tried
-# and removed: it was a second, disagreeing model of the executor's timing (audit-found).
+# and removed: it was a second, disagreeing model of the executor's timing.
 REQUIRED_POST_TIMEOUT_S = 1800.0
 
 
@@ -263,8 +263,7 @@ class Lifecycle:
                                   .replace("{multiarch}", _MULTIARCH))
 
     def missing_requirements(self, comp: Component) -> list:
-        """Component dependencies not satisfied: a command not on PATH, or (for
-        -dev packages) a `check_file` header that does not exist."""
+        """Component dependencies not satisfied: a `cmd` neither on PATH nor in the sbin dirs and no `check_file` present, a python `module` that does not import, unix `groups` not effective for this process, or an `absent_file` that exists."""
         missing = []
         for req in comp.requires:
             if req.groups:
@@ -299,8 +298,7 @@ class Lifecycle:
                 # PATH probe, so a PATH install is always a reliable escape hatch.
                 # PATH, plus the sbin dirs explicitly. A DAEMON installs to /usr/sbin (gpsd does),
                 # which is not on a non-root user's PATH and is absent from a systemd user unit's
-                # PATH entirely — so `shutil.which` alone reported an installed gpsd as missing
-                # while `lhpc gps` was happily talking to it. Probing the standard sbin locations
+                # PATH entirely. Probing the standard sbin locations
                 # is what "is this tool present" honestly means for a system daemon.
                 on_path = bool(req.cmd) and (
                     shutil.which(req.cmd) is not None
@@ -434,7 +432,7 @@ class Lifecycle:
         try:
             # BAND-SCOPED log: the daemon runs one instance PER BAND simultaneously, and they must
             # not append to one shared file (it mixes bands and doubles the volume the RX/TX feed
-            # has to scan). `band` is "" for band-agnostic components -> unchanged legacy name.
+            # has to scan). `band` is "" for band-agnostic components -> the plain name.
             log = self.logs_dir() / f"start-{comp.id}{('-' + band) if band else ''}.log"
             runtime_fs.ensure_dir(self.paths, self.logs_dir())
         except (OSError, PathContainmentError) as exc:
@@ -463,7 +461,7 @@ class Lifecycle:
             env[AUTO_ENV] = "gpsd" if self.config.gps.auto_listening else "off"
         # Guarantee the standard system dirs on the run PATH. A non-login ssh env, or a systemd unit
         # without an explicit PATH, can omit /usr/sbin — where ldconfig/iw live — which breaks a run
-        # script that legitimately probes them (live finding: meshcom's run.sh runs `ldconfig -p` to
+        # script that legitimately probes them (meshcom's run.sh runs `ldconfig -p` to
         # check libslirp and falsely reported it MISSING because ldconfig was off-PATH). Appended, so
         # an inherited tool still wins by order.
         _pp = [p for p in (env.get("PATH") or "").split(os.pathsep) if p]
@@ -808,9 +806,7 @@ class Lifecycle:
         or was replaced mid-run. It also writes the same typed result sidecar, so an OPTIONAL
         step that failed inside an otherwise-passing required run stays visible in `lhpc status`.
 
-        The default timeout must comfortably exceed the whole declared set (a 12 s delay plus a
-        120 s per-exec cap twice over) — a shorter budget would kill the job mid-set and report a
-        failure the steps did not cause.
+        The default is `REQUIRED_POST_TIMEOUT_S` (see its comment for the sizing).
 
         `while_running` is an optional context manager wrapped around the EXECUTION only. The start
         path passes the config-stability release: everything config-derived is already rendered into
@@ -918,10 +914,7 @@ class Lifecycle:
         # but tagged role="post" and given a role-scoped launch_id, so it never collides with the
         # main record and is filtered out of status (the main component never looks duplicated).
         tag = f"{role}-" if role else ""
-        # Per-launch 128-bit nonce: the old deterministic name (component__band__pid) let a
-        # post-reboot pid reuse OVERWRITE the previous record — and a later prune of the old
-        # record would then delete the NEW one. With the nonce in the filename that collision
-        # class is gone entirely.
+        # Per-launch 128-bit nonce in the filename: a reused pid can never overwrite (or later prune) another launch's record.
         nonce = secrets.token_hex(16)
         rec = {**(extra or {}), **(binding or {}), **(ident or {})}
         # RESERVED core identity — constructed LAST so no extra/binding/identity key can ever
@@ -948,8 +941,7 @@ class Lifecycle:
 
     # Bounded ownership-record size: far above any real record (~1 KiB), far below abuse.
     _OWNED_MAX_BYTES = 64 * 1024
-    # v0 = every record the previous releases wrote (deterministic launch_id, no version/boot/
-    # scope fields). v1 adds the reserved core set. ONE definition for the stop AND restore paths.
+    # Schema-v1 record fields (reserved core identity, in two groups). ONE definition for the stop AND restore paths.
     _OWNED_V0_KEYS = ("launch_id", "stack", "component", "band", "pid", "role", "launched_at")
     _OWNED_V1_EXTRA = ("requested_target", "start_scope", "boot_id")
 
@@ -1055,8 +1047,8 @@ class Lifecycle:
             p = Path(rec["_path"])
         except KeyError:
             return False
-        # COMPARE-BEFORE-DELETE: re-read the leaf and prove it still holds THIS record. Legacy
-        # deterministic filenames (and any future path collision) could otherwise let the prune
+        # COMPARE-BEFORE-DELETE: re-read the leaf and prove it still holds THIS record. A path
+        # collision could otherwise let the prune
         # of an old record unlink a NEWER one written at the same path.
         try:
             on_disk = json.loads(runtime_fs.read_text(self.paths, p))
@@ -1110,10 +1102,7 @@ class Lifecycle:
         BOOT AWARENESS: a record whose stored boot_id differs from the current boot's id is
         NEVER live — pid+starttime alone are reusable across reboots (starttime restarts from
         boot). Rejected ONLY when BOTH ids are non-empty: an unreadable current boot id must
-        never disown a possibly-live process. PRUNING-RACE AUDIT (re-verified at a0f38eb):
-        ownership records are removed exclusively by Lifecycle.stop / _cancel_post_runners via
-        _remove_record — the status prober never reads state/owned/ and no boot-time sweep
-        exists, so this rule cannot cause an early prune of boot-restore evidence; an operator
+        never disown a possibly-live process. Ownership records are removed only through `_remove_record` — by `stop` / `_cancel_post_runners` and by boot-restore's journalled prune of CONSUMED evidence — and the status prober never reads state/owned/, so this rule cannot prune evidence before it is consumed; an operator
         stop before the restore runs is intent NOT to restore. Enforced by
         test_verify_owned_rejects_foreign_boot, test_foreign_boot_identical_starttime_is_ceased
         and test_unreadable_boot_id_preserves_ownership (tests/test_boot_restore.py)."""

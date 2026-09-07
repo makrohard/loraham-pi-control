@@ -13,20 +13,21 @@
    `cfg.port` is a socket nobody is listening on yet. Same rule as the dashboard row. With NOTHING
    live (`absent`), the desired port is the right thing to name — there is no listener to contradict
    it. The Settings FORM input stays on `cfg.port`: that field edits desired config. #}
-{% set live_port = sw.live_port if (sw.cfg.enabled and sw.listen_scope != 'absent') else sw.cfg.port %}
+{% set live_port = sw.live_port if sw.listen_scope != 'absent' else sw.cfg.port %}
 <details class="advcfg" id="stack-webserver-{{ sw.page_id }}">
   <summary>Webserver (web UI proxy){% if not sw.primary %} — {{ sw.name }}{% endif %}
     {# First pill = SECURITY (red = off-loopback + no auth; yellow = public 0.0.0.0/0 + auth; green = local or LAN+auth),
        address = reached host + the proxy's port. Second pill = RUNNING: grey "offline" (stack not started),
        yellow "local-only" (started, not proxied), green "proxied". #}
-    {% if sw.cfg.enabled %}{{ webserver_pills(sw.posture, req_host ~ ':' ~ live_port) }}
+    {% if sw.cfg.enabled or sw.pending_disable %}{{ webserver_pills(sw.posture, req_host ~ ':' ~ live_port) }}
+      {% if sw.pending_disable %}<span class="pill pill-warn" title="Disabled in the saved settings — nginx still serves this proxy until Apply runs">disable pending</span>{% endif %}
     {% else %}<span class="pill">not proxied</span>{% endif %}
     {% if sw.bypassable %}<span class="ver ver-red">upstream exposed</span>{% endif %}
   </summary>
   <div class="body">
     {# The URL is a LINK here, not in the summary above (a11y: no interactive element
        inside a <summary> toggle). #}
-    {% if sw.cfg.enabled and sw.posture %}<p class="wsopen"><a class="wsurl" href="{{ sw.posture.scheme }}://{{ req_host }}:{{ live_port }}">Open {{ sw.posture.scheme }}://{{ req_host }}:{{ live_port }}</a></p>{% endif %}
+    {% if (sw.cfg.enabled or sw.pending_disable) and sw.posture %}<p class="wsopen"><a class="wsurl" href="{{ sw.posture.scheme }}://{{ req_host }}:{{ live_port }}">Open {{ sw.posture.scheme }}://{{ req_host }}:{{ live_port }}</a></p>{% endif %}
 
     {# STANDING security fact, not a one-off flash: the upstream answers on a non-loopback interface,
        so nginx is not the only door — whatever `mode`/`auth` say. #}
@@ -69,7 +70,7 @@
               </tr>
               <tr>
                 <th>Port</th>
-                {# Pre-filled with the stable default (meshcom 8444, meshtastic 8445) so enabling actually
+                {# Pre-filled with the stable default (graywolf 8444, meshcom 8445, meshcore 8446, meshtastic 8447) so enabling actually
                    writes a port — a BLANK port silently saves as 0 (not proxied). #}
                 <td><input name="port" type="number" min="0" max="65535"
                      value="{{ sw.cfg.port or sw.suggested_port }}" autocomplete="off"></td>
@@ -122,7 +123,8 @@
         {% for w in sw.warnings %}<p class="depnote {{ depnote_classes(w.level) }}">{{ w.text }}</p>{% endfor %}
         <p class="summary">Reverse-proxies <code>{{ sw.upstream_scheme }}://{{ sw.upstream_address }}</code>
           through nginx, reusing the console's client certificate.
-          {% if sw.cfg.enabled %}
+          {% if sw.cfg.enabled or sw.pending_disable %}
+            {% if sw.pending_disable %}<strong>Disabled in the saved settings — still served until Apply.</strong>{% endif %}
             {% if sw.listen_scope == 'exposed' %}
               <strong>Currently listening on port {{ live_port }} on all interfaces</strong> — reachable from the LAN now.
             {% elif sw.listen_scope == 'loopback' %}

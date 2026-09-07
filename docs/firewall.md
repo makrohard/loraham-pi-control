@@ -68,11 +68,13 @@ close-what-we-open form, for boxes that already run a custom firewall.
 
 ## The managed firewall: one command
 
-On the dashboard, open **Webserver → Firewall** (also `lhpc firewall`). Pick a mode, tick any
-direct-access exceptions, then run the shown command:
+On the **Apps** page, open the controller row's **Firewall** panel (the Dashboard's Firewall line links there; also `lhpc firewall`). Pick a mode, tick any
+direct-access exceptions, then run the two shown commands — the root script, then the Webserver
+Apply that activates the listeners the firewall was gating:
 
 ```bash
 sudo bash ~/loraham-pi-control/config/files/firewall/firewall-apply.sh
+lhpc webserver apply
 ```
 
 That script (rendered by `lhpc`, executed by you) installs a small **root-owned** helper and
@@ -92,7 +94,8 @@ sudo systemctl start lhpc-firewall-check.service
 The dashboard's Firewall line then reads one of:
 
 - `Firewall: Active — Secure default · Config ✓ · Boot ✓ · Live ✓`
-- `Firewall: Active — Compatibility · unwanted stack ports blocked · Live ✓`
+- `Firewall: Active — Compatibility · unwanted stack ports blocked · Config ✓ · Boot ✓ · Live ✓`
+- `Firewall: Update required — re-apply the firewall after the update · Config ✓ · Boot ✓ · Live ?`
 - `Firewall: Changes pending · Config ✗ · Boot ✓ · Live ?`
 - `Firewall: Verification unavailable — setup required`
 - `Firewall: Live rules missing or mismatched — LHPC protection unverified · Live ✗`
@@ -170,8 +173,7 @@ raw `nft` is shown for the by-hand path. Exposing the console itself is the
 **Local only**: the default. Nothing exposed; the console is loopback. Reach it through an
 [SSH tunnel](ssh-tunnel.md).
 
-**Your LAN**: expose the console to a CIDR (the runbook), then apply the firewall. The managed
-rule mirrors the CIDR: `ip saddr 192.168.0.0/24 tcp dport 8443 accept`.
+**Your LAN**: expose the console to a CIDR (the runbook), then apply the firewall. The managed rule mirrors the CIDR (`ip saddr 192.168.0.0/24 tcp dport 8443 accept`) unless the AP rules are enabled; then the ingress rule is unscoped (`meta nfproto ipv4 tcp dport 8443 accept`) and the nginx allow-list keeps the CIDR.
 
 **Public internet**: forward only 8443 at your router; the exposure needs the elevated confirm
 phrase (the runbook). Never forward 4403/9443/8001/5000/7000/8000.
@@ -191,14 +193,14 @@ sudo bash ~/loraham-pi-control/config/files/firewall/firewall-reset.sh
 ```
 
 Removes **only** lhpc-owned artifacts (the `table inet lhpc`, the three units, the known files
-under `/etc/lhpc/`), restores the prior `nftables.service` enabled-state, and leaves every foreign
+under `/etc/lhpc/`), and leaves every foreign
 file, table and unit exactly as it was. It removes named lhpc files and then `rmdir`s `/etc/lhpc`,
 which succeeds only if the directory is empty, so any unexpected file left there is preserved,
 never recursively deleted. All ownership and table checks live in the trusted root helper: if the
 installed helper is missing, a symlink, not root-owned, or not executable, the reset **refuses**
 (exit 13) and asks you to reinstall the current helper (re-run `firewall-apply.sh`) first, so a
 live owned table is only ever removed by the proven code path, never stranded. Controller uninstall
-refuses while any firewall residual (helper, candidate, metadata, snapshot, journal, or a unit)
+refuses while any firewall residual (helper, candidate, metadata, snapshot, journal, transition record, or a unit)
 remains and points you here first.
 
 ## Doing it entirely by hand
@@ -235,9 +237,7 @@ table inet lhpc {
 The managed firewall gates every path that can bind an externally reachable listener: the web
 console, each stack proxy, **and stack starts/restarts**. A start is allowed only when the
 listener's **complete scope** (protocol, address family, bind address, port, band and source
-CIDRs) exactly matches a modeled candidate scope the live receipt vouches for; an ephemeral
-bind/port/CIDR change or a non-default-band scope that isn't modeled is refused with *"Save the
-setting permanently, apply the firewall, then start."* A TCP listener with no firewall metadata
+CIDRs) exactly matches a modeled candidate scope the live receipt vouches for; a saved bind/port/CIDR change not yet applied is refused with *"Firewall changes pending — the listener was NOT started. Apply the firewall first, then start '<target>' again."*; a scope the applied firewall does not model (e.g. a non-default-band listener) is refused with *"The saved listener is not covered by the applied firewall — apply the firewall, then start."* A TCP listener with no firewall metadata
 is treated as exposed and gated (fail-closed), so a newly added listener can never slip out
 unprotected.
 
@@ -249,8 +249,7 @@ firmware has no mesh password to authenticate against.
 
 **Verified across updates.** The installed root helper stamps a revision (a hash of its own
 source) into every receipt; after an lhpc update replaces the helper, the old attestation no
-longer matches, so the dashboard shows *setup/update required* (never a stale green) until you
-re-apply. The operator scripts and the lhpc-owned nginx unit that carries the boot gate are
+longer matches, so the dashboard shows *Update required — re-apply the firewall after the update* (never a stale green) until you re-apply. The operator scripts and the lhpc-owned nginx unit that carries the boot gate are
 refreshed with the **new** version's templates by the freshly restarted console *after* the
 update, not by the pre-update process (which still holds the old code in memory). If a
 self-update would advance into a state where remote web could come up ungated (a foreign nginx
@@ -260,8 +259,7 @@ unit while remote access is configured), it stops first and directs you to
 A few things are intentionally **out of scope**; they add complexity without materially
 improving safety:
 
-- **SSH scope is widened, not narrowed.** Automatically preserved SSH access resolves to a
-  wildcard allow rather than an exact bind address/family. This can only ever allow *more* SSH
+- **SSH scope is widened, not narrowed.** SSH ports learned without an explicit `ListenAddress` (unit `-p`, `ssh.socket`, live sshd sockets, `[firewall] ssh_ports`) resolve to a wildcard allow; an `sshd -T` `ListenAddress` keeps its exact address and family. This can only ever allow *more* SSH
   access, never lock you out. Use `[firewall] ssh_ports` to pin specific ports.
 - **Hostname binds** are treated as wildcard rather than resolved to addresses.
 - **DHCP client replies** are accepted on any interface, not scoped per-interface.

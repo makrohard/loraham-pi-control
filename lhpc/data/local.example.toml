@@ -12,16 +12,15 @@
 # callsign = "DJ0CHE"      # <- replace with YOUR base callsign (runtime-local only)
 
 [web]
-# host = "127.0.0.1"       # loopback only
-# port = 8770
 # update_check_hours = 12  # background update-check cadence (1..168; 0 = off)
 
 [install]
 # adopt_search_root = ""   # optional in-root fallback dir; outside-root values are refused
 
 # Per-component source overrides, e.g. pin a different local path or branch:
-# [sources.loraham-daemon-433]
-# path = "src/loraham-daemon"
+# Per-component Git remote overrides (https:// or git@host:path; see docs/provenance.md):
+# [remotes]
+# loraham-daemon = "https://github.com/<you>/loraham-daemon.git"
 
 # [boot]
 # restore = false        # do not restart previously running stacks after a reboot

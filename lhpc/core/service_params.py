@@ -1,6 +1,6 @@
 """Param & config resolution, saves, config-file generation, and daemon-parameter application.
 
-Mixin of ControllerService (state/constants on the facade). Adapters import lhpc.core.services only."""
+Mixin of ControllerService (state/constants on the facade). """
 from __future__ import annotations
 
 import os
@@ -136,7 +136,7 @@ class ParamsConfigMixin:
 
     def _effective_daemon_band(self, target: str, band: str = "") -> str:
         """The single band the daemon-params panel/apply uses: the requested band if valid, else
-        the stack's fixed band (from its band-component), else 433."""
+        the stack's fixed band (from its band-component), else the first served band; "" when no hardware is configured."""
         active = self.active_bands()                              # served bands (radio mode)
         if not active:
             return ""                                             # no hardware configured -> no band
@@ -168,9 +168,9 @@ class ParamsConfigMixin:
         return daemon_params.is_client(self._owner_stack_id(target)) or self._is_daemon_target(target)
 
     # -- component-scoped persisted keys (collision-free, inside the owner stack config) ---------
-    # A run/file value can be stored either FLAT (legacy `<name>` / `file_<name>`) or COMPONENT-
+    # A run/file value can be stored either FLAT (`<name>` / `file_<name>`) or COMPONENT-
     # SCOPED (`__r__<comp>__<name>` / `__f__<comp>__<name>`). A direct component save writes SCOPED
-    # keys; a stack save keeps FLAT keys. On read, a scoped value wins; else a flat legacy value is
+    # keys; a stack save keeps FLAT keys. On read, a scoped value wins; else a flat value is
     # honoured ONLY when its param name is UNIQUE for that kind across the owner stack (otherwise it
     # is ambiguous and never silently applied — the start fails typed, see `_config_ambiguity`).
 
@@ -180,7 +180,7 @@ class ParamsConfigMixin:
 
     def _owner_param_counts(self, owner) -> tuple[dict, dict]:
         """(run_counts, file_counts): how many owner-stack components declare each run/file param
-        name — a name with count >= 2 is AMBIGUOUS for a flat legacy value."""
+        name — a name with count >= 2 is AMBIGUOUS for a flat value."""
         run_c: dict = {}
         file_c: dict = {}
         for c in (owner.components if owner is not None else ()):
@@ -192,8 +192,8 @@ class ParamsConfigMixin:
 
     def _resolve_stored(self, stored: dict, kind: str, comp_id: str, name: str,
                         count: int) -> tuple:
-        """(value_or_None, ambiguous). A component-SCOPED key wins; else a FLAT legacy key ONLY when
-        the name is UNIQUE (count <= 1). `ambiguous` is True when a flat legacy value exists but the
+        """(value_or_None, ambiguous). A component-SCOPED key wins; else a FLAT key ONLY when
+        the name is UNIQUE (count <= 1). `ambiguous` is True when a flat value exists but the
         name is declared by >= 2 components and no scoped value overrides it — a value that must NOT
         be silently applied."""
         sk = self._scoped_key(kind, comp_id, name)
@@ -202,7 +202,7 @@ class ParamsConfigMixin:
         flat = name if kind == "r" else f"file_{name}"
         if flat in stored:
             if count <= 1:
-                return stored[flat], False               # unique legacy -> backward compatible
+                return stored[flat], False               # unique flat value
             return None, True                            # ambiguous flat -> never silently applied
         return None, False
 
@@ -271,7 +271,7 @@ class ParamsConfigMixin:
             return []
         s = self.stack(target)
         main_id = s.main if s is not None else None
-        # IDENTITY rows on the SETTINGS surface are TRUTHFUL (audit-found: this surface once
+        # IDENTITY rows on the SETTINGS surface are TRUTHFUL (this surface once
         # prefilled the substituted global, so merely saving another setting persisted it as a
         # local override — copy-on-save through the ordinary Config page): stored-only value,
         # empty form default (reset = inherit), inheritance as placeholder/note, never in the
@@ -428,7 +428,7 @@ class ParamsConfigMixin:
 
     def _resolved_param_value(self, target: str, kind: str, comp_id: str, name: str,
                               band: str = "") -> str:
-        """The component's OWN persisted value (component-scoped, else a UNIQUE flat legacy) or its
+        """The component's OWN persisted value (component-scoped, else a UNIQUE flat) or its
         operator-substituted default — never masked by a same-named sibling."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
@@ -462,10 +462,10 @@ class ParamsConfigMixin:
         except validators.ValidationError:
             return eff
 
-    # -- legacy-default migration (self-update) --------------------------------------------------
-    # Pre-feature LHPC stored a run/file value verbatim under EVERY valid representation: the
+    # -- default migration (self-update) --------------------------------------------------
+    # A stored run/file value may exist under EVERY valid representation: the
     # component-SCOPED key (`__r__/__f__<comp>__<name>`, written even for a unique name saved through a
-    # direct-component target) and, when the name is UNIQUE at owner-stack scope, the FLAT legacy key
+    # direct-component target) and, when the name is UNIQUE at owner-stack scope, the FLAT key
     # (`name` / `file_<name>`). After a successful self-update, a value still equal to its canonical
     # PRE-UPDATE default must be removed so it adopts the new default — but only under the config lock,
     # conditionally, so a concurrent genuine override survives. Ambiguous flat names, `dp_*`, autostart
@@ -483,8 +483,7 @@ class ParamsConfigMixin:
     def _is_identity_candidate(self, cand: dict) -> bool:
         """Does this stale-default migration candidate name an identity field?
 
-        Matched on the candidate's OWN (kind, comp, name) — the exact triple both this version and
-        0.2.5 emit — so it cannot exempt an unrelated parameter that merely shares a name with an
+        Matched on the candidate's OWN (kind, comp, name) — the exact triple `_migration_candidates` emits — so it cannot exempt an unrelated parameter that merely shares a name with an
         identity field on another component, and it is independent of how the stored key was
         spelled (scoped `__r__comp__name`, flat `name`, flat file `file_name`) or which band the
         config belongs to. The `key` fallback exists only for a candidate that predates those
@@ -530,13 +529,12 @@ class ParamsConfigMixin:
                         # substituted {callsign} is a DELIBERATE local pin (fix persisted by
                         # save_config_bundle's identical carve-out) — snapshotting it here
                         # would silently revert the stack to inherit at the next self-update
-                        # (audit-found).
                         if getattr(p, "validator", "") in self._IDENTITY_ENFORCE:
                             continue
                         default = self._param_default_canon(p, cfg_band, band)
                         keys = [self._scoped_key(kind, c.id, p.name)]     # scoped: valid for any comp
                         counts = run_counts if kind == "r" else file_counts
-                        if counts.get(p.name, 0) <= 1:                    # unique -> flat legacy too
+                        if counts.get(p.name, 0) <= 1:                    # unique -> flat too
                             keys.append(p.name if kind == "r" else f"file_{p.name}")
                         for key in keys:
                             if key in stored and self._canon_value(p, str(stored[key])) == default:
@@ -610,7 +608,7 @@ class ParamsConfigMixin:
             return None
         if old_stack is None:
             return None
-        # OLD-manifest key eligibility (mirrors legacy candidate generation):
+        # OLD-manifest key eligibility (mirrors candidate generation):
         #  * a SCOPED key must map to that EXACT old component + parameter;
         #  * a FLAT key is eligible ONLY when the name was UNIQUE for its kind across the OLD owner
         #    stack — an ambiguous/absent flat name is never proven (kept pending).
@@ -633,7 +631,7 @@ class ParamsConfigMixin:
 
     def _config_ambiguity(self, target: str, order, band: str = ""):
         """A message naming the first AMBIGUOUS legacy value a started component would rely on — a
-        run/file param name declared by >= 2 owner-stack components, stored as a flat legacy value,
+        run/file param name declared by >= 2 owner-stack components, stored as a flat value,
         with no component-scoped value for that component. None when every started component resolves
         unambiguously. Used to fail a start TYPED (never silently apply a value to the wrong
         component). `order` is the resolved [(stack, comp), …] launch order."""
@@ -652,22 +650,22 @@ class ParamsConfigMixin:
                                                run_counts.get(p.name, 0))
                 if amb:
                     return (f"run parameter '{p.name}' is ambiguous — declared by more than one "
-                            f"component and stored only as a flat legacy value; set a "
+                            f"component and stored only as a flat value; set a "
                             f"component-scoped value for '{comp.id}'")
             for p in (comp.config_file.params if comp.config_file else ()):
                 _v, amb = self._resolve_stored(stored, "f", comp.id, p.name,
                                                file_counts.get(p.name, 0))
                 if amb:
                     return (f"file parameter '{p.name}' is ambiguous — declared by more than one "
-                            f"component and stored only as a flat legacy value; set a "
+                            f"component and stored only as a flat value; set a "
                             f"component-scoped value for '{comp.id}'")
         return None
 
     def stack_config(self, target: str, band: str = "") -> dict:
         """Effective run config for `target` (and band): the component-scoped saved value, else a
-        UNIQUE flat legacy value, else the per-band/manifest default (operator `{callsign}`
+        UNIQUE flat value, else the per-band/manifest default (operator `{callsign}`
         tokens substituted in DEFAULTS only — a saved value is used verbatim). An
-        ambiguous flat legacy value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
+        ambiguous flat value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
         stored = self._stack_config_cached(self._owner_stack_id(target), cfg_band)
@@ -723,7 +721,7 @@ class ParamsConfigMixin:
 
     def gui_skipped_stack(self, stack) -> bool:
         """True when a MANDATORY component of the stack is GUI-unavailable — the whole stack is then
-        recorded skipped. An OPTIONAL one (the voice GTK app) only removes itself: the stack stays
+        recorded skipped. An `optional` or `gui_optional` one (the voice GTK app is `gui_optional`) only removes itself: the stack stays
         fully usable headless through its CLI."""
         skip = set(self.gui_unavailable_components(stack))
         return any(c.id in skip and not (c.optional or c.gui_optional)
@@ -819,7 +817,7 @@ class ParamsConfigMixin:
         s = self.stack(target)
         members = s.components if s else ()
         comps = [c for c in members if c.run_params]
-        # The daemon's run params (radio/debug/tx-mode/CAD/RSSI) are START options,
+        # The daemon's run params (radio/hw/tx-mode/CAD/RSSI) are START options,
         # always chosen on confirm:start — not persistent config. Keep the daemon
         # Config page to its live tuning + sources only.
         if s is not None and s.main == self.DAEMON_ID:
@@ -936,8 +934,7 @@ class ParamsConfigMixin:
         """Validate the WHOLE Config-page submission, then persist it as ONE
         all-or-recoverable transaction (local.toml + the per-stack config file).
         Nothing is written unless every value validates; unknown fields are
-        rejected; a malformed local.toml is preserved. (P0: replaces the previous
-        per-remote sequential writes.)
+        rejected; a malformed local.toml is preserved.
 
         `_allow_managed_params` is an INTERNAL trust token: HMAC-managed run params (e.g.
         `password_file`) are rejected from generic submissions and may be written ONLY by the managed
@@ -1015,7 +1012,7 @@ class ParamsConfigMixin:
                 errors.append(str(exc))
         # The global operator callsign is NOT settable through a stack save — the one
         # authoritative mutation path is `set_operator_identity` (atomic restart-marker
-        # handling); routing it through here bypassed that (audit-found). So this save only ever
+        # handling); routing it through here bypassed that. So this save only ever
         # patches `[remotes]` in local.toml.
         # A remote submission is a PATCH for THIS stack's own source components only (enforced in
         # the service, not the web form): validated non-blank -> set, blank -> clear that
@@ -1086,7 +1083,7 @@ class ParamsConfigMixin:
         cfg_band = self._config_band(target, band)
         # Apply-mode hints (restart/build) come from the SAME change set the marker decision
         # computes inside the transaction — one identity-aware comparison instead of two that
-        # could disagree (review-found: an identity no-op said "Restart the stack to apply" while
+        # could disagree (an identity no-op said "Restart the stack to apply" while
         # the marker correctly decided nothing had changed). Filled in by `_render_marker`.
         modes: set = set()
         _live_seen: dict = {}
@@ -1096,13 +1093,13 @@ class ParamsConfigMixin:
         # that DIFFERS from the default is stored (even if empty — a genuine "unset" override).
         # Persisted-key form: a DIRECT component target, or a DUPLICATED stack-target name, is stored
         # COMPONENT-SCOPED (`__r__/__f__<comp>__<name>`); a UNIQUE stack-target name keeps its FLAT
-        # legacy key. Autostart (stack-only): "on" is an override; "" (off) is the default -> cleared.
+        # key. Autostart (stack-only): "on" is an override; "" (off) is the default -> cleared.
         dup_run, dup_file = self._dup_names(target)
 
         def _store_key(kind, c, p):
             dup = dup_run if kind == "r" else dup_file
             if is_stack_target and p.name not in dup:
-                return p.name if kind == "r" else f"file_{p.name}"          # unique -> flat legacy
+                return p.name if kind == "r" else f"file_{p.name}"          # unique -> flat
             return self._scoped_key(kind, c.id, p.name)                     # scoped
 
         to_set: dict = {}
@@ -1124,7 +1121,7 @@ class ParamsConfigMixin:
             # submitted callsign against the operator-substituted {callsign} default made
             # saving a local value IDENTICAL to the global silently un-save it — breaking
             # the documented migration (set the SSID per stack, then change the global to
-            # its base) whenever the legacy global equalled the value being localized.
+            # its base) whenever the global equalled the value being localized.
             ident = getattr(p, "validator", "") in self._IDENTITY_ENFORCE
             canon = "" if ident else self._param_default_canon(p, cfg_band, band)
             if str(v) == canon:
@@ -1134,7 +1131,7 @@ class ParamsConfigMixin:
         # `use_gps` is a STACK-LEVEL switch, exactly like autostart above: "does this box report
         # its position" is a property of the stack, not of the band it happens to be on. Stored
         # per band it silently reverted on a band change — and the band-less read then saw
-        # nothing at all, so the switch did nothing. (Live-found on the Zero: the CLI wrote
+        # nothing at all, so the switch did nothing. (the CLI wrote
         # `use_gps` into `meshtastic@868.toml` while every GPS decision read `meshtastic.toml`.)
         # Routed here, in the canonical bundle path, so the CLI, the console and the API all
         # agree — an intercept on any single surface only fixes that surface.
@@ -1223,7 +1220,7 @@ class ParamsConfigMixin:
         # override keys (keeping daemon-profile dp_*, other bands + unrelated manual scalars), then
         # drop the at-default keys. A raise here (unsupported manual value) rolls the transaction back.
         def _render_stack(pth, tgt=sid, b=cfg_band, setv=to_set, rmv=to_remove):
-            # AUTHORITATIVE RECHECK, inside the transaction (audit-found race: the caller's
+            # AUTHORITATIVE RECHECK, inside the transaction (the caller's
             # accept/refuse decision was taken before this lock, so a concurrent global-identity
             # clear could land in between and the submission was persisted and only THEN refused).
             # Raising here rolls the whole transaction back — nothing is persisted.
@@ -1231,7 +1228,7 @@ class ParamsConfigMixin:
                 # THE authoritative identity decision, re-taken INSIDE this transaction: a
                 # concurrent `set_operator_identity` may have cleared the global a blank was about
                 # to inherit, and refusing here rolls the whole submission back rather than
-                # persisting first and refusing after (audit-found).
+                # persisting first and refusing after.
                 self._invalidate_config()          # the COMMITTED global, never a cached one
                 if (_again := self.identity_refusal_for_values(target, band, values or {})):
                     raise ConfigError(_again.summary)
@@ -1266,7 +1263,7 @@ class ParamsConfigMixin:
         # Atomic with the config change: if the marker cannot be persisted the whole save
         # rolls back — a running stack can never hold changed restart-mode settings without
         # the warning.
-        # THE RESTART-MARKER DECISION IS TAKEN INSIDE THE TRANSACTION (audit-found race: it used
+        # THE RESTART-MARKER DECISION IS TAKEN INSIDE THE TRANSACTION (it used
         # to be taken during this pre-lock build, so a stack that went live while the save queued
         # for the exclusive lock committed a changed identity with NO warning, and an edit to
         # ANOTHER band's store marked a live instance whose own configuration had not changed).
@@ -1284,7 +1281,7 @@ class ParamsConfigMixin:
                 def _post_effective(kind, c, p, v) -> str:
                     """What the stack will ACTUALLY use once this value is stored. A cleared
                     identity does not become empty — a licensed one falls back to the global
-                    callsign (audit-found: comparing the pre-save EFFECTIVE value against the RAW
+                    callsign (comparing the pre-save EFFECTIVE value against the RAW
                     submitted blank marked an identity change where the running process still
                     matches the resulting configuration)."""
                     raw = str(v)
@@ -1296,11 +1293,10 @@ class ParamsConfigMixin:
 
                 def _pre_effective(kind, c, p) -> str:
                     """What the stack uses RIGHT NOW — resolved the same way as the post-save
-                    value, so the two sides of the comparison mean the same thing. Review-found:
+                    value, so the two sides of the comparison mean the same thing — otherwise
                     the stored side went through `{callsign}` substitution (the RAW global) while
                     the submitted side went through inheritance (the VALIDATED global), so with a
-                    legacy SSID-bearing or lowercase global — the state every existing installation
-                    upgrades from — a save that wrote nothing still flagged the stack
+                    SSID-bearing or lowercase global a save that wrote nothing still flagged the stack
                     restart-required and told the operator to restart."""
                     rec = id_recs.get(("run" if kind == "r" else "file", c.id, p.name))
                     stored = self._stored_param_value(
@@ -1381,7 +1377,7 @@ class ParamsConfigMixin:
         running, or waits and then reads the NEW global): reload fresh state, determine the
         RUNNING licensed stacks that inherit (judged on each stack's ACTUAL running band),
         then commit the `[operator]` patch AND every restart-required marker in ONE
-        all-or-recoverable transaction — no partial result (audit-found: the previous
+        all-or-recoverable transaction — no partial result (the previous
         snapshot-before-lock + best-effort markers were racy, band-blind and non-atomic).
         An explicit empty string clears the global; other `[operator]` keys are preserved."""
         from . import config as _config
@@ -1397,7 +1393,7 @@ class ParamsConfigMixin:
         keep_unsafe: list = []
         try:
             with _config.config_lock(self._paths):
-                # PENDING-JOURNAL RECOVERY FIRST (audit-found): an interrupted earlier
+                # PENDING-JOURNAL RECOVERY FIRST: an interrupted earlier
                 # transaction may have left local.toml partially written — reading/patching
                 # it before recovery would resurrect rolled-back data or drop restored keys.
                 # Everything below reads the RECOVERED state.
@@ -1408,10 +1404,10 @@ class ParamsConfigMixin:
                 self._invalidate_config()          # fresh, lock-consistent, recovered
                 old_call = str(self.config().operator.callsign or "").strip()
                 # Per-stack INHERITED value before the change, so the affected set reflects what
-                # each stack actually uses. Review-found: comparing the normalized new global
+                # each stack actually uses: comparing the normalized new global
                 # against the RAW stored one flagged every running licensed stack restart-required
-                # when a legacy or lowercase global was merely re-saved unchanged — the state an
-                # existing installation upgrades into, with no effective identity change at all.
+                # when an SSID-bearing or lowercase global is merely re-saved unchanged, with no
+                # effective identity change at all.
                 _before = {}
                 for _st in self.stacks():
                     for _rec in self._identity_fields(_st.id):
@@ -1424,7 +1420,7 @@ class ParamsConfigMixin:
                         # ACTIVE = main running, OR the GUI fallback is what runs here and
                         # its interactive marker is presented (Voice on Lite: the main is
                         # gui-skipped, the operator runs the TUI — its shared config still
-                        # carries the inherited callsign; audit-found miss).
+                        # carries the inherited callsign).
                         active, run_band = self.active_config_consumer(st.id)
                         if not active:
                             continue
@@ -1432,9 +1428,9 @@ class ParamsConfigMixin:
                         if not any(r["enforce"] == "licensed" and not r["explicit"]
                                    for r in rows):
                             continue           # nothing here inherits the global
-                        # ...and only when what it INHERITS actually changes. Re-saving a legacy
+                        # ...and only when what it INHERITS actually changes. Re-saving an SSID-bearing
                         # or lowercase global unchanged leaves every effective identity identical,
-                        # so there is nothing to restart for (review-found).
+                        # so there is nothing to restart for.
                         after = next((self.inheritable_global(r, new_call)[0] for r in rows
                                       if r["enforce"] == "licensed"), "")
                         if after != _before.get(st.id, ""):
@@ -1520,8 +1516,8 @@ class ParamsConfigMixin:
 
         Resolved from the MANIFEST (never hardcoded paths): the generated config, then the
         upstream template it is built from — the only two places a key could be living
-        before LHPC owned it, the second because pinning the identity used to mean
-        hand-editing that template.
+        before LHPC owned it, the second because an operator may have pinned the identity
+        by hand-editing that template.
         """
         hit = self._component_index().get(MESHCORE_COMPONENT)
         comp = hit[1] if hit else None
@@ -1676,7 +1672,7 @@ class ParamsConfigMixin:
             "{gps_alt}": plan.fixed_alt,
         }
 
-    # Position keys Sideband used to own per-stack, before `[gps]` became authoritative.
+    # Per-stack position keys that `[gps]` supersedes (reported when still saved on disk).
     _LEGACY_GPS_KEYS: ClassVar[tuple] = (
         "location_source", "gpsd_host", "gpsd_port", "nmea_device", "nmea_baud",
         "fixed_lat", "fixed_lon", "fixed_alt")
@@ -1684,10 +1680,10 @@ class ParamsConfigMixin:
     def legacy_gps_values(self) -> dict:
         """Stale per-stack position values still saved on disk -> {stack: [keys]}.
 
-        These no longer take effect: the params are `hidden` and filled from `[gps]`, so a
-        saved value cannot override the global source. But leaving them silently in place
-        would mislead anyone reading the config, so they are REPORTED — the audit's
-        "migrated, or ignored with a clear diagnostic, never silently overriding".
+        They take no effect: the params are `hidden` and filled from `[gps]`, so a saved
+        value cannot override the global source. Leaving them silently in place would
+        mislead anyone reading the config, so they are REPORTED (ignored with a clear
+        diagnostic, never silently overriding).
         """
         found = {}
         for sid in ("reticulum",):
@@ -1773,7 +1769,7 @@ class ParamsConfigMixin:
         derived from the OLD plan. Refusing is simpler and safer than re-planning a running
         stack, and it is what the operator would have to do by hand anyway.
 
-        DERIVED from the manifest (audit-found): this was the third hardcoded GPS stack list,
+        DERIVED from the manifest: this was the third hardcoded GPS stack list,
         and it drifted like the other two — graywolf was missing, so `lhpc gps --source ...`
         went through while a GPS-enabled graywolf ran, leaving its live process on the old
         source while the saved plan (and, with direct NMEA, the receiver claim) described the
@@ -1851,7 +1847,7 @@ class ParamsConfigMixin:
             if v["source"] == "fixed":
                 det.append("  fixed position configured")     # never echo coordinates
                 if "graywolf" in self._gps_stacks():
-                    # AUDIT-FOUND honesty gap: graywolf has no fixed GPS mode (its API takes
+                    # graywolf has no fixed GPS mode (its API takes
                     # serial/gpsd/none only), so `fixed` reaches it as GPS OFF while its
                     # use_gps switch reads on. Not a refusal — a fixed box would then never
                     # start graywolf with the default switch — but it must be SAID.
@@ -1924,15 +1920,14 @@ class ParamsConfigMixin:
 
         `use_gps` needs no special handling here: `save_config_bundle` routes it to the band-less
         file and refuses a change under a running stack, so every surface behaves identically.
-        (It once WAS handled here — which fixed nothing, because the CLI and the console both
-        call `save_config_bundle` directly.)"""
+        """
         if self.stack(target) is None:
             return self._unknown_stack(target)
         return self.save_config_bundle(target, values=values, band=band)
 
     def _apply_hints(self, target: str, modes: set, live: bool | None = None) -> list[str]:
         """Human guidance on how a saved config change takes effect."""
-        # THE same live-consumer predicate the restart-required marker uses (review-found: this
+        # THE same live-consumer predicate the restart-required marker uses (this
         # asked only `stack_running`, so a presented interactive command — Chat's, or Voice on
         # Lite — was told "applies on the next Run" while the dashboard raised restart-required
         # for the very command still carrying the old identity).
@@ -1958,13 +1953,13 @@ class ParamsConfigMixin:
 
         ONE predicate for every writer that must warn "the running thing no longer matches
         what is saved" — the global identity setter AND ordinary config/identity saves
-        (audit-found: they disagreed, so changing a local callsign while Voice ran as the
+        (they disagreed, so changing a local callsign while Voice ran as the
         Lite TUI fallback saved silently and left the presented app on the old identity).
         Running main -> its running band. Otherwise a stack whose GUI fallback is what runs
         HERE and whose interactive marker is presented -> that marker's band."""
         if fresh:
             # Authoritative recheck UNDER the transaction lock: drop any snapshot this same
-            # operation cached before it acquired the lock (audit-found: a stack that went live
+            # operation cached before it acquired the lock (a stack that went live
             # while the save queued for the exclusive lock was committed with no marker).
             self.build_snapshot(fresh=True)
         if self.stack_running(stack_id):
@@ -1973,7 +1968,7 @@ class ParamsConfigMixin:
         main = st.main_component if st is not None else None
         # An INTERACTIVE main whose command has been prepared and presented is a live consumer too:
         # the operator can still run it, and it carries the identity that was generated FOR it
-        # (audit-found: Chat fell through this gap — its presented command kept the old callsign
+        # (Chat fell through this gap — its presented command kept the old callsign
         # while the store said something else, with no warning). Voice's GUI fallback is the same
         # situation reached by another route.
         if st is not None and (getattr(main, "interactive", False)
@@ -1989,7 +1984,7 @@ class ParamsConfigMixin:
         it reads the marker that is committed RIGHT NOW and a concurrent writer's reason is merged
         rather than overwritten.
 
-        MERGE (audit-found: a blind replace destroyed a stronger build requirement, its reasons and
+        MERGE (a blind replace destroyed a stronger build requirement, its reasons and
         its band): build outranks restart, reasons are unioned without duplication, an existing
         CONCRETE band is retained.
 
@@ -2040,7 +2035,7 @@ class ParamsConfigMixin:
         if not isinstance(d, dict) or d.get("version") != 1 or d.get("stack") != stack_id:
             return _unsafe("restart-required marker fails validation — treat as restart "
                            "required; resolve the marker")
-        # FULL field schema (audit-found: a structurally-invalid-but-parseable marker was
+        # FULL field schema (a structurally-invalid-but-parseable marker was
         # trusted — an unknown mode silently downgraded to restart, a string params value
         # iterated character-by-character in the merge, an integer raised uncaught). ONE
         # schema, here: every consumer (display AND the global-change merge) reads through
@@ -2112,8 +2107,8 @@ class ParamsConfigMixin:
 
     def file_config_values(self, target: str, band: str = "") -> dict:
         """Stored file-config values (component-scoped `__f__<comp>__<name>`, else a UNIQUE flat
-        legacy `file_<name>`), falling back to the per-band default, then the FileParam default. An
-        ambiguous flat legacy value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
+        `file_<name>`), falling back to the per-band default, then the FileParam default. An
+        ambiguous flat value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
         stored = self._stack_config_cached(self._owner_stack_id(target), cfg_band)
@@ -2131,7 +2126,7 @@ class ParamsConfigMixin:
         op = self.config().operator
         return str(text).replace("{callsign}", op.callsign or "")
 
-    # Retired generic first-start identities: a saved value EQUAL to one of these is a
+    # Generic first-start identities: a saved value EQUAL to one of these is a
     # generated default that survived a form round-trip, not a deliberate identity — it must
     # not satisfy the deliberate-configuration requirement. (A user genuinely wanting one of
     # these names is indistinguishable from the default; the contract resolves that in favor
@@ -2140,9 +2135,8 @@ class ParamsConfigMixin:
                                      "NODENAME", "SHORTNAME", "YOURCALL")
 
     def _is_identity_placeholder(self, value: str) -> bool:
-        """REVIEW-FOUND: the membership test was case-SENSITIVE, so the retired generated default
-        `LHPi` was refused while `lhpi` sailed through and the node advertised the very placeholder
-        the rule exists to prevent. Node names are free text — only callsigns get upper-cased —
+        """Case-INSENSITIVE: `lhpi` is the same placeholder as `LHPi`, and a node must never
+        advertise the very placeholder the rule exists to prevent. Node names are free text — only callsigns get upper-cased —
         so the comparison has to fold case itself."""
         return value.strip().casefold() in {p.casefold() for p in self._IDENTITY_PLACEHOLDERS}
 
@@ -2263,7 +2257,7 @@ class ParamsConfigMixin:
         reinterpret. Web render, hidden confirm state, Save, Apply, identity persistence, ordinary
         and dependency params, plan, locks, stop and launch all read this ONE value.
 
-        Audit-found, twice: the panel prefilled identity from the RUNNING band while ordinary rows
+        Without it the panel prefilled identity from the RUNNING band while ordinary rows
         (frequency, SF, bandwidth, preamble, TX power) came from the RAW band — a bandless Web
         restart of a stack running on 868 could show the 868 callsign beside 433 radio values, save
         the 868 callsign into the 433 store, and launch the 868 operation with 433 radio
@@ -2272,7 +2266,7 @@ class ParamsConfigMixin:
         # genuinely operates per band, so flattening there would DISCARD an explicit `--band 433`.
         # Only the daemon keeps the raw hint: a FIXED-band client (chat/meshcom on 433,
         # meshcore on 868) also has no store, and honouring a raw band for it would ensure, lock
-        # and clear the daemon on a band the node cannot run on (review-found) — it flattens, as
+        # and clear the daemon on a band the node cannot run on — it flattens, as
         # it always did, and the fixed band its manifest declares is what actually runs.
         hint = self._launch_band_hint(target, band)
         cb = self._config_band(target, hint)
@@ -2291,14 +2285,14 @@ class ParamsConfigMixin:
         Start/Restart panel (Apply and Save), the launch, and the in-transaction recheck.
 
         A value is judged only if the bundle actually carries it. The manifest validator alone
-        accepts the retired generic defaults; and a blank means "inherit" ONLY for a LICENSED
+        accepts the generic defaults; and a blank means "inherit" ONLY for a LICENSED
         field with a global it can actually inherit — for an unlicensed node identity, which
         never inherits, or a licensed one with no usable global, a blank means MISSING, and
         storing it would delete the stack's only identity and refuse the very next launch."""
         bad: list[dict] = []
         for rec in self._identity_fields(target):
             # A bundle addresses a param bare (unique in its stack) or component-qualified; a
-            # DEPENDENCY bundle is ALWAYS qualified (review-found: seeking only the bare name
+            # DEPENDENCY bundle is ALWAYS qualified (seeking only the bare name
             # made this a silent no-op there).
             key = next((k for k in (self._identity_bundle_key(target, rec),
                                     ("" if rec["kind"] == "run" else "file_")
@@ -2328,11 +2322,11 @@ class ParamsConfigMixin:
     def _identity_config_hints(self, target: str, band: str = "") -> list[str]:
         """The copy-pasteable remedies for a start refused over missing/invalid identities:
         ONE `lhpc config <stack> <field> <value>` per problem field — a fresh Meshtastic
-        refusal prints BOTH node_name and node_short in the same attempt (audit-found:
-        first-problem-only forced two failed starts). Field names derive from the manifest/
+        refusal prints BOTH node_name and node_short in the same attempt (first-problem-only
+        would force two failed starts). Field names derive from the manifest/
         param model (`_param_key`), never a hand-kept map. For a licensed stack the optional
         global fallback rides along as a comment on the first line, never the lead."""
-        # BAND-AWARE (audit-found): the refusal that prints these is judged on the
+        # BAND-AWARE: the refusal that prints these is judged on the
         # running/launch band, so the remedy must target THAT band's store — a hint
         # without --band saved into the primary band and the same refusal repeated.
         rows = self.identity_resolution(target, band)
@@ -2341,7 +2335,7 @@ class ParamsConfigMixin:
             return [f"lhpc config {target}"]
         out = []
         for n, r in enumerate(bad):
-            # SHELL-SAFE replace-me templates (audit-found: <angle-bracket> placeholders
+            # SHELL-SAFE replace-me templates (<angle-bracket> placeholders
             # are shell redirection operators, and quoted ones reach validation literally).
             # Every placeholder is an UPPERCASE marked token the trailing comment names.
             example, what = {
@@ -2362,7 +2356,7 @@ class ParamsConfigMixin:
         """`(value, reason)`: the global operator callsign AS THIS FIELD WOULD INHERIT IT, or
         `("", why)` when there is no global or this stack's protocol cannot carry it. THE single
         accept-decision, shared by `identity_resolution` (what a stack effectively uses) and
-        `identity_refusal_for_values` (whether clearing a local callsign is safe) — audit-found:
+        `identity_refusal_for_values` (whether clearing a local callsign is safe) —
         the Web pre-gate refused a licensed clear while the service persisted it first, so the
         same submission had two different persistence semantics. The reason is returned rather
         than swallowed so the caller can word its remedy without recomputing the failure."""
@@ -2393,7 +2387,7 @@ class ParamsConfigMixin:
             stack's protocol cannot carry is a named problem, never silently used);
             else missing.
           * unlicensed: local only — the global operator callsign is NEVER consulted; a
-            retired generic default (LoRaHAM Pi/LHPi/pyMC/...) does not count as configured.
+            generic default (LoRaHAM Pi/LHPi/pyMC/...) does not count as configured.
         The local field is never populated by inheritance — it stays empty and keeps
         meaning "inherit"."""
         from . import validators
@@ -2413,19 +2407,19 @@ class ParamsConfigMixin:
                     row["problem"] = (f"a callsign is required to start '{target}' — set "
                                       f"'{rec['name']}' (or the global operator callsign)")
                 elif src == "global":
-                    # The GLOBAL is a BASE callsign only. A legacy stored value carrying an
+                    # The GLOBAL is a BASE callsign only. A stored value carrying an
                     # SSID/suffix (e.g. N0CALL-12) must NOT inherit — it would stamp the
                     # SAME SSID onto every licensed stack, the exact problem per-stack
                     # identities exist to solve. Reported with the correction, never
                     # silently used or rewritten (operator ruling). Every derived remedy is
-                    # VALIDATED before it is printed (audit-found: N0CALL/8-char legacy
-                    # values produced corrections that themselves failed validation).
+                    # VALIDATED before it is printed (an N0CALL or 8-char value
+                    # can produce a correction that itself fails validation).
                     inherited, why = self.inheritable_global(rec)
                     if inherited:
                         row["effective"], row["source"] = inherited, "global"
                     else:
                         remedies = []
-                        try:                       # can this stack carry the legacy value AS-IS?
+                        try:                       # can this stack carry the stored value AS-IS?
                             if validate:
                                 validate(cand)
                             remedies.append("keep per-stack SSIDs local ("
@@ -2434,7 +2428,7 @@ class ParamsConfigMixin:
                         except validators.ValidationError:
                             pass
                         # ONE base-correction rule, shared with the dashboard card. Never printed
-                        # unless the derived value itself validates (audit-found).
+                        # unless the derived value itself validates.
                         base = self.operator_callsign_correction()
                         remedies.append(
                             f"set the global to its base (lhpc config operator --callsign {base})"
@@ -2469,7 +2463,7 @@ class ParamsConfigMixin:
         callsign — the ONE launch-time overlay on the saved configuration, never persisted (the
         local field stays empty and keeps meaning "inherit"). Without it the argv/config-file
         build reads the empty local value and the station launches WITHOUT the identity the
-        refusal gate just approved (audit-found, reproduced live)."""
+        refusal gate just approved."""
         p: dict = {}
         fo: dict = {}
         for r in self.identity_resolution(target, band):
@@ -2522,7 +2516,7 @@ class ParamsConfigMixin:
             return "", idrec["problem"]
         if not value:
             return "", ""
-        # Only claim an override when there is actually a global to override (review-found).
+        # Only claim an override when there is actually a global to override.
         return "", ("overrides the global operator callsign"
                     if str(self.config().operator.callsign or "").strip() else "")
 
@@ -2636,8 +2630,8 @@ class ParamsConfigMixin:
                     except ConfigError as exc:
                         # A refused secrets file is a config-generation FAILURE, not an
                         # exception escaping to the caller: the start boundary catches
-                        # OSError/PathContainmentError only, so this used to surface as
-                        # a traceback (web 500) instead of a blocked, typed result.
+                        # OSError/PathContainmentError only, so it is caught HERE as a blocked,
+                        # typed result (never a traceback / web 500).
                         secret_error = str(exc)
                         break
                     val = (loaded.get(table) or {}).get(key)
@@ -2849,9 +2843,7 @@ class ParamsConfigMixin:
         `runtime_fs.atomic_write`: a full parent NO-FOLLOW walk from the runtime root (a
         symlink swapped in at ANY component, incl. `src`, is refused at the syscall), a
         UNIQUE `O_EXCL`+random-nonce temp, mode-set, atomic rename, and a parent fsync for
-        durability (AUDIT FS3 — the old hand-rolled temp reused a `pid`-named, non-`O_EXCL`
-        leaf that two waitress threads writing the same file could corrupt, and skipped the
-        parent fsync). Linked external sources fail the no-follow walk and are refused."""
+        durability . Linked external sources fail the no-follow walk and are refused."""
         from . import runtime_fs
         leaf_parts = [p for p in Path(rel_path).parts if p not in ("", ".")]
         if not leaf_parts or any(p in ("..", "/") for p in leaf_parts):
@@ -2869,23 +2861,42 @@ class ParamsConfigMixin:
         if self.stack(target) is None:
             return self._unknown_stack(target)
         from . import validators
+        from .gps import use_gps_default
         from .paths import PathContainmentError
         cfg_band = self._config_band(target, band)
         label = f"'{target}'" + (f" ({cfg_band})" if cfg_band else "")
         run_names = {p.name for p in self.run_params_for(target)}
+        # A band-switchable stack keeps `autostart_*` and `use_gps` in its BAND-LESS file, so a
+        # reset of one band owns that file too; a band-less stack has only the one.
+        files = [cfg_band, ""] if cfg_band else [""]
+        cleared: list = []
         try:
-            stored = load_stack_config(self._paths, target, cfg_band)
-            normal = [k for k in stored
-                      if k in run_names or k.startswith(("file_", "autostart_", "__r__", "__f__"))]
-            if normal:
+            for b in files:
+                stored = load_stack_config(self._paths, target, b)
+                normal = [k for k in stored
+                          if k in run_names or k.startswith(("file_", "autostart_", "__r__", "__f__"))]
+                if not normal:
+                    continue
+                # Resetting use_gps IS a GPS change: the same liveness gate as a Settings save —
+                # a running consumer or feed derived its claims and config from the current value.
+                if ("use_gps" in normal and str(stored["use_gps"]).strip().lower()
+                        != use_gps_default(self.stacks(), target)):
+                    blockers = self.gps_liveness_blockers([target], snap=self._gps_fresh_snapshot())
+                    if blockers:
+                        return ActionResult(False, f"Config reset blocked for {label}: cannot change "
+                                            f"use_gps while {', '.join(blockers)} "
+                                            f"{'is' if len(blockers) == 1 else 'are'} running "
+                                            f"(lhpc stack stop {target})")
                 # Clear ONLY the normal-owned keys under the config lock; dp_* + unrelated stay.
-                update_stack_config(self._paths, target, dict.fromkeys(normal, ""), cfg_band)
+                update_stack_config(self._paths, target, dict.fromkeys(normal, ""), b)
+                cleared += normal
+            if cleared:
                 self._invalidate_config()
         except (ConfigError, PathContainmentError, validators.ValidationError, OSError) as exc:
             return ActionResult(False, f"Config reset blocked for {label}: unsafe/malformed "
                                 f"config (refused, not modified): {exc}")
         return ActionResult(True,
-                            f"Config reset to defaults for {label}." if normal
+                            f"Config reset to defaults for {label}." if cleared
                             else f"{label} already at defaults.",
                             next_commands=[f"lhpc stack start {target}"])
 

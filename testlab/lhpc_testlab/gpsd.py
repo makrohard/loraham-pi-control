@@ -2,7 +2,7 @@
 the `auto` GPS source's /proc/net/tcp probe and the GPS bridge's `?WATCH` + raw-NMEA
 client find an honest peer. Scenario-polled (~1 s): while `gpsd` is off the listener is
 CLOSED (the port truly disappears), and it reopens on recovery. Run detached via the
-hidden CLI verb `_testlab-gpsd`.
+hidden CLI verb `_gpsd`.
 """
 from __future__ import annotations
 

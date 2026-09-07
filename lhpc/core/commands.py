@@ -133,8 +133,8 @@ def build_env(env_items, runtime: str, source: str, band: str = "") -> dict:
 
     FAIL-CLOSED: a missing/unreadable/empty `@file:` secret raises CommandError
     (which blocks the launch/build) — it never silently becomes an empty string.
-    `@file?:PATH` is the OPTIONAL form: an absent/empty file yields "" (matches the
-    legacy `$(cat … 2>/dev/null)` semantics for optional secrets like the MeshCom
+    `@file?:PATH` is the OPTIONAL form: an absent/empty file yields "" (the
+    `$(cat … 2>/dev/null)` semantics for optional secrets like the MeshCom
     HMAC); an UNREADABLE present file still fails closed."""
     env: dict[str, str] = {}
     for key, value in (env_items or ()):
@@ -403,7 +403,7 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
             graw = str((params or {}).get(guard, gp.default))
             graw = graw.replace("{callsign}", op.callsign or "").strip()
             if graw in [str(v) for v in sv]:
-                # REVIEW-FOUND: skipping is right for an OPTIONAL step, but a REQUIRED one that
+                # skipping is right for an OPTIONAL step, but a REQUIRED one that
                 # silently vanishes makes the launcher exit 0 and the run report "required
                 # post-start completed" without ever sending it — a false guarantee. Identity
                 # enforcement already refuses an empty/placeholder callsign before launch, so
@@ -476,7 +476,7 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                     d["intervals"] = [d["interval"]] * (d["repeat"] - 1)
                 if step.get("label") is not None:
                     d["label"] = _post_label(step["label"])
-                # ACKNOWLEDGEMENT-AWARE sending (live finding: 17 blind --setcall
+                # ACKNOWLEDGEMENT-AWARE sending (17 blind --setcall
                 # connects starved the MeshCom node's heap and killed its web UI):
                 #  * stop_on: read the reply after each send; a match STOPS the repeats
                 #    (one acknowledged send instead of the full blind window);
@@ -804,7 +804,7 @@ for s in STEPS:
                 acked = False
                 try:
                     if probing:
-                        # READINESS-GATED (live finding: 18 buffered callsign-push replays
+                        # READINESS-GATED (18 buffered callsign-push replays
                         # per start): the guest accepts connects long before its console
                         # is alive, and it serves ONE exchange per connection. Probe on
                         # its OWN connection; NO REPLY = still booting -> retry WITHOUT
@@ -864,7 +864,7 @@ _flush_results(True)
 
 def render_build_launcher(steps: list, runtime: str, source: str,
                           lock_paths: list | tuple = (), index_lock: str = "",
-                          txn_dir: str = "", result_name: str = "", attempt_id: str = "",
+                          result_name: str = "", attempt_id: str = "",
                           op: str = "", target: str = "", stack: str = "",
                           marker_path: str = "", marker_text: str = "") -> str:
     """A self-contained Python launcher that runs build/test steps sequentially with
@@ -872,11 +872,10 @@ def render_build_launcher(steps: list, runtime: str, source: str,
     its env and cwd, streaming output. Returns nonzero on the first failing step.
 
     Index-to-source handoff (no race): the launcher holds the source-transaction INDEX
-    lock (`index_lock`), verifies NO unresolved journal in `txn_dir`, acquires the
-    `lock_paths` source flock(s) for its WHOLE lifetime, and only THEN releases the index
-    lock. While the index lock is held no new journal can appear and the source lock is
-    already taken, so a concurrent update/uninstall cannot race the running job, and a
-    retained journal makes the job fail visibly in its log."""
+    lock (`index_lock`), acquires the `lock_paths` source flock(s) for its WHOLE lifetime,
+    and only THEN releases the index lock. While the index lock is held no new journal can
+    appear and the source lock is already taken, so a concurrent update/uninstall cannot
+    race the running job."""
     resolved = []
     for step in steps:
         # SECRETS-AT-REST: env is carried UNRESOLVED (the `@file:`/`@env:` tokens, not

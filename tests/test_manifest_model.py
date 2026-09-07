@@ -108,7 +108,7 @@ def test_meshtastic_is_rootless_multiband():
     m = comps["meshtastic"]
     assert m.bands == ("433", "868")            # band-switchable
     assert not m.units                          # no systemd — lhpc runs it directly
-    assert "meshtasticd -c" in m.run_cmd and "-d" in m.run_cmd   # rootless user process
+    assert m.run_argv[0].endswith("/meshtasticd") and "-c" in m.run_argv and "-d" in m.run_argv   # rootless
     keys = {r.key for r in m.resources}
     assert {"loraham.radio.433", "loraham.radio.868"} <= keys    # conflicts with daemon
     # per-band Lora pins come from band_defaults on the config-file params
@@ -270,8 +270,8 @@ def test_meshcore_cli_wrapped_for_slot_handoff():
 
     root = Path(__file__).parents[1]
     cli = _index(load_manifest())["meshcore-cli"]
-    assert "scripts/meshcli-run.sh" in cli.run_cmd
-    assert "state/meshcore-cli.lock" in cli.run_cmd
+    assert any(t.endswith("scripts/meshcli-run.sh") for t in cli.run_argv)
+    assert any(t.endswith("state/meshcore-cli.lock") for t in cli.run_argv)
 
     wrapper = root / "lhpc/data/scripts/meshcli-run.sh"
     body = wrapper.read_text()
@@ -426,3 +426,27 @@ def test_the_meshtastic_cli_is_an_on_demand_component_not_a_start_hint():
     assert list(cli.run_argv) == ["lhpc", "meshtastic", "--help"] and cli.process is None
     assert cli.tx_capable                                          # it transmits through the node
     assert not node.start_note                                     # the hint is retired
+
+
+def test_shorthand_with_shell_syntax_is_refused():
+    """`run`/`build`/`test` shorthand is for plain argv lines; shell syntax must be written as
+    the structured fields — there is no shell fallback, so it is refused at parse time."""
+    import pytest
+
+    from lhpc.core import manifest as _m
+    for key in ("run", "build", "test"):
+        with pytest.raises(_m.ManifestError, match=f"`{key}` shorthand uses shell syntax"):
+            _m._parse_component({"id": "x", key: "a && b"})
+    c = _m._parse_component({"id": "x", "run": "prog --flag", "build": "make all", "test": "pytest"})
+    assert c.run_argv == ("prog", "--flag") and c.build_steps == ({"argv": ["make", "all"]},)
+    assert c.test_argv == ("pytest",)
+
+
+def test_build_time_patches_are_recorded_on_the_source():
+    """A build step that applies an LHPC-shipped patch marks the checkout's SourceSpec, so a
+    patched tree is not mistaken for an operator-modified one."""
+    comps = _index(load_manifest())
+    assert comps["meshcore-node"].source.patches == ("{asset}/patches/openhop-core-companion-fixes.patch",)
+    assert comps["meshcore-webui"].source.patches == ("{asset}/patches/meshcore-webui-lhpc-guards.patch",)
+    assert comps["loraham-daemon"].source.patches == ()
+

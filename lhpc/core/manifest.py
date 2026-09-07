@@ -5,18 +5,14 @@ component. The loader parses the schema (per-band daemons, structured process
 identity, probeable endpoints, resource compatibility modes, source pins and
 runtime dependencies) into the `model` dataclasses.
 
-Configuration layering (see docs/architecture.md):
-  1. tracked defaults        -> lhpc/data/manifest.example.toml (shipped package data)
-  2. known-working compositions -> runtime profiles/known-working/ (operator-confirmed)
-  3. generated runtime state -> under the runtime root
-  4. user-local overrides    -> <runtime>/config/local.toml   (git-ignored)
-  5. secrets                 -> <runtime>/config/secrets.toml (git-ignored)
+Configuration layering: see docs/architecture.md, "Manifest and config layers".
 
 Uses the stdlib `tomllib` (Python 3.11+). Read-only: it never writes or fetches.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import tomllib
 from pathlib import Path
@@ -144,7 +140,7 @@ def load_manifest(path: Path | None = None) -> tuple[Stack, ...]:
     """Load and parse the manifest into Stack/Component objects (read-only). Also VALIDATES
     any present `[controller]` table (strict parser, result discarded) so an invalid
     controller declaration is rejected here — not silently ignored by dashboard, bootstrap,
-    auto-install, or normal stack paths. The `tuple[Stack, ...]` return contract is unchanged."""
+    auto-install, or normal stack paths. """
     stacks, _controller = _load_stacks_and_controller(path)
     return stacks
 
@@ -393,7 +389,7 @@ def _validate_graph(stacks: tuple[Stack, ...]) -> None:
             raise ManifestError(
                 f"components {prev[0]!r} and {cid!r} share source path "
                 f"{c.source.path!r} but declare different source specs "
-                "(pin/tag/branch/remote/strategy/artifact must be identical)")
+                "(pin/tag/branch/remote/artifact must be identical)")
 
     # PROXY PAGE IDS: one proxied web page per component with a client http/https endpoint; a
     # stack's first page keeps the stack id, further ones are `<stack_id>-<component_id>`
@@ -570,8 +566,7 @@ def parse_controller(data: dict, known_ids: set[str] | None = None) -> Controlle
 
 def load_controller(path: Path | None = None) -> ControllerSpec | None:
     """Load the manifest and return its `ControllerSpec` (or None). Validates the id does
-    not collide with any stack/component id. The `load_manifest` stack contract is
-    UNCHANGED — controller state travels ONLY through this separate accessor."""
+    not collide with any stack/component id. Controller state travels ONLY through this separate accessor."""
     _stacks, controller = _load_stacks_and_controller(path)
     return controller
 
@@ -603,17 +598,39 @@ def _tok(t: str) -> str:
 
 
 def _derive_structured(raw: dict) -> None:
-    """Fill structured run/build/test fields from the `run`/`build`/`test` command shorthand —
-    a current authoring form for plain shell-free commands — so every shipped component executes
-    shell-free. A command with shell syntax is written as explicit run_argv/build_steps in the
-    manifest instead (no shell fallback)."""
-    if not raw.get("run_argv") and _is_simple(raw.get("run", "")):
-        raw["run_argv"] = [_tok(t) for t in raw["run"].split()]
-        raw.setdefault("run_cwd", "{source}")
-    if not raw.get("build_steps") and _is_simple(raw.get("build", "")):
-        raw["build_steps"] = [{"argv": raw["build"].split()}]
-    if not raw.get("test_argv") and _is_simple(raw.get("test", "")):
-        raw["test_argv"] = raw["test"].split()
+    """Fill the structured run/build/test fields from the `run`/`build`/`test` shorthand — the
+    authoring form for a plain `prog arg arg` command. Shell syntax has no shorthand and no
+    shell fallback: it is written as explicit run_argv/build_steps/test_argv, and a shorthand
+    that needs a shell is refused at parse time."""
+    for key, field in (("run", "run_argv"), ("build", "build_steps"), ("test", "test_argv")):
+        cmd = raw.get(key, "")
+        if not cmd or raw.get(field):
+            continue
+        if not _is_simple(cmd):
+            raise ManifestError(f"component {raw.get('id', '?')!r}: `{key}` shorthand uses shell "
+                                f"syntax — write `{field}` explicitly")
+        if key == "run":
+            raw["run_argv"] = [_tok(t) for t in cmd.split()]
+            raw.setdefault("run_cwd", "{source}")
+        elif key == "build":
+            raw["build_steps"] = [{"argv": cmd.split()}]
+        else:
+            raw["test_argv"] = cmd.split()
+
+
+_PATCH_SCRIPT = "/openhop-apply-patch.sh"
+
+
+def _with_patches(source, build_steps):
+    """Record on the SourceSpec the LHPC-shipped patch files a build step applies to the
+    checkout (`openhop-apply-patch.sh <source> {asset}/patches/<x>.patch`), so status and the
+    update's overwrite gate can tell LHPC's own modifications from an operator's."""
+    if source is None:
+        return None
+    pats = tuple(str(t) for st in build_steps for argv in [st.get("argv", [])]
+                 if any(str(a).endswith(_PATCH_SCRIPT) for a in argv)
+                 for t in argv if str(t).startswith("{asset}/patches/"))
+    return dataclasses.replace(source, patches=pats) if pats else source
 
 
 def _parse_component(raw: dict) -> Component:
@@ -631,21 +648,16 @@ def _parse_component(raw: dict) -> Component:
         endpoints=tuple(_parse_endpoint(e) for e in raw.get("endpoint", [])),
         depends_on=tuple(raw.get("depends_on", [])),
         build_requires=tuple(raw.get("build_requires", [])),
-        source=_parse_source(raw.get("source")),
+        source=_with_patches(_parse_source(raw.get("source")), raw.get("build_steps", [])),
         log_paths=tuple(raw.get("log_paths", [])),
         start_order=raw.get("start_order"),
         note=raw.get("note", ""),
         start_note=raw.get("start_note", ""),
-        build_cmd=raw.get("build", ""),
-        run_cmd=raw.get("run", ""),
-        test_cmd=raw.get("test", ""),
-        pre_cmd=raw.get("pre", ""),
         build_root=raw.get("build_root", ""),
         release_repo=raw.get("release_repo", ""),
         ui_user=raw.get("ui_user", ""),
         ui_password_file=raw.get("ui_password_file", ""),
         ui_password_note=str(raw.get("ui_password_note", "") or ""),
-        post_start=raw.get("post_start", ""),
         run_argv=tuple(str(t) for t in raw.get("run_argv", [])),
         run_cwd=raw.get("run_cwd", ""),
         run_env=tuple((str(k), str(v)) for k, v in raw.get("run_env", {}).items()),
@@ -687,7 +699,9 @@ def _parse_component(raw: dict) -> Component:
 
 
 _PARAM_KEYS = frozenset((
-    "name", "kind", "choices", "choice_labels", "default", "flag", "label",
+    "name", "kind", "choices", "default", "flag", "label",
+    "choice_labels",   # accepted and ignored: the config-default migration parses the previous
+                       # release's manifest (service_params), which carries it
     "min", "max", "advanced", "arg", "apply_mode", "band_defaults",
     "validator", "group",
 ))
@@ -696,7 +710,7 @@ _PARAM_KEYS = frozenset((
 def _parse_param(p: dict, cid: str) -> RunParam:
     # FAIL CLOSED on stray keys: a bare key placed AFTER a [[…param]] table binds to that
     # table in TOML, so a misplaced component scalar (note, test, …) would otherwise be
-    # silently swallowed here — exactly the trap that lost a component note once.
+    # silently swallowed here.
     stray = set(p) - _PARAM_KEYS
     if stray:
         raise ManifestError(
@@ -706,8 +720,6 @@ def _parse_param(p: dict, cid: str) -> RunParam:
     return RunParam(
         name=p["name"], kind=p.get("kind", "enum"),
         choices=tuple(str(c) for c in p.get("choices", [])),
-        choice_labels=tuple((str(pair[0]), str(pair[1]))
-                            for pair in p.get("choice_labels", []) if len(pair) == 2),
         default=str(p.get("default", "")),
         flag=p.get("flag", ""), label=p.get("label", ""),
         min=p.get("min"), max=p.get("max"),
@@ -725,7 +737,6 @@ def _parse_resource(raw: dict) -> ResourceClaim:
         key=raw["key"],
         kind=ResourceKind(raw["kind"]),
         mode=ResourceMode(raw.get("mode", "exclusive")),
-        group=raw.get("group", ""),
         requirement=raw.get("requirement", ""),
         note=raw.get("note", ""),
         advisory=bool(raw.get("advisory", False)),
@@ -771,8 +782,7 @@ _DENY_PATH_RE = re.compile(r"\A/[A-Za-z0-9\-._~/]*\Z")
 
 
 def _parse_proxy_deny_paths(raw) -> tuple:
-    """Exact request paths a web-UI proxy must refuse. Each must be an absolute path that maps
-    to a literal nginx `location = <path>` — only `[A-Za-z0-9-._~/]`, leading '/'."""
+    """Exact request paths a web-UI proxy must refuse. Each must be an absolute path, rendered as a spelling-tolerant nginx `location ~` block (`webserver.deny_location_regex`, 404) — only `[A-Za-z0-9-._~/]`, leading '/'."""
     if raw is None:
         return ()
     if not isinstance(raw, list) or not all(isinstance(x, str) for x in raw):

@@ -13,7 +13,7 @@ sockets its clients use. It never transmits on its own.
 | State | `<runtime>/state/loraham` (mode 0700, `LORAHAM_RUNTIME_DIR`) — the lock files, including `spi0.lock` |
 | Hardware | `/dev/spidev0.0` + GPIO (`/dev/gpiochip0`); the `--hw` preset comes from `lhpc hardware` |
 | Resources | `spi.bus.0` cooperative · `loraham.radio.433` / `.868` provider · `loraham.daemon-socket.433` / `.868` provider |
-| Install channel | **binary** by default (`lhpc install daemon`: a sha256-verified prebuilt that replaces the daemon + RadioLib builds); `--source pinned\|dev\|stable` runs `loraham_daemon/build.sh` instead (needs `cmake`, `liblgpio-dev`, `build-essential`). Policy: [provenance](../provenance.md); operator consequences: [operations](../operations.md) |
+| Install channel | **binary** by default (`lhpc install daemon`: a sha256-verified prebuilt that replaces the daemon + RadioLib builds); `--source pinned\|dev\|stable` clones the sources and `lhpc build daemon` runs `loraham_daemon/build.sh` (needs `cmake`, `liblgpio-dev`, `build-essential`). Policy: [provenance](../provenance.md); operator consequences: [operations](../operations.md) |
 
 ## Contents
 
@@ -42,8 +42,7 @@ daemon refuses to start until one is chosen; the catalog is in [cli](../cli.md).
 A client stack declares the TX mode it needs (`requires_daemon_tx`: MANAGED for kiss, graywolf,
 chat, meshcom and meshcore; DIRECT for voice), and lhpc applies it live when that stack starts.
 Live changes without a restart: `lhpc daemon <band> --set TXMODE=DIRECT` — a CONF `SET` followed
-by a `GET STATUS` read-back; only whitelisted keys are accepted (TXMODE, TXQUEUE, CAD*, the radio
-params). `lhpc daemon <band> --feed` shows recent RX/TX activity.
+by a `GET STATUS` read-back; only whitelisted keys are accepted (TXMODE, TXQUEUE, TXRESULT, CAD*, GETRSSI, the radio params). `lhpc daemon <band> --feed` shows recent RX/TX activity.
 
 ## Radio parameters
 
@@ -76,7 +75,7 @@ defaults), or the CLI — `<stack>` may be `daemon` itself:
 
 ```
 lhpc config <stack> --band <433|868> --daemon-param KEY=VALUE [--daemon-param ...]   # persist
-lhpc config <stack> --band <433|868> --apply-daemon                                  # push to the running daemon
+lhpc config <stack> --band <433|868> --apply-daemon                                  # push live (the stack must be running)
 lhpc config <stack> --band <433|868> --reset-daemon
 ```
 

@@ -30,9 +30,9 @@ jobs:
       - name: Build the lab image from THIS commit's Dockerfile
         # Build (never pull) so the image deps always match the checkout — a stale
         # published `latest` (e.g. racing the image-publish workflow) would miss deps a
-        # new commit added and fail spuriously. INCLUDE_MESHCOM=0 keeps it fast; the
-        # meshcom leg then skips (its own documented CI limitation — the QEMU-baked
-        # image is exercised in Codespaces (INCLUDE_MESHCOM=1 there).
+        # new commit added and fail spuriously. The image is built with no build arguments;
+        # the heavy acceptance lane below boots the binary meshcom and meshtastic legs on
+        # this native aarch64 runner.
         run: |
           IMG=lhpc-testlab:ci
           docker build -t "$IMG" -f .devcontainer/Dockerfile .devcontainer

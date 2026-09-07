@@ -169,7 +169,7 @@ def _runner_path() -> str:
     parts = base.split(os.pathsep)
     # Guarantee the standard system dirs are present. A non-login ssh env, or a systemd unit without an
     # explicit PATH, can omit /usr/sbin — where ldconfig/iw and friends live — which then breaks a
-    # stack's run/build script that calls one of them (live finding: meshcom's run.sh probes
+    # stack's run/build script that calls one of them (meshcom's run.sh probes
     # `ldconfig -p` for libslirp and falsely reported it MISSING because ldconfig was off-PATH).
     # Appended (not prepended), so an inherited tool still wins by order.
     for d in ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"):

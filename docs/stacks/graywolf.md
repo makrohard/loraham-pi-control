@@ -1,6 +1,6 @@
 # Stack: Graywolf APRS
 
-[Graywolf](https://github.com/chrissnell/graywolf) (Chris Snell, NW5W; GPL-2.0-or-later) is the
+[Graywolf](https://github.com/chrissnell/graywolf) (Chris Snell, NW5W; GPL-2.0) is the
 box's APRS station — AX.25 decode, digipeater, iGate, SQLite packet log and a web UI — on 433
 (default) or 868 MHz. It speaks only KISS over TCP: the [KISS TNC](kiss.md) owns the band and the
 daemon sockets, and the daemon owns the transmitter.
@@ -20,7 +20,7 @@ APRS-IS <-> graywolf <-> KISS/TCP 8001 <-> loraham-kiss-tnc <-> framed DATA <-> 
 | Password file | `<runtime>/state/graywolf/graywolf-admin.txt` (0600), user `admin` |
 | Resources | `tcp.port.8080` exclusive · `tcp.port.8001` consumer |
 | Depends on | `loraham-kiss-tnc` + `loraham-daemon`, `requires_daemon_tx = MANAGED` |
-| Install channel | the release fetch above (the stack's Install tab and `lhpc auto-install` do the same). `lhpc clean graywolf --purge` removes `build/tools/graywolf`. *Check upstream* compares the latest `chrissnell/graywolf` release; an opted-in newer version is verified against that release's own `checksums.txt` (`--from-upstream`). A version bump = the version in the manifest build step + a new sha256 in the fetch script's table |
+| Install channel | the release fetch above (the stack's Install tab and `lhpc auto-install` do the same). `lhpc clean graywolf --purge` removes `build/tools/graywolf`. *Check upstream* compares the latest `chrissnell/graywolf` release; an opted-in newer version is verified against that release's own `checksums.txt` (`--from-upstream`). A version bump = the version in the manifest build step and its `build_marker` name + a new sha256 in the fetch script's table |
 
 ## Contents
 
@@ -70,6 +70,7 @@ directions — a global source turned off, or `use_gps = off`, actively pushes `
 | `lhpc gps --source` | pushed to graywolf |
 |---|---|
 | `gpsd` (local or remote) | `source=gpsd`, `gpsd_host`, `gpsd_port` |
+| `auto` | as `gpsd` on `127.0.0.1:2947` while one listens, else `source=none` |
 | `nmea` | `source=serial`, `serial_port`, `baud_rate` |
 | `fixed` | `source=none` — graywolf's GPS has no fixed mode; a fixed position belongs to its beacons, which are yours to set |
 | `off`, or `use_gps = off` | `source=none` |

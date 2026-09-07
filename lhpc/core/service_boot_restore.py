@@ -29,8 +29,7 @@ from .service_base import ActionResult, AdmissionRefused
 
 class BootRestoreOpsMixin:
     DAEMON_STACK_ID = "daemon"
-    # ONE string, three uses (written at classification, matched by both prune paths) — the
-    # round-3 review found the match duplicated inline, one edit away from a silent split.
+        # ONE string: written at classification, matched only in _prune_intent_skips.
     INTENT_SKIP_REASON = ("operator stop intent stands — stopped after the recorded launch, "
                           "not restored")
 
@@ -98,7 +97,7 @@ class BootRestoreOpsMixin:
 
     # ---- operator stop intent -------------------------------------------------------------
     #
-    # LIVE-FOUND (voice resurrecting on every reboot): an operator stop whose cessation could
+    # An operator stop whose cessation could
     # not be verified RETAINS the ownership records — correct for the running system (never
     # assume a process died), but after a reboot those leftovers are indistinguishable from
     # "was running at shutdown", so boot-restore resurrected a stack the operator had
@@ -176,10 +175,8 @@ class BootRestoreOpsMixin:
                 launched_at=float(rec.get("launched_at", 0)),
                 start_scope=rec.get("start_scope", ""),
                 requested_target=rec.get("requested_target", "")))
-        # OPERATOR STOP INTENT beats leftover evidence: an unverified stop retains ownership
-        # records (correct for the live system), which after a reboot read exactly like
-        # "was running at shutdown" — restoring them resurrects a stack the operator
-        # explicitly stopped, and each restored run re-seeds the evidence forever. The
+        # OPERATOR STOP INTENT beats leftover evidence (see the section note above). The skipped
+        # records are pruned by the CALLER; the intent is cleared only by an applied operator start. The
         # skipped records are pruned by the caller (they are dead prior-boot leftovers), and
         # the standing intent is cleared only by an applied operator start.
         intents = self._stop_intent_stacks()
@@ -188,8 +185,7 @@ class BootRestoreOpsMixin:
             for ev in evidence:
                 if ev.stack in intents:
                     # NOT pruned here: like every other skip reason, the CALLER prunes —
-                    # after the admission gates and with the journal in place (REVIEW-FOUND:
-                    # deleting inside classification destroyed evidence even when the run was
+                    # after the admission gates and with the journal in place (deleting inside classification destroyed evidence even when the run was
                     # subsequently disabled, outside the journalled prune pattern).
                     skipped.append({"stack": ev.stack,
                                     "reason": self.INTENT_SKIP_REASON,
@@ -323,7 +319,7 @@ class BootRestoreOpsMixin:
 
         metas = self._boot_stack_metas()
         markers = {sid: self._boot_marker_view(sid) for sid in
-                   {e.stack for e in evidence} | set()}
+                   {e.stack for e in evidence}}
         plan = boot_restore.derive_plan(evidence, metas, markers, self.DAEMON_STACK_ID)
         plan.skipped.extend(skipped)
 
@@ -392,7 +388,7 @@ class BootRestoreOpsMixin:
 
     def _prune_intent_skips(self, journal, write: bool = True) -> None:
         """Prune intent-skipped leftovers and persist the results — AFTER the journal is
-        durable (REVIEW-FOUND: pruning first left destruction unrecorded on a crash or an
+        durable (pruning first left destruction unrecorded on a crash or an
         unwritable journal; the disabled path documents the same journal-first order). They
         are dead prior-boot records of a stack the operator stopped; leaving them would
         re-classify them on every boot."""
@@ -421,7 +417,7 @@ class BootRestoreOpsMixin:
         journal = boot_restore.new_journal(boot_id=cur_boot, pid=os.getpid(),
                                            process_start_time=self._own_start_time(),
                                            items=items)
-        # REVIEW-FOUND: intent-skipped records must be retired here too — every OTHER
+        # intent-skipped records must be retired here too — every OTHER
         # foreign record is, and "a later re-enable must not resurrect stacks from an older
         # boot" applies doubly to a stack the operator explicitly stopped.
         journal["skipped"] = list(skipped)

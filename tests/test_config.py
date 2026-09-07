@@ -23,7 +23,7 @@ def _paths(tmp_path: Path) -> Paths:
 
 def test_defaults_loaded(tmp_path):
     cfg = load_config(_paths(tmp_path))
-    assert cfg.get("web", "port") == 8770
+    assert cfg.get("web", "update_check_hours") == 12
     assert cfg.get("install", "adopt_search_root") == ""
 
 
@@ -36,12 +36,12 @@ def test_operator_absent_by_default(tmp_path):
 def test_local_overrides_merge(tmp_path):
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "local.toml").write_text(
-        '[operator]\ncallsign = "OE1XYZ"\n[web]\nport = 9999\n'
+        '[operator]\ncallsign = "OE1XYZ"\n[web]\nupdate_check_hours = 24\n'
     )
     cfg = load_config(_paths(tmp_path))
     assert cfg.operator.callsign == "OE1XYZ"
     assert cfg.operator.configured
-    assert cfg.get("web", "port") == 9999          # override wins
+    assert cfg.get("web", "update_check_hours") == 24   # override wins
     assert cfg.get("install", "adopt_search_root") == ""     # default preserved
 
 
@@ -81,12 +81,12 @@ def test_save_operator_preserves_unrelated_keys(tmp_path):
     paths = _paths(tmp_path)
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "local.toml").write_text(
-        '[operator]\ncallsign = "OLD"\nnote = "keep"\n[web]\nport = 8770\n')
+        '[operator]\ncallsign = "OLD"\nnote = "keep"\n[web]\nupdate_check_hours = 12\n')
     save_operator_config(paths, "XX0XXB")
     data = tomllib.loads((tmp_path / "config" / "local.toml").read_text())
     assert data["operator"]["callsign"] == "XX0XXB"
     assert data["operator"]["note"] == "keep"          # unrelated [operator] key preserved
-    assert data["web"]["port"] == 8770                 # unrelated table preserved
+    assert data["web"]["update_check_hours"] == 12     # unrelated table preserved
 
 
 def test_config_view_splits_basic_advanced_and_operator(tmp_path):
@@ -857,7 +857,7 @@ def test_component_remote_set_and_clear_preserve_others(tmp_path):
 
 
 def test_audit_config_lock_is_bounded(tmp_path):
-    # AUDIT CC1: a held exclusive config lock must make a second acquire fail fast with
+    # A held exclusive config lock must make a second acquire fail fast with
     # ConfigLockBusy, not block forever (which would wedge the fixed web thread pool).
     import threading, time
     from lhpc.core import config as cfg
@@ -882,7 +882,7 @@ def test_audit_config_lock_is_bounded(tmp_path):
 
 
 def test_audit_deep_toml_is_diagnostic_not_crash(tmp_path):
-    # AUDIT IN2: pathologically deep inline-table nesting -> ConfigError, never RecursionError.
+    # Pathologically deep inline-table nesting -> ConfigError, never RecursionError.
     from lhpc.core import config as cfg
     from lhpc.core.paths import Paths
     (tmp_path / "config").mkdir()
@@ -1189,6 +1189,42 @@ def test_known_working_record_is_contained(tmp_path):
     assert outside.read_text() == "orig"
 
 
+def test_reset_of_one_band_also_clears_the_band_less_keys(tmp_path):
+    # autostart_* and use_gps live in the BAND-LESS file of a band-switchable stack; a reset of
+    # band 433 used to load only kiss@433.toml and leave them set.
+    from lhpc.core.services import ControllerService
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core import config as cfgmod
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    for band, text in (("433", 'rx_only = "on"\n'), ("", 'autostart_loraham-kiss-serial = "on"\n')):
+        p = cfgmod._stack_config_path(svc._paths, "kiss", band)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+    assert svc.reset_config("kiss", band="433").ok
+    assert "rx_only" not in cfgmod.load_stack_config(svc._paths, "kiss", "433")
+    assert "autostart_loraham-kiss-serial" not in cfgmod.load_stack_config(svc._paths, "kiss", "")
+
+
+def test_reset_config_gates_use_gps_on_running_consumers(tmp_path, monkeypatch):
+    # Clearing use_gps is a GPS change and takes the same liveness gate as a Settings save.
+    from lhpc.core.services import ControllerService
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core import config as cfgmod
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    p = cfgmod._stack_config_path(svc._paths, "reticulum", "")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('use_gps = "off"\n')                   # differs from the default (on)
+    monkeypatch.setattr(ControllerService, "gps_liveness_blockers",
+                        lambda self, ids, snap=None, require_enabled=False: ["reticulum-node"])
+    r = svc.reset_config("reticulum")
+    assert not r.ok and "use_gps" in r.summary and "reticulum-node" in r.summary
+    assert cfgmod.load_stack_config(svc._paths, "reticulum", "")["use_gps"] == "off"   # untouched
+    monkeypatch.setattr(ControllerService, "gps_liveness_blockers",
+                        lambda self, ids, snap=None, require_enabled=False: [])
+    assert svc.reset_config("reticulum").ok
+    assert "use_gps" not in cfgmod.load_stack_config(svc._paths, "reticulum", "")
+
+
 def test_reset_config_preserves_daemon_profile_and_unrelated(tmp_path):
     # reset_config owns ONLY normal Config-page keys (run/file/autostart). Daemon-profile dp_*
     # overrides and unrelated manual scalars are PRESERVED (removed via the locked safe merge).
@@ -1386,3 +1422,15 @@ def test_reset_config_normal_then_idempotent(tmp_path):
     assert r.ok and "reset to defaults" in r.summary
     r2 = svc.reset_config("daemon")
     assert r2.ok and "already at defaults" in r2.summary
+
+
+def test_non_string_radio_hardware_is_a_diagnostic_not_a_crash(tmp_path):
+    from lhpc.core.config import HW_DEFAULT, load_config
+    from lhpc.core.paths import Paths
+    (tmp_path / "config").mkdir()
+    for bad in ('["a", "b"]', "{ x = 1 }", "7"):
+        (tmp_path / "config" / "local.toml").write_text(f"[radio]\nhardware = {bad}\n")
+        cfg = load_config(Paths(runtime_root=tmp_path))
+        assert cfg.radio.hardware == HW_DEFAULT
+        assert any("ignored invalid radio.hardware" in d for d in cfg.diagnostics), bad
+

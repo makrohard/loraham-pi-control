@@ -62,7 +62,7 @@ auto-install-processed — every generic verb aimed at it refuses centrally and 
 version / update / identity state.
 
 **The identity policy.** The runtime root and the controller checkout must be **owned by the
-service user** with **no group/other write** (mode `0700`). Before any self-update apply, LHPC
+service user** with **no group/other write bit** (`lhpc bootstrap` hardens them to `0700`). Before any self-update apply, LHPC
 verifies the fixed layout — no symlink anywhere in the `runtime-root → src → checkout` chain,
 correct ownership/mode, the checkout realpath equal to both the discovered git repo and the
 imported package, on the expected branch, attached, with the approved canonical `origin` — and
@@ -86,14 +86,10 @@ detects and refuses an unsafe layout, it does not claim same-account race-proofn
   `lhpc self-update --repair-integration` from a shell — it restores the exact canonical set on
   an existing or `--no-service` deployment (the console's *Repair & update* does the same in one
   click while its unit still has bus access).
-- **Manual path.** With the console up its shared lock blocks an in-process apply:
-  `systemctl --user stop lhpc-web`, then `lhpc self-update --apply`, then start it again.
+- **Manual path.** `lhpc self-update --apply` from an operator shell (refused inside a managed unit): when the console is running it stops `lhpc-web` itself (the console's shared lock would otherwise block the apply), applies, syncs the venv, then starts the console again.
 - **Dirty checkout** blocks apply unless you choose `--overwrite`.
 - **Venv sync** runs automatically after a real advance; if it fails the update is reported
-  failed (never half-applied). On the manual path, when it reports `deps_changed`, run:
-  ```bash
-  ~/loraham-pi-control/venv/lhpc/bin/python -m pip install -e ~/loraham-pi-control/src/loraham-pi-control
-  ```
+  failed (never half-applied). - **Venv sync** runs automatically after a real advance on both paths; if it fails the update is reported failed (never half-applied) and the result names the `pip install -e` command to run by hand.
 - **Applying always re-checks live.** Every apply performs a fresh identity/provenance check
   immediately before mutating the checkout — it never trusts the cached verdict — and runs with
   the web service stopped (controller-runtime lock); the one-click updater unit handles that
@@ -118,7 +114,7 @@ detects and refuses an unsafe layout, it does not claim same-account race-proofn
 
 `install.sh` writes all **seven canonical user units** — `lhpc-web.service`, the self-update
 helper + watcher (`lhpc-selfupdate.service`/`.path`), the `lhpc-nginx.service` TLS front-end
-(enabled, started once `lhpc webserver apply` has generated its config) with its restart helper +
+(enabled, started once `lhpc webserver start-service` has generated its config) with its restart helper +
 watcher (`lhpc-nginx-restart.service`/`.path`), and the `lhpc-boot-restore.service` oneshot
 (enabled, never started at install — it runs at the next boot) — never overwriting a foreign one;
 runs `daemon-reload`, enables them, and turns on lingering so the console autostarts at boot.
@@ -138,7 +134,7 @@ systemctl --user enable --now lhpc-web.service
 loginctl enable-linger "$USER"     # keep running after logout
 ```
 
-- **Logs:** `journalctl --user -u lhpc-web -f`
+- **Logs:** `tail -f ~/loraham-pi-control/logs/lhpc-web.log` (the unit appends stdout/stderr there; `journalctl --user -u lhpc-web` shows only systemd's own messages)
 - **Stop:** `systemctl --user stop lhpc-web`
 - **Disable:** `systemctl --user disable --now lhpc-web`
 - **Recovery** (after the bounded restart limit trips): `systemctl --user reset-failed lhpc-web && systemctl --user restart lhpc-web`
@@ -148,7 +144,7 @@ loginctl enable-linger "$USER"     # keep running after logout
 - **Bounded restart** (`Restart=on-failure`, `RestartSec=3`, `StartLimitBurst=5` /
   `StartLimitIntervalSec=60`): auto-recovers from a crash but stops flapping instead of
   looping forever.
-- **journald logging**: all stdout/stderr goes to the journal (`SyslogIdentifier=lhpc-web`).
+- **File logging** (`StandardOutput=append:`, `StandardError=append:`): stdout/stderr are appended to `logs/lhpc-web.log` under the runtime root; the journal carries only systemd's own unit messages (`SyslogIdentifier=lhpc-web`).
 - **Least-privilege hardening**: `NoNewPrivileges`, `ProtectSystem=strict`,
   `ProtectHome=read-only`, `RestrictNamespaces`, `ProtectKernel*`, `ProtectControlGroups`,
   `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_BLUETOOTH`. The **only**

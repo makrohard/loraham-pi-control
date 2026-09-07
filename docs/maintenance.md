@@ -15,7 +15,7 @@ work lives in [backlog.md](backlog.md); the per-release procedure in [test-matri
 
 ## What CI enforces
 
-Every push, Python 3.11/3.12/3.13, GitHub runners (`.github/workflows/ci.yml`):
+On pushes to `main`, on pull requests and on manual dispatch — Python 3.11/3.12/3.13, GitHub runners (`.github/workflows/ci.yml`):
 
 - `compileall lhpc` + `bash -n install.sh uninstall.sh bootstrap-deps.sh`
 - `ruff check lhpc` (the frozen ruleset) and `ruff check tests --select F,E9`
@@ -84,14 +84,14 @@ built from source, so a toolchain change upstream breaks the recipe silently. Bu
 - `pip-audit` red / new ruff or bandit finding → fix or justify-in-config (don't pin).
 - Runtime deps are floors, not pins (`flask>=3,<4`, `werkzeug>=3.1`, `waitress>=3,<4`,
   `cryptography>=42`) — watch a breaking major (Werkzeug Host parsing, Flask 4).
-- Python matrix 3.11–3.13 (`requires-python >= 3.11`): add 3.14 when it ships, drop 3.11 when
+- Python matrix 3.11–3.13 (`requires-python >= 3.11`): add 3.14 once the deployment image ships it, drop 3.11 when
   no longer targeted.
 - OS/kernel drift (Raspberry Pi OS Trixie): meshtasticd + qemu-from-source are the most fragile
   to toolchain bumps; a kernel change once flipped the `in0_input` voltage-file path.
 - **PKI has no auto-renewal** — server/client certs default to 825 days; rotate before expiry
   on long-lived deployments ([webserver.md](webserver.md)).
 - **Adding a third-party apt package** — audit before it reaches hardware:
-  1. `sudo bash bootstrap-deps.sh --dry-run` on a fresh image: it simulates the exact default
+  1. `bash bootstrap-deps.sh --dry-run` on a fresh image (no root needed): it simulates the exact default
      apt transaction (`apt-get install -s --no-install-recommends`), changes nothing, and exits
      nonzero if the set cannot be resolved or would pull anything graphical/audio.
   2. Recommends are how a cascade arrives (`git` → `openssh-client` → `xauth` → `libX11`), so
@@ -113,16 +113,13 @@ built from source, so a toolchain change upstream breaks the recipe silently. Bu
 
 ## Running on a Pi
 
-**The test suite.** Always give pytest a dedicated basetemp on the SD card and remove exactly
-that path afterwards: `--basetemp="$HOME/pt-lhpc"` then `rm -rf -- "$HOME/pt-lhpc"`. The default
-basetemp lands on the `/tmp` tmpfs (208 MB on a Zero 2W) and the full suite fills it (ENOSPC);
-leaked basetemps accumulate under `/var/tmp` — list them first
-(`find /var/tmp -maxdepth 1 -uid "$(id -u)" -type d -name 'lpt-*'`), review, then remove
-explicitly, never a broad glob. Run under `setsid` or `needs_session` tests silently SKIP (you
+**The test suite.** Give pytest a dedicated basetemp and remove exactly that path afterwards
+([tests/README.md](../tests/README.md)): `--basetemp="$HOME/pt-lhpc"` then
+`rm -rf -- "$HOME/pt-lhpc"` — the default basetemp lands on the `/tmp` tmpfs (208 MB on a
+Zero 2W) and the full suite fills it (ENOSPC). Run under `setsid` or `needs_session` tests silently SKIP (you
 lose boot-restore/ownership coverage); `zstd` must be installed or `requires_zstd` tests skip;
 don't run as root or `needs_nonroot` tests skip. Serialize heavy jobs — one full-suite/coverage
-run at a time (full `--cov` ~13 min, fast lane ~8 min on a Pi 5). **Stop any real daemon before a
-full local run** (the hermeticity item in [backlog.md](backlog.md)).
+run at a time (full `--cov` ~13 min, fast lane ~8 min on a Pi 5). 
 
 **Memory on a 512 MB Zero 2W.** The three heavy stacks install from the binary channel by
 default; everything below is about source builds and runtime load.

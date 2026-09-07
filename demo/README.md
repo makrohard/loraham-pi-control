@@ -4,8 +4,7 @@ A fully static, **interactive** demo of the real LoRaHAM Pi Control console — 
 Flask app compiled to WebAssembly with [Pyodide](https://pyodide.org) and driven against a
 pure in-browser **simulation** backend. No server, no Raspberry Pi, no real radios.
 
-**Live:** `https://makrohard.github.io/loraham-pi-control/` *(after Pages is enabled — see
-Setup below).*
+**Live:** `https://makrohard.github.io/loraham-pi-control/` 
 
 ## Contents
 
@@ -66,13 +65,7 @@ DEMO_URL=http://127.0.0.1:8099/index.html node tests/browser.mjs
 ## Deploy
 
 `.github/workflows/pages.yml` assembles the bundle, runs both gates, and deploys to Pages.
-It runs on changes under `demo/**` and on manual dispatch (a manual run also refreshes the
-bundled lhpc version).
-
-### One-time setup
-
-Repo **Settings → Pages → Build and deployment → Source: “GitHub Actions.”** Until that is
-enabled the deploy step fails (the build + tests still run).
+It runs on manual dispatch and on pushes to `main` that touch `demo/**`, `lhpc/**`, `pyproject.toml` or the workflow itself (a manual run also refreshes the bundled lhpc version).
 
 ## What runs vs what's simulated
 

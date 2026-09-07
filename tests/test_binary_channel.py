@@ -254,8 +254,8 @@ def _stub_pipeline(monkeypatch, svc):
     entry = bi.IndexEntry(
         stack="daemon", filename="daemon-" + "a" * 64 + ".tar.zst",
         url="https://example.invalid/daemon-" + "a" * 64 + ".tar.zst", sha256="a" * 64,
-        size=10, built_from="b" * 40, components=dict(svc._binary_pins("daemon")),
-        runtime_deps=(), target="aarch64-trixie", os_name="trixie",
+        size=10, components=dict(svc._binary_pins("daemon")),
+        runtime_deps=(), target="aarch64-trixie",
         provenance={"smoke": {"mode": "mandatory", "result": "passed"}})
     monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 2, "stacks": {}})
     monkeypatch.setattr(bi, "index_entry", lambda idx, sid: entry)
@@ -714,6 +714,18 @@ def test_web_pill_renders_provenance(tmp_path, monkeypatch):
     # ONE version pill in the row (the version cell); the artifact tooltip rides on it
     assert body.count("binary@" + ("ab" * 32)[:9]) == 1
     assert "verified prebuilt artifact" in body
+
+
+def test_web_binary_stack_is_not_offered_as_missing(tmp_path, monkeypatch):
+    """A binary-installed stack has no clone by design: its row must not carry the
+    "Not installed yet — run Install" banner that gates a source stack."""
+    from lhpc.adapters.web.app import create_app
+    svc = _svc_binary_status(tmp_path, monkeypatch)
+    _install_binary(svc, tmp_path)                                    # daemon from the artifact
+    body = create_app(service_factory=lambda: svc).test_client().get("/stacks").get_data(as_text=True)
+    row = body[body.index('id="stackrow-daemon"'):]
+    row = row[:row.find('id="stackrow-', 10)] if row.find('id="stackrow-', 10) > 0 else row
+    assert "src: binary" in row and "Not installed yet" not in row
 
 
 # ===== merged from test_binary_predicates.py =====
@@ -1195,3 +1207,18 @@ def test_start_gate_uses_the_shared_classifier(tmp_path, monkeypatch):
     assert out[0].install == "lhpc install meshcom --source binary --yes"   # artifact remedy
     assert out[1].install == "sudo apt install x"                           # untouched
 
+
+
+def test_known_working_confirm_names_the_missing_composition_for_a_binary_stack(tmp_path, monkeypatch):
+    # A binary-installed stack has no source composition, so the offer never appears; the CLI
+    # confirm must say that, not "start the stack first" to an operator who just started it.
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    res = svc.confirm_known_working("daemon")
+    assert not res.ok and "no source composition" in res.summary
+    # graywolf is a fetched release: no source at all, the same answer
+    res = svc.confirm_known_working("graywolf")
+    assert not res.ok and "no source composition" in res.summary
+    # a source-built stack keeps the start-first refusal
+    res = svc.confirm_known_working("kiss")
+    assert not res.ok and "No healthy start" in res.summary

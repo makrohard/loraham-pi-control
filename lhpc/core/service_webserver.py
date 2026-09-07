@@ -150,7 +150,7 @@ class WebserverOpsMixin:
     # ---- Apply deferred by the firewall gate ---------------------------------------------------
     # The gate only DEFERS an activation the operator already confirmed. Without a record of that,
     # the refusal was a one-off flash: after the firewall step nothing completed the apply and
-    # nothing at the firewall panel said it was still owed (live-found 2026-09-04). Same contract
+    # nothing at the firewall panel said it was still owed. Same contract
     # as the network join's console apply: a marker, completed by the watchdog once verified.
     # The marker records the DEFERRAL only: it is cleared as soon as the gate lets an apply run
     # (whatever that apply's outcome — a later failure is shown in the Webserver panel, and must
@@ -296,7 +296,7 @@ class WebserverOpsMixin:
         `bind`, gate remote exposure with `plan_exposure` (elevated confirm for public/no-auth/http), then
         — only on accept — save ALL fields in ONE write (incl. `remote_exposed` + `allowed_cidrs`), add the
         host IP SAN + reissue the server cert on exposure, and apply (staged validate + reload). On refusal
-        it saves nothing and applies nothing. Folds in the former dedicated Remote-exposure form."""
+        it saves nothing and applies nothing. """
         from . import config as _config
         from . import webserver as _ws
         from .config import WebserverConfig
@@ -393,21 +393,6 @@ class WebserverOpsMixin:
     def web_page(self, page_id: str):
         """The `WebPage` a page id names (a stack id names that stack's first page), or None."""
         return next((p for p in self.web_pages() if p.page_id == page_id), None)
-
-    def stack_web_upstream(self, page_id: str):
-        """(address, scheme) of a proxied page's web UI from the MANIFEST, or None when the id
-        names no page. A stack id names the stack's first page.
-
-        The upstream is evidence, never operator input: an `EndpointSpec` with `client=true` and an
-        http/https scheme. This is what keeps `upstream_scheme` independent of the listener scheme."""
-        p = self.web_page(page_id)
-        return (p.address, p.scheme) if p is not None else None
-
-    def stack_web_deny_paths(self, page_id: str) -> tuple:
-        """Request paths the page's proxy must refuse (from the SAME manifest endpoint
-        stack_web_upstream reads). Empty when the page declares none."""
-        p = self.web_page(page_id)
-        return tuple(p.deny_paths) if p is not None else ()
 
     def stack_web_eligible(self) -> list:
         """Page ids that can be proxied (derived from the manifest, never hardcoded), in
@@ -615,6 +600,20 @@ class WebserverOpsMixin:
                 listen_scope, live_port = old_scope, old_port
         contained = (self._listener_restricted(live_port, listeners, fw_status)
                      if listen_scope == "exposed" else None)
+        # A proxy is REPORTED while a listener exists for it — desired or not. A saved Disable
+        # takes effect at Apply; until then nginx keeps serving the APPLIED proxy, and the panel,
+        # the dashboard and the warnings must describe that live socket, not the saved intent.
+        # `eff` is the policy that is actually exposed: the saved one while enabled, else the
+        # applied record the live listener still implements.
+        live = listen_scope != "absent"
+        eff = swc
+        if live and not swc.enabled:
+            eff = _dc.replace(
+                swc, mode=ap.get("mode") or swc.mode, port=live_port,
+                scheme=ap.get("scheme") or swc.scheme,
+                access_mode=ap.get("access_mode") or swc.access_mode,
+                allowed_cidrs=tuple(ap.get("allowed_cidrs") or swc.allowed_cidrs))
+        shown = eff.enabled
         plan = _ws.plan_stack_exposure(swc, ws.port, used)
         return {
             # The page and the component behind it (`page_id` is the key of every saved policy).
@@ -627,8 +626,7 @@ class WebserverOpsMixin:
             "modes": STACKWEB_MODES, "access_modes": WEBSERVER_ACCESS_MODES,
             "schemes": WEBSERVER_SCHEMES, "plan": plan,
             # The port that ANSWERS, so a saved-but-unapplied move never advertises a dead URL.
-            "urls": (_ws.stack_ui_urls(swc, live_port if listen_scope != "absent" else None)
-                     if swc.enabled else []),
+            "urls": _ws.stack_ui_urls(eff, live_port if live else None),
             # Is the raw upstream port genuinely reachable AROUND this proxy? Off-loopback alone
             # is not enough — a deny-default endpoint the VERIFIED firewall drops bypasses nothing.
             "bypassable": self._upstream_bypassable(upstream_port, listeners, fw_status),
@@ -639,9 +637,11 @@ class WebserverOpsMixin:
             # A saved PORT move is pending exactly like a saved MODE move: the listener is live and
             # healthy, just not on the port the operator now asks for. Without this the panel read
             # "in sync" while nginx still served the old socket.
-            "pending": bool(swc.enabled and (
+            "pending": bool((swc.enabled and (
                 listen_scope == "absent" or swc.remote != (listen_scope == "exposed")
-                or live_port != swc.port)),
+                or live_port != swc.port)) or (live and not swc.enabled)),
+            # Saved Disable, listener still up: the truthful state until Apply removes it.
+            "pending_disable": bool(live and not swc.enabled),
             # Security + running posture for the two summary pills. Security via posture_for() — the
             # LIVE listener's applied policy, never a saved-but-unapplied one; the RUNNING pill for a
             # PROXY is: grey "offline" (stack not started — its web-UI upstream is down), yellow
@@ -660,10 +660,10 @@ class WebserverOpsMixin:
             # for an ENABLED proxy. A proxy binds 0.0.0.0 when remote, 127.0.0.1 when local.
             # Name the socket that EXISTS: with a live listener, its bind/port are the APPLIED ones.
             "warnings": _ws.exposure_warnings(
-                remote=swc.remote, access_mode=swc.access_mode, allowed_cidrs=swc.allowed_cidrs,
+                remote=eff.remote, access_mode=eff.access_mode, allowed_cidrs=eff.allowed_cidrs,
                 bind=(ap.get("bind") if (ap and listen_scope in ("exposed", "loopback"))
-                      else ("0.0.0.0" if swc.remote else "127.0.0.1")),
-                port=live_port, live_scope=listen_scope) if swc.enabled else [],
+                      else ("0.0.0.0" if eff.remote else "127.0.0.1")),
+                port=live_port, live_scope=listen_scope) if shown else [],
         }
 
     def dashboard_webservers(self, served_via_nginx: bool | None = None,
@@ -754,6 +754,9 @@ class WebserverOpsMixin:
         v = self.stack_web_view(page.page_id, listeners=listeners, fw_status=fw_status) or {}
         swc = v.get("cfg")
         enabled = bool(swc and swc.enabled)
+        # A listener that still exists after a saved Disable is reported until Apply removes it.
+        live = v.get("listen_scope") not in (None, "absent")
+        shown = enabled or live
         # The DIRECT (un-proxied) web port and its live bind scope — the view already derived both
         # from the same address and listener snapshot (`upstream_port`/`upstream_scope`). The adapter
         # links to the request host only when it is genuinely exposed, else 127.0.0.1 (a loopback-only
@@ -765,14 +768,15 @@ class WebserverOpsMixin:
         # the desired port would hand out a socket nobody listens on. Desired config is untouched
         # and still reaches Settings through `cfg`; with no live listener there is nothing to
         # correct, so the desired port stands.
-        listen_scope = v.get("listen_scope") if enabled else None
+        listen_scope = v.get("listen_scope") if shown else None
         port = None
-        if enabled:
+        if shown:
             port = (v.get("live_port") or swc.port) if listen_scope != "absent" else swc.port
         return {"kind": "stack", "name": page.label, "sid": stk.id, "pid": page.page_id,
-                "anchor": page.anchor, "enabled": enabled,
+                "anchor": page.anchor, "enabled": enabled, "live": live,
+                "pending_disable": bool(live and not enabled),
                 "mode_note": v.get("mode_note", ""),      # "" unless the mode hides the upstream
-                "posture": v.get("posture") if enabled else None,
+                "posture": v.get("posture") if shown else None,
                 "port": port,
                 # The proxy's LIVE listen scope (exposed|loopback|absent) — the adapter links to the
                 # proxy socket only where it actually listens, so an enabled-but-local-only or inactive
@@ -938,8 +942,7 @@ class WebserverOpsMixin:
         page's index in `_page_positions()` — the stacks' first pages sorted by id, then any
         further pages (so a stack growing a second page shifts nobody else). So graywolf → 8444,
         meshcom → 8445, meshcore → 8446, meshtastic → 8447, deterministically and without
-        colliding — the old 'first free above the console' gave every not-yet-enabled stack the
-        SAME port (8444), so accepting two suggestions collided.
+        colliding.
 
         A default is only ever WRITTEN when the operator saves the panel; an untouched stack keeps
         no port key, so a fresh deployment's rendered nginx stays unchanged.
@@ -984,7 +987,7 @@ class WebserverOpsMixin:
                     if plan["no_auth"]:
                         # The danger phrase is the wrong first answer here: the operator usually
                         # wants the listener AUTHENTICATED, not the warning waived. Name that way
-                        # out too — live-found, where the documented proxy recipe hit this refusal
+                        # out too — where the documented proxy recipe hit this refusal
                         # and reaching for the danger phrase would have exposed an unauthenticated
                         # meshtasticd UI to the LAN.
                         missing.append("or keep the client-certificate requirement instead: "
@@ -1110,7 +1113,7 @@ class WebserverOpsMixin:
             return ActionResult(False, "no stacks with a web UI to configure")
         cidrs = list(cidrs or [])
         # ONE config_lock spans candidate calculation, conflict validation AND the write, on a
-        # FRESHLY-loaded snapshot (audit-found TOCTOU: candidates computed from the memoized
+        # FRESHLY-loaded snapshot (TOCTOU: candidates computed from the memoized
         # config could stamp a concurrently-edited port back to its stale value — "existing
         # nonzero ports are never changed" must hold against the configuration AT WRITE TIME).
         # webserver_apply stays outside the lock: it re-reads desired config itself.
@@ -1180,9 +1183,9 @@ class WebserverOpsMixin:
         cidrs = list(cidrs or [])
         ws_now = self.config().webserver
         mode = access_mode or ws_now.access_mode
-        # BUG FIX (live find): the probe MUST carry the CURRENT CONFIGURED scheme — the dataclass
-        # default is https, so an http deployment's exposure used to be assessed as encrypted and
-        # the cleartext elevation never fired.
+        # The probe MUST carry the CURRENT CONFIGURED scheme — the dataclass default is https,
+        # so an http deployment's exposure would otherwise be assessed as encrypted and the
+        # cleartext elevation would never fire.
         probe = WebserverConfig(bind="0.0.0.0", port=ws_now.port, scheme=ws_now.scheme,
                                 access_mode=mode, remote_exposed=True,
                                 allowed_cidrs=tuple(cidrs))
@@ -1411,7 +1414,7 @@ class WebserverOpsMixin:
         """Carry an ALLOWED gate's warning (and its remedy) onto whatever result the operation
         produced. The gate can permit an exposure REDUCTION while reporting that the firewall
         scripts could not be regenerated; without this the operator sees the applied change and
-        never learns the apply script is stale (audit). No-op when the gate said nothing."""
+        never learns the apply script is stale. No-op when the gate said nothing."""
         if not gate_msg:
             return res
         return _dc.replace(res, details=[gate_msg, *res.details],
@@ -1419,7 +1422,7 @@ class WebserverOpsMixin:
 
     def crl_refresh_if_expired(self) -> bool:
         """Rebuild the client-CA CRL when its nextUpdate lies in the past, then reload nginx
-        via the normal apply. LIVE-FOUND (clock-jump class): an AP-isolated box gets NTP the
+        via the normal apply. An AP-isolated box gets NTP the
         moment it joins a WLAN, the clock jumps months forward past the CRL's nextUpdate,
         and nginx then rejects EVERY client cert ("The SSL certificate error") — a total
         console lockout with nothing actually revoked. lhpc owns the CRL file, so the heal
@@ -1528,7 +1531,7 @@ class WebserverOpsMixin:
             # console and every proxy keep being rendered against what nginx is really serving.
             self._record_applied(cfg, self._stack_web_proxies())
             return ActionResult(True, "webserver configuration applied and nginx reloaded", data=ev)
-        # PRIVILEGE BOUNDARY (live-found): inside the managed web unit the user bus is DELIBERATELY
+        # PRIVILEGE BOUNDARY: inside the managed web unit the user bus is DELIBERATELY
         # inaccessible (`InaccessiblePaths=%t/bus %t/systemd/private` — the escape-proof updater
         # design: a compromised console must never command systemd). A direct restart from here can
         # only fail with a bus EPERM — so the web branch completes the bind change through the

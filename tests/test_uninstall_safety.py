@@ -61,7 +61,7 @@ def _own(tmp_path, rel, comps=("x",)):
     """Seed an ownership record — the tree is a registered LHPC adoption."""
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord(f"src/{rel}", "", "backfilled", "", time.time(), "",
+        source_registry.RegistryRecord(f"src/{rel}", "", "pinned", "", time.time(), "",
                                        tuple(comps)))
 
 
@@ -136,7 +136,7 @@ def test_uninstall_refuses_unknown_tree(tmp_path):
     svc = _svc(tmp_path)
     res = svc.uninstall("kiss", apply=True)
     assert not res.ok
-    assert any("refused" in d and "not a git checkout" in d for d in res.details)
+    assert any("refused" in d and "no ownership record" in d for d in res.details)
     assert (tmp_path / "src" / "loraham-kiss-tnc" / "user-data.txt").exists()
 
 
@@ -247,7 +247,7 @@ def _seed_shared(tmp_path):
     (dest / "app.c").write_text("x")
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", _t.time(),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "pinned", "", _t.time(),
                                        "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
     return dest
 

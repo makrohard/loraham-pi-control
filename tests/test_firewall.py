@@ -611,6 +611,32 @@ def test_recovery_rolls_back_unpromoted_apply(tmp_path):
     assert (tmp_path / "etc" / "firewall.snapshot.json").read_text() == old_canon
 
 
+def test_recovery_tears_down_an_unpromoted_first_install_table(tmp_path):
+    # An interrupted FIRST install (journal at snapshot-staged, no old snapshot to reload, no
+    # canonical snapshot yet) rolls back by destroying the unverified table we own — with the
+    # `table` keyword, or nft rejects the command and the table stays live behind a "recovered".
+    import json as _json
+    from lhpc.core import firewall_helper as fh
+    etc, run = str(tmp_path / "etc"), str(tmp_path / "run")
+    _seed_meta(etc)                                       # ownership metadata (fixedid01)
+    sysx = _FakeSys()
+    sysx.listing = _expected_live_json(_candidate())      # our owned table IS live...
+    sysx.preexisting = True                               # ...before this run loaded anything
+    destroyed = []
+    orig = sysx.run
+    sysx.run = lambda argv, **kw: (destroyed.append(argv) if argv[:2] == ["nft", "destroy"]
+                                   else None, orig(argv, **kw))[1]
+    fh.atomic_write(f"{etc}/firewall.journal.json", _json.dumps(
+        {"op": "apply", "txid": "t1", "phase": "snapshot-staged", "old_snapshot": None,
+         "old_hash": "", "new_hash": "deadbeef", "staged": f"{etc}/firewall.snapshot.json.staging-t1"}), 0o600)
+    # recovered (journal gone, table destroyed); the check then reports the truthful state of a
+    # box with NO accepted snapshot yet, which is a failed verification, not a green.
+    assert fh.op_check(sysx, etc_dir=etc, run_dir=run) == fh.EXIT_FAIL
+    assert destroyed == [["nft", "destroy", "table", fh.TABLE_FAMILY, fh.TABLE_NAME]]
+    assert not (tmp_path / "etc" / "firewall.journal.json").exists()
+    assert not (tmp_path / "etc" / "firewall.snapshot.json").exists()
+
+
 def test_recovery_fails_closed_on_unknown_journal_shape(tmp_path):
     # P2-1: a parseable journal with an unknown op/phase is an interrupted op of unknown state ->
     # fail closed (EXIT_INTERNAL), never silently deleted.
@@ -2724,3 +2750,59 @@ def test_stack_start_gate_verified_refuses_a_saved_scope_the_model_lacks(tmp_pat
     allowed, msg, _ = svc.firewall_gate_stack_start("kiss")
     assert not allowed
     assert "not covered by the applied firewall" in msg
+
+
+def test_bootstrap_renders_the_firewall_scripts_the_console_names(tmp_path):
+    # The dashboard, the Firewall panel and `lhpc firewall` all show `firewall-apply.sh` as the
+    # apply command; a fresh install must therefore have the file — a copied command that ends
+    # in "No such file or directory" is not an apply command.
+    import os as _os
+    svc = _svc(tmp_path)
+    assert svc.bootstrap(apply=True).ok
+    scripts = svc._fw_script_paths()
+    for name in ("firewall-apply.sh", "firewall-reset.sh", "firewall-cleanup.sh"):
+        assert _os.path.isfile(scripts[name]), name
+
+
+def test_every_apply_sequence_ends_with_the_webserver_apply(tmp_path):
+    # The firewall script alone leaves the gated listeners unactivated; every place that hands
+    # the operator the apply sequence names `lhpc webserver apply` as its last line.
+    from lhpc.core.service_base import ActionResult
+    svc = _svc(tmp_path)
+    assert svc._fw_apply_commands(ActionResult(True, "rendered"))[-1] == "lhpc webserver apply"
+    assert svc.firewall_settings_view()["webserver_apply_cmd"] == "lhpc webserver apply"
+    lines = svc._fw_apply_lines()
+    assert lines[0].startswith("sudo bash ") and lines[-1] == "lhpc webserver apply"
+
+
+def test_bootstrap_on_an_existing_root_restores_missing_firewall_scripts(tmp_path):
+    # An older install (or a hand-deleted directory) has no scripts: the dry run plans the one
+    # render, the apply writes it, a further bootstrap has nothing to do.
+    import os as _os, shutil as _sh
+    svc = _svc(tmp_path)
+    assert svc.bootstrap(apply=True).ok
+    _sh.rmtree(svc._paths.under("config/files/firewall"))
+    dry = svc.bootstrap(apply=False)
+    assert dry.data["changes"] == 1 and "render the firewall operator scripts" in "\n".join(dry.details)
+    assert svc.bootstrap(apply=True).ok
+    assert _os.path.isfile(svc._fw_script_paths()["firewall-apply.sh"])
+    assert svc.bootstrap(apply=False).data["changes"] == 0
+
+
+def test_a_gate_deferred_apply_raises_the_persistent_notice_until_the_marker_clears(tmp_path, monkeypatch):
+    # End to end: the firewall gate refuses a console Apply -> the durable marker is set -> every
+    # page carries the notice; the marker cleared (the watchdog's completion) -> the notice is gone.
+    from lhpc.adapters.web.app import create_app
+    fw = {"installed": True, "config_ok": False, "boot_ok": True, "live_ok": False,
+          "transitional": False, "foreign": [], "reason": "changes-pending",
+          "line": "Firewall: Changes pending", "level": "warn", "candidate": None}
+    svc = _svc_gate_pending(tmp_path, monkeypatch, fw)
+    r = svc.webserver_apply()
+    assert not r.ok and r.data.get("firewall_gate") == "pending"
+    assert svc.webserver_apply_pending() is True
+    client = create_app(lambda: svc).test_client()
+    body = client.get("/", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
+    assert 'id="fw-pending-notice"' in body and "#firewall-apply" in body
+    svc._ws_apply_pending_clear()
+    body = client.get("/", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
+    assert 'id="fw-pending-notice"' not in body

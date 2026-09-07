@@ -14,7 +14,7 @@ from lhpc.core.resources import interpret_conflicts
 
 
 def _spi(mode: ResourceMode) -> ResourceClaim:
-    return ResourceClaim(key="spi.bus.0", kind=ResourceKind.SPI_BUS, mode=mode, group="spi.bus.0")
+    return ResourceClaim(key="spi.bus.0", kind=ResourceKind.SPI_BUS, mode=mode)
 
 
 def _comp(cid: str, claim: ResourceClaim) -> Component:

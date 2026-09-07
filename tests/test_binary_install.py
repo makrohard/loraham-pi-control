@@ -64,8 +64,8 @@ def _entry(tar_path, stack="demo", **over):
     sha = hashlib.sha256(data).hexdigest()
     d = dict(stack=stack, filename=f"{stack}-{sha}.tar.zst",
              url=f"https://example.invalid/{stack}-{sha}.tar.zst", sha256=sha,
-             size=len(data), built_from="b" * 40, components={"demo-main": "c" * 40},
-             runtime_deps=("libc6",), target="aarch64-trixie", os_name="trixie",
+             size=len(data), components={"demo-main": "c" * 40},
+             runtime_deps=("libc6",), target="aarch64-trixie",
              provenance={"smoke": {"mode": "mandatory", "result": "passed"}})
     d.update(over)
     return bi.IndexEntry(**d)
@@ -74,8 +74,8 @@ def _entry(tar_path, stack="demo", **over):
 def _index(entry):
     return {"schema": 2, "stacks": {entry.stack: {
         "filename": entry.filename, "url": entry.url, "sha256": entry.sha256,
-        "size": entry.size, "built_from": entry.built_from, "components": entry.components,
-        "runtime_deps": list(entry.runtime_deps), "target": entry.target, "os": entry.os_name,
+        "size": entry.size, "built_from": "b" * 40, "components": entry.components,
+        "runtime_deps": list(entry.runtime_deps), "target": entry.target, "os": "trixie",
         "smoke": {"mode": "mandatory", "result": "passed"},
         "lhpc_commit": "d" * 40, "builder_commit": "e" * 40,
         "container_digest": "debian@sha256:" + "f" * 64, "extract_to": "runtime-root"}}}
@@ -400,18 +400,18 @@ def test_displaced_file_is_gone_after_commit(tmp_path):
     assert list((tmp_path / "state" / "binary").glob(".backup-*")) == []
 
 
-def test_note_created_files_are_removed_on_rollback(tmp_path):
-    """Provisioned files (the meshtastic CLI venv) join the transaction, so a later failure
-    cannot leave a half-built venv behind."""
+def test_note_created_dir_is_removed_on_rollback(tmp_path):
+    """A provisioned directory (the meshtastic CLI venv) joins the transaction, so a later
+    failure cannot leave a half-built venv behind."""
     paths = _paths(tmp_path)
     _open(paths, txn="txnV")
     bi.publish(paths, "demo", _staged(tmp_path), ["src/demo/bin/demo"], "txnV")
-    venv = tmp_path / "build" / "tools" / "x" / ".venv" / "bin"
-    venv.mkdir(parents=True)
-    (venv / "cli").write_bytes(b"#!/x")
-    bi.note_created(paths, ["build/tools/x/.venv/bin/cli"])
+    venv = tmp_path / "build" / "tools" / "x" / ".venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "cli").write_bytes(b"#!/x")
+    bi.note_created_dir(paths, "build/tools/x/.venv")
     ok, _why = _unwind(paths)
-    assert ok and not (venv / "cli").exists()
+    assert ok and not venv.exists()
 
 
 def test_publish_refuses_when_no_root_populated(tmp_path):
@@ -899,14 +899,31 @@ def test_update_binary_to_binary_when_current(tmp_path, monkeypatch):
     assert seen["args"] == ("daemon", True)                  # fast path, no dialog
 
 
-def test_update_offers_source_when_binary_lags(tmp_path, monkeypatch):
+def test_update_tries_the_published_binary_even_when_the_receipt_lags(tmp_path, monkeypatch):
+    """An installed receipt behind the manifest pins says nothing about the PUBLISHER: the
+    update fetches the index and lets the pin check decide (a lagging artifact is refused there
+    with the source offer), instead of steering every binary box into an hours-long build."""
     svc = _svc(tmp_path, monkeypatch)
     stale = {cid: "9" * 40 for cid in _pins(svc)}
     _lay_down(svc, tmp_path, commits=stale)
+    seen = {}
+    monkeypatch.setattr(ControllerService, "binary_install",
+                        lambda self, sid, apply=False: seen.setdefault("args", (sid, apply)))
+    svc.update("daemon", apply=True, source="binary")
+    assert seen["args"] == ("daemon", True)
+
+
+def test_lagging_published_binary_is_refused_with_the_source_offer(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch)
+    _lay_down(svc, tmp_path)
+    monkeypatch.setattr(bi, "require_zstd", lambda: None)
+    monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 2, "stacks": {}})
+    monkeypatch.setattr(bi, "index_entry", lambda idx, sid: _fake_entry(svc, sid))
+    monkeypatch.setattr(bi, "check_target", lambda e, tgt: None)
+    monkeypatch.setattr(bi, "check_pins", lambda e, p: (_ for _ in ()).throw(
+        bi.BinaryInstallError("published artifact lags the pins")))
     res = svc.update("daemon", apply=True, source="binary")
-    assert not res.ok
-    assert "only as source" in res.summary
-    assert res.data["binary_behind"] and res.data["offer_source"] is True
+    assert not res.ok and res.data["offer_source"] is True
     assert any("--source pinned" in c for c in res.next_commands)
     assert any("hours" in d for d in res.details)            # the long-compile warning
 
@@ -997,9 +1014,9 @@ def test_clone_required_is_adopted_before_the_overlay(tmp_path, monkeypatch):
 def _fake_entry(svc, sid):
     return bi.IndexEntry(
         stack=sid, filename=f"{sid}-{'a' * 64}.tar.zst", url="https://example.invalid/a.tar.zst",
-        sha256="a" * 64, size=10, built_from="b" * 40,
+        sha256="a" * 64, size=10,
         components=dict(svc._binary_pins(sid)), runtime_deps=(), target="aarch64-trixie",
-        os_name="trixie", provenance={"smoke": {"mode": "mandatory", "result": "passed"}})
+        provenance={"smoke": {"mode": "mandatory", "result": "passed"}})
 
 
 def test_switch_plan_counts_a_change_even_when_sources_exist(tmp_path, monkeypatch):
@@ -1425,3 +1442,37 @@ def test_replaced_first_source_is_restored_when_a_later_group_fails(tmp_path, mo
     assert brx.receipt_state(svc._paths, "daemon")[0] == "valid"
     assert (tmp_path / rec.proof_paths[0]).read_bytes() == b"ELF"
     assert bi.read_journal(svc._paths)[1] == "absent"
+
+
+def test_binary_update_probe_verdict_resolves_against_the_receipt_head(tmp_path, monkeypatch):
+    """The binary branch of the freshness probe must record the head it judged (the receipt's
+    component commit — the same head the status probe reports), or effective_status() shows
+    "unchecked" forever and the console can never render the verdict it just computed."""
+    from lhpc.core import stackupdates
+    svc = _svc(tmp_path, monkeypatch)
+    _lay_down(svc, tmp_path)                                 # valid receipt == manifest pins
+    comp = svc.stack("daemon").main_component
+    entry = svc._update_probe(comp)
+    head = svc.binary_receipt_state("daemon")[1].components[comp.id]
+    assert entry["channel"] == "binary" and entry["local_head_at_check"] == head
+    assert stackupdates.effective_status(entry, head) == stackupdates.UP_TO_DATE
+
+
+def test_binary_install_journal_failure_is_a_typed_refusal(tmp_path, monkeypatch):
+    """A journal that cannot be written refuses with the source command, never a traceback,
+    and leaves no staging directory behind."""
+    svc = _svc(tmp_path, monkeypatch)
+    _lay_down(svc, tmp_path)
+    monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 2, "stacks": {}})
+    monkeypatch.setattr(bi, "index_entry", lambda idx, sid: _fake_entry(svc, sid))
+    monkeypatch.setattr(bi, "check_target", lambda e, tgt: None)
+    monkeypatch.setattr(bi, "check_pins", lambda e, p: None)
+    monkeypatch.setattr(bi, "require_zstd", lambda: None)
+    monkeypatch.setattr(ControllerService, "_dpkg_installed", lambda self, p: True)
+    monkeypatch.setattr(bi, "open_txn", lambda *a, **k: (_ for _ in ()).throw(
+        bi.BinaryInstallError("journal unwritable")))
+    res = svc.binary_install("daemon", apply=True)
+    assert not res.ok and "journal unwritable" in res.summary
+    assert any("--source pinned" in c for c in res.next_commands)
+    assert not list((tmp_path / "state").glob("lhpc-binary-*"))
+

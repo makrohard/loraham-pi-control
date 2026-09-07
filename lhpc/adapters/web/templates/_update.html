@@ -89,7 +89,7 @@
       <code>lhpc self-update --repair-integration</code></p>
   {% endif %}
 
-  {# One-click integration state. Canonical units -> "Update now". A legacy same-root set
+  {# One-click integration state. Canonical units -> "Update now". A non-canonical same-root set
      (old/%h units, no .path) is `fixable` -> "Repair & update" migrates + updates in one click.
      recovery -> recovery command; genuinely-unsafe units -> resolve manually. #}
   {% if updater and updater.status == 'recovery_required' %}

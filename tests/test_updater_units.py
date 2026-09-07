@@ -88,7 +88,7 @@ def test_web_and_helper_carry_the_bus_block_and_sandbox():
     for t in (web, helper):
         assert "InaccessiblePaths=%t/bus %t/systemd/private" in t
         assert "ProtectHome=read-only" in t and "ProtectSystem=strict" in t
-    # web also grants meshcore-nodegui its HOME data dir (%h/.meshcore_nm); the helper
+    # web also grants an OPTIONAL -%h/.meshcore_nm entry (no shipped component uses it); the helper
     # (no stack GUIs) stays minimal. The `-` prefix makes the path OPTIONAL — an absent
     # non-prefixed ReadWritePaths entry fails namespace setup (226/NAMESPACE) and would
     # hard-fail the web console on a box where that app has never run.

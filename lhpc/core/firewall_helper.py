@@ -630,10 +630,6 @@ import time  # noqa: E402
 
 ETC_DIR = "/etc/lhpc"
 RUN_DIR = "/run/lhpc-firewall"
-META_PATH = ETC_DIR + "/firewall.meta.json"
-SNAPSHOT_PATH = ETC_DIR + "/firewall.snapshot.json"
-TRANSITION_PATH = ETC_DIR + "/firewall.transition.json"
-JOURNAL_PATH = ETC_DIR + "/firewall.journal.json"
 LOCK_PATH = ETC_DIR + "/.firewall.lock"
 RECEIPT_PATH = RUN_DIR + "/check.json"
 
@@ -930,7 +926,7 @@ def active_sshd_ports(sysx):
         return set()
     ports = set()
     for line in out.splitlines():
-        if '"sshd"' in line or "sshd" in line.split('"')[-1:] or "sshd" in line:
+        if "sshd" in line:
             for tok in line.split():
                 if ":" in tok:
                     p = tok.rsplit(":", 1)[-1]
@@ -1086,7 +1082,7 @@ def _recover_apply(sysx, p, j):
             if mstate == "valid" and (meta or {}).get("ownership_id"):
                 st, _ = live_table_state(sysx, f"lhpc-owned:{meta['ownership_id']}")
                 if st == "ours":
-                    sysx.run(["nft", "destroy", TABLE_FAMILY, TABLE_NAME])
+                    sysx.run(["nft", "destroy", "table", TABLE_FAMILY, TABLE_NAME])
         _durable_unlink(p["journal"])
         return True
     return False                           # unknown phase -> fail closed

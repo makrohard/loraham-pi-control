@@ -21,21 +21,20 @@ lhpc treats managed source selection as a supply-chain decision. Source-mutating
 | `stable` | Latest stable | Git-only: newest version-shaped tag ("release"), else newest tag, else the default-branch HEAD. The exact resolved commit is recorded. Explicit opt-in. | ❌ mutable |
 
 Without `--source`, a named stack installs from `binary` where one is published for this platform,
-else `dev`; the all-stacks form (`auto-install`, and so the image builder) uses `dev` for every source
-stack. `pinned` is the known-working line you choose explicitly.
+else `dev`; `auto-install` (and so the image builder) applies that same per-stack default; only the all-stacks
+`lhpc install` form, with no stack named, stays on `dev`. `pinned` is the known-working line you choose explicitly.
 
 An **unpinned** component cannot be installed as `pinned` — with no configured pin it is
 `unverified-blocked`, and you must choose `dev` or `stable` explicitly. lhpc never fabricates
-a missing pin or signature. An **artifact** source (`artifact = true`: chat, voice,
-meshtastic base) resolves every selector to the same declared artifact (`artifact-head`).
+a missing pin or signature. An **artifact** source (`artifact = true`: chat and voice) resolves every selector to the same declared artifact (`artifact-head`).
 Every source lives under the runtime root as a managed clone.
 
 ## Ownership records
 
 Every adoption records durable ownership (`state/source-registry/`): remote, selector, exact
 resolved commit, transaction id — written inside the activation transaction and completable by
-recovery. Update/uninstall/clean require ownership (a tree without a record must origin-match its
-configured remote to be backfilled); update also requires the affected stacks stopped and refuses
+recovery. Update/uninstall/clean require ownership (a tree without a record is not LHPC's to
+touch — re-adopt it with `lhpc install`); update also requires the affected stacks stopped and refuses
 dirty trees (tracked or non-ignored untracked changes). `lhpc clean <stack> --purge` is the
 explicit destructive escape hatch (typed confirm on the web); normal uninstall retains config,
 logs and history. A record that no longer matches its tree is never rewritten silently
@@ -69,6 +68,7 @@ operating a stack: [operations.md](operations.md).
   obtained (signers were configured, verification did not succeed).
 - **`mutable-dev` / `mutable-stable`** — explicit mutable selection (not production-safe).
 - **`unverified-blocked`** — no pin (or `HEAD != pin`) and no explicit mutable choice.
+- **`artifact-head`** — a declared artifact source; every selector resolves to it.
 
 ## Signed commits/tags
 

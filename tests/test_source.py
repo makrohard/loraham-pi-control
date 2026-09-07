@@ -15,7 +15,7 @@ from lhpc.core.services import ControllerService
 from pathlib import Path
 from lhpc.core.config import Config, OperatorConfig
 from lhpc.core.install import Installer
-from lhpc.core.model import Component, ComponentKind, SourceSpec, Stack
+from lhpc.core.model import Component, ComponentKind, SourceSpec, SourceState, Stack
 from lhpc.core.probes import RealSystem
 from lhpc.core.lifecycle import Lifecycle
 from conftest import set_call
@@ -428,47 +428,44 @@ def test_leaf_kind_classifies_no_follow(tmp_path):
     assert source_fs.leaf_kind(paths, d / "gone") == "absent"
 
 
-def test_rename_child_renames_siblings(tmp_path):
-    paths, root = _paths(tmp_path)
-    d = root / "src"; d.mkdir(parents=True); (d / "app").mkdir(); (d / "app" / "m").write_text("v")
-    source_fs.rename_child(paths, d, "app", ".app.prev")
-    assert not (d / "app").exists() and (d / ".app.prev" / "m").read_text() == "v"
-
-
-def test_rename_child_swapped_parent_blocks(tmp_path):
-    import shutil
-    paths, root = _paths(tmp_path)
-    (root / "src" / "app").mkdir(parents=True)
-    outside = tmp_path / "out"; outside.mkdir()
-    shutil.rmtree(root / "src"); os.symlink(outside, root / "src")   # parent swapped to symlink
-    with pytest.raises(PathContainmentError):
-        source_fs.rename_child(paths, root / "src", "app", ".app.prev")
-    assert list(outside.iterdir()) == []
-
-
-def test_pinned_parent_writes_into_held_inode(tmp_path):
-    paths, root = _paths(tmp_path)
-    (root / "src").mkdir(parents=True)
-    with source_fs.pinned_parent(paths, root / "src") as pin:
-        with open(f"{pin}/probe", "w") as fh:
-            fh.write("x")
-    assert (root / "src" / "probe").read_text() == "x"
-
-
-def test_pinned_parent_swapped_blocks(tmp_path):
-    paths, root = _paths(tmp_path)
-    outside = tmp_path / "out"; outside.mkdir()
-    os.symlink(outside, root / "src")                               # parent is a symlink
-    with pytest.raises(PathContainmentError):
-        with source_fs.pinned_parent(paths, root / "src"):
-            pass
-
-
 def _git(args, cwd=None):
     import subprocess
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
                           env={"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
                                "HOME": "/tmp", "PATH": os.environ.get("PATH", "")})
+
+
+_META = {"selector": "pinned", "resolved_commit": "", "remote": "", "components": ["app"],
+         "had_prior": True}
+
+
+def _activate(inst, dest: Path, staging: Path, verify_active=None) -> str:
+    """Test entry to the activation transaction: open the source-parent transaction, capture
+    the prior and candidate leaves, synthesize a minimal valid meta, and run `_activate_held`
+    exactly as `install()` does."""
+    from lhpc.core import source_fs
+    from lhpc.core.paths import PathContainmentError
+    prior = cand = None
+    try:
+        with source_fs.ManagedSourceTransaction(inst.paths, dest.parent) as txn:
+            meta = {"selector": "pinned", "resolved_commit": "", "remote": "",
+                    "components": [dest.name or "src"],
+                    "had_prior": txn.leaf_kind(dest.name) != "absent"}
+            try:
+                if txn.leaf_kind(dest.name) == "dir":
+                    prior = txn.capture_leaf(dest.name)
+                if txn.leaf_kind(staging.name) == "dir":
+                    cand = txn.capture_leaf(staging.name)
+            except (OSError, PathContainmentError):
+                return "recovery-required"
+            return inst._activate_held(txn, dest, staging, meta, verify_active,
+                                       handle=cand, prior=prior)
+    except PathContainmentError:
+        return "recovery-required"
+    finally:
+        for h in (prior, cand):
+            if h is not None:
+                h.close()
 
 
 def _make_repo(path):
@@ -485,7 +482,8 @@ def test_real_git_clone_through_controller_pinned_path(tmp_path):
     paths, root = _paths(tmp_path)
     (root / "src").mkdir(parents=True)
     upstream = tmp_path / "upstream"; _make_repo(upstream)
-    with source_fs.pinned_parent(paths, root / "src") as pin:
+    with source_fs.ManagedSourceTransaction(paths, root / "src") as txn:
+        pin = txn.pinned_path()
         cand = f"{pin}/.app.candidate-x"
         r = _git(["clone", "-q", f"file://{upstream}", cand])
         assert r.returncode == 0, r.stderr
@@ -501,7 +499,8 @@ def test_parent_swap_after_fd_cannot_redirect_clone_outside(tmp_path):
     upstream = tmp_path / "upstream"; _make_repo(upstream)
     outside = tmp_path / "outside"; outside.mkdir()
     moved = tmp_path / "moved-src"
-    with source_fs.pinned_parent(paths, root / "src") as pin:
+    with source_fs.ManagedSourceTransaction(paths, root / "src") as txn:
+        pin = txn.pinned_path()
         # AFTER acquiring the held fd, move the real parent aside and point its path at
         # `outside` — the held fd still refers to the ORIGINAL inode (now at `moved`).
         os.rename(root / "src", moved)
@@ -510,49 +509,6 @@ def test_parent_swap_after_fd_cannot_redirect_clone_outside(tmp_path):
         assert _git(["clone", "-q", f"file://{upstream}", cand]).returncode == 0
     assert list(outside.iterdir()) == []                     # NOT redirected through the swap
     assert (moved / ".app.candidate-x" / "MARK").read_text() == "payload"   # landed in held inode
-
-
-def test_create_candidate_makes_fresh_empty_dir(tmp_path):
-    paths, root = _paths(tmp_path)
-    (root / "src").mkdir(parents=True)
-    source_fs.create_candidate_dir(paths, root / "src", ".app.candidate-1-2")
-    cand = root / "src" / ".app.candidate-1-2"
-    assert cand.is_dir() and not any(cand.iterdir())        # fresh, empty
-
-
-def test_create_candidate_refuses_preexisting_symlink(tmp_path):
-    paths, root = _paths(tmp_path)
-    (root / "src").mkdir(parents=True)
-    outside = tmp_path / "evil"; outside.mkdir(); (outside / "x").write_text("V")
-    os.symlink(outside, root / "src" / ".app.candidate-1-2")   # pre-seeded symlink
-    with pytest.raises(PathContainmentError):
-        source_fs.create_candidate_dir(paths, root / "src", ".app.candidate-1-2")
-    assert (outside / "x").read_text() == "V"               # never followed/written
-
-
-def test_create_candidate_refuses_preexisting_file(tmp_path):
-    paths, root = _paths(tmp_path)
-    (root / "src").mkdir(parents=True)
-    (root / "src" / ".app.candidate-1-2").write_text("seed")  # pre-seeded regular file
-    with pytest.raises(PathContainmentError):
-        source_fs.create_candidate_dir(paths, root / "src", ".app.candidate-1-2")
-
-
-def test_create_candidate_refuses_preexisting_dir(tmp_path):
-    paths, root = _paths(tmp_path)
-    (root / "src").mkdir(parents=True)
-    (root / "src" / ".app.candidate-1-2").mkdir()            # pre-seeded dir (not fresh)
-    with pytest.raises(PathContainmentError):
-        source_fs.create_candidate_dir(paths, root / "src", ".app.candidate-1-2")
-
-
-def test_create_candidate_swapped_parent_blocks(tmp_path):
-    paths, root = _paths(tmp_path)
-    outside = tmp_path / "out"; outside.mkdir()
-    os.symlink(outside, root / "src")                       # source parent is a symlink
-    with pytest.raises(PathContainmentError):
-        source_fs.create_candidate_dir(paths, root / "src", ".app.candidate-1-2")
-    assert list(outside.iterdir()) == []
 
 
 def test_transaction_renames_survive_parent_swap(tmp_path):
@@ -768,7 +724,7 @@ def test_malformed_and_symlinked_records_are_absent(tmp_path):
     assert source_registry.read_record(paths, "src/app") is None        # wrong version
     rp.unlink()
     (rp.parent / "real.json").write_text(json.dumps({
-        "version": 1, "source_rel": "src/app", "remote": "", "selector": "backfilled",
+        "version": 1, "source_rel": "src/app", "remote": "", "selector": "pinned",
         "resolved_commit": "", "adopted_at": 1.0, "txn_id": "", "strategy": "",
         "components": ["app"]}))
     os.symlink("real.json", rp)
@@ -776,7 +732,7 @@ def test_malformed_and_symlinked_records_are_absent(tmp_path):
     # a record claiming a DIFFERENT source_rel than its filename identity is refused
     rp.unlink()
     rp.write_text(json.dumps({
-        "version": 1, "source_rel": "src/evil", "remote": "", "selector": "backfilled",
+        "version": 1, "source_rel": "src/evil", "remote": "", "selector": "pinned",
         "resolved_commit": "", "adopted_at": 1.0, "txn_id": "", "strategy": "",
         "components": ["app"]}))
     assert source_registry.read_record(paths, "src/app") is None
@@ -1022,61 +978,17 @@ def _svc_bits(tmp_path, remote):
     return comp, inst, dest
 
 
-def test_backfill_accepts_matching_origin(tmp_path):
+def test_absent_record_refuses_destructive_authorization(tmp_path):
+    # A tree with no ownership record is not LHPC's, however well its origin matches the
+    # configured remote: refused, nothing registered, nothing touched, no git run.
     comp, inst, dest = _svc_bits(tmp_path, "https://github.com/x/y.git")
-    head = _make_repo_source_registry(dest)
+    _make_repo_source_registry(dest)
     _git_source_registry(dest, "remote", "add", "origin", "https://github.com/x/y.git")
-    rec, why = source_registry.verify_or_backfill(inst.paths, inst.system, inst.config,
-                                                  comp, dest, components=("app",))
-    assert rec is not None and why == "backfilled"
-    assert rec.selector == "backfilled" and rec.resolved_commit == head
-    assert _rec(inst) is not None                                       # persisted
-
-
-def test_backfill_normalizes_ssh_vs_https(tmp_path):
-    comp, inst, dest = _svc_bits(tmp_path, "https://github.com/x/y.git")
-    _make_repo_source_registry(dest)
-    _git_source_registry(dest, "remote", "add", "origin", "git@github.com:x/y.git")
-    rec, why = source_registry.verify_or_backfill(inst.paths, inst.system, inst.config,
-                                                  comp, dest)
-    assert rec is not None and why == "backfilled"
-
-
-def test_backfill_refuses_mismatched_origin(tmp_path):
-    comp, inst, dest = _svc_bits(tmp_path, "https://github.com/x/y.git")
-    _make_repo_source_registry(dest)
-    _git_source_registry(dest, "remote", "add", "origin", "https://github.com/other/z.git")
-    rec, why = source_registry.verify_or_backfill(inst.paths, inst.system, inst.config,
-                                                  comp, dest)
-    assert rec is None and "does not match" in why
+    rec, why = source_registry.verify_identity(inst.paths, inst.system, inst.config,
+                                               comp, dest, components=("app",))
+    assert rec is None and "no ownership record" in why
     assert _rec(inst) is None                                           # nothing persisted
-
-
-def test_backfill_refuses_unknown_tree_and_missing_remote(tmp_path):
-    comp, inst, dest = _svc_bits(tmp_path, "https://github.com/x/y.git")
-    dest.mkdir(parents=True)
-    (dest / "data.txt").write_text("user data")                         # NOT a git checkout
-    rec, why = source_registry.verify_or_backfill(inst.paths, inst.system, inst.config,
-                                                  comp, dest)
-    assert rec is None and "not a git checkout" in why
-    # a git tree but NO configured remote -> ownership not provable
-    comp2, inst2, dest2 = _svc_bits(tmp_path / "b", "")
-    _make_repo_source_registry(dest2)
-    _git_source_registry(dest2, "remote", "add", "origin", "https://github.com/x/y.git")
-    rec2, why2 = source_registry.verify_or_backfill(inst2.paths, inst2.system, inst2.config,
-                                                    comp2, dest2)
-    assert rec2 is None and "no configured remote" in why2
-
-
-def test_registered_record_wins_over_backfill(tmp_path):
-    comp, inst, dest = _svc_bits(tmp_path, "https://github.com/x/y.git")
-    _make_repo_source_registry(dest)
-    rec = source_registry.RegistryRecord("src/app", "https://github.com/x/y.git", "pinned",
-                                         "a" * 40, 1.0, "t" * 64, ("app",))
-    assert source_registry.write_record(inst.paths, rec)
-    got, why = source_registry.verify_or_backfill(inst.paths, inst.system, inst.config,
-                                                  comp, dest)
-    assert got == rec and why == "registered"                           # no git needed
+    assert (dest / ".git").exists()
 
 
 def test_symlink_at_source_destination_is_refused(tmp_path):
@@ -1090,12 +1002,12 @@ def test_symlink_at_source_destination_is_refused(tmp_path):
     _make_repo_source_registry(external)
     dest.parent.mkdir(parents=True)
     os.symlink(str(external), dest)
-    rec, why = source_registry.verify_or_backfill(inst.paths, inst.system, inst.config,
-                                                  comp, dest)
-    assert rec is None and "symlink leaf" in why
+    rec, why = source_registry.verify_identity(inst.paths, inst.system, inst.config,
+                                               comp, dest)
+    assert rec is None and "no ownership record" in why
     assert source_registry.read_record(inst.paths, "src/app") is None      # nothing registered
     assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
-        "src/app", "https://github.com/x/y.git", "backfilled", "", _t.time(), "", ("app",)))
+        "src/app", "https://github.com/x/y.git", "pinned", "", _t.time(), "", ("app",)))
     rec2, why2 = source_registry.verify_identity(inst.paths, inst.system, inst.config,
                                                  comp, dest)
     assert rec2 is None and "identity drift" in why2 and "symlink" in why2
@@ -1391,32 +1303,9 @@ def test_unsafe_registry_blocks_uninstall_clean_and_confirm(tmp_path):
     res3 = svc2.confirm_known_working("chat")
     assert not res3.ok
     assert known_working.load(paths, "chat") == []
-    # SAFELY ABSENT still permits genuine legacy backfill (existing coverage re-proven)
+    # SAFELY ABSENT (as opposed to unsafe) is still reported for a path never touched
     state, _, _ = source_registry.record_state(paths, "src/never-touched")
     assert state == "absent"
-
-
-def test_backfill_never_registers_substituted_leaf(tmp_path):
-    # Capture a handle on the ORIGINAL tree, replace the path leaf, then backfill with the
-    # stale handle: inspection runs on the CAPTURED inode, the pre-persist re-proof fails,
-    # nothing is registered, nothing mutated.
-    import shutil
-    from lhpc.core import source_fs
-    comp, inst, dest = _svc_bits(tmp_path, "https://github.com/x/y.git")
-    _make_repo_source_registry(dest)
-    _git_source_registry(dest, "remote", "add", "origin", "https://github.com/x/y.git")
-    handle = source_fs.capture_leaf(inst.paths, dest)
-    try:
-        shutil.move(str(dest), str(tmp_path / "stolen"))
-        dest.mkdir()
-        (dest / "unknown.txt").write_text("substitute")
-        rec, why = source_registry.verify_or_backfill(inst.paths, inst.system, inst.config,
-                                                      comp, dest, handle=handle)
-        assert rec is None and "concurrently replaced" in why
-        assert source_registry.read_record(inst.paths, "src/app") is None   # NOT registered
-        assert (dest / "unknown.txt").exists()                              # untouched
-    finally:
-        handle.close()
 
 
 def test_non_git_directory_is_never_destructively_authorized(tmp_path):
@@ -1427,7 +1316,7 @@ def test_non_git_directory_is_never_destructively_authorized(tmp_path):
     dest.mkdir(parents=True)
     (dest / "replaced.txt").write_text("manually placed")
     assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
-        "src/app", "", "backfilled", "", _t.time(), "", ("app",)))
+        "src/app", "", "pinned", "", _t.time(), "", ("app",)))
     rec, why = source_registry.verify_identity(inst.paths, inst.system, inst.config,
                                                comp, dest)
     assert rec is None and "unprovable" in why
@@ -1630,7 +1519,7 @@ def _journal(inst, dest, prev, staging, state, version=5):
         "txn_id": inst._txn_id(cand_rel)}
     if version in (4, 5):
         ct = version == 5
-        payload["meta"] = {"selector": "backfilled", "resolved_commit": "", "remote": "",
+        payload["meta"] = {"selector": "pinned", "resolved_commit": "", "remote": "",
                            "strategy": "", "components": [dest.name], "had_prior": True}
         payload["idents"] = {"candidate": _ident_of(staging, ctime=ct),
                              "prev": _ident_of(prev, ctime=ct)}
@@ -1648,6 +1537,7 @@ def _fin(inst, dest, prev, staging):
     try:
         return inst._finish_or_rollback(
             dest, prev, staging, m,
+            meta=_META, txn_id="",
             idents={"candidate": _ident_of(staging), "prev": _ident_of(prev)})
     finally:
         m.close()
@@ -1848,7 +1738,7 @@ def test_activate_failed_restore_retains_journal(tmp_path, monkeypatch):
         return real_rename(a, b, *args, **kw)
     monkeypatch.setattr("lhpc.core.install.os.rename", failing)
     _fail_noreplace(monkeypatch)                          # promotion is atomic NOREPLACE now
-    assert inst._activate(dest, staging) == "recovery-required"
+    assert _activate(inst, dest, staging) == "recovery-required"
     assert inst._journal_path(dest).exists()             # journal RETAINED (recovery-required)
 
 
@@ -1893,6 +1783,7 @@ def test_host_test_blocked_by_held_source_lock(tmp_path):
     from lhpc.core.services import ControllerService
     from lhpc.core.probes.backends import FakeSystem
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    (tmp_path / "src" / "loraham-daemon").mkdir(parents=True)   # present, so the lock is what refuses
     svc._SELF_LOCK_WAIT_S = 0.2          # fast contention (default 5.0s just delays the refusal)
     with reslock.operation_lock(svc._paths, reslock.source_lock_key("src/loraham-daemon"),
                                 "update", "x"):
@@ -1908,7 +1799,7 @@ def test_unknown_prev_blocks_and_is_not_discarded(tmp_path):
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
     orphan = src / ".app.prev"; orphan.mkdir(); (orphan / "keep").write_text("ORPHAN")
     staging = src / ".app.candidate-9-9"; staging.mkdir(); (staging / "m").write_text("NEW")
-    assert inst._activate(dest, staging) == "failed-clean"
+    assert _activate(inst, dest, staging) == "failed-clean"
     assert (orphan / "keep").read_text() == "ORPHAN"     # orphan untouched
     assert (dest / "m").read_text() == "LIVE"            # active source untouched
 
@@ -2045,7 +1936,7 @@ def test_recovery_required_preserves_candidate_and_prior(tmp_path, monkeypatch):
         return real(a, b, *args, **kw)
     monkeypatch.setattr("lhpc.core.install.os.rename", failing)
     _fail_noreplace(monkeypatch)                          # promotion is atomic NOREPLACE now
-    assert inst._activate(dest, staging) == "recovery-required"
+    assert _activate(inst, dest, staging) == "recovery-required"
     assert staging.is_dir() and (staging / "m").read_text() == "NEW"   # candidate PRESERVED
     assert inst._journal_path(dest).exists()                            # journal retained
 
@@ -2059,7 +1950,7 @@ def test_journal_unlink_failure_after_activation_is_recovery_required(tmp_path, 
     # The activation renames succeed, but the owned-journal removal fails -> typed
     # recovery-required (never an untyped exception), journal retained.
     monkeypatch.setattr(runtime_fs.OwnedMarker, "remove", lambda self: False)
-    assert inst._activate(dest, staging) == "recovery-required"
+    assert _activate(inst, dest, staging) == "recovery-required"
     assert (dest / "m").read_text() == "NEW"                  # activation DID happen
     assert inst._journal_path(dest).exists()                  # journal retained for recovery
 
@@ -2087,7 +1978,7 @@ def _render_launcher(tmp_path, marker, with_journal):
         (txn / "garbage.json").write_text("{ unresolved")
     idx = str(reslock.lock_file_path(paths, "source-txn-index"))
     script = commands.render_build_launcher([{"argv": ["touch", str(marker)]}], str(tmp_path),
-                                            str(tmp_path), [], index_lock=idx, txn_dir=str(txn))
+                                            str(tmp_path), [], index_lock=idx)
     launcher = tmp_path / "l.py"; launcher.write_text(script)
     return launcher
 
@@ -2203,7 +2094,7 @@ def test_dangling_linked_source_not_activated(tmp_path):
     dest = src / "app"
     staging = src / ".app.candidate-1-2"
     _os.symlink(src / "gone", staging)              # candidate symlink -> NONEXISTENT dir
-    outcome = inst._activate(dest, staging)
+    outcome = _activate(inst, dest, staging)
     assert outcome == "recovery-required"           # dangling link is NOT a usable source
     assert inst._journal_path(dest).exists()        # journal retained (not deleted)
     assert dest.is_symlink() and not dest.is_dir()  # the dangling link occupies dest
@@ -2214,7 +2105,7 @@ def test_regular_file_active_source_not_activated(tmp_path):
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"
     staging = src / ".app.candidate-1-2"; staging.write_text("not a dir")  # regular file
-    outcome = inst._activate(dest, staging)
+    outcome = _activate(inst, dest, staging)
     assert outcome == "recovery-required"           # a regular file is not a source tree
     assert inst._journal_path(dest).exists()
 
@@ -2224,7 +2115,7 @@ def test_real_dir_candidate_activates(tmp_path):
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "f").write_text("x")
-    assert inst._activate(dest, staging) == "activated"
+    assert _activate(inst, dest, staging) == "activated"
     assert dest.is_dir() and not inst._journal_path(dest).exists()
 
 
@@ -2255,7 +2146,7 @@ def test_activate_failed_rename_leaving_dangling_dest_restores_prior(tmp_path, m
         return real(a, b, *args, **kw)
     monkeypatch.setattr("lhpc.core.install.os.rename", fake_rename)
     _fail_noreplace(monkeypatch, suffixes=(".app.candidate-1-2",), plant_dangling=True)
-    outcome = inst._activate(dest, staging)
+    outcome = _activate(inst, dest, staging)
     # the injected dangling symlink is NEVER deleted to continue: evidence retained,
     # prior stays archived at .prev, journal retained for recovery
     assert outcome == "recovery-required"
@@ -2281,7 +2172,7 @@ def test_activate_dangling_dest_unrestorable_retains_journal(tmp_path, monkeypat
         return real(a, b, *args, **kw)
     monkeypatch.setattr("lhpc.core.install.os.rename", fake_rename)
     _fail_noreplace(monkeypatch, plant_dangling=True)
-    assert inst._activate(dest, staging) == "recovery-required"
+    assert _activate(inst, dest, staging) == "recovery-required"
     assert inst._journal_path(dest).exists()           # journal retained (recovery route)
 
 
@@ -2297,7 +2188,7 @@ def test_activation_prev_cleanup_failure_recovery_required_then_recoverable(tmp_
         lambda self, txn, prev, ident=None: False if fail["on"]
         else real(self, txn, prev, ident))
     # Activation succeeds, but the .prev cleanup fails -> recovery-required (typed).
-    assert inst._activate(dest, staging) == "recovery-required"
+    assert _activate(inst, dest, staging) == "recovery-required"
     assert dest.is_dir() and (dest / "m").read_text() == "NEW"   # active source usable
     assert inst._journal_path(dest).exists()                     # journal retained
     assert (src / ".app.prev").exists()                          # .prev retained
@@ -2409,7 +2300,7 @@ def _register_tree(inst, dest, comp, remote=""):
                           capture_output=True, text=True, env=env).stdout.strip()
     rel = str(dest.relative_to(inst.paths.runtime_root))
     assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
-        rel, remote, "backfilled", head, _t.time(), "", (comp.id,)))
+        rel, remote, "pinned", head, _t.time(), "", (comp.id,)))
     return head
 
 
@@ -2630,10 +2521,10 @@ def test_journal_exclusive_create_refuses_existing_leaf(tmp_path):
     inst.paths.under("state", "source-txn").mkdir(parents=True, exist_ok=True)
     jp = inst._journal_path(dest)
     jp.write_text("{injected}")                                  # regular file injected
-    assert inst._create_journal(dest, prev, staging) is None     # O_EXCL refuses
+    assert inst._create_journal(dest, prev, staging, _META, {}) is None     # O_EXCL refuses
     assert jp.read_text() == "{injected}"                        # never overwritten
     jp.unlink(); os.symlink(tmp_path / "x", jp)                  # symlink injected
-    assert inst._create_journal(dest, prev, staging) is None     # O_NOFOLLOW refuses
+    assert inst._create_journal(dest, prev, staging, _META, {}) is None     # O_NOFOLLOW refuses
 
 
 def test_injected_journal_blocks_before_prev_change(tmp_path):
@@ -2644,7 +2535,7 @@ def test_injected_journal_blocks_before_prev_change(tmp_path):
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "m").write_text("NEW")
     inst._journal_path(dest).write_text("{injected regular journal}")
-    outcome = inst._activate(dest, staging)
+    outcome = _activate(inst, dest, staging)
     assert outcome == "recovery-required"
     assert (dest / "m").read_text() == "LIVE"                    # dest untouched
     assert not (src / ".app.prev").exists()                      # .prev NEVER created
@@ -2665,8 +2556,9 @@ def test_activate_verifies_candidate_identity_before_promotion(tmp_path):
         name = ".app.candidate-1-2"
         st_dev = -1
         st_ino = -1
+        fd = -1                                   # dead descriptor: no live ident either
     with source_fs.ManagedSourceTransaction(inst.paths, dest.parent) as txn:
-        outcome = inst._activate_held(txn, dest, staging, handle=_BadHandle())
+        outcome = inst._activate_held(txn, dest, staging, _META, handle=_BadHandle())
     assert outcome in ("recovery-required", "failed-clean")
     assert (dest / "m").read_text() == "LIVE"                    # active source not replaced
 
@@ -2680,7 +2572,7 @@ def test_candidate_substitution_is_recovery_required_and_preserved(tmp_path):
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "x").write_text("NEW")
     with source_fs.ManagedSourceTransaction(inst.paths, dest.parent) as txn:
         bad = source_fs.CandidateHandle(".app.candidate-1-2", -1, -1, -1)   # wrong inode
-        outcome = inst._activate_held(txn, dest, staging, handle=bad)
+        outcome = inst._activate_held(txn, dest, staging, _META, handle=bad)
     assert outcome == "recovery-required"                     # NOT failed-clean
     assert (dest / "m").read_text() == "LIVE"                 # active source untouched
     assert (staging / "x").read_text() == "NEW"              # substituted staging RETAINED
@@ -2695,7 +2587,7 @@ def test_journal_ownership_lost_before_update_rolls_back(tmp_path, monkeypatch):
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "m").write_text("NEW")
     monkeypatch.setattr(type(inst), "_update_journal",
                         lambda self, jh, d, p, s, state: False)   # ownership lost on update
-    outcome = inst._activate(dest, staging)
+    outcome = _activate(inst, dest, staging)
     assert outcome == "recovery-required"
     assert (dest / "m").read_text() == "LIVE"                 # prior restored
     assert inst._journal_path(dest).exists()                  # journal retained
@@ -2731,7 +2623,7 @@ def test_substitution_during_successful_provenance_is_recovery_required(tmp_path
         def va():      # provenance "passes" but swaps the now-active dest for a NEW inode
             shutil.rmtree(src / "app"); (src / "app").mkdir(); (src / "app" / "evil").write_text("x")
             return True
-        outcome = inst._activate_held(txn, dest, staging, verify_active=va, handle=h)
+        outcome = inst._activate_held(txn, dest, staging, _META, verify_active=va, handle=h)
     assert outcome == "recovery-required"                       # never reported activated
     assert (src / ".app.prev").exists()                        # .prev retained
     assert inst._journal_path(dest).exists()                   # journal retained
@@ -2752,7 +2644,7 @@ def test_substitution_during_failed_provenance_does_not_delete_dest(tmp_path):
         def va():      # provenance FAILS, and the active dest was swapped meanwhile
             shutil.rmtree(src / "app"); (src / "app").mkdir(); (src / "app" / "evil").write_text("x")
             return False
-        outcome = inst._activate_held(txn, dest, staging, verify_active=va, handle=h)
+        outcome = inst._activate_held(txn, dest, staging, _META, verify_active=va, handle=h)
     assert outcome == "recovery-required"
     assert (src / "app" / "evil").exists()                     # substituted dest NOT deleted
     assert (src / ".app.prev").exists() and inst._journal_path(dest).exists()
@@ -2814,7 +2706,7 @@ def test_v5_inode_recycling_forged_ctime_prior_not_restored(tmp_path):
         "version": 5, "state": "prior-archived", "source_rel": rel(dest),
         "prev_rel": rel(prev), "candidate_rel": rel(staging),
         "txn_id": inst._txn_id(rel(staging)),
-        "meta": {"selector": "backfilled", "resolved_commit": "", "remote": "",
+        "meta": {"selector": "pinned", "resolved_commit": "", "remote": "",
                  "strategy": "", "components": ["app"], "had_prior": True},
         "idents": {"candidate": None, "prev": forged}}))
     msgs = inst.recover_source_activations()
@@ -3180,7 +3072,7 @@ def _svc_env(tmp_path):
     (dest / "code.c").write_text("x")
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", time.time(),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "pinned", "", time.time(),
                                        "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     from lhpc.core.probes.backends import CommandResult
@@ -3563,7 +3455,7 @@ def test_uninstall_dirty_after_detach_restores_source(tmp_path, monkeypatch):
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc",
                                        "https://github.com/makrohard/loraham-kiss-tnc.git",
-                                       "backfilled", head, time.time(), "",
+                                       "pinned", head, time.time(), "",
                                        ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = ControllerService(system=RealSystem(), paths=Paths(runtime_root=tmp_path))
     rec_before = source_registry.read_record(svc._paths, "src/loraham-kiss-tnc")
@@ -3596,7 +3488,7 @@ def test_uninstall_dirty_after_detach_reoccupied_is_recovery(tmp_path, monkeypat
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc",
                                        "https://github.com/makrohard/loraham-kiss-tnc.git",
-                                       "backfilled", head, time.time(), "",
+                                       "pinned", head, time.time(), "",
                                        ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = ControllerService(system=RealSystem(), paths=Paths(runtime_root=tmp_path))
 
@@ -4119,7 +4011,7 @@ def test_other_stack_start_keeps_voice_sidecar_marker(tmp_path, monkeypatch):
     assert "voice" in svc.clear_stale_interactive(keep="kiss")
 
 
-# ===== 0.2.9: the render contract "once per request" =====
+# ===== the render contract "once per request" =====
 def _count_calls(monkeypatch, owner, name):
     n = []
     orig = getattr(owner, name)
@@ -4255,3 +4147,111 @@ def test_a_restart_plan_assesses_the_snapshot_once(tmp_path, monkeypatch):
     plan = svc.restart("kiss", apply=False)
     assert plan.ok and "dependents" in plan.data
     assert len(n) <= 2, f"restart plan assessed {len(n)}×"          # one memoized (+ one fresh recheck)
+
+
+def test_symlinked_source_is_absent_for_every_operation(tmp_path):
+    """ONE presence policy (`source_fs.source_present`): a symlink at a managed source path is
+    not a managed source. Status, the source check, the install plan, build, test and start all
+    say so; nothing follows the link — no git, no build, no log is ever run through it."""
+    outside = tmp_path / "outside" / "loraham-daemon"
+    (outside / ".git").mkdir(parents=True)
+    (tmp_path / "src").mkdir()
+    link = tmp_path / "src" / "loraham-daemon"
+    link.symlink_to(outside)
+    svc = _svc(tmp_path, {**_ls_remote(DAEMON_REMOTE, DAEMON_BRANCH, A), **_git_src(link, A)})
+    assert not svc.is_installed("daemon")
+    st = svc.build_snapshot(fresh=True).stacks
+    comp = next(ss for ss in st if ss.stack.id == "daemon").components["loraham-daemon"]
+    assert comp.source_state is SourceState.MISSING
+    res = svc.source_check("daemon")
+    assert not res.ok and res.data["counts"][su.UP_TO_DATE] == 0
+    plan = svc.install("daemon", apply=False)
+    assert any("unexpected symlink leaf" in d for d in plan.details), plan.details
+    for op in ("build", "test", "start"):
+        r = getattr(svc, op)("daemon", apply=True)
+        assert not r.ok, (op, r.summary)
+        assert "not installed" in " ".join([r.summary or ""] + list(r.details or [])).lower(), (op, r.summary, r.details)
+    assert not list((tmp_path / "logs").glob("*loraham-daemon*")) if (tmp_path / "logs").exists() else True
+    assert not any(str(link) in " ".join(c) for c in svc._system.runner.calls)   # nothing through the link
+    assert link.is_symlink() and outside.is_dir()                                # untouched
+
+
+def test_detach_and_remove_clears_a_checkout_holding_a_runtime_socket(tmp_path):
+    """The verified-removal protocol must finish for a checkout the stack RAN from (runtime
+    socket + FIFO inside it): the quarantine is this transaction's own leaf, so IPC leaves are
+    deleted with it — otherwise the removal aborted after the detach and left a quarantine
+    that blocked every retry."""
+    import socket
+    paths = Paths(runtime_root=tmp_path)
+    leaf = tmp_path / "src" / "app"
+    (leaf / ".run").mkdir(parents=True)
+    (leaf / "README.md").write_text("x")
+    s = socket.socket(socket.AF_UNIX)
+    s.bind(str(leaf / ".run" / "gps.sock"))
+    s.close()
+    os.mkfifo(leaf / ".run" / "fifo")
+    handle = source_fs.capture_leaf(paths, leaf)
+    try:
+        ok, why = source_fs.detach_and_remove(paths, leaf, handle)
+    finally:
+        handle.close()
+    assert ok, why
+    assert not leaf.exists() and not list((tmp_path / "src").iterdir())    # no quarantine left
+
+
+def _repo_with_lhpc_patch(repo: Path):
+    """A committed checkout whose ONLY working-tree change is an applied patch file (the shape a
+    build-time `openhop-apply-patch.sh` leaves behind). Returns (head, patch_path)."""
+    import subprocess
+    repo.mkdir(parents=True)
+    g = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@x"]
+    subprocess.run([*g, "init", "-q"], check=True)
+    (repo / "a.txt").write_text("one\n"); (repo / "b.txt").write_text("keep\n")
+    subprocess.run([*g, "add", "."], check=True); subprocess.run([*g, "commit", "-q", "-m", "base"], check=True)
+    head = subprocess.run([*g, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    (repo / "a.txt").write_text("one\ntwo\n")
+    patch = repo.parent / "lhpc.patch"
+    patch.write_text(subprocess.run([*g, "diff"], capture_output=True, text=True, check=True).stdout)
+    subprocess.run([*g, "checkout", "--", "a.txt"], check=True)
+    subprocess.run([*g, "apply", str(patch)], check=True)
+    return head, patch
+
+
+def test_probe_reports_an_lhpc_patched_tree_as_clean(tmp_path):
+    """A checkout whose only modifications are LHPC's own build-time patch is not dirty: status
+    says MATCH (so known-working can confirm it), and the version drops `-dirty`. Without the
+    declared patch, or with one extra edit, it is dirty as before."""
+    from lhpc.core.probes import RealSystem
+    from lhpc.core.probes.source import probe_source
+    repo = tmp_path / "src" / "app"
+    head, patch = _repo_with_lhpc_patch(repo)
+    sysx = RealSystem()
+    plain = probe_source(sysx, SourceSpec(path="src/app", pin_commit=head), str(repo))
+    assert plain.state is SourceState.DIRTY
+    p = probe_source(sysx, SourceSpec(path="src/app", pin_commit=head, patches=(str(patch),)), str(repo))
+    assert p.state is SourceState.MATCH and p.evidence.get("patched") == "lhpc"
+    assert not p.version.endswith("-dirty")
+    (repo / "b.txt").write_text("keep\nedited\n")                      # an operator edit on top
+    p2 = probe_source(sysx, SourceSpec(path="src/app", pin_commit=head, patches=(str(patch),)), str(repo))
+    assert p2.state is SourceState.DIRTY
+
+
+def test_dirty_report_ignores_the_shipped_patch_only(tmp_path):
+    """The update's overwrite gate: a tree carrying exactly the declared patch is not "local
+    modifications"; any other tracked change still refuses the overwrite."""
+    from lhpc.core.probes import RealSystem
+    comp0 = Component(id="app", name="app", kind=ComponentKind.SERVICE,
+                      source=SourceSpec(path="src/app", local_dir="app"))
+    inst = _inst(tmp_path, comp0)
+    dest = inst.paths.under("src", "app")
+    head, patch = _repo_with_lhpc_patch(dest)
+    inst.system = RealSystem()
+    assert inst.dirty_report(dest, "src/app")                          # undeclared patch: dirty
+    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
+                     source=SourceSpec(path="src/app", local_dir="app", patches=(str(patch),)))
+    inst = _inst(tmp_path, comp)
+    inst.system = RealSystem()
+    assert not inst.dirty_report(dest, "src/app")                      # exactly the patch: clean
+    (dest / "a.txt").write_text("one\ntwo\nthree\n")                     # an extra hunk
+    assert inst.dirty_report(dest, "src/app")
+

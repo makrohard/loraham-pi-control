@@ -41,23 +41,6 @@ def test_record_dedupe_and_keep_three(tmp_path):
     assert [c["entries"]["c1"]["commit"][0] for c in comps] == ["c", "d", "b"]
 
 
-def test_newest_commit_for_uses_one_coherent_composition(tmp_path):
-    paths = _paths(tmp_path)
-    known_working.record(paths, "s",
-                         {"c1": {"commit": "1" * 40, "selector": "pinned", "remote": "",
-                                 "source_rel": "src/x"},
-                          "c2": {"commit": "2" * 40, "selector": "pinned", "remote": "",
-                                 "source_rel": "src/y"}}, {"confirmed_at": 1.0})
-    known_working.record(paths, "s",
-                         {"c1": {"commit": "3" * 40, "selector": "dev", "remote": "",
-                                 "source_rel": "src/x"},
-                          "c2": {"commit": "4" * 40, "selector": "dev", "remote": "",
-                                 "source_rel": "src/y"}}, {"confirmed_at": 2.0})
-    assert known_working.newest_commit_for(paths, "s", "c1") == "3" * 40   # newest composition
-    assert known_working.newest_commit_for(paths, "s", "c2") == "4" * 40   # SAME composition
-    assert known_working.newest_commit_for(paths, "s", "nope") == ""
-
-
 def test_store_malformed_or_symlinked_is_empty(tmp_path):
     paths = _paths(tmp_path)
     sp = known_working.store_path(paths, "s")
@@ -81,7 +64,7 @@ def test_candidate_roundtrip_and_clear(tmp_path):
     assert cand and cand["band"] == "433" and cand["hash"] == known_working.composition_hash(_entries())
     # a candidate claiming another stack is refused
     assert known_working.read_candidate(paths, "other") is None
-    known_working.clear_candidate(paths, "s")
+    assert known_working.clear_candidate_checked(paths, "s")[0]
     assert known_working.read_candidate(paths, "s") is None
 
 
@@ -147,7 +130,7 @@ def test_offer_hidden_when_stopped_recorded_or_changed(tmp_path):
     known_working.record(paths, "chat", entries, {"confirmed_at": 1.0})
     assert svc.known_working_offer("chat") is None
     # sources changed since the start (registry commit differs) -> no offer
-    known_working.clear_candidate(paths, "chat")
+    assert known_working.clear_candidate_checked(paths, "chat")[0]
     _seed_running_chat(tmp_path)                                  # fresh candidate (commit a…)
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
         "src/LoRaHAM_Daemon", "", "dev", "b" * 40, time.time(), "",
@@ -161,7 +144,7 @@ def test_confirm_records_and_second_confirm_is_noop(tmp_path):
     svc = _bind_chat_identity(_svc(tmp_path, cmdlines={555: ["loraham_chat"]}), tmp_path)
     res = svc.confirm_known_working("chat")
     assert res.ok and "Recorded" in res.summary
-    assert known_working.newest_commit_for(paths, "chat", "loraham-chat") == "a" * 40
+    assert known_working.load(paths, "chat")[0]["entries"]["loraham-chat"]["commit"] == "a" * 40
     res2 = svc.confirm_known_working("chat")
     assert res2.ok and "already recorded" in res2.summary
 
@@ -201,7 +184,7 @@ def test_manual_stack_offer_and_confirm_without_candidate(tmp_path):
     assert res.ok and "Recorded" in res.summary
     comps = known_working.load(paths, "chat")
     assert comps and "probe-verified" in comps[0]["validated"]["evidence"]
-    assert known_working.newest_commit_for(paths, "chat", "loraham-chat") == "a" * 40
+    assert known_working.load(paths, "chat")[0]["entries"]["loraham-chat"]["commit"] == "a" * 40
 
 
 def test_manual_stack_confirm_refuses_stopped_or_unproven(tmp_path):
@@ -428,7 +411,7 @@ def test_resolver_stale_identity_record_is_history_only(tmp_path):
     st = _mk_stack(("a", "src/a", ""))
     assert known_working.compatible_composition(paths, st, _EFF) is None   # ineligible
     assert known_working.load(paths, "s")                                  # still visible
-    assert known_working.newest_commit_for(paths, "s", "a") == "1" * 40    # history intact
+    assert known_working.load(paths, "s")[0]["entries"]["a"]["commit"] == "1" * 40   # history intact
 
 
 def test_no_complete_record_means_whole_stack_fallback_never_mixed(tmp_path):

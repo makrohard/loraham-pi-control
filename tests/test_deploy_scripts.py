@@ -131,12 +131,14 @@ def _deployment(root: Path, *, unit_home: Path, unit_target: Path | None = None,
     import sys as _sys
 
     from lhpc.core import updater_units as _U
-    for d in ("config", "src/loraham-pi-control", "venv/lhpc/bin", "state/locks",
+    for d in ("config", "src/loraham-pi-control", "venv/lhpc/bin", "state/locks", "state/graywolf",
               "logs", "build", "bin", "profiles", "systemd", "docs"):
         (root / d).mkdir(parents=True, exist_ok=True)
     (root / "config" / "local.toml").write_text('[operator]\ncallsign = "KEEP"\n')
     (root / "config" / "secrets.toml").write_text("hmac = 'x'\n")
     (root / "state" / "locks" / "controller-runtime").write_text("")
+    (root / "state" / "graywolf" / "graywolf.db").write_text("APP-DATA")       # kept by default
+    (root / "profiles" / "known-working.toml").write_text("KEEP")
     # Executable fake controller: the uninstall quiescence gate invokes `lhpc _controller-uninstall-prep`
     # (answered "quiescent" -> exit 0 so teardown runs) and the ATOMIC guard claim/release, which we
     # delegate to the REAL CLI (via the fake python) so the guard file is created/removed for real.
@@ -184,7 +186,7 @@ def test_install_refuses_existing_checkout_without_touching_it(tmp_path):
     r = _run(INSTALL, ["--target", str(root), "--no-service"], home, fb)
     assert r.returncode != 0
     out = r.stdout + r.stderr
-    assert "not a config-only remainder" in out or "found src" in out    # freshness refusal
+    assert "not an uninstall remainder" in out and "found src" in out    # freshness refusal
     assert (co / "SENTINEL").read_text() == "do-not-touch"   # untouched
     # No fresh clone happened over it (the sentinel + our fake .git are intact).
     assert (co / ".git").is_dir() and not (co / "lhpc").exists()
@@ -217,16 +219,45 @@ def test_install_refuses_symlinked_ancestor(tmp_path):
 
 
 @pytest.mark.slow
-def test_install_allows_config_only_remainder(tmp_path):
-    """A reinstall over a preserved config-only remainder is permitted (freshness OK)."""
-    home = tmp_path / "home"; home.mkdir()
-    root = home / "loraham-pi-control"; (root / "config").mkdir(parents=True)
+def _remainder(root: Path):
+    """What a default uninstall leaves behind: config, marker, profiles and app data."""
+    for d in ("config", "profiles", "state/graywolf", "state/meshcore"):
+        (root / d).mkdir(parents=True)
     (root / "config" / "local.toml").write_text("[operator]\ncallsign='X'\n")
     (root / ".lhpc-root").write_text('{"schema_version":1,"root":"%s"}' % root)
+    (root / "state" / "graywolf" / "graywolf.db").write_text("APP-DATA")
+
+
+@pytest.mark.slow
+def test_install_allows_uninstall_remainder(tmp_path):
+    """A reinstall over what a default uninstall kept is permitted (freshness OK) and touches none of it."""
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"; _remainder(root)
     fb = _fake_bin(tmp_path, git_src=REPO)
     r = _run(INSTALL, ["--target", str(root)], home, fb)
     assert r.returncode == 0, r.stdout + r.stderr        # reused the remainder, installed fresh
     assert (root / "src" / "loraham-pi-control" / ".git").is_dir()
+    assert (root / "state" / "graywolf" / "graywolf.db").read_text() == "APP-DATA"
+
+
+@pytest.mark.parametrize("leftover", ["state/locks", "state/registry", "state/loraham"])
+def test_install_refuses_foreign_state_entry(tmp_path, leftover):
+    """Controller state that survived (a crashed uninstall, a hand-made dir) is not a remainder."""
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"; _remainder(root)
+    (root / leftover).mkdir(parents=True)
+    fb = _fake_bin(tmp_path, git_src=REPO)
+    r = _run(INSTALL, ["--target", str(root)], home, fb)
+    assert r.returncode != 0 and "not a managed stack's app data" in (r.stdout + r.stderr)
+    assert not (root / "src").exists()
+
+
+def test_app_data_list_is_identical_in_both_scripts():
+    """ONE allowlist: the app data a default uninstall keeps is exactly what install.sh accepts."""
+    lines = {s: [ln for ln in (REPO / s).read_text().splitlines() if ln.startswith("APP_DATA=")]
+             for s in ("install.sh", "uninstall.sh")}
+    assert lines["install.sh"] == lines["uninstall.sh"] and len(lines["install.sh"]) == 1
+    assert "state/graywolf" in lines["install.sh"][0]
 
 
 def test_install_refuses_foreign_local_bin_link(tmp_path):
@@ -352,8 +383,10 @@ def test_uninstall_default_preserves_config_removes_rest(tmp_path):
     fb = _fake_bin(tmp_path)                      # systemctl fake logs calls
     r = _run(UNINSTALL, ["--target", str(root), "--yes"], home, fb)
     assert r.returncode == 0, r.stdout + r.stderr
-    for gone in ("src", "venv", "state", "logs", "build", "bin", "profiles", "systemd", "docs"):
+    for gone in ("src", "venv", "state/locks", "logs", "build", "bin", "systemd", "docs"):
         assert not (root / gone).exists(), f"{gone} should be removed"
+    assert (root / "state" / "graywolf" / "graywolf.db").read_text() == "APP-DATA"   # app data kept
+    assert (root / "profiles" / "known-working.toml").read_text() == "KEEP"
     assert (root / "config" / "local.toml").read_text().count("KEEP") == 1   # preserved
     assert (root / "config" / "secrets.toml").exists()
     assert (root / ".lhpc-root").exists()                                    # marker preserved
@@ -527,21 +560,6 @@ def test_uninstall_removes_canonical_units_leaves_foreign(tmp_path):
     assert muts and muts[0][-1] == "lhpc-boot-restore.service", muts[:4]
 
 
-def test_uninstall_purge_legacy_config_only(tmp_path):
-    """A config-only remainder WITHOUT a valid marker is refused by default --purge, but allowed
-    with the explicit --purge-legacy-config-only acknowledgement."""
-    home = tmp_path / "home"; home.mkdir()
-    root = home / "loraham-pi-control"; (root / "config").mkdir(parents=True)
-    (root / "config" / "local.toml").write_text("x")     # no venv/src, no marker -> not provable
-    fb = _fake_bin(tmp_path)
-    r1 = _run(UNINSTALL, ["--target", str(root), "--purge", "--yes"], home, fb)
-    assert r1.returncode != 0 and "purge-legacy-config-only" in (r1.stdout + r1.stderr)
-    assert root.exists()
-    r2 = _run(UNINSTALL, ["--target", str(root), "--purge-legacy-config-only", "--yes"], home, fb)
-    assert r2.returncode == 0, r2.stdout + r2.stderr
-    assert not root.exists()
-
-
 def test_uninstall_rejects_copied_marker_from_other_root(tmp_path):
     """A .lhpc-root whose stored root names a DIFFERENT dir does not prove identity (copied
     marker) — with no structural triple either, uninstall refuses."""
@@ -551,7 +569,7 @@ def test_uninstall_rejects_copied_marker_from_other_root(tmp_path):
     (root / ".lhpc-root").write_text('{"schema_version":1,"root":"/somewhere/else"}')
     fb = _fake_bin(tmp_path)
     r = _run(UNINSTALL, ["--target", str(root), "--purge", "--yes"], home, fb)
-    assert r.returncode != 0 and "purge-legacy-config-only" in (r.stdout + r.stderr)
+    assert r.returncode != 0 and "does not prove it is an LHPC controller root" in (r.stdout + r.stderr)
     assert root.exists()
 
 

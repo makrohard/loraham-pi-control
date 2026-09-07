@@ -22,8 +22,8 @@ def _fakebin(tmp_path, *, no_sudo=False):
     def w(name, body):
         p = b / name; p.write_text("#!/usr/bin/env bash\n" + body); p.chmod(0o755)
 
-    # POISON sudo: the script must NEVER invoke a sudo binary — it requires root and routes its
-    # historic `sudo` prefixes through an in-script no-op function (which shadows PATH lookup). Any
+    # POISON sudo: the script must NEVER invoke a sudo binary — it requires root and carries no
+    # sudo prefix at any command position (manifest commands lose theirs when emitted). Any
     # call site that escaped the function would hit this poison and fail the test loudly. This is a
     # stronger guarantee than removing sudo from PATH (/usr/bin, with the real sudo, stays on it).
     # no_sudo=True removes it entirely for the explicit sudo-less-environment test.
@@ -478,7 +478,7 @@ def test_apt_block_carries_the_tools_later_sections_need():
     # are present by then. The prebuilt-tarball fetch (wget/xz-utils) is gone — QEMU is built from
     # source now, so git + meson + ninja-build replace it.
     text = _BOOTSTRAP.read_text()
-    apt_i = text.index("sudo apt-get install -y")
+    apt_i = text.index("\napt-get install -y")
     apt_block = text[apt_i:text.index("\n\n", apt_i)]
     for pkg in ("ca-certificates", "curl", "git", "meson", "ninja-build"):
         assert f"\n    {pkg}" in apt_block, pkg
@@ -660,7 +660,7 @@ def test_default_package_set_carries_voice_cli_audio_but_never_gtk():
     # toolchain stays strictly in the --with-gui opt-in scope — a headless/Lite image must never
     # pull a graphical environment. libncurses-dev is SHARED with chat and stays in core.
     text = _BOOTSTRAP.read_text()
-    apt_i = text.index("sudo apt-get install -y --no-install-recommends")
+    apt_i = text.index("\napt-get install -y --no-install-recommends")
     core_block = text[apt_i:text.index("\n\n", apt_i)]
     assert "libasound2-dev" in core_block
     assert "libcodec2-dev" in core_block
@@ -672,7 +672,7 @@ def test_default_apt_install_drops_recommends():
     # Recommends are how the cascade arrived (git -> openssh-client -> xauth -> libX11), so the one
     # merged install runs --no-install-recommends. Only hard Depends land on a headless image.
     text = _BOOTSTRAP.read_text()
-    assert "sudo apt-get install -y --no-install-recommends \\" in text
+    assert "\napt-get install -y --no-install-recommends \\" in text
 
 
 def test_committed_snapshot_equals_generator(tmp_path):
@@ -1003,7 +1003,7 @@ def test_no_unguarded_command_can_abort_before_the_summary(tmp_path):
     text = _BOOTSTRAP.read_text()
     for i, line in enumerate(text.splitlines()):
         s = line.strip()
-        if s.startswith("sudo systemctl disable"):
+        if s.startswith("systemctl disable"):
             assert s.endswith("|| true") or line.startswith("\t"), \
                 f"unguarded systemctl disable at line {i + 1}: {line!r}"
     # Unit presence is tested PIPELINE-FREE. `systemctl list-unit-files | grep -q '^unit'` inverts
@@ -1021,7 +1021,7 @@ def test_no_unguarded_command_can_abort_before_the_summary(tmp_path):
     for line in text.splitlines():
         assert not ("systemctl" in line and "| grep" in line), \
             f"pipefail-inverting unit guard: {line!r}"
-    assert "if sudo usermod -aG" in text                               # branched, not bare
+    assert "if usermod -aG" in text                               # branched, not bare
 
 
 # --- system nginx: keep the package, disable the ROOT service ------------------------------------
@@ -1154,7 +1154,7 @@ def test_readonly_failclosed_checks_run_before_any_mutation(tmp_path):
     text = _BOOTSTRAP.read_text()
     # The real first mutation is the apt-get update COMMAND (newline-bounded — not the dry-run
     # block's echo that merely mentions "sudo apt-get update").
-    first_mutation = text.index("\nsudo apt-get update\n")
+    first_mutation = text.index("\napt-get update\n")
     for marker in ('exit 3', 'if ! systemctl list-unit-files --no-legend >/dev/null 2>&1; then'):
         idx = text.index(marker)
         assert idx < first_mutation, f"{marker!r} is evaluated mid-mutation (after apt)"

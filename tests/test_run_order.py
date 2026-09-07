@@ -389,6 +389,36 @@ def test_client_stop_releases_daemon_only_when_unused(tmp_path, monkeypatch):
     assert svc._daemon_bands_to_release(svc.stack("daemon"), "daemon", {"433"})[1] == []
 
 
+def test_component_scoped_stop_releases_nothing_shared(tmp_path, monkeypatch):
+    """Stopping ONE component leaves its siblings running, so it must not ask "does anything
+    else still need the daemon band / this dependency stack?" — that question excludes the
+    target's own stack and is only sound when the whole stack stopped. A component stop used
+    to release the daemon band and force-cascade the rest of its own stack off the air."""
+    svc = _svc(tmp_path)
+    asked = []
+    monkeypatch.setattr(ControllerService, "_daemon_bands_to_release",
+                        lambda self, stk, sid, bands: (asked.append(sid), ("daemon", []))[1])
+    monkeypatch.setattr(ControllerService, "_dep_stacks_to_release",
+                        lambda self, stk, sid: (asked.append(sid), [])[1])
+    assert svc.stop("loraham-kiss-serial", apply=True).ok      # component target
+    assert asked == []                                          # nothing shared is touched
+    assert svc.stop("kiss", apply=True).ok                      # whole-stack target
+    assert "kiss" in asked                                      # the release question is asked
+
+
+def test_daemon_named_by_component_id_still_cascades(tmp_path, monkeypatch):
+    """`stop loraham-daemon` must orphan-check exactly like `stop daemon`: the dependent
+    lookups see the OWNER STACK, not the raw component id (which matched no stack and silently
+    returned no dependents, stopping the daemon under a running KISS TNC)."""
+    svc = _svc(tmp_path)
+    seen = []
+    real = ControllerService.stop_dependents
+    monkeypatch.setattr(ControllerService, "stop_dependents",
+                        lambda self, t, bands=None: (seen.append(t), real(self, t, bands=bands))[1])
+    svc.stop("loraham-daemon", apply=True)
+    assert "daemon" in seen and "loraham-daemon" not in seen
+
+
 def test_dep_stacks_to_release_selection(tmp_path, monkeypatch):
     """Stopping a client also selects the non-daemon dependency stacks it ALONE was using
     (kiss under graywolf) — running, no other dependent; the daemon is never in the set

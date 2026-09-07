@@ -10,12 +10,12 @@ GPS, persistence, readiness and lifecycle. The node never drives SPI or GPIO its
 | | |
 |---|---|
 | Components | `meshcore-node` (main — the one openhop process: chat node and/or repeater, by `mode`) · `meshcore-gps` (position feed, admitted by the global GPS plan) · `meshcore-webui` (optional browser GUI) · `meshcore-cli` (optional REPL) · `openhop-repeater-src` (library: the pinned repeater checkout, build-time only) |
-| Source / pin | `src/openhop-core` ← `openhop-dev/openhop_core` `dev` @ `8cdb04e` + one LHPC patch (`lhpc/data/patches/openhop-core-companion-fixes.patch`: the radio noise floor in the radio stats), applied idempotently at build — a conflict fails the build, and the patched checkout reads `dirty` in `lhpc status` (expected). Selectors: `dev` = Development, `main`/PyPI = Latest stable, the pin = Known working · `src/openhop-repeater` ← `openhop-dev/openhop_repeater` `dev` @ `efc5616` · `src/meshcore-webui` ← `adradr/meshcore-webui` `94dcc3d` (+ `meshcore-webui-lhpc-guards.patch`) · `src/meshcore-cli` ← `meshcore-dev/meshcore-cli` `v1.6.3` |
+| Source / pin | `src/openhop-core` ← `openhop-dev/openhop_core` `dev` @ `8cdb04e` + one LHPC patch (`lhpc/data/patches/openhop-core-companion-fixes.patch`: the radio noise floor in the radio stats), applied idempotently at build — a conflict fails the build, and the patched checkout reads `dirty` in `lhpc status` (expected). Selectors: `dev` = Development, `main`/PyPI = Latest stable, the pin = Known working (unless an operator-confirmed composition exists) · `src/openhop-repeater` ← `openhop-dev/openhop_repeater` `dev` @ `efc5616` · `src/meshcore-webui` ← `adradr/meshcore-webui` `94dcc3d` (+ `meshcore-webui-lhpc-guards.patch`) · `src/meshcore-cli` ← `meshcore-dev/meshcore-cli` `v1.6.3` |
 | Build | `lhpc build meshcore`: patch → in-tree `.venv` (`--system-site-packages`) → openHop Core → `meshcore_host` (shipped with lhpc) → the repeater's pinned closure (`openhop-repeater-constraints.txt`) and checkout. Web UI: a backend venv from `meshcore-webui-constraints.txt`; the React frontend is prebuilt package data (no npm on the box). Nothing is gui-gated — everything builds headless |
 | Run | `.venv/bin/python -m meshcore_host <runtime>/config/files/meshcore.toml` — the same command in every mode |
 | Config | `<runtime>/config/files/meshcore.toml` (0600 — it carries the private key), rendered from `lhpc/data/bases/meshcore.toml` on every start |
 | Identity | `<runtime>/config/secrets/meshcore_identity.key` (0600), written into the generated config as `[identity] key`; repeater: `openhop_repeater_identity.key` + `openhop_repeater_admin.txt` |
-| Endpoints | Companion TCP `127.0.0.1:5000` (chat modes) · repeater dashboard `127.0.0.1:8000` (repeater modes) · Web UI backend `127.0.0.1:8788`, loopback — reached through the LHPC proxy or an [SSH tunnel](../ssh-tunnel.md) |
+| Endpoints | Companion TCP `:5000` (chat modes; binds loopback while `meshcore_allow` is `127.0.0.1`, else `0.0.0.0`) · repeater dashboard `127.0.0.1:8000` (repeater modes) · Web UI backend `127.0.0.1:8788`, loopback — reached through the LHPC proxy or an [SSH tunnel](../ssh-tunnel.md) |
 | Persistence | chat: `<runtime>/state/meshcore/companion.db` (contacts, channels, routes, prefs, queued messages) · repeater modes: `<runtime>/state/openhop/` (the repeater's own SQLite/RRD; the hosted Companion persists there) · Web UI: `<runtime>/state/meshcore-webui/` (a display cache, never the identity) |
 | Resources | `tcp.port.5000` / `.8000` / `.8788` exclusive · `loraham.daemon-socket.868` consumer · `loraham.profile.868` requirement `MANAGED` · `meshcore.companion-client` exclusive, advisory (webui and cli) |
 | Depends on | `loraham-daemon` (868, MANAGED), `meshcore-gps`; the hardware setup must serve 868 |
@@ -47,7 +47,7 @@ GPS, persistence, readiness and lifecycle. The node never drives SPI or GPIO its
 | `repeater_name` | *(empty)* | required in the repeater modes; the repeater's own name, never the operator callsign |
 | `repeater_mode` | `forward` | upstream's behaviour: `forward` relays, `monitor` listens and advertises without relaying, `no_tx` only receives |
 
-Controller-owned, never shown: the private keys, the dashboard password, `db`, the GPS
+Controller-owned, not settings rows: the private keys, the dashboard password (Password section), `db`, the GPS
 socket/coordinates, `state_dir`. The daemon-side radio parameters live in [daemon](daemon.md).
 
 ## Mode

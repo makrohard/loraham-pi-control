@@ -153,7 +153,7 @@ def capture_session_token(pid: int) -> SessionToken | None:
         return None
     if min(pid, pgid, sid, start) <= 0:
         return None
-    # AUDIT S3: every process we capture was spawned with start_new_session=True, so it
+    # Every process we capture was spawned with start_new_session=True, so it
     # MUST be its own session AND group leader (sid == pgid == pid). If the pid was
     # recycled — in the microseconds before this read — by a mere MEMBER of a foreign
     # session, sid/pgid would point elsewhere and a later terminate_session could signal

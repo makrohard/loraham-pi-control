@@ -152,7 +152,7 @@ def candidate_key(paths: Paths, path: Path) -> str:
     try:
         doc = tomllib.loads(raw.decode("utf-8", "replace"))
     except (ValueError, UnicodeError) as exc:
-        # A file we cannot PARSE is not a file without a key. During migration the generated
+        # A file we cannot PARSE is not a file without a key. The generated
         # config can hold the only surviving copy of the identity alongside some unrelated
         # TOML damage; falling through here would fail to find that key, mint a new one, and
         # then regenerate the file over the original — losing the node's identity precisely
@@ -222,8 +222,7 @@ def ensure_identity(paths: Paths, candidates=(), filename: str = IDENTITY_FILENA
     """The key to write into the generated config, minting one if none exists yet.
 
     The ONLY place a MeshCore identity is created (`filename` selects the node's or the
-    repeater's). Adoption is tried first, so an install upgrading into this feature keeps
-    the identity it already has on air.
+    repeater's). Adoption is tried first, so a key already held in a candidate config is kept.
     """
     return adopt_identity(paths, candidates, filename) or _store(paths, _mint(), filename)
 

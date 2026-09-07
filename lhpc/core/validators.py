@@ -49,7 +49,7 @@ def safe_text(value, *, max_len: int = MAX_LEN, field: str = "value") -> str:
 
 
 # YOURCALL is the shell-safe replace-me token the refusal hints print — pasting a hint
-# verbatim must never yield a transmitting identity (audit-found: bare "YOURCALL" passed
+# verbatim must never yield a transmitting identity (bare "YOURCALL" passed
 # the voice shape).
 _PLACEHOLDER_BASES = ("N0CALL", "XX0XXX", "YOURCALL")
 
@@ -70,13 +70,13 @@ def callsign_base(value, *, field: str = "operator callsign", allow_empty: bool 
         if allow_empty:
             return ""
         raise ValidationError(f"{field}: required")
-    # THE INTERSECTION every licensed stack accepts (audit-found dead end: a digit-less
+    # THE INTERSECTION every licensed stack accepts (a digit-less
     # "ABCDEF" saved globally, then MeshCom refused it and both printed remedies were the
     # same invalid string). MeshCom's firmware requires the digit-bearing amateur structure
     # (prefix, digit(s), 1-3 suffix letters) — every real base callsign has it, so nothing
     # legitimate is lost by requiring it here.
     # Suffix 1-3 letters — the INTERSECTION the global must satisfy, because MeshCom's pinned
-    # firmware accepts at most three (audit-found: widening this to 4 let a global be set that
+    # firmware accepts at most three (widening this to 4 let a global be set that
     # MeshCom would reject, so an "inheritable" global was not actually inheritable everywhere).
     _reject_placeholder(s, field)          # named as a placeholder, not refused on shape
     if not re.fullmatch(r"[A-Z0-9]?[A-Z]?[0-9]+[A-Z]{1,3}", s) or not (3 <= len(s) <= 6):
@@ -361,20 +361,6 @@ def path_component(value, *, field: str = "id") -> str:
     if not re.fullmatch(r"[A-Za-z0-9._@-]+", s):
         raise ValidationError(f"{field}: illegal character(s) in {s!r}")
     return s
-
-
-def aprs_symbol(value, *, field: str = "value") -> str:
-    """A single APRS symbol character — one printable ASCII glyph (0x21–0x7E), e.g. `&` (I-gate),
-    `#` (digi), `R`. APRS symbols are intentionally punctuation, so the generic safe-text rules do
-    not apply. Blank is allowed (means: leave the source default). The daemon uses the first char."""
-    s = str(value).strip()
-    if s == "":
-        return ""
-    if len(s) != 1 or not (0x21 <= ord(s) <= 0x7E):
-        raise ValidationError(f"{field}: must be a single printable APRS symbol character")
-    return s
-
-
 def aprs_filter(value, *, field: str = "value") -> str:
     """An APRS-IS server filter expression, e.g. `r/48.46/9.96/100 p/DL/DK b/N0CALL*`.
 
@@ -433,7 +419,6 @@ _NAMED = {
     "callsign_voice": callsign_voice,
     "callsign_meshcom": callsign_meshcom,
     "path": path_value,
-    "aprs_symbol": aprs_symbol,
     "aprs_filter": aprs_filter,
     "sync": sync_word,
     "text": safe_text,
@@ -463,7 +448,7 @@ def validate_param(param, value) -> str:
         s = str(value).strip()
         if not re.fullmatch(r"-?[0-9]{1,9}(\.[0-9]{1,9})?", s):
             raise ValidationError(f"{name}: not a number ({value!r})")
-        # AUDIT IN3: enforce declared min/max like the int branch (was skipped).
+        # Enforce declared min/max like the int branch.
         fv = float(s)
         lo, hi = getattr(param, "min", None), getattr(param, "max", None)
         if lo is not None and fv < lo:
@@ -480,7 +465,7 @@ def validate_param(param, value) -> str:
     vname = getattr(param, "validator", "") or ""
     fn = _NAMED.get(vname, safe_text)
     cleaned = fn(value, field=name)
-    # AUDIT S2: a POSITIONAL free-text param (no `arg` flag prefix, no named validator)
+    # A POSITIONAL free-text param (no `arg` flag prefix, no named validator)
     # emitted as a bare token starting with '-' would be parsed as an option by a GNU
     # target. Reject it — the value stays exactly one data token, never a flag. Named
     # validators (callsign/host/…) already constrain their charset, so only the

@@ -13,8 +13,8 @@
   <details class="advcfg" id="gps-row"{% if request.args.get('open') == 'gps' %} open data-force-open="1"{% endif %}>
     <summary>Position (GPS)
       {# GREEN means PROVEN, not merely configured. Selecting `gpsd` with no gpsd on the box is a
-         perfectly valid configuration, and this pill used to read green for it while `lhpc doctor`
-         said "gpsd ... answers but owns NO receiver". Positive evidence here is a RUNNING consumer:
+         perfectly valid configuration, and this pill must not read green for it while `lhpc doctor`
+         says "gpsd ... answers but owns NO receiver". Positive evidence here is a RUNNING consumer:
          a start is refused when the feed cannot reach its source, so a live consumer means the
          source was proven at least once. Configured-but-unproven is neutral, never green. No probe
          is added — gps_view() is display-only by design (see its docstring). #}

@@ -3,14 +3,12 @@
 This is the first *mutating* layer, but it is deliberately conservative:
 
   * bootstrap is idempotent and NEVER overwrites local config or secrets;
-  * source adoption copies the operator's locally verified checkout into the
-    runtime root (or clones a pin) and then VERIFIES the pin; it never edits,
+  * source adoption clones the selected version into the runtime root (a configured in-root local checkout is only a fallback) and then VERIFIES the pin; it never edits,
     resets or cleans the original source, and refuses to overwrite an existing
     runtime checkout unless explicitly forced;
   * a dirty source is reported, never silently "repaired".
 
-All operations are expressed as a `Plan` of `PlanAction`s so the CLI (and, later,
-the web confirmation screen) can show the exact intended effect before applying.
+All operations are expressed as a `Plan` of `PlanAction`s so the CLI and the web confirmation page can show the exact intended effect before applying.
 Nothing here builds, starts a service, or transmits.
 """
 
@@ -27,7 +25,7 @@ from .config import Config
 from .model import Component, Stack
 from .paths import PathContainmentError, Paths
 from .probes import System
-from .probes.source import probe_source
+from .probes.source import lhpc_patched_only, probe_source
 
 RUNTIME_SUBDIRS = (
     "bin", "src", "build", "config", "profiles", "systemd", "state", "logs",
@@ -35,9 +33,7 @@ RUNTIME_SUBDIRS = (
 )
 
 # Operator-facing pointers at the runtime root, as RELATIVE symlinks into the self-hosted
-# checkout. `docs/` used to be created as an EMPTY directory here (nothing ever wrote into
-# it), so the place an operator naturally looks for documentation held none — the real docs
-# live in the checkout. A dangling link on a non-self-hosted root is deliberate: it still
+# checkout. A dangling link on a non-self-hosted root is deliberate: it still
 # names where the documentation lives.
 DOC_LINKS = (
     ("docs", "src/loraham-pi-control/docs"),
@@ -96,15 +92,12 @@ _LOCAL_STARTER = """\
 # [operator]
 # callsign = "YOURCALL"
 
-# [web]
-# host = "127.0.0.1"
-# port = 8770
 """
 
 
 @dataclass
 class PlanAction:
-    kind: str                 # mkdir | config | secret | adopt | clone | verify
+    kind: str                 # mkdir | harden | doclink | config | secret | adopt | verify
     target: str
     description: str
     status: str = "planned"   # planned | exists | done | failed | skipped
@@ -196,16 +189,6 @@ class Installer:
         plan.actions.append(PlanAction(
             "secret", str(secret), "write config/secrets.toml (0600)",
             status="exists" if secret.exists() else "planned"))
-        # Manual start wrappers are RETIRED: lhpc starts services itself and the
-        # dashboard shows interactive components' copy-paste commands (rendered from
-        # the same structured spec) — a wrapper-started service would bypass LHPC
-        # ownership. Legacy wrappers are pruned on bootstrap.
-        start_dir = self.subdir("start")
-        if start_dir.is_dir():
-            for existing in sorted(start_dir.glob("*-start")):
-                plan.actions.append(PlanAction(
-                    "prune-wrapper", str(existing),
-                    f"remove legacy start/{existing.name}"))
         return plan
 
     def apply_bootstrap(self, plan: Plan | None = None) -> Plan:
@@ -269,9 +252,6 @@ class Installer:
             else:
                 os.symlink(rel, dest)
                 action.status = "done"
-        elif action.kind == "prune-wrapper":
-            runtime_fs.unlink(self.paths, Path(action.target))
-            action.status = "done"
 
     # -- source adoption ---------------------------------------------------
 
@@ -289,7 +269,7 @@ class Installer:
                     kind = source_fs.leaf_kind(self.paths, dest)   # no-follow, never exists()
                 except PathContainmentError:
                     kind = "special"                               # unsafe parent -> not adoptable
-                if kind in ("dir", "symlink"):
+                if kind == "dir":
                     probe = probe_source(self.system, comp.source, str(dest))
                     plan.actions.append(PlanAction(
                         "verify", str(dest),
@@ -300,21 +280,23 @@ class Installer:
                         "adopt", str(dest),
                         f"{comp.id}: adopt {comp.source.adopt_dir} -> {comp.source.path}"))
                 else:
+                    # The same refusal `adopt_source` gives: a symlink/file/special leaf is
+                    # never an LHPC adoption, so the plan and the apply agree.
                     plan.actions.append(PlanAction(
                         "verify", str(dest),
-                        f"{comp.id}: destination is a {kind} leaf — not an installable "
-                        "destination (resolve manually)", status="failed", detail=kind))
+                        f"{comp.id}: destination is an unexpected {kind} leaf — not an LHPC "
+                        "adoption (resolve manually)", status="failed", detail=kind))
         return plan
 
     def adopt_source(self, comp: Component, *, force: bool = False,
                      source: str = "pinned", pinned_expected: tuple | None = None,
                      locked: bool = False) -> PlanAction:
         """Install a component's source. `source` selects the version:
-          * "dev"    — newest commit on the remote branch (default);
-          * "stable" — the latest release tag;
-          * "pinned" — the manifest's pinned known-good commit.
-        It clones from GitHub for that version and, on failure, falls back to the
-        operator's local checkout.
+          * "pinned" (default) — the stack's compatible known-working composition entry, else the manifest pin;
+          * "dev"    — newest commit on the configured branch;
+          * "stable" — newest version-shaped tag, else newest tag, else default-branch HEAD.
+        Clones from the remote; a local checkout under `[install].adopt_search_root` is used only
+        when that is configured and provably satisfies the selector.
         Never alters the local source; refuses to overwrite unless forced.
         """
         spec = comp.source
@@ -335,7 +317,7 @@ class Installer:
             # them here would self-contend. Mutate directly under the caller's boundary.
             return self._adopt_locked(comp, spec, dest, action, force, source,
                                       pinned_expected)
-        # P0.2: ONE operation boundary, deadlock-free order (index THEN source path).
+        # ONE operation boundary, deadlock-free order (index THEN source path).
         # Recovery runs under the INDEX lock ONLY — the per-source locks it takes must
         # NOT self-contend with a source lock adopt itself holds, so adopt acquires the
         # target source-path lock AFTER recovery completes. The index lock is held
@@ -543,7 +525,7 @@ class Installer:
                     return provenance.evaluate(
                         self.system.runner, handle.pinned_path(), spec, source, trusted,
                         expected_commit=expected).ok
-                # Ownership metadata rides in the journal (v3) so the registry record is part
+                # Ownership metadata rides in the journal so the registry record is part
                 # of the SAME durable transaction: written after the activation rename, and
                 # completable by recovery from the journal alone.
                 meta = self._txn_meta(comp, spec, source, pre_pinned)
@@ -829,9 +811,21 @@ class Installer:
                 untracked.append(path)
             else:
                 tracked.append(path)
+        if tracked and not untracked:
+            # Tracked changes that are exactly LHPC's own build-time patch are not operator
+            # work: the next build re-applies the patch to a fresh clone.
+            patches = self._path_patches(source_path)
+            if patches and lhpc_patched_only(self.system, str(dest), patches):
+                tracked = []
         return DirtyReport(tracked=tuple(tracked), untracked=tuple(untracked))
 
     # -- source ownership registry (transactional with activation) ----------
+
+    def _path_patches(self, source_path: str) -> tuple:
+        """Every LHPC-shipped patch a consumer's build step applies to `source_path`."""
+        return tuple(sorted({p for stack in self.stacks for c in stack.components
+                             if c.source and c.source.path == source_path
+                             for p in c.source.patches}))
 
     def _path_consumers(self, source_path: str) -> tuple:
         """Every manifest component id consuming `source_path` (the shared-checkout set)."""
@@ -843,7 +837,7 @@ class Installer:
         return tuple(out)
 
     def _txn_meta(self, comp, spec, source: str, git_path: str) -> dict:
-        """The ownership metadata carried by the v3 journal — the AUTHORITY recovery uses to
+        """The ownership metadata carried by the journal — the AUTHORITY recovery uses to
         complete the registry record. `git_path` points at the staged tree (candidate FD-pinned
         path)."""
         head = self.system.runner.run(["git", "-C", git_path, "rev-parse", "HEAD"], 5.0)
@@ -866,16 +860,16 @@ class Installer:
 
     @staticmethod
     def _valid_meta(meta) -> bool:
-        """Strict validation of a v3 journal's ownership metadata (untrusted persisted input).
+        """Strict validation of a journal's ownership metadata (untrusted persisted input).
         `had_prior` (update vs fresh-install evidence for recovery rollback) is a required
         bool."""
         if not isinstance(meta, dict):
             return False
-        # A journal written by <= 0.2.10 also carries `strategy`; it is ignored, not required.
+        # Unknown extra fields (e.g. `strategy`) are ignored, not required.
         for f in ("selector", "resolved_commit", "remote"):
             if not isinstance(meta.get(f), str):
                 return False
-        if meta["selector"] not in ("pinned", "dev", "stable", "backfilled"):
+        if meta["selector"] not in ("pinned", "dev", "stable"):
             return False
         if not isinstance(meta.get("had_prior"), bool):
             return False
@@ -915,7 +909,7 @@ class Installer:
         # Journal identity is bound to the FULL managed runtime-relative source path, not the
         # basename: `src/a/app` and `src/b/app` get distinct journals (readable prefix +
         # SHA-256 digest of `source_rel`). Recovery re-derives this and refuses any journal
-        # whose filename does not match its declared source (so a legacy basename-only
+        # whose filename does not match its declared source (a basename-only
         # `app.json` is retained and blocks, never silently migrated).
         import hashlib
 
@@ -963,32 +957,25 @@ class Installer:
             re.fullmatch(rf"\.{re.escape(dest.name)}\.candidate-\d+-\d+", cand.name))
 
     def _journal_payload(self, dest: Path, prev: Path, staging: Path, state: str,
-                         txn_id: str, meta: dict | None = None,
-                         idents: dict | None = None) -> str:
+                         txn_id: str, meta: dict, idents: dict) -> str:
         """v5 journal: carries the OWNERSHIP metadata (`meta`) AND ctime-hardened leaf-identity
         evidence (`idents`: no-follow [dev, ino, ctime_ns] for the CANDIDATE and the archived
         PRIOR), so crash recovery can re-prove the exact leaves before any destructive step —
         candidate promotion, prior restore, and prior cleanup all verify identity first. `ctime_ns`
-        defeats inode recycling (dev+ino alone is forgeable). `meta=None` renders a v2-shaped
-        payload; meta-without-idents renders v3. Older v2/v3/v4 journals are still PARSED at
-        recovery but retained-as-unprovable (never an unsafe automatic cleanup)."""
+        defeats inode recycling (dev+ino alone is forgeable). Only v5 is ever written; older
+        v2/v3/v4 journals are still PARSED at recovery but retained-as-unprovable (never an
+        unsafe automatic cleanup)."""
         import json
-        version = 2 if meta is None else (5 if idents is not None else 3)
         payload = {
-            "version": version, "state": state,
+            "version": 5, "state": state,
             "source_rel": self._source_rel(dest),
             "prev_rel": self._source_rel(prev),
             "candidate_rel": self._source_rel(staging),
-            "txn_id": txn_id,
+            "txn_id": txn_id, "meta": meta, "idents": idents,
         }
-        if meta is not None:
-            payload["meta"] = meta
-        if idents is not None:
-            payload["idents"] = idents
         return json.dumps(payload)
 
-    def _create_journal(self, dest: Path, prev: Path, staging: Path, meta: dict | None = None,
-                        idents: dict | None = None):
+    def _create_journal(self, dest: Path, prev: Path, staging: Path, meta: dict, idents: dict):
         """EXCLUSIVELY create the initial (`planned`) journal (`O_CREAT|O_EXCL|O_NOFOLLOW`,
         fsync'd) and RETAIN its file + parent fds. Returns a journal handle
         `{marker: OwnedMarker, txn_id, path, meta, idents}`, or None if ANY journal leaf
@@ -1017,8 +1004,8 @@ class Installer:
         False if ownership was lost (a leaf swap) — the caller then rolls back and retains
         the replacement evidence."""
         return jh["marker"].rewrite(
-            self._journal_payload(dest, prev, staging, state, jh["txn_id"], jh.get("meta"),
-                                  jh.get("idents")))
+            self._journal_payload(dest, prev, staging, state, jh["txn_id"], jh["meta"],
+                                  jh["idents"]))
 
     @staticmethod
     def _valid_idents(idents) -> bool:
@@ -1246,19 +1233,18 @@ class Installer:
         source_fs.race_seam("pre-prev-delete", prev.name)
         # `allow_ipc`: `.prev` is THIS transaction's own inode-bound quarantine — a checkout a
         # stack runs from legitimately holds a runtime socket (meshcom's `.run/`), and refusing
-        # it left the archive half-deleted and the whole box blocked (live-found on the Zero).
+        # it left the archive half-deleted and the whole box blocked.
         ok, _why = source_fs.remove_bound(txn.fd, prev.name, ident, allow_ipc=True)
         if not ok:
             return False                           # substituted/unprovable -> RETAIN
         return txn.leaf_kind(prev.name) == "absent"
 
     def _finish_or_rollback(self, dest: Path, prev: Path, staging: Path, marker,
-                            meta: dict | None = None, txn_id: str = "",
-                            idents: dict | None = None) -> str:
+                            meta: dict, txn_id: str, idents: dict) -> str:
         """Resolve one validated journal under ONE held source-parent FD across verification,
         rename, and cleanup. The journal is removed (via the OWNED `marker`, identity re-
         verified) ONLY once the active source is proven USABLE (via the held FD), the archived
-        prior is proven removed, AND — for a v3 journal — the OWNERSHIP RECORD is completed.
+        prior is proven removed, AND the OWNERSHIP RECORD is completed.
         Any uncertainty — including a journal replaced after validation but before removal —
         RETAINS the journal + candidate/prior evidence and yields recovery-required."""
         from . import source_fs
@@ -1270,8 +1256,8 @@ class Installer:
         def _head_state() -> object:
             """Whether dest is THIS transaction's tree: True (HEAD == journal commit),
             False (a DIFFERENT tree — rolled-back prior or a foreign occupant), or
-            None (v2 journal / unprovable — no judgement possible)."""
-            if meta is None or not meta.get("resolved_commit"):
+            None (no commit recorded — unprovable, no judgement possible)."""
+            if not meta.get("resolved_commit"):
                 return None
             head = self.system.runner.run(["git", "-C", str(dest), "rev-parse", "HEAD"], 5.0)
             actual = (head.stdout or "").strip() if head.returncode == 0 else ""
@@ -1282,10 +1268,9 @@ class Installer:
             resolved_commit is the AUTHORITY: only a dest whose actual HEAD equals it gets the
             record (a ROLLED-BACK prior — restored by an in-process rollback that retained the
             journal — must never be re-registered under the new transaction's metadata; the
-            prior's own older record still describes it). A v2 journal or an unprovable tree
-            writes nothing (ownership is later provable via the backfill path)."""
+            prior's own older record still describes it). An unprovable tree writes nothing."""
             if ours is not True:
-                return True                       # rolled-back / v2 -> no new record
+                return True                       # rolled-back / unprovable -> no new record
             return self._write_registry_record(dest, meta, txn_id)
 
         def _rollback_record_failure(txn) -> str:
@@ -1297,9 +1282,9 @@ class Installer:
             tree. An UPDATE (`.prev` present) restores the prior (whose own record was never
             touched); a FRESH INSTALL (journal `had_prior` false) removes the candidate; an
             ambiguous state retains the journal (fail closed)."""
-            had_prior = (meta or {}).get("had_prior", None)
-            cand_ident = (idents or {}).get("candidate")
-            prev_ident = (idents or {}).get("prev")
+            had_prior = meta.get("had_prior")
+            cand_ident = idents.get("candidate")
+            prev_ident = idents.get("prev")
 
             try:
                 if txn.leaf_kind(prev.name) != "absent":
@@ -1308,7 +1293,7 @@ class Installer:
                         return (f"recovery-required for {dest.name}: archived prior was "
                                 "substituted (everything retained)")
                     # IDENT-BOUND destructive step: the recorded candidate identity is
-                    # REQUIRED (recovery runs only for v4 journals) and stays bound
+                    # REQUIRED (recovery runs only for v5 journals) and stays bound
                     # through the deletion.
                     source_fs.race_seam("pre-recovery-rollback-delete", dest.name)
                     ok, _w = source_fs.remove_bound(txn.fd, dest.name, cand_ident)
@@ -1358,7 +1343,7 @@ class Installer:
                     if txn.leaf_kind(prev.name) != "absent":
                         source_fs.race_seam("pre-prev-cleanup", str(dest))
                         dirty = self._prev_dirty_scan(txn, dest, prev,
-                                                      (idents or {}).get("prev"))
+                                                      idents.get("prev"))
                         if dirty is None:
                             return (f"recovery-required for {dest.name}: archived prior "
                                     "could not be proven (journal + prior retained)")
@@ -1373,13 +1358,13 @@ class Installer:
                                     f"complete, but the archived prior at "
                                     f"{self._source_rel(prev)} contains late local changes "
                                     "— retained for the operator (never auto-deleted)")
-                        if not self._prev_cleanup_ok(txn, prev, (idents or {}).get("prev")):
+                        if not self._prev_cleanup_ok(txn, prev, idents.get("prev")):
                             return (f"recovery-required for {dest.name}: archived prior "
                                     "could not be removed or was substituted (journal + "
                                     "prior retained)")
                     return _cleared("active source intact")
                 if txn.leaf_kind(staging.name) != "absent" and txn.leaf_kind(dest.name) == "absent":
-                    cand_ident = (idents or {}).get("candidate")
+                    cand_ident = idents.get("candidate")
                     if cand_ident is None:
                         return (f"recovery-required for {dest.name}: no candidate identity "
                                 "evidence — automatic promotion refused (retained)")
@@ -1410,7 +1395,7 @@ class Installer:
                     if txn.leaf_kind(dest.name) != "absent":
                         return (f"recovery-required for {dest.name}: destination is occupied "
                                 "by an unverified leaf (everything retained)")
-                    prev_ident = (idents or {}).get("prev")
+                    prev_ident = idents.get("prev")
                     if prev_ident is None:
                         return (f"recovery-required for {dest.name}: no prior identity "
                                 "evidence — automatic restore refused (retained)")
@@ -1436,44 +1421,6 @@ class Installer:
         except PathContainmentError:
             return f"recovery-required for {dest.name}: source parent unsafe (journal retained)"
         return f"recovery-required for {dest.name}: nothing to restore (journal retained)"
-
-    def _activate(self, dest: Path, staging: Path, verify_active=None) -> str:
-        """Swap the verified candidate into place, archiving the prior source as a sibling
-        `.prev`, using ONE held source-parent FD for BOTH renames + any rollback (a parent
-        swap after the first rename cannot redirect the second into another inode). A durable
-        journal records the in-flight state so an interruption is finished or rolled back by
-        `recover_source_activations()`.
-
-        `verify_active`, when given, is called on the newly-active source INSIDE the durable
-        transaction (after the renames, before ANY `.prev`/journal cleanup): if it returns
-        False the activation is rolled back to the prior via the same held FD and the journal
-        is retained. The journal is cleared only after the active source is proven usable AND
-        (if checked) provenance-verified."""
-        from . import source_fs
-        prior = cand = None
-        try:
-            with source_fs.ManagedSourceTransaction(self.paths, dest.parent) as txn:
-                # Synthesize the v4 evidence (minimal valid meta + leaf idents) so even this
-                # low-level entry produces journals current recovery can act on — there is
-                # no journal generation without identity evidence anymore.
-                meta = {"selector": "backfilled", "resolved_commit": "", "remote": "",
-                        "components": [dest.name or "src"],
-                        "had_prior": txn.leaf_kind(dest.name) != "absent"}
-                try:
-                    if txn.leaf_kind(dest.name) == "dir":
-                        prior = txn.capture_leaf(dest.name)
-                    if txn.leaf_kind(staging.name) == "dir":
-                        cand = txn.capture_leaf(staging.name)
-                except (OSError, PathContainmentError):
-                    return "recovery-required"
-                return self._activate_held(txn, dest, staging, verify_active,
-                                           handle=cand, meta=meta, prior=prior)
-        except PathContainmentError:
-            return "recovery-required"          # unsafe/swapped source parent -> fail closed
-        finally:
-            for h in (prior, cand):
-                if h is not None:
-                    h.close()
 
     def _rollback_bad_active(self, txn, dest: Path, prev: Path, handle=None) -> str:
         """Undo a just-completed activation (post-activation provenance failure, or an
@@ -1521,8 +1468,8 @@ class Installer:
             return True
         return txn.verify_candidate(handle, name)
 
-    def _activate_held(self, txn, dest: Path, staging: Path, verify_active=None, handle=None,
-                       meta: dict | None = None, prior=None, final_dirty=None) -> str:
+    def _activate_held(self, txn, dest: Path, staging: Path, meta: dict, verify_active=None,
+                       handle=None, prior=None, final_dirty=None) -> str:
         from . import source_fs
         prev = dest.with_name(f".{dest.name}.prev")
         # A pre-existing `.prev` is an UNOWNED orphan (the journal is created EXCLUSIVELY just
@@ -1590,8 +1537,7 @@ class Installer:
                     # REFRESH the prior ident: dest -> .prev renamed the prior, which bumps its
                     # ctime, so the journal must record the .prev's CURRENT ctime for recovery to
                     # re-prove it. (Candidate is untouched — still at `staging`.)
-                    if jh.get("idents") is not None:
-                        jh["idents"] = self._v5_idents(handle, prior)
+                    jh["idents"] = self._v5_idents(handle, prior)
                     if not self._update_journal(jh, dest, prev, staging, "prior-archived"):
                         raise _JournalLost()
                     # SECOND dirty scan THROUGH THE CAPTURED PRIOR HANDLE, after the archive
@@ -1636,8 +1582,7 @@ class Installer:
                 txn.fsync()
                 # REFRESH the candidate ident: candidate -> dest renamed it, bumping its ctime, so
                 # the journal records the active leaf's CURRENT ctime. (Prior untouched — at `.prev`.)
-                if jh.get("idents") is not None:
-                    jh["idents"] = self._v5_idents(handle, prior)
+                jh["idents"] = self._v5_idents(handle, prior)
                 if not self._update_journal(jh, dest, prev, staging, "activated"):
                     raise _JournalLost()
                 # POST-rename: the ACTIVE leaf must be exactly our captured candidate.
@@ -1771,7 +1716,7 @@ class Installer:
         def step(argv, timeout, what: str):
             """A post-clone git step (checkout/rev-parse/describe). Records WHY it failed in the
             adoption log: the caller can only report "clone failed", which reads as a network
-            fault even when the clone finished and a LATER step timed out (live-found — a switch
+            fault even when the clone finished and a LATER step timed out (a switch
             failed after 'Resolving deltas: 100%')."""
             res = run(argv, timeout)
             if res.returncode != 0 and log_fh is not None:
@@ -1845,7 +1790,7 @@ class Installer:
                      timeout=self._CLONE_TIMEOUT_S).returncode == 0 \
                     and dest.exists():
                 if source == "pinned":
-                    # P0.5: 'Known working' REQUIRES an exact expected commit — the newest
+                    # 'Known working' REQUIRES an exact expected commit — the newest
                     # operator-confirmed composition entry when one exists, else the manifest
                     # pin — and must resolve EXACTLY to it; never a silent adoption of the
                     # default branch.

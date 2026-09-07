@@ -62,9 +62,8 @@ def config_lock(paths: Paths, timeout: float = CONFIG_LOCK_TIMEOUT_S):
     and its path is containment-checked; if the lock cannot be acquired safely the
     mutation is blocked (the exception propagates), never silently bypassed.
 
-    BOUNDED acquire (AUDIT CC1): the exclusive lock is polled non-blocking up to
-    `timeout`, then raises `ConfigLockBusy`. A blocking `LOCK_EX` here would wedge — a
-    auto-install run holds the SHARED config-stability lock for its ENTIRE duration (minutes),
+    BOUNDED acquire: the exclusive lock is polled non-blocking up to
+    `timeout`, then raises `ConfigLockBusy`. A blocking `LOCK_EX` here would wedge — an auto-install run holds the config-stability lock EXCLUSIVELY for its ENTIRE duration (minutes),
     so a Settings save on one of the web server's fixed thread pool would block that
     thread until the run ended; repeated retries could freeze the whole UI. Failing fast
     with a truthful 'busy, retry shortly' keeps the server responsive."""
@@ -377,7 +376,7 @@ class RadioConfig:
 
 # Webserver access modes (browser client-certificate authentication policy). There are
 # NO user accounts/roles — a client certificate is a named device credential with equal
-# full access. See the webserver plan/docs.
+# full access. See docs/webserver.md.
 WEBSERVER_ACCESS_MODES = (
     "local-open-remote-auth",   # default: loopback open; non-loopback requires a client cert
     "auth-everywhere",          # every client (incl. loopback) requires a client cert
@@ -432,9 +431,8 @@ class StackWebConfig:
     fresh deployment's rendered config unchanged.
 
     `stack_id` carries the PAGE id (`model.web_pages`): the stack id for a stack's first web
-    component — so every entry saved before a stack could have two pages stays valid — and
-    `<stack_id>-<component_id>` for any further one. The field name is kept: it is the key of
-    every saved `[stackweb]` entry."""
+    component and `<stack_id>-<component_id>` for any further one; its value is the key of every
+    saved `[stackweb]` entry."""
 
     stack_id: str
     mode: str = "local"
@@ -551,7 +549,7 @@ def _load_runtime_toml(paths: Paths, path: Path) -> dict:
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
         raise ConfigError(f"{path}: {exc}") from exc
     except RecursionError as exc:
-        # AUDIT IN2: pathologically deep inline-table nesting makes tomllib recurse past
+        # Pathologically deep inline-table nesting makes tomllib recurse past
         # the interpreter limit — a malformed config must be a diagnostic, not a crash.
         raise ConfigError(f"{path}: config nesting too deep") from exc
 
@@ -823,13 +821,13 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
 
     # [radio] hardware setup. Fail-OPEN: an absent/malformed/unknown value falls back to `unset`
     # (no hardware configured — the daemon refuses to start until the operator picks a board), with a
-    # diagnostic. Pre-release: no migration from any older `[radio].mode` key.
+    # diagnostic.
     radio_raw = merged.get("radio", {})
     if not isinstance(radio_raw, dict):
         diagnostics.append(f"ignored non-table [radio] (got {type(radio_raw).__name__}); using unset")
         radio_raw = {}
     hardware = radio_raw.get("hardware", HW_DEFAULT)
-    if hardware not in HW_SETUPS:
+    if not isinstance(hardware, str) or hardware not in HW_SETUPS:
         diagnostics.append(f"ignored invalid radio.hardware {hardware!r}; using {HW_DEFAULT}")
         hardware = HW_DEFAULT
     radio = RadioConfig(hardware=hardware)
@@ -864,7 +862,7 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
         # shares ONE frozen verdict, instead of re-probing live /proc state mid-start.
         from . import gps as _gps_mod
         gps = replace(gps, auto_listening=_gps_mod.local_gpsd_listening())
-    # FAIL CLOSED (plan §3, deliberate deviation from the fail-soft convention above): when the
+    # FAIL CLOSED (deliberate deviation from the fail-soft convention above): when the
     # LOCAL layer itself could not be read (malformed/unreadable/symlinked local.toml), the
     # operator's boot-restore switch is unknown — an autonomous process-starter must not fall
     # back to the default-ON. Every other consumer keeps the fail-soft defaults.
@@ -951,19 +949,6 @@ def web_session_secret(paths: Paths) -> bytes:
         except (OSError, PathContainmentError):
             pass
     return secret
-
-
-def rotate_web_session_secret(paths: Paths) -> bytes:
-    """Explicitly rotate the persistent session secret — a deliberate operator action that
-    invalidates every existing session (all clients must re-establish)."""
-    import secrets as _secrets
-
-    from . import runtime_fs
-    secret = _secrets.token_bytes(48)
-    runtime_fs.atomic_write_bytes(paths, _web_session_path(paths), secret, mode=0o600)
-    return secret
-
-
 def _toml_value(kind: str, value: str) -> str:
     """Format a value as TOML scalar for a flat key update."""
     v = str(value)
@@ -1071,8 +1056,8 @@ def update_toml(text: str, params, values, subst) -> str:
     """Update declared keys (by section) in an existing TOML file, preserving the rest.
 
     A set value updates the key — uncommenting a `# key = …` line if needed — and is
-    APPENDED to its section when the template has no such line at all (a declared key that
-    silently vanished used to look configured while doing nothing).
+    APPENDED to its section when the template has no such line at all (a declared key must
+    never silently vanish and look configured while doing nothing).
 
     A blank value leaves the base as-is, EXCEPT for an `omit_if_empty` param, which REMOVES
     an active key: those are controller-owned (the MeshCore position), and leaving the
@@ -1284,18 +1269,18 @@ def save_gps(paths: Paths, *, recheck=None, **fields) -> Path:
 
 
 def _write_gps_locked(paths: Paths, fields: dict) -> Path:
-    """Read-merge-validate-write for `[gps]`. Caller MUST hold the config lock."""
-    cur = load_config(paths).gps
-    merged = {
-        "source": fields.get("source", cur.source),
-        "host": fields.get("host", cur.host),
-        "port": fields.get("port", cur.port),
-        "device": fields.get("device", cur.device),
-        "nmea_baud": fields.get("nmea_baud", cur.nmea_baud),
-        "fixed_lat": fields.get("fixed_lat", cur.fixed_lat),
-        "fixed_lon": fields.get("fixed_lon", cur.fixed_lon),
-        "fixed_alt": fields.get("fixed_alt", cur.fixed_alt),
-    }
+    """Read-merge-validate-write for `[gps]`. Caller MUST hold the config lock. Unchanged
+    fields carry over from the STORED table, not from the parsed `GpsConfig` — `_parse_gps`
+    blanks every field while the source is off/auto, and a partial save must not lose them."""
+    try:
+        stored = _load_runtime_toml(paths, paths.runtime_root / "config" / "local.toml").get("gps")
+    except ConfigError:
+        stored = None
+    stored = stored if isinstance(stored, dict) else {}
+    defaults = GpsConfig()
+    merged = {k: fields.get(k, stored.get(k, getattr(defaults, k)))
+              for k in ("source", "host", "port", "device", "nmea_baud",
+                        "fixed_lat", "fixed_lon", "fixed_alt")}
     unknown = set(fields) - set(merged)
     if unknown:
         raise ConfigError(f"unknown [gps] field(s): {', '.join(sorted(unknown))}")
@@ -1754,8 +1739,7 @@ def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path
     `ControllerService.set_operator_identity` (which computes its affected-stack snapshot and commits
     the [operator] patch + restart markers under its own held `config_lock` — the same critical
     section, so snapshot and write cannot be split by a concurrent start). Everyone else MUST use
-    `apply_config_transaction()`, which acquires the lock. Steps
-    (unchanged): recover/block any pending journal; journal each pre-image; atomically replace; roll back
+    `apply_config_transaction()`, which acquires the lock. Steps: recover/block any pending journal; journal each pre-image; atomically replace; roll back
     all on failure; remove the journal on success."""
     if recover_config_transaction(paths) == "":
         raise ConfigError("recovery-required: a pending config journal could not be "
@@ -1783,8 +1767,7 @@ def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path
         # lock (merge-in-transaction), so it reads the LATEST file and preserves keys owned by
         # another writer — and rendering before any write means a renderer can READ the pre-save
         # state of a file another target is about to replace, without depending on its position in
-        # this list (review-found: the restart-marker renderer was only correct because it had been
-        # inserted at index 0, an invariant nothing enforced). It also means a renderer that raises
+        # this list . It also means a renderer that raises
         # leaves ZERO writes to roll back rather than a partial set.
         # None WITHDRAWS a target: a decision that can only be taken with the authoritative state
         # in hand ("is a restart marker warranted?") belongs inside the transaction, not in the
@@ -1960,7 +1943,7 @@ def merge_stack_values(paths: Paths, stack_id: str, band: str, updates: dict,
 
 def conditional_clear_stack_config(paths: Paths, stack_id: str, band: str, expected: dict,
                                    matches) -> int:
-    """Race-safe removal of legacy default-equal keys under ONE config lock. Re-reads the LATEST
+    """Race-safe removal of default-equal keys under ONE config lock. Re-reads the LATEST
     config, and for each key in `expected` removes it ONLY if `matches(key, str(current[key]),
     expected[key])` is True — i.e. the stored value is STILL semantically the pre-update default
     captured for that key. A value a concurrent save changed to a genuine override (or an intentional

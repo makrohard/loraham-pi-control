@@ -16,7 +16,7 @@
      not reliably keyboard/AT reachable. #}
   {% if ws_console_addr %}<p class="wsopen"><a class="wsurl" href="{{ mon.posture.scheme }}://{{ ws_console_addr }}">Open {{ mon.posture.scheme }}://{{ ws_console_addr }}</a></p>{% endif %}
 
-  {# ===== LHPC WebGUI (the console's own settings — unchanged behavior) ===== #}
+  {# ===== LHPC WebGUI (the console's own settings) ===== #}
   <div class="ws-sub-wrap">
   <details class="advcfg" open>
     <summary>LHPC WebGUI</summary>
@@ -212,11 +212,11 @@
           only from a loopback session. You may still manage existing certificates.</p>
       {% endif %}
       {% if ws_fetch and not ws_fetch.p12 and certs %}
-        {# LIVE-FOUND UX gap: an issued cert with no STORED export rendered nothing here, and
+        {# An issued cert with no STORED export rendered nothing here, and
            "nothing" reads as broken. Say why, and what creates a fetchable bundle. #}
         <p class="muted">No stored <code>.p12</code> export to fetch — a bundle exists only until
-          it is downloaded/discarded. <em>Issue</em> a new certificate (or <em>reissue</em> an
-          existing one — that rotates its key) to get a fetch command here.</p>
+          it is downloaded/discarded. <em>Issue</em> a new certificate to get a fetch command
+          here; an existing label is rotated from the CLI (<code>lhpc webserver cert reissue</code>).</p>
       {% endif %}
       {% if ws_fetch and ws_fetch.p12 %}
         {# Fetch an issued USER CERT (.p12) to a Linux PC over ssh — the sanctioned remote path

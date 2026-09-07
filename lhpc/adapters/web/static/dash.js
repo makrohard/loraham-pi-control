@@ -33,7 +33,7 @@
           set("rd-pktrssi-" + band, d.channel.PACKETRSSI || "?");
         }
         if (d.status) {
-          if (d.status.TXMODE) { set("rd-txmode-" + band, d.status.TXMODE); set("rd-txmode2-" + band, d.status.TXMODE); }
+          if (d.status.TXMODE) { set("rd-txmode-" + band, d.status.TXMODE); }
           set("rd-tx-" + band, d.status.TX || "?");
           if (d.status.RADIO) set("rd-radio-" + band, d.status.RADIO);
           if (d.status.CADRSSI) set("rd-cadrssi-" + band, d.status.CADRSSI);

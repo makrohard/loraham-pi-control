@@ -56,7 +56,7 @@ def _identity_cmds(tmp_path, rel, remote=_KISS_REMOTE):
 def _own(tmp_path, rel, comps):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord(f"src/{rel}", "", "backfilled", "", time.time(), "",
+        source_registry.RegistryRecord(f"src/{rel}", "", "pinned", "", time.time(), "",
                                        tuple(comps)))
 
 
@@ -178,7 +178,7 @@ def test_clean_allows_dirty_tree_but_still_requires_ownership(tmp_path):
     svc = _svc(tmp_path)
     res = svc.clean("kiss", apply=True, purge=True)
     assert not res.ok
-    assert any("refused" in d and "not a git checkout" in d for d in res.details)
+    assert any("refused" in d and "no ownership record" in d for d in res.details)
     assert (tmp_path / "src" / "loraham-kiss-tnc" / "user.txt").exists()
 
 

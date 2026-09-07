@@ -1,5 +1,4 @@
-{# Managed Firewall — a sub-section INSIDE the LHCP controller row, SIBLING to Webserver (moved out
-   of the Webserver box, same level as it). The anchor id="firewall-row" MUST sit on a
+{# Managed Firewall — a sub-section INSIDE the LHCP controller row, SIBLING to Webserver . The anchor id="firewall-row" MUST sit on a
    <details class="advcfg"> (never a wrapping div) so the hash-open JS (closest('details')) opens it
    when a dashboard link targets #firewall-row. `firewall_view` is a top-level render var (fail-safe
    None -> the whole section is omitted). #}
@@ -99,12 +98,15 @@
       </details>
 
       {# ---- Apply & commands: the one setup command; check/reset tucked away ---- #}
-      <details class="advcfg">
+      <details class="advcfg" id="firewall-apply"{% if request.args.get('fw') == 'apply' %} open data-force-open="1"{% endif %}>
         <summary>Apply &amp; commands</summary>
         <section class="cfgsec">
-          <p class="muted">Set up / update — run this ONE root command. It installs or refreshes the
+          <p class="muted">Set up / update — run the root command first. It installs or refreshes the
             firewall and verifies it; the status above turns green after the next refresh:</p>
           {{ cmdbox('fw-apply-cmd', firewall_view.apply_cmd) }}
+          <p class="muted">Then activate the listeners the firewall was gating (a Webserver Apply the
+            gate deferred also completes on its own; running it again is harmless):</p>
+          {{ cmdbox('ws-apply-cmd', firewall_view.webserver_apply_cmd) }}
           {% if firewall_view.cleanup_cmd %}
             <p class="depnote depnote-warn">A listener migration is in progress — the old scope is
               preserved until you complete the move, then run cleanup:</p>
@@ -112,9 +114,8 @@
           {% endif %}
           {% if firewall_view.webserver_apply_pending %}
             <p class="depnote depnote-warn">A Webserver Apply is still waiting for this firewall step —
-              once the status above is green it completes automatically. To finish it now,
-              click Apply in the Webserver section or run:</p>
-            {{ cmdbox('ws-apply-cmd', firewall_view.webserver_apply_cmd) }}
+              once the status above is green it completes automatically; the command above finishes
+              it now.</p>
           {% endif %}
           <details class="fwextra">
             <summary>Other commands (optional — not part of setup)</summary>

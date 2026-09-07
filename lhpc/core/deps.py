@@ -65,11 +65,11 @@ def stack_report(lifecycle, paths, stacks, stack_id: str, comp_index: dict,
     satisfied-by-other-means, they are IRRELEVANT: `build` is refused on that channel, so a
     missing compiler input is nothing the operator can or should act on. Without this the
     dashboard demanded a RadioLib checkout and PlatformIO on a box that had installed the
-    daemon and MeshCom as binaries (live-found on a fresh Zero)."""
+    daemon and MeshCom as binaries."""
     _free = build_free if callable(build_free) else (lambda _cid: False)
     # `classify(comp_id, req) -> "blocker"|"irrelevant"|"artifact-missing"` is the SAME predicate
     # the start gate uses (`ControllerService.binary_requirement_class`). Absent (tests, non-binary
-    # callers) it degrades to the historical behaviour: provisioned + build-free == not needed.
+    # callers) it degrades to: provisioned + build-free == not needed.
     _classify = classify if callable(classify) else (
         lambda cid, _req: "irrelevant" if _free(cid) else "blocker")
     _artifact_note = artifact_note
@@ -123,7 +123,7 @@ def stack_report(lifecycle, paths, stacks, stack_id: str, comp_index: dict,
             if not sat and getattr(req, "provisioned", False):
                 # THE SHARED CLASSIFIER decides — this report and the start gate must never
                 # disagree. They did: everything provisioned read "not needed" here while the start
-                # gate refused to start without the artifact-delivered ones (audit).
+                # gate refused to start without the artifact-delivered ones.
                 verdict = _classify(c.id, req)
                 if verdict == "irrelevant":
                     # A pure BUILD tool (PlatformIO, the QEMU toolchain). There is no build on the
@@ -145,10 +145,11 @@ def stack_report(lifecycle, paths, stacks, stack_id: str, comp_index: dict,
                 install_cmd=GROUP_RESTART_CMD if pending else _fix,
                 runtime=bool(req.groups or req.absent_file), restart_pending=pending,
                 gui=bool(gui_eff.get(key))))
+        from . import source_fs
         for dep_id in c.build_requires:
             dep = comp_index.get(dep_id)
             present = bool(dep and dep.source
-                           and paths.resolve_source(dep.source.path).is_dir())
+                           and source_fs.source_present(paths, paths.resolve_source(dep.source.path)))
             if _free(c.id):
                 out.append(DepItem(
                     kind="build", component=c.id,
@@ -199,6 +200,14 @@ def grouped(report: list) -> dict:
 # emitted verbatim and never merged out of order. Group-grant and SPI/config.txt commands are NOT
 # emitted verbatim — they are re-rendered as hardened, operator-safe, mode-gated, idempotent sections.
 _APT_INSTALL_RE = _re.compile(r"^sudo apt(?:-get)? install\s+(.+)$")
+# Manifest remediation commands are written for an operator shell (`sudo …`); the bootstrap script
+# runs as root and never invokes sudo, so `sudo` at command position is dropped when a command is
+# emitted verbatim (line start, after a pipe, `&&`, `;`, `(`, `$(`).
+_SUDO_RE = _re.compile(r"(^[ \t]*|[|&;(][ \t]*|\$\([ \t]*)sudo\s+", _re.MULTILINE)
+
+
+def _desudo(block: str) -> str:
+    return _SUDO_RE.sub(r"\1", block)
 _USERMOD_RE = _re.compile(r"usermod\s+-a?G\s+([A-Za-z0-9,_-]+)")
 _OVERLAY_RE = _re.compile(r"dtoverlay=([A-Za-z0-9_.-]+)")
 _DISABLE_UNIT_RE = _re.compile(r"systemctl\s+disable\s+(?:--now\s+)?([A-Za-z0-9@._-]+)")
@@ -311,7 +320,7 @@ def network_rule_install_cmd(user: str) -> str:
 
 def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=()) -> str:
     """Render every declared dependency-remediation command into ONE hardened, executable bootstrap
-    script. Standalone `sudo apt install` commands merge into a single deduplicated `apt-get install`
+    script. Standalone `apt install` commands merge into a single deduplicated `apt-get install`
     run FIRST (so tools like curl/gpg exist before the blocks that use them). Group grants are
     re-rendered to a validated non-root operator; SPI/config.txt is re-rendered behind a required
     `--spi-mode` (soft-cs | hardware-cs | skip), idempotent and fail-closed on a conflicting existing
@@ -540,7 +549,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
     if apt_pkgs:
         pkgs_line = " ".join(sorted(apt_pkgs))
         out("# --- --dry-run: simulate the DEFAULT apt transaction, change NOTHING -----------------------",
-            "# The blocker this guards against: the real package closure used to be discovered only while",
+            "# The blocker this guards against: discovering the real package closure only while",
             "# installing on hardware. `apt-get install -s` resolves it against the local apt database",
             "# without touching the system, so a from-zero run can be vetted first. The GUI opt-in is NOT",
             "# part of this verdict — the default transaction is what a headless image gets.",
@@ -585,18 +594,14 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "# above: the pre-flight is deliberately READ-ONLY and ZERO-TRUST — an operator vets what the",
         "# script would install BEFORE ever granting it root. Every mutating path below runs as root:",
         "# the documented call is `sudo bash bootstrap-deps.sh`, and the script never invokes sudo",
-        "# itself (internal sudo prefixes used to fail where sudo is absent, unconfigured, or cannot",
-        "# prompt — unattended runs). Operator resolution below is UNCHANGED: $OP comes from SUDO_USER",
-        "# (or --operator-user) and uid-0 operators are refused — root never receives group grants.",
+        "# itself, so it also works where sudo is absent, unconfigured, or cannot prompt (unattended",
+        "# runs). Operator resolution: $OP comes from SUDO_USER (or --operator-user) and uid-0",
+        "# operators are refused — root never receives group grants.",
         'if [ "$(id -u)" -ne 0 ]; then',
         '\techo "ERROR: bootstrap-deps.sh must run as root — run: sudo bash bootstrap-deps.sh ${SPI_MODE:+--spi-mode $SPI_MODE}" >&2',
         '\techo "       (only --dry-run and -h/--help work unprivileged)" >&2',
         "\texit 10",
         "fi",
-        "# Historic call sites below carry a `sudo` prefix; the script is root (checked above), so route",
-        "# them through a no-op. A shell FUNCTION shadows PATH lookup, so this also works on systems",
-        "# with no sudo binary at all.",
-        'sudo() { "$@"; }',
         "")
 
     out("# Validate ALL options up front — BEFORE any apt / repository / boot-config / group mutation.",
@@ -619,10 +624,10 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "fi",
         "")
 
-    # READ-ONLY PRE-FLIGHT (item P): fail-closed environment checks that used to abort MID-RUN — a
-    # conflicting boot config aborted only at the config.txt step, an unqueryable systemd only at the
-    # disable step — after apt had installed ~70 packages and the system nginx had been disabled. They
-    # run HERE instead, in the up-front validation block before ANY apt / service / config / swap /
+    # READ-ONLY PRE-FLIGHT: fail-closed environment checks that must never abort MID-RUN (a
+    # conflicting boot config at the config.txt step, an unqueryable systemd at the disable step)
+    # after apt has installed ~70 packages and the system nginx has been disabled. They
+    # run HERE, in the up-front validation block before ANY apt / service / config / swap /
     # group mutation, so a refusal leaves the system COMPLETELY untouched. Exit codes are unchanged
     # (3 = conflicting SPI config, 8 = systemd not inspectable). The SPI section below now only
     # APPENDS its idempotent lines; the conflict DETECTION lives here.
@@ -714,8 +719,8 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
             "# --no-install-recommends: Recommends are what turned a headless install into a desktop one.",
             "# Nothing here needs them — e.g. git Recommends openssh-client, which Recommends xauth, which",
             "# Depends on libX11. Only hard Depends are installed, so the closure stays display-free.",
-            "sudo apt-get update",
-            "sudo apt-get install -y --no-install-recommends \\")
+            "apt-get update",
+            "apt-get install -y --no-install-recommends \\")
         pk = sorted(apt_pkgs)
         for p in pk:
             out(f"    {p} \\")
@@ -748,7 +753,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
                 "\t\t# reported as such rather than claiming we 'disabled' it.",
                 "\t\tif systemctl is-enabled --quiet nginx.service 2>/dev/null"
                 " || systemctl is-active --quiet nginx.service 2>/dev/null; then",
-                "\t\t\tif sudo systemctl disable --now nginx.service; then",
+                "\t\t\tif systemctl disable --now nginx.service; then",
                 '\t\t\t\techo "[bootstrap-deps] disabled the system nginx.service (lhpc serves via the'
                 ' lhpc-nginx user unit; the nginx PACKAGE stays installed)."',
                 "\t\t\telse",
@@ -769,7 +774,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
 
     for b in repo_blocks:
         out("# --- third-party apt repository (dedicated keyring + signed-by, HTTPS) -------------------",
-            b, "")
+            _desudo(b), "")
 
     if gui_pkgs or gui_blocks:
         # Emitted AFTER the repo block on purpose: the default package list must stay the
@@ -784,12 +789,12 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
             "# server: it assumes the machine already has a graphical session.",
             'if [ -n "$WITH_GUI" ]; then')
         if gui_pkgs:
-            out("\tsudo apt-get install -y \\")
+            out("\tapt-get install -y \\")
             gp = sorted(gui_pkgs)
             for i, pkg in enumerate(gp):
                 out(f"\t\t{pkg}" + (" \\" if i < len(gp) - 1 else ""))
         for b in gui_blocks:
-            out("\t" + b.replace("\n", "\n\t"))
+            out("\t" + _desudo(b).replace("\n", "\n\t"))
         out("else",
             '\techo "[bootstrap-deps] GUI dependencies skipped (headless-safe default). On a machine'
             ' with a display, re-run with --with-gui."',
@@ -802,7 +807,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
             "# another machine, a directly-read device, or a fixed position need nothing here — so this is",
             "# opt-in rather than part of the default set, and lhpc never configures gpsd itself.",
             'if [ -n "$WITH_GPS" ]; then')
-        out("\tsudo apt-get install -y \\")
+        out("\tapt-get install -y \\")
         gp = sorted(gps_pkgs)
         for i, pkg in enumerate(gp):
             out(f"\t\t{pkg}" + (" \\" if i < len(gp) - 1 else ""))
@@ -816,7 +821,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "# The read-only CONFLICT check ran UP FRONT (before any mutation, item P); here we only APPEND",
         "# the idempotent lines for the chosen mode. CONFIG_TXT was set in the pre-flight above.",
         "add_cfg() {  # append $1 iff absent (idempotent)",
-        '\tif ! grep -qxF "$1" "$CONFIG_TXT" 2>/dev/null; then printf "%s\\n" "$1" | sudo tee -a "$CONFIG_TXT" >/dev/null; fi',
+        '\tif ! grep -qxF "$1" "$CONFIG_TXT" 2>/dev/null; then printf "%s\\n" "$1" | tee -a "$CONFIG_TXT" >/dev/null; fi',
         "}",
         'case "$SPI_MODE" in',
         "\tsoft-cs)",
@@ -902,44 +907,44 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         '\t\t\techo "[bootstrap-deps] swap: $FSTAB is not a regular file — refusing to publish."'
         " >&2; return 1",
         "\t\tfi",
-        '\t\t_ftmp="$(sudo mktemp "$(dirname "$FSTAB")/.fstab.lhpc.XXXXXX")" || return 1',
+        '\t\t_ftmp="$(mktemp "$(dirname "$FSTAB")/.fstab.lhpc.XXXXXX")" || return 1',
         '\t\tif [ -f "$FSTAB" ]; then',
         "\t\t\t# cp carries mode+ownership onto the 0600 root-owned temp; the filter then rewrites",
         "\t\t\t# its CONTENT: every EXACT first-field match is dropped (stale options, duplicates),",
         "\t\t\t# while comments and longer paths keep their own first field and survive verbatim.",
-        '\t\t\tif ! sudo cp --preserve=mode,ownership "$FSTAB" "$_ftmp"; then',
-        '\t\t\t\tsudo rm -f "$_ftmp"; return 1',
+        '\t\t\tif ! cp --preserve=mode,ownership "$FSTAB" "$_ftmp"; then',
+        '\t\t\t\trm -f "$_ftmp"; return 1',
         "\t\t\tfi",
-        '\t\t\tif ! sudo awk -v f="$SWAPFILE" \'$1 != f\' "$FSTAB" | sudo tee "$_ftmp"'
+        '\t\t\tif ! awk -v f="$SWAPFILE" \'$1 != f\' "$FSTAB" | tee "$_ftmp"'
         " >/dev/null; then",
-        '\t\t\t\tsudo rm -f "$_ftmp"; return 1',
+        '\t\t\t\trm -f "$_ftmp"; return 1',
         "\t\t\tfi",
-        '\t\telif ! sudo chmod 644 "$_ftmp"; then',
-        '\t\t\tsudo rm -f "$_ftmp"; return 1',
+        '\t\telif ! chmod 644 "$_ftmp"; then',
+        '\t\t\trm -f "$_ftmp"; return 1',
         "\t\tfi",
-        '\t\tif ! printf "%s\\n" "$SWAP_FSTAB_LINE" | sudo tee -a "$_ftmp" >/dev/null; then',
-        '\t\t\tsudo rm -f "$_ftmp"; return 1',
+        '\t\tif ! printf "%s\\n" "$SWAP_FSTAB_LINE" | tee -a "$_ftmp" >/dev/null; then',
+        '\t\t\trm -f "$_ftmp"; return 1',
         "\t\tfi",
         "\t\t# Durable BEFORE the rename: a power loss must not publish an empty/partial fstab.",
-        '\t\tif ! sudo sync "$_ftmp"; then sudo rm -f "$_ftmp"; return 1; fi',
-        '\t\tif ! sudo mv -f "$_ftmp" "$FSTAB"; then sudo rm -f "$_ftmp"; return 1; fi',
-        '\t\tsudo sync "$(dirname "$FSTAB")" || true   # dir entry durable (best-effort)',
+        '\t\tif ! sync "$_ftmp"; then rm -f "$_ftmp"; return 1; fi',
+        '\t\tif ! mv -f "$_ftmp" "$FSTAB"; then rm -f "$_ftmp"; return 1; fi',
+        '\t\tsync "$(dirname "$FSTAB")" || true   # dir entry durable (best-effort)',
         "\t}",
         "\t# Fresh allocation NEVER writes to the final path: a UNIQUE same-directory temp is",
         "\t# allocated, chmod 600'd, formatted and FSYNCED, and only a complete, valid swap image is",
         "\t# renamed into place. An interrupted run leaves an inert .swap.lhpc.XXXXXX, never a",
         "\t# half-formatted $SWAPFILE that the next run would try to swapon.",
         '\t_swap_alloc_temp() {',
-        '\t\t_stmp="$(sudo mktemp "$(dirname "$SWAPFILE")/.swap.lhpc.XXXXXX")" || return 1',
-        '\t\tif ! sudo fallocate -l "${SWAP_TARGET_MB}M" "$_stmp" 2>/dev/null; then',
-        '\t\t\tif ! sudo dd if=/dev/zero of="$_stmp" bs=1M count="$SWAP_TARGET_MB" status=none;'
+        '\t\t_stmp="$(mktemp "$(dirname "$SWAPFILE")/.swap.lhpc.XXXXXX")" || return 1',
+        '\t\tif ! fallocate -l "${SWAP_TARGET_MB}M" "$_stmp" 2>/dev/null; then',
+        '\t\t\tif ! dd if=/dev/zero of="$_stmp" bs=1M count="$SWAP_TARGET_MB" status=none;'
         " then",
-        '\t\t\t\tsudo rm -f "$_stmp"; return 1',
+        '\t\t\t\trm -f "$_stmp"; return 1',
         "\t\t\tfi",
         "\t\tfi",
-        '\t\tif ! sudo chmod 600 "$_stmp"; then sudo rm -f "$_stmp"; return 1; fi',
-        '\t\tif ! sudo mkswap "$_stmp" >/dev/null; then sudo rm -f "$_stmp"; return 1; fi',
-        '\t\tif ! sudo sync "$_stmp"; then sudo rm -f "$_stmp"; return 1; fi',
+        '\t\tif ! chmod 600 "$_stmp"; then rm -f "$_stmp"; return 1; fi',
+        '\t\tif ! mkswap "$_stmp" >/dev/null; then rm -f "$_stmp"; return 1; fi',
+        '\t\tif ! sync "$_stmp"; then rm -f "$_stmp"; return 1; fi',
         '\t\tprintf "%s\\n" "$_stmp"',
         "\t}",
         "\t# swapon stderr is NOT suppressed: its message ('read swap header failed', 'Device or",
@@ -948,15 +953,15 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         '\t_swap_install() {',
         '\t\t_new="$(_swap_alloc_temp)" || return 1',
         "\t\tif _swap_active; then",
-        '\t\t\tif ! sudo swapoff "$SWAPFILE"; then',
+        '\t\t\tif ! swapoff "$SWAPFILE"; then',
         '\t\t\t\techo "[bootstrap-deps] swap: $SWAPFILE is in use and swapoff failed — refusing'
         ' to replace it." >&2',
-        '\t\t\t\tsudo rm -f "$_new"; return 1',
+        '\t\t\t\trm -f "$_new"; return 1',
         "\t\t\tfi",
         "\t\tfi",
-        '\t\tif ! sudo mv -f "$_new" "$SWAPFILE"; then sudo rm -f "$_new"; return 1; fi',
-        '\t\tsudo sync "$(dirname "$SWAPFILE")" || true',
-        '\t\tsudo swapon -p 10 "$SWAPFILE"',
+        '\t\tif ! mv -f "$_new" "$SWAPFILE"; then rm -f "$_new"; return 1; fi',
+        '\t\tsync "$(dirname "$SWAPFILE")" || true',
+        '\t\tswapon -p 10 "$SWAPFILE"',
         "\t}",
         '\t_provision=""',
         '\t_swap_state="fail"',
@@ -976,7 +981,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "\t\t\t# unsuppressed on the REAL activation attempts (reactivate below, and _swap_install).",
         '\t\t\techo "[bootstrap-deps] swap: fstab entry pointed at a missing file — recreating."',
         '\t\t\t_provision="reuse"',
-        '\t\telif sudo swapon -p 10 "$SWAPFILE" && _swap_active; then',
+        '\t\telif swapon -p 10 "$SWAPFILE" && _swap_active; then',
         '\t\t\t_swap_state="reactivated"',
         "\t\telse",
         '\t\t\t_provision="reuse"',
@@ -1075,24 +1080,24 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         '\techo "[bootstrap-deps] Wi-Fi: DISABLING power-save on $WIFI_DEV (default)."',
         '\techo "[bootstrap-deps]   Reason: brcmfmac Wi-Fi on a Pi Zero 2W crashes/drops under a long build"',
         '\techo "[bootstrap-deps]   with power-save on; --keep-wifi-powersave leaves Wi-Fi untouched."',
-        '\t# Persistent config, fail-closed: refuse a symlink/non-regular leaf (never write THROUGH it under',
-        '\t# sudo); write a ROOT-OWNED same-dir temp (sudo mktemp), chmod 0644, atomically rename into place,',
+        '\t# Persistent config, fail-closed: refuse a symlink/non-regular leaf (never write THROUGH it as',
+        '\t# root); write a ROOT-OWNED same-dir temp, chmod 0644, atomically rename into place,',
         '\t# and clean the temp up on ANY failure after creation. _persisted tracks success so the live-apply',
         '\t# report below never promises "after reboot" when nothing was actually written.',
         '\t_persisted=0',
         '\tif [ -L "$WIFI_PSAVE_CONF" ] || { [ -e "$WIFI_PSAVE_CONF" ] && [ ! -f "$WIFI_PSAVE_CONF" ]; }; then',
         '\t\techo "[bootstrap-deps]   WARNING: $WIFI_PSAVE_CONF is a symlink or non-regular file - NOT touching it; power-save config left as-is." >&2',
         "\telse",
-        '\t\tsudo mkdir -p "$(dirname "$WIFI_PSAVE_CONF")" 2>/dev/null || true',
-        '\t\tif _wtmp="$(sudo mktemp "$(dirname "$WIFI_PSAVE_CONF")/.wifi-nopowersave.XXXXXX")" \\',
-        '\t\t\t\t&& printf \'[connection]\\nwifi.powersave = 2\\n\' | sudo tee "$_wtmp" >/dev/null \\',
-        '\t\t\t\t&& sudo chmod 0644 "$_wtmp" \\',
-        '\t\t\t\t&& sudo mv -- "$_wtmp" "$WIFI_PSAVE_CONF"; then',
+        '\t\tmkdir -p "$(dirname "$WIFI_PSAVE_CONF")" 2>/dev/null || true',
+        '\t\tif _wtmp="$(mktemp "$(dirname "$WIFI_PSAVE_CONF")/.wifi-nopowersave.XXXXXX")" \\',
+        '\t\t\t\t&& printf \'[connection]\\nwifi.powersave = 2\\n\' | tee "$_wtmp" >/dev/null \\',
+        '\t\t\t\t&& chmod 0644 "$_wtmp" \\',
+        '\t\t\t\t&& mv -- "$_wtmp" "$WIFI_PSAVE_CONF"; then',
         '\t\t\t_persisted=1',
         '\t\t\techo "[bootstrap-deps]   persistent config written: $WIFI_PSAVE_CONF (wifi.powersave=2)"',
         '\t\t\techo "[bootstrap-deps]   REVERT: sudo rm $WIFI_PSAVE_CONF && sudo systemctl restart NetworkManager"',
         "\t\telse",
-        '\t\t\t[ -n "${_wtmp:-}" ] && sudo rm -f -- "$_wtmp"',
+        '\t\t\t[ -n "${_wtmp:-}" ] && rm -f -- "$_wtmp"',
         '\t\t\techo "[bootstrap-deps]   WARNING: could not write $WIFI_PSAVE_CONF - power-save NOT persisted." >&2',
         "\t\tfi",
         "\tfi",
@@ -1103,13 +1108,13 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         '\t_live_ok=0',
         '\t_wcon="$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | grep ":${WIFI_DEV}$" | cut -d: -f1 | head -1 || true)"',
         '\tif [ -n "$_wcon" ]; then',
-        '\t\tif sudo nmcli connection modify "$_wcon" wifi.powersave 2 >/dev/null 2>&1 \\',
-        '\t\t\t\t&& sudo nmcli device reapply "$WIFI_DEV" >/dev/null 2>&1; then',
+        '\t\tif nmcli connection modify "$_wcon" wifi.powersave 2 >/dev/null 2>&1 \\',
+        '\t\t\t\t&& nmcli device reapply "$WIFI_DEV" >/dev/null 2>&1; then',
         "\t\t\t_live_ok=1",
         "\t\tfi",
         "\tfi",
         '\tif command -v iw >/dev/null 2>&1; then',
-        '\t\tsudo iw dev "$WIFI_DEV" set power_save off >/dev/null 2>&1 && _live_ok=1',
+        '\t\tiw dev "$WIFI_DEV" set power_save off >/dev/null 2>&1 && _live_ok=1',
         "\tfi",
         '\tif [ "$_live_ok" = 1 ]; then',
         '\t\techo "[bootstrap-deps]   Wi-Fi power-save disabled now (live)."',
@@ -1122,7 +1127,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "")
 
     # --- persistent journal ------------------------------------------------------------------
-    # Live-found (twice): spontaneous-reboot forensics died because Raspberry Pi OS's default
+    # Spontaneous-reboot forensics died because Raspberry Pi OS's default
     # VOLATILE journal loses the previous boot's kernel evidence. journald ships Storage=auto,
     # which becomes persistent once /var/log/journal exists — so bootstrap creates it. Directory
     # creation is FATAL on failure (no dir = no persistence — never claim it); only the tmpfiles
@@ -1130,10 +1135,10 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
     out("# --- persistent journal (crash forensics survive reboots; Storage=auto honours the dir) ------",
         'JOURNAL_DIR="${JOURNAL_DIR:-/var/log/journal}"',
         'if [ ! -d "$JOURNAL_DIR" ]; then',
-        '\tsudo mkdir -p "$JOURNAL_DIR" || { echo "ERROR: could not create $JOURNAL_DIR — persistent journal NOT enabled." >&2; exit 1; }',
+        '\tmkdir -p "$JOURNAL_DIR" || { echo "ERROR: could not create $JOURNAL_DIR — persistent journal NOT enabled." >&2; exit 1; }',
         "fi",
         "# ACL fixup is best-effort: the directory alone already makes Storage=auto persistent.",
-        'sudo systemd-tmpfiles --create --prefix="$JOURNAL_DIR" 2>/dev/null || echo "[bootstrap-deps] WARNING: systemd-tmpfiles ACL adjustment failed — the journal is persistent but may carry default permissions." >&2',
+        'systemd-tmpfiles --create --prefix="$JOURNAL_DIR" 2>/dev/null || echo "[bootstrap-deps] WARNING: systemd-tmpfiles ACL adjustment failed — the journal is persistent but may carry default permissions." >&2',
         'echo "[bootstrap-deps] persistent journal enabled (takes effect after the reboot)."',
         "")
 
@@ -1144,7 +1149,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         # it is exactly what makes the rootless stacks unable to reach the radio. So it is reported
         # loudly and settled at the END, the same way the swap verdict is.
         out("# --- hardware group membership (granted to the resolved operator, never root) ------------",
-            f'if sudo usermod -aG {groups_csv} "$OP"; then',
+            f'if usermod -aG {groups_csv} "$OP"; then',
             f'\techo "[bootstrap-deps] granted {groups_csv} to $OP — log out/in (or reboot) to take effect."',
             "else",
             f'\techo "ERROR: could not grant {groups_csv} to $OP — do those groups exist on this'
@@ -1188,7 +1193,8 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "fi",
         "")
 
-    for b in disable_blocks:
+    for blk in disable_blocks:
+        b = _desudo(blk)
         out("# --- disable an OS-packaged service (lhpc manages its own) --------------------------------")
         mo = _DISABLE_UNIT_RE.search(b)
         unit = mo.group(1) if mo else ""
@@ -1219,7 +1225,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
 
     for b in other_blocks:
         out("# --- extra setup step -------------------------------------------------------------------",
-            b, "")
+            _desudo(b), "")
 
     # The swap verdict is reported LAST so the apt/SPI/group work above always completes: the
     # operator ends up with a configured machine AND an unambiguous nonzero exit, rather than
@@ -1236,5 +1242,5 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "\texit 4",
         "fi",
         'echo "[bootstrap-deps] done. Next: install lhpc (install.sh), then ONE reboot applies '
-        'SPI + groups + PATH — see README steps 4-5."')
+        'SPI + groups + PATH — see README steps 5-6."')
     return "\n".join(L) + "\n"

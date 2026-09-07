@@ -10,8 +10,7 @@ automatically: a healthy start only persists a CANDIDATE marker; the operator's 
 The "Known working" install selector resolves through ONE stack-level COMPATIBLE
 composition (`compatible_composition`): the newest stored composition that covers the EXACT
 current set of source-bearing component ids and whose every entry still matches the current
-manifest/config identity (component id, source path, normalized effective remote, strategy,
-immutable commit). Every component of the stack resolves from that single composition; when
+manifest/config identity (component id, source path, normalized effective remote, immutable commit). Every component of the stack resolves from that single composition; when
 none qualifies, EVERY component uses the manifest-pin fallback — records are never mixed.
 
 Storage (all strict, descriptor-safe, no git on read):
@@ -56,8 +55,7 @@ def composition_hash(entries: dict) -> str:
         e = entries[c] or {}
         parts.append("|".join((
             c, e.get("commit", ""), e.get("source_rel", ""),
-            # `strategy` is no longer written; reading it as "" keeps a record stored before
-            # its removal hashing to the same value it always did.
+            # an absent `strategy` key hashes as "" (the field is never written)
             source_registry.norm_remote(e.get("remote", "")), e.get("strategy", ""))))
     blob = ";".join(parts)
     return hashlib.sha256(("lhpc-composition:v2:" + blob).encode("utf-8")).hexdigest()
@@ -139,9 +137,8 @@ def compatible_composition(paths: Paths, stack, effective_remote) -> dict | None
       * its entry set covers EXACTLY the current source-bearing component ids;
       * every entry still matches the current manifest/config identity: same source path,
         same normalized effective remote (`effective_remote(comp)` — config override or
-        manifest), same strategy form, and a non-empty immutable commit;
-      * the entry carries the full identity fields (an OLDER record without them stays
-        visible as history but is INELIGIBLE for source selection until re-confirmed).
+        manifest), and a non-empty immutable commit;
+      * the entry carries the full identity fields (a record lacking them stays visible as history but is INELIGIBLE for source selection until re-confirmed).
 
     Returns that single composition's entries (used for EVERY component of the stack), or
     None — in which case every component takes the manifest-pin fallback; known-working and
@@ -170,17 +167,6 @@ def compatible_composition(paths: Paths, stack, effective_remote) -> dict | None
         if eligible:
             return entries
     return None
-
-
-def newest_commit_for(paths: Paths, stack_id: str, comp_id: str) -> str:
-    """The component's commit in the NEWEST stored composition containing it ("" when none).
-    HISTORY DISPLAY ONLY — source selection goes through `compatible_composition` (one
-    complete compatible record for the whole stack, never per-component)."""
-    for comp in load(paths, stack_id):
-        entry = comp["entries"].get(comp_id)
-        if entry and entry.get("commit"):
-            return entry["commit"]
-    return ""
 
 
 # ---- last-start candidate marker (written by the START path, read by GETs) --------------------
@@ -212,13 +198,6 @@ def read_candidate(paths: Paths, stack_id: str) -> dict | None:
                        for k, v in d["entries"].items())):
         return None
     return d
-
-
-def clear_candidate(paths: Paths, stack_id: str) -> None:
-    try:
-        runtime_fs.unlink(paths, candidate_path(paths, stack_id))
-    except (OSError, PathContainmentError):
-        pass                                     # a stale candidate is re-validated on read
 
 
 def clear_candidate_checked(paths: Paths, stack_id: str) -> tuple:

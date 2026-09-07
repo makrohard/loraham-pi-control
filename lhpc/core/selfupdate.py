@@ -1,7 +1,7 @@
 """Self-update: lhpc's own version / git / upstream state.
 
 lhpc is normally installed as an EDITABLE git checkout, so it updates ITSELF by fast-forwarding that
-checkout (`git fetch` + `git merge --ff-only`) and asking the operator to restart the web console —
+checkout (`git fetch` + `git merge --ff-only`); the console restart is systemd's on the one-click path (helper unit's `OnSuccess=/OnFailure=lhpc-web.service`, see `updater_units`) and the operator's on the CLI `--apply` path —
 a flow kept deliberately separate from the managed-component update machinery (installer / clone).
 
 Design rules:
@@ -282,11 +282,9 @@ def check_upstream(system: System, branch: str = "") -> dict:
     # `--` ends option parsing so a branch name can never be read as a git flag (S5:
     # defense-in-depth — `br` is derived locally today, but guard it if it ever becomes
     # operator-settable).
-    # EXPLICIT FORCED REFSPEC into the remote-tracking ref. `git fetch <remote> <branch>`
-    # updates the tracking ref only opportunistically, and NOT when upstream rewrote
-    # history — after a force-push we kept reading the old commit and reported "update
-    # available" pointing at a commit that no longer exists (with `ff_blocked` reasoning
-    # computed against that phantom). With the refspec, "fresh by construction" is true.
+    # Explicit forced refspec into the remote-tracking ref: THIS fetch updates
+    # `refs/remotes/origin/<br>` regardless of the `remote.origin.fetch` config or a rewritten
+    # upstream, so the ancestry below is computed against a fresh ref.
     f = _git(system, root, ["fetch", "--quiet", "--force", _REMOTE, "--",
                             f"refs/heads/{br}:refs/remotes/{_REMOTE}/{br}"], _NET_TIMEOUT)
     if getattr(f, "not_found", False):
@@ -367,7 +365,7 @@ _LOCAL_FIELDS = {"head": _is_str, "head_short": _is_str, "branch": _is_str,
 _UPSTREAM_FIELDS = {"ok": _is_bool, "deps_changed": _is_bool, "error": _is_str,
                     "branch": _is_str, "upstream_head": _is_str,
                     "upstream_head_short": _is_str, "upstream_version": _is_str,
-                    "ff_blocked": _is_bool}     # absent in old caches -> defaulted False on read
+                    "ff_blocked": _is_bool}     # absent -> False on read
 _IDENTITY_FIELDS = {"ok": _is_bool, "status": _is_str, "reason": _is_str, "checked_at": _is_int}
 # Outcome of the LAST service-mediated apply (the one-click web update) — shown once the
 # console is back so the operator sees what happened while it was down.
@@ -835,7 +833,7 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, branch: s
     if m.returncode != 0:
         detail = _summarize_output(m.stderr)
         # THREE distinct outcomes share this branch — conflating them offered a DESTRUCTIVE remedy
-        # for faults it cannot repair (audit): `--overwrite` runs `reset --hard` + `clean -ffd`, so
+        # for faults it cannot repair: `--overwrite` runs `reset --hard` + `clean -ffd`, so
         # a lock file, a read-only filesystem, a full disk or a corrupt index would have cost the
         # operator their untracked work while leaving the real fault in place.
         if force:
@@ -846,7 +844,7 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, branch: s
         if up.get("ff_blocked") is True:
             # POSITIVELY proven by the freshly fetched ancestry (`merge-base --is-ancestor` exit 1,
             # fail-soft otherwise): only here is the reset path the actual remedy, and saying so is
-            # what keeps the refusal from being a dead end (live-found after an upstream force-push).
+            # what keeps the refusal from being a dead end.
             return {"ok": False, "needs_overwrite": True,
                     "message": "Update could not be applied — the local branch has diverged "
                     "from upstream." + (f" {detail}" if detail else "")}

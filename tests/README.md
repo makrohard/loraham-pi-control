@@ -85,7 +85,7 @@ genuine duplicates; never delete a distinct guard. The guarantees under "Safety 
 
 ## Layout
 
-Tests are grouped by SUBJECT into ~90 files. Notable consolidated homes:
+Tests are grouped by SUBJECT into ~110 files. Notable consolidated homes:
 
 | file | covers |
 |---|---|
@@ -105,16 +105,18 @@ several unrelated subjects, so it is not force-merged into any one subject file.
 
 ## Tier 0 — the contract
 
-`-m contract` is the **readable core**: a single lane, ~100 cases, that states what LHPC *promises* —
+`-m contract` is the **readable core**: a single lane, ~150 cases, that states what LHPC *promises* —
 install/auto-install/start/stop, TX safety, the binary channel, config/params, hardware, firewall,
 exposure, HMAC, self-update, boot-restore, uninstall/clean, and the GET-no-mutation guarantee. Every
 case is an EXISTING test tagged `@pytest.mark.contract`, chosen to go through the widest public seam
 available (a CLI verb, a Flask route, or a typed `ActionResult`) and to state either a happy path or
 the one refusal that defines a boundary. Read this lane to learn the system; it runs in ~20s.
 
-`-m safety` is the **invariant set** — the subset of contract cases that guard a named safety
-invariant (`@pytest.mark.safety("<id>")`): RF/TX opt-in, firewall fail-closed, exposure opt-in,
-uninstall-while-running (P0.5), and GET-no-network (P0.6). Every safety case is also a contract case.
+`-m safety` is the **invariant set** — every case that guards a named safety invariant
+(`@pytest.mark.safety("<id>")`): RF-TX-opt-in, firewall-fail-closed, exposure-fail-closed, P0.5
+(uninstall-while-running), P0.6 (GET-no-network), gps-fail-closed, gps-position-privacy,
+gps-receiver-exclusive, meshcore-identity, meshcore-position, optional-visibility and
+runtime-containment. It overlaps the contract lane but is not a subset of it.
 
 Everything else is the **net**: the full suite is a thorough regression net that nobody is expected to
 read top-to-bottom. A change is understood through the contract; it is *protected* by the net.
@@ -156,11 +158,10 @@ CI. `tests/test_suite_hygiene.py` fails on it either way.
    the fast lane and focused runs aren't held to a total); the gate compares coverage against the prior
    baseline instead.
 
-Markers (`contract`, `safety`, `slow`, `requires_zstd`, plus `needs_session` / `needs_nonroot` /
-`no_default_hardware`) are
+Markers (`contract`, `safety`, `slow`, `requires_zstd`, plus `needs_session` / `needs_nonroot` / `no_default_hardware` / `no_default_display`) are
 registered once in `tests/conftest.py`.
 
-### Basetemp discipline (a Pi5 once held 19 GB of stray pytest dirs)
+### Basetemp discipline
 
 Run the suite with a **dedicated, fixed basetemp** and remove exactly that path afterwards — never a
 broad glob:
@@ -171,12 +172,5 @@ rm -rf -- "$HOME/pt-lhpc"
 ```
 
 On a Pi Zero 2W this is mandatory anyway: the default basetemp lands on the 208 MB `/tmp` tmpfs and
-the full suite fills it (ENOSPC). For legacy leftovers under `/var/tmp` (`lpt-*` from older runs):
-stop all pytest processes first, then LIST before removing —
-
-```
-find /var/tmp -maxdepth 1 -uid "$(id -u)" -type d -name 'lpt-*'
-```
-
-review the output, then remove those directories explicitly. Do not delete unrelated `$HOME/pt-*`
+the full suite fills it (ENOSPC). Do not delete unrelated `$HOME/pt-*`
 paths.

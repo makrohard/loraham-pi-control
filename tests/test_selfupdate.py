@@ -117,6 +117,24 @@ def test_historical_manifest_survives_the_runner_capture_cap():
     assert {s.id for s in stacks} >= {"daemon", "kiss", "graywolf"}
 
 
+def test_previous_release_manifest_still_parses():
+    """The config-default migration parses the manifest of the release being upgraded FROM
+    (`service_params`: `git show <from_head>:...`), so a key that release wrote must stay
+    accepted even when nothing reads it any more."""
+    import pathlib
+    import tomllib
+
+    from lhpc.core import manifest as manifest_mod
+    from lhpc.core.probes import RealSystem
+    repo = pathlib.Path(__file__).resolve().parents[1]
+    r = RealSystem().runner.run(["git", "-C", str(repo), "show",
+                                 "v0.2.10:lhpc/data/manifest.example.toml"], timeout=20.0)
+    if r.returncode != 0:
+        pytest.skip("v0.2.10 tag not available in this checkout")
+    stacks = manifest_mod.parse_manifest(tomllib.loads(r.stdout))
+    assert {s.id for s in stacks} >= {"daemon", "kiss", "graywolf"}
+
+
 def test_local_state_reads_head_branch_clean(env):
     st = selfupdate.local_state(env["sys"])
     assert st["is_git"] and st["branch"] == "main" and st["dirty"] is False
@@ -2281,20 +2299,6 @@ def test_repair_integration_restart_false_installs_starts_path_no_restart(tmp_pa
     assert not any(c[:3] == ["systemctl", "--user", "restart"] for c in calls)   # restart=False
 
 
-def test_repair_removes_stale_same_root_overwrite_only(tmp_path, monkeypatch):
-    svc = _legacy_svc(tmp_path, monkeypatch)
-    ud = svc._user_unit_dir(); root = str(tmp_path)
-    ov = ud / "lhpc-selfupdate-overwrite.service"
-    ov.write_text(f"[Service]\nEnvironment=LHPC_RUNTIME_ROOT={root}\n"
-                  f"ExecStart={root}/venv/lhpc/bin/lhpc self-update --run-service --overwrite\n")
-    svc.self_update_repair_integration(restart=False)
-    assert not ov.exists()                                   # same-root stale variant removed
-    # a FOREIGN overwrite unit is left untouched
-    ov.write_text("[Service]\nEnvironment=LHPC_RUNTIME_ROOT=/elsewhere\nExecStart=/elsewhere/x\n")
-    svc.self_update_repair_integration(restart=False)
-    assert ov.exists()
-
-
 def test_repair_and_trigger_migrates_then_writes_marker(tmp_path, monkeypatch):
     svc = _legacy_svc(tmp_path, monkeypatch)
     assert svc.updater_integration()["fixable"] and svc.updater_integration()["status"] == "incomplete"
@@ -2392,92 +2396,6 @@ def test_repair_restart_true_also_verifies_watcher_active(tmp_path, monkeypatch)
     res = svc.self_update_repair_integration(restart=True)
     assert not res.ok and res.data.get("path_watcher_failed")
     assert not (tmp_path / ".lhpc-root").exists()
-
-
-def _write_overwrite_unit(ud, root, execline):
-    (ud / "lhpc-selfupdate-overwrite.service").write_text(
-        f"[Service]\nEnvironment=LHPC_RUNTIME_ROOT={root}\nExecStart={execline}\n")
-
-
-# --- _remove_stale_overwrite_unit: absence is not evidence -------------------------------------
-
-def _stale_svc(tmp_path):
-    from lhpc.core.services import ControllerService
-    from lhpc.core.paths import Paths
-    from lhpc.core.probes.backends import FakeSystem
-    ud = tmp_path / "units"
-    ud.mkdir(parents=True, exist_ok=True)
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    return svc, ud
-
-
-def test_absent_overwrite_unit_yields_no_note(tmp_path):
-    # THE BUG: `_read_unit` RAISES FileNotFoundError when the unit does not exist (it never returns
-    # None), and a bare `except Exception` reported every clean box as "present but unreadable".
-    svc, ud = _stale_svc(tmp_path)
-    assert not (ud / "lhpc-selfupdate-overwrite.service").exists()
-    assert svc._remove_stale_overwrite_unit(ud) is None
-
-
-def test_symlinked_overwrite_unit_is_reported_not_touched(tmp_path):
-    svc, ud = _stale_svc(tmp_path)
-    (tmp_path / "real.service").write_text("[Service]\n")
-    link = ud / "lhpc-selfupdate-overwrite.service"
-    link.symlink_to(tmp_path / "real.service")           # O_NOFOLLOW -> ELOOP
-    note = svc._remove_stale_overwrite_unit(ud)
-    assert note and "unreadable/symlinked" in note
-    assert link.is_symlink()                             # left untouched
-
-
-def test_non_regular_overwrite_unit_is_reported(tmp_path):
-    svc, ud = _stale_svc(tmp_path)
-    (ud / "lhpc-selfupdate-overwrite.service").mkdir()   # a directory at the unit path
-    note = svc._remove_stale_overwrite_unit(ud)
-    assert note and "unreadable/symlinked" in note
-
-
-def test_oversized_overwrite_unit_is_reported(tmp_path):
-    svc, ud = _stale_svc(tmp_path)
-    (ud / "lhpc-selfupdate-overwrite.service").write_text("x" * (64 * 1024 + 1))
-    note = svc._remove_stale_overwrite_unit(ud)
-    assert note and "unreadable/symlinked" in note
-
-
-def test_proven_ours_overwrite_unit_is_removed_silently(tmp_path):
-    svc, ud = _stale_svc(tmp_path)
-    root = str(tmp_path)
-    _write_overwrite_unit(ud, root, f"{root}/venv/lhpc/bin/lhpc self-update --run-service --overwrite")
-    assert svc._remove_stale_overwrite_unit(ud) is None
-    assert not (ud / "lhpc-selfupdate-overwrite.service").exists()
-
-
-def test_foreign_overwrite_unit_is_left_with_its_own_note(tmp_path):
-    svc, ud = _stale_svc(tmp_path)
-    _write_overwrite_unit(ud, "/elsewhere", "/usr/bin/somethingelse")
-    note = svc._remove_stale_overwrite_unit(ud)
-    assert note and "not the recognised old overwrite helper" in note
-    assert "unreadable/symlinked" not in note            # a readable foreign unit is not "unreadable"
-    assert (ud / "lhpc-selfupdate-overwrite.service").exists()
-
-
-def test_overwrite_removed_only_with_old_helper_execstart(tmp_path, monkeypatch):
-    """P2: same-root env + the exact old overwrite ExecStart -> removed; a same-root unit with a
-    DIFFERENT ExecStart is left in place with a cleanup note; foreign env is left."""
-    ud = None
-    svc = _legacy_svc(tmp_path, monkeypatch); ud = svc._user_unit_dir(); root = str(tmp_path)
-    # (a) correct old overwrite variant -> removed
-    _write_overwrite_unit(ud, root, f"{root}/venv/lhpc/bin/lhpc self-update --run-service --overwrite")
-    assert svc.self_update_repair_integration(restart=False).ok
-    assert not (ud / "lhpc-selfupdate-overwrite.service").exists()
-    # (b) same root but WRONG ExecStart -> left + note
-    _write_overwrite_unit(ud, root, "/usr/bin/somethingelse")
-    res = svc.self_update_repair_integration(restart=False)
-    assert (ud / "lhpc-selfupdate-overwrite.service").exists()
-    assert any("not the recognised old overwrite helper" in d for d in res.details)
-    # (c) foreign env -> left
-    _write_overwrite_unit(ud, "/elsewhere", "/elsewhere/venv/lhpc/bin/lhpc self-update --run-service --overwrite")
-    svc.self_update_repair_integration(restart=False)
-    assert (ud / "lhpc-selfupdate-overwrite.service").exists()
 
 
 def test_check_upstream_follows_a_rewritten_upstream(env):

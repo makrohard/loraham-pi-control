@@ -18,7 +18,7 @@
       up to a minute per retry while it is away).</p>
     <p>Current: <strong>{% if nv.mode == 'client' %}{{ nv.active.name }} ({{ nv.active.address }})
       {% elif nv.mode == 'ap' %}own AP{% else %}no active Wi-Fi{% endif %}</strong>
-      — reachable as <code>https://{{ nv.hostname }}.local:8443</code> on a joined network.</p>
+      — reachable as <code>https://{{ nv.hostname }}.local:{{ ws_mon.desired.port if ws_mon else 8443 }}</code> on a joined network.</p>
     {% if nv.authorized and nv.mode == 'client' %}
       <form method="post" action="{{ url_for('network_action', op='ap') }}" class="act">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
@@ -45,7 +45,7 @@
             {% else %}
               Phone-friendly address: <code>https://{{ nv.outcome.address.split('/')[0] }}:8443</code>
               (your router announced no local DNS domain, so the plain address is the way in
-              from phones; PC/iPhone can use <code>https://{{ nv.hostname }}.local:8443</code>).
+              from phones; PC/iPhone can use <code>https://{{ nv.hostname }}.local:{{ ws_mon.desired.port if ws_mon else 8443 }}</code>).
             {% endif %}
             {% if nv.outcome.console == 'applied' %}Console allowed from {{ nv.outcome.cidr }}.{% endif %}
             {% if nv.outcome.console == 'pending' and nv.outcome.firewall_cmd %}
@@ -104,7 +104,7 @@
       <section class="cfgsec">
         <h4>Join a network</h4>
         {# Manual entry — while this box hosts its own AP the radio cannot survey other
-           channels (live-found: scans see only the AP itself), so typing the name is THE
+           channels (scans see only the AP itself), so typing the name is THE
            commissioning path and the Scan button renders only in client mode (operator
            ruling: no button that cannot work). #}
         {# The password is asked on the CONFIRM page, never here — it must ride exactly one

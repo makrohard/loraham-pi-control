@@ -72,11 +72,12 @@ lhpc/
     web/app.py           # Flask HTTP → ControllerService → server-rendered pages
 ```
 
-Not every module is listed — `lhpc/core/` holds ~55 files; the rule below is what matters.
+Not every module is listed; the rule below is what matters.
 
 Dependency rule: `adapters/*` import `core/*`; `core/*` never imports `adapters/*`.
-Adapters import only `lhpc.core.services`; the `service_*` modules are internal mixins of
-`ControllerService` (composed by the `services.py` facade) and are never imported by adapters.
+Adapters obtain `ControllerService` and `ActionResult` from `lhpc.core.services`; the `service_*` modules are
+internal mixins composed into `ControllerService` by the `services.py` facade (the CLI additionally imports the
+two cooperative-abort flags from `service_auto_install` and `service_hmac` to install its signal handlers).
 Both adapters are thin — they parse input, call one `ControllerService` method, and
 render the returned `ActionResult`. The web adapter calls the service directly
 (never shells out to the CLI), so validation, gating and results are identical.
@@ -96,7 +97,7 @@ render the returned `ActionResult`. The web adapter calls the service directly
      disagree. The one launch-time overlay is an inherited identity (below), materialized for
      that launch and never persisted.
 - The config file each app reads is generated from its `config_file` params
-  (`{callsign}`/`{band}`/`{runtime}`/`{source}` substituted; `{callsign}` resolves to the
+  (`{callsign}`/`{band}`/`{runtime}`/`{hardware}`/`{gps_*}` substituted; `{callsign}` resolves to the
   effective identity).
 
 ## Identity and callsigns
@@ -131,27 +132,30 @@ and framed socket (`/tmp/lora{band}f.sock`). Components declare **resource claim
 manifest (`[[stack.component.resource]]`: key, kind, mode); `core/resources.py` turns declared
 claims plus observed state into conflicts, and a start is blocked, with the holder named, if a
 running stack already holds a resource it needs. The modes: **exclusive** (one claimant),
-**cooperative** (members of one `group` coexist, but conflict with any exclusive claim),
+**cooperative** (claimants of the same key coexist, but conflict with any exclusive claim),
 **provider** / **consumer** (the provider creates the resource, e.g. a socket; two providers
-conflict, a consumer only records a dependency).
+conflict, a consumer only records a dependency), and **requirement** (a band-scoped daemon
+configuration constraint, e.g. `loraham.profile.433 = MANAGED`; recorded and shown by
+`lhpc explain`, never a conflict source).
 
 The claims that matter for the radios:
 
 - `loraham.radio.<band>` — the daemon claims it as **provider** for the band it runs; a direct
   radio user (meshtastic, reticulum) claims it **exclusive**. One stack owns a band at a time.
 - `loraham.daemon-socket.<band>` — **provider** on the daemon, **consumer** on every
-  daemon-client stack (kiss, graywolf, chat, meshcore, …).
+  daemon-client stack (kiss, meshcom, meshcore).
 - `spi.bus.0` — the shared SPI bus, **cooperative** in group `spi.bus.0`: the daemon (and the
   Reticulum node) serialise every transfer through the daemon's fail-closed
-  `/run/lock/loraham/spi0.lock` flock, so they may share the bus on opposite bands.
+  `<runtime>/state/loraham/spi0.lock` flock, so they may share the bus on opposite bands.
 - `spi.bus.0.unlocked` — meshtasticd drives `/dev/spidev0.0` without taking that lock, so it
   claims this key **exclusive**; the Reticulum node claims it exclusive too. `meshtastic +
   reticulum` is therefore refused, while `daemon + meshtastic` on opposite bands stays allowed:
   that pair shares `/dev/spidev0.0` without mutual exclusion — an accepted hazard, not a safe
   design.
 
-Each stack document lists its own claims; a band, a TCP port, a serial device and the single
-MeshCore companion-client slot are claimed the same way.
+Each stack document lists its own claims; a band, a TCP port and a serial device are claimed the
+same way. A claim marked `advisory = true` — the single MeshCore companion-client slot — is
+reported as a conflict but never blocks a start.
 
 ## Daemon control
 
@@ -174,9 +178,9 @@ The guarantees the controller gives, each with where it is implemented and prove
   secret blocks the launch (`core/commands.py`); a `pkg-config` failure aborts a build
   (`core/build_launcher_runtime.py`).
 - **Identity-verified stopping.** Each launch records full process identity under a unique id
-  (`state/owned/<comp>__<band>__<pid>.json`: pid, start time, pgid, sid, executable, argv
+  (`state/owned/<comp>__<band>__<pid>__<nonce>.json`: pid, start time, pgid, sid, executable, argv
   fingerprint). `Lifecycle.stop` re-reads `/proc` and signals only an LHPC-owned session leader
-  whose identity still matches; any mismatch means no signal and a `manual-required` verdict with
+  whose identity still matches; any mismatch means no signal and a `manual_required` verdict with
   the exact PID. It waits for verified cessation before clearing the record (no auto-SIGKILL).
   `core/lifecycle.py`; `tests/test_process_ownership.py`.
 - **Path containment.** `core/runtime_fs.py` opens the runtime root and walks each parent with
@@ -213,7 +217,7 @@ The guarantees the controller gives, each with where it is implemented and prove
   rejects an empty, malformed or unrelated `Host` with 400 before any session or CSRF work
   (`tests/test_trusted_host.py`); mutations are POST + CSRF token + explicit confirm; every
   response carries `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
-  `Referrer-Policy: no-referrer` and `Content-Security-Policy: default-src 'self'`; per-stack
+  `Referrer-Policy: no-referrer` and a `Content-Security-Policy` locked to `'self'` (with `base-uri`/`frame-ancestors` `'none'`); per-stack
   config paths are proven to stay inside `config/stacks/`
   (`tests/test_web.py::test_config_path_cannot_escape_via_band_or_id`). No GET route runs a
   network or git-remote command (`tests/test_web.py::test_get_routes_make_no_network_calls`).
@@ -230,7 +234,7 @@ The guarantees the controller gives, each with where it is implemented and prove
   when its stop is unproven). Job markers are PID-reuse-resistant; `prune_logs()` never deletes
   the log of an active job.
 - **Uninstall protection.** Uninstall refuses while a target runs, never removes a source still
-  referenced by another component (kiss/serial-kiss share `loraham-kiss-tnc`), and never deletes
+  referenced by another component (`loraham-kiss-tnc` and `loraham-kiss-serial` share `src/loraham-kiss-tnc`), and never deletes
   config, secrets or profiles (`tests/test_uninstall_safety.py`). `uninstall.sh` writes the
   `.lhpc-uninstalling` guard (blocks new task admission), refuses on active or unprovable jobs
   or any UNKNOWN component, stops clients before the shared daemon and verifies cessation; if

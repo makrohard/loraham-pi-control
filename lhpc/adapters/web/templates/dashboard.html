@@ -24,8 +24,7 @@
   </div>
   {% endif %}
   {% if restart_required %}
-    {# Durable restart-required flags: yellow, explicit — the action opens the normal
-       controlled restart confirm (never restarts anything by itself). #}
+    {# Durable restart-required flags: yellow, explicit — the action restarts the stack at once (a confirm page appears only when a dependent or another stack's owner would be stopped). #}
     <div class="depnote depnote-warn">
       <span class="ver ver-yellow">Restart required</span> — saved settings differ from the
       running stack{{ 's' if restart_required|length > 1 }}:
@@ -319,10 +318,11 @@
       {% if not firewall.live_ok %}
         {% if firewall.installed %}
           {{ cmdbox('fw-apply', 'sudo bash ' ~ runtime_root ~ '/config/files/firewall/firewall-apply.sh') }}
+          {{ cmdbox('ws-apply', 'lhpc webserver apply') }}
         {% else %}
           <div class="wsline"><span class="muted">Not set up yet — configure it in the
             <a href="{{ url_for('stacks_overview', open='firewall') ~ '#firewall-row' }}">Firewall panel</a>, then run
-            the one apply command it shows.</span></div>
+            the two commands it shows.</span></div>
         {% endif %}
       {% endif %}
       {% endif %}
@@ -354,6 +354,7 @@
                dead proxy URL; link to this stack's Webserver Settings (Apply if the proxy is down). #}
             {% if w.addr %}{{ webserver_pills(w.posture, w.addr, link=true) }}{% if w.mode_note %} <span class="pill" title="{{ w.mode_note }}">not served in this mode</span>{% endif %}
             {% else %}{{ webserver_pills(w.posture, '', link=false) }} <a class="pill wsurl" href="{{ url_for('stacks_overview', open=w.sid) ~ w.anchor }}" title="Open it on the Pi, or Apply/expose it in this stack's Settings">{{ 'proxy not active — Apply' if w.listen_scope == 'absent' else 'local only' }}</a>{% endif %}
+            {% if w.pending_disable %}<span class="pill pill-warn" title="Disabled in the saved settings — nginx still serves this proxy until Apply runs">disable pending</span>{% endif %}
           {% elif w.direct_port %}
             {# Not-proxied web UI. Link the DIRECT listener only where it's up for this viewer
                (w.direct_addr set by the adapter); ABSENT is its own state (down, not local-only). #}

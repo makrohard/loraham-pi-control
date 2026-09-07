@@ -163,8 +163,7 @@ class FirewallOpsMixin:
         AP-MANAGED (Lite) boxes emit these UNSCOPED (empty allow_cidrs -> one unrestricted
         accept per port): the box roams between its own AP subnet and joined WLANs, and a
         subnet-scoped nft rule locked the operator out of the console on every newly joined
-        network — the privileged re-apply is a step field users cannot take (live-found;
-        operator ruling). Reachability stays gated by the nginx CIDR allowlist + mTLS, both
+        network — the privileged re-apply is a step field users cannot take (operator ruling). Reachability stays gated by the nginx CIDR allowlist + mTLS, both
         of which lhpc manages unprivileged — the same trust level as the already-unscoped
         SSH port, and stronger auth. It also makes the nft intent independent of the nginx
         allowlist, so joining a network never trips the firewall gate. Non-AP boxes
@@ -569,11 +568,9 @@ class FirewallOpsMixin:
                 lvl = w.get("exposure", {}).get("level", "bad")
                 if lvl == "ok":
                     continue                          # loopback, or provably firewalled — safe
-                # The row's level is FINAL. The old rule here refused to improve a port from
-                # firewall evidence because a same-NUMBERED listener on another address/family is
-                # not proven filtered — that reasoning is now enforced properly by the directional
-                # `scope_covers` where the row is built, so there is nothing to re-check. (It was
-                # always a comment, never an upgrade algorithm; do not go looking for one.)
+                                # The row's level is FINAL: a same-NUMBERED listener on another address/family is
+                # proven filtered only by the directional `scope_covers` where the row is built,
+                # so nothing is re-checked here.
                 bump(lvl)
                 if lvl == "warn":
                     # Use the reason the ROW resolved. A port row is also yellow for a LAN-shaped
@@ -591,9 +588,8 @@ class FirewallOpsMixin:
             # green, and it is still bound. The claim is about unauthenticated REACHABILITY.
             label, title = "secure", "No unauthenticated port is reachable from outside this box."
         elif worst == "warn":
-            # Only claim restricted-source reachability when EVERY yellow says so. A mixed set
-            # (or any other cause) is a generic review — the old text asserted a no-auth
-            # restricted port for warnings that were nothing of the kind.
+            # Only claim restricted-source reachability when EVERY yellow says so; a mixed set
+            # (or any other cause) is a generic review.
             if reasons == {"restricted_noauth"}:
                 label = "lan-exposed"
                 title = "A no-auth port is reachable, but restricted to allowed sources."
@@ -631,7 +627,7 @@ class FirewallOpsMixin:
 
         INVARIANT: no result names `firewall-apply.sh` unless `firewall_render()` SUCCEEDED in this
         same call. Naming a script that is stale — or was never written — sends the operator to
-        apply the wrong intent, or to a file that does not exist (audit).
+        apply the wrong intent, or to a file that does not exist.
         """
         state = self._fw_integration_state()
         if state == "absent":
@@ -659,9 +655,8 @@ class FirewallOpsMixin:
             return True, "", []                            # receipt already matches; nothing to redo
         # From here the saved intent DIFFERS from the receipt, so the apply script no longer embeds
         # it: regenerate before returning on ANY path — otherwise the operator runs a stale
-        # firewall-apply.sh that can never satisfy the new intent. This check used to sit AFTER the
-        # empty-set return, so closing the LAST remote listener left the script advertising an
-        # ingress that no longer exists (audit).
+        # firewall-apply.sh that can never satisfy the new intent — including when the LAST remote
+        # listener is being closed.
         rendered = self.firewall_render()
         if not prospective_ports:
             # Nothing remote left to protect: a local-only activation is always allowed. The intent
@@ -669,10 +664,8 @@ class FirewallOpsMixin:
             return (True, "", []) if rendered.ok else (True, self._render_warning(rendered),
                                                        ["lhpc firewall --script"])
         # A change that OPENS nothing new must never be blocked. The gate exists to stop a port
-        # binding ahead of a verified firewall — not to stop one being CLOSED. Refusing here left
-        # `webserver disable-remote` + apply with the console still on 0.0.0.0 while telling the
-        # operator the remote listener "was NOT activated" (live-found on a Zero: another stack's
-        # proxy kept the prospective set non-empty, so narrowing the console was refused too).
+                # binding ahead of a verified firewall — not to stop one being CLOSED (narrowing the
+        # console must pass even while another stack's proxy keeps the prospective set non-empty).
         if self._narrowing_is_console_removal_only():
             if rendered.ok:
                 return True, "", []
@@ -697,8 +690,15 @@ class FirewallOpsMixin:
         operation actually (re)wrote it; otherwise offers the regeneration step instead."""
         if not rendered.ok:
             return ["lhpc firewall --script"]
+        return self._fw_apply_lines()
+
+    def _fw_apply_lines(self) -> list:
+        """The operator's apply sequence: the root script, the live check, then the Webserver
+        Apply that activates the listeners the firewall was gating (a gate-deferred Apply also
+        completes on its own; running it again is harmless)."""
         base = self._paths.under("config/files/firewall/firewall-apply.sh")
-        return [f"sudo bash {base}", "sudo systemctl start lhpc-firewall-check.service"]
+        return [f"sudo bash {base}", "sudo systemctl start lhpc-firewall-check.service",
+                "lhpc webserver apply"]
 
     def _narrowing_is_console_removal_only(self) -> bool:
         """True only when the ONE firewall-relevant change is REMOVING the console's remote
@@ -708,7 +708,7 @@ class FirewallOpsMixin:
         `state/webserver.json` — `desired_snapshot.remote_exposed` is an INTENT that
         `webserver verify` writes without activating anything, the file carries no boot binding,
         and bare port numbers ignore address, family and CIDRs. It could therefore let a genuinely
-        new listener through on stale evidence (audit).
+        new listener through on stale evidence.
 
         Instead: rebuild the candidate the firewall was last applied for — the current candidate
         plus the removed console ingress — and require the receipt's own `intent_hash` to match it.
@@ -1021,7 +1021,7 @@ class FirewallOpsMixin:
             return (False,
                     "Firewall changes pending — the listener was NOT started. Apply the firewall "
                     f"first, then start '{target}' again.",
-                    [f"sudo bash {base}", "sudo systemctl start lhpc-firewall-check.service"])
+                    self._fw_apply_lines())
         modeled = st.get("candidate") or self.firewall_candidate()
         for sc in scopes:
             if not self._fw_scope_modeled(sc, modeled):
@@ -1256,8 +1256,7 @@ def _own_cgroup_text():
 #   * lhpc-nginx.service     — ExecStartPre boot gate: may a remote listener bind this boot?
 #   * lhpc-boot-restore.service — restarts stacks through the gated start(), whose FW-R8 exposure
 #     gate refuses a non-loopback listener without a verified firewall
-# Leaving the nginx unit out forced the console back to loopback on every restart (live-found on a
-# Zero); boot-restore would have refused every externally-listening stack after a reboot the same
+# Leaving the nginx unit out forced the console back to loopback on every restart; boot-restore would have refused every externally-listening stack after a reboot the same
 # way. lhpc-selfupdate.service is deliberately NOT here: its preflight reads artifacts and config,
 # never the receipt.
 _MANAGED_SANDBOXED_UNITS = ("lhpc-web.service", "lhpc-nginx.service",

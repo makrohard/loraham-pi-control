@@ -10,9 +10,9 @@ This module owns:
   * `nginx -t` VALIDATION before any activation (through the injected System.runner);
   * the exposure-policy gate (remote needs >=1 CIDR; 0.0.0.0/0 needs elevated confirmation).
 
-It does NOT start/enable systemd units (operator-context only) and it does NOT decide, from
+It does NOT enable or install systemd units (that is `service_webserver.py`'s `systemctl --user enable --now`); its only systemctl use is `restart()` (`systemctl --user restart lhpc-nginx.service`, operator context only) plus `is-active` queries and it does NOT decide, from
 desired config, that anything is active — effective/exposed truth lives in state/webserver.json
-(the verification evidence, written by services.py). Nginx reload/activation proof also lives
+(the verification evidence, written by `verify()` / `record_applied()` below). Nginx reload/activation proof also lives
 in the service layer.
 """
 
@@ -42,8 +42,8 @@ _UPDATING_PAGE = ("config", "nginx", "_lhpc_updating.html")
 
 _NGINX_VALIDATE_TIMEOUT_S = 15.0
 # A restart is ExecStop (`nginx -s quit`, draining workers) + ExecStart. On a loaded Pi Zero
-# that is not a 20-second operation, and our own expiring budget used to be reported as an
-# indistinguishable 'restart failed' (live-found).
+# that is not a 20-second operation, and our own expiring budget must not be reported as an
+# indistinguishable 'restart failed'.
 _NGINX_RESTART_TIMEOUT_S = 60.0
 
 # Declared SYSTEM (apt) dependencies of the production webserver. LHPC never installs system
@@ -455,8 +455,7 @@ def tls_required(cfg: WebserverConfig, stack_webs=()) -> bool:
     """Does ANY public listener in the DESIRED config terminate TLS?
 
     The whole config's PKI needs follow from this, not from the console alone: an http console with
-    an https stack proxy still needs a server certificate, and an all-http config needs none. Asking
-    for TLS material nobody uses is how `scheme=http` ended up only half-working."""
+    an https stack proxy still needs a server certificate, and an all-http config needs none."""
     if cfg.scheme == "https":
         return True
     return any(p.swc.enabled and p.swc.scheme == "https" for p in stack_webs)
@@ -465,8 +464,7 @@ def tls_required(cfg: WebserverConfig, stack_webs=()) -> bool:
 def client_auth_required(cfg: WebserverConfig, stack_webs=()) -> bool:
     """Does any TLS listener actually verify client certificates? (=> client CA + CRL must exist.)
 
-    Gating this on the CONSOLE's access mode alone was wrong: a `no-auth` console with a cert-auth
-    stack proxy still makes nginx load `ssl_client_certificate`/`ssl_crl`."""
+    A `no-auth` console with a cert-auth stack proxy still makes nginx load `ssl_client_certificate`/`ssl_crl`."""
     if cfg.scheme == "https" and cfg.access_mode != "no-auth":
         return True
     return any(p.swc.enabled and p.swc.scheme == "https" and p.swc.access_mode != "no-auth"
@@ -607,7 +605,7 @@ def _stack_allow_deny(swc) -> str:
 def deny_location_regex(path: str) -> str:
     """The nginx location regex that refuses `path` however a backend might spell it.
 
-    An exact `location = P` was bypassable in two ways (audit-found, reproduced against the
+    An exact `location = P` was bypassable in two ways (reproduced against the
     pinned openHop dashboard): CherryPy folds every punctuation character of a path segment to
     `_` before the attribute lookup (`/api/set-mode` reaches `set_mode`), and it binds extra
     path segments to positional handler arguments (`/api/config_export/true` exports secrets).
@@ -635,7 +633,7 @@ def _stack_deny_locations(s) -> str:
             continue
         seen.add(base)
         # 404, not 403: single-page dashboards (openHop's) treat a 403 on ANY call as "session
-        # gone" and log the operator out the moment they touch a denied feature (audit-found on
+        # gone" and log the operator out the moment they touch a denied feature (on
         # e293: the first call after login was a denied /api/update/check). A denied route is
         # simply absent through this proxy — the app then reports one failed feature.
         out.append(f"        location ~ {deny_location_regex(base)} {{ return 404; }}")
@@ -718,7 +716,7 @@ def render_nginx_config(paths: Paths, cfg: WebserverConfig, stack_webs=()) -> st
     nginx-set evidence headers.
 
     `stack_webs` is a sequence of `StackWebProxy` (per-stack web-UI reverse proxies). It defaults to
-    empty, and an empty set renders BYTE-IDENTICALLY to the pre-feature config — the websocket `map`,
+    empty, and an empty set renders BYTE-IDENTICALLY to the console-only config — the websocket `map`,
     the upstreams and the extra server blocks all appear only when a stack is actually proxied."""
     sock = _abs(paths, WAITRESS_SOCK)
     server_crt = _abs(paths, ("config", "tls", "server", "server.crt"))
@@ -956,7 +954,7 @@ def restart(system, paths: Paths) -> tuple:
     if not msg:
         # systemctl CAN fail without a word (notably when our own budget expires). Say which of
         # the two it was and what the unit ended up as — a bare "restart failed" sent the operator
-        # to the nginx log for a problem that was never nginx's (live-found on a Zero).
+        # to the nginx log for a problem that was never nginx's.
         why = (f"our restart budget of {_NGINX_RESTART_TIMEOUT_S:.0f}s expired"
                if getattr(r, "timed_out", False)
                else f"systemctl exited {r.returncode} without a message")
@@ -965,7 +963,7 @@ def restart(system, paths: Paths) -> tuple:
         msg = (f"{why} — the unit is now {state}"
                + ("; re-run `lhpc webserver apply` to prove the new listener"
                   if state == "active" else ""))
-    # Live-found misleading failure: this bus EPERM means the CALLER cannot reach the operator's
+    # This bus EPERM means the CALLER cannot reach the operator's
     # user manager — either it runs as root/sudo, or inside the managed web unit (whose sandbox
     # deliberately blocks %t/bus). The generic advice pointed at the nginx log; name the remedy.
     if "user scope bus" in msg or "Operation not permitted" in msg:
@@ -1120,12 +1118,7 @@ def monitor_view(paths: Paths, cfg: WebserverConfig, live_listener_scope: str | 
     # while you view the raw dev server. When unsupplied (non-request callers), fall back to the console
     # port being live (nginx owns it; lhpc-web has no TCP console listener).
     via_nginx = served_via_nginx if served_via_nginx is not None else scope not in (None, "absent")
-    # The APPLIED console access mode, verbatim in the view: gates that must not trust the
-    # saved-but-not-applied window (the /stacks fetch commands) read it here — one snapshot
-    # read, one shape, whoever builds the view. "" = unknown -> fail closed downstream.
-    applied_access_mode = str(applied_console.get("access_mode") or "")
     return {
-        "applied_access_mode": applied_access_mode,
         "local_ip": local_ip(),
         "desired": {
             "bind": cfg.bind, "port": cfg.port, "access_mode": cfg.access_mode,
@@ -1263,7 +1256,6 @@ def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=(),
             "listener_scope": own_scope,
             # EXACT scope required: local ⇒ "loopback", lan/public ⇒ "exposed". ABSENT always FAILS —
             # an enabled proxy with no listener is a dead front-end, not a successful local bind
-            # (a failed restart used to slip through as desired-local "success" with no frontend).
             "listener_matches": ("ok" if own_scope == ("exposed" if p.swc.remote else "loopback")
                                  else "failed"),
         })

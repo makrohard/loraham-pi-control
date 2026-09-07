@@ -1,7 +1,6 @@
-"""Identity import — the migration's hard gate.
+"""Identity import — the host's hard gate.
 
-The existing LHPC MeshCore private key must map to the SAME public identity under
-openHop, and nothing in the host may ever mint a replacement. Oracle for the seed →
+The LHPC-owned MeshCore private key must map to the SAME public identity as openHop, and nothing in the host may ever mint a replacement. Oracle for the seed →
 public key relation: PyNaCl's standard Ed25519 (the same construction the openHop host's
 ed25519_wrapper and LHPC's meshcore_identity module use).
 """

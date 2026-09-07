@@ -54,25 +54,15 @@ def _proc_start_time(pid: int) -> int:
 
 
 def _guard_owner_ints(rec: dict) -> tuple[int, int]:
-    """STRICT (pid, start_time) extraction from an uninstall-guard owner record. Accepts ints
-    and DECIMAL STRINGS — the guard is written by `uninstall.sh` (integers) and by the controller
-    claim, which wrote the shell's argument strings verbatim up to 0.2.10, so a guard left behind
-    by an interrupted uninstall must stay readable across the upgrade. REJECTS booleans (json true
-    would int() to 1), any non-decimal value, and non-positive pid/start times (the shell fallback
-    writes start 0 when /proc/$$/stat was unreadable — that is UNPROVABLE, not pid-reuse-safe
-    evidence). Raises ValueError on anything rejected — callers keep the guard."""
+    """STRICT (pid, start_time) extraction from an uninstall-guard owner record: positive
+    integers only. REJECTS booleans (json true would int() to 1), strings, and non-positive
+    values (the shell fallback writes start 0 when /proc/$$/stat was unreadable — that is
+    UNPROVABLE, not pid-reuse-safe evidence). Raises ValueError on anything rejected —
+    callers keep the guard."""
     def _strict(v) -> int:
-        if isinstance(v, bool):
-            raise ValueError("boolean is not an identity value")  # noqa: TRY004
-        if isinstance(v, int):
-            i = v
-        elif isinstance(v, str) and v.strip().isdigit():
-            i = int(v.strip())
-        else:
-            raise ValueError(f"non-decimal identity value: {v!r}")
-        if i <= 0:
-            raise ValueError("non-positive identity value")
-        return i
+        if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+            raise ValueError(f"not a positive integer identity value: {v!r}")
+        return v
     return _strict(rec["pid"]), _strict(rec["start_time"])
 
 

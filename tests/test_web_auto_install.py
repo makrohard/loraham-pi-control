@@ -1,4 +1,4 @@
-"""Web surface of the auto-install auto-install feature: form modes/defaults, CSRF, second-stage RF
+"""Web surface of the auto-install feature: form modes/defaults, CSRF, second-stage RF
 confirmation binding source+tests+TX, POST refusal matrix, ack path, run view, cursor log
 API, welcome-banner tri-state, Apps-page button labels."""
 import pytest

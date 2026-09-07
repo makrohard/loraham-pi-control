@@ -1,4 +1,5 @@
-"""`lhpc _gps-bridge` — feeds ONE consumer a device-shaped NMEA stream.
+"""`lhpc _gps-bridge` — feeds ONE consumer the global `[gps]` position in the shape it reads: a
+device-shaped NMEA stream (meshtasticd, MeshCom) or a line-JSON position feed (MeshCore).
 
 Why this exists: meshtasticd accepts only `GPS: SerialPath:` (a serial device — no gpsd,
 no TCP), and MeshCom's pinned relay speaks only to a LOCAL gpsd. Neither can consume a
@@ -6,7 +7,8 @@ remote gpsd, a direct NMEA device, or a fixed position. This bridge turns whatev
 global `[gps]` setting says into the shape each consumer can actually read.
 
 ONE INSTANCE PER CONSUMER. No shared process, no reference counting: the consumers want
-different output shapes (a PTY for meshtasticd, a UNIX socket for MeshCom's QEMU UART1),
+different output shapes (a PTY for meshtasticd, a UNIX socket for MeshCom's QEMU UART1, a
+line-JSON Unix server socket for MeshCore),
 and a shared process would have to outlive whichever stack stopped first.
 
 Two behaviours here are not optional, both learned on hardware:

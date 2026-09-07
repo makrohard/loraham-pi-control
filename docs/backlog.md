@@ -10,7 +10,6 @@ knows what they are relying on before they touch it.
 - [Transitive build-dependency source locks](#transitive-build-dependency-source-locks)
 - [SX1262 on 868 — not run on hardware](#sx1262-on-868--not-run-on-hardware)
 - [Independent review](#independent-review)
-- [Test hermeticity vs a live daemon](#test-hermeticity-vs-a-live-daemon)
 - [Contract gaps](#contract-gaps)
 - [Coverage-hostile flaky test](#coverage-hostile-flaky-test)
 - [Safety invariant IDs](#safety-invariant-ids)
@@ -73,23 +72,13 @@ final receipt only once all are held.
 Tested on the air: the LoRaHAM Pi HAT dual-module controller, the Uputronics dual stack and
 the Waveshare SX1262 433M. **Not tested on silicon: the Waveshare SX1262 868M.** The 868 path
 of the direct-SPI driver is code-complete and shares everything but the band profile with the
-433 path; treat a first 868 run as a hardware test, not a regression check. Dated evidence:
+433 path; treat a first 868 run as a hardware test, not a regression check. Dated evidence for the LoRaHAM Pi HAT runs:
 [live tests](live-test.md); the driver's hardware notes: [stacks/reticulum.md](stacks/reticulum.md).
 
 ## Independent review
 
 None of the safety model in [architecture.md](architecture.md) has been reviewed by anyone
 outside the project. The tests named next to each guarantee are the only evidence.
-
-## Test hermeticity vs a live daemon
-
-The `RealSystem`-backed binary-switch tests in `tests/test_binary_install.py` read the GLOBAL
-`/tmp/loraconf*.sock`, so with a real daemon running on the box they report "component(s)
-running" and `pytest -m "not slow"` goes red (correct code, non-hermetic test).
-
-**Holding the line:** stop the daemon before a full local run ([maintenance.md](maintenance.md)).
-
-**Fix:** route the CONF-socket path through a per-test override for those tests.
 
 ## Contract gaps
 

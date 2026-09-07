@@ -32,7 +32,7 @@ def _seed_sources(svc, tmp_path, stack_id):
 def _own(tmp_path, rel, comps):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord(f"src/{rel}", "", "backfilled", "", time.time(), "",
+        source_registry.RegistryRecord(f"src/{rel}", "", "pinned", "", time.time(), "",
                                        tuple(comps)))
 
 
@@ -316,7 +316,8 @@ def test_render_bootstrap_preserves_multiline_blocks_verbatim(tmp_path):
     script = deps.render_bootstrap_script(["sudo apt install -y git", obs, obs], revision="r")
     # a multi-line block is emitted verbatim (never merged out of order) and deduplicated
     assert script.count("sources.list.d/x.list") == 1
-    assert "sudo apt install -y meshtasticd" in script       # kept AFTER the repo add, not merged up
+    assert "\napt install -y meshtasticd" in script          # kept AFTER the repo add, not merged up
+    assert "| tee /etc/apt/sources.list.d/x.list" in script   # sudo dropped at command position too
 
 
 def test_deps_script_service_has_every_category_and_no_venv_pip(tmp_path):
@@ -346,6 +347,14 @@ def test_shipped_bootstrap_snapshot_is_up_to_date(tmp_path):
     assert shipped.exists(), "bootstrap-deps.sh snapshot missing — run `lhpc deps --script > bootstrap-deps.sh`"
     assert shipped.read_text() == svc.deps_script(), \
         "bootstrap-deps.sh is stale — regenerate with `lhpc deps --script > bootstrap-deps.sh`"
+
+
+def test_bootstrap_script_runs_no_sudo(tmp_path):
+    """The script is root: `sudo` may survive only in comments and inside quoted (echoed) text."""
+    import re
+    for ln in _svc(tmp_path).deps_script().splitlines():
+        code = "" if ln.lstrip().startswith("#") else ln.split("#", 1)[0]
+        assert "sudo" not in re.sub(r'"[^"]*"|\'[^\']*\'', "", code), ln
 
 
 def test_bootstrap_script_never_advises_apt_install_systemd(tmp_path):

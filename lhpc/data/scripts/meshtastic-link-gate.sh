@@ -2,8 +2,7 @@
 #
 # meshtastic-link-gate.sh <binary> [label]
 #
-# FAIL-CLOSED link-time gate for a binary that must NOT touch a display or audio stack. Originally the
-# managed server-only meshtasticd (`-e native`); now also the headless source-built qemu-system-xtensa
+# FAIL-CLOSED link-time gate for a binary that must NOT touch a display or audio stack. Used for the managed server-only meshtasticd (`-e native`) and for the headless source-built qemu-system-xtensa
 # (build-qemu.sh passes a label). Pass a label to describe the artifact; without one the message keeps
 # the meshtasticd-specific remediation.
 #

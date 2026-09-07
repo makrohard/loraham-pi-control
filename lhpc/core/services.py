@@ -2,7 +2,7 @@
 
 The CLI adapter and the web adapter both call ONLY this module, guaranteeing
 identical validation, status interpretation and results. Read methods are bounded
-and read-only; mutating methods print a plan and apply only when confirmed.
+and read-only; mutating methods return a dry-run plan and apply only with `apply=True`.
 
 `build_snapshot()` is the single probing path; both `status()` (CLI text) and the
 web adapter call it, so a page load and a CLI run see the same fresh evidence.
@@ -213,9 +213,9 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
           * SHARED (default) — a read lock for the duration of an applied lifecycle transition. Config
             MUTATIONS take the EXCLUSIVE `config_lock`, so a concurrent save WAITS for the transition and a
             start WAITS for an in-progress save; independent starts share and never serialise.
-          * EXCLUSIVE — the auto-install auto-install boundary holds `LOCK_EX` for the WHOLE run, so an atomic config
+          * EXCLUSIVE — the auto-install boundary holds `LOCK_EX` for the WHOLE run, so an atomic config
             write inside the boundary reuses this held lock (see `save_config_bundle`) instead of contending
-            on a second descriptor. Acquired BOUNDED (a auto-install run must not hang on a stuck holder) → typed
+            on a second descriptor. Acquired BOUNDED (an auto-install run must not hang on a stuck holder) → typed
             `SourceTxnBlocked` on timeout.
         RE-ENTRANT per thread. The OUTERMOST entry FIXES the mode and holds it UNCHANGED — nested entries are
         depth-only and NEVER convert it (SH↔EX conversion is not atomic on Linux). Nested exclusive-under-
@@ -314,7 +314,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     def config(self) -> Config:
         with self._config_lock:
-            # AUDIT CC4: reload when local.toml's mtime changed since the cache was built.
+            # Reload when local.toml's mtime changed since the cache was built.
             # A long-lived web process otherwise served a stale callsign/remotes forever
             # after an out-of-band hand-edit (a scenario the loader explicitly supports),
             # and an in-lock plan could verify identity against the wrong effective remote.
@@ -694,7 +694,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             # for a station with no transmitter. Pulling the declared dependencies in keeps the
             # inference POSITIVE and can only ever make it stricter.
             required = [c for c in self._tx_chain_components(ss.stack)
-                        if c.tx_capable and (c.run_cmd or c.run_argv) and not c.optional]
+                        if c.tx_capable and c.run_argv and not c.optional]
             proven = bool(required)
             for c in required:
                 # A chain member may live in ANOTHER stack's section, so resolve the status
@@ -879,7 +879,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         self._snapshot_state.memo = None
 
     def _request_memo(self, key, compute):
-        """ONCE PER REQUEST (0.2.9 render contract): memoize a read-only piece of evidence for the
+        """ONCE PER REQUEST: memoize a read-only piece of evidence for the
         rest of the current request/operation, in the SAME thread-local state as the snapshot —
         never an ordinary service attribute, because Waitress worker threads share this service.
         Cleared wherever the snapshot memo is cleared (every web request start, every public
@@ -1129,7 +1129,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     present += 1
                 elif self.binary_covers(c.id):
                     # No checkout BY DESIGN — the artifact IS the build output. Counting these as
-                    # "missing" made a healthy binary install read half-installed (live-found).
+                    # "missing" made a healthy binary install read half-installed.
                     covered += 1
                 else:
                     missing += 1
@@ -1165,7 +1165,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         # by a source adoption of a shared checkout, an interrupted transaction, a hand-edited
         # record) is the one binary-channel fault the ordinary status view cannot show — it
         # reads as an ordinary source state while the stack is in fact not installed
-        # (live-found on the Zero). Name it here, with the reason and the way out.
+        # Name it here, with the reason and the way out.
         for s in self.stacks():
             if self.binary_spec(s.id) is None:
                 continue
@@ -1209,7 +1209,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             details.append("")
             details.append(f"  ! POSITION SOURCE DISABLED — {gcfg.reason}")
             details.append("    stacks that would use GPS will start without a position:")
-            details.append("      lhpc gps --source <off|gpsd|nmea|fixed>")
+            details.append("      lhpc gps --source <auto|off|gpsd|nmea|fixed>")
         elif gcfg is not None and getattr(gcfg, "source", "") == "gpsd":
             # gpsd ANSWERING is not gpsd HAVING A RECEIVER. Debian's default is `DEVICES=""` with
             # `USBAUTO`, so gpsd depends on a udev hotplug event: restart it while the receiver is
@@ -1262,16 +1262,30 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     # ---- install / bootstrap ---------------------------------------------
 
     def bootstrap(self, apply: bool = False) -> ActionResult:
+        from .install import PlanAction
         inst = self._installer()
         plan = inst.plan_bootstrap()
+        # The firewall operator scripts exist from the first bootstrap on: the console, the
+        # dashboard and `lhpc firewall` all name `firewall-apply.sh` as the apply command, so the
+        # path they show must be a file (every later Firewall save re-renders it). Planned here,
+        # applied here — the installer's action kinds stay filesystem-only.
+        fw_path = self._fw_script_paths()["firewall-apply.sh"]
+        fw_action = PlanAction("render", fw_path, "render the firewall operator scripts",
+                               status="exists" if os.path.isfile(fw_path) else "planned")
         if not apply:
+            plan.actions.append(fw_action)
             return self._plan_result(plan, applied=False, next_apply="lhpc bootstrap --yes")
         plan = inst.apply_bootstrap(plan)
+        if fw_action.status == "planned":
+            rendered = self.firewall_render()
+            fw_action.status = "done" if rendered.ok else "failed"
+            fw_action.detail = "" if rendered.ok else rendered.summary
+        plan.actions.append(fw_action)
         return self._plan_result(plan, applied=True, next_apply=None)
 
     def _switch_records_missing(self, paths) -> list:
         """Source paths this switch adopted whose ownership record is not valid — the switch is
-        not complete until every one of them is recorded (audit finding)."""
+        not complete until every one of them is recorded."""
         from . import source_registry
         return [p for p in sorted(set(paths))
                 if source_registry.record_state(self._paths, p)[0] != "valid"]
@@ -1350,11 +1364,11 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         # already exists") — the artifact is retired, but LATER: only once the runtime root,
         # shared-remote coherence and the adoption plan have all validated, and inside the
         # install's own guards. Retiring up here would destroy a working binary before a
-        # source resolution failure that never adopts anything (audit finding).
+        # source resolution failure that never adopts anything.
         _retire_note = ""
         # ANY receipt state but "absent" must be retired — a SUPERSEDED or drifted receipt still
         # names files this box owns, and `on_binary_channel` (valid receipts only) let those
-        # bypass retirement entirely (audit finding). An unreadable receipt is refused by
+        # bypass retirement entirely. An unreadable receipt is refused by
         # `binary_retire` itself, with the manual-resolution command.
         _retire_binary = bool(apply and stack_id
                               and self.binary_receipt_state(stack_id)[0] != "absent")
@@ -1366,7 +1380,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 next_commands=["lhpc bootstrap"],
             )
         # SHARED-SOURCE REMOTE COHERENCE gates BOTH planning and mutation: one checkout is
-        # one clone with ONE effective remote — a legacy divergent per-component override
+        # one clone with ONE effective remote — a divergent per-component override
         # blocks install with ZERO candidate/source/registry/config mutation.
         planned_paths = sorted({c.source.path for st in self.stacks()
                                 if not stack_id or st.id == stack_id
@@ -1386,7 +1400,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 # SWITCHING AWAY from the binary channel is real work even when every source
                 # path already exists: the artifact must be retired (and its files removed)
                 # first. Without counting it, the CLI's dry-run short-circuit reports "Nothing
-                # to do" and the switch silently never happens (live-found on the Zero).
+                # to do" and the switch silently never happens.
                 _d = dict(res.data)
                 _d["changes"] = int(_d.get("changes", 0)) + 1
                 return ActionResult(
@@ -1452,7 +1466,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             # SELECTOR ENFORCEMENT, before anything is set aside: an existing checkout must be
             # provably ours, clean, and at the commit the requested selector resolves to —
             # otherwise this "switch to dev" would leave a pinned tree in place and report
-            # success (audit finding). Refuse here, with the artifact untouched.
+            # success. Refuse here, with the artifact untouched.
             _sw_owned = (self.binary_receipt_state(stack_id)[1] or None)
             _sw_replace, _sw_refusals = self.switch_source_plan(
                 groups, owned_files=(_sw_owned.files if _sw_owned else ()))
@@ -1470,7 +1484,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             # below fails, `binary_recover()` puts the exact previous install back from disk —
             # re-downloading it would need the network, the release, and an artifact that still
             # matches the pins, which is precisely what an operator switching to source is
-            # working around (audit finding). `locked=False` so retirement rechecks running.
+            # working around. `locked=False` so retirement rechecks running.
             _switch_txn = secrets.token_hex(8)
             try:
                 binary_install_mod.open_txn(
@@ -1530,7 +1544,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     # without this a later failure could restore the binary while the checkout
                     # (and its NEW registry txn id) stayed on the source channel: the receipt's
                     # baseline no longer matched and the restored install read SUPERSEDED
-                    # (audit finding). Adoption then runs against an absent destination.
+                    # Adoption then runs against an absent destination.
                     _err = self._preserve_replaced_source(_switch_txn, path)
                     if _err:
                         self.binary_recover()
@@ -1587,7 +1601,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             # The binary retirement becomes final ONLY when the WHOLE switch succeeded: every
             # source group adopted, every ownership record written, and (where it applies) the
             # MeshCom password enabled. Committing earlier left the operator with a failed
-            # switch and no way back to the binary (audit finding).
+            # switch and no way back to the binary.
             _switch_note = []
             if _retire_note:
                 _missing = self._switch_records_missing(mutated_paths)
@@ -1938,10 +1952,10 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
           * tickable — a SERVICE the operator may auto-start with the stack (`autostart_<id>`;
                        an INTERACTIVE service such as nomadnet stays a choice: the start plans it
                        and prints its launch line, MANUAL_REQUIRED, instead of spawning it).
-        A saved `autostart_<id>` flag counts ONLY for a tickable component — the Settings list,
-        the run-order admission and (formerly) the confirm page used to encode this separately
-        and drifted (a stale FIXTURE tick silently replayed a synthetic position on every
-        start; the CLI was offered a tick one surface never showed). Non-optional -> "hidden"."""
+        A saved `autostart_<id>` flag counts ONLY for a tickable component — the Settings list
+        and the run-order admission both derive it from here (one rule, so a stale FIXTURE tick
+        can never replay a synthetic position and no surface offers a tick another never shows).
+        Non-optional -> "hidden"."""
         from .model import ComponentKind
         if (not c.optional or c.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE)
                 or c.test_fixture or c.id in self._all_gps_feed_ids()):
@@ -2135,7 +2149,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
           * STOP   — the ACTUAL running bands: a client uses its running/interactive MARKER (falling
                      back to the declared band only when there is NO runtime evidence); the daemon
                      uses PROCESS TOPOLOGY — a per-band stop also locks the other band when the SAME
-                     process serves it (a legacy dual-band), and a whole-daemon stop locks
+                     process serves it (a dual-band value), and a whole-daemon stop locks
                      every band an owned/observed daemon PROCESS serves, even if that band's CONF
                      socket is unreachable / UNINITIALIZED / FAILED.
           * RESTART— the UNION of the actual STOP bands and the requested START bands."""
@@ -2523,10 +2537,10 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         remaining: list = []
         for cand in candidates:
             # IDENTITY params are never stale-default candidates. Filtered HERE, at the point of
-            # use, and not only where candidates are chosen: on the 0.2.5 -> this-version crossing
-            # the candidates are chosen by the OLD code, which has no such exclusion, so a
+            # use, and not only where candidates are chosen: the candidates may have been chosen
+            # by pre-update code without this exclusion, so a
             # deliberately pinned local callsign equal to the global would be deleted by the very
-            # update that ships this rule (audit-found). Dropping it here is silent and correct —
+            # update that ships this rule. Dropping it here is silent and correct —
             # the value simply stays as the operator set it.
             if self._is_identity_candidate(cand):
                 continue
@@ -2587,7 +2601,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     def _daemon_serve_bands(self, radio: str = "") -> list:
         """The explicit single band(s) a daemon start SERVES, from a requested `radio` value — ALWAYS
         clamped to the active mode and ALWAYS explicit (lhpc runs one
-        process per band). A single active band -> [that band]; anything else (empty, a legacy dual-band value,
+        process per band). A single active band -> [that band]; anything else (empty, a dual-band value,
         or the excluded band) -> the active band(s). radio_mode='both' therefore serves TWO processes."""
         active = list(self.active_bands())
         return [radio] if radio in ("433", "868") and radio in active else active

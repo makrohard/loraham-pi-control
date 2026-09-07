@@ -442,3 +442,18 @@ def test_crafted_start_post_fields_are_ignored_not_applied(tmp_path):
     r = _start_post(c, {"dp_433_SF": "99", "dp_433_CADIDLE": "250", "dp_bad": "x"})
     assert b"invalid daemon parameter" not in r.data and b"malformed daemon field" not in r.data
     assert cfgmod.load_stack_config(svc._paths, "daemon")["dp_433_CADIDLE"] == "40"
+
+
+@pytest.mark.no_default_hardware
+def test_daemon_param_save_refuses_without_radio_hardware(tmp_path):
+    """With no radio hardware there is no served band, so a save has nowhere to go: refused
+    (before this, inert `dp__<PARAM>` keys were persisted and reported as saved)."""
+    from lhpc.core.config import load_stack_config
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    r = svc.save_daemon_params("daemon", "", {"MODE": "FSK"})
+    assert not r.ok and "no radio hardware configured" in r.summary
+    assert not any(k.startswith("dp_") for k in load_stack_config(svc._paths, "daemon", ""))
+

@@ -77,7 +77,7 @@ class ResourceKind(str, Enum):
     SERIAL = "serial"                    # serial.<device>
     AUDIO = "audio"                      # audio.<device>
     GPSD = "gpsd"                        # gpsd.local
-    SPI_BUS = "spi-bus"                  # /dev/spidev0.0 + /run/lock/loraham/spi0.lock
+    SPI_BUS = "spi-bus"                  # /dev/spidev0.0 + <runtime>/state/loraham/spi0.lock
     GPIO = "gpio"                        # /dev/gpiochip0
     # The single Companion client slot a MeshCore node serves at a time: the frame server
     # evicts an existing client when a new one connects, so two clients (webui + the operator's
@@ -120,8 +120,6 @@ class ResourceClaim:
     key: str                     # canonical id, e.g. "loraham.radio.868" / "tcp.port.7000"
     kind: ResourceKind
     mode: ResourceMode = ResourceMode.EXCLUSIVE
-    group: str = ""              # cooperative group id (RESERVED: parsed + exposed via
-                                 # group_id, not yet consumed by conflict logic)
     requirement: str = ""        # for REQUIREMENT mode, the required value (e.g. "DIRECT")
     note: str = ""
     # An advisory claim still produces an OBSERVED conflict (Apps-page banner + component card)
@@ -130,10 +128,6 @@ class ResourceClaim:
     # refuse the start. Non-advisory EXCLUSIVE claims (SPI, TCP ports, …) still block.
     advisory: bool = False
 
-    @property
-    def group_id(self) -> str:
-        """Reserved cooperative-group identity (defaults to `key`); kept as schema."""
-        return self.group or self.key
 
 
 @dataclass(frozen=True)
@@ -226,7 +220,7 @@ class FirewallMeta:
 class EndpointSpec:
     """A local endpoint a component exposes that can be probed read-only."""
 
-    kind: str                    # "tcp" | "unix"
+    kind: str                    # "tcp" | "unix" | "path"
     address: str                 # "127.0.0.1:7000" | "/tmp/loraconf433.sock"
     role: str = "listener"       # "listener" (tcp) | "provider"/"data" (unix)
     readiness: str = "none"      # "none" | "daemon-status" (bounded GET STATUS probe)
@@ -239,7 +233,7 @@ class EndpointSpec:
     scheme: str = ""             # "http"|"kiss"|"tcp"|"serial"… (http renders a link)
     # Managed-Firewall semantics; None on non-firewall-relevant endpoints (unix, external).
     firewall: FirewallMeta | None = None
-    # Exact request paths the web proxy must REFUSE (nginx `location = <path>` -> 403), for a
+    # Request paths the web proxy must REFUSE (rendered as spelling-tolerant `location ~` regex blocks -> 404, see webserver.deny_location_regex), for a
     # proxied web UI whose backend exposes operations LHPC owns (e.g. a MeshCore GUI's
     # factory-reset / radio / GPS mutations). Server-side enforcement at LHPC's perimeter, not
     # JS: the backend is loopback-only, so the proxy is the reachable path. Empty = deny nothing.
@@ -260,7 +254,6 @@ class RunParam:
     choices: tuple[str, ...] = ()
     # Optional friendly DISPLAY labels for enum choices: ((value, label), …). The value still submits;
     # only the shown text changes (e.g. hw "loraham" -> "LoRaHAM"). Missing entries fall back to the value.
-    choice_labels: tuple = ()
     default: str = ""
     flag: str = ""               # for kind="flag", the text to inject when enabled
     label: str = ""
@@ -322,12 +315,12 @@ class FileParam:
     group: str = ""              # settings sub-section title (see RunParam.group)
     omit_if_empty: bool = False  # OPTIONAL-ABSENT: when unset/blank, OMIT the key from the generated
     #                              file entirely (and remove an active key line inherited from the base)
+    #                              — never write an empty value. For pins a board genuinely lacks
+    #                              (Uputronics Reset/Busy) a written value assert-aborts meshtasticd.
     secret_ref: str = ""         # "<table>.<key>" in config/secrets.toml. The value is resolved
                                  # ONLY through load_secrets() at write time — never from
                                  # local.toml or merged config — so the two trust layers stay
                                  # separate. Enforced hidden + non-overridable at manifest load.
-    #                              — never write an empty value. For pins a board genuinely lacks
-    #                              (Uputronics Reset/Busy): a written value assert-aborts meshtasticd.
     secret_file: str = ""        # BARE filename under <runtime>/config/secrets/ holding a
                                  # CONTROLLER-MANAGED secret (vs secret_ref's operator-authored
                                  # secrets.toml). Read at write time only; same invariants as
@@ -345,10 +338,10 @@ class FileConfig:
     """
 
     path: str
-    fmt: str = "keyval"          # "keyval" | "toml-update" | "yaml-update" | "ini-update"
+    fmt: str = "keyval"          # "keyval" | "env" | "toml-update" | "yaml-update" | "ini-update"
     mode: int = 0o644            # permissions applied on EVERY atomic replace. A file holding
                                  # a secret_ref value must be 0600.
-    base: str = ""               # base file to update (rel. to source dir, or absolute)
+    base: str = ""               # base file to update ({runtime}/…, {asset}/…, or relative to the source dir — never absolute)
     apply_cmd: str = ""          # copyable command to apply the generated file ({path})
     params: tuple[FileParam, ...] = ()
 
@@ -367,6 +360,9 @@ class SourceSpec:
     artifact: bool = False       # single-file/artifact-style source: EVERY selector resolves to
                                  # the same declared artifact (default-branch HEAD); no fake
                                  # pin/branch/tag semantics are invented for it
+    patches: tuple[str, ...] = ()  # `{asset}/patches/…` files a build step applies to this checkout
+                                   # (derived from the component's build_steps at manifest load):
+                                   # a tree whose only modifications are these is NOT dirty
 
     @property
     def adopt_dir(self) -> str:
@@ -413,9 +409,6 @@ class Component:
                                           # build consumes (e.g. daemon -> radiolib); enforced
                                           # for update inclusion + uninstall refcounting
     source: SourceSpec | None = None
-    # A web UI whose password LHPC does not choose but DOES store (an app that generates its own
-    # credential on first start). Declaring the file here lets the console tell the operator how to
-    # read it, without LHPC ever putting the secret itself into a page or a log.
     # A runtime-root-relative directory this component's BUILD owns outright, for a component
     # that has no `source` to be cleaned through (a fetched package). `clean` removes it; without
     # it a "Clean all" would leave the artifact behind.
@@ -423,8 +416,11 @@ class Component:
     # GitHub "owner/repo" whose RELEASES this fetched-package component tracks, for the
     # upstream-version check (and the opt-in upstream install). "" = no upstream check.
     release_repo: str = ""
+    # A web UI whose password LHPC does not choose but DOES store (an app that generates its own
+    # credential on first start). Declaring the file here lets the console tell the operator how to
+    # read it, without LHPC ever putting the secret itself into a page or a log.
     ui_user: str = ""             # the account name to log in with (e.g. "admin")
-    # Runtime-root-relative path holding the web-UI password (first line). CONTRACT (0.2.9): the
+    # Runtime-root-relative path holding the web-UI password (first line). CONTRACT: the
     # secret may be shown ONLY in the stack page's authenticated Password section, read through
     # the controller's safe reader (containment, no-follow, 0600 posture); it must never reach
     # logs, flashes, task markers, ActionResult text, status output or JSON APIs.
@@ -436,26 +432,19 @@ class Component:
     # A short green confirmation shown (then auto-hidden) on the dashboard right after
     # this component is started — e.g. how to connect a just-launched GUI to its node.
     start_note: str = ""
-    # Human-readable commands (relative to the component's source dir). Used to
-    # drive starts and build/test jobs (manual start/ wrappers are retired).
-    build_cmd: str = ""
-    run_cmd: str = ""
-    test_cmd: str = ""
-    pre_cmd: str = ""            # optional pre-start hook (e.g. mkdir a lock dir)
-    post_start: str = ""         # optional command spawned (detached) after start (e.g. set region)
-    # --- structured command model (preferred; replaces the shell strings above) ---
+    # --- structured command model (the executed form; the run/build/test shorthand derives into it) ---
     run_argv: tuple[str, ...] = ()        # argv token template (literals + {param:…}/{operator:…})
     run_cwd: str = ""                     # working dir ({runtime}/{source} substituted)
     run_env: tuple[tuple[str, str], ...] = ()   # extra env (value may be @file:/@env:/path)
     pre_steps: tuple[dict, ...] = ()      # typed controller pre-steps (mkdir/chmod/symlink)
-    post_steps: tuple[dict, ...] = ()     # typed post-start steps (delay/exec)
+    post_steps: tuple[dict, ...] = ()     # typed post-start steps (delay/exec/tcp_wait/tcp_send)
     build_steps: tuple[dict, ...] = ()    # typed build steps ({argv, env, pkgconfig})
     test_argv: tuple[str, ...] = ()       # structured host-test argv (no shell)
     test_requires_running: bool = False   # host test needs the stack already RUNNING (integration
-                                          # test, e.g. probing a running QEMU guest); auto-install/auto-install
+                                          # test, e.g. probing a running QEMU guest); auto-install
                                           # DEFERS it (can't start during a build sweep), `lhpc test`
                                           # runs it. Without this it would fail in auto-install.
-    readiness: str = ""                   # process | endpoint | daemon-band | manual | external-systemd
+    readiness: str = ""                   # process | endpoint | daemon-band | manual | external-systemd | gps-feed
     readiness_timeout: float = 0.0        # seconds to wait for ready=true endpoints at start
                                           # (0 = use the service default); raise it for a
                                           # slow-booting app (e.g. a Python node opening a port)
@@ -476,7 +465,7 @@ class Component:
     # particular it is still seeded by a default `stack start` wherever it IS buildable
     # (unlike `optional`, which also removes it from start seeding). Voice's GTK app uses
     # this: a headless/Lite box keeps the stack through the terminal variant, a desktop
-    # starts the GUI exactly as before.
+    # starts the GUI.
     gui_optional: bool = False
     # A TEST FACILITY, not an operator choice: never offered as an optional start, never
     # auto-installed. `optional` alone could not express this — it made the meshcom GPS relay
@@ -485,7 +474,7 @@ class Component:
     # This component READS a position (device/gpsd/plugin) when GPS is on. Declared where the
     # reading happens, because the `use_gps` param cannot say: reticulum declares `use_gps` on
     # `rns` while `sideband` is the component that reads. The GPS gate, the receiver claim and
-    # feed admission all key off this — a hardcoded consumer list drifted twice.
+    # feed admission all key off this
     reads_position: bool = False
     run_params: tuple[RunParam, ...] = ()    # user-choosable run parameters
     requires_daemon_tx: str = ""             # daemon TX mode this component needs (MANAGED/DIRECT)
@@ -529,8 +518,7 @@ class Stack:
 class WebPage:
     """ONE proxied web page: a component's client http/https endpoint as the stack web-UI proxy
     sees it. `page_id` keys the operator's `[stackweb]` policy, the nginx block and the panels: the
-    stack's FIRST web component keeps the STACK id (so every policy saved before pages existed stays
-    valid), any further one is `<stack_id>-<component_id>`. Derived, never declared — the complete
+    stack's FIRST web component keeps the STACK id , any further one is `<stack_id>-<component_id>`. Derived, never declared — the complete
     set is collision-checked once at manifest load (`manifest._validate_graph`)."""
 
     page_id: str
@@ -559,10 +547,7 @@ def web_pages(stack: Stack) -> tuple:
 
     ORDER decides which page keeps the stack id: the components in manifest order, except that
     the stack's MAIN component comes LAST. A stack's "web UI" is the dedicated web component it
-    ships (meshcore-webui), and it existed — with every saved `meshcore_*` proxy setting — before
-    the main component grew a dashboard of its own; putting main last keeps that identity stable
-    whenever a main component gains a web endpoint later. For every stack whose only web page IS
-    its main component (graywolf, meshtastic, meshcom) nothing changes.
+    ships (meshcore-webui), so putting main last keeps the dedicated web component's page keyed by the stack id even when the main component also exposes a web endpoint.
 
     `label` is the ONE spelling every stack-external list uses: the stack name for the first
     page, `<stack> · <component>` for any further one (inside the stack's own panel the
@@ -617,8 +602,6 @@ class EndpointObservation:
     spec: EndpointSpec
     present: bool = False        # tcp: listening; unix: socket exists & is a socket
     detail: str = ""             # human note (e.g. "RADIO=READY TXMODE=DIRECT")
-    owner_pid: int | None = None
-    owner_incomplete: bool = False  # owner lookup hit its time budget / not resolved
 
 
 @dataclass
@@ -647,7 +630,6 @@ class ComponentStatus:
     dependencies: list[DependencyObservation] = field(default_factory=list)
     pids: list[int] = field(default_factory=list)
     evidence: dict[str, str] = field(default_factory=dict)
-    notes: list[str] = field(default_factory=list)
 
 
 @dataclass
