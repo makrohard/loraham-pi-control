@@ -143,13 +143,11 @@ accounting state blocks transmit but never receive.
 
 - `rnstatus` interface counters are the RX/TX evidence; `Valid announce` is not logged at the
   default log level, so grepping the node log proves nothing.
-- Every SPI transaction takes the daemon's `spi0.lock` (bounded, 2 s), so sharing
-  `/dev/spidev0.0` with the daemon on the other band is safe.
 
 ## Conflicts
 
 - The stack claims its band **exclusively**: not with the daemon serving that band (and so not
   with its clients), not with meshtastic on that band. Opposite bands coexist — the 433 daemon and
   Reticulum on 868 run together.
-- `spi.bus.0.unlocked`: `meshtastic + reticulum` is refused on any band pair, because meshtasticd
-  drives the bus without the lock ([architecture](../architecture.md)).
+- `spi.bus.0.unlocked`: `meshtastic + reticulum` is refused on any band pair
+  ([architecture](../architecture.md#radios-bands-and-resource-claims)).

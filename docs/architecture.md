@@ -261,10 +261,9 @@ What is still open is tracked in [backlog.md](backlog.md).
 
 LHPC's own checkout is a **dedicated controller identity** — a top-level `[controller]`
 manifest table (strict allow-list; fixed `source_path = "src/loraham-pi-control"` and
-`branch = "main"`), NOT a stack. It is observable and self-updatable but never installed,
-built, started, cleaned, or auto-install-processed: every generic verb aimed at its id refuses in
-the central service layer and points to `lhpc self-update` (operating rules:
-[deployment.md](deployment.md)).
+`branch = "main"`), NOT a stack. It is observable and self-updatable: every generic verb aimed
+at its id refuses in the central service layer and points to `lhpc self-update` (operating
+rules: [deployment.md](deployment.md)).
 
 `controller_identity_live()` reports a **tri-state** verdict, used only at startup refresh,
 explicit "check now", and immediately before an apply:
@@ -278,8 +277,10 @@ explicit "check now", and immediately before an apply:
 - **not_applicable** — *not* self-hosted (a dev checkout). Neutral: does not block;
   self-update proceeds via the normal `repo_root()` mechanism.
 
-Status GETs are **cached-only**: they render the last verdict from a single versioned,
-schema-validated self-update envelope — never a live git/network/identity call. `lhpc web`
-holds a shared controller-runtime flock for its lifetime; `self-update --apply` takes it
-exclusive first (then the self-update lock), so a running server can never have its own
-source mutated underneath it.
+A same-account process replacing the checkout mid-check is **out of the threat model**: LHPC
+detects and refuses an unsafe layout, it does not claim same-account race-proofness.
+
+The verdict is cached in a single versioned, schema-validated self-update envelope, and status
+GETs render only that — never a live git, network or identity call. `lhpc web` holds a shared controller-runtime flock for its lifetime;
+`self-update --apply` takes it exclusive first (then the self-update lock), so a running
+server can never have its own source mutated underneath it.

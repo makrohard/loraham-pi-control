@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3
+
+- Documentation: one canonical owner per subject, short context and a link everywhere else; `live-test.md` keeps the newest live run only (git history holds the rest). No behaviour change.
+- The release rule now says which releases run the full [test matrix](docs/test-matrix.md): a minor release (`0.X.0`) does, a patch release runs the live checks its own change calls for.
+
 ## 0.3.2
 
 - Internal: core service coupling reduced — logic moved into plain core modules (`restart_required`, `power`, `jobs`, `resources`, `gps`, `procident`); no behaviour change. Public surface, CLI and routes identical; live re-proof of every moved flow in `docs/live-test.md`.

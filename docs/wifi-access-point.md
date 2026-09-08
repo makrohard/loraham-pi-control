@@ -43,7 +43,7 @@ is missing.
   display-only.
 - **Allow console from that network** (checkbox, default on): the helper extends the console
   allow-list to the joined subnet, adds the joined address and names as server-certificate
-  SANs, re-issues the server certificate and applies. With the managed firewall and its AP rules **off**, the joined CIDR changes the ruleset, so the apply is deferred until you run the shown sudo command (over SSH, port 22 is open there); the watchdog then completes it. With the AP rules on the ingress rule is unscoped and the apply completes at once. A join that would leave the console blocked on the new network
+  SANs, re-issues the server certificate and applies. With the managed firewall and its AP rules **off**, the joined CIDR changes the ruleset, so the apply is deferred until you run the shown sudo command (over SSH, port 22 is open there); the watchdog then completes it. With the AP rules on it completes at once ([firewall](firewall.md)). A join that would leave the console blocked on the new network
   is refused *before* the AP drops. With the checkbox off the box is SSH-only there.
 - **AP fallback.** Client profiles are created `autoconnect no`, so after a reboot the box is
   its AP again; a lost WLAN brings the AP back within seconds, a failed join (wrong password,
@@ -81,8 +81,8 @@ panel and its semantics above apply. To remove the AP: `sudo nmcli connection de
 The AP only puts the phone on the box's network. Order matters, certificates first and exposure
 last: follow the [remote exposure runbook](webserver.md) with `10.42.0.1` as a server-certificate
 SAN and `10.42.0.0/24` among the allowed CIDRs, issue the phone's client certificate before
-exposing, and with the managed firewall enable its AP rules (DHCP/DNS for the AP's clients)
-**before** the radio becomes an AP ([firewall](firewall.md)). Then browse to
+exposing, and with the managed firewall enable its AP rules **before** the radio becomes an AP
+([firewall](firewall.md)). Then browse to
 `https://10.42.0.1:8443` and present the certificate.
 
 ## Troubleshooting

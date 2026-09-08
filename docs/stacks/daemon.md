@@ -58,7 +58,10 @@ daemon **once**, after the daemon reports READY and before the stack's component
 The client app re-`SET`s its own radio params and `TXMODE` when it connects, so those rows are
 **app-owned**: lhpc still applies them, the app overwrites them, and the panel greys them.
 `CADWAIT`, `CADIDLE`, `TXQUEUE`, `CADMONITOR`, `CADRSSI` and `CADTXAFTERTIMEOUT` are
-operator-owned and stick. Defaults, taken from each app's source:
+operator-owned and stick. A profile is the app's own default, not a legal ceiling: the licensed
+stacks carry amateur-service settings, while the licence-free ones (meshcore, reticulum) sit
+inside the SRD limits in [reticulum](reticulum.md#band-limits). Defaults, taken from each app's
+source:
 
 | stack | 433 | 868 | both bands |
 |---|---|---|---|
@@ -92,10 +95,9 @@ The daemon reads no position. The stacks that do are listed in [GPS](../gps.md).
 - **Readiness** is a read-only `GET STATUS` on the CONF socket →
   `STATUS RADIO=READY|FAILED|UNINITIALIZED … TXMODE=…`. Only `READY` counts; a reachable socket
   alone does not. No side effects, no TX.
-- lhpc never enables TX by itself; `lhpc test daemon --tx` sends one bounded frame per ready band
-  (dummy loads).
-- The daemon runs without `-d` (no double fork), so it stays an LHPC-owned process that stop can
-  identity-verify before signalling.
+- TX is never enabled by lhpc itself — [TX safety](../operations.md#tx-safety).
+- The daemon runs without `-d` (no double fork), so it stays an LHPC-owned process —
+  [identity-verified stopping](../architecture.md#safety-model).
 
 ## Conflicts
 

@@ -188,10 +188,8 @@ lhpc hardware waveshare-868  # Waveshare SX1262 (868)
 ---
 
 ### gps
-Show or set the **position source shared by every stack**. Like `hardware`, this is a *global*
-controller setting, not a per-stack parameter: Meshtastic, MeshCom, Sideband and Graywolf all take
-position from here, so they can never disagree about where it comes from. Per-stack settings only
-turn GPS **on or off**.
+Show or set the **position source shared by every stack** — a global controller setting, like
+`hardware`, not a per-stack parameter.
 
 ```
 lhpc gps                                        # show the current source (and what `auto` resolved to)
@@ -204,34 +202,7 @@ lhpc gps --source nmea --device /dev/ttyACM0 --baud 9600
 lhpc gps --source fixed --lat 51.4779 --lon -0.0015 --alt 45   # a station that does not move
 ```
 
-- **`auto` (the default) never refuses a start**: it uses a gpsd listening on `127.0.0.1:2947`
-  and otherwise runs the stack **without position**. Explicit sources keep their fail-closed
-  refusals. `auto` probes localhost only — a remote gpsd or a device is always an explicit choice.
-
-- **gpsd covers the most cases.** How gpsd gets its data is gpsd's business, not lhpc's — a USB
-  receiver, a HAT, or a hardware GPS server on the network all look the same through it. lhpc never
-  edits `/etc/default/gpsd`; see [GPS](gps.md) for that side.
-- **`nmea` opens the device directly** and therefore *excludes* gpsd: two readers on one receiver
-  present as intermittent position loss, so lhpc refuses the combination by resolving the device's
-  real identity (`st_rdev`) — `/dev/ttyACM0` and `/dev/serial/by-id/...` are recognised as the same
-  receiver.
-- **Malformed settings fail closed** to `source = off` rather than half-enabling a source.
-- The source **cannot be changed while a stack that uses it is running** — stop the stack first; its
-  claims and generated config were derived from the current source. What counts as "in use" is a
-  stack's position readers and its feed, in any live state: a feed running on its own counts, and so
-  does a component whose state cannot be determined — "could not tell" blocks the change rather than
-  being read as "not running". A stack running with `use_gps = off` takes no position from the global
-  setting and does not block it.
-- Coordinates are never echoed back by the CLI, the console, or any log.
-- **Each stack keeps its own saved switch**: `lhpc config <stack> use_gps on|off`
-  (meshtastic, meshcom, meshcore, reticulum, graywolf; default **on**). With the switch on and no usable
-  source the stack starts **without position** — only a malformed section or an unresolvable
-  explicit source refuses. The switch is stored band-lessly, so it survives a band change, and —
-  like the source — it cannot be changed while that stack is running.
-- Everything the console's **Position (GPS)** card offers is available here — the two surfaces
-  call the same code, so validation and refusals are identical.
-- `gpsd` is opt-in at bootstrap: `sudo bash bootstrap-deps.sh --spi-mode <mode> --with-gps`, and only
-  when the source is a gpsd on *this* box.
+The model, the refusals and the per-stack `use_gps` switch are in [GPS](gps.md).
 
 ---
 

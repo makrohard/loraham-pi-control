@@ -18,14 +18,14 @@ root.
 1. Click **[Open in GitHub Codespaces](https://codespaces.new/makrohard/loraham-pi-control)**
    (the badge below). Codespaces are **x86-only**. Enable the **prebuild** (Settings →
    Codespaces) so the image is baked with every stack already built; without one the first boot
-   source-builds meshcom (qemu-xtensa) and meshtastic (sim radio) on x86, a few minutes each.
+   source-builds meshcom and meshtastic on x86, a few minutes each.
 2. Wait while it builds and sets itself up (install → `init` → `reset`); you type nothing.
 3. The **LHPC console opens in a browser tab by itself** (port 8770).
 
 The console comes up fast; every other stack (kiss, graywolf, meshcore, reticulum, voice,
-sideband, meshcom, meshtastic) then installs and builds in the background. Populate prefers the
-aarch64 `lhpc-binaries` wherever a stack ships one and falls back to source otherwise; progress
-is in `~/lhpc-populate.log`, and a stack appears as **installed** once its build finishes.
+sideband, meshcom, meshtastic) then installs and builds in the background, preferring the
+aarch64 `lhpc-binaries` wherever a stack ships one: progress is in `~/lhpc-populate.log`, and a
+stack appears as **installed** once its build finishes.
 
 To run a stack: **Apps**, pick a stack, **Start** (or **Install → Build → Start** if you got there
 before its background install finished); its web UI appears on its own forwarded port (below).

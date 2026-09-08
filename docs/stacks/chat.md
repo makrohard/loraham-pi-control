@@ -30,6 +30,10 @@ daemon in MANAGED mode. It needs a real terminal — there is no headless mode.
 | `dest` | `DEST` | `ALL` | APRS destination |
 | `aprs_path` | `PATH` | `APRS,WIDE1-1` | |
 
+The frequency pair is the app's own default and is the tracker-facing half of the classic
+LoRa-APRS split: chat transmits on 433.775, the channel stock ESP32 trackers listen on, and
+receives on 433.900. `kiss` defaults to 433.775 both ways instead ([kiss](kiss.md)).
+
 Radio parameters (the LoRaHAM amateur profile) live in [daemon](daemon.md).
 
 ## Position (GPS)

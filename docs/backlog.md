@@ -9,6 +9,7 @@ knows what they are relying on before they touch it.
 - [Two-stage unit-template migration](#two-stage-unit-template-migration)
 - [Transitive build-dependency source locks](#transitive-build-dependency-source-locks)
 - [SX1262 on 868 — not run on hardware](#sx1262-on-868--not-run-on-hardware)
+- [On-air coverage](#on-air-coverage)
 - [Independent review](#independent-review)
 - [Contract gaps](#contract-gaps)
 - [Coverage-hostile flaky test](#coverage-hostile-flaky-test)
@@ -69,11 +70,21 @@ final receipt only once all are held.
 
 ## SX1262 on 868 — not run on hardware
 
-Tested on the air: the LoRaHAM Pi HAT dual-module controller, the Uputronics dual stack and
-the Waveshare SX1262 433M. **Not tested on silicon: the Waveshare SX1262 868M.** The 868 path
-of the direct-SPI driver is code-complete and shares everything but the band profile with the
-433 path; treat a first 868 run as a hardware test, not a regression check. Dated evidence for the LoRaHAM Pi HAT runs:
-[live tests](live-test.md); the driver's hardware notes: [stacks/reticulum.md](stacks/reticulum.md).
+The 868 path of the direct-SPI driver is code-complete and shares everything but the band profile
+with the on-air-proven 433 path, so treat a first 868 run as a hardware test, not a regression
+check. Which profile has run on silicon: [stacks/reticulum.md](stacks/reticulum.md).
+
+## On-air coverage
+
+Each RF stack has been accepted on air against a real vendor peer at near-field range, so nothing
+is proven about range. Still never exercised, and accepted as such:
+
+- MeshCom is proven at packet level (an MHeard entry); message **content** has not been verified
+  end to end.
+- Graywolf's beacon is proven **on demand**; a scheduled beacon has never been observed across a
+  slot boundary. No defect is established.
+- MeshCore's repeater is proven forwarding its own traffic only — not between two third-party
+  nodes — and group messaging and telemetry are untested.
 
 ## Independent review
 
@@ -94,9 +105,8 @@ Promises whose widest-seam case is missing — the priority list for the next te
 3. no route-level binary-channel SWITCH test (only the install confirmation's channel selection);
 4. no `/action` POST test for `op=uninstall`/`op=clean` refuse-while-running at the web seam;
 5. no direct `/hardware` setup POST test (only `/hardware/probe`);
-6. lhpc's own suite has no route-table gate — the coverage matrix over every route operation,
-   form, CLI leaf and stack phase lives in the separate testlab package
-   ([testlab.md](testlab.md)) and runs in that package's CI lane;
+6. lhpc's own suite has no route-table gate; the coverage matrix lives in
+   [testlab](testlab.md) and runs in that package's CI lane;
 7. no single composite "TX opt-in + tests + callsign" gate test (covered by several separate ones).
 
 ## Coverage-hostile flaky test
@@ -108,9 +118,8 @@ without instrumentation.
 
 ## Safety invariant IDs
 
-The safety model has no enumerated invariant registry; `@pytest.mark.safety` ids are
-descriptive slugs (`RF-TX-opt-in`, `firewall-fail-closed`, `exposure-fail-closed`, `P0.5`
-uninstall, `P0.6` GET-no-network). A canonical invariant table next to the safety model in
+The safety model has no enumerated invariant registry; `@pytest.mark.safety` ids are descriptive
+slugs (the set in use is in `tests/`). A canonical invariant table next to the safety model in
 [architecture.md](architecture.md) would let the ids map cleanly.
 
 ## No `--live` interface

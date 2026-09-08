@@ -40,7 +40,7 @@ PTT), a `tcp-client` KISS interface dialling the TNC (a stale interface from an 
 
 | param | default | notes |
 |---|---|---|
-| `call` | inherits the global base callsign while empty | optional APRS SSID `-1`…`-15` (bare = SSID 0), shaped like `G0ABC-10` with your own call; `N0CALL` is refused. Graywolf derives the APRS-IS passcode from it — LHPC stores no passcode |
+| `call` | inherits the global base callsign while empty | optional APRS SSID `-1`…`-15` (bare = SSID 0), shaped like `G0ABC-10` with your own call. Graywolf derives the APRS-IS passcode from it — LHPC stores no passcode |
 | `tnc_host` / `tnc_port` | `127.0.0.1` / `8001` | where `loraham-kiss-tnc` listens |
 | `use_gps` | `on` | use the global position source (`lhpc gps`) |
 | `igate` | `0` | enable Graywolf's APRS-IS iGate |
@@ -81,15 +81,15 @@ latitude/longitude — graywolf's setting, not LHPC's. The model is in [GPS](../
 ## Notes
 
 - **Password.** The first start generates the admin password into the file above; the stack
-  page's **Password** section masks the stored value behind a *Show* toggle and a copy button, beside an
-  *Edit stored password file* command. LHPC owns the account — provisioning logs in with it on every start — so
-  a password changed in the web UI must be written into that file (one line) or the next start
-  fails. The file is written *before* the account is created, so an interrupted first start
-  retries cleanly. Policy: [operations](../operations.md).
+  page's **Password** section reaches it, beside an *Edit stored password file* command
+  ([operations](../operations.md#secrets-and-passwords)). LHPC owns the account — provisioning
+  logs in with it on every start — so a password changed in the web UI must be written into that
+  file (one line) or the next start fails. The file is written *before* the account is created,
+  so an interrupted first start retries cleanly.
 - **RF.** Nothing beacons until a beacon is configured in the UI. For structural silence use the
-  kiss stack's switch, `lhpc config kiss rx_only on` — it gates the component that owns the
-  transmitter and `lhpc status` reads it; with the chain RX-only graywolf is never reported as
-  TX-enabled.
+  [kiss](kiss.md) stack's switch, `lhpc config kiss rx_only on` — it gates the component that
+  owns the transmitter and `lhpc status` reads it; with the chain RX-only graywolf is never
+  reported as TX-enabled.
 - With the iGate on, received and sent traffic reaches the public APRS-IS network; `igate = 0`
   (the default) keeps a bench test local.
 - Verified round trips against an ESP32 LoRa-APRS tracker: [live tests](../live-test.md).
@@ -99,7 +99,6 @@ latitude/longitude — graywolf's setting, not LHPC's. The model is in [GPS](../
 - **Not with `loraham-kiss-serial`** — the TNC serves one KISS client; if the PTY holds it
   graywolf's dial is refused and it retries, if graywolf holds it the PTY is dead. An operator
   constraint, not reslock-enforced.
-- One app stack per band ([kiss](kiss.md)); `chat` retunes the same radio.
-- **One band at a time.** Graywolf claims no radio, but the chain it needs does: a start on the
-  other band is refused while graywolf, or its `kiss`/daemon chain, is up on one. Stop the holder
-  first or start on the band the chain already serves.
+- **One band at a time.** Graywolf claims no radio, but the chain it needs does
+  ([kiss](kiss.md)): a start on the other band is refused while graywolf, or its `kiss`/daemon
+  chain, is up on one. Stop the holder first or start on the band the chain already serves.

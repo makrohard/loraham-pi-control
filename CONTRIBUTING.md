@@ -5,14 +5,11 @@ that does not may still be taken, but the chances are lower and it will take lon
 
 ## Branches
 
-- `main` is the latest release: every commit on it is tagged, and `install.sh`, `self-update` and
-  the image builder read it. Nothing lands on `main` except a fast-forward from `dev` at a release.
-- `dev` is where changes land. Open your PR against `dev`. `main` is never rewritten; `dev` only
-  at a release, when the cycle is squashed into the release commit (rebase an open topic branch
-  onto the new `dev` afterwards).
-- Work on a topic branch off `dev`, rebase it on `dev` before the PR, and land it as **one
-  commit** (squash-merge). The maintainer's own work follows the same path.
-- A hotfix for the released version is the one exception; see
+- **Open your PR against `dev`.** Work on a topic branch off `dev`, rebase it on `dev` before the
+  PR, and land it as **one commit** (squash-merge). The maintainer's own work follows the same path.
+- `dev` is rewritten once per release, when the cycle is squashed into the release commit — rebase
+  an open topic branch onto the new `dev` afterwards.
+- The branch model, the release procedure and the hotfix path:
   [Branches and releases](docs/maintenance.md#branches-and-releases).
 
 ## Commits
@@ -29,19 +26,19 @@ that does not may still be taken, but the chances are lower and it will take lon
 
 ## What should be green
 
-CI runs on every push to `dev` and on every PR (`.github/workflows/ci.yml`, `testlab.yml`). Run
-the same gates locally before opening the PR; each one is a single command in a venv with
-`pip install -e .[dev]`:
+Run these locally before opening the PR — each is one command in a venv with
+`pip install -e .[dev]`. CI runs on every push to `main`/`dev` and on every PR, and adds
+`pip-audit` and pin validation:
+[what CI enforces](docs/maintenance.md#what-ci-enforces).
 
 | gate | command |
 |---|---|
-| unit + contract suite | `pytest -q -n 12 --dist loadfile -p no:cacheprovider tests` (a serial `pytest -q tests` is what CI runs) |
+| unit + contract suite | `pytest -q -n 12 --dist loadfile -p no:cacheprovider tests` (CI runs it serially, with coverage) |
 | lint, frozen ruleset | `ruff check lhpc testlab` and `ruff check tests --select F,E9` |
 | security | `bandit -q -r lhpc -lll` |
-| console lane | `python -m pytest -q testlab/tests` (see [testlab](docs/testlab.md)) |
-| docs | part of the suite: every Contents block, the docs index, `cli.md` per CLI verb, README drift (EN and DE), the hardware table |
+| console lane | `python -m pytest -q testlab/tests` — the default lane; the acceptance and browser lanes are in [testlab](docs/testlab.md) |
+| docs | run inside the suite; what it pins: [maintenance](docs/maintenance.md#what-ci-does-not-enforce) |
 | shipped snapshot | `lhpc deps --script` must equal `bootstrap-deps.sh` when `lhpc/core/deps.py` changed |
-| pins | CI's `pin-validation` job checks every pinned source against its live branch |
 
 Two tests need a real Meshtastic CLI in the venv and fail without it; that is the only accepted
 local failure. Coverage is not gated; do not let it drop when you touch `lhpc/`.
@@ -51,8 +48,9 @@ local failure. Coverage is not gated; do not let it drop when you touch `lhpc/`.
 - **Tests that fail on the unfixed code.** A bug fix carries a regression; a new capability tags
   its widest-seam happy and refusal case `@pytest.mark.contract`.
 - **Docs in the same commit.** The CLI reference, the operator docs and `CHANGELOG.md` change
-  with the code. Docs state the current contract only; history lives in the changelog and
-  measured evidence in `docs/live-test.md`. Numbers in docs are measured, never estimated.
+  with the code. Docs state the current contract only; history lives in the changelog, and
+  [live-test.md](docs/live-test.md) holds the newest live run. Numbers in docs are measured,
+  never estimated.
 - **Both READMEs.** A factual change to `README.md` is mirrored in `README.de.md`.
 - **No architecture change without a discussion first.** Open an issue; the
   [architecture](docs/architecture.md) doc is the model to argue against.
@@ -61,5 +59,5 @@ local failure. Coverage is not gated; do not let it drop when you touch `lhpc/`.
 ## Adding a stack
 
 [docs/adding-a-stack.md](docs/adding-a-stack.md) is the recipe; the manifest is the contract.
-A new stack comes with its `docs/stacks/<stack>.md`, a row in the README's stacks table and,
-where the release matrix applies, a row in `docs/test-matrix.md`.
+A new stack comes with its `docs/stacks/<stack>.md`, a row in the README's stacks table and a row
+in the [release test matrix](docs/test-matrix.md).

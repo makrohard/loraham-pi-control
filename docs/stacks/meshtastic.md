@@ -30,7 +30,7 @@ and cannot run while the daemon serves that band.
 | param | default | notes |
 |---|---|---|
 | `region` | `EU_868` (433: `EU_433`) | LoRa region — required for TX; applied after start (a failed push fails the start) |
-| `node_name` / `node_short` | *(empty)* | the node's own names (39 / 4 UTF-8 bytes), never the operator callsign; the start is refused until both are set |
+| `node_name` / `node_short` | *(empty)* | the node's own names (39 / 4 UTF-8 bytes), never the operator callsign; the start is refused until both are set — node names never inherit ([architecture](../architecture.md#identity-and-callsigns)) |
 | `use_gps` | `on` | use the global position source |
 | `loglevel`, `max_nodes`, `ble`, `mqtt`, `cs`, `irq`, `reset`, `busy`, `ssl_key`, `ssl_cert`, `web_root` | advanced | YAML keys. `cs`/`irq` default 7/16 (868) and 8/25 (433); `reset`/`busy` are omitted when empty — the Uputronics RF95 boards have neither line, and BCM 6/13 are the daemon's LEDs |
 
@@ -102,6 +102,6 @@ lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --
 
 - Claims `loraham.radio.<band>` exclusively: not with the daemon on that band (so not with
   kiss/graywolf/chat/voice/meshcom on 433, meshcore on 868), and not with reticulum on that band.
-- `spi.bus.0.unlocked`: meshtasticd does not take the daemon's `spi0.lock`, so `meshtastic +
-  reticulum` is refused outright; `daemon + meshtastic` on opposite bands is allowed and shares the
-  bus without mutual exclusion — an accepted hazard, recorded in [architecture](../architecture.md).
+- `spi.bus.0.unlocked`: `meshtastic + reticulum` is refused outright; `daemon + meshtastic` on
+  opposite bands is allowed — the model and the accepted hazard are in
+  [architecture](../architecture.md#radios-bands-and-resource-claims).

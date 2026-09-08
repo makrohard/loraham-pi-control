@@ -18,13 +18,10 @@ free. This guide uses the **MeshCom (QEMU)** stack as a worked example.
 
 - A **stack** is one runnable app plus its dependency **components**, in a start order.
 - Each stack names a **`main`** component (the app itself); the rest are dependencies.
-- A **component** with a `source` is adopted into the runtime root under `src/<name>` at a
-  **pinned commit**, built there, and run by LHPC (which owns the process).
-- LHPC verifies a start by **readiness** (a process is alive, or a `ready = true` endpoint came
-  up) and reports a typed outcome; it never assumes.
+- A component with a `source` is adopted into the runtime root at its **pinned commit**, built
+  there, run by LHPC, and verified by **readiness** ([architecture.md](architecture.md)).
 
-The MeshCom stack chains `loraham-daemon → meshcom-bridge → meshcom-gps → meshcom-qemu` (plus the `meshcom-firmware` source component and the `meshcom-gps-relay` test fixture). The daemon owns the radio; the bridge exposes a TCP port the
-firmware talks to; the GPS feed carries the global position; QEMU runs the MeshCom firmware.
+The MeshCom components, start order and pins: [stacks/meshcom.md](stacks/meshcom.md).
 
 ## Anatomy of a stack (MeshCom)
 
@@ -55,8 +52,8 @@ main = "meshcom-qemu"          # the app; the others are its dependencies
 
 `lhpc install` adopts this into `src/meshcom-loraham-bridge` and verifies the pinned commit. One
 source path is **one checkout with one remote**: every component that declares the same `path`
-shares it, a remote override is applied to all of them in one write, and diverging effective
-remotes fail destructive operations closed.
+shares it, so a remote override ([provenance.md](provenance.md)) is applied to all of them in one
+write, and diverging effective remotes fail destructive operations closed.
 
 ```toml
     [stack.component.source]
@@ -68,7 +65,8 @@ remotes fail destructive operations closed.
 
 ### Commands: two forms
 
-Every component executes **shell-free**. Two ways to say a command:
+Every component executes [**shell-free**](architecture.md#safety-model). Two ways to say a
+command:
 
 - **Shorthand** `run` / `build` / `test`: a plain `prog arg arg` line with no shell syntax. At
   load it is split on whitespace into `run_argv` (with `run_cwd = "{source}"`), a one-step
@@ -179,15 +177,12 @@ syntax and the enforcement class ([identity rules](architecture.md)):
 | `node` | ≤ 31 UTF-8 bytes | unlicensed local identity | `""` |
 | `node_long` / `node_short` | ≤ 39 / ≤ 4 UTF-8 bytes | unlicensed local identity | `""` |
 
-Licensed params inherit the global operator callsign through `default = "{callsign}"` while
-the local field is empty. Unlicensed local identities get `default = ""` and never `{callsign}`:
-they must be deliberately configured. A start without a resolvable identity is refused by the
-plan, before any lifecycle mutation, so the web can send the operator to the exact Settings row.
-
 ### Resources & dependencies
 
 `resource` claims prevent conflicts (two things can't own the same TCP port / radio / daemon
-socket). `depends_on` + `start_order` sequence the stack.
+socket); the mode semantics are in
+[architecture.md](architecture.md#radios-bands-and-resource-claims). `depends_on` +
+`start_order` sequence the stack.
 
 ```toml
     [[stack.component.resource]]
@@ -199,7 +194,7 @@ socket). `depends_on` + `start_order` sequence the stack.
 ## The lifecycle
 
 ```bash
-lhpc install meshcom --source pinned --yes   # adopt + verify every component's source at its pin (bare install takes the binary where published)
+lhpc install meshcom --source pinned --yes   # adopt + verify every component's source at its pin
 lhpc build meshcom           # run each component's build_steps
 lhpc test meshcom            # host tests (RX-safe), optional
 lhpc stack start meshcom     # start in order; verify readiness per component

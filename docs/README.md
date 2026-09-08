@@ -23,10 +23,9 @@ model, then the CLI. Every file is linked once; the README covers install.
 - [Operations](operations.md) — operating the console, start flow, boot restore, passwords and
   secrets, backup and restore, the binary channel in operation.
 - [GPS](gps.md) — the one global position source and what each stack does with it.
-- [Maintenance](maintenance.md) — routine upkeep of an installed box, the pin bump recipe, Pi
+- [Maintenance](maintenance.md) — what CI proves, branches and releases, the pin bump recipe, Pi
   gotchas.
-- [Backlog](backlog.md) — open follow-ups and accepted deferrals; read before changing a unit
-  template.
+- [Backlog](backlog.md) — accepted deferrals; read before changing a unit template.
 
 ## Reach it
 
@@ -53,13 +52,13 @@ model, then the CLI. Every file is linked once; the README covers install.
 
 ## Verify
 
-- [Test matrix](test-matrix.md) — the per-release procedure: every stack purged, installed,
+- [Test matrix](test-matrix.md) — the full minor-release procedure: every stack purged, installed,
   built and started on the box.
-- [Live tests](live-test.md) — dated validation evidence: on-air runs and their outcomes.
+- [Live tests](live-test.md) — the newest live run on the reference box.
 - [Test lab](testlab.md) — real stack processes against simulated hardware, locally or in a
   Codespace.
 
 ## Policy
 
-- [Contributing](../CONTRIBUTING.md) — the branch model and what should be green before a PR.
+- [Contributing](../CONTRIBUTING.md) — how to open a PR and what should be green.
 - [Provenance](provenance.md) — supply-chain rules for managed source and the binary channel.

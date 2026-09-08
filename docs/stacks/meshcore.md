@@ -10,7 +10,7 @@ GPS, persistence, readiness and lifecycle. The node never drives SPI or GPIO its
 | | |
 |---|---|
 | Components | `meshcore-node` (main — the one openhop process: chat node and/or repeater, by `mode`) · `meshcore-gps` (position feed, admitted by the global GPS plan) · `meshcore-webui` (optional browser GUI) · `meshcore-cli` (optional REPL) · `openhop-repeater-src` (library: the pinned repeater checkout, build-time only) |
-| Source / pin | `src/openhop-core` ← `openhop-dev/openhop_core` `dev` @ `8cdb04e` + one LHPC patch (`lhpc/data/patches/openhop-core-companion-fixes.patch`: the radio noise floor in the radio stats), applied idempotently at build — a conflict fails the build, and the patched checkout reads `dirty` in `lhpc status` (expected). Selectors: `dev` = Development, `main`/PyPI = Latest stable, the pin = Known working (unless an operator-confirmed composition exists) · `src/openhop-repeater` ← `openhop-dev/openhop_repeater` `dev` @ `efc5616` · `src/meshcore-webui` ← `adradr/meshcore-webui` `94dcc3d` (+ `meshcore-webui-lhpc-guards.patch`) · `src/meshcore-cli` ← `meshcore-dev/meshcore-cli` `v1.6.3` |
+| Source / pin | `src/openhop-core` ← `openhop-dev/openhop_core` `dev` @ `8cdb04e` + one LHPC patch (`lhpc/data/patches/openhop-core-companion-fixes.patch`: the radio noise floor in the radio stats), applied idempotently at build — a conflict fails the build, and the patched checkout reads `dirty` in `lhpc status` (expected). `main`/PyPI = Latest stable; selector policy: [provenance](../provenance.md) · `src/openhop-repeater` ← `openhop-dev/openhop_repeater` `dev` @ `efc5616` · `src/meshcore-webui` ← `adradr/meshcore-webui` `94dcc3d` (+ `meshcore-webui-lhpc-guards.patch`) · `src/meshcore-cli` ← `meshcore-dev/meshcore-cli` `v1.6.3` |
 | Build | `lhpc build meshcore`: patch → in-tree `.venv` (`--system-site-packages`) → openHop Core → `meshcore_host` (shipped with lhpc) → the repeater's pinned closure (`openhop-repeater-constraints.txt`) and checkout. Web UI: a backend venv from `meshcore-webui-constraints.txt`; the React frontend is prebuilt package data (no npm on the box). Nothing is gui-gated — everything builds headless |
 | Run | `.venv/bin/python -m meshcore_host <runtime>/config/files/meshcore.toml` — the same command in every mode |
 | Config | `<runtime>/config/files/meshcore.toml` (0600 — it carries the private key), rendered from `lhpc/data/bases/meshcore.toml` on every start |
@@ -37,7 +37,7 @@ GPS, persistence, readiness and lifecycle. The node never drives SPI or GPIO its
 |---|---|---|
 | `preset` | `eu_uk_narrow` | RF preset (`eu_uk_long` / `eu_uk_medium` / `eu_uk_narrow`); narrow = 869.618 MHz, BW 62.5 kHz, SF8, CR8 — the T-Deck MeshCore firmware default |
 | `enable_tx` | on | off = RX only |
-| `node_name` | *(empty)* | max 31 bytes; the node's own name, never the operator callsign — the start is refused until set |
+| `node_name` | *(empty)* | max 31 bytes; the node's own name, never the operator callsign; the start is refused until set — node names never inherit ([architecture](../architecture.md#identity-and-callsigns)) |
 | `meshcore_allow` | `127.0.0.1` | who may connect to TCP 5000 (no auth); drives the managed firewall |
 | `txpower` | 14 dBm | advanced (0–20) |
 | `frequency` | blank = the preset's | Hz; an explicit value overrides the preset frequency |
@@ -103,10 +103,10 @@ In `repeater` mode nothing consumes position. Model: [GPS](../gps.md).
 ## Web UI
 
 `meshcore-webui` is a client of the Companion endpoint (5000): a FastAPI/uvicorn backend plus the
-prebuilt React SPA, bound to loopback and published only through the LHPC nginx proxy (TLS,
-optional mTLS, CIDR gate — enable it on the Webserver page). The proxy refuses (404) the operations
-LHPC owns — factory reset, radio/TX-power/tuning, position, device name, admin reset; the list is
-the component's `proxy_deny_paths` in the manifest. The advert-location policy rides a combined
+prebuilt React SPA, bound to loopback and published through the LHPC proxy
+([webserver](../webserver.md)). The proxy refuses (404) the operations LHPC owns — factory reset,
+radio/TX-power/tuning, position, device name, admin reset; the list is the component's
+`proxy_deny_paths` in the manifest. The advert-location policy rides a combined
 `POST /api/device/policy`, so the shipped WebUI patch rejects only its `adv_loc_policy` field. The
 backend has no private-key import/export endpoint; messages, contacts, channels, TRACE and adverts
 pass.

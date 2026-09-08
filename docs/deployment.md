@@ -4,9 +4,9 @@ The console process itself is a **local operator tool**: it serves either a prot
 socket or loopback TCP, never a public address. Reaching it from another machine is a separate,
 opt-in step through the nginx + mTLS front end ([webserver.md](webserver.md)). This document
 covers running it persistently and updating it. **lhpc itself never runs `systemctl` and never
-runs a privileged command**: the units are written by `install.sh`, and the two polkit rules that
-let the console reboot the box and manage Wi-Fi are installed by `bootstrap-deps.sh`
-([operations.md](operations.md), [wifi-access-point.md](wifi-access-point.md)).
+runs a privileged command**: the units are written by `install.sh`, the polkit rules by
+`bootstrap-deps.sh` ([operations.md](operations.md),
+[wifi-access-point.md](wifi-access-point.md)).
 
 ## Contents
 
@@ -27,9 +27,7 @@ process, multi-threaded, no debug, no reloader.
 - **Interactive** (`lhpc web`): loopback TCP (default `:8770`) for quick local use; without
   waitress this one does fall back to Flask's development server, with a warning.
 
-Loopback-only is a hard invariant for the TCP mode: `run_server` refuses any non-loopback
-`--host` (`127.0.0.1` / `::1`). Remote access is the nginx front end (`lhpc-nginx.service`,
-HTTPS + mTLS + source-CIDR gate, opt-in behind a typed confirmation), never a public bind —
+The TCP mode binds loopback only; remote access is the nginx front end, never a public bind —
 [webserver.md](webserver.md). The other guarantees of the web layer (trusted-host check, CSRF,
 headers) are listed in the [safety model](architecture.md).
 
@@ -55,20 +53,14 @@ The unit sets `LHPC_RUNTIME_ROOT=~/loraham-pi-control` **explicitly**, runs
 `venv/lhpc/bin/lhpc web`, and works from `src/loraham-pi-control`. Keeping the venv *outside*
 the checkout means self-update's `git clean` can never reach it.
 
-LHPC's checkout is a **dedicated controller identity**: observable and self-updatable, but
-never installed, adopted, built, tested, started, stopped, uninstalled, cleaned, or
-auto-install-processed — every generic verb aimed at it refuses centrally and points you at
-`lhpc self-update`. `lhpc status` shows a distinct `[controller]` row with its cached
-version / update / identity state.
+LHPC's checkout is a **dedicated controller identity**, not a stack — generic verbs aimed at it
+refuse and point you at `lhpc self-update` ([architecture.md](architecture.md)). `lhpc status`
+shows a distinct `[controller]` row with its cached version / update / identity state.
 
 **The identity policy.** The runtime root and the controller checkout must be **owned by the
-service user** with **no group/other write bit** (`lhpc bootstrap` hardens them to `0700`). Before any self-update apply, LHPC
-verifies the fixed layout — no symlink anywhere in the `runtime-root → src → checkout` chain,
-correct ownership/mode, the checkout realpath equal to both the discovered git repo and the
-imported package, on the expected branch, attached, with the approved canonical `origin` — and
-refuses (`unsafe`) otherwise; the verdicts are defined in [architecture.md](architecture.md). A
-same-account process replacing the checkout mid-check is **out of the threat model**: LHPC
-detects and refuses an unsafe layout, it does not claim same-account race-proofness.
+service user** with **no group/other write bit** (`lhpc bootstrap` hardens them to `0700`).
+Every apply verifies that layout live before mutating anything and refuses (`unsafe`)
+otherwise; the verdicts are defined in [architecture.md](architecture.md).
 
 ## Self-update
 
@@ -88,12 +80,12 @@ detects and refuses an unsafe layout, it does not claim same-account race-proofn
   click while its unit still has bus access).
 - **Manual path.** `lhpc self-update --apply` from an operator shell (refused inside a managed unit): when the console is running it stops `lhpc-web` itself (the console's shared lock would otherwise block the apply), applies, syncs the venv, then starts the console again.
 - **Dirty checkout** blocks apply unless you choose `--overwrite`.
-- **Venv sync** runs automatically after a real advance; if it fails the update is reported
-  failed (never half-applied). - **Venv sync** runs automatically after a real advance on both paths; if it fails the update is reported failed (never half-applied) and the result names the `pip install -e` command to run by hand.
+- **Venv sync** runs automatically after a real advance on both paths; if it fails the update
+  is reported failed, never half-applied, and the result names the `pip install -e` command to
+  run by hand.
 - **Applying always re-checks live.** Every apply performs a fresh identity/provenance check
   immediately before mutating the checkout — it never trusts the cached verdict — and runs with
-  the web service stopped (controller-runtime lock); the one-click updater unit handles that
-  stop/start for you.
+  the web service stopped; the one-click updater unit handles that stop/start for you.
 
 ### Recovery
 
@@ -174,11 +166,9 @@ loginctl enable-linger "$USER"     # keep running after logout
 
 ## Controller status & updates on the web console
 
-The controller row (first entry on **Apps**/`/stacks`) and the version indicator in the
-footer are **cached-only on every page load**: they read the last self-update envelope from
-`state/` plus the running in-process version, and never touch the live checkout, `.git`, the
-network, or the controller identity while rendering a GET. A missing or stale cache simply
-shows an "unchecked/unknown" state.
+The controller row (first entry on **Apps**/`/stacks`) and the version indicator in the footer
+are **cached-only on every page load** ([architecture.md](architecture.md)): a missing or stale
+cache simply shows an "unchecked/unknown" state.
 
 - **Background check:** the console refreshes that cache by itself — once at startup and then
   every `update_check_hours` (default 12; set it in `config/local.toml` under `[web]`,

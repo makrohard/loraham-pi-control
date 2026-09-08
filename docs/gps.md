@@ -103,17 +103,15 @@ not a failure.
 Each stack has its own switch (`lhpc config <stack> use_gps on|off`) and consumes the resolved
 source in its own way. Stack specifics live in the stack's page.
 
-| Stack | What it consumes | Feed component | Page |
-|---|---|---|---|
-| Meshtastic | `gpsd`: the feed presents NMEA on a PTY, because meshtasticd reads only `GPS: SerialPath:`. `nmea`: reads the receiver directly (detects the chip, skips the probe). `fixed`: meshtasticd's own fixed position, no feed. `position.gps_mode` is pushed in both directions; off also clears a stored fixed position | `meshtastic-gps` (gpsd only) | [meshtastic](stacks/meshtastic.md) |
-| MeshCom | every enabled source through the feed, on the QEMU node's UART1 (a UNIX socket). `meshcom-gps-relay` is a **test fixture** that replays a synthetic file: never part of a normal start, run it explicitly with `lhpc stack start meshcom-gps-relay` | `meshcom-gps` | [meshcom](stacks/meshcom.md) |
-| MeshCore | live sources (`gpsd`, `auto`→gpsd, `nmea`) as a line-JSON position feed on a UNIX socket, so the node's position follows the box and clears when the source goes stale. `fixed`: coordinates in its config, no feed | `meshcore-gps` (live sources) | [meshcore](stacks/meshcore.md) |
-| Sideband (`reticulum`) | its location plugin is a native gpsd/NMEA client and takes the resolved values directly. Stale per-stack position keys still saved are listed by `lhpc gps` and `lhpc doctor` as ignored | none | [reticulum](stacks/reticulum.md) |
-| Graywolf | native gpsd or serial-NMEA client (`--gps-source gpsd` or `serial`), applied in both directions. `fixed` maps to `none`: graywolf has no fixed-position mode, and a fixed station's coordinates belong to its beacons, which are yours to set | none | [graywolf](stacks/graywolf.md) |
+| Stack | Feed component | Page |
+|---|---|---|
+| Meshtastic | `meshtastic-gps` (gpsd only) | [meshtastic](stacks/meshtastic.md) |
+| MeshCom | `meshcom-gps` | [meshcom](stacks/meshcom.md) |
+| MeshCore | `meshcore-gps` (live sources) | [meshcore](stacks/meshcore.md) |
+| Sideband (`reticulum`) | none | [reticulum](stacks/reticulum.md) |
+| Graywolf | none | [graywolf](stacks/graywolf.md) |
 
-Expect roughly **37 seconds** of `No GNSS Module` warnings after a Meshtastic start on the
-`gpsd` feed: meshtasticd probes for a specific GPS chip, nothing answers a passive stream, then
-it parses the NMEA normally. This is expected, not a fault.
+Stale per-stack position keys still saved are listed by `lhpc gps` and `lhpc doctor` as ignored.
 
 ## A u-blox that has met gpsd stays in binary mode
 

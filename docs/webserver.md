@@ -7,11 +7,10 @@ Browser → HTTPS on <bind>:8443 → Nginx (TLS boundary, mTLS, source-CIDR gate
         → Waitress over a protected Unix socket → LHPC Flask app
 ```
 
-Nginx is the **only** TCP listener. The managed `lhpc-web.service` runs `lhpc web --socket`, so
-Waitress binds a Unix-domain socket under the runtime root (`state/run/lhpc-web.sock`, 0600) and
-opens **no TCP port at all**. Productive serving uses Waitress and never Flask's development
-server. A bare `lhpc web` (loopback TCP `:8770`) is a non-productive interactive mode: use it or
-the CLI to bootstrap before nginx is up.
+Nginx is the **only** TCP listener: the managed `lhpc-web.service` runs Waitress on a protected
+Unix socket and opens no TCP port at all ([serving model](deployment.md#serving-model)). A bare
+`lhpc web` (loopback TCP `:8770`) is a non-productive interactive mode: use it or the CLI to
+bootstrap before nginx is up.
 
 The Monitor view renders only **cached, proven** evidence (`state/webserver.json`): it never
 infers "active/exposed" from desired configuration and never probes the network during a page
@@ -55,7 +54,7 @@ lhpc webserver start-service                      # generate + validate config, 
 
 Installing the Debian `nginx` package activates a system `nginx.service` on `:80`; left running,
 that root process owns the web ports and the rootless `lhpc-nginx` user unit cannot bind.
-`bootstrap-deps.sh` installs the package and disables the root service for you.
+`bootstrap-deps.sh` does both steps for you.
 
 `start-service` is the **only** path that starts nginx (it uses `systemctl --user` and refuses to
 run from a managed unit). The console is then at `https://127.0.0.1:8443/`. Until nginx is up,
@@ -84,11 +83,9 @@ exposure is not supported: IPv6 bind/CIDR values are rejected; `::1` is honoured
 access only.
 
 **The managed firewall gates exposure.** With it in use, `lhpc webserver apply` is refused while
-the firewall is unapplied (*Firewall changes pending*, with the command to run); a notice at the top
-of every console page then links to *Firewall → Apply & commands* until the firewall is verified, and the
-running console completes that Apply on its own once it is; at boot
-nginx binds loopback-only until the live check passes. LHPC never edits your own firewall
-configuration; a port at your router stays yours. See [firewall](firewall.md).
+the firewall is unapplied (*Firewall changes pending*, with the command to run; a console notice
+links to *Firewall → Apply & commands* until it is verified), and at boot nginx binds loopback-only
+until a current-boot live firewall receipt proves the rules are there. See [firewall](firewall.md).
 
 ## Remote exposure runbook
 
@@ -308,9 +305,9 @@ listener has ceased. If a box comes up loopback-only (firewall gate at boot), re
 - `waitress` and `cryptography` are LHPC dependencies (installed into the venv).
 - `nginx` is a system package; the installer/repair path detects it and instructs or installs it
   in operator context. The web service never installs packages. After any manual `apt install
-  nginx`, run `sudo systemctl disable --now nginx.service` yourself.
-- The installer writes and enables the rootless `lhpc-nginx.service` user unit (one of the
-  canonical managed units, byte-exact-verified by the self-update integrity proof). It is
-  enabled but starts only once `start-service` has generated and validated its config (a
-  `ConditionPathExists` gates it until then); runtime config changes reload it via `nginx -s
-  reload`, never `systemctl`, from the web process.
+  nginx`, disable the root service as in [first-time bootstrap](#first-time-bootstrap).
+- The rootless `lhpc-nginx.service` user unit is one of the canonical managed units
+  ([deployment](deployment.md#run-it-under-systemd)). `start-service` is the only path that
+  starts it — it is enabled at install but does not run until that command has generated and
+  validated its config (a `ConditionPathExists` gates it); runtime config changes reload it via
+  `nginx -s reload`, never `systemctl`, from the web process.

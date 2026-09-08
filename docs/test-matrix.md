@@ -1,11 +1,14 @@
 # Release test matrix
 
-The leading live test of a release: every stack is **purged, installed, built, started and verified
-on the box**, one stack at a time, with the install, build and start times recorded and the memory
-watched during the heavy compiles. CI proves the code, the [testlab](testlab.md) proves the
-console, the [live tests](live-test.md) hold the dated evidence — the on-air silicon test and every
-release's result table; this matrix proves that a release **installs and comes up** from nothing on
-the reference box. It is run before a release is tagged and its results go into live-test.md (newest first).
+Every stack **purged, installed, built, started and verified on the box**, one stack at a time,
+with the install, build and start times recorded and the memory watched during the heavy compiles.
+CI proves the code, the [testlab](testlab.md) proves the console; this matrix proves that a release
+**installs and comes up** from nothing on the reference box.
+
+**When it applies:** a minor release (`0.X.0`) runs it before the tag. A patch release runs the
+live checks its own change calls for instead — the release policy is
+[maintenance](maintenance.md#branches-and-releases). Results replace the section in
+[live-test.md](live-test.md).
 
 Evidence is the controller's own typed outcome plus the stack's own state (`lhpc status`, the
 node's info, an HTTP answer, `rnstatus` counters). Log greps are not evidence.
@@ -26,14 +29,14 @@ node's info, an HTTP answer, `rnstatus` counters). Log greps are not evidence.
 |---|---|
 | Box | `lhpc-e293`, Raspberry Pi Zero 2 W (512 MB, 415 MB usable after zram), Lite image, LAN |
 | Radio | LoRaHAM daemon serving 433 and 868; record `lhpc hardware` at the start of the run |
-| Channels | `pinned` = the manifest pins (the known-working line, main); `dev` = the branch tip and the default install for every stack without a published binary; `binary` for daemon, meshtastic and meshcom. All three are covered, see [Coverage](#coverage) |
+| Channels | `pinned` = the manifest pins; `dev` = the branch tip and the default install for every stack without a published binary ([provenance](provenance.md#selections)); `binary` for daemon, meshtastic and meshcom. All three are covered, see [Coverage](#coverage) |
 | Console | left running for the light stacks; **stopped for the heavy compiles** (`systemctl --user stop lhpc-web lhpc-nginx`), as the 512 MB box requires (see [maintenance](maintenance.md)) |
 | Radio budget | one stack per band at a time: 433 belongs to the daemon chain (kiss, graywolf, meshcom), 868 to one of meshtastic / MeshCore / Reticulum. Stop the previous owner before starting the next |
 
 ## Procedure per stack
 
 Every row runs the same loop, in a tmux on the box, timed with the wrapper below. Nothing is
-skipped because "it worked last release".
+skipped because "it worked last release" — the one exception is the [fast lane](#fast-lane).
 
 ```bash
 t() { local s=$(date +%s); "$@"; echo "[timer] $* -> $(( $(date +%s) - s )) s"; }
@@ -75,7 +78,7 @@ sources) is still purged and reinstalled on its own.
 | 9 | `meshtastic` | pinned (from source) | meshtasticd | 868 | as row 8; build time and memory recorded |
 | 10 | `daemon` | pinned (from source) | RadioLib + daemon | both bands | as row 1; build time and memory recorded |
 | 11 | `meshcom` | binary | bridge | 433 (graywolf/kiss stopped) | verified; web UI `:18083` 502 until boot then 200; callsign switches from the placeholder |
-| 12 | `meshcom` | pinned (from source) | QEMU, firmware, bridge | 433 | as row 11 — the longest row; QEMU ~68 min and the firmware ~26 min cold at `-j1`; memory watched throughout |
+| 12 | `meshcom` | pinned (from source) | QEMU, firmware, bridge | 433 | as row 11 — the longest row by far (build times: [maintenance](maintenance.md#running-on-a-pi)); memory watched throughout |
 
 Rows 9–12 are the heavy compiles: console stopped, `vmstat` running, `dmesg` checked after each.
 
@@ -98,7 +101,7 @@ all-stacks install (and the image builder) uses.
 | meshtastic | row 8 | row 9 | auto-install (binary is its default) |
 | meshcom | row 11 | row 12 | auto-install (binary is its default) |
 
-No empty cell: this is the full pre-release check.
+No empty cell — the full check, unless a [fast lane](#fast-lane) waiver applies.
 
 ## Fast lane
 
@@ -108,7 +111,8 @@ binary rows (1, 8, 11) still prove the artifacts that ship, and the compiles the
 the ones already timed under the same pins. Everything else runs unchanged — every light stack's
 build, the cross-cutting checks, the from-zero reinstall (with the published binaries) and the host
 tests. A skipped row is written into the result table as *not re-run* with a footnote naming the
-run that measured it and the waiver's date; the pins column must show the pin is the same. A changed
+run that measured it and the waiver's date — that run may live only in this file's git history —
+and the pins column must show the pin is the same. A changed
 pin, a changed toolchain or a changed builder image takes the row out of the fast lane.
 
 ## Cross-cutting checks
@@ -117,7 +121,7 @@ After the per-stack rows, with the box holding every stack installed and built:
 
 | check | how | evidence |
 |---|---|---|
-| **auto-install consistency (CLI path)** | purge every stack, then `lhpc auto-install --yes` — the exact command the image builder runs and README step 9; every log file the run announces (`tail -f …`) must exist afterwards | every stack ends installed on its default channel (binary where published, else `dev` = the branch tip) and built; `lhpc status --versions` is recorded as-is: a `dev` checkout reads `match` only while the branch tip equals the pin and `differs` once upstream moved (the image's `components-*.txt` shows the same lines); nothing reads "not built"; total time recorded |
+| **auto-install consistency (CLI path)** | purge every stack, then `lhpc auto-install --yes` — the exact command the image builder runs and README step 9; every log file the run announces (`tail -f …`) must exist afterwards | every stack ends installed on its default channel (binary where published, else `dev` = the branch tip) and built; `lhpc status --versions` recorded as-is (what `match`/`differs` mean: [provenance](provenance.md)); the image's `components-*.txt` shows the same lines; nothing reads "not built"; total time recorded |
 | **known-working** | after each stack's green start, the stack page must offer to record the composition; confirm it there for every source-built stack (a binary install and the fetched graywolf release have no source composition and show no offer, by design) (the CLI form is `lhpc known-working <stack>`) | the offer is visible and plainly worded (one click, no commit ids to understand); `profiles/known-working/<stack>.json` and `lhpc status --versions` show the run-proven pins (the per-release step in [maintenance](maintenance.md#moving-a-pin)) |
 | **boot restore** | power-cycle once with the release's default running set | `N restored, 0 failed`, console reachable |
 | **web console** | Dashboard, Apps rows, Settings of every stack after the run | no traceback in the console log; every row opens |
@@ -144,14 +148,15 @@ already proved and timed every compile, and a Zero 2 W's Wi-Fi can drop under a 
 | 8. start and stop of every stack | on the fresh install: `lhpc stack start <stack> --yes` → verify → `lhpc stack stop <stack> --yes`, one stack at a time, then the conflicting pairs | every stack starts and stops with the typed outcomes; a band or TX-mode conflict (meshtastic vs MeshCore on 868, MeshCom vs graywolf on 433) is refused with its reason, nothing half-started; interactive components (chat, voice terminal, Meshtastic CLI, MeshCore CLI) are listed with their command and never started by the controller |
 
 Remote exposure with mTLS and the managed firewall needs the operator's one root step (the copy-paste
-`sudo` line the console prints); it is exercised as the last from-zero step when the operator enters
+`sudo` line the console prints — [firewall](firewall.md), [webserver](webserver.md)); it is exercised as the last from-zero step when the operator enters
 that line, otherwise its contracts rest on the unit tests.
 
-The result lines go into the release's section of [live-test.md](live-test.md).
+The result lines replace the section in [live-test.md](live-test.md).
 
 ## Refused as designed
 
-These contracts are pinned by unit tests and are not re-run row by row. The live run naturally hits
+These contracts are pinned by unit tests and are not re-run row by row; the model behind them is
+[architecture](architecture.md#radios-bands-and-resource-claims). The live run naturally hits
 the first three; note them when they occur.
 
 | refusal | pinned by |

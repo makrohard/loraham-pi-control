@@ -17,56 +17,47 @@ Operational rules for `lhpc`. Internals and the safety model: [architecture.md](
 
 ## Not a supervisor
 
-`lhpc` does not stay running. Closing the CLI or web server never stops a stack.
-On each run it reconstructs real state from systemd, process identity, endpoint
-probes, source/pin state and resource ownership — never from a stale PID file.
-`lhpc` only stops a process whose full identity still matches an LHPC ownership record; a
+`lhpc` does not stay running. Closing the CLI or web server never stops a stack. State is
+reconstructed on every run, never read from a stale PID file
+([architecture.md](architecture.md#probes-and-status)). `lhpc` only stops a process whose full identity still matches an LHPC ownership record; a
 manual or foreign process is never signalled — you get a manual `kill` hint instead
-([safety model](architecture.md)).
+([safety model](architecture.md#safety-model)).
 
 The one boot-time exception is **boot restore** (Home → System → Autostart, or `lhpc autostart`;
-default on): after a reboot,
-`lhpc-boot-restore.service` (a `Type=oneshot`, `RemainAfterExit=yes` user unit wanted by
-`default.target`) runs the driver ONCE and exits — it is not a supervisor either. It restores the
-stacks that were **LHPC-owned and never verifiably stopped** before the reboot — not literally
+default on): after a reboot, `lhpc-boot-restore.service` runs the driver once and exits
+([deployment.md](deployment.md)) — it is not a supervisor either. It restores the stacks that were **LHPC-owned and never verifiably stopped** before the reboot — not literally
 "alive at power-off": a stack that crashed shortly before the reboot may be restored too, and
 that is safe because every restored start replays the **saved** configuration through the
 normal gated start path (hardware, band arbitration, callsign, firewall exposure, TX mode
-strictly from saved config) — the same saved configuration every web or CLI start runs. It
-refuses to act unless the web console unit is enabled AND byte-exact canonical (a customized
-console disables autonomous restarts) and honours the fail-closed `[boot] restore` switch in
-`local.toml` (strictly boolean; anything else disables restore). Each piece of pre-reboot
-evidence is consumed exactly once (recorded in the run journal `state/boot-restore.json`): a failed restore is not
+strictly from saved config) — the same saved configuration every web or CLI start runs. It refuses to act unless the web
+console unit is enabled AND byte-exact canonical — a customized or foreign console unit disables
+autonomous restarts — and honours the fail-closed `[boot] restore` switch in `local.toml`
+(strictly boolean; anything else disables restore). A failed restore is not
 retried — the dashboard banner and `lhpc autostart` name the stacks to start manually.
 
 ## Install channels
 
 A stack is installed either from **source** (`pinned` / `dev` / `stable` — a git checkout lhpc
 adopts and builds) or, for the three long-compiling stacks (daemon, meshtastic, meshcom), from a
-**binary** artifact. The channel is a per-install choice, not a stored preference: what a stack
-runs on now is recorded in its receipt (`state/binary/<stack>.json`) and shown as `binary@<sha>`
-by `lhpc status --versions`. Policy (what is accepted and why): [provenance.md](provenance.md).
+**binary** artifact. The channel is a per-install choice, not a stored preference: `lhpc status
+--versions` shows what a stack currently runs on. Policy (what is accepted and why):
+[provenance.md](provenance.md).
 
 What the binary channel means in practice:
 
 - **No source tree**, so `build` and host tests refuse; the bounded TX test still works (it
   exercises the running stack).
-- **meshcom runs open auth** — the published firmware has no mesh password, so the bridge runs
-  without one, password changes are refused, and the firewall models that listener as
-  unauthenticated.
+- **meshcom runs open auth** — the published firmware has no mesh password
+  ([stacks/meshcom.md](stacks/meshcom.md)).
 - **Every binary mutation needs the stack stopped** — install, update, retire, uninstall and
   clean recheck under the operation locks, so a start slipping in mid-flight cannot be overwritten.
-- **A failed install never costs you the previous one.** Password switch, file promotion, CLI
-  provisioning, probes and receipt write are ONE journaled transaction: any failure restores the
-  previous artifact, receipt and password setting. While that journal is open — mid-run, or after
+- **A failed install never costs you the previous one** — any failure restores the previous
+  artifact, receipt and password setting. While the install journal is open — mid-run, or after
   a power cut — the receipt is not authoritative: `lhpc doctor` names the stack, and the next
   binary operation recovers it.
-- **Switching to source is transactional too.** The requested selector is enforced: a checkout at
-  a different commit is replaced through the normal source transaction, and a dirty, foreign or
-  wrong-remote tree refuses the switch with the artifact untouched. The artifact is set aside
-  locally until the whole switch has succeeded — a failure restores it from disk.
-- **No binary rollback**: the release keeps the latest artifact per stack, so going back means
-  installing from source.
+- **Switching to source is transactional too** — a dirty, foreign or wrong-remote checkout
+  refuses the switch with the artifact untouched ([provenance.md](provenance.md)).
+- **No binary rollback**: going back means installing from source.
 - **meshcom keeps its pinned clone** even on this channel (its run scripts live there), and
   **meshtastic provisions its CLI virtualenv locally** after extraction (it embeds absolute paths,
   so it cannot ship in an artifact). lhpc owns that virtualenv as a whole directory.
@@ -78,8 +69,8 @@ What the binary channel means in practice:
 ## Fast vs explicit
 
 - Fast & bounded (no build, no mutation, no RF): `status`, `explain`, `doctor`, `logs`,
-  `web` page loads. These do no network I/O, with one exception: when the position source is
-  `gpsd`, `doctor` makes one bounded query to that gpsd to see whether it owns a receiver.
+  `web` page loads. These do no network I/O, with one bounded exception when the position
+  source is `gpsd` ([gps.md](gps.md)).
 - Explicit & gated (print a plan, need `--yes` or a confirmation): `install`,
   `build`, `update`, `stack start/stop`, `test`, `uninstall`.
 
@@ -98,11 +89,11 @@ What the binary channel means in practice:
 Callsign, passwords, HMAC keys and private keys live only in git-ignored local
 config (`~/loraham-pi-control/config/local.toml`, `config/secrets.toml` mode
 `0600`, and file-based secrets such as the MeshCom `xr_pw` and the web session
-key in `config/secrets/`, mode `0600`) — never in tracked files, status output,
-logs, task markers or web flashes. The one place a stored password is reachable is the
+key in `config/secrets/`, mode `0600`); nothing of that ever reaches tracked files or output
+([architecture.md](architecture.md)). The one place a stored password is reachable is the
 stack page's authenticated Password section, which masks the value behind a *Show* toggle and a
 copy button (a
-file that is not `0600` shows a reason instead). A stack password is never changed by a generic Settings save: MeshCom's is renewed through the HMAC Password actions (or `lhpc hmac renew`); an app's own stored password is edited in its file, with the command that section prints.
+file that is not `0600` shows a reason instead). A stack password is never changed by a generic Settings save: MeshCom's is renewed through the HMAC Password actions ([stacks/meshcom.md](stacks/meshcom.md)); an app's own stored password is edited in its file, with the command that section prints.
 Uninstall keeps local config by default.
 
 ## Backup & restore
@@ -168,10 +159,11 @@ exposed: [webserver.md](webserver.md). Four areas:
   own keys; an unsupported structure refuses the save and preserves the file byte-for-byte.
 - **System panels** — Firewall, Webserver, GPS, Hardware, System dependencies, and per-target logs.
 
-GET routes are read-only and do no network I/O. Mutating routes follow one pattern — **POST +
-CSRF token + explicit confirm**: install, update, stop, uninstall and clean show a dry-run plan
-first (TX-capable ones add an RF/dummy-load warning; clean requires typing the stack id);
-daemon live settings apply only whitelisted keys (TX/CAD tuning and the radio params — [stacks/daemon.md](stacks/daemon.md)).
+Every mutating action needs an **explicit confirm**: install, update, stop, uninstall and clean
+show a dry-run plan first (TX-capable ones add an RF/dummy-load warning; clean requires typing
+the stack id); daemon live settings apply only whitelisted keys (TX/CAD tuning and the radio
+params — [stacks/daemon.md](stacks/daemon.md)). The safety model behind this:
+[architecture.md](architecture.md#safety-model).
 
 **Start means start.** A Start or Restart from the Dashboard or the Apps page runs exactly the
 **saved** configuration — there are no per-launch values. The click freezes the operation band
@@ -190,10 +182,8 @@ The plan and the apply judge the saved identity alike, so the CLI's dry run
 (`lhpc stack start <id>`) refuses exactly what the web refuses, printing the `lhpc config` remedy.
 
 **A web Start/Restart is detached.** The page returns at once and the start runs as a tracked
-job, exactly like a web install or build: the hidden `lhpc _stack-start` runner proves the
-console tracked this attempt, then runs the ordinary locked start/restart; its log is
-`logs/web-start-<stack>.log` (`web-restart-…` for a restart), reachable from the banner's
-*view →*. While the job runs the stack's row and its dashboard card carry a yellow *starting…*
+job, exactly like a web install or build; its log is `logs/web-start-<stack>.log`
+(`web-restart-…` for a restart), reachable from the banner's *view →*. While the job runs the stack's row and its dashboard card carry a yellow *starting…*
 badge; when it ends the page reloads once. The banner turns green with the result or red with
 the refusal — a red banner is dismissed with ✕, an *unsafe* one (the job could not be tracked)
 needs *Recover*. A second Start while one runs is refused ("already in progress"); a pending
@@ -205,33 +195,35 @@ restore start synchronously.
 The dashboard's system card ends with **Reboot…** / **Shut down…** buttons (each behind a
 confirm page). They act through logind (`systemctl reboot|poweroff`) — a graceful teardown, so
 the SD card is safe and running stacks come back via boot restore on the next power-on. The
-buttons render **only** when logind authorizes that action for the operator (`CanReboot` / `CanPowerOff`, per button — probed
-bounded and cached, since the rule file `/etc/polkit-1/rules.d/49-lhpc-power.rules` lives in a
-directory the operator process cannot read on stock Debian). Fresh installs get the rule from
+buttons render **only** when logind authorizes that action for the operator, probed per button
+(`CanReboot` / `CanPowerOff`), because the rule file
+`/etc/polkit-1/rules.d/49-lhpc-power.rules` lives in a directory the operator process cannot
+read on stock Debian. Fresh installs get the rule from
 `bootstrap-deps.sh` (opt out with `--no-power-controls`); on an existing box the
 System-dependencies panel (and `lhpc doctor`) shows a paste-ready install command. lhpc never
-installs the rule itself — it never runs privileged commands. Apply performs a synchronous
-logind authorization check (a refusal is typed and repeats the install command), records a
-short-lived pending marker that refuses new builds/updates until the trigger fires, then
-requests the action detached so the HTTP response reaches the browser first; failures after
-that authorization land only in `logs/power-<kind>.log`.
+installs the rule itself — it never runs privileged commands. A refusal at apply time is typed
+and repeats the install command. Apply then records a short-lived pending marker that refuses
+new builds and updates until the trigger fires (an unreadable or stale marker is named in that
+refusal and is yours to delete); failures after the authorization land only in
+`logs/power-<kind>.log`.
 
 ## Network
 
 The Apps page gains a **Network** panel (scan, join a WLAN, preferred network, back to the AP)
-when the box is AP-managed: `network_supported()` in `lhpc/core/service_network.py` checks that
-the `lhpc-ap` NetworkManager profile exists and `nmcli` is present — a capability gate, not an
+when the box has an `lhpc-ap` NetworkManager profile and `nmcli` — a capability gate, not an
 image type. Authorization is the polkit rule `/etc/polkit-1/rules.d/49-lhpc-network.rules`
 from `bootstrap-deps.sh` (opt-out `--no-network-controls`). The AP, the panel and the
 console-allowlist step: [wifi-access-point.md](wifi-access-point.md).
 
+A purge (`uninstall.sh --purge` or `lhpc clean --purge`) removes the preferred-network record, so
+the box falls back to its own access point at the next link loss or reboot. Re-declaring a
+preferred WLAN in the Network panel afterwards is mandatory, not optional.
+
 ## Identity drift on clean or uninstall
 
 Every adopted source carries an ownership record (`state/source-registry/`) naming the commit
-LHPC checked out. A destructive command re-proves that record first and refuses when the
-checkout's HEAD or origin no longer matches it — the tree changed outside an LHPC transaction,
+LHPC checked out ([provenance.md](provenance.md)). A destructive command re-proves that record
+first and refuses when the checkout's HEAD or origin no longer matches it — the tree changed outside an LHPC transaction,
 so LHPC will not delete it. Inspect the checkout (`git -C src/<name> log -1`, `git remote -v`);
 if it is yours to drop, remove it and its record by hand (`rm -rf src/<name>
-state/source-registry/<name>-*.json`) and reinstall. A record is never rewritten to match a
-tree silently, and a tree without a record is never adopted silently — only `lhpc install`
-adopts, inside a transaction that writes the record.
+state/source-registry/<name>-*.json`) and reinstall.

@@ -43,9 +43,9 @@ None — the TNC carries no position; an APRS position belongs to its client ([g
 - **One KISS client.** The TNC bridges exactly one KISS/TCP client to the daemon at a time; after
   a disconnect it waits for the next. Not a declarable resource, so not reslock-enforced.
 - **One app stack per band.** The `loraham.daemon-socket.<band>` consumer claim records the
-  dependency only (a consumer never conflicts). What refuses a second daemon client on a band is
-  the start gate's same-frequency rule: another app stack running on a band this start needs
-  blocks it with "must be stopped first".
+  dependency only; what refuses a second daemon client on a band is the start gate's
+  same-frequency rule — "must be stopped first". Resource model:
+  [architecture](../architecture.md#radios-bands-and-resource-claims).
 
 ## Conflicts
 

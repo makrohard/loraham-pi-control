@@ -1,7 +1,8 @@
 # LHPC maintenance
 
 What CI enforces, what stays manual, the pin-bump recipe, and the local gotchas on a Pi. Open
-work lives in [backlog.md](backlog.md); the per-release procedure in [test-matrix.md](test-matrix.md).
+work lives in [backlog.md](backlog.md); the release-matrix procedure in
+[test-matrix.md](test-matrix.md).
 
 ## Contents
 
@@ -23,18 +24,22 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
 - `pytest -q --cov=lhpc --cov-branch` — the **whole** suite with branch coverage measured and published (terminal summary, `coverage.xml` artifact per Python version, the total in the job summary); no `-m` lane, not under `setsid`
 - `bandit -q -r lhpc -lll` (high severity only) and `pip-audit . --strict` (dependency CVEs)
 - a separate `pin-validation` job: **every pinned source is validated against its live branch**
+- `testlab.yml`, on the same branches and on pull requests: the console lane on an aarch64 runner
+  ([testlab.md](testlab.md#running-the-verification-lanes))
 
 ## What CI does not enforce
 
 - **A coverage threshold.** CI measures and publishes branch coverage but does not gate on it — no
-  `--cov-fail-under` on purpose: a drop is judged in review. If you touch `lhpc/`, run it locally and
-  check the branch-inclusive total does not drop:
-  `pytest -q -p no:cacheprovider --basetemp="$HOME/pt-lhpc" --cov=lhpc --cov-branch; rm -rf -- "$HOME/pt-lhpc"`
+  `--cov-fail-under` on purpose: a drop is judged in review. Touch `lhpc/` and you run it locally
+  (the command: [tests/README.md](../tests/README.md); why it needs its own basetemp:
+  [Running on a Pi](#running-on-a-pi)).
 - **Contract lane.** `pytest -m contract` (~20 s) runs inside `pytest -q` but is not a separate
   gate; use it as a fast pre-flight.
-- **Docs.** `cli.md` is test-enforced (a new CLI verb reddens `test_cli`), every Contents block
-  and the docs index by `tests/test_docs_contents.py`; `adding-a-stack.md` must be updated by
-  hand when the manifest/source model changes.
+- **Docs.** What the suite does pin: a `### ` section in `cli.md` per CLI verb, every Contents
+  block and the docs index (`tests/test_docs_contents.py`), the two READMEs' dependency list and
+  hardware table against the generators (`tests/test_readme_not_drifted.py`), the firewall and
+  offline-QEMU wordings. Everything else — `adding-a-stack.md` when the manifest model changes,
+  the operator docs when behaviour changes — is updated by hand.
 - Everything Pi-specific below only bites locally, never in CI.
 
 ## Policy
@@ -44,9 +49,8 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
   bandit runs `-lll`. When a floated tool complains, fix the code or adjust the config **with a
   reason** — never re-pin the tool.
 - **The contract is the map, the net is the protection.** `-m contract` states what LHPC
-  promises; the full suite protects it. New capability → tag its widest-seam happy + boundary-
-  refusal case `@pytest.mark.contract` (and `@pytest.mark.safety("id")` if it guards a safety
-  invariant), keep `-m contract` green and < 30 s, and tag only isolation-robust cases.
+  promises; the full suite protects it. What a new capability tags, and how:
+  [CONTRIBUTING.md](../CONTRIBUTING.md) and [tests/README.md](../tests/README.md).
 - **Version bump** = `pyproject.toml` **and** `lhpc/version.py` (a test pins them equal and
   requires the matching `CHANGELOG.md` heading) + tag.
 
@@ -63,8 +67,11 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
   exception, announced by the tag.
 - **A cycle starts with the version bump** (`pyproject.toml`, `lhpc/version.py`, the
   `CHANGELOG.md` heading), so a `dev` deployment never reports the released number.
-- **Release.** `dev` green on CI and testlab, the release matrix run (`docs/test-matrix.md`),
-  the changelog complete. The cycle's commits are squashed into **one commit named by the version**
+- **Release.** `dev` green on CI and testlab, the changelog complete, and the live evidence the
+  release calls for: a **minor release** (`0.X.0`) runs the full
+  [release test matrix](test-matrix.md); a **patch release** (`0.X.Y`) runs the live checks its
+  own change calls for. Either way the result replaces the section in
+  [live-test.md](live-test.md). The cycle's commits are squashed into **one commit named by the version**
   (subject `<version>`, body = the changelog section), CI runs on that exact SHA, then `main` is
   fast-forwarded to it and `git tag -a v<version>` goes on it — `main` reads as one commit per
   release, the changelog is the release note. That squash is the one moment `dev` is rewritten:
@@ -73,7 +80,7 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
   (title = the version, not a pre-release, marked latest), linking the matching `loraham-images`
   release and the binaries index; a **patch release** (`0.X.Y`) is the tag and its changelog
   section only — boxes follow `main` either way. Publish the binaries before tagging an image (the
-  binary channel in `docs/provenance.md`).
+  [binary channel](provenance.md#the-binary-channel)).
 - **GitHub rulesets** (repository settings, not in the tree): `main` — no force push, no
   deletion, linear history, required checks `test`, `pin-validation` and `testlab` on the pushed
   SHA (they ran on `dev`, so the fast-forward passes without a PR); `dev` — no force push, no
@@ -81,7 +88,7 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
   update. Pull requests: squash merging only, the PR title and body become the commit, the topic
   branch is deleted on merge. The repository admin is the bypass actor of all three rulesets
   (always allowed, every bypass logged), so the maintainer's own pushes and hotfixes are never
-  blocked while contributors meet the checks by construction. In place since 2026-09-07.
+  blocked while contributors meet the checks by construction.
 - **Hotfix for the released version** when `dev` has already diverged: branch from `main`,
   fix with its regression test, bump the patch version, push the branch so CI runs on that
   SHA, fast-forward `main` to it, tag, then merge `main` into `dev` so the fix is not lost.
@@ -112,7 +119,8 @@ CI job hard-fail on an orphaned or predating pin).
 5. **Images**: tag `loraham-images` only after every moved binary is published — a stale index
    blocks the binary stacks and the image build dies.
 6. **On the box**: `lhpc install <stack> --source binary` (or `update` + `build` from source),
-   smoke, then `lhpc known-working <stack>`. The full pass is the [release test matrix](test-matrix.md).
+   smoke, then `lhpc known-working <stack>`. When the release runs the full pass, it is the
+   [release test matrix](test-matrix.md).
 
 **The Meshtastic web client** is a pin of its own: the `meshtastic-web-assets.sh` step in the
 manifest names a meshtastic/web release version and the sha256 of its `build.tar`. To move it:
@@ -149,22 +157,22 @@ built from source, so a toolchain change upstream breaks the recipe silently. Bu
 
 ## Security posture
 
-- Managed firewall (nftables) fail-closed + receipt trust (owner identity, cgroup-leaf gating,
-  `O_NOFOLLOW` receipt reads) — don't loosen ([firewall.md](firewall.md)).
-- Exposure stays opt-in, loopback fail-safe, mTLS. `meshtasticd 4403/9443` is the one
-  unconditional `0.0.0.0` exposure with no upstream knob — keep it firewall-contained.
-- HMAC apply/abort/recover transactional; the token never leaks. `bandit -lll` + `pip-audit` are
-  the automated floor. The guarantees themselves: [architecture.md](architecture.md).
+- The guarantees and where they are implemented: [architecture.md](architecture.md#safety-model);
+  the firewall's own model: [firewall.md](firewall.md). Don't loosen either.
+- `meshtasticd 4403/9443` is the one unconditional `0.0.0.0` exposure with no upstream knob —
+  keep it firewall-contained.
+- HMAC apply/abort/recover is transactional and the token never leaks.
+- `bandit -lll` + `pip-audit` are the automated floor; everything else is review.
 
 ## Running on a Pi
 
 **The test suite.** Give pytest a dedicated basetemp and remove exactly that path afterwards
-([tests/README.md](../tests/README.md)): `--basetemp="$HOME/pt-lhpc"` then
-`rm -rf -- "$HOME/pt-lhpc"` — the default basetemp lands on the `/tmp` tmpfs (208 MB on a
-Zero 2W) and the full suite fills it (ENOSPC). Run under `setsid` or `needs_session` tests silently SKIP (you
-lose boot-restore/ownership coverage); `zstd` must be installed or `requires_zstd` tests skip;
-don't run as root or `needs_nonroot` tests skip. Serialize heavy jobs — one full-suite/coverage
-run at a time (full `--cov` ~13 min, fast lane ~8 min on a Pi 5). 
+: `pytest --basetemp="$HOME/pt-lhpc"` then `rm -rf -- "$HOME/pt-lhpc"` — the default basetemp
+lands on the `/tmp` tmpfs (208 MB on a Zero 2W) and the full suite fills it (ENOSPC). Run under
+`setsid` or `needs_session` tests silently SKIP (you lose boot-restore/ownership coverage);
+`zstd` must be installed or `requires_zstd` tests skip; don't run as root or `needs_nonroot`
+tests skip — the markers themselves: [tests/README.md](../tests/README.md). Serialize heavy jobs — one full-suite/coverage run at a
+time (full `--cov` ~13 min, the suite's fast lane ~8 min on a Pi 5).
 
 **Memory on a 512 MB Zero 2W.** The three heavy stacks install from the binary channel by
 default; everything below is about source builds and runtime load.
@@ -191,21 +199,18 @@ default; everything below is about source builds and runtime load.
   console while the QEMU node boots. A Pi 5 has no such limit.
 - **Disk swapfile as OOM insurance.** Trixie's default swap is zram (compressed pages still in
   RAM), so a build can still be OOM-killed at `-j1`. When `MemTotal < ~600 MB`,
-  `bootstrap-deps.sh` provisions a disk-backed swapfile (`/var/swap.lhpc`, default 768 MB,
-  `--swap-size 64–16384`, `--no-swapfile` to opt out) at lower priority than zram, only when no
-  sufficient disk swap exists and the filesystem has room. Success means active AND declared
+  `bootstrap-deps.sh` provisions a disk-backed swapfile at lower priority than zram (its flags
+  are in the README), only when no sufficient disk swap exists and the filesystem has room.
+  Success means active AND declared
   (one canonical `fstab` line), so a re-run repairs whichever half is missing; a non-regular file
   at the swap path or a symlinked `/etc/fstab` is refused untouched, and if swap is required but
   cannot be provisioned the bootstrap exits 4 after the apt/SPI/group work. It lives on the SD card.
 - **Wi-Fi under sustained build load.** The Zero's brcmfmac firmware drops the interface until a
   reboot when power-save is on; `bootstrap-deps.sh` disables Wi-Fi power-save when the install
-  runs over Wi-Fi (one NetworkManager drop-in; `--keep-wifi-powersave` opts out) and enables a
-  persistent journal so a drop is captured. `lhpc build` is idempotent, so a drop mid-build costs
-  a reconnect, not the build.
-- **Recovering an interrupted `auto-install`.** `lhpc auto-install --status` prints the reason;
-  `--recover` clears the reservation + lease + run marker in one action; `--confirm-orphan`
-  acknowledges a child whose termination could not be proven (inspect `ps` first). Do not
-  hand-edit the `state/auto-install*.json` markers.
+  runs over Wi-Fi and enables a persistent journal so a drop is captured. `lhpc build` is
+  idempotent, so a drop mid-build costs a reconnect, not the build.
+- **An interrupted `auto-install`** is recovered with `lhpc auto-install --status` / `--recover`
+  ([cli.md](cli.md)); never hand-edit the `state/auto-install*.json` markers.
 
 **Job logs.** Build/host-test logs are `logs/build-<comp>.log` (single-step) or
 `logs/build-<comp>-<N>.log` (multi-step); host tests `test-<comp>…`; run logs

@@ -20,25 +20,25 @@ lhpc treats managed source selection as a supply-chain decision. Source-mutating
 | `dev` | Development | The configured development branch tip. Never silently another ref — an unobtainable branch is a typed "selector unavailable". Explicit opt-in. | ❌ mutable |
 | `stable` | Latest stable | Git-only: newest version-shaped tag ("release"), else newest tag, else the default-branch HEAD. The exact resolved commit is recorded. Explicit opt-in. | ❌ mutable |
 
-Without `--source`, a named stack installs from `binary` where one is published for this platform,
-else `dev`; `auto-install` (and so the image builder) applies that same per-stack default; only the all-stacks
-`lhpc install` form, with no stack named, stays on `dev`. `pinned` is the known-working line you choose explicitly.
+Without `--source`, install and `auto-install` (and so the image builder) take the per-stack
+default channel ([cli.md](cli.md)); only the all-stacks `lhpc install` form, with no stack named,
+stays on `dev`. `pinned` is the known-working line you choose explicitly.
 
 An **unpinned** component cannot be installed as `pinned` — with no configured pin it is
 `unverified-blocked`, and you must choose `dev` or `stable` explicitly. lhpc never fabricates
 a missing pin or signature. An **artifact** source (`artifact = true`: chat and voice) resolves every selector to the same declared artifact (`artifact-head`).
-Every source lives under the runtime root as a managed clone.
+Every source lives under the runtime root as a managed clone. For a source checkout,
+`lhpc status --versions` reads `match` only while the checked-out ref still equals the pin: a
+`dev` checkout turns to `differs` once upstream moved.
 
 ## Ownership records
 
 Every adoption records durable ownership (`state/source-registry/`): remote, selector, exact
 resolved commit, transaction id — written inside the activation transaction and completable by
-recovery. Update/uninstall/clean require ownership (a tree without a record is not LHPC's to
-touch — re-adopt it with `lhpc install`); update also requires the affected stacks stopped and refuses
-dirty trees (tracked or non-ignored untracked changes). `lhpc clean <stack> --purge` is the
-explicit destructive escape hatch (typed confirm on the web); normal uninstall retains config,
-logs and history. A record that no longer matches its tree is never rewritten silently
-([operations.md](operations.md)).
+recovery. A record that no longer matches its tree is never rewritten silently, and a tree
+without one is not LHPC's to touch. Update, uninstall and clean re-prove the record first
+(update also needs the affected stacks stopped and refuses a dirty tree); what they refuse, and
+how to recover, is in [operations.md](operations.md).
 
 ## The binary channel
 
@@ -54,9 +54,8 @@ artifact** instead of a source build. Same policy, different medium:
 
 Any failed check is a typed refusal that offers the source channel — never a silent fallback.
 Artifacts are built and published by
-[lhpc-binaries](https://github.com/makrohard/lhpc-binaries), which compiles exactly the pin; the
-release keeps the latest artifact per stack (no binary rollback). What the channel means when
-operating a stack: [operations.md](operations.md).
+[lhpc-binaries](https://github.com/makrohard/lhpc-binaries), which compiles exactly the pin. What
+the channel means when operating a stack: [operations.md](operations.md).
 
 ## Verification status
 
@@ -76,8 +75,7 @@ Optional. Signature verification uses Git's own facilities — `git verify-commi
 `git verify-tag --raw` — and parses the machine-readable GPG status. A signature counts
 **only** when git exits 0 **and** a `VALIDSIG` fingerprint matches a configured trusted
 signer fingerprint. Configure trusted signers as full GPG fingerprints; without them,
-lhpc never claims signed provenance (it stays `pinned-verified`). The command runner is
-injectable, so the tests cover signature behaviour with a faked runner — no network or keyring.
+lhpc never claims signed provenance (it stays `pinned-verified`).
 
 ## Remote overrides
 
