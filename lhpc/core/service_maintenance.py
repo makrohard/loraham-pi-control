@@ -9,6 +9,7 @@ from typing import ClassVar
 
 from . import (
     power,
+    provenance,
     restart_required,
     runtime_fs,
     source_fs,
@@ -365,7 +366,6 @@ class MaintenanceOpsMixin:
         time (bounded `git ls-remote`, no fetch, no mutation). Returns
         ((sha, label), "") or ((None, None), typed-reason). Adoption receives the frozen
         sha and performs NO second selector lookup."""
-        import re
 
         from . import validators
         spec = comp.source
@@ -389,13 +389,12 @@ class MaintenanceOpsMixin:
                      else f"development branch {ref}")
             return (sha, f"frozen: {label} @ {sha[:9]}"), ""
         # stable: newest VERSION-SHAPED tag (peeled commit), else default-branch HEAD —
-        # resolved remotely so the whole run uses ONE exact commit.
+        # resolved remotely so the whole run uses ONE exact commit. The tag rule itself is
+        # `provenance.stable_version_tag`, shared with the local clone path in install.py, so
+        # `install --source stable` and `auto-install --source stable` cannot disagree.
         out = run(["git", "ls-remote", "--tags", remote], timeout=15.0)
         if out.returncode != 0:
             return (None, None), f"could not list tags on {remote}"
-        if self._VERSION_TAG_RE is None:
-            type(self)._VERSION_TAG_RE = re.compile(r"^v?(\d+(?:\.\d+)*)$")
-        best, best_sha = None, ""
         plain, peeled = {}, {}
         for line in (out.stdout or "").splitlines():
             parts = line.split()
@@ -406,14 +405,9 @@ class MaintenanceOpsMixin:
                 peeled[name[:-3]] = parts[0]
             else:
                 plain[name] = parts[0]
-        for name, sha in plain.items():
-            m = self._VERSION_TAG_RE.match(name)
-            if not m:
-                continue
-            key = tuple(int(x) for x in m.group(1).split("."))
-            if best is None or key > best:
-                best, best_sha = key, peeled.get(name, sha)
-        if best is not None:
+        best_name = provenance.stable_version_tag(plain)
+        if best_name:
+            best_sha = peeled.get(best_name, plain[best_name])
             return (best_sha, f"frozen: latest stable tag @ {best_sha[:9]}"), ""
         out2 = run(["git", "ls-remote", remote, "HEAD"], timeout=15.0)
         if out2.returncode != 0 or not out2.stdout.strip():

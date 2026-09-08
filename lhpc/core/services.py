@@ -2646,8 +2646,6 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     _FEED_SCAN_LINES = 2000
     _FEED_SCAN_BYTES = 512 * 1024
 
-    _VERSION_TAG_RE = None
-
     # ---- helpers ---------------------------------------------------------
 
     def _unknown_stack(self, stack_id: str) -> ActionResult:

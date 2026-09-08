@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.4
+
+- LHPC's own tests for the MeshCore host application ran in no gate at all; they now run in CI against the manifest-pinned openHop core. No external project's own test suite runs in LHPC CI.
+- `--source stable` resolves through one rule instead of two: the newest version-shaped tag, else the default-branch HEAD. The local and the remote (auto-install) paths used different regexes and different fallbacks, so the same selector could install different commits of one component.
+
 ## 0.3.3
 
 - Documentation: one canonical owner per subject, short context and a link everywhere else; `live-test.md` keeps the newest live run only (git history holds the rest). No behaviour change.

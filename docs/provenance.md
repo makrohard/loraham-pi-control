@@ -18,7 +18,7 @@ lhpc treats managed source selection as a supply-chain decision. Source-mutating
 |---|---|---|---|
 | `pinned` | Known working | The newest operator-confirmed known-working composition entry for the stack; else the manifest pin (clearly labelled `fallback`). `HEAD ==` the expected commit is verified either way. | ✅ (immutable) |
 | `dev` | Development | The configured development branch tip. Never silently another ref — an unobtainable branch is a typed "selector unavailable". Explicit opt-in. | ❌ mutable |
-| `stable` | Latest stable | Git-only: newest version-shaped tag ("release"), else newest tag, else the default-branch HEAD. The exact resolved commit is recorded. Explicit opt-in. | ❌ mutable |
+| `stable` | Latest stable | Git-only: the newest version-shaped tag — the WHOLE name is an optional `v` and dot-separated numbers (`v112`, `v1.2`, `1.5.2`) — else the default-branch HEAD. A build-suffixed (`v2.8.0.7239fe8`) or prerelease (`1.8.2-pre`) tag is a snapshot, not a release, and is ignored. One rule for both the local and the remote resolution, so the selector resolves to one commit either way. The exact resolved commit is recorded. Explicit opt-in. | ❌ mutable |
 
 Without `--source`, install and `auto-install` (and so the image builder) take the per-stack
 default channel ([cli.md](cli.md)); only the all-stacks `lhpc install` form, with no stack named,

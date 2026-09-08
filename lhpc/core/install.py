@@ -20,6 +20,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import provenance
 from .assets import asset_text
 from .config import Config
 from .model import Component, Stack
@@ -294,7 +295,7 @@ class Installer:
         """Install a component's source. `source` selects the version:
           * "pinned" (default) — the stack's compatible known-working composition entry, else the manifest pin;
           * "dev"    — newest commit on the configured branch;
-          * "stable" — newest version-shaped tag, else newest tag, else default-branch HEAD.
+          * "stable" — the newest version-shaped tag, else the default-branch HEAD.
         Clones from the remote; a local checkout under `[install].adopt_search_root` is used only
         when that is configured and provably satisfies the selector.
         Never alters the local source; refuses to overwrite unless forced.
@@ -1672,33 +1673,18 @@ class Installer:
             self._close_journal(jh)
 
 
-    # A "release" for the git-only Latest-stable resolution: a version-shaped tag.
-    _VERSION_TAG = re.compile(r"^v?(\d+(?:\.\d+)+)")
-
     def _resolve_stable_tag(self, dest: str) -> str:
-        """Git-only Latest-stable tag selection in a FULL clone at `dest`:
-          * the newest VERSION-SHAPED tag (v?X.Y[.Z…], highest by numeric version sort) —
-            the published-release form;
-          * else the newest tag by creation date (a "suitable tag");
-          * else "" — the caller stays on the default-branch HEAD (latest main commit)."""
+        """Git-only Latest-stable tag selection in a FULL clone at `dest`: the newest
+        VERSION-SHAPED tag — a tag whose WHOLE name is a version, `v112` and `v1.2` and `1.5.2`
+        but not `v2.8.0.7239fe8` or `1.8.2-pre` (`provenance.stable_version_tag`) — else "", and
+        the caller stays on the default-branch HEAD. The remote freeze path (`service_maintenance._frozen_ref`) applies
+        the SAME rule to `git ls-remote --tags`, so one selector resolves to one commit however
+        the operator reaches it."""
         run = self.system.runner.run
         tags = run(["git", "-C", dest, "tag", "--list"], 10.0)
         names = [t.strip() for t in (tags.stdout or "").splitlines() if t.strip()] \
             if tags.returncode == 0 else []
-        versioned = []
-        for name in names:
-            m = self._VERSION_TAG.match(name)
-            if m:
-                versioned.append((tuple(int(x) for x in m.group(1).split(".")), name))
-        if versioned:
-            return max(versioned)[1]
-        newest = run(["git", "-C", dest, "for-each-ref", "--sort=-creatordate",
-                      "--format=%(refname:short)", "refs/tags"], 10.0)
-        if newest.returncode == 0:
-            for line in (newest.stdout or "").splitlines():
-                if line.strip():
-                    return line.strip()
-        return ""
+        return provenance.stable_version_tag(names)
 
     # Slow-box budgets. A Pi 5 clones RadioLib (94k objects, 114 MB) in ~15 s and checks the
     # pin out in <1 s; a Zero 2W over Wi-Fi is roughly an order of magnitude slower on both, and
@@ -1805,9 +1791,9 @@ class Installer:
                                         "rev-parse")
                             ok = head.returncode == 0 and head.stdout.strip() == pin
                 elif source == "stable":
-                    # Latest stable, GIT-ONLY: newest version-shaped tag ("release") ->
-                    # newest tag -> default-branch HEAD (latest main commit). The resolved
-                    # commit is recorded by the ownership registry either way.
+                    # Latest stable, GIT-ONLY: the newest version-shaped tag ("release"),
+                    # else the default-branch HEAD (latest main commit). The resolved commit
+                    # is recorded by the ownership registry either way.
                     tag = self._resolve_stable_tag(str(dest))
                     if not tag:
                         ok = True                      # no tags at all -> default-branch HEAD

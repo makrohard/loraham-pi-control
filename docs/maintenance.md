@@ -26,6 +26,10 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
 - a separate `pin-validation` job: **every pinned source is validated against its live branch**
 - `testlab.yml`, on the same branches and on pull requests: the console lane on an aarch64 runner
   ([testlab.md](testlab.md#running-the-verification-lanes))
+- a separate `meshcore-host` job: **LHPC's own** tests for `lhpc/data/meshcore_host`, which ships
+  inside `lhpc/data/` so `pytest -q` does not collect it. Most of them exercise LHPC behaviour
+  against the external API, so the manifest-pinned openHop core is installed as a dependency,
+  patched as a box builds it. No external project's own suite runs in CI
 
 ## What CI does not enforce
 
@@ -82,9 +86,10 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
   section only — boxes follow `main` either way. Publish the binaries before tagging an image (the
   [binary channel](provenance.md#the-binary-channel)).
 - **GitHub rulesets** (repository settings, not in the tree): `main` — no force push, no
-  deletion, linear history, required checks `test`, `pin-validation` and `testlab` on the pushed
-  SHA (they ran on `dev`, so the fast-forward passes without a PR); `dev` — no force push, no
-  deletion, linear history, required checks `test` and `testlab`; `v*` tags — no deletion, no
+  deletion, linear history, required checks `test`, `pin-validation`, `testlab` and
+  `meshcore-host` on the pushed SHA (they ran on `dev`, so the fast-forward passes without a PR);
+  `dev` — no force push, no deletion, linear history, required checks `test`, `testlab` and
+  `meshcore-host`; `v*` tags — no deletion, no
   update. Pull requests: squash merging only, the PR title and body become the commit, the topic
   branch is deleted on merge. The repository admin is the bypass actor of all three rulesets
   (always allowed, every bypass logged), so the maintainer's own pushes and hotfixes are never
@@ -211,6 +216,13 @@ default; everything below is about source builds and runtime load.
   idempotent, so a drop mid-build costs a reconnect, not the build.
 - **An interrupted `auto-install`** is recovered with `lhpc auto-install --status` / `--recover`
   ([cli.md](cli.md)); never hand-edit the `state/auto-install*.json` markers.
+
+**LHPC CI runs LHPC's tests. An upstream's own suite is a host test, not a gate.** Where a
+component declares one — openHop Core does — it is reachable exactly like any other host test: the
+button on the stack's install section, `lhpc test <component>`, or the tests checkbox in
+auto-install. It runs in the environment the build created, against the pinned upstream that box
+installed, so it tells the operator whether the pinned upstream itself works on that hardware. A
+failure there is information; no external project's suite is a required check.
 
 **Job logs.** Build/host-test logs are `logs/build-<comp>.log` (single-step) or
 `logs/build-<comp>-<N>.log` (multi-step); host tests `test-<comp>…`; run logs

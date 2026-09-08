@@ -1086,8 +1086,10 @@ def test_stable_resolves_newest_version_tag(tmp_path):
     assert v120                                        # (sanity)
 
 
-def test_stable_falls_back_to_newest_tag_then_head(tmp_path):
-    # only NON-version tags -> newest by creation date
+def test_stable_ignores_non_version_tags_and_stays_on_head(tmp_path):
+    # only NON-version tags -> "" (the caller stays on the default-branch HEAD). A build-suffixed
+    # or code-named tag is a snapshot, not a release, and the remote freeze path cannot see tag
+    # dates at all, so BOTH paths ignore it rather than disagreeing about it.
     repo = tmp_path / "r1"
     _make_repo_source_registry(repo)
     _git_source_registry(repo, "tag", "alpha")
@@ -1102,11 +1104,86 @@ def test_stable_falls_back_to_newest_tag_then_head(tmp_path):
     _git_source_registry(repo, "tag", "beta")
     comp = _comp()
     inst = _inst(tmp_path, comp)
-    assert inst._resolve_stable_tag(str(repo)) == "beta"
+    assert inst._resolve_stable_tag(str(repo)) == ""
     # NO tags at all -> "" (caller stays on the default-branch HEAD)
     repo2 = tmp_path / "r2"
     _make_repo_source_registry(repo2)
     assert inst._resolve_stable_tag(str(repo2)) == ""
+
+
+def _frozen_ls_remote(svc, tags_out, head_sha):
+    """Bind a fake `git ls-remote` to `svc` so `_frozen_ref` can be driven directly."""
+    real = svc._system.runner.run
+
+    def run(argv, timeout, *a, **k):
+        argv = list(argv)
+        if argv[:3] == ["git", "ls-remote", "--tags"]:
+            return CommandResult(0, tags_out, "")
+        if argv[:2] == ["git", "ls-remote"] and argv[-1] == "HEAD":
+            return CommandResult(0, f"{head_sha}\tHEAD\n", "")
+        return real(argv, timeout, *a, **k)
+
+    svc._system.runner.run = run
+
+
+def test_both_stable_paths_agree_on_the_real_manifest_tag_shapes(tmp_path):
+    """One selector, one commit, whichever PRODUCTION path the operator reaches it through.
+
+    `lhpc install --source stable` resolves in a full clone (Installer._resolve_stable_tag);
+    `lhpc auto-install --source stable` resolves remotely (ControllerService._frozen_ref over
+    `git ls-remote --tags`). They once carried different regexes AND different fallbacks, so the
+    same word installed different commits of one component. This drives BOTH production
+    functions — not the shared helper — over the tag shapes each pinned upstream actually
+    publishes, and asserts they land on the same commit.
+    """
+    # (upstream, its tag shapes, the release the rule must pick — "" means default-branch HEAD)
+    cases = [
+        ("loraham-daemon", ["v0.4.0", "v112"], "v112"),         # a bare numeric version IS a version
+        ("kiss-tnc", ["v0.5.1"], "v0.5.1"),
+        ("reticulum", ["1.5.2", "1.8.2-pre"], "1.5.2"),         # a prerelease is not a release
+        ("meshcore-cli", ["v1.6.3", "v1.6.2"], "v1.6.3"),
+        # build-suffixed snapshots are NOT releases: no version tag -> default-branch HEAD
+        ("meshtastic", ["v2.7.26.54e0d8d", "v2.8.0.7239fe8"], ""),
+        ("meshcom-firmware", ["v4.35p.08.29", "v4.35s"], ""),
+        ("no-tags-at-all", [], ""),
+    ]
+    svc = _svc(tmp_path / "svc")
+    comp_remote = next(c for st in svc.stacks() if st.id == "daemon"
+                       for c in st.components if c.id == "loraham-daemon")
+    inst = _inst(tmp_path, _comp())
+    head_sha = "9" * 40
+    for name, shapes, expected in cases:
+        # LOCAL path: a real repo carrying those tags.
+        repo = tmp_path / f"up-{name}"
+        _make_repo_source_registry(repo)
+        for tag in shapes:
+            _git_source_registry(repo, "tag", tag)
+        local_tag = inst._resolve_stable_tag(str(repo))
+        assert local_tag == expected, f"{name}: local picked {local_tag!r}, expected {expected!r}"
+        local_sha = (_git_source_registry(repo, "rev-parse", local_tag) if local_tag
+                     else _git_source_registry(repo, "rev-parse", "HEAD"))
+
+        # REMOTE path: the same tag names over a faked `ls-remote`, each ANNOTATED so the
+        # peeled commit is what must be selected (the plain tag object sha must not be).
+        lines, peel = [], {}
+        for i, tag in enumerate(shapes):
+            tag_obj, peeled = f"{i:040x}", f"{i:039x}f"
+            peel[tag] = peeled
+            lines.append(f"{tag_obj}\trefs/tags/{tag}\n{peeled}\trefs/tags/{tag}^{{}}\n")
+        _frozen_ls_remote(svc, "".join(lines), head_sha)
+        (fz, why) = svc._frozen_ref(comp_remote, "stable")
+        assert why == "", f"{name}: frozen resolution failed: {why}"
+        remote_sha = fz[0]
+        expected_remote = peel[expected] if expected else head_sha
+        assert remote_sha == expected_remote, (
+            f"{name}: remote picked {remote_sha!r}, expected {expected_remote!r}")
+
+        # the two production paths agree on WHICH tag (their shas differ only because the
+        # fixtures are different repositories)
+        picked_remote = next((t for t, sha in peel.items() if sha == remote_sha), "")
+        assert picked_remote == local_tag, (
+            f"{name}: stable diverges — local {local_tag!r} vs remote {picked_remote!r}")
+        assert local_sha                                          # (sanity: the local ref resolved)
 
 
 def test_artifact_source_same_for_every_selector(tmp_path):

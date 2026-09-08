@@ -172,3 +172,52 @@ jobs:
           test "$validated" -gt 0 || { echo "::error::zero pinned sources validated"; exit 1; }
           test "$scripts_validated" -gt 0 || { echo "::error::zero referenced scripts validated"; exit 1; }
           echo "pin validation OK — ${validated} pinned source(s), ${scripts_validated} script(s)"
+
+  meshcore-host:
+    # LHPC's OWN tests for `lhpc/data/meshcore_host` — the adapter implementing openHop's
+    # LoRaRadio contract on the LoRaHAM daemon's sockets, plus LHPC's identity, persistence and
+    # GPS-feed glue. They ship inside lhpc/data/, so `pytest -q` (testpaths = tests) never
+    # collects them. Most of them exercise LHPC behaviour AGAINST the external API, so the
+    # PINNED openHop core is installed here as a DEPENDENCY, patched exactly as a box builds it.
+    #
+    # What this job does NOT do: run openHop's or MeshCore's own upstream test suites. Those are
+    # the operator's diagnostic, exposed on the box through the meshcore stack's host test
+    # (`lhpc test meshcore`), and an upstream failure there is information, never a red LHPC gate.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install the pinned openHop core (patched, as a box builds it)
+        run: |
+          set -euo pipefail
+          # The pin comes from the manifest, never from a literal here: this job can never test
+          # against a different commit than the one the product installs.
+          eval "$(python - <<'PY'
+          import tomllib, pathlib, shlex
+          m = tomllib.loads(pathlib.Path("lhpc/data/manifest.example.toml").read_text())
+          for s in m["stack"]:
+              for c in s.get("component", []):
+                  if c["id"] == "meshcore-node":
+                      src = c["source"]
+                      print(f"REMOTE={shlex.quote(src['remote'])}")
+                      print(f"PIN={shlex.quote(src['pin_commit'])}")
+          PY
+          )"
+          test -n "${PIN:-}" || { echo "::error::no meshcore-node pin in the manifest"; exit 1; }
+          git clone -q "$REMOTE" /tmp/openhop-core
+          git -C /tmp/openhop-core checkout -q "$PIN"
+          # ABSOLUTE: the apply script cds into the source tree, so a relative patch path
+          # resolves against the clone, not the workspace.
+          bash lhpc/data/scripts/openhop-apply-patch.sh /tmp/openhop-core \
+               "$PWD/lhpc/data/patches/openhop-core-companion-fixes.patch"
+          python -m pip install -q --upgrade pip
+          python -m pip install -q /tmp/openhop-core meshcore pytest pytest-asyncio
+          python -m pip install -q --no-deps ./lhpc/data/meshcore_host
+      - name: LHPC MeshCore host tests
+        run: pytest -q -rs lhpc/data/meshcore_host/tests
