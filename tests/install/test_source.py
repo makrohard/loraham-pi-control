@@ -497,6 +497,30 @@ def _make_repo(path):
     _git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "add"], cwd=path)
 
 
+@pytest.mark.parametrize("cid", ["loraham-voice", "loraham-voice-cli"])
+def test_voice_verifies_its_pin_like_any_other_source(tmp_path, cid):
+    """Voice is an ordinary pinned source: a local checkout that is NOT at the manifest pin
+    cannot satisfy a `pinned` install.
+
+    Both Voice components share one checkout, and NOTHING else in the suite would notice if only
+    one of them lost `artifact = true` — the pin-consistency gate compares `pin_commit`/`pin_tag`
+    across shared consumers and never looks at the flag. Hence both are driven here.
+
+    With the flag this returned True for ANY tree, so the manifest pin was decorative and a
+    release-bot hold on `src/LoRaHAM_Voice` could not be enforced.
+    """
+    from lhpc.core.config import Config
+    from lhpc.core.manifest import load_manifest
+    comp = next(c for st in load_manifest() for c in st.components if c.id == cid)
+    assert comp.source.pin_commit, "the manifest must pin Voice for this to mean anything"
+    paths, root = _paths(tmp_path)
+    local = root / "voice"
+    _make_repo(local)                                   # a real repo whose HEAD is NOT the pin
+    inst = Installer(paths, load_manifest(), Config(values={}), RealSystem())
+
+    assert not inst._fallback_satisfies(comp.source, local, "pinned", "")
+
+
 def test_real_git_clone_through_controller_pinned_path(tmp_path):
     paths, root = _paths(tmp_path)
     (root / "src").mkdir(parents=True)

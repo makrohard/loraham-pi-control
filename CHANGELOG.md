@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.10
+
+- Voice is an ordinary pinned source. Its `artifact` flag meant an ordinary pinned install or update took the branch tip and skipped the identity check, so the manifest pin was decorative. It now installs and verifies the pinned commit like every other source.
+- Internal: five lint findings in the test lab's release lane are fixed (regex flag aliases spelled out, one import block sorted). No behaviour change; `ruff check testlab` is green again.
+
 ## 0.3.9
 
 - **Files you add to a managed source checkout now survive an update.** A stack's own logs and generated settings, or a file you put there yourself, are carried into the new source instead of blocking the update; the old checkout is discarded only once each of them is proven to be there, and a path the new upstream version also ships is a refusal naming the file rather than a merge. LHPC's own regenerable output (`build/`, `.pio/`, `.venv/`, `.work/`, `.run/`, `__pycache__/`, `node_modules/` and a declared built binary) is the exception: it neither blocks an update nor survives one. Editing, deleting or staging an upstream-tracked file still makes the checkout dirty and blocks the update — to run a modified stack, fork it and point the component's remote and pin at your fork. Uninstall and clean are unchanged and keep their existing dirty-tree protection; unlike source updates, they do not carry additions forward.

@@ -41,7 +41,7 @@ def state_of(env: dict, stack: str) -> str:
     never installed.
     """
     out = run_lhpc(env, "status", timeout=120).stdout
-    m = re.search(rf"^\[{re.escape(stack)}\][^\n(]*\(([a-z-]+)\)", out, re.M)
+    m = re.search(rf"^\[{re.escape(stack)}\][^\n(]*\(([a-z-]+)\)", out, re.MULTILINE)
     return m.group(1) if m else ""
 
 
@@ -157,7 +157,7 @@ def pty_readiness(command: str, env: dict, *, ready_timeout: float = 60.0,
         tail = drawn[-600:].decode("utf-8", "replace")
         assert drawn, f"{command!r} drew nothing on its terminal within {ready_timeout} s"
         if expect:
-            assert re.search(expect, drawn.decode("utf-8", "replace"), re.I | re.S), (
+            assert re.search(expect, drawn.decode("utf-8", "replace"), re.IGNORECASE | re.DOTALL), (
                 f"{command!r} did not draw anything matching {expect!r}. It drew: {tail!r}")
         time.sleep(hold)
         assert proc.poll() is None, (
@@ -196,7 +196,7 @@ def start_component(env: dict, component: str, timeout: float = 900.0) -> None:
 def alive(env: dict, component: str) -> bool:
     """Is this COMPONENT running, as LHPC's own status reports it?"""
     out = run_lhpc(env, "status", timeout=120).stdout
-    m = re.search(rf"^\s+{re.escape(component)}\s+([a-z-]+)", out, re.M)
+    m = re.search(rf"^\s+{re.escape(component)}\s+([a-z-]+)", out, re.MULTILINE)
     return bool(m) and m.group(1) == "running"
 
 

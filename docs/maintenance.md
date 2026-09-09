@@ -98,6 +98,12 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
     unit template or the manifest model is a minor. Changing a **default** — what happens when
     the operator names nothing — is a patch, provided every explicit selector keeps its meaning
     and the release lane proves every stack on the new default.
+  - **One recorded exception (0.3.10).** Voice losing `artifact = true` changed what every
+    selector resolves to for that one source, which the line above calls a minor. It shipped as a
+    patch by maintainer decision: the pin and the branch tip were the same commit, so no box
+    installed anything different, and the release lane already proves both Voice variants through
+    the path the change introduces. The exception is the unchanged bytes plus lane proof, not the
+    selector rule itself.
   - The proof a patch needs is the proof its own change calls for. A **pin move** is proved by
     the binary builder's smoke and clean-runtime test plus the
     [release-verification lane](testlab.md#running-the-verification-lanes) — no box. That lane

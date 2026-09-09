@@ -270,9 +270,10 @@ def test_release_identity_matches_candidate_manifest(env, svc):
     """
     import tomllib
 
+    from lhpc_testlab.manifest_overlay import RETARGETS
+
     from lhpc.core import binary_receipt, source_registry
     from lhpc.core.manifest import default_manifest_path
-    from lhpc_testlab.manifest_overlay import RETARGETS
 
     candidate = tomllib.loads(default_manifest_path().read_text())
     pins, stack_of = {}, {}

@@ -416,7 +416,6 @@ main = "loraham-voice"
     remote = "https://github.com/makrohard/LoRaHAM_Voice.git"
     branch = "main"
     local_dir = "LoRaHAM_Voice"
-    artifact = true
 
     [stack.component.process]
     exec_name = "loraham_voice"
@@ -602,7 +601,6 @@ main = "loraham-voice"
     remote = "https://github.com/makrohard/LoRaHAM_Voice.git"
     branch = "main"
     local_dir = "LoRaHAM_Voice"
-    artifact = true
 
     [stack.component.process]
     exec_name = "loraham_voice_cli"
