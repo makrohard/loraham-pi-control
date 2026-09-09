@@ -548,7 +548,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         for row in service.auto_install_rows():
             sid = row["id"]
             sel[sid] = {"install": request.form.get(f"install:{sid}") == "yes",
-                        # per-stack default: binary where published, else "dev"
+                        # per-stack default: binary where published, else "pinned"
                         "version": request.form.get(f"version:{sid}", row["default_channel"]),
                         "tests": request.form.get(f"tests:{sid}") == "yes",
                         "tx": request.form.get(f"tx:{sid}") == "yes"}
@@ -1444,13 +1444,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 return _redirect_for(target)
         # Source version selector (only meaningful for install/update). A MISSING selector defaults
         # to the CLI's `default_channel` — binary wherever it is published (a fresh Pi must not
-        # silently start a four-hour compile because nobody touched the selector), the
-        # "dev" everywhere else. An INVALID selector is rejected by run_action (never silently
+        # silently start a four-hour compile because nobody touched the selector), "pinned"
+        # everywhere else. An INVALID selector is rejected by run_action (never silently
         # rewritten). A binary plan does fetch the index, so an offline box renders a typed refusal
         # that offers the source channel — the honest outcome, not a source build nobody asked for.
         _sid = service.stack_of(target) or target
         source = request.form.get("source") or (
-            service.default_channel(_sid) if _sid else "dev")
+            service.default_channel(_sid) if _sid else "pinned")
         stop_owners = request.form.get("stop_owners") == "yes"
         cascade = request.form.get("cascade") == "yes"
         frm = request.form.get("from", "")     # origin page (e.g. "dash") for redirect

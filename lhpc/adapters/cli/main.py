@@ -792,11 +792,11 @@ def _run(argv: list[str] | None = None) -> int:
             # toolchain would defeat the entire point of the channel. Its own runtime_deps are
             # checked inside the transaction.
             # Resolve the effective channel ONCE: an explicit --source wins; otherwise the
-            # stack's default (binary where published, else "dev").
+            # stack's default (binary where published, else "pinned").
             # NOTE: the all-stacks form (`lhpc install` with no stack) stays on the source
             # channel — one plan covers many stacks, and the binary channel installs one stack
             # at a time. Name a stack to use it.
-            _chan = args.source or (svc.default_channel(args.stack) if args.stack else "dev")
+            _chan = args.source or (svc.default_channel(args.stack) if args.stack else "pinned")
             if _chan == svc.BINARY_CHANNEL and not args.check:
                 # `--check` stays a READ-ONLY preview and must never prompt: it falls through
                 # to the plan render below (which prints the binary plan without applying).
@@ -849,7 +849,7 @@ def _run(argv: list[str] | None = None) -> int:
         if not jobresult.mark_gate_passed(svc._paths, web, aid):
             print("web install: could not clear the startup flag — refusing (no mutation).")
             return 3
-        _wchan = args.source or (svc.default_channel(args.stack) if args.stack else "dev")
+        _wchan = args.source or (svc.default_channel(args.stack) if args.stack else "pinned")
         # The BUILD dep gate applies to source installs only (see _do_install).
         if _wchan != svc.BINARY_CHANNEL and _print_install_dep_gate(svc, args.stack, check=False):
             rc = 1                                         # a blocked dep-gate is a real (never-admitted) failure
@@ -1183,10 +1183,11 @@ def _run(argv: list[str] | None = None) -> int:
         if getattr(args, "upstream", False):
             return _apply_flow(lambda a: svc.graywolf_upstream_update(args.target, apply=a),
                                yes=args.yes)
-        # An unspecified selector KEEPS the stack on its current channel: a binary-installed
-        # stack updates binary→binary, everything else keeps the "dev" default.
+        # An unspecified selector follows the default channel: a binary-installed stack updates
+        # binary→binary, everything else updates to `pinned` — the composition this release
+        # proved. Following the branch tip is the explicit `--source dev`.
         _usrc = args.source or ("binary" if (args.target
-                                             and svc.on_binary_channel(args.target)) else "dev")
+                                             and svc.on_binary_channel(args.target)) else "pinned")
         return _apply_flow(lambda a: svc.update(args.target, apply=a, source=_usrc),
                            yes=args.yes)
     if args.command == "uninstall":

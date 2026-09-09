@@ -509,15 +509,17 @@ def test_install_confirm_defaults_to_the_stacks_default_channel(tmp_path, monkey
     assert 'value="binary" selected' in " ".join(cf.split())
 
 
-def test_install_confirm_keeps_dev_where_no_binary_is_published(tmp_path, monkeypatch):
+def test_install_confirm_preselects_pinned_where_no_binary_is_published(tmp_path, monkeypatch):
     _stub_binary_plan(monkeypatch)
     c = _real_app(tmp_path)
-    # kiss declares no [stack.binary] — its confirm keeps the historical source default
+    # kiss declares no [stack.binary] — its confirm preselects the PINNED composition, and the
+    # branch tip stays an offered choice the operator has to pick.
     cf = c.post("/action", data={"_csrf": _csrf(c), "op": "install",
                                  "target": "kiss"}).get_data(as_text=True)
     flat = " ".join(cf.split())
     assert 'value="binary"' not in flat
-    assert 'value="dev" selected' in flat
+    assert 'value="pinned" selected' in flat
+    assert 'value="dev"' in flat and 'value="dev" selected' not in flat
 
 
 @pytest.mark.contract

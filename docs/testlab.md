@@ -106,11 +106,12 @@ identity advances, the admission gate clears on the "new boot", but the console 
 pytest -q                                      # default lane (lab lanes skip)
 LHPC_ACCEPTANCE=1 pytest testlab/tests/acceptance -q   # real server + real executable
 LHPC_BROWSER=1 pytest testlab/tests/browser -q     # headless Chromium (pip install -e ./testlab[browser])
+LHPC_RELEASE_VERIFY=1 pytest testlab/tests/release -q  # release lane: every stack installed, built, started
 ```
 
-The lab has three lanes — `testlab/tests/unit` for the simulator itself, `acceptance` for the real
-executable and server over simulated hardware, `browser` for real headless Chromium. What they
-prove differs in depth, and the difference matters:
+The lab has four lanes — `testlab/tests/unit` for the simulator itself, `acceptance` for the real
+executable and server over simulated hardware, `browser` for real headless Chromium, and
+`release` for a release's evidence. What they prove differs in depth, and the difference matters:
 
 - **acceptance** drives the RUNNING server and the real `lhpc` executable, and verifies the
   effect. `test_http_smoke.py` additionally enumerates the app's own `url_map`, so a new route is
@@ -119,6 +120,23 @@ prove differs in depth, and the difference matters:
 - **browser** drives real headless Chromium against the running console — the system box's state
   machine under controlled `/api/system` responses, the Apps page's lazy bodies, the GPS panel,
   and one 390 px phone viewport. No virtual display: Chromium is launched `headless=True`.
+
+- **release** is the evidence a pin release needs, and it is the slowest: on a FRESH lab root
+  with no known-working records it installs every stack on its default channel — the published
+  binary, else the pin — builds it, starts it and verifies the stack's own state (its port, its
+  own client tool, its node info). Interactive components run on a real terminal and must draw,
+  stay up and exit; GUI ones run where LHPC's own GUI predicate says they can. It ends by
+  re-proving every managed checkout through the production identity verifier and comparing its
+  HEAD with the candidate manifest's pin, and every artifact against its receipt. Case names are
+  the contract (`test_release_<stack>`), so an automated release can require the stack it moved
+  to have PASSED — a skip is not proof.
+  - **What it cannot prove:** the daemon and RadioLib are the lab's fixtures, and the real daemon
+    needs a radio to start. Their pins move by hand, with the box
+    [test matrix](test-matrix.md); their artifact is proved by the binary builder's own smoke and
+    clean-runtime test.
+  - In CI it is the `release-verify` job: pushes to `main`, or a dispatch with
+    `release_verify=true` on a candidate branch. It uploads `junit-release.xml`, the recorded
+    versions and the lab's own logs.
 
 The route sweep proves existence and CSRF discipline, not each action's effect; effects are
 proven by the named acceptance tests and by LHPC's own in-process web suite.

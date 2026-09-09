@@ -66,9 +66,15 @@ class BinaryChannelMixin:
 
     def default_channel(self, stack_id: str) -> str:
         """The channel a bare `install`/`update` uses. Binary WHERE AVAILABLE (that is the
-        feature: a fresh Pi should not compile for hours), else the default."""
+        feature: a fresh Pi should not compile for hours), else `pinned`.
+
+        `pinned` — not the branch tip — because a default install must land on a composition
+        this release actually proved: the operator's newest known-working entry, else the
+        manifest pin. The image builder runs the same bare `auto-install`, so a fresh image
+        ships the release's pins instead of whatever upstream happened to push that morning.
+        `dev` stays available, as an explicit selector."""
         ok, _why = self.binary_available(stack_id)
-        return self.BINARY_CHANNEL if ok else "dev"
+        return self.BINARY_CHANNEL if ok else "pinned"
 
     def channel_error(self, stack_id: str, channel: str) -> str:
         """"" when `channel` is usable for this stack, else the typed refusal reason."""

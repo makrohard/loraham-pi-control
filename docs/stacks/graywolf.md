@@ -12,7 +12,7 @@ APRS-IS <-> graywolf <-> KISS/TCP 8001 <-> loraham-kiss-tnc <-> framed DATA <-> 
 | | |
 |---|---|
 | Component | `graywolf` |
-| Source / pin | upstream release **v0.14.13** `.deb` — no git source. `lhpc build graywolf` runs `lhpc/data/scripts/graywolf-fetch.sh`: download the `.deb` for this architecture, verify it against the recorded sha256 (arm64/armhf/amd64), unpack with `dpkg-deb -x` — rootless, no system package, no new bootstrap dependency (`curl`, `dpkg-deb`). Marker `build/tools/graywolf/.lhpc-built-0.14.13`; a rebuild at the same version needs no network |
+| Source / pin | upstream release `.deb`, version pinned in the manifest — no git source. `lhpc build graywolf` runs `lhpc/data/scripts/graywolf-fetch.sh`: download the `.deb` for this architecture, verify it against the recorded sha256 (arm64/armhf/amd64), unpack with `dpkg-deb -x` — rootless, no system package, no new bootstrap dependency (`curl`, `dpkg-deb`). Marker `build/tools/graywolf/.lhpc-built-<version>`; a rebuild at the same version needs no network |
 | Binary | `<runtime>/build/tools/graywolf/usr/bin/graywolf` |
 | Run | `graywolf -config <runtime>/state/graywolf/graywolf.db -http 127.0.0.1:8080` |
 | Web UI | `127.0.0.1:8080` — password-authenticated, loopback only, no bind param. Reach it through the stack's web proxy (Webserver page, `lhpc webserver proxy graywolf`) or an [SSH tunnel](../ssh-tunnel.md) |

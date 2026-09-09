@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.6
+
+- A default install lands on the composition this release proved: without `--source`, install, update and auto-install take the published binary where there is one, else `pinned` (was `dev`). The image builder runs that same bare auto-install, so a fresh image carries the release's pins instead of the branch tips of the day. `dev` and `stable` stay available as explicit choices.
+- New test-lab lane `release` (CI job `release-verify`): every stack an automated pin release may move is installed on its default channel, built, started and verified by its own state, then re-proved to BE the candidate manifest's commits. Interactive components run on a real terminal; GUI ones where LHPC's own predicate says they can. The daemon and RadioLib are the lab's fixtures and are never proved there — they need the radio.
+- Release policy: a patch release (pins or a fix) branches from `main` and has two producers, the maintainer and the [release bot](https://github.com/makrohard/lhpc-release-bot); a minor release comes from `dev` with the full box matrix. An image follows every release. A patch returns to `dev` as a fast-forward or a pull request, never a rewrite.
+- The lab lanes upload their own build, start and state logs as run artifacts, so a red lane says which component failed.
+
 ## 0.3.5
 
 - Tests fail only for LHPC behaviour now. The JavaScript source-arithmetic and hand-built-DOM harnesses are replaced by real headless Chromium, the deployment tests run the shipped scripts, the testlab coverage matrix gives way to enumerating the app's own routes, and the remaining source scans are replaced by the behavioural seams they stood in for.

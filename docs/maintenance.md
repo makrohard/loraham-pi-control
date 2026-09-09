@@ -25,7 +25,9 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
 - `bandit -q -r lhpc -lll` (high severity only) and `pip-audit . --strict` (dependency CVEs)
 - a separate `pin-validation` job: **every pinned source is validated against its live branch**
 - `testlab.yml`, on the same branches and on pull requests: the console lane on an aarch64 runner
-  ([testlab.md](testlab.md#running-the-verification-lanes))
+  ([testlab.md](testlab.md#running-the-verification-lanes)). Its second job, `release-verify`,
+  installs, builds, starts and identity-proves every stack a pin release may move; it runs on
+  pushes to `main` and on dispatch with `release_verify=true`, not on every push
 - a separate `meshcore-host` job: **LHPC's own** tests for `lhpc/data/meshcore_host`, which ships
   inside `lhpc/data/` so `pytest -q` does not collect it. Most of them exercise LHPC behaviour
   against the external API, so the manifest-pinned openHop core is installed as a dependency,
@@ -71,33 +73,52 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
   exception, announced by the tag.
 - **A cycle starts with the version bump** (`pyproject.toml`, `lhpc/version.py`, the
   `CHANGELOG.md` heading), so a `dev` deployment never reports the released number.
-- **Release.** `dev` green on CI and testlab, the changelog complete, and the live evidence the
-  release calls for: a **minor release** (`0.X.0`) runs the full
-  [release test matrix](test-matrix.md); a **patch release** (`0.X.Y`) runs the live checks its
-  own change calls for. Either way the result replaces the section in
-  [live-test.md](live-test.md). The cycle's commits are squashed into **one commit named by the version**
-  (subject `<version>`, body = the changelog section), CI runs on that exact SHA, then `main` is
-  fast-forwarded to it and `git tag -a v<version>` goes on it — `main` reads as one commit per
-  release, the changelog is the release note. That squash is the one moment `dev` is rewritten:
-  after the tag `dev` equals `main`, and an open topic branch rebases onto it. A **minor release**
-  (`0.X.0`) also publishes a GitHub Release from the tag with the changelog section as its body
-  (title = the version, not a pre-release, marked latest), linking the matching `loraham-images`
-  release and the binaries index; a **patch release** (`0.X.Y`) is the tag and its changelog
-  section only — boxes follow `main` either way. Publish the binaries before tagging an image (the
-  [binary channel](provenance.md#the-binary-channel)).
+- **A minor release (`0.X.0`) is a feature release.** It comes from `dev`: a new capability or a
+  changed contract — a CLI verb, a manifest model change, a unit template, a changed refusal, a
+  stack added or removed. It runs the full [release test matrix](test-matrix.md) on the box, and
+  its result replaces the section in [live-test.md](live-test.md). The cycle's commits are
+  squashed into **one commit named by the version** (subject `<version>`, body = the changelog
+  section), CI runs on that exact SHA, then `main` is fast-forwarded to it and `git tag -a
+  v<version>` goes on it. That squash is the one moment `dev` is rewritten: after the tag `dev`
+  equals `main`, and an open topic branch rebases onto it. A minor release also publishes a
+  GitHub Release from the tag with the changelog section as its body (title = the version, not a
+  pre-release, marked latest), linking the matching `loraham-images` release and the binaries
+  index. Before starting one, run the release bot's `watch-only` and bump anything upstream has
+  moved, so the matrix proves the pins the release ships.
+- **A patch release (`0.X.Y`) is pins or a fix**, and it has **two producers** — the maintainer,
+  and the release bot on its schedule. Both take the same shape: branch from `main` (never from
+  `dev`, so nothing unreleased rides along), one commit named by the version, CI and testlab
+  green on that SHA, fast-forward `main`, tag. A patch is the tag and its changelog section; it
+  publishes no GitHub Release. Boxes follow `main` either way.
+  - **Where the line runs.** Adding, removing or changing a selector, a CLI verb, a refusal, a
+    unit template or the manifest model is a minor. Changing a **default** — what happens when
+    the operator names nothing — is a patch, provided every explicit selector keeps its meaning
+    and the release lane proves every stack on the new default.
+  - The proof a patch needs is the proof its own change calls for. A **pin move** is proved by
+    the binary builder's smoke and clean-runtime test plus the
+    [release-verification lane](testlab.md#running-the-verification-lanes) — no box. Anything
+    that changes behaviour on hardware is proved on the box and recorded in
+    [live-test.md](live-test.md).
+  - **Bringing the patch back to `dev`:** fast-forward `dev` when it still equals the old `main`;
+    otherwise open a pull request. `dev` is linear and never rewritten outside a minor release,
+    so a patch is never merged into it.
+- **Every release is followed by an image.** `loraham-images` is tagged with the same version
+  once the binaries a moved pin needs are published, so the published image always carries the
+  latest release ([binary channel](provenance.md#the-binary-channel)).
+- **The release bot** performs the pin patch — watch, repin, binaries, proof, release, image —
+  and opens an issue instead of releasing when anything is not green. What it moves, what it only
+  reports, and how to pause, retry or recover it:
+  [`lhpc-release-bot`](https://github.com/makrohard/lhpc-release-bot). It never moves the daemon,
+  RadioLib or the shared chat source: those need the radio hardware the lane does not have.
 - **GitHub rulesets** (repository settings, not in the tree): `main` — no force push, no
-  deletion, linear history, required checks `test`, `pin-validation`, `testlab` and
-  `meshcore-host` on the pushed SHA (they ran on `dev`, so the fast-forward passes without a PR);
-  `dev` — no force push, no deletion, linear history, required checks `test`, `testlab` and
-  `meshcore-host`; `v*` tags — no deletion, no
+  deletion, linear history, required checks `test (3.11)`, `test (3.12)`, `test (3.13)`,
+  `pin-validation`, `testlab`, `meshcore-host` and `release-verify` on the pushed SHA (they ran
+  on the release branch, so the fast-forward passes without a PR); `dev` — the same minus
+  `pin-validation` and `release-verify`; `v*` tags — no deletion, no
   update. Pull requests: squash merging only, the PR title and body become the commit, the topic
   branch is deleted on merge. The repository admin is the bypass actor of all three rulesets
   (always allowed, every bypass logged), so the maintainer's own pushes and hotfixes are never
   blocked while contributors meet the checks by construction.
-- **Hotfix for the released version** when `dev` has already diverged: branch from `main`,
-  fix with its regression test, bump the patch version, push the branch so CI runs on that
-  SHA, fast-forward `main` to it, tag, then merge `main` into `dev` so the fix is not lost.
-  Nothing from `dev` rides along.
 
 ## Moving a pin
 
@@ -126,6 +147,11 @@ CI job hard-fail on an orphaned or predating pin).
 6. **On the box**: `lhpc install <stack> --source binary` (or `update` + `build` from source),
    smoke, then `lhpc known-working <stack>`. When the release runs the full pass, it is the
    [release test matrix](test-matrix.md).
+
+Steps 1–5 are what the [release bot](https://github.com/makrohard/lhpc-release-bot) does on its
+schedule, with the release-verification lane in place of step 6 — for the pins it is allowed to
+move. The daemon, RadioLib, the shared chat source and the Meshtastic web-client and CLI pins it
+only reports; those move by hand, through the recipe above.
 
 **The Meshtastic web client** is a pin of its own: the `meshtastic-web-assets.sh` step in the
 manifest names a meshtastic/web release version and the sha256 of its `build.tar`. To move it:

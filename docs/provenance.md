@@ -20,9 +20,11 @@ lhpc treats managed source selection as a supply-chain decision. Source-mutating
 | `dev` | Development | The configured development branch tip. Never silently another ref — an unobtainable branch is a typed "selector unavailable". Explicit opt-in. | ❌ mutable |
 | `stable` | Latest stable | Git-only: the newest version-shaped tag — the WHOLE name is an optional `v` and dot-separated numbers (`v112`, `v1.2`, `1.5.2`) — else the default-branch HEAD. A build-suffixed (`v2.8.0.7239fe8`) or prerelease (`1.8.2-pre`) tag is a snapshot, not a release, and is ignored. One rule for both the local and the remote resolution, so the selector resolves to one commit either way. The exact resolved commit is recorded. Explicit opt-in. | ❌ mutable |
 
-Without `--source`, install and `auto-install` (and so the image builder) take the per-stack
-default channel ([cli.md](cli.md)); only the all-stacks `lhpc install` form, with no stack named,
-stays on `dev`. `pinned` is the known-working line you choose explicitly.
+Without `--source`, install, `update` and `auto-install` (and so the image builder) take the
+per-stack default channel: the published **binary** where there is one for this platform, else
+**`pinned`** ([cli.md](cli.md)). A default install therefore lands on a composition this release
+proved, and a published image carries the release's pins. `dev` and `stable` are mutable and
+explicit — nothing reaches them by leaving a selector alone.
 
 An **unpinned** component cannot be installed as `pinned` — with no configured pin it is
 `unverified-blocked`, and you must choose `dev` or `stable` explicitly. lhpc never fabricates

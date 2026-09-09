@@ -7,8 +7,9 @@ that does not may still be taken, but the chances are lower and it will take lon
 
 - **Open your PR against `dev`.** Work on a topic branch off `dev`, rebase it on `dev` before the
   PR, and land it as **one commit** (squash-merge). The maintainer's own work follows the same path.
-- `dev` is rewritten once per release, when the cycle is squashed into the release commit — rebase
-  an open topic branch onto the new `dev` afterwards.
+- `dev` is rewritten once per MINOR release, when the cycle is squashed into the release commit —
+  rebase an open topic branch onto the new `dev` afterwards. A patch release branches from `main`
+  and comes back as a fast-forward or a pull request, so it never rewrites `dev`.
 - The branch model, the release procedure and the hotfix path:
   [Branches and releases](docs/maintenance.md#branches-and-releases).
 

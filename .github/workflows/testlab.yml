@@ -2,6 +2,11 @@
 # (the real executable and server over simulated hardware) and browser (real headless Chromium)
 # — run INSIDE a lab image built from THIS commit's devcontainer Dockerfile, so the image deps
 # always match the checkout. ci.yml is untouched; this is its own independent check.
+#
+# `release-verify` is a SECOND, heavier job: every stack a pin release may move, installed at
+# the selected commit, built, started and proved to BE that commit. It runs on pushes to `main`
+# and on dispatch with `release_verify=true` — an automated pin release dispatches it on its
+# candidate branch. It is deliberately NOT on every push: it installs and builds everything.
 name: testlab
 
 on:
@@ -9,6 +14,11 @@ on:
     branches: [main, dev]
   pull_request:
   workflow_dispatch:        # a release branch is checked by dispatching on its ref
+    inputs:
+      release_verify:
+        description: "also run the release-verification lane (every stack installed, built, started, identity-proved)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -68,3 +78,98 @@ jobs:
                 DISPLAY=:99 LHPC_ACCEPTANCE=1 LHPC_CHAIN_HEAVY=1 \
                   python -m pytest testlab/tests/acceptance -q -rs
                 LHPC_BROWSER=1 python -m pytest testlab/tests/browser -q -rs"'
+
+      - name: Collect the lab's own logs (also on failure)
+        # Without this a red lane leaves nothing behind: the runtime roots live inside the
+        # container's /tmp volume, and the pytest tail alone never says WHICH build or start
+        # failed. Named per job — two jobs uploading `testlab-logs` would collide.
+        if: always()
+        run: |
+          mkdir -p labevidence
+          docker run --rm --user root -v lhpc_lab_tmp:/tmp -v "$PWD/labevidence":/out \
+            "${IMG:-lhpc-testlab:ci}" bash -lc '
+              set +e
+              find /tmp -maxdepth 6 \( -type d -name logs -o -type d -name testlab \) \
+                   -not -path "*/site-packages/*" -print0 \
+                | while IFS= read -r -d "" d; do
+                    dest="/out/$(echo "${d#/tmp/}" | tr "/" "_")"
+                    mkdir -p "$dest" && cp -r "$d"/. "$dest"/ 2>/dev/null
+                  done
+              chmod -R a+rX /out 2>/dev/null; true' || true
+          du -sh labevidence 2>/dev/null || true
+
+      - name: Upload the lab logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: testlab-logs-testlab
+          path: labevidence/**
+          if-no-files-found: warn
+          retention-days: 14
+
+  release-verify:
+    # Every stack an automated pin release may move: installed on its DEFAULT channel (the
+    # published binary, else the manifest pin), built, started, verified, and finally proved
+    # to be exactly the candidate manifest's commits. The daemon and RadioLib are the lab's
+    # fixtures, so they are NOT proved here — their artifact is proved by the binary builder's
+    # own smoke and clean-runtime test, and their pins move by hand.
+    if: ${{ github.event_name == 'push' || inputs.release_verify }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the lab image from THIS commit's Dockerfile
+        run: |
+          IMG=lhpc-testlab:ci
+          docker build -t "$IMG" -f .devcontainer/Dockerfile .devcontainer
+          echo "IMG=$IMG" >> "$GITHUB_ENV"
+
+      - name: Release verification
+        run: |
+          mkdir -p releaseevidence
+          docker run --rm --user root -v "$PWD":/repo:ro \
+            -v lhpc_release_tmp:/tmp -v "$PWD/releaseevidence":/out \
+            "$IMG" bash -lc '
+              set -e
+              cp -r /repo /tmp/repo && chown -R lhpclab /tmp/repo && chmod a+w /out
+              su lhpclab -c "
+                set -e
+                cd /tmp/repo
+                export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build
+                python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
+                pip install -q -e .
+                pip install -q -e ./testlab
+                pip install -q pytest
+                (Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &)
+                DISPLAY=:99 LHPC_RELEASE_VERIFY=1 LHPC_CHAIN_HEAVY=1 \
+                  python -m pytest testlab/tests/release -q -rs \
+                    --junitxml=/out/junit-release.xml"'
+
+      - name: Collect the lab's own logs (also on failure)
+        if: always()
+        run: |
+          docker run --rm --user root -v lhpc_release_tmp:/tmp -v "$PWD/releaseevidence":/out \
+            "${IMG:-lhpc-testlab:ci}" bash -lc '
+              set +e
+              find /tmp -maxdepth 7 \( -type d -name logs -o -type d -name testlab \
+                   -o -name "versions.txt" \) -not -path "*/site-packages/*" -print0 \
+                | while IFS= read -r -d "" d; do
+                    dest="/out/$(echo "${d#/tmp/}" | tr "/" "_")"
+                    if [ -d "$d" ]; then mkdir -p "$dest" && cp -r "$d"/. "$dest"/ 2>/dev/null
+                    else cp "$d" "$dest" 2>/dev/null; fi
+                  done
+              chmod -R a+rX /out 2>/dev/null; true' || true
+          du -sh releaseevidence 2>/dev/null || true
+
+      - name: Upload the release evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: testlab-logs-release-verify
+          path: releaseevidence/**
+          if-no-files-found: warn
+          retention-days: 14

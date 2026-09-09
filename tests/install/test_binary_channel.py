@@ -61,14 +61,30 @@ def test_undeclared_stack_has_no_binary(tmp_path, monkeypatch):
     ok, why = svc.binary_available("kiss")
     assert not ok and "no prebuilt binary" in why
     assert svc.allowed_channels("kiss") == svc.SOURCE_CHOICES
-    assert svc.default_channel("kiss") == "dev"
+    # No binary for this stack -> the default is the PINNED composition, never the branch tip.
+    assert svc.default_channel("kiss") == "pinned"
+
+
+@pytest.mark.contract
+def test_default_channel_is_never_the_branch_tip(tmp_path, monkeypatch):
+    """THE contract behind the image and every bare install: a default install lands on a
+    composition this release proved — the published binary, else `pinned`. `dev` is reachable
+    only by asking for it, so upstream pushing to a branch can never change what a fresh box
+    installs."""
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    for st in svc.stacks():
+        assert svc.default_channel(st.id) in (svc.BINARY_CHANNEL, "pinned")
+    # every stack the auto-install (and so the image builder) plans for
+    for row in svc.auto_install_rows():
+        assert row["default_channel"] in (svc.BINARY_CHANNEL, "pinned"), row["id"]
+        assert "dev" in row["channels"]           # still offered, never the default
 
 
 def test_unsupported_platform_disables_binary(tmp_path, monkeypatch):
     svc = _svc(tmp_path, target="", monkeypatch=monkeypatch)
     ok, why = svc.binary_available("daemon")
     assert not ok and "not a supported binary target" in why
-    assert svc.default_channel("daemon") == "dev"
+    assert svc.default_channel("daemon") == "pinned"
 
 
 def test_other_target_disables_binary(tmp_path, monkeypatch):

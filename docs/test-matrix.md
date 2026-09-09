@@ -10,6 +10,13 @@ live checks its own change calls for instead — the release policy is
 [maintenance](maintenance.md#branches-and-releases). Results replace the section in
 [live-test.md](live-test.md).
 
+A **pin patch** is the one case with no box step: the moved pins are proved by the binary
+builder's smoke and clean-runtime test plus the
+[release-verification lane](testlab.md#running-the-verification-lanes), which installs, builds,
+starts and identity-proves every stack it moved. That lane cannot start the real daemon — it has
+no radio — so the **daemon, RadioLib and the shared chat source are never moved by a pin patch**.
+They move by hand, and this matrix is their proof.
+
 Evidence is the controller's own typed outcome plus the stack's own state (`lhpc status`, the
 node's info, an HTTP answer, `rnstatus` counters). Log greps are not evidence.
 
@@ -29,7 +36,7 @@ node's info, an HTTP answer, `rnstatus` counters). Log greps are not evidence.
 |---|---|
 | Box | `lhpc-e293`, Raspberry Pi Zero 2 W (512 MB, 415 MB usable after zram), Lite image, LAN |
 | Radio | LoRaHAM daemon serving 433 and 868; record `lhpc hardware` at the start of the run |
-| Channels | `pinned` = the manifest pins; `dev` = the branch tip and the default install for every stack without a published binary ([provenance](provenance.md#selections)); `binary` for daemon, meshtastic and meshcom. All three are covered, see [Coverage](#coverage) |
+| Channels | `pinned` = the manifest pins, and the default install for every stack without a published binary ([provenance](provenance.md#selections)); `dev` = the branch tip, an explicit choice; `binary` for daemon, meshtastic and meshcom. All three are covered, see [Coverage](#coverage) |
 | Console | left running for the light stacks; **stopped for the heavy compiles** (`systemctl --user stop lhpc-web lhpc-nginx`), as the 512 MB box requires (see [maintenance](maintenance.md)) |
 | Radio budget | one stack per band at a time: 433 belongs to the daemon chain (kiss, graywolf, meshcom), 868 to one of meshtastic / MeshCore / Reticulum. Stop the previous owner before starting the next |
 
@@ -85,21 +92,21 @@ Rows 9–12 are the heavy compiles: console stopped, `vmstat` running, `dmesg` c
 ### Coverage
 
 Every stack on every channel it can be installed on — its default channel, the release's pins,
-and the published binary where one exists. The cell names the row that proves it; the
-auto-install row is the `dev` proof for every stack because that is the channel the default
-all-stacks install (and the image builder) uses.
+and the published binary where one exists. The cell names the row that proves it. `dev` is an
+explicit selector nothing reaches by default, so it is covered once, by the cross-cutting
+spot-check below, not by repeating every row on a second channel.
 
-| stack | binary | pinned (source) | dev (default install) |
+| stack | binary | pinned (source, default) | dev (explicit) |
 |---|---|---|---|
-| daemon | row 1 | row 10 | auto-install (binary is its default) |
-| chat | — | row 2 | auto-install |
-| voice | — | row 3 | auto-install |
-| kiss | — | row 4 | auto-install |
-| graywolf | — (fetched release) | row 5 | auto-install |
-| reticulum | — | row 6 | auto-install |
-| meshcore | — | row 7 | auto-install |
-| meshtastic | row 8 | row 9 | auto-install (binary is its default) |
-| meshcom | row 11 | row 12 | auto-install (binary is its default) |
+| daemon | row 1 | row 10 | dev spot-check |
+| chat | — | row 2 (default) | dev spot-check |
+| voice | — | row 3 (default) | dev spot-check |
+| kiss | — | row 4 (default) | dev spot-check |
+| graywolf | — (fetched release) | row 5 (default) | — (one pinned release) |
+| reticulum | — | row 6 (default) | dev spot-check |
+| meshcore | — | row 7 (default) | dev spot-check |
+| meshtastic | row 8 (default) | row 9 | dev spot-check |
+| meshcom | row 11 (default) | row 12 | dev spot-check |
 
 No empty cell — the full check, unless a [fast lane](#fast-lane) waiver applies.
 
@@ -121,7 +128,8 @@ After the per-stack rows, with the box holding every stack installed and built:
 
 | check | how | evidence |
 |---|---|---|
-| **auto-install consistency (CLI path)** | purge every stack, then `lhpc auto-install --yes` — the exact command the image builder runs and README step 9; every log file the run announces (`tail -f …`) must exist afterwards | every stack ends installed on its default channel (binary where published, else `dev` = the branch tip) and built; `lhpc status --versions` recorded as-is (what `match`/`differs` mean: [provenance](provenance.md)); the image's `components-*.txt` shows the same lines; nothing reads "not built"; total time recorded |
+| **auto-install consistency (CLI path)** | purge every stack, then `lhpc auto-install --yes` — the exact command the image builder runs and README step 9; every log file the run announces (`tail -f …`) must exist afterwards | every stack ends installed on its default channel (binary where published, else `pinned`) and built; `lhpc status --versions` reads `match` for every source component (a `differs` means the default channel did not resolve to the pin); `lhpc status --versions` recorded as-is (what `match`/`differs` mean: [provenance](provenance.md)); the image's `components-*.txt` shows the same lines; nothing reads "not built"; total time recorded |
+| **`dev` selector spot-check** | on one light stack with no binary (kiss): `lhpc clean kiss --purge --yes`, `lhpc install kiss --source dev --yes`, build, start, then reinstall it on the default channel | the install reports the branch tip and `lhpc status --versions` reads `differs` against the pin (that is what `dev` means); the stack starts; after the reinstall it reads `match` again |
 | **known-working** | after each stack's green start, the stack page must offer to record the composition; confirm it there for every source-built stack (a binary install and the fetched graywolf release have no source composition and show no offer, by design) (the CLI form is `lhpc known-working <stack>`) | the offer is visible and plainly worded (one click, no commit ids to understand); `profiles/known-working/<stack>.json` and `lhpc status --versions` show the run-proven pins (the per-release step in [maintenance](maintenance.md#moving-a-pin)) |
 | **boot restore** | power-cycle once with the release's default running set | `N restored, 0 failed`, console reachable |
 | **web console** | Dashboard, Apps rows, Settings of every stack after the run | no traceback in the console log; every row opens |
@@ -144,7 +152,7 @@ already proved and timed every compile, and a Zero 2 W's Wi-Fi can drop under a 
 | 4. first start, global callsign unset | one licensed stack started before any identity is set | the typed refusal (CLI hint `lhpc config operator --callsign`, the Settings row highlighted in the console); nothing started |
 | 5. identity, then the rest | `lhpc config operator --callsign <CALL>`, then the remaining stacks' first start with the saved defaults | every stack starts; Meshtastic / MeshCore still need their own node names, as documented |
 | 6. passwords | after each stack's first start, its Password section on the stack page | the stored value is shown and equals the file (graywolf admin, MeshCore repeater dashboard, MeshCom HMAC via Renew) |
-| 7. auto-install from the web console | Apps → Auto-install with the defaults (binary where published, else `dev`; no tests, no TX) | every mandatory stack installed and built; the run's total time; **no GTK / X11 / Wayland package installed** (`dpkg -l` count before and after) |
+| 7. auto-install from the web console | Apps → Auto-install with the defaults (binary where published, else `pinned`; no tests, no TX) | every mandatory stack installed and built; the run's total time; **no GTK / X11 / Wayland package installed** (`dpkg -l` count before and after) |
 | 8. start and stop of every stack | on the fresh install: `lhpc stack start <stack> --yes` → verify → `lhpc stack stop <stack> --yes`, one stack at a time, then the conflicting pairs | every stack starts and stops with the typed outcomes; a band or TX-mode conflict (meshtastic vs MeshCore on 868, MeshCom vs graywolf on 433) is refused with its reason, nothing half-started; interactive components (chat, voice terminal, Meshtastic CLI, MeshCore CLI) are listed with their command and never started by the controller |
 
 Remote exposure with mTLS and the managed firewall needs the operator's one root step (the copy-paste

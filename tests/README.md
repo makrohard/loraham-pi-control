@@ -11,6 +11,7 @@ a sentence or an equivalent JavaScript rewrite changed.
 | testlab **unit** | the simulator itself: provider, runner, scenarios, fake systemd/NetworkManager, its own safety. | `testlab/tests/unit` |
 | testlab **acceptance** | the real `lhpc` executable and the real server, end to end against a simulated host. | `testlab/tests/acceptance` |
 | testlab **browser** | the console in real headless Chromium: JavaScript, DOM, navigation, layout. | `testlab/tests/browser` |
+| testlab **release** | every stack a pin release may move: installed on its default channel, built, started, and proved to BE the candidate manifest's commits. | `testlab/tests/release` |
 | meshcore host tests | LHPC's adapter against the pinned real openHop API. | `lhpc/data/meshcore_host` |
 | release / live matrix | a real Pi, kernel and radios. Nothing below replaces it. | [docs/test-matrix.md](../docs/test-matrix.md) |
 
@@ -109,8 +110,9 @@ review.
 The lab lanes are off unless asked for:
 
 ```sh
-LHPC_ACCEPTANCE=1 pytest testlab/tests/acceptance -q
-LHPC_BROWSER=1    pytest testlab/tests/browser -q     # pip install -e ./testlab[browser]
+LHPC_ACCEPTANCE=1     pytest testlab/tests/acceptance -q
+LHPC_BROWSER=1        pytest testlab/tests/browser -q   # pip install -e ./testlab[browser]
+LHPC_RELEASE_VERIFY=1 pytest testlab/tests/release -q   # installs and builds every stack
 ```
 
 Chromium is needed only for that browser lane. Never install it to run `tests/`, and never on a

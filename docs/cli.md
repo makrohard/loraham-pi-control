@@ -91,8 +91,9 @@ dependencies change (CI shell-syntax-checks the committed snapshot).
 `lhpc install [<stack>] [--check] [--source binary|pinned|dev|stable] [--yes]` — install a stack:
 download the published **binary** artifact, or adopt/verify managed sources into the runtime root.
 
-- Without `--source`, a named stack uses its default channel — binary where one is published for
-  this platform, else `dev`. The all-stacks form stays on the source channel.
+- Without `--source`, a stack uses its default channel — binary where one is published for this
+  platform, else `pinned` (the newest known-working composition, else the manifest pin). The
+  all-stacks form stays on that source channel. `dev` is an explicit choice.
 - A failed binary install asks **explicitly** whether to build from source; it never falls back
   silently.
 - `--check` is a dry run: it shows the plan and reports missing mandatory system dependencies

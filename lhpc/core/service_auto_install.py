@@ -593,7 +593,8 @@ class AutoInstallOpsMixin:
         scope = self._auto_install_scope()
         # Normalize the submitted selection to EXACTLY the current scope, then validate authoritatively.
         norm = {st.id: {"install": bool((selection or {}).get(st.id, {}).get("install", False)),
-                        "version": (selection or {}).get(st.id, {}).get("version", "dev"),
+                        "version": (selection or {}).get(st.id, {}).get(
+                            "version", self.default_channel(st.id)),
                         "tests": bool((selection or {}).get(st.id, {}).get("tests", False)),
                         "tx": bool((selection or {}).get(st.id, {}).get("tx", False))}
                 for st, _ in scope}

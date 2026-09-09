@@ -373,11 +373,32 @@ def test_auto_install_default_source_is_per_stack(monkeypatch, capsys):
                         (seen.append(source), ActionResult(True, "p", data={"changes": 0}))[1])
     cli_main.main(["auto-install", "--yes"])
     # An UNSET selector reaches the driver as "" and each stack resolves its OWN default
-    # (binary where published, else dev) — a uniform "dev" would compile the heavy stacks.
+    # (binary where published, else pinned) — a uniform selector would either compile the heavy
+    # stacks or drag every light one to a branch tip.
     assert seen and seen[0] == ""
     seen.clear()
     cli_main.main(["auto-install", "--yes", "--source", "dev"])
     assert seen and seen[0] == "dev"          # an explicit selector still wins
+
+
+@pytest.mark.contract
+def test_install_without_source_uses_the_pinned_default(monkeypatch, tmp_path, capsys):
+    """A bare `lhpc install <stack>` on a stack with no published binary must plan the PINNED
+    composition. This is the path the image builder and every fresh box take."""
+    from lhpc.adapters.cli import main as cli_main
+    from lhpc.core.services import ActionResult, ControllerService
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+    cli_main.main(["bootstrap", "--yes"])
+    capsys.readouterr()
+    seen = []
+    monkeypatch.setattr(ControllerService, "install",
+                        lambda self, stack=None, apply=False, source="", **kw:
+                        (seen.append(source), ActionResult(True, "p", data={"changes": 0}))[1])
+    cli_main.main(["install", "kiss", "--yes"])
+    assert seen and seen[-1] == "pinned"
+    seen.clear()
+    cli_main.main(["install", "kiss", "--yes", "--source", "dev"])
+    assert seen and seen[-1] == "dev"          # an explicit selector still wins
 
 
 # --------------------------------------------------------------------------------------------------

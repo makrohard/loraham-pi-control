@@ -62,3 +62,5 @@ model, then the CLI. Every file is linked once; the README covers install.
 
 - [Contributing](../CONTRIBUTING.md) — how to open a PR and what should be green.
 - [Provenance](provenance.md) — supply-chain rules for managed source and the binary channel.
+- [Release bot](https://github.com/makrohard/lhpc-release-bot) — the scheduled pin release:
+  what it moves, what it only reports, how to pause, retry and recover it.
