@@ -1062,17 +1062,68 @@ def test_dirty_report_untracked_blocks_but_artifacts_do_not(tmp_path):
     assert not inst.dirty_report(dest, "src/app")
 
 
-def test_update_overwrite_refuses_untracked_changes(tmp_path):
-    _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+@pytest.mark.contract
+def test_update_preserves_an_added_file(tmp_path):
+    """A stack that RUNS from its checkout writes into it (logs, generated settings). Those
+    files are the operator's, not upstream's: an update replaces the tree around them and
+    carries them across, byte-identical, instead of refusing."""
+    repo = tmp_path / "rt" / "local" / "app"
+    _make_repo_source_registry(repo)
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     dest = inst.paths.under("src", "app")
     (dest / "precious.txt").write_text("operator work")                 # untracked, non-ignored
+    (repo / "file.txt").write_text("v2\n")                              # something to update TO
+    _git_source_registry(repo, "add", "-A")
+    _git_source_registry(repo, "commit", "-qm", "v2")
+
+    action = inst.adopt_source(comp, force=True, source="dev")
+    assert action.status != "failed", action.detail
+    assert (dest / "file.txt").read_text() == "v2\n"                    # new upstream IS active
+    assert (dest / "precious.txt").read_text() == "operator work"       # ...and the file survived
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("case", ["modified", "deleted", "staged", "git-added"])
+def test_update_refuses_a_changed_upstream_source(tmp_path, case):
+    """The other half of the rule: a change to the SOURCE ITSELF still refuses, and still names
+    it — LHPC will not guess how to merge an operator's edit into a new version. `git add` puts
+    even a brand-new file in that class: the checkout then differs from upstream by more than an
+    addition an update could carry."""
+    _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = _inst(tmp_path, comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    dest = inst.paths.under("src", "app")
+    if case == "modified":
+        (dest / "file.txt").write_text("operator edited upstream\n")
+    elif case == "deleted":
+        (dest / "file.txt").unlink()
+    elif case == "staged":
+        (dest / "file.txt").write_text("edited\n")
+        _git_source_registry(dest, "add", "file.txt")
+    else:
+        (dest / "notes.txt").write_text("mine")
+        _git_source_registry(dest, "add", "notes.txt")
+
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status == "failed" and "local modifications" in action.detail
-    assert "precious.txt" in action.detail                              # itemized
-    assert (dest / "precious.txt").exists()                            # nothing discarded
+    assert ("notes.txt" if case == "git-added" else "file.txt") in action.detail   # itemized
+
+    # the operator's change is exactly as they left it, and the refusal came before any staging
+    if case == "modified":
+        assert (dest / "file.txt").read_text() == "operator edited upstream\n"
+    elif case == "deleted":
+        assert not (dest / "file.txt").exists()
+    elif case == "staged":
+        assert (dest / "file.txt").read_text() == "edited\n"
+        assert "file.txt" in _git_source_registry(dest, "diff", "--cached", "--name-only")
+    else:
+        assert (dest / "notes.txt").read_text() == "mine"
+        assert "notes.txt" in _git_source_registry(dest, "diff", "--cached", "--name-only")
+    assert not dest.with_name(".app.prev").exists()
+    assert not inst._journal_path(dest).exists()
 
 
 def _tagged_repo(path: Path):
@@ -1613,7 +1664,8 @@ def _journal(inst, dest, prev, staging, state, version=5):
         ct = version == 5
         payload["meta"] = {"selector": "pinned", "resolved_commit": "", "remote": "",
                            "strategy": "", "components": [dest.name], "had_prior": True}
-        payload["idents"] = {"candidate": _ident_of(staging, ctime=ct),
+        payload["idents"] = {"candidate": (_ident_of(staging, ctime=ct)
+                                           or _ident_of(dest, ctime=ct)),
                              "prev": _ident_of(prev, ctime=ct)}
     inst._journal_path(dest).write_text(json.dumps(payload))
 
@@ -1630,7 +1682,11 @@ def _fin(inst, dest, prev, staging):
         return inst._finish_or_rollback(
             dest, prev, staging, m,
             meta=_META, txn_id="",
-            idents={"candidate": _ident_of(staging), "prev": _ident_of(prev)})
+            # A real journal's candidate ident is refreshed by the promotion rename, so for an
+            # already-activated tree it describes DEST. Falling back to it keeps these
+            # hand-built states coherent with what recovery is entitled to assume.
+            idents={"candidate": _ident_of(staging) or _ident_of(dest),
+                    "prev": _ident_of(prev)})
     finally:
         m.close()
 
@@ -2173,7 +2229,7 @@ def test_failed_prev_cleanup_after_activation_retains_journal(tmp_path, monkeypa
     prev = src / ".app.prev"; prev.mkdir()
     jf = inst._journal_path(dest); jf.parent.mkdir(parents=True, exist_ok=True); jf.write_text("{}")
     monkeypatch.setattr(type(inst), "_prev_cleanup_ok",
-                        lambda self, txn, prev, ident=None: False)   # prev removal "fails"
+                        lambda self, txn, prev, ident=None, **kw: False)  # prev removal "fails"
     msg = _fin(inst, dest, prev, src / ".app.candidate-1-2")
     assert "recovery-required" in msg and "prior could not be removed" in msg
     assert jf.exists() and prev.exists()                  # journal + prior retained
@@ -2277,8 +2333,8 @@ def test_activation_prev_cleanup_failure_recovery_required_then_recoverable(tmp_
     fail = {"on": True}
     monkeypatch.setattr(
         type(inst), "_prev_cleanup_ok",
-        lambda self, txn, prev, ident=None: False if fail["on"]
-        else real(self, txn, prev, ident))
+        lambda self, txn, prev, ident=None, **kw: False if fail["on"]
+        else real(self, txn, prev, ident, **kw))
     # Activation succeeds, but the .prev cleanup fails -> recovery-required (typed).
     assert _activate(inst, dest, staging) == "recovery-required"
     assert dest.is_dir() and (dest / "m").read_text() == "NEW"   # active source usable
@@ -3429,9 +3485,10 @@ def test_probe_level_renameat2_unsupported_refuses(tmp_path, monkeypatch):
     assert source_registry.read_record(inst.paths, "src/app") is None
 
 
-def test_dirty_file_created_during_staging_blocks_archive(tmp_path, monkeypatch):
-    # A non-ignored untracked file appears AFTER the initial dirty check (during staging):
-    # the FINAL recheck before the archive preserves the source and refuses.
+def test_a_file_added_during_staging_is_carried(tmp_path, monkeypatch):
+    """The carry inventory is taken INSIDE the activation, so a file created after the initial
+    check — while the candidate was still cloning — is still preserved. This is why the
+    authoritative inventory runs after the archive rather than at the start."""
     _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
     comp = _comp_race_safety()
     inst = _inst_race_safety(tmp_path, comp)
@@ -3444,9 +3501,28 @@ def test_dirty_file_created_during_staging_blocks_archive(tmp_path, monkeypatch)
                   lambda _p: (dest / "new-user-file.txt").write_text("late"))
     action = inst.adopt_source(comp, force=True, source="dev")
     assert fired["done"]
-    assert action.status == "failed" and "appeared during staging" in action.detail
-    assert (dest / "file.txt").read_text() == "hello\n"          # ORIGINAL source preserved
-    assert (dest / "new-user-file.txt").read_text() == "late"    # user file preserved
+    assert action.status != "failed", action.detail
+    assert (dest / "file.txt").read_text() == "v2\n"             # new upstream active
+    assert (dest / "new-user-file.txt").read_text() == "late"    # the late addition survived
+
+
+def test_upstream_modified_during_staging_blocks_archive(tmp_path, monkeypatch):
+    # A TRACKED file is edited AFTER the initial dirty check (during staging): the FINAL
+    # recheck before the archive preserves the source and refuses, with zero mutation.
+    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
+    comp = _comp_race_safety()
+    inst = _inst_race_safety(tmp_path, comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
+    _git_race_safety(tmp_path / "rt" / "local" / "app", "add", "-A")
+    _git_race_safety(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
+    dest = inst.paths.under("src", "app")
+    fired = _seam(monkeypatch, "pre-archive",
+                  lambda _p: (dest / "file.txt").write_text("late operator edit\n"))
+    action = inst.adopt_source(comp, force=True, source="dev")
+    assert fired["done"]
+    assert action.status == "failed" and "modified during staging" in action.detail
+    assert (dest / "file.txt").read_text() == "late operator edit\n"   # the edit is untouched
     assert not dest.with_name(".app.prev").exists()              # never archived
     assert not inst._journal_path(dest).exists()
 
@@ -3472,16 +3548,14 @@ def test_dirty_file_created_before_uninstall_removal_blocks(tmp_path, monkeypatc
     assert dest.exists() and (dest / "late-user-file.txt").exists()   # source preserved
 
 
-def test_update_dirty_after_archive_restores_prior(tmp_path, monkeypatch):
-    # An untracked file lands INSIDE the (unchanged) prior directory AFTER the pre-archive
-    # dirty check, once it is already archived at `.prev`: the post-archive rescan through
-    # the captured handle catches it — no promotion, prior restored no-clobber at its
-    # original path, the new file survives, registry/journal state stays consistent.
+def test_a_file_added_after_the_archive_is_still_carried(tmp_path, monkeypatch):
+    """The inventory is taken through the CAPTURED prior handle after the archive, so even a
+    file that lands in the tree at that last moment is carried. This is the window the
+    after-archive placement exists to close."""
     _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
     comp = _comp_race_safety()
     inst = _inst_race_safety(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
-    rec_before = source_registry.read_record(inst.paths, "src/app")
     (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
     _git_race_safety(tmp_path / "rt" / "local" / "app", "add", "-A")
     _git_race_safety(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
@@ -3494,10 +3568,38 @@ def test_update_dirty_after_archive_restores_prior(tmp_path, monkeypatch):
     fired = _seam(monkeypatch, "post-archive", late_file)
     action = inst.adopt_source(comp, force=True, source="dev")
     assert fired["done"]
+    assert action.status != "failed", action.detail
+    assert (dest / "file.txt").read_text() == "v2\n"                    # new upstream active
+    assert (dest / "late-user-file.txt").read_text() == "late"          # carried at the last moment
+    assert not prev.exists()                                            # cleaned up normally
+    assert not inst._journal_path(dest).exists()
+
+
+def test_upstream_modified_after_the_archive_restores_prior(tmp_path, monkeypatch):
+    # A TRACKED file is edited INSIDE the (unchanged) prior directory AFTER the pre-archive
+    # check, once it is already archived at `.prev`: the post-archive rescan through the
+    # captured handle catches it — no promotion, prior restored no-clobber at its original
+    # path, the edit survives, registry/journal state stays consistent.
+    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
+    comp = _comp_race_safety()
+    inst = _inst_race_safety(tmp_path, comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    rec_before = source_registry.read_record(inst.paths, "src/app")
+    (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
+    _git_race_safety(tmp_path / "rt" / "local" / "app", "add", "-A")
+    _git_race_safety(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
+    dest = inst.paths.under("src", "app")
+    prev = dest.with_name(".app.prev")
+
+    def late_edit(_path):
+        assert prev.is_dir()                              # the prior IS archived right now
+        (prev / "file.txt").write_text("late operator edit\n")
+    fired = _seam(monkeypatch, "post-archive", late_edit)
+    action = inst.adopt_source(comp, force=True, source="dev")
+    assert fired["done"]
     assert action.status == "failed"                      # truthful refusal, no false success
-    assert "local modifications appeared" in action.detail
-    assert (dest / "file.txt").read_text() == "hello\n"   # OLD source restored at dest
-    assert (dest / "late-user-file.txt").read_text() == "late"   # the new file SURVIVES
+    assert "modified during staging" in action.detail
+    assert (dest / "file.txt").read_text() == "late operator edit\n"    # OLD source restored
     assert not prev.exists()                              # nothing left archived
     assert not list(dest.parent.glob(".app.candidate-*")) # candidate NOT activated, cleaned
     assert source_registry.read_record(inst.paths, "src/app") == rec_before  # registry intact
@@ -3599,6 +3701,31 @@ def test_uninstall_dirty_after_detach_reoccupied_is_recovery(tmp_path, monkeypat
                                        "src/loraham-kiss-tnc") is not None  # record retained
 
 
+@pytest.mark.safety("P0.5")
+def test_uninstall_still_refuses_a_tree_holding_an_added_file(tmp_path):
+    """The relaxation is for UPDATES only. Uninstall carries nothing forward, so an added file
+    there really would be lost — it keeps the full dirty rule and refuses."""
+    from lhpc.core.probes import RealSystem
+    dest = tmp_path / "src" / "loraham-kiss-tnc"
+    _make_repo_race_safety(dest)
+    _git_race_safety(dest, "remote", "add", "origin",
+                     "https://github.com/makrohard/loraham-kiss-tnc.git")
+    head = _git_race_safety(dest, "rev-parse", "HEAD")
+    assert source_registry.write_record(
+        Paths(runtime_root=tmp_path),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc",
+                                       "https://github.com/makrohard/loraham-kiss-tnc.git",
+                                       "pinned", head, time.time(), "",
+                                       ("loraham-kiss-tnc", "loraham-kiss-serial")))
+    (dest / "user-data.txt").write_text("precious")        # a plain local ADDITION
+    svc = ControllerService(system=RealSystem(), paths=Paths(runtime_root=tmp_path))
+
+    res = svc.uninstall("kiss", apply=True)
+    assert not res.ok
+    assert any("local changes present" in d for d in res.details)
+    assert (dest / "user-data.txt").read_text() == "precious"    # nothing removed
+
+
 def _v2_update_env(tmp_path):
     """Installed v1, local advanced to v2 — ready for a force update."""
     _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
@@ -3612,25 +3739,178 @@ def _v2_update_env(tmp_path):
     return comp, inst, inst.paths.under("src", "app"), v2_head
 
 
+# ---- local additions survive a source update ---------------------------------------------------
+# The rule: files the operator or the STACK ITSELF adds to a managed checkout are carried into
+# the new source; changes to files that belong to UPSTREAM still refuse. Regenerable artifacts
+# are neither carried nor blocking.
+
+def test_an_ignored_file_survives_an_update(tmp_path):
+    """A stack's own settings/log file is usually `.gitignore`d — `git status` never even shows
+    it. It is still the operator's data and must survive."""
+    repo = tmp_path / "rt" / "local" / "app"
+    _make_repo_race_safety(repo)
+    (repo / ".gitignore").write_text("settings.json\nlogs/\n")
+    _git_race_safety(repo, "add", "-A")
+    _git_race_safety(repo, "commit", "-qm", "ignore")
+    comp = _comp_race_safety()
+    inst = _inst_race_safety(tmp_path, comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    dest = inst.paths.under("src", "app")
+    (dest / "settings.json").write_text('{"mine": true}')
+    (repo / "file.txt").write_text("v2\n")
+    _git_race_safety(repo, "add", "-A"); _git_race_safety(repo, "commit", "-qm", "v2")
+
+    assert inst.adopt_source(comp, force=True, source="dev").status != "failed"
+    assert (dest / "file.txt").read_text() == "v2\n"
+    assert (dest / "settings.json").read_text() == '{"mine": true}'
+
+
+def test_a_nested_added_file_survives_with_its_directories_and_mode(tmp_path):
+    """Nested paths are reproduced whole, and the file's own permission bits come with it —
+    a stack that writes an executable helper still finds it executable."""
+    comp, inst, dest, _head = _v2_update_env(tmp_path)
+    (dest / "logs").mkdir()
+    (dest / "logs" / "history.log").write_text("line one\n")
+    (dest / "run-me.sh").write_text("#!/bin/sh\necho hi\n")
+    (dest / "run-me.sh").chmod(0o755)
+
+    assert inst.adopt_source(comp, force=True, source="dev").status != "failed"
+    assert (dest / "file.txt").read_text() == "v2\n"                    # new upstream
+    assert (dest / "logs" / "history.log").read_text() == "line one\n"  # nested path rebuilt
+    assert os.stat(dest / "run-me.sh").st_mode & 0o777 == 0o755         # mode carried
+
+
+def test_an_added_file_survives_two_consecutive_updates(tmp_path):
+    """The carried file lands as an ordinary local addition, so the NEXT update inventories and
+    carries it again — preservation is not a one-off."""
+    repo = tmp_path / "rt" / "local" / "app"
+    comp, inst, dest, _head = _v2_update_env(tmp_path)
+    (dest / "notes.txt").write_text("keep me")
+    assert inst.adopt_source(comp, force=True, source="dev").status != "failed"
+    assert (dest / "notes.txt").read_text() == "keep me"
+
+    (repo / "file.txt").write_text("v3\n")
+    _git_race_safety(repo, "add", "-A"); _git_race_safety(repo, "commit", "-qm", "v3")
+    assert inst.adopt_source(comp, force=True, source="dev").status != "failed"
+    assert (dest / "file.txt").read_text() == "v3\n"
+    assert (dest / "notes.txt").read_text() == "keep me"                # survived update #2
+
+
+
+
+
+
+
+
+@pytest.mark.safety("source-additions-preserved")
+def test_an_added_file_colliding_with_the_new_upstream_refuses(tmp_path):
+    """Upstream has taken ownership of that pathname. LHPC does not merge, rename or pick a
+    winner — it refuses and leaves the old checkout in place for the operator to resolve."""
+    repo = tmp_path / "rt" / "local" / "app"
+    comp, inst, dest, _head = _v2_update_env(tmp_path)
+    (dest / "settings.json").write_text("mine")                         # local addition
+    (repo / "settings.json").write_text("upstream now ships this\n")    # ...upstream adds it too
+    _git_race_safety(repo, "add", "-A"); _git_race_safety(repo, "commit", "-qm", "v3")
+
+    action = inst.adopt_source(comp, force=True, source="dev")
+    assert action.status == "failed"
+    assert "settings.json" in action.detail             # the refusal names it
+    assert (dest / "settings.json").read_text() == "mine"               # local file untouched
+    assert (dest / "file.txt").read_text() == "hello\n"                 # OLD source restored
+    assert not dest.with_name(".app.prev").exists()
+    assert not inst._journal_path(dest).exists()
+
+
+def test_an_added_path_blocked_by_a_new_upstream_file_refuses(tmp_path):
+    """Parent-path collision: the local file needs `conf/` to be a directory, but the new
+    upstream ships `conf` as a FILE."""
+    repo = tmp_path / "rt" / "local" / "app"
+    comp, inst, dest, _head = _v2_update_env(tmp_path)
+    (dest / "conf").mkdir()
+    (dest / "conf" / "mine.ini").write_text("local")
+    (repo / "conf").write_text("upstream file, not a directory\n")
+    _git_race_safety(repo, "add", "-A"); _git_race_safety(repo, "commit", "-qm", "v3")
+
+    action = inst.adopt_source(comp, force=True, source="dev")
+    assert action.status == "failed" and "conf" in action.detail
+    assert (dest / "conf" / "mine.ini").read_text() == "local"          # old tree intact
+    assert not dest.with_name(".app.prev").exists()
+
+
+@pytest.mark.safety("source-additions-preserved")
+def test_a_carry_failure_restores_the_prior_and_refuses(tmp_path, monkeypatch):
+    """If the carry cannot be PROVEN to have succeeded, the update refuses and the previous
+    source stays authoritative — never a green result over lost local data."""
+    comp, inst, dest, _head = _v2_update_env(tmp_path)
+    (dest / "notes.txt").write_text("keep me")
+    # The copy primitive's return value IS the seam: a real failure here needs ENOSPC or EIO
+    # part-way through the transaction, which no injected `System` can produce.
+    monkeypatch.setattr(source_fs, "carry_extras",
+                        lambda *a, **k: "notes.txt: simulated copy failure")
+
+    action = inst.adopt_source(comp, force=True, source="dev")
+    assert action.status == "failed" and "simulated copy failure" in action.detail
+    assert (dest / "file.txt").read_text() == "hello\n"                 # prior restored
+    assert (dest / "notes.txt").read_text() == "keep me"                # local data intact
+    assert not dest.with_name(".app.prev").exists()                     # nothing left archived
+    assert not list(dest.parent.glob(".app.candidate-*"))               # candidate discarded
+    assert not inst._journal_path(dest).exists()                        # transaction resolved
+
+
+def test_regenerable_artifacts_neither_block_nor_are_carried(tmp_path):
+    """Build output is LHPC's to regenerate, not the operator's data: it must not block an
+    update, and it need not survive one. Same exclusion the dirty report uses."""
+    comp, inst, dest, _head = _v2_update_env(tmp_path)
+    rels = [f"{d}/leftover" for d in
+            (".pio", ".venv", "build", ".work", ".run", "__pycache__", "node_modules")]
+    for rel in rels:
+        (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+        (dest / rel).write_text("regenerable")
+
+    assert inst.adopt_source(comp, force=True, source="dev").status != "failed"
+    assert (dest / "file.txt").read_text() == "v2\n"                    # not blocked...
+    assert [r for r in rels if (dest / r).exists()] == []               # ...and none carried
+
+
+def test_a_declared_binary_is_disposable_but_a_sibling_is_carried(tmp_path):
+    """The carve-out is the EXACT declared leaf — a file beside it is ordinary operator data."""
+    repo = tmp_path / "rt" / "local" / "app"
+    _make_repo_race_safety(repo)
+    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE, bin="bin/app",
+                     source=SourceSpec(path="src/app", local_dir="app"))
+    inst = _inst_race_safety(tmp_path, comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    dest = inst.paths.under("src", "app")
+    (dest / "bin").mkdir()
+    (dest / "bin" / "app").write_text("built")                          # the declared binary
+    (dest / "bin" / "helper.sh").write_text("operator helper")          # its sibling
+    (repo / "file.txt").write_text("v2\n")
+    _git_race_safety(repo, "add", "-A"); _git_race_safety(repo, "commit", "-qm", "v2")
+
+    assert inst.adopt_source(comp, force=True, source="dev").status != "failed"
+    assert (dest / "file.txt").read_text() == "v2\n"
+    assert not (dest / "bin" / "app").exists()                          # regenerated, not carried
+    assert (dest / "bin" / "helper.sh").read_text() == "operator helper"
+
+
 def test_prev_dirty_before_cleanup_is_retained_operator_only(tmp_path, monkeypatch):
-    # An untracked file lands inside the archived `.prev` AFTER the post-archive recheck,
-    # immediately before the cleanup: the file survives, `.prev` stays, the journal is
+    # An upstream file is MODIFIED inside the archived `.prev` AFTER the post-archive recheck,
+    # immediately before the cleanup: the edit survives, `.prev` stays, the journal is
     # marked prior-dirty-retained, the ACTIVE NEW source + its record stay coherent, the
     # result is truthful incomplete — and no later automatic recovery deletes the prior.
-    import json
+    # (An ADDED file here is not retained: the carry already reproduced it in the live tree.)
     comp, inst, dest, v2_head = _v2_update_env(tmp_path)
     prev = dest.with_name(".app.prev")
 
-    def late_file(_path):
-        (prev / "late-user-file.txt").write_text("late")
-    fired = _seam(monkeypatch, "pre-prev-cleanup", late_file)
+    def late_edit(_path):
+        (prev / "file.txt").write_text("late operator edit\n")
+    fired = _seam(monkeypatch, "pre-prev-cleanup", late_edit)
     action = inst.adopt_source(comp, force=True, source="dev")
     assert fired["done"]
     assert action.status == "failed"                       # NEVER a successful update
     assert action.detail.startswith("prior-dirty:")
     assert ".app.prev" in action.detail                    # names the retained path
-    assert (prev / "late-user-file.txt").read_text() == "late"   # the new file SURVIVES
-    assert (prev / "file.txt").read_text() == "hello\n"    # prior content intact
+    assert (prev / "file.txt").read_text() == "late operator edit\n"   # the EDIT survives
     assert (dest / "file.txt").read_text() == "v2\n"       # NEW source stays active
     rec = source_registry.read_record(inst.paths, "src/app")
     assert rec is not None and rec.resolved_commit == v2_head    # registry truthful
@@ -3641,17 +3921,315 @@ def test_prev_dirty_before_cleanup_is_retained_operator_only(tmp_path, monkeypat
     for _ in range(2):
         msgs = inst.recover_source_activations()
         assert any("late local changes" in m and "recovery-required" in m for m in msgs)
-        assert (prev / "late-user-file.txt").exists() and jf.exists()
+        assert (prev / "file.txt").exists() and jf.exists()
     # and further source mutation stays blocked while the journal is unresolved
     blocked = inst.adopt_source(comp, force=True, source="dev")
     assert blocked.status == "failed" and "recovery-required" in blocked.detail
 
 
+def test_an_lhpc_patched_checkout_still_carries_an_added_file(tmp_path):
+    """A checkout whose only tracked change is LHPC's own declared build-time patch (openHop is
+    the live case) is not operator work, and an ADDED file beside it must not resurrect that
+    judgement: the patch verdict is taken from the tracked diff alone. The update proceeds and
+    carries the addition; a real operator edit on top still refuses."""
+    local = tmp_path / "rt" / "local" / "app"
+    _make_repo_race_safety(local)
+    (local / "a.txt").write_text("one\ntwo\n")
+    _git_race_safety(local, "add", "-A"); _git_race_safety(local, "commit", "-qm", "a")
+    (local / "a.txt").write_text("one\ntwo\nPATCHED\n")             # the change LHPC ships
+    patch = tmp_path / "lhpc.patch"
+    patch.write_text(_git_race_safety(local, "diff") + "\n")          # a patch ends in a newline
+    _git_race_safety(local, "checkout", "--", "a.txt")                # upstream stays clean
+
+    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
+                     source=SourceSpec(path="src/app", local_dir="app",
+                                       patches=(str(patch),)))
+    inst = _inst_race_safety(tmp_path, comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    dest = inst.paths.under("src", "app")
+    _git_race_safety(dest, "apply", str(patch))                       # the build step patches it
+    (dest / "notes.txt").write_text("operator data\n")                # ...and a local addition
+    rep = inst.dirty_report(dest, "src/app")
+    assert rep.untracked and not rep.blocks_update()    # untracked kept, but the patch is exempt
+    assert rep                                          # ...and uninstall/clean still see it
+    (local / "file.txt").write_text("v2\n")
+    _git_race_safety(local, "add", "-A"); _git_race_safety(local, "commit", "-qm", "v2")
+
+    assert inst.adopt_source(comp, force=True, source="dev").status != "failed"
+    assert (dest / "file.txt").read_text() == "v2\n"                  # updated
+    assert (dest / "notes.txt").read_text() == "operator data\n"      # addition carried
+    assert (dest / "a.txt").read_text() == "one\ntwo\n"               # fresh clone, build repatches
+
+    _git_race_safety(dest, "apply", str(patch))
+    (dest / "a.txt").write_text("one\ntwo\nPATCHED\nOPERATOR\n")     # a REAL edit on top
+    action = inst.adopt_source(comp, force=True, source="dev")
+    assert action.status == "failed" and "local modifications" in action.detail
+
+
+@pytest.mark.safety("source-additions-preserved")
+def test_recovery_rolls_back_an_update_interrupted_before_the_carry(tmp_path):
+    """CRASH BETWEEN ARCHIVE AND CARRY. The journal records no carry state on purpose, so a
+    recovery that finds a staged candidate beside an archived prior holding local additions
+    cannot prove the candidate has them. It must therefore NOT complete the activation: it
+    undoes the transaction, and the next update carries the additions again."""
+    comp, inst, dest, _v2 = _v2_update_env(tmp_path)
+    (dest / "notes.txt").write_text("operator data\n")
+    (dest / "notes.txt").chmod(0o640)
+    prev = dest.with_name(".app.prev")
+    staging = dest.with_name(".app.candidate-1-2")
+    shutil.move(str(dest), str(prev))                       # (2) prior archived
+    shutil.copytree(str(tmp_path / "rt" / "local" / "app"), str(staging), symlinks=True)
+    rel = lambda q: str(q.relative_to(inst.paths.runtime_root))
+
+    def ident(q):
+        st = os.stat(q, follow_symlinks=False)
+        return [st.st_dev, st.st_ino, st.st_ctime_ns]
+    jf = inst._journal_path(dest)
+    jf.parent.mkdir(parents=True, exist_ok=True)
+    jf.write_text(json.dumps({                             # ...then the process died
+        "version": 5, "state": "prior-archived", "source_rel": rel(dest),
+        "prev_rel": rel(prev), "candidate_rel": rel(staging),
+        "txn_id": inst._txn_id(rel(staging)),
+        "meta": {"selector": "dev", "resolved_commit": "", "remote": "", "strategy": "",
+                 "components": ["app"], "had_prior": True},
+        "idents": {"candidate": ident(staging), "prev": ident(prev)}}))
+
+    inst.recover_source_activations()
+    assert (dest / "file.txt").read_text() == "hello\n"     # the PRIOR is active again
+    assert (dest / "notes.txt").read_text() == "operator data\n"      # byte-identical
+    assert os.stat(dest / "notes.txt").st_mode & 0o777 == 0o640        # and unchanged mode
+    assert not staging.exists() and not prev.exists()       # transaction fully undone
+    assert not jf.exists()                                  # ...and resolved, not stuck
+    # the box is not blocked: the retried update succeeds and carries the addition
+    assert inst.adopt_source(comp, force=True, source="dev").status != "failed"
+    assert (dest / "file.txt").read_text() == "v2\n"
+    assert (dest / "notes.txt").read_text() == "operator data\n"
+
+
+@pytest.mark.safety("source-additions-preserved")
+def test_a_substituted_active_source_retains_the_archive(tmp_path, monkeypatch):
+    """What licenses destroying `.prev` is that the ACTIVE tree carries everything the archive
+    held — proven about one inode. If the destination is swapped between that proof and the
+    delete, the licence belonged to a tree that is no longer there, so the archive stays.
+    In-process the authority is the retained candidate handle (dev+ino: the fd pins the inode)."""
+    comp, inst, dest, _v2 = _v2_update_env(tmp_path)
+    (dest / "notes.txt").write_text("operator data\n")
+    prev = dest.with_name(".app.prev")
+
+    def swap_dest(_path):
+        os.rename(dest, dest.with_name(".app.displaced"))      # our candidate steps aside...
+        dest.mkdir()
+        (dest / "planted").write_text("A DIFFERENT TREE\n")     # ...a foreign one takes the name
+    fired = _seam(monkeypatch, "pre-prev-delete", swap_dest)
+
+    action = inst.adopt_source(comp, force=True, source="dev")
+    assert fired["done"]
+    assert action.status == "failed"                           # never a clean result
+    assert prev.is_dir()                                       # the ARCHIVE IS RETAINED
+    assert (prev / "notes.txt").read_text() == "operator data\n"   # ...with the operator's data
+    assert (dest / "planted").read_text() == "A DIFFERENT TREE\n"  # substitute untouched
+    assert inst._journal_path(dest).exists()                   # transaction retained
+
+
+@pytest.mark.safety("source-additions-preserved")
+def test_recovery_retains_the_archive_when_the_active_source_was_substituted(tmp_path, monkeypatch):
+    """The same boundary under crash RECOVERY, where the authority is the journal's full v5
+    candidate ident (the promotion rename refreshed it, so it describes the active leaf)."""
+    comp, inst, dest, v2_head = _v2_update_env(tmp_path)
+    prev = dest.with_name(".app.prev")
+    # Craft the interruption: record complete, activation done, `.prev` still archived.
+    shutil.move(str(dest), str(prev))
+    (prev / "notes.txt").write_text("operator data\n")
+    shutil.copytree(str(tmp_path / "rt" / "local" / "app"), str(dest), symlinks=True)
+    (dest / "notes.txt").write_text("operator data\n")         # the carry already ran
+    rel = lambda q: str(q.relative_to(inst.paths.runtime_root))
+    staging_rel = rel(dest.with_name(".app.candidate-1-2"))
+
+    def ident(q):
+        st = os.stat(q, follow_symlinks=False)
+        return [st.st_dev, st.st_ino, st.st_ctime_ns]
+    jf = inst._journal_path(dest)
+    jf.parent.mkdir(parents=True, exist_ok=True)
+    jf.write_text(json.dumps({
+        "version": 5, "state": "activated", "source_rel": rel(dest),
+        "prev_rel": rel(prev), "candidate_rel": staging_rel,
+        "txn_id": inst._txn_id(staging_rel),
+        "meta": {"selector": "dev", "resolved_commit": v2_head, "remote": "", "strategy": "",
+                 "components": ["app"], "had_prior": True},
+        "idents": {"candidate": ident(dest), "prev": ident(prev)}}))
+
+    def swap_dest(_path):
+        os.rename(dest, dest.with_name(".app.displaced"))
+        dest.mkdir()
+        (dest / "planted").write_text("A DIFFERENT TREE\n")
+    fired = _seam(monkeypatch, "pre-prev-delete", swap_dest)
+
+    msgs = inst.recover_source_activations()
+    assert fired["done"]
+    assert any("recovery-required" in m for m in msgs), msgs
+    assert prev.is_dir() and (prev / "notes.txt").read_text() == "operator data\n"
+    assert (dest / "planted").read_text() == "A DIFFERENT TREE\n"   # substitute untouched
+    assert jf.exists()                                              # journal retained
+
+
+@pytest.mark.safety("source-additions-preserved")
+def test_recovery_retains_a_candidate_whose_carry_had_already_started(tmp_path):
+    """CRASH *DURING* THE CARRY. The journal records the candidate's identity at
+    `prior-archived` — before the carry — and the carry then writes the additions INTO that
+    candidate, moving its ctime. Recovery therefore can no longer prove the candidate, and the
+    v5 rule is that an unprovable leaf is RETAINED, never destroyed: dev+ino alone is forgeable
+    through inode recycling (see the `.prev` twin below), and unlike the post-rename re-proofs
+    this recovery never proved all three fields itself.
+
+    So this interruption is fail-closed rather than auto-rolled-back: nothing is lost, the
+    operator resolves it. Found by SIGKILLing a real update during a 3 GB carry."""
+    comp, inst, dest, _v2 = _v2_update_env(tmp_path)
+    (dest / "notes.txt").write_text("operator data\n")
+    prev = dest.with_name(".app.prev")
+    staging = dest.with_name(".app.candidate-1-2")
+    shutil.move(str(dest), str(prev))
+    shutil.copytree(str(tmp_path / "rt" / "local" / "app"), str(staging), symlinks=True)
+    rel = lambda q: str(q.relative_to(inst.paths.runtime_root))
+
+    def ident(q):
+        st = os.stat(q, follow_symlinks=False)
+        return [st.st_dev, st.st_ino, st.st_ctime_ns]
+    idents = {"candidate": ident(staging), "prev": ident(prev)}   # recorded BEFORE the carry
+    (staging / "notes.txt").write_text("operator")                # the carry starts: partial copy
+    assert ident(staging)[2] != idents["candidate"][2], "the carry must move the ctime"
+
+    jf = inst._journal_path(dest)
+    jf.parent.mkdir(parents=True, exist_ok=True)
+    jf.write_text(json.dumps({
+        "version": 5, "state": "prior-archived", "source_rel": rel(dest),
+        "prev_rel": rel(prev), "candidate_rel": rel(staging),
+        "txn_id": inst._txn_id(rel(staging)),
+        "meta": {"selector": "dev", "resolved_commit": "", "remote": "", "strategy": "",
+                 "components": ["app"], "had_prior": True},
+        "idents": idents}))
+
+    msgs = inst.recover_source_activations()
+    assert any("recovery-required" in m for m in msgs), msgs
+    assert not dest.exists()                              # never promoted over the additions
+    assert staging.is_dir()                               # the candidate is EVIDENCE, not rubbish
+    assert jf.exists()                                    # transaction retained for the operator
+    # ...and NOTHING IS LOST: the archived prior still holds the whole source and the addition.
+    assert (prev / "file.txt").read_text() == "hello\n"
+    assert (prev / "notes.txt").read_text() == "operator data\n"
+
+
+@pytest.mark.safety("source-additions-preserved")
+def test_recovery_never_deletes_a_candidate_on_a_recycled_inode(tmp_path):
+    """The candidate twin of `test_v5_inode_recycling_forged_ctime_prior_not_restored`, and the
+    reason the ctime may not be dropped from the deletion above: a DIFFERENT directory that has
+    taken the candidate's hidden pathname and been handed its recycled dev+ino is
+    indistinguishable from the real candidate by inode alone. Only the ctime separates them, and
+    recovery is about to delete that leaf recursively."""
+    comp, inst, dest, _v2 = _v2_update_env(tmp_path)
+    (dest / "notes.txt").write_text("operator data\n")     # additions -> the carry is unprovable
+    prev = dest.with_name(".app.prev")
+    staging = dest.with_name(".app.candidate-1-2")
+    shutil.move(str(dest), str(prev))
+    staging.mkdir()
+    (staging / "not-ours").write_text("A DIFFERENT TREE ON THE RECYCLED INODE\n")
+    rel = lambda q: str(q.relative_to(inst.paths.runtime_root))
+
+    def ident(q):
+        st = os.stat(q, follow_symlinks=False)
+        return [st.st_dev, st.st_ino, st.st_ctime_ns]
+    real = ident(staging)
+    forged = [real[0], real[1], real[2] - 1]              # SAME dev+ino, different ctime
+    jf = inst._journal_path(dest)
+    jf.parent.mkdir(parents=True, exist_ok=True)
+    jf.write_text(json.dumps({
+        "version": 5, "state": "prior-archived", "source_rel": rel(dest),
+        "prev_rel": rel(prev), "candidate_rel": rel(staging),
+        "txn_id": inst._txn_id(rel(staging)),
+        "meta": {"selector": "dev", "resolved_commit": "", "remote": "", "strategy": "",
+                 "components": ["app"], "had_prior": True},
+        "idents": {"candidate": forged, "prev": ident(prev)}}))
+
+    msgs = inst.recover_source_activations()
+    assert any("recovery-required" in m for m in msgs), msgs
+    assert (staging / "not-ours").read_text() == "A DIFFERENT TREE ON THE RECYCLED INODE\n"
+    assert not dest.exists() and jf.exists()             # everything retained as evidence
+    assert (prev / "notes.txt").read_text() == "operator data\n"
+
+
+@pytest.mark.safety("source-additions-preserved")
+def test_recovery_of_an_unprovable_prior_touches_nothing(tmp_path):
+    """Same interruption, but the archived prior is SUBSTITUTED before recovery runs. Recovery
+    must decide nothing from a tree it cannot prove is the journal's own: no inventory of it, no
+    deletion of the staged candidate, no restore — everything retained as evidence."""
+    comp, inst, dest, _v2 = _v2_update_env(tmp_path)
+    (dest / "notes.txt").write_text("operator data\n")
+    prev = dest.with_name(".app.prev")
+    staging = dest.with_name(".app.candidate-1-2")
+    shutil.move(str(dest), str(prev))
+    shutil.copytree(str(tmp_path / "rt" / "local" / "app"), str(staging), symlinks=True)
+    rel = lambda q: str(q.relative_to(inst.paths.runtime_root))
+
+    def ident(q):
+        st = os.stat(q, follow_symlinks=False)
+        return [st.st_dev, st.st_ino, st.st_ctime_ns]
+    jf = inst._journal_path(dest)
+    jf.parent.mkdir(parents=True, exist_ok=True)
+    jf.write_text(json.dumps({
+        "version": 5, "state": "prior-archived", "source_rel": rel(dest),
+        "prev_rel": rel(prev), "candidate_rel": rel(staging),
+        "txn_id": inst._txn_id(rel(staging)),
+        "meta": {"selector": "dev", "resolved_commit": "", "remote": "", "strategy": "",
+                 "components": ["app"], "had_prior": True},
+        "idents": {"candidate": ident(staging), "prev": ident(prev)}}))
+    # SUBSTITUTE the archived prior: same name, different inode than the journal recorded.
+    shutil.move(str(prev), str(prev.with_name(".app.prev.real")))
+    prev.mkdir()
+    (prev / "planted").write_text("not the recorded prior\n")
+
+    msgs = inst.recover_source_activations()
+    assert any("recovery-required" in m and "archived prior" in m for m in msgs), msgs
+    assert staging.is_dir() and (staging / "file.txt").exists()   # candidate NOT deleted
+    assert (prev / "planted").exists()                            # substitute untouched
+    assert not dest.exists()                                      # nothing restored or promoted
+    assert jf.exists()                                            # journal retained as evidence
+    assert (prev.with_name(".app.prev.real") / "notes.txt").read_text() == "operator data\n"
+
+
+@pytest.mark.safety("source-additions-preserved")
+def test_an_addition_made_after_the_carry_retains_the_archived_prior(tmp_path, monkeypatch):
+    """The `.prev` cleanup destroys the archive, so it runs only once every local addition the
+    archive still holds is PROVEN present in the activated source. A file that appears in `.prev`
+    after the carry is in neither — it must never be deleted as collateral."""
+    comp, inst, dest, v2_head = _v2_update_env(tmp_path)
+    (dest / "notes.txt").write_text("carried\n")
+    prev = dest.with_name(".app.prev")
+
+    def late_add(_path):
+        (prev / "late.log").write_text("written after the carry\n")
+    fired = _seam(monkeypatch, "pre-prev-cleanup", late_add)
+    action = inst.adopt_source(comp, force=True, source="dev")
+
+    assert fired["done"]
+    assert action.status == "failed"                        # never reported as a clean update
+    assert action.detail.startswith("prior-dirty:")
+    assert "late.log" in action.detail                      # names the file that is at risk
+    assert (prev / "late.log").read_text() == "written after the carry\n"   # NOT deleted
+    assert prev.is_dir()                                    # the archive is retained whole
+    assert (dest / "file.txt").read_text() == "v2\n"        # the new source stays active...
+    assert (dest / "notes.txt").read_text() == "carried\n"   # ...with the carried addition
+    jf = inst._journal_path(dest)
+    assert json.loads(jf.read_text())["state"] == "prior-dirty-retained"
+    # automatic recovery never retries the deletion either — the journal is operator-only now
+    monkeypatch.undo()
+    msgs = inst.recover_source_activations()
+    assert any("late local changes" in m and "recovery-required" in m for m in msgs), msgs
+    assert (prev / "late.log").exists() and jf.exists()
+
+
 def test_prev_dirty_during_recovery_cleanup_is_retained(tmp_path, monkeypatch):
     # Interrupted activation (journal 'activated', record complete, `.prev` still present):
-    # a file created inside `.prev` right before RECOVERY's cleanup marks the transaction
-    # prior-dirty-retained — recovery completes nothing destructive, everything retained.
-    import json
+    # an upstream file MODIFIED inside `.prev` right before RECOVERY's cleanup marks the
+    # transaction prior-dirty-retained — recovery completes nothing destructive, all retained.
     comp, inst, dest, v2_head = _v2_update_env(tmp_path)
     prev = dest.with_name(".app.prev")
     # Build the crash state MANUALLY (a real run removes .prev before the journal, so the
@@ -3665,10 +4243,9 @@ def test_prev_dirty_during_recovery_cleanup_is_retained(tmp_path, monkeypatch):
     def ident(q):
         st = os.stat(q, follow_symlinks=False)
         return [st.st_dev, st.st_ino, st.st_ctime_ns]   # v5 ctime-hardened ident
-    import json as _json
     jf = inst._journal_path(dest)
     jf.parent.mkdir(parents=True, exist_ok=True)
-    jf.write_text(_json.dumps({
+    jf.write_text(json.dumps({
         "version": 5, "state": "activated", "source_rel": rel(dest),
         "prev_rel": rel(prev), "candidate_rel": staging_rel,
         "txn_id": inst._txn_id(staging_rel),
@@ -3678,13 +4255,13 @@ def test_prev_dirty_during_recovery_cleanup_is_retained(tmp_path, monkeypatch):
     assert jf.exists() and prev.is_dir()                   # archived prior + journal remain
     assert (dest / "file.txt").read_text() == "v2\n"       # new source already active
 
-    def late_file(_path):
-        (prev / "late-user-file.txt").write_text("late")
-    fired = _seam(monkeypatch, "pre-prev-cleanup", late_file)
+    def late_edit(_path):
+        (prev / "file.txt").write_text("late operator edit\n")   # TRACKED change in the prior
+    fired = _seam(monkeypatch, "pre-prev-cleanup", late_edit)
     msgs = inst.recover_source_activations()
     assert fired["done"]
     assert any("late local changes" in m and "recovery-required" in m for m in msgs)
-    assert (prev / "late-user-file.txt").read_text() == "late"   # file survives
+    assert (prev / "file.txt").read_text() == "late operator edit\n"   # the edit survives
     assert prev.is_dir()                                   # `.prev` retained
     assert json.loads(jf.read_text())["state"] == "prior-dirty-retained"
     rec = source_registry.read_record(inst.paths, "src/app")
@@ -3693,7 +4270,7 @@ def test_prev_dirty_during_recovery_cleanup_is_retained(tmp_path, monkeypatch):
     monkeypatch.undo()
     msgs2 = inst.recover_source_activations()
     assert any("late local changes" in m for m in msgs2)
-    assert (prev / "late-user-file.txt").exists() and jf.exists()
+    assert (prev / "file.txt").exists() and jf.exists()
 
 
 def test_clean_prev_cleanup_still_succeeds_when_not_dirty(tmp_path):

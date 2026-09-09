@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.9
+
+- **Files you add to a managed source checkout now survive an update.** A stack's own logs and generated settings, or a file you put there yourself, are carried into the new source instead of blocking the update; the old checkout is discarded only once each of them is proven to be there, and a path the new upstream version also ships is a refusal naming the file rather than a merge. LHPC's own regenerable output (`build/`, `.pio/`, `.venv/`, `.work/`, `.run/`, `__pycache__/`, `node_modules/` and a declared built binary) is the exception: it neither blocks an update nor survives one. Editing, deleting or staging an upstream-tracked file still makes the checkout dirty and blocks the update — to run a modified stack, fork it and point the component's remote and pin at your fork. Uninstall and clean are unchanged and keep their existing dirty-tree protection; unlike source updates, they do not carry additions forward.
+
 ## 0.3.8
 
 - The release-verification lane no longer reports a pass it did not earn. A stack counts as running only when LHPC's own status says `running` for it, a failed stop is a failure rather than housekeeping, an interactive component must draw what it is supposed to draw and must exit cleanly rather than be killed, and the optional components a stack start deliberately leaves alone (Sideband, LXMD, the MeshCore Web UI) are started by name. Both Voice variants are proved, because they share one checkout and it proves neither.

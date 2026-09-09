@@ -39,8 +39,30 @@ Every adoption records durable ownership (`state/source-registry/`): remote, sel
 resolved commit, transaction id — written inside the activation transaction and completable by
 recovery. A record that no longer matches its tree is never rewritten silently, and a tree
 without one is not LHPC's to touch. Update, uninstall and clean re-prove the record first
-(update also needs the affected stacks stopped and refuses a dirty tree); what they refuse, and
-how to recover, is in [operations.md](operations.md).
+(update also needs the affected stacks stopped); what they refuse, and how to recover, is in
+[operations.md](operations.md).
+
+**New files: OK.** Files added by the user or by the stack to a managed source checkout —
+logs, generated settings, a scratch script, whether ignored by Git or not — are preserved
+across managed source updates: they are copied into the new source at the same path, and the
+old checkout is discarded only once each of them is proven to be there. A path the new upstream
+version also ships is a refusal naming the file, never a merge, a rename or an overwrite.
+
+The exception is LHPC's own regenerable output, which is neither preserved nor allowed to block:
+anything under `build/`, `.pio/`, `.venv/`, `.work/`, `.run/`, `__pycache__/` or `node_modules/`,
+and a component's declared built binary. Those are LHPC's to recreate; put nothing there you
+want to keep.
+
+**Editing, deleting or staging an upstream-tracked file** makes the checkout dirty and blocks
+the update. Revert or stash it. **To run a modified stack, fork the project and point the
+component's remote and pin at your fork** ([Remote overrides](#remote-overrides)) — a managed
+checkout is not a place to keep source changes.
+
+Uninstall and clean protect the whole tree instead: they carry nothing forward, so for them any
+local file the dirty check sees still counts. A **binary** install is stricter only where the
+artifact runs code from the pinned checkout (today MeshCom's QEMU node): there a file an update
+would carry refuses the install by name. What the dirty check sees, here as everywhere, is
+tracked changes and untracked files, never Git-ignored ones.
 
 ## The binary channel
 
@@ -98,3 +120,9 @@ A per-component remote override (`[remotes]` in `local.toml`) is validated to a 
 URL (https or scp-style ssh) before any Git use, and a non-string/malformed remote is dropped
 at config load — it can never silently weaken the selected pin/signature policy or reach Git.
 Moving a pin is a maintainer task: [maintenance.md](maintenance.md).
+
+**Changing the source itself:** fork the upstream project, make the changes in your fork, and
+point the component at it — the override selects the remote, and the commit it installs still
+comes from the selector and the pin, so a `pinned` install also needs the pin moved to a commit
+of your fork (a manifest change). Do not keep source edits in the managed checkout: they are
+exactly what makes it dirty, and every update will refuse until they are gone.

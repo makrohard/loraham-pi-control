@@ -205,6 +205,17 @@ The guarantees the controller gives, each with where it is implemented and prove
   never destroys the active source, and an unresolved or malformed journal blocks all source
   mutation until an operator resolves it. `core/install.py`, `core/source_fs.py`;
   `tests/install/test_staged_update.py`, `tests/install/test_source.py`.
+- **Locally added files are never collateral.** An update copies the operator's and the stack's
+  own added files into the new source inside the activation (descriptor-relative, `O_NOFOLLOW`,
+  `O_EXCL`, so a path the new upstream also ships is a refusal, never a merge). The archived
+  prior is destroyed only after each addition it still holds is proven present in the activated
+  source — bytes, mode, symlink target — so a carry that never ran, or a file added after it,
+  retains the archive instead of losing data. Recovery decides nothing from a leaf it cannot
+  identity-prove: an interruption before the carry is rolled back automatically, and one during
+  it — which moves the candidate's recorded ctime — is retained whole for the operator rather
+  than cleaned up on a weaker proof. Editing or deleting an upstream-tracked file, or staging any
+  Git change, still refuses the update; the operator-facing rule is [provenance](provenance.md).
+  `core/install.py`, `core/source_fs.py`; `tests/install/test_source.py`.
 - **Locking.** Start, stop, restart, build, update, uninstall and clean take named non-blocking
   locks; a contended operation refuses immediately, naming the holder. `core/reslock.py`.
 - **Config as a transaction.** A Settings save is validate-first and all-or-recoverable: the

@@ -27,7 +27,9 @@ __all__ = [
     "PathContainmentError",
     "SourceLeafHandle",
     "capture_leaf",
+    "carry_extras",
     "detach_and_remove",
+    "extras_preserved",
     "leaf_kind",
     "quarantine_siblings",
     "race_seam",
@@ -494,6 +496,223 @@ def _rmtree_fd(parent_fd: int, name: str, *, allow_ipc: bool = False) -> None:
     # fifo / socket / block / char device -> fail closed, retain as evidence.
     raise PathContainmentError(
         f"refusing to remove a non-regular source leaf {name!r} (mode {oct(mode)})")
+
+
+def _open_chain(dfd: int, parts: tuple) -> int:
+    """Open the directory holding a relative path under `dfd`, NO-FOLLOW at every component.
+    Returns a new fd (the caller closes it) or -1 if any component is missing or is not a real
+    directory. Creates nothing — the read-only twin of `_carry_parent`."""
+    fd = os.dup(dfd)
+    for name in parts:
+        try:
+            nxt = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        except OSError:
+            os.close(fd)
+            return -1
+        os.close(fd)
+        fd = nxt
+    return fd
+
+
+def _carry_parent(dst_fd: int, parts: tuple, rel: str) -> tuple:
+    """Open (creating as needed) the candidate directory holding `rel`, NO-FOLLOW at every
+    component. Returns `(fd, "")` or `(-1, conflict)`. Caller closes a returned fd."""
+    fd = os.dup(dst_fd)
+    for name in parts:
+        try:
+            os.mkdir(name, 0o755, dir_fd=fd)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            os.close(fd)
+            return -1, f"{rel}: cannot create directory {name!r} in the new source ({exc})"
+        try:
+            nxt = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        except OSError:
+            # a FILE or SYMLINK already occupies a directory this path needs: the new upstream
+            # owns that name, so the local file cannot be reproduced at its old path.
+            os.close(fd)
+            return -1, (f"{rel}: the new source has a file where {name!r} must be a directory")
+        os.close(fd)
+        fd = nxt
+    return fd, ""
+
+
+def carry_extras(src_fd: int, dst_fd: int, rels) -> str:
+    """Copy local additions `rels` from the captured PRIOR tree into the captured CANDIDATE,
+    at identical relative paths. Returns "" on success or the FIRST conflict, in which case the
+    caller restores the prior and refuses — LHPC never picks a winner between a local file and
+    the upstream file that now claims its path.
+
+    Both ends are directory fds and every path component is opened `O_NOFOLLOW`, so no mutable
+    pathname is ever traversed on either side. The candidate leaf is created
+    `O_CREAT|O_EXCL|O_NOFOLLOW`: an upstream file (or a symlink upstream ships) at that path is a
+    conflict, never a target to follow or overwrite."""
+    for rel in rels:
+        if rel.startswith("/") or ".." in rel.split("/") or not rel.strip():
+            return f"{rel!r}: refusing an unsafe relative path"
+        *parts, leaf = rel.split("/")
+        qfd = _open_chain(src_fd, tuple(parts))
+        if qfd < 0:
+            return f"{rel}: local file could not be read (path is gone or not a directory)"
+        try:
+            try:
+                st = os.stat(leaf, dir_fd=qfd, follow_symlinks=False)
+            except OSError as exc:
+                return f"{rel}: local file could not be read ({exc})"
+            if not (_stat.S_ISREG(st.st_mode) or _stat.S_ISLNK(st.st_mode)):
+                # git never lists these, so reaching here means the tree changed under us.
+                return f"{rel}: refusing to carry a non-regular local leaf (mode {oct(st.st_mode)})"
+            pfd, why = _carry_parent(dst_fd, tuple(parts), rel)
+            if why:
+                return why
+            try:
+                if _stat.S_ISLNK(st.st_mode):
+                    try:
+                        os.symlink(os.readlink(leaf, dir_fd=qfd), leaf, dir_fd=pfd)
+                    except FileExistsError:
+                        return (f"local file {rel} conflicts with the new source version; "
+                                "existing source preserved")
+                    except OSError as exc:
+                        return f"{rel}: local symlink could not be preserved ({exc})"
+                    continue
+                try:
+                    sfd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=qfd)
+                except OSError as exc:
+                    return f"{rel}: local file could not be opened ({exc})"
+                try:
+                    try:
+                        dfd = os.open(leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                      st.st_mode & 0o777, dir_fd=pfd)
+                    except FileExistsError:
+                        return (f"local file {rel} conflicts with the new source version; "
+                                "existing source preserved")
+                    except OSError as exc:
+                        return f"{rel}: local file could not be written ({exc})"
+                    try:
+                        while True:
+                            chunk = os.read(sfd, 1 << 20)
+                            if not chunk:
+                                break
+                            while chunk:
+                                chunk = chunk[os.write(dfd, chunk):]
+                        # mode again: O_CREAT is masked by umask, the local file's bits are the
+                        # contract (setuid/setgid/sticky deliberately dropped).
+                        os.fchmod(dfd, st.st_mode & 0o777)
+                    except OSError as exc:
+                        return f"{rel}: local file could not be copied ({exc})"
+                    finally:
+                        os.close(dfd)
+                finally:
+                    os.close(sfd)
+            finally:
+                os.close(pfd)
+        finally:
+            os.close(qfd)
+    return ""
+
+
+def _read_exact(fd: int, n: int) -> bytes:
+    """Read up to `n` bytes, tolerating short reads; a shorter result means EOF."""
+    buf = b""
+    while len(buf) < n:
+        chunk = os.read(fd, n - len(buf))
+        if not chunk:
+            break
+        buf += chunk
+    return buf
+
+
+def _same_leaf(sfd: int, dfd: int, leaf: str, sst, rel: str) -> str:
+    """Is `leaf` under `dfd` the same preserved value as `leaf` under `sfd` (already lstat'd as
+    `sst`)? Returns "" when proven identical, else why it is not."""
+    try:
+        dst = os.stat(leaf, dir_fd=dfd, follow_symlinks=False)
+    except FileNotFoundError:
+        return f"{rel}: missing from the active source"
+    except OSError as exc:
+        return f"{rel}: could not be read in the active source ({exc})"
+    if _stat.S_ISLNK(sst.st_mode):
+        if not _stat.S_ISLNK(dst.st_mode):
+            return f"{rel}: is a symlink in the archived source but not in the active one"
+        try:
+            if os.readlink(leaf, dir_fd=sfd) != os.readlink(leaf, dir_fd=dfd):
+                return f"{rel}: symlink target differs in the active source"
+        except OSError as exc:
+            return f"{rel}: symlink target could not be compared ({exc})"
+        return ""
+    if not _stat.S_ISREG(sst.st_mode):
+        return (f"{rel}: a non-regular local leaf cannot be proven preserved "
+                f"(mode {oct(sst.st_mode)})")
+    if not _stat.S_ISREG(dst.st_mode):
+        return f"{rel}: is not a regular file in the active source"
+    if (sst.st_mode & 0o777) != (dst.st_mode & 0o777):
+        return f"{rel}: permission mode differs in the active source"
+    if sst.st_size != dst.st_size:
+        return f"{rel}: content differs in the active source"
+    try:
+        a = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=sfd)
+    except OSError as exc:
+        return f"{rel}: archived copy could not be opened ({exc})"
+    try:
+        b = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+    except OSError as exc:
+        os.close(a)
+        return f"{rel}: active copy could not be opened ({exc})"
+    try:
+        while True:
+            # Fill both buffers before comparing: a short read on one side alone would
+            # otherwise misalign the comparison and report a false difference.
+            x, y = _read_exact(a, 1 << 20), _read_exact(b, 1 << 20)
+            if x != y:
+                return f"{rel}: content differs in the active source"
+            if not x:
+                return ""
+    except OSError as exc:
+        return f"{rel}: content could not be compared ({exc})"
+    finally:
+        os.close(a)
+        os.close(b)
+
+
+def extras_preserved(src_fd: int, dst_fd: int, rels) -> str:
+    """Prove that every local addition `rels` the ARCHIVED prior still holds is present in the
+    ACTIVE source at the same relative path with the same preserved value — bytes and permission
+    mode for a regular file, target for a symlink, never followed. Returns "" (all proven; the
+    archive may be destroyed) or the FIRST path that is missing, different or unprovable.
+
+    This is the gate in front of the `.prev` removal, and it is deliberately a PROOF rather than
+    a trust in the carry having run: an activation completed by crash recovery may never have
+    carried anything, and a file added to `.prev` after the carry is not in the active tree
+    either. Either way the caller retains `.prev` for the operator instead of deleting data.
+
+    Both ends are directory fds, every component is opened `O_NOFOLLOW`."""
+    for rel in rels:
+        if rel.startswith("/") or ".." in rel.split("/") or not rel.strip():
+            return f"{rel!r}: refusing an unsafe relative path"
+        *parts, leaf = rel.split("/")
+        sfd = _open_chain(src_fd, tuple(parts))
+        if sfd < 0:
+            continue                      # gone from the archive: nothing left to preserve
+        try:
+            try:
+                sst = os.stat(leaf, dir_fd=sfd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue                  # ditto — removing the archive loses nothing
+            except OSError as exc:
+                return f"{rel}: archived local file could not be read ({exc})"
+            dfd = _open_chain(dst_fd, tuple(parts))
+            if dfd < 0:
+                return f"{rel}: missing from the active source"
+            try:
+                why = _same_leaf(sfd, dfd, leaf, sst, rel)
+                if why:
+                    return why
+            finally:
+                os.close(dfd)
+        finally:
+            os.close(sfd)
+    return ""
 
 
 def rmtree_at(paths: Paths, path: Path) -> None:

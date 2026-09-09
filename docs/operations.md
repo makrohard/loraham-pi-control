@@ -57,6 +57,9 @@ What the binary channel means in practice:
   binary operation recovers it.
 - **Switching to source is transactional too** — a dirty, foreign or wrong-remote checkout
   refuses the switch with the artifact untouched ([provenance.md](provenance.md)).
+- **Ordinary files you add to a source checkout survive an update** — logs a stack writes, your own
+  settings or scratch files. Editing upstream files does not: that makes the checkout dirty and
+  blocks the update, and the fix is a fork, not a local edit ([provenance.md](provenance.md)).
 - **No binary rollback**: going back means installing from source.
 - **meshcom keeps its pinned clone** even on this channel (its run scripts live there), and
   **meshtastic provisions its CLI virtualenv locally** after extraction (it embeds absolute paths,

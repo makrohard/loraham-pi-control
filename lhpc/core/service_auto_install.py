@@ -1687,9 +1687,9 @@ class AutoInstallOpsMixin:
         if kind == "dir":
             inst = self._installer()
             dirty = inst.dirty_report(dest, path)
-            if dirty:
-                return "blocked", ("local changes present — commit/stash or Clean before "
-                                   "an auto-install update touches this checkout")
+            if dirty.blocks_update():
+                return "blocked", ("upstream source modified locally — revert, stash or Clean "
+                                   "before an auto-install update touches this checkout")
         return "update", ""
 
     def auto_install_mode(self) -> str:

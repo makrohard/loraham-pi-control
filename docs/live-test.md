@@ -9,32 +9,39 @@ Earlier runs — the 0.3.0 and 0.2.10 release matrices and the 2026-09-05 on-air
 pages cite for their measured numbers — live in this file's git history:
 `git log --follow -p -- docs/live-test.md`.
 
-## 0.3.2 — live re-proof of the moved code, 2026-09-07
+## 0.3.9 — locally added files survive an update, 2026-09-09
 
-Run on `lhpc-e293` with the source checkout switched to `dev` = `d545924` (0.3.2, the
-*reduce core service coupling* commit plus CI coverage; `lhpc self-update` answers *Up to date*),
-21:10 to 22:38 local, over the console's unix socket and the CLI. The patch moved logic without
-changing behaviour, so each row exercises one moved flow and compares with what 0.3.1 did. The
-433 chain (daemon, kiss, graywolf) and MeshCom were started for the run and stopped afterwards; the
-Meshtastic stack on 868 kept running except for the two feed kills below, each followed by a
-restart. Nothing was purged or rebuilt from source.
+Run on `lhpc-e293` (aarch64, Trixie Lite) against the release candidate, from a scratch
+`LHPC_RUNTIME_ROOT` so the box's own installation, config and running stacks were untouched: a
+scratch root holds no ownership records, so it can never signal their processes. `daemon` was
+stopped for the binary rows (which took `meshcom` with it); `meshtastic` kept running on 868. No
+radio is needed for any row — a source update requires its consumers stopped, so no band is
+claimed. Earlier the same day the same candidate was exercised against real GitHub clones of
+`loraham-kiss-tnc` and `openhop-core` on a workstation; only the rows that need aarch64 or a
+running consumer are listed here.
 
-| moved flow | what was done | result |
+| row | what was done | result |
 |---|---|---|
-| console after the deploy (`status.py`, `services.py`) | Dashboard, Apps, dependencies, `/healthz`, the three log pages, the Network and Firewall panels and every stack's lazy body (32 requests) | pass — all 200 (`/stacks/<id>` redirects as before), `/healthz` reports 0.3.2, 0 tracebacks in the console log |
-| restart-required marker written by a config save on a running stack (`restart_required.py`) | kiss running: `lhpc config kiss verbose 1` | pass — *Config saved … Restart the stack to apply*; `state/restart-required/kiss.json` = version 1, stack kiss, mode restart, params `["verbose"]`, band 433; `lhpc status` prints *! RESTART REQUIRED: 'kiss' — saved settings differ from the running stack*; the Dashboard and the kiss panel show *Restart required* with the Restart action; `/api/dash-signature` carries `RR:kiss` |
-| merge on a second save | `lhpc config kiss rx_only 1` | pass — one marker, params `["verbose", "rx_only"]` in save order, band kept, `created_at` re-stamped (as in 0.3.1) |
-| unsafe marker read safe-side, never deleted | marker replaced by `{not json`, then by a version-2 record | pass — *RESTART REQUIRED (safe-side): … marker is malformed* / *… fails validation — treat as restart required; resolve the marker* in the CLI and the panel; the file stays after every read |
-| clear on a successful restart | `lhpc stack restart kiss --yes` on the unsafe marker | pass — kiss verified on `127.0.0.1:8001`, marker gone, status clean |
-| clear on a verified stop | fresh save (`verbose` back to empty) → marker → `lhpc stack stop kiss --yes` | pass — *[stopped] loraham-kiss-tnc*, daemon 433 released, marker gone; the next start ran with `--rx-only` on the argv |
-| detached web job tracked by its job marker (`jobs.write_job_marker`, `jobs.jobs_dir`) | Test button on the kiss panel (confirm page, then confirmed) | pass — `/api/tasks` lists the job *running* within 1 s; `state/jobs/test-loraham-kiss-tnc.log.job` carries launch_id, pid, starttime, pgid, sid, exec, argv fingerprint and length, target, op, log and attempt id; the job reaches *done* (*Ready.*), the TNC host test reports OK=8 FAIL=0 |
-| web auto-install run (`service_auto_install` → `jobs.write_job_marker`) | Apps → Auto-install with only kiss selected while kiss ran; then with only chat selected | pass — the first run is admitted, tracked and ends with the typed refusal *component(s) are running — this run never stops anything itself*, marker written; the chat run completes *1/1 stack(s) successful, 0 blocked, 0 failed* in 7 s with its own marker (target all, op auto-install) |
-| launcher retention (`jobs.prune_ephemeral_launchers`) | counted `state/post` and `state/jobs` launchers after the starts | 11 and 1, below the retention of 200, so nothing was due for pruning; the prune itself is covered by the unit tests |
-| GPS feed marker rule (`gps.py`, `procident.py`) | the live feed first (Meshtastic panel `gps.feed`, `state/gps/meshtastic/readiness.json`), then the feed process killed with SIGKILL so its marker survives with a dead owner pid | pass — *source live (108248 sentences)* with a fresh `updated` and a live owner pid; 3 s after the kill the panel reads *readiness marker is stale (feed is gone)*, 70 s after it *readiness marker is stale* (the marker aged past 60 s); `lhpc stack restart meshtastic --yes` recovers to *source live*. Observed on the way, unchanged behaviour: a SIGTERM to the feed lets it remove its own marker (*no readiness marker*), and meshtasticd goes down with its feed either way, so the stack reads *stopped* rather than *degraded* |
-| band-limited claims (`resources.limit_radio_claims`) | plans only, nothing applied: `lhpc stack start meshcom` with kiss and graywolf on 433; `meshcore` and `reticulum` against Meshtastic on 868 | pass — meshcom: *radio 433 MHz is held by running stack 'kiss'* and *'graywolf'*; meshcore: *radio 868 MHz* and *loraham.radio.868 held by 'meshtastic'*; reticulum adds *spi.bus.0.unlocked*; no cross-band conflict shown, the same lines as the 0.3.0 run |
-| Graywolf upstream check (moved to `service_maintenance`) | Check for updates on the graywolf panel | pass — redirect to the panel, *upstream latest is 0.14.13; installed 0.14.13 — up to date*; no update applied |
-| HMAC apply job (`service_hmac` → `jobs.write_job_marker`) | `lhpc hmac status`, the enable and renew pages | as on 0.3.1 — *disabled (meshcom)*; both pages 200 and explain that the prebuilt firmware has no mesh password, so no apply job exists on this box |
-| power verdict and confirm plan (`power.py`) | Dashboard Reboot… without confirming | pass — the buttons render (busctl verdict parsed as allowed), the confirm page lists daemon, graywolf, kiss, meshtastic as running plus the boot-restore and AP notes; no marker written, no reboot |
-| pending-power marker gate (`power.parse_pending_marker`) | `state/power-pending.json` written by hand: malformed (null boot id, NaN uptime); then valid for this boot with the current uptime | pass — start refused *a power-request marker is unreadable (…) — refusing new work; inspect it and delete it if it is stale*, file retained; this-boot marker: *a reboot of this box is pending (requested 3s ago) — not starting work the shutdown would kill*, file retained; a stop passes the gate (admission code unchanged since 0.3.1); markers removed by hand afterwards |
-| reboot applied (`power.py` payload + trigger, pending-marker prune on the next boot) | 22:35 local, later the same evening, dev `d545924` redeployed for it: daemon, kiss, graywolf and Meshtastic running; Reboot confirmed on the Dashboard (POST from the box itself) | pass — 302 back to the Dashboard; `state/power-pending.json` = kind reboot, the running kernel boot id, requested_uptime 39367.61; the ssh session was cut within seconds; the box answered again after 1:00 with a new boot id (`cdb013c1…` → `17d483f6…`); `lhpc autostart`: *done @ 22:37:32 — 3 restored (meshtastic, kiss, graywolf), 0 failed, 0 cancelled, 0 pending, 1 skipped*; the skip is the daemon's recorded operator stop intent from the earlier chain stop (it came back as kiss's dependency); the pending marker was gone on the first look after the boot; `/healthz` 200 on 0.3.2 with the same four stacks running as before |
-| build outranks restart; `use_gps` save guard (`service_params`) | MeshCom running (start incl. post-start 13:47, the QEMU console answered late): `lhpc config meshcom env qemu-headless`, then `use_gps off`, then both values restored | pass — the env save answers *Compile-time change — Rebuild (Build) the stack to apply*, marker mode build, params `["env"]`, band empty (fixed-band stack); the `use_gps` change is refused typed *cannot change use_gps while meshcom-gps, meshcom-qemu are running*, marker unchanged; restoring the values keeps mode build; `lhpc stack stop meshcom --yes` (0:12) clears the marker |
+| additions survive | plain, `.gitignore`d, nested, mode `755`, across two consecutive updates | pass — every file byte-identical afterwards, mode preserved; the ignored one is invisible to `git status` and still survived |
+| runtime artifacts | two bound unix sockets (one in `.run/`, one at the checkout root) and a FIFO, plus an ordinary log the app wrote | pass — none blocked the update, none was carried, the log WAS carried, and `.prev` was cleaned with the socket and FIFO inside it |
+| upstream changes refuse | modified · deleted · staged · `git add`ed · modified-plus-added | pass — refused in every case, tree byte-identical afterwards, `HEAD` unmoved, the operator's change untouched; the mixed case named only the modified file |
+| collision | local `settings.json`, then upstream ships that path | pass — refused naming the file, old source still active, tree byte-identical, no residue |
+| parent collision | local `conf/mine.ini`, upstream ships `conf` as a file | pass — refused naming `conf`, old tree intact |
+| carry failure | an added file made unreadable (real `EACCES`, no fault injection) | pass — refused naming it, prior restored and authoritative, transaction resolved |
+| crash during carry | `SIGKILL` of a real update during a 3 GB carry | pass — candidate held a partial copy; recovery refused to promote and, unable to prove the candidate, retained `.prev` + candidate + journal. No data lost: the archive held the complete prior. Manual resolution restored it and the retry carried all 3 GB |
+| crash before carry | `SIGKILL` at journal state `prior-archived`, 30 000 added files widening the window | pass — recovery rolled the transaction back automatically; all 30 000 files and the addition intact; the retry then carried them |
+| late `.prev` addition | a file created in `.prev` at journal state `activated`, after the carry | pass — `prior-dirty`, `.prev` retained whole, the file never deleted, new source active, registry truthful; automatic recovery refused twice |
+| substituted `.prev` | `.prev` replaced between the crash and recovery | pass — `recovery-required`, nothing promoted or deleted, substitute untouched |
+| binary install strictness | `notes.txt` in `src/meshcom-qemu-raspi`, then `install meshcom --source binary` | pass — refused: *"has local changes — the artifact runs scripts from that checkout"*. The same file in `src/loraham-daemon` does **not** block a daemon binary install: the gate covers `clone_required` components only |
+| the asymmetry, one tree | source update, then binary install, then remove the file | pass — update carried it, binary install refused it by name, removing it let the install proceed |
+| binary → source switch | switch with an addition present | pass — binary retired, addition survived, no residue |
+| auto-install | binary channel; source channel with an addition; source channel with a modified upstream file | pass — 1/1 successful, 1/1 successful with the addition carried, **1 blocked** for the modification; a channel switch correctly refused as *"an install, not an update"* |
+| running consumer | update attempted with `loraham-daemon` running | pass — *"component(s) using the affected source(s) are running … an update never stops or restarts a stack itself"* — refused on the consumer, not on the addition |
+| LHPC-patched checkout | openHop patched by its build step, plus an added file | pass — the declared patch stays exempt, the update carries the addition, an edit beyond the patch still refuses; `probe_source` reports `patched: lhpc` with no `-dirty` |
+
+After every row: no `.prev`, no candidate, no journal, `lhpc doctor` clean, the ownership record's
+commit equal to `HEAD`, and no traceback in the console log.
+
+Not covered on hardware: forcing a real inode to be recycled, which no filesystem does on demand —
+that case is proved by a unit test that forges the recorded identity instead.
+

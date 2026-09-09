@@ -39,6 +39,8 @@ class _Runner:
             return CommandResult(1, "", "fatal: could not connect")
         if "status" in argv:
             return CommandResult(0, "", "")          # clean working tree
+        if "ls-files" in argv:
+            return CommandResult(0, "", "")          # no local additions to carry
         if "config" in argv:                          # remote.origin.url identity query
             return CommandResult(0, "https://example/repo.git\n", "")
         return CommandResult(0, "abc123\n", "")       # rev-parse / checkout / describe

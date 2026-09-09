@@ -591,9 +591,9 @@ class BinaryOpsMixin:
             if rec is None:
                 refusals.append(f"{path}: {why}")
                 continue
-            if (dirty := inst.dirty_report(dest, path)):
-                refusals.append(f"{path}: local modifications — "
-                                + ", ".join((list(dirty.tracked) + list(dirty.untracked))[:3]))
+            if (dirty := inst.dirty_report(dest, path)).blocks_update():
+                refusals.append(f"{path}: upstream source modified locally — "
+                                + ", ".join(dirty.tracked[:3]))
                 continue
             # The selector's commit, resolved by the EXISTING mechanisms: the plan's frozen
             # known-working commit, else the manifest pin for `pinned`, else `_frozen_ref`

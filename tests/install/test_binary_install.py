@@ -1011,6 +1011,58 @@ def test_clone_required_is_adopted_before_the_overlay(tmp_path, monkeypatch):
     assert ("meshcom-qemu", "pinned") in adopted        # adopted BEFORE the download
 
 
+def test_binary_install_refuses_a_clone_required_checkout_with_local_changes(tmp_path, monkeypatch):
+    """The ONE place a local file blocks a BINARY install: a component whose artifact only
+    overlays build output while the code it runs lives in the repo (`clone_required` — today
+    meshcom's QEMU node). There a local file would put operator code under a "pinned" install, so
+    the install refuses and names it — even though a source UPDATE carries that same file. Every
+    other binary install ships what it runs and never reads a source checkout this way.
+
+    Live-found: `install --source binary` for the daemon succeeded with an untracked file in
+    `src/loraham-daemon`, because the daemon declares no `clone_required`.
+    """
+    from lhpc.core.install import DirtyReport
+    svc = _svc(tmp_path, monkeypatch)
+    # The installer and the ownership verifier are stubbed as COLLABORATORS: this test is about
+    # what the gate does with a dirty verdict, not about how the verdict is computed (that is
+    # `dirty_report`'s own tests) nor about proving a real clone's identity. The live run on real
+    # hardware exercised the same gate against a genuine git checkout.
+    comp = next(c for st in svc.stacks() if st.id == "meshcom"
+                for c in st.components if c.id == "meshcom-qemu")
+    dest = svc._paths.resolve_source(comp.source.path)
+    dest.mkdir(parents=True)
+
+    class _Rec:
+        resolved_commit = comp.source.pin_commit
+
+    class _FakeInstaller:
+        def dirty_report(self, d, path):
+            return DirtyReport(untracked=("notes.txt",))     # an ordinary local addition
+        def _index_key(self):
+            return "source-txn-index"
+        def _recover_scan(self):
+            return None
+        def _pending_journals(self):
+            return []
+
+    monkeypatch.setattr(ControllerService, "_installer", lambda self: _FakeInstaller())
+    monkeypatch.setattr(source_registry, "verify_identity",
+                        lambda *a, **k: (_Rec(), ""))        # proven ours, at the pin
+    monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 2, "stacks": {}})
+    monkeypatch.setattr(bi, "index_entry", lambda idx, sid: _fake_entry(svc, sid))
+    monkeypatch.setattr(bi, "check_target", lambda e, t: None)
+    monkeypatch.setattr(bi, "check_pins", lambda e, p: None)
+    monkeypatch.setattr(bi, "require_zstd", lambda: None)
+    monkeypatch.setattr(ControllerService, "_dpkg_installed", lambda self, p: True)
+    monkeypatch.setattr(bi, "download_artifact",
+                        lambda e, d: pytest.fail("must refuse BEFORE downloading anything"))
+
+    res = svc.binary_install("meshcom", apply=True)
+    assert not res.ok                                        # refused...
+    assert comp.source.path in res.summary                   # ...naming the checkout...
+    assert any("notes.txt" in d for d in res.details)        # ...and the file it protects
+
+
 def test_binary_install_does_not_self_contend_on_its_own_source_guard(tmp_path, monkeypatch):
     """`binary_install` guards every path in `spec.covers`, then adopts the `clone_required`
     checkout inside that same guard. Passing the bare `locked` told adoption the lock was free
@@ -1309,7 +1361,9 @@ def _checkout(svc, tmp_path, rel, comp_id, *, commits=2, remote=None, dirty=Fals
         source_rel=rel, remote=origin, selector="pinned", resolved_commit=head,
         adopted_at=1.0, txn_id="txn-" + comp_id, components=(comp_id,)))
     if dirty:
-        (d / "operator-notes.txt").write_text("mine")
+        # a TRACKED modification: an ADDED file no longer blocks a takeover (it is carried
+        # across an update), so the refusal this exercises must be a real source change.
+        (d / "f0").write_text("operator edited upstream")
     return head
 
 

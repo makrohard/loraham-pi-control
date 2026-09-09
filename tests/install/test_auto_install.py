@@ -343,9 +343,9 @@ def test_reconcile_valid_identity_updates_dirty_blocks(tmp_path):
     comp = next(c for s in svc.stacks() if s.id == "kiss"
                 for c in s.components if c.id == "loraham-kiss-tnc")
     assert svc._reconcile_group("src/loraham-kiss-tnc", comp) == ("update", "")
-    (dest / "user-change.txt").write_text("late")                # dirty tree
+    (dest / "file.txt").write_text("operator edited upstream\n")  # TRACKED change -> dirty
     action, why = svc._reconcile_group("src/loraham-kiss-tnc", comp)
-    assert action == "blocked" and "local changes" in why
+    assert action == "blocked" and "upstream source modified locally" in why
 
 
 def test_auto_install_mode_aggregate(tmp_path):

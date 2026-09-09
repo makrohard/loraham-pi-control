@@ -52,15 +52,31 @@ _ADOPT_IGNORE = shutil.ignore_patterns(*_ADOPT_IGNORE_NAMES)
 
 @dataclass(frozen=True)
 class DirtyReport:
-    """Local changes that a destructive source operation would discard. `tracked` =
-    modified/staged/deleted tracked files; `untracked` = non-ignored untracked files EXCLUDING
-    LHPC-regenerable artifacts (`_ADOPT_IGNORE_NAMES` + every consumer component's declared
-    built binary). Either list non-empty => the tree is dirty for update/uninstall purposes."""
+    """Local changes in a managed checkout. `tracked` = modified/staged/deleted tracked files;
+    `untracked` = non-ignored untracked files EXCLUDING LHPC-regenerable artifacts
+    (`_ADOPT_IGNORE_NAMES` + every consumer component's declared built binary).
+
+    Two readings, because two kinds of operation are at stake: `__bool__` (either list) is what a
+    DESTRUCTIVE operation asks — uninstall and clean carry nothing forward, so an added file there
+    really would be lost. `blocks_update()` (tracked only) is what a source UPDATE asks, because
+    an update carries additions into the new source."""
     tracked: tuple = ()
     untracked: tuple = ()
 
     def __bool__(self) -> bool:
         return bool(self.tracked or self.untracked)
+
+    def blocks_update(self) -> bool:
+        """Does this tree refuse a source UPDATE? Only TRACKED changes do.
+
+        An update replaces the checkout with a fresh candidate and CARRIES local additions
+        across (`Installer.extra_files` → `source_fs.carry_extras`), so an added file is not
+        data an update would discard. A tracked modification still is: the upstream file it
+        edits does not survive the replacement, and LHPC will not guess how to merge it.
+
+        DESTRUCTIVE operations (uninstall, clean) keep the full `__bool__` rule — they carry
+        nothing, so an added file there really would be lost."""
+        return bool(self.tracked)
 
     def lines(self, limit: int = 8) -> list:
         out = [f"    modified: {p}" for p in self.tracked[:limit]]
@@ -408,14 +424,16 @@ class Installer:
                         f"Recover by removing the checkout ({spec.path}) and re-running "
                         f"install, which re-clones it at the pin.")
                     return action
-                # Never overwrite a working tree with local modifications — TRACKED changes
-                # AND non-ignored, non-artifact UNTRACKED files: staging into it would be
-                # silent data loss. Checked on the CAPTURED inode.
+                # Never overwrite the operator's changes to the UPSTREAM source (tracked
+                # modifications/deletions/staged content): the replacement would discard them and
+                # LHPC will not guess how to merge. Added files are carried instead of blocking —
+                # `blocks_update()`. Checked on the CAPTURED inode.
                 dirty = self.dirty_report(Path(prior.pinned_path()), spec.path)
-                if dirty:
+                if dirty.blocks_update():
                     action.status = "failed"
-                    action.detail = ("local modifications present — not overwritten:\n"
-                                     + "\n".join(dirty.lines()))
+                    action.detail = ("local modifications to the upstream source — not "
+                                     "overwritten:\n"
+                                     + "\n".join(f"    modified: {p}" for p in dirty.tracked[:8]))
                     return action
 
             # CONTAINMENT: the local-adoption fallback is DISABLED unless configured,
@@ -531,15 +549,40 @@ class Installer:
                 # completable by recovery from the journal alone.
                 meta = self._txn_meta(comp, spec, source, pre_pinned)
                 meta["had_prior"] = bool(had_prior)
-                # FINAL dirty recheck, run immediately before the prior is archived: a
-                # tracked or non-ignored untracked file created AFTER the initial check
-                # (e.g. while the candidate was cloning/building) must block the archive.
+                # FINAL dirty recheck, run immediately before the prior is archived: an
+                # upstream file MODIFIED after the initial check (e.g. while the candidate was
+                # cloning/building) must block the archive. A file merely ADDED in that window
+                # does not — it is carried like any other addition.
                 final_dirty = (
-                    (lambda: self.dirty_report(Path(prior.pinned_path()), spec.path))
+                    (lambda: self.dirty_report(Path(prior.pinned_path()),
+                                               spec.path).blocks_update())
                     if prior is not None and prior.kind == "dir" else None)
+                # LOCAL ADDITIONS: inventory the prior's untracked files and reproduce them in
+                # the candidate at identical paths. Runs INSIDE the activation, after the prior
+                # is archived, so the set is final. `carry_why` carries the first conflict out
+                # for a truthful message.
+                carry_why: dict = {}
+                # ...and `prev_why` the reason the archived prior had to be RETAINED, which is
+                # decided only at the very end, by re-proving the carry against the live tree.
+                prev_why: dict = {}
+
+                def _carry() -> bool:
+                    if prior is None or prior.kind != "dir" or handle is None:
+                        return False
+                    rels = self.extra_files(Path(prior.pinned_path()), spec.path)
+                    if rels is None:
+                        carry_why["why"] = ("local additions could not be inventoried "
+                                            "(git failed) — refusing rather than dropping them")
+                        return True
+                    why = source_fs.carry_extras(prior.fd, handle.fd, rels)
+                    if why:
+                        carry_why["why"] = why
+                    return bool(why)
+
                 outcome = self._activate_held(txn, dest, staging, verify_active=_post_ok,
                                               handle=handle, meta=meta, prior=prior,
-                                              final_dirty=final_dirty)
+                                              final_dirty=final_dirty, carry=_carry,
+                                              prev_why=prev_why)
                 if outcome == "substituted":
                     # An EXTERNAL process replaced the destination leaf between verification
                     # and the irreversible step: nothing of the substitute was archived,
@@ -567,18 +610,30 @@ class Installer:
                     action.detail = (
                         "prior-dirty: the update activated the new source, but the archived "
                         f"prior at {self._source_rel(dest.with_name('.' + dest.name + '.prev'))} "
-                        "gained late local changes — it is RETAINED with the transaction "
-                        "journal (inspect/salvage, then remove the .prev directory and the "
-                        "journal manually; automatic recovery will not delete it)")
+                        "still holds local content — "
+                        f"{prev_why.get('why', 'late local changes')} — it is RETAINED with the "
+                        "transaction journal (inspect/salvage, then remove the .prev directory "
+                        "and the journal manually; automatic recovery will not delete it)")
+                    return action
+                if outcome == "carry-failed":
+                    # A local addition could not be reproduced in the new source. The prior is
+                    # restored and authoritative; nothing was merged, renamed or overwritten.
+                    self._cleanup_owned_staging(txn, handle, staging.name)
+                    action.status = "failed"
+                    action.detail = ("update refused: "
+                                     + carry_why.get("why", "local files could not be preserved")
+                                     + " — resolve it in the checkout (move or remove the local "
+                                       "file), then retry")
                     return action
                 if outcome == "dirty":
                     # The owned candidate is discarded ONLY through its bound identity.
                     self._cleanup_owned_staging(txn, handle, staging.name)
                     action.status = "failed"
-                    action.detail = ("local modifications appeared during staging — the "
+                    action.detail = ("upstream source was modified during staging — the "
                                      "prior source is intact at its original path (nothing "
-                                     "was overwritten); commit/stash or remove the new "
-                                     "files and retry")
+                                     "was overwritten); revert or stash the change and retry "
+                                     "(for a permanent source change, fork the project and "
+                                     "point the remote and pin at your fork)")
                     return action
                 if outcome == "provenance-blocked":
                     post = provenance.evaluate(self.system.runner,
@@ -812,13 +867,39 @@ class Installer:
                 untracked.append(path)
             else:
                 tracked.append(path)
-        if tracked and not untracked:
+        if tracked:
             # Tracked changes that are exactly LHPC's own build-time patch are not operator
-            # work: the next build re-applies the patch to a fresh clone.
+            # work: the next build re-applies the patch to a fresh clone. Judged on the TRACKED
+            # diff alone (`lhpc_patched_only` runs `git diff HEAD`), so a local ADDITION beside
+            # the patch cannot make the patch look like operator work — the openHop checkout is
+            # patched by a build step and may still hold a stack's own files.
             patches = self._path_patches(source_path)
             if patches and lhpc_patched_only(self.system, str(dest), patches):
                 tracked = []
         return DirtyReport(tracked=tuple(tracked), untracked=tuple(untracked))
+
+    def extra_files(self, dest: Path, source_path: str) -> tuple | None:
+        """Files present in the checkout but NOT tracked by git — the local additions an update
+        carries into the fresh candidate. `None` means the inventory could not be taken (fail
+        closed: the caller refuses rather than silently dropping the operator's files).
+
+        `ls-files --others` WITHOUT `--exclude-standard`, so `.gitignore`d files are included
+        too: a stack's own log or settings file is usually ignored, and it is exactly what has
+        to survive. It also lists every file INDIVIDUALLY (`git status --ignored` collapses an
+        ignored directory to `logs/`), never reports FIFOs/sockets/devices, and skips empty
+        directories — we carry files, not empty trees.
+
+        Regenerable artifacts are filtered by the SAME predicate `dirty_report` uses, so
+        `build/`, `.run/` and a component's declared `bin` stay disposable in both."""
+        if not (dest / ".git").exists():
+            return ()
+        r = self.system.runner.run(["git", "-C", str(dest), "ls-files", "-z", "--others"], 10.0)
+        if r.returncode != 0:
+            return None
+        bins = self._path_bins(source_path)
+        return tuple(sorted(
+            p for p in (r.stdout or "").split("\0")
+            if p and p.split("/", 1)[0] not in _ADOPT_IGNORE_NAMES and p not in bins))
 
     # -- source ownership registry (transactional with activation) ----------
 
@@ -1198,12 +1279,25 @@ class Installer:
         finally:
             marker.close()
 
-    def _prev_dirty_scan(self, txn, dest: Path, prev: Path, prev_ident=None):
-        """FINAL dirty scan of the archived prior, BOUND to its leaf: capture the `.prev`
-        leaf no-follow, prove its identity (v4 evidence when available), and scan through
-        the captured fd-pinned path. Returns True (dirty — late tracked/non-ignored
-        untracked changes), False (clean / not dirty-capable), or None (unprovable —
-        the caller retains everything)."""
+    def _prev_dirty_scan(self, txn, dest: Path, prev: Path, prev_ident=None, why=None):
+        """FINAL scan of the archived prior, BOUND to its leaf: capture the `.prev` leaf
+        no-follow, prove its identity (v4 evidence when available), and scan through the
+        captured fd-pinned path. Returns True (RETAIN `.prev` — it still holds something the
+        operator would lose), False (nothing to keep; the cleanup may destroy it), or None
+        (unprovable — the caller retains everything).
+
+        The archive is about to be DESTROYED, so "keep it" is decided by proof, in two parts:
+          * an upstream file modified inside `.prev` after the earlier checks — the operator's
+            edit, never silently discarded;
+          * a local ADDITION `.prev` still holds that is not provably present in the ACTIVE
+            source. Carrying additions forward does not license trusting that the carry ran:
+            an activation completed by crash RECOVERY may have died between the archive and
+            the carry, and a file added to `.prev` after the carry is not in the active tree
+            either. `source_fs.extras_preserved` re-proves each one against the live tree.
+
+        (An update requires the affected stacks stopped, so nothing is appending to those files
+        while the proof runs.)"""
+        from . import source_fs
         try:
             if txn.leaf_kind(prev.name) != "dir":
                 return False                       # symlink/absent prior: nothing scannable
@@ -1215,23 +1309,75 @@ class Installer:
             # enforces the full v5 ctime before any removal. `prev_ident` may be v5 (3-element).
             if prev_ident is not None and [h.st_dev, h.st_ino] != list(prev_ident[:2]):
                 return None                        # substituted -> existing retention path
-            return bool(self.dirty_report(Path(h.pinned_path()), self._source_rel(dest)))
+            pinned, rel = Path(h.pinned_path()), self._source_rel(dest)
+            if self.dirty_report(pinned, rel).blocks_update():
+                if why is not None:
+                    why["why"] = ("the archived prior holds modifications to the upstream "
+                                  "source")
+                return True
+            rels = self.extra_files(pinned, rel)
+            if rels is None:
+                return None                        # cannot inventory -> retain everything
+            if not rels:
+                return False
+            if txn.leaf_kind(dest.name) != "dir":
+                return None                        # nothing to prove the additions against
+            dh = txn.capture_leaf(dest.name)
+            try:
+                unproven = source_fs.extras_preserved(h.fd, dh.fd, rels)
+            finally:
+                dh.close()
+            if unproven:
+                if why is not None:
+                    why["why"] = f"a local addition is not preserved in the new source: {unproven}"
+                return True
+            return False
+        except (OSError, PathContainmentError):
+            return None
         finally:
             h.close()
 
-    def _prev_cleanup_ok(self, txn, prev: Path, ident=None) -> bool:
+    def _prev_extras(self, txn, dest: Path, prev: Path):
+        """Local additions the archived prior still holds: `()` (none, or nothing scannable),
+        a tuple of relative paths, or None (unprovable). Recovery asks this BEFORE promoting a
+        staged candidate — see `_finish_or_rollback`."""
+        try:
+            if txn.leaf_kind(prev.name) != "dir":
+                return ()
+            h = txn.capture_leaf(prev.name)
+        except (OSError, PathContainmentError):
+            return None
+        try:
+            return self.extra_files(Path(h.pinned_path()), self._source_rel(dest))
+        except (OSError, PathContainmentError):
+            return None
+        finally:
+            h.close()
+
+    def _prev_cleanup_ok(self, txn, prev: Path, ident=None, active=None) -> bool:
         """Remove the archived `.prev` — IDENT-BOUND ONLY. `.prev` is the transaction's own
         quarantine (atomically detached from dest with identity proof at archive time); its
         deletion binds to the recorded (dev, ino) through content removal and re-proves it
         before the final rmdir. WITHOUT identity evidence nothing is deleted (the caller
         retains `.prev` + journal); an ABSENT `.prev` is already-clean; a substituted one
-        is retained untouched."""
+        is retained untouched.
+
+        `active` is `(name, ident)` for the ACTIVE source, re-proven immediately before the
+        removal. What licenses destroying this archive is that the new tree carries everything
+        the archive held — a fact established about ONE inode. If the destination is swapped
+        after that proof and before this delete, the licence belonged to a tree that is no
+        longer there, so the archive is retained instead. A caller with no identity evidence
+        passes `active=None` and gets the historical behaviour."""
         from . import source_fs
         if txn.leaf_kind(prev.name) == "absent":
             return True
         if ident is None:
             return False                           # no identity evidence -> RETAIN
         source_fs.race_seam("pre-prev-delete", prev.name)
+        if active is not None:
+            name, aident = active
+            if aident is None or not source_fs.ident_matches(txn.fd, name, aident):
+                return False                       # active leaf swapped/unprovable -> RETAIN
         # `allow_ipc`: `.prev` is THIS transaction's own inode-bound quarantine — a checkout a
         # stack runs from legitimately holds a runtime socket (meshcom's `.run/`), and refusing
         # it left the archive half-deleted and the whole box blocked.
@@ -1326,6 +1472,7 @@ class Installer:
                     "persisted and rollback is not provable (journal retained)")
         try:
             with source_fs.ManagedSourceTransaction(self.paths, dest.parent) as txn:
+                unproven_carry = False
                 if txn.usable(dest.name):
                     # Completed activation: the ownership record must be completed (ONE retry —
                     # this call) and the archived prior PROVEN removed (held FD) before the
@@ -1343,8 +1490,9 @@ class Installer:
                         return _rollback_record_failure(txn)
                     if txn.leaf_kind(prev.name) != "absent":
                         source_fs.race_seam("pre-prev-cleanup", str(dest))
+                        prev_why: dict = {}
                         dirty = self._prev_dirty_scan(txn, dest, prev,
-                                                      idents.get("prev"))
+                                                      idents.get("prev"), prev_why)
                         if dirty is None:
                             return (f"recovery-required for {dest.name}: archived prior "
                                     "could not be proven (journal + prior retained)")
@@ -1358,38 +1506,66 @@ class Installer:
                             return (f"recovery-required for {dest.name}: activation is "
                                     f"complete, but the archived prior at "
                                     f"{self._source_rel(prev)} contains late local changes "
-                                    "— retained for the operator (never auto-deleted)")
-                        if not self._prev_cleanup_ok(txn, prev, idents.get("prev")):
+                                    f"({prev_why.get('why', 'unprovable')}) — retained for "
+                                    "the operator (never auto-deleted)")
+                        if not self._prev_cleanup_ok(
+                                txn, prev, idents.get("prev"),
+                                active=(dest.name, idents.get("candidate"))):
                             return (f"recovery-required for {dest.name}: archived prior "
                                     "could not be removed or was substituted (journal + "
                                     "prior retained)")
                     return _cleared("active source intact")
                 if txn.leaf_kind(staging.name) != "absent" and txn.leaf_kind(dest.name) == "absent":
-                    cand_ident = idents.get("candidate")
-                    if cand_ident is None:
-                        return (f"recovery-required for {dest.name}: no candidate identity "
-                                "evidence — automatic promotion refused (retained)")
-                    if not source_fs.ident_matches(txn.fd, staging.name, cand_ident):
-                        return (f"recovery-required for {dest.name}: staged candidate was "
-                                "substituted (everything retained)")
-                    source_fs.race_seam("pre-recovery-promote", str(dest))
-                    try:                                # died before staging->dest
-                        txn.rename_noreplace(staging.name, dest.name)
-                        txn.fsync()
-                    except (OSError, PathContainmentError):
-                        pass                            # fall through to prior restore
-                    else:
-                        # POST-promotion re-proof is dev+ino ONLY: our own rename just bumped the
-                        # candidate's ctime, so the v5 ctime was already proven on `staging` above;
-                        # here we only confirm the name still resolves to THAT inode (swap detection).
-                        if not source_fs.ident_matches(txn.fd, dest.name, list(cand_ident[:2])):
-                            return (f"recovery-required for {dest.name}: destination is no "
-                                    "longer the recorded candidate after promotion "
+                    # PROMOTION IS CARRY-BLIND. The interruption may have landed anywhere between
+                    # the archive and the carry, and the journal deliberately records no carry
+                    # state, so a candidate promoted here cannot be shown to hold the local
+                    # additions the archived prior still has. Rather than complete an activation
+                    # that would then have `.prev` (and the additions with it) cleaned away, roll
+                    # the transaction back below: the prior returns intact WITH its additions, and
+                    # the next update stages afresh and carries them again. An UNPROVABLE
+                    # inventory takes the same path — never the destructive one.
+                    #
+                    # IDENTITY FIRST: an archived prior that cannot be proven to be the journal's
+                    # own is not a tree this recovery may read a decision out of, let alone act
+                    # on. Retain everything before inventorying it — the same fail-closed order
+                    # every other destructive step here follows.
+                    extras = ()
+                    if txn.leaf_kind(prev.name) != "absent":
+                        pi = idents.get("prev")
+                        if pi is None or not source_fs.ident_matches(txn.fd, prev.name, pi):
+                            return (f"recovery-required for {dest.name}: archived prior could "
+                                    "not be proven before deciding the interrupted update "
                                     "(everything retained)")
-                        if txn.usable(dest.name):
-                            if not _record_ok(_head_state()):
-                                return _rollback_record_failure(txn)
-                            return _cleared("completed interrupted activation")
+                        extras = self._prev_extras(txn, dest, prev)
+                    unproven_carry = extras != ()
+                    if not unproven_carry:
+                        cand_ident = idents.get("candidate")
+                        if cand_ident is None:
+                            return (f"recovery-required for {dest.name}: no candidate identity "
+                                    "evidence — automatic promotion refused (retained)")
+                        if not source_fs.ident_matches(txn.fd, staging.name, cand_ident):
+                            return (f"recovery-required for {dest.name}: staged candidate was "
+                                    "substituted (everything retained)")
+                        source_fs.race_seam("pre-recovery-promote", str(dest))
+                        try:                                # died before staging->dest
+                            txn.rename_noreplace(staging.name, dest.name)
+                            txn.fsync()
+                        except (OSError, PathContainmentError):
+                            pass                            # fall through to prior restore
+                        else:
+                            # POST-promotion re-proof is dev+ino ONLY: our own rename just bumped
+                            # the candidate's ctime, so the v5 ctime was already proven on
+                            # `staging` above; here we only confirm the name still resolves to
+                            # THAT inode (swap detection).
+                            if not source_fs.ident_matches(txn.fd, dest.name,
+                                                           list(cand_ident[:2])):
+                                return (f"recovery-required for {dest.name}: destination is no "
+                                        "longer the recorded candidate after promotion "
+                                        "(everything retained)")
+                            if txn.usable(dest.name):
+                                if not _record_ok(_head_state()):
+                                    return _rollback_record_failure(txn)
+                                return _cleared("completed interrupted activation")
                 if txn.leaf_kind(prev.name) != "absent":     # died after dest->prev: roll back
                     # An OCCUPIED dest slot (dangling symlink, file, injected dir, special
                     # leaf) is NEVER deleted to continue — retain it + `.prev` + journal.
@@ -1403,6 +1579,33 @@ class Installer:
                     if not source_fs.ident_matches(txn.fd, prev.name, prev_ident):
                         return (f"recovery-required for {dest.name}: archived prior was "
                                 "substituted (everything retained)")
+                    if unproven_carry and txn.leaf_kind(staging.name) != "absent":
+                        # Discard THIS transaction's candidate, ident-bound, so the rollback
+                        # leaves no half-updated tree beside the restored source. Ordered AFTER
+                        # the prior's identity proof above: nothing is destroyed until the tree
+                        # we are rolling back TO is known to be ours. Anything unprovable
+                        # retains everything instead.
+                        cand_ident = idents.get("candidate")
+                        if cand_ident is None:
+                            return (f"recovery-required for {dest.name}: the interrupted "
+                                    "update cannot be proven to have preserved local "
+                                    "additions and its candidate has no identity evidence "
+                                    "(everything retained)")
+                        # FULL v5 identity, deliberately. The carry writes into this candidate
+                        # after the journal recorded its ident, so a crash mid-carry leaves a
+                        # ctime that can no longer be proven — and then the candidate is NOT
+                        # deleted. dev+ino alone is forgeable through inode recycling, and the
+                        # post-rename re-proofs that use it are a different trust boundary: there
+                        # LHPC has just proven all three fields and caused the change itself,
+                        # inside one held operation. Here an arbitrary amount of time and any
+                        # number of processes sit between the proof and this deletion, so an
+                        # unprovable candidate is retained as evidence, never destroyed.
+                        source_fs.race_seam("pre-recovery-rollback-delete", staging.name)
+                        ok, _w = source_fs.remove_bound(txn.fd, staging.name, cand_ident)
+                        if not ok:
+                            return (f"recovery-required for {dest.name}: staged candidate is "
+                                    "not the recorded one or could not be removed "
+                                    "(everything retained)")
                     try:
                         txn.rename_noreplace(prev.name, dest.name)
                         txn.fsync()
@@ -1418,7 +1621,10 @@ class Installer:
                     if not txn.usable(dest.name):
                         return (f"recovery-required for {dest.name}: restored prior is not "
                                 "usable (journal retained)")
-                    return _cleared("rolled back to prior version")
+                    return _cleared("rolled back to prior version" + (
+                        " — the interrupted update could not be proven to have preserved the "
+                        "local additions in the prior source, so it was undone rather than "
+                        "completed (retry the update)" if unproven_carry else ""))
         except PathContainmentError:
             return f"recovery-required for {dest.name}: source parent unsafe (journal retained)"
         return f"recovery-required for {dest.name}: nothing to restore (journal retained)"
@@ -1470,7 +1676,8 @@ class Installer:
         return txn.verify_candidate(handle, name)
 
     def _activate_held(self, txn, dest: Path, staging: Path, meta: dict, verify_active=None,
-                       handle=None, prior=None, final_dirty=None) -> str:
+                       handle=None, prior=None, final_dirty=None, carry=None,
+                       prev_why=None) -> str:
         from . import source_fs
         prev = dest.with_name(f".{dest.name}.prev")
         # A pre-existing `.prev` is an UNOWNED orphan (the journal is created EXCLUSIVELY just
@@ -1549,7 +1756,10 @@ class Installer:
                     # discarded by the caller through its bound identity; the prior source
                     # and its registry record stay authoritative and consistent).
                     source_fs.race_seam("post-archive", str(dest))
-                    if final_dirty is not None and final_dirty():
+
+                    def _restore(outcome: str) -> str:
+                        """Put the archived prior back and refuse. The candidate is discarded
+                        by the caller through its bound identity."""
                         try:
                             txn.rename_noreplace(prev.name, dest.name)
                         except (OSError, PathContainmentError):
@@ -1558,8 +1768,17 @@ class Installer:
                         if prior is not None and not txn.verify_leaf(prior, dest.name):
                             return "recovery-required"   # unproven restore -> retain journal
                         if jh["marker"].remove():
-                            return "dirty"               # truthful refusal; prior restored
+                            return outcome               # truthful refusal; prior restored
                         return "recovery-required"
+
+                    if final_dirty is not None and final_dirty():
+                        return _restore("dirty")
+                    # AUTHORITATIVE CARRY: the prior pathname is detached, so no pathname-based
+                    # writer can add another file to it before activation — this inventory is
+                    # final. A collision or an unprovable copy restores the prior and refuses;
+                    # nothing is ever merged or overwritten.
+                    if carry is not None and carry():
+                        return _restore("carry-failed")
                 # TIGHT re-check IMMEDIATELY before promotion (bounded only by kernel rename
                 # atomicity): a substituted candidate leaf is never promoted.
                 if not self._verify_staged(txn, handle, staging.name):
@@ -1659,13 +1878,15 @@ class Installer:
             prior_ident = ([prior.st_dev, prior.st_ino] if prior is not None else None)
             if txn.leaf_kind(prev.name) != "absent":
                 source_fs.race_seam("pre-prev-cleanup", str(dest))
-                dirty = self._prev_dirty_scan(txn, dest, prev, prior_ident)
+                dirty = self._prev_dirty_scan(txn, dest, prev, prior_ident, prev_why)
                 if dirty is None:
                     return "recovery-required"
                 if dirty:
                     self._update_journal(jh, dest, prev, staging, "prior-dirty-retained")
                     return "prior-dirty"
-                if not self._prev_cleanup_ok(txn, prev, prior_ident):
+                active = ((dest.name, [handle.st_dev, handle.st_ino])
+                          if handle is not None else None)
+                if not self._prev_cleanup_ok(txn, prev, prior_ident, active=active):
                     return "recovery-required"
             txn.fsync()
             return "activated" if jh["marker"].remove() else "recovery-required"
