@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.7
+
+- openhop-core: 8cdb04e73 -> 8a3921da1 (v1.0.10-410-g8a3921d), used by meshcore-node
+- openhop-repeater: efc5616ec -> 47e49e64a (1.1.4-1-g47e49e6), used by openhop-repeater-src
+
 ## 0.3.6
 
 - A default install lands on the composition this release proved: without `--source`, install, update and auto-install take the published binary where there is one, else `pinned` (was `dev`). The image builder runs that same bare auto-install, so a fresh image carries the release's pins instead of the branch tips of the day. `dev` and `stable` stay available as explicit choices.
