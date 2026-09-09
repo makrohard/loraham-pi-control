@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.11
+
+- CI lints the test lab. `CONTRIBUTING.md` has always named `ruff check lhpc testlab` as the gate, but the workflow ran `ruff check lhpc` only, so findings in `testlab/` could sit on `main` unnoticed — five did, until 0.3.10 fixed them. The workflow and `maintenance.md` now match what contributors are told to run.
+
 ## 0.3.10
 
 - Voice is an ordinary pinned source. Its `artifact` flag meant an ordinary pinned install or update took the branch tip and skipped the identity check, so the manifest pin was decorative. It now installs and verifies the pinned commit like every other source.

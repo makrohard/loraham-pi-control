@@ -58,8 +58,10 @@ jobs:
       - name: Shell-syntax check installer + bootstrap scripts
         run: bash -n install.sh uninstall.sh bootstrap-deps.sh
 
-      - name: Ruff (production code, default rules)
-        run: ruff check lhpc
+      - name: Ruff (production code + test lab, frozen ruleset)
+        # `testlab` too: CONTRIBUTING has always named it in this gate, but CI checked only
+        # `lhpc`, so five findings sat on `main` unnoticed until someone ran it by hand.
+        run: ruff check lhpc testlab
 
       - name: Ruff (tests — fatal errors only)
         run: ruff check tests --select F,E9

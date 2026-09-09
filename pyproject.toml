@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loraham-pi-control"
-version = "0.3.10"
+version = "0.3.11"
 description = "Terminal-first and web-enabled installer/updater/configurator/orchestrator for LoRaHAM Pi stacks"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -99,7 +99,9 @@ extend-exclude = ["lhpc/data/meshcore_host"]
 
 [tool.ruff.lint]
 # The rule set is FROZEN EXPLICITLY so the ruff version can float without CI going red — a ruff
-# release that changes its DEFAULT selection can't add rules behind our back. This is the modern
+# release that changes its DEFAULT selection can't add rules behind our back. It is not frozen
+# against ruff itself: the entries below are FAMILIES, so a new rule inside one (FURB167 did this)
+# arrives on an upgrade. That is the deliberate trade — new checks in a family we chose. This is the modern
 # curated set (roughly ruff 0.16's effective default) minus the opinionated/noisy PLR-refactor and
 # docstring/naming/pathlib families; add or drop a family here deliberately.
 select = [

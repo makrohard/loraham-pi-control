@@ -20,7 +20,7 @@ work lives in [backlog.md](backlog.md); the release-matrix procedure in
 On pushes to `main` and `dev`, on pull requests and on manual dispatch — Python 3.11/3.12/3.13, GitHub runners (`.github/workflows/ci.yml`):
 
 - `compileall lhpc` + `bash -n install.sh uninstall.sh bootstrap-deps.sh`
-- `ruff check lhpc` (the frozen ruleset) and `ruff check tests --select F,E9`
+- `ruff check lhpc testlab` (the frozen ruleset) and `ruff check tests --select F,E9`
 - `pytest -q --cov=lhpc --cov-branch` — the **whole** suite with branch coverage measured and published (terminal summary, `coverage.xml` artifact per Python version, the total in the job summary); no `-m` lane, not under `setsid`
 - `bandit -q -r lhpc -lll` (high severity only) and `pip-audit . --strict` (dependency CVEs)
 - a separate `pin-validation` job: **every pinned source is validated against its live branch**
