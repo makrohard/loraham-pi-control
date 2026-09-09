@@ -27,7 +27,8 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
 - `testlab.yml`, on the same branches and on pull requests: the console lane on an aarch64 runner
   ([testlab.md](testlab.md#running-the-verification-lanes)). Its second job, `release-verify`,
   installs, builds, starts and identity-proves every stack a pin release may move; it runs on
-  pushes to `main` and on dispatch with `release_verify=true`, not on every push
+  pushes to `main` and on dispatch with `release_verify=true` — not on `dev` and not on a pull
+  request, because it installs and builds everything
 - a separate `meshcore-host` job: **LHPC's own** tests for `lhpc/data/meshcore_host`, which ships
   inside `lhpc/data/` so `pytest -q` does not collect it. Most of them exercise LHPC behaviour
   against the external API, so the manifest-pinned openHop core is installed as a dependency,
@@ -63,8 +64,11 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
 ## Branches and releases
 
 - **`main` is the latest release.** Every commit on it carries a tag; `install.sh` clones it,
-  `self-update` fast-forwards deployed boxes along it, the image builder reads it. It advances
-  only by a fast-forward from `dev` at a release, never by a direct push, never rewritten.
+  `self-update` fast-forwards deployed boxes along it, the image builder reads it. It only ever
+  fast-forwards and is never rewritten. Two paths advance it, and they are the two release paths
+  below: a **minor** release fast-forwards it from `dev`, and a **patch** release fast-forwards
+  it from a one-commit branch taken off `main` itself. Neither is a direct push of unproven
+  work: both land a commit whose checks are already green.
 - **`dev` is the integration branch.** All work lands there, one complete commit per change,
   from a topic branch rebased on `dev` and squash-merged; CI and testlab run on every push; the
   reference box runs it for testing (its self-update identity check reports `unsafe: checkout
@@ -96,7 +100,9 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
     and the release lane proves every stack on the new default.
   - The proof a patch needs is the proof its own change calls for. A **pin move** is proved by
     the binary builder's smoke and clean-runtime test plus the
-    [release-verification lane](testlab.md#running-the-verification-lanes) — no box. Anything
+    [release-verification lane](testlab.md#running-the-verification-lanes) — no box. That lane
+    covers the stacks whose pins may move automatically; the daemon, RadioLib and the shared
+    chat source are not among them, because the real daemon needs a radio to start. Anything
     that changes behaviour on hardware is proved on the box and recorded in
     [live-test.md](live-test.md).
   - **Bringing the patch back to `dev`:** fast-forward `dev` when it still equals the old `main`;

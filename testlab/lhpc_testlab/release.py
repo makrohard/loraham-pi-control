@@ -7,6 +7,7 @@ They drive the REAL `lhpc` executable and read LHPC's own predicates. Nothing he
 from __future__ import annotations
 
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -18,10 +19,36 @@ from pathlib import Path
 from lhpc_testlab.testing import run_lhpc
 
 
-def stop(env: dict, *stacks: str) -> None:
-    """Release the bands before the next stack claims them."""
+def stop(env: dict, *stacks: str, require: bool = True) -> None:
+    """Release the bands before the next stack claims them.
+
+    A stop that failed is not housekeeping: the next stack will collide with whatever is still
+    holding the band, and the failure it then reports will name the wrong thing. `require=False`
+    is for stacks that may not be running at all.
+    """
     for sid in stacks:
-        run_lhpc(env, "stack", "stop", sid, "--yes", timeout=300)
+        r = run_lhpc(env, "stack", "stop", sid, "--yes", timeout=300)
+        if require and r.returncode != 0:
+            raise AssertionError(f"stopping {sid} failed (rc {r.returncode}): "
+                                 f"{r.stdout[-800:]}")
+
+
+def state_of(env: dict, stack: str) -> str:
+    """The stack's own run state as `lhpc status` reports it, e.g. `running` or `stopped`.
+
+    Parsed from the stack's header line — `[kiss] LoRaHAM KISS TNC  (running)` — because merely
+    finding the stack's NAME in the output is true of a stopped stack too, and of one that was
+    never installed.
+    """
+    out = run_lhpc(env, "status", timeout=120).stdout
+    m = re.search(rf"^\[{re.escape(stack)}\][^\n(]*\(([a-z-]+)\)", out, re.M)
+    return m.group(1) if m else ""
+
+
+def running(env: dict, stack: str) -> bool:
+    """Running, and not merely mentioned. `degraded` is not running: it is the state LHPC uses
+    when the process is up but an endpoint it promised is not."""
+    return state_of(env, stack) == "running"
 
 
 def install_build(env: dict, stack: str, *, build: bool = True,
@@ -73,15 +100,18 @@ def wait_http(url: str, timeout: float, accept=(200,)) -> int:
     return last
 
 
-def running(env: dict, stack: str) -> bool:
-    return stack in run_lhpc(env, "status", timeout=120).stdout
-
-
 def pty_readiness(command: str, env: dict, *, ready_timeout: float = 60.0,
-                  hold: float = 5.0) -> bytes:
+                  hold: float = 5.0, expect: str = "") -> bytes:
     """Run an INTERACTIVE component the way an operator does — on a real terminal — and prove
-    it: it must write to that terminal (a TUI drawing its screen), still be running afterwards,
-    and exit when asked. Returns what it drew.
+    it: it must draw its own screen, still be running afterwards, and exit CLEANLY when asked.
+    Returns what it drew.
+
+    `expect` is a regular expression the drawn output must match. Without it "wrote something"
+    accepts a program that printed an error and stayed up, which is exactly the false pass this
+    lane exists to avoid.
+
+    Cleanup is part of the proof, not tidying: a component that has to be killed did not exit,
+    and a lane that silently escalates to SIGKILL would hide a hung application.
 
     The controller never starts these itself, so the command comes from the production renderer
     (`manual_start_command`), not from a literal here.
@@ -124,12 +154,16 @@ def pty_readiness(command: str, env: dict, *, ready_timeout: float = 60.0,
                 drawn += chunk
             if proc.poll() is not None:
                 break
-        tail = drawn[-400:].decode("utf-8", "replace")
+        tail = drawn[-600:].decode("utf-8", "replace")
         assert drawn, f"{command!r} drew nothing on its terminal within {ready_timeout} s"
+        if expect:
+            assert re.search(expect, drawn.decode("utf-8", "replace"), re.I | re.S), (
+                f"{command!r} did not draw anything matching {expect!r}. It drew: {tail!r}")
         time.sleep(hold)
         assert proc.poll() is None, (
             f"{command!r} exited on its own (rc={proc.returncode}) — not a running app. "
             f"It drew: {tail!r}")
+        killed = False
     finally:
         try:
             os.killpg(proc.pid, signal.SIGTERM)
@@ -140,8 +174,42 @@ def pty_readiness(command: str, env: dict, *, ready_timeout: float = 60.0,
         except subprocess.TimeoutExpired:
             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait(timeout=10)
+            killed = True
         os.close(master)
+    assert not killed, (f"{command!r} ignored SIGTERM and had to be killed — it does not exit "
+                        f"cleanly")
     return drawn
+
+
+def start_component(env: dict, component: str, timeout: float = 900.0) -> None:
+    """Start ONE component by name.
+
+    An `optional` component is not started by `lhpc stack start <stack>` — Sideband, LXMD and
+    the MeshCore Web UI among them. Naming it is how an operator starts it, and it is the only
+    way this lane can claim it starts at all.
+    """
+    r = run_lhpc(env, "stack", "start", component, "--yes", timeout=timeout)
+    assert r.returncode == 0, (f"starting {component} failed (rc {r.returncode})",
+                               r.stdout[-2000:], r.stderr[-500:])
+
+
+def alive(env: dict, component: str) -> bool:
+    """Is this COMPONENT running, as LHPC's own status reports it?"""
+    out = run_lhpc(env, "status", timeout=120).stdout
+    m = re.search(rf"^\s+{re.escape(component)}\s+([a-z-]+)", out, re.M)
+    return bool(m) and m.group(1) == "running"
+
+
+def built(svc, stack_id: str, comp_id: str) -> bool:
+    """Was this component BUILT? LHPC's own predicate, over the artifact rather than the
+    checkout.
+
+    It is the honest evidence for a component this box does not run. Voice ships two variants
+    that share one source checkout and LHPC starts exactly one of them per box, so the other
+    can only be proved to have been built — and a matching checkout proves neither."""
+    st = svc.stack(stack_id)
+    comp = next((c for c in st.components if c.id == comp_id), None)
+    return bool(comp is not None and svc.is_built(comp))
 
 
 def gui_startable(svc, stack_id: str, comp_id: str) -> bool:

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.8
+
+- The release-verification lane no longer reports a pass it did not earn. A stack counts as running only when LHPC's own status says `running` for it, a failed stop is a failure rather than housekeeping, an interactive component must draw what it is supposed to draw and must exit cleanly rather than be killed, and the optional components a stack start deliberately leaves alone (Sideband, LXMD, the MeshCore Web UI) are started by name. Both Voice variants are proved, because they share one checkout and it proves neither.
+- Its identity check fails closed: a mandatory component that is not installed is a failure, not a printed note, and a binary stack is compared against every component its artifact covers. Artifact integrity is checked before the stacks start, because an emulated node writes to its own flash as soon as it boots.
+- `release-verify` runs on `main` pushes and explicit dispatch only. It used to run on every push, including `dev`, which spent half an hour proving a commit nobody was about to release.
+- Documentation: how `main` advances by both release paths; that a binary row's build is refused rather than skipped; that a `dev` checkout reads `match` when the branch tip IS the pin; and the four different questions provenance answers, of which file integrity is the one that is time-sensitive.
+
 ## 0.3.7
 
 - openhop-core: 8cdb04e73 -> 8a3921da1 (v1.0.10-410-g8a3921d), used by meshcore-node

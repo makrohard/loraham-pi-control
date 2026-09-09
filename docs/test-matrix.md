@@ -56,6 +56,9 @@ lhpc status <stack>                           # 5. verify: the row's evidence co
 t lhpc stack stop <stack> --yes               # 6. stop; `lhpc status` shows nothing left running
 ```
 
+- **A binary row's build is REFUSED, not skipped.** `lhpc build` on a binary install has no
+  source tree to build and says so; that typed refusal is the correct outcome and is recorded as
+  the row's build result.
 - **Times.** `install` is the wrapper's number for step 2, `build` for step 3, `start` for step 4
   (the controller returns when the components are verified). Where a stack is *usable* later than
   it is *verified* (MeshCom's web UI answers 502 until the firmware has booted), record both.
@@ -74,17 +77,17 @@ sources) is still purged and reinstalled on its own.
 
 | # | stack | channel | build | start | evidence |
 |---|---|---|---|---|---|
-| 1 | `daemon` | binary | — | both bands | `lhpc status daemon`: READY on 433 and 868; `lhpc daemon 433` answers |
+| 1 | `daemon` | binary | refused (no source tree) | both bands | `lhpc status daemon`: READY on 433 and 868; `lhpc daemon 433` answers |
 | 2 | `chat` | pinned | daemon sources | interactive | the printed command runs in a terminal and exits cleanly |
 | 3 | `voice` | pinned | `loraham-voice-cli` (GTK variant skipped on Lite) | interactive | the terminal variant's printed command runs; GTK reported skipped, not failed |
 | 4 | `kiss` | pinned | `loraham-kiss-tnc` | 433 | verified; TCP `127.0.0.1:8001` answers |
 | 5 | `graywolf` | fetched release | — | 433 (needs kiss) | verified; web UI `127.0.0.1:8080` answers; the KISS client is held |
 | 6 | `reticulum` | pinned | rns, nomadnet, lxmd (sideband skipped on Lite) | the free band | `rnstatus` lists the LoRa interface; the ready marker present |
 | 7 | `meshcore` | pinned | node, webui, openhop repeater source | 868, mode chat+repeater | node and repeater verified; web UI `:8788` and dashboard `:8000` answer; `meshcore-cli` listed on the Dashboard |
-| 8 | `meshtastic` | binary | — | 868 (MeshCore stopped) | verified; `lhpc meshtastic --info` returns the node; `meshtastic-cli` listed |
+| 8 | `meshtastic` | binary | refused (no source tree) | 868 (MeshCore stopped) | verified; `lhpc meshtastic --info` returns the node; `meshtastic-cli` listed |
 | 9 | `meshtastic` | pinned (from source) | meshtasticd | 868 | as row 8; build time and memory recorded |
 | 10 | `daemon` | pinned (from source) | RadioLib + daemon | both bands | as row 1; build time and memory recorded |
-| 11 | `meshcom` | binary | bridge | 433 (graywolf/kiss stopped) | verified; web UI `:18083` 502 until boot then 200; callsign switches from the placeholder |
+| 11 | `meshcom` | binary | refused (no source tree) | 433 (graywolf/kiss stopped) | verified; web UI `:18083` 502 until boot then 200; callsign switches from the placeholder |
 | 12 | `meshcom` | pinned (from source) | QEMU, firmware, bridge | 433 | as row 11 — the longest row by far (build times: [maintenance](maintenance.md#running-on-a-pi)); memory watched throughout |
 
 Rows 9–12 are the heavy compiles: console stopped, `vmstat` running, `dmesg` checked after each.
@@ -129,7 +132,7 @@ After the per-stack rows, with the box holding every stack installed and built:
 | check | how | evidence |
 |---|---|---|
 | **auto-install consistency (CLI path)** | purge every stack, then `lhpc auto-install --yes` — the exact command the image builder runs and README step 9; every log file the run announces (`tail -f …`) must exist afterwards | every stack ends installed on its default channel (binary where published, else `pinned`) and built; `lhpc status --versions` reads `match` for every source component (a `differs` means the default channel did not resolve to the pin); `lhpc status --versions` recorded as-is (what `match`/`differs` mean: [provenance](provenance.md)); the image's `components-*.txt` shows the same lines; nothing reads "not built"; total time recorded |
-| **`dev` selector spot-check** | on one light stack with no binary (kiss): `lhpc clean kiss --purge --yes`, `lhpc install kiss --source dev --yes`, build, start, then reinstall it on the default channel | the install reports the branch tip and `lhpc status --versions` reads `differs` against the pin (that is what `dev` means); the stack starts; after the reinstall it reads `match` again |
+| **`dev` selector spot-check** | on one light stack with no binary (kiss): `lhpc clean kiss --purge --yes`, `lhpc install kiss --source dev --yes`, build, start, then reinstall it on the default channel | the install reports the resolved BRANCH TIP and the checkout is at it; `lhpc status --versions` reads `differs` when the tip is ahead of the pin and `match` when the tip IS the pin — both are correct, the check is that the selector resolved to the tip; the stack starts; after the reinstall it reads `match` |
 | **known-working** | after each stack's green start, the stack page must offer to record the composition; confirm it there for every source-built stack (a binary install and the fetched graywolf release have no source composition and show no offer, by design) (the CLI form is `lhpc known-working <stack>`) | the offer is visible and plainly worded (one click, no commit ids to understand); `profiles/known-working/<stack>.json` and `lhpc status --versions` show the run-proven pins (the per-release step in [maintenance](maintenance.md#moving-a-pin)) |
 | **boot restore** | power-cycle once with the release's default running set | `N restored, 0 failed`, console reachable |
 | **web console** | Dashboard, Apps rows, Settings of every stack after the run | no traceback in the console log; every row opens |

@@ -54,6 +54,19 @@ artifact** instead of a source build. Same policy, different medium:
 - provenance is recorded per install in `state/binary/<stack>.json` and shown as
   `binary@<sha>` by `lhpc status --versions`.
 
+Four different questions get four different answers, and they are easy to confuse:
+
+| question | what answers it |
+|---|---|
+| is this checkout the commit it claims? | the ownership record plus its live `HEAD` (`source_registry.verify_identity`) |
+| is this stack installed from an artifact at all? | the receipt's four-state read (`receipt_state`) — cheap, no hashing |
+| is that artifact the right COMMITS? | the receipt's `components` map against the manifest pins — the same comparison the install gate makes |
+| are the artifact's FILES still as installed? | `verify_files`, which hashes them |
+
+The last one is an integrity check on what was installed, not a statement of provenance, and it
+is time-sensitive: an emulated node writes to its own flash as soon as it boots, so a mismatch
+there after a start means the node ran. Check it before starting; identify by commits after.
+
 Any failed check is a typed refusal that offers the source channel — never a silent fallback.
 Artifacts are built and published by
 [lhpc-binaries](https://github.com/makrohard/lhpc-binaries), which compiles exactly the pin. What

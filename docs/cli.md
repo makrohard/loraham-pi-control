@@ -92,7 +92,9 @@ dependencies change (CI shell-syntax-checks the committed snapshot).
 download the published **binary** artifact, or adopt/verify managed sources into the runtime root.
 
 - Without `--source`, a stack uses its default channel — binary where one is published for this
-  platform, else `pinned` (the newest known-working composition, else the manifest pin). The
+  platform, else `pinned`. `pinned` is the newest composition the OPERATOR confirmed as
+  known-working, and the manifest pin only when there is no such record: a fresh box therefore
+  installs the release's pins, while a box with a known-working entry keeps what it proved. The
   all-stacks form stays on that source channel. `dev` is an explicit choice.
 - A failed binary install asks **explicitly** whether to build from source; it never falls back
   silently.

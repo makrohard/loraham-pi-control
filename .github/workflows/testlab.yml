@@ -6,7 +6,8 @@
 # `release-verify` is a SECOND, heavier job: every stack a pin release may move, installed at
 # the selected commit, built, started and proved to BE that commit. It runs on pushes to `main`
 # and on dispatch with `release_verify=true` — an automated pin release dispatches it on its
-# candidate branch. It is deliberately NOT on every push: it installs and builds everything.
+# candidate branch. It is deliberately NOT on `dev` or on a pull request: it installs and builds
+# everything, and a commit nobody is about to release does not need that proof.
 name: testlab
 
 on:
@@ -113,7 +114,10 @@ jobs:
     # to be exactly the candidate manifest's commits. The daemon and RadioLib are the lab's
     # fixtures, so they are NOT proved here — their artifact is proved by the binary builder's
     # own smoke and clean-runtime test, and their pins move by hand.
-    if: ${{ github.event_name == 'push' || inputs.release_verify }}
+    # `main` pushes and explicit dispatch only. It used to run on every push, including `dev`,
+    # which spent half an hour proving a commit nobody was about to release and made the lane's
+    # own description untrue.
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.release_verify }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     steps:
