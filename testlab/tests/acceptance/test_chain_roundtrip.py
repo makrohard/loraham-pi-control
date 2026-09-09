@@ -10,7 +10,7 @@ import socket
 import time
 
 import pytest
-from labproc import run_lab, run_lhpc
+from lhpc_testlab.testing import run_lab, run_lhpc
 
 
 def _kiss_serving() -> bool:
@@ -44,9 +44,6 @@ def chain(lab):
 
 
 @pytest.mark.slow
-@pytest.mark.covers("stack:daemon#configure", "stack:daemon#start", "stack:kiss#start",
-                    "stack:kiss#configure", "stack:kiss#data", "stack:daemon#data",
-                    "cli:stack start", "cli:install", "cli:build")
 def test_kiss_rx_and_tx_round_trip(chain):
     """Injected APRS frame -> fake daemon framed RX -> real kiss TNC -> valid AX.25/KISS
     on TCP 8001; the same frame written back is a TX the fake daemon captures."""
@@ -74,8 +71,6 @@ def test_kiss_rx_and_tx_round_trip(chain):
 
 
 @pytest.mark.slow
-@pytest.mark.covers("stack:kiss#stop", "stack:daemon#stop", "stack:kiss#restart",
-                    "cli:stack stop", "cli:stack restart")
 def test_kiss_stop_restart_and_status(chain):
     r = run_lhpc(chain.env, "stack", "restart", "kiss", "--yes", check=True,
                  timeout=300)
@@ -85,8 +80,6 @@ def test_kiss_stop_restart_and_status(chain):
 
 
 @pytest.mark.slow
-@pytest.mark.covers("stack:graywolf#configure", "stack:graywolf#start",
-                    "stack:graywolf#data", "stack:graywolf#ui", "stack:graywolf#stop")
 def test_graywolf_shows_injected_station(chain):
     """Real graywolf consumes the chain and its REAL web UI shows the injected
     station. Needs dpkg-deb (Debian containers — the devcontainer/CI always has it)."""
@@ -130,8 +123,6 @@ def test_graywolf_shows_injected_station(chain):
 
 
 @pytest.mark.slow
-@pytest.mark.covers("stack:meshcore#configure", "stack:meshcore#start",
-                    "stack:meshcore#stop")
 def test_meshcore_real_process_over_fake_868(chain):
     """The real MeshCore host (python venv) starts against the fake 868 daemon and stops
     verified — the second real stack family on the chain."""
@@ -170,7 +161,6 @@ def test_meshcom_starts_on_the_prebuilt_image(chain):
 
 
 @pytest.mark.slow
-@pytest.mark.covers("route:POST /power/<kind>#reboot", "stack:daemon#restart")
 def test_simulated_reboot_restores_running_stacks(chain):
     """RE-AUDIT: with kiss running, a simulated reboot advances the boot id AND brings
     the previously-running stacks back (no operator-stop tombstone)."""

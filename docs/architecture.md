@@ -182,7 +182,8 @@ The guarantees the controller gives, each with where it is implemented and prove
   The manifest defines argv token templates; `core/commands.py` expands them so a validated
   user value is always its own token — it cannot merge with an option, change the executable,
   cwd or env, or become shell syntax. Interactive components get their copy-paste command from
-  the same spec. `tests/test_structured_exec.py` (source scan + spawn-argv capture).
+  the same spec. `tests/core/test_structured_exec.py` (rendered-runner AST check +
+  spawn-argv capture).
 - **Typed validation.** Every value is validated by type (`core/validators.py`) before
   persistence and before execution. `@file:` secrets fail closed — a missing, unreadable or empty
   secret blocks the launch (`core/commands.py`); a `pkg-config` failure aborts a build
@@ -192,45 +193,45 @@ The guarantees the controller gives, each with where it is implemented and prove
   fingerprint). `Lifecycle.stop` re-reads `/proc` and signals only an LHPC-owned session leader
   whose identity still matches; any mismatch means no signal and a `manual_required` verdict with
   the exact PID. It waits for verified cessation before clearing the record (no auto-SIGKILL).
-  `core/lifecycle.py`; `tests/test_process_ownership.py`.
+  `core/lifecycle.py`; `tests/core/test_process_ownership.py`.
 - **Path containment.** `core/runtime_fs.py` opens the runtime root and walks each parent with
   `O_DIRECTORY|O_NOFOLLOW`, so a symlink swapped in mid-operation cannot redirect a write;
   atomic writes fsync and `os.replace`; config, owned-record, journal and log leaves are opened
   `O_NOFOLLOW`; absolute and `..` paths are rejected. Failures are typed
-  (`PathContainmentError`) and caught at every boundary. `tests/test_runtime_fs.py`.
+  (`PathContainmentError`) and caught at every boundary. `tests/core/test_runtime_fs.py`.
 - **Source transactions.** An update clones a candidate beside the destination, archives the
   prior source to a transaction-owned `.prev`, activates by atomic no-clobber rename, writes the
   ownership record, then removes the `.prev` — journalled at every step; a failed activation
   never destroys the active source, and an unresolved or malformed journal blocks all source
   mutation until an operator resolves it. `core/install.py`, `core/source_fs.py`;
-  `tests/test_staged_update.py`, `tests/test_source.py`.
+  `tests/install/test_staged_update.py`, `tests/install/test_source.py`.
 - **Locking.** Start, stop, restart, build, update, uninstall and clean take named non-blocking
   locks; a contended operation refuses immediately, naming the holder. `core/reslock.py`.
 - **Config as a transaction.** A Settings save is validate-first and all-or-recoverable: the
   whole submission is validated before any write, files are journalled and atomically replaced,
   a mid-write failure rolls back. A malformed `local.toml` is preserved, never overwritten;
   a present-but-malformed per-stack file is a typed error (CLI: clean failure, web: 409, no echo
-  of the bad value), only an *absent* file means "use defaults". `tests/test_config.py`,
-  `tests/test_stack_params.py`.
+  of the bad value), only an *absent* file means "use defaults". `tests/core/test_config.py`,
+  `tests/stacks/test_stack_params.py`.
 - **Truthful outcomes.** Every component yields one typed `Outcome`; `ActionResult.ok` derives
   entirely from those. `start` fails unless every required component verified ready (a daemon
   start verifies each band's CONF socket); a stop counts as verified only when the process
   ceased AND every ready endpoint disappeared, and markers clear only then; `update` reports
-  nonzero on partial failure; CLI exit status and web flash agree. `tests/test_post_start.py`.
+  nonzero on partial failure; CLI exit status and web flash agree. `tests/core/test_post_start.py`.
 - **Daemon sockets.** One bounded CONF parser for every read (≥4 KiB, over-long or
   over-tokenized replies are rejected); a TX-mode change is read back, and an unconfirmed change
   blocks dependents (`core/daemon_control.py`). A compatibility `/tmp` socket is peer-checked with
   `SO_PEERCRED` after `connect()` and before any payload — the peer UID must equal the
   controller's; protected `/run/loraham` sockets keep their dedicated-UID model and are exempt
-  (`core/probes/backends.py`; `tests/test_socket_peercred.py`).
+  (`core/probes/backends.py`; `tests/web/test_socket_peercred.py`).
 - **Web.** Loopback bind only (`run_server` refuses a non-loopback host); every serving mode
   rejects an empty, malformed or unrelated `Host` with 400 before any session or CSRF work
-  (`tests/test_trusted_host.py`); mutations are POST + CSRF token + explicit confirm; every
+  (`tests/web/test_trusted_host.py`); mutations are POST + CSRF token + explicit confirm; every
   response carries `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: no-referrer` and a `Content-Security-Policy` locked to `'self'` (with `base-uri`/`frame-ancestors` `'none'`); per-stack
   config paths are proven to stay inside `config/stacks/`
-  (`tests/test_web.py::test_config_path_cannot_escape_via_band_or_id`). No GET route runs a
-  network or git-remote command (`tests/test_web.py::test_get_routes_make_no_network_calls`).
+  (`tests/web/test_web.py::test_config_path_cannot_escape_via_band_or_id`). No GET route runs a
+  network or git-remote command (`tests/web/test_web.py::test_get_routes_make_no_network_calls`).
   Network exposure is the nginx + mTLS front end, never a public bind — [webserver.md](webserver.md).
 - **Evidence once per request.** A page render reads each piece of evidence once (status
   snapshot, per-(stack, band) config, consumed-source SHAs, firewall status, listeners, git
@@ -245,7 +246,7 @@ The guarantees the controller gives, each with where it is implemented and prove
   the log of an active job.
 - **Uninstall protection.** Uninstall refuses while a target runs, never removes a source still
   referenced by another component (`loraham-kiss-tnc` and `loraham-kiss-serial` share `src/loraham-kiss-tnc`), and never deletes
-  config, secrets or profiles (`tests/test_uninstall_safety.py`). `uninstall.sh` writes the
+  config, secrets or profiles (`tests/core/test_uninstall_safety.py`). `uninstall.sh` writes the
   `.lhpc-uninstalling` guard (blocks new task admission), refuses on active or unprovable jobs
   or any UNKNOWN component, stops clients before the shared daemon and verifies cessation; if
   quiescence cannot be proven the guard is removed and nothing is deleted. Only byte-exact
@@ -253,7 +254,7 @@ The guarantees the controller gives, each with where it is implemented and prove
 - **Boot restore replays only saved configuration** through the normal gated start path —
   [operations.md](operations.md).
 - **Packaging.** Tracked assets live in `lhpc/data/` and load via `importlib.resources`
-  (`core/assets.py`) — a wheel installed into a fresh venv runs (`tests/test_packaging.py`).
+  (`core/assets.py`) — a wheel installed into a fresh venv runs (`tests/repo/test_packaging.py`).
 
 What is still open is tracked in [backlog.md](backlog.md).
 

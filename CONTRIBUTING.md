@@ -36,12 +36,13 @@ Run these locally before opening the PR — each is one command in a venv with
 | unit + contract suite | `pytest -q -n 12 --dist loadfile -p no:cacheprovider tests` (CI runs it serially, with coverage) |
 | lint, frozen ruleset | `ruff check lhpc testlab` and `ruff check tests --select F,E9` |
 | security | `bandit -q -r lhpc -lll` |
-| console lane | `python -m pytest -q testlab/tests` — the default lane; the acceptance and browser lanes are in [testlab](docs/testlab.md) |
+| testlab unit lane | `pytest -q testlab/tests/unit` — the simulator itself; the acceptance and browser lanes are opt-in, see [testlab](docs/testlab.md) |
 | docs | run inside the suite; what it pins: [maintenance](docs/maintenance.md#what-ci-does-not-enforce) |
 | shipped snapshot | `lhpc deps --script` must equal `bootstrap-deps.sh` when `lhpc/core/deps.py` changed |
 
-Two tests need a real Meshtastic CLI in the venv and fail without it; that is the only accepted
-local failure. Coverage is not gated; do not let it drop when you touch `lhpc/`.
+The suite is expected to be fully green locally: no failures, and nothing skipped on an ordinary
+developer machine. Coverage is measured, not gated — it is a diagnostic, so do not chase the
+percentage, and do not let it drop when you touch `lhpc/`.
 
 ## What a good change looks like
 

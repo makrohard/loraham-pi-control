@@ -161,10 +161,10 @@ the first three; note them when they occur.
 
 | refusal | pinned by |
 |---|---|
-| a second owner of a band (meshtastic while MeshCore or Reticulum holds 868; kiss while Reticulum holds 433) | `tests/test_run_order.py`, `tests/test_reticulum_stack.py` |
-| meshtastic with Reticulum on the bus (`spi.bus.0.unlocked`) | `tests/test_reticulum_stack.py` |
-| a start with a missing identity (Meshtastic / MeshCore node name, MeshCom callsign) — plan and apply, CLI and web | `tests/test_identity.py` |
-| a source update while a consumer runs; a drifted checkout is not overwritten | `tests/test_uninstall_safety.py`, `tests/test_source.py` |
-| a start against a build receipt that no longer matches its sources | `tests/test_reticulum_stack.py` |
-| a dependent component when its dependency failed to start | `tests/test_reticulum_stack.py` |
-| changing the GPS source, or a stack's `use_gps`, while a consumer runs | `tests/test_gps.py` |
+| a second owner of a band (meshtastic while MeshCore or Reticulum holds 868; kiss while Reticulum holds 433) | `tests/core/test_run_order.py`, `tests/stacks/test_reticulum_stack.py` |
+| meshtastic with Reticulum on the bus (`spi.bus.0.unlocked`) | `tests/stacks/test_reticulum_stack.py` |
+| a start with a missing identity (Meshtastic / MeshCore node name, MeshCom callsign) — plan and apply, CLI and web | `tests/core/test_identity.py` |
+| a source update while a consumer runs; a drifted checkout is not overwritten | `tests/core/test_uninstall_safety.py`, `tests/install/test_source.py` |
+| a start against a build receipt that no longer matches its sources | `tests/stacks/test_reticulum_stack.py` |
+| a dependent component when its dependency failed to start | `tests/stacks/test_reticulum_stack.py` |
+| changing the GPS source, or a stack's `use_gps`, while a consumer runs | `tests/stacks/test_gps.py` |

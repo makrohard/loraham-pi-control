@@ -3,11 +3,9 @@ parameterless-GET sweep with a process-boundary no-mutation check, and the Test 
 panel's own ops."""
 from __future__ import annotations
 
-import pytest
-from labproc import run_lab
+from lhpc_testlab.testing import run_lab
 
 
-@pytest.mark.covers("route:GET /", "route:GET /healthz")
 def test_dashboard_and_health(client):
     status, body = client.get("/")
     assert status == 200
@@ -15,8 +13,6 @@ def test_dashboard_and_health(client):
     assert client.get("/healthz")[0] == 200
 
 
-@pytest.mark.covers("route:GET /testlab", "route:POST /testlab/<op>#scenario",
-                    "route:POST /testlab/<op>#check")
 def test_testlab_panel_scenario_roundtrip(client, lab):
     status, body = client.get("/testlab")
     assert status == 200 and "Switch scenario" in body
@@ -36,9 +32,10 @@ def test_csrf_missing_token_refused_on_posts(client):
         assert status == 400, path
 
 
-def _get_rules():
-    """Parameterless GET rules straight from the real url_map (in-process app build —
-    enumeration only, the requests go to the real server)."""
+def _app_rules():
+    """The real app's url_map, built in process purely to ENUMERATE routes — every request in
+    these tests goes to the running server. One builder, so the GET and POST sweeps can never
+    disagree about what the surface is."""
     import os
     import tempfile
     from pathlib import Path
@@ -57,24 +54,21 @@ def _get_rules():
     finally:
         if env_off is not None:
             os.environ["LHPC_TESTLAB"] = env_off
-    rules = []
-    for rule in app.url_map.iter_rules():
-        if rule.endpoint == "static" or "GET" not in (rule.methods or ()):
-            continue
-        if "<" in rule.rule:
-            continue
-        rules.append(rule.rule)
-    return sorted(rules)
+    return [r for r in app.url_map.iter_rules() if r.endpoint != "static"]
 
 
-@pytest.mark.covers("route:GET /stacks", "route:GET /dependencies",
-                    "route:GET /auto-install", "route:GET /api/system",
-                    "route:GET /api/tasks", "route:GET /api/dash-signature",
-                    "route:GET /api/auto-install", "route:GET /api/hmac-apply",
-                    "route:GET /webserver/ca.crt", "route:GET /webserver/logs",
-                    "route:GET /firewall/logs", "route:GET /controller/logs",
-                    "route:GET /stacks/loraham-pi-control")
-def test_every_parameterless_get_renders_and_mutates_nothing(client, lab):
+def _get_rules():
+    """Parameterless GET rules — the ones a sweep can call without inventing an argument."""
+    return sorted(r.rule for r in _app_rules()
+                  if "GET" in (r.methods or ()) and "<" not in r.rule)
+
+
+def _post_rules():
+    """Every POST rule the app declares."""
+    return sorted(r.rule for r in _app_rules() if "POST" in (r.methods or ()))
+
+
+def test_every_parameterless_get_renders_and_preserves_watched_lab_state(client, lab):
     watched = ["state/testlab/scenario.json", "state/testlab/nm.json",
                "state/testlab/units.json", "config/local.toml"]
 
@@ -88,40 +82,53 @@ def test_every_parameterless_get_renders_and_mutates_nothing(client, lab):
     failures = []
     for rule in _get_rules():
         status, _body = client.get(rule)
-        # ca.crt may 404 before webserver init; a couple of flows answer with a
-        # redirect to their landing page — all are valid render responses.
-        if status not in (200, 302, 303, 404):
+        # Only ca.crt may legitimately 404 (no server CA before webserver init); a couple of
+        # flows answer with a redirect to their landing page. Every other rule must RENDER —
+        # accepting 404 for all of them would hide a page that started aborting.
+        ok = (200, 302, 303, 404) if rule == "/webserver/ca.crt" else (200, 302, 303)
+        if status not in ok:
             failures.append((rule, status))
     assert not failures, failures
-    assert snapshot() == before                     # GETs mutate nothing observable
+    # Narrow, and honest about it: these four files are the lab state a GET could plausibly
+    # disturb, not a whole-tree mutation detector.
+    assert snapshot() == before, "a GET changed lab state"
 
 
 def test_every_post_route_refuses_without_csrf(client):
-    """The POST sweep: EVERY POST row answers through the running app — a tokenless
-    POST is refused (400) or the op/route gate 404s. Proves route existence + the CSRF
-    discipline for the whole POST surface, including each dispatcher op."""
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    import covscan
-    subst = {"<sid>": "daemon", "<stack_id>": "daemon", "<target>": "daemon",
-             "<band>": "433", "<label>": "labx", "<action>": "enable"}
+    """Every POST route the running app declares refuses a tokenless POST with exactly 400.
+
+    The route list comes from the app's OWN url_map, like the GET sweep above, so the surface can
+    never drift from a hand-kept inventory.
+
+    EXACTLY 400, never a broader set. Accepting 404 too would let this pass after the very
+    regression it exists to catch: a CSRF check moved BEHIND target validation still refuses an
+    unauthenticated request today, but would answer 404 for an unknown target and the sweep would
+    stay green.
+
+    Each placeholder is therefore substituted with a target the route actually SERVES, which is
+    not the same stack for all of them: `<sid>` reaches the HMAC routes, and HMAC applies only to
+    meshcom; `<stack_id>` reaches `mode`, which only meshcore carries. Substituting one stack
+    everywhere makes several routes 404 before they ever reach their CSRF check — which is
+    exactly the blindness this assertion exists to remove.
+    """
+    subst = {"<sid>": "meshcom", "<stack_id>": "meshcore", "<target>": "daemon",
+             "<band>": "433", "<label>": "labx", "<action>": "enable",
+             "<op>": "start", "<kind>": "reboot", "<name>": "x"}
     failures = []
-    for rid in sorted(covscan.sweepable_route_ids()):
-        body = rid[len("route:"):]
-        method, rest = body.split(" ", 1)
-        if method != "POST":
-            continue
-        rule, _, op = rest.partition("#")
+    skipped = []
+    for rule in sorted(_post_rules()):
         path = rule
         for k, v in subst.items():
             path = path.replace(k, v)
-        for k in ("<op>", "<kind>"):
-            path = path.replace(k, op or "x")
-        status, _ = client.post(path, {"op": op} if op else {}, csrf_from=None)
-        if status not in (400, 404, 405):
-            failures.append((rid, status))
-    assert not failures, failures
+        if "<" in path:                      # an unknown converter: record it, never silently skip
+            skipped.append(rule)
+            continue
+        status, _ = client.post(path, {}, csrf_from=None)
+        if status != 400:
+            failures.append((rule, status))
+    assert not failures, f"POST routes that did not refuse a tokenless POST with 400: {failures}"
+    assert not skipped, (
+        f"no substitution for {skipped} — add one, or this route is not being swept at all")
 
 
 def test_second_reset_is_idempotent_and_returns_to_baseline(lab, client):

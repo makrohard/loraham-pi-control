@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loraham-pi-control"
-version = "0.3.4"
+version = "0.3.5"
 description = "Terminal-first and web-enabled installer/updater/configurator/orchestrator for LoRaHAM Pi stacks"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -69,9 +69,26 @@ packages = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# A misspelt marker is an error, not a silently-ignored attribute.
+addopts = ["--strict-markers"]
 # An unhandled exception in a test's thread is a HARD failure, never a swallowed warning (a leaked/racy
 # test thread must be fixed, not tolerated). Complements the session-wide propagator in tests/conftest.py.
 filterwarnings = ["error::pytest.PytestUnhandledThreadExceptionWarning"]
+
+# Every marker the suite uses, declared HERE rather than in a conftest hook: this is the one
+# place a maintainer looks, and `--strict-markers` then rejects a typo instead of silently
+# collecting nothing.
+markers = [
+  "contract: Tier 0 — the readable core, one lane that states what LHPC PROMISES. Each tagged case goes through the widest public seam (CLI verb / Flask route / typed ActionResult) and expresses a happy path or the refusal that defines a boundary. Run it with `-m contract`; it must be green and quick.",
+  "safety(id): a contract case that guards a named SAFETY invariant. The id is the P0.x/P1.x id of the guarantee where one exists (P0.5 uninstall, P0.6 GET-no-network), else a descriptive slug (RF-TX-opt-in / firewall-fail-closed / exposure-fail-closed). Run the invariant set with `-m safety`.",
+  "slow: a genuinely slow test (real bash sub-process building a real venv, or a timed retry loop). Excluded by the fast lane `-m 'not slow'`; always run by the complete coverage gate.",
+  "needs_session: requires a real POSIX session (sid>0) — the product's procident.identity_complete refuses sid==0, so these tests fail in a sandbox whose processes have session id 0 (run them under `setsid`).",
+  "needs_nonroot: requires a non-root euid — a chmod-based permission fixture does not bind for root.",
+  "requires_zstd: crosses the production extraction boundary (`zstd -dc`), so it needs the host `zstd` binary. Skipped (with reason) where it is absent; the target and CI install it, so it normally runs.",
+  "no_default_hardware: opt OUT of the test-baseline hardware setup so the test sees the true fresh-install default (no radio hardware configured).",
+  "no_default_display: opt OUT of the test-baseline graphical session, so the test sees the real compositor-socket detection (headless).",
+]
+
 
 [tool.ruff]
 # The MeshCore host application shipped as package data is a SEPARATE installable

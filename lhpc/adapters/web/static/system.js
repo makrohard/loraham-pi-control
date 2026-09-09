@@ -487,7 +487,4 @@
     if (document.hidden) stop(); else start();      // visible again: fresh baseline
   });
   if (box.open) start();   // belt-and-braces: the id-keyed restore may have opened it already
-  // Test hook (inert in production): lets the node-driven regression harness call the state
-  // machine directly — apply/reset with controlled samples, no fetch/timers involved.
-  box.lhpcTest = { apply: apply, resetDynamic: resetDynamic, tickClock: tickClock };
 })();

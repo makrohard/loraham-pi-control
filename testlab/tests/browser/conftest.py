@@ -4,12 +4,9 @@ so the default lane and boxes without the browser skip with a reason, never fail
 from __future__ import annotations
 
 import os
-import sys
 
 import pytest
-
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "acceptance"))
-from labproc import LabServer
+from lhpc_testlab.testing import LabServer
 
 
 def _browser_ready() -> str:

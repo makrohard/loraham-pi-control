@@ -5,14 +5,10 @@ the real executable."""
 from __future__ import annotations
 
 import os
-import sys
 
 import pytest
-
-sys.path.append(os.path.dirname(__file__))   # labproc/httpc live beside us; APPEND —
-# prepending would shadow tests/conftest.py for the legacy `from conftest import …` uses
-from httpc import Client
-from labproc import LabServer, run_lab
+from lhpc_testlab.http_client import Client
+from lhpc_testlab.testing import LabServer, run_lab
 
 
 def pytest_collection_modifyitems(config, items):

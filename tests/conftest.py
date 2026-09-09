@@ -3,46 +3,9 @@
 from __future__ import annotations
 
 import os
-import socket
 import subprocess
-import threading
-import time
 
 import pytest
-
-
-def pytest_configure(config):
-    config.addinivalue_line(
-        "markers", "needs_session: requires a real POSIX session (sid>0) — the product's "
-                   "procident.identity_complete refuses sid==0, so these tests fail in a sandbox "
-                   "whose processes have session id 0 (run them under `setsid`).")
-    config.addinivalue_line(
-        "markers", "needs_nonroot: requires a non-root euid — a chmod-based permission fixture "
-                   "does not bind for root.")
-    config.addinivalue_line(
-        "markers", "no_default_hardware: opt OUT of the test-baseline hardware setup so the test sees "
-                   "the true fresh-install default (no radio hardware configured).")
-    config.addinivalue_line(
-        "markers", "no_default_display: opt OUT of the test-baseline graphical session, so the test "
-                   "sees the real compositor-socket detection (headless).")
-    config.addinivalue_line(
-        "markers", "slow: a genuinely slow test (real bash sub-process building a real venv, or a "
-                   "timed retry loop). Excluded by the fast lane `-m 'not slow'`; always run by the "
-                   "complete coverage gate.")
-    config.addinivalue_line(
-        "markers", "requires_zstd: crosses the production extraction boundary (`zstd -dc`), so it "
-                   "needs the host `zstd` binary. Skipped (with reason) where it is absent; the target "
-                   "and CI install it, so it normally runs.")
-    config.addinivalue_line(
-        "markers", "contract: Tier 0 — the readable core, one lane that states what LHPC PROMISES. "
-                   "Each tagged case goes through the widest public seam (CLI verb / Flask route / "
-                   "typed ActionResult) and expresses a happy path or the refusal that defines a "
-                   "boundary. Run it with `-m contract`; it must be green and quick.")
-    config.addinivalue_line(
-        "markers", "safety(id): a contract case that guards a named SAFETY invariant. The id is the "
-                   "P0.x/P1.x id of the guarantee where one exists (P0.5 uninstall, P0.6 GET-no-"
-                   "network), else a descriptive slug (RF-TX-opt-in / firewall-fail-closed / "
-                   "exposure-fail-closed). Run the invariant set with `-m safety`.")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -94,11 +57,73 @@ def _no_binary_network(monkeypatch):
     runs after this fixture and wins)."""
     from lhpc.core import binary_install as _bi
 
-    def _refuse(url, max_bytes):
+    def _refuse(url, *_a, **_k):
         raise AssertionError(
             f"test attempted a real binary-channel download: {url} — stub "
-            "lhpc.core.binary_install._http_get or pick a source channel")
+            "lhpc.core.binary_install._http_get / _open_stream, or pick a source channel")
+
+    # BOTH doors: `_http_get` fetches the index, `_open_stream` streams the asset itself.
     monkeypatch.setattr(_bi, "_http_get", _refuse)
+    monkeypatch.setattr(_bi, "_open_stream", _refuse)
+
+
+@pytest.fixture(autouse=True)
+def _no_pip_install(monkeypatch):
+    """A test must never install into the developer's venv.
+
+    `self-update` really runs `<python> -m pip install -e <root>` after an advance. A test that
+    lets that through installs a throwaway package from a pytest tmp dir into the shared venv and
+    breaks the NEXT run, not its own: the editable finder then points `lhpc` at a directory that
+    no longer exists, and 4,500 tests stop collecting with a FileNotFoundError that names /tmp and
+    never names pip. Same shape as `_no_binary_network` below: turn a silent poisoning into a loud
+    failure in the test that causes it.
+    """
+    from lhpc.core.probes.backends import RealCommandRunner
+    real = RealCommandRunner.run
+
+    def guarded(self, argv, timeout=None, *a, **kw):
+        av = [str(x) for x in argv]
+        if "pip" in " ".join(av[:3]) and "install" in av:
+            raise AssertionError(
+                f"a test tried to install into the developer's venv: {av!r} — stub the runner")
+        return real(self, argv, timeout, *a, **kw)
+
+    monkeypatch.setattr(RealCommandRunner, "run", guarded)
+
+
+@pytest.fixture(autouse=True)
+def _no_shell_execution():
+    """SAFETY: nothing LHPC runs may go through a shell.
+
+    Every launch, build, test and web job is structured argv with `shell=False`, so a validated
+    operator value can never merge with an option, change the executable, or become shell syntax.
+    This watches the real `subprocess` entry points for the WHOLE suite, so any driven flow that
+    started passing a truthy `shell=` fails in the test that reached it — a behavioural check that
+    a source scan of three chosen modules could not make, and that no comment or refusal message
+    can trip. The other half of the invariant (the argv LHPC actually spawns is the real
+    executable, never a shell) is owned by
+    `tests/core/test_structured_exec.py::test_started_process_argv_is_not_a_shell`.
+    """
+    import subprocess
+    originals = {n: getattr(subprocess, n) for n in
+                 ("Popen", "run", "call", "check_call", "check_output")}
+
+    def guarded(name, fn):
+        def wrapper(*args, **kwargs):
+            if kwargs.get("shell"):
+                raise AssertionError(
+                    f"subprocess.{name} was called with shell={kwargs['shell']!r} — LHPC runs "
+                    "structured argv with shell=False, never a shell")
+            return fn(*args, **kwargs)
+        return wrapper
+
+    for name, fn in originals.items():
+        setattr(subprocess, name, guarded(name, fn))
+    try:
+        yield
+    finally:
+        for name, fn in originals.items():
+            setattr(subprocess, name, fn)
 
 
 @pytest.fixture(autouse=True)
@@ -163,111 +188,13 @@ def _default_hardware(request, monkeypatch):
     monkeypatch.setattr(_config, "HW_DEFAULT", "loraham", raising=False)
 
 
-# --- fake gpsd -----------------------------------------------------------------------------
-# Shared because two modules need it (gps + doctor). It lives HERE, not in a test module, so
-# nothing has to import one test module from another: `from tests.test_gps import ...` only
-# resolved because the local lane runs `python -m pytest`, which puts the working directory on
-# sys.path. CI runs the `pytest` console script, which does not — so a module once collected fine on
-# both boxes and died on collection in CI.
-
-class _FakeGpsd:
-    """A minimal gpsd: answers ?DEVICES with a device list and streams NMEA after ?WATCH.
-
-    `json_lines` serves a JSON `?WATCH` response instead of NMEA:
-    pass raw byte chunks, so a test can split one TPV across recv boundaries, send junk, or
-    send a TPV with no fix. `silent=True` accepts the connection and says nothing, for the
-    timeout path.
-    """
-
-    def __init__(self, devices=(), sentences=(), close_after=None,
-                 json_lines=None, silent=False):
-        self.devices = list(devices)
-        self.sentences = list(sentences)
-        self.close_after = close_after
-        self.json_lines = list(json_lines) if json_lines is not None else None
-        self.silent = silent
-        self.connections = 0
-        self._srv = socket.socket()
-        self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._srv.bind(("127.0.0.1", 0))
-        self._srv.listen(4)
-        self.port = self._srv.getsockname()[1]
-        self._stop = threading.Event()
-        self._t = threading.Thread(target=self._serve, daemon=True)
-        self._t.start()
-
-    def _serve(self):
-        import json
-        while not self._stop.is_set():
-            try:
-                self._srv.settimeout(0.3)
-                conn, _ = self._srv.accept()
-            except (TimeoutError, OSError):
-                continue
-            self.connections += 1
-            with conn:
-                conn.settimeout(1.0)
-                try:
-                    req = conn.recv(4096)
-                except (TimeoutError, OSError):
-                    req = b""
-                if b"?DEVICES" in req:
-                    conn.sendall(json.dumps(
-                        {"class": "DEVICES",
-                         "devices": [{"path": p} for p in self.devices]}).encode() + b"\n")
-                    continue
-                if self.silent:
-                    # Connected but mute — the caller must hit its own total deadline.
-                    while not self._stop.wait(0.05):
-                        pass
-                    return
-                if self.json_lines is not None:
-                    for chunk in self.json_lines:
-                        try:
-                            conn.sendall(chunk)
-                        except OSError:
-                            return
-                        time.sleep(0.01)
-                    while not self._stop.wait(0.05):
-                        pass
-                    return
-                sent = 0
-                while not self._stop.is_set():
-                    for s in self.sentences:
-                        try:
-                            conn.sendall(s.encode() + b"\r\n")
-                        except OSError:
-                            return
-                        sent += 1
-                        if self.close_after and sent >= self.close_after:
-                            return
-                    time.sleep(0.05)
-
-    def close(self):
-        self._stop.set()
-        try:
-            self._srv.close()
-        except OSError:
-            pass
-
-
 @pytest.fixture
-def fake_gpsd():
-    """Factory for a minimal in-process gpsd. Every server it hands out is closed at teardown,
-    so a failing assertion cannot leak the accept thread into the rest of the session."""
-    made: list = []
-
-    def _make(**kw):
-        srv = _FakeGpsd(**kw)
-        made.append(srv)
-        return srv
-
-    yield _make
-    for srv in made:
-        srv.close()
+def set_call():
+    """Configure a licensed callsign — as a FIXTURE, so no test module imports another."""
+    return _set_call
 
 
-def set_call(svc, callsign="XX0XXA"):
+def _set_call(svc, callsign="XX0XXA"):
     """Configure a valid operator callsign so a LICENSED stack (chat/graywolf/voice/meshcom) passes
     CALL-enforcement — the realistic precondition for starting one. Returns the service."""
     from lhpc.core.config import save_operator_config
@@ -281,7 +208,14 @@ def set_call(svc, callsign="XX0XXA"):
 _SPAWNED: list = []
 
 
-def real_spawn(argv, log, cwd=None, env=None):
+@pytest.fixture
+def real_spawn():
+    """The real-spawn shim as a FIXTURE, so a test in any directory gets it without importing
+    another test module (see tests/README.md: a test module never imports a test module)."""
+    return _real_spawn
+
+
+def _real_spawn(argv, log, cwd=None, env=None):
     """A `spawn` callable for Lifecycle that launches a real detached `sleep` (its own
     session, so it is an LHPC-ownable session leader) and returns its pid. The log path
     is created so callers that read it work."""

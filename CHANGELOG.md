@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.5
+
+- Tests fail only for LHPC behaviour now. The JavaScript source-arithmetic and hand-built-DOM harnesses are replaced by real headless Chromium, the deployment tests run the shipped scripts, the testlab coverage matrix gives way to enumerating the app's own routes, and the remaining source scans are replaced by the behavioural seams they stood in for.
+- The suite is organised by the behaviour it protects (`core`, `stacks`, `web`, `cli`, `install`, `host`, `repo`), the test lab has three named lanes (`unit`, `acceptance`, `browser`), and the suite runs from any working directory, on a machine with no browser, with nothing skipped.
+- No product change: the only non-test edit in this release removes a test-only hook from `system.js` that the deleted Node harness needed.
+
 ## 0.3.4
 
 - LHPC's own tests for the MeshCore host application ran in no gate at all; they now run in CI against the manifest-pinned openHop core. No external project's own test suite runs in LHPC CI.

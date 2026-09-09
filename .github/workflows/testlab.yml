@@ -1,7 +1,7 @@
-# The test-lab CI lane: coverage-matrix gate + the acceptance and browser lanes, run
-# INSIDE the published lab image (the exact environment Codespaces users get). ci.yml is
-# untouched — this is its own independent check. Falls back to building the image from
-# the Dockerfile when the GHCR pull fails (first run / private package).
+# The test-lab CI lane: the lab's three test lanes — unit (the simulator itself), acceptance
+# (the real executable and server over simulated hardware) and browser (real headless Chromium)
+# — run INSIDE a lab image built from THIS commit's devcontainer Dockerfile, so the image deps
+# always match the checkout. ci.yml is untouched; this is its own independent check.
 name: testlab
 
 on:
@@ -50,16 +50,21 @@ jobs:
               su lhpclab -c "
                 set -e
                 cd /tmp/repo
-                export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build DISPLAY=:99
+                export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build
                 python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
                 pip install -q -e .            # the product
                 pip install -q -e ./testlab    # the SEPARATE lab package
                 pip install -q pytest playwright
                 python -m playwright install chromium
+                # A virtual display for the ACCEPTANCE lane only: voice and sideband are
+                # GTK/Kivy programs, and without one the lab would skip starting them
+                # instead of proving they start. The browser lane below runs with no
+                # DISPLAY at all — headless Chromium needs no desktop.
                 (Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &)
-                python -m pytest testlab/tests/test_coverage_matrix.py testlab/tests/test_testlab.py -q
+                python -m pytest testlab/tests/unit -q
                 # LHPC_CHAIN_HEAVY=1: this runner is NATIVE aarch64 (not nested emulation),
                 # so the binary meshcom (qemu-system-xtensa) and meshtastic START legs can
                 # actually boot and be verified here — proving every stack starts.
-                LHPC_ACCEPTANCE=1 LHPC_CHAIN_HEAVY=1 python -m pytest testlab/tests/acceptance -q -rs
+                DISPLAY=:99 LHPC_ACCEPTANCE=1 LHPC_CHAIN_HEAVY=1 \
+                  python -m pytest testlab/tests/acceptance -q -rs
                 LHPC_BROWSER=1 python -m pytest testlab/tests/browser -q -rs"'

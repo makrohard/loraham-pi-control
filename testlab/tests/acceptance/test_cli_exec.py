@@ -4,8 +4,10 @@ shared state. The lab root keeps everything hermetic; slow lifecycle verbs are c
 by the chain test, not duplicated here."""
 from __future__ import annotations
 
+import re
+
 import pytest
-from labproc import run_lab, run_lhpc
+from lhpc_testlab.testing import run_lab, run_lhpc
 
 # verb -> (argv, acceptable rcs). rc 2 = argparse refusal (malformed) asserted for all.
 SUCCESS = {
@@ -49,14 +51,6 @@ MALFORMED = {
 }
 
 
-@pytest.mark.covers("cli:auto-install", "cli:autostart", "cli:bootstrap", "cli:build",
-                    "cli:clean", "cli:config", "cli:daemon", "cli:deps",
-                    "cli:doctor", "cli:explain", "cli:firewall", "cli:gps",
-                    "cli:hardware", "cli:help", "cli:hmac", "cli:install",
-                    "cli:known-working", "cli:list", "cli:logs", "cli:self-update",
-                    "cli:source-check", "cli:stack", "cli:status", "cli:test",
-                    "cli:uninstall", "cli:update", "cli:web",
-                    "cli:webserver")
 @pytest.mark.parametrize("verb", sorted(SUCCESS))
 def test_cli_verb_succeeds_or_refuses_honestly(lab, verb):
     argv, rcs = SUCCESS[verb]
@@ -79,11 +73,13 @@ def test_cli_unknown_stack_refused_not_crash(lab):
         assert r.returncode != 0 and "Traceback" not in r.stderr, argv
 
 
-@pytest.mark.covers("labcli:scenario", "labcli:status")
 def test_web_and_cli_agree_on_scenario_state(lab, client):
     run_lab(lab.env, "scenario", "degraded", check=True)
     _s, page = client.get("/testlab")
-    assert 'value="degraded" checked' in page.replace("\n", " ") \
-        or "degraded" in page                     # the panel reflects the CLI switch
+    # Bind `checked` to the degraded radio INSIDE one tag. "degraded" appears in the page
+    # whatever the scenario (the form lists every one), and the two attributes are never
+    # adjacent, so the old pair of disjuncts could not tell the states apart at all.
+    assert any('value="degraded"' in tag and "checked" in tag
+               for tag in re.findall(r"<input[^>]*>", page)), page
     out = run_lab(lab.env, "status", check=True).stdout
     assert "degraded" in out and "868=FAILED" in out

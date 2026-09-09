@@ -53,8 +53,7 @@ Graywolf's APRS-IS uplink is forced to the lab's local sink (`127.0.0.1:14580`) 
 overlay, so the lab never reaches the live ham network. meshtastic and reticulum run against
 simulated radios (meshtastic's upstream `sim` radio; reticulum's fake spidev/gpiod shims); voice
 and sideband are GTK/Kivy GUIs that launch headless under Xvfb (not remotely viewable). `chat`,
-`nomadnet` and voice's terminal variant are interactive TUIs LHPC never auto-spawns. See
-`grep limitation testlab/tests/coverage_matrix.toml` for every gap.
+`nomadnet` and voice's terminal variant are interactive TUIs LHPC never auto-spawns.
 
 ## Launch
 
@@ -109,25 +108,20 @@ LHPC_ACCEPTANCE=1 pytest testlab/tests/acceptance -q   # real server + real exec
 LHPC_BROWSER=1 pytest testlab/tests/browser -q     # headless Chromium (pip install -e ./testlab[browser])
 ```
 
-The coverage matrix (`testlab/tests/coverage_matrix.toml`, gated by
-`testlab/tests/test_coverage_matrix.py`) forces every route operation, form, CLI subcommand and
-stack phase to carry an EXPLICIT coverage class; the build fails on any undocumented surface. The
-classes differ in depth:
+The lab has three lanes — `testlab/tests/unit` for the simulator itself, `acceptance` for the real
+executable and server over simulated hardware, `browser` for real headless Chromium. What they
+prove differs in depth, and the difference matters:
 
-- **`acceptance`**: driven against the RUNNING app/executable (effect verified).
-- **`sweep`**: proven only that the route EXISTS and enforces CSRF (POST rows) or renders
-  without mutating (parameterless GETs); the action's effect is not asserted.
-- **`{ limitation = "…" }`**: a documented gap; the reason says whether it is covered by lhpc's
-  own in-process web/CLI suite (a different layer) or genuinely deferred.
+- **acceptance** drives the RUNNING server and the real `lhpc` executable, and verifies the
+  effect. `test_http_smoke.py` additionally enumerates the app's own `url_map`, so a new route is
+  swept the moment it exists: every parameterless GET must render, and every POST must refuse a
+  request without a CSRF token.
+- **browser** drives real headless Chromium against the running console — the system box's state
+  machine under controlled `/api/system` responses, the Apps page's lazy bodies, the GPS panel,
+  and one 390 px phone viewport. No virtual display: Chromium is launched `headless=True`.
 
-So every surface is accounted for and the gate blocks silent drift, but many POST effects, forms
-and CLI verbs are proven at the CSRF/existence or in-process level, not end-to-end. To deepen a
-row: add a `@pytest.mark.covers("route:…")` acceptance test and change its class.
-
-CI: `.github/workflows/testlab.yml` runs on a GitHub-hosted **aarch64** runner
-(`ubuntu-24.04-arm`), builds the lab image from `.devcontainer/Dockerfile` (the same one
-Codespaces builds), and runs the matrix gate + both lanes inside it, so the environment CI proves
-is the environment users get, including meshcom/meshtastic from the binary channel.
+The route sweep proves existence and CSRF discipline, not each action's effect; effects are
+proven by the named acceptance tests and by LHPC's own in-process web suite.
 
 ## Codespaces costs
 

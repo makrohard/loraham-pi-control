@@ -1,176 +1,117 @@
-# LHPC test suite — what we test and how
+# LHPC test suite
 
-The suite protects **behaviour and safety invariants**, not the exact spelling of the UI or messages.
-Keep it that way: a test should fail when the *system does the wrong thing*, never merely because some
-markup, CSS class, or wording changed.
+A test must fail because LHPC did the wrong thing — never because a name, a refactor, a CSS class,
+a sentence or an equivalent JavaScript rewrite changed.
 
-## Contents
+## What each layer proves
 
-- [Principles](#principles)
-- [Untouchable safety areas — do not weaken these](#untouchable-safety-areas--do-not-weaken-these)
-- [Layout](#layout)
-- [Tier 0 — the contract](#tier-0--the-contract)
-- [Running — three tiers](#running--three-tiers)
+| layer | proves | where |
+|---|---|---|
+| ordinary tests | LHPC's own behaviour, against injected fakes. No radio, no root, no network, no browser. | this directory |
+| testlab **unit** | the simulator itself: provider, runner, scenarios, fake systemd/NetworkManager, its own safety. | `testlab/tests/unit` |
+| testlab **acceptance** | the real `lhpc` executable and the real server, end to end against a simulated host. | `testlab/tests/acceptance` |
+| testlab **browser** | the console in real headless Chromium: JavaScript, DOM, navigation, layout. | `testlab/tests/browser` |
+| meshcore host tests | LHPC's adapter against the pinned real openHop API. | `lhpc/data/meshcore_host` |
+| release / live matrix | a real Pi, kernel and radios. Nothing below replaces it. | [docs/test-matrix.md](../docs/test-matrix.md) |
 
-## Principles
+Three rules decide where something belongs:
 
-1. **Assert behaviour and contracts, not presentation or wording.** Prefer a status code, a redirect,
-   a typed `ActionResult`, a persisted effect, or a structural HTML query over a raw-markup substring.
-2. **No markup / CSS / JS-implementation pins.** Don't assert exact `<tag ...>` strings, CSS class
-   tokens (`flash-bad`, `col-version`), `data-*` spelling, or the contents of `.js`/`.css` files. To
-   check a page structurally, use `tests/htmlq.py`:
-   ```python
-   from htmlq import parse
-   doc = parse(resp.get_data(as_text=True))
-   assert doc.by_id("stack-settings-kiss").has_attr("open")   # panel open when ?cfg requires it
-   assert doc.field_default("dp_MODE") == "FSK"                # rendered default / selected option
-   ```
-   (`htmlq` is intentionally tiny — if a plain `re.search` reads clearly, that's fine too.)
-3. **One canonical test per behaviour; fold true permutations.** When a cluster of tests shares the
-   SAME setup, action, observable contract AND side-effect assertions and differs only in input →
-   expected, fold it into a single `@pytest.mark.parametrize` with an explicit `pytest.param(..., id=)`
-   per case (keep each case's message fragments and state checks in its param). NEVER combine cases
-   that cross a safety boundary, mutate-vs-not, raise different exception classes, or hold different
-   locks — "they both reject input" is not enough kinship.
-4. **Prefer a public or injected dependency over patching a private implementation detail.** Introduce
-   a production seam ONLY for a genuine external dependency (an OS/filesystem/subprocess boundary), and
-   drive it through the injected `System` (`FakeSystem(commands=…, paths=…, files=…)`) rather than a
-   `monkeypatch.setattr(svc, "_private", …)`. A justified private-method patch is fine when it stubs a
-   COLLABORATOR to isolate a different unit under test, encodes a DELIBERATE timeout (`_SELF_LOCK_WAIT_S`),
-   or exercises a private SAFETY boundary directly — say so in a comment. Do not add a seam merely to
-   remove a `monkeypatch` if it makes the test more complex or routes a security boundary
-   (receipt/ownership/`O_NOFOLLOW`/fd reads) through a fake.
-5. **A regression test guards a bug CLASS or folds into a contract** — not a one-off reproduction that
-   duplicates an existing path with a trivially different input.
-6. **Optional host-tool tests skip explicitly; mandatory deps are installed, not skipped.** A test that
-   needs a host binary the product also needs at runtime (e.g. `zstd` for artifact extraction) carries
-   `@pytest.mark.requires_zstd` and skips with a reason when it is absent — it never silently passes.
-7. **Critical safety tests map to a known invariant**: one of the guarantees listed under
-   "Safety model" in `docs/architecture.md`. Ordinary behavioural tests just need a clear purpose
-   in their name/docstring.
-8. **Organise by behaviour, not by dev milestone.**
+1. **Test the cheapest stable seam that actually proves the behaviour.** A browser test that
+   re-proves core logic is in the wrong place.
+2. **One canonical owner per behaviour.** Overlap is justified only where the upper layer adds a
+   behaviour of its own — a distinct safety invariant, say, not merely a second look at the same one.
+3. **Be exact only where exactness itself is the contract.**
 
-## Untouchable safety areas — do not weaken these
+## Where a new test goes
 
-These guard RF, exposure, destructive, and corruption invariants. Slim them only by parametrizing
-genuine duplicates; never delete a distinct guard. The guarantees under "Safety model" in
-`docs/architecture.md` are the spec.
+By the behaviour it protects, not by how it is written:
 
-- **RF / TX safety** — TX never auto-enabled; TX actions need explicit opt-in + passing tests + a
-  callsign; daemon TXMODE apply/readback gating; bounded one-frame TX test.
-  (`test_lifecycle`, `test_daemon_readiness`, `test_post_start` (P0.3 truthful outcomes),
-  `test_auto_install` TX gates.)
-- **Resource coordination** — one physical band/SPI owner at a time; conflicting starts refused;
-  reslock serialization; recheck-running-after-locks. (`test_reslock`, `test_resource_coord`,
-  `test_op_serialization`, `test_source` (race-safe destructive ops).)
-- **Exposure fail-closed** — remote exposure is opt-in with typed `enable-remote` /
-  `enable-remote-danger`; nginx `_listen` loopback fail-safe; loopback-only bind; mTLS access modes.
-  (`test_webserver` (apply/nginx/blockers/evidence/corrections/serve), `test_web_error_boundary`.)
-- **Destructive-action guards** — uninstall/clean refuse while running / on identity drift; typed
-  stack-id confirmation; shared checkouts + config/secrets preserved. (`test_uninstall_safety`,
-  `test_clean`, `test_source` (fs guards).)
-- **Data integrity** — descriptor-anchored atomic writes (0600 where required); config-bundle
-  all-or-recoverable transaction + journal recovery; path containment / no-follow / anchored runtime
-  FS; manifest validation. (`test_runtime_fs` (incl. anchored/hardening/containment), `test_config`
-  (incl. bundle), `test_manifest_*`.)
-- **PKI / revocation** — two-CA independence, keys 0600, `0.0.0.0` never a SAN, transactional
-  revocation (CRL-first, partial → pending). (`test_pki`, `test_webserver` (corrections).)
-- **Process identity / kill safety** — signal only an LHPC-owned leader whose full identity matches;
-  PID-reuse safe; never the controller's own group. (`test_process_ownership`, `test_proctree`.)
-- **Byte-exact managed renders** — systemd unit / nginx config integrity + verify verdicts.
-  (`test_updater_units`, `test_deployment`, `test_stackweb`, `test_webserver` (nginx fixtures).)
-- **Read-only / bounded** — GET/page-load does no network/subprocess/mutation (P0.6); bounded runners
-  and daemon parsers fail closed. (`test_web::test_get_routes_make_no_network_calls`,
-  `test_bounded_runner`, `test_daemon_bounds`.)
+- **`core/`** — the controller service: lifecycle, admission, locks, jobs, config, params, status,
+  resources, process identity, runtime filesystem.
+- **`stacks/`** — the nine radio stacks and the manifest that describes them, GPS included.
+- **`web/`** — the Flask console: routes, pages, forms, sessions, CSRF, HMAC, web jobs.
+- **`cli/`** — the `lhpc` command's output and exit status.
+- **`install/`** — getting code onto the box and keeping it current: source, pins, binary channel,
+  auto-install, self-update.
+- **`host/`** — the machine LHPC runs on: firewall, network, power, PKI, systemd units, host metrics,
+  deployment scripts.
+- **`repo/`** — invariants of the repository itself: packaging, versions, README drift, suite hygiene.
 
-## Layout
+Put a test where a maintainer would look when changing that behaviour. Never in a file named after
+when or how a defect was found.
 
-Tests are grouped by SUBJECT into ~110 files. Notable consolidated homes:
+## The rules
 
-| file | covers |
-|---|---|
-| `test_config.py` | layered config: bundle, containment, fail-closed, safety, stable, typed |
-| `test_webserver.py` | web console: apply, nginx, evidence, gui, service, serve, blockers, corrections, hardening, cli |
-| `test_stackweb.py` | per-stack web exposure: config, service, verify |
-| `test_source.py` | managed source: registry, fs, selection, check, transactions, snapshot cache, race-safe destructive ops |
-| `test_probes.py` | probes: process/net, unix sockets, systemd, source |
-| `test_runtime_fs.py` | anchored runtime FS, hardening, wrapper-anchored, path containment, containment |
-| `test_binary_channel.py` | binary channel: receipt, status, predicates, hmac+firewall |
-| `test_binary_install.py` | binary install transaction, switching, switch selector |
-| `test_task_admission.py` | task-admission contention (incl. admission "holes") |
-| `test_post_start.py` | post-start truthful outcomes (P0.3) |
+1. **Behaviour, not implementation.** No `inspect.getsource`, no reading production `.py`/`.js`/`.css`
+   to assert what it contains, no pinning statement order or helper names. The rare exception is a
+   negative invariant over a whole module ("this file spawns nothing") that no driven path can prove;
+   it says so in its docstring and has a behavioural twin.
+2. **Exact where exactness is the contract.** Systemd units, nginx config, firewall rules, generated
+   argv, config rendering, persisted schemas, receipts, permissions and canonical paths are compared
+   byte for byte on purpose. Human sentences are not: assert the typed field, the state, or the
+   command token an operator is told to run.
+3. **One canonical owner per behaviour.** Fold true permutations into `parametrize`. Never merge
+   cases that cross a safety boundary, mutate versus not, or hold different locks.
+4. **No ambient host or repository dependencies.** A test must not care which sibling repositories are
+   cloned, whether a daemon happens to run here, or what the developer's `$HOME` contains. Live-remote
+   pin checking belongs to CI's `pin-validation` lane.
+5. **Structural HTML queries.** Use `htmlq` (`doc.by_id(...)`, `doc.field_default(...)`) or a readable
+   regex. Not `body.split(...)`, not exact tag strings, not CSS class spelling.
+6. **Browser behaviour goes in a real browser.** Playwright with `headless=True`, waiting on observable
+   state. No `wait_for_timeout`, no sleeps, no hand-built DOM.
+7. **No sibling-test imports and no `sys.path` edits.** Share through a fixture in the nearest
+   `conftest.py`, or one of the two plain helper modules here (`repo_paths.py`, `htmlq.py`).
+8. **Autouse fixtures isolate the host, and say so.** They give the test a temporary runtime root,
+   HOME and firewall state, refuse real downloads and real `pip install`, and reap spawned helpers.
+   The two that supply a product baseline — radio hardware and a graphical session — are opt-out by
+   marker (`no_default_hardware`, `no_default_display`), because nearly every test wants a working box.
+9. **Prefer the injected `System` to patching a private method.** `FakeSystem(commands=…, files=…)` is
+   the seam. Patch a private only to stub a collaborator, and say why in a comment.
+10. **A test must be able to fail.** No `assert True` fallback, no conditional body that can do
+    nothing, no skip that hides functionality CI actually supports.
 
-`test_services_hardening.py` intentionally stays standalone — it is an audit-regression bucket spanning
-several unrelated subjects, so it is not force-merged into any one subject file.
+**Coverage is diagnostic, not the design target.** A new test should normally accompany a
+behaviour or a defect; do not add one because a line is uncovered, and do not keep one that only
+covers lines.
 
-## Tier 0 — the contract
+## Markers
 
-`-m contract` is the **readable core**: a single lane, ~150 cases, that states what LHPC *promises* —
-install/auto-install/start/stop, TX safety, the binary channel, config/params, hardware, firewall,
-exposure, HMAC, self-update, boot-restore, uninstall/clean, and the GET-no-mutation guarantee. Every
-case is an EXISTING test tagged `@pytest.mark.contract`, chosen to go through the widest public seam
-available (a CLI verb, a Flask route, or a typed `ActionResult`) and to state either a happy path or
-the one refusal that defines a boundary. Read this lane to learn the system; it runs in ~20s.
+`contract` and `safety` are the two lanes worth reading. `slow` excludes the real-venv builds and
+timed loops. `requires_zstd`, `needs_session`, `needs_nonroot`, `no_default_hardware` and
+`no_default_display` state a genuine environmental requirement or opt-out. All of them are declared in
+`pyproject.toml`, and `--strict-markers` rejects a typo.
 
-`-m safety` is the **invariant set** — every case that guards a named safety invariant
-(`@pytest.mark.safety("<id>")`): RF-TX-opt-in, firewall-fail-closed, exposure-fail-closed, P0.5
-(uninstall-while-running), P0.6 (GET-no-network), gps-fail-closed, gps-position-privacy,
-gps-receiver-exclusive, meshcore-identity, meshcore-position, optional-visibility and
-runtime-containment. It overlaps the contract lane but is not a subset of it.
+`-m contract` is the readable core: each case goes through the widest public seam available — a CLI
+verb, a Flask route, or a typed `ActionResult` — and states a happy path or the one refusal that
+defines a boundary. `-m safety` is every case guarding a named invariant from the safety model in
+[docs/architecture.md](../docs/architecture.md), which is the source of truth for those guarantees.
+The two lanes overlap; neither is a subset of the other.
 
-Everything else is the **net**: the full suite is a thorough regression net that nobody is expected to
-read top-to-bottom. A change is understood through the contract; it is *protected* by the net.
+## How to run
 
-```
-.venv/bin/pytest -q -p no:cacheprovider -m contract    # the readable core (~20s)
-.venv/bin/pytest -q -p no:cacheprovider -m safety      # the invariant subset
-```
+Use the **console script**, not `python -m pytest`: the `-m` form puts the working directory on
+`sys.path` and hides an import that would die in CI.
 
-The contract lane is deliberately tagged on isolation-robust cases only. Two promises still lack a
-widest-seam case: a real firewall-apply route test, and a sandbox-safe boot-restore case.
-
-## Running — three tiers
-
-Run the **console script** (`.venv/bin/pytest`), not `python -m pytest`. The `-m` form puts the
-working directory on `sys.path`; CI's console script does not, and the dev venv's editable install
-exposes only `lhpc`, so a module that reaches for a sibling test module collects here and dies in
-CI. `tests/test_suite_hygiene.py` fails on it either way.
-
-
-1. **Focused (inner loop)** — one file or a `-k` subset while iterating:
-   ```
-   .venv/bin/pytest -q -p no:cacheprovider tests/test_webserver.py
-   ```
-2. **Fast lane** — the whole suite minus the genuinely-slow tests (real-bash full-venv installs and
-   timed loops carry `@pytest.mark.slow`):
-   ```
-   .venv/bin/pytest -q -p no:cacheprovider -m "not slow" --basetemp="$HOME/pt-lhpc"
-   rm -rf -- "$HOME/pt-lhpc"
-   ```
-3. **Complete coverage gate** — everything, INCLUDING `slow` and every env-supported test, with
-   coverage. This is the gate a change must pass (coverage must not regress):
-   ```
-   .venv/bin/pytest -q -p no:cacheprovider --cov=lhpc --cov-branch \
-       --basetemp="$HOME/pt-lhpc"
-   rm -rf -- "$HOME/pt-lhpc"
-   ```
-   Coverage is NOT enforced via a global `--cov-fail-under` (kept out of `pyproject.toml` on purpose so
-   the fast lane and focused runs aren't held to a total); the gate compares coverage against the prior
-   baseline instead.
-
-Markers (`contract`, `safety`, `slow`, `requires_zstd`, plus `needs_session` / `needs_nonroot` / `no_default_hardware` / `no_default_display`) are
-registered once in `tests/conftest.py`.
-
-### Basetemp discipline
-
-Run the suite with a **dedicated, fixed basetemp** and remove exactly that path afterwards — never a
-broad glob:
-
-```
-.venv/bin/pytest -q -p no:cacheprovider --basetemp="$HOME/pt-lhpc"
+```sh
+.venv/bin/pytest -q -p no:cacheprovider tests/web/test_webserver.py   # one file
+.venv/bin/pytest -q -p no:cacheprovider -m contract                   # the readable core (~12 s)
+.venv/bin/pytest -q -p no:cacheprovider -m safety                     # the invariant set
+.venv/bin/pytest -q -p no:cacheprovider --basetemp="$HOME/pt-lhpc"    # everything
 rm -rf -- "$HOME/pt-lhpc"
 ```
 
-On a Pi Zero 2W this is mandatory anyway: the default basetemp lands on the 208 MB `/tmp` tmpfs and
-the full suite fills it (ENOSPC). Do not delete unrelated `$HOME/pt-*`
-paths.
+Always give the full suite a dedicated basetemp and delete exactly that path. On a Pi Zero 2 W the
+default lands on a 208 MB tmpfs and the run fills it.
+
+CI measures branch coverage and publishes it; it does not gate on a threshold. A drop is judged in
+review.
+
+The lab lanes are off unless asked for:
+
+```sh
+LHPC_ACCEPTANCE=1 pytest testlab/tests/acceptance -q
+LHPC_BROWSER=1    pytest testlab/tests/browser -q     # pip install -e ./testlab[browser]
+```
+
+Chromium is needed only for that browser lane. Never install it to run `tests/`, and never on a
+release box.

@@ -39,11 +39,11 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
   [Running on a Pi](#running-on-a-pi)).
 - **Contract lane.** `pytest -m contract` (~20 s) runs inside `pytest -q` but is not a separate
   gate; use it as a fast pre-flight.
-- **Docs.** What the suite does pin: a `### ` section in `cli.md` per CLI verb, every Contents
-  block and the docs index (`tests/test_docs_contents.py`), the two READMEs' dependency list and
-  hardware table against the generators (`tests/test_readme_not_drifted.py`), the firewall and
-  offline-QEMU wordings. Everything else — `adding-a-stack.md` when the manifest model changes,
-  the operator docs when behaviour changes — is updated by hand.
+- **Docs formatting.** The suite pins documentation only where the words are a contract: a `### `
+  section in `cli.md` per CLI verb, and the two READMEs' dependency list and hardware table against
+  the generators (`tests/repo/test_readme_not_drifted.py`). Headings, Contents blocks and prose are
+  not tested — `adding-a-stack.md` when the manifest model changes, the operator docs when
+  behaviour changes, all by hand.
 - Everything Pi-specific below only bites locally, never in CI.
 
 ## Policy
@@ -106,11 +106,11 @@ validates each pin against its live branch on every push, and the `lhpc-binaries
 compiles **exactly the pin**, never "latest". Pin bumps are the **last** step of a release,
 after the final source-repository batch is pushed and its commit is reachable from the
 advertised branch. **Never amend or force-push a published commit referenced by a pin** — it
-orphans the SHA and breaks fresh installs at checkout (`tests/test_pin_consistency.py` and the
+orphans the SHA and breaks fresh installs at checkout (`tests/install/test_pin_consistency.py` and the
 CI job hard-fail on an orphaned or predating pin).
 
 1. **Bump** `pin_commit`/`pin_tag`. Every component sharing that source gets the identical SHA
-   (`tests/test_pin_consistency.py`; both meshcom-qemu-raspi consumers reference one full 40-hex
+   (`tests/install/test_pin_consistency.py`; both meshcom-qemu-raspi consumers reference one full 40-hex
    SHA); meshcom: `apply-overlay.sh` must still apply (it fails closed).
 2. **Validate locally** before pushing — the pin must be reachable on its declared branch:
    `python tools/manifest_pin.py --list` names the sources; CI's job (`ci.yml`, "Validate EVERY

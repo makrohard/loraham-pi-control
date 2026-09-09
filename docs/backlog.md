@@ -12,7 +12,6 @@ knows what they are relying on before they touch it.
 - [On-air coverage](#on-air-coverage)
 - [Independent review](#independent-review)
 - [Contract gaps](#contract-gaps)
-- [Coverage-hostile flaky test](#coverage-hostile-flaky-test)
 - [Safety invariant IDs](#safety-invariant-ids)
 - [No `--live` interface](#no---live-interface)
 
@@ -35,7 +34,7 @@ What exists today is *detection*, not repair: verification runs out of process
 against the new checkout, and a failure makes the update visibly partial instead
 of silently disabling boot restore.
 
-**Holding the line:** `tests/test_updater_units.py::test_unit_bytes_are_the_frozen_render`
+**Holding the line:** `tests/host/test_updater_units.py::test_unit_bytes_are_the_frozen_render`
 pins the rendered bytes of all seven units.
 
 **Workaround for new writable paths:** redirect the state into the runtime root
@@ -61,7 +60,7 @@ holding an obsolete copied plugin — is closed by
 `build_requires = ["rns-lora-interface"]`.
 
 Regression:
-`tests/test_reticulum_stack.py::test_changing_a_consumed_source_invalidates_the_completed_receipt`
+`tests/stacks/test_reticulum_stack.py::test_changing_a_consumed_source_invalidates_the_completed_receipt`
 drives the real `is_built()` against a real marker file.
 
 **What a real fix needs:** acquire source locks for the component *and every
@@ -99,7 +98,7 @@ Promises whose widest-seam case is missing — the priority list for the next te
 1. no real `POST /firewall/configure` route test that observes an applied effect (only
    GET-redirect + settings-render exist; apply/fail-closed is proven only at the `ActionResult`
    seam);
-2. boot restore has NO isolation-safe case — the whole `tests/test_boot_restore.py` is
+2. boot restore has NO isolation-safe case — the whole `tests/core/test_boot_restore.py` is
    `needs_session` at module scope (split out the pure route-toggle tests to give it a
    sandbox-safe contract case);
 3. no route-level binary-channel SWITCH test (only the install confirmation's channel selection);
@@ -108,13 +107,6 @@ Promises whose widest-seam case is missing — the priority list for the next te
 6. lhpc's own suite has no route-table gate; the coverage matrix lives in
    [testlab](testlab.md) and runs in that package's CI lane;
 7. no single composite "TX opt-in + tests + callsign" gate test (covered by several separate ones).
-
-## Coverage-hostile flaky test
-
-`tests/test_stack_params.py::test_same_process_claim_retries_while_ownership_is_unpublished`
-flakes UNDER the coverage tracer (0.2 s / 0.05 s threading windows); green without `--cov`.
-If a coverage run red-flags only it, deselect it from the `--cov` run and verify it separately
-without instrumentation.
 
 ## Safety invariant IDs
 

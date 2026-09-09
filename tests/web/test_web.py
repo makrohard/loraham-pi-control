@@ -1,0 +1,2464 @@
+"""Tests for the Flask web console: rendering, escaping, 404/405, security
+headers, loopback binding, and proof that page loads are read-only."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from htmlq import parse
+from lhpc.adapters.web.app import _LOOPBACK_HOSTS, create_app, run_server
+from lhpc.core.paths import Paths
+from lhpc.core.probes.backends import FakeSystem
+from lhpc.core.services import ControllerService
+
+import repo_paths
+
+
+_MUTATING = {"start", "stop", "build", "update", "test",
+             "uninstall", "daemon_set"}
+
+
+def _real_app(tmp_path, manifest=None, cmdlines=None, commands=None):
+    """App backed by a fake-system ControllerService (daemon unreachable). `cmdlines`
+    fakes running processes ({pid: argv}); `commands` fakes exact subprocess argv results
+    (e.g. the source-identity git queries)."""
+    def factory():
+        return ControllerService(manifest_path=manifest,
+                                 system=FakeSystem(cmdlines_data=cmdlines or {},
+                                                   commands=commands or {}).system,
+                                 paths=Paths(runtime_root=tmp_path))
+    return create_app(service_factory=factory).test_client()
+
+
+def _csrf(client, path="/stacks"):
+    import re
+    body = client.get(path).get_data(as_text=True)
+    m = re.search(r'name="_csrf" value="([^"]+)"', body)
+    return m.group(1) if m else ""
+
+
+class ReadOnlyGuard:
+    """Delegates read-only calls; fails the test if a mutating method is used."""
+
+    def __init__(self, service: ControllerService) -> None:
+        self._service = service
+
+    def __getattr__(self, name: str):
+        if name in _MUTATING:
+            raise AssertionError(f"web invoked mutating method '{name}'")
+        return getattr(self._service, name)
+
+
+def _client(tmp_path: Path, manifest: Path | None = None):
+    def factory():
+        svc = ControllerService(
+            manifest_path=manifest,
+            system=FakeSystem().system,
+            paths=Paths(runtime_root=tmp_path),
+        )
+        return ReadOnlyGuard(svc)
+
+    return create_app(service_factory=factory).test_client()
+
+
+def test_dashboard_autostart_section_shows_state_and_last_result(tmp_path):
+    # Autostart is plain configuration (no privilege), so the System box always carries the
+    # switch — unlike the power actions beside it, which render only when logind allows them.
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.set_boot_restore(True).ok
+    body = create_app(lambda: svc).test_client().get("/").get_data(as_text=True)
+    assert "Autostart stacks on boot:" in body and "<strong>on</strong>" in body
+    assert "no boot restore has run yet" in body          # nothing has run on a fresh root
+    assert 'name="restore" value="off"' in body and "Turn off" in body   # toggle offers the flip
+
+    assert svc.set_boot_restore(False).ok
+    body = create_app(lambda: svc).test_client().get("/").get_data(as_text=True)
+    assert "<strong>off</strong>" in body
+    assert 'name="restore" value="on"' in body and "Turn on" in body
+
+
+def test_dashboard_autostart_toggle_flips_the_setting_and_returns_to_the_dashboard(tmp_path):
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.set_boot_restore(False).ok
+    c = create_app(lambda: svc).test_client()
+    token = _csrf(c, "/")
+    r = c.post("/boot-restore", data={"_csrf": token, "restore": "on", "from": "dash"})
+    assert r.status_code in (302, 303) and r.headers["Location"].endswith("/")
+    assert svc.boot_restore_enabled()[0] is True         # persisted, not just flashed
+
+
+def test_dashboard_autostart_toggle_requires_csrf(tmp_path):
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.set_boot_restore(False).ok
+    c = create_app(lambda: svc).test_client()
+    assert c.post("/boot-restore", data={"restore": "on", "from": "dash"}).status_code == 400
+    assert svc.boot_restore_enabled()[0] is False        # unchanged
+
+
+@pytest.mark.contract
+def test_dashboard_ok_and_headers(tmp_path):
+    resp = _client(tmp_path).get("/")
+    assert resp.status_code == 200
+    assert resp.headers["Cache-Control"] == "no-store"
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+    assert resp.headers["Referrer-Policy"] == "no-referrer"
+    csp = resp.headers["Content-Security-Policy"]
+    assert "default-src 'self'" in csp and "script-src 'self'" in csp
+    assert "connect-src 'self'" in csp   # allows the live-monitor fetch polling
+    assert b"LoRaHAM Pi Control" in resp.data
+
+
+def test_stack_detail_ok(tmp_path):
+    resp = _client(tmp_path).get("/stacks?open=kiss")   # DIRECT lives in a stack body (now lazy-loaded)
+    assert resp.status_code == 200
+    assert b"DIRECT" in resp.data  # the corrected 433 DIRECT requirement is shown
+
+
+def test_unknown_stack_404(tmp_path):
+    assert _client(tmp_path).get("/stacks/nope").status_code == 404
+
+
+def test_non_get_405(tmp_path):
+    assert _client(tmp_path).post("/").status_code == 405
+    assert _client(tmp_path).post("/stacks/meshcom").status_code == 405
+
+
+@pytest.mark.contract
+@pytest.mark.safety("P0.6")
+def test_stranded_get_on_action_url_redirects_home(tmp_path):
+    """A browser reload of a POST-only action URL (the redirect got lost when an apply
+    restarted nginx mid-response) must land on the overview, not an 'Error 405' dead end."""
+    c = _client(tmp_path)
+    for url in ("/webserver/configure", "/webserver/verify", "/webserver/init",
+                "/stacks/meshcom/webserver"):
+        resp = c.get(url)
+        assert resp.status_code == 302, url
+        assert resp.headers["Location"].endswith("/stacks"), url
+
+
+def test_healthz(tmp_path):
+    resp = _client(tmp_path).get("/healthz")
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "ok"
+
+
+def test_html_escaping(tmp_path):
+    manifest = tmp_path / "m.toml"
+    manifest.write_text(
+        '[[stack]]\n'
+        'id = "x"\n'
+        'name = "<script>alert(1)</script>"\n'
+        'summary = "s"\n'
+        '[[stack.component]]\n'
+        'id = "c"\n'
+        'name = "c"\n'
+        'kind = "service"\n'
+    )
+    resp = _client(tmp_path, manifest=manifest).get("/stacks")
+    assert resp.status_code == 200
+    assert b"<script>alert(1)</script>" not in resp.data
+    assert b"&lt;script&gt;" in resp.data
+
+
+@pytest.mark.contract
+@pytest.mark.safety("P0.6")
+def test_page_load_is_read_only(tmp_path):
+    # If any page handler called a mutating service method, ReadOnlyGuard would
+    # raise and these requests would 500. 200 proves the load was read-only.
+    client = _client(tmp_path)
+    assert client.get("/").status_code == 200
+    assert client.get("/stacks").status_code == 200
+
+
+_NET_GIT = {"ls-remote", "fetch", "clone", "pull", "push", "remote"}
+_NET_CMD = {"curl", "wget", "nc", "ssh", "ping", "host", "dig", "nslookup"}
+
+
+def _is_network(argv: list[str]) -> bool:
+    if not argv:
+        return False
+    exe = argv[0].rsplit("/", 1)[-1]
+    if exe in _NET_CMD:
+        return True
+    if exe == "git" and any(a in _NET_GIT for a in argv[1:]):
+        return True
+    return False
+
+
+@pytest.mark.contract
+@pytest.mark.safety("P0.6")
+def test_get_routes_make_no_network_calls(tmp_path):
+    """P0.6 — every GET route must run no network/git-remote command. A recording
+    runner captures every subprocess invocation during each GET; none may be a
+    network command (git ls-remote/fetch/clone/…, curl, ssh, DNS)."""
+    calls: list[list[str]] = []
+
+    def factory():
+        sys = FakeSystem().system
+        inner = sys.runner
+
+        class Rec:
+            def run(self, argv, timeout=None, *a, **k):
+                calls.append(list(argv))
+                return inner.run(argv, timeout, *a, **k)
+
+        sys.runner = Rec()
+        return ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
+
+    client = create_app(service_factory=factory).test_client()
+    for path in ("/", "/stacks", "/stacks/daemon",
+                 "/healthz", "/logs/loraham-daemon", "/api/daemon/433",
+                 "/api/dash-signature", "/api/logs/loraham-daemon",
+                 "/auto-install", "/api/auto-install", "/api/system"):
+        client.get(path)
+    offenders = [c for c in calls if _is_network(c)]
+    assert not offenders, f"GET routes ran network commands: {offenders}"
+
+
+def test_radio_dashboard_has_two_band_columns(tmp_path):
+    body = _client(tmp_path).get("/").get_data(as_text=True)
+    assert 'class="radiogrid"' in body
+    assert 'data-radio-band="433"' in body and 'data-radio-band="868"' in body
+    assert "433 MHz" in body and "868 MHz" in body
+    # per-band: a start-stack control and a radio-config link
+    assert 'name="op" value="start"' in body
+    assert "Radio config" in body or "daemon offline" in body
+
+
+def test_config_page_route_gone_content_on_stack(tmp_path):
+    # The standalone Config page (menu hub + per-stack GET) moved into the stack Settings section.
+    c = _client(tmp_path)
+    assert c.get("/config").status_code == 404                         # config hub page gone
+    assert c.get("/stacks/kiss/config").status_code == 302            # GET config page gone (POST save remains)
+    body = c.get("/stacks?open=kiss").get_data(as_text=True)     # content now on the stack page (lazy body)
+    assert 'id="stack-settings-kiss"' in body and ">Settings<" in body
+
+
+def test_server_forced_open_marks_data_force_open(tmp_path):
+    # A redirected/bookmarked URL forces the row open server-side and marks it data-force-open so the
+    # JS restore can never close it. ?cfg forces the row AND its Settings.
+    c = _client(tmp_path)
+    row = parse(c.get("/stacks?open=daemon").get_data(as_text=True)).by_id("stackrow-daemon")
+    assert row.has_attr("open") and row["data-force-open"] == "1"
+    cfg = parse(c.get("/stacks?cfg=daemon").get_data(as_text=True))
+    panel = cfg.by_id("stack-settings-daemon")
+    assert panel.has_attr("open") and panel["data-force-open"] == "1"     # ?cfg opens Settings…
+    assert cfg.by_id("stackrow-daemon")["data-force-open"] == "1"         # …and forces the row
+
+
+def test_inst_query_forces_and_scrolls_to_install_panel(tmp_path):
+    # ?inst=<sid> opens the row AND that stack's Install panel, and marks it data-force-scroll so a
+    # refused start lands ON the Install/Build buttons instead of the last saved scroll position.
+    c = _client(tmp_path)
+    body = c.get("/stacks?inst=kiss").get_data(as_text=True)
+    doc = parse(body)
+    panel = doc.by_id("stack-install-kiss")
+    assert panel.has_attr("open") and panel["data-force-open"] == "1" and panel["data-force-scroll"] == "1"
+    assert doc.by_id("stackrow-kiss")["data-force-open"] == "1"          # the row is forced too
+    # TARGET-SPECIFIC: no other stack's Install panel is forced or scrolled to. A non-targeted
+    # (closed) stack's body is lazy-loaded, so its Install panel is absent from this response —
+    # which is a fortiori not forced/scrolled.
+    assert doc.by_id("stack-install-daemon") is None
+    assert body.count('data-force-scroll="1"') == 1
+
+
+def test_inst_non_matching_value_forces_nothing(tmp_path):
+    # A value that is not a stack id must open/scroll nothing (cf. the ?dp=1 regression).
+    body = _client(tmp_path).get("/stacks?inst=1").get_data(as_text=True)
+    assert "data-force-scroll" not in body and "data-force-open" not in body
+
+
+def test_install_panel_ids_unique(tmp_path):
+    import re
+    c = _client(tmp_path)
+    # Bodies are lazy-loaded, so no Install panel is inlined on the overview; collect the ids
+    # across every stack's body partial and prove each is unique.
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    ids = []
+    for s in svc.stacks():
+        body = c.get(f"/stacks/{s.id}/body").get_data(as_text=True)
+        ids += re.findall(r'id="(stack-install-[a-z0-9-]+)"', body)
+    assert ids and len(ids) == len(set(ids))
+
+
+def _anchors(body):
+    import re
+    return re.findall(r"<a\b[^>]*>", body)
+
+
+def _log_anchors(body):
+    """Anchors whose href targets a log VIEW (not the config link that shares the logslink class)."""
+    return [a for a in _anchors(body)
+            if 'href="/logs/' in a or "/controller/logs" in a or "/webserver/logs" in a]
+
+
+def test_only_web_ui_links_open_a_new_tab(tmp_path):
+    # /stacks (log links etc.) never opens a new tab — the nav chrome is the Home/Apps buttons.
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    found = _log_anchors(body)
+    assert len(found) >= 3
+    for a in found:
+        assert 'target="_blank"' not in a, a
+    assert 'target="_blank"' not in body
+
+    # The ONLY links that may open a new tab are the dashboard mc/mt web-UI links (they leave the console
+    # for the stack's own web UI). Static invariant across every template.
+    import re
+    import pathlib
+    from lhpc.adapters.web import app as _app
+    tdir = pathlib.Path(_app.__file__).resolve().parent / "templates"
+    offenders, web_ui = [], 0
+    for f in sorted(tdir.glob("*.html")):
+        for m in re.finditer(r'<a\b[^>]*target="_blank"[^>]*>', f.read_text()):
+            if "iface-web" in m.group(0):
+                web_ui += 1
+            else:
+                offenders.append(f"{f.name}: {m.group(0)[:80]}")
+    assert not offenders, "non-web-UI links opening a new tab:\n" + "\n".join(offenders)
+    assert web_ui >= 2                       # the exception exists (the two web-UI links)
+
+
+def test_updating_page_is_static_no_script():
+    # The self-update "restarting" page is fully static (no JS): the console stops itself, so it
+    # can't reliably run/reload JS. It just shows a big "Return to the console" link.
+    base = repo_paths.REPO / "lhpc" / "adapters" / "web"
+    tpl = (base / "templates" / "updating.html").read_text()
+    assert "<script" not in tpl                              # no script at all
+    assert "Return to the console" in tpl and 'href="/"' in tpl
+    assert not (base / "static" / "updating.js").exists()    # removed
+
+
+def test_radiolib_dependency_has_source_and_build_actions(tmp_path):
+    # RadioLib (git source + build_steps, no test) must expose Source (Install/Update) and Build in
+    # its Dependencies row — the actions that actually work on a component target.
+    body = _real_app(tmp_path).get("/stacks?open=daemon").get_data(as_text=True)   # radiolib is a daemon dep (lazy body)
+    assert "<summary>radiolib" in body
+    start = body.index("<summary>radiolib")
+    block = body[start:body.index("<summary>Info", start)]        # radiolib's actbar, before its Info
+    assert 'name="op" value="update"' in block and 'name="target" value="radiolib"' in block
+    assert 'name="op" value="build"' in block
+    assert 'name="op" value="test"' not in block                 # no test (none defined)
+    assert 'name="op" value="uninstall"' not in block and 'name="op" value="clean"' not in block
+
+
+def test_radiolib_actions_use_working_dispatch_ops(tmp_path):
+    # The buttons post op+target to /action -> service.run_action(op, target); prove that exact
+    # dispatch plans successfully for radiolib (not an "unknown stack/component" error).
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.run_action("build", "radiolib", apply=False).ok    # buildable via build_steps
+    assert svc.run_action("update", "radiolib", apply=False).ok   # source refresh/clone planned
+
+
+def test_stack_rows_fold_in_detail_sections(tmp_path):
+    # The former /stacks/<id> detail page is now collapsible sections under each stack row.
+    body = _real_app(tmp_path).get("/stacks?open=daemon").get_data(as_text=True)   # lazy body forced inline
+    for s in (">Install</summary>", ">Info</summary>", ">Settings</summary>",
+              ">System dependencies</summary>", ">Dependencies</summary>"):
+        assert s in body, s
+    # per-component actions live under Dependencies; the old detail URL redirects; the page is gone
+    assert ">TX test</button>" in body or ">Build</button>" in body   # per-component actions present
+    r = _client(tmp_path).get("/stacks/daemon")
+    assert r.status_code == 302 and r.headers["Location"].endswith("#stackrow-daemon")
+    assert _client(tmp_path).get("/stacks/nope").status_code == 404
+    base = repo_paths.REPO / "lhpc" / "adapters" / "web"
+    assert not (base / "templates" / "stack.html").exists()
+
+
+def test_no_inline_style_or_script_on_pages(tmp_path):
+    # CSP is default-src 'self'; inline styles/scripts would be blocked. External
+    # same-origin <script src> is CSP-compliant, but inline scripts/styles are not.
+    import re
+    for path in ("/", "/stacks", "/stacks/meshcom"):
+        body = _client(tmp_path).get(path).get_data(as_text=True)
+        assert "style=" not in body.lower()
+        for tag in re.findall(r"<script[^>]*>", body.lower()):
+            assert "src=" in tag                 # no inline <script> blocks
+
+
+def _daemon_client(tmp_path, guard=False):
+    reply = b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90\n"
+    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})
+
+    def factory():
+        svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+        return ReadOnlyGuard(svc) if guard else svc
+
+    return create_app(service_factory=factory).test_client()
+
+
+def test_daemon_config_page_has_live_settings(tmp_path):
+    # Live daemon settings now live on the daemon's config page (Monitor page deleted).
+    body = _daemon_client(tmp_path).get("/stacks?cfg=daemon").get_data(as_text=True)   # open daemon Settings (lazy body)
+    assert "Live radio settings" in body and 'name="_csrf"' in body
+    assert 'name="value"' in body and "<select" in body   # enum -> dropdown (attrs may vary)
+    assert 'type="number"' in body and 'min="-130"' in body   # int -> ranged input
+
+
+# (the /daemon/433 old-monitor-page absence check is now a case of
+# test_retired_routes_remain_unavailable)
+
+
+def test_daemon_api_json(tmp_path):
+    j = _daemon_client(tmp_path).get("/api/daemon/433").get_json()
+    assert j["reachable"] and j["status"]["TXMODE"] == "MANAGED"
+
+
+def test_radio_set_requires_csrf(tmp_path):
+    c = _daemon_client(tmp_path)
+    r = c.post("/radio/433/set", data={"key": "TXMODE", "value": "DIRECT"})
+    assert r.status_code == 400
+
+
+def test_radio_set_is_two_step(tmp_path):
+    # A live daemon setting needs plan + confirm, like every other mutation.
+    c = _daemon_client(tmp_path)
+    token = _csrf(c)
+    # First POST (no confirmed) -> shows the plan, does NOT apply (200, not 302).
+    r = c.post("/radio/433/set", data={"_csrf": token, "key": "TXMODE", "value": "DIRECT"})
+    assert r.status_code == 200 and b"Confirm live daemon setting" in r.data
+    # Confirmed POST -> applies (redirect to the daemon config page).
+    r2 = c.post("/radio/433/set", data={"_csrf": token, "key": "TXMODE",
+                                        "value": "DIRECT", "confirmed": "yes"})
+    assert r2.status_code == 302
+
+
+def test_config_path_cannot_escape_via_band_or_id(tmp_path):
+    import pytest as _pytest
+    from lhpc.core.config import _stack_config_path, save_stack_config
+    from lhpc.core.validators import ValidationError
+    from lhpc.core.paths import Paths
+    paths = Paths(runtime_root=tmp_path)
+    stacks = (tmp_path / "config" / "stacks").resolve()
+    # A traversal band or id must be rejected, never resolve outside config/stacks/.
+    for sid, band in [("daemon", "../../etc"), ("../../evil", "433"), ("a/b", ""),
+                      ("daemon", "433/../../x")]:
+        with _pytest.raises(ValidationError):
+            _stack_config_path(paths, sid, band)
+    # A legitimate write stays inside config/stacks/.
+    p = save_stack_config(paths, "kiss", {"x": "1"}, "868")
+    assert stacks in p.resolve().parents
+
+
+@pytest.mark.contract
+@pytest.mark.safety("P0.6")
+def test_get_daemon_config_is_read_only(tmp_path):
+    # daemon_set is in _MUTATING; a GET of the config page must never call it.
+    assert _daemon_client(tmp_path, guard=True).get("/stacks").status_code == 200
+
+
+def test_multi_band_config_stored_per_band(tmp_path):
+    c = _real_app(tmp_path)
+    token = _csrf(c)     # kiss stays multi-band
+    c.post("/stacks/kiss/config", data={"_csrf": token, "band": "868",
+                                        "c_tx_freq": "869.525"})
+    assert "869.525" in c.get("/stacks?band=868&open=kiss").get_data(as_text=True)   # kiss body lazy-loaded
+    body_433 = c.get("/stacks?band=433&open=kiss").get_data(as_text=True)
+    assert "433.775" in body_433 and "869.525" not in body_433                      # 433 untouched
+
+
+
+def test_actions_grouped_and_install_state_aware(tmp_path):
+    # fresh runtime: sources missing -> not installed -> Install shown, Build hidden
+    body = _real_app(tmp_path).get("/stacks?open=daemon").get_data(as_text=True)   # actions live in the lazy body
+    assert "grouplabel" in body and ">Install<" in body
+    # Nothing installed -> stack_actions renders no Setup group (its stack-level Build/Test live there).
+    assert 'grouplabel">Setup<' not in body
+
+
+def _stub_binary_plan(monkeypatch):
+    """Render the binary PLAN without touching the network (the plan branch fetches the
+    index — see test_install_confirm_defaults_to_the_stacks_default_channel)."""
+    from lhpc.core.service_base import ActionResult
+    seen = {}
+
+    def _plan(self, sid, apply=False, locked=False):
+        seen["called"] = (sid, apply)
+        return ActionResult(True, f"Binary install plan for {sid!r}.", data={"changes": 1})
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    monkeypatch.setattr(ControllerService, "binary_install", _plan)
+    return seen
+
+
+def test_install_confirm_offers_source_versions(tmp_path, monkeypatch):
+    _stub_binary_plan(monkeypatch)
+    c = _real_app(tmp_path)
+    token = _csrf(c)
+    cf = c.post("/action", data={"_csrf": token, "op": "install", "target": "daemon"}).get_data(as_text=True)
+    assert 'name="source"' in cf and "Known working" in cf and "Development" in cf \
+        and "Latest stable" in cf and "Binary (prebuilt)" in cf
+
+
+@pytest.mark.contract
+def test_install_confirm_defaults_to_the_stacks_default_channel(tmp_path, monkeypatch):
+    """A bare Install click must resolve the SAME channel the CLI would: binary wherever it is
+    published. Defaulting to "dev" here started a multi-hour source compile nobody asked for
+    (audit finding)."""
+    seen = _stub_binary_plan(monkeypatch)
+    c = _real_app(tmp_path)
+    cf = c.post("/action", data={"_csrf": _csrf(c), "op": "install",
+                                 "target": "daemon"}).get_data(as_text=True)
+    assert seen.get("called") == ("daemon", False)
+    assert 'value="binary" selected' in " ".join(cf.split())
+
+
+def test_install_confirm_keeps_dev_where_no_binary_is_published(tmp_path, monkeypatch):
+    _stub_binary_plan(monkeypatch)
+    c = _real_app(tmp_path)
+    # kiss declares no [stack.binary] — its confirm keeps the historical source default
+    cf = c.post("/action", data={"_csrf": _csrf(c), "op": "install",
+                                 "target": "kiss"}).get_data(as_text=True)
+    flat = " ".join(cf.split())
+    assert 'value="binary"' not in flat
+    assert 'value="dev" selected' in flat
+
+
+@pytest.mark.contract
+def test_refused_binary_plan_offers_the_source_channel(tmp_path, monkeypatch):
+    """A refused binary install must not be a dead end: the settled decision is an explicit
+    "build from source instead?" — offered right here, never a silent fallback."""
+    from lhpc.core.service_base import ActionResult
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    monkeypatch.setattr(
+        ControllerService, "binary_install",
+        lambda self, sid, apply=False, locked=False: ActionResult(
+            False, "Binary install of 'daemon' refused: could not download the index.",
+            data={"binary_failed": True, "offer_source": True}))
+    c = _real_app(tmp_path)
+    flat = " ".join(c.post("/action", data={"_csrf": _csrf(c), "op": "install",
+                                            "target": "daemon"})
+                     .get_data(as_text=True).split())
+    assert "Build from source instead?" in flat
+    assert 'value="pinned" selected' in flat and 'name="target" value="daemon"' in flat
+    assert 'value="binary"' not in flat        # the channel that just failed is not re-offered
+
+
+def test_binary_install_apply_is_not_gated_on_build_dependencies(tmp_path, monkeypatch):
+    """The Apply stage gates a SOURCE install on the build-dependency gate; a binary download
+    needs no toolchain — the exact case the binary channel exists for."""
+    spawned = []
+    monkeypatch.setattr(ControllerService, "install_dep_gate",
+                        lambda self, target: {"block": [{"install": "sudo apt install -y g++"}], "warn": []})
+    monkeypatch.setattr(ControllerService, "spawn_web_job",
+                        lambda self, op, target, source="": (spawned.append((op, target, source)),
+                                                             ("web-install-daemon.log", "admitted", ""))[1])
+    c = _real_app(tmp_path)
+    r = c.post("/action", data={"_csrf": _csrf(c), "op": "install", "target": "daemon",
+                                "source": "binary", "confirmed": "yes"})
+    assert r.status_code == 302 and "/logs/" in r.headers["Location"]
+    assert spawned == [("install", "daemon", "binary")]
+    r = c.post("/action", data={"_csrf": _csrf(c), "op": "install", "target": "daemon",
+                                "source": "pinned", "confirmed": "yes"}, follow_redirects=True)
+    assert "System dependencies missing" in r.get_data(as_text=True)
+    assert spawned == [("install", "daemon", "binary")]                  # the source apply was gated
+
+
+def test_action_requires_csrf(tmp_path):
+    c = _real_app(tmp_path)
+    assert c.post("/action", data={"op": "start", "target": "daemon"}).status_code == 400
+
+
+def test_action_unknown_op_rejected(tmp_path):
+    c = _real_app(tmp_path)
+    token = _csrf(c)
+    assert c.post("/action", data={"_csrf": token, "op": "evil", "target": "daemon"}).status_code == 400
+
+
+@pytest.mark.contract
+def test_start_uninstalled_stack_redirects_to_app_page(tmp_path):
+    # Fresh runtime: kiss source absent -> starting it refuses and forwards to KISS's OWN Install
+    # section (which has the Install button) with a warning — not to whatever row the page last had
+    # open (the daemon's, restored from sessionStorage).
+    c = _real_app(tmp_path)
+    token = _csrf(c)
+    r = c.post("/action", data={"_csrf": token, "op": "start", "target": "kiss"})
+    assert r.status_code == 302
+    loc = r.headers["Location"]
+    assert loc.endswith("#stack-install-kiss")     # anchor + data-force-scroll land on Install
+    assert "open=kiss" in loc and "inst=kiss" in loc   # force the row AND the Install panel
+
+
+def test_install_confirm_shows_missing_system_deps(tmp_path):
+    # FakeSystem fs reports the ncurses header absent -> chat install warns with apt cmd.
+    c = _real_app(tmp_path)
+    token = _csrf(c)
+    cf = c.post("/action", data={"_csrf": token, "op": "install", "target": "chat"}).get_data(as_text=True)
+    assert "Missing system dependencies" in cf and "libncurses-dev" in cf
+
+
+@pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
+def test_install_runs_as_live_logged_job(tmp_path):
+    c = _real_app(tmp_path)
+    token = _csrf(c)
+    r = c.post("/action", data={"_csrf": token, "op": "install",
+                                "target": "kiss", "confirmed": "yes"})
+    assert r.status_code == 302 and "/logs/" in r.headers["Location"]
+    assert "job=" in r.headers["Location"]
+
+
+@pytest.mark.contract
+def test_action_plan_then_confirm(tmp_path):
+    c = _real_app(tmp_path)
+    token = _csrf(c)
+    # Stage 1: no ack -> confirm page (200, not applied)
+    r1 = c.post("/action", data={"_csrf": token, "op": "stop", "target": "daemon"})
+    assert r1.status_code == 200 and b"Confirm: stop" in r1.data
+    # Stage 2: ack -> applies, redirect
+    r2 = c.post("/action", data={"_csrf": token, "op": "stop", "target": "daemon", "confirmed": "yes"})
+    assert r2.status_code == 302
+
+
+def test_logs_view(tmp_path):
+    assert _real_app(tmp_path).get("/logs/loraham-daemon").status_code == 200
+
+
+def test_logs_view_keeps_the_band_for_the_live_poll(tmp_path):
+    # logs.js rebuilds the API URL from the card's data attributes: a band-scoped page must
+    # keep polling the same band's log, not swap to another log two seconds later.
+    body = _real_app(tmp_path).get("/logs/loraham-daemon?band=433").get_data(as_text=True)
+    assert 'data-band="433"' in body
+    assert 'data-band=""' in _real_app(tmp_path).get("/logs/loraham-daemon").get_data(as_text=True)
+    assert _real_app(tmp_path).get("/logs/bogus").status_code == 404
+
+
+def test_log_api_returns_lines(tmp_path):
+    j = _real_app(tmp_path).get("/api/logs/loraham-daemon").get_json()
+    assert "lines" in j and isinstance(j["lines"], list)
+
+
+@pytest.mark.contract
+@pytest.mark.safety("P0.6")
+def test_system_api_is_read_only_json(tmp_path):
+    # ReadOnlyGuard client: proves the GET touches no mutating service method; contract minimum
+    # is a monotonic ts (raw counters are host-dependent and covered in test_sysstats.py).
+    r = _client(tmp_path).get("/api/system")
+    assert r.status_code == 200
+    j = r.get_json()
+    assert isinstance(j["ts"], float)
+    # Time row: always present (the clock is always readable, even when its sync state is not),
+    # with a state the panel can pin. `unknown` is its own state and never folded into red.
+    tm = j["time"]
+    assert tm["state"] in ("green", "yellow", "red", "unknown")
+    assert tm["local"] and tm["utc"] and tm["tz"]
+
+
+def test_dashboard_system_box_collapsed_by_default(tmp_path):
+    body = _client(tmp_path).get("/").get_data(as_text=True)
+    doc = parse(body)
+    box = doc.by_id("sysbox")
+    assert box is not None
+    assert not box.has_attr("open")             # zero load while collapsed: no open attribute
+    # the metrics table is labelled for assistive tech
+    assert any(t["aria-label"] for t in doc.find("table", **{"class": "systab"}))
+
+
+@pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
+def test_build_action_redirects_to_live_log(tmp_path):
+    c = _real_app(tmp_path)
+    token = _csrf(c)
+    r = c.post("/action", data={"_csrf": token, "op": "build",
+                                "target": "loraham-kiss-tnc", "confirmed": "yes"})
+    assert r.status_code == 302 and "/logs/" in r.headers["Location"]
+    assert "job=" in r.headers["Location"]
+
+
+def test_log_api_rejects_path_traversal_job(tmp_path):
+    # ?job is restricted to a bare filename.
+    j = _real_app(tmp_path).get("/api/logs/loraham-daemon?job=../../etc/passwd").get_json()
+    assert "etc/passwd" not in (j["path"] or "")
+
+
+def test_run_server_rejects_non_loopback(capsys):
+    assert run_server(host="0.0.0.0", port=8770) == 1
+    assert "loopback-only" in capsys.readouterr().out
+
+
+def test_loopback_set_is_exactly_localhost():
+    assert _LOOPBACK_HOSTS == {"127.0.0.1", "::1"}
+
+
+# --- transient green start-note (meshcore-webui access hint) ---------------
+
+def test_start_note_for_started_component():
+    from lhpc.core.services import ControllerService, ActionResult
+    from lhpc.core.outcomes import CompResult, Outcome
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    import tempfile, pathlib
+    svc = ControllerService(system=FakeSystem().system,
+                            paths=Paths(runtime_root=pathlib.Path(tempfile.mkdtemp())))
+    verified = ActionResult(True, "ok", results=(
+        CompResult(component="meshcore-webui", action="start", outcome=Outcome.VERIFIED),))
+    assert svc.start_notes(verified) == ["Open the MeshCore Web UI via the LHPC Webserver page (enable its proxy for the meshcore stack)."]
+    # already-healthy also emits the note
+    healthy = ActionResult(True, "ok", results=(
+        CompResult(component="meshcore-webui", action="start", outcome=Outcome.ALREADY_HEALTHY),))
+    assert svc.start_notes(healthy) == ["Open the MeshCore Web UI via the LHPC Webserver page (enable its proxy for the meshcore stack)."]
+    # blocked / unverified / failed -> NO note
+    for bad in (Outcome.BLOCKED, Outcome.UNVERIFIED, Outcome.FAILED):
+        res = ActionResult(True, "ok", results=(
+            CompResult(component="meshcore-webui", action="start", outcome=bad),))
+        assert svc.start_notes(res) == []
+
+
+def test_start_note_is_html_escaped(tmp_path):
+    """A flash note containing markup is ESCAPED by the rendered page, never live HTML.
+
+    Asserted on the response, not on the template's source: `{{ msg|e }}`, a macro, an include
+    or different whitespace are all correct and must stay green, while adding `|safe` or turning
+    autoescaping off turns this red.
+    """
+    from lhpc.adapters.web.app import create_app
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    app = create_app(service_factory=lambda: ControllerService(
+        system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)))
+    with app.test_client() as c:
+        with c.session_transaction() as sess:
+            sess["_flashes"] = [("warn", "<script>alert(1)</script> started")]
+        body = c.get("/").get_data(as_text=True)
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
+    assert "<script>alert(1)" not in body
+
+
+def test_clear_stale_interactive_survives_unlink_io_error(tmp_path, monkeypatch):
+    # Stale-marker cleanup runs AFTER lifecycle work; a PermissionError (not just a
+    # containment error) from safe_unlink must NOT escape as an unhandled exception.
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    svc.mark_interactive("chat", "433")             # a stale interactive marker exists
+    def boom(self, path):
+        raise PermissionError("EACCES")
+    monkeypatch.setattr(Paths, "safe_unlink", boom)
+    assert svc._safe_unlink(svc._interactive_marker("chat")) is False   # typed, not raised
+    svc.clear_stale_interactive(keep="daemon")      # must NOT raise
+    svc.dismiss_interactive("chat")                 # must NOT raise
+
+
+def _overview_433(tmp_path):
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    sysm = FakeSystem(unix_replies={"/tmp/loraconf433.sock":
+                                    b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system
+    svc = ControllerService(system=sysm, paths=Paths(runtime_root=tmp_path))
+    return svc
+
+
+def test_interactive_command_block_survives_an_empty_band_marker(tmp_path):
+    # REGRESSION (adf433e "gui polish"): the dashboard gated an interactive app's command block
+    # on `mark_band in usable_bands`. A stack that is NOT band-switchable (chat) marks an EMPTY
+    # band — the start path passes cfg_band, which is "" there — and "" is never in usable_bands,
+    # so chat silently fell back into the plain start dropdown with no copy-paste block.
+    # Every pre-existing test wrote an explicit "433", which is why none of them caught it.
+    svc = _overview_433(tmp_path)
+    svc.mark_interactive("chat", "")                 # exactly what the start path writes
+    row = next(r for r in svc.radio_overview() if r["band"] == "433")
+    assert "chat" in [s["id"] for s in row["interactive"]], \
+        "an interactive app with a marker must render its command block, not vanish"
+    assert "chat" not in [s["id"] for s in row["startable"]], \
+        "it must not ALSO sit in the start dropdown"
+
+
+def test_interactive_without_a_marker_stays_in_the_dropdown(tmp_path):
+    # The OTHER half of the same gate, and the reason the fix may not be a bare
+    # `mark_band or min(sbands)`: interactive_band() returns None for "no marker" and "" for
+    # "marked but band-less". None is falsy too, so collapsing them would give every
+    # never-started interactive stack a permanent command card and drop it from the dropdown.
+    svc = _overview_433(tmp_path)                    # no mark_interactive call at all
+    row = next(r for r in svc.radio_overview() if r["band"] == "433")
+    assert "chat" in [s["id"] for s in row["startable"]], \
+        "a never-started interactive stack belongs in the dropdown"
+    assert "chat" not in [s["id"] for s in row["interactive"]], \
+        "it must NOT render a command block before the operator ever ran it"
+
+
+# --- A5: band-aware observed conflicts in the web UI ----------------------------------------
+
+def _conflict_app(tmp_path, cmdlines, socks, mesh_band):
+    def factory():
+        svc = ControllerService(system=FakeSystem(cmdlines_data=cmdlines, unix_replies=socks).system,
+                                paths=Paths(runtime_root=tmp_path))
+        svc._set_running_band("meshtastic", mesh_band)
+        return svc
+    return create_app(service_factory=factory).test_client()
+
+
+_RDY_A5 = b"STATUS RADIO=READY TXMODE=MANAGED\n"
+
+
+def test_stacks_pages_suppress_false_daemon433_vs_meshtastic868(tmp_path):
+    # daemon serving ONLY 433 + meshtastic on 868 must NOT show a conflict.
+    c = _conflict_app(tmp_path, {100: ["loraham_daemon", "--radio", "433"], 200: ["meshtasticd"]},
+                      {"/tmp/loraconf433.sock": _RDY_A5}, "868")
+    body = c.get("/stacks").get_data(as_text=True)
+    # The declared-resource keys now always render in each stack's Info panel, so a conflict is
+    # proven by the conflict markup, not the bare key: no false conflict here.
+    assert "OBSERVED" not in body and 'class="conflict"' not in body
+
+
+def test_stacks_pages_show_true_daemon_both_vs_meshtastic868(tmp_path):
+    # daemon serving BOTH + meshtastic on 868 IS a real conflict on 868 -> shown.
+    c = _conflict_app(tmp_path, {100: ["loraham_daemon", "--radio", "both"], 200: ["meshtasticd"]},
+                      {"/tmp/loraconf433.sock": _RDY_A5, "/tmp/loraconf868.sock": _RDY_A5}, "868")
+    # The OBSERVED conflict row lives in the stack's (deferred) Info panel — fetch it inline via ?open.
+    body = c.get("/stacks?open=daemon").get_data(as_text=True)
+    # A real 868 conflict is shown as an OBSERVED conflict row naming the 868 radio resource.
+    assert "OBSERVED" in body and 'class="conflict"' in body and "loraham.radio.868" in body
+
+
+# --- Start-confirm "Stack parameters" panel + CALL/node enforcement + Save -------------------
+
+def _install_chat(tmp_path):
+    # chat builds from the LoRaHAM_Daemon source; create its built binary so the start-confirm renders.
+    from lhpc.core.services import ControllerService as _CS
+    svc = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    srcdir = svc._lifecycle().source_dir(svc.stack("chat").main_component)
+    srcdir.mkdir(parents=True, exist_ok=True)
+    (srcdir / "loraham_chat").write_text("#!/bin/sh\n")
+    return _real_app(tmp_path)
+
+
+# --- component identity end to end through the web (stack-target collisions) -----------------
+
+def _collide_app(tmp_path):
+    m = tmp_path / "col.toml"
+    m.write_text((repo_paths.DATA
+                  / "scope2_manifest.toml").read_text())
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "files").mkdir(parents=True, exist_ok=True)
+    return m, _real_app(tmp_path, manifest=m)
+
+
+# --- permanent Config page: component-aware (collision fixture) ------------------------------
+
+def test_config_page_distinct_collision_fields_and_values(tmp_path):
+    m, c = _collide_app(tmp_path)
+    svc = ControllerService(manifest_path=m, system=FakeSystem().system,
+                            paths=Paths(runtime_root=tmp_path))
+    assert svc.save_config_bundle("ostack2", values={"tgt.rp": "RP-T", "dep.rp": "RP-D",
+                                                     "file_tgt.fp": "FP-T", "file_dep.fp": "FP-D"}).ok
+    body = c.get("/stacks?open=ostack2").get_data(as_text=True)   # Settings fields live in the lazy body
+    assert 'name="c_tgt__rp"' in body and 'name="c_dep__rp"' in body        # distinct run fields
+    assert 'name="f_tgt__fp"' in body and 'name="f_dep__fp"' in body        # distinct file fields
+    assert 'name="c_rp"' not in body and 'name="f_fp"' not in body          # no shared bare field
+    assert 'name="c_uniq"' in body                                          # unique stays bare
+    assert 'value="RP-T"' in body and 'value="RP-D"' in body                # each component's own value
+    assert 'value="FP-T"' in body and 'value="FP-D"' in body
+
+
+def test_config_page_post_persists_scoped_and_reloads(tmp_path):
+    from lhpc.core import config as cfgmod
+    m, c = _collide_app(tmp_path)
+    tok = _csrf(c, "/stacks?open=ostack2")   # csrf field lives in the (lazy) stack body
+    r = c.post("/stacks/ostack2/config",
+               data={"_csrf": tok, "band": "", "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
+                     "c_uniq": "U-FLAT", "f_tgt__fp": "FP-T", "f_dep__fp": "FP-D"})
+    assert r.status_code in (200, 302)
+    cfg = cfgmod.load_stack_config(Paths(runtime_root=tmp_path), "ostack2")
+    assert cfg["__r__tgt__rp"] == "RP-T" and cfg["__r__dep__rp"] == "RP-D"    # scoped run keys
+    assert cfg["__f__tgt__fp"] == "FP-T" and cfg["__f__dep__fp"] == "FP-D"    # scoped file keys
+    assert cfg["uniq"] == "U-FLAT" and "__r__tgt__uniq" not in cfg            # unique stays flat
+    body = c.get("/stacks?open=ostack2").get_data(as_text=True)   # reloads correctly (lazy body)
+    assert 'value="RP-T"' in body and 'value="RP-D"' in body
+
+
+def test_config_saved_values_launch_per_component(tmp_path, monkeypatch):
+    from lhpc.core.lifecycle import Lifecycle, StartLaunch
+    m, c = _collide_app(tmp_path)
+    tok = _csrf(c, "/stacks?open=ostack2")   # csrf field lives in the (lazy) stack body
+    c.post("/stacks/ostack2/config",
+           data={"_csrf": tok, "band": "", "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
+                 "c_uniq": "U", "f_tgt__fp": "FP-T", "f_dep__fp": "FP-D"})
+    seen = {}
+    def stub(self, stack, comp, cfg, band="", **_scope):
+        seen[comp.id] = dict(cfg)
+        return StartLaunch(True, "log", "")
+    monkeypatch.setattr(Lifecycle, "start", stub)
+    ControllerService(manifest_path=m, system=FakeSystem().system,
+                      paths=Paths(runtime_root=tmp_path)).start("ostack2", apply=True)
+    assert seen["tgt"]["rp"] == "RP-T" and seen["dep"]["rp"] == "RP-D"        # own saved run value
+    files = tmp_path / "config" / "files"
+    assert "FP=FP-T" in (files / "tgt.conf").read_text()                     # own generated file config
+    assert "FP=FP-D" in (files / "dep.conf").read_text()
+    assert not (files / "sib.conf").exists()
+
+
+@pytest.mark.contract
+@pytest.mark.safety("P0.6")
+def test_daemon_socket_stream_endpoint_read_only_and_bounded(tmp_path):
+    c = _daemon_client(tmp_path)                       # 433 CONF socket reachable
+    j = c.get("/api/daemon/433/socket").get_json()
+    assert j["band"] == "433" and j["reachable"] is True
+    assert j["line"].startswith("STATUS")              # one raw, sanitised status line
+    # 868 has no reply -> fail-closed, not reachable
+    assert c.get("/api/daemon/868/socket").get_json() == {"band": "868", "line": "", "reachable": False}
+    assert c.get("/api/daemon/999/socket").status_code == 404       # band validated -> no arbitrary path
+    assert c.post("/api/daemon/433/socket").status_code == 405       # read-only (GET only)
+
+
+def test_daemon_socket_line_sanitises_and_bounds(tmp_path):
+    from lhpc.core.services import ControllerService
+    # ANSI colour + a control char (0x07) + a non-ASCII byte + a second line -> stripped to one
+    # printable-ASCII first line (a hostile/garbled socket can never emit control chars or extra data).
+    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock":
+                                    b"\x1b[31mSTATUS RSSI=-95\x07\xff CAD=1\nEVIL\n"})
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    assert svc.daemon_socket_line("433") == "STATUS RSSI=-95 CAD=1"
+    assert svc.daemon_socket_line("868") == ""          # unreachable -> fail-closed
+    assert svc.daemon_socket_line("evil") == ""         # invalid band -> never builds a socket path
+
+
+# --- Restored shared Settings partial (_stack_settings.html): render, placement, regression ---
+
+def test_settings_apps_ids_unique(tmp_path):                                 # (3)
+    import re
+    c = _client(tmp_path)
+    # Bodies are lazy-loaded; collect each stack's Settings id from its body partial.
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    ids, apps = [], ""
+    for s in svc.stacks():
+        body = c.get(f"/stacks/{s.id}/body").get_data(as_text=True)
+        apps += body
+        ids += re.findall(r'id="(stack-settings-[a-z0-9-]+)"', body)
+    assert len(ids) >= 2 and len(ids) == len(set(ids))        # one unique id per stack
+    assert 'id="stack-settings"' not in apps                  # never the bare detail id here
+
+
+def test_settings_cfg_query_opens(tmp_path):                                 # (4)
+    c = _client(tmp_path)
+    assert parse(c.get("/stacks?cfg=kiss").get_data(as_text=True)) \
+        .by_id("stack-settings-kiss").has_attr("open")                 # ?cfg=<id> forces it open
+    # By default the row is closed, so its body (and this Settings panel) is lazy-loaded, i.e. absent —
+    # never auto-open.
+    assert parse(c.get("/stacks").get_data(as_text=True)) \
+        .by_id("stack-settings-kiss") is None
+
+
+def test_settings_embedded_post_persists(tmp_path):                          # (5)
+    from lhpc.core.config import load_stack_config
+    c = _real_app(tmp_path)
+    tok = _csrf(c)
+    r = c.post("/stacks/chat/config", data={"_csrf": tok, "band": "", "f_call": "XX0XXA-7"})
+    assert r.status_code in (200, 302)
+    assert load_stack_config(Paths(runtime_root=tmp_path), "chat").get("file_call") == "XX0XXA-7"
+    # embedded form persists (unique config-file param -> flat `file_<name>` key)
+
+
+@pytest.mark.parametrize("client_kind,path,status", [
+    pytest.param("app", "/config", 404, id="config-hub-page-removed"),
+    pytest.param("app", "/stacks/kiss/config", 302, id="per-stack-config-GET-removed-post-save-remains"),
+    pytest.param("daemon", "/daemon/433", 404, id="old-per-band-daemon-monitor-page-removed"),
+    pytest.param("app", "/self-update", 404, id="standalone-self-update-page-removed"),
+])
+def test_retired_routes_remain_unavailable(tmp_path, client_kind, path, status):
+    # Negative contract: every formerly-served page/route stays retired (must not silently return).
+    # The WHY of each retirement is carried in its param id.
+    c = _daemon_client(tmp_path) if client_kind == "daemon" else _client(tmp_path)
+    assert c.get(path).status_code == status
+
+
+def test_settings_partial_loads_and_renders(tmp_path):                       # (7)
+    # Regression guard: the shared partial must exist and render standalone with the data both
+    # include sites pass — a missing file raises TemplateNotFound here.
+    from lhpc.adapters.web.app import create_app
+    from lhpc.core.services import ControllerService
+    def factory():
+        return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    app = create_app(service_factory=factory)
+    svc = factory()
+    with app.test_request_context("/stacks/chat?cfg=1"):
+        tmpl = app.jinja_env.get_template("_stack_settings.html")   # TemplateNotFound if absent
+        html = tmpl.render(stack=svc.stack("chat"), view=svc.config_view("chat"),
+                           config_groups=svc.config_param_groups("chat"),
+                           settings_id="stack-settings")
+    assert '<summary>Settings</summary>' in html and 'id="stack-settings"' in html
+    assert 'name="f_call"' in html                            # component-aware field rendered
+
+
+# --- Settings reset button: exact "Reset to defaults" text for every stack/band --------------
+
+def test_reset_post_submits_band_and_redirects_to_settings(tmp_path):         # (3)
+    c = _real_app(tmp_path)
+    tok = _csrf(c)             # selected-band reset semantics preserved
+    r = c.post("/stacks/kiss/config/reset", data={"_csrf": tok, "band": "868"})
+    assert r.status_code in (302, 303)
+    loc = r.headers["Location"]
+    assert "band=868" in loc and "cfg=kiss" in loc
+    assert loc.endswith("#stack-settings-kiss")              # back to the opened Settings section
+    # CSRF still enforced on the reset route
+    assert c.post("/stacks/kiss/config/reset", data={"band": "868"}).status_code == 400
+
+
+# --- Self-Update: footer indicator, page, apply flow, Apps entry -----------------------------
+
+def _write_selfcache(tmp_path, local, upstream):
+    from lhpc.core import selfupdate
+    from lhpc.core.paths import Paths
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    selfupdate.write_cache(Paths(runtime_root=tmp_path),
+                           {"schema_version": 1, "local": local, "upstream": upstream,
+                            "checked_at": 1})
+
+
+@pytest.mark.parametrize("upstream, wants_link", [
+    ({}, False),                                                         # never checked
+    ({"ok": True, "upstream_version": __import__("lhpc.version", fromlist=["__version__"]).__version__,
+      "upstream_head": "a" * 40, "upstream_head_short": "aaaaaaaaa"}, False),   # up to date
+    ({"ok": True, "upstream_version": __import__("lhpc.version", fromlist=["__version__"]).__version__,
+      "upstream_head": "b" * 40, "upstream_head_short": "bbbbbbbbb"}, True),     # commit ahead
+    ({"ok": True, "upstream_version": "99.0.0",
+      "upstream_head": "b" * 40, "upstream_head_short": "bbbbbbbbb"}, True),     # version ahead
+])
+def test_footer_offers_an_update_link_iff_an_update_is_available(tmp_path, upstream, wants_link):
+    # The actionable behaviour is the LINK, not the CSS colour: a footer update link appears exactly
+    # when the cached self-update check reports the controller is behind upstream.
+    _write_selfcache(tmp_path, {"head": "a" * 40, "head_short": "aaaaaaaaa"}, upstream)
+    body = _client(tmp_path).get("/").get_data(as_text=True)
+    assert ("update-link" in body) is wants_link
+
+
+def test_apps_leads_with_controller_row_and_embedded_update_ui(tmp_path):
+    # The controller is the FIRST /stacks entry (cached), with the Update UI embedded as its
+    # collapsible section — replacing the old hardcoded always-"running" self-stack row.
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})   # cached-only availability
+    b = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    assert 'id="self-stack"' not in b
+    assert 'id="controller-row"' in b
+    assert "/self-update/check" in b and "Check for updates" in b   # embedded update form
+    assert "Self-Update" not in b                                   # renamed to just "Update"
+
+
+# (the /self-update standalone-page absence check is now a case of
+# test_retired_routes_remain_unavailable — the Update UI lives only on /stacks)
+
+
+@pytest.mark.contract
+def test_self_update_check_post_csrf(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    monkeypatch.setattr(ControllerService, "self_update_check", lambda self: ActionResult(True, "Up to date."))
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/stacks")
+    assert c.post("/self-update/check", data={"_csrf": tok}).status_code in (302, 303)
+    assert c.post("/self-update/check").status_code == 400          # CSRF enforced
+
+
+def _confirm_body(tmp_path, monkeypatch, *, dirty=False, diverged=False,
+                  changes=(), ahead=0, behind=0):
+    from lhpc.core.services import ControllerService
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: dirty)
+    monkeypatch.setattr(ControllerService, "self_update_ff_blocked", lambda self: diverged)
+    monkeypatch.setattr(ControllerService, "self_update_local_changes",
+                        lambda self, limit=20: tuple(changes))
+    monkeypatch.setattr(ControllerService, "self_update_divergence", lambda self: (ahead, behind))
+    monkeypatch.setattr(ControllerService, "self_update_branch", lambda self: "main")
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/stacks")
+    return c.post("/self-update/apply", data={"_csrf": tok}).get_data(as_text=True)
+
+
+def test_dirty_confirm_names_the_paths_an_overwrite_would_discard(tmp_path, monkeypatch):
+    # Consent to a discard the operator cannot see is not consent. A bare "local changes are
+    # present" left them unable to tell an accidental artifact from real work.
+    body = _confirm_body(tmp_path, monkeypatch, dirty=True,
+                         changes=(" M lhpc/core/services.py", "?? scratch.txt", "… and 3 more"))
+    assert "Local changes are present" in body
+    assert "These paths would be discarded" in body
+    assert "lhpc/core/services.py" in body and "scratch.txt" in body
+    assert "… and 3 more" in body                    # truncation disclosed, not silent
+    assert 'name="overwrite"' in body
+
+
+def test_diverged_confirm_names_the_commit_count_and_upstream_ref(tmp_path, monkeypatch):
+    body = _confirm_body(tmp_path, monkeypatch, diverged=True, ahead=3, behind=7)
+    assert "has diverged from upstream" in body
+    assert "3 commits" in body and "origin/main" in body
+    assert "7 ahead of it" in body
+
+
+def test_clean_tree_confirm_shows_neither_banner_nor_checkbox(tmp_path, monkeypatch):
+    body = _confirm_body(tmp_path, monkeypatch)      # clean + fast-forwardable (the normal case)
+    assert 'name="overwrite"' not in body
+    assert "Local changes are present" not in body
+    assert "These paths would be discarded" not in body
+
+
+@pytest.mark.contract
+def test_self_update_one_click_confirm_then_trigger(tmp_path, monkeypatch):
+    """Stage 1 warns about the automatic stop/update/restart (fresh CLEAN tree -> no discard
+    checkbox); stage 2 starts the NORMAL updater unit and renders the STATIC updating page."""
+    from lhpc.core.services import ControllerService, ActionResult
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})     # available checkout (cached)
+    monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
+    triggered = {}
+    def fake_trigger(self, *, overwrite=False):
+        triggered["overwrite"] = overwrite
+        return ActionResult(True, "Updater started.", data={"triggered": True})
+    monkeypatch.setattr(ControllerService, "self_update_repair_and_trigger", fake_trigger)
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/stacks")
+    r1 = c.post("/self-update/apply", data={"_csrf": tok}).get_data(as_text=True)
+    assert "stop the web console" in r1 and "automatically" in r1
+    # P2: the confirm must NOT promise auto-reconnect — the next page is static (no JS).
+    assert "reconnects by itself" not in r1 and "Return to the console" in r1
+    assert "Update &amp; restart now" in r1
+    assert "reset to upstream" not in r1                        # clean, ff-able tree -> no consent box
+    r2 = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
+    assert "Return to the console" in r2 and "updating.js" not in r2   # static updating page, no reload JS
+    assert triggered["overwrite"] is False
+    assert c.post("/self-update/apply", data={"confirmed": "yes"}).status_code == 400   # CSRF
+
+
+def test_stacks_first_load_all_main_headers_collapsed(tmp_path):
+    # An available update signals via the pill — it must NOT auto-expand the controller row.
+    import re
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"},
+                     {"ok": True, "upstream_head": "b" * 40, "upstream_head_short": "bbbbbbbbb",
+                      "upstream_version": "9.9.9"})
+    body = _real_app(tmp_path).get("/stacks").get_data(as_text=True)
+    doc = parse(body)
+    # still signalled — now as the col-update link (same column as the stack rows)
+    assert doc.find("a", **{"class": "update-link"}) and ">Update</a>" in body
+    assert not doc.by_id("controller-row").has_attr("open")             # controller row collapsed
+    assert not doc.by_id("controller-update").has_attr("open")          # nested Update collapsed
+    assert not re.search(r'id="stackrow-[a-z0-9-]+"[^>]*\sopen', body)  # every stack row collapsed
+
+
+def test_stacks_default_closed_install_and_webserver_not_auto_open(tmp_path):
+    # "install and webserver section shall not auto-open anymore": a plain GET force-opens nothing.
+    import re
+    c = _client(tmp_path)
+    body = c.get("/stacks").get_data(as_text=True)
+    assert "data-force-open" not in body and "data-force-scroll" not in body
+    # A lazily-fetched body renders its Install panel collapsed (id immediately followed by '>', no ' open').
+    bod = c.get("/stacks/daemon/body").get_data(as_text=True)
+    assert re.search(r'id="stack-install-daemon"', bod)                       # it renders…
+    assert not re.search(r'id="stack-install-daemon"[^>]*\sopen', bod)        # …but closed
+    assert 'id="webserver-row">' in body and 'id="webserver-row" open' not in body
+
+
+def test_footer_update_link_targets_the_controller_update_panel(tmp_path):
+    # The link must open+scroll the Update panel section, not the row (which the JS treats as generic).
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"},
+                     {"ok": True, "upstream_head": "b" * 40, "upstream_head_short": "bbbbbbbbb",
+                      "upstream_version": "9.9.9"})
+    body = _real_app(tmp_path).get("/").get_data(as_text=True)
+    assert 'class="update-link"' in body and "#controller-update" in body
+    assert 'href="/stacks#controller-row"' not in body
+
+
+def test_foreground_console_shows_managed_service_banner(tmp_path, monkeypatch):
+    # The unit FILES can verify ok while the console runs in a foreground shell — say why one-click
+    # update / boot autostart are unavailable, without implying they are impossible forever.
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    body = _real_app(tmp_path).get("/stacks").get_data(as_text=True)
+    assert "running in the foreground" in body
+    assert "lhpc self-update --repair-integration" in body
+    assert "boot autostart" in body
+
+
+def test_last_apply_success_suppressed_failure_shown(tmp_path):
+    # The "Last update run: Update applied…" SUCCESS line is redundant with the version/green and is
+    # removed; a FAILURE line is still shown (not redundant).
+    from lhpc.core import selfupdate
+    from lhpc.core.paths import Paths
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+
+    def _cache(ok):
+        selfupdate.write_cache(Paths(runtime_root=tmp_path), {
+            "schema_version": 1,
+            "local": {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa", "branch": "main"},
+            "upstream": {}, "checked_at": 1,
+            "last_apply": {"ok": ok, "finished_at": 2,
+                           "summary": "Update applied — restart the web console to load it." if ok
+                           else "Update could not be applied — the local branch has diverged."}})
+    _cache(True)
+    assert "Last update run" not in _client(tmp_path).get("/stacks").get_data(as_text=True)
+    _cache(False)
+    assert "Last update run" in _client(tmp_path).get("/stacks").get_data(as_text=True)
+
+
+def test_dash_radio_config_link_opens_daemon_settings(tmp_path):
+    # With a configured setup and an answering CONF socket the dashboard emits the link, so it
+    # can be asserted where the operator sees it rather than by scraping one template line.
+    from lhpc.core import config as _cfg
+    svc = ControllerService(
+        system=FakeSystem(unix_replies={"/tmp/loraconf433.sock":
+                                        b"STATUS RADIO=READY TXMODE=DIRECT\n"}).system,
+        paths=Paths(runtime_root=tmp_path))
+    _cfg.save_hardware_setup(svc._paths, "loraham")
+    body = create_app(lambda: svc).test_client().get("/").get_data(as_text=True)
+    assert 'href="/stacks?open=daemon&amp;cfg=daemon#stack-settings-daemon">Radio config' in body
+
+
+def test_controller_logs_page_and_header_link(tmp_path):
+    # The controller row header carries a 'logs' link to a controller-logs page that tails the
+    # on-disk log FILE (StandardOutput=append:), showing its path like the webserver-logs page.
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    c = _real_app(tmp_path)
+    body = c.get("/stacks").get_data(as_text=True)
+    assert "/controller/logs" in body                              # header 'logs' link
+    r = c.get("/controller/logs")
+    assert r.status_code == 200
+    page = r.get_data(as_text=True)
+    assert "lhpc-web.service" in page                              # unit label pill
+    assert "logs/lhpc-web.log" in page                            # on-disk file path shown
+    assert c.get("/controller/logs?src=selfupdate").status_code == 200
+
+
+def test_self_update_apply_get_redirects_not_405(tmp_path):
+    # Both apply stages render INLINE at /self-update/apply, so the browser tab stays there; a
+    # reload/Back/post-outage GET must redirect to the controller Update panel, NEVER 405.
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    c = _real_app(tmp_path)
+    r = c.get("/self-update/apply")
+    assert r.status_code == 302 and r.headers["Location"].endswith("#controller-update")
+
+
+@pytest.mark.contract
+def test_self_update_dirty_confirm_consent_selects_overwrite_unit(tmp_path, monkeypatch):
+    """A FRESH dirty check drives the confirm warning; ticking the discard consent selects the
+    fixed overwrite unit; without the tick the normal unit runs (dirty apply then refuses)."""
+    from lhpc.core.services import ControllerService, ActionResult
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: True)
+    seen = {}
+    monkeypatch.setattr(ControllerService, "self_update_repair_and_trigger",
+                        lambda self, *, overwrite=False: (seen.__setitem__("ow", overwrite),
+                                                          ActionResult(True, "started",
+                                                                       data={"triggered": True}))[1])
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/stacks")
+    r1 = c.post("/self-update/apply", data={"_csrf": tok}).get_data(as_text=True)
+    assert "Local changes are present" in r1 and "reset to upstream" in r1
+    c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes", "overwrite": "yes"})
+    assert seen["ow"] is True
+    c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"})
+    assert seen["ow"] is False
+
+
+def test_self_update_stale_overwrite_tick_downgrades_on_clean_tree(tmp_path, monkeypatch):
+    """An overwrite tick submitted against a MEANWHILE-CLEAN tree must NOT select the
+    destructive unit (fresh re-check at stage 2)."""
+    from lhpc.core.services import ControllerService, ActionResult
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
+    seen = {}
+    monkeypatch.setattr(ControllerService, "self_update_repair_and_trigger",
+                        lambda self, *, overwrite=False: (seen.__setitem__("ow", overwrite),
+                                                          ActionResult(True, "started",
+                                                                       data={"triggered": True}))[1])
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/stacks")
+    c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes", "overwrite": "yes"})
+    assert seen["ow"] is False
+
+
+def test_self_update_diverged_confirm_offers_override(tmp_path, monkeypatch):
+    """A CLEAN but DIVERGED tree (a normal update can't fast-forward) must WARN and offer the
+    reset-to-upstream override, and ticking it selects the force unit — same consent flow as dirty."""
+    from lhpc.core.services import ControllerService, ActionResult
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
+    monkeypatch.setattr(ControllerService, "self_update_ff_blocked", lambda self: True)
+    seen = {}
+    monkeypatch.setattr(ControllerService, "self_update_repair_and_trigger",
+                        lambda self, *, overwrite=False: (seen.__setitem__("ow", overwrite),
+                                                          ActionResult(True, "started",
+                                                                       data={"triggered": True}))[1])
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/stacks")
+    r1 = c.post("/self-update/apply", data={"_csrf": tok}).get_data(as_text=True)
+    assert "history has diverged" in r1 and "reset to upstream" in r1
+    assert "Local changes are present" not in r1                 # clean tree -> only the diverged note
+    c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes", "overwrite": "yes"})
+    assert seen["ow"] is True                                    # diverged + consent -> force unit
+    c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"})
+    assert seen["ow"] is False                                   # no tick -> normal (apply then refuses)
+
+
+def test_self_update_last_apply_renders_prewrap(tmp_path):
+    """The last-apply outcome renders in a pre-wrap depnote so a (sanitized) multi-word summary is
+    legible instead of collapsed — the fix for the 'garbled Update failed' message."""
+    from lhpc.core import selfupdate
+    from lhpc.core.paths import Paths
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    selfupdate.write_cache(Paths(runtime_root=tmp_path), {
+            "schema_version": 1,
+        "local": {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa", "branch": "main"},
+        "upstream": {}, "checked_at": 1,
+        "last_apply": {"ok": False, "summary": "Update could not be applied — the local branch has "
+                       "diverged from upstream. fatal: Not possible to fast-forward, aborting.",
+                       "finished_at": 2}})
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    assert "depnote-pre" in body                                 # pre-wrap container present
+    assert "Not possible to fast-forward" in body                # clean summary shown verbatim
+
+
+def test_self_update_trigger_blocked_by_active_job(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    monkeypatch.setenv("INVOCATION_ID", "x")           # simulate the managed web unit
+    monkeypatch.setattr(ControllerService, "updater_integration",
+                        lambda self: {"status": "ok", "request": "absent"})
+    # The centralized blocker scan calls active_jobs(include_unsafe=True) -> accept the kwarg.
+    monkeypatch.setattr(ControllerService, "active_jobs",
+                        lambda self, *a, **k: [{"op": "build", "target": "x"}])
+    monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/stacks")
+    body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
+    assert "job is running" in body or "blocked" in body.lower()   # blocked; no request, no waiting page
+    assert "reconnects" not in body
+
+
+def test_self_update_trigger_failure_flashes_and_stays(tmp_path, monkeypatch):
+    """A failed unit start (updater not installed) must NOT strand the operator on the
+    waiting page — it flashes the error and re-renders /stacks."""
+    from lhpc.core.services import ControllerService, ActionResult
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
+    monkeypatch.setattr(ControllerService, "self_update_repair_and_trigger",
+                        lambda self, *, overwrite=False: ActionResult(
+                            False, "Could not start the updater service (lhpc-selfupdate.service).",
+                            data={"trigger_failed": True}))
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/stacks")
+    body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
+    assert "Could not start the updater service" in body and "reconnects" not in body
+
+
+def test_last_apply_outcome_renders_from_cache(tmp_path):
+    """The updater records its outcome while the console is down; the returning /stacks page
+    shows it CACHED-only (both success and failure)."""
+    from lhpc.core import selfupdate
+    from lhpc.core.paths import Paths
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    selfupdate.record_last_apply_strict(Paths(runtime_root=tmp_path), ok=False,
+                                 summary="Local uncommitted changes present.", now=5)
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    assert "Last update run:" in body and "Local uncommitted changes present." in body
+
+
+# --- M4: "Confirm this stack as working" (operator-confirmed known-working) ------------------
+
+def _seed_kw_offer(tmp_path, commit="a" * 40):
+    import time as _t
+    from lhpc.core import known_working, source_registry
+    from lhpc.core.paths import Paths
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True, exist_ok=True)
+    entries = {"loraham-chat": {"commit": commit, "selector": "dev", "remote": "",
+                                "source_rel": "src/LoRaHAM_Daemon"}}
+    assert known_working.write_candidate(paths, "chat", entries, "433")
+    assert source_registry.write_record(paths, source_registry.RegistryRecord(
+        "src/LoRaHAM_Daemon", "", "dev", commit, _t.time(), "",
+        ("loraham-chat",)))
+    return paths, entries
+
+
+def _kw_bound_app(tmp_path, commit="a" * 40, cmdlines=None):
+    """A client whose service answers the identity git queries by REALPATH — the
+    handle-bound POST confirmation queries the captured leaf's fd-pinned path."""
+    import os as _os
+    from lhpc.core.probes.backends import CommandResult, FakeSystem
+    svc = ControllerService(system=FakeSystem(cmdlines_data=cmdlines or {}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    real_run = svc._system.runner.run
+    dest_real = _os.path.realpath(str(tmp_path / "src" / "LoRaHAM_Daemon"))
+    def run(argv, timeout, *a, **k):
+        argv = list(argv)
+        if (len(argv) >= 4 and argv[:2] == ["git", "-C"]
+                and _os.path.realpath(argv[2]) == dest_real):
+            if argv[3:] == ["config", "--get", "remote.origin.url"]:
+                return CommandResult(
+                    0, "https://github.com/makrohard/LoRaHAM_Daemon.git\n", "")
+            if argv[3:] == ["rev-parse", "HEAD"]:
+                return CommandResult(0, commit + "\n", "")
+        return real_run(argv, timeout, *a, **k)
+    svc._system.runner.run = run
+    return create_app(service_factory=lambda: svc).test_client()
+
+
+def test_confirm_working_button_renders_when_offer_valid(tmp_path):
+    _seed_kw_offer(tmp_path)
+    c = _real_app(tmp_path, cmdlines={555: ["loraham_chat"]})
+    body = c.get("/stacks?open=chat").get_data(as_text=True)   # confirm-working offer lives in the lazy body
+    assert "Confirm this stack as working" in body
+    assert "known-working/confirm" in body
+
+
+def test_confirm_working_button_hidden_when_stopped_or_recorded(tmp_path):
+    from lhpc.core import known_working
+    paths, entries = _seed_kw_offer(tmp_path)
+    # stopped -> hidden
+    c = _real_app(tmp_path)
+    assert "Confirm this stack as working" not in c.get("/stacks").get_data(as_text=True)
+    # running but already recorded -> hidden
+    known_working.record(paths, "chat", entries, {"confirmed_at": 1.0})
+    c2 = _real_app(tmp_path, cmdlines={555: ["loraham_chat"]})
+    assert "Confirm this stack as working" not in c2.get("/stacks").get_data(as_text=True)
+
+
+def test_confirm_working_post_records_and_hides_button(tmp_path):
+    from lhpc.core import known_working
+    from lhpc.core.paths import Paths
+    _seed_kw_offer(tmp_path)
+    c = _kw_bound_app(tmp_path, cmdlines={555: ["loraham_chat"]})
+    tok = _csrf(c)
+    assert c.post("/stacks/chat/known-working/confirm").status_code == 400   # CSRF enforced
+    r = c.post("/stacks/chat/known-working/confirm", data={"_csrf": tok})
+    assert r.status_code in (302, 303)
+    assert known_working.load(Paths(runtime_root=tmp_path), "chat")[0]["entries"]["loraham-chat"]["commit"] == "a" * 40
+    assert "Confirm this stack as working" not in c.get("/stacks").get_data(as_text=True)
+    assert c.post("/stacks/nope/known-working/confirm", data={"_csrf": tok}).status_code == 404
+
+
+# --- M6: restart-required yellow chip + Restart now action -----------------------------------
+
+def _flag_restart(tmp_path, sid="chat"):
+    import json as _json
+    d = tmp_path / "state" / "restart-required"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{sid}.json").write_text(_json.dumps(
+        {"version": 1, "stack": sid, "mode": "restart", "params": ["tx_freq"],
+         "band": "", "created_at": 1.0}))
+
+
+def test_restart_required_chip_on_stack_page_and_dashboard(tmp_path):
+    _flag_restart(tmp_path)
+    c = _real_app(tmp_path, cmdlines={555: ["loraham_chat"]})
+    body = c.get("/stacks?open=chat").get_data(as_text=True)   # restart chip + action live in the lazy body
+    assert "Restart required" in body and "Restart now" in body
+    dash = c.get("/").get_data(as_text=True)
+    assert "Restart required" in dash and "Restart chat now" in dash
+
+
+def test_no_chip_without_flag(tmp_path):
+    c = _real_app(tmp_path)
+    assert "Restart required" not in c.get("/stacks").get_data(as_text=True)
+    assert "Restart required" not in c.get("/").get_data(as_text=True)
+
+
+# --- M7: Clean all confirm flow (typed stack id, zero mutation on mismatch) -------------------
+
+def _seed_clean_target(tmp_path):
+    import time as _t
+    from lhpc.core import source_registry
+    from lhpc.core.paths import Paths
+    (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
+    assert source_registry.write_record(
+        Paths(runtime_root=tmp_path),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "pinned", "", _t.time(),
+                                       "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
+
+
+def _bind_web_identity(client_factory_svc, dest, remote):
+    """Answer identity git queries by realpath — the verifier runs them against the captured
+    leaf's fd-pinned /proc path."""
+    import os as _os
+    from lhpc.core.probes.backends import CommandResult
+    real_run = client_factory_svc._system.runner.run
+    dest_real = _os.path.realpath(str(dest))
+    def run(argv, timeout, *a, **k):
+        argv = list(argv)
+        if (len(argv) >= 4 and argv[:2] == ["git", "-C"]
+                and _os.path.realpath(argv[2]) == dest_real
+                and argv[3:] == ["config", "--get", "remote.origin.url"]):
+            return CommandResult(0, remote + "\n", "")
+        return real_run(argv, timeout, *a, **k)
+    client_factory_svc._system.runner.run = run
+
+
+def test_clean_confirm_page_requires_typed_id(tmp_path):
+    _seed_clean_target(tmp_path)
+    c = _real_app(tmp_path)
+    tok = _csrf(c)
+    body = c.post("/action", data={"_csrf": tok, "op": "clean", "target": "kiss"})
+    page = body.get_data(as_text=True)
+    assert body.status_code == 200 and "DESTRUCTIVE" in page and "confirm_text" in page
+
+
+def test_clean_confirm_text_mismatch_is_zero_mutation(tmp_path):
+    _seed_clean_target(tmp_path)
+    c = _real_app(tmp_path)
+    tok = _csrf(c)
+    r = c.post("/action", data={"_csrf": tok, "op": "clean", "target": "kiss",
+                                "confirmed": "yes", "confirm_text": "WRONG"})
+    assert r.status_code == 200                                      # re-rendered confirm
+    assert (tmp_path / "src" / "loraham-kiss-tnc").exists()          # ZERO mutation
+
+
+def test_clean_confirm_text_match_purges(tmp_path):
+    from lhpc.core.probes.backends import FakeSystem
+    _seed_clean_target(tmp_path)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    _bind_web_identity(svc, tmp_path / "src" / "loraham-kiss-tnc",
+                       "https://github.com/makrohard/loraham-kiss-tnc.git")
+    c = create_app(service_factory=lambda: svc).test_client()
+    tok = _csrf(c)
+    r = c.post("/action", data={"_csrf": tok, "op": "clean", "target": "kiss",
+                                "confirmed": "yes", "confirm_text": "kiss"})
+    assert r.status_code in (302, 303)
+    assert not (tmp_path / "src" / "loraham-kiss-tnc").exists()      # purged
+
+
+def test_confirm_working_post_refuses_drifted_tree(tmp_path):
+    from lhpc.core import known_working
+    from lhpc.core.paths import Paths
+    _seed_kw_offer(tmp_path)
+    c = _kw_bound_app(tmp_path, commit="b" * 40,
+                      cmdlines={555: ["loraham_chat"]})                   # HEAD drifted
+    tok = _csrf(c)
+    r = c.post("/stacks/chat/known-working/confirm", data={"_csrf": tok})
+    assert r.status_code in (302, 303)                                    # flashed refusal
+    assert known_working.load(Paths(runtime_root=tmp_path), "chat") == [] # nothing recorded
+
+
+# --- M2 final: live-finding fixes (meshcore blank config, daemon activity feed) ---------------
+
+def test_blank_file_params_clear_override_not_error(tmp_path):
+    # LIVE FINDING: submitting blank txpower/frequency for meshcore refused the whole
+    # save ("not an integer ('')"). Blank = clear-the-override for file AND run params
+    # of every kind; invalid non-blank values are still refused.
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    r = svc.save_config_bundle("meshcore", values={"file_txpower": "",
+                                                   "file_frequency": ""})
+    assert r.ok, r.details
+    r2 = svc.save_config_bundle("meshcore", values={"file_txpower": "7",
+                                                    "file_frequency": "869618000"})
+    assert r2.ok
+    r3 = svc.save_config_bundle("meshcore", values={"file_txpower": "abc"})
+    assert not r3.ok and any("not an integer" in d for d in r3.details)
+    # a stored blank renders as the manifest DEFAULT, never an empty config line
+    vals = svc.save_config_bundle("meshcore", values={"file_txpower": ""})
+    assert vals.ok
+
+
+def test_daemon_feed_reads_per_band_process_log(tmp_path, monkeypatch):
+    # CONTAINMENT: the feed must never touch the legacy /tmp path — any tail_log call
+    # (external-log reader) is a failure.
+    from lhpc.core import jobs as jobs_mod
+    def boom(*a, **k):
+        raise AssertionError("daemon_feed touched an external log path")
+    monkeypatch.setattr(jobs_mod, "tail_log", boom)
+    # LIVE FINDING: RX/TX activity never showed after a TX — the feed tailed a
+    # nonexistent legacy /tmp file. It now reads the per-band captured process log.
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    d = tmp_path / "logs"
+    d.mkdir(parents=True)
+    (d / "start-loraham-daemon-868.log").write_text(
+        "boot\n[TX868] one frame TXOK=1\nnoise\n[RX868] pkt\n")
+    feed = svc.daemon_feed("868")
+    assert feed == ["[TX868] one frame TXOK=1", "[RX868] pkt"]
+    assert svc.daemon_feed("433") == []                          # band-scoped
+    # symlinked log leaf: refused by the no-follow tail, feed stays empty
+    (d / "start-loraham-daemon-433.log").symlink_to("start-loraham-daemon-868.log")
+    assert svc.daemon_feed("433") == []
+
+
+def _feed_svc(tmp_path):
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    (tmp_path / "logs").mkdir(parents=True, exist_ok=True)
+    return ControllerService(system=FakeSystem(cmdlines_data={}).system,
+                             paths=Paths(runtime_root=tmp_path))
+
+
+def test_daemon_feed_keeps_a_tx_buried_under_log_chatter(tmp_path):
+    # THE BUG: the feed tailed 400 lines and filtered AFTERWARDS, so "recent" meant "within the last
+    # 400 log lines", not recent in time. A chatty graywolf (beacons + digipeat + RX) buried a
+    # seconds-old TX; a quiet chat did not. Filter FIRST, then keep the last N matches.
+    svc = _feed_svc(tmp_path)
+    body = ("noise\n" * 1500) + "[TX868] one frame TXOK=1\n" + ("noise\n" * 800)
+    (tmp_path / "logs" / "start-loraham-daemon-868.log").write_text(body)
+    assert svc.daemon_feed("868") == ["[TX868] one frame TXOK=1"]
+
+
+def test_daemon_feed_uses_exactly_one_source_file(tmp_path):
+    # The per-band log WINS and the legacy shared log is not also read: the band-agnostic tokens
+    # ([TX]/[RX]/TXOK/...) match either band, so concatenating would double-count every match.
+    svc = _feed_svc(tmp_path)
+    d = tmp_path / "logs"
+    (d / "start-loraham-daemon-868.log").write_text("[TX868] frame TXOK=1\n")
+    (d / "start-loraham-daemon.log").write_text("[TX] band-less frame TXOK=1\n")
+    assert svc.daemon_feed("868") == ["[TX868] frame TXOK=1"]     # band-less file never read
+
+
+
+def test_clear_daemon_feed_hides_prior_activity_but_shows_new(tmp_path):
+    # The RX/TX window is CLEARED at start/stop boundaries: clear_daemon_feed records the current
+    # log size as a floor, so prior [TX]/[RX] lines vanish from the feed while the underlying
+    # append-only log is untouched — and activity appended AFTER the clear shows again.
+    svc = _feed_svc(tmp_path)
+    log = tmp_path / "logs" / "start-loraham-daemon-868.log"
+    log.write_text("boot\n[TX868] old frame TXOK=1\n[RX868] old pkt\n")
+    assert svc.daemon_feed("868") == ["[TX868] old frame TXOK=1", "[RX868] old pkt"]
+    svc.clear_daemon_feed("868")                                 # the boundary
+    assert svc.daemon_feed("868") == []                          # window emptied
+    with log.open("a") as fh:
+        fh.write("[TX868] new frame TXOK=1\n")
+    assert svc.daemon_feed("868") == ["[TX868] new frame TXOK=1"]  # fresh activity shows
+    # The full log is intact — only the feed floor moved, not the file (logs view still sees all).
+    assert "old frame" in log.read_text()
+
+
+def test_clear_daemon_feed_floor_resets_when_log_shrinks(tmp_path):
+    # A daemon restart that truncates/replaces the log shorter than the recorded floor must not
+    # hide the whole new log — a size below the floor is treated as floor 0.
+    svc = _feed_svc(tmp_path)
+    log = tmp_path / "logs" / "start-loraham-daemon-868.log"
+    log.write_text("x" * 500 + "\n[TX868] before TXOK=1\n")
+    svc.clear_daemon_feed("868")                                 # floor at ~520 bytes
+    log.write_text("[RX868] after restart\n")                    # replaced shorter than the floor
+    assert svc.daemon_feed("868") == ["[RX868] after restart"]
+
+
+def test_clear_daemon_feed_is_band_scoped_and_ignores_bad_band(tmp_path):
+    svc = _feed_svc(tmp_path)
+    d = tmp_path / "logs"
+    (d / "start-loraham-daemon-868.log").write_text("[TX868] keep TXOK=1\n")
+    (d / "start-loraham-daemon-433.log").write_text("[TX433] keep TXOK=1\n")
+    svc.clear_daemon_feed("868")                                 # only 868 cleared
+    assert svc.daemon_feed("868") == []
+    assert svc.daemon_feed("433") == ["[TX433] keep TXOK=1"]     # other band untouched
+    svc.clear_daemon_feed("nonsense")                            # invalid band -> no-op, no crash
+
+
+def test_logs_view_band_selects_the_per_band_process_log(tmp_path):
+    # `?band=` picks the instance of a band-scoped component; an absent/invalid band falls back to
+    # the newest band's log (never empty just because the caller had no band to offer).
+    c = _real_app(tmp_path)
+    d = tmp_path / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "start-loraham-daemon-433.log").write_text("four-three-three\n")
+    (d / "start-loraham-daemon-868.log").write_text("eight-six-eight\n")
+    assert "four-three-three" in c.get("/logs/loraham-daemon?band=433").get_data(as_text=True)
+    assert "eight-six-eight" in c.get("/logs/loraham-daemon?band=868").get_data(as_text=True)
+    # A band outside the whitelist is dropped (never reaches the filename), not a 500/traversal.
+    r = c.get("/logs/loraham-daemon?band=../../etc/passwd")
+    assert r.status_code == 200 and "passwd" not in r.get_data(as_text=True)
+
+
+def test_settings_page_rules_line_before_optional_component(tmp_path):
+    # /stacks?cfg=meshcom: the fixture-relay settings group is separated by a rule.
+    # Named '(fixture)': production GPS comes from the global source, and
+    # this component replays a synthetic file — the name has to say so.
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    # The typed group is what LHPC decides; the separator is the template's rendering of it.
+    groups = {g["name"]: g for g in svc.config_param_groups("meshcom", "")}
+    assert groups["MeshCom GPS relay (fixture)"]["rule_before"] is True
+    assert groups["MeshCom GPS relay (fixture)"]["optional"] is True
+
+
+def test_meshcore_power_frequency_defaults_start_clean(tmp_path):
+    # frequency defaults to BLANK so the selected RF preset owns the frequency (eu_uk_narrow ->
+    # 869.618, matching the T-Deck; a 869525000 default would override it and 93 kHz-detune RX).
+    # A blank non-flag override no longer fails START validation (the ephemeral normalizer and the
+    # settings save both treat blank as "no override"); a real value still validates Hz-correctly.
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    comp = next(c for s in svc.stacks() if s.id == "meshcore"
+                for c in s.components if c.id == "meshcore-node")
+    params = {p.name: p for p in comp.config_file.params}
+    assert params["txpower"].default == "14"
+    assert params["frequency"].default == ""                     # blank -> preset owns the frequency
+    assert params["frequency"].kind == "int"                     # Hz-correct validation when set
+    assert svc.save_config_bundle("meshcore", values={"file_txpower": "",
+                                                      "file_frequency": ""}).ok
+    plan = svc.start("meshcore", apply=False)
+    assert "not an integer" not in plan.summary + " ".join(plan.details)
+    assert svc.save_config_bundle("meshcore",
+                                  values={"file_frequency": "869618000"}).ok
+    assert not svc.save_config_bundle("meshcore",
+                                      values={"file_frequency": "999"}).ok
+
+
+def test_dash_signature_flips_when_booting_clears(tmp_path, monkeypatch):
+    # LIVE FINDING: the dash shows 'booting' (yellow) while the post-start runner is
+    # applying settings, but the reload signature ignored that state — the page never
+    # flipped green when it cleared. The signature now includes booting components.
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    svc = ControllerService(system=FakeSystem(cmdlines_data={555: ["loraham-kiss-tnc"]}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(type(svc), "_component_booting",
+                        lambda self, cid: cid == "loraham-kiss-tnc")
+    sig_booting = svc.dash_signature()
+    monkeypatch.setattr(type(svc), "_component_booting", lambda self, cid: False)
+    sig_done = svc.dash_signature()
+    assert sig_booting != sig_done                               # reload triggers
+    assert "B:" in sig_booting
+
+
+def _manual_required_svc(tmp_path, monkeypatch, summary):
+    """A service whose run_action returns a NOT-fully-verified result (ok=False) whose only
+    non-success is MANUAL_REQUIRED — the foreign-process case."""
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService, ActionResult
+    from lhpc.core.paths import Paths
+    from lhpc.core.outcomes import Outcome, CompResult
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)      # satisfies enforce_identity
+    (tmp_path / "config" / "local.toml").write_text(
+        '[operator]\ncallsign = "XX0XXB"\n')
+    svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    res = CompResult(component="loraham-chat", action="stop", stack="chat",
+                     outcome=Outcome.MANUAL_REQUIRED,
+                     summary="a matching process is running but not owned by LHPC")
+    detail = ("[manual_required] loraham-chat: a matching process is running but not owned "
+              "by LHPC — stop it yourself: kill 16720")
+    monkeypatch.setattr(type(svc), "run_action",
+                        lambda self, op, target, apply=False, **k:
+                        ActionResult(False, summary, details=[detail], results=(res,)))
+    monkeypatch.setattr(type(svc), "start_notes", lambda self, result: [])
+    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
+    monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
+    return svc
+
+
+def _flash_class(body, needle):
+    """The class list of the action-flash <p> carrying `needle` (persistent page banners now use the
+    separate `depnote-*` channel, so this reliably targets the real action flash)."""
+    i = body.index(needle)
+    start = body.rindex('<p class="flash', 0, i)
+    return body[start:body.index(">", start)]
+
+
+def test_stop_manual_required_flashes_yellow_not_green(tmp_path, monkeypatch):
+    # "Stop for 'chat' is NOT fully verified" + "kill 16720 yourself" is a WARNING. The
+    # manual_required_only override is start-only; a stop must fall back to the strict ok=False.
+    svc = _manual_required_svc(tmp_path, monkeypatch,
+                               "Stop for 'chat' is NOT fully verified — see details.")
+    c = create_app(service_factory=lambda: svc).test_client()
+    tok = _csrf(c)
+    body = c.post("/action", data={"_csrf": tok, "op": "stop", "target": "chat",
+                                   "confirmed": "yes"}, follow_redirects=True).data.decode()
+    assert "kill 16720" in body
+    cls = _flash_class(body, "is NOT fully verified")
+    assert "flash-warn" in cls and "flash-ok" not in cls
+
+
+_SYSTEMD_MUTATIONS = ("start", "stop", "restart", "reload", "enable", "disable", "mask",
+                      "unmask", "daemon-reload", "daemon-reexec", "kill", "set-environment")
+
+
+def _systemd_mutations(calls):
+    """Calls that would CHANGE systemd state. A read-only `systemctl show` is fine — the
+    console reads unit state on every page; running the unit is what its sandbox forbids."""
+    bad = []
+    for c in calls:
+        av = [str(t) for t in c]
+        if not av:
+            continue
+        exe = av[0].rsplit("/", 1)[-1]
+        if exe == "systemd-run":
+            bad.append(av)
+        elif exe == "systemctl" and any(a in _SYSTEMD_MUTATIONS for a in av[1:]):
+            bad.append(av)
+    return bad
+
+
+def test_the_web_surface_never_mutates_systemd(tmp_path):
+    """P0 invariant, driven rather than read: the console's unit blocks the user D-Bus, so a
+    GET that shelled out to systemctl/systemd-run would fail on a real box. A recording runner
+    captures every subprocess the whole GET surface issues; none may be a systemd call.
+    """
+    calls: list[list[str]] = []
+
+    def factory():
+        sys_ = FakeSystem().system
+        inner = sys_.runner
+
+        class Rec:
+            def run(self, argv, timeout=None, *a, **k):
+                calls.append(list(argv))
+                return inner.run(argv, timeout, *a, **k)
+
+        sys_.runner = Rec()
+        return ControllerService(system=sys_, paths=Paths(runtime_root=tmp_path))
+
+    app = create_app(service_factory=factory)
+    client = app.test_client()
+    for rule in sorted(r.rule for r in app.url_map.iter_rules()
+                       if r.endpoint != "static" and "GET" in (r.methods or ())
+                       and "<" not in r.rule):
+        client.get(rule)
+    offenders = _systemd_mutations(calls)
+    assert not offenders, f"the web GET surface tried to change systemd state: {offenders}"
+
+
+def test_the_updater_trigger_paths_never_mutate_systemd(tmp_path):
+    """The same invariant on the self-update trigger/inspection paths: they reach systemd
+    through the static .path/.service units and the request marker, never by running it.
+    Only the explicit OPERATOR repair/recover ops may, and they are not exercised here."""
+    sys_ = FakeSystem().system
+    inner = sys_.runner
+    calls: list[list[str]] = []
+
+    class Rec:
+        def run(self, argv, timeout=None, *a, **k):
+            calls.append(list(argv))
+            return inner.run(argv, timeout, *a, **k)
+
+    sys_.runner = Rec()
+    svc = ControllerService(system=sys_, paths=Paths(runtime_root=tmp_path))
+    svc.updater_integration()
+    svc.self_update_trigger()
+    svc.self_update_run_service()
+    offenders = _systemd_mutations(calls)
+    assert not offenders, f"an updater path tried to change systemd state: {offenders}"
+
+
+# --- update UI: "Repair & update" for fixable legacy units; manual guidance for unsafe ---------
+
+def _selfcache_update_available(tmp_path):
+    _write_selfcache(tmp_path,
+                     {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa", "branch": "main"},
+                     {"ok": True, "upstream_version": "9.9",
+                      "upstream_head": "b" * 40, "upstream_head_short": "bbbbbbbbb"})
+
+
+def test_update_ui_shows_repair_and_update_for_fixable(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService
+    _selfcache_update_available(tmp_path)
+    monkeypatch.setattr(ControllerService, "updater_integration",
+                        lambda self: {"status": "incomplete", "fixable": True,
+                                      "per_unit": {}, "request": "absent"})
+    b = _real_app(tmp_path).get("/stacks").get_data(as_text=True)
+    assert "Repair &amp; update" in b and "Update now" not in b
+    assert "self-update --apply" not in b            # no misleading unit-repair advice
+
+
+def test_update_ui_manual_guidance_for_unsafe_no_apply_advice(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService
+    _selfcache_update_available(tmp_path)
+    monkeypatch.setattr(ControllerService, "updater_integration",
+                        lambda self: {"status": "foreign", "fixable": False,
+                                      "per_unit": {"lhpc-web.service": "foreign"}, "request": "absent"})
+    b = _real_app(tmp_path).get("/stacks").get_data(as_text=True)
+    assert "Repair &amp; update" not in b and "Update now" not in b
+    assert "resolve them manually" in b
+    assert "self-update --apply" not in b            # the wrong advice is gone
+
+
+def test_controller_system_deps_panel(tmp_path, monkeypatch):
+    # The controller row surfaces its OWN system deps (git required, nginx optional) in a stack-styled
+    # panel — git the previously-missed hard dep. With git+nginx forced absent, git reads as a problem
+    # (badge-failed) and nginx as optional (badge-not-installed), each with a copy-paste install command.
+    import shutil
+    real = shutil.which
+    monkeypatch.setattr(shutil, "which",
+                        lambda c, *a, **k: None if c in ("git", "nginx") else real(c, *a, **k))
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    assert parse(body).by_id("controller-system-deps") is not None
+    i = body.index('id="controller-system-deps"')
+    seg = body[i:body.index("</details>", i)]
+    assert "git" in seg and "nginx" in seg
+    assert "badge-failed" in seg                       # git: required + missing -> problem
+    assert "badge-not-installed" in seg                # nginx: optional + missing -> non-alarming
+    assert "sudo apt install -y nginx" in seg          # copy-paste install command
+
+
+def test_controller_system_deps_makes_no_subprocess(tmp_path):
+    # Detection is PATH / importlib / fs probes only — the method spawns NOTHING (in particular
+    # it must not run `nginx -v`, which webserver.nginx_installed() would).
+    calls: list[list[str]] = []
+    s = FakeSystem().system
+    inner = s.runner
+
+    class Rec:
+        def run(self, argv, timeout=None, *a, **k):
+            calls.append(list(argv))
+            return inner.run(argv, timeout, *a, **k)
+
+    s.runner = Rec()
+    svc = ControllerService(system=s, paths=Paths(runtime_root=tmp_path))
+    svc.controller_system_deps()
+    assert calls == []
+
+
+# --- return-to-site: dash-originated actions come back to the Dashboard --------------------------
+
+def test_dash_originated_action_returns_to_dashboard(tmp_path):
+    # A Dashboard button carries from=dash -> _redirect_for sends the applied action back to the
+    # Dashboard (root), never to /stacks.
+    c = _real_app(tmp_path)
+    token = _csrf(c)
+    r = c.post("/action", data={"_csrf": token, "op": "stop", "target": "kiss",
+                                "from": "dash", "confirmed": "yes"})
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/")         # dashboard root, not a /stacks anchor
+    assert "/stacks" not in r.headers["Location"]
+
+
+def test_stacks_originated_action_returns_to_its_stack_row(tmp_path):
+    # No from=dash -> the action returns to the acting stack's row on /stacks.
+    c = _real_app(tmp_path)
+    token = _csrf(c)
+    r = c.post("/action", data={"_csrf": token, "op": "stop", "target": "kiss",
+                                "confirmed": "yes"})
+    assert r.status_code == 302
+    loc = r.headers["Location"]
+    assert "/stacks" in loc and "open=kiss" in loc
+
+
+def test_dashboard_wsbox_collapsed_with_firewall_line(tmp_path):
+    body = _client(tmp_path).get("/").get_data(as_text=True)
+    wsbox = parse(body).by_id("wsbox")
+    assert wsbox is not None                                     # collapsible webserver box
+    assert not wsbox.has_attr("open")                            # collapsed by default
+    assert 'class="pill pill-' in body                           # a consolidated security pill
+    assert "Firewall" in body and "#firewall-row" in body        # linked firewall line
+
+
+@pytest.mark.contract
+@pytest.mark.safety("firewall-fail-closed")
+def test_firewall_settings_section_present(tmp_path):
+    body = _client(tmp_path).get("/stacks?open=kiss").get_data(as_text=True)
+    assert 'id="firewall-row"' in body
+    assert 'name="mode" value="secure-default"' in body
+    assert 'name="mode" value="compatibility"' in body
+    assert "Use recommended settings" in body
+    assert "Refresh status" in body
+    # deny-default endpoints render their unauthenticated-exposure warning
+    assert "unauthenticated" in body
+
+
+@pytest.mark.contract
+@pytest.mark.safety("firewall-fail-closed")
+def test_firewall_configure_get_redirects(tmp_path):
+    resp = _client(tmp_path).get("/firewall/configure")
+    assert resp.status_code == 302 and resp.headers["Location"].endswith("#firewall-row")
+
+
+# --- GPS: the console and the CLI must never disagree about the position source ------------
+
+def test_gps_card_is_rendered_with_the_global_source(tmp_path):
+    """GPS is a GLOBAL box setting, so it lives in the LHPC controller row beside Webserver
+    and the Firewall — visible on /stacks with no clicks and belonging to no stack.
+
+    It is NOT a daemon setting (the daemon uses no position) and must not be reachable only
+    by expanding one stack's settings, which hid it from anyone working on another.
+    """
+    from lhpc.core.config import save_gps
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    save_gps(svc._paths, source="gpsd", host="192.168.1.5", port=2948)
+    svc._invalidate_config()
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    assert "Position (GPS)" in body, "the card must be on /stacks without expanding anything"
+    assert 'name="gps_source"' in body and 'name="gps_host"' in body
+    assert "192.168.1.5" in body and "2948" in body
+    # In the controller row: after the Firewall section, before the stack list.
+    # In the controller row, as a sibling of the Firewall section.
+    assert 'id="gps-row"' in body
+    assert body.index('id="gps-row"') > body.index('id="firewall-row"')
+
+
+def test_gps_set_requires_csrf(tmp_path):
+    c = _client(tmp_path)
+    assert c.post("/gps", data={"gps_source": "gpsd"}).status_code == 400
+
+
+def test_gps_card_reports_a_disabled_source_instead_of_looking_normal(tmp_path):
+    """A malformed section already disabled position; a card that rendered as if nothing were
+    wrong would leave the operator believing GPS works."""
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "local.toml").write_text('[gps]\nsource = "bogus"\n')
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    body = create_app(service_factory=lambda: ReadOnlyGuard(svc)).test_client() \
+        .get("/stacks?cfg=meshtastic").get_data(as_text=True)
+    assert "Position is DISABLED" in body
+
+
+def test_gps_card_follows_the_webserver_panel_layout(tmp_path):
+    """The GPS card is a controller-row panel like Webserver and the Firewall, so it uses the
+    same shape — `details.advcfg` + status pill, a Settings section, and a `paramgrid dptab`
+    table with a help column. A hand-rolled layout looked out of place next to them.
+
+    Every control also carries an accessible name: a bare `<input>` in a table cell is
+    announced as an unlabelled text field, which would cost the console its accessibility
+    score (see tests/test_form_accessibility.py for the select-specific property check).
+    """
+    import re
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    card = body[body.index('id="gps-row"'):]
+    card = card[:card.index("</details>", card.index("paramgrid"))]
+
+    assert 'class="advcfg"' in body[:body.index('id="gps-row"') + 40]
+    assert "ws-sub-wrap" in card and "paramgrid dptab" in card
+    # The fields sit directly under the card — no nested "Settings" sub-panel to click
+    # through for a single form.
+    assert "<summary>Settings</summary>" not in card
+    assert card.count('class="dphelp muted"') >= 6, "each row explains itself"
+
+    # No control may be left without an accessible name.
+    for m in re.finditer(r"<(input|select)\b[^>]*>", card):
+        tag = m.group(0)
+        if 'type="hidden"' in tag or 'type="submit"' in tag:
+            continue
+        assert "aria-label=" in tag, f"unlabelled control: {tag[:80]}"
+
+
+def test_the_gps_card_never_renders_a_coordinate(tmp_path):
+    """The console is reachable from a browser, a screenshot or a shared session, and
+    docs/gps.md promises coordinates are never echoed back. The placeholder may say only
+    WHETHER one is set."""
+    from lhpc.core.config import save_gps
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    save_gps(svc._paths, source="fixed", fixed_lat="51.4779", fixed_lon="-0.0015", fixed_alt="45")
+    svc._invalidate_config()
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    for coord in ("51.4779", "-0.0015"):
+        assert coord not in body, f"{coord} leaked into the page"
+
+
+def test_fetched_binary_stack_offers_uninstall_in_the_console(tmp_path):
+    """The removal actions hung off `has_source`, so a stack whose artifact is FETCHED instead of
+    cloned (graywolf) got no Uninstall button at all — while `lhpc uninstall graywolf` worked and
+    did remove it. Installable from the console but removable only from a shell is not a state the
+    console may leave the operator in."""
+    from lhpc.core.services import ControllerService as _CS
+
+    def app_for(root):
+        (root / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+        return create_app(service_factory=lambda: _CS(
+            system=FakeSystem().system, paths=Paths(runtime_root=root))).test_client()
+
+    # NOT built: nothing on disk to remove, so no removal button is offered.
+    body = app_for(tmp_path).get("/stacks?open=graywolf").get_data(as_text=True)
+    assert "uninstall" not in body.split("graywolf-actions")[-1][:400].lower()
+
+    # ARTIFACT ON DISK but NOT BUILT (interrupted fetch / stale pin): this is exactly the
+    # state where removal is the fix, so Uninstall/Clean must be reachable — REVIEW-FOUND:
+    # gating on fully-built hid the buttons here and sent the operator back to a shell.
+    root = tmp_path / "partial"
+    (root / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    svc = _CS(system=FakeSystem().system, paths=Paths(runtime_root=root))
+    comp = svc.stack("graywolf").main_component
+    art = root / comp.bin
+    art.parent.mkdir(parents=True, exist_ok=True)
+    art.write_text("#!/bin/sh\n")
+    art.chmod(0o755)
+    assert svc.unbuilt_components("graywolf") == ["graywolf"]   # NOT built (no marker) ...
+    assert svc.fetched_artifacts_present("graywolf") is True    # ... but on disk
+    body = app_for(root).get("/stacks?open=graywolf").get_data(as_text=True)
+    assert 'value="uninstall"' in body and "graywolf" in body
+
+    # FULLY BUILT: still reachable, of course.
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+    marker = svc._lifecycle().source_dir(comp) / comp.build_marker
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(comp))
+    assert svc.unbuilt_components("graywolf") == []
+    body = app_for(root).get("/stacks?open=graywolf").get_data(as_text=True)
+    assert 'value="uninstall"' in body
+
+
+def test_fetched_stack_shows_its_version_and_an_update_when_the_pin_moves(tmp_path):
+    """A fetched (.deb) stack has no git head, so its row showed no version at all. The build
+    marker carries it: the on-disk marker is the INSTALLED version, the manifest's marker the
+    PINNED one — mismatch shows 'update → <new pin>' and an Update button (the build op, which
+    re-fetches). LIVE-REQUESTED on the graywolf row."""
+    from lhpc.core.services import ControllerService as _CS
+
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    svc = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    comp = svc.stack("graywolf").main_component
+    marker_dir = tmp_path / "/".join(comp.build_marker.split("/")[:-1])
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    pinned = comp.build_marker.rsplit("/", 1)[-1][len(".lhpc-built-"):]
+
+    # Nothing installed yet -> no version, no update flag.
+    assert svc.fetched_version_state("graywolf") == {"installed": "", "pinned": pinned,
+                                                     "has_update": False}
+    # Installed at the pin -> version shown, no update.
+    (marker_dir / f".lhpc-built-{pinned}").write_text("")
+    st = svc.fetched_version_state("graywolf")
+    assert st == {"installed": pinned, "pinned": pinned, "has_update": False}
+    # LIVE-FOUND: the RENDERED page must NOT show the update pill or an Update button when
+    # installed==pinned (Jinja `dict.update` is a truthy method, so a `.update` key check
+    # showed both unconditionally). Assert the negative in the actual HTML.
+    body_ok = create_app(lambda: svc).test_client().get(
+        "/stacks?open=graywolf").get_data(as_text=True)
+    assert f"deb {pinned}" in body_ok
+    assert "update →" not in body_ok, "no update pill when installed==pinned"
+    _row = body_ok[body_ok.index('id="stackrow-graywolf"'):]
+    _pkg = _row[_row.index("Package"):_row.index("Package") + 400]
+    assert ">Update<" not in _pkg, "no Update button when installed==pinned"
+    # The pin moves on (an older install stays on disk) -> update, NAMING the new pin.
+    (marker_dir / f".lhpc-built-{pinned}").unlink()
+    (marker_dir / ".lhpc-built-0.0.1").write_text("")
+    st = svc.fetched_version_state("graywolf")
+    assert st == {"installed": "0.0.1", "pinned": pinned, "has_update": True}
+
+    # And the row renders it: version pill + yellow update pill naming the pin + Update button.
+    c = create_app(lambda: svc).test_client()
+    body = c.get("/stacks?open=graywolf").get_data(as_text=True)
+    assert "deb 0.0.1" in body
+    assert f"update → {pinned}" in body
+    i = body.index('id="stackrow-graywolf"')
+    row = body[i:]
+    assert ">Update<" in row, "the Package line must offer Update on a pin mismatch"
+
+
+
+def test_the_meshcore_mode_switch_on_the_stack_body_saves_the_same_setting(tmp_path):
+    """One route, one key: the stack body's Mode form writes the Settings row's setting through
+    the config API (CSRF-enforced, MeshCore-only, refusals reported as flashes, never a start)."""
+    from lhpc.core.paths import Paths
+    from lhpc.core.services import ControllerService
+    c = _real_app(tmp_path)
+    tok = _csrf(c)
+    assert c.post("/stacks/meshcore/mode", data={"mode": "repeater"}).status_code == 400   # CSRF
+    assert c.post("/stacks/graywolf/mode", data={"_csrf": tok, "mode": "chat"}).status_code == 404
+    svc = ControllerService(paths=Paths(runtime_root=tmp_path))
+    # a repeater mode without a saved repeater name is refused (the save-time rule), mode stays
+    r = c.post("/stacks/meshcore/mode", data={"_csrf": tok, "mode": "repeater"})
+    assert r.status_code in (302, 303) and "#stack-mode-meshcore" in r.headers["Location"]
+    assert svc.meshcore_mode() == "chat"
+    assert svc.save_config("meshcore", {"file_repeater_name": "Relay"}).ok
+    r = c.post("/stacks/meshcore/mode", data={"_csrf": tok, "mode": "chat+repeater"})
+    assert r.status_code in (302, 303)
+    svc._invalidate_config()
+    assert svc.meshcore_mode() == "chat+repeater"
+    body = c.get("/stacks/meshcore/body").get_data(as_text=True)
+    assert 'id="stack-mode-meshcore"' in body and 'option value="chat+repeater" selected' in body
+    assert "stack-webserver-meshcore-meshcore-node" in body
+    page = c.get("/stacks").get_data(as_text=True)
+    assert "mode: chat+repeater" in page                                    # the Apps-row pill
+
+
+# ---- Start means start (Settings is the only place configuration changes) -------------
+
+def _spy_actions(monkeypatch):
+    """Record every run_action(apply=True) call as (op, target, kwargs) and stub it."""
+    from lhpc.core.services import ControllerService, ActionResult
+    calls = []
+    orig = ControllerService.run_action
+    def spy(self, op, target, apply=False, **k):
+        if apply:
+            calls.append((op, target, k))
+            return ActionResult(True, f"{op} {target} (stub)")
+        return orig(self, op, target, apply=apply, **k)
+    monkeypatch.setattr(ControllerService, "run_action", spy)
+    return calls
+
+
+def _spy_spawns(monkeypatch, admission="admitted", reason=""):
+    """Record every spawn_start_job(op, target, band, stop_owners) call and stub the spawn."""
+    from lhpc.core.services import ControllerService
+    spawns = []
+    def spy(self, op, target, band="", stop_owners=False, cascade=False):
+        spawns.append((op, target, band, stop_owners, cascade))
+        return (f"web-{op}-{target}.log" if admission != "blocked" else None), admission, reason
+    monkeypatch.setattr(ControllerService, "spawn_start_job", spy)
+    return spawns
+
+
+def _chat_ready(tmp_path):
+    """chat installed + built, with an operator callsign the plan accepts."""
+    from lhpc.core.services import ControllerService as _CS
+    c = _install_chat(tmp_path)
+    _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).set_operator_identity(
+        callsign="XX0XXA")
+    return c
+
+
+def test_routine_start_runs_with_no_page_between(tmp_path, monkeypatch):
+    # Click Start -> the plan finds no consequential choice -> the start is spawned as a tracked
+    # job -> back where the operator came from at once, "follow it in the banner" flashed. No
+    # confirmation page, no per-launch inputs, no synchronous run.
+    c = _chat_ready(tmp_path)
+    calls = _spy_actions(monkeypatch)
+    spawns = _spy_spawns(monkeypatch)
+    tok = _csrf(c)
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat", "from": "dash"})
+    assert r.status_code == 302 and r.headers["Location"].endswith("/")
+    assert spawns == [("start", "chat", "", False, False)] and calls == []
+    page = c.get("/").get_data(as_text=True)
+    assert "Starting &#39;chat&#39; — follow it in the banner" in page
+
+
+def test_routine_restart_runs_with_no_page_between(tmp_path, monkeypatch):
+    _flag_restart(tmp_path)
+    c = _real_app(tmp_path, cmdlines={555: ["loraham_chat"]})
+    from lhpc.core.services import ControllerService as _CS
+    _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).set_operator_identity(
+        callsign="XX0XXA")
+    spawns = _spy_spawns(monkeypatch)
+    tok = _csrf(c)
+    r = c.post("/action", data={"_csrf": tok, "op": "restart", "target": "chat"})
+    assert r.status_code == 302                                # no stage-1 page
+    assert spawns == [("restart", "chat", "", False, False)]
+    assert "Restarting &#39;chat&#39;" in c.get("/stacks").get_data(as_text=True)
+
+
+def test_a_crafted_post_with_the_old_launch_fields_changes_nothing(tmp_path, monkeypatch):
+    # p_<name>/pf_<name>/dp_<band>_<PARAM>/opt_start_<id>/_save fields are simply not read.
+    from lhpc.core.config import load_stack_config
+    c = _chat_ready(tmp_path)
+    spawns = _spy_spawns(monkeypatch)
+    tok = _csrf(c)
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat",
+                                "confirmed": "yes", "_params": "1", "_save": "all",
+                                "_save_then_start": "1", "p_call": "ZZ9ZZZ-1",
+                                "p_tx_freq": "434.500", "dp_433_SF": "10",
+                                "opt_start_x": "on"})
+    assert r.status_code == 302 and len(spawns) == 1
+    cfg = load_stack_config(Paths(runtime_root=tmp_path), "chat")
+    assert "call" not in cfg and "tx_freq" not in cfg and "dp_433_SF" not in cfg
+
+
+def test_identity_refusal_sends_the_operator_to_the_settings_row(tmp_path, monkeypatch):
+    # No callsign anywhere -> the PLAN refuses before anything runs; the operator lands on the
+    # stack's Settings with the offending row marked (`?cfg=` force-open + `?bad=` highlight).
+    c = _install_chat(tmp_path)
+    calls = _spy_actions(monkeypatch)
+    tok = _csrf(c)
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat"})
+    assert r.status_code == 302 and calls == []
+    loc = r.headers["Location"]
+    assert "/stacks?" in loc and "cfg=chat" in loc and "bad=f_call" in loc
+    assert loc.endswith("#stack-settings-chat")
+    page = c.get(loc.split("#")[0]).get_data(as_text=True)
+    assert "callsign is required" in page                      # the refusal, flashed
+    row = page
+    doc = parse(page)
+    sec = doc.by_id("stack-settings-chat")
+    assert sec.has_attr("open") and sec["data-force-open"] == "1"     # section force-opened
+    assert any("field-bad" in (tr["class"] or "").split() for tr in doc.find("tr"))
+    assert 'name="f_call"' in row.split("field-bad", 1)[1][:600]   # the marked row IS the field
+    # No persisted refusal state: a second plain page load shows nothing marked.
+    assert "field-bad" not in c.get("/stacks?open=chat").get_data(as_text=True)
+
+
+def test_a_refused_plan_flashes_where_the_operator_came_from(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    c = _chat_ready(tmp_path)
+    monkeypatch.setattr(ControllerService, "run_action",
+                        lambda self, op, target, apply=False, **k: ActionResult(
+                            False, "Cannot start 'chat': radio hardware not set",
+                            details=["  set it under Settings"]))
+    tok = _csrf(c)
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat", "from": "dash"})
+    assert r.status_code == 302 and r.headers["Location"].endswith("/")
+    page = c.get("/").get_data(as_text=True)
+    assert "radio hardware not set" in page and "set it under Settings" in page
+
+
+def test_a_resource_conflict_asks_for_the_minimal_confirmation(tmp_path, monkeypatch):
+    # meshtastic owns the 868 radio -> starting the daemon on 868 needs "Stop owner(s) & start":
+    # the ONE consequential choice that still gets a page (Start lower right, Cancel lower left).
+    binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
+    binp.parent.mkdir(parents=True); binp.write_text("#!/bin/sh\n")
+    from lhpc.core.services import ControllerService as _CS
+    _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))._set_running_band(
+        "meshtastic", "868")
+    c = _real_app(tmp_path, cmdlines={200: ["meshtasticd"]})
+    spawns = _spy_spawns(monkeypatch)
+    tok = _csrf(c)
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon", "band": "868",
+                                "from": "dash"})
+    body = r.get_data(as_text=True)
+    assert r.status_code == 200 and spawns == []
+    assert "Confirm: start" in body and "held by <strong>meshtastic</strong>" in body
+    assert 'name="stop_owners" value="yes"' in body
+    assert "Stop owner(s) &amp; start</button>" in body
+    assert 'class="btnlink cancel" href="/">Cancel</a>' in body      # back to the Dashboard
+    assert 'name="p_' not in body and "Stack parameters" not in body
+    r2 = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon", "band": "868",
+                                 "confirmed": "yes", "stop_owners": "yes"})
+    assert r2.status_code == 302
+    assert spawns == [("start", "daemon", "868", True, False)]
+
+
+def test_a_restart_that_takes_dependents_down_asks_first(tmp_path, monkeypatch):
+    # The daemon's stop force-cascades its running dependents: a routine Restart must not take
+    # other stacks down silently -> the combined restart plan carries the stop-side collateral
+    # and the web asks; an isolated restart runs directly.
+    import os
+    b = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
+    b.parent.mkdir(parents=True); b.write_text("#!/bin/sh\n"); os.chmod(b, 0o755)
+    rdy = b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90\n"
+    def factory():
+        return ControllerService(system=FakeSystem(
+            cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["loraham_chat"]},
+            unix_replies={"/tmp/loraconf433.sock": rdy}).system,
+            paths=Paths(runtime_root=tmp_path))
+    factory().set_operator_identity(callsign="XX0XXA")
+    c = create_app(service_factory=factory).test_client()
+    spawns = _spy_spawns(monkeypatch)
+    tok = _csrf(c)
+    r = c.post("/action", data={"_csrf": tok, "op": "restart", "target": "daemon", "band": "433"})
+    body = r.get_data(as_text=True)
+    assert r.status_code == 200 and spawns == []
+    assert "Confirm: restart" in body and "Other running stacks depend on this" in body
+    assert "chat" in body and "Stop dependents &amp; restart</button>" in body
+    r2 = c.post("/action", data={"_csrf": tok, "op": "restart", "target": "daemon",
+                                 "band": "433", "confirmed": "yes", "cascade": "yes"})
+    assert r2.status_code == 302 and spawns == [("restart", "daemon", "433", False, True)]   # consent travels
+
+
+def test_start_daemon_only_on_a_band(tmp_path, monkeypatch):
+    # The dash "Start daemon (868 only)" posts op=start target=daemon band=868 -> runs on 868.
+    binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
+    binp.parent.mkdir(parents=True); binp.write_text("#!/bin/sh\n")
+    c = _real_app(tmp_path)
+    spawns = _spy_spawns(monkeypatch)
+    tok = _csrf(c)
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon", "band": "868",
+                                "from": "dash"})
+    assert r.status_code == 302
+    assert spawns == [("start", "daemon", "868", False, False)]
+    assert 'name="p_radio"' not in c.get("/").get_data(as_text=True)
+
+
+def test_daemon_stop_confirm_shows_band(tmp_path):
+    # The daemon STOP keeps its confirmation (band collateral); a START has no page any more.
+    bind = tmp_path / "src" / "loraham-daemon" / "loraham_daemon"
+    bind.mkdir(parents=True)
+    (bind / "loraham_daemon").write_text("#!bin")
+    client = _real_app(tmp_path)
+    token = _csrf(client)
+    r = client.post("/action", data={"_csrf": token, "op": "stop", "target": "daemon",
+                                     "band": "433"})
+    body = r.get_data(as_text=True)
+    assert r.status_code == 200 and "Confirm: stop" in body and "daemon 433" in body
+    assert "Cancel</a>" in body and "Apply stop</button>" in body
+
+
+def test_stack_start_launches_each_component_with_its_own_saved_values(tmp_path, monkeypatch):
+    # Colliding param names across components: the SAVED component-scoped values launch per
+    # component and render each component's own config file (no per-launch inputs involved).
+    from lhpc.core.lifecycle import Lifecycle, StartLaunch
+    m, _c = _collide_app(tmp_path)
+    svc = ControllerService(manifest_path=m, system=FakeSystem().system,
+                            paths=Paths(runtime_root=tmp_path))
+    assert svc.save_config_bundle("ostack2", values={"tgt.rp": "RP-T", "dep.rp": "RP-D",
+                                                     "uniq": "U-FLAT",
+                                                     "file_tgt.fp": "FP-T", "file_dep.fp": "FP-D"}).ok
+    seen = {}
+    def stub(self, stack, comp, cfg, band="", **_scope):
+        seen[comp.id] = dict(cfg)
+        return StartLaunch(True, "log", "")
+    monkeypatch.setattr(Lifecycle, "start", stub)
+    assert svc.start("ostack2", apply=True).ok                                # what the job runs
+    assert seen["tgt"]["rp"] == "RP-T" and seen["dep"]["rp"] == "RP-D"         # launched per component
+    files = tmp_path / "config" / "files"
+    assert "FP=FP-T" in (files / "tgt.conf").read_text()                      # own generated config
+    assert "FP=FP-D" in (files / "dep.conf").read_text()
+    assert not (files / "sib.conf").exists()                                  # sibling never generated
+
+
+def test_the_removed_settings_panel_stays_removed():
+    """The in-page settings modal was replaced by the server-rendered Settings section. Its
+    template and script must not come back: two renderers for one surface is how the two drift."""
+    base = repo_paths.REPO / "lhpc" / "adapters" / "web"
+    assert not (base / "templates" / "_stack_params.html").exists()
+    assert not (base / "static" / "stackparams.js").exists()
+    assert "stackparams.js" not in (base / "templates" / "base.html").read_text()
+
+
+def test_a_blocked_or_pending_spawn_flashes_and_returns(tmp_path, monkeypatch):
+    c = _chat_ready(tmp_path)
+    tok = _csrf(c)
+    _spy_spawns(monkeypatch, admission="blocked", reason="a start of 'chat' is already in progress")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat", "from": "dash"})
+    assert r.status_code == 302
+    assert "already in progress" in c.get("/").get_data(as_text=True)
+    _spy_spawns(monkeypatch, admission="pending")
+    c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat", "from": "dash"})
+    assert "admission not yet confirmed" in c.get("/").get_data(as_text=True)
+
+
+def test_the_dashboard_lists_the_meshtastic_cli_with_its_launch_line(tmp_path, monkeypatch):
+    from lhpc.core import config as _cfg
+    from lhpc.core.model import RunState
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    _cfg.save_hardware_setup(svc._paths, "loraham"); svc._invalidate_config()
+    svc._set_running_band("meshtastic", "868")
+    cli = svc.stack("meshtastic").component("meshtastic-cli")
+    assert svc.optional_role(cli) == "listed"                        # run on demand, no tick
+    assert "lhpc meshtastic --help" in svc.manual_start_command(cli)
+    snap = svc.build_snapshot()
+    for ss in snap.stacks:
+        if ss.stack.id == "meshtastic":
+            ss.components["meshtastic"].run_state = RunState.RUNNING
+    monkeypatch.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
+    page = create_app(lambda: svc).test_client().get("/").get_data(as_text=True)
+    assert "Meshtastic CLI" in page and 'data-copy="runc-meshtastic-cli"' in page
+    assert "lhpc meshtastic --help" in page
+    assert "Use the meshtastic CLI through lhpc" not in page
+
+
+def test_deferred_webserver_apply_is_announced_on_every_page_until_the_firewall_runs(tmp_path, monkeypatch):
+    # A Webserver Apply the firewall gate deferred is not a one-off flash: every page carries the
+    # notice with the click path (Firewall → Apply & commands) until the marker is cleared.
+    monkeypatch.setattr(ControllerService, "webserver_apply_pending", lambda self: True)
+    client = _client(tmp_path)
+    for path in ("/", "/stacks", "/auto-install"):
+        body = client.get(path, headers={"Host": "127.0.0.1"}).get_data(as_text=True)
+        assert 'id="fw-pending-notice"' in body, path
+        assert "open=firewall" in body and "fw=apply" in body and "#firewall-apply" in body, path
+    monkeypatch.setattr(ControllerService, "webserver_apply_pending", lambda self: False)
+    body = client.get("/", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
+    assert 'id="fw-pending-notice"' not in body
+
+
+def test_the_notice_link_opens_the_firewall_apply_section(tmp_path):
+    # The link's query opens the Firewall row AND its Apply & commands section (server-rendered
+    # `open` + data-force-open, which the stacks script resolves to the nested target).
+    client = _client(tmp_path)
+    body = client.get("/stacks?open=firewall&fw=apply", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
+    assert 'id="firewall-apply" open data-force-open="1"' in body
+    assert 'id="firewall-row" open data-force-open="1"' in body
+    body = client.get("/stacks?open=firewall", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
+    assert 'id="firewall-apply">' in body and 'id="firewall-apply" open' not in body
