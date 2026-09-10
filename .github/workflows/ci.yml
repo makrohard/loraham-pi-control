@@ -33,6 +33,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # FULL history and tags. `tests/repo/test_artifact_portability.py` compares what this
+          # controller adds to an artifact against the publish roots RELEASED controllers
+          # declare, which it reads out of their tags — on a shallow checkout it found none and
+          # skipped, so the guard sat in a required job proving nothing. It now FAILS in CI
+          # rather than skipping, and this is what keeps it able to run.
+          fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0

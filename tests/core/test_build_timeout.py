@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from lhpc.core import lifecycle as lifecycle_mod
-from lhpc.core.jobs import run_job, JobResult, JobState, tail_log
+from lhpc.core.jobs import JobResult, JobState, run_job, tail_log
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult, FakeSystem
 from lhpc.core.services import ControllerService
@@ -228,6 +228,7 @@ def test_meshcom_failed_rebuild_leaves_no_marker(tmp_path, monkeypatch):
 # --- Item 2: strict marker semantics (is_built regular-file+content; fail-closed invalidation) ----
 
 import os as _os
+
 import lhpc.core.runtime_fs as _rfs
 
 
@@ -336,3 +337,38 @@ def test_is_built_never_raises_on_any_bad_marker(tmp_path):
         m.parent.mkdir(parents=True, exist_ok=True)
         make(m)
         assert svc.is_built(comp) is False                  # bounded bool, no exception
+
+
+# --- a local write failure is not evidence against the recipe -------------------------------------
+
+def test_marker_write_failure_carries_no_step_identity(tmp_path, monkeypatch):
+    """Every command succeeded and a LOCAL write failed. The release lane decides attribution from
+    the failed job's log identity — a failure naming a step the recipe declares its own becomes an
+    upstream regression and freezes that stack's pins. Reusing the last SUCCESSFUL step's log here
+    let a full disk do exactly that: reproduced against Reticulum, it held five upstream inputs
+    that had built perfectly.
+    """
+    svc = _svc(tmp_path)
+    comp = _meshcore(svc)
+    src = svc._lifecycle().source_dir(comp)
+    (src / ".venv" / "bin").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(lifecycle_mod, "run_job",
+                        lambda runner, **kw: JobResult(name="b", state=JobState.SUCCEEDED,
+                                                       returncode=0,
+                                                       log_path="/logs/build-meshcore-node-4.log",
+                                                       tail=[]))
+
+    def full_disk(paths, path, text, mode):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(lifecycle_mod.runtime_fs, "atomic_write", full_disk)
+    res = svc._lifecycle().build(comp, marker_extra=svc._consumed_source_lines(comp))
+
+    assert not res.ok, "an unstamped tree must never read built"
+    assert res.log_path == "", \
+        "a marker-write failure must not borrow a build step's identity — that is what attributes"
+    assert any("completion marker could not be written" in ln for ln in res.tail)
+    assert any("build-meshcore-node-4.log" in ln for ln in res.tail), \
+        "the step log must stay discoverable as a diagnostic"
+    assert not (src / comp.build_marker).exists()

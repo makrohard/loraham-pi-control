@@ -10,6 +10,8 @@ So the rule is checked against what RELEASED controllers actually declare, read 
 """
 from __future__ import annotations
 
+import os
+import pathlib
 import subprocess
 import tomllib
 from pathlib import Path
@@ -55,16 +57,45 @@ def _members_this_release_adds(stack: str) -> list:
     return out
 
 
+def _inside(member: str, roots: list) -> bool:
+    return any(member == r or member.startswith(r + "/") for r in roots)
+
+
 @pytest.mark.parametrize("stack", ["meshtastic"])
-def test_every_member_this_release_adds_is_inside_older_publish_roots(stack):
+def test_every_member_this_release_adds_is_inside_older_publish_roots(stack, capsys):
     tags = _released_tags()
-    if not tags:                      # a shallow checkout has no tags to compare against
+    if not tags:
+        # A shallow checkout has no tags to compare against, which is a fine reason to skip on a
+        # workstation and NO reason at all in CI: this guard exists because the released roots
+        # are the only ones that matter, and a required check that silently skips is not a check.
+        # CI fetches the tags; if they are missing there, the fetch broke and this must say so.
+        if os.environ.get("CI"):
+            pytest.fail("no release tags in this checkout — CI must fetch them for this guard "
+                        "(actions/checkout needs fetch-depth: 0), not skip it")
         pytest.skip("no release tags in this checkout")
+    print(f"comparing against released publish roots at: {', '.join(tags)}")
     members = _members_this_release_adds(stack)
     assert members, f"{stack} records no build inputs — this guard has stopped checking anything"
     for tag in tags:
         roots = _roots_at(tag, stack)
         for member in members:
-            assert any(member == r or member.startswith(r + "/") for r in roots), (
+            assert _inside(member, roots), (
                 f"{member!r} is outside {tag}'s publish roots {roots} — an artifact carrying it "
                 f"would be REFUSED on every box running {tag}")
+
+
+@pytest.mark.parametrize("stack", ["meshtastic"])
+def test_a_member_outside_those_roots_is_caught(stack):
+    """The guard's own teeth. A member one directory above a publish root is exactly the shape
+    that shipped and was refused on every released box; if this ever passes, the comparison
+    above has stopped comparing."""
+    tags = _released_tags()
+    if not tags:
+        if os.environ.get("CI"):
+            pytest.fail("no release tags in this checkout — CI must fetch them for this guard")
+        pytest.skip("no release tags in this checkout")
+    roots = _roots_at(tags[0], stack)
+    assert roots, f"{tags[0]} declares no publish roots for {stack}"
+    outside = str(pathlib.PurePosixPath(roots[0]).parent / ".lhpc-build-inputs")
+    assert not _inside(outside, roots), (
+        f"{outside!r} was accepted as inside {roots} — the containment check is not checking")

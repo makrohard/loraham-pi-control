@@ -37,6 +37,9 @@ candidate was checked out and its venv synced. Console left running for the ligh
 | 7 | meshcore | pinned | 9 s | 75 s | 443 s | 11 s | two typed refusals first — missing `node_name`, then `chat+repeater` without a repeater name, the save rolled back. Then `mode: chat+repeater`: node on 868, companion `:5000`, repeater dashboard `:8000` → 200, web UI `:8788` → 200 (started by name, as an optional component must be) |
 | 8 | meshtastic | binary | 7 s | 131 s (50.7 MB) | **refused** | 35 s | refused first for `node_name`/`node_short`; then verified, `:4403` up, GPS live, all four post-start steps applied. `lhpc meshtastic --info` returns the node — owner `LHPCBENCH (LHPB)`, firmware `2.7.26.54e0d8d` = pin `54e0d8d0`. The artifact is the republished one, `binary@a0ffaa37a` |
 | 11 | meshcom | binary | 6 s | 26 s (11.6 MB) | **refused** | 392 s | bridge on `:7000`, GPS relay live, QEMU node verified with the post-start completed; the firmware's UART shows `SX1268 … success` and `OpenETH GOT_IP`, the bridge logged `XR client connected`. `:18083` refused until the node had booted, then **200**, and the callsign reached the net-console — *"acknowledged on attempt 22"*. Inside the 6–14 min the controller's own note predicts for this box |
+| 9 | meshtastic | pinned (source) | — | — | — | — | **not re-run** — fast-lane waiver, maintainer, 2026-09-10. `meshtastic-firmware` pin `54e0d8d0` is the one measured in the 0.3.0 matrix and unchanged since v0.3.7 |
+| 10 | daemon | pinned (source) | — | — | — | — | **not re-run** — same waiver. `loraham-daemon` `10f41070` + `radiolib` `187ef247`, both unchanged since v0.3.7 |
+| 12 | meshcom | pinned (source) | — | — | — | — | **not re-run** — same waiver. `meshcom-qemu` `579e463e`, `meshcom-firmware` `674413ce`, `meshcom-bridge` `f0189206`, unchanged since v0.3.7 |
 
 Also checked: `lhpc status --versions` on the three binary stacks — every installed artifact's
 components equal the manifest pins, `built_from == pin` throughout.
@@ -45,9 +48,15 @@ Memory: minimum `MemAvailable` 69 952 kB in row 1 and **23 920 kB** during Retic
 tightest point of the run. No OOM line in `dmesg` after any row. The console was left running for
 the light rows and stopped for MeshCom's QEMU boot.
 
-Not run, and not claimed: the from-zero reinstall, the Desktop-variant rows (Voice GTK and
-Sideband need a display this Lite box does not have), and rows 9, 10 and 12 under the waiver
-above.
+The three waived rows are in the table above rather than omitted from it, with the pins that make
+the waiver legitimate — the [fast-lane rule](test-matrix.md#fast-lane) requires exactly that, and
+the run that last measured them is the 0.3.0 matrix in this file's git history. The waiver is the
+maintainer's instruction of 2026-09-10 to run the binary and pinned rows only.
+
+Not run, and not claimed: the from-zero reinstall (per-stack purges on an existing installation do
+not test that path) and the Desktop-variant rows — Voice GTK and Sideband need a display this Lite
+box has not got. Cross-cutting checks other than pins-versus-binaries and the refusals recorded
+above did not run either.
 
 Two things worth knowing next time: `rnstatus` needs `--config {runtime}/state/reticulum`, and
 without it creates a stray `~/.reticulum` and reports no instance; and the operator self-update

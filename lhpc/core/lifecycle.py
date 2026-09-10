@@ -416,11 +416,18 @@ class Lifecycle:
                 runtime_fs.atomic_write(self.paths, marker,
                                         BUILD_MARKER_TEXT + marker_extra, 0o644)
             except (OSError, PathContainmentError) as exc:
+                # NOT the last successful step's log. Every command succeeded; what failed is a
+                # local write. The release lane decides attribution from exactly this identity —
+                # a failure naming a step the recipe declares its own becomes an upstream
+                # regression — so reusing that log here would let a full disk freeze pins that
+                # built perfectly. Emptying it makes the typed line unattributable by
+                # construction; the build log stays named in the tail, where diagnostics belong.
                 return JobResult(name=base, state=JobState.FAILED, returncode=1,
-                                 log_path=last.log_path,
+                                 log_path="",
                                  tail=(list(last.tail) if last.tail else [])
                                  + [f"build succeeded but the completion marker could not be "
-                                    f"written ({exc}) — treating as NOT built"])
+                                    f"written ({exc}) — treating as NOT built",
+                                    f"every build step succeeded; their log is {last.log_path}"])
         return last
 
 

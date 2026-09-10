@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from lhpc.core import build_regression as br
 from lhpc_testlab import data_path
 from lhpc_testlab.testing import run_lhpc
 
@@ -140,7 +141,8 @@ def stack_regression(stack: str, phase: str) -> str:
                          "parser matches these four and nothing else")
     if not _STACK_ID_RE.fullmatch(stack):
         raise ValueError(f"stack {stack!r} is not a stack id ({_STACK_ID_RE.pattern})")
-    return f"STACK-REGRESSION stack={stack} phase={phase}"
+    # The grammar itself lives in the controller, so the builder writes the same bytes.
+    return br.marker_line(stack, phase)
 
 
 def required_release_cases() -> tuple[str, ...]:
@@ -246,24 +248,17 @@ def require_prerequisite(env: dict, *stacks: str, left_by: str) -> None:
 # `Lifecycle.build` logs step `i` of a multi-step component as `build-<component>-<i>` — which is
 # the consumer half of the attribution contract below. A refusal typed before any step ran
 # carries no log path, so this pattern does not match it either.
-_TYPED_BUILD_FAILURE = re.compile(r"\[failed\] build (\S+) \(rc \d+, log (\S+)\)")
+_TYPED_BUILD_FAILURE = br.TYPED_BUILD_FAILURE
 
 
 def _own_recipe_step_logs(svc, stack: str) -> set:
-    """The log names of the build steps this stack's recipe declares as its OWN — the PRODUCER
-    half of the contract: `attributable = true` on a build step in the manifest.
+    """The log names of the build steps this stack's recipe declares as its OWN.
 
-    A recipe author marks a step that compiles, patches or checks what earlier steps already
-    fetched. Nothing here reads error text: a step is this stack's own regression because the
-    recipe says so, or it is not.
+    The rule itself lives in `lhpc.core.build_regression`, because the binary builder applies the
+    same one to the same `lhpc build` output inside its container. Two copies of it would drift,
+    and the direction they drift in is "freeze an upstream pin over a broken package index".
     """
-    names = set()
-    for comp in svc.stack(stack).components:
-        n = len(comp.build_steps)
-        for i, step in enumerate(comp.build_steps):
-            if step.get("attributable"):
-                names.add(f"build-{comp.id}-{i}.log" if n > 1 else f"build-{comp.id}.log")
-    return names
+    return br.own_step_logs(svc.stack(stack))
 
 
 def install_build(env, svc, stack: str, *, build: bool = True,

@@ -856,6 +856,9 @@ TYPED = "  [failed] build loraham-kiss-tnc (rc 1, log /x/logs/build-loraham-kiss
 TIMED_OUT = "  [timeout] build loraham-kiss-tnc (rc 124, log /x/logs/build-x.log)\\n"
 REFUSED = "ERR   Refusing to build 'kiss': loraham-kiss-tnc is not installed.\\n"
 CLONE = "  [failed] clone loraham-kiss-tnc — fatal: unable to access: Could not resolve host\\n"
+# Every command succeeded and the COMPLETION MARKER write failed — a full disk, not the recipe.
+# LHPC types it as a failed build with NO log identity, precisely so it cannot be attributed.
+MARKER_IO = "  [failed] build loraham-kiss-tnc (rc 1, log )\\n"
 
 def _script(*results):
     it = iter(results)
@@ -877,6 +880,10 @@ def test_a_build_refused_before_a_step_ran():
 
 def test_an_install_that_could_not_reach_the_remote():
     _script(_R(1, CLONE))
+    rel.install_build(ENV, SVC(), 'kiss')
+
+def test_a_build_whose_only_failure_was_writing_the_completion_marker():
+    _script(_R(0), _R(1, MARKER_IO))
     rel.install_build(ENV, SVC(), 'kiss')
 
 def test_a_package_network_failure_during_a_build_step():
@@ -922,6 +929,7 @@ def test_only_a_build_step_the_recipe_declares_its_own_is_attributable(tmp_path)
         "test_a_build_refused_before_a_step_ran",
         "test_an_install_that_could_not_reach_the_remote",
         "test_a_package_network_failure_during_a_build_step",
+        "test_a_build_whose_only_failure_was_writing_the_completion_marker",
         "test_a_prerequisite_another_case_should_have_left_running",
         "test_stopping_another_stack"}, failures
 
@@ -1125,3 +1133,71 @@ def test_only_a_stack_that_holds_something_counts_as_holding():
               "d": "degraded", "e": "failed", "f": "not-applicable"}
     rel.stack_states = lambda env: states
     assert rel.holding_stacks({}) == {"c", "d", "e"}
+
+
+def test_a_real_marker_write_failure_crosses_into_the_lane_unattributed(tmp_path, monkeypatch):
+    """The producer and the consumer, joined — not two halves asserted apart.
+
+    A REAL `Lifecycle.build` runs with every command succeeding and the completion-marker write
+    failing, the typed line is rendered exactly as `service_lifecycle_ops` renders it from that
+    JobResult, and the lane's own consumer is asked what it makes of it. Nothing may be
+    attributed: every command succeeded, so there is no evidence against any upstream pin.
+    """
+    from pathlib import Path
+
+    import lhpc_testlab.release as rel
+
+    from lhpc.core import lifecycle as lifecycle_mod
+    from lhpc.core.jobs import JobResult, JobState
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=Path(tmp_path)))
+    comp = next(c for s in svc.stacks() for c in s.components if c.id == "meshcore-node")
+    (svc._lifecycle().source_dir(comp) / ".venv" / "bin").mkdir(parents=True, exist_ok=True)
+
+    # The log of the step this recipe DECLARES ITS OWN — the one name that would attribute.
+    # Derived from the recipe, not typed in: a fake name would make this test pass by accident.
+    own = rel._own_recipe_step_logs(svc, "meshcore")
+    owned_log = next(n for n in own if n.startswith("build-meshcore-node"))
+
+    monkeypatch.setattr(lifecycle_mod, "run_job",
+                        lambda runner, **kw: JobResult(name="b", state=JobState.SUCCEEDED,
+                                                       returncode=0,
+                                                       log_path=f"/x/logs/{owned_log}",
+                                                       tail=[]))
+    monkeypatch.setattr(lifecycle_mod.runtime_fs, "atomic_write",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError(28, "No space left")))
+
+    res = svc._lifecycle().build(comp, marker_extra=svc._consumed_source_lines(comp))
+    assert not res.ok
+
+    # Rendered the way service_lifecycle_ops renders a build result into the run's details.
+    typed = f"  [{res.state.value}] build {comp.id} (rc {res.returncode}, log {res.log_path})"
+
+    hit = next((m for m in rel._TYPED_BUILD_FAILURE.finditer(typed)
+                if Path(m.group(2)).name in own), None)
+    assert hit is None, f"a local write failure was attributed to an owned step: {typed!r}"
+
+
+def test_the_lane_and_the_binary_builder_share_one_attribution_rule():
+    """Not two implementations that happen to agree today.
+
+    The builder cannot import this package, so it runs `tools/build_regression.py` against the
+    controller it was told to build. Both paths must be the SAME rule: if they ever diverged, a
+    pin could be frozen by one and not the other, and the divergence would show up as a hold
+    nobody could explain.
+    """
+    import lhpc_testlab.release as rel
+
+    from lhpc.core import build_regression as br
+    assert rel._TYPED_BUILD_FAILURE is br.TYPED_BUILD_FAILURE
+    assert rel.stack_regression("meshcore", "build") == br.marker_line("meshcore", "build")
+    from pathlib import Path
+
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=Path("/tmp/x")))
+    assert rel._own_recipe_step_logs(svc, "meshcore") == br.own_step_logs(svc.stack("meshcore"))
