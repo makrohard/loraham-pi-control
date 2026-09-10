@@ -16,6 +16,7 @@ knows what they are relying on before they touch it.
 - [No `--live` interface](#no---live-interface)
 - [Operator self-update prints steps it already took](#operator-self-update-prints-steps-it-already-took)
 - [Chat source path moves when the daemon repin lands](#chat-source-path-moves-when-the-daemon-repin-lands)
+- [A flaky adopt_source test can block an automated release](#a-flaky-adopt_source-test-can-block-an-automated-release)
 
 ## Two-stage unit-template migration
 
@@ -171,3 +172,26 @@ One related invariant, recorded because it is easy to break by accident from the
 chat's component is `artifact = true`, so its non-pinned selectors resolve to **default-branch
 HEAD**. That repo's default branch must stay `main`; pointing it at `dev` would put in-progress
 restructure work onto real boxes through a selector nobody thought they were changing.
+
+## A flaky adopt_source test can block an automated release
+
+**`tests/install/test_source.py::test_an_ignored_file_survives_an_update` failed once on
+`test (3.11)` and passed everywhere else**, including `test (3.13)` in the same CI run, the same
+suite on a near-identical candidate twenty minutes earlier, and a local run on the exact failing
+commit. The adopt reported `failed` with a description naming a path under the source repo's
+`.git/objects/ce`, so it looks like a transient read of a loose git object rather than anything
+about the change under test. The helpers around it are already named `_git_race_safety` and
+`_make_repo_race_safety`, so this area has had races before.
+
+Why it is worth a backlog entry rather than a shrug: the release bot treats a red CI leg as
+proof that the candidate is not proven, and refuses to release. That is correct and must not be
+relaxed. But it means **one flaky test anywhere in the suite stops an unattended release**, and
+the cost is not just a re-run: a release that was retrying an automatic hold spends its one
+retry on the flake, and recovering from that needs a person.
+
+What holds the line today: nothing. A recurrence stops a release and reports honestly, which is
+safe but not free.
+
+Worth doing when someone is in this file: reproduce under load (`-n` high, repeated runs) to see
+whether the loose-object read is genuinely racy, and if so give the adopt a bounded retry for
+that one class of transient rather than widening what counts as success.
