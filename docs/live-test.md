@@ -10,7 +10,14 @@ Earlier runs — the 0.3.9 added-files run, the 0.3.0 and 0.2.10 release matrice
 git history:
 `git log --follow -p -- docs/live-test.md`.
 
-## 0.3.12 — the binary and pinned rows, in preparation of 0.4.0, 2026-09-10
+## 0.3.12 → 0.3.14 — the release-automation campaign, 2026-09-10
+
+One run of the reference box on one day, in two parts: the binary and pinned rows on the 0.3.12
+candidate, then — after the bot released v0.3.14 and the box took it by `self-update` — the two
+rows the daemon/Chat repin needed. Each part says which artifact it measured; neither part's rows
+are evidence for the other's.
+
+### Part 1 — the binary and pinned rows, on 0.3.12
 
 Deliberately short. The full twelve-row matrix ran clean for 0.3.0 and nothing since has touched
 real silicon or a real radio, so this run re-proves only what a release-automation change can
@@ -53,12 +60,44 @@ the waiver legitimate — the [fast-lane rule](test-matrix.md#fast-lane) require
 the run that last measured them is the 0.3.0 matrix in this file's git history. The waiver is the
 maintainer's instruction of 2026-09-10 to run the binary and pinned rows only.
 
-Not run, and not claimed: the from-zero reinstall (per-stack purges on an existing installation do
-not test that path) and the Desktop-variant rows — Voice GTK and Sideband need a display this Lite
-box has not got. Cross-cutting checks other than pins-versus-binaries and the refusals recorded
-above did not run either.
-
 Two things worth knowing next time: `rnstatus` needs `--config {runtime}/state/reticulum`, and
 without it creates a stray `~/.reticulum` and reports no instance; and the operator self-update
 path prints the restart and venv-sync steps it has already carried out
 ([backlog](backlog.md#operator-self-update-prints-steps-it-already-took)).
+
+### Part 2 — the repin, on v0.3.14
+
+The box was returned to `main` and taken to the release the bot had just made: `lhpc self-update
+--apply` from 0.3.12 to **0.3.14 in 34.6 s**, the documented operator path. The daemon and Chat
+are the two pins the release lane cannot prove without a radio, and the rewrite that prompted the
+repin changed no production source, so these two rows are what the repin needs.
+
+| row | purge | install | build | start | evidence |
+|---|---|---|---|---|---|
+| daemon, binary | 10 s | 10 s | **refused** (binary channel), 3 s | 14 s | both bands `RADIO=READY TXMODE=MANAGED` |
+| chat, pinned | 6 s | 6 s | 5 s | typed `manual_required` | the compiled TUI drew its header, call list and `TX 433.775 / RX 433.900` under a PTY |
+
+`lhpc status --versions` afterwards:
+
+```
+loraham-daemon  binary  binary@afa7d89a4  built_from=dbd2998b7e69  pin=dbd2998b7e69
+radiolib        binary  binary@afa7d89a4  built_from=187ef24791c3  pin=187ef24791c3
+loraham-chat    match   pin=dbd2998b7e69  tag=v112-6-gdbd2998
+```
+
+Before these rows `loraham-chat` read `differs`, because its checkout still held the pre-rewrite
+commit. Installed source, manifest pin and rebuilt artifact now agree on the rewritten commit, on
+real hardware — which is the whole claim the repin makes. Controller `4afef7394` = v0.3.14; the
+image published for it is `loraham-images` v0.3.14 at `c07a63e`.
+
+Part 2 measured these two rows and nothing else. Part 1's rows keep their own artifact and their
+own date.
+
+### Not run, and not claimed
+
+Neither part covered these, and no earlier row implies them: the **from-zero reinstall** (per-stack
+purges on an existing installation do not test that path), the **Desktop-variant rows** — Voice GTK
+and Sideband need a display this Lite box has not got — the **cross-cutting operator flows** other
+than pins-versus-binaries and the refusals recorded above, and **booting a published image** on
+hardware. The [fast-lane rule](test-matrix.md#fast-lane) that scoped this campaign expressly
+retains from-zero and cross-cutting checks; they stay owed.
