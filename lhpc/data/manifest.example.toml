@@ -2651,8 +2651,8 @@ main = "meshcore-node"
     path = "src/openhop-repeater"
     remote = "https://github.com/openhop-dev/openhop_repeater.git"
     branch = "dev"
-    pin_commit = "47e49e64aaf39ae17827def617dd1190e2149101"
-    pin_tag = "1.1.4-1-g47e49e6"
+    pin_commit = "4705c99c38c8413c64c5a1902db42547d76b03c1"
+    pin_tag = "1.1.4-3-g4705c99"
 
 [[stack]]
 id = "reticulum"

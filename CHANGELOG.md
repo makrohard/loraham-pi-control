@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.14
+
+- openhop-repeater: 47e49e64a -> 4705c99c3 (1.1.4-3-g4705c99), used by openhop-repeater-src
+
 ## 0.3.13
 
 - A build whose every command succeeded but whose completion marker could not be written no longer looks like that component's own build failure. It used to return the last SUCCESSFUL step's log path, and the release lane decides attribution from exactly that identity — so a full disk during Reticulum's build produced evidence against five upstream pins that had built perfectly. Such a result now carries no step identity at all; the log stays named in the failure text, where diagnostics belong.
