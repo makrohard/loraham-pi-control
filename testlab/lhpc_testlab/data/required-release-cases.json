@@ -1,0 +1,21 @@
+{
+  "note": "The cases testlab/tests/release/test_release_verify.py MUST report. An automated release reads that lane's JUnit and requires every name listed here to have PASSED — counting cases is not enough, because fourteen renamed or replaced cases satisfy a count while the stack they proved stops being proved. test_release_lane_reports_exactly_the_required_cases keeps this file and the lane identical, so adding, dropping or renaming a case fails the lane until this list is updated with it.",
+  "required_cases": [
+    "test_release_lane_reports_exactly_the_required_cases",
+    "test_release_kiss",
+    "test_release_graywolf",
+    "test_release_chat",
+    "test_release_voice_gtk",
+    "test_release_voice_terminal",
+    "test_release_meshcore_chat",
+    "test_release_meshcore_chat_repeater",
+    "test_release_meshcore_repeater",
+    "test_release_meshcore_cli",
+    "test_release_reticulum",
+    "test_release_reticulum_nomadnet",
+    "test_release_meshtastic",
+    "test_release_meshcom",
+    "test_release_identity_matches_candidate_manifest",
+    "test_release_gui_predicate_names_only_gui_components"
+  ]
+}

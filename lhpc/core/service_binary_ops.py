@@ -760,11 +760,26 @@ class BinaryOpsMixin:
 
     def binary_freshness(self, stack_id: str) -> dict:
         """LOCAL, network-free freshness for a binary-installed stack: the receipt's component
-        commits vs the CURRENT manifest pins. {state: current|behind|n/a, behind: [...]}."""
+        commits vs the CURRENT manifest pins, plus the build inputs the artifact's own completion
+        marker records. {state: current|behind|n/a, behind: [...]}.
+
+        The marker half matters because not every pin is a commit. The Meshtastic web client and
+        CLI are manifest VALUES compiled into the artifact, not component pins, so moving one
+        leaves every commit equal and the comparison above says "current" about an artifact that
+        is demonstrably older than the manifest. The marker is the artifact's own record of what
+        it was built from; `is_built` recomputes it from the manifest, and a mismatch is exactly
+        "this artifact is behind". Still local: the marker is a file the artifact installed.
+        """
         state, rec, _why = self.binary_receipt_state(stack_id)
         if state != "valid" or rec is None:
             return {"state": "n/a", "behind": []}
         pins = self._binary_pins(stack_id)
         behind = [cid for cid, want in sorted(pins.items())
                   if rec.components.get(cid) != want]
-        return {"state": "behind" if behind else "current", "behind": behind}
+        st = self.stack(stack_id)
+        spec = getattr(st, "binary", None)
+        covers = set(spec.covers) if spec is not None else set()
+        behind += [c.id for c in (st.components if st is not None else ())
+                   if c.id in covers and c.id not in behind
+                   and c.build_marker and c.build_inputs and not self.is_built(c)]
+        return {"state": "behind" if behind else "current", "behind": sorted(behind)}

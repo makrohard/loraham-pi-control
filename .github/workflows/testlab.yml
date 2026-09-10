@@ -132,26 +132,50 @@ jobs:
           docker build -t "$IMG" -f .devcontainer/Dockerfile .devcontainer
           echo "IMG=$IMG" >> "$GITHUB_ENV"
 
+      # The lane's script is written to a FILE and run, never nested inside quoted strings.
+      # It was nested twice before, and both times a quote in a COMMENT broke it: an apostrophe
+      # ended the outer single-quoted string and the job died, and a double quote ended the
+      # inner one, so a truncated script installed the venv, exited 0 and never ran pytest at
+      # all — a green lane that proved nothing. A heredoc has no such edge.
+      #
+      # No Xvfb is started here: the release lane OWNS its display (testlab/tests/release/
+      # conftest.py), because one case must run with no graphical session to prove the Voice
+      # terminal variant through the production start path.
       - name: Release verification
         run: |
           mkdir -p releaseevidence
+          cat > lane.sh <<'LANE'
+          set -e
+          cd /tmp/repo
+          export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build
+          python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
+          pip install -q -e .
+          pip install -q -e ./testlab
+          pip install -q pytest
+          # -x: STOP AT THE FIRST FAILURE. The lane chains stacks over one radio pair, so a
+          # case that fails leaves the run in a state later cases cannot be judged in — and the
+          # automated release reads this JUnit to decide which stack to freeze. Continuing
+          # produced both wrong answers: a cleaned-up failure was followed by an unmarked
+          # prerequisite failure, which made the consumer refuse a genuine freeze; and a failed
+          # cleanup was followed by an innocent stack earning its own valid marker. Stopping
+          # here bounds the run to its FIRST genuine regression. An aborted run can never
+          # satisfy the publication gate anyway: that requires every required case to have
+          # passed. Cleanup still runs (fixture teardown is unaffected by -x) and a failed stop
+          # still surfaces as its own teardown error.
+          DISPLAY=:99 LHPC_RELEASE_VERIFY=1 LHPC_CHAIN_HEAVY=1 \
+            python -m pytest testlab/tests/release -q -rs -x \
+              --junitxml=/out/junit-release.xml
+          LANE
           docker run --rm --user root -v "$PWD":/repo:ro \
             -v lhpc_release_tmp:/tmp -v "$PWD/releaseevidence":/out \
             "$IMG" bash -lc '
               set -e
               cp -r /repo /tmp/repo && chown -R lhpclab /tmp/repo && chmod a+w /out
-              su lhpclab -c "
-                set -e
-                cd /tmp/repo
-                export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build
-                python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
-                pip install -q -e .
-                pip install -q -e ./testlab
-                pip install -q pytest
-                (Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &)
-                DISPLAY=:99 LHPC_RELEASE_VERIFY=1 LHPC_CHAIN_HEAVY=1 \
-                  python -m pytest testlab/tests/release -q -rs \
-                    --junitxml=/out/junit-release.xml"'
+              install -m 0755 /repo/lane.sh /tmp/lane.sh
+              su lhpclab -c /tmp/lane.sh
+            '
+          test -s releaseevidence/junit-release.xml \
+            || { echo "::error::the lane produced no JUnit — it did not run"; exit 1; }
 
       - name: Collect the lab's own logs (also on failure)
         if: always()

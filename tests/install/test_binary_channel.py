@@ -21,6 +21,13 @@ def _h(root, rel):
     return hashlib.sha256((root / rel).read_bytes()).hexdigest()
 
 
+def _stamp_inputs(path, text):
+    """Write the recorded inputs where a real build puts them — beside the built artifact, whose
+    directory a real build has already created."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
 def _svc(tmp_path, target="aarch64-trixie", monkeypatch=None):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     if monkeypatch is not None:
@@ -1238,3 +1245,88 @@ def test_known_working_confirm_names_the_missing_composition_for_a_binary_stack(
     # a source-built stack keeps the start-first refusal
     res = svc.confirm_known_working("kiss")
     assert not res.ok and "No healthy start" in res.summary
+
+
+# --- an artifact can be behind without any commit moving ---------------------------------------
+# The Meshtastic web client and CLI are manifest VALUES compiled into the artifact, not component
+# pins. The commit comparison says "current" about an artifact that is demonstrably older, so the
+# artifact's own completion marker is consulted too.
+
+
+def _mesh_on_binary(tmp_path, monkeypatch, manifest=None):
+    """A box with the Meshtastic artifact installed and its marker recording TODAY's inputs."""
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+    svc = ControllerService(manifest_path=manifest, system=FakeSystem().system,
+                            paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    import dataclasses
+    # Components equal to the manifest pins: this box is current on the COMMIT half, so a
+    # "behind" verdict below can only come from the marker.
+    rec = dataclasses.replace(_receipt_for(svc, tmp_path, "meshtastic"),
+                              components=dict(svc._binary_pins("meshtastic")))
+    assert brx.write_receipt(svc._paths, rec)
+    comp = _comp(svc, "meshtastic")
+    src = tmp_path / "src" / "meshtastic-firmware"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / comp.build_marker).write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(comp))
+    _stamp_inputs(svc.build_inputs_path(comp), svc.build_inputs_text(comp))
+    return svc
+
+
+def _manifest_with_a_newer_web_client(tmp_path):
+    from lhpc.core.manifest import default_manifest_path
+    text = (default_manifest_path().read_text()
+            .replace('"2.7.2"', '"9.9.9"').replace("web client v2.7.2", "web client v9.9.9"))
+    path = tmp_path / "newer-web.toml"
+    path.write_text(text)
+    return path
+
+
+def test_an_artifact_matching_the_manifest_is_current(tmp_path, monkeypatch):
+    svc = _mesh_on_binary(tmp_path, monkeypatch)
+    assert svc.binary_freshness("meshtastic") == {"state": "current", "behind": []}
+
+
+def test_an_artifact_built_before_a_web_client_bump_is_behind(tmp_path, monkeypatch):
+    """No component commit moved, so the pin comparison alone would call this current and the
+    box would never be offered the newer artifact."""
+    _mesh_on_binary(tmp_path, monkeypatch)                       # marker written at 2.7.2
+    svc = ControllerService(manifest_path=_manifest_with_a_newer_web_client(tmp_path),
+                            system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    fresh = svc.binary_freshness("meshtastic")
+    assert fresh["state"] == "behind" and "meshtastic" in fresh["behind"]
+
+
+def test_freshness_still_reads_no_network_for_the_marker_check(tmp_path, monkeypatch):
+    from lhpc.core import binary_install as bi
+    _mesh_on_binary(tmp_path, monkeypatch)
+    svc = ControllerService(manifest_path=_manifest_with_a_newer_web_client(tmp_path),
+                            system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(bi, "_http_get",
+                        lambda *a, **k: pytest.fail("freshness must not fetch"))
+    assert svc.binary_freshness("meshtastic")["state"] == "behind"
+
+
+def test_the_remedy_for_a_covered_component_is_a_reinstall_not_a_build(tmp_path, monkeypatch):
+    """`lhpc build` is refused on the binary channel, so offering it to a box whose artifact is
+    stale is a dead end: the console said "run: lhpc build meshtastic" and that command refuses."""
+    svc = _mesh_on_binary(tmp_path, monkeypatch)
+    assert svc.build_remedy("meshtastic", "meshtastic") == \
+        "lhpc install meshtastic --source binary --yes"
+
+
+def test_the_remedy_for_a_source_component_is_still_the_build(tmp_path, monkeypatch):
+    svc = _mesh_on_binary(tmp_path, monkeypatch)
+    assert svc.build_remedy("kiss", "kiss-serial") == "lhpc build kiss"
+    assert svc.build_remedy("meshtastic") == "lhpc build meshtastic"
+
+
+def test_a_stale_artifact_names_the_reinstall_when_it_blocks_a_launch(tmp_path, monkeypatch):
+    """The operator-visible end of it: the blocker string carries the command that works."""
+    _mesh_on_binary(tmp_path, monkeypatch)
+    svc = ControllerService(manifest_path=_manifest_with_a_newer_web_client(tmp_path),
+                            system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    blocker = svc.install_blocker(_comp(svc, "meshtastic"))
+    assert "not built" in blocker
+    assert "lhpc install meshtastic --source binary --yes" in blocker

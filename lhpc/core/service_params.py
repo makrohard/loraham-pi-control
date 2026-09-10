@@ -604,7 +604,17 @@ class ParamsConfigMixin:
         if getattr(r, "not_found", False) or r.returncode != 0:
             return None
         try:
-            old_stack = next((s for s in manifest_mod.parse_manifest(tomllib.loads(r.stdout))
+            old_doc = tomllib.loads(r.stdout)
+            # The OLD manifest is read for its PARAMETER definitions only — it describes a build
+            # this box will never run again. Its `build_inputs` are dropped before parsing because
+            # how they must be DECLARED is tightened between releases (an entry now names the argv
+            # token it fills), and a manifest written before such a tightening would otherwise fail
+            # to parse at all: every migration candidate would then stay pending forever and a
+            # stored value equal to the old default would never follow the new one.
+            for _st in old_doc.get("stack", []):
+                for _c in _st.get("component", []):
+                    _c.pop("build_inputs", None)
+            old_stack = next((s for s in manifest_mod.parse_manifest(old_doc)
                               if s.id == cand["stack"]), None)
         except Exception:
             return None
@@ -2147,7 +2157,8 @@ class ParamsConfigMixin:
             validators.node_name(name or "", field="repeater name")
         except validators.ValidationError as exc:
             return (f"mode '{_mm.normalize(mode)}' needs the repeater's own node name — {exc} "
-                    f"(set repeater_name in the same save, or keep mode chat)")
+                    f"(the console saves both at once; from the CLI set repeater_name first, "
+                    f"then the mode — or keep mode chat)")
         return ""
 
     def _identity_field(self, target: str) -> dict | None:

@@ -71,7 +71,12 @@ main = "loraham-daemon"
   # dependency (not "optional"): update includes it, uninstall refuses to remove it while
   # the daemon source is installed. RADIOLIB_DIR pins the build to the MANAGED in-root
   # clone (CONTAINMENT: without it, build.sh's discovery falls back to ~/src/RadioLib).
-  build_steps = [ { argv = ["loraham_daemon/build.sh"], env = { RADIOLIB_DIR = "{runtime}/src/RadioLib" } } ]
+  # `attributable = true` marks a step whose failure is THIS component's own build regression:
+  # it compiles, patches or checks what earlier steps already fetched, and reaches no network
+  # itself. The release-verification lane freezes a stack's pins only on such a step (see
+  # `lhpc_testlab.release.install_build`), because every fetching step — pip, git, a package
+  # mirror — fails the same typed way when the network does, and a wrong freeze costs weeks.
+  build_steps = [ { argv = ["loraham_daemon/build.sh"], env = { RADIOLIB_DIR = "{runtime}/src/RadioLib" }, attributable = true } ]
   build_requires = ["radiolib"]
   pre_steps = [ { kind = "mkdir", path = "{runtime}/state/loraham", mode = "700" } ]
   readiness = "daemon-band"
@@ -227,7 +232,7 @@ main = "loraham-daemon"
   tx_capable = false
   # Self-sufficient in-root build: produces build/libRadioLib.a, which the daemon's
   # build.sh consumes via RADIOLIB_DIR (all deps live and build under <root>/src).
-  build_steps = [ { argv = ["cmake", "-S", ".", "-B", "build"] }, { argv = ["cmake", "--build", "build", "-j", "2"] } ]
+  build_steps = [ { argv = ["cmake", "-S", ".", "-B", "build"] }, { argv = ["cmake", "--build", "build", "-j", "2"], attributable = true } ]
   # The built artifact is the static lib the daemon links — declaring it as `bin` makes lhpc's
   # `is_built` HONEST (a fresh clone has no build/, so RadioLib correctly reads "not built" and the
   # daemon's "Build needed" banner names it; Build compiles it first via build_requires ordering).
@@ -278,6 +283,9 @@ main = "loraham-chat"
   depends_on = ["loraham-daemon"]
   requires_daemon_tx = "MANAGED"
   build = "gcc lorachat_ncurses_113.c -o loraham_chat -lncurses -lpthread"
+  # Written out rather than left to the `build` shorthand above: a shorthand step cannot declare
+  # `attributable`, and this compile is exactly the kind of failure that IS chat's own.
+  build_steps = [ { argv = ["gcc", "lorachat_ncurses_113.c", "-o", "loraham_chat", "-lncurses", "-lpthread"], attributable = true } ]
   bin = "loraham_chat"
   # Run from the runtime config dir so the TUI reads the lhpc-seeded lorachat.conf
   # (and its in-app Ctrl-K saves persist there too) — never written into the repo.
@@ -373,7 +381,7 @@ main = "loraham-voice"
   # via a symlink in the runtime config dir (where lhpc seeds the conf), keeping the
   # conf out of the repo. GUI app: lhpc Start/Stops it; opens on the Pi display.
   run = 'env DISPLAY="${DISPLAY:-:0}" "{runtime}/config/files/loraham_voice"'
-  build_steps = [ { argv = ["gcc", "-o", "loraham_voice", "loraham_voice_v107.c", "{pkgconfig:gtk+-3.0}", "-lcodec2", "-lasound", "-lncurses", "-lpthread", "-lm"] } ]
+  build_steps = [ { argv = ["gcc", "-o", "loraham_voice", "loraham_voice_v107.c", "{pkgconfig:gtk+-3.0}", "-lcodec2", "-lasound", "-lncurses", "-lpthread", "-lm"], attributable = true } ]
   pre_steps = [ { kind = "mkdir", path = "{runtime}/config/files" }, { kind = "symlink", src = "{source}/loraham_voice", dst = "{runtime}/config/files/loraham_voice" } ]
   run_argv = ["{runtime}/config/files/loraham_voice"]
   run_cwd = "{runtime}/config/files"
@@ -572,7 +580,7 @@ main = "loraham-voice"
   readiness = "manual"
   build = "gcc -DNO_GTK -o loraham_voice_cli loraham_voice_v107.c -lcodec2 -lasound -lncurses -lpthread -lm"
   bin = "loraham_voice_cli"
-  build_steps = [ { argv = ["gcc", "-DNO_GTK", "-o", "loraham_voice_cli", "loraham_voice_v107.c", "-lcodec2", "-lasound", "-lncurses", "-lpthread", "-lm"] } ]
+  build_steps = [ { argv = ["gcc", "-DNO_GTK", "-o", "loraham_voice_cli", "loraham_voice_v107.c", "-lcodec2", "-lasound", "-lncurses", "-lpthread", "-lm"], attributable = true } ]
   pre_steps = [ { kind = "mkdir", path = "{runtime}/config/files" }, { kind = "symlink", src = "{source}/loraham_voice_cli", dst = "{runtime}/config/files/loraham_voice_cli" } ]
   run_argv = ["{runtime}/config/files/loraham_voice_cli"]
   run_cwd = "{runtime}/config/files"
@@ -636,7 +644,7 @@ main = "loraham-kiss-tnc"
   # root, and the binary is named after the checkout dir (src/loraham-kiss-tnc -> "loraham-kiss-tnc").
   # Explicit run_argv/build_steps + run_cwd so the root binary/script resolve cwd-relative.
   build = "bash build.sh"
-  build_steps = [ { argv = ["bash", "build.sh"] } ]
+  build_steps = [ { argv = ["bash", "build.sh"], attributable = true } ]
   run = "./loraham-kiss-tnc --config loraham_kiss_tnc.conf.example {kiss_port} {kiss_host} {rx_freq} {tx_freq} {data_socket} {conf_socket} {rx_only} {verbose}"
   run_argv = ["./loraham-kiss-tnc", "--config", "loraham_kiss_tnc.conf.example", "{param:kiss_port}", "{param:kiss_host}", "{param:kiss_bind}", "{param:rx_freq}", "{param:tx_freq}", "{param:data_socket}", "{param:conf_socket}", "{param:rx_only}", "{param:verbose}"]
   run_cwd = "{source}"
@@ -1114,9 +1122,9 @@ main = "meshtastic"
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/platformio/.venv"] },
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pip", "install", "--disable-pip-version-check", "platformio==6.1.19"], announce = "[install] PlatformIO 6.1.19 into {runtime}/build/tools/platformio/.venv — pip is quiet off-TTY; progress: watch {runtime}/build/tools/platformio/.venv/lib grow" },
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pio", "pkg", "install", "--environment", "native"], env = { PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core" }, announce = "[resolve] Meshtastic native platform + libraries — large download, output is quiet; progress: watch {runtime}/build/tools/platformio/core grow" },
-    { argv = ["{runtime}/build/tools/platformio/.venv/bin/pio", "run", "--environment", "native"], env = { PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", PLATFORMIO_RUN_JOBS = "1" }, announce = "[build] meshtasticd (upstream env: native — server-only, no TFT/SDL/X11) — a full C++ build; slow on a Zero 2W; progress: watch {source}/.pio/build/native grow" },
+    { argv = ["{runtime}/build/tools/platformio/.venv/bin/pio", "run", "--environment", "native"], env = { PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", PLATFORMIO_RUN_JOBS = "1" }, attributable = true, announce = "[build] meshtasticd (upstream env: native — server-only, no TFT/SDL/X11) — a full C++ build; slow on a Zero 2W; progress: watch {source}/.pio/build/native grow" },
     { argv = ["install", "-D", "-m", "0755", "{source}/.pio/build/native/meshtasticd", "{runtime}/build/tools/meshtasticd/meshtasticd"] },
-    { argv = ["bash", "{asset}/scripts/meshtastic-link-gate.sh", "{runtime}/build/tools/meshtasticd/meshtasticd"] },
+    { argv = ["bash", "{asset}/scripts/meshtastic-link-gate.sh", "{runtime}/build/tools/meshtasticd/meshtasticd"], attributable = true },
     # The web client is LHPC's own pin (the newest meshtastic/web release, verified by sha256 on every
     # install), not the firmware's bin/web.version — see the script header and docs/stacks/meshtastic.md.
     { argv = ["bash", "{asset}/scripts/meshtastic-web-assets.sh", "{runtime}/build/tools/meshtasticd/web", "2.7.2", "62657b85b4c24af4d44da2932b64143abdbf6e65a79fcb51fd0801d9540616e2"], announce = "[fetch] Meshtastic web client v2.7.2 (LHPC pin, sha256-verified) into {runtime}/build/tools/meshtasticd/web" },
@@ -1133,6 +1141,20 @@ main = "meshtastic"
   # the marker with it and the stack reads "Build required" until the new revision is rebuilt —
   # which is exactly what must happen when the source moves.
   build_marker = ".lhpc-build-complete"
+  # The two pins above that are NOT git commits, recorded INSIDE that marker. Moving the firmware
+  # pin replaces the checkout and takes the marker with it; moving only the web client or only the
+  # CLI does not, and the marker's content is what notices. Without these lines a bump here left
+  # every already-built box reporting "built" while still serving the OLD client and running the
+  # OLD CLI, and `lhpc status` called the artifact current. `command` names the step above that
+  # CONSUMES each value (the pip install, the web fetch script) and `token` the argv token it
+  # fills ({value} is where the value goes); the loader requires that step to carry the rendered
+  # token exactly once, so bumping one here without bumping the step it names fails the load.
+  # Matching a token anywhere in the recipe did not: it accepted a recorded "2.7.11" while the
+  # pip step installed the 2.7.110 wheel, because a decoy token elsewhere carried "2.7.11".
+  build_inputs = [
+    { name = "meshtastic-web", value = "2.7.2", command = "meshtastic-web-assets.sh", token = "{value}" },
+    { name = "meshtastic-cli", value = "2.7.11", command = "pip", token = "meshtastic=={value}" },
+  ]
   # A native C++ firmware build on a Zero 2W is long; the platform/library resolve alone can run
   # for many minutes over slow Wi-Fi. Ceiling set from LIVE measurement (not a guess): a Pi Zero 2W
   # (512 MB, one-job compile) builds up to ~900 objects at ~3-6 objects/min, so a cold build runs
@@ -1521,7 +1543,7 @@ main = "meshcom-qemu"
   requires_daemon_tx = "MANAGED"
   start_order = 1
   build = "cmake -S . -B build && cmake --build build"
-  build_steps = [ { argv = ["cmake", "-S", ".", "-B", "build"] }, { argv = ["cmake", "--build", "build"] } ]
+  build_steps = [ { argv = ["cmake", "-S", ".", "-B", "build"] }, { argv = ["cmake", "--build", "build"], attributable = true } ]
   readiness = "endpoint"
   run = "build/meshcom-loraham-bridge {bind} {port} {backend} {password_file} {ping_interval} {pong_timeout}"
   bin = "build/meshcom-loraham-bridge"
@@ -1782,9 +1804,9 @@ main = "meshcom-qemu"
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pip", "install", "--disable-pip-version-check", "platformio==6.1.19"], announce = "[install] PlatformIO 6.1.19 into {runtime}/build/tools/platformio/.venv — pip is quiet off-TTY; progress: watch {runtime}/build/tools/platformio/.venv/lib grow" },
     { argv = ["scripts/build-qemu.sh", "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606", "--link-gate", "{asset}/scripts/meshtastic-link-gate.sh"], announce = "[build] qemu-system-xtensa FROM SOURCE (headless: no SDL/GTK/VNC/OpenGL/audio) at the pinned Espressif commit — clone + configure + compile, slow + silent off-TTY; progress: watch {runtime}/build/tool-cache/qemu-xtensa grow" },
     { argv = ["scripts/setup.sh", "--ref", "674413ce38bebcc02969a4c1b754a6f1850bf4ba"], announce = "[clone] MeshCom-Firmware (icssw-org dev 674413c, v4.35p.08.29 + 34) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
-    { argv = ["scripts/apply-overlay.sh"] },
+    { argv = ["scripts/apply-overlay.sh"], attributable = true },
     { argv = ["scripts/prepare-openeth.sh"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core" }, announce = "[resolve] ESP32 platform + toolchain — large download, output is quiet; progress: watch {runtime}/build/tools/platformio/core grow" },
-    { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" } },
+    { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" }, attributable = true },
   ]
   readiness = "endpoint"
   # The emulated ESP32 boots slowly — live-measured ~1 min on a Pi 5 and ~6–14 min on a Pi Zero 2W to
@@ -2096,7 +2118,7 @@ main = "meshcore-node"
   # SPI/GPIO itself: no GPIO bindings, no SPI deps. --system-site-packages keeps any system
   # packages reusable; openhop's deps (pycryptodome, PyNaCl, pyyaml) are wheels on aarch64.
   build_steps = [
-    { argv = ["bash", "{asset}/scripts/openhop-apply-patch.sh", "{source}", "{asset}/patches/openhop-core-companion-fixes.patch"] },
+    { argv = ["bash", "{asset}/scripts/openhop-apply-patch.sh", "{source}", "{asset}/patches/openhop-core-companion-fixes.patch"], attributable = true },
     { argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"] },
     { argv = [".venv/bin/pip", "install", ".", "pytest", "pytest-asyncio"], announce = "[install] openHop Core + its deps (pycryptodome, PyNaCl, …) into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
     { argv = [".venv/bin/pip", "install", "--no-deps", "{asset}/meshcore_host"], announce = "[install] LHPC MeshCore host application (shipped with lhpc) into {source}/.venv" },
@@ -2436,7 +2458,7 @@ main = "meshcore-node"
     #      policy) while keeping its telemetry / manual-add / multi-ack controls.
     # Runtime imports app.* from {source} (run_cwd), so patching the source tree before the venv
     # install is what takes effect.
-    { argv = ["bash", "{asset}/scripts/openhop-apply-patch.sh", "{source}", "{asset}/patches/meshcore-webui-lhpc-guards.patch"] },
+    { argv = ["bash", "{asset}/scripts/openhop-apply-patch.sh", "{source}", "{asset}/patches/meshcore-webui-lhpc-guards.patch"], attributable = true },
     { argv = ["python3", "-m", "venv", "backend/.venv"] },
     # Constrain EVERY dependency to the exact set proven in the integration run (the shipped
     # constraints file), so a commit-pinned source can't still pull a floating/uncontrolled
@@ -2554,7 +2576,7 @@ main = "meshcore-node"
     # while LHPC supports >=3.11 — the pin below avoids it, and this step keeps it avoided:
     # a future pin that regresses fails the BUILD with the exact file and line, instead of
     # installing fine and dying with a SyntaxError at first run.
-    { argv = [".venv/bin/python", "-m", "compileall", "-q", "src"], announce = "[check] byte-compile meshcore-cli (guards the >=3.11 support this pin restores)" },
+    { argv = [".venv/bin/python", "-m", "compileall", "-q", "src"], attributable = true, announce = "[check] byte-compile meshcore-cli (guards the >=3.11 support this pin restores)" },
   ]
   # `pip install .` places the meshcli console script in the venv — that IS the build artifact.
   bin = ".venv/bin/meshcli"
@@ -2715,6 +2737,7 @@ announce = "[install] the direct-SPI LoRa interface + loraham-rns-node"
 argv = ["install", "-D", "-m", "0644", "{runtime}/src/loraham-rns-interface/interfaces/LoRaSPIInterface.py", "{runtime}/state/reticulum/interfaces/LoRaSPIInterface.py"]
 [[stack.component.build_steps]]
 argv = [".venv/bin/python", "-c", "import RNS, gpiod, spidev, loraham_rns.interface, loraham_rns.node; print('reticulum venv OK', RNS.__version__)"]
+attributable = true
 announce = "[probe] verify the built environment imports before marking it complete"
 
 [[stack.component.endpoint]]

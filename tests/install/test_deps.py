@@ -16,6 +16,13 @@ import re
 import repo_paths
 
 
+def _stamp_inputs(path, text):
+    """Write the recorded inputs where a real build puts them — beside the built artifact, whose
+    directory a real build has already created."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
 def _svc(tmp_path, cmdlines=None):
     return ControllerService(system=FakeSystem(cmdlines_data=cmdlines or {}).system,
                              paths=Paths(runtime_root=tmp_path))
@@ -862,7 +869,9 @@ def test_source_update_leaves_the_stack_needing_a_rebuild(tmp_path):
     src = tmp_path / "src" / "meshtastic-firmware"
     src.mkdir(parents=True)
     marker = src / c.build_marker
-    marker.write_text(BUILD_MARKER_TEXT)
+    # What a real build writes: the marker's own content, and the recorded inputs BESIDE it.
+    marker.write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(c))
+    _stamp_inputs(svc.build_inputs_path(c), svc.build_inputs_text(c))
     assert svc.is_built(_mesh(_svc(tmp_path))) is True
     # An update REPLACES the checkout, taking the source-local marker with it.
     marker.unlink()
@@ -1086,3 +1095,109 @@ def test_meshtastic_never_needs_root_to_build_start_or_configure(tmp_path):
     for s in c.build_steps:
         for tok in s.get("argv", []):
             assert not tok.startswith(("/etc/", "/usr/", "/var/", "/opt/")), tok
+
+
+# --- non-source build inputs: the marker records the pins that are not commits ---------------
+# The web client and the CLI are manifest VALUES compiled into the build, not git pins. Moving
+# one leaves the checkout — and so the source-local marker — untouched, which is why the marker
+# has to carry the values themselves.
+
+
+def _mesh_svc_with(tmp_path, replacements):
+    """A service on a manifest with `replacements` applied to the real one, built and marked as
+    of BEFORE those replacements. Returns (service, component)."""
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+    from lhpc.core.manifest import default_manifest_path
+    built = _svc(tmp_path)
+    comp = _mesh(built)
+    src = tmp_path / "src" / "meshtastic-firmware"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / comp.build_marker).write_text(
+        BUILD_MARKER_TEXT + built._consumed_source_lines(comp))
+    _stamp_inputs(built.build_inputs_path(comp), built.build_inputs_text(comp))
+    assert built.is_built(_mesh(_svc(tmp_path))) is True, "the baseline must read built"
+    text = default_manifest_path().read_text()
+    for old, new in replacements:
+        assert text.count(old) >= 1, old
+        text = text.replace(old, new)
+    moved = tmp_path / "moved-manifest.toml"
+    moved.write_text(text)
+    svc = ControllerService(manifest_path=moved, system=FakeSystem().system,
+                            paths=Paths(runtime_root=tmp_path))
+    return svc, _mesh(svc)
+
+
+def test_moving_the_web_client_pin_alone_reads_not_built(tmp_path):
+    """The firmware pin has not moved, so the checkout and its marker are untouched. Before the
+    marker recorded this value, the box kept serving the OLD client and still said "built"."""
+    svc, comp = _mesh_svc_with(tmp_path, [('"2.7.2"', '"9.9.9"'),
+                                          ("web client v2.7.2", "web client v9.9.9")])
+    assert ("meshtastic-web", "9.9.9") in comp.build_inputs
+    assert svc.is_built(comp) is False
+
+
+def test_moving_the_cli_pin_alone_reads_not_built(tmp_path):
+    svc, comp = _mesh_svc_with(tmp_path, [("meshtastic==2.7.11", "meshtastic==9.9.9"),
+                                          ('value = "2.7.11"', 'value = "9.9.9"'),
+                                          ("CLI 2.7.11", "CLI 9.9.9")])
+    assert ("meshtastic-cli", "9.9.9") in comp.build_inputs
+    assert svc.is_built(comp) is False
+
+
+def test_a_rebuild_at_the_new_inputs_reads_built_again(tmp_path):
+    """The remedy has to actually resolve: rewriting the marker at the new values is what a
+    rebuild does, and the stack must then read built rather than staying stuck."""
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+    svc, comp = _mesh_svc_with(tmp_path, [('"2.7.2"', '"9.9.9"'),
+                                          ("web client v2.7.2", "web client v9.9.9")])
+    marker = tmp_path / "src" / "meshtastic-firmware" / comp.build_marker
+    marker.write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(comp))
+    _stamp_inputs(svc.build_inputs_path(comp), svc.build_inputs_text(comp))
+    assert svc.is_built(comp) is True
+
+
+def test_the_recorded_inputs_are_the_literals_the_build_actually_uses(tmp_path):
+    """Two copies of one version can disagree. The marker would then record a value the build
+    never used, so the manifest refuses to load rather than answering about the wrong thing."""
+    from lhpc.core.manifest import default_manifest_path, load_manifest
+    text = default_manifest_path().read_text().replace('value = "2.7.11"', 'value = "9.9.9"')
+    bad = tmp_path / "drifted.toml"
+    bad.write_text(text)
+    with pytest.raises(ManifestError, match="is not what the recipe consumes"):
+        load_manifest(bad)
+
+
+def test_an_artifact_that_records_inputs_still_reads_built_to_a_controller_without_them(tmp_path):
+    """The reason the inputs are BESIDE the marker and not inside it.
+
+    A published artifact is installed by whatever controller a box happens to run. If the
+    recorded inputs lived in the marker, an artifact carrying them would read NOT built on every
+    box that had not upgraded yet, and an artifact without them reads NOT built on every box that
+    had — so neither publishing first nor releasing first was safe, and a release could not be
+    ordered at all. This is that property: the marker a NEW build writes is byte-for-byte what an
+    OLD controller expects.
+    """
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+    svc = _svc(tmp_path)
+    c = _mesh(svc)
+    src = tmp_path / "src" / "meshtastic-firmware"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / c.build_marker).write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(c))
+    _stamp_inputs(svc.build_inputs_path(c), svc.build_inputs_text(c))
+
+    assert (src / c.build_marker).read_text() == BUILD_MARKER_TEXT, (
+        "the marker gained content an older controller would not expect")
+    assert svc.build_inputs_path(c).exists(), "the inputs were not recorded at all"
+    assert svc.is_built(_mesh(_svc(tmp_path))) is True
+
+
+def test_an_artifact_that_predates_the_recorded_inputs_reads_not_built(tmp_path):
+    """The other half: a stale artifact says so, and the operator is told to reinstall it rather
+    than to run a build the binary channel refuses."""
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+    svc = _svc(tmp_path)
+    c = _mesh(svc)
+    src = tmp_path / "src" / "meshtastic-firmware"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / c.build_marker).write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(c))
+    assert svc.is_built(_mesh(_svc(tmp_path))) is False

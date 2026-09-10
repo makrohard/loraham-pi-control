@@ -1143,7 +1143,7 @@ class LifecycleOpsMixin:
             if comp.build_marker and comp.build_requires and not self.is_built(comp):
                 record(comp, stack, Outcome.BLOCKED,
                        "its sources changed since the last build — rebuild first "
-                       f"(lhpc build {stack.id})")
+                       f"({self.build_remedy(stack.id, comp.id)})")
                 continue
             # A GUI component that cannot run HERE is typed-SKIPPED: either its toolkit is
             # absent (gui_optional on a box bootstrapped without --with-gui — the same
@@ -1215,7 +1215,8 @@ class LifecycleOpsMixin:
                         continue
                     if not self.is_built(comp):
                         record(comp, stack, Outcome.BLOCKED,
-                               f"not built — build it first (lhpc build {stack.id})")
+                               "not built — build it first "
+                               f"({self.build_remedy(stack.id, comp.id)})")
                         continue
                     # The shared-config OWNER must have completed in THIS run: a BLOCKED
                     # owner (config generation failed) must not yield a presented command
@@ -1304,7 +1305,8 @@ class LifecycleOpsMixin:
                 continue
             if not self.is_built(comp):
                 record(comp, stack, Outcome.BLOCKED,
-                       f"not built — build it first (lhpc build {stack.id})")
+                       "not built — build it first "
+                       f"({self.build_remedy(stack.id, comp.id)})")
                 continue
             # Regenerate any config file this component reads (per the chosen band). A
             # generation FAILURE for this component blocks the launch — never start with
@@ -2970,7 +2972,10 @@ class LifecycleOpsMixin:
                     res = life.build(comp, log_base=log_base,
                                      redactor=redactor, should_cancel=should_cancel,
                                      on_log_open=self._log_announcer(comp.id, details),
-                                     marker_extra=self._consumed_source_lines(comp))
+                                     marker_extra=self._consumed_source_lines(comp),
+                                     inputs=(self.build_inputs_path(comp),
+                                             self.build_inputs_text(comp))
+                                     if comp.build_inputs else None)
                     ok = ok and res.ok
                     details.append(f"  [{res.state.value}] build {comp.id} "
                                    f"(rc {res.returncode}, log {res.log_path})")
@@ -4317,13 +4322,20 @@ class LifecycleOpsMixin:
         return comp.bin or None
 
     def _consumed_source_lines(self, comp) -> str:
-        """One `consumed <id> <sha>` line per source this build installs FROM: the
-        component's own checkout plus each `build_requires` dependency's.
+        """What this build consumed, as marker lines: one `consumed <id> <sha>` per source it
+        installs FROM (the component's own checkout plus each `build_requires` dependency's),
+        then one `input <name> <value>` per declared non-source build input.
 
         Recorded into the build marker and recomputed by `is_built`, so the marker is a
-        receipt for the exact sources consumed — a static marker stayed "built" after
+        receipt for the exact inputs consumed — a static marker stayed "built" after
         `rns-lora-interface` (or Reticulum itself) was updated, leaving the OLD driver
         installed in the venv while lhpc reported the component built.
+
+        The non-source `build_inputs` are recorded BESIDE the marker, not inside it — see
+        `build_inputs_path`. Putting them in the marker made the two sides of a release
+        impossible to order: an artifact carrying them reads NOT built to a controller that does
+        not know about them, and an artifact without them reads NOT built to one that does, so
+        neither publishing first nor releasing first was safe.
         """
         if not (comp.build_marker and comp.build_requires):
             return ""
@@ -4347,6 +4359,39 @@ class LifecycleOpsMixin:
             lines.append(f"consumed {cid} {sha or 'unknown'}\n")
         return "".join(lines)
 
+    def build_inputs_path(self, comp):
+        """Where a component's recorded non-source build inputs live: beside its BUILT ARTIFACT.
+
+        A separate file, and in that particular place, for two different compatibility reasons
+        that were each learned the hard way.
+
+        Separate, because the marker's content is compared byte for byte by every version of this
+        controller that ever shipped: adding to it would make a published artifact read NOT built
+        on every box that had not upgraded yet.
+
+        Beside `bin` rather than beside the marker, because a published artifact may only contain
+        members inside the PUBLISH ROOTS of the manifest doing the installing — and those come
+        from the installed controller, not from the artifact. A file next to the source marker
+        needed a new root, which a released controller does not have, so the whole artifact was
+        refused on every box while installing perfectly on the candidate that had widened its own
+        roots. `bin` is inside a publish root by definition for a stack with a binary channel.
+        """
+        return (Path(self._paths.runtime_root) / comp.bin).with_name(".lhpc-build-inputs")
+
+    def build_inputs_text(self, comp) -> str:
+        return "".join(f"input {n} {v}\n" for n, v in comp.build_inputs)
+
+    def _inputs_recorded(self, comp) -> bool:
+        """The recorded inputs are present and are the ones the manifest names."""
+        from . import runtime_fs
+        from .lifecycle import _BUILD_MARKER_MAX
+        try:
+            return (runtime_fs.read_text_regular(self._paths, self.build_inputs_path(comp),
+                                                 max_bytes=_BUILD_MARKER_MAX)
+                    == self.build_inputs_text(comp))
+        except (FileNotFoundError, OSError, PathContainmentError):
+            return False
+
     def is_built(self, comp) -> bool:
         """True if the component needs no build, or its built artifact is present.
         The artifact path may carry run-param placeholders (e.g. {env} for the
@@ -4368,9 +4413,11 @@ class LifecycleOpsMixin:
                 # Expected = the static text + the CURRENT consumed-source SHAs. A marker
                 # written against older sources (or the pre-receipt static form) mismatches
                 # and reads NOT built — `lhpc build reticulum` is then surfaced as required.
-                return (runtime_fs.read_text_regular(self._paths, marker,
-                                                     max_bytes=_BUILD_MARKER_MAX)
-                        == BUILD_MARKER_TEXT + self._consumed_source_lines(comp))
+                if (runtime_fs.read_text_regular(self._paths, marker,
+                                                  max_bytes=_BUILD_MARKER_MAX)
+                        != BUILD_MARKER_TEXT + self._consumed_source_lines(comp)):
+                    return False
+                return not comp.build_inputs or self._inputs_recorded(comp)
             except (FileNotFoundError, OSError, PathContainmentError):
                 return False
         rel = self._build_artifact(comp)
@@ -4394,7 +4441,7 @@ class LifecycleOpsMixin:
         if comp.source and not covered and not self._source_present(comp):
             return f"not installed — run: lhpc install {sid}"
         if not self.is_built(comp):
-            return f"not built — run: lhpc build {sid}"
+            return f"not built — run: {self.build_remedy(sid, comp.id)}"
         return ""
 
     def manual_start_command(self, comp) -> str:

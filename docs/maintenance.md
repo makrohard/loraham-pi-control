@@ -122,6 +122,9 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
   reports, and how to pause, retry or recover it:
   [`lhpc-release-bot`](https://github.com/makrohard/lhpc-release-bot). It never moves the daemon,
   RadioLib or the shared chat source: those need the radio hardware the lane does not have.
+  When the [release lane](testlab.md#running-the-verification-lanes) blames one stack by name, the
+  bot holds that stack's pins itself and retries once, so the others keep releasing; the hold is
+  lifted by hand, and the bot's own README owns that procedure.
 - **GitHub rulesets** (repository settings, not in the tree): `main` — no force push, no
   deletion, linear history, required checks `test (3.11)`, `test (3.12)`, `test (3.13)`,
   `pin-validation`, `testlab`, `meshcore-host` and `release-verify` on the pushed SHA (they ran
@@ -162,14 +165,34 @@ CI job hard-fail on an orphaned or predating pin).
 
 Steps 1–5 are what the [release bot](https://github.com/makrohard/lhpc-release-bot) does on its
 schedule, with the release-verification lane in place of step 6 — for the pins it is allowed to
-move. The daemon, RadioLib, the shared chat source and the Meshtastic web-client and CLI pins it
-only reports; those move by hand, through the recipe above.
+move. The daemon, RadioLib and the shared chat source it only reports; those move by hand,
+through the recipe above.
 
-**The Meshtastic web client** is a pin of its own: the `meshtastic-web-assets.sh` step in the
-manifest names a meshtastic/web release version and the sha256 of its `build.tar`. To move it:
-download the release's `build.tar`, `sha256sum` it, put version and digest into that step, then
-republish the meshtastic binary (step 4 — the artifact ships the client) and open the UI through
-the proxy on the box before tagging.
+**Two pins are not commits.** The Meshtastic web client is named in the manifest by
+meshtastic/web release version and by the sha256 of that release's `build.tar`; the CLI is a pip
+version in a build step. The bot moves both. By hand: download the release's `build.tar`,
+`sha256sum` it, put version and digest into the `meshtastic-web-assets.sh` step, and open the UI
+through the proxy on the box before tagging.
+
+Either move has two consequences that a commit pin does not, and both are mandatory:
+
+- **Republish the meshtastic binary** (step 4). The artifact ships the client and the marker.
+- **Move the matching `build_inputs` entry** on the meshtastic component. Each entry names the
+  build step that CONSUMES it (`command = "pip"`, `command = "meshtastic-web-assets.sh"`) and the
+  argv token it fills (`token = "meshtastic=={value}"`, or `"{value}"` for a bare version token),
+  and the loader requires that step to carry the rendered token exactly once — so moving one
+  without the other refuses to load, and a matching token in some other command does not count. Those values are recorded BESIDE the completion marker,
+  in a file of its own, which is what makes an already-built box read *Build required* — without
+  them the checkout never moves, so the box kept serving the OLD client and still called itself
+  built, and `lhpc status` called the artifact current. Beside and not inside: the marker's
+  content is compared byte for byte by every controller that ever shipped, so recording them in
+  it would make a republished artifact read *not built* on every box that had not upgraded yet,
+  and there would be no safe order for a release at all. It sits beside the BUILT ARTIFACT rather
+  than beside the source marker for a second reason: publish roots come from the installed
+  manifest, never from the artifact, so a member outside them is refused — a candidate that
+  widens its own roots proves nothing about released boxes, and an artifact shipped that way was
+  refused on all of them while installing perfectly in the lane. A box on the binary channel is told to
+  reinstall the artifact rather than to build, because `lhpc build` is refused there.
 
 Watch upstream **build systems**, not just releases: meshtasticd and `qemu-system-xtensa` are
 built from source, so a toolchain change upstream breaks the recipe silently. Builder internals:

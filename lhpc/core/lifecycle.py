@@ -352,7 +352,7 @@ class Lifecycle:
 
     def build(self, comp: Component, timeout: float | None = None,
               log_base: str | None = None, redactor=None, should_cancel=None,
-              on_log_open=None, marker_extra: str = "") -> JobResult:
+              on_log_open=None, marker_extra: str = "", inputs=None) -> JobResult:
         """Run a component's typed build steps (structured argv, shell=False). Each
         step may carry env and a `{pkgconfig:NAME}` token (resolved via pkg-config).
 
@@ -407,6 +407,12 @@ class Lifecycle:
                 # `marker_extra` (caller-computed consumed-source SHAs) makes the marker
                 # provenance-bearing: is_built() recomputes the expected text, so a marker
                 # written against older sources reads NOT built after either source moves.
+                # `inputs` is written BESIDE it, and only where the manifest records any: older
+                # controllers compare the marker byte for byte and must keep seeing what they
+                # always saw. Written BEFORE the marker, so a crash in between leaves the
+                # component NOT built rather than built-and-unrecorded.
+                if inputs is not None:
+                    runtime_fs.atomic_write(self.paths, inputs[0], inputs[1], 0o644)
                 runtime_fs.atomic_write(self.paths, marker,
                                         BUILD_MARKER_TEXT + marker_extra, 0o644)
             except (OSError, PathContainmentError) as exc:

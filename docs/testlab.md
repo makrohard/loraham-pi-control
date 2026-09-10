@@ -106,7 +106,7 @@ identity advances, the admission gate clears on the "new boot", but the console 
 pytest -q                                      # default lane (lab lanes skip)
 LHPC_ACCEPTANCE=1 pytest testlab/tests/acceptance -q   # real server + real executable
 LHPC_BROWSER=1 pytest testlab/tests/browser -q     # headless Chromium (pip install -e ./testlab[browser])
-LHPC_RELEASE_VERIFY=1 pytest testlab/tests/release -q  # release lane: every stack installed, built, started
+LHPC_RELEASE_VERIFY=1 pytest testlab/tests/release -q -x  # release lane: every stack installed, built, started
 ```
 
 The lab has four lanes — `testlab/tests/unit` for the simulator itself, `acceptance` for the real
@@ -128,8 +128,25 @@ executable and server over simulated hardware, `browser` for real headless Chrom
   stay up and exit; GUI ones run where LHPC's own GUI predicate says they can. It ends by
   re-proving every managed checkout through the production identity verifier and comparing its
   HEAD with the candidate manifest's pin, and every artifact against its receipt. Case names are
-  the contract (`test_release_<stack>`), so an automated release can require the stack it moved
-  to have PASSED — a skip is not proof.
+  the contract (`test_release_<stack>`) and the required ones are named in
+  `testlab/lhpc_testlab/data/required-release-cases.json`, so an automated release can require
+  the stack it moved to have PASSED — a skip is not proof, and neither is a count, which any
+  fourteen renamed cases satisfy. The lane's first case fails if that list and the module ever
+  disagree. A case name is not evidence of WHICH stack broke — a case also stops the previous
+  stack and starts the lab's fake daemon — so a failure at a genuine per-stack step carries the
+  one-line marker `STACK-REGRESSION stack=<id> phase=<install|build|start|readiness>` in its
+  JUnit failure text, and everything else deliberately carries none. An automation may freeze a
+  stack only on a marked failure; the grammar and the list of sites left unmarked are in
+  `lhpc_testlab.release.stack_regression`. A build is marked only where the recipe itself
+  declares the failed step its own (`attributable = true` in the manifest — a compile, a patch,
+  a check over what earlier steps fetched), never at a step that fetches: pip failing on a
+  package mirror is typed exactly like a broken recipe.
+  - **It runs with `-x`.** The cases chain over one radio pair, so after the first failure
+    nothing later is judged in a meaningful state: continuing turned a genuine failure into an
+    unmarked prerequisite failure that suppressed the freeze, and a failed cleanup into an
+    innocent stack's own marker. A stopped run may still supply the attribution for its FIRST
+    regression; it can never satisfy the publication gate, which needs every required case to
+    have passed. Cleanup still runs, and a stop that fails is a visible teardown error.
   - **What it cannot prove:** the daemon and RadioLib are the lab's fixtures, and the real daemon
     needs a radio to start. Their pins move by hand, with the box
     [test matrix](test-matrix.md); their artifact is proved by the binary builder's own smoke and

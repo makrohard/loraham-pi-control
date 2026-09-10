@@ -1465,9 +1465,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 return _install_back(target)
             unbuilt = service.unbuilt_components(target)
             if unbuilt:
+                # The remedy is per component: on the binary channel `lhpc build` is refused,
+                # so a covered component that reads unbuilt must be pointed at the artifact
+                # reinstall instead. Offering the build here was a dead end.
+                remedy = service.build_remedy(target, unbuilt[0])
                 flash(f"'{target}' needs building before it can run — its binary is "
                       f"missing ({', '.join(unbuilt)}). Build it on this page "
-                      f"(or run: lhpc build {target}).", "warn")
+                      f"(or run: {remedy}).", "warn")
                 return _install_back(target)
         if op in ("start", "restart") and not confirmed:
             # START MEANS START: plan the SAVED configuration (identity included — the plan and

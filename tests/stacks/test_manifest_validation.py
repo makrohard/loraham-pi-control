@@ -2,6 +2,8 @@
 malformed command tokens, unknown placeholders, and invalid step/env schemas fail
 early rather than launching a misconfigured process."""
 
+import tomllib
+
 import pytest
 
 from lhpc.core.manifest import parse_manifest, ManifestError, load_manifest, default_manifest_path
@@ -260,3 +262,162 @@ def test_shipped_manifest_binary_declarations():
             assert by_id[cid].source is not None and by_id[cid].source.pin_commit
         for cid in s.binary.clone_required:
             assert cid in s.binary.covers
+
+
+
+# --- build_inputs: the non-source values a completion marker records ----------------------------
+# Each one ends up verbatim inside a sidecar that is compared byte for byte, so the loader is the
+# place that refuses anything which could not survive that round trip — and the place that binds
+# the recorded value to the build step that really consumes it.
+
+
+def _with_inputs(inputs, *, marker=".done", steps=(("fetch", "2.7.2"),)):
+    return {"build_steps": [{"argv": list(a)} for a in steps],
+            "build_marker": marker, "build_inputs": inputs}
+
+
+def _input(**kw):
+    return [{"name": "web", "value": "2.7.2", "command": "fetch", "token": "{value}", **kw}]
+
+
+def test_a_recorded_input_reaches_the_component():
+    comp = parse_manifest(_manifest(_with_inputs(_input())))[0].components[0]
+    assert comp.build_inputs == (("web", "2.7.2"),)
+
+
+def test_inputs_without_a_marker_are_refused():
+    """Nothing would record them, so the declaration would be a silent no-op — and a maintainer
+    would reasonably believe a bump here was being noticed."""
+    with pytest.raises(ManifestError, match="without a build_marker"):
+        parse_manifest(_manifest(_with_inputs(_input(), marker="")))
+
+
+def test_a_value_that_no_build_step_uses_is_refused():
+    with pytest.raises(ManifestError, match="is not what the recipe consumes"):
+        parse_manifest(_manifest(_with_inputs(_input(value="9.9.9"))))
+
+
+@pytest.mark.parametrize("entry", [{"command": ""}, {"token": ""}, {"token": "2.7.2"}])
+def test_an_input_that_does_not_name_its_consumer_is_refused(entry):
+    """The pair is what binds the recorded value to the recipe: `command` selects the step that
+    consumes it, `token` the argv token it fills. Without both there is nothing to compare
+    against, and the entry would be a claim no step backs."""
+    with pytest.raises(ManifestError, match="must name the build step that consumes it"):
+        parse_manifest(_manifest(_with_inputs(_input(**entry))))
+
+
+@pytest.mark.parametrize("recipe_token", ["meshtastic==2.7.110", "meshtastic==12.7.11",
+                                          "2.7.11"])
+def test_a_value_the_recipe_only_contains_is_refused(recipe_token):
+    """`2.7.11` is not the version `meshtastic==2.7.110` installs, and a bare `2.7.11` token is
+    not the pip requirement the entry says it fills. Anything short of equality with the declared
+    token let a recorded CLI pin describe a build that consumed a different version."""
+    with pytest.raises(ManifestError, match="is not what the recipe consumes"):
+        parse_manifest(_manifest(_with_inputs(
+            [{"name": "cli", "value": "2.7.11", "command": "pip",
+              "token": "meshtastic=={value}"}],
+            steps=(("pip", "install", recipe_token),))))
+
+
+@pytest.mark.parametrize("entry,steps", [
+    ({"name": "cli", "value": "2.7.11", "command": "pip", "token": "meshtastic=={value}"},
+     (("printf", "meshtastic==2.7.11"), ("pip", "install", "meshtastic==2.7.110"))),
+    ({"name": "web", "value": "2.7.2", "command": "fetch", "token": "{value}"},
+     (("printf", "2.7.2"), ("fetch", "web", "2.7.20"))),
+])
+def test_a_decoy_in_another_command_does_not_satisfy_an_input(entry, steps):
+    """THE counterexample this rule exists for, in both consumer shapes. The real step installs
+    `meshtastic==2.7.110` (fetches 2.7.20) while an unrelated command carries the recorded token
+    verbatim. Comparing the token against every argv token in the recipe called that a match — a
+    FULL-token decoy satisfied the pip entry and any bare version satisfied the web entry — so
+    the sidecar recorded a version nothing had installed and every built box kept reporting
+    itself built on the wrong one. The consuming STEP has to be selected first."""
+    with pytest.raises(ManifestError, match="is not what the recipe consumes"):
+        parse_manifest(_manifest(_with_inputs([entry], steps=steps)))
+
+
+def test_two_steps_of_the_consuming_command_carrying_the_token_are_refused():
+    """"Exactly one" is enforced, not merely documented: with two pip steps installing the same
+    requirement there is no single step the sidecar describes, and a later bump would move one
+    and leave the other."""
+    with pytest.raises(ManifestError, match="is not what the recipe consumes"):
+        parse_manifest(_manifest(_with_inputs(
+            [{"name": "cli", "value": "2.7.11", "command": "pip",
+              "token": "meshtastic=={value}"}],
+            steps=(("pip", "install", "meshtastic==2.7.11"),
+                   ("pip", "install", "meshtastic==2.7.11")))))
+
+
+@pytest.mark.parametrize("token,recipe_token", [("meshtastic=={value}", "meshtastic==2.7.11"),
+                                                ("{value}", "2.7.11")])
+def test_a_value_the_recipe_really_consumes_is_accepted(token, recipe_token):
+    """Both shapes the real manifest uses: a version pinned inside a pip requirement, and one
+    passed as an argv token of its own."""
+    comp = parse_manifest(_manifest(_with_inputs(
+        [{"name": "cli", "value": "2.7.11", "command": "pip", "token": token}],
+        steps=(("pip", "install", recipe_token),))))[0].components[0]
+    assert comp.build_inputs == (("cli", "2.7.11"),)
+
+
+def test_a_step_run_through_bash_is_the_command_it_names():
+    """The web client's fetch step is `bash {asset}/scripts/meshtastic-web-assets.sh …`, so the
+    consumer is the SCRIPT, not the shell that launches it — otherwise the real entry could name
+    no consumer at all and the whole binding would be unusable."""
+    comp = parse_manifest(_manifest(_with_inputs(
+        [{"name": "web", "value": "2.7.2", "command": "web-assets.sh", "token": "{value}"}],
+        steps=(("bash", "/x/scripts/web-assets.sh", "dir", "2.7.2"),))))[0].components[0]
+    assert comp.build_inputs == (("web", "2.7.2"),)
+
+
+def test_the_real_cli_pin_is_bound_to_the_version_the_recipe_installs():
+    """Over the REAL manifest: move only the recipe to a version that merely starts with the
+    recorded one and the load must fail. Otherwise `2.7.11` would keep "mirroring" a step that
+    installs 2.7.110, and every already-built box would report itself built on the wrong CLI."""
+    text = default_manifest_path().read_text()
+    assert text.count("meshtastic==2.7.11") == 1, "the CLI pin moved — update this case"
+    drifted = text.replace("meshtastic==2.7.11", "meshtastic==2.7.110")
+    with pytest.raises(ManifestError, match="is not what the recipe consumes"):
+        parse_manifest(tomllib.loads(drifted))
+
+
+def test_the_real_cli_pin_is_not_satisfied_by_a_decoy_in_another_command():
+    """The same drift, with a step elsewhere in the REAL recipe carrying the recorded token in
+    full. The pip step installs 2.7.110; a token equal to `meshtastic==2.7.11` in another
+    command is not what was installed, and must not stand in for it."""
+    text = default_manifest_path().read_text()
+    venv = '{ argv = ["python3", "-m", "venv", "{runtime}/build/tools/meshtastic-cli/.venv"] },'
+    assert text.count(venv) == 1, "the CLI venv step moved — update this case"
+    drifted = text.replace("meshtastic==2.7.11", "meshtastic==2.7.110").replace(
+        venv, venv + '\n    { argv = ["printf", "meshtastic==2.7.11"] },')
+    with pytest.raises(ManifestError, match="is not what the recipe consumes"):
+        parse_manifest(tomllib.loads(drifted))
+
+
+def test_the_real_web_pin_is_bound_to_the_token_the_fetch_step_passes():
+    """The web client is passed as an argv token of its own, so its binding has no `==` to
+    anchor it: only equality with the fetch step's token does. Move the recipe alone and the
+    load must fail, or the artifact could ship one client while the marker recorded another."""
+    text = default_manifest_path().read_text()
+    assert text.count('"2.7.2"') == 2, "the web pin moved — update this case"
+    drifted = text.replace('"2.7.2", "62657b85', '"2.7.20", "62657b85')
+    with pytest.raises(ManifestError, match="is not what the recipe consumes"):
+        parse_manifest(tomllib.loads(drifted))
+
+
+def test_the_same_input_twice_is_refused():
+    with pytest.raises(ManifestError, match="twice"):
+        parse_manifest(_manifest(_with_inputs(_input() + _input())))
+
+
+@pytest.mark.parametrize("value", ["2.7.2\nweb x", " 2.7.2", "2.7.2\t"])
+def test_a_value_that_could_not_survive_the_marker_is_refused(value):
+    """A newline would forge an extra marker line; leading or trailing whitespace would make the
+    recomputed text differ from what was written."""
+    with pytest.raises(ManifestError, match="printable single line"):
+        parse_manifest(_manifest(_with_inputs(_input(value=value),
+                                              steps=(("fetch", value),))))
+
+
+def test_a_name_that_is_not_an_identifier_is_refused():
+    with pytest.raises(ManifestError, match="not an identifier"):
+        parse_manifest(_manifest(_with_inputs(_input(name="web client"))))

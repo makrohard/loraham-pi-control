@@ -14,6 +14,7 @@ knows what they are relying on before they touch it.
 - [Contract gaps](#contract-gaps)
 - [Safety invariant IDs](#safety-invariant-ids)
 - [No `--live` interface](#no---live-interface)
+- [Operator self-update prints steps it already took](#operator-self-update-prints-steps-it-already-took)
 
 ## Two-stage unit-template migration
 
@@ -119,3 +120,20 @@ slugs (the set in use is in `tests/`). A canonical invariant table next to the s
 `--live` is deliberately absent from the CLI and the service params: that interface is not
 frozen, so it is not offered. Live daemon tuning stays the whitelisted CONF-socket path
 ([stacks/daemon.md](stacks/daemon.md)).
+
+## Operator self-update prints steps it already took
+
+`lhpc self-update --apply` in an operator shell stops `lhpc-web`, applies, syncs the venv and
+starts the console again (`service_selfupdate.self_update_apply_operator`), but it returns the
+result built for the request/service path — so it still prints *"restart the web console to load
+it"*, the editable-install command and the *"Dependencies changed"* note for work it has already
+done. The wording is service-blind as well: `selfupdate.restart_instructions` reads
+`INVOCATION_ID` of the *calling* shell, so a box with the managed unit installed is told to press
+Ctrl-C and re-run `lhpc web`.
+
+Observed on the reference box on 2026-09-10 taking it from 0.3.1 to 0.3.11: the pip sync that
+followed the advice was a no-op and the console was already serving the new version.
+
+**Holding the line:** only the guidance is stale. What the path *does* is covered by its own
+tests, and following the printed steps is harmless — the editable install is idempotent and so is
+a restart.

@@ -286,6 +286,12 @@ def _validate_component(comp) -> None:
         # Optional quiet-step preamble written into the step log at step start: a string with
         # only {runtime}/{source} placeholders. Validated EAGERLY (dry-run substitution) so a
         # typo'd placeholder fails at manifest load, not minutes into a build.
+        # The producer half of the release lane's build-attribution contract: a step declaring
+        # itself `attributable` says a failure there is this component's own build regression
+        # (see the comment on the daemon's build step). A non-bool would be truthy and freeze a
+        # stack's pins on a typo.
+        if "attributable" in step and not isinstance(step["attributable"], bool):
+            raise ManifestError(f"{cid}: build-step attributable must be true or false")
         if "announce" in step:
             ann = step["announce"]
             if not isinstance(ann, str) or not ann.strip():
@@ -633,6 +639,89 @@ def _with_patches(source, build_steps):
     return dataclasses.replace(source, patches=pats) if pats else source
 
 
+# A build input NAME is an identifier and a VALUE is a printable one-line scalar: both end up
+# verbatim inside the completion marker, which is compared byte-for-byte, so a newline or a stray
+# control character there would make a marker that can never match what `is_built` recomputes.
+_BUILD_INPUT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
+_BUILD_INPUT_VALUE = re.compile(r"[!-~][ -~]*\Z")
+
+
+def _step_command(step: dict) -> str:
+    """The program a build step RUNS: argv[0]'s file name, or the script's when the step is
+    launched through `bash <script>` — the only wrapper shape the recipes use. Nothing more
+    general: the two consumers below are a pip install and one shipped fetch script."""
+    argv = [str(t) for t in step.get("argv", [])]
+    if not argv:
+        return ""
+    if Path(argv[0]).name in ("bash", "sh") and len(argv) > 1:
+        return Path(argv[1]).name
+    return Path(argv[0]).name
+
+
+def _parse_build_inputs(raw: dict) -> tuple[tuple[str, str], ...]:
+    """`build_inputs = [{ name, value, command, token }]` — the non-source inputs recorded
+    beside the completion marker. Declaring one without a `build_marker` is a manifest error
+    rather than a silent no-op: the whole point is that the marker carries it.
+
+    `command` names the build step that CONSUMES the value (`"pip"`, `"meshtastic-web-assets.sh"`
+    — see `_step_command`), and `token` is the argv token the value fills, with `{value}` where
+    the value goes (`"meshtastic=={value}"` for a pip pin, the bare `"{value}"` for a version
+    passed as a token of its own). Only `{value}` is substituted, so a token may carry LHPC's
+    own `{runtime}`/`{source}` placeholders verbatim.
+
+    The rendered string must be EXACTLY ONE argv token of the steps running that command."""
+    items = raw.get("build_inputs", [])
+    if not items:
+        return ()
+    cid = raw.get("id", "?")
+    if not raw.get("build_marker"):
+        raise ManifestError(f"component {cid!r} declares build_inputs without a build_marker")
+    steps = raw.get("build_steps", [])
+    out, seen = [], set()
+    for entry in items:
+        if not isinstance(entry, dict):
+            raise ManifestError(f"component {cid!r} build_inputs entry must be a table")
+        name, value = str(entry.get("name", "")), str(entry.get("value", ""))
+        command, token = str(entry.get("command", "")), str(entry.get("token", ""))
+        if not _BUILD_INPUT_NAME.match(name):
+            raise ManifestError(f"component {cid!r} build_input name {name!r} is not an identifier")
+        if not _BUILD_INPUT_VALUE.match(value):
+            raise ManifestError(
+                f"component {cid!r} build_input {name!r} value {value!r} must be a printable "
+                f"single line")
+        if name in seen:
+            raise ManifestError(f"component {cid!r} declares build_input {name!r} twice")
+        seen.add(name)
+        # THE anti-drift rule. A build input mirrors a literal in a build step, and two copies
+        # of one version can disagree: the marker would then record a value the build never
+        # used, and `is_built` would answer about the wrong thing. So the recorded value is
+        # bound to the token of the step that actually consumes it — the CONSUMER is selected
+        # first, and only then is the token compared.
+        #
+        # Selecting the consumer is what a token match alone does not do. Matching a rendered
+        # token anywhere in the recipe accepted a recorded CLI pin of "2.7.11" while the pip
+        # step installed `meshtastic==2.7.110`, because a decoy elsewhere (a `printf
+        # meshtastic==2.7.11`, another tool's argument) carried the same full token; and the
+        # bare `"{value}"` of the web entry was satisfied by any unrelated bare version.
+        if not command or "{value}" not in token:
+            raise ManifestError(
+                f"component {cid!r} build_input {name!r} must name the build step that consumes "
+                f"it and the argv token it fills, e.g. command = \"pip\", token = "
+                f"\"meshtastic=={{value}}\" — got command={command!r}, token={token!r}")
+        want = token.replace("{value}", value)
+        n = sum([str(t) for t in st.get("argv", [])].count(want)
+                for st in steps if _step_command(st) == command)
+        if n != 1:
+            raise ManifestError(
+                f"component {cid!r} build_input {name!r} = {value!r} is not what the recipe "
+                f"consumes: {want!r} must be exactly one argv token of a build step running "
+                f"{command!r}, and {n} such tokens exist. The recorded value must be the one "
+                f"that step consumes — a matching token in another command is a different "
+                f"value, and two of them are ambiguous.")
+        out.append((name, value))
+    return tuple(out)
+
+
 def _parse_component(raw: dict) -> Component:
     _derive_structured(raw)
     return Component(
@@ -648,6 +737,7 @@ def _parse_component(raw: dict) -> Component:
         endpoints=tuple(_parse_endpoint(e) for e in raw.get("endpoint", [])),
         depends_on=tuple(raw.get("depends_on", [])),
         build_requires=tuple(raw.get("build_requires", [])),
+        build_inputs=_parse_build_inputs(raw),
         source=_with_patches(_parse_source(raw.get("source")), raw.get("build_steps", [])),
         log_paths=tuple(raw.get("log_paths", [])),
         start_order=raw.get("start_order"),

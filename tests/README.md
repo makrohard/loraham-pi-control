@@ -112,8 +112,12 @@ The lab lanes are off unless asked for:
 ```sh
 LHPC_ACCEPTANCE=1     pytest testlab/tests/acceptance -q
 LHPC_BROWSER=1        pytest testlab/tests/browser -q   # pip install -e ./testlab[browser]
-LHPC_RELEASE_VERIFY=1 pytest testlab/tests/release -q   # installs and builds every stack
+LHPC_RELEASE_VERIFY=1 pytest testlab/tests/release -q -x   # installs and builds every stack; -x is required
 ```
 
 Chromium is needed only for that browser lane. Never install it to run `tests/`, and never on a
 release box.
+
+The release lane runs with `-x` wherever a release reads it: its cases chain over one radio pair,
+so after the first failure nothing later is judged in a state that means anything — and the
+automated release freezes a stack from that JUnit.

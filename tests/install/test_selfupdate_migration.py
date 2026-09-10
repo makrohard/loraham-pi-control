@@ -1087,3 +1087,40 @@ def test_removed_param_preserved_despite_stale_service_cache(tmp_path, monkeypat
     assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == "OLD"   # stale cache must NOT delete it
 
 
+
+
+# --- a manifest from an EARLIER release still proves an old default --------------------------
+
+def _rf_manifest_legacy_build_inputs(ropt="OLD"):
+    """The same stack as `_rf_manifest`, plus a `build_inputs` entry in the shape releases before
+    this one shipped: a name and a value, and NO `token` naming the argv token the value fills.
+    The build keys sit BEFORE the param sub-tables, or TOML would bind them to the last table."""
+    return (
+        '[[stack]]\nid="s"\nname="S"\nmain="c"\n'
+        '[[stack.component]]\nid="c"\nname="C"\nkind="service"\nrun="true"\nreadiness="process"\n'
+        'build_marker=".done"\n'
+        'build_steps=[{argv=["pip","install","meshtastic==2.7.11"]}]\n'
+        'build_inputs=[{name="cli",value="2.7.11"}]\n'
+        f'  [[stack.component.param]]\n  name="ropt"\n  kind="str"\n  default="{ropt}"\n'
+        '  [[stack.component.param]]\n  name="keep"\n  kind="str"\n  default="D"\n')
+
+
+def test_a_pre_token_manifest_still_migrates_its_old_default(tmp_path, monkeypatch):
+    """The pre-update manifest is read for its PARAMETER definitions, and it was written by an
+    OLDER release. Tightening how `build_inputs` must be declared (each entry now names the argv
+    token it fills) made the whole parse fail on such a manifest, so `_prove_candidate` answered
+    "unprovable" and every stored value equal to the old default stayed pending forever instead of
+    following the new default.
+    """
+    from lhpc.core import config as cfgmod
+    _o, work, up = gitrepo.repos(tmp_path)
+    monkeypatch.setattr(selfupdate, "repo_root", lambda: work)
+    a = _seed_manifest(work, up, _rf_manifest_legacy_build_inputs(ropt="OLD"))
+    b = _seed_manifest(work, up, _rf_manifest(ropt="NEW"))
+    svc, _man, _rt = _svc(tmp_path, work)
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    _seed_journal(svc, from_head=a, to_head=b, pending=[_cand(a, expected="OLD")])
+    res = svc.self_update_apply()
+    assert res.ok and res.data.get("migrated") >= 1
+    assert "ropt" not in cfgmod.load_stack_config(svc._paths, "s")
+    assert svc.stack_config("s")["ropt"] == "NEW"

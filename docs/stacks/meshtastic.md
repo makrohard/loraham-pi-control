@@ -53,6 +53,12 @@ box and moved with the pin recipe) → the CLI venv. The
 completion marker lives in the checkout and is written after the last step, so an updated checkout
 reads *Build required* until rebuilt. A native C++ build takes hours on a Pi Zero 2W.
 
+The marker also records the two pins that are **not** commits — the web-client version and the
+CLI version (`build_inputs`). Moving the firmware pin replaces the checkout and takes the marker
+with it; moving only one of these does not, so the marker's content is what notices. A box whose
+artifact predates the bump therefore reads *Build required*, and on the binary channel is pointed
+at `lhpc install meshtastic --source binary --yes` rather than a build it cannot run.
+
 ## Position (GPS)
 
 Position comes from the global setting ([GPS](../gps.md)); `use_gps` only opts this node in or out.
