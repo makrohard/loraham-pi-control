@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.15
+
+- loraham-kiss-tnc: 3c4461e4f -> e7646c12f (v0.5.1-2-ge7646c1), used by loraham-kiss-tnc, loraham-kiss-serial
+- meshcom-loraham-bridge: f0189206a -> 35a9348a0 (35a9348), used by meshcom-bridge
+
 ## 0.3.14
 
 - openhop-repeater: 47e49e64a -> 4705c99c3 (1.1.4-3-g4705c99), used by openhop-repeater-src
