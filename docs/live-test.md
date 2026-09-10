@@ -95,9 +95,20 @@ own date.
 
 ### Not run, and not claimed
 
-Neither part covered these, and no earlier row implies them: the **from-zero reinstall** (per-stack
-purges on an existing installation do not test that path), the **Desktop-variant rows** — Voice GTK
-and Sideband need a display this Lite box has not got — the **cross-cutting operator flows** other
-than pins-versus-binaries and the refusals recorded above, and **booting a published image** on
-hardware. The [fast-lane rule](test-matrix.md#fast-lane) that scoped this campaign expressly
-retains from-zero and cross-cutting checks; they stay owed.
+Neither part covered these, and no earlier row implies them:
+
+| owed row | why it is not covered here |
+|---|---|
+| **from-zero reinstall** | per-stack purges on an existing installation do not test that path |
+| **Desktop-variant rows** | Voice GTK and Sideband need a display this Lite box has not got |
+| **cross-cutting operator flows** | beyond pins-versus-binaries and the refusals recorded above |
+| **booting a published image** | build and publish evidence is not boot evidence |
+
+The [fast-lane rule](test-matrix.md#fast-lane) that scoped this campaign expressly retains
+from-zero and cross-cutting checks, so the waiver does not reach them.
+
+**Disposition: all four run in the 0.4.0 campaign.** Maintainer decision of 2026-09-10, given
+during the release-automation round of that date: the round was scoped to prove the release bot
+rather than LHPC itself, and these are statements about the product on hardware, so they move to
+0.4.0 as their own campaign rather than gating the bot. They are recorded here, not closed — a
+0.4.0 run starts from this list.
