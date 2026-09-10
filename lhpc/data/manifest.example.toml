@@ -732,8 +732,8 @@ main = "loraham-kiss-tnc"
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
-    pin_commit = "3c4461e4fff10ccab9b83fc7a7951542c68d43aa"
-    pin_tag = "v0.5.1"
+    pin_commit = "e7646c12f75f9b4b8ff5b3e26cd162cee9a8f6bd"
+    pin_tag = "v0.5.1-2-ge7646c1"
     remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
     branch = "main"
 
@@ -780,8 +780,8 @@ main = "loraham-kiss-tnc"
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
-    pin_commit = "3c4461e4fff10ccab9b83fc7a7951542c68d43aa"
-    pin_tag = "v0.5.1"
+    pin_commit = "e7646c12f75f9b4b8ff5b3e26cd162cee9a8f6bd"
+    pin_tag = "v0.5.1-2-ge7646c1"
     remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
     branch = "main"
 
@@ -1621,8 +1621,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-loraham-bridge"
-    pin_commit = "f0189206a6657f63c02f12aedb74b99fa525bd98"
-    pin_tag = "f018920"
+    pin_commit = "35a9348a064642d6fcd4b273222e1af6f0950c59"
+    pin_tag = "35a9348"
     remote = "https://github.com/makrohard/meshcom-loraham-bridge.git"
     branch = "main"
 
