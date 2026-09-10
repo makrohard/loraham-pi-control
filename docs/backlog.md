@@ -15,6 +15,7 @@ knows what they are relying on before they touch it.
 - [Safety invariant IDs](#safety-invariant-ids)
 - [No `--live` interface](#no---live-interface)
 - [Operator self-update prints steps it already took](#operator-self-update-prints-steps-it-already-took)
+- [Chat source path moves when the daemon repin lands](#chat-source-path-moves-when-the-daemon-repin-lands)
 
 ## Two-stage unit-template migration
 
@@ -137,3 +138,36 @@ followed the advice was a no-op and the console was already serving the new vers
 **Holding the line:** only the guidance is stale. What the path *does* is covered by its own
 tests, and following the printed steps is harmless — the editable install is idempotent and so is
 a restart.
+
+## Chat source path moves when the daemon repin lands
+
+**`lorachat_ncurses_113.c` has moved to `clients/chat/lorachat_ncurses_113.c`** in the
+LoRaHAM_Daemon restructure. It is on that repo's `dev` (2e9c7e0) only; `main` is still
+`dbd2998b7e69`, which is what both our pins name, so nothing is broken today.
+
+What holds the line: `src/LoRaHAM_Daemon` is `track = "manual"` in the release bot's
+`policy.toml`, so the bot cannot move that pin on its own. Chat's `build`/`build_steps` still
+name the root path, and at the pinned commit that is where the file is.
+
+The trap is that the two changes are one change. Editing the recipe before the pin moves breaks
+chat at the current pin; moving the pin before editing the recipe breaks chat at the new one. So
+when the daemon repin lands, the manifest edit goes in the **same commit**:
+
+```toml
+build       = "gcc clients/chat/lorachat_ncurses_113.c -o loraham_chat -lncurses -lpthread"
+build_steps = [ { argv = ["gcc", "clients/chat/lorachat_ncurses_113.c", "-o", "loraham_chat",
+                          "-lncurses", "-lpthread"], attributable = true } ]
+```
+
+Nothing else changes: the binary is still written as `loraham_chat` at the source root, so `bin`,
+`run`, `run_argv`, `run_cwd`, the source `path` and `attributable = true` are all untouched. The
+recipe above was compiled from the new path by the author of the move before it was written down.
+
+`loraham_daemon/build.sh` — the other path we consume from that repo — is **not** moving; that
+was settled before the restructure started, because we encode it in `build`, `publish_roots`,
+`proof_paths` and `probes`.
+
+One related invariant, recorded because it is easy to break by accident from the other side:
+chat's component is `artifact = true`, so its non-pinned selectors resolve to **default-branch
+HEAD**. That repo's default branch must stay `main`; pointing it at `dev` would put in-progress
+restructure work onto real boxes through a selector nobody thought they were changing.
