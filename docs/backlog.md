@@ -175,13 +175,25 @@ restructure work onto real boxes through a selector nobody thought they were cha
 
 ## A flaky adopt_source test can block an automated release
 
-**`tests/install/test_source.py::test_an_ignored_file_survives_an_update` failed once on
-`test (3.11)` and passed everywhere else**, including `test (3.13)` in the same CI run, the same
-suite on a near-identical candidate twenty minutes earlier, and a local run on the exact failing
-commit. The adopt reported `failed` with a description naming a path under the source repo's
-`.git/objects/ce`, so it looks like a transient read of a loose git object rather than anything
-about the change under test. The helpers around it are already named `_git_race_safety` and
-`_make_repo_race_safety`, so this area has had races before.
+**`tests/install/test_source.py::test_an_ignored_file_survives_an_update` failed twice within one
+hour on 2026-09-10**, on two different Python versions and at two different assertions inside the
+same test:
+
+| time (UTC) | job | commit | assertion |
+|---|---|---|---|
+| 17:38 | `test (3.11)` | `b6acfe9`, a release candidate | line 3787, the forced re-adopt |
+| 18:19 | `test (3.12)` | `f3db4aae` on **`main`** — the v0.3.15 release commit | line 3781, the first adopt |
+
+The first reported a path under the source repo's `.git/objects/`, which reads like a transient
+loose-object read. The helpers around this test are already named `_git_race_safety` and
+`_make_repo_race_safety`, so the area has had races before.
+
+**It does not reproduce locally.** The exact failing commit passes 10/10 in isolation and 3/3
+running the whole `test_source.py` file the way CI does — serially, with `--cov=lhpc --cov-branch`.
+The same commit `f3db4aae` also passed CI twice on other branches. So it is environment-dependent
+on the GitHub runner, and a local loop will not find it; whoever picks this up should expect to
+need runner-side reproduction (or instrumentation that captures the adopt's error text on
+failure, which the assertion currently truncates).
 
 Why it is worth a backlog entry rather than a shrug: the release bot treats a red CI leg as
 proof that the candidate is not proven, and refuses to release. That is correct and must not be
@@ -190,7 +202,12 @@ the cost is not just a re-run: a release that was retrying an automatic hold spe
 retry on the flake, and recovering from that needs a person.
 
 What holds the line today: nothing. A recurrence stops a release and reports honestly, which is
-safe but not free.
+safe but not free — and it has already recurred once, so "rare" is not the right word for it.
+
+It also left **`main` red at the v0.3.15 release commit**, because the bot gates on the candidate
+branch's CI run while the push to `main` fires a separate run of the same commit. The release
+itself is sound — the gate that authorised it was green, and so was the PR branch — but a
+released tag whose branch shows red CI is its own problem.
 
 Worth doing when someone is in this file: reproduce under load (`-n` high, repeated runs) to see
 whether the loose-object read is genuinely racy, and if so give the adopt a bounded retry for
