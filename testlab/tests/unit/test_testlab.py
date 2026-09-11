@@ -831,16 +831,24 @@ class SVC:
     def stack(self, sid):
         return STACKS[sid]
 
-# The MeshCore node's REAL recipe: a step that reaches the network (pip, installing openHop's
-# dependency closure) and a step the recipe declares its own (the LHPC patch). LHPC types both
-# failures identically, and the log name is what tells them apart.
-NODE = next(c for c in STACKS["meshcore"].components if c.id == "meshcore-node")
+# A REAL MeshCore recipe carrying both shapes: a step that reaches the network (pip) and a step
+# the recipe declares its own (`attributable`). LHPC types both failures identically, and the log
+# name is what tells them apart.
+#
+# The component is RESOLVED, not named: meshcore-node used to be it and stopped being one when
+# LHPC dropped its openhop_core patch, which was the node's only attributable step. Picking
+# whichever MeshCore component has both shapes today keeps the RULE under test, not the example.
+NODE = next(c for c in STACKS["meshcore"].components
+            if c.build_steps
+            and any(s.get("attributable") for s in c.build_steps)
+            and any(str(s["argv"][0]).endswith("pip") and "install" in s["argv"]
+                    for s in c.build_steps))
 NET_STEP = next(i for i, s in enumerate(NODE.build_steps)
                 if str(s["argv"][0]).endswith("pip") and "install" in s["argv"])
 OWN_STEP = next(i for i, s in enumerate(NODE.build_steps) if s.get("attributable"))
 
 def typed(step):
-    return (f"  [failed] build meshcore-node (rc 1, log /x/logs/build-meshcore-node-{step}.log)"
+    return (f"  [failed] build {NODE.id} (rc 1, log /x/logs/build-{NODE.id}-{step}.log)"
             "\\n")
 
 # What pip prints when the package index is unreachable — the failure this rule exists to keep
@@ -1154,13 +1162,16 @@ def test_a_real_marker_write_failure_crosses_into_the_lane_unattributed(tmp_path
     from lhpc.core.services import ControllerService
 
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=Path(tmp_path)))
-    comp = next(c for s in svc.stacks() for c in s.components if c.id == "meshcore-node")
+    # The component RESOLVED by shape, not by name: whichever MeshCore component declares a step
+    # as its own. Naming one is how this test broke when LHPC dropped its openhop_core patch.
+    comp = next(c for s in svc.stacks() if s.id == "meshcore" for c in s.components
+                if c.build_steps and any(x.get("attributable") for x in c.build_steps))
     (svc._lifecycle().source_dir(comp) / ".venv" / "bin").mkdir(parents=True, exist_ok=True)
 
     # The log of the step this recipe DECLARES ITS OWN — the one name that would attribute.
     # Derived from the recipe, not typed in: a fake name would make this test pass by accident.
     own = rel._own_recipe_step_logs(svc, "meshcore")
-    owned_log = next(n for n in own if n.startswith("build-meshcore-node"))
+    owned_log = next(n for n in own if n.startswith(f"build-{comp.id}"))
 
     monkeypatch.setattr(lifecycle_mod, "run_job",
                         lambda runner, **kw: JobResult(name="b", state=JobState.SUCCEEDED,
@@ -1223,7 +1234,8 @@ def test_the_log_names_the_rule_expects_are_the_ones_the_builder_writes(tmp_path
 
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=Path(tmp_path)))
     stack = svc.stack("meshcore")
-    comp = next(c for c in stack.components if c.id == "meshcore-node")
+    comp = next(c for c in stack.components
+                if c.build_steps and any(s.get("attributable") for s in c.build_steps))
     owned_index = next(i for i, s in enumerate(comp.build_steps) if s.get("attributable"))
     (svc._lifecycle().source_dir(comp) / ".venv" / "bin").mkdir(parents=True, exist_ok=True)
 

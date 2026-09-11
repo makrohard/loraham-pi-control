@@ -449,7 +449,11 @@ class Installer:
                     action.status = "failed"
                     action.detail = ("local modifications to the upstream source — not "
                                      "overwritten:\n"
-                                     + "\n".join(f"    modified: {p}" for p in dirty.tracked[:8]))
+                                     + "\n".join(f"    modified: {p}" for p in dirty.tracked[:8])
+                                     + "\n    Preserve or reconcile these changes first — they "
+                                       "are yours and nothing here will merge them. ONLY if you "
+                                       f"mean to discard them: remove the checkout ({spec.path}) "
+                                       "and re-run install, which re-clones it at the pin.")
                     return action
 
             # CONTAINMENT: the local-adoption fallback is DISABLED unless configured,

@@ -442,9 +442,15 @@ def test_shorthand_with_shell_syntax_is_refused():
 
 def test_build_time_patches_are_recorded_on_the_source():
     """A build step that applies an LHPC-shipped patch marks the checkout's SourceSpec, so a
-    patched tree is not mistaken for an operator-modified one."""
+    patched tree is not mistaken for an operator-modified one.
+
+    `meshcore-node` is the counter-case and is asserted deliberately: LHPC used to patch
+    openhop_core here and no longer does, so its checkout must now record NO patch. If a patch
+    step were reintroduced there, this would catch it — and a declared patch is what makes a
+    modified tree still report `match`, so declaring one that is no longer applied would hide a
+    genuinely dirty checkout."""
     comps = _index(load_manifest())
-    assert comps["meshcore-node"].source.patches == ("{asset}/patches/openhop-core-companion-fixes.patch",)
+    assert comps["meshcore-node"].source.patches == ()
     assert comps["meshcore-webui"].source.patches == ("{asset}/patches/meshcore-webui-lhpc-guards.patch",)
     assert comps["loraham-daemon"].source.patches == ()
 

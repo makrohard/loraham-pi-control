@@ -308,25 +308,42 @@ lhpc self-update --repair-integration && lhpc webserver init && lhpc webserver s
 remote access modes require one, so switching the policy before your own machine holds it locks you
 out.
 
+The steps below name `10.42.0.0/24` and `10.42.0.1`, the box's own
+[access point](docs/wifi-access-point.md). **That applies only where the AP exists** — the Lite
+image creates `lhpc-ap` on first boot; a Desktop or hand-built box has one only if you made it.
+Without an AP, skip those two values everywhere they appear and use your own network alone.
+
 1. **Apps → LoRaHAM Pi Control → Webserver (HTTPS / mTLS) → Certificates → Issue client cert**<br>
    Mints the certificate and shows a one-time passphrase — copy it there and then, it is never
    stored and never shown again. The same section offers copy boxes for fetching the `.p12` and the
    server CA to your own machine. Lost the passphrase? `cert reissue` mints a new bundle. Bundle
-   gone astray? `cert revoke` withdraws it. Commands and the browser or phone import:
-   [`docs/webserver.md`](docs/webserver.md).
+   gone astray? `cert revoke <label> --confirm-label <label>` withdraws it — the label is typed
+   twice on purpose, because revoking the wrong credential is how you lock yourself out. Commands
+   and the browser or phone import: [`docs/webserver.md`](docs/webserver.md).
 
 2. **Apps → LoRaHAM Pi Control → Webserver (HTTPS / mTLS) → Stacks WebGUIs**<br>
    One policy for *every* stack web UI at once, so you do not visit them one by one: Access `lan`,
    Scheme `https` (http forces no-auth), Access mode `local-open-remote-auth`, Allowed CIDRs — the
-   network you connect from, e.g. `192.168.1.0/24`, required for lan and public — and Confirm
-   `enable-remote` (`enable-remote-danger` for a public or unauthenticated listener). Ports stay per
-   page. This half stays empty until the stacks are installed (step 9) — come back to it then.
+   networks you connect from, required for lan and public — and Confirm `enable-remote`
+   (`enable-remote-danger` for a public or unauthenticated listener). Ports stay per page. This half
+   stays empty until the stacks are installed (step 9) — come back to it then.<br>
+   **With an AP, list two: your own network, e.g. `192.168.1.0/24`, and `10.42.0.0/24`.** The
+   second is the box's own Access Point, which is how you reach a box that has left its network —
+   the field case, and the one where nothing else works. Without an AP, your own network alone.
 
 3. **Apps → LoRaHAM Pi Control → Webserver (HTTPS / mTLS) → LHPC WebGUI**<br>
-   The WebGUI itself, and last, because it is the page you are working in. Same values, except it
-   has **Bind** instead of Access: `0.0.0.0` to listen beyond loopback.
+   The WebGUI itself, and last, because it is the page you are working in. The same values as
+   step 2, except it has **Bind** instead of Access: `0.0.0.0` to listen beyond loopback. This
+   same panel carries the server certificate's **DNS SANs** and **IP SANs** — on a box with an AP,
+   add `10.42.0.1` to the IP SANs here, then re-issue with `lhpc webserver tls-renew`. An **Apply**
+   reloads nginx and never re-issues the certificate, so a SAN added without `tls-renew` is saved
+   and not served. (The *Certificates* section further down is for client credentials, not this.)
 
-4. **Apply the managed firewall — on the Pi.** Once the managed integration is in use, exposure is
+4. **Apply the managed firewall — on the Pi.** If this box has the recovery AP, first set
+   **Apps → LoRaHAM Pi Control → Firewall** to enable the AP rules — interface `wlan0`, CIDR
+   `10.42.0.0/24` — and do it *before* the radio becomes an AP: without them a joining phone never
+   gets a DHCP lease, so the console is unreachable over the AP no matter what the allow-list says
+   ([firewall](docs/firewall.md)). Then apply. Once the managed integration is in use, exposure is
    gated on it: `webserver apply` is refused while the firewall is unapplied, and nginx binds
    loopback-only at boot until the live check passes. Until you install it, nothing is filtered and
    nothing gates. The script exists from the install on (every Firewall save refreshes it); the
@@ -360,18 +377,31 @@ web UI, with the port the panel suggests for it;
 [`docs/cli.md`](docs/cli.md)):
 
 ```bash
-lhpc webserver configure --dns lhpc-zero.local --ip 192.168.1.10   # 0 — name/address you will use
+lhpc webserver configure --dns lhpc-zero.local --ip 192.168.1.10 --ip 10.42.0.1   # 0 — every address you will use
 lhpc webserver tls-renew                   # re-issue the server cert with those SANs
 lhpc webserver cert issue lhpc-laptop      # 1 — prints a ONE-TIME passphrase; record it now
 lhpc webserver cert export lhpc-laptop ~/lhpc-laptop.p12
 lhpc webserver proxy <page> --port <port> --mode lan --scheme https \      # --port is required (0 = not proxied)
-    --access-mode local-open-remote-auth --cidr 192.168.1.0/24 --confirm-phrase enable-remote
-lhpc webserver expose --cidr 192.168.1.0/24 \
+    --access-mode local-open-remote-auth --cidr 192.168.1.0/24 --cidr 10.42.0.0/24 --confirm-phrase enable-remote
+lhpc webserver expose --cidr 192.168.1.0/24 --cidr 10.42.0.0/24 \
     --access-mode local-open-remote-auth --confirm-phrase enable-remote   # 2 — the WebGUI itself
-sudo bash ~/loraham-pi-control/config/files/firewall/firewall-apply.sh    # 3 — exposure is gated on it
+lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.42.0.0/24         # 3 — the AP's own rules,
+sudo bash ~/loraham-pi-control/config/files/firewall/firewall-apply.sh    #     then apply: exposure is gated on it
 lhpc webserver apply                                                      # 4 — validate + activate
 systemctl --user restart lhpc-nginx lhpc-web                              # only if it does not come back
 ```
+
+**On a box with the recovery AP, leaving `10.42.0.1` and `10.42.0.0/24` out is how it becomes
+unreachable in the field.** Such a box raises its own Wi-Fi when it cannot find a network it knows,
+and the console then tells you to open `https://10.42.0.1:8443` — but the console answers only
+sources the allow-list names, over a certificate that has to carry that address. A LAN-only setup
+is fine on the bench and silently useless the first time you take the box somewhere, which is
+exactly when the AP is the only way in.
+
+The Lite image creates that AP (`lhpc-ap`) on first boot. A Desktop or hand-built box has none
+unless you create one — see [Wi-Fi access point](docs/wifi-access-point.md) — and without it these
+two values are simply not yours to add. Substitute your own LAN range for `192.168.1.0/24`; the AP
+range is the same on every box that has one.
 
 Then, **on your own machine**, copy the bundle and the server CA across with one `scp` per file.
 The full runbook —

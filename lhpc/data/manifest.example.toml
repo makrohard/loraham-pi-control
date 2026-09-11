@@ -2086,7 +2086,7 @@ main = "meshcore-node"
   reads_position = true
   depends_on = ["loraham-daemon", "meshcore-gps"]
   # The repeater program is a second pinned upstream source (LIBRARY component below): it is
-  # installed into THIS venv, so both roles import the same pinned + patched openHop Core.
+  # installed into THIS venv, so both roles import the same pinned openHop Core.
   build_requires = ["openhop-repeater-src"]
   # The repeater dashboard's login: `admin` + the password LHPC mints into this 0600 file on the
   # first repeater-mode config generation (see the `dashboard_password` param). Shown on the
@@ -2099,7 +2099,7 @@ main = "meshcore-node"
   run = ".venv/bin/python -m meshcore_host {runtime}/config/files/meshcore.toml"
   # Upstream openHop Core test suite, runnable on-device via `lhpc test meshcore-node`.
   test = ".venv/bin/python -m pytest tests/"
-  # The build_steps patch the checkout, create the in-tree venv, THEN pip-install. The venv
+  # The build_steps create the in-tree venv, THEN pip-install. The venv
   # interpreter appears before the installs finish, so `bin` alone would read "built" too
   # early — `build_marker` is written ONLY after the LAST step succeeds and gates `is_built`.
   bin = ".venv/bin/python"
@@ -2108,17 +2108,17 @@ main = "meshcore-node"
   # give the build the same room.
   build_timeout = 1800.0
   test_timeout = 900.0
-  # The MeshCore implementation is upstream openhop_core, pinned below, plus ONE
-  # LHPC-shipped patch applied idempotently at build time: the radio noise floor surfaced into
-  # STATS_TYPE_RADIO. The host application
+  # The MeshCore implementation is upstream openhop_core, pinned below, built PRISTINE: LHPC
+  # carries no patch against it. The noise-floor fix that used to be applied here is upstream as
+  # openhop_core PR #133; until that merges the noise floor is simply not reported, which is an
+  # accepted gap and not a regression. The host application
   # glue (LoRaHAM radio adapter, identity loading, persistence, GPS feed consumer) ships WITH lhpc as
   # the `meshcore_host` package-data asset and is installed into the same venv — so the checkout
-  # stays an unmodified upstream tree plus a reviewable patch, never a fork.
+  # stays an unmodified upstream tree, never a fork.
   # This node reaches the radio over the loraham daemon's unix sockets and NEVER drives
   # SPI/GPIO itself: no GPIO bindings, no SPI deps. --system-site-packages keeps any system
   # packages reusable; openhop's deps (pycryptodome, PyNaCl, pyyaml) are wheels on aarch64.
   build_steps = [
-    { argv = ["bash", "{asset}/scripts/openhop-apply-patch.sh", "{source}", "{asset}/patches/openhop-core-companion-fixes.patch"], attributable = true },
     { argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"] },
     { argv = [".venv/bin/pip", "install", ".", "pytest", "pytest-asyncio"], announce = "[install] openHop Core + its deps (pycryptodome, PyNaCl, …) into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
     { argv = [".venv/bin/pip", "install", "--no-deps", "{asset}/meshcore_host"], announce = "[install] LHPC MeshCore host application (shipped with lhpc) into {source}/.venv" },
@@ -2312,8 +2312,8 @@ main = "meshcore-node"
     # development branch; `main` carries the stable releases that also go to PyPI; the
     # two are NOT equivalent. Selection policy: Development = `dev` head, Latest stable =
     # `main`, Known working = the pin below — the exact SHA this integration was
-    # validated against (plus the shipped patch, which build_steps apply to ANY revision;
-    # the apply script fails the build on a conflict instead of running unpatched code).
+    # validated against. The checkout is built PRISTINE — LHPC ships no patch against
+    # openhop_core — so what is known-working is the upstream revision itself.
     [stack.component.source]
     path = "src/openhop-core"
     pin_commit = "c95a68445b3f6691ffbb0bdd0123e2daed182556"
@@ -2450,7 +2450,7 @@ main = "meshcore-node"
   # runs npm at runtime. Only the Python backend is built on the target.
   build_steps = [
     # Reviewable local patch applied to the pinned, otherwise-unmodified upstream checkout (same
-    # idempotent git-apply helper the openhop-node uses). Two LHPC ownership guards:
+    # idempotent git-apply helper, this stack's only remaining patch). Two LHPC ownership guards:
     #   1. Companion-slot handoff: the reconnect supervisor waits while the meshcore-cli lock
     #      (MESHCORE_CLI_LOCK) exists, so the WebUI YIELDS the node's single client slot to a
     #      running CLI instead of evicting it — reconnect timing alone cannot arbitrate the slot.

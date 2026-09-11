@@ -91,8 +91,12 @@ until a current-boot live firewall receipt proves the rules are there. See [fire
 
 Reach the console from another machine, protected by a client certificate. Run every `lhpc`
 command from an interactive operator shell on the Pi. Replace `192.168.0.0/24` with your LAN
-range and `192.168.0.10` with the Pi's LAN address; `10.42.0.1` / `10.42.0.0/24` is the box's
-own [access point](wifi-access-point.md), include it only if you use that. Command details:
+range and `192.168.0.10` with the Pi's LAN address. `10.42.0.1` / `10.42.0.0/24` is the box's own
+[access point](wifi-access-point.md). **Where that AP exists, include it** — it is what such a box
+raises by itself when it cannot find a network it knows, so it is the only way back into one that
+has left the bench, and leaving it out makes the console answer `403` exactly when it is the sole
+route in. The Lite image creates `lhpc-ap` on first boot; a Desktop or hand-built box has one only
+if you made it, and on a box without it these two values do not apply. Command details:
 [CLI](cli.md).
 
 1. **Name every address in the server certificate.** `install.sh` created the PKI with
@@ -103,11 +107,17 @@ own [access point](wifi-access-point.md), include it only if you use that. Comma
                             --ip 127.0.0.1 --ip 192.168.0.10 --ip 10.42.0.1
    lhpc webserver tls-renew
    ```
-   Adding an address later repeats this step; client credentials already imported on a phone
-   or laptop keep working, because only `init` recreates the CAs. **Never re-run `init` on a
-   box with a PKI**: it voids every client certificate you have issued.
-2. **Turn on remote access.** `--cidr` is repeatable and REPLACES the allowed-source list; the
-   default access mode already requires a client cert off-loopback:
+   Adding an address later repeats this step — **both lines**. `apply` reloads nginx and never
+   re-issues the leaf, so a SAN added without `tls-renew` is saved and not served, and the
+   browser rejects the address with a name mismatch while every status command reports the
+   configuration as applied. Client credentials already imported on a phone or laptop keep
+   working, because only `init` recreates the CAs. **Never re-run `init` on a box with a PKI**:
+   it voids every client certificate you have issued.
+2. **Turn on remote access.** `--cidr` is repeatable and REPLACES the allowed-source list — so a
+   later `expose` with a single `--cidr` silently drops every range you are not repeating,
+   `10.42.0.0/24` included, and the loss shows up only when you are away from the LAN and the
+   Access Point is the sole way in. List every range you want, every time. The default access mode
+   already requires a client cert off-loopback:
    ```
    lhpc webserver expose --cidr 192.168.0.0/24 --cidr 10.42.0.0/24 --confirm-phrase enable-remote
    lhpc webserver apply
@@ -141,8 +151,11 @@ own [access point](wifi-access-point.md), include it only if you use that. Comma
 5. **Import both in the remote browser**: the CA clears the trust warning, the `.p12` supplies
    the client credential (you are prompted for the one-time passphrase). Per-platform steps
    below under [Install the client certificate in a browser](#install-the-client-certificate-in-a-browser).
-6. **Firewall.** Apply the managed firewall ([firewall](firewall.md)), or open `8443` in your
-   own; LHPC never edits your firewall.
+6. **Firewall.** On a box with the access point, enable its rules first — in the Firewall panel,
+   or `lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.42.0.0/24` — and do it *before* the
+   radio becomes an AP: without them a joining phone never gets a DHCP lease, so the console is
+   unreachable over the AP whatever the allow-list says. Then apply the managed firewall
+   ([firewall](firewall.md)), or open `8443` in your own; LHPC never edits your firewall.
 7. **Prove it:** `lhpc webserver verify`, then browse to `https://192.168.0.10:8443/` from the
    remote machine and pick the `lhpc-laptop` certificate when prompted. Afterwards discard the
    bundle on the Pi: `lhpc webserver cert discard-export lhpc-laptop` (the certificate stays).
@@ -165,7 +178,7 @@ source-CIDR gate as the console, so you never rely on the raw port:
 
 ```
 lhpc webserver proxy meshtastic --mode lan --port 8447 --access-mode local-open-remote-auth \
-     --cidr 192.168.0.0/24 --confirm-phrase enable-remote
+     --cidr 192.168.0.0/24 --cidr 10.42.0.0/24 --confirm-phrase enable-remote
 lhpc webserver apply
 ```
 

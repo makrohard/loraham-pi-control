@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.5
+
+- The access point is documented where it is configured. The path to remote access set up neither
+  the allowed source range nor the certificate address for it, so a box followed the controller's
+  own instruction to open `https://10.42.0.1:8443` and answered `403`. Boxes without an AP —
+  Desktop and hand-built — are no longer told to configure one.
+- Written down because they cost time: `apply` never re-issues the server certificate, so a SAN
+  added without `tls-renew` is saved and not served; `cert revoke` refuses without
+  `--confirm-label`.
+- openhop_core is built pristine — the noise-floor patch is upstream as PR #133, and until it
+  merges the noise floor is not reported. An already-patched checkout now reads `dirty` and
+  refuses the overwrite; `docs/stacks/meshcore.md` carries the one-time migration.
+- A refused source update says to preserve or reconcile the modifications first, and makes
+  discarding them an explicit choice rather than the implied one.
+
 ## 0.4.4
 
 - openhop-core: 8a3921da1 -> c95a68445 (v1.0.10-413-gc95a684), used by meshcore-node

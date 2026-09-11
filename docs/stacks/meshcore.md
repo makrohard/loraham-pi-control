@@ -10,8 +10,8 @@ GPS, persistence, readiness and lifecycle. The node never drives SPI or GPIO its
 | | |
 |---|---|
 | Components | `meshcore-node` (main — the one openhop process: chat node and/or repeater, by `mode`) · `meshcore-gps` (position feed, admitted by the global GPS plan) · `meshcore-webui` (optional browser GUI) · `meshcore-cli` (optional REPL) · `openhop-repeater-src` (library: the pinned repeater checkout, build-time only) |
-| Source / pin | `src/openhop-core` ← `openhop-dev/openhop_core` `dev` @ `8cdb04e` + one LHPC patch (`lhpc/data/patches/openhop-core-companion-fixes.patch`: the radio noise floor in the radio stats), applied idempotently at build — a conflict fails the build; because the patch is declared, that patched checkout still reports `match`, while changes beyond the declared patch make it dirty. `main`/PyPI = Latest stable; selector policy: [provenance](../provenance.md) · `src/openhop-repeater` ← `openhop-dev/openhop_repeater` `dev` @ `efc5616` · `src/meshcore-webui` ← `adradr/meshcore-webui` `94dcc3d` (+ `meshcore-webui-lhpc-guards.patch`) · `src/meshcore-cli` ← `meshcore-dev/meshcore-cli` `v1.6.3` |
-| Build | `lhpc build meshcore`: patch → in-tree `.venv` (`--system-site-packages`) → openHop Core → `meshcore_host` (shipped with lhpc) → the repeater's pinned closure (`openhop-repeater-constraints.txt`) and checkout. Web UI: a backend venv from `meshcore-webui-constraints.txt`; the React frontend is prebuilt package data (no npm on the box). Nothing is gui-gated — everything builds headless |
+| Source / pin | `src/openhop-core` ← `openhop-dev/openhop_core` `dev` @ `c95a684` — **built pristine, LHPC carries no patch against it**, so the checkout is plain upstream and any modification makes it dirty. `main`/PyPI = Latest stable; selector policy: [provenance](../provenance.md) · `src/openhop-repeater` ← `openhop-dev/openhop_repeater` `dev` @ `9e375da` · `src/meshcore-webui` ← `adradr/meshcore-webui` `94dcc3d` (+ `meshcore-webui-lhpc-guards.patch`, applied idempotently at build — a conflict fails the build; because that patch is declared, the patched checkout still reports `match`, while changes beyond it make it dirty) · `src/meshcore-cli` ← `meshcore-dev/meshcore-cli` `v1.6.3` |
+| Build | `lhpc build meshcore`: in-tree `.venv` (`--system-site-packages`) → openHop Core → `meshcore_host` (shipped with lhpc) → the repeater's pinned closure (`openhop-repeater-constraints.txt`) and checkout. Web UI: a backend venv from `meshcore-webui-constraints.txt`; the React frontend is prebuilt package data (no npm on the box). Nothing is gui-gated — everything builds headless |
 | Run | `.venv/bin/python -m meshcore_host <runtime>/config/files/meshcore.toml` — the same command in every mode |
 | Config | `<runtime>/config/files/meshcore.toml` (0600 — it carries the private key), rendered from `lhpc/data/bases/meshcore.toml` on every start |
 | Identity | `<runtime>/config/secrets/meshcore_identity.key` (0600), written into the generated config as `[identity] key`; repeater: `openhop_repeater_identity.key` + `openhop_repeater_admin.txt` |
@@ -128,6 +128,36 @@ after an arrival can return nothing — use the REPL for send-and-read; the node
   replaced. On the first run LHPC adopts a key found in the generated config's `[identity] key`,
   else mints one. The public key survives restart, rebuild, update and reinstall.
 - TX is allowed only after the connect handshake verified the daemon READY and MANAGED.
+- **Upgrading a box that was installed before LHPC dropped its openHop Core patch.** LHPC used to
+  apply one patch to `src/openhop-core` at build time. It no longer does, and the declaration that
+  went with it is gone — and a *declared* patch is what let a modified checkout still report
+  `match`. So an existing box keeps those modified files and now reads **`dirty`**, and an update
+  of that source is refused: *"local modifications to the upstream source — not overwritten"*.
+  That refusal is correct and is not to be forced. Clear it once, by **moving the checkout aside
+  rather than deleting it**:
+
+  ```bash
+  lhpc stack stop meshcore --yes
+  mv ~/loraham-pi-control/src/openhop-core ~/openhop-core.before-pristine
+  lhpc install meshcore --source pinned --yes     # clones pristine at the pin
+  lhpc build meshcore --yes                       # ~8 min on a Zero 2 W
+  ```
+
+  **Keep that directory until you are satisfied**, then remove it. Moving rather than deleting is
+  the point: the old patch touched exactly two files —
+  `src/openhop_core/companion/companion_radio.py` and `tests/test_companion_radio.py` — but
+  knowing that is not enough to delete safely. Your own edits may sit *inside* those same two
+  files, where a file-name check cannot see them, and `git status --porcelain` does not list
+  ignored files at all, so anything gitignored in that tree would go without ever appearing in the
+  check. A move loses nothing and costs one directory.
+
+  To see what you had, once the new checkout is in place:
+  `git -C ~/openhop-core.before-pristine status --porcelain` for tracked changes, and
+  `git -C ~/openhop-core.before-pristine status --porcelain --ignored` to include the rest.
+
+  Only the checkout moves. The config (`config/files/meshcore.toml`), the identity keys and the
+  repeater's admin file all live outside it and are untouched, so the node keeps its public key
+  and its settings. A fresh install needs none of this: nothing modifies the checkout any more.
 - On-air validation against a MeshCore T-Deck Pro: [live tests](../live-test.md).
 
 ## Conflicts

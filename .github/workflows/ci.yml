@@ -214,7 +214,7 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
-      - name: Install the pinned openHop core (patched, as a box builds it)
+      - name: Install the pinned openHop core (pristine, as a box builds it)
         run: |
           set -euo pipefail
           # The pin comes from the manifest, never from a literal here: this job can never test
@@ -233,12 +233,12 @@ jobs:
           test -n "${PIN:-}" || { echo "::error::no meshcore-node pin in the manifest"; exit 1; }
           git clone -q "$REMOTE" /tmp/openhop-core
           git -C /tmp/openhop-core checkout -q "$PIN"
-          # ABSOLUTE: the apply script cds into the source tree, so a relative patch path
-          # resolves against the clone, not the workspace.
-          bash lhpc/data/scripts/openhop-apply-patch.sh /tmp/openhop-core \
-               "$PWD/lhpc/data/patches/openhop-core-companion-fixes.patch"
-          python -m pip install -q --upgrade pip
-          python -m pip install -q /tmp/openhop-core meshcore pytest pytest-asyncio
-          python -m pip install -q --no-deps ./lhpc/data/meshcore_host
+          # No patch is applied: LHPC builds openhop_core pristine. This job exists to prove the
+          # meshcore_host adapter against the upstream the product actually installs, so it must
+          # install exactly that — an unmodified checkout at the manifest pin.
+          . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
+          retry 3 python -m pip install -q --upgrade pip
+          retry 3 python -m pip install -q /tmp/openhop-core meshcore pytest pytest-asyncio
+          retry 3 python -m pip install -q --no-deps ./lhpc/data/meshcore_host
       - name: LHPC MeshCore host tests
         run: pytest -q -rs lhpc/data/meshcore_host/tests
