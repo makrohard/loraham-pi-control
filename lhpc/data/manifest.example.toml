@@ -2037,8 +2037,8 @@ main = "meshcom-qemu"
     # bounds the per-loop GPS UART drain under QEMU: an unpaced socket UART starves loop() and
     # leaves the net-console deaf). EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
     path = "src/MeshCom-Firmware"
-    pin_commit = "674413ce38bebcc02969a4c1b754a6f1850bf4ba"
-    pin_tag = "v4.35p.08.29-34-g674413c"
+    pin_commit = "6edc74997154da97b32c516624f3c4566095081c"
+    pin_tag = "v4.35t"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 

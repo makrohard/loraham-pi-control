@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1
+
+- MeshCom-Firmware: 674413ce3 -> 6edc74997 (v4.35t), used by meshcom-firmware
+
 ## 0.4.0
 
 - The release test matrix ran on the reference box: nine of the twelve rows, the cross-cutting
