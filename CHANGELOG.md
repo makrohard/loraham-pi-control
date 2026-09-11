@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0
+
+- The release test matrix ran on the reference box: nine of the twelve rows, the cross-cutting
+  checks, a full purge-and-`auto-install` pass (9/9 stacks, 0 blocked, 0 failed), a boot restore
+  (3 restored, 0 failed) and the host tests. Every source component ends at its manifest pin and
+  every binary stack at `built_from == pin`, with no OOM anywhere in the run. Measured numbers and
+  the rows that remain owed are in [live-test.md](docs/live-test.md).
+
 ## 0.3.16
 
 - LoRaHAM_Daemon: dbd2998b7 -> 82c82c3f1 (v112-7-g82c82c3), used by loraham-daemon, loraham-chat
