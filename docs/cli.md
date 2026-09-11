@@ -132,7 +132,7 @@ lhpc config operator [--callsign CALL]   # show / set the GLOBAL operator identi
 - `operator` is a reserved subcommand (not a stack id). `--callsign` applies only to it and
   takes the **base** callsign only — the intersection every licensed stack accepts: the
   digit-bearing amateur structure — prefix, digit, then 1–3 letters, 3–6 characters total
-  (e.g. `G0ABC`, `DJ0CHE`) — no SSID, no `/P`. `N0CALL` is refused as a placeholder, and its
+  (e.g. `G0ABC`, `M7XYZ`) — no SSID, no `/P`. `N0CALL` is refused as a placeholder, and its
   four-letter suffix is not a valid base shape either. A value any licensed stack would refuse cannot be saved globally.
 - The global setting is **optional**. Licensed stacks (chat, Voice, Graywolf, MeshCom)
   inherit it only while their own callsign field is empty; the local field stays empty while

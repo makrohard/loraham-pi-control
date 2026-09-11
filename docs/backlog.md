@@ -137,3 +137,4 @@ followed the advice was a no-op and the console was already serving the new vers
 **Holding the line:** only the guidance is stale. What the path *does* is covered by its own
 tests, and following the printed steps is harmless — the editable install is idempotent and so is
 a restart.
+

@@ -63,12 +63,12 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
 
 ## Branches and releases
 
-- **`main` is the latest release.** Every commit on it carries a tag; `install.sh` clones it,
+- **`main` is the latest release.** Every released tip carries a tag; `install.sh` clones it,
   `self-update` fast-forwards deployed boxes along it, the image builder reads it. It only ever
   fast-forwards and is never rewritten. Two paths advance it, and they are the two release paths
-  below: a **minor** release fast-forwards it from `dev`, and a **patch** release fast-forwards
-  it from a one-commit branch taken off `main` itself. Neither is a direct push of unproven
-  work: both land a commit whose checks are already green.
+  below: a **minor** release and a **maintainer patch** both fast-forward it from `dev`; a **bot
+  patch** fast-forwards it from a one-commit branch taken off `main` itself. None is a direct push
+  of unproven work: each lands a commit whose checks are already green.
 - **`dev` is the integration branch.** All work lands there, one complete commit per change,
   from a topic branch rebased on `dev` and squash-merged; CI and testlab run on every push; the
   reference box runs it for testing (its self-update identity check reports `unsafe: checkout
@@ -89,11 +89,20 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
   pre-release, marked latest), linking the matching `loraham-images` release and the binaries
   index. Before starting one, run the release bot's `watch-only` and bump anything upstream has
   moved, so the matrix proves the pins the release ships.
-- **A patch release (`0.X.Y`) is pins or a fix**, and it has **two producers** — the maintainer,
-  and the release bot on its schedule. Both take the same shape: branch from `main` (never from
-  `dev`, so nothing unreleased rides along), one commit named by the version, CI and testlab
-  green on that SHA, fast-forward `main`, tag. A patch is the tag and its changelog section; it
-  publishes no GitHub Release. Boxes follow `main` either way.
+- **A patch release (`0.X.Y`) is pins or a fix**, and it has **two producers with two different
+  shapes** — the maintainer, and the release bot on its schedule.
+  - **The maintainer's patch lands on `dev`** once it is release-ready, and `main` fast-forwards to
+    the proven `dev` tip and is tagged there. Work that must not ship yet stays on a topic branch,
+    never on `dev`. There is no back-merge, because there is nothing to merge back: `main` stays an
+    ancestor of `dev`, so the release is a fast-forward and no pull request is created. This
+    replaced the older maintainer lane — a one-commit branch off `main` — which left a release
+    commit `dev` did not have and needed a back-merge to repair. A back-merge that is squashed
+    rather than merged does not repair it: it copies the content without the commit.
+  - **The bot keeps the `main`-based lane**, but only while `dev` has not diverged; the guard below
+    defines that refusal.
+
+  Either way a patch is the tag and its changelog section, with CI and testlab green on the exact
+  released SHA; it publishes no GitHub Release, and boxes follow `main`.
   - **Where the line runs.** Adding, removing or changing a selector, a CLI verb, a refusal, a
     unit template or the manifest model is a minor. Changing a **default** — what happens when
     the operator names nothing — is a patch, provided every explicit selector keeps its meaning
@@ -111,9 +120,14 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
     chat source are not among them, because the real daemon needs a radio to start. Anything
     that changes behaviour on hardware is proved on the box and recorded in
     [live-test.md](live-test.md).
-  - **Bringing the patch back to `dev`:** fast-forward `dev` when it still equals the old `main`;
-    otherwise open a pull request. `dev` is linear and never rewritten outside a minor release,
-    so a patch is never merged into it.
+  - **A bot patch requires an undiverged `dev`.** The bot releases only while `dev` has not moved
+    past `main`; afterwards `dev` fast-forwards to the new `main` and the branches are equal again.
+    If `dev` already carries unreleased commits the bot does **not** release: it reports and leaves
+    both branches untouched, and the maintainer's lane — whose patch is on `dev` already — carries
+    the fix instead. There is deliberately no reconciliation machinery: no back-merge pull request,
+    no automated rebase, no force-push repair. A squash cannot restore ancestry (it copies the
+    content without the commit) and a merge commit would break `dev`'s linear history, so the only
+    sound answer is not to diverge in the first place.
 - **Every release is followed by an image.** `loraham-images` is tagged with the same version
   once the binaries a moved pin needs are published, so the published image always carries the
   latest release ([binary channel](provenance.md#the-binary-channel)).

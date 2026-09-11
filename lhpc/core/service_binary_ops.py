@@ -255,6 +255,7 @@ class BinaryOpsMixin:
             # binary update replaces the executable/firmware the stack is running from.
             _running = self._binary_running_components(stack_id)
             if _running:
+                shutil.rmtree(tmpdir, ignore_errors=True)   # nothing was opened yet; leave nothing
                 return ActionResult(
                     False, f"Refusing to install '{stack_id}' from binary: component(s) "
                            "running.",
@@ -760,15 +761,15 @@ class BinaryOpsMixin:
 
     def binary_freshness(self, stack_id: str) -> dict:
         """LOCAL, network-free freshness for a binary-installed stack: the receipt's component
-        commits vs the CURRENT manifest pins, plus the build inputs the artifact's own completion
-        marker records. {state: current|behind|n/a, behind: [...]}.
+        commits vs the CURRENT manifest pins, plus the build inputs the artifact's own build-input
+        sidecar records. {state: current|behind|n/a, behind: [...]}.
 
-        The marker half matters because not every pin is a commit. The Meshtastic web client and
+        The sidecar half matters because not every pin is a commit. The Meshtastic web client and
         CLI are manifest VALUES compiled into the artifact, not component pins, so moving one
         leaves every commit equal and the comparison above says "current" about an artifact that
-        is demonstrably older than the manifest. The marker is the artifact's own record of what
+        is demonstrably older than the manifest. The sidecar is the artifact's own record of what
         it was built from; `is_built` recomputes it from the manifest, and a mismatch is exactly
-        "this artifact is behind". Still local: the marker is a file the artifact installed.
+        "this artifact is behind". Still local: the sidecar is a file the artifact installed.
         """
         state, rec, _why = self.binary_receipt_state(stack_id)
         if state != "valid" or rec is None:

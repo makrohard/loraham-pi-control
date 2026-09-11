@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.16
+
+- LoRaHAM_Daemon: dbd2998b7 -> 82c82c3f1 (v112-7-g82c82c3), used by loraham-daemon, loraham-chat
+- LoRaHAM_Voice: 143b83f25 -> c0b22ddca (c0b22dd), used by loraham-voice, loraham-voice-cli
+- openhop-repeater: 4705c99c3 -> c02b3cb73 (1.1.4-5-gc02b3cb), used by openhop-repeater-src
+
+  The Voice move carries no code: 143b83f2 and c0b22dd have the identical tree 780298165b6c.
+  It is recorded because Voice is tip-tracked, so the release bot would otherwise read it as a
+  real move and spend a version number and an image build on nothing.
+
+- Chat builds from `clients/chat/lorachat_ncurses_113.c`. Chat is an artifact source, so it follows
+  the daemon repository's default branch rather than its manifest pin, and that repository moved its
+  client programs into `clients/`. The compile was still naming the old root path.
+
+- Adopting a local source no longer fails when git repacks the checkout while it is being
+  copied. `copytree` lists a directory then reads it, and git packing loose objects prunes
+  their fan-out directories in between, so an entry vanishes mid-copy — the same repository
+  in a different physical representation. The `.git` copy is now retried once, and only when
+  every collected failure is a missing path; a mixed failure, or a vanishing working-tree
+  file, still fails the adoption as before.
+
 ## 0.3.15
 
 - loraham-kiss-tnc: 3c4461e4f -> e7646c12f (v0.5.1-2-ge7646c1), used by loraham-kiss-tnc, loraham-kiss-serial

@@ -170,8 +170,8 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/loraham-daemon"
-    pin_commit = "dbd2998b7e69bbff26e86260ff51ef1ebe302580"
-    pin_tag = "v112-6-gdbd2998"
+    pin_commit = "82c82c3f1d99bc9ece524b81ed82fc5378183501"
+    pin_tag = "v112-7-g82c82c3"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "loraham-daemon-hardening"
@@ -282,10 +282,10 @@ main = "loraham-chat"
   interactive = true
   depends_on = ["loraham-daemon"]
   requires_daemon_tx = "MANAGED"
-  build = "gcc lorachat_ncurses_113.c -o loraham_chat -lncurses -lpthread"
+  build = "gcc clients/chat/lorachat_ncurses_113.c -o loraham_chat -lncurses -lpthread"
   # Written out rather than left to the `build` shorthand above: a shorthand step cannot declare
   # `attributable`, and this compile is exactly the kind of failure that IS chat's own.
-  build_steps = [ { argv = ["gcc", "lorachat_ncurses_113.c", "-o", "loraham_chat", "-lncurses", "-lpthread"], attributable = true } ]
+  build_steps = [ { argv = ["gcc", "clients/chat/lorachat_ncurses_113.c", "-o", "loraham_chat", "-lncurses", "-lpthread"], attributable = true } ]
   bin = "loraham_chat"
   # Run from the runtime config dir so the TUI reads the lhpc-seeded lorachat.conf
   # (and its in-app Ctrl-K saves persist there too) — never written into the repo.
@@ -302,8 +302,8 @@ main = "loraham-chat"
 
     [stack.component.source]
     path = "src/LoRaHAM_Daemon"
-    pin_commit = "dbd2998b7e69bbff26e86260ff51ef1ebe302580"
-    pin_tag = "v112-6-gdbd2998"
+    pin_commit = "82c82c3f1d99bc9ece524b81ed82fc5378183501"
+    pin_tag = "v112-7-g82c82c3"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "LoRaHAM_Daemon"
@@ -419,8 +419,8 @@ main = "loraham-voice"
 
     [stack.component.source]
     path = "src/LoRaHAM_Voice"
-    pin_commit = "143b83f25e8ce0e29ff29c9dc19080e93025b536"
-    pin_tag = "143b83f"
+    pin_commit = "c0b22ddca8823ddb392edba6000a465d10be69f7"
+    pin_tag = "c0b22dd"
     remote = "https://github.com/makrohard/LoRaHAM_Voice.git"
     branch = "main"
     local_dir = "LoRaHAM_Voice"
@@ -604,8 +604,8 @@ main = "loraham-voice"
 
     [stack.component.source]
     path = "src/LoRaHAM_Voice"
-    pin_commit = "143b83f25e8ce0e29ff29c9dc19080e93025b536"
-    pin_tag = "143b83f"
+    pin_commit = "c0b22ddca8823ddb392edba6000a465d10be69f7"
+    pin_tag = "c0b22dd"
     remote = "https://github.com/makrohard/LoRaHAM_Voice.git"
     branch = "main"
     local_dir = "LoRaHAM_Voice"
@@ -2651,8 +2651,8 @@ main = "meshcore-node"
     path = "src/openhop-repeater"
     remote = "https://github.com/openhop-dev/openhop_repeater.git"
     branch = "dev"
-    pin_commit = "4705c99c38c8413c64c5a1902db42547d76b03c1"
-    pin_tag = "1.1.4-3-g4705c99"
+    pin_commit = "c02b3cb738987fe78f0b9a37eae55c46f87b7c44"
+    pin_tag = "1.1.4-5-gc02b3cb"
 
 [[stack]]
 id = "reticulum"

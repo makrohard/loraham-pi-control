@@ -397,9 +397,11 @@ def test_release_meshcom(env, svc):
 def test_release_identity_matches_candidate_manifest(env, svc):
     """THE release check: what is installed IS the candidate, and NOTHING mandatory is missing.
 
-    Every managed source is re-proved NOW through the production verifier (record + live HEAD),
-    then its HEAD is compared with the pin in the REAL packaged manifest — not the lab overlay,
-    which retargets the daemon and RadioLib at local fixtures. Those two are named as the
+    Every managed source is re-proved NOW through the production verifier (record + live HEAD).
+    A PINNED source is then compared with the pin in the REAL packaged manifest — not the lab
+    overlay, which retargets the daemon and RadioLib at local fixtures. An `artifact = true`
+    source has no such comparison to make: every selector resolves to the upstream default
+    branch, so the verifier above is its whole identity. Those two are named as the
     exception; their artifact is proved by the binary builder's own smoke and clean-runtime
     test, never here.
 
@@ -420,7 +422,7 @@ def test_release_identity_matches_candidate_manifest(env, svc):
         for c in st.get("component", []):
             src = c.get("source") or {}
             if src.get("pin_commit"):
-                pins[c["id"]] = (src["path"], src["pin_commit"])
+                pins[c["id"]] = (src["path"], src["pin_commit"], bool(src.get("artifact")))
                 stack_of[c["id"]] = st["id"]
 
     # A stack installed from an artifact has no managed checkout for the components that
@@ -442,7 +444,7 @@ def test_release_identity_matches_candidate_manifest(env, svc):
         for comp in stack.components:
             if getattr(comp, "source", None) is None or comp.id not in pins:
                 continue
-            path, pin = pins[comp.id]
+            path, pin, is_artifact = pins[comp.id]
             if comp.id in from_binary:
                 excluded.append(f"{comp.id} (in the {stack.id} artifact)")
                 continue
@@ -458,6 +460,15 @@ def test_release_identity_matches_candidate_manifest(env, svc):
                 svc._paths, svc._system, config, comp, dest)
             if rec is None:
                 wrong.append(f"{stack.id}/{comp.id}: identity not provable — {why}")
+                continue
+            if is_artifact:
+                # `artifact = true` means every selector resolves to the SAME thing: the
+                # declared artifact at the upstream default branch. The manifest's pin is not
+                # honoured for such a source, so HEAD is expected to move when upstream does
+                # and comparing the two would fail whenever it did. The verifier above is the
+                # identity that IS meaningful here: this leaf is the one LHPC adopted and
+                # still owns.
+                checked.append(f"{comp.id} (artifact-head)")
                 continue
             head = subprocess.run(["git", "-C", str(dest), "rev-parse", "HEAD"],
                                   capture_output=True, text=True, timeout=60,

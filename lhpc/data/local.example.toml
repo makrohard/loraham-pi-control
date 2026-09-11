@@ -6,10 +6,10 @@
 
 [operator]
 # OPTIONAL base callsign (prefix, digit, then 1-3 letters; 3-6 characters total, e.g.
-# "DJ0CHE" or "G0ABC" — use your OWN call):
+# "G0ABC" or "M7XYZ" — use your OWN call):
 # licensed stacks inherit it while their own callsign field is empty. Leave unset to
 # configure callsigns per stack.
-# callsign = "DJ0CHE"      # <- replace with YOUR base callsign (runtime-local only)
+# callsign = "G0ABC"       # <- replace with YOUR base callsign (runtime-local only)
 
 [web]
 # update_check_hours = 12  # background update-check cadence (1..168; 0 = off)

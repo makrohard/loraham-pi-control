@@ -7,7 +7,7 @@ sockets its clients use. It never transmits on its own.
 | | |
 |---|---|
 | Components | `loraham-daemon` (main) · `radiolib` — the RadioLib static library, a build-time dependency (`build_requires`), never started |
-| Source / pin | `src/loraham-daemon` ← `makrohard/LoRaHAM_Daemon` `v112-1-g10f4107` (`10f41070…`) · `src/RadioLib` ← `jgromes/RadioLib` `7.7.1-57-g187ef247` |
+| Source / pin | `src/loraham-daemon` ← `makrohard/LoRaHAM_Daemon` `v112-7-g82c82c3` (`82c82c3f…`) · `src/RadioLib` ← `jgromes/RadioLib` `7.7.1-57-g187ef247` |
 | Run | `loraham_daemon/loraham_daemon --radio <band> --hw <preset> --tx-mode managed\|direct --cad-monitor off\|on --cad-rssi <dBm>` — one process per band; lhpc computes every value at spawn |
 | Sockets (per band) | `/tmp/loraconf<band>.sock` (CONF / status), `/tmp/lora<band>f.sock` (framed), `/tmp/lora<band>.sock` (raw) — `LORAHAM_SOCKET_DIR=/tmp` |
 | State | `<runtime>/state/loraham` (mode 0700, `LORAHAM_RUNTIME_DIR`) — the lock files, including `spi0.lock` |

@@ -640,8 +640,8 @@ def _with_patches(source, build_steps):
 
 
 # A build input NAME is an identifier and a VALUE is a printable one-line scalar: both end up
-# verbatim inside the completion marker, which is compared byte-for-byte, so a newline or a stray
-# control character there would make a marker that can never match what `is_built` recomputes.
+# verbatim in the build-input sidecar, which is compared byte-for-byte, so a newline or a stray
+# control character there would make a record that can never match what `is_built` recomputes.
 _BUILD_INPUT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 _BUILD_INPUT_VALUE = re.compile(r"[!-~][ -~]*\Z")
 
@@ -661,7 +661,8 @@ def _step_command(step: dict) -> str:
 def _parse_build_inputs(raw: dict) -> tuple[tuple[str, str], ...]:
     """`build_inputs = [{ name, value, command, token }]` — the non-source inputs recorded
     beside the completion marker. Declaring one without a `build_marker` is a manifest error
-    rather than a silent no-op: the whole point is that the marker carries it.
+    rather than a silent no-op: the sidecar is written next to the marker, so without a marker
+    there is nowhere for it to live and nothing for `is_built` to compare.
 
     `command` names the build step that CONSUMES the value (`"pip"`, `"meshtastic-web-assets.sh"`
     — see `_step_command`), and `token` is the argv token the value fills, with `{value}` where

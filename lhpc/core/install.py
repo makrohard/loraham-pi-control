@@ -14,6 +14,7 @@ Nothing here builds, starts a service, or transmits.
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import shutil
@@ -48,6 +49,21 @@ _ADOPT_IGNORE_NAMES = (
     ".pio", ".venv", "build", ".work", ".run", "__pycache__", "node_modules",
 )
 _ADOPT_IGNORE = shutil.ignore_patterns(*_ADOPT_IGNORE_NAMES)
+
+_ENOENT_PREFIX = f"[Errno {errno.ENOENT}]"
+
+
+def _every_failure_is_enoent(err: shutil.Error) -> bool:
+    """True only when EVERY failure `copytree` collected is a missing path.
+
+    `copytree` aggregates nested failures into one `shutil.Error` carrying
+    `(src, dst, why)` triples whose `why` is the string form of the original error. A
+    mixed error -- a missing path AND a permission or I/O failure -- must NOT read as
+    transient: retrying it could hide a genuine copy failure behind the benign one and
+    activate an incomplete tree. Hence `all`, never `any`."""
+    entries = err.args[0] if err.args else ()
+    return bool(entries) and all(
+        str(why).startswith(_ENOENT_PREFIX) for _src, _dst, why in entries)
 
 
 @dataclass(frozen=True)
@@ -775,7 +791,19 @@ class Installer:
             if s.is_symlink():
                 os.symlink(os.readlink(s), d)
             elif s.is_dir():
-                shutil.copytree(s, d, ignore=_ADOPT_IGNORE, symlinks=True)
+                try:
+                    shutil.copytree(s, d, ignore=_ADOPT_IGNORE, symlinks=True)
+                except shutil.Error as err:
+                    # A live `.git` can repack mid-copy: git packs loose objects and prunes
+                    # their fan-out directories between `copytree`'s listing and its read, so
+                    # an entry vanishes. That is the SAME repository in a different physical
+                    # representation, so copy it once more. Everything else escapes: a
+                    # vanishing working-tree file means the source itself is being modified
+                    # under us, and failing is the safe answer.
+                    if entry != ".git" or not _every_failure_is_enoent(err):
+                        raise
+                    shutil.rmtree(d, ignore_errors=True)   # `copytree` left a partial copy
+                    shutil.copytree(s, d, ignore=_ADOPT_IGNORE, symlinks=True)
             else:
                 shutil.copy2(s, d, follow_symlinks=False)
 

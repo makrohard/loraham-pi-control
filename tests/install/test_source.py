@@ -2,6 +2,7 @@
 
 
 from __future__ import annotations
+import errno
 import os
 import pytest
 import json
@@ -3767,6 +3768,80 @@ def _v2_update_env(tmp_path):
 # The rule: files the operator or the STACK ITSELF adds to a managed checkout are carried into
 # the new source; changes to files that belong to UPSTREAM still refuse. Regenerable artifacts
 # are neither carried nor blocking.
+
+def _inject_on_git_copy(monkeypatch, failure):
+    """Make the FIRST `.git` copy fail with `failure(src, dst)`; delegate every other call.
+
+    A real `copytree` has already created and partly filled the destination when a nested
+    entry disappears, so the injection leaves a sentinel behind: an implementation that
+    forgets to remove the partial `.git` before retrying must not pass.
+    """
+    real = shutil.copytree
+    calls = {"git": 0}
+
+    def wrapper(src, dst, *a, **kw):
+        if os.path.basename(str(src)) == ".git":
+            calls["git"] += 1
+            if calls["git"] == 1:
+                Path(dst).mkdir(parents=True, exist_ok=True)
+                (Path(dst) / "already-copied").write_text("partial")
+                raise failure(str(src), str(dst))
+        return real(src, dst, *a, **kw)
+
+    monkeypatch.setattr(shutil, "copytree", wrapper)
+    return calls
+
+
+def _enoent(src, name="objects/ce"):
+    return (f"{src}/{name}", "", f"[Errno {errno.ENOENT}] No such file or directory: '{src}/{name}'")
+
+
+def test_a_repack_during_the_git_copy_does_not_fail_the_adoption(tmp_path, monkeypatch):
+    """Git may repack the source mid-copy: loose objects are packed and their fan-out
+    directories pruned between `copytree`'s listing and its read, so an entry vanishes.
+    That is the same repository in a different physical representation, not a changed
+    source, so the adoption must survive it."""
+    repo = tmp_path / "rt" / "local" / "app"
+    _make_repo_race_safety(repo)
+    (repo / ".gitignore").write_text("settings.json\n")
+    _git_race_safety(repo, "add", "-A")
+    _git_race_safety(repo, "commit", "-qm", "ignore")
+    head = _git_race_safety(repo, "rev-parse", "HEAD")
+    (repo / "settings.json").write_text('{"mine": true}')          # ignored, still operator data
+
+    comp = _comp_race_safety()
+    inst = _inst_race_safety(tmp_path, comp)
+    calls = _inject_on_git_copy(
+        monkeypatch, lambda src, dst: shutil.Error([_enoent(src)]))
+
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    assert calls["git"] == 2                                       # the transient really fired
+
+    dest = inst.paths.under("src", "app")
+    assert (dest / "file.txt").read_text() == "hello\n"            # tracked content
+    assert (dest / "settings.json").read_text() == '{"mine": true}'  # ignored content
+    assert _git_race_safety(dest, "rev-parse", "HEAD") == head     # identity intact
+    assert not (dest / ".git" / "already-copied").exists()         # partial .git was REPLACED
+
+
+def test_a_mixed_copy_failure_is_not_retried_into_success(tmp_path, monkeypatch):
+    """`copytree` aggregates every nested failure into one `shutil.Error`. A missing path
+    beside a permission failure is NOT the benign repack: retrying it would hide a real
+    copy failure behind the harmless one and activate an incomplete tree. Only an
+    exclusively-ENOENT error may be retried — `all`, never `any`."""
+    repo = tmp_path / "rt" / "local" / "app"
+    _make_repo_race_safety(repo)
+    comp = _comp_race_safety()
+    inst = _inst_race_safety(tmp_path, comp)
+    calls = _inject_on_git_copy(monkeypatch, lambda src, dst: shutil.Error([
+        _enoent(src),
+        (f"{src}/config", "", f"[Errno {errno.EACCES}] Permission denied: '{src}/config'"),
+    ]))
+
+    assert inst.adopt_source(comp, source="dev").status == "failed"
+    assert calls["git"] == 1                                       # never retried
+    assert not inst.paths.under("src", "app").exists()             # nothing activated
+
 
 def test_an_ignored_file_survives_an_update(tmp_path):
     """A stack's own settings/log file is usually `.gitignore`d — `git status` never even shows

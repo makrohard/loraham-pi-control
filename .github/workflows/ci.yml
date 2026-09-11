@@ -78,7 +78,13 @@ jobs:
         # or why. Cheap to print, and it turns a silent coverage hole into a visible line.
         # Coverage is MEASURED and published (terminal summary, XML artifact, job summary), not
         # gated: no --cov-fail-under on purpose — a drop is judged in review, not by a threshold.
-        run: pytest -q -rs --cov=lhpc --cov-branch --cov-report=term:skip-covered --cov-report=xml:coverage.xml
+        # `python -m pytest`, NOT the console script: the package is installed non-editable
+        # above, and the console script leaves the checkout OFF sys.path, so the tests import
+        # site-packages while `--cov=lhpc` resolves to the checkout. Coverage then watches files
+        # nobody executes and reports ~0% however many tests pass. `-m` puts the working directory
+        # first, so the imported and the measured tree are the same one. The install above still
+        # proves the package builds and installs.
+        run: python -m pytest -q -rs --cov=lhpc --cov-branch --cov-report=term:skip-covered --cov-report=xml:coverage.xml
 
       - name: Coverage summary
         if: ${{ !cancelled() }}

@@ -457,14 +457,16 @@ class Component:
                                  # build step succeeds; when set, `is_built` gates on IT (not `bin`),
                                  # so a build killed mid-way (e.g. a half-populated venv whose
                                  # interpreter already exists) can never read "built"
-    # Non-source build inputs recorded INSIDE the completion marker: (name, value) pairs that are
+    # Non-source build inputs recorded in the build-input sidecar BESIDE the completion marker
+    # (keeping them out of the marker itself leaves the artifact readable by older controllers):
+    # (name, value) pairs that are
     # not a git pin but still decide what the build produces — a fetched release version, a pinned
     # pip version. `is_built` recomputes them, so changing one here reads NOT built until the
     # component is rebuilt (or, on the binary channel, its artifact reinstalled). Without this a
     # pin that is only a literal in a build step moved in the manifest while every already-built
     # box kept the old thing and still reported "built". The manifest entry also declares the argv
     # TOKEN the value fills; the loader binds the two by exact equality, so only the (name, value)
-    # the marker records survives into here.
+    # the sidecar records survives into here.
     build_inputs: tuple[tuple[str, str], ...] = ()
     requires: tuple[Requirement, ...] = ()   # external commands needed to run
     optional: bool = False       # an optional dependency component within a stack

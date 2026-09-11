@@ -1201,3 +1201,46 @@ def test_the_lane_and_the_binary_builder_share_one_attribution_rule():
     from lhpc.core.services import ControllerService
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=Path("/tmp/x")))
     assert rel._own_recipe_step_logs(svc, "meshcore") == br.own_step_logs(svc.stack("meshcore"))
+
+
+def test_the_log_names_the_rule_expects_are_the_ones_the_builder_writes(tmp_path, monkeypatch):
+    """The naming convention lives in TWO places and must not drift.
+
+    `Lifecycle.build` names step `i` of a multi-step component `build-<component>-<i>`, and
+    `build_regression.own_step_logs` reconstructs that name to decide what may attribute. Nothing
+    tied them together: renaming the log would leave attribution matching nothing, no automatic
+    freeze would ever fire again, and every run would look exactly as green as before. So this
+    asks the real `build()` what it names the attributable step, and the rule what it expects.
+    """
+    from pathlib import Path, PurePosixPath
+
+    from lhpc.core import build_regression as br
+    from lhpc.core import lifecycle as lifecycle_mod
+    from lhpc.core.jobs import JobResult, JobState
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=Path(tmp_path)))
+    stack = svc.stack("meshcore")
+    comp = next(c for c in stack.components if c.id == "meshcore-node")
+    owned_index = next(i for i, s in enumerate(comp.build_steps) if s.get("attributable"))
+    (svc._lifecycle().source_dir(comp) / ".venv" / "bin").mkdir(parents=True, exist_ok=True)
+
+    seen = []
+
+    def record(runner, **kw):
+        seen.append(kw["name"])
+        state = JobState.FAILED if len(seen) - 1 == owned_index else JobState.SUCCEEDED
+        return JobResult(name=kw["name"], state=state,
+                         returncode=1 if state is JobState.FAILED else 0,
+                         log_path=f"/x/logs/{kw['name']}.log", tail=[])
+
+    monkeypatch.setattr(lifecycle_mod, "run_job", record)
+    res = svc._lifecycle().build(comp, marker_extra=svc._consumed_source_lines(comp))
+
+    assert not res.ok and res.log_path, "the attributable step must fail with a log identity"
+    assert PurePosixPath(res.log_path).name in br.own_step_logs(stack), (
+        f"build() named the failed step {PurePosixPath(res.log_path).name!r}, but the "
+        f"attribution rule looks for one of {sorted(br.own_step_logs(stack))} — a rename here "
+        f"silently disables every automatic freeze")
