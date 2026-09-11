@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.4
+
+- openhop-core: 8a3921da1 -> c95a68445 (v1.0.10-413-gc95a684), used by meshcore-node
+- openhop-repeater: c02b3cb73 -> 9e375da77 (1.1.4-7-g9e375da), used by openhop-repeater-src
+
 ## 0.4.3
 
 - LoRaHAM_Voice: c0b22ddca -> 8e1af01bf (8e1af01), used by loraham-voice, loraham-voice-cli

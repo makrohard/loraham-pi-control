@@ -2316,8 +2316,8 @@ main = "meshcore-node"
     # the apply script fails the build on a conflict instead of running unpatched code).
     [stack.component.source]
     path = "src/openhop-core"
-    pin_commit = "8a3921da12246dc6754671e3187aac910eacd37a"
-    pin_tag = "v1.0.10-410-g8a3921d"
+    pin_commit = "c95a68445b3f6691ffbb0bdd0123e2daed182556"
+    pin_tag = "v1.0.10-413-gc95a684"
     remote = "https://github.com/openhop-dev/openhop_core.git"
     branch = "dev"
 
@@ -2651,8 +2651,8 @@ main = "meshcore-node"
     path = "src/openhop-repeater"
     remote = "https://github.com/openhop-dev/openhop_repeater.git"
     branch = "dev"
-    pin_commit = "c02b3cb738987fe78f0b9a37eae55c46f87b7c44"
-    pin_tag = "1.1.4-5-gc02b3cb"
+    pin_commit = "9e375da776826632a0b7b6a25a529b102e864018"
+    pin_tag = "1.1.4-7-g9e375da"
 
 [[stack]]
 id = "reticulum"
