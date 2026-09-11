@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.2
+
+- LoRaHAM_Daemon: 82c82c3f1 -> ff3c26a42 (v0.9.0), used by loraham-daemon, loraham-chat
+
+  The daemon repository merged its upstream and published v0.9.0. The merge resolved two
+  restructure conflicts and changed no file, so the pinned tree is byte-identical to the one
+  0.4.0's test matrix measured; the artifact is republished regardless, because provenance names
+  a commit and that commit has to be the one the manifest pins.
+
+- The daemon `pin_tag` names a tag that exists. It read `v112-7-g82c82c3`, but `v112` is not in
+  that commit's ancestry: the daemon's history rewrite re-ided 64 commits and orphaned every
+  release tag it had, so `git describe` — the convention every other pin follows — yielded
+  `110-137-g82c82c3` instead. Nothing enforced this, because CI validates `pin_commit` and never
+  the tag, so a provenance label had been naming an unreachable object since the pin moved. The
+  daemon repository now carries a reachable `v0.9.0`, which is what both blocks and both stack
+  pages record.
+
 ## 0.4.1
 
 - MeshCom-Firmware: 674413ce3 -> 6edc74997 (v4.35t), used by meshcom-firmware

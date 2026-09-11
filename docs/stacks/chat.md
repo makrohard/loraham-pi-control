@@ -6,7 +6,7 @@ daemon in MANAGED mode. It needs a real terminal — there is no headless mode.
 | | |
 |---|---|
 | Component | `loraham-chat` (interactive; readiness manual) |
-| Source / pin | `src/LoRaHAM_Daemon` ← `makrohard/LoRaHAM_Daemon` `v112-7-g82c82c3`, single-file artifact `clients/chat/lorachat_ncurses_113.c` |
+| Source / pin | `src/LoRaHAM_Daemon` ← `makrohard/LoRaHAM_Daemon` `v0.9.0`, single-file artifact `clients/chat/lorachat_ncurses_113.c` |
 | Build | `gcc clients/chat/lorachat_ncurses_113.c -o loraham_chat -lncurses -lpthread` (needs `libncurses-dev`) |
 | Run | `<source>/loraham_chat` from `<runtime>/config/files`, so it reads the seeded config; `lhpc stack start chat` ensures the daemon (433, MANAGED) and prints the command — you run it, locally or over SSH |
 | Config | `<runtime>/config/files/lorachat.conf` (`KEY=VALUE`); the in-app Ctrl-K menu saves back to it |
