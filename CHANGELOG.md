@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.4.3
+
+- LoRaHAM_Voice: c0b22ddca -> 8e1af01bf (8e1af01), used by loraham-voice, loraham-voice-cli
+
+  The Voice repository rewrote its history and the pinned commit stopped being reachable from its
+  `main`, so `pin-validation` failed and the release-verification lane could not clone the source
+  at all. The new pin carries the GPLv3 relicence of the Voice sources, so this is a real content
+  change and not only a reachability fix. No binary is affected: Voice is covered by no published
+  artifact and builds from source on the box.
+
+- A third-party outage no longer decides a release. The headless Pyodide gate fetched `micropip`
+  from a CDN while it ran, because the npm pyodide package ships no wheels — one such fetch failed
+  and reddened a release whose diff touched no file under `demo/`. Those two wheels are now
+  committed under `demo/vendor/` and served through `packageCacheDir`, which Pyodide checks before
+  the network. That removes the fetch that failed and nothing more: the gate still resolves the
+  lhpc wheel's own dependencies from PyPI, which is recorded in the backlog with the measurement
+  that proves it.
+
+- Acquisition steps across CI, testlab and Pages retry three times. Only acquisition: package
+  installs, `git fetch` of the pinned remotes, the browser download. `pip-audit` is deliberately
+  excluded, because it exits non-zero on a real vulnerability and a retry cannot tell that from a
+  network fault; so are the test commands themselves, because a gate that fails once and passes
+  twice is telling you something. A test enforces that rule by reading which program each retry
+  invokes.
+
+- The Pages deployment job is restricted to `main`. It had no branch guard, so the manual dispatch
+  used to verify a change on its own branch would have published that branch to GitHub Pages.
+
+- Documentation that told the reader to do something the project no longer does: the test suite is
+  run with `python -m pytest` (CI switched when coverage moved to the checkout), the documented
+  local gate no longer names a parallel plugin that is not a dependency, a maintainer patch lands
+  on `dev` rather than branching from `main`, and the deploy-script tests no longer claim to need
+  no network while running a real `pip install`.
+
 ## 0.4.2
 
 - LoRaHAM_Daemon: 82c82c3f1 -> ff3c26a42 (v0.9.0), used by loraham-daemon, loraham-chat

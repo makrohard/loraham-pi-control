@@ -55,8 +55,9 @@ jobs:
         # default selection, 2026-07-24) and bandit runs high-severity-only. pip-audit floats
         # too — its value is the freshest vulnerability database.
         run: |
-          python -m pip install --upgrade pip
-          pip install .[dev] pip-audit
+          . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
+          retry 3 python -m pip install --upgrade pip
+          retry 3 pip install .[dev] pip-audit
 
       - name: Byte-compile production code
         run: python -m compileall -q lhpc
@@ -115,6 +116,9 @@ jobs:
         if: ${{ !cancelled() }}
         run: bandit -q -r lhpc -lll
 
+      # DELIBERATELY NOT RETRIED: pip-audit exits 1 when it finds a real vulnerability, so a
+      # generic retry cannot tell a security verdict from a transport fault. This is a fail-closed
+      # security gate and stays one.
       - name: pip-audit (dependency vulnerabilities)
         if: ${{ !cancelled() }}
         run: pip-audit . --strict --progress-spinner=off
@@ -143,6 +147,7 @@ jobs:
           GIT_TERMINAL_PROMPT: "0"
         run: |
           set -euo pipefail
+          . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
           # The validated set is DERIVED from the manifest: a newly pinned repo is covered the
           # moment it is added. (This job used to hardcode src/meshcom-qemu-raspi, so ten other
           # pinned repos could orphan their pin unnoticed.)
@@ -160,7 +165,9 @@ jobs:
             git -C "$dir" remote add origin "$REMOTE"
             # FULL fetch of the source branch. An ORPHANED pin (force-push/amend) is not reachable,
             # so the object resolution below HARD-FAILS — exactly the 56dc877 -> amend signature.
-            git -C "$dir" fetch --no-tags origin "$BRANCH"
+            # Acquisition only. A dropped connection to one of seventeen remotes is not a
+            # statement about the pin; the checks BELOW are, and none of them is retried.
+            retry 3 git -C "$dir" fetch --no-tags origin "$BRANCH"
             git -C "$dir" cat-file -e "${PIN}^{commit}" \
               || { echo "::error::$path: pinned commit ${PIN} not found on ${BRANCH} (orphaned pin?)"; exit 1; }
             git -C "$dir" merge-base --is-ancestor "$PIN" "origin/${BRANCH}" \

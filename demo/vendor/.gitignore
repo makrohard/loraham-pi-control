@@ -1,0 +1,8 @@
+# Pyodide does not only READ packageCacheDir, it WRITES to it: every wheel it fetches during a
+# run is cached here (cryptography, cffi, openssl-*.zip and friends — several MB). Only the two
+# wheels this repository deliberately vendors are tracked, so a local gate run cannot leave
+# megabytes of downloaded wheels staged for commit.
+*
+!.gitignore
+!micropip-0.6.0-py3-none-any.whl
+!packaging-23.2-py3-none-any.whl

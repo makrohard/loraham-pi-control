@@ -8,8 +8,8 @@ that does not may still be taken, but the chances are lower and it will take lon
 - **Open your PR against `dev`.** Work on a topic branch off `dev`, rebase it on `dev` before the
   PR, and land it as **one commit** (squash-merge). The maintainer's own work follows the same path.
 - `dev` is rewritten once per MINOR release, when the cycle is squashed into the release commit —
-  rebase an open topic branch onto the new `dev` afterwards. A patch release branches from `main`
-  and comes back as a fast-forward or a pull request, so it never rewrites `dev`.
+  rebase an open topic branch onto the new `dev` afterwards. A maintainer patch lands on `dev`
+  like any other work, and `main` fast-forwards from the proven `dev` tip.
 - The branch model, the release procedure and the hotfix path:
   [Branches and releases](docs/maintenance.md#branches-and-releases).
 
@@ -34,10 +34,10 @@ Run these locally before opening the PR — each is one command in a venv with
 
 | gate | command |
 |---|---|
-| unit + contract suite | `pytest -q -n 12 --dist loadfile -p no:cacheprovider tests` (CI runs it serially, with coverage) |
+| unit + contract suite | `python -m pytest -q -p no:cacheprovider tests` — the same form CI runs. `pytest-xdist` is not a dev dependency, so `-n` is a local convenience for whoever installs it, never release evidence |
 | lint, frozen ruleset | `ruff check lhpc testlab` and `ruff check tests --select F,E9` |
 | security | `bandit -q -r lhpc -lll` |
-| testlab unit lane | `pytest -q testlab/tests/unit` — the simulator itself; the acceptance and browser lanes are opt-in, see [testlab](docs/testlab.md) |
+| testlab unit lane | `python -m pytest -q testlab/tests/unit` — the simulator itself; the acceptance and browser lanes are opt-in, see [testlab](docs/testlab.md) |
 | docs | run inside the suite; what it pins: [maintenance](docs/maintenance.md#what-ci-does-not-enforce) |
 | shipped snapshot | `lhpc deps --script` must equal `bootstrap-deps.sh` when `lhpc/core/deps.py` changed |
 

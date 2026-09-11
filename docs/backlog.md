@@ -15,6 +15,7 @@ knows what they are relying on before they touch it.
 - [Safety invariant IDs](#safety-invariant-ids)
 - [No `--live` interface](#no---live-interface)
 - [Operator self-update prints steps it already took](#operator-self-update-prints-steps-it-already-took)
+- [Gates that still fetch at test time](#gates-that-still-fetch-at-test-time)
 
 ## Two-stage unit-template migration
 
@@ -138,3 +139,44 @@ followed the advice was a no-op and the console was already serving the new vers
 tests, and following the printed steps is harmless — the editable install is idempotent and so is
 a restart.
 
+## Gates that still fetch at test time
+
+An audit of every test surface found gates that reach the network **while they run**, so a
+third-party outage reddens a release whose diff could not have caused it. One such fetch did
+exactly that: the Pyodide boot gate pulled `micropip` from jsDelivr mid-test and failed on a
+commit that touched no file under `demo/`.
+
+That specific fetch is fixed — `demo/vendor/` now holds the `micropip` and `packaging` wheels and
+`boot.mjs` passes `packageCacheDir`, which is checked before the CDN. Acquisition steps across
+CI, testlab and Pages are retried. Three findings are deliberately left:
+
+* **The demo's dependency closure.** `micropip.install()` defaults to `deps=True`, so the lhpc
+  wheel's `flask`, `werkzeug` and `waitress` still resolve from PyPI, and `cryptography` and its
+  own dependencies from jsDelivr. Measured, not assumed: with only the two wheels cached and the
+  network off, the boot gate reaches `micropip.install` and dies with *"Can't find a pure Python 3
+  wheel for: 'waitress<4,>=3', 'flask<4,>=3', 'werkzeug>=3.1'"*. Closing it means vendoring about a
+  dozen wheels, several of which must be the exact `cp312 pyodide_2024_0_wasm32` files named in
+  `pyodide-lock.json` and re-pinned whenever Pyodide moves. **What holds the line:** the gate is
+  not retried, so a failure here is visible rather than papered over, and the deployed demo
+  depends on the same CDN at run time anyway — hermetic gates would stop mirroring what a visitor
+  actually gets.
+
+* **The testlab acceptance clones.** The chain fixture installs kiss, and the graywolf, meshcore
+  and meshcom cases install theirs, from live remotes with no transport retry inside the product's
+  `_clone`. The honest fix is baking those checkouts into the devcontainer image and serving them
+  through the `adopt_search_root` the lab already configures — not faking the sources, because
+  `test_kiss_rx_and_tx_round_trip` asserts real AX.25 bytes off a real TNC and a fake would delete
+  that proof. **What holds the line:** an image change plus a lab change, wanting its own round.
+
+* **The deploy-script full-install tests.** The six `slow` tests in
+  `tests/host/test_deploy_scripts.py` run `install.sh` as shipped, which creates a venv and
+  `pip install -e`s the checkout — roughly eighteen cold PyPI installs per CI run, since the test
+  overrides `HOME` and the runner's pip cache is never exported. The fix is a session wheelhouse
+  plus `PIP_NO_INDEX`/`PIP_FIND_LINKS` in the test's environment, leaving `install.sh`
+  byte-identical; rewriting the script or adding `--system-site-packages` would let the identity
+  assertion resolve `lhpc` from the outer CI install instead of the deployed checkout, which
+  weakens two real assertions. **What holds the line:** the job already installs from PyPI in its
+  own setup step, so this is amplification of an existing dependency rather than a new one.
+
+Findings in `loraham-images`, `lhpc-binaries` and `lhpc-release-bot` are owned by those
+repositories and recorded there, not here.

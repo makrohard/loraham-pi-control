@@ -90,14 +90,17 @@ The two lanes overlap; neither is a subset of the other.
 
 ## How to run
 
-Use the **console script**, not `python -m pytest`: the `-m` form puts the working directory on
-`sys.path` and hides an import that would die in CI.
+Use **`python -m pytest`**, which is what CI runs. The `-m` form puts the working directory on
+`sys.path`, so the tree that is imported and the tree `--cov=lhpc` measures are the same one; the
+console script imports the INSTALLED package instead, and coverage of the checkout then reads
+near zero. The suite's own import surface is pinned by `tests/repo/test_suite_hygiene.py`, so the
+failure the console script used to guard against is caught there rather than by the runner.
 
 ```sh
-.venv/bin/pytest -q -p no:cacheprovider tests/web/test_webserver.py   # one file
-.venv/bin/pytest -q -p no:cacheprovider -m contract                   # the readable core (~12 s)
-.venv/bin/pytest -q -p no:cacheprovider -m safety                     # the invariant set
-.venv/bin/pytest -q -p no:cacheprovider --basetemp="$HOME/pt-lhpc"    # everything
+python -m pytest -q -p no:cacheprovider tests/web/test_webserver.py   # one file
+python -m pytest -q -p no:cacheprovider -m contract                   # the readable core (~12 s)
+python -m pytest -q -p no:cacheprovider -m safety                     # the invariant set
+python -m pytest -q -p no:cacheprovider --basetemp="$HOME/pt-lhpc"    # everything
 rm -rf -- "$HOME/pt-lhpc"
 ```
 

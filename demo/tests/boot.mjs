@@ -9,7 +9,14 @@ const wheel = process.env.LHPC_WHEEL;
 const demoDir = process.env.DEMO_DIR || new URL("..", import.meta.url).pathname;
 if (!wheel) { console.error("set LHPC_WHEEL to the lhpc wheel path"); process.exit(2); }
 
-const py = await loadPyodide();
+// packageCacheDir is checked before the CDN, so the two wheels committed under demo/vendor/
+// serve micropip and packaging from disk. The npm pyodide package ships NO wheels, so without
+// this every run fetched them from jsDelivr mid-gate — and one such fetch failed and reddened a
+// release. This removes THAT dependency only: micropip.install below still resolves the lhpc
+// wheel's flask/werkzeug/waitress from PyPI, which is a separate, deferred decision.
+const py = await loadPyodide({
+  packageCacheDir: new URL("../vendor/", import.meta.url).pathname,
+});
 await py.loadPackage("micropip");
 const whl = basename(wheel);
 py.FS.writeFile("/tmp/" + whl, readFileSync(wheel));

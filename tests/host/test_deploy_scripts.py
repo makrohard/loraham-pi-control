@@ -1,9 +1,16 @@
 """Isolated tests for the controller deployment scripts install.sh / uninstall.sh.
 
-Everything runs in a temp HOME with a fake `git`/`systemctl`/`lhpc` on PATH — no network, no
-real services, and never the developer machine's live deployment. The one full-install test
-serves a `git clone` of the *canonical* repo from a local clone of this very checkout, so the
-resulting venv + controller-identity check are real but offline.
+Everything runs in a temp HOME with a fake `git`/`systemctl`/`lhpc` on PATH — no real services,
+and never the developer machine's live deployment. The `git clone` of the *canonical* repo is
+served from a local clone of this very checkout, so the controller-identity check is real without
+reaching GitHub.
+
+The `slow` tests are NOT offline, and saying otherwise here was wrong. They run install.sh as
+shipped, which creates a real venv and `pip install -e`s the checkout into it: pip contacts PyPI
+for `setuptools` and for flask, werkzeug, waitress and cryptography. The fake PATH does not
+shadow the venv's own pip, and the autouse `_no_pip_install` guard patches an in-process runner a
+bash subprocess never traverses. That is a real test-time network dependency; making it hermetic
+needs a wheelhouse rather than a rewritten install.sh, and is recorded in docs/backlog.md.
 """
 
 from __future__ import annotations
@@ -224,7 +231,6 @@ def test_install_refuses_symlinked_ancestor(tmp_path):
     assert r.returncode != 0 and "symlink" in (r.stdout + r.stderr)
 
 
-@pytest.mark.slow
 def _remainder(root: Path):
     """What a default uninstall leaves behind: config, marker, profiles and app data."""
     for d in ("config", "profiles", "state/graywolf", "state/meshcore"):

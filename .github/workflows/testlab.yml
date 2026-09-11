@@ -63,10 +63,13 @@ jobs:
                 cd /tmp/repo
                 export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build
                 python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
-                pip install -q -e .            # the product
-                pip install -q -e ./testlab    # the SEPARATE lab package
-                pip install -q pytest playwright
-                python -m playwright install chromium
+                # Sourced from the COPY inside the container: a helper sourced in the host shell
+                # does not survive docker run, let alone the su below.
+                . /tmp/repo/.github/scripts/retry.sh
+                retry 3 pip install -q -e .            # the product
+                retry 3 pip install -q -e ./testlab    # the SEPARATE lab package
+                retry 3 pip install -q pytest playwright
+                retry 3 python -m playwright install chromium
                 # A virtual display for the ACCEPTANCE lane only: voice and sideband are
                 # GTK/Kivy programs, and without one the lab would skip starting them
                 # instead of proving they start. The browser lane below runs with no
@@ -149,9 +152,10 @@ jobs:
           cd /tmp/repo
           export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build
           python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
-          pip install -q -e .
-          pip install -q -e ./testlab
-          pip install -q pytest
+          . /tmp/repo/.github/scripts/retry.sh
+          retry 3 pip install -q -e .
+          retry 3 pip install -q -e ./testlab
+          retry 3 pip install -q pytest
           # -x: STOP AT THE FIRST FAILURE. The lane chains stacks over one radio pair, so a
           # case that fails leaves the run in a state later cases cannot be judged in — and the
           # automated release reads this JUnit to decide which stack to freeze. Continuing

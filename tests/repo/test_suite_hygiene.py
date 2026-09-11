@@ -1,11 +1,16 @@
 """Properties of the SUITE itself, so a test can only pass here for the reason it passes in CI.
 
-The local lane runs `python -m pytest`, and `-m` puts the working directory on `sys.path`, so the
-repo root is importable and `tests` resolves as a namespace package. CI runs the `pytest` console
-script, which does not — the editable install is no help either, since its finder exposes only
-`lhpc` (verified: `import tests` fails from any other directory). A module that reaches outside
-the import surface CI actually has therefore collects fine here and dies there — which is what
-happened once: green on both boxes, `ModuleNotFoundError: No module named 'tests'` in CI.
+CI and the local lane both run `python -m pytest`, because `-m` puts the working directory on
+`sys.path` and so makes the imported tree and the `--cov=lhpc` measured tree the same one; the
+console script imports the installed package and coverage of the checkout collapses. That is a
+deliberate change from the older arrangement, where CI used the console script and a module
+reaching outside CI's import surface collected locally and died there with
+`ModuleNotFoundError: No module named 'tests'`.
+
+The properties below are what now stands in for that runner difference. They hold whichever
+launcher is used, so the suite cannot quietly regrow a dependency on the repo root being
+importable — which is the real invariant, and the reason this module did not go away with the
+runner change.
 """
 from __future__ import annotations
 
