@@ -37,6 +37,7 @@ Start order: daemon → bridge → GPS feed → QEMU.
 | `backend` | bridge | `loraham` | `fake` = no RF |
 | `password_file` | bridge | blank = open auth | managed only by the HMAC flow, never by generic config |
 | `ping_interval` / `pong_timeout` | bridge | 30000 / 90000 ms | XR keepalive sized for QEMU/TCG stalls (the bridge binary's own 15 s / 10 s defaults flap under emulation) |
+| `rf_log` | bridge | on | RF log (`logs/rf-meshcom.log`): raw MeshCom frames the radio received (RSSI/SNR) or sent — TX on the daemon's `TX_RESULT` (`ok`; `unconfirmed` when the bridge faulted with the frame already handed over), never on submit. No decoding of MeshCom frames. Read at the bridge's next start |
 | `rate` / `loop` | gps-relay | 5 / on | fixture replay only |
 
 RF parameters are not bridge settings — they arrive from the firmware over the XR protocol; the

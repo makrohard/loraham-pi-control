@@ -43,6 +43,7 @@ GPS, persistence, readiness and lifecycle. The node never drives SPI or GPIO its
 | `frequency` | blank = the preset's | Hz; an explicit value overrides the preset frequency |
 | `airtime` | 10 % | duty-cycle limit |
 | `use_gps` | on | use the global position source |
+| `rf_log` | on | RF log (`logs/rf-meshcore.log`) written by the host's radio adapter in every mode: raw frames received (RSSI/SNR) or sent (`ok` after `TX_RESULT_STATUS_OK`; `unconfirmed` when the result was never learned; a refused send writes nothing). Read at the next start |
 | `mode` | `chat` | see [Mode](#mode) |
 | `repeater_name` | *(empty)* | required in the repeater modes; the repeater's own name, never the operator callsign |
 | `repeater_mode` | `forward` | upstream's behaviour: `forward` relays, `monitor` listens and advertises without relaying, `no_tx` only receives |

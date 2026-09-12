@@ -11,6 +11,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .rflog import parse_switch
+
 # The presets the manifest exposes (values must stay in lockstep with
 # the LoRaHAM daemon band plan; eu_uk_narrow matches the T-Deck MeshCore firmware).
 RF_PRESETS = {
@@ -77,6 +79,8 @@ class HostConfig:
     crc: bool = True
     enable_tx: bool = True
     airtime: float = 10.0
+    rf_log: bool = False
+    rf_log_path: str = ""
 
     # [persistence]
     db: str = ""
@@ -196,6 +200,18 @@ def load_config(path: str | Path) -> HostConfig:
     cfg.crc = _opt(radio, "crc", True, bool, "radio")
     cfg.enable_tx = _opt(radio, "enable_tx", True, bool, "radio")
     cfg.airtime = float(_opt(radio, "airtime", 10.0, (int, float), "radio"))
+    # The RF log switch is LHPC's enum (`"on"`/`"off"`), a hand-written bool is
+    # accepted too; `on` without an absolute path is a config error, never a
+    # silent off — the writer must not run unlogged when it was asked to log.
+    try:
+        cfg.rf_log = parse_switch(_opt(radio, "rf_log", "off", (bool, str), "radio"))
+    except ValueError as exc:
+        raise ConfigError(f"[radio] {exc}") from None
+    cfg.rf_log_path = _opt(radio, "rf_log_path", "", str, "radio").strip()
+    if cfg.rf_log and not cfg.rf_log_path:
+        raise ConfigError("[radio] rf_log = on needs rf_log_path")
+    if cfg.rf_log and not cfg.rf_log_path.startswith("/"):
+        raise ConfigError("[radio] rf_log_path must be an absolute path")
 
     persistence = _table(doc, "persistence")
     cfg.db = _opt(persistence, "db", "", str, "persistence")

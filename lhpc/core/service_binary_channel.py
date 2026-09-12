@@ -111,6 +111,23 @@ class BinaryChannelMixin:
         """True while the stack is installed from a binary artifact (receipt VALID)."""
         return self.binary_receipt_state(stack_id)[0] == "valid"
 
+    def binary_behind(self, comp) -> str:
+        """"" unless `comp` runs from an installed binary artifact whose recorded commit for it
+        is not the manifest pin. Publishing a new artifact never touches an installed copy, and
+        a stale copy would be launched with argv it does not know (the RF-log options were the
+        first such case) — so the start refuses, typed, before spawning anything."""
+        if comp.source is None or not self.binary_covers(comp.id):
+            return ""
+        sid = self.stack_of(comp.id) or comp.id
+        _state, rec, _why = self.binary_receipt_state(sid)
+        got = (rec.components if rec is not None else {}).get(comp.id, "")
+        want = comp.source.pin_commit
+        if not got or not want or got == want:
+            return ""
+        return (f"installed binary artifact is behind the manifest (built from {got[:9]}, "
+                f"the manifest pins {want[:9]}) — update it first (lhpc update {sid}, or "
+                f"lhpc install {sid} --source pinned)")
+
     def binary_covers(self, component_id: str) -> bool:
         """True when this component's source/build is currently provided by a binary artifact.
         The single primitive every predicate/gate uses — never re-derive it."""

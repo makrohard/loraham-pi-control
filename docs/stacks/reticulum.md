@@ -39,6 +39,7 @@ packet. The driver is [loraham-rns-interface](https://github.com/makrohard/lorah
 | `airtime_limit_short` / `airtime_limit_long` | 868: 5 % (15 s) / 1 % (1 h) · 433: 10 % / 10 % | advanced |
 | `rns_allow` | `127.0.0.1` | client-access allow-list; drives the managed firewall |
 | `enable_transport` | `No` | relay OTHER nodes' traffic between this node's interfaces — see [Internet and transport](#internet-and-transport) |
+| `rf_log` | on | RF log (`logs/rf-reticulum.log`) at the LoRa interface: every packet received (RSSI/SNR) or sent (`ok` on the radio's TX-done; `unconfirmed` when the window elapsed — the airtime was charged and it may have gone out; a duty-dropped packet writes nothing). Raw Reticulum packets, i.e. ciphertext — sizes, timing and signal, not contents. With transport on, relayed packets appear too. Read at the next start |
 | `lora_announce_relay` | `internal` | whether the public mesh's announces may go out over the radio; `gateway` relays them. Advanced, and only read while transport is on |
 | `internet_enabled` | `no` | the optional `[[Internet]]` TCP interface |
 | `internet_host` / `internet_port` | unset | its endpoint; both are required once it is enabled |
@@ -103,6 +104,9 @@ client-access port. On-box it is installed only where `bootstrap-deps.sh --with-
 gated by `python3-dev` (`sbapp` pulls `materialyoucolor`, a C++ extension without an aarch64 wheel)
 and `libx11-dev` (the `--with-gui` marker; Kivy vendors its own SDL2); without `--with-gui` it is
 skipped, never a build error.
+
+RF logging is at the shared RNS LoRa interface; MeshChat traffic therefore appears in the
+Reticulum RF log as raw Reticulum packets — there is no separate MeshChat log.
 
 **MeshChat** is a browser client for the same node: an aiohttp backend on `127.0.0.1:8790` plus a
 prebuilt web frontend, published through the LHPC proxy ([webserver](../webserver.md)). It has no

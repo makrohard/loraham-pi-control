@@ -48,7 +48,8 @@ def _receipt_for(svc, tmp_path, stack_id="daemon"):
     return brx.BinaryReceipt(
         stack=stack_id, artifact_sha256="a" * 64, artifact_size=9,
         filename=f"{stack_id}-{'a' * 64}.tar.zst", url="https://example.invalid/a.tar.zst",
-        components={c: "b" * 40 for c in spec.covers}, provenance={},
+        # A real artifact records the manifest pins (check_pins enforces equality at install).
+        components={c: svc._binary_pins(stack_id).get(c, "b" * 40) for c in spec.covers}, provenance={},
         files=tuple(files), file_hashes={r: _h(tmp_path, r) for r in files},
         proof_paths=tuple(files),
         registry_baseline={}, probe="ok")
@@ -770,7 +771,7 @@ def _install_daemon_binary(svc, tmp_path):
     rec = brx.BinaryReceipt(
         stack="daemon", artifact_sha256="a" * 64, artifact_size=10,
         filename=f"daemon-{'a' * 64}.tar.zst", url="https://example.invalid/d.tar.zst",
-        components={c: "b" * 40 for c in spec.covers}, provenance={},
+        components={c: svc._binary_pins("daemon").get(c, "b" * 40) for c in spec.covers}, provenance={},
         files=tuple(spec.proof_paths),
         file_hashes={r: _h(tmp_path, r) for r in spec.proof_paths},
         proof_paths=tuple(spec.proof_paths),

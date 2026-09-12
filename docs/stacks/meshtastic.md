@@ -32,6 +32,7 @@ and cannot run while the daemon serves that band.
 | `region` | `EU_868` (433: `EU_433`) | LoRa region — required for TX; applied after start (a failed push fails the start) |
 | `node_name` / `node_short` | *(empty)* | the node's own names (39 / 4 UTF-8 bytes), never the operator callsign; the start is refused until both are set — node names never inherit ([architecture](../architecture.md#identity-and-callsigns)) |
 | `use_gps` | `on` | use the global position source |
+| `rf_log` | `on` | RF log = meshtasticd's own per-packet JSON trace (`Logging.TraceFile` → `logs/rf-meshtastic.log`), not the common line format. Append-only by the node: lhpc rolls it opportunistically (at start and when the page reads it over 5 MB) — no hard cap, see [maintenance](../maintenance.md#rf-logs) |
 | `loglevel`, `max_nodes`, `ble`, `mqtt`, `cs`, `irq`, `reset`, `busy`, `ssl_key`, `ssl_cert`, `web_root` | advanced | YAML keys. `cs`/`irq` default 7/16 (868) and 8/25 (433); `reset`/`busy` are omitted when empty — the Uputronics RF95 boards have neither line, and BCM 6/13 are the daemon's LEDs |
 
 Region, node identity, GPS mode and fixed position are device settings applied through the

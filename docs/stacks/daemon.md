@@ -38,6 +38,7 @@ daemon refuses to start until one is chosen; the catalog is in [cli](../cli.md).
 | `tx_433` / `tx_868` | `managed` | TX mode per band. `MANAGED` = bounded CAD/LBT, a busy channel returns `CHANNEL_BUSY`; `DIRECT` = immediate TX, no CAD |
 | `cadmon_433` / `cadmon_868` | `off` | continuous channel-activity monitor |
 | `cadrssi_433` / `cadrssi_868` | `-90` | channel-busy RSSI threshold, dBm (−130…0) |
+| `rf_log` | `on` | RF log: every frame the radio received (RSSI/SNR) or sent (after `transmit()` returned OK — a CAD-refused send writes nothing), raw hex + ASCII, one file per band (`logs/rf-daemon-433.log`, `-868.log`). Stack-level switch, read at the daemon's next start; the daemon's RF-Logs submenu or `lhpc config daemon rf_log off` |
 
 A client stack declares the TX mode it needs (`requires_daemon_tx`: MANAGED for kiss, graywolf,
 chat, meshcom and meshcore; DIRECT for voice), and lhpc applies it live when that stack starts.

@@ -301,6 +301,13 @@ the selected source.
 ### logs
 `lhpc logs <target> [--lines N]` — bounded tail of a component's log.
 
+### rflog
+`lhpc rflog <stack> [--band 433|868] [--lines N] [--clear]` — a stack's RF log: what its radio
+heard and sent, one line per frame, kept across restarts. `daemon` needs `--band` (one file per
+band); no other stack takes one. `graywolf` shows the kiss TNC's log — its switch is
+`lhpc config kiss rf_log off`; every other stack's is `lhpc config <stack> rf_log on|off`, read at
+the writer's next start. `--clear` empties the file in place and removes its previous segment.
+
 ---
 
 ### meshtastic

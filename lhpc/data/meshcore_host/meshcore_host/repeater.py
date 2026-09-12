@@ -120,6 +120,7 @@ class _Host:
             txpower=cfg.txpower, txmaxpower=cfg.txmaxpower, crc=cfg.crc,
             preamble=cfg.preamble, syncword=cfg.syncword, ldro=cfg.ldro,
             enable_tx=cfg.enable_tx, airtime_dutycycle=cfg.airtime,
+            rf_log_path=cfg.rf_log_path if cfg.rf_log else "",
         )
         self.gps: Optional[GpsFeed] = None
         self.daemon = self._make_daemon()

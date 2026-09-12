@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0
+
+- RF logs: every stack's radio boundary writes what it heard and sent, one line per frame, kept
+  across restarts — the daemon per band, the KISS TNC (graywolf), the MeshCom bridge, the MeshCore
+  host, the Reticulum LoRa driver, and meshtasticd's own packet trace. One registry drives the
+  RF-Logs submenu on each stack card, the log page's switcher and confirmed Clear, and the new
+  `lhpc rflog` command. `rf_log` is a band-less stack setting; the restart marker now judges
+  applicability per changed parameter. Live proof: `docs/rflog-test-2026-09-12.md`.
+- Pins: LoRaHAM_Daemon 1623ae9, loraham-kiss-tnc b9b7104, meshcom-loraham-bridge 7c86c96,
+  loraham-rns-interface 76a7a37.
+
 ## 0.4.5
 
 - The access point is documented where it is configured. The path to remote access set up neither

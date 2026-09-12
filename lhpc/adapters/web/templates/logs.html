@@ -3,14 +3,33 @@
 {% block content %}
   <div class="card" id="log-card" data-target="{{ target }}" data-job="{{ job or '' }}" data-band="{{ band or '' }}">
     <header>
-      <h2>Logs <span class="pill">{{ target }}</span></h2>
+      <h2>{{ 'RF log' if rflog else 'Logs' }} <span class="pill">{{ rflog.label if rflog else target }}</span></h2>
       <span class="badge badge-{{ 'running' if running else 'stopped' }}" id="log-status">
         {{ 'process running' if running else 'process ended' }}</span>
     </header>
+    {% if switcher %}
+      {# One row per RF-logging stack the manifest installs (registry order); plain links, a full
+         page load — logs.js polls whatever data-job the loaded card carries. #}
+      <nav class="rfswitch" aria-label="RF logs">
+        {% for s in switcher %}
+          <a class="pill" href="{{ url_for('logs_view', target=s.target, job=s.job) }}"{% if s.job == job %} aria-current="page"{% endif %}>{{ s.label }}</a>
+        {% endfor %}
+      </nav>
+    {% endif %}
     <div class="body">
       <p class="muted">{{ path or '(no log file yet)' }}</p>
       <pre id="logbox" class="logbox">{% for line in lines %}{{ line }}
 {% endfor %}{% if not lines %}(no output yet){% endif %}</pre>
+      {% if rflog %}
+        {# Clear applies to the SHOWN log only: the form posts this card's target and job. #}
+        <form method="post" action="{{ url_for('logs_clear', target=target) }}" class="inline"
+              id="rflog-clear" data-confirm="Do you really want to delete the RF log?">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="job" value="{{ job }}">
+          <button type="submit">Clear RF log</button>
+          <span class="muted">empties {{ job }} and removes {{ job }}.1</span>
+        </form>
+      {% endif %}
     </div>
   </div>
 {% endblock %}

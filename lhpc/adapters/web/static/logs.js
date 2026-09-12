@@ -37,6 +37,15 @@
       .catch(function () { if (status) status.textContent = "retrying…"; });
   }
 
+  // The RF log's Clear asks once (OK/Cancel) before the form goes out — CSP forbids an inline
+  // handler, so the question lives here and the template only carries the text.
+  var clear = document.getElementById("rflog-clear");
+  if (clear) {
+    clear.addEventListener("submit", function (e) {
+      if (!window.confirm(clear.getAttribute("data-confirm") || "Clear the RF log?")) e.preventDefault();
+    });
+  }
+
   box.scrollTop = box.scrollHeight;     // start at the newest line
   setInterval(poll, 2000);
   poll();

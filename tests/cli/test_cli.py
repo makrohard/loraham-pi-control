@@ -867,3 +867,56 @@ def test_install_source_fallback_is_gated_and_confirmed(monkeypatch, capsys):
     assert m.main(["install", "--source", "binary"]) != 0
     assert not asked
 
+
+
+# ---- rflog: the registry, not the generic log command ------------------------------------------
+
+@pytest.mark.parametrize("argv", [["rflog", "daemon"],                     # two files: band required
+                                  ["rflog", "graywolf", "--band", "433"],  # one file: band rejected
+                                  ["rflog", "chat"]])                      # no RF log
+def test_rflog_usage_errors_exit_two(tmp_path, monkeypatch, capsys, argv):
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+    assert main(argv) == 2
+    assert capsys.readouterr().out.startswith("ERR")
+
+
+def test_rflog_graywolf_reads_the_kiss_file_and_clears_it(tmp_path, monkeypatch, capsys):
+    rt = tmp_path / "rt"
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
+    assert main(["rflog", "graywolf"]) == 0
+    assert "(no log file yet)" in capsys.readouterr().out
+    (rt / "logs").mkdir(parents=True)
+    (rt / "logs" / "rf-kiss.log").write_text("frame 1\nframe 2\n")
+    (rt / "logs" / "rf-kiss.log.1").write_text("older\n")
+    assert main(["rflog", "graywolf", "--lines", "2"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0].endswith("/logs/rf-kiss.log") and out[1:] == ["frame 1", "frame 2"]
+    assert main(["rflog", "daemon", "--band", "868"]) == 0
+    assert "rf-daemon-868" not in (rt / "logs" / "rf-kiss.log").read_text()
+    assert main(["rflog", "graywolf", "--clear"]) == 0
+    assert (rt / "logs" / "rf-kiss.log").read_text() == "" and not (rt / "logs" / "rf-kiss.log.1").exists()
+
+
+def test_rflog_clear_never_reads_first(tmp_path, monkeypatch):
+    """Clear is Clear. Reading the meshtastic trace is an active operation (an oversized file is
+    rolled into `.1` on read), so `--clear` must resolve and clear without tailing: no `.1` is
+    written and immediately deleted, no 5 MB copied for nothing."""
+    from lhpc.core import rflog
+    from lhpc.core.services import ControllerService
+    rt = tmp_path / "rt"
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
+    (rt / "logs").mkdir(parents=True)
+    trace = rt / "logs" / "rf-meshtastic.log"
+    trace.write_bytes(b"{}\n" * (rflog.MAX_BYTES // 3 + 10))          # over the cap
+    calls = []
+    monkeypatch.setattr(ControllerService, "rflog_tail",
+                        lambda self, *a, **k: calls.append(("tail", a)) or ("", []))
+    monkeypatch.setattr(ControllerService, "_rflog_roll_native",
+                        lambda self, p: calls.append(("roll", p)))
+    assert main(["rflog", "meshtastic", "--clear"]) == 0
+    assert calls == []                                              # neither read nor rolled
+    assert trace.stat().st_size == 0
+    assert not (rt / "logs" / "rf-meshtastic.log.1").exists()
+    # The usage rules still apply on the --clear path.
+    assert main(["rflog", "daemon", "--clear"]) == 2
+    assert main(["rflog", "meshtastic", "--band", "868", "--clear"]) == 2

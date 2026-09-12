@@ -15,6 +15,7 @@ from . import meshcore_identity as _meshcore_identity
 from . import meshcore_mode as _meshcore_mode
 from . import restart_required as _rr
 from . import reticulum_interfaces as _reticulum_interfaces
+from . import rflog as _rflog
 from .config import (
     ConfigError,
     _load_runtime_toml,
@@ -43,7 +44,7 @@ from .snapshot_memo import invalidates_snapshot
 # therefore stored in the band-less config file (like autostart). Both the writer
 # (`save_config_bundle`) and the reader (`_resolved_param_value`) must agree on this set —
 # disagreeing is what made the switch read as its default while being saved as "on".
-_BANDLESS_STACK_PARAMS = (USE_GPS_PARAM,)
+_BANDLESS_STACK_PARAMS = (USE_GPS_PARAM, _rflog.RF_LOG_PARAM)
 
 # MeshCore's position is controller-owned: a LIVE source feeds it through the meshcore-gps
 # bridge, and `fixed` writes static coordinates. Either way the values come from the one
@@ -682,6 +683,10 @@ class ParamsConfigMixin:
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
         stored = self._stack_config_cached(self._owner_stack_id(target), cfg_band)
+        # STACK-LEVEL params live in the band-less file (see `save_config_bundle`); read from the
+        # banded file they would launch at their default whatever the operator saved.
+        bandless = (self._stack_config_cached(self._owner_stack_id(target), "")
+                    if cfg_band else stored)
         run_counts, _ = self._owner_param_counts(owner)
         op = self.config().operator
 
@@ -691,8 +696,9 @@ class ParamsConfigMixin:
         out = {}
         for c in self._target_components(target):
             for p in c.run_params:
-                val, _amb = self._resolve_stored(stored, "r", c.id, p.name,
-                                                 run_counts.get(p.name, 0))
+                val, _amb = self._resolve_stored(
+                    bandless if p.name in _BANDLESS_STACK_PARAMS else stored, "r", c.id, p.name,
+                    run_counts.get(p.name, 0))
                 if val is not None:
                     out[p.name] = str(val)                    # saved value (scoped/unique), verbatim
                 else:
@@ -1179,6 +1185,27 @@ class ParamsConfigMixin:
             else:
                 auto_remove.add(USE_GPS_PARAM)
                 auto_set.pop(USE_GPS_PARAM, None)
+        # The RF-log switch is the second STACK-LEVEL param: one per owner stack, read by the
+        # writer at its next start, so none of the GPS liveness machinery applies. Whatever
+        # shape it arrived in (flat run/file key or component-scoped), it is stored as the
+        # owner's flat band-less key — a banded copy would silently revert on a band change —
+        # and only a deviation from the manifest default is kept.
+        _rf_now, _rf_want = False, ""
+        for _k in [k for k in to_set if _rflog.is_switch_key(k)]:
+            _rf_now = True
+            _rf_want = _rflog.OFF if str(to_set.pop(_k)).strip().lower() == _rflog.OFF else _rflog.ON
+        _rf_default = _rflog.switch_default(self.stacks(), sid) if sid else _rflog.ON
+        for _k in [k for k in to_remove if _rflog.is_switch_key(k)]:
+            to_remove.discard(_k)
+            _rf_now, _rf_want = True, _rf_default
+        if _rf_now:
+            _rf_key = _rflog.switch_key(sid)
+            if _rf_want != _rf_default:
+                auto_set[_rf_key] = _rf_want
+                auto_remove.discard(_rf_key)
+            else:
+                auto_remove.add(_rf_key)
+                auto_set.pop(_rf_key, None)
         # Flipping the switch under a RUNNING stack would leave its feed, its resource claims and
         # its generated config describing a different plan than the one that launched — the same
         # reason the global source is locked while in use. Refused BEFORE anything is written;
@@ -1332,12 +1359,22 @@ class ParamsConfigMixin:
                 _live_seen["v"] = live         # reused by the apply hints — never probed twice
                 if not live:
                     return None                       # nobody is reading this configuration
+                marked = [(k, c, p) for k, c, p in changed if p.apply_mode in live_modes]
+                marker_band = _cfg or live_band
                 if _cfg and live_band and _cfg != live_band:
-                    return None                       # another band's store — the live one is intact
-                names = sorted(p.name for _k, _c, p in changed if p.apply_mode in live_modes)
+                    # Another band's store — the live instance's own settings are intact. Only a
+                    # STACK-LEVEL (band-less) param reaches it from here, so the marker names
+                    # those alone, and records the LIVE band: it exists because the running
+                    # instance must restart, not the edited one.
+                    marked = [(k, c, p) for k, c, p in marked if p.name in _BANDLESS_STACK_PARAMS]
+                    marker_band = live_band
+                if not marked:
+                    return None
+                names = sorted(p.name for _k, _c, p in marked)
                 return self.restart_marker_payload(
-                    _sid, names, _cfg or live_band,
-                    mode="build" if "build" in live_modes else "restart")
+                    _sid, names, marker_band,
+                    mode="build" if any(p.apply_mode == "build" for _k, _c, p in marked)
+                    else "restart")
             targets.append(("state", _rr.marker_path(self._paths, sid), _render_marker, 0o600))
         try:
             if self._holds_config_exclusive():
@@ -2043,13 +2080,16 @@ class ParamsConfigMixin:
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
         stored = self._stack_config_cached(self._owner_stack_id(target), cfg_band)
+        bandless = (self._stack_config_cached(self._owner_stack_id(target), "")
+                    if cfg_band else stored)          # STACK-LEVEL params: the band-less store
         _, file_counts = self._owner_param_counts(owner)
         out = {}
         for c in self._file_config_components(target):
             for p in c.config_file.params:
                 bd = dict(p.band_defaults).get(cfg_band or band, p.default)
-                val, _amb = self._resolve_stored(stored, "f", c.id, p.name,
-                                                 file_counts.get(p.name, 0))
+                val, _amb = self._resolve_stored(
+                    bandless if p.name in _BANDLESS_STACK_PARAMS else stored, "f", c.id, p.name,
+                    file_counts.get(p.name, 0))
                 out[p.name] = str(val) if val is not None else bd
         return out
 
@@ -2621,6 +2661,14 @@ class ParamsConfigMixin:
                     except (OSError, PathContainmentError, ValueError) as exc:
                         secret_error = str(exc)
                         break
+                    continue
+                if p.name == _rflog.MESHTASTIC_TRACE_PARAM and c.id == _rflog.entry("meshtastic").writer:
+                    # DERIVED, controller-owned: the public band-less `rf_log` switch decides
+                    # whether meshtasticd gets a `Logging.TraceFile` path (off -> the key is
+                    # omitted). Never `over`, never `stored`: the switch is the only input.
+                    values[p.name] = _rflog.meshtastic_trace_file(
+                        runtime, _rflog.is_on(self._resolved_param_value(
+                            target, "run", c.id, _rflog.RF_LOG_PARAM, band)))
                     continue
                 raw = over.get(p.name, stored.get(p.name, p.default))
                 try:

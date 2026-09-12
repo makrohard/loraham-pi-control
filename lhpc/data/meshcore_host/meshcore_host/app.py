@@ -54,6 +54,7 @@ class HostApp:
             ldro=cfg.ldro,
             enable_tx=cfg.enable_tx,
             airtime_dutycycle=cfg.airtime,
+            rf_log_path=cfg.rf_log_path if cfg.rf_log else "",
         )
         self.store: Optional[CompanionStore] = (
             CompanionStore(cfg.db) if cfg.db else None

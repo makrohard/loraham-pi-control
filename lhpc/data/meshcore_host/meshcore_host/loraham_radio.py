@@ -34,6 +34,8 @@ import time
 from collections import deque
 from typing import Callable, Optional
 
+from .rflog import RfLog
+
 logger = logging.getLogger("LoRaHAMRadio")
 
 try:  # openHop base class when available; adapter also works standalone (tests).
@@ -73,6 +75,10 @@ TX_RESULT_STATUS_RADIO_NOT_READY = 3
 TX_RESULT_STATUS_RADIO_ERROR = 4
 TX_RESULT_STATUS_INVALID_PACKET = 5
 TX_RESULT_STATUS_INVALID_BAND = 6
+
+# Resolves a pending TX future when the daemon link dropped with the frame already
+# written: distinct from None (an ERROR frame) so the RF log can say `unconfirmed`.
+_TX_LINK_LOST = object()
 
 # TX_RESULT flag bits (informational; status is authoritative).
 TX_RESULT_FLAG_MANAGED = 0x01
@@ -152,6 +158,7 @@ class LoRaHAMRadio(_LoRaRadioBase):
         airtime_dutycycle: float = 10.0,
         noise_poll_interval: float = NOISE_POLL_INTERVAL_S,
         resolve_sockets: bool = True,
+        rf_log_path: str = "",
     ) -> None:
         # Configured paths are kept as given; resolution against /run/loraham
         # happens on EVERY connect attempt (the daemon can restart under either
@@ -185,6 +192,13 @@ class LoRaHAMRadio(_LoRaRadioBase):
         self._noise_poll_interval = noise_poll_interval
 
         self._validate_config()
+
+        # The RF log is opened before the daemon link: a path that cannot be
+        # opened fails startup, like every other LoRaHAM writer. Empty = off.
+        self._rflog = RfLog()
+        if rf_log_path:
+            self._rflog.open(rf_log_path)
+        self._frame_submitted = False
 
         self._rx_callback: Optional[Callable] = None
         self._rx_queue: deque = deque(maxlen=RX_QUEUE_MAX)
@@ -351,6 +365,10 @@ class LoRaHAMRadio(_LoRaRadioBase):
             # Arm the pending slot before writing so a fast TX_RESULT is not missed.
             self._pending_tx_result = future
 
+            # Once the whole frame is written the daemon owns it and may transmit
+            # it whatever happens to this coroutine; a result lost after that
+            # point is logged as `unconfirmed`, never as not radiated.
+            self._frame_submitted = False       # set by _write_frame once the bytes are handed over
             try:
                 await self._write_frame(FRAMED_DATA_TYPE_TX_PACKET, data)
                 result = await asyncio.wait_for(future, timeout=timeout)
@@ -361,6 +379,8 @@ class LoRaHAMRadio(_LoRaRadioBase):
                     self._pending_tx_result = None
                 self._set_tx_ready(False)
                 self._request_reconnect()
+                if self._frame_submitted:
+                    self._rflog.tx("unconfirmed", data)
                 raise
             except (TimeoutError, asyncio.TimeoutError):
                 # asyncio.TimeoutError is only an alias of TimeoutError from 3.11 on;
@@ -372,10 +392,13 @@ class LoRaHAMRadio(_LoRaRadioBase):
                     "No TX_RESULT after %.2f s; packet result lost, reconnecting", timeout
                 )
                 self._request_reconnect()
+                self._rflog.tx("unconfirmed", data)
                 return None
             except (ConnectionError, OSError) as exc:
                 # Stream error: the frame may already have reached the daemon, so a late
                 # TX_RESULT could be inherited by the next send(). Invalidate and reconnect.
+                if self._frame_submitted:
+                    self._rflog.tx("unconfirmed", data)
                 if self._pending_tx_result is future:
                     self._pending_tx_result = None
                 self._set_tx_ready(False)
@@ -389,14 +412,18 @@ class LoRaHAMRadio(_LoRaRadioBase):
                 logger.error("Daemon TX failed: %s", exc)
                 return None
 
-            if result is None:
-                # Resolved by an ERROR frame or a connection drop.
+            if result is None or result is _TX_LINK_LOST:
+                # Resolved by an ERROR frame (the daemon refused it: not radiated)
+                # or by a connection drop (the daemon may still transmit it).
                 logger.warning("TX aborted before a result was received")
+                if result is _TX_LINK_LOST:
+                    self._rflog.tx("unconfirmed", data)
                 return None
 
             status, flags, seq = result
             if status == TX_RESULT_STATUS_OK:
                 # OK also covers send-after-CAD-timeout (flag 0x04): transmitted.
+                self._rflog.tx("ok", data)
                 self._airtime_txtimestamp.append(time.monotonic())
                 self._airtime_txtime.append(airtime_ms)
                 logger.debug(
@@ -529,6 +556,7 @@ class LoRaHAMRadio(_LoRaRadioBase):
             except (asyncio.CancelledError, Exception):
                 pass
         await self._close_sockets()
+        self._rflog.close()
         # Wake any wait_for_rx() waiter so it observes the closed state.
         self._rx_available.set()
 
@@ -567,7 +595,7 @@ class LoRaHAMRadio(_LoRaRadioBase):
             ) from exc
 
     async def _connect_sockets(self) -> None:
-        self._fail_pending_tx()
+        self._fail_pending_tx(link_lost=True)
         self._cadwait_s = DEFAULT_CADWAIT_S
         self._set_link_state(False, False)
 
@@ -786,6 +814,8 @@ class LoRaHAMRadio(_LoRaRadioBase):
                 rf, rssi, snr = decoded
                 self._last_rssi = rssi
                 self._last_snr = snr
+                # What the radio received — before the callback or the queue.
+                self._rflog.rx(rssi, snr, rf)
                 cb = self._rx_callback
                 if cb is not None:
                     try:
@@ -834,11 +864,13 @@ class LoRaHAMRadio(_LoRaRadioBase):
         self._pending_tx_result = None
         future.set_result((status, flags, seq))
 
-    def _fail_pending_tx(self) -> None:
+    def _fail_pending_tx(self, *, link_lost: bool = False) -> None:
+        # None: the daemon answered with ERROR, the packet was not sent. Link
+        # lost: the frame reached the daemon and its result is simply unknown.
         future = self._pending_tx_result
         self._pending_tx_result = None
         if future is not None and not future.done():
-            future.set_result(None)
+            future.set_result(_TX_LINK_LOST if link_lost else None)
 
     def _request_reconnect(self) -> None:
         # Closing the data writer drops the transport, which makes the reader loops error
@@ -888,7 +920,7 @@ class LoRaHAMRadio(_LoRaRadioBase):
     async def _close_sockets(self) -> None:
         # Resolve any in-flight transmit so it does not hang across reconnect, and
         # require a fresh handshake before the next TX.
-        self._fail_pending_tx()
+        self._fail_pending_tx(link_lost=True)
         self._set_link_state(False, False)
         # Drop the cached noise floor: a value read before the drop is stale, and
         # openHop should report "no reading" (0) rather than a stale one until the
@@ -925,6 +957,10 @@ class LoRaHAMRadio(_LoRaRadioBase):
         # TX transaction under _tx_lock.
         frame = self._encode_frame(frame_type, payload)
         writer.write(frame)
+        # From here the bytes belong to the transport: a drain() that fails afterwards
+        # cannot prove the frame did not reach the daemon, so send() treats it as
+        # submitted (`unconfirmed` in the RF log), never as "nothing went out".
+        self._frame_submitted = True
         await writer.drain()
 
     def _calculate_airtime_ms(self, payload_len: int) -> float:

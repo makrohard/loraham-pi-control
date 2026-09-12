@@ -303,3 +303,24 @@ failure there is information; no external project's suite is a required check.
 `logs/build-<comp>-<N>.log` (multi-step); host tests `test-<comp>…`; run logs
 `start-<comp>[-<band>].log`. `lhpc logs <comp>` resolves to the newest matching file, and each
 job announces its exact path at start.
+
+### RF logs
+
+`logs/rf-*.log` is the family of per-stack RF logs — what a stack's radio heard and sent, one
+line per frame, written by the stack's own process at its radio boundary and kept across
+restarts (run logs are overwritten; these are not). The six user-facing logs, their config owner
+and their writer are the registry in `lhpc/core/rflog.py`, which is the **only** authorization
+for the viewer, the switcher and Clear: a job absent from it is never an RF log, whatever its
+name. `rf_log` is a stack-level, band-less switch (`_BANDLESS_STACK_PARAMS`), read at the
+writer's next start; graywolf proxies to the kiss TNC's switch.
+
+Retention, per job: the writer copy-truncates at 5 MB into `<job>.1` — the inode never changes,
+so Clear (truncate in place, delete `.1`) is safe under a running writer — which retains at most
+~10 MB per job (the daemon: per band). The viewer tails `.1` + the live file as one. Registered RF
+logs are outside the generic job-log pruning and its count/byte budget (they are meant to outlive
+every job log), and a roll or Clear of one job holds a per-job lock in `state/locks/`, so two
+console workers can never interleave them. The one
+exception is **meshtastic**: its log is meshtasticd's own `TraceFile`, which the node only ever
+appends to, so lhpc rolls it opportunistically — at stack start and when a page read finds it over
+the cap, keeping the last ~5 MB in `.1`. That is not a hard maximum; an unattended node grows the
+trace until the next start, read or Clear.

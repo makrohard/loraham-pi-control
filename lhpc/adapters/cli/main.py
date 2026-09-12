@@ -297,6 +297,35 @@ def _cmd_config(svc, args) -> int:
     return rc
 
 
+def _cmd_rflog(svc, args) -> int:
+    from lhpc.core import rflog as _rflog
+    if _rflog.entry(args.surface) is None:
+        print(f"ERR   '{args.surface}' has no RF log (one of: "
+              f"{', '.join(x.surface for x in _rflog.REGISTRY)})")
+        return 2
+    try:
+        e, job = _rflog.resolve_job(args.surface, args.band)
+    except ValueError as exc:
+        print(f"ERR   {exc}")                                   # usage: band required/rejected
+        return 2
+    if args.clear:
+        # Clear is Clear: resolve and clear, never read first — reading the meshtastic trace
+        # is an active operation (it rolls an oversized file), and a roll before a Clear
+        # would copy 5 MB to `.1` only to delete it.
+        return _render(svc.rflog_clear(e.writer, job))
+    try:
+        path, lines = svc.rflog_tail(args.surface, args.band, args.lines)
+    except ValueError as exc:
+        print(f"ERR   {exc}")
+        return 2
+    print(path or "(no log file yet)")
+    for line in lines:
+        print(line)
+    if not lines:
+        print("(no output yet)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lhpc",
@@ -469,6 +498,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_logs = sub.add_parser("logs", help="Show a bounded tail of a component's log")
     p_logs.add_argument("target", help="Stack/component id")
     p_logs.add_argument("--lines", type=int, default=200, help="Tail length")
+
+    # RF logs read the same registry as the web UI (lhpc/core/rflog.py): graywolf maps to the
+    # kiss TNC's file, the daemon has one file per band, nothing else is reachable here.
+    p_rf = sub.add_parser("rflog", help="Show or clear a stack's RF log (what its radio heard and sent)")
+    p_rf.add_argument("surface", help="daemon | graywolf | meshcom | meshtastic | meshcore | reticulum")
+    p_rf.add_argument("--band", default="", help="daemon only: 433 or 868 (one file per band)")
+    p_rf.add_argument("--lines", type=int, default=300, help="Tail length")
+    p_rf.add_argument("--clear", action="store_true",
+                      help="Empty the log in place and remove its previous segment")
 
     from lhpc.core.config import GPS_BAUDS as _GPS_BAUDS
     from lhpc.core.config import GPS_SOURCES as _GPS_SOURCES
@@ -1169,6 +1207,8 @@ def _run(argv: list[str] | None = None) -> int:
         return _apply_flow(lambda a: svc.build(args.target, apply=a), yes=args.yes)
     if args.command == "logs":
         return _render(svc.logs(args.target, lines=args.lines))
+    if args.command == "rflog":
+        return _cmd_rflog(svc, args)
     if args.command == "daemon":
         if args.set_kv:
             key, _, value = args.set_kv.partition("=")

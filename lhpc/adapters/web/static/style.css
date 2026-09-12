@@ -496,6 +496,9 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .badge-ok { background: var(--badge-ok-bg); color: var(--ok); border-color: var(--badge-ok-border); }
 .badge-failed { background: var(--badge-bad-bg); color: var(--bad); border-color: var(--badge-bad-border); }
 .inline { display: inline; }
+/* RF log page: one row of stack pills under the header, the shown one marked. */
+.rfswitch { display: flex; flex-wrap: wrap; gap: .3rem; padding: .35rem .8rem 0; }
+.rfswitch a[aria-current="page"] { background: var(--badge-ok-bg); border-color: var(--badge-ok-border); color: var(--ok); }
 
 /* ---- Webserver controller component (inline in the controller row) ---- */
 .ws-comp form { margin: 0.7em 0; }

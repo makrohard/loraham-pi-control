@@ -82,7 +82,7 @@ Four different questions get four different answers, and they are easy to confus
 |---|---|
 | is this checkout the commit it claims? | the ownership record plus its live `HEAD` (`source_registry.verify_identity`) |
 | is this stack installed from an artifact at all? | the receipt's four-state read (`receipt_state`) — cheap, no hashing |
-| is that artifact the right COMMITS? | the receipt's `components` map against the manifest pins — the same comparison the install gate makes |
+| is that artifact the right COMMITS? | the receipt's `components` map against the manifest pins — the same comparison the install gate makes. A start refuses a covered component whose installed artifact is behind the manifest (publishing a new artifact never updates an installed copy): `lhpc update <stack>` |
 | are the artifact's FILES still as installed? | `verify_files`, which hashes them |
 
 The last one is an integrity check on what was installed, not a statement of provenance, and it

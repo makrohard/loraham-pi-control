@@ -21,6 +21,7 @@ from . import (
 from . import resources as resources_mod
 from . import restart_required as _rr
 from . import reticulum_interfaces as _ri
+from . import rflog as _rflog
 from .lifecycle import GUI_MISSING_HINT
 from .model import ComponentKind, ResourceMode, RunState
 from .outcomes import CompResult, Outcome, applied_ok
@@ -1177,6 +1178,13 @@ class LifecycleOpsMixin:
             if comp.source and not self._source_present(comp):
                 record(comp, stack, Outcome.BLOCKED, f"not installed (lhpc install {stack.id})")
                 continue
+            # An installed binary artifact built from other commits than the manifest pins is
+            # an install-state problem like "not installed": refused here, before any
+            # requirement or build check, so a stale binary is never launched with argv it
+            # does not know.
+            if (_behind := self.binary_behind(comp)):
+                record(comp, stack, Outcome.BLOCKED, _behind)
+                continue
             if comp.interactive:
                 # Never auto-start an interactive TUI — the operator runs it in a terminal.
                 # ONLY voice's terminal variant is a GUI FALLBACK: a non-main interactive
@@ -1322,6 +1330,7 @@ class LifecycleOpsMixin:
                     record(comp, stack, Outcome.BLOCKED,
                            f"config generation failed ({bad.path}: {bad.detail})")
                     continue
+            self._rflog_roll_at_start(comp.id)
             # COMPONENT-scoped launch config (this component's OWN run params from the owner-stack
             # store) so a stored sibling run parameter can never leak into another component's argv
             # through a name collision. The only launch-time overlay is an inherited identity
@@ -1873,6 +1882,13 @@ class LifecycleOpsMixin:
             if comp.source and not self._source_present(comp):
                 lines.append("  [skip] daemon: not installed (lhpc install daemon)")
                 return lines, False
+            # The daemon takes this separate path, so the same refusal as the generic start:
+            # an installed binary artifact behind the manifest pins is never spawned — it
+            # would be launched with argv it does not know (the RF-log options were the first
+            # case) — whether the daemon itself or a dependent stack asked for it.
+            if (_behind := self.binary_behind(comp)):
+                lines.append(f"  [BLOCKED] daemon: {_behind}")
+                return lines, False
             if not self.is_built(comp):
                 lines.append("  [BLOCKED] daemon: not built — build it first (lhpc build daemon)")
                 return lines, False
@@ -1888,6 +1904,10 @@ class LifecycleOpsMixin:
                 dparams["txmode"] = dparams.get(f"tx_{b}", "managed")
                 dparams["cadmon"] = dparams.get(f"cadmon_{b}", "off")
                 dparams["cadrssi"] = dparams.get(f"cadrssi_{b}", "-90")
+                # The RF-log switch is STACK-level (band-less) while the file it names is per
+                # band (`{band}` in the run line); the path itself is never a stored value.
+                dparams[_rflog.RF_LOG_PARAM] = self._resolved_param_value(
+                    "daemon", "run", self.DAEMON_ID, _rflog.RF_LOG_PARAM, b)
                 res = life.start(stack, comp, dparams, band=b,
                                  requested_target=requested_target,
                                  start_scope=start_scope)
@@ -3078,6 +3098,11 @@ class LifecycleOpsMixin:
             if p.is_symlink() or not p.is_file():
                 return "", []
             from . import runtime_fs
+            rf = _rflog.by_job(name)
+            if rf is not None:
+                if rf[0].native:
+                    self._rflog_roll_native(p)     # meshtasticd never rolls its own trace
+                return str(p), self._rflog_tail(p, lines)
             return str(p), runtime_fs.tail(self._paths, p, lines)
         s = self.stack(target)
         if s is not None and s.main_component:
@@ -3506,6 +3531,11 @@ class LifecycleOpsMixin:
         logs = []
         for name, is_link in entries:
             if is_link or not name.endswith(".log"):
+                continue
+            # A registered RF log is persistent by contract (its writer keeps the descriptor
+            # open and the file is meant to outlive every job log): it is neither a deletion
+            # candidate nor part of the count/byte budget the job logs share.
+            if _rflog.by_job(name) is not None:
                 continue
             f = d / name
             # REGULAR FILES ONLY, via a DESCRIPTOR-SAFE stat (a path-based lstat could
@@ -4478,6 +4508,8 @@ class LifecycleOpsMixin:
         covered = self.binary_covers(comp.id)
         if comp.source and not covered and not self._source_present(comp):
             return f"not installed — run: lhpc install {sid}"
+        if (behind := self.binary_behind(comp)):
+            return behind
         if not self.is_built(comp):
             return f"not built — run: {self.build_remedy(sid, comp.id)}"
         return ""
@@ -4978,6 +5010,198 @@ class LifecycleOpsMixin:
             if st is not None:
                 return st.run_state in (RunState.RUNNING, RunState.DEGRADED)
         return False
+
+    # ------------------------------------------------------------------
+    # RF logs — everything reads `rflog.REGISTRY`; nothing is rediscovered from the manifest.
+    # ------------------------------------------------------------------
+
+    def _rflog_path(self, job: str):
+        return self._paths.under("logs", job)
+
+    def _rflog_lock(self, job: str):
+        """An exclusive flock per RF job, held across a native roll or a Clear. Two console
+        workers (or the CLI and a worker) can otherwise both pass the size check; the second
+        would copy the already-truncated live file over `.1` and the retained history is gone.
+        The size is re-checked UNDER the lock for exactly that reason."""
+        import fcntl
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _held():
+            fh = runtime_fs.open_lock(self._paths, self._paths.under("state", "locks", f"rflog-{job}.lock"))
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                yield
+            finally:
+                fh.close()                       # releases the flock
+        return _held()
+
+    def _rflog_tail(self, p, lines: int) -> list[str]:
+        """The last `lines` of the logical concatenation <job>.1 + <job> — exactly `lines` in
+        total, so the page does not go blank right after a rollover."""
+        cur = runtime_fs.tail(self._paths, p, lines)
+        if len(cur) >= lines:
+            return cur
+        prev = runtime_fs.tail(self._paths, p.with_name(_rflog.previous(p.name)), lines - len(cur))
+        return prev + cur
+
+    def _rflog_roll_native(self, p) -> None:
+        """meshtasticd's TraceFile is append-only and its own rotation belongs to another
+        facility, so LHPC rolls it OPPORTUNISTICALLY — at stack start and when a read finds it
+        over the cap: at most the last ~5 MB go to <job>.1, the live file is truncated in place
+        (same inode: meshtasticd keeps appending). Not a hard cap; the docs say so."""
+        st = runtime_fs.stat_leaf_nofollow(self._paths, p)
+        if st is None or st.st_size <= _rflog.MAX_BYTES:
+            return                               # cheap pre-check, no lock
+        try:
+            with self._rflog_lock(p.name):
+                self._rflog_roll_native_locked(p)
+        except (OSError, PathContainmentError):
+            pass
+
+    def _rflog_roll_native_locked(self, p) -> None:
+        try:
+            fd = runtime_fs._open_leaf(self._paths, p, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                       0o644, create_dirs=False)
+        except (OSError, PathContainmentError):
+            return
+        try:
+            runtime_fs._require_regular_fd(fd, p)
+            size = os.fstat(fd).st_size
+            if size <= _rflog.MAX_BYTES:
+                return                           # a concurrent roll or Clear got here first
+            tail = os.pread(fd, _rflog.MAX_BYTES, max(0, size - _rflog.MAX_BYTES))
+            nl = tail.find(b"\n")
+            tail = tail[nl + 1:] if nl >= 0 else tail          # whole lines only
+            with runtime_fs.open_log_truncate(self._paths, p.with_name(_rflog.previous(p.name))) as prev:
+                prev.write(tail.decode("utf-8", "replace"))
+            os.ftruncate(fd, 0)
+        except (OSError, PathContainmentError):
+            pass
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def _rflog_roll_at_start(self, comp_id: str) -> None:
+        for e in _rflog.REGISTRY:
+            if e.native and e.writer == comp_id:
+                for _band, job in e.jobs:
+                    try:
+                        self._rflog_roll_native(self._rflog_path(job))
+                    except (OSError, PathContainmentError):
+                        pass
+
+    def rflog_job(self, target: str, job) -> dict | None:
+        """The registry entry behind `/logs/<target>?job=<job>` — None unless `job` is a
+        registered RF log AND `target` is its writer. The one authorization for the RF viewer,
+        the switcher and Clear (no prefix semantics: `rf-made-up.log` is nobody's)."""
+        if not job:
+            return None
+        rf = _rflog.by_job(str(job))
+        if rf is None or rf[0].writer != target:
+            return None
+        e, band = rf
+        return {"surface": e.surface, "owner": e.owner, "writer": e.writer, "band": band,
+                "job": job, "label": f"{e.surface} {band}".strip(), "native": e.native}
+
+    def rflog_running(self, job: str) -> bool:
+        """The badge: the WRITER's run state (the daemon's per band), never a job marker."""
+        rf = _rflog.by_job(str(job or ""))
+        if rf is None:
+            return False
+        e, band = rf
+        if e.writer == self.DAEMON_ID:
+            try:
+                return bool(self.daemon_view(band).reachable)
+            except Exception:
+                return False
+        for ss in self.build_snapshot().stacks:
+            st = ss.components.get(e.writer)
+            if st is not None:
+                return st.run_state in (RunState.RUNNING, RunState.DEGRADED)
+        return False
+
+    def rflog_switcher(self) -> list[dict]:
+        """One row per RF-logging job this manifest installs, in registry order — the log page's
+        header switcher."""
+        out = []
+        for e in _rflog.REGISTRY:
+            if self.stack(e.surface) is None:
+                continue
+            for band, job in e.jobs:
+                out.append({"target": e.writer, "job": job, "surface": e.surface, "band": band,
+                            "label": f"{e.surface} {band}".strip()})
+        return out
+
+    def _rflog_switch_value(self, e) -> str:
+        return (_rflog.ON if _rflog.is_on(self._resolved_param_value(
+            e.owner, e.kind, e.writer, _rflog.RF_LOG_PARAM, "")) else _rflog.OFF)
+
+    def rflog_view(self, stack_id: str) -> dict | None:
+        """The RF-Logs submenu of a stack card: the owner's switch (configured value, whether a
+        restart is still pending for it), and each job with its path and size."""
+        e = _rflog.entry(stack_id)
+        if e is None or self.stack(e.owner) is None:
+            return None
+        marker = self.restart_required(e.owner) or {}
+        jobs = []
+        for band, job in e.jobs:
+            p = self._rflog_path(job)
+            st = runtime_fs.stat_leaf_nofollow(self._paths, p)
+            size = int(st.st_size) if st is not None else None
+            jobs.append({"job": job, "band": band, "target": e.writer, "path": str(p),
+                         "label": f"{e.surface} {band}".strip(), "size": size,
+                         "size_text": (f"{size / 1048576:.1f} MB" if size is not None and size >= 1048576
+                                       else f"{size / 1024:.0f} kB" if size is not None and size >= 1024
+                                       else f"{size} B" if size is not None else "no file yet")})
+        return {"surface": e.surface, "owner": e.owner, "writer": e.writer, "key": e.key,
+                "native": e.native, "value": self._rflog_switch_value(e),
+                "restart_required": _rflog.RF_LOG_PARAM in (marker.get("params") or []),
+                "jobs": jobs}
+
+    def set_rflog(self, stack_id: str, value) -> ActionResult:
+        """Save the switch on the CONFIG OWNER through the one-key bundle path (values merge; no
+        band — the param is band-less). Graywolf's page deliberately writes the kiss store."""
+        e = _rflog.entry(stack_id)
+        if e is None or self.stack(e.owner) is None:
+            return ActionResult(False, f"'{stack_id}' has no RF log.")
+        v = str(value or "").strip().lower()
+        if v not in (_rflog.ON, _rflog.OFF):
+            return ActionResult(False, "RF log: the switch is 'on' or 'off'.")
+        return self.save_config_bundle(e.owner, values={e.key: v})
+
+    def rflog_clear(self, target: str, job) -> ActionResult:
+        """Clear ONE RF log: truncate the live file in place (the writer keeps its descriptor —
+        same inode, it simply continues) and remove its previous segment. Only a registered job
+        of `target` — re-validated exactly like `log_tail`; nothing else is ever touched."""
+        rf = self.rflog_job(target, job)
+        if rf is None:
+            return ActionResult(False, "Not an RF log of this component; nothing cleared.")
+        try:
+            name = validators.path_component(str(job), field="job log")
+            if not name.endswith(".log"):
+                raise validators.ValidationError("not a .log")
+            p = self._rflog_path(name)
+        except (validators.ValidationError, PathContainmentError) as exc:
+            return ActionResult(False, f"RF log not cleared: {exc}")
+        st = runtime_fs.stat_leaf_nofollow(self._paths, p)
+        try:
+            with self._rflog_lock(name):         # never interleaved with a native roll
+                if st is not None:
+                    # A symlink/non-regular leaf is refused by the anchored open, never truncated.
+                    runtime_fs.open_log_truncate(self._paths, p).close()
+                runtime_fs.unlink(self._paths, p.with_name(_rflog.previous(name)))
+        except (OSError, PathContainmentError) as exc:
+            return ActionResult(False, f"RF log not cleared: {exc}")
+        return ActionResult(True, f"RF log cleared: {name}")
+
+    def rflog_tail(self, surface: str, band: str = "", lines: int = 300) -> tuple:
+        """CLI: (path, lines) for a surface's RF log; the daemon needs its band, nobody else
+        takes one. ("", []) with a reason in the second slot is never returned — errors raise."""
+        e, job = _rflog.resolve_job(surface, band)
+        return self.log_tail(e.writer, lines, job=job)
 
     def start_notes(self, result: ActionResult) -> list[str]:
         """Per-component `start_note` strings for components that actually started

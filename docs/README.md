@@ -59,6 +59,8 @@ model, then the CLI. Every file is linked once; the README covers install.
   Codespace.
 - [Reticulum test 2026-09-12](reticulum-test-2026-09-12.md) — the whole Reticulum stack on the
   box: the node, MeshChat, the Internet interface and transport, and what stayed unproven.
+- [RF logs test 2026-09-12](rflog-test-2026-09-12.md) — the six RF logs proven with real frames
+  from three radios, the switch, the console, retention, and what stayed unproven.
 
 ## Policy
 

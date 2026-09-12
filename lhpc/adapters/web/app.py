@@ -919,6 +919,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 # None when HMAC does not apply here (no flag/row); else whether it is ENABLED.
                 "hmac_enabled": service.hmac_status(stack.id),
                 "restart_required": service.restart_required(stack.id),
+                # The RF-Logs submenu: None for a stack without an RF log (chat, voice, kiss).
+                "rflog": service.rflog_view(stack.id),
                 "conflicts": [c for c in all_conflicts
                               if any(h in member_ids for h in c.holders)],
             })
@@ -1571,9 +1573,27 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         job = _safe_job(request.args.get("job"))
         band = _safe_band(request.args.get("band"))
         path, lines = service.log_tail(target, 300, job=job, band=band)
+        # An RF log (registry-authorized, never by name): the writer's run state is the badge,
+        # the header carries the switcher and the card a confirmed Clear.
+        rf = service.rflog_job(target, job)
         return render_template("logs.html", version=__version__, target=target, job=job, band=band,
                                stack_id=service.stack_of(target), path=path, lines=lines,
-                               running=service.log_running(target, job))
+                               running=(service.rflog_running(job) if rf
+                                        else service.log_running(target, job)),
+                               rflog=rf, switcher=service.rflog_switcher() if rf else [])
+
+    @app.post("/logs/<target>/clear")
+    def logs_clear(target: str):
+        if service.stack_of(target) is None:
+            abort(404)
+        if not _csrf_ok():
+            abort(400)
+        job = _safe_job(request.form.get("job"))
+        if service.rflog_job(target, job) is None:
+            abort(404)                      # not a registered RF log of this writer
+        result = service.rflog_clear(target, job)
+        flash(result.summary, "ok" if result.ok else "warn")
+        return redirect(url_for("logs_view", target=target, job=job))
 
     @app.get("/api/logs/<target>")
     def logs_api(target: str):
@@ -1583,7 +1603,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         band = _safe_band(request.args.get("band"))
         path, lines = service.log_tail(target, 300, job=job, band=band)
         return jsonify(target=target, path=path, lines=lines,
-                       running=service.log_running(target, job))
+                       running=(service.rflog_running(job) if service.rflog_job(target, job)
+                                else service.log_running(target, job)))
 
     @app.post("/stacks/<stack_id>/config")
     def stack_config_save(stack_id: str):
@@ -1699,6 +1720,18 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                "message": pr.message, "diagnostic": pr.diagnostic}
         return redirect(url_for("stacks_overview", open="daemon", cfg="daemon")
                         + "#stack-settings-daemon")
+
+    @app.post("/stacks/<stack_id>/rflog")
+    def stack_rflog_save(stack_id: str):
+        # ONE key on the config OWNER through the merging bundle path (never the whole Settings
+        # form, whose parser fills every missing field with its default). Band-less by design.
+        if service.stack(stack_id) is None:
+            abort(404)
+        if not _csrf_ok():
+            abort(400)
+        result = service.set_rflog(stack_id, request.form.get("value", ""))
+        flash(result.summary, "ok" if result.ok else "warn")
+        return redirect(url_for("stacks_overview", open=stack_id) + "#stack-rflog-" + stack_id)
 
     @app.post("/stacks/<stack_id>/daemon-params")
     def daemon_params_save(stack_id: str):

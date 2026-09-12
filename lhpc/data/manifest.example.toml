@@ -59,9 +59,11 @@ main = "loraham-daemon"
   # v112+ daemon: ONE radio per process. `--radio` is mandatory; `--hw` selects the board preset;
   # the plain (NON band-suffixed) --tx-mode/--cad-monitor/--cad-rssi apply to this process's band.
   # lhpc injects `radio`/`hw`/`txmode`/`cadmon`/`cadrssi` per band at spawn (see _ensure_daemon).
-  run = "loraham_daemon/loraham_daemon --radio {radio} --hw {hw} --tx-mode {txmode} --cad-monitor {cadmon} --cad-rssi {cadrssi}"
+  # `{rf_log}` renders `--rflog on|off` (the STACK-level switch, injected per band like the rest);
+  # the file is per band and named by lhpc — the daemon never derives a path itself.
+  run = "loraham_daemon/loraham_daemon --radio {radio} --hw {hw} --tx-mode {txmode} --cad-monitor {cadmon} --cad-rssi {cadrssi} {rf_log} --rflog-path {runtime}/logs/rf-daemon-{band}.log"
   # Structured (shell-free) execution — preferred over `run`/`pre` above.
-  run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "--hw", "{param:hw}", "--tx-mode", "{param:txmode}", "--cad-monitor", "{param:cadmon}", "--cad-rssi", "{param:cadrssi}"]
+  run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "--hw", "{param:hw}", "--tx-mode", "{param:txmode}", "--cad-monitor", "{param:cadmon}", "--cad-rssi", "{param:cadrssi}", "{param:rf_log}", "--rflog-path", "{runtime}/logs/rf-daemon-{band}.log"]
   run_cwd = "{source}"
   # v112 sockets default to /run/loraham (systemd, tmpfiles-provisioned). lhpc runs the daemon DIRECT
   # as a user, so point its sockets at /tmp — the daemon has no /tmp fallback of its own, and all
@@ -123,6 +125,17 @@ main = "loraham-daemon"
     min = -130
     max = 0
     label = "CAD RSSI (this process, dBm)"
+    # RF log: what this band's radio heard and sent, one line per frame, kept across restarts.
+    # STACK-level (band-less) switch — the FILES are per band, the switch is not. The daemon's
+    # RF-Logs submenu is its only web surface for it (`config_param_fields` is empty here).
+    [[stack.component.param]]
+    name = "rf_log"
+    kind = "enum"
+    arg = "--rflog"
+    choices = ["on", "off"]
+    default = "on"
+    group = "RF-Logs"
+    label = "RF log (what the radio heard and sent; one file per band)"
     [[stack.component.param]]
     name = "tx_433"
     kind = "enum"
@@ -170,8 +183,8 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/loraham-daemon"
-    pin_commit = "ff3c26a4247f74771b61c353877f7dd71af9984b"
-    pin_tag = "v0.9.0"
+    pin_commit = "1623ae90c051e76b2b6c61419008ffd70d108a20"
+    pin_tag = "v0.9.0-1-g1623ae9"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "loraham-daemon-hardening"
@@ -302,8 +315,8 @@ main = "loraham-chat"
 
     [stack.component.source]
     path = "src/LoRaHAM_Daemon"
-    pin_commit = "ff3c26a4247f74771b61c353877f7dd71af9984b"
-    pin_tag = "v0.9.0"
+    pin_commit = "1623ae90c051e76b2b6c61419008ffd70d108a20"
+    pin_tag = "v0.9.0-1-g1623ae9"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "LoRaHAM_Daemon"
@@ -645,8 +658,8 @@ main = "loraham-kiss-tnc"
   # Explicit run_argv/build_steps + run_cwd so the root binary/script resolve cwd-relative.
   build = "bash build.sh"
   build_steps = [ { argv = ["bash", "build.sh"], attributable = true } ]
-  run = "./loraham-kiss-tnc --config loraham_kiss_tnc.conf.example {kiss_port} {kiss_host} {rx_freq} {tx_freq} {data_socket} {conf_socket} {rx_only} {verbose}"
-  run_argv = ["./loraham-kiss-tnc", "--config", "loraham_kiss_tnc.conf.example", "{param:kiss_port}", "{param:kiss_host}", "{param:kiss_bind}", "{param:rx_freq}", "{param:tx_freq}", "{param:data_socket}", "{param:conf_socket}", "{param:rx_only}", "{param:verbose}"]
+  run = "./loraham-kiss-tnc --config loraham_kiss_tnc.conf.example {kiss_port} {kiss_host} {rx_freq} {tx_freq} {data_socket} {conf_socket} {rx_only} {verbose} {rf_log} --rflog-path {runtime}/logs/rf-kiss.log"
+  run_argv = ["./loraham-kiss-tnc", "--config", "loraham_kiss_tnc.conf.example", "{param:kiss_port}", "{param:kiss_host}", "{param:kiss_bind}", "{param:rx_freq}", "{param:tx_freq}", "{param:data_socket}", "{param:conf_socket}", "{param:rx_only}", "{param:verbose}", "{param:rf_log}", "--rflog-path", "{runtime}/logs/rf-kiss.log"]
   run_cwd = "{source}"
   bin = "loraham-kiss-tnc"
   test = "bash run_tests.sh"
@@ -729,11 +742,21 @@ main = "loraham-kiss-tnc"
     flag = "--verbose"
     label = "Verbose logging"
     advanced = true
+    # RF log at the TNC — the radio boundary of the kiss AND the graywolf stack (graywolf's
+    # RF-Logs submenu proxies to this switch). STACK-level (band-less); the file is named by lhpc.
+    [[stack.component.param]]
+    name = "rf_log"
+    kind = "enum"
+    arg = "--rflog"
+    choices = ["on", "off"]
+    default = "on"
+    group = "RF-Logs"
+    label = "RF log (what the radio heard and sent; TNC2 text where the frame carries it)"
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
-    pin_commit = "e7646c12f75f9b4b8ff5b3e26cd162cee9a8f6bd"
-    pin_tag = "v0.5.1-2-ge7646c1"
+    pin_commit = "b9b71042236786d580b0767c26904cfd0f7e50aa"
+    pin_tag = "v0.5.1-4-gb9b7104"
     remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
     branch = "main"
 
@@ -780,8 +803,8 @@ main = "loraham-kiss-tnc"
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
-    pin_commit = "e7646c12f75f9b4b8ff5b3e26cd162cee9a8f6bd"
-    pin_tag = "v0.5.1-2-ge7646c1"
+    pin_commit = "b9b71042236786d580b0767c26904cfd0f7e50aa"
+    pin_tag = "v0.5.1-4-gb9b7104"
     remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
     branch = "main"
 
@@ -1204,6 +1227,17 @@ main = "meshtastic"
     choices = ["on", "off"]
     default = "on"
     label = "Use the global position source (Position (GPS) card on the Stacks page)"
+    # RF log = meshtasticd's OWN per-packet JSON trace (`Logging.TraceFile`), written by the
+    # node before its LogLevel gate. The switch is public and band-less like every other
+    # stack's; the path is the hidden `trace_file` file param below, DERIVED from this switch
+    # by lhpc/core/rflog.py at config generation (never a stored value).
+    [[stack.component.param]]
+    name = "rf_log"
+    kind = "enum"
+    choices = ["on", "off"]
+    default = "on"
+    group = "RF-Logs"
+    label = "RF log (the node's per-packet JSON trace)"
     [[stack.component.param]]
     name = "region"
     kind = "enum"
@@ -1318,6 +1352,18 @@ main = "meshtastic"
       omit_if_empty = true
       hidden = true
       label = "GPS device (from the global position source)"
+      # DERIVED from the band-less `rf_log` switch (see the run params): on -> the absolute
+      # registry path, off -> omitted (`omit_if_empty`). Hidden and never read from a store.
+      [[stack.component.config_file.param]]
+      name = "trace_file"
+      key = "TraceFile"
+      section = "Logging"
+      kind = "str"
+      default = ""
+      validator = "path"
+      omit_if_empty = true
+      hidden = true
+      label = "Per-packet JSON trace file (derived from rf_log)"
       [[stack.component.config_file.param]]
       name = "ssl_key"
       key = "SSLKey"
@@ -1545,7 +1591,7 @@ main = "meshcom-qemu"
   build = "cmake -S . -B build && cmake --build build"
   build_steps = [ { argv = ["cmake", "-S", ".", "-B", "build"] }, { argv = ["cmake", "--build", "build"], attributable = true } ]
   readiness = "endpoint"
-  run = "build/meshcom-loraham-bridge {bind} {port} {backend} {password_file} {ping_interval} {pong_timeout}"
+  run = "build/meshcom-loraham-bridge {bind} {port} {backend} {password_file} {ping_interval} {pong_timeout} {rf_log} --rflog-path {runtime}/logs/rf-meshcom.log"
   bin = "build/meshcom-loraham-bridge"
   # Deterministic, hardware-free host test: the bridge's own CTest suite (FakeBackend by default —
   # no daemon, no QEMU, no radio). The build step above already compiles the test binaries +
@@ -1618,11 +1664,21 @@ main = "meshcom-qemu"
     max = 3600000
     label = "XR keepalive PONG timeout, ms (bridge default 10000 flaps under QEMU/TCG stalls)"
     advanced = true
+    # RF log at the daemon boundary inside the bridge (raw MeshCom frames with RSSI/SNR; TX with
+    # the daemon's result as the outcome). STACK-level (band-less); the file is named by lhpc.
+    [[stack.component.param]]
+    name = "rf_log"
+    kind = "enum"
+    arg = "--rflog"
+    choices = ["on", "off"]
+    default = "on"
+    group = "RF-Logs"
+    label = "RF log (what the radio heard and sent)"
 
     [stack.component.source]
     path = "src/meshcom-loraham-bridge"
-    pin_commit = "35a9348a064642d6fcd4b273222e1af6f0950c59"
-    pin_tag = "35a9348"
+    pin_commit = "7c86c96aa5ae9c1359aff85c761028910be5cd91"
+    pin_tag = "7c86c96"
     remote = "https://github.com/makrohard/meshcom-loraham-bridge.git"
     branch = "main"
 
@@ -2307,6 +2363,26 @@ main = "meshcore-node"
       kind = "str"
       hidden = true
       default = "{runtime}/state/openhop"
+      # RF log written by the LoRaHAM radio adapter of the host (every mode). STACK-level
+      # (band-less) switch; the path is lhpc's and hidden.
+      [[stack.component.config_file.param]]
+      name = "rf_log"
+      key = "rf_log"
+      section = "radio"
+      kind = "enum"
+      choices = ["on", "off"]
+      default = "on"
+      group = "RF-Logs"
+      label = "RF log (what the radio heard and sent)"
+      [[stack.component.config_file.param]]
+      name = "rf_log_path"
+      key = "rf_log_path"
+      section = "radio"
+      kind = "str"
+      default = "{runtime}/logs/rf-meshcore.log"
+      validator = "path"
+      hidden = true
+      label = "RF log file (named by lhpc)"
 
     # openHop Core release discipline: `dev` is the active
     # development branch; `main` carries the stable releases that also go to PyPI; the
@@ -2672,8 +2748,8 @@ readiness = "manual"
 path = "src/loraham-rns-interface"
 remote = "https://github.com/makrohard/loraham-rns-interface.git"
 branch = "main"
-pin_commit = "3fef54243a72313384f5f13ba036d64021eec0ec"
-pin_tag = "3fef542"
+pin_commit = "76a7a37f5b6cc8917ee5dd52a158b206fbf5705a"
+pin_tag = "76a7a37"
 
 [[stack.component]]
 id = "rns"
@@ -2936,6 +3012,26 @@ default = "1.0"
 band_defaults = { 433 = "10.0", 868 = "1.0" }
 advanced = true
 label = "Long-term airtime limit % (1 h window) — 868 SRD is 1%, 433 SRD is 10%"
+# RF log at the shared LoRa interface: raw Reticulum packets (ciphertext), so MeshChat and every
+# other client's traffic appears here. STACK-level (band-less) switch; the path is lhpc's.
+[[stack.component.config_file.param]]
+name = "rf_log"
+key = "rf_log"
+section = "interfaces/LoRa"
+kind = "enum"
+choices = ["on", "off"]
+default = "on"
+group = "RF-Logs"
+label = "RF log (what the radio heard and sent — raw packets, ciphertext)"
+[[stack.component.config_file.param]]
+name = "rf_log_path"
+key = "rf_log_path"
+section = "interfaces/LoRa"
+kind = "str"
+default = "{runtime}/logs/rf-reticulum.log"
+validator = "path"
+hidden = true
+label = "RF log file (named by lhpc)"
 [[stack.component.config_file.param]]
 name = "ifac_netname"
 key = "networkname"
