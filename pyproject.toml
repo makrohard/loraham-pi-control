@@ -61,6 +61,7 @@ packages = [
 [tool.setuptools.package-data]
 "lhpc" = ["data/*.toml", "data/bases/*", "data/scripts/*", "data/patches/*",
           "data/meshcore_host/pyproject.toml", "data/meshcore_host/meshcore_host/*.py",
+          "data/rfdecode/*.py",
           "data/meshcore-webui-dist/**/*",
           "data/meshchat-dist/**/*",
           "data/meshcore-webui-constraints.txt",

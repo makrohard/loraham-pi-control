@@ -1152,7 +1152,9 @@ main = "meshtastic"
     # install), not the firmware's bin/web.version — see the script header and docs/stacks/meshtastic.md.
     { argv = ["bash", "{asset}/scripts/meshtastic-web-assets.sh", "{runtime}/build/tools/meshtasticd/web", "2.7.2", "62657b85b4c24af4d44da2932b64143abdbf6e65a79fcb51fd0801d9540616e2"], announce = "[fetch] Meshtastic web client v2.7.2 (LHPC pin, sha256-verified) into {runtime}/build/tools/meshtasticd/web" },
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/meshtastic-cli/.venv"] },
-    { argv = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/pip", "install", "--disable-pip-version-check", "meshtastic==2.7.11"], announce = "[install] Meshtastic CLI 2.7.11 into {runtime}/build/tools/meshtastic-cli/.venv — pip is quiet off-TTY and pulls protobuf/pyserial/bleak; progress: watch {runtime}/build/tools/meshtastic-cli/.venv/lib grow" },
+    # pycryptodomex is for the RF-log decoder (`lhpc rflog meshtastic --decrypt`, the page's Decrypt
+    # toggle): it runs under this venv and decrypts channel traffic with the node's own AES-CTR.
+    { argv = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/pip", "install", "--disable-pip-version-check", "meshtastic==2.7.11", "pycryptodomex==3.23.0"], announce = "[install] Meshtastic CLI 2.7.11 + pycryptodomex 3.23.0 into {runtime}/build/tools/meshtastic-cli/.venv — pip is quiet off-TTY and pulls protobuf/pyserial/bleak; progress: watch {runtime}/build/tools/meshtastic-cli/.venv/lib grow" },
   ]
   # The server binary IS the primary artifact. The strict completion marker is written only after
   # EVERY step above succeeds — so a source update (which clears the marker) reads "Build required"
@@ -1177,6 +1179,7 @@ main = "meshtastic"
   build_inputs = [
     { name = "meshtastic-web", value = "2.7.2", command = "meshtastic-web-assets.sh", token = "{value}" },
     { name = "meshtastic-cli", value = "2.7.11", command = "pip", token = "meshtastic=={value}" },
+    { name = "meshtastic-decoder-crypto", value = "3.23.0", command = "pip", token = "pycryptodomex=={value}" },
   ]
   # A native C++ firmware build on a Zero 2W is long; the platform/library resolve alone can run
   # for many minutes over slow Wi-Fi. Ceiling set from LIVE measurement (not a guess): a Pi Zero 2W
@@ -2128,7 +2131,7 @@ main = "meshcore-node"
   [[stack.component]]
   id = "meshcore-node"
   readiness = "endpoint"
-  # The node imports its crypto stack (pycryptodome/PyNaCl) and restores persisted state
+  # The node imports its crypto stack (pycryptodomex/PyNaCl) and restores persisted state
   # before opening TCP 5000; give it a generous window on 512 MB / A53-class hardware so
   # start verifies instead of tearing it down. Tune down if your Pi is faster.
   readiness_timeout = 120.0
@@ -2173,10 +2176,10 @@ main = "meshcore-node"
   # stays an unmodified upstream tree, never a fork.
   # This node reaches the radio over the loraham daemon's unix sockets and NEVER drives
   # SPI/GPIO itself: no GPIO bindings, no SPI deps. --system-site-packages keeps any system
-  # packages reusable; openhop's deps (pycryptodome, PyNaCl, pyyaml) are wheels on aarch64.
+  # packages reusable; openhop's deps (pycryptodomex, PyNaCl, pyyaml) are wheels on aarch64.
   build_steps = [
     { argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"] },
-    { argv = [".venv/bin/pip", "install", ".", "pytest", "pytest-asyncio"], announce = "[install] openHop Core + its deps (pycryptodome, PyNaCl, …) into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
+    { argv = [".venv/bin/pip", "install", ".", "pytest", "pytest-asyncio"], announce = "[install] openHop Core + its deps (pycryptodomex, PyNaCl, …) into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
     { argv = [".venv/bin/pip", "install", "--no-deps", "{asset}/meshcore_host"], announce = "[install] LHPC MeshCore host application (shipped with lhpc) into {source}/.venv" },
     # openHop REPEATER (upstream openhop_repeater, pinned in `openhop-repeater-src`): its own
     # dependency closure — runtime AND build (setuptools/wheel/setuptools_scm) — is pinned by the

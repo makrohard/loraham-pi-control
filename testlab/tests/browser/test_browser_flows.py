@@ -187,3 +187,94 @@ def test_a_start_marks_its_stack_and_reloads_the_page_once_when_it_finishes(page
     page.wait_for_function(
         "() => document.querySelectorAll('.badge-starting').length === 0", timeout=15000)
     assert len(navigations) == 2, f"reloaded more than once: {navigations}"
+
+
+def test_the_rf_log_viewer_sorts_filters_toggles_columns_and_decrypts(page, lab):
+    """rflog.js is proven only here: the records table over a seeded two-segment log, sort by
+    rssi, a filter, a column off, a row appended and picked up by the poll, and the Decrypt
+    toggle — which switches the poll to the decoded API (answered by a controlled feed, so no
+    stack venv is needed) and renders the decoded column through textContent, never as HTML."""
+    import json
+
+    logs = lab.root / "logs"
+    logs.mkdir(exist_ok=True)
+    older = '2026-09-12T16:00:00.000Z RX rssi=-90.00 snr=2.00 len=3 hex=aabbcc ascii="..."'
+    newer = '2026-09-12T16:01:00.000Z TX rssi=- snr=- len=3 outcome=ok tnc2="G0ABC>APRS:hello" hex=112233 ascii="..."'
+    (logs / "rf-kiss.log.1").write_text(older + "\n")
+    (logs / "rf-kiss.log").write_text(newer + "\n")
+
+    page.goto(page.lab_base + "/logs/loraham-kiss-tnc?job=rf-kiss.log", wait_until="networkidle")
+    page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 2", timeout=15000)
+    assert page.locator("#rf-decrypt").count() == 0                     # plaintext stack: no toggle
+    rows = page.locator("#rfview tbody tr")
+    assert "16:00:00" in rows.nth(0).inner_text() and "16:01:00" in rows.nth(1).inner_text()
+
+    page.locator("#rfview th[data-col=rssi] button").click()            # sort: nulls last
+    page.locator("#rfview th[data-col=rssi] button").click()            # reversed
+    assert page.locator("#rfview th[data-col=rssi]").get_attribute("aria-sort") == "descending"
+    page.fill("#rf-filter", "G0ABC")
+    page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 1", timeout=5000)
+    assert "hello" in rows.nth(0).inner_text()
+    page.fill("#rf-filter", "")
+    page.locator("#rf-cols input[value=hex]").uncheck()
+    assert page.locator("#rfview tbody tr").nth(0).locator("td").nth(7).is_hidden()
+
+    with open(logs / "rf-kiss.log", "a") as f:                            # the poll picks it up
+        f.write('2026-09-12T16:02:00.000Z RX rssi=-70.00 snr=8.00 len=1 hex=ff ascii="."\n')
+    page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 3", timeout=15000)
+
+    page.locator("#rf-raw").click()                                       # the raw view is the file
+    assert page.locator("#logbox").is_visible() and older in page.locator("#logbox").inner_text()
+    page.locator("#rf-raw").click()
+
+    # An encrypted stack: the toggle sits on its own row and, on, the page reads the decoded API.
+    (logs / "rf-meshtastic.log").write_text(
+        '{"timestamp":1789228997,"rssi":-67,"snr":11.25,"from":1,"to":4294967295,"size":4,"bytes":"01020304"}\n')
+    decoded_hits = []
+
+    def decoded(route):
+        decoded_hits.append(route.request.url)
+        rec = json.loads(page.evaluate("() => fetch('/api/rflog/meshtastic?job=rf-meshtastic.log').then(r => r.text())"))["records"][0]
+        body = {"target": "meshtastic", "job": "rf-meshtastic.log", "path": "x", "running": False, "error": "",
+                "records": [dict(rec, status="ok", kind="text", peer="!00000001", decoded="<b>hi from the radio</b>")]}
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+    page.route("**/api/rflog/meshtastic/decoded*", decoded)
+    page.goto(page.lab_base + "/logs/meshtastic?job=rf-meshtastic.log", wait_until="networkidle")
+    page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 1", timeout=15000)
+    toggle = page.locator("#rf-decrypt")
+    assert toggle.get_attribute("aria-pressed") == "false" and not decoded_hits
+    box = toggle.bounding_box()
+    nav = page.locator("nav.rfswitch").bounding_box()
+    assert box["y"] >= nav["y"] + nav["height"], "Decrypt must sit on its own row below the switcher"
+    toggle.click()
+    page.wait_for_function("() => document.querySelector('#rfview tbody tr td:last-child').textContent.includes('hi from the radio')", timeout=15000)
+    assert toggle.get_attribute("aria-pressed") == "true" and decoded_hits
+    assert page.locator("#rfview tbody tr td b").count() == 0            # text, never markup
+    toggle.click()
+    page.wait_for_function("() => document.querySelector('#rf-decrypt').getAttribute('aria-pressed') === 'false'", timeout=5000)
+    assert not page.locator("#rfview tbody tr td:last-child").inner_text().strip()
+
+    # The race: a decoded response still in flight when Decrypt goes OFF must never land.
+    page.unroute("**/api/rflog/meshtastic/decoded*")
+    held = []
+
+    def hold(route):                                                      # hold, do not answer (playwright
+        held.append(route)                                                # needs a plain function here)
+    page.route("**/api/rflog/meshtastic/decoded*", hold)
+    toggle.click()                                                        # ON: a decoded fetch starts and hangs
+    page.wait_for_function("() => document.querySelector('#rf-decrypt').getAttribute('aria-pressed') === 'true'", timeout=5000)
+    page.wait_for_function("() => true", timeout=1000)
+    assert held, "the decoded request must be in flight"
+    toggle.click()                                                        # OFF while it is in flight
+    page.wait_for_function("() => document.querySelector('#rf-decrypt').getAttribute('aria-pressed') === 'false'", timeout=5000)
+    rec = json.loads(page.evaluate("() => fetch('/api/rflog/meshtastic?job=rf-meshtastic.log').then(r => r.text())"))["records"][0]
+    late = {"target": "meshtastic", "job": "rf-meshtastic.log", "path": "x", "running": False, "error": "",
+            "records": [dict(rec, status="ok", kind="text", peer="!00000001", decoded="LATE PLAINTEXT")]}
+    for route in held:
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(late))
+    page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 1", timeout=5000)
+    page.wait_for_timeout(1500)
+    assert "LATE PLAINTEXT" not in page.locator("#rfview").inner_text()
+    # And the reveal is never remembered: a reload starts with Decrypt off.
+    page.reload(wait_until="networkidle")
+    assert page.locator("#rf-decrypt").get_attribute("aria-pressed") == "false"

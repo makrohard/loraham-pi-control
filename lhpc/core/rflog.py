@@ -19,6 +19,10 @@ daemon's FILES are per band, its SWITCH is not.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
+import time
 from dataclasses import dataclass
 
 RF_LOG_PARAM = "rf_log"
@@ -39,6 +43,7 @@ class Entry:
     key: str              # the switch's bundle key on the owner: run `rf_log` / file `file_rf_log`
     jobs: tuple           # ((band, job), …) — band "" for a single file
     native: bool = False  # the process's own trace (meshtasticd): LHPC rolls it opportunistically
+    decoder: str = ""     # the offline decoder that can open this log's encrypted payloads ("" = plaintext)
 
     @property
     def kind(self) -> str:
@@ -62,9 +67,11 @@ REGISTRY: tuple[Entry, ...] = (
     Entry("graywolf", "kiss", "loraham-kiss-tnc", "rf_log", (("", "rf-kiss.log"),)),
     Entry("meshcom", "meshcom", "meshcom-bridge", "rf_log", (("", "rf-meshcom.log"),)),
     Entry("meshtastic", "meshtastic", "meshtastic", "rf_log", (("", "rf-meshtastic.log"),),
-          native=True),
-    Entry("meshcore", "meshcore", "meshcore-node", "file_rf_log", (("", "rf-meshcore.log"),)),
-    Entry("reticulum", "reticulum", "rns", "file_rf_log", (("", "rf-reticulum.log"),)),
+          native=True, decoder="meshtastic"),
+    Entry("meshcore", "meshcore", "meshcore-node", "file_rf_log", (("", "rf-meshcore.log"),),
+          decoder="meshcore"),
+    Entry("reticulum", "reticulum", "rns", "file_rf_log", (("", "rf-reticulum.log"),),
+          decoder="reticulum"),
 )
 
 
@@ -143,3 +150,82 @@ def meshtastic_trace_file(runtime: str, on: bool) -> str:
     generated — not a generic transform framework."""
     e = entry("meshtastic")
     return f"{runtime}/logs/{e.job()}" if (on and e is not None) else ""
+
+
+# --- records: the line contract parsed once, server-side ------------------------------------
+# A record is what the log page's table and the decoders work on. Every record carries `key`, the
+# hash of its raw line: the decoders echo it (N in, N out, keys matching), and the decoded-result
+# cache is keyed by it — so a line is the same record wherever it sits (live file, `.1`, after a
+# copy-truncate), and no rotation state is needed anywhere.
+
+_LINE_RE = re.compile(
+    r"^(?P<ts>\S+) (?P<dir>RX|TX) rssi=(?P<rssi>-?[\d.]+|-) snr=(?P<snr>-?[\d.]+|-) len=(?P<len>\d+)"
+    r"(?: outcome=(?P<outcome>\S+))?(?: band=(?P<band>\S+))?(?: tnc2=\"(?P<tnc2>[^\"]*)\")?"
+    r" hex=(?P<hex>[0-9a-f]*) ascii=\"(?P<ascii>.*)\"$")
+
+RECORD_FIELDS = ("key", "raw", "ts", "dir", "rssi", "snr", "len", "outcome", "band", "summary",
+                 "hex", "ascii")
+
+
+def record_key(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8", "surrogateescape")).hexdigest()[:32]
+
+
+def _num(text):
+    if text in (None, "", "-"):
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _int(v) -> int:
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def parse_line(line: str) -> dict:
+    """One RF-log line -> one record (pure). The common contract (five writers) and meshtastic's
+    JSON object both map onto the same keys; anything else is `{"key", "raw"}` only — shown as a
+    raw line, never dropped and never an exception."""
+    raw = line.rstrip("\n")
+    rec = {"key": record_key(raw), "raw": raw}
+    m = _LINE_RE.match(raw)
+    if m:
+        g = m.groupdict()
+        rec.update({"ts": g["ts"], "dir": g["dir"], "rssi": _num(g["rssi"]), "snr": _num(g["snr"]),
+                    "len": int(g["len"]), "outcome": g["outcome"] or "", "band": g["band"] or "",
+                    "summary": g["tnc2"] or "", "hex": g["hex"], "ascii": g["ascii"]})
+        return rec
+    if raw.startswith("{"):
+        try:
+            obj = json.loads(raw)
+        except ValueError:
+            return rec
+        if not isinstance(obj, dict):
+            return rec
+        ts = obj.get("timestamp")
+        try:
+            iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(ts))) if ts else ""
+        except (ValueError, OverflowError, OSError):
+            iso = ""
+
+        def node(v):
+            try:
+                v = int(v)
+            except (TypeError, ValueError):
+                return ""
+            return "^all" if v == 0xFFFFFFFF else ("local" if v == 0 else f"!{v:08x}")
+        rec.update({"ts": iso, "dir": "RX" if "rssi" in obj else "TX",
+                    "rssi": _num(obj.get("rssi")), "snr": _num(obj.get("snr")),
+                    "len": _int(obj.get("size")), "outcome": "", "band": "",
+                    "summary": f"{node(obj.get('from'))} \u2192 {node(obj.get('to'))}".strip(),
+                    "hex": str(obj.get("bytes") or "").lower(), "ascii": ""})
+    return rec
+
+
+def parse_lines(lines) -> list:
+    return [parse_line(ln) for ln in lines]

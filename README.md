@@ -558,6 +558,7 @@ lhpc config <stack> --band 868 <param> <value>    # per-band value on a band-swi
 lhpc stack start|stop|restart <stack>             # plans + confirms; --yes to skip the prompt
 lhpc logs <target>                 # tail a component log
 lhpc rflog <stack> [--band B]      # tail a stack's RF log (what the radio heard and sent)
+lhpc rflog <stack> --decrypt       # the same, decoded with the keys on this box (encrypted stacks)
 lhpc doctor                        # environment / dependency checks
 lhpc test <stack> [--tx] --yes     # bounded RF test (real TX only with --tx — dummy loads!)
 ```

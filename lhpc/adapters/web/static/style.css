@@ -499,6 +499,17 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 /* RF log page: one row of stack pills under the header, the shown one marked. */
 .rfswitch { display: flex; flex-wrap: wrap; gap: .3rem; padding: .35rem .8rem 0; }
 .rfswitch a[aria-current="page"] { background: var(--badge-ok-bg); border-color: var(--badge-ok-border); color: var(--ok); }
+.rfdecrypt { padding: .35rem .8rem 0; display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.rfcontrols { display: flex; flex-wrap: wrap; gap: .5rem .8rem; align-items: center; margin-bottom: .5rem; font-size: .85rem; }
+.rfcontrols #rf-cols label { margin-right: .3rem; white-space: nowrap; }
+.rfscroll { overflow-x: auto; max-height: 44rem; overflow-y: auto; }
+#rfview th button { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-transform: inherit; letter-spacing: inherit; }
+#rfview th[aria-sort="ascending"] button::after { content: " \25B2"; }
+#rfview th[aria-sort="descending"] button::after { content: " \25BC"; }
+#rfview td { font-variant-numeric: tabular-nums; white-space: nowrap; }
+#rfview td.rf-payload { font-family: ui-monospace, monospace; font-size: .8rem; max-width: 18rem; overflow: hidden; text-overflow: ellipsis; }
+#rfview tr.rf-open td.rf-payload { white-space: pre-wrap; word-break: break-all; max-width: none; overflow: visible; }
+#rfview tr.rf-no-key td, #rfview tr.rf-undecryptable td, #rfview tr.rf-malformed td { color: var(--muted); }
 
 /* ---- Webserver controller component (inline in the controller row) ---- */
 .ws-comp form { margin: 0.7em 0; }

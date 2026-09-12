@@ -242,3 +242,68 @@ jobs:
           retry 3 python -m pip install -q --no-deps ./lhpc/data/meshcore_host
       - name: LHPC MeshCore host tests
         run: pytest -q -rs lhpc/data/meshcore_host/tests
+      - name: MeshCore RF-log decoder (openHop's own crypto, generated keys)
+        run: pytest -q -rs lhpc/data/rfdecode/tests/test_meshcore_decoder.py
+
+  rfdecode-meshtastic:
+    # The meshtastic RF-log decoder runs under the managed Meshtastic CLI venv on a box; here it
+    # runs under the same pinned `meshtastic` package (the version is read from the manifest,
+    # never a literal). Keys in the tests are the public default PSK and generated ones.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install the pinned Meshtastic CLI
+        run: |
+          set -euo pipefail
+          . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
+          ver=$(grep -oE 'meshtastic==[0-9.]+' lhpc/data/manifest.example.toml | head -1)
+          test -n "$ver" || { echo "::error::no meshtastic== pin in the manifest"; exit 1; }
+          retry 3 python -m pip install -q --upgrade pip
+          retry 3 python -m pip install -q "$ver" pycryptodomex==3.23.0 pytest
+      - name: Meshtastic RF-log decoder tests
+        run: pytest -q -rs lhpc/data/rfdecode/tests/test_meshtastic_decoder.py
+
+  rfdecode-reticulum:
+    # The reticulum RF-log decoder runs under src/reticulum/.venv on a box; here under the same
+    # pinned Reticulum checkout (pin from the manifest) plus LXMF for the message summary.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install the pinned Reticulum and LXMF
+        run: |
+          set -euo pipefail
+          . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
+          eval "$(python - <<'PY'
+          import tomllib, pathlib, shlex
+          m = tomllib.loads(pathlib.Path("lhpc/data/manifest.example.toml").read_text())
+          for s in m["stack"]:
+              for c in s.get("component", []):
+                  src = c.get("source") or {}
+                  if src.get("path") == "src/reticulum":
+                      print(f"RNS_REMOTE={shlex.quote(src['remote'])}; RNS_PIN={shlex.quote(src['pin_commit'])}")
+                  if src.get("path") == "src/lxmf":
+                      print(f"LXMF_REMOTE={shlex.quote(src['remote'])}; LXMF_PIN={shlex.quote(src['pin_commit'])}")
+          PY
+          )"
+          test -n "${RNS_PIN:-}" && test -n "${LXMF_PIN:-}" || { echo "::error::reticulum/lxmf pins missing"; exit 1; }
+          git clone -q "$RNS_REMOTE" /tmp/rns && git -C /tmp/rns checkout -q "$RNS_PIN"
+          git clone -q "$LXMF_REMOTE" /tmp/lxmf && git -C /tmp/lxmf checkout -q "$LXMF_PIN"
+          retry 3 python -m pip install -q --upgrade pip
+          retry 3 python -m pip install -q /tmp/rns pytest
+          retry 3 python -m pip install -q --no-deps /tmp/lxmf
+      - name: Reticulum RF-log decoder tests
+        run: pytest -q -rs lhpc/data/rfdecode/tests/test_reticulum_decoder.py

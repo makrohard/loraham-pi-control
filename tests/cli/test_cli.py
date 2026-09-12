@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import pytest
 
 from lhpc.adapters.cli.main import main
@@ -920,3 +921,74 @@ def test_rflog_clear_never_reads_first(tmp_path, monkeypatch):
     # The usage rules still apply on the --clear path.
     assert main(["rflog", "daemon", "--clear"]) == 2
     assert main(["rflog", "meshtastic", "--band", "868", "--clear"]) == 2
+
+
+# ---- rflog --decrypt: the decoder's records on the terminal, never in a file -------------------
+
+def _decoded(records, error=""):
+    return {"records": [{**r, "status": "ok", "kind": "text", "peer": "!433f648c", "decoded": "hi \x1b[31mred\x1b[0m"}
+                        for r in records], "error": error}
+
+
+def test_rflog_decrypt_is_refused_on_plaintext_logs(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+    for surface in ("graywolf", "meshcom"):
+        assert main(["rflog", surface, "--decrypt"]) == 2
+        assert "plaintext already" in capsys.readouterr().out
+    assert main(["rflog", "daemon", "--band", "433", "--decrypt"]) == 2
+
+
+def test_rflog_decrypt_prints_decoded_frames_with_control_characters_escaped(tmp_path, monkeypatch, capsys):
+    from lhpc.core.services import ControllerService
+    rt = tmp_path / "rt"
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
+    (rt / "logs").mkdir(parents=True)
+    line = '2026-09-12T18:36:49.968Z RX rssi=-67.00 snr=11.25 len=4 hex=01020304 ascii="...."'
+    (rt / "logs" / "rf-meshcore.log").write_text(line + "\nnot a frame \x07\n")
+    monkeypatch.setattr(ControllerService, "rflog_decode", lambda self, t, j, recs: _decoded(recs))
+    assert main(["rflog", "meshcore", "--decrypt"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0].endswith("/logs/rf-meshcore.log")
+    assert out[1] == "2026-09-12T18:36:49.968Z RX rssi=-67.00 snr=11.25 len=4 text !433f648c: hi \\x1b[31mred\\x1b[0m"
+    assert out[2] == "not a frame \\x07"                                   # an unparsed line stays raw
+    assert "\x1b" not in "\n".join(out) and "\x07" not in "\n".join(out)
+    assert sorted(os.listdir(rt / "logs")) == ["rf-meshcore.log"]           # nothing written
+
+
+def test_rflog_decrypt_reports_a_decoder_error_and_exits_one(tmp_path, monkeypatch, capsys):
+    from lhpc.core.services import ControllerService
+    rt = tmp_path / "rt"
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
+    (rt / "logs").mkdir(parents=True)
+    (rt / "logs" / "rf-reticulum.log").write_text("x\n")
+    monkeypatch.setattr(ControllerService, "rflog_decode",
+                        lambda self, t, j, recs: _decoded([], "reticulum is not built — nothing to decode with"))
+    assert main(["rflog", "reticulum", "--decrypt"]) == 1
+    assert capsys.readouterr().out.startswith("ERR   reticulum is not built")
+
+
+def test_rflog_decrypt_follow_prints_each_new_frame_once(tmp_path, monkeypatch, capsys):
+    from lhpc.adapters.cli import main as climain
+    from lhpc.core.services import ControllerService
+    rt = tmp_path / "rt"
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
+    (rt / "logs").mkdir(parents=True)
+    log = rt / "logs" / "rf-meshtastic.log"
+    log.write_text('{"timestamp":1,"rssi":-60,"snr":5,"from":1,"to":2,"size":1,"bytes":"01"}\n')
+    monkeypatch.setattr(ControllerService, "rflog_decode", lambda self, t, j, recs: _decoded(recs))
+    polls = []
+
+    def sleep(_s):
+        polls.append(1)
+        if len(polls) == 1:                      # a burst of three between two polls, --lines 1
+            with open(log, "a") as f:
+                for ts in (2, 3, 4):
+                    f.write('{"timestamp":%d,"rssi":-61,"snr":5,"from":1,"to":2,"size":1,"bytes":"02"}\n' % ts)
+        elif len(polls) == 3:
+            raise KeyboardInterrupt
+    monkeypatch.setattr(climain, "_t", type("T", (), {"sleep": staticmethod(sleep)}), raising=False)
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", sleep)
+    assert main(["rflog", "meshtastic", "--decrypt", "--follow", "--lines", "1"]) == 0
+    out = [ln for ln in capsys.readouterr().out.splitlines() if " text " in ln]
+    assert [ln[:20] for ln in out] == [f"1970-01-01T00:00:0{i}Z" for i in (1, 2, 3, 4)]   # none lost, none twice

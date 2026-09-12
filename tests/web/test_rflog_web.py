@@ -161,3 +161,85 @@ def test_clear_requires_csrf_and_refuses_a_symlink(tmp_path):
     assert c.post("/logs/meshcom-bridge/clear",
                   data={"_csrf": _csrf(c), "job": "rf-meshcom.log"}).status_code == 302
     assert outside.read_text() == "precious\n"
+
+
+# ---- the viewer's records and the Decrypt toggle -----------------------------------------------
+
+KISS_LINE = '2026-09-12T16:05:01.020Z RX rssi=-71.00 snr=9.75 len=3 hex=010203 ascii="..."'
+
+
+def test_the_records_api_parses_both_segments_and_is_registry_authorized(tmp_path):
+    _logs(tmp_path, "rf-kiss.log.1", "old junk\n")
+    _logs(tmp_path, "rf-kiss.log", KISS_LINE + "\n")
+    c = _app(tmp_path)
+    d = c.get("/api/rflog/loraham-kiss-tnc?job=rf-kiss.log").get_json()
+    assert d["target"] == "loraham-kiss-tnc" and d["path"].endswith("/logs/rf-kiss.log")
+    assert [r["raw"] for r in d["records"]] == ["old junk", KISS_LINE]
+    assert d["records"][1]["rssi"] == -71.0 and d["records"][1]["hex"] == "010203"
+    assert set(d["records"][0]) == {"key", "raw"}
+    for url in ("/api/rflog/loraham-kiss-tnc?job=rf-made-up.log", "/api/rflog/loraham-daemon?job=rf-kiss.log",
+                "/api/rflog/loraham-kiss-tnc", "/api/rflog/bogus?job=rf-kiss.log"):
+        assert c.get(url).status_code == 404
+
+
+def test_the_decoded_api_exists_only_for_encrypted_logs_and_is_never_cached(tmp_path, monkeypatch):
+    _logs(tmp_path, "rf-meshtastic.log", '{"timestamp":1789228997,"rssi":-67,"snr":11.25,"from":1,"to":2,"size":4,"bytes":"01020304"}\n')
+    calls = []
+
+    def fake(self, target, job, records):
+        calls.append((target, job, len(records)))
+        return {"records": [{**r, "status": "ok", "kind": "text", "peer": "!00000001", "decoded": "<b>hi</b>"}
+                            for r in records], "error": ""}
+    monkeypatch.setattr(ControllerService, "rflog_decode", fake)
+    c = _app(tmp_path)
+    r = c.get("/api/rflog/meshtastic/decoded?job=rf-meshtastic.log")
+    assert r.status_code == 200 and r.headers["Cache-Control"] == "no-store"
+    d = r.get_json()
+    assert calls == [("meshtastic", "rf-meshtastic.log", 1)]
+    assert d["error"] == "" and d["records"][0]["decoded"] == "<b>hi</b>" and d["records"][0]["kind"] == "text"
+    # plaintext logs, unregistered jobs and the wrong writer: 404, and the decoder never runs
+    for url in ("/api/rflog/loraham-kiss-tnc/decoded?job=rf-kiss.log", "/api/rflog/meshcom-bridge/decoded?job=rf-meshcom.log",
+                "/api/rflog/loraham-daemon/decoded?job=rf-daemon-433.log", "/api/rflog/meshtastic/decoded?job=rf-kiss.log",
+                "/api/rflog/meshtastic/decoded?job=rf-made-up.log", "/api/rflog/meshtastic/decoded"):
+        assert c.get(url).status_code == 404
+    assert len(calls) == 1
+
+
+def test_a_decoder_level_error_is_reported_with_the_records_intact(tmp_path, monkeypatch):
+    _logs(tmp_path, "rf-reticulum.log", KISS_LINE + "\n")
+    monkeypatch.setattr(ControllerService, "rflog_decode",
+                        lambda self, t, j, recs: {"records": [{**r, "status": "", "kind": "", "peer": "", "decoded": ""} for r in recs],
+                                                  "error": "reticulum is not built — nothing to decode with"})
+    d = _app(tmp_path).get("/api/rflog/rns/decoded?job=rf-reticulum.log").get_json()
+    assert d["error"].startswith("reticulum is not built") and d["records"][0]["raw"] == KISS_LINE
+
+
+@pytest.mark.parametrize("url,encrypted", [
+    ("/logs/meshtastic?job=rf-meshtastic.log", True),
+    ("/logs/meshcore-node?job=rf-meshcore.log", True),
+    ("/logs/rns?job=rf-reticulum.log", True),
+    ("/logs/loraham-kiss-tnc?job=rf-kiss.log", False),
+    ("/logs/loraham-daemon?job=rf-daemon-433.log", False),
+    ("/logs/meshcom-bridge?job=rf-meshcom.log", False),
+])
+def test_the_page_carries_the_table_and_decrypt_only_where_keys_can_open_it(tmp_path, url, encrypted):
+    html = _app(tmp_path).get(url).get_data(as_text=True)
+    doc = parse(html)
+    assert doc.by_id("rfview") and doc.by_id("rf-filter") and doc.by_id("rf-raw")
+    assert doc.by_id("log-card")["data-decoder"] == ("1" if encrypted else "0")
+    assert bool(doc.by_id("rf-decrypt")) == encrypted
+    assert bool(doc.find("th", **{"data-col": "decoded"})) == encrypted
+    assert bool(doc.find("input", value="decoded")) == encrypted
+    if encrypted:
+        # its own row, below the switcher, off by default
+        assert html.index('aria-label="RF logs"') < html.index('id="rf-decrypt"') < html.index('id="rf-filter"')
+        assert doc.by_id("rf-decrypt")["aria-pressed"] == "false"
+    assert 'static/rflog.js' in html and 'static/logs.js' not in html
+    assert "onclick=" not in html                                         # CSP: no inline handlers
+
+
+def test_a_run_log_page_keeps_the_plain_viewer(tmp_path):
+    html = _app(tmp_path).get("/logs/loraham-kiss-tnc").get_data(as_text=True)
+    doc = parse(html)
+    assert not doc.by_id("rfview") and not doc.by_id("rf-decrypt") and doc.by_id("logbox")
+    assert 'static/logs.js' in html and 'static/rflog.js' not in html

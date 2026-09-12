@@ -313,6 +313,11 @@ def _cmd_rflog(svc, args) -> int:
         # is an active operation (it rolls an oversized file), and a roll before a Clear
         # would copy 5 MB to `.1` only to delete it.
         return _render(svc.rflog_clear(e.writer, job))
+    if args.decrypt:
+        if not e.decoder:
+            print(f"ERR   '{args.surface}' is plaintext already — see the ascii column / tnc2 field")
+            return 2
+        return _rflog_decrypt(svc, e, job, args.lines, args.follow)
     try:
         path, lines = svc.rflog_tail(args.surface, args.band, args.lines)
     except ValueError as exc:
@@ -324,6 +329,79 @@ def _cmd_rflog(svc, args) -> int:
     if not lines:
         print("(no output yet)")
     return 0
+
+
+def _visible(text: str) -> str:
+    """Radio-controlled text for a terminal: control characters (ESC/OSC sequences included)
+    become visible escapes, never raw bytes the terminal would interpret."""
+    out = []
+    for ch in str(text):
+        o = ord(ch)
+        if o < 0x20 or o == 0x7f or 0x80 <= o < 0xa0:
+            out.append(f"\\x{o:02x}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _rflog_decrypt(svc, e, job: str, lines: int, follow: bool) -> int:
+    """Print the tail (and, with --follow, every new frame) decoded; stdout only."""
+    seen = set()
+
+    def batch(window=lines):
+        path, records = svc.rflog_records(e.writer, job, window)
+        res = svc.rflog_decode(e.writer, job, records)
+        if res["error"]:
+            print(f"ERR   {_visible(res['error'])}")
+            return path, None
+        return path, res["records"]
+
+    path, recs = batch()
+    if recs is None:
+        return 1
+    print(path or "(no log file yet)")
+    if not recs:
+        print("(no output yet)")
+    try:
+        return _rflog_print_loop(svc, e, job, lines, follow, recs, seen, batch)
+    except KeyboardInterrupt:
+        return 0
+
+
+def _rflog_print_loop(svc, e, job, lines, follow, recs, seen, batch) -> int:
+    import time as _t
+    while True:
+        for r in recs:
+            if r["key"] in seen:
+                continue
+            seen.add(r["key"])
+            if not r.get("ts"):                       # not a frame the parser knows: raw, escaped
+                print(_visible(r.get("raw", "")))
+                continue
+            prefix = " ".join(x for x in (r.get("ts", ""), r.get("dir", ""),
+                                          f"rssi={r['rssi']:.2f}" if r.get("rssi") is not None else "",
+                                          f"snr={r['snr']:.2f}" if r.get("snr") is not None else "",
+                                          f"len={r['len']}" if r.get("len") is not None else "",
+                                          f"outcome={r['outcome']}" if r.get("outcome") else "") if x)
+            status = r.get("status", "")
+            body = r.get("decoded", "")
+            if status and status != "ok":
+                body = f"[{body or status}]"
+            elif not status:                          # not decoded (decoder-level error): the payload as logged
+                body = r.get("ascii") or r.get("hex") or ""
+            peer = f" {r['peer']}" if r.get("peer") else ""
+            kind = f" {r['kind']}" if r.get("kind") else ""
+            print(f"{prefix}{kind}{peer}: {_visible(body)}")
+        sys.stdout.flush()                                # a pipe or a file sees each batch as it happens
+        if not follow:
+            return 0
+        _t.sleep(2.0)
+        # Following: re-read the last 300 lines (or --lines, if larger) every poll, not just
+        # `--lines` — a burst between two polls must not slip past a small window; dedup by key
+        # keeps the output to new frames. More than 300 frames in two seconds is not LoRa.
+        _path, recs = batch(max(lines, 300))
+        if recs is None:
+            return 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -507,6 +585,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_rf.add_argument("--lines", type=int, default=300, help="Tail length")
     p_rf.add_argument("--clear", action="store_true",
                       help="Empty the log in place and remove its previous segment")
+    p_rf.add_argument("--decrypt", action="store_true",
+                      help="Decode encrypted payloads in memory with the keys on this box "
+                           "(meshtastic, meshcore, reticulum); prints, never writes")
+    p_rf.add_argument("--follow", action="store_true",
+                      help="With --decrypt: keep printing new frames as they arrive (Ctrl-C ends)")
 
     from lhpc.core.config import GPS_BAUDS as _GPS_BAUDS
     from lhpc.core.config import GPS_SOURCES as _GPS_SOURCES

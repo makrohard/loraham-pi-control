@@ -11,7 +11,7 @@ and cannot run while the daemon serves that band.
 | Run | `build/tools/meshtasticd/meshtasticd -c <runtime>/config/files/meshtasticd.yaml -d <runtime>/state/meshtasticd` |
 | Endpoints | TCP API `:4403` · web UI `:9443` (HTTPS; rootless cannot bind 443) — both bind all interfaces with no auth, so the managed firewall denies them by default; the sanctioned remote path is the stack web proxy or an [SSH tunnel](../ssh-tunnel.md) |
 | Config | `<runtime>/config/files/meshtasticd.yaml`, regenerated per band from `lhpc/data/bases/meshtasticd.yaml` at every start (per-band LoRa pins, web root, TLS paths, log level) |
-| Artifacts | `build/tools/meshtasticd/meshtasticd`, its web UI at `build/tools/meshtasticd/web`, the managed CLI venv `build/tools/meshtastic-cli/.venv` (`meshtastic==2.7.11`) |
+| Artifacts | `build/tools/meshtasticd/meshtasticd`, its web UI at `build/tools/meshtasticd/web`, the managed CLI venv `build/tools/meshtastic-cli/.venv` (`meshtastic==2.7.11`, `pycryptodomex==3.23.0` for the RF-log decoder) |
 | Resources | `loraham.radio.868` + `.433` exclusive · `spi.bus.0.unlocked` exclusive · `tcp.port.4403` + `.9443` exclusive |
 | System | `/dev/spidev0.0` (`dtoverlay=spi0-0cs`), `spi` + `gpio` group membership, the packaged root `meshtasticd.service` must be disabled (`sudo systemctl disable --now meshtasticd`) |
 | Install channel | **binary** by default (a sha256-verified prebuilt of the binary + web assets, built from the pinned commit); `--source pinned\|dev\|stable` builds natively instead. Policy: [provenance](../provenance.md) |
@@ -32,7 +32,7 @@ and cannot run while the daemon serves that band.
 | `region` | `EU_868` (433: `EU_433`) | LoRa region — required for TX; applied after start (a failed push fails the start) |
 | `node_name` / `node_short` | *(empty)* | the node's own names (39 / 4 UTF-8 bytes), never the operator callsign; the start is refused until both are set — node names never inherit ([architecture](../architecture.md#identity-and-callsigns)) |
 | `use_gps` | `on` | use the global position source |
-| `rf_log` | `on` | RF log = meshtasticd's own per-packet JSON trace (`Logging.TraceFile` → `logs/rf-meshtastic.log`), not the common line format. Append-only by the node: lhpc rolls it opportunistically (at start and when the page reads it over 5 MB) — no hard cap, see [maintenance](../maintenance.md#rf-logs) |
+| `rf_log` | `on` | RF log = meshtasticd's own per-packet JSON trace (`Logging.TraceFile` → `logs/rf-meshtastic.log`), not the common line format. Append-only by the node: lhpc rolls it opportunistically (at start and when the page reads it over 5 MB) — no hard cap. The page's Decrypt toggle and `lhpc rflog meshtastic --decrypt` open channel traffic with the PSKs in `prefs/channels.proto` and direct messages to/from this node with its key in `prefs/config.proto`, in memory only — see [maintenance](../maintenance.md#rf-logs) |
 | `loglevel`, `max_nodes`, `ble`, `mqtt`, `cs`, `irq`, `reset`, `busy`, `ssl_key`, `ssl_cert`, `web_root` | advanced | YAML keys. `cs`/`irq` default 7/16 (868) and 8/25 (433); `reset`/`busy` are omitted when empty — the Uputronics RF95 boards have neither line, and BCM 6/13 are the daemon's LEDs |
 
 Region, node identity, GPS mode and fixed position are device settings applied through the

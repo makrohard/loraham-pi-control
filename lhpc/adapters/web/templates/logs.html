@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}logs {{ target }} — LoRaHAM Pi Control{% endblock %}
 {% block content %}
-  <div class="card" id="log-card" data-target="{{ target }}" data-job="{{ job or '' }}" data-band="{{ band or '' }}">
+  <div class="card" id="log-card" data-target="{{ target }}" data-job="{{ job or '' }}" data-band="{{ band or '' }}" data-decoder="{{ '1' if rflog and rflog.decoder else '0' }}">
     <header>
       <h2>{{ 'RF log' if rflog else 'Logs' }} <span class="pill">{{ rflog.label if rflog else target }}</span></h2>
       <span class="badge badge-{{ 'running' if running else 'stopped' }}" id="log-status">
@@ -16,9 +16,42 @@
         {% endfor %}
       </nav>
     {% endif %}
+    {% if rflog and rflog.decoder %}
+      {# Below the switcher, on its own row: only for a stack whose payloads are encrypted and
+         whose keys live on this box. Off by default; the choice is this browser's. #}
+      <div class="rfdecrypt">
+        <button type="button" id="rf-decrypt" aria-pressed="false">Decrypt: off</button>
+        <span class="muted">decodes in memory with the keys on this box; nothing is written</span>
+      </div>
+    {% endif %}
     <div class="body">
       <p class="muted">{{ path or '(no log file yet)' }}</p>
-      <pre id="logbox" class="logbox">{% for line in lines %}{{ line }}
+      {% if rflog %}
+        <div class="rfcontrols">
+          <label for="rf-filter">Filter</label>
+          <input type="search" id="rf-filter" placeholder="summary, ascii, hex, decoded">
+          <label for="rf-dir">Direction</label>
+          <select id="rf-dir" aria-label="Direction filter"><option value="">RX + TX</option><option value="RX">RX</option><option value="TX">TX</option></select>
+          <span id="rf-cols">Columns:
+            {% for c in (['ts', 'dir', 'rssi', 'snr', 'len', 'outcome', 'summary', 'hex', 'ascii'] + (['decoded'] if rflog.decoder else [])) %}
+              <label><input type="checkbox" value="{{ c }}" checked> {{ {'ts': 'time'}.get(c, c) }}</label>
+            {% endfor %}
+          </span>
+          <button type="button" id="rf-raw" aria-pressed="false">Raw</button>
+        </div>
+        <p id="rf-notice" class="depnote depnote-warn" hidden></p>
+        <div class="rfscroll">
+          <table id="rfview">
+            <thead><tr>
+              {% for c in (['ts', 'dir', 'rssi', 'snr', 'len', 'outcome', 'summary', 'hex', 'ascii'] + (['decoded'] if rflog.decoder else [])) %}
+                <th data-col="{{ c }}" aria-sort="none"><button type="button">{{ {'ts': 'time'}.get(c, c) }}</button></th>
+              {% endfor %}
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      {% endif %}
+      <pre id="logbox" class="logbox"{% if rflog %} hidden{% endif %}>{% for line in lines %}{{ line }}
 {% endfor %}{% if not lines %}(no output yet){% endif %}</pre>
       {% if rflog %}
         {# Clear applies to the SHOWN log only: the form posts this card's target and job. #}
@@ -34,5 +67,9 @@
   </div>
 {% endblock %}
 {% block scripts %}
-  <script src="{{ url_for('static', filename='logs.js') }}" defer></script>
+  {% if rflog %}
+    <script src="{{ url_for('static', filename='rflog.js') }}" defer></script>
+  {% else %}
+    <script src="{{ url_for('static', filename='logs.js') }}" defer></script>
+  {% endif %}
 {% endblock %}

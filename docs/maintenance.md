@@ -324,3 +324,43 @@ exception is **meshtastic**: its log is meshtasticd's own `TraceFile`, which the
 appends to, so lhpc rolls it opportunistically — at stack start and when a page read finds it over
 the cap, keeping the last ~5 MB in `.1`. That is not a hard maximum; an unattended node grows the
 trace until the next start, read or Clear.
+
+**The viewer.** The log page shows an RF log as records — one row per frame with time, direction,
+RSSI/SNR, length, outcome, summary (the TNC2 text or meshtastic's `!from → !to`), hex and ascii —
+parsed server-side by `rflog.parse_line` and served by `GET /api/rflog/<writer>?job=…` (same
+registry authorization as the page). Sort by any column, filter, switch columns on and off; the
+raw file is one click away and is what the CLI prints. Below 700 px hex and ascii start off and a
+row tap expands them. Sort, filter and column choices live in the browser (`localStorage`), never
+on the box; the Decrypt toggle is never remembered — every page load starts with it off. A line the parser does not know is still a row with its raw text.
+
+**Decrypt.** For the three stacks whose payloads are encrypted — meshtastic, meshcore,
+reticulum — the page carries a **Decrypt** toggle on its own row below the switcher, and the CLI
+`lhpc rflog <stack> --decrypt [--follow]`. Both run a small decoder script (`lhpc/data/rfdecode/`)
+under the *stack's own interpreter*, where its libraries and its keys already live: the managed
+Meshtastic CLI venv reads `state/meshtasticd/prefs/channels.proto` (channel PSKs; LongFast's is
+public) and decrypts channel traffic with the node's own AES-CTR, and opens public-key direct
+messages to and from this node with its own key in `prefs/config.proto` and the peer's public key
+in `prefs/nodes.proto` (X25519 → SHA-256 → AES-256-CCM, the firmware's nonce); openHop's venv
+reads the identity seed in `config/secrets/` and the contacts and channel keys in
+`state/meshcore/companion.db` (or the repeater's store, by `mode`; MeshCore's well-known Public
+channel key is built in) and opens adverts, channel text and data, and every pairwise frame this
+node is one end of — direct messages, requests, responses, path returns, anonymous requests
+addressed to it (a login shows as a login, never its password); LXMF's venv (or, before `lxmd` is
+built, the RNS venv) reads `state/reticulum/config` (the LoRa interface's IFAC) and MeshChat's
+identity and ratchets in `state/meshchat/` and opens announces, path requests and single packets
+to this box — link traffic and relayed packets are undecryptable by design and say so. The rule
+on every stack: what this node's own secrets can open is opened; a frame between two other
+nodes stays closed. A frame the keys cannot open is `no-key`, a
+frame nobody could open `undecryptable`, a non-frame `malformed`; every row keeps its raw line.
+
+Nothing leaves its place: no key is copied, passed on argv or in the environment (the decoder
+opens the files itself, as `lhpc`; reading a SQLite store touches its `-wal`/`-shm` lock files,
+nothing more), no decoded text is written anywhere (`logs/`, `state/`, the access log sees the
+URL only; `Cache-Control: no-store`), and the console keeps at most 2000
+decoded records per job in memory, gone with a restart (a frame no key opened is retried after
+30 s, so a key that appears later is picked up without a restart). The decoder is bounded (10 s
+wall clock, 1 MB of accepted output, one run at a time per job — concurrent polls share one run) and its protocol is checked line for line — N frames in, N results
+out, keys matching — so a broken or half-built decoder is one typed error on the page and on the
+terminal, never a traceback and never a gap. A stack that is not built has nothing to decode with,
+and the page says so. Decoding other stations' channel traffic afterwards is the same act as the
+node reading it live; a private message between two other stations stays closed.

@@ -18,6 +18,7 @@ from . import (
     runtime_fs,
     validators,
 )
+from . import meshcore_mode as _meshcore_mode
 from . import resources as resources_mod
 from . import restart_required as _rr
 from . import reticulum_interfaces as _ri
@@ -5104,7 +5105,8 @@ class LifecycleOpsMixin:
             return None
         e, band = rf
         return {"surface": e.surface, "owner": e.owner, "writer": e.writer, "band": band,
-                "job": job, "label": f"{e.surface} {band}".strip(), "native": e.native}
+                "job": job, "label": f"{e.surface} {band}".strip(), "native": e.native,
+                "decoder": e.decoder}
 
     def rflog_running(self, job: str) -> bool:
         """The badge: the WRITER's run state (the daemon's per band), never a job marker."""
@@ -5196,6 +5198,191 @@ class LifecycleOpsMixin:
         except (OSError, PathContainmentError) as exc:
             return ActionResult(False, f"RF log not cleared: {exc}")
         return ActionResult(True, f"RF log cleared: {name}")
+
+    # ---- records + decode ---------------------------------------------------------------
+    # The page and the CLI work on RECORDS (rflog.parse_line). Decoding runs the stack's own
+    # decoder under the stack's own interpreter, where its libraries and its keys already live;
+    # the controller only relays lines and enforces the protocol. Results are cached per job by
+    # record key (the raw line's hash) — no rotation state — and one decode runs per job at a time.
+
+    RFLOG_DECODE_TIMEOUT_S = 10.0
+    RFLOG_DECODE_MAX_OUT = 1 << 20          # bytes of decoder stdout ACCEPTED per batch (checked after the run)
+    RFLOG_LRU_MAX = 2000                    # cached decoded records per job
+    RFLOG_NOKEY_TTL_S = 30.0                # a `no-key` answer is kept this long before the frame is retried
+
+    def _rflog_meshcore_mode(self) -> str:
+        """The mode the MeshCore RF log is being WRITTEN in: the running node's mode while it
+        runs (a saved-but-not-restarted change must not switch the decoder's identity and
+        stores under a live writer), the saved mode otherwise."""
+        if self.stack_running(_meshcore_mode.STACK_ID):
+            return _meshcore_mode.normalize(self.meshcore_running_mode())
+        return _meshcore_mode.normalize(self.meshcore_mode())
+
+    def rflog_records(self, target: str, job, lines: int = 300) -> tuple:
+        """(path, records) — the RF viewer's data: the two-segment tail as parsed records."""
+        path, raw = self.log_tail(target, lines, job=job)
+        return path, _rflog.parse_lines(raw)
+
+    def _rflog_decoder_argv(self, e) -> tuple:
+        """(argv, error): the decoder script under the stack's interpreter, or a typed reason."""
+        try:
+            return self._rflog_decoder_argv_inner(e)
+        except PathContainmentError as exc:
+            return (), f"{e.surface}: a store path is refused ({exc})"
+
+    def _rflog_decoder_argv_inner(self, e) -> tuple:
+        from pathlib import Path as _P
+        script = _P(__file__).resolve().parent.parent / "data" / "rfdecode" / f"decode_{e.decoder}.py"
+        rt = str(self._paths.runtime_root)
+        if e.decoder == "meshtastic":
+            from . import meshtastic_tool
+            # The venv's `bin/python` is a symlink to the system interpreter by design, so this
+            # is lexical containment (an executable we run), never `under()` (paths we write).
+            py = self._paths.runtime_root.joinpath(*meshtastic_tool.MANAGED_CLI_REL[:-1], "python")
+            extra = ["--prefs", str(self._paths.under("state", "meshtasticd", "prefs"))]
+        elif e.decoder == "meshcore":
+            comp = self.stack(e.owner).component(e.writer) if self.stack(e.owner) else None
+            if comp is None or comp.source is None:
+                return (), "meshcore is not installed — nothing to decode with"
+            py = self._paths.resolve_source(comp.source.path) / ".venv" / "bin" / "python"
+            mode = self._rflog_meshcore_mode()
+            extra = ["--mode", mode, "--secrets", str(self._paths.under("config", "secrets")),
+                     "--store", str(self._paths.under("state", "meshcore", "companion.db")),
+                     "--repeater-store", str(self._paths.under("state", "openhop"))]
+        elif e.decoder == "reticulum":
+            # LXMF's venv (RNS + LXMF: the message summary) when the delivery service is built,
+            # else the RNS venv (RNS only: announces, IFAC, opaque plaintext) — both this stack's.
+            stack = self.stack(e.owner)
+            pys = []
+            for cid in ("lxmd", e.writer):
+                comp = stack.component(cid) if stack else None
+                if comp is not None and comp.source is not None:
+                    pys.append(self._paths.resolve_source(comp.source.path) / ".venv" / "bin" / "python")
+            if not pys:
+                return (), "reticulum is not installed — nothing to decode with"
+            py = next((p for p in pys if p.is_file()), pys[-1])
+            # `--config` is RNS's configdir (state/reticulum); the decoder reads its `config` file.
+            extra = ["--config", str(self._paths.under("state", "reticulum")),
+                     "--meshchat", str(self._paths.under("state", "meshchat"))]
+        else:
+            return (), f"no decoder for {e.surface}"
+        if not py.is_file():
+            return (), f"{e.surface} is not built — nothing to decode with ({py})"
+        return (str(py), str(script), "--runtime", rt, *extra), ""
+
+    def _rflog_lru(self, job: str):
+        from collections import OrderedDict
+        store = self.__dict__.setdefault("_rflog_lru_by_job", {})
+        return store.setdefault(job, OrderedDict())
+
+    def _rflog_flight(self, job: str):
+        import threading
+        store = self.__dict__.setdefault("_rflog_flight_by_job", {})
+        return store.setdefault(job, threading.Lock())
+
+    def rflog_decode(self, target: str, job, records: list) -> dict:
+        """Decode `records` (the viewer's batch) with the job's decoder. Returns
+        {"records": [...with status/kind/peer/decoded...], "error": ""} — `error` is set, and no
+        record decoded, on a DECODER-LEVEL failure (venv absent, store unreadable, protocol
+        violation, timeout). A healthy store that lacks this frame's key is a per-record
+        `no-key`, never an error. Cached per job by record key; a `no-key` answer expires after
+        RFLOG_NOKEY_TTL_S so a key that appears later is picked up without a restart."""
+        rf = _rflog.by_job(str(job or ""))
+        if rf is None or rf[0].writer != target or not rf[0].decoder:
+            return {"records": records, "error": "not a decodable RF log"}
+        e = rf[0]
+        import time as _time
+        # Everything from "what is missing" to "cache updated" happens under the per-job lock:
+        # two polls arriving together must not both decide the same frames are misses and
+        # then run the decoder twice — the second finds the first's answers in the cache.
+        with self._rflog_flight(str(job)):
+            lru = self._rflog_lru(str(job))
+            # The meshcore job's cache is only valid for the mode the log is written in.
+            if e.decoder == "meshcore":
+                mode = self._rflog_meshcore_mode()
+                if lru.get("__mode__") not in (None, mode):
+                    lru.clear()
+                lru["__mode__"] = mode
+            now = _time.monotonic()
+            out = []
+            misses = []
+            for r in records:
+                hit = lru.get(r["key"])
+                if hit is not None and (hit.get("status") != "no-key"
+                                        or now - hit.get("_at", 0) < self.RFLOG_NOKEY_TTL_S):
+                    out.append({**r, **{k: v for k, v in hit.items() if k != "_at"}})
+                else:
+                    out.append(None)
+                    misses.append(r)
+            error = ""
+            decoded = {}
+            if misses:
+                argv, error = self._rflog_decoder_argv(e)
+                if not error:
+                    decoded, error = self._rflog_run(argv, misses)
+            for i, r in enumerate(records):
+                if out[i] is None:
+                    d = decoded.get(r["key"])
+                    if d is None:
+                        out[i] = {**r, "status": "", "kind": "", "peer": "", "decoded": ""}
+                    else:
+                        out[i] = {**r, **d}
+                        # `no-key` is kept briefly (a key may appear without a restart) so an
+                        # unchanged failure is not re-decoded every poll; anything else for good.
+                        lru[r["key"]] = {**d, "_at": now} if d.get("status") == "no-key" else d
+                        lru.move_to_end(r["key"])
+            while len(lru) - ("__mode__" in lru) > self.RFLOG_LRU_MAX:     # the marker is not a record
+                k = next(iter(lru))
+                if k == "__mode__":
+                    lru.move_to_end(k)
+                    k = next(iter(lru))
+                lru.pop(k, None)
+        return {"records": out, "error": error}
+
+    def _rflog_run(self, argv, misses) -> tuple:
+        """One decoder subprocess over `misses`: N lines in, N JSON lines out, keys matching, in
+        order — anything else is a protocol violation and the whole batch is rejected. stdout is
+        collected whole and then refused above RFLOG_DECODE_MAX_OUT — a cap on what is ACCEPTED
+        (the wall clock bounds the child), not a limit on the child's memory. stderr is captured
+        and capped; only our own typed first line (exit 3) is reported, never a traceback, never
+        plaintext."""
+        import json as _json
+        import subprocess
+        payload = "".join(_json.dumps({"key": r["key"], "raw": r["raw"]}) + "\n" for r in misses)
+        try:
+            proc = subprocess.run(list(argv), input=payload.encode("utf-8", "surrogateescape"),
+                                  capture_output=True, timeout=self.RFLOG_DECODE_TIMEOUT_S,
+                                  check=False, cwd=str(self._paths.runtime_root))
+        except subprocess.TimeoutExpired:
+            return {}, "decoder timed out"
+        except OSError as exc:
+            return {}, f"decoder could not start: {exc.strerror or exc}"
+        err = proc.stderr[:4096].decode("utf-8", "replace")
+        if proc.returncode == 3:
+            first = err.strip().splitlines()[0] if err.strip() else "decoder refused"
+            return {}, first[:200]
+        if proc.returncode != 0:
+            return {}, f"decoder failed (exit {proc.returncode})"
+        if len(proc.stdout) > self.RFLOG_DECODE_MAX_OUT:
+            return {}, "decoder output too large"
+        lines = proc.stdout.decode("utf-8", "replace").splitlines()
+        if len(lines) != len(misses):
+            return {}, f"decoder protocol violation ({len(lines)} results for {len(misses)} records)"
+        result = {}
+        for r, ln in zip(misses, lines, strict=True):
+            try:
+                obj = _json.loads(ln)
+            except ValueError:
+                return {}, "decoder protocol violation (not JSON)"
+            if not isinstance(obj, dict) or obj.get("key") != r["key"]:
+                return {}, "decoder protocol violation (key mismatch)"
+            status = str(obj.get("status", ""))
+            if status not in ("ok", "no-key", "undecryptable", "malformed"):
+                return {}, "decoder protocol violation (status)"
+            result[r["key"]] = {"status": status, "kind": str(obj.get("kind", ""))[:40],
+                                "peer": str(obj.get("peer", ""))[:120],
+                                "decoded": str(obj.get("decoded", ""))[:4000]}
+        return result, ""
 
     def rflog_tail(self, surface: str, band: str = "", lines: int = 300) -> tuple:
         """CLI: (path, lines) for a surface's RF log; the daemon needs its band, nobody else

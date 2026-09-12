@@ -1582,6 +1582,35 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                         else service.log_running(target, job)),
                                rflog=rf, switcher=service.rflog_switcher() if rf else [])
 
+    @app.get("/api/rflog/<target>")
+    def rflog_records_api(target: str):
+        # The viewer's records: registry-authorized like everything RF.
+        if service.stack_of(target) is None:
+            abort(404)
+        job = _safe_job(request.args.get("job"))
+        rf = service.rflog_job(target, job)
+        if rf is None:
+            abort(404)
+        path, records = service.rflog_records(target, job)
+        return jsonify(target=target, job=job, path=path, records=records,
+                       running=service.rflog_running(job))
+
+    @app.get("/api/rflog/<target>/decoded")
+    def rflog_decoded_api(target: str):
+        # Decrypted in memory with the keys on this box; the response is never cached anywhere.
+        if service.stack_of(target) is None:
+            abort(404)
+        job = _safe_job(request.args.get("job"))
+        rf = service.rflog_job(target, job)
+        if rf is None or not rf.get("decoder"):
+            abort(404)
+        path, records = service.rflog_records(target, job)
+        res = service.rflog_decode(target, job, records)
+        resp = jsonify(target=target, job=job, path=path, records=res["records"],
+                       error=res["error"], running=service.rflog_running(job))
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
     @app.post("/logs/<target>/clear")
     def logs_clear(target: str):
         if service.stack_of(target) is None:

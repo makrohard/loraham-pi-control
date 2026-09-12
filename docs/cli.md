@@ -302,11 +302,18 @@ the selected source.
 `lhpc logs <target> [--lines N]` — bounded tail of a component's log.
 
 ### rflog
-`lhpc rflog <stack> [--band 433|868] [--lines N] [--clear]` — a stack's RF log: what its radio
-heard and sent, one line per frame, kept across restarts. `daemon` needs `--band` (one file per
-band); no other stack takes one. `graywolf` shows the kiss TNC's log — its switch is
-`lhpc config kiss rf_log off`; every other stack's is `lhpc config <stack> rf_log on|off`, read at
-the writer's next start. `--clear` empties the file in place and removes its previous segment.
+`lhpc rflog <stack> [--band 433|868] [--lines N] [--clear] [--decrypt [--follow]]` — a stack's
+RF log: what its radio heard and sent, one line per frame, kept across restarts. `daemon` needs
+`--band` (one file per band); no other stack takes one. `graywolf` shows the kiss TNC's log — its
+switch is `lhpc config kiss rf_log off`; every other stack's is `lhpc config <stack> rf_log
+on|off`, read at the writer's next start. `--clear` empties the file in place and removes its
+previous segment. `--decrypt` (meshtastic, meshcore, reticulum only — the others are plaintext
+already) prints the tail decoded with the keys on this box, one frame per line: the time, direction
+and signal, then the kind, the peer and the text; `[no-key …]`, `[undecryptable …]` or
+`[malformed …]` where that is the truth. `--follow` keeps printing new frames every 2 s until
+Ctrl-C. Output goes to the terminal only — nothing is written; piping it is the operator's
+choice. Exit 2 on a plaintext stack, 1 when the decoder cannot run (the stack is not built, a key
+store is unreadable). See [maintenance → RF logs](maintenance.md#rf-logs).
 
 ---
 

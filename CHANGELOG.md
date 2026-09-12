@@ -8,6 +8,17 @@
   RF-Logs submenu on each stack card, the log page's switcher and confirmed Clear, and the new
   `lhpc rflog` command. `rf_log` is a band-less stack setting; the restart marker now judges
   applicability per changed parameter. Live proof: `docs/rflog-test-2026-09-12.md`.
+- RF-log viewer and decrypt: the log page shows an RF log as a sortable, filterable table with
+  columns on and off (phone-friendly, raw view one click away), and for meshtastic, meshcore and
+  reticulum a Decrypt toggle below the switcher — plus `lhpc rflog <stack> --decrypt [--follow]` —
+  decodes the frames in memory with the keys already on the box, under each stack's own
+  interpreter and crypto — everything this node's own secrets can open, including Meshtastic
+  public-key direct messages and MeshCore requests, responses and path returns. No key moves,
+  nothing decoded is written. The managed Meshtastic CLI
+  venv gains `pycryptodomex` (a `build_inputs` entry), so an already-built meshtastic reads
+  *Build required* once — an incremental rebuild from source, or on the binary channel the
+  artifact this release publishes. Live proof:
+  `docs/rflog-decrypt-test-2026-09-13.md`.
 - Pins: LoRaHAM_Daemon 1623ae9, loraham-kiss-tnc b9b7104, meshcom-loraham-bridge 7c86c96,
   loraham-rns-interface 76a7a37.
 
