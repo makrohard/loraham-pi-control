@@ -56,13 +56,26 @@ Three saved configurations that config generation rejects, each attempted as a r
 Before the fix each of these stopped the node first and refused afterwards, leaving it down. The
 settings were restored to their defaults afterwards and the node came back `[verified]`.
 
-### Not re-run, and the one row still open
+### Boot restore — two power cycles, and what the first one taught
 
-Rows 1–5 and 7–12, and the cross-cutting checks other than the console and known-working, are
-*not re-run*; they were measured in the 0.4.0 full matrix (2026-09-11, this file's git history)
-and this cycle changes nothing they cover. **Boot restore is still owed**: it needs a power cycle,
-and the run account has no passwordless `reboot`. It is the one row of this scoped set not yet
-measured.
+Both reboots were triggered from the console's own Reboot control (the run account has no
+passwordless `reboot`, which is itself the correct posture).
+
+| | last start before the reboot | result |
+|---|---|---|
+| 1 | component-scoped (`stack start meshchat`, `stack restart rns`) | `no-plan — 0 restored, 0 failed, 1 skipped`, reason **"no full-stack-scoped evidence (component-scoped starts are never widened)"** |
+| 2 | stack-scoped (`stack start reticulum`) | **`done — 1 restored, 0 failed, 0 cancelled, 0 pending, 0 skipped`**; `rns` back with `:37428` and `:4242`; console **200** |
+
+The first is a correct **negative**, not a failure, and it is recorded because an operator can
+easily read it as one: restoring a whole stack from a component-scoped start would start
+components nobody asked for, so the driver declines to widen the evidence it has. Down-to-up was
+46 s and 45 s.
+
+### Not re-run
+
+Rows 1–5 and 7–12, and the cross-cutting checks other than boot restore, the console and
+known-working, are *not re-run*; they were measured in the 0.4.0 full matrix (2026-09-11, this
+file's git history) and this cycle changes nothing they cover.
 
 ## 0.4.0 — the full release matrix, 2026-09-11
 
