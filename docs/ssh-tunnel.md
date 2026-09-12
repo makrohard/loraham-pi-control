@@ -54,6 +54,7 @@ port instead; forward that port too, or reach the proxy directly.)
 | meshtasticd's own web UI | `127.0.0.1:9443` (HTTPS) | `ssh -N -L 9443:127.0.0.1:9443 lhpc@<host>` | `https://127.0.0.1:9443/` |
 | KISS TNC (an APRS client on your machine) | `127.0.0.1:8001` | `ssh -N -L 8001:127.0.0.1:8001 lhpc@<host>` | KISS over TCP at `127.0.0.1:8001` |
 | Reticulum TCP interface (another RNS node of yours) | `127.0.0.1:4242` | `ssh -N -L 4242:127.0.0.1:4242 lhpc@<host>` | a `TCPClientInterface` to `127.0.0.1:4242` |
+| MeshChat (an optional component of the reticulum stack, started from its card or with `lhpc stack start meshchat`) | `127.0.0.1:8790` | `ssh -N -L 8790:127.0.0.1:8790 lhpc@<host>` | `http://127.0.0.1:8790/` |
 
 The daemon, chat and voice have no TCP port: chat and the voice terminal are run in an SSH
 session on the box itself (`ssh -t lhpc@<host>` and the command shown on the Dashboard).
@@ -67,6 +68,7 @@ ssh -N -o ServerAliveInterval=30 \
   -L 8443:127.0.0.1:8443 -L 8080:127.0.0.1:8080 -L 8788:127.0.0.1:8788 -L 8000:127.0.0.1:8000 \
   -L 5000:127.0.0.1:5000 -L 18083:127.0.0.1:18083 -L 12323:127.0.0.1:12323 \
   -L 4403:127.0.0.1:4403 -L 9443:127.0.0.1:9443 -L 8001:127.0.0.1:8001 -L 4242:127.0.0.1:4242 \
+  -L 8790:127.0.0.1:8790 \
   lhpc@<host>
 ```
 

@@ -673,7 +673,7 @@ class NetworkOpsMixin:
                                               remote_exposed=True,
                                               allowed_cidrs=union, ip_sans=ip_sans,
                                               dns_sans=dns_sans, hold_lock=False)
-                # The STACK PROXIES (8444..8447) carry their OWN per-stack allowlists —
+                # The STACK PROXIES (8444..8448) carry their OWN per-stack allowlists —
                 # Extending only the console left every proxy answering 403
                 # from the joined network. Union the joined CIDR into each enabled remote
                 # proxy under the same held lock.

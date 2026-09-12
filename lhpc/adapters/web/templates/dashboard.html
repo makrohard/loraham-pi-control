@@ -144,6 +144,10 @@
           <h3>Running on {{ r.band }}</h3>
           {% if r.running %}
             {% for s in r.running %}
+              {# A rule BETWEEN the running stacks of this radio. `loop.first` keeps it out of the
+                 top of the list, and being emitted before each later item keeps it off the end.
+                 The component rows inside each stack get their own, lighter rule (`.complist`). #}
+              {% if not loop.first %}<hr class="runsep">{% endif %}
               <div class="runstack">
                 <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
                   <span class="pill">{{ s.id }}</span></p>

@@ -30,6 +30,7 @@ pytestmark = pytest.mark.slow
 
 MESHCORE_COMPANION = 5000
 MESHCORE_WEBUI = 8788
+MESHCHAT_UI = 8790
 REPEATER_DASHBOARD = 8000
 MESHCOM_UI = 18083
 MESHTASTIC_API = 4403
@@ -304,6 +305,18 @@ def test_release_reticulum(env, svc):
     start_component(env, "lxmd", stack="reticulum")
     assert alive(env, "lxmd"), (f"{stack_regression('reticulum', 'readiness')}\n"
                                 "lxmd did not come up")
+    # MeshChat is a release deliverable too, and a stack start deliberately leaves it stopped —
+    # so without starting it by name the lane shipped a browser client it never once ran. It
+    # launches through the rns-client guard, which refuses unless the node above is really up,
+    # and it serves its prebuilt bundle: the HTTP answer proves both the guard passed and the
+    # bundle is where `get_file_path()` looks.
+    start_component(env, "meshchat", stack="reticulum")
+    # 200, not "any answer": the bundled UI requires no authentication of its own — the proxy is
+    # where auth lives — so a 401/403 here would mean something other than MeshChat replied.
+    assert wait_http(f"http://127.0.0.1:{MESHCHAT_UI}/", 180, accept=(200,)) == 200, \
+        (f"{stack_regression('reticulum', 'readiness')}\nMeshChat did not serve its UI")
+    assert alive(env, "meshchat"), (f"{stack_regression('reticulum', 'readiness')}\n"
+                                    "LHPC does not report meshchat running")
     # Sideband is a release deliverable of this stack, and the lane runs against a real X
     # display (the workflow starts Xvfb before it). So LHPC's GUI predicate dropping it here
     # means the GUI capability it needs is MISSING, not that this box is legitimately headless

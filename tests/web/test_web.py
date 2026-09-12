@@ -2464,3 +2464,66 @@ def test_the_notice_link_opens_the_firewall_apply_section(tmp_path):
     assert 'id="firewall-row" open data-force-open="1"' in body
     body = client.get("/stacks?open=firewall", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
     assert 'id="firewall-apply">' in body and 'id="firewall-apply" open' not in body
+
+
+def _running_entry(sid, name):
+    return {"id": sid, "name": name, "multi_band": False,
+            "components": [{"id": sid, "name": name, "state": "running", "optional": False,
+                            "runnable": True, "interactive": False, "command": "", "blocker": "",
+                            "configurable": False, "writes_log": False, "interfaces": []}]}
+
+
+def test_the_running_card_rules_off_one_stack_from_the_next(tmp_path, monkeypatch):
+    """Two stacks sharing a radio ran together as one wall of text. A rule separates them —
+    BETWEEN the entries only: never above the first, never below the last, and never in a card
+    that shows a single stack (a trailing rule reads as 'something is missing here')."""
+    from lhpc.core.services import ControllerService
+    c = _real_app(tmp_path)
+    rows = None
+
+    def two_running(self):
+        row = {"band": "433", "running": [_running_entry("kiss", "KISS TNC"),
+                                          _running_entry("graywolf", "Graywolf")],
+               "interactive": [], "startable": [], "daemon": None}
+        return [{**row, **(rows or {})}]
+
+    monkeypatch.setattr(ControllerService, "radio_overview", two_running)
+    body = c.get("/").get_data(as_text=True)
+    card = body.split("Running on 433", 1)[1].split("</section>", 1)[0]
+    assert card.count('class="runsep"') == 1, "one rule between two stacks"
+    first, rest = card.split('class="runstack"', 1)
+    assert 'class="runsep"' not in first, "no rule above the first stack"
+    assert 'class="runsep"' not in rest.rsplit('class="runstack"', 1)[1], \
+        "no rule after the last stack"
+
+    def one_running(self):
+        return [{"band": "433", "running": [_running_entry("kiss", "KISS TNC")],
+                 "interactive": [], "startable": [], "daemon": None}]
+
+    monkeypatch.setattr(ControllerService, "radio_overview", one_running)
+    body = c.get("/").get_data(as_text=True)
+    assert 'class="runsep"' not in body, "a single running stack needs no separator"
+
+
+def test_the_component_rows_of_a_stack_are_ruled_off_from_each_other(tmp_path, monkeypatch):
+    """The second half of the same card: inside one stack, the component lines ran together.
+    They are ruled off by CSS (`.complist li + li`), which cannot put a rule above the first row
+    or below the last however many components there are — so the contract to keep is that the
+    rows really are consecutive `li` of a `.complist`, and that the stylesheet rules them off."""
+    from lhpc.core.services import ControllerService
+    c = _real_app(tmp_path)
+
+    def one_stack_three_components(self):
+        e = _running_entry("reticulum", "Reticulum (RNS)")
+        e["components"] = [dict(e["components"][0], id=cid, name=cid)
+                           for cid in ("rns", "lxmd", "meshchat")]
+        return [{"band": "868", "running": [e], "interactive": [], "startable": [], "daemon": None}]
+
+    monkeypatch.setattr(ControllerService, "radio_overview", one_stack_three_components)
+    card = c.get("/").get_data(as_text=True).split("Running on 868", 1)[1].split("<h3>", 1)[0]
+    ul = card.split('<ul class="complist">', 1)[1].split("</ul>", 1)[0]
+    assert ul.count("<li>") == 3, "one row per component, as consecutive siblings"
+    css = (repo_paths.REPO / "lhpc/adapters/web/static/style.css").read_text()
+    rule = [ln for ln in css.splitlines() if ln.startswith(".complist li + li")]
+    assert rule and "border-top" in rule[0], \
+        "the rule between component rows lives in the stylesheet; renaming the class loses it"

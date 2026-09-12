@@ -37,3 +37,10 @@ logs/
 # coverage data — a local artifact, never committed
 .coverage
 .coverage.*
+
+# Shipped browser bundles are PACKAGE DATA, not build output. The generic rules above
+# (dist/, build/, *.log, *.key …) match paths INSIDE a vendored bundle — `dist/` alone hid
+# two files of MeshChat's rnode-flasher, so a fresh clone built an incomplete UI while the
+# developer's tree looked complete. Nothing under these trees is ever generated here.
+!lhpc/data/*-dist/
+!lhpc/data/*-dist/**

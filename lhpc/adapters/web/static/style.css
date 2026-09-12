@@ -245,6 +245,9 @@ button:hover { background: var(--btn-bg); color: var(--btn-ink); border-color: v
 .runstack { border: 1px solid var(--line); border-radius: 8px; padding: .5rem .6rem; margin: .4rem 0; }
 .complist { list-style: none; padding-left: 0; margin: .3rem 0; }
 .complist li { margin: .15rem 0; }
+/* A rule BETWEEN the component rows of one stack — `li + li` cannot draw one above the
+   first row or below the last, and a single-component stack keeps no rule at all. */
+.complist li + li { border-top: 1px solid var(--line); padding-top: .3rem; margin-top: .3rem; }
 /* Enlarged, comfortably-spaced tap target for the row "logs" link (≈ WCAG 2.5.8 24×24). The padding
    grows the link inside its own grid cell, not the row layout. */
 .logslink { font-size: .8rem; margin-left: .3rem; display: inline-block; padding: .25rem .45rem; }
@@ -453,6 +456,11 @@ input.wide { width: 100%; min-width: 16rem; }
 
 .cfgreset { margin-top: 1.4rem; }                    /* space Save-config off from Reset */
 hr.sep { border: 0; border-top: 1px solid var(--line, #333); margin: 1.4rem 0 .6rem; }
+/* Same rule, tighter: it sits INSIDE a radio card between two running STACKS, where
+   `hr.sep`'s 1.4rem lead-in would read as a gap rather than a separator. It falls in the
+   margin BETWEEN two bordered blocks, so it reads as the stronger of the card's two
+   separators; the component rows inside a block are ruled off by `.complist li + li`. */
+hr.runsep { border: 0; border-top: 1px solid var(--line, #333); margin: .7rem .15rem; }
 
 /* Per-stack daemon radio parameters (config page) — one param per line */
 .dptab { margin: .3rem 0 .6rem; }

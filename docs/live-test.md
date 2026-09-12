@@ -10,6 +10,60 @@ Earlier runs — the 0.3.12→0.3.14 release-automation campaign, the 0.3.9 adde
 their measured numbers — live in this file's git history:
 `git log --follow -p -- docs/live-test.md`.
 
+## 0.5.0 — the scoped Reticulum run, 2026-09-12
+
+A **scoped** matrix on the maintainer's waiver: this cycle's change is confined to the reticulum
+stack plus two console surfaces, so row 6 runs from zero and the rest are recorded *not re-run*,
+footnoted to the 0.4.0 full matrix of 2026-09-11 — which lives in this file's git history, the
+convention the [fast lane](test-matrix.md#fast-lane) already uses for a waived row.
+
+Controller `8d983ac` on `feature/reticulum-client-and-interfaces`. Box `lhpc-e293`, Pi Zero 2 W
+(415 MB), Debian 13 Lite, aarch64, `lhpc hardware` = Uputronics dual. Console left running.
+
+### Row 6 — reticulum, from zero
+
+| purge | install (pinned) | build | start |
+|---|---|---|---|
+| 11 s | 285 s | 252 s | 15 s |
+
+`[verified] rns … ready: present`; `127.0.0.1:37428`, `:37429`, `:4242` all present; every
+component reads `src match`; Sideband `[skip] … GUI dependencies not installed`, which is the
+headless-safe default and not a failure. Lowest free memory during the whole run **27 MB**, no OOM.
+
+Evidence beyond the row's own column:
+
+| check | result |
+|---|---|
+| the radio's mode, as the NODE reports it | `LoRaSPIInterface[LoRa] · Mode: Internal`, `TCPServerInterface[Client access] · Mode: Gateway` |
+| the generated config | `enable_transport = No`; LoRa `internal`, Client access `gateway`, Internet `boundary` + `recursive_prs = yes`, `enabled = no`; file mode **0400** |
+| the operator may still choose the fuller bridge | `lora_announce_relay = gateway` → the node reports `Mode: Gateway`; set back → `Mode: Internal` |
+| MeshChat | starts by name (a stack start leaves it stopped), `[verified]`, UI **200** |
+| the frozen dependency closure on aarch64 | the from-zero build resolved `pip install -c meshchat-constraints.txt` and left exactly **17** packages in the venv — the outstanding re-proof from the correction review |
+| known-working | recorded for reticulum |
+| web console | `/`, `/stacks` and three stack bodies all **200**, no traceback, and zero errors in the console log for the run window |
+
+### The correction the audit demanded, proven against a running node
+
+Three saved configurations that config generation rejects, each attempted as a real
+`lhpc stack restart rns` while the node was up:
+
+| saved state | result | node |
+|---|---|---|
+| IFAC network name, no passphrase | typed refusal naming the passphrase | **same pid, never stopped** |
+| `internet_ifac_netkey = 123456` (a bare number) | same typed refusal | **same pid** |
+| passphrase present, `secrets.toml` at `0644` | the loader's refusal, naming the file and the `chmod` remedy | **same pid** |
+
+Before the fix each of these stopped the node first and refused afterwards, leaving it down. The
+settings were restored to their defaults afterwards and the node came back `[verified]`.
+
+### Not re-run, and the one row still open
+
+Rows 1–5 and 7–12, and the cross-cutting checks other than the console and known-working, are
+*not re-run*; they were measured in the 0.4.0 full matrix (2026-09-11, this file's git history)
+and this cycle changes nothing they cover. **Boot restore is still owed**: it needs a power cycle,
+and the run account has no passwordless `reboot`. It is the one row of this scoped set not yet
+measured.
+
 ## 0.4.0 — the full release matrix, 2026-09-11
 
 Nine of the twelve rows run on the reference box, plus the cross-cutting checks and the four rows

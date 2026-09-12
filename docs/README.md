@@ -57,6 +57,8 @@ model, then the CLI. Every file is linked once; the README covers install.
 - [Live tests](live-test.md) — the newest live run on the reference box.
 - [Test lab](testlab.md) — real stack processes against simulated hardware, locally or in a
   Codespace.
+- [Reticulum test 2026-09-12](reticulum-test-2026-09-12.md) — the whole Reticulum stack on the
+  box: the node, MeshChat, the Internet interface and transport, and what stayed unproven.
 
 ## Policy
 

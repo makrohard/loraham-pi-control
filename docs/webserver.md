@@ -189,7 +189,8 @@ lhpc webserver apply
 - `--port` is **required**: a page with no port is not proxied. The console suggests a stable
   per-page default (console port + 1 + the page's position: the stacks' first pages sorted by
   id, then further pages; on a fresh box graywolf `8444`, meshcom `8445`, meshcore `8446`,
-  meshtastic `8447`, skipping ports already saved); any free port ≥ 1024 works.
+  meshtastic `8447`, reticulum `8448`, skipping ports already saved); any free port ≥ 1024
+  works.
 - `--access-mode` (alias `--auth`) takes the console's values (default
   `local-open-remote-auth`); proxied UIs use the **same** client certificates. Pass it
   explicitly: a stack whose stored policy is already `no-auth` otherwise refuses with *elevated
@@ -198,8 +199,10 @@ lhpc webserver apply
   endpoint is its own proxied **page** with its own port, policy and listener. A stack's first
   page is addressed by the stack id (`lhpc webserver proxy meshcore`), further pages by
   `<stack>-<component>`; the stack's Webserver panel shows one sub-panel per page. Pages:
-  graywolf, meshcom, meshtastic (one each) and meshcore (two: `meshcore` = the MeshCore Web UI,
-  `meshcore-meshcore-node` = the openHop repeater dashboard). The other stacks (daemon, kiss, chat, voice, reticulum) declare no HTTP endpoint and cannot be proxied. A new web component becomes eligible automatically but is
+  graywolf, meshcom, meshtastic and reticulum (one each — reticulum's page is MeshChat) and
+  meshcore (two: `meshcore` = the MeshCore Web UI, `meshcore-meshcore-node` = the openHop
+  repeater dashboard). The other stacks (daemon, kiss, chat, voice) declare no HTTP endpoint
+  and cannot be proxied. A new web component becomes eligible automatically but is
   configured only when you save its panel or submit the bulk form; nothing is exposed on its own.
 
 **One policy for all stack WebGUIs.** The **Webserver → Stacks WebGUIs** subpanel applies one

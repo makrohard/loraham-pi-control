@@ -16,6 +16,7 @@ needs a wheelhouse rather than a rewritten install.sh, and is recorded in docs/b
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -264,12 +265,25 @@ def test_install_refuses_foreign_state_entry(tmp_path, leftover):
     assert not (root / "src").exists()
 
 
-def test_app_data_list_is_identical_in_both_scripts():
-    """ONE allowlist: the app data a default uninstall keeps is exactly what install.sh accepts."""
+def test_app_data_list_is_identical_in_both_scripts_and_in_the_docs():
+    """ONE allowlist, in FOUR places: the app data a default uninstall keeps is exactly what
+    install.sh accepts, exactly what operations.md tells the operator to back up, and exactly
+    what its tar recipe copies. These directories hold identities — MeshChat's LXMF identity is
+    its `--storage-dir`, and losing it silently changes the node's address — so a directory that
+    reaches only some of the four is a trap, not a typo. It stays hand-curated because it cannot
+    be derived: `state/loraham` is created by a pre-step and is NOT app data (SPI locks), while
+    four entries are created by the apps themselves and have no pre-step at all."""
     lines = {s: [ln for ln in (REPO / s).read_text().splitlines() if ln.startswith("APP_DATA=")]
              for s in ("install.sh", "uninstall.sh")}
     assert lines["install.sh"] == lines["uninstall.sh"] and len(lines["install.sh"]) == 1
-    assert "state/graywolf" in lines["install.sh"][0]
+    listed = set(lines["install.sh"][0].split('"')[1].split())
+    assert "state/graywolf" in listed and "state/meshchat" in listed
+    ops = (REPO / "docs" / "operations.md").read_text()
+    pat = re.compile(r"state/[A-Za-z0-9_.-]+")
+    prose = set(pat.findall(ops.split("(the `APP_DATA` list")[0].split("**App data under")[-1]))
+    recipe = set(pat.findall(ops.split("tar -czpf")[1].split("```")[0]))
+    assert prose == listed, "operations.md's prose list drifted"
+    assert recipe == listed, "operations.md's backup recipe drifted"
 
 
 def test_install_refuses_foreign_local_bin_link(tmp_path):

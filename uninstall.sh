@@ -100,7 +100,7 @@ has_triple() {
 }
 # Operator data that survives a default uninstall and that a reinstall accepts: ONE list,
 # byte-identical in install.sh (tests/test_deploy_scripts.py asserts they match).
-APP_DATA="state/graywolf state/meshcore state/openhop state/meshtasticd state/reticulum state/nomadnet state/lxmd state/sideband"
+APP_DATA="state/graywolf state/meshcore state/openhop state/meshtasticd state/reticulum state/nomadnet state/lxmd state/sideband state/meshchat"
 is_app_data() { case " $APP_DATA " in *" $1 "*) return 0 ;; esac; return 1; }
 is_remainder() {   # nothing but config/, backups/, .lhpc-root, profiles/ and app data; config present
 	local e

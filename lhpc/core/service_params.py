@@ -14,6 +14,7 @@ from . import daemon_control, runtime_fs, validators
 from . import meshcore_identity as _meshcore_identity
 from . import meshcore_mode as _meshcore_mode
 from . import restart_required as _rr
+from . import reticulum_interfaces as _reticulum_interfaces
 from .config import (
     ConfigError,
     _load_runtime_toml,
@@ -1248,6 +1249,9 @@ class ParamsConfigMixin:
                 merged.pop(k, None)
             if sid == _meshcore_mode.STACK_ID and (_why := self._meshcore_mode_save_refusal(merged)):
                 raise ConfigError(_why)         # rolls the whole submission back, like identity
+            if sid == _reticulum_interfaces.STACK_ID and (
+                    _why := self._reticulum_internet_save_refusal(merged)):
+                raise ConfigError(_why)         # same rollback; the start would refuse it anyway
             return render_stack_config(tgt, merged)
         targets.append(("stack", _stack_config_path(self._paths, sid, cfg_band), _render_stack, 0o644))
         if (auto_set or auto_remove) and cfg_band:
@@ -2161,6 +2165,19 @@ class ParamsConfigMixin:
                     f"then the mode — or keep mode chat)")
         return ""
 
+    def _reticulum_internet_save_refusal(self, merged: dict) -> str:
+        """Why a Reticulum config save must be refused ("" = fine): an enabled Internet
+        interface needs its endpoint IN THE SAME saved state, or every later start (boot
+        restore included) would be blocked by a config nobody can see being wrong. The
+        generation path re-checks this and the IFAC pairing with it — the passphrase lives in
+        secrets.toml and is not part of a save."""
+        vals = {}
+        for name in (_reticulum_interfaces.ENABLED, _reticulum_interfaces.HOST,
+                     _reticulum_interfaces.PORT):
+            vals[name], _ = self._resolve_stored(merged, "f", _reticulum_interfaces.NODE_ID,
+                                                 name, 1)
+        return _reticulum_interfaces.endpoint_problem(vals)
+
     def _identity_field(self, target: str) -> dict | None:
         """The PRIMARY identity field (compat: first licensed, else first node field)."""
         fields = self._identity_fields(target)
@@ -2610,6 +2627,14 @@ class ParamsConfigMixin:
                     values[p.name] = validators.validate_param(p, raw)
                 except validators.ValidationError:
                     values[p.name] = p.default
+            if not secret_error and c.id == _reticulum_interfaces.NODE_ID:
+                # CROSS-FIELD rules, checked where the passphrase is resolved and BEFORE the
+                # file is written: an enabled Internet interface whose endpoint or IFAC is half
+                # configured must block the start with a typed message, not hand RNS a config
+                # it fails to construct (or, worse, an IFAC built from one half that silently
+                # passes nothing). `lhpc config` refuses the endpoint half at save time too;
+                # this is the authoritative check, and the only one that can see the secret.
+                secret_error = _reticulum_interfaces.problem(values)
             if secret_error:
                 # The message names the LOCATION of the secret, never its value.
                 written.append(ConfigWrite(c.id, str(fc.path), "failed", secret_error))

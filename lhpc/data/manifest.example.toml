@@ -2832,7 +2832,13 @@ note = "Python spidev binding as a SYSTEM package — the other half of the radi
 [stack.component.config_file]
 path = "{runtime}/state/reticulum/config"
 fmt = "ini-update"
-mode = 0o600
+# READ-ONLY to its owner, not 0600. LHPC still writes it: `runtime_fs.atomic_write` renames a
+# fresh temp leaf over the target and rename needs permission on the DIRECTORY, not the file.
+# What 0400 stops is an in-place `open(path, "wb")` — which is what ConfigObj.write() does, and
+# a co-resident Reticulum client editing interfaces through its own UI would otherwise silently
+# overwrite LHPC-owned state. An ownership convention and accidental-write protection, NOT a
+# security boundary: a client under the same account could chmod it back.
+mode = 0o400
 base = "{asset}/bases/reticulum.conf"
 [[stack.component.config_file.param]]
 name = "hardware"
@@ -2938,7 +2944,7 @@ kind = "str"
 default = ""
 omit_if_empty = true
 group = "Network exposure"
-label = "IFAC network name — written as RNS's `networkname`; set the passphrase in secrets.toml too or IFAC stays off"
+label = "IFAC network name — written as RNS's `networkname`; set the passphrase in secrets.toml too, or the LoRa interface REFUSES TO START (our driver treats a half-configured IFAC as an error, it does not fall back to no IFAC)"
 [[stack.component.config_file.param]]
 name = "ifac_netkey"
 key = "passphrase"
@@ -2961,6 +2967,90 @@ choices = ["127.0.0.1"]
 group = "Network exposure"
 label = "Client-access bind (loopback only)"
 note = "RNS client access on 4242 has NO application-level authentication, so a non-loopback bind would rely entirely on the allow-list plus a managed firewall that may be absent, stale or not live-verified. Locked to loopback for this release; remote clients reach it through an SSH tunnel. Lifting this needs the start path to REFUSE a non-loopback bind unless the firewall is installed, current and live-verified for that exact bind/allow pair."
+[[stack.component.config_file.param]]
+name = "lora_announce_relay"
+key = "mode"
+section = "interfaces/LoRa"
+# The ONE interface mode that is an operator decision, because it is a policy question and not a
+# correctness one. `internal` (default) keeps the public mesh's announce broadcast OFF the radio;
+# `gateway` relays those announces too, so radio peers DISCOVER internet-side nodes by themselves.
+# Measured against the pinned Reticulum 1.5.2: both settings relay traffic in both directions and
+# both resolve paths in both directions — the difference is only the unsolicited announces, which
+# on a 3.12 kbps link with a 1 % hourly budget is the expensive part. Only read while transport is
+# on; with transport off the two are indistinguishable.
+kind = "enum"
+choices = ["internal", "gateway"]
+default = "internal"
+advanced = true
+group = "Network exposure"
+label = "Radio announce policy — internal: keep internet-side announces off the air · gateway: relay them, so radio peers discover internet nodes"
+note = "Only matters once transport is on. `gateway` gives the fuller bridge and spends radio airtime on the public mesh's announce traffic, which competes with your own inside the same duty-cycle budget; `internal` still relays traffic and still answers path requests in both directions."
+[[stack.component.config_file.param]]
+name = "enable_transport"
+key = "enable_transport"
+section = "reticulum"
+# enum, not flag: `No`/`Yes` is what RNS's own config uses, and an enum is the only kind whose
+# choices are enforced. LHPC has no bool kind.
+kind = "enum"
+choices = ["No", "Yes"]
+default = "No"
+advanced = true
+group = "Network exposure"
+label = "Transport — route OTHER nodes' traffic between this node's interfaces"
+note = "Independent of the Internet interface below: that one carries this node's own traffic, this one relays third-party traffic between the radio and the internet. Relayed traffic cannot bypass the radio's airtime limits — our LoRa interface enforces and persists them — so what you donate is bounded by `airtime_limit_short`/`_long`, but you do donate it."
+[[stack.component.config_file.param]]
+name = "internet_enabled"
+key = "enabled"
+section = "interfaces/Internet"
+kind = "enum"
+choices = ["no", "yes"]
+default = "no"
+group = "Network exposure"
+label = "Internet interface — link this node to the wider Reticulum network over TCP"
+note = "Off by default. While off the section stays in the generated config and is inert: RNS builds an interface only for an enabled section. Enabling it makes this node's announces reach the internet-side mesh, and theirs reach you."
+[[stack.component.config_file.param]]
+name = "internet_host"
+key = "target_host"
+section = "interfaces/Internet"
+kind = "str"
+validator = "host"
+default = ""
+omit_if_empty = true
+group = "Network exposure"
+label = "Internet interface: target host (a public hub, or another node of yours)"
+[[stack.component.config_file.param]]
+name = "internet_port"
+key = "target_port"
+section = "interfaces/Internet"
+# str + the `port` validator, NOT kind=int: an int is validated even when the interface is off,
+# and the endpoint must be allowed to stay empty until the operator enables it. The pairing
+# (enabled -> host AND port) is enforced as its own typed refusal, at save and at start.
+kind = "str"
+validator = "port"
+default = ""
+omit_if_empty = true
+group = "Network exposure"
+label = "Internet interface: target port"
+[[stack.component.config_file.param]]
+name = "internet_ifac_netname"
+key = "networkname"
+section = "interfaces/Internet"
+kind = "str"
+default = ""
+omit_if_empty = true
+group = "Network exposure"
+label = "Internet interface IFAC network name — leave EMPTY for a public hub, which does not have your passphrase"
+[[stack.component.config_file.param]]
+name = "internet_ifac_netkey"
+key = "passphrase"
+section = "interfaces/Internet"
+kind = "str"
+hidden = true
+omit_if_empty = true
+# Its OWN secret, never the LoRa one: a public hub needs none, and sharing the radio's key
+# would widen one secret from a local medium to a globally reachable socket.
+secret_ref = "reticulum.internet_ifac_netkey"
+label = "Internet interface IFAC passphrase (config/secrets.toml only)"
 
 [[stack.component]]
 id = "nomadnet"
@@ -3231,3 +3321,102 @@ check_file = "{runtime}/src/sideband/.venv/bin/sideband"
 provisioned = true
 install = "lhpc build reticulum"
 note = "Sideband is provisioned into its own in-root venv by the build. It needs a DISPLAY at run time; Kivy vendors its own SDL2, so no GTK/X11 apt packages are pulled."
+
+  # ---------------------------------------------------------------------------------------
+  # MeshChat — the stack's browser client. Optional; `rns` still owns the radio and the
+  # instance. This is the only Reticulum component with an HTTP endpoint, so it is what makes
+  # the stack proxyable: `web_pages()` derives the page id from the stack, giving the page
+  # `reticulum` (NOT `reticulum-meshchat`) and the `[stackweb] reticulum_*` settings with it.
+  # Adding a SECOND web component to this stack ABOVE this one would move that page id and
+  # silently orphan an operator's saved proxy policy — add any such component BELOW.
+  [[stack.component]]
+  id = "meshchat"
+  name = "MeshChat"
+  kind = "service"
+  optional = true
+  purpose = "Browser client for the Reticulum node (LXMF messaging) — a phone or laptop uses the node through it. Client only: it never owns the radio."
+  tx_capable = true
+  depends_on = ["rns"]
+  start_order = 2
+  show_config_link = true
+  show_log_link = true
+  bin = ".venv/bin/python"
+  # `.venv/bin/python` exists as soon as the venv is created, long before pip and the UI copy
+  # have finished — without a marker a half-built tree reads as a completed build.
+  build_marker = ".venv/.lhpc-build-complete"
+  build_timeout = 1800.0
+  readiness = "endpoint"
+  readiness_timeout = 90.0
+  # Launched through `loraham-rns-client`, for the same reason nomadnet, lxmd and Sideband are:
+  # pointed at the OWNER's config, a client started while `rns` is absent becomes the
+  # shared-instance OWNER itself — measured, it took `:37428` and tried to load
+  # LoRaSPIInterface. The guard proves the instance exists first, then execs in place (so the
+  # `process` match below sees the client, not a wrapper). It lives in the `rns` component's
+  # venv and is not on PATH.
+  run = "{runtime}/src/reticulum/.venv/bin/loraham-rns-client --configdir {runtime}/state/reticulum --wait 10 -- .venv/bin/python meshchat.py --headless --host 127.0.0.1 --port 8790 --storage-dir {runtime}/state/meshchat --reticulum-config-dir {runtime}/state/reticulum"
+  note = "Browser GUI via the LHPC web proxy — enable the proxy for the reticulum stack on the Webserver page. It attaches to the Reticulum instance owned by `rns`; interface and transport settings are LHPC-owned and its routes for them are refused by the proxy."
+  start_note = "Open MeshChat via the LHPC Webserver page (enable the proxy for the reticulum stack). It listens on loopback only."
+
+  [stack.component.source]
+  path = "src/meshchat"
+  remote = "https://github.com/liamcottle/reticulum-meshchat.git"
+  branch = "master"
+  pin_commit = "45f89a8fca79f63501659d192577e880380e6cc0"
+  pin_tag = "v2.4.0"
+
+  # Without this LHPC computes `running_evidence = systemd_active or proc_matched` and reports
+  # the component STOPPED while the UI is serving — a listening socket alone does not count.
+  [stack.component.process]
+  exec_name = "python"
+  all_args = ["meshchat.py"]
+
+  # The LXMF IDENTITY lives here, not a cache: losing it silently changes the node's address.
+  # It must stay outside the checkout, which a reinstall purges.
+  [[stack.component.pre_steps]]
+  kind = "mkdir"
+  path = "{runtime}/state/meshchat"
+
+  # A PLAIN venv, deliberately unlike its three siblings: without system site-packages this
+  # client cannot import `loraham_rns`/`spidev`, so even started wrongly it cannot drive the
+  # radio. That is a second line only — the guard above is what actually prevents it.
+  [[stack.component.build_steps]]
+  argv = ["python3", "-m", "venv", ".venv"]
+  [[stack.component.build_steps]]
+  argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "-c", "{asset}/meshchat-constraints.txt", "aiohttp", "lxmf", "peewee", "rns", "websockets"]
+  announce = "[install] MeshChat's dependencies into {source}/.venv — exact pinned versions; pip is quiet off-TTY"
+  [[stack.component.build_steps]]
+  argv = ["bash", "{asset}/scripts/meshchat-assets.sh", "{asset}/meshchat-dist", "public"]
+  announce = "[install] MeshChat's prebuilt browser UI (upstream gitignores it; no npm on the box)"
+
+  [[stack.component.endpoint]]
+  kind = "tcp"
+  address = "127.0.0.1:8790"
+  ready = true
+  role = "listener"
+  client = true
+  scheme = "http"
+  # The Dashboard pin's LABEL. Without it the pin falls back to the raw upstream address, so a
+  # UI that is proxied and exposed still reads "127.0.0.1:8790" — it looks local while it is not.
+  description = "MeshChat"
+  firewall = { auth = "none" }
+  # The seven routes that call `self.reticulum.config.write()` — re-derived from the pinned
+  # commit, not copied forward: interfaces and transport are LHPC-owned, rendered from
+  # `bases/reticulum.conf` on every start, so a MeshChat edit would be silently reverted while
+  # appearing to work. The 0400 config already refuses the write; this turns the resulting
+  # backend 500 into a clean 404. `GET /interfaces` stays, and so do `interfaces/export` and
+  # `interfaces/import-preview`, which are POSTs that write nothing.
+  # RE-AUDIT THIS AT EVERY BUMP: an eighth write route would pass straight through.
+  proxy_deny_paths = [
+    "/api/v1/reticulum/interfaces/add",
+    "/api/v1/reticulum/interfaces/delete",
+    "/api/v1/reticulum/interfaces/disable",
+    "/api/v1/reticulum/interfaces/enable",
+    "/api/v1/reticulum/interfaces/import",
+    "/api/v1/reticulum/enable-transport",
+    "/api/v1/reticulum/disable-transport",
+  ]
+
+  [[stack.component.resource]]
+  key = "tcp.port.8790"
+  kind = "tcp-port"
+  mode = "exclusive"

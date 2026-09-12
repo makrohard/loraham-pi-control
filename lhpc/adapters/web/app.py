@@ -1917,10 +1917,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         f = request.form
         phrase = f.get("confirm_phrase", "").strip()
+        # No field defaults here: the service refuses an unset one. A default would rewrite
+        # EVERY page's policy from a select the operator never touched.
         r = service.stack_webs_configure_apply(
-            mode=(f.get("mode") or "local"),
-            scheme=(f.get("scheme") or "https"),
-            access_mode=(f.get("access_mode") or "local-open-remote-auth"),
+            mode=f.get("mode", ""),
+            scheme=f.get("scheme", ""),
+            access_mode=f.get("access_mode", ""),
             cidrs=[x.strip() for x in f.get("cidrs", "").split(",") if x.strip()],
             confirm=phrase in ("enable-remote", "enable-remote-danger"),
             confirm_public=(phrase == "enable-remote-danger"))

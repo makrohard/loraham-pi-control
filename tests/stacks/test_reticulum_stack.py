@@ -5,7 +5,10 @@ These pin the properties an audit flagged as load-bearing:
     daemon's spi0.lock), so opposite-band coexistence with the daemon is allowed;
   * every TCP listener the stack opens is claimed exclusively;
   * a secret may only come from secrets.toml — never from local.toml, a default
-    or a band default — and a file carrying one is 0600;
+    or a band default — and a file carrying one is owner-only (0600 or 0400);
+  * MeshChat is a CLIENT: it never owns the radio, and the properties that keep it one
+    (the rns-client guard, a plain venv, a loopback listener, the denied config routes)
+    are pinned here because each was a measured hazard, not a style preference;
   * the nested-INI writer addresses `[[LoRa]]` inside `[interfaces]` by full
     path, quotes what ConfigObj needs quoted, and refuses control characters.
 """
@@ -83,7 +86,13 @@ def test_ifac_key_is_a_secret_and_the_file_is_owner_only():
     assert key.hidden, "a secret must not be editable on the Config page"
     assert not key.default and not key.band_defaults, \
         "a default would compete with the secrets.toml lookup"
-    assert fc.mode == 0o600, "a file carrying a secret must not be world-readable"
+    assert fc.mode & 0o077 == 0, "a file carrying a secret must be owner-only"
+    # And specifically READ-ONLY, which is the stronger claim this stack makes: co-resident
+    # Reticulum clients (MeshChat, nomadnet, Sideband) run under the same account and can edit
+    # interfaces through their own UIs. ConfigObj.write() opens the target in place, which 0400
+    # refuses; LHPC's own writer renames a temp leaf over it and is unaffected. An ownership
+    # convention, not a security boundary — the same account could chmod it back.
+    assert fc.mode == 0o400, "the RNS config is LHPC-owned and read-only to its clients"
 
 
 @pytest.mark.parametrize("bad", [
@@ -105,6 +114,48 @@ def test_manifest_refuses_a_secret_in_a_world_readable_file():
     raw = {"path": "{runtime}/x.conf", "fmt": "ini-update", "mode": 0o644,
            "base": "{asset}/bases/reticulum.conf",
            "param": [{"name": "s", "key": "s", "secret_ref": "a.b", "hidden": True}]}
+    with pytest.raises(ManifestError):
+        m._parse_file_config(raw)
+
+
+def _secret_cfg(mode):
+    return {"path": "{runtime}/x.conf", "fmt": "ini-update", "mode": mode,
+            "base": "{asset}/bases/reticulum.conf",
+            "param": [{"name": "s", "key": "s", "secret_ref": "a.b", "hidden": True}]}
+
+
+@pytest.mark.parametrize("mode", [0o600, 0o400])
+def test_a_secret_bearing_config_may_be_owner_only(mode):
+    """0400 as well as 0600. A config LHPC writes but a co-resident client must not rewrite is
+    declared read-only, and that has to survive validation or the manifest cannot express it.
+    LHPC's own writer is unaffected: `atomic_write_bytes` renames a fresh temp leaf over the
+    target, and rename needs permission on the DIRECTORY. What 0400 stops is an in-place
+    `open(path, "wb")` — which is exactly what configobj does."""
+    from lhpc.core import manifest as m
+    assert m._parse_file_config(_secret_cfg(mode)).mode == mode
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o640, 0o660, 0o604])
+def test_a_secret_bearing_config_may_not_be_readable_by_anyone_else(mode):
+    """Widening to 0400 must not widen anything else: group- or world-readable still refused,
+    including modes that ARE valid for a config without a secret (0644, 0640)."""
+    from lhpc.core import manifest as m
+    with pytest.raises(ManifestError):
+        m._parse_file_config(_secret_cfg(mode))
+
+
+def test_a_plain_config_may_be_read_only():
+    from lhpc.core import manifest as m
+    raw = {"path": "{runtime}/x.conf", "fmt": "ini-update", "mode": 0o400,
+           "base": "{asset}/bases/reticulum.conf", "param": []}
+    assert m._parse_file_config(raw).mode == 0o400
+
+
+@pytest.mark.parametrize("mode", [0o777, 0o755, 0o000, 0o700])
+def test_an_unlisted_config_mode_is_still_refused(mode):
+    from lhpc.core import manifest as m
+    raw = {"path": "{runtime}/x.conf", "fmt": "ini-update", "mode": mode,
+           "base": "{asset}/bases/reticulum.conf", "param": []}
     with pytest.raises(ManifestError):
         m._parse_file_config(raw)
 
@@ -706,3 +757,435 @@ def test_sideband_declares_the_driver_it_copies_from():
     sb = _comp("sideband")
     assert "rns-lora-interface" in (sb.build_requires or ())
     assert sb.build_marker, "a receipt only exists for a marker-bearing component"
+
+
+# ---- MeshChat, the browser client -----------------------------------------
+
+def _run_line(c):
+    """The model exposes the DERIVED argv, not the `run` shorthand the manifest declares."""
+    return " ".join(c.run_argv)
+
+
+def test_meshchat_is_an_optional_client_that_cannot_own_the_radio():
+    """Started bare against the owner's config with `rns` absent, MeshChat BECAME the
+    shared-instance owner on :37428 and tried to load LoRaSPIInterface — measured on the box. It
+    failed only because its venv could not import `loraham_rns`. Two independent properties keep
+    it a client, and both are asserted: it launches through the guard, and its venv is plain."""
+    m = _comp("meshchat")
+    assert m.optional, "a client must never be seeded by a plain stack start"
+    assert "rns" in m.depends_on
+    # The guard by ABSOLUTE path into the rns component's venv: it is not on PATH, and it is
+    # not in MeshChat's own venv.
+    run = _run_line(m)
+    assert "{runtime}/src/reticulum/.venv/bin/loraham-rns-client" in run
+    assert "--wait" in run, "the guard must WAIT for the instance, not merely test once"
+    venv = [s for s in m.build_steps if "venv" in s["argv"]][0]["argv"]
+    assert "--system-site-packages" not in venv, (
+        "a plain venv is deliberate: without it MeshChat can import loraham_rns/spidev and, "
+        "started wrongly, drive the radio")
+
+
+def test_meshchat_listens_on_loopback_and_is_proxied():
+    m = _comp("meshchat")
+    ep = [e for e in m.endpoints if e.ready][0]
+    assert ep.address.startswith("127.0.0.1:"), "nginx is the only public path; it has no auth"
+    assert ep.client and ep.scheme == "http", "client+scheme is what makes it a proxyable page"
+    port = ep.address.split(":")[1]
+    assert any(r.key == f"tcp.port.{port}" and r.mode is ResourceMode.EXCLUSIVE
+               for r in m.resources), "every listener this stack opens is claimed exclusively"
+    assert f"--port {port}" in _run_line(m), (
+        "the port is written in three places — the run line, the endpoint and the resource "
+        "claim — with nothing deriving it, so they must be asserted to agree")
+
+
+def test_meshchat_reports_running_and_built_truthfully():
+    """Two states LHPC gets wrong without explicit declarations. `running_evidence` is
+    `systemd_active or proc_matched`, so with no process stanza the component reads STOPPED
+    while the UI serves; and `.venv/bin/python` exists long before pip and the UI copy finish,
+    so without a marker a half-built tree reads as a completed build."""
+    m = _comp("meshchat")
+    assert m.process and m.process.exec_name and m.process.all_args
+    assert m.build_marker and m.bin
+    assert m.readiness == "endpoint", "readiness must be the listener, not a status route"
+
+
+def test_meshchat_may_not_write_the_lhpc_owned_reticulum_config():
+    """Interfaces and transport are LHPC's, rendered from the base file on every start. The
+    0400 config refuses the write; these turn the resulting backend 500 into a clean 404. The
+    list is re-derived from the pinned commit at every bump — an eighth route would pass."""
+    m = _comp("meshchat")
+    ep = [e for e in m.endpoints if e.ready][0]
+    denied = set(ep.proxy_deny_paths)
+    assert len(denied) == 7, "seven routes call reticulum.config.write() at the pinned commit"
+    for suffix in ("add", "delete", "disable", "enable", "import"):
+        assert f"/api/v1/reticulum/interfaces/{suffix}" in denied
+    assert "/api/v1/reticulum/enable-transport" in denied
+    assert "/api/v1/reticulum/disable-transport" in denied
+    # Reading is fine, and so are the two POSTs that write nothing.
+    assert not any(d.endswith(("/export", "/import-preview")) for d in denied)
+
+
+def test_meshchat_state_survives_a_reinstall():
+    """The storage dir holds the LXMF IDENTITY (`identity` + `identities/`, measured), not a
+    cache: inside the checkout a reinstall would purge it and the node's address would change
+    silently."""
+    m = _comp("meshchat")
+    mk = [s for s in m.pre_steps if s.get("kind") == "mkdir"]
+    assert any("{runtime}/state/meshchat" == s.get("path") for s in mk)
+    assert "{runtime}/state/meshchat" in _run_line(m)
+
+
+# ---- the Internet interface and transport ---------------------------------
+
+def _rns_file_params():
+    fc = _comp("rns").config_file
+    return fc.params, fc
+
+
+def _render(values=None):
+    """The generated config as the start path renders it: the shipped base, the declared params,
+    the operator's values on top of the declared defaults."""
+    from lhpc.core.assets import asset_path
+    params, _ = _rns_file_params()
+    vals = {p.name: p.default for p in params}
+    vals.update(values or {})
+    base = asset_path("bases/reticulum.conf").read_text()
+    return update_ini(base, params, vals, lambda s: s)
+
+
+def test_the_defaults_render_transport_off_and_the_internet_interface_inert():
+    """Both switches are opt-in, and the Internet section is PRESENT while off: `update_ini`
+    appends a missing key to an existing section, it does not manufacture a missing nested
+    section, so a section that only appears once enabled could never be written. RNS builds an
+    interface only for an enabled section, so the empty endpoint below is never read."""
+    from lhpc.core.assets import asset_path
+    out = _render()
+    assert "enable_transport = No" in out
+    assert "[[Internet]]" in out
+    body = out.split("[[Internet]]", 1)[1]
+    assert "enabled = no" in body
+    assert "type = TCPClientInterface" in body
+    # The rendered value comes from the declared DEFAULT, which is what RNS reads; the base
+    # must agree with it, or the shipped file documents a state the controller never renders.
+    by_name = {p.name: p for p in _rns_file_params()[0]}
+    assert by_name["internet_enabled"].default == "no"
+    assert by_name["enable_transport"].default == "No"
+    base_body = asset_path("bases/reticulum.conf").read_text().split("[[Internet]]", 1)[1]
+    assert "enabled = no" in base_body
+    assert "enable_transport = No" in asset_path("bases/reticulum.conf").read_text()
+
+
+def test_the_rendered_interface_modes_are_the_intended_trio():
+    """The radio is `internal`, the client door `gateway`, the internet side `boundary` with
+    `recursive_prs`.
+
+    `internal` is the load-bearing one and it was WRONG in the first cut: measured against the
+    pinned Reticulum 1.5.2, a `gateway` LoRa interface retransmits onto the radio every announce
+    the node learns from the internet once transport is on (183-byte ANNOUNCE, one hop), because
+    RNS filters announces on the OUTGOING interface and its gateway path has no branch rejecting
+    them. `internal` is that branch. Measured in all four directions, it costs nothing else, and
+    with transport off the two are indistinguishable. `recursive_prs` on the internet side is its
+    companion: an internal interface is excluded from a boundary interface's default path search,
+    so without it no internet-side peer could ever discover a destination on the radio."""
+    out = _render()
+    modes = {}
+    section = ""
+    for line in out.splitlines():
+        s = line.strip()
+        if s.startswith("[[") and s.endswith("]]"):
+            section = s.strip("[]")
+        elif s.startswith("mode ="):
+            modes[section] = s.split("=", 1)[1].strip()
+    assert modes == {"LoRa": "internal", "Client access": "gateway", "Internet": "boundary"}
+    assert "recursive_prs = yes" in out.split("[[Internet]]", 1)[1], (
+        "without it, `internal` on LoRa also hides the radio from the internet side's path search")
+
+
+def test_the_radio_announce_policy_is_the_one_mode_an_operator_may_choose():
+    """`internal` vs `gateway` on the radio is a POLICY question — how much of the public mesh's
+    announce traffic may spend the duty-cycle budget — so it is a setting, while the other two
+    modes stay LHPC's. Both relay traffic and resolve paths in both directions; only the
+    unsolicited announces differ. The default must be the cheap one."""
+    params = {p.name: p for p in _rns_file_params()[0]}
+    p = params["lora_announce_relay"]
+    assert (p.key, p.section) == ("mode", "interfaces/LoRa")
+    assert p.default == "internal" and set(p.choices) == {"internal", "gateway"}
+    # BOUNDED to the LoRa section: everything after `[[LoRa]]` also contains Client access, which
+    # carries `mode = gateway` of its own — an unbounded search passes even when the operator's
+    # value was ignored entirely.
+    def lora_mode(values=None):
+        """The SETTING lines of the LoRa section only. Bounded at the next section, because
+        everything after `[[LoRa]]` also contains Client access with a `mode` of its own; and
+        compared as whole lines, because the section's comments mention `interface_mode =
+        gateway` and a substring test matches that too."""
+        body = _render(values).split("[[LoRa]]", 1)[1].split("[[", 1)[0]
+        return [ln.strip() for ln in body.splitlines() if ln.strip().startswith("mode = ")]
+    assert lora_mode({"lora_announce_relay": "gateway"}) == ["mode = gateway"]
+    assert lora_mode() == ["mode = internal"]
+    # the other two are NOT settings
+    assert not [q for q in params.values()
+                if q.key == "mode" and q.section in ("interfaces/Client access", "interfaces/Internet")]
+
+
+def test_the_mode_key_is_mode_and_never_interface_mode():
+    """A spelling that must be re-checked at every Reticulum bump. In 1.5.2's
+    `_synthesize_interface`, the `interface_mode` branch resolves gateway/internal by reading
+    `c["mode"]` (Reticulum.py:776,778) — so `interface_mode = gateway` raises KeyError while
+    the separate `elif "mode" in c:` branch handles every value correctly."""
+    from lhpc.core.assets import asset_path
+    base = asset_path("bases/reticulum.conf").read_text()
+    settings = [ln.strip() for ln in base.splitlines() if not ln.strip().startswith("#")]
+    assert not any(ln.startswith("interface_mode") for ln in settings)
+    assert [ln for ln in settings if ln.startswith("mode = ")] == [
+        "mode = internal", "mode = gateway", "mode = boundary"]
+
+
+def test_enabling_the_internet_interface_writes_its_endpoint():
+    out = _render({"internet_enabled": "yes", "internet_host": "rns.example.org",
+                   "internet_port": "4965"})
+    body = out.split("[[Internet]]", 1)[1]
+    assert "enabled = yes" in body
+    assert "target_host = rns.example.org" in body
+    assert "target_port = 4965" in body
+
+
+def test_the_internet_ifac_is_its_own_secret_and_never_the_radios():
+    """A public hub does not have your passphrase, and sharing the radio's key would widen one
+    secret from a physically limited medium to a globally reachable socket."""
+    params, _ = _rns_file_params()
+    by_name = {p.name: p for p in params}
+    lora, inet = by_name["ifac_netkey"], by_name["internet_ifac_netkey"]
+    assert lora.secret_ref != inet.secret_ref
+    assert inet.secret_ref == "reticulum.internet_ifac_netkey"
+    assert inet.hidden and inet.omit_if_empty and not inet.default
+    assert inet.section == "interfaces/Internet"
+
+
+@pytest.mark.parametrize("values,missing", [
+    ({"internet_enabled": "yes"}, ["internet_host", "internet_port"]),
+    ({"internet_enabled": "yes", "internet_host": "hub.example.org"}, ["internet_port"]),
+    ({"internet_enabled": "yes", "internet_port": "4965"}, ["internet_host"]),
+])
+def test_an_enabled_internet_interface_needs_its_whole_endpoint(values, missing):
+    """RNS reads `target_host` and does `int(target_port)` while CONSTRUCTING the interface, so
+    a missing endpoint is a construction failure — a different path from the merely unreachable
+    target the node is built to tolerate (`panic_on_interface_error = No`)."""
+    from lhpc.core import reticulum_interfaces as ri
+    why = ri.endpoint_problem(values)
+    assert why
+    for name in missing:
+        assert name in why
+
+
+@pytest.mark.parametrize("values", [
+    {},
+    {"internet_enabled": "no"},
+    {"internet_enabled": "no", "internet_host": "hub.example.org"},   # staged, not yet enabled
+    {"internet_enabled": "yes", "internet_host": "hub.example.org", "internet_port": "4965"},
+])
+def test_a_complete_or_disabled_internet_interface_is_accepted(values):
+    from lhpc.core import reticulum_interfaces as ri
+    assert ri.endpoint_problem(values) == ""
+
+
+@pytest.mark.parametrize("values", [
+    {"internet_enabled": "yes", "internet_ifac_netname": "private"},
+    {"internet_enabled": "yes", "internet_ifac_netkey": "s3cret"},
+])
+def test_a_half_configured_internet_ifac_is_refused(values):
+    """Upstream's TCPClientInterface builds an IFAC from EITHER half alone, so a half
+    configuration is not refused by RNS — the link just silently passes nothing. Our own LoRa
+    driver already refuses this for the radio; this is the same policy for the interface RNS
+    owns."""
+    from lhpc.core import reticulum_interfaces as ri
+    full = {"internet_host": "hub.example.org", "internet_port": "4965", **values}
+    assert ri.ifac_problem(full)
+    assert ri.problem(full)
+
+
+@pytest.mark.parametrize("values", [
+    {},                                                                   # neither: a public hub
+    {"internet_ifac_netname": "private", "internet_ifac_netkey": "s3cret"},
+])
+def test_both_or_neither_internet_ifac_halves_are_accepted(values):
+    from lhpc.core import reticulum_interfaces as ri
+    full = {"internet_enabled": "yes", "internet_host": "hub.example.org",
+            "internet_port": "4965", **values}
+    assert ri.ifac_problem(full) == ""
+    assert ri.problem(full) == ""
+
+
+def test_a_disabled_interface_never_refuses_however_broken_its_fields():
+    """Staging is allowed: the operator may save a host today and the port tomorrow. Only
+    turning the interface ON asks for a complete configuration."""
+    from lhpc.core import reticulum_interfaces as ri
+    assert ri.problem({"internet_enabled": "no", "internet_ifac_netname": "private"}) == ""
+
+
+def test_saving_an_enabled_internet_interface_without_an_endpoint_is_refused():
+    """Refused at SAVE, so the mistake is reported where it is made rather than as a blocked
+    start later (boot restore included). The whole submission rolls back."""
+    from lhpc.core.services import ControllerService
+    svc = ControllerService()
+    r = svc.save_config("reticulum", {"file_internet_enabled": "yes"})
+    assert not r.ok
+    assert "endpoint is incomplete" in " ".join([r.summary, *r.details])
+    assert "rolled" in " ".join(r.details), "a refused submission persists nothing"
+    # the COMPONENT target is the same rule: a save persists into the owner stack's config
+    # either way, so refusing only the stack target would leave `lhpc config rns` a way past it.
+    assert not svc.save_config("rns", {"file_internet_enabled": "yes"}).ok
+    # and the complete endpoint saves in one submission
+    assert svc.save_config("reticulum", {"file_internet_enabled": "yes",
+                                         "file_internet_host": "hub.example.org",
+                                         "file_internet_port": "4965"}).ok
+
+
+def test_generation_blocks_a_half_configured_internet_ifac(monkeypatch):
+    """The authoritative check: the passphrase lives in config/secrets.toml and is resolved
+    only here, so the IFAC pairing cannot be judged at save time. A typed generation failure
+    blocks the start before RNS is handed a config that would pass nothing."""
+    from lhpc.core.services import ControllerService
+    svc = ControllerService()
+    assert svc.save_config("reticulum", {"file_internet_enabled": "yes",
+                                         "file_internet_host": "hub.example.org",
+                                         "file_internet_port": "4965",
+                                         "file_internet_ifac_netname": "private"}).ok
+    bad = [w for w in svc.write_config_files("reticulum") if w.status == "failed"]
+    assert bad and "passphrase" in bad[0].detail
+    assert "private" not in bad[0].detail, "a refusal names the location of a secret, not a value"
+
+
+def test_the_meshchat_pin_is_declared_like_every_other_browser_gui():
+    """The Dashboard renders one pin per client endpoint through ONE code path, so a pin behaves
+    like its siblings only if it is DECLARED like them. Compared field by field against the
+    other shipped browser GUI (meshcore-webui): same kind, same loopback-plus-proxy shape, same
+    label-bearing description. MeshChat shipped without the description and its pin fell back to
+    the raw address — proxied and exposed, but reading `127.0.0.1:8790`, which is exactly what a
+    local-only service looks like."""
+    from lhpc.core.manifest import load_manifest
+    comps = {c.id: c for s in load_manifest() for c in s.components}
+    mine = [e for e in comps["meshchat"].endpoints if getattr(e, "client", False)]
+    theirs = [e for e in comps["meshcore-webui"].endpoints if getattr(e, "client", False)]
+    assert len(mine) == len(theirs) == 1
+    a, b = mine[0], theirs[0]
+    for field in ("kind", "scheme", "client", "ready", "role"):
+        assert getattr(a, field) == getattr(b, field), f"{field} differs from the sibling GUI"
+    assert a.description and b.description, "the pin's label"
+    assert a.address.startswith("127.0.0.1:") and b.address.startswith("127.0.0.1:")
+    assert a.proxy_deny_paths and b.proxy_deny_paths, "both are fronted by the LHPC proxy"
+
+
+def _half_ifac_runtime(tmp_path):
+    """A runtime whose SAVED state is a complete, enabled Internet endpoint with an IFAC network
+    name and no passphrase — a state the save path accepts, because the passphrase lives in
+    secrets.toml and a save cannot see it."""
+    from lhpc.core import config as cfgmod
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    paths = Paths(runtime_root=tmp_path)
+    cfgmod.save_hardware_setup(paths, "uputronics")
+    svc = ControllerService(paths=paths, system=FakeSystem().system)
+    assert svc.save_config("reticulum", {
+        "file_internet_enabled": "yes", "file_internet_host": "peer.example.org",
+        "file_internet_port": "4965", "file_internet_ifac_netname": "private"}).ok
+    return svc
+
+
+def test_another_stack_is_never_refused_for_reticulums_configuration(tmp_path):
+    """The rule is scoped to run orders that actually contain the RNS node. Without that scoping
+    a broken Reticulum setting would refuse to start every OTHER stack on the box, for a reason
+    none of them can act on — and the refusal would name a stack the operator was not touching."""
+    svc = _half_ifac_runtime(tmp_path)
+    for other in ("kiss", "meshtastic", "graywolf"):
+        summary = svc.restart(other, apply=False).summary or ""
+        assert "passphrase" not in summary and "Internet interface" not in summary, \
+            f"{other} was refused for reticulum's configuration: {summary}"
+    # ...and directly, because the end-to-end check above can pass for the wrong reason: another
+    # stack resolves its OWN band, under which reticulum's saved values read as defaults anyway.
+    # The scoping is what must hold, whatever the bands happen to be.
+    band = svc._config_band("rns", "")
+    assert svc._reticulum_internet_preflight(svc._run_order("rns"), band), \
+        "it speaks for a run order that contains the node"
+    assert svc._reticulum_internet_preflight(svc._run_order("kiss"), band) == "", \
+        "and is silent for one that does not, even on the node's own band"
+
+
+@pytest.mark.parametrize("target", ["rns", "reticulum"])
+@pytest.mark.parametrize("secrets_body,mode,needle", [
+    pytest.param(None, 0o600, "passphrase", id="no-passphrase"),
+    # A BARE NUMBER is not a passphrase to generation (`isinstance(val, str)`), so a preflight
+    # that str()-s whatever TOML holds would pass a configuration generation then rejects — and
+    # the node is already stopped by then.
+    pytest.param('[reticulum]\ninternet_ifac_netkey = 123456\n', 0o600, "passphrase",
+                 id="numeric-passphrase"),
+    # The loader refuses a group/other-readable secrets file with its own typed message and a
+    # chmod remedy. Generation fails on exactly that, so this seam must too.
+    pytest.param('[reticulum]\ninternet_ifac_netkey = "s3cret"\n', 0o644, "chmod 600",
+                 id="unsafe-secrets-file"),
+])
+def test_every_secret_input_generation_rejects_is_refused_before_the_stop(
+        tmp_path, monkeypatch, target, secrets_body, mode, needle):
+    """The preflight and config generation must agree on EVERY input, not just the obvious one:
+    any disagreement is a node stopped by a restart and refused afterwards, which is the defect
+    this check exists to prevent. Each row is rejected by generation, so each must be refused
+    before the stop — for a component target and a stack target alike."""
+    from lhpc.core.services import ControllerService
+    svc = _half_ifac_runtime(tmp_path)
+    secrets = svc._paths.runtime_root / "config" / "secrets.toml"
+    if secrets_body is not None:
+        secrets.write_text(secrets_body)
+        secrets.chmod(mode)
+    svc._invalidate_config()
+    assert any(w.status == "failed" for w in svc.write_config_files("rns")), \
+        "the row must be one generation really rejects"
+
+    def _stop_is_a_failure(self, *a, **k):
+        raise AssertionError("restart reached its stop despite a config generation rejects")
+
+    monkeypatch.setattr(ControllerService, "stop", _stop_is_a_failure)
+    r = svc.restart(target, apply=True)
+    assert not r.ok and needle in r.summary
+    assert "s3cret" not in r.summary and "123456" not in r.summary, \
+        "a refusal names the file and the remedy, never the value"
+
+
+@pytest.mark.parametrize("target", ["rns", "reticulum"])
+def test_a_half_configured_ifac_refuses_before_restart_stops_the_node(tmp_path, monkeypatch, target):
+    """Generation is the authoritative check, but on a RESTART it runs AFTER the stop: the node
+    would be taken down and left down by a configuration that saved cleanly. The same rule must
+    therefore refuse at the pre-mutation boundary, for a component target and a stack target
+    alike — a save can reach this state through either."""
+    from lhpc.core.services import ControllerService
+    svc = _half_ifac_runtime(tmp_path)
+    assert any(w.status == "failed" for w in svc.write_config_files("rns")), "generation still refuses"
+
+    def _stop_is_a_failure(self, *a, **k):
+        raise AssertionError("restart reached its stop despite a deterministically invalid config")
+
+    monkeypatch.setattr(ControllerService, "stop", _stop_is_a_failure)
+    r = svc.restart(target, apply=True)          # raises if it ever reaches the stop
+    assert not r.ok, "a restart must not proceed into its stop with this configuration"
+    assert "passphrase" in r.summary and "private" not in r.summary, \
+        "typed, and it names the location of the secret rather than any value"
+
+
+def test_a_valid_or_disabled_internet_interface_still_starts(tmp_path):
+    """The guard must refuse the broken state only: both halves present, and the interface off,
+    pass the preflight (they may still fail later for reasons a fake system cannot satisfy —
+    what is asserted is that THIS rule does not speak)."""
+    from lhpc.core import config as cfgmod
+    svc = _half_ifac_runtime(tmp_path)
+    # both halves present
+    secrets = svc._paths.runtime_root / "config" / "secrets.toml"
+    secrets.parent.mkdir(parents=True, exist_ok=True)
+    secrets.write_text('[reticulum]\ninternet_ifac_netkey = "s3cret"\n')
+    secrets.chmod(0o600)
+    svc._invalidate_config()
+    assert "passphrase" not in (svc.restart("rns", apply=False).summary or "")
+    # and with the interface switched off, the IFAC half is not judged at all
+    secrets.unlink()
+    assert svc.save_config("reticulum", {"file_internet_enabled": "no"}).ok
+    cfgmod.load_config(svc._paths)
+    svc._invalidate_config()
+    assert "passphrase" not in (svc.restart("rns", apply=False).summary or "")

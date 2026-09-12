@@ -59,12 +59,16 @@ def test_saved_meshcore_proxy_settings_still_govern_the_web_ui(tmp_path):
     assert v["upstream_address"] == "127.0.0.1:8788" and v["cfg"].port == 8451
     d = svc.stack_web_view("meshcore-meshcore-node")
     assert d["upstream_address"] == "127.0.0.1:8000" and not d["cfg"].enabled
-    # positions: the four first pages keep 8444-8447, the dashboard comes after them
+    # Positions: primary pages first in stack order, then the non-primary ones. The literals are
+    # a SNAPSHOT on purpose — deriving them from `_page_positions()` would assert the
+    # implementation against itself and stop this catching an accidental reordering, which
+    # silently moves an operator's saved [stackweb] policy from one page to another.
+    # reticulum joined as a primary page (MeshChat) and pushed the dashboard from +5 to +6.
     console = svc.config().webserver.port
     assert svc._page_positions()[-1] == "meshcore-meshcore-node"
-    assert svc._default_stack_web_port("meshcore-meshcore-node", console) == console + 5
+    assert svc._default_stack_web_port("meshcore-meshcore-node", console) == console + 6
     assert svc.stack_web_eligible() == ["graywolf", "meshtastic", "meshcom", "meshcore",
-                                        "meshcore-meshcore-node"]
+                                        "meshcore-meshcore-node", "reticulum"]
 
 
 def test_the_dashboard_login_is_lhpcs_minted_password_on_the_node(tmp_path):

@@ -2002,3 +2002,70 @@ def test_a_saved_disable_keeps_the_live_proxy_visible_until_apply(tmp_path):
     assert "disable pending" in panel
     assert "Currently listening on port 8445 on all interfaces" in panel
     assert "not proxied" not in panel.split('id="stack-webserver-meshtastic"')[1].split("</summary>")[0]
+
+
+def test_bulk_refuses_an_unset_field_instead_of_defaulting_to_local(tmp_path, monkeypatch):
+    """The trap this closes, reported from a real box: the operator opened Stacks WebGUIs to
+    EXPOSE everything, filled in the CIDRs and the confirm phrase, and left the Access select
+    where the form opened it. The form did not preselect the saved policy, so its first option
+    (`local`) won and one submit took every already-exposed page back to loopback — silently,
+    reported as success. An unset field is now a refusal, and nothing is written."""
+    svc = _svc(tmp_path)
+    paths = Paths(runtime_root=tmp_path)
+    for sid in svc.stack_web_eligible():
+        cfgmod.save_stackweb_config(paths, sid, mode="lan", port=0, scheme="https",
+                                    access_mode="local-open-remote-auth",
+                                    allowed_cidrs=["192.168.0.0/24"])
+    svc._invalidate_config()
+    before = {s: c.mode for s, c in load_config(paths).stackweb.items()}
+    saves, applies = _bulk_spies(svc, monkeypatch)
+    r = svc.stack_webs_configure_apply(mode="", scheme="https",
+                                       access_mode="local-open-remote-auth",
+                                       cidrs=["192.168.0.0/24"], confirm=True)
+    assert not r.ok and "choose" in r.summary
+    assert not saves and not applies, "a refused bulk writes nothing and reloads nothing"
+    assert {s: c.mode for s, c in load_config(paths).stackweb.items()} == before
+
+
+def test_the_bulk_form_preselects_the_policy_the_pages_share(tmp_path):
+    """Like the per-stack panel and the console's own form. A form that always opens on the
+    first option is how the downgrade above happened."""
+    svc = _svc(tmp_path)
+    paths = Paths(runtime_root=tmp_path)
+    eligible = sorted(svc.stack_web_eligible())
+    for sid in eligible:
+        cfgmod.save_stackweb_config(paths, sid, mode="lan", port=0, scheme="https",
+                                    access_mode="auth-everywhere",
+                                    allowed_cidrs=["192.168.7.0/24"])
+    svc._invalidate_config()
+    cur = svc.stack_webs_overview()["current"]
+    assert cur == {"mode": "lan", "scheme": "https", "access_mode": "auth-everywhere",
+                   "cidrs": "192.168.7.0/24"}
+    # One page differs -> no honest common value; the form must ask rather than pick.
+    cfgmod.save_stackweb_config(paths, eligible[0], mode="local", port=0, scheme="https",
+                                access_mode="auth-everywhere", allowed_cidrs=["192.168.7.0/24"])
+    svc._invalidate_config()
+    assert svc.stack_webs_overview()["current"]["mode"] == ""
+    assert svc.stack_webs_overview()["current"]["scheme"] == "https"    # still shared
+
+
+def test_the_bulk_route_does_not_default_a_missing_select(tmp_path):
+    """The ROUTE, not just the service: a POST that carries no `mode` (a select the operator
+    never touched, a form rendered before this fix, a hand-made request) must be refused. The
+    handler used to substitute `local`, which is how one submit un-exposed every page."""
+    app, svc = _app(tmp_path)
+    paths = Paths(runtime_root=tmp_path)
+    for sid in svc.stack_web_eligible():
+        cfgmod.save_stackweb_config(paths, sid, mode="lan", port=0, scheme="https",
+                                    access_mode="local-open-remote-auth",
+                                    allowed_cidrs=["192.168.0.0/24"])
+    svc._invalidate_config()
+    c = app.test_client()
+    tok = _csrf(c)
+    r = c.post("/webserver/stacks", data={"_csrf": tok, "scheme": "https",
+                                          "access_mode": "local-open-remote-auth",
+                                          "cidrs": "192.168.0.0/24",
+                                          "confirm_phrase": "enable-remote"})
+    assert r.status_code in (302, 303)
+    assert {c.mode for c in load_config(paths).stackweb.values()} == {"lan"}, \
+        "a submit without Access must leave every page's mode alone"

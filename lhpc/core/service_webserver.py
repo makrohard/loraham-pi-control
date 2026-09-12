@@ -385,7 +385,8 @@ class WebserverOpsMixin:
     def _page_positions(self) -> list:
         """Page ids in port-suggestion order: the stacks' first pages sorted by id, THEN any
         further pages sorted by id — so a second page appearing in one stack never shifts another
-        stack's suggested port (graywolf 8444, meshcom 8445, meshcore 8446, meshtastic 8447)."""
+        stack's suggested port (graywolf 8444, meshcom 8445, meshcore 8446, meshtastic 8447,
+        reticulum 8448)."""
         pages = self.web_pages()
         return (sorted(p.page_id for p in pages if p.primary)
                 + sorted(p.page_id for p in pages if not p.primary))
@@ -941,8 +942,8 @@ class WebserverOpsMixin:
         """A STABLE per-page default port: `console_port + 1 + position`, where position is the
         page's index in `_page_positions()` — the stacks' first pages sorted by id, then any
         further pages (so a stack growing a second page shifts nobody else). So graywolf → 8444,
-        meshcom → 8445, meshcore → 8446, meshtastic → 8447, deterministically and without
-        colliding.
+        meshcom → 8445, meshcore → 8446, meshtastic → 8447, reticulum → 8448,
+        deterministically and without colliding.
 
         A default is only ever WRITTEN when the operator saves the panel; an untouched stack keeps
         no port key, so a fresh deployment's rendered nginx stays unchanged.
@@ -1085,13 +1086,30 @@ class WebserverOpsMixin:
             out.append((sid, port, bool(getattr(swc, "port", 0))))
         return out
 
+    def _stack_webs_common(self) -> dict:
+        """The policy the eligible pages ALREADY share, field by field — "" where they disagree
+        or nothing is saved yet. The bulk form preselects this, the way the per-stack panel and
+        the console's own form preselect theirs. Without it the form opens on the FIRST option of
+        every select, which is `local`: an operator who fills in CIDRs and the confirm phrase but
+        does not touch Access silently takes every exposed page back to loopback."""
+        cfgs = self.config().stackweb
+        saved = [cfgs[sid] for sid in self.stack_web_eligible() if sid in cfgs]
+        if not saved:
+            return {"mode": "", "scheme": "", "access_mode": "", "cidrs": ""}
+        def one(get):
+            vals = {get(c) for c in saved}
+            return vals.pop() if len(vals) == 1 else ""
+        return {"mode": one(lambda c: c.mode), "scheme": one(lambda c: c.scheme),
+                "access_mode": one(lambda c: c.access_mode),
+                "cidrs": one(lambda c: ",".join(c.allowed_cidrs))}
+
     def stack_webs_overview(self) -> dict:
         """READ-ONLY context for the 'Stacks WebGUIs' bulk form (the shared candidate walk)."""
         from .config import STACKWEB_MODES, WEBSERVER_ACCESS_MODES, WEBSERVER_SCHEMES
         pages = {p.page_id: p for p in self.web_pages()}
         return {"stacks": [{"sid": sid, "port": port, "keeps": keeps, "label": pages[sid].label}
                            for sid, port, keeps in self._stack_webs_candidates()],
-                "modes": STACKWEB_MODES,
+                "modes": STACKWEB_MODES, "current": self._stack_webs_common(),
                 "access_modes": WEBSERVER_ACCESS_MODES, "schemes": WEBSERVER_SCHEMES}
 
     def stack_webs_configure_apply(self, *, mode, scheme, access_mode, cidrs,
@@ -1111,6 +1129,18 @@ class WebserverOpsMixin:
         eligible = self.stack_web_eligible()
         if not eligible:
             return ActionResult(False, "no stacks with a web UI to configure")
+        # An UNSET field is a refusal, never a default. This action rewrites the policy of every
+        # page at once, so defaulting a missing `mode` to the first one (`local`) would take
+        # exposed pages back to loopback because the operator did not touch a select.
+        from .config import STACKWEB_MODES, WEBSERVER_ACCESS_MODES, WEBSERVER_SCHEMES
+        for field, value, allowed in (("mode", mode, STACKWEB_MODES),
+                                      ("scheme", scheme, WEBSERVER_SCHEMES),
+                                      ("access mode", access_mode, WEBSERVER_ACCESS_MODES)):
+            if value not in allowed:
+                return ActionResult(False, f"cannot configure the stack web UIs — choose "
+                                    f"a{'n' if field[0] in 'ae' else ''} {field}",
+                                    details=[f"  - {field}: {value!r} is not one of "
+                                             f"{', '.join(allowed)}"])
         cidrs = list(cidrs or [])
         # ONE config_lock spans candidate calculation, conflict validation AND the write, on a
         # FRESHLY-loaded snapshot (TOCTOU: candidates computed from the memoized

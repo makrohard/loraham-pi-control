@@ -9,6 +9,7 @@ import re as _re
 import time
 from pathlib import Path
 
+from . import config as _config
 from . import (
     daemon_control,
     gps,
@@ -19,6 +20,7 @@ from . import (
 )
 from . import resources as resources_mod
 from . import restart_required as _rr
+from . import reticulum_interfaces as _ri
 from .lifecycle import GUI_MISSING_HINT
 from .model import ComponentKind, ResourceMode, RunState
 from .outcomes import CompResult, Outcome, applied_ok
@@ -2662,7 +2664,43 @@ class LifecycleOpsMixin:
                                     next_commands=[f"lhpc config {sid}"])
             except (commands.CommandError, OSError, PathContainmentError):
                 continue                     # not a stored value; the launch reports it typed
+        # CONFIG-FILE cross-field rules, which argv expansion cannot see. Config GENERATION is
+        # the authoritative check and stays the last one, but on a RESTART it runs after the
+        # node has already been stopped: a half-configured Internet IFAC saved cleanly (the save
+        # can only judge the endpoint, not the passphrase) would take a working node down and
+        # leave it down. So the same rule refuses here, before any mutation.
+        if (why := self._reticulum_internet_preflight(order, cfg_band)):
+            return ActionResult(False, f"Cannot {op} '{target}': {why}",
+                                next_commands=[f"lhpc config {_ri.STACK_ID}"])
         return None
+
+    def _reticulum_internet_preflight(self, order, band: str) -> str:
+        """The Internet interface's cross-field verdict for a run order that contains the RNS
+        node ("" = nothing to refuse, or the node is not in this order). Resolved exactly the way
+        GENERATION resolves it, because anything this seam judges differently is a node stopped
+        by a restart and then refused — which is the whole defect this preflight exists for:
+
+          * the passphrase counts only as a NON-EMPTY STRING. A bare number in `secrets.toml` is
+            absent to generation, so `str()`-ing it here would pass a config generation rejects;
+          * a secrets file the loader refuses (group/other-readable) is refused HERE too. Its
+            message is predictable and safe — it names the file and the `chmod` remedy, never a
+            value — so there is no reason to let the stop happen first.
+
+        The enabled check comes before the load: a disabled interface needs no secret, and a
+        broken secrets file must not refuse a start that would never have read it."""
+        if not any(c.id == _ri.NODE_ID for _stack, c in order):
+            return ""
+        vals = {n: (self._resolved_param_value(_ri.STACK_ID, "file", _ri.NODE_ID, n, band) or "")
+                for n in (_ri.ENABLED, _ri.HOST, _ri.PORT, _ri.NETNAME)}
+        if not _ri.enabled(vals[_ri.ENABLED]):
+            return ""
+        try:
+            secrets = _config.load_secrets(self._paths)
+        except _config.ConfigError as exc:
+            return str(exc)
+        key = (secrets.get(_ri.STACK_ID) or {}).get(_ri.NETKEY)
+        vals[_ri.NETKEY] = key if isinstance(key, str) else ""
+        return _ri.problem(vals)
 
     def _identity_refusal(self, target: str, band: str, op: str):
         """The typed refusal for an unusable SAVED identity, or None — the one wording the start

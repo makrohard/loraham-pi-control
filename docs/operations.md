@@ -113,7 +113,7 @@ install/apply and can be discarded.
 - **`profiles/`** — your confirmed known-working compositions (optional but not regenerable).
 - **App data under `state/`** — the stacks' own databases, identities and message stores:
   `state/graywolf state/meshcore state/openhop state/meshtasticd state/reticulum state/nomadnet
-  state/lxmd state/sideband` (the `APP_DATA` list in `install.sh`/`uninstall.sh`). Never back up
+  state/lxmd state/sideband state/meshchat` (the `APP_DATA` list in `install.sh`/`uninstall.sh`). Never back up
   `state/` wholesale — its other entries are process ownership, jobs, locks and registries that
   must not be restored onto a different run.
 
@@ -124,7 +124,7 @@ Back up with every stack stopped (`lhpc stack stop <stack>`), as the LHPC user; 
 cd ~/loraham-pi-control          # or: cd "$LHPC_RUNTIME_ROOT"
 tar -czpf ~/lhpc-backup-$(date +%F).tgz --ignore-failed-read config profiles \
     state/graywolf state/meshcore state/openhop state/meshtasticd \
-    state/reticulum state/nomadnet state/lxmd state/sideband
+    state/reticulum state/nomadnet state/lxmd state/sideband state/meshchat
 chmod 600 ~/lhpc-backup-*.tgz
 ```
 

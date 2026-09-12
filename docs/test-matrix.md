@@ -82,7 +82,7 @@ sources) is still purged and reinstalled on its own.
 | 3 | `voice` | pinned | `loraham-voice-cli` (GTK variant skipped on Lite) | interactive | the terminal variant's printed command runs; GTK reported skipped, not failed |
 | 4 | `kiss` | pinned | `loraham-kiss-tnc` | 433 | verified; TCP `127.0.0.1:8001` answers |
 | 5 | `graywolf` | fetched release | — | 433 (needs kiss) | verified; web UI `127.0.0.1:8080` answers; the KISS client is held |
-| 6 | `reticulum` | pinned | rns, nomadnet, lxmd (sideband skipped on Lite) | the free band | `rnstatus` lists the LoRa interface; the ready marker present |
+| 6 | `reticulum` | pinned | rns, nomadnet, lxmd, meshchat (sideband skipped on Lite) | the free band | `rnstatus` lists the LoRa interface with `Mode: Internal`; the ready marker present; MeshChat's UI answers 200 on `127.0.0.1:8790`, and the generated config is `0400`. The stack's own full matrix is [reticulum-test-2026-09-12](reticulum-test-2026-09-12.md) |
 | 7 | `meshcore` | pinned | node, webui, openhop repeater source | 868, mode chat+repeater | node and repeater verified; web UI `:8788` and dashboard `:8000` answer; `meshcore-cli` listed on the Dashboard |
 | 8 | `meshtastic` | binary | refused (no source tree) | 868 (MeshCore stopped) | verified; `lhpc meshtastic --info` returns the node; `meshtastic-cli` listed |
 | 9 | `meshtastic` | pinned (from source) | meshtasticd | 868 | as row 8; build time and memory recorded |

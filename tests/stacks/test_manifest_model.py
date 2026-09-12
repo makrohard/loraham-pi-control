@@ -454,3 +454,15 @@ def test_build_time_patches_are_recorded_on_the_source():
     assert comps["meshcore-webui"].source.patches == ("{asset}/patches/meshcore-webui-lhpc-guards.patch",)
     assert comps["loraham-daemon"].source.patches == ()
 
+
+
+def test_every_client_endpoint_is_labelled():
+    """A `client` endpoint becomes a PIN on the Dashboard, and the pin's text is the endpoint's
+    `description`. Without one it falls back to the raw upstream address — so a web UI that is
+    proxied and exposed on the LAN still renders as `127.0.0.1:<port>` and reads as local. That
+    is how MeshChat shipped its first day: correctly proxied, correctly exposed, and labelled
+    with a loopback address."""
+    missing = [f"{c.id}:{ep.address}" for s in load_manifest() for c in s.components
+               for ep in c.endpoints
+               if getattr(ep, "client", False) and not getattr(ep, "description", "")]
+    assert missing == [], f"client endpoints with no label: {missing}"

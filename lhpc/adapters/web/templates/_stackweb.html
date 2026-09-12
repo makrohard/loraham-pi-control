@@ -70,7 +70,7 @@
               </tr>
               <tr>
                 <th>Port</th>
-                {# Pre-filled with the stable default (graywolf 8444, meshcom 8445, meshcore 8446, meshtastic 8447) so enabling actually
+                {# Pre-filled with the stable default (graywolf 8444, meshcom 8445, meshcore 8446, meshtastic 8447, reticulum 8448) so enabling actually
                    writes a port — a BLANK port silently saves as 0 (not proxied). #}
                 <td><input name="port" type="number" min="0" max="65535"
                      value="{{ sw.cfg.port or sw.suggested_port }}" autocomplete="off"></td>

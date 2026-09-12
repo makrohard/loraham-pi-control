@@ -118,7 +118,7 @@ done
 # 2) freshness: absent, empty, or ONLY what a default uninstall keeps: config/, backups/, .lhpc-root,
 #    profiles/ and the stacks' app data under state/ — ONE list, byte-identical in uninstall.sh
 #    (tests/test_deploy_scripts.py asserts they match).
-APP_DATA="state/graywolf state/meshcore state/openhop state/meshtasticd state/reticulum state/nomadnet state/lxmd state/sideband"
+APP_DATA="state/graywolf state/meshcore state/openhop state/meshtasticd state/reticulum state/nomadnet state/lxmd state/sideband state/meshchat"
 if [ -e "$TARGET_DIR" ]; then
 	no_symlink "$TARGET_DIR" "runtime root $TARGET_DIR"
 	[ -d "$TARGET_DIR" ] || die "$TARGET_DIR exists and is not a directory."

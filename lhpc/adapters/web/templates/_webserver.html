@@ -100,24 +100,31 @@
           <table class="paramgrid dptab">
             <tr><th>Access</th>
               <td><select name="mode" aria-label="Access">
+                {# Preselect what the pages already share (the per-stack panel does the same).
+                   Where they differ there is no honest default, so the placeholder below stays
+                   selected and the save is refused until Access is chosen — this form rewrites
+                   every page at once, and `local` as a silent default un-exposes them all. #}
+                {% if not ws_stackwebs.current.mode %}<option value="" selected>— choose —</option>{% endif %}
                 {% for m in ws_stackwebs.modes %}
-                  <option value="{{ m }}">{% if m == 'local' %}local only (loopback)
+                  <option value="{{ m }}"{% if ws_stackwebs.current.mode == m %} selected{% endif %}>{% if m == 'local' %}local only (loopback)
                     {% elif m == 'lan' %}LAN (allowed CIDRs){% else %}public (0.0.0.0/0){% endif %}</option>
                 {% endfor %}
               </select></td>
               <td class="dphelp muted">Who may reach the proxies</td></tr>
             <tr><th>Scheme</th>
               <td><select name="scheme" class="schemesel" data-authsel="wsg-authsel" aria-label="Scheme">
-                {% for sch in ws_stackwebs.schemes %}<option value="{{ sch }}">{{ sch }}</option>{% endfor %}
+                {% if not ws_stackwebs.current.scheme %}<option value="" selected>— choose —</option>{% endif %}
+                {% for sch in ws_stackwebs.schemes %}<option value="{{ sch }}"{% if ws_stackwebs.current.scheme == sch %} selected{% endif %}>{{ sch }}</option>{% endfor %}
               </select></td>
               <td class="dphelp muted">https keeps client-certificate auth possible</td></tr>
             <tr><th>Access mode</th>
               <td><select name="access_mode" id="wsg-authsel" aria-label="Access mode">
-                {% for m in ws_stackwebs.access_modes %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+                {% if not ws_stackwebs.current.access_mode %}<option value="" selected>— choose —</option>{% endif %}
+                {% for m in ws_stackwebs.access_modes %}<option value="{{ m }}"{% if ws_stackwebs.current.access_mode == m %} selected{% endif %}>{{ m }}</option>{% endfor %}
               </select></td>
               <td class="dphelp muted">Client-certificate (mTLS) policy — http requires no-auth</td></tr>
             <tr><th>Allowed CIDRs</th>
-              <td><input name="cidrs" placeholder="192.168.0.0/24" autocomplete="off"></td>
+              <td><input name="cidrs" value="{{ ws_stackwebs.current.cidrs }}" placeholder="192.168.0.0/24" autocomplete="off"></td>
               <td class="dphelp muted">Required for LAN/public</td></tr>
             <tr><th>Confirm</th>
               <td><input name="confirm_phrase" autocomplete="off"></td>

@@ -38,7 +38,7 @@ nftables.
 | 7000 | MeshCom bridge | loopback default | password<sup>†</sup> | direct-access row |
 | 18083/12323 | MeshCom QEMU | loopback hardcoded | — | already safe |
 | 8443 | lhpc console (nginx) | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
-| 8444–8447 (+1 per further page, e.g. 8448) | stack proxy pages | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
+| 8444–8448 (+1 per further page, e.g. 8449) | stack proxy pages | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
 
 <sup>†</sup> **unless the stack is installed from the [binary channel](provenance.md)**: the
 published MeshCom firmware is built without a mesh password, so the bridge runs open and the

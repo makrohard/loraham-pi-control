@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" href="favicons/favicon-512x512.png"/>
+    <title>Reticulum MeshChat</title>
+
+    <!-- codec2 -->
+    <script src="assets/js/codec2-emscripten/c2enc.js"></script>
+    <script src="assets/js/codec2-emscripten/c2dec.js"></script>
+    <script src="assets/js/codec2-emscripten/sox.js"></script>
+    <script src="assets/js/codec2-emscripten/codec2-lib.js"></script>
+    <script src="assets/js/codec2-emscripten/wav-encoder.js"></script>
+    <script src="assets/js/codec2-emscripten/codec2-microphone-recorder.js"></script>
+
+  <script type="module" crossorigin src="/assets/app-bBZA6pZm.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/DialogUtils-CNvf-ath.js">
+  <link rel="stylesheet" crossorigin href="/assets/DialogUtils-CuE8E_4R.css">
+  <link rel="stylesheet" crossorigin href="/assets/app-BFJIgFU5.css">
+</head>
+<body class="bg-gray-100">
+<div id="app"></div>
+<script>
+    // install service worker
+    if('serviceWorker' in navigator){
+        navigator.serviceWorker.register('/service-worker.js');
+    }
+</script>
+</body>
+</html>

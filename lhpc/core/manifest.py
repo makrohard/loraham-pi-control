@@ -119,15 +119,23 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
         if prm.default or prm.band_defaults:
             raise ManifestError(f"param {prm.name!r} has {which} and must not declare "
                                 f"a default or band_defaults — the secret is the only source")
-        if mode != 0o600:
-            raise ManifestError(f"config_file carrying {which} param {prm.name!r} "
-                                f"must declare mode 0600, got {mode:#o}")
+        # OWNER-ONLY, not exactly 0600: a secret-bearing config may also be read-only to its
+        # owner (0400), which is how a config LHPC writes but a co-resident client must not
+        # is declared. LHPC's own writer is unaffected — `runtime_fs.atomic_write_bytes`
+        # renames a fresh temp leaf over the target, and rename needs permission on the
+        # DIRECTORY, not the file. What 0400 stops is an in-place `open(path, "wb")`.
+        if mode not in _SECRET_CONFIG_MODES:
+            raise ManifestError(f"config_file carrying {which} param {prm.name!r} must be "
+                                f"owner-only (0600 or 0400), got {mode:#o}")
     return FileConfig(path=path, fmt=fmt, mode=mode,
                       base=base, apply_cmd=raw.get("apply_cmd", ""),
                       params=params)
 
 _CONFIG_FMTS = {"keyval", "env", "toml-update", "yaml-update", "ini-update"}
-_CONFIG_MODES = {0o644, 0o640, 0o600}
+_CONFIG_MODES = {0o644, 0o640, 0o600, 0o400}
+# The subset a config carrying a secret may declare: owner-only, nothing group- or
+# world-readable. 0400 additionally keeps a co-resident client from rewriting it in place.
+_SECRET_CONFIG_MODES = {0o600, 0o400}
 
 _DEFAULT_MANIFEST = asset_path("manifest.example.toml")   # package data (wheel-safe)
 
