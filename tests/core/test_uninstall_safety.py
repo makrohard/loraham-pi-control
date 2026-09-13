@@ -1,4 +1,4 @@
-"""P0.5 + M2 — uninstall never removes a running component or a source checkout still
+"""uninstall never removes a running component or a source checkout still
 used by another component (shared source), never touches config/secrets, removes only
 LHPC-OWNED verified trees, refuses dirty trees, and update refuses while any consumer
 of an affected source is running."""
@@ -41,7 +41,6 @@ def _bind_identity(svc, dest, remote, head=""):
         return real_run(argv, timeout, *a, **k)
     svc._system.runner.run = run
     return svc
-
 
 
 def _mksrc(tmp_path, *rel):

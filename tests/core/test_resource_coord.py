@@ -74,7 +74,7 @@ def test_start_does_not_hold_unrelated_source(tmp_path):
     assert "busy" not in res.summary.lower()
 
 
-# --- P1 public lifecycle API is authoritative (direct calls are locked) ------
+# --- public lifecycle API is authoritative (direct calls are locked) ------
 
 def test_direct_start_call_is_locked(tmp_path):
     # A DIRECT svc.start() (not via run_action) must still acquire the source lock.
@@ -110,7 +110,7 @@ def test_owner_bundle_includes_owner_lifecycle_key(tmp_path):
     assert "lifecycle.meshtastic" in monkey_keys and monkey_keys == sorted(monkey_keys)
 
 
-# --- P0.2 thread/request-safe lifecycle re-entrancy --------------------------
+# --- thread/request-safe lifecycle re-entrancy --------------------------
 
 def test_lifecycle_guard_is_thread_scoped(tmp_path):
     # ONE shared service. Thread A holds the guard (delayed); thread B, an INDEPENDENT

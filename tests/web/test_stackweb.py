@@ -16,7 +16,6 @@ import pytest
 from lhpc.core import webserver, config as cfgmod
 from lhpc.core.config import StackWebConfig, WebserverConfig, ConfigError, load_config, save_stackweb_config
 from lhpc.core.paths import Paths
-from lhpc.adapters.web.app import create_app
 from lhpc.core.probes.backends import FakeSystem, Listener, CommandResult as CR
 from lhpc.core.services import ControllerService
 
@@ -24,7 +23,6 @@ import repo_paths
 from htmlq import parse
 
 
-# ===== merged from test_stackweb.py =====
 FIXTURES = repo_paths.FIXTURES
 
 
@@ -38,7 +36,6 @@ def _web_upstream(svc, page_id):
 def _web_deny(svc, page_id):
     p = svc.web_page(page_id)
     return tuple(p.deny_paths) if p is not None else ()
-
 
 
 def _paths():
@@ -277,7 +274,6 @@ def test_stack_ui_urls_empty_when_not_proxied():
     assert webserver.stack_ui_urls(StackWebConfig("meshcom")) == []
 
 
-# ===== merged from test_stackweb_config.py =====
 def _paths_stackweb_config(tmp_path):
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     return Paths(runtime_root=tmp_path)
@@ -441,17 +437,10 @@ def test_port_zero_disables_and_is_savable(tmp_path):
     assert not load_config(p).stackweb["meshcom"].enabled
 
 
-# ===== merged from test_stackweb_service.py =====
 def _svc(tmp_path, listeners=()):
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     fake = FakeSystem(listeners=[Listener(**l) for l in listeners])
     return ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
-
-
-def _csrf(client, path="/stacks"):
-    import re
-    m = re.search(r'name="_csrf" value="([^"]+)"', client.get(path).get_data(as_text=True))
-    return m.group(1) if m else ""
 
 
 def test_eligible_stacks_are_derived_from_client_web_endpoints(tmp_path):
@@ -598,17 +587,12 @@ def test_default_port_skips_a_port_another_stack_already_saved(tmp_path):
     assert svc.stack_web_view("meshcom")["suggested_port"] == 8444    # its own saved port stands
 
 
-def test_default_port_prefills_the_form_so_saving_enables_the_proxy(tmp_path):
+def test_default_port_prefills_the_form_so_saving_enables_the_proxy(tmp_path, web):
     # A blank port silently saves as 0 (disabled). The form pre-fills the default value, so it is
     # submitted and the proxy actually listens.
-    from lhpc.adapters.web.app import create_app
     svc = _svc(tmp_path)
-    import re
-    body = create_app(lambda: svc).test_client().get("/stacks?open=meshcom").get_data(as_text=True)
-    i = body.index('id="stack-webserver-meshcom"')
-    panel = body[i:body.index("</details>", i)]
-    m = re.search(r'<input name="port"[^>]*>', panel)
-    assert m and 'value="8445"' in m.group(0), m.group(0) if m else "no port input"
+    doc = parse(web(service_factory=lambda: svc).get("/stacks?open=meshcom").get_data(as_text=True))
+    assert doc.within(doc.by_id("stack-webserver-meshcom")).field_default("port") == "8445"
 
 
 def test_enabled_stack_reaches_the_rendered_nginx_config(tmp_path):
@@ -671,34 +655,31 @@ def test_applied_remote_proxy_links_the_reachable_address(tmp_path):
     assert itf["link"] == "https://127.0.0.1:8444/"          # loopback fallback (dash uses request.host)
 
 
-def test_dashboard_link_uses_the_host_the_browser_reached_the_console_at(tmp_path):
+def test_dashboard_link_uses_the_host_the_browser_reached_the_console_at(tmp_path, web):
     """Reached at a hostname, the dashboard links the mesh UI at THAT host — not at the loopback
     fallback the typed interface carries (the sibling test above pins that fallback).
 
-    Asserted on the value the dashboard hands its template, because the anchor itself only renders
-    for a RUNNING proxied component; `req_host` is the whole of the decision this test is about.
-    The previous version wrapped its assertion in `if "MeshCom" in body and "iface-web" in body`,
-    and the trusted-host guard answered 400, so it asserted nothing at all.
+    Driven to the rendered anchor: the anchor renders only for a RUNNING proxied component, so
+    MeshCom runs (bridge + QEMU processes), nginx holds 0.0.0.0:8444, and the radio is configured
+    so the band cards render at all. History: the first version wrapped its assertion in
+    `if "MeshCom" in body and "iface-web" in body` and the trusted-host guard answered 400, so it
+    asserted nothing; the second spied on the template context (`req_host`) instead of the page.
     """
-    from flask import template_rendered
-
-    from lhpc.adapters.web.app import create_app
-    svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 1}])
-    svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["0.0.0.0/0"],
-                            confirm=True, confirm_public=True)
-    app = create_app(lambda: svc)
-    seen = []
-
-    def record(_sender, template, context, **_extra):
-        seen.append((template.name, context.get("req_host")))
-
-    # weak=False: blinker holds receivers weakly, and a local function would be collected before
-    # the request ever runs — the listener would silently never fire.
-    template_rendered.connect(record, app, weak=False)
+    fake = FakeSystem(cmdlines_data={300: ["meshcom-loraham-bridge"], 301: ["qemu-system-xtensa"]},
+                      listeners=[Listener(family="ipv4", ip="0.0.0.0", port=8444, inode=1),
+                                 Listener(family="ipv4", ip="127.0.0.1", port=18083, inode=2)])
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    cfgmod.save_hardware_setup(svc._paths, "loraham")
+    assert svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["0.0.0.0/0"],
+                                   confirm=True, confirm_public=True).ok
+    assert [s["id"] for r in svc.radio_overview() for s in r["running"]] == ["meshcom"]
     # `localhost` is trusted (so the page renders) and is NOT 127.0.0.1 (so it is distinguishable
     # from the loopback fallback).
-    assert app.test_client().get("/", headers={"Host": "localhost:8443"}).status_code == 200
-    assert ("dashboard.html", "localhost") in seen
+    r = web(service_factory=lambda: svc).get("/", headers={"Host": "localhost:8443"})
+    assert r.status_code == 200
+    links = parse(r.get_data(as_text=True)).find("a", class_="iface-web")
+    assert [a["href"] for a in links] == ["https://localhost:8444/"]
 
 
 def test_drift_local_mode_but_exposed_listener_is_truthfully_remote(tmp_path):
@@ -770,13 +751,13 @@ def test_view_disabled_proxy_is_absent_and_not_pending(tmp_path):
     assert v["listen_scope"] == "absent" and v["pending"] is False
 
 
-def test_stacks_panel_shows_running_state(tmp_path):
+def test_stacks_panel_shows_running_state(tmp_path, web):
     # The stacks-page Webserver header states the running pill: with the stack's web-UI upstream (18083)
     # AND the nginx proxy port (8444) both listening, it reads "proxied" (green).
-    app, svc = _app(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 18083, "inode": 1},
+    c, svc = _app(web, tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 18083, "inode": 1},
                                {"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 2}])
     svc.stack_web_configure("meshcom", mode="local", port=8444)
-    body = app.test_client().get("/stacks?open=meshcom").get_data(as_text=True)   # webserver panel is deferred
+    body = c.get("/stacks?open=meshcom").get_data(as_text=True)   # webserver panel is deferred
     assert 'id="stack-webserver-meshcom"' in body
     assert ">proxied</span>" in body
 
@@ -821,7 +802,7 @@ def test_dashboard_port_row_excludes_non_network_serial_pty(tmp_path):
     assert kiss[0]["port"] == "8001"                           # the TCP port, NOT "state/loraham_kiss"
 
 
-def test_dashboard_not_proxied_web_ui_shows_direct_address_and_name_link(tmp_path, monkeypatch):
+def test_dashboard_not_proxied_web_ui_shows_direct_address_and_name_link(tmp_path, monkeypatch, web):
     # A running but NOT-proxied web UI shows its DIRECT address (reached host + endpoint port) BEFORE
     # "not proxied", and each name links to the respective webserver config on the Apps page.
     from lhpc.core.services import ControllerService
@@ -834,16 +815,19 @@ def test_dashboard_not_proxied_web_ui_shows_direct_address_and_name_link(tmp_pat
              "posture": None, "port": None, "direct_port": "18083", "direct_scheme": "http",
              "logs_component": None}]
     monkeypatch.setattr(ControllerService, "dashboard_webservers", lambda self, **k: rows)
-    app, _ = _app(tmp_path)
-    body = app.test_client().get("/").get_data(as_text=True)
-    assert ":18083" in body and "not proxied" in body               # direct address IS shown
-    assert body.index(":18083") < body.index("not proxied")         # …BEFORE "not proxied"
-    assert 'href="/stacks?open=meshcom#stack-webserver-meshcom"' in body    # stack name -> its ws config
-    assert 'href="/stacks#webserver-row"' in body                          # console name -> console ws config
+    c, _ = _app(web, tmp_path)
+    body = c.get("/").get_data(as_text=True)
+    doc = parse(body)
+    text = doc.text
+    assert ":18083" in text and "not proxied" in text               # direct address IS shown
+    assert text.index(":18083") < text.index("not proxied")         # …BEFORE "not proxied"
+    assert doc.find("a", href="/stacks?open=meshcom#stack-webserver-meshcom")   # stack name -> its ws config
+    assert doc.find("a", href="/stacks#webserver-row")                          # console name -> console ws config
     # A link to the http address, NESTED in the warning-coloured pill. Asserted as nesting, not
     # as adjacent bytes: an added attribute or a Jinja newline between the tags changes nothing.
     assert re.search(r'class="[^"]*pill-warn[^"]*"[^>]*>\s*<a\b[^>]*href="http://', body)
-    assert 'wsurl" href="https://' in body                          # console address is a clickable https:// URL pill
+    # console address is a clickable https:// URL pill
+    assert any((a["href"] or "").startswith("https://") for a in doc.find("a", class_="wsurl"))
 
 
 def test_stack_monitor_carries_the_same_exposure_warnings_as_the_console(tmp_path):
@@ -858,60 +842,57 @@ def test_stack_monitor_carries_the_same_exposure_warnings_as_the_console(tmp_pat
                for w in v["warnings"])
 
 
-def _app(tmp_path, listeners=()):
+def _app(web, tmp_path, listeners=()):
+    """(client, service) over `_svc`."""
     svc = _svc(tmp_path, listeners)
-    return create_app(lambda: svc), svc
+    return web(service_factory=lambda: svc), svc
 
 
-def test_route_requires_csrf(tmp_path):
-    app, _ = _app(tmp_path)
-    assert app.test_client().post("/stacks/meshcom/webserver").status_code == 400
+def test_route_requires_csrf(tmp_path, web):
+    c, _ = _app(web, tmp_path)
+    assert c.post("/stacks/meshcom/webserver").status_code == 400
 
 
-def test_route_404s_for_unknown_and_non_web_stacks(tmp_path):
-    app, _ = _app(tmp_path)
-    c = app.test_client()
-    tok = _csrf(c)
+def test_route_404s_for_unknown_and_non_web_stacks(tmp_path, web, csrf):
+    c, _ = _app(web, tmp_path)
+    tok = csrf(c)
     assert c.post("/stacks/nope/webserver", data={"_csrf": tok}).status_code == 404
     assert c.post("/stacks/daemon/webserver", data={"_csrf": tok}).status_code == 404
 
 
-def test_route_saves_and_redirects_to_the_panel(tmp_path):
-    app, svc = _app(tmp_path)
-    c = app.test_client()
+def test_route_saves_and_redirects_to_the_panel(tmp_path, web, csrf):
+    c, svc = _app(web, tmp_path)
     r = c.post("/stacks/meshcom/webserver",
-               data={"_csrf": _csrf(c), "mode": "local", "port": "8444"})
+               data={"_csrf": csrf(c), "mode": "local", "port": "8444"})
     assert r.status_code == 302 and r.headers["Location"].endswith("#stack-webserver-meshcom")
     # anchors the webserver panel, NOT ?cfg (which would wrongly open Settings)
     assert "cfg=" not in r.headers["Location"]
     assert svc.config().stackweb["meshcom"].port == 8444
 
 
-def test_route_maps_the_typed_phrase_like_webserver_configure(tmp_path):
-    app, svc = _app(tmp_path)
-    c = app.test_client()
-    base = {"_csrf": _csrf(c), "mode": "public", "port": "8444", "cidrs": "0.0.0.0/0"}
+def test_route_maps_the_typed_phrase_like_webserver_configure(tmp_path, web, csrf):
+    c, svc = _app(web, tmp_path)
+    base = {"_csrf": csrf(c), "mode": "public", "port": "8444", "cidrs": "0.0.0.0/0"}
     c.post("/stacks/meshcom/webserver", data={**base, "confirm_phrase": "enable-remote"})
     assert svc.config().stackweb.get("meshcom") is None           # weak phrase: nothing written
     c.post("/stacks/meshcom/webserver", data={**base, "confirm_phrase": "enable-remote-danger"})
     assert svc.config().stackweb["meshcom"].mode == "public"
 
 
-def test_panel_renders_with_the_bypass_warning(tmp_path):
-    app, _ = _app(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}])
-    body = app.test_client().get("/stacks?open=meshtastic").get_data(as_text=True)   # panel is in the deferred body
+def test_panel_renders_with_the_bypass_warning(tmp_path, web):
+    c, _ = _app(web, tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}])
+    body = c.get("/stacks?open=meshtastic").get_data(as_text=True)   # panel is in the deferred body
     assert 'id="stack-webserver-meshtastic"' in body
     assert "listening on all interfaces" in body and "depnote-bad" in body
     assert "bypassing this proxy" in body
 
 
-def test_panel_absent_for_a_stack_without_a_web_ui(tmp_path):
-    app, _ = _app(tmp_path)
-    body = app.test_client().get("/stacks").get_data(as_text=True)
+def test_panel_absent_for_a_stack_without_a_web_ui(tmp_path, web):
+    c, _ = _app(web, tmp_path)
+    body = c.get("/stacks").get_data(as_text=True)
     assert 'id="stack-webserver-daemon"' not in body
 
 
-# ===== merged from test_stackweb_verify.py =====
 def _fake(tmp_path, listeners=(), nginx_ok=True):
     staged = str(Paths(runtime_root=tmp_path).under(*webserver.NGINX_CONF_STAGED))
     cmds = {("nginx", "-v"): CR(0, "", "nginx version: 1.0")}
@@ -1142,7 +1123,7 @@ def test_monitor_lists_no_proxies_by_default(tmp_path):
 
 
 def test_monitor_warnings_are_all_dicts_never_plain_strings(tmp_path):
-    # P3: a plain string here renders as an empty flash (the template reads w.level/w.text).
+    # a plain string here renders as an empty flash (the template reads w.level/w.text).
     svc = _svc_stackweb_verify(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}])
     svc.stack_web_configure("meshtastic", mode="local", port=8445)
     for w in svc.webserver_monitor().data["warnings"]:
@@ -1239,7 +1220,7 @@ def test_reset_proves_cessation_when_no_stack_proxy_was_enabled(tmp_path):
 
 
 def test_reset_refuses_cessation_while_the_console_listener_stays_exposed(tmp_path):
-    # P2: a live console listener on 0.0.0.0:8443 that survives the reload -> cessation is NOT proven,
+    # a live console listener on 0.0.0.0:8443 that survives the reload -> cessation is NOT proven,
     # and `remote_listener`/`listener_scope` truthfully say exposed (not a stale, inconsistent block).
     svc = _reset_svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8443, "inode": 7}])
     res = svc.webserver_reset_defaults()
@@ -1250,7 +1231,7 @@ def test_reset_refuses_cessation_while_the_console_listener_stays_exposed(tmp_pa
 
 
 def test_reset_persists_a_consistent_non_exposed_scope_when_cessation_is_proven(tmp_path, monkeypatch):
-    # P2: verify() runs BEFORE the reload and records the pre-reset (exposed) scope; reset must
+    # verify() runs BEFORE the reload and records the pre-reset (exposed) scope; reset must
     # RE-READ after the reload and persist a consistent block. Simulate the 0.0.0.0 -> 127.0.0.1
     # transition: first listener_scope call (verify, pre-reload) sees exposed, the post-reload
     # re-read sees loopback.
@@ -1303,20 +1284,17 @@ def test_reset_restores_https_from_a_valid_http_console(tmp_path):
     assert res.data["effective"]["remote_cessation_proven"] is True
 
 
-def test_webserver_panel_is_the_last_sub_section_and_styled_like_the_others(tmp_path):
-    from lhpc.adapters.web.app import create_app
+def test_webserver_panel_is_the_last_sub_section_and_styled_like_the_others(tmp_path, web):
     svc = _svc_stackweb_verify(tmp_path)
-    body = create_app(lambda: svc).test_client().get("/stacks?open=meshcom").get_data(as_text=True)
-    i = body.index('id="stackrow-meshcom"')
-    row = body[i:body.index('id="stackrow-', i + 1)] if body.find(
-        'id="stackrow-', i + 1) != -1 else body[i:]
+    doc = parse(web(service_factory=lambda: svc).get("/stacks?open=meshcom").get_data(as_text=True))
+    row = doc.within(doc.by_id("stackrow-meshcom"))
     # same element/class as Install, Info, Settings — not a nested stackrow
-    el = parse(row).by_id("stack-webserver-meshcom")
-    assert el is not None and el.tag == "details" and "advcfg" in (el["class"] or "").split()
-    assert "stackrow ws-comp" not in row
+    el = row.by_id("stack-webserver-meshcom")
+    assert el is not None and el.tag == "details" and el.has_class("advcfg")
+    assert [d["id"] for d in row.find("details", class_="stackrow")] == ["stackrow-meshcom"]
     # LAST: after Install and after Settings
-    assert row.index('id="stack-install-meshcom"') < row.index('id="stack-webserver-meshcom"')
-    assert row.index('id="stack-settings-meshcom"') < row.index('id="stack-webserver-meshcom"')
+    assert doc.index(row.by_id("stack-install-meshcom")) < doc.index(el)
+    assert doc.index(row.by_id("stack-settings-meshcom")) < doc.index(el)
 
 
 # ===== raw endpoint verdicts, proxy containment, and desired-vs-applied proxy policy =====
@@ -1554,7 +1532,7 @@ def test_the_intended_zero_state_is_constructible(tmp_path, monkeypatch):
                    for w in svc.webserver_monitor().data.get("warnings", []))
 
 
-def test_a_saved_proxy_port_move_keeps_advertising_the_port_that_still_answers(tmp_path):
+def test_a_saved_proxy_port_move_keeps_advertising_the_port_that_still_answers(tmp_path, web):
     # `stack_web_view` already finds the OLD applied port after a saved-but-unapplied port change,
     # but that truth stopped there: the panel read "in sync" and the dashboard advertised the NEW
     # port, which nothing is listening on. The operator was handed a dead address while a working
@@ -1596,8 +1574,7 @@ def test_a_saved_proxy_port_move_keeps_advertising_the_port_that_still_answers(t
                if r["kind"] == "stack" and r["sid"] == "meshtastic")
     assert row["port"] == 8445
 
-    app = create_app(lambda: svc)
-    client = app.test_client()
+    client = web(service_factory=lambda: svc)
     body = client.get("/", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
     assert "127.0.0.1:8445" in body                             # the address that answers
     assert ":8555" not in body                                  # ...and not the one that does not
@@ -1834,29 +1811,27 @@ def test_bulk_saved_but_gated_apply_stays_truthfully_pending(tmp_path, monkeypat
     assert all(c.mode == "local" for c in after.values()) and after   # intent persisted
 
 
-def test_webserver_panel_renders_both_webgui_subpanels(tmp_path):
-    app, _svc_ = _app(tmp_path)
-    with app.test_client() as client:
-        html = client.get("/stacks").get_data(as_text=True)
-    assert "LHPC WebGUI" in html and "Stacks WebGUIs" in html
-    assert "Apply to all Stack WebGUIs" in html
+def test_webserver_panel_renders_both_webgui_subpanels(tmp_path, web):
+    c, _svc_ = _app(web, tmp_path)
+    doc = parse(c.get("/stacks").get_data(as_text=True))
+    assert "LHPC WebGUI" in doc.text and "Stacks WebGUIs" in doc.text
+    assert "Apply to all Stack WebGUIs" in doc.text
     # target-policy form: the bulk form carries NO port input
-    bulk = html.split("Stacks WebGUIs", 1)[1].split("</details>", 1)[0]
-    assert 'name="port"' not in bulk
-    for field in ('name="mode"', 'name="scheme"', 'name="access_mode"',
-                  'name="cidrs"', 'name="confirm_phrase"'):
-        assert field in bulk, field
+    bulk = doc.within(doc.by_id("ws-stackwebs"))
+    assert not _controls(bulk, "port")
+    for field in ("mode", "scheme", "access_mode", "cidrs", "confirm_phrase"):
+        assert _controls(bulk, field), field
 
 
-def test_bulk_route_requires_csrf_and_maps_the_phrase(tmp_path, monkeypatch):
-    app, svc = _app(tmp_path)
+def test_bulk_route_requires_csrf_and_maps_the_phrase(tmp_path, monkeypatch, web, csrf):
+    c, svc = _app(web, tmp_path)
     seen = {}
     from lhpc.core.service_base import ActionResult
     monkeypatch.setattr(type(svc), "stack_webs_configure_apply",
                         lambda self, **kw: seen.update(kw) or ActionResult(True, "ok"))
-    with app.test_client() as client:
+    with c as client:
         assert client.post("/webserver/stacks", data={}).status_code == 400   # no CSRF
-        tok = _csrf(client)
+        tok = csrf(client)
         resp = client.post("/webserver/stacks", data={
             "_csrf": tok, "mode": "lan", "scheme": "https",
             "access_mode": "local-open-remote-auth", "cidrs": "192.168.0.0/24",
@@ -1876,10 +1851,9 @@ def _pw_file(tmp_path, text=b"s3cret-shown-here\n", mode=0o600):
     return f
 
 
-def test_password_section_shows_the_stored_value_and_an_edit_command(tmp_path):
+def test_password_section_shows_the_stored_value_and_an_edit_command(tmp_path, web):
     """The stack page shows the stored web-UI password itself (an authenticated page; product
     decision) with a copy button, plus `nano <path>` to edit the file — never a `cat`."""
-    from lhpc.adapters.web.app import create_app
     svc = _svc(tmp_path)
     assert svc.ui_credentials("kiss") == {}          # only declared where it applies
     creds = svc.ui_credentials("graywolf")
@@ -1889,21 +1863,23 @@ def test_password_section_shows_the_stored_value_and_an_edit_command(tmp_path):
     creds = svc.ui_credentials("graywolf")
     assert creds["value"] == "s3cret-shown-here" and creds["exists"] is True
     assert creds["edit_command"] == f"nano {f}" and creds["reason"] == ""
-    body = create_app(lambda: svc).test_client().get("/stacks?open=graywolf").get_data(as_text=True)
-    assert 'id="stack-password-graywolf"' in body and "<summary>Password</summary>" in body
-    # MASKED on screen by CSS; `Show` drops the class so the value becomes selectable text, and
-    # the copy button reads the element's real text either way.
-    assert '<pre class="next masked" id="uipw-graywolf">s3cret-shown-here</pre>' in body
-    assert 'class="revealbtn" data-reveal="uipw-graywolf"' in body
+    body = web(service_factory=lambda: svc).get("/stacks?open=graywolf").get_data(as_text=True)
+    doc = parse(body)
+    section = doc.by_id("stack-password-graywolf")
+    assert section is not None and any(s.text == "Password" for s in doc.within(section).find("summary"))
+    # MASKED on screen by CSS; `Show` (the reveal script's `data-reveal` hook) unmasks it so the
+    # value becomes selectable text, and the copy button reads the element's real text either way.
+    box = doc.by_id("uipw-graywolf")
+    assert box.tag == "pre" and box.has_class("masked") and box.text == "s3cret-shown-here"
+    assert doc.find("button", **{"data-reveal": "uipw-graywolf"})
     assert "copy password" in body and f"nano {f}" in body
     assert "cat " + str(f) not in body and "not shown" not in body and "on purpose" not in body
     assert body.count("s3cret-shown-here") == 1          # the value appears ONLY in the secretbox
 
 
-def test_password_section_states_absent_lax_malformed_and_unreadable_without_a_value(tmp_path):
-    from lhpc.adapters.web.app import create_app
+def test_password_section_states_absent_lax_malformed_and_unreadable_without_a_value(tmp_path, web):
     svc = _svc(tmp_path)
-    c = create_app(lambda: svc).test_client()
+    c = web(service_factory=lambda: svc)
     body = c.get("/stacks?open=graywolf").get_data(as_text=True)
     assert "Password not created yet" in body and "start the stack first" in body
     assert "uipwedit-graywolf" not in body                # no edit box for an absent file
@@ -1936,13 +1912,12 @@ def test_password_section_states_absent_lax_malformed_and_unreadable_without_a_v
     assert "linked-secret" not in body and str(real) not in body
 
 
-def test_a_stored_password_never_reaches_the_json_apis_or_flashes(tmp_path):
-    from lhpc.adapters.web.app import create_app
+def test_a_stored_password_never_reaches_the_json_apis_or_flashes(tmp_path, web):
     svc = _svc(tmp_path)
     _pw_file(tmp_path, text=b"ONLY-IN-THE-PRE\n")
-    c = create_app(lambda: svc).test_client()
+    c = web(service_factory=lambda: svc)
     page = c.get("/stacks?open=graywolf").get_data(as_text=True)
-    assert page.count("ONLY-IN-THE-PRE") == 1 and 'id="uipw-graywolf">ONLY-IN-THE-PRE<' in page
+    assert page.count("ONLY-IN-THE-PRE") == 1 and parse(page).by_id("uipw-graywolf").text == "ONLY-IN-THE-PRE"
     for api in ("/api/tasks", "/api/dash-signature", "/api/system"):
         r = c.get(api)
         assert "ONLY-IN-THE-PRE" not in r.get_data(as_text=True), api
@@ -1950,7 +1925,7 @@ def test_a_stored_password_never_reaches_the_json_apis_or_flashes(tmp_path):
     assert "ONLY-IN-THE-PRE" not in str(svc.running_tasks())
 
 
-def test_a_saved_disable_keeps_the_live_proxy_visible_until_apply(tmp_path):
+def test_a_saved_disable_keeps_the_live_proxy_visible_until_apply(tmp_path, web):
     # A saved Disable takes effect at Apply. Until then nginx still serves the APPLIED proxy, so
     # the panel, the dashboard and the exposure warnings must describe that live socket (as a
     # pending disable), never hide an off-loopback listener behind the saved intent.
@@ -1993,15 +1968,31 @@ def test_a_saved_disable_keeps_the_live_proxy_visible_until_apply(tmp_path):
     assert row["enabled"] is False and row["live"] is True and row["pending_disable"] is True
     assert row["port"] == 8445 and row["posture"] is not None
 
-    app = create_app(lambda: svc)
-    client = app.test_client()
+    client = web(service_factory=lambda: svc)
     body = client.get("/", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
     assert "127.0.0.1:8445" in body and "disable pending" in body
-    panel = client.get("/stacks?open=meshtastic",
-                       headers={"Host": "127.0.0.1"}).get_data(as_text=True)
-    assert "disable pending" in panel
-    assert "Currently listening on port 8445 on all interfaces" in panel
-    assert "not proxied" not in panel.split('id="stack-webserver-meshtastic"')[1].split("</summary>")[0]
+    panel = parse(client.get("/stacks?open=meshtastic",
+                             headers={"Host": "127.0.0.1"}).get_data(as_text=True))
+    assert "disable pending" in panel.text
+    assert "Currently listening on port 8445 on all interfaces" in panel.text
+    header = panel.within(panel.by_id("stack-webserver-meshtastic")).find("summary")[0]
+    assert "not proxied" not in header.text
+
+
+def _seed_policy(svc, paths, **fields):
+    """Persist one stack-web policy on EVERY eligible page straight into the config store —
+    `stack_web_configure` would run the confirmation ladder and the port planning, which is not
+    what these tests seed. `_invalidate_config` drops the service's cached config so its next
+    read sees the files."""
+    for sid in sorted(svc.stack_web_eligible()):
+        cfgmod.save_stackweb_config(paths, sid, port=0, **fields)
+    svc._invalidate_config()
+
+
+def _controls(scope, name):
+    """The form controls named `name` inside `scope`, whatever their tag."""
+    return (scope.find("input", name=name) + scope.find("select", name=name)
+            + scope.find("textarea", name=name))
 
 
 def test_bulk_refuses_an_unset_field_instead_of_defaulting_to_local(tmp_path, monkeypatch):
@@ -2012,56 +2003,59 @@ def test_bulk_refuses_an_unset_field_instead_of_defaulting_to_local(tmp_path, mo
     reported as success. An unset field is now a refusal, and nothing is written."""
     svc = _svc(tmp_path)
     paths = Paths(runtime_root=tmp_path)
-    for sid in svc.stack_web_eligible():
-        cfgmod.save_stackweb_config(paths, sid, mode="lan", port=0, scheme="https",
-                                    access_mode="local-open-remote-auth",
-                                    allowed_cidrs=["192.168.0.0/24"])
-    svc._invalidate_config()
+    _seed_policy(svc, paths, mode="lan", scheme="https", access_mode="local-open-remote-auth",
+                 allowed_cidrs=["192.168.0.0/24"])
     before = {s: c.mode for s, c in load_config(paths).stackweb.items()}
     saves, applies = _bulk_spies(svc, monkeypatch)
     r = svc.stack_webs_configure_apply(mode="", scheme="https",
                                        access_mode="local-open-remote-auth",
                                        cidrs=["192.168.0.0/24"], confirm=True)
-    assert not r.ok and "choose" in r.summary
+    assert not r.ok and r.data.get("reason") == "invalid-choice" and r.data.get("field") == "mode"
     assert not saves and not applies, "a refused bulk writes nothing and reloads nothing"
     assert {s: c.mode for s, c in load_config(paths).stackweb.items()} == before
 
 
-def test_the_bulk_form_preselects_the_policy_the_pages_share(tmp_path):
+def test_the_bulk_form_preselects_the_policy_the_pages_share(tmp_path, web):
     """Like the per-stack panel and the console's own form. A form that always opens on the
-    first option is how the downgrade above happened."""
+    first option is how the downgrade above happened. The overview reports the shared policy,
+    and the rendered bulk form (scoped: three selects on /stacks share `name="mode"`)
+    preselects exactly that."""
     svc = _svc(tmp_path)
     paths = Paths(runtime_root=tmp_path)
     eligible = sorted(svc.stack_web_eligible())
-    for sid in eligible:
-        cfgmod.save_stackweb_config(paths, sid, mode="lan", port=0, scheme="https",
-                                    access_mode="auth-everywhere",
-                                    allowed_cidrs=["192.168.7.0/24"])
-    svc._invalidate_config()
+    _seed_policy(svc, paths, mode="lan", scheme="https", access_mode="auth-everywhere",
+                 allowed_cidrs=["192.168.7.0/24"])
     cur = svc.stack_webs_overview()["current"]
     assert cur == {"mode": "lan", "scheme": "https", "access_mode": "auth-everywhere",
                    "cidrs": "192.168.7.0/24"}
+    c = web(service_factory=lambda: svc)
+
+    def bulk_form():
+        doc = parse(c.get("/stacks").get_data(as_text=True))
+        return doc.within(doc.by_id("ws-stackwebs"))
+
+    form = bulk_form()
+    assert (form.field_default("mode"), form.field_default("scheme"),
+            form.field_default("access_mode")) == ("lan", "https", "auth-everywhere")
     # One page differs -> no honest common value; the form must ask rather than pick.
     cfgmod.save_stackweb_config(paths, eligible[0], mode="local", port=0, scheme="https",
                                 access_mode="auth-everywhere", allowed_cidrs=["192.168.7.0/24"])
     svc._invalidate_config()
     assert svc.stack_webs_overview()["current"]["mode"] == ""
     assert svc.stack_webs_overview()["current"]["scheme"] == "https"    # still shared
+    form = bulk_form()
+    assert form.field_default("mode") == "" and form.field_default("scheme") == "https"
 
 
-def test_the_bulk_route_does_not_default_a_missing_select(tmp_path):
+def test_the_bulk_route_does_not_default_a_missing_select(tmp_path, web, csrf):
     """The ROUTE, not just the service: a POST that carries no `mode` (a select the operator
     never touched, a form rendered before this fix, a hand-made request) must be refused. The
     handler used to substitute `local`, which is how one submit un-exposed every page."""
-    app, svc = _app(tmp_path)
+    c, svc = _app(web, tmp_path)
     paths = Paths(runtime_root=tmp_path)
-    for sid in svc.stack_web_eligible():
-        cfgmod.save_stackweb_config(paths, sid, mode="lan", port=0, scheme="https",
-                                    access_mode="local-open-remote-auth",
-                                    allowed_cidrs=["192.168.0.0/24"])
-    svc._invalidate_config()
-    c = app.test_client()
-    tok = _csrf(c)
+    _seed_policy(svc, paths, mode="lan", scheme="https", access_mode="local-open-remote-auth",
+                 allowed_cidrs=["192.168.0.0/24"])
+    tok = csrf(c)
     r = c.post("/webserver/stacks", data={"_csrf": tok, "scheme": "https",
                                           "access_mode": "local-open-remote-auth",
                                           "cidrs": "192.168.0.0/24",

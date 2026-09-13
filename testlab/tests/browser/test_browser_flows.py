@@ -23,13 +23,12 @@ def test_opening_a_stack_loads_its_lazy_body(page):
     page.goto(page.lab_base + "/stacks", wait_until="networkidle")
     row = page.locator("details").filter(has_text="LoRaHAM daemon").first
     row.locator("summary").first.click()
-    # stacklazy.js REPLACES the `.lazy-body` placeholder with the fetched body: the
-    # placeholder disappearing is the observable proof the fetch arrived and was inserted.
+    # The placeholder carries no form; one appearing inside the open row is the observable
+    # proof the fetched body arrived and was inserted.
     page.wait_for_function(
         "() => { const d = [...document.querySelectorAll('details')]"
         ".find(e => e.textContent.includes('LoRaHAM daemon'));"
-        " return d && d.open && !d.querySelector(':scope > .lazy-body')"
-        " && d.querySelector('form'); }", timeout=15000)
+        " return d && d.open && d.querySelector('form'); }", timeout=15000)
 
 
 def test_a_lifecycle_action_travels_form_to_route_to_state(page, lab):
@@ -72,57 +71,62 @@ def test_a_phone_viewport_has_no_horizontal_overflow(page, path):
     assert page.locator("a.home").is_visible(), "the Home link must stay reachable"
 
 
-def test_the_auto_install_channel_rules_hold_in_both_directions(page):
-    """auto_install.js owns three operator rules on the Auto-install page. All three are asserted
-    here against the real rendered page, because they are pure client-side state:
+def _auto_install_rows(page):
+    page.goto(page.lab_base + "/auto-install", wait_until="networkidle")
+    page.wait_for_selector("tr[data-stack] input.ai-tests", timeout=15000)
+    return page.locator("tr[data-stack]")
+
+
+def test_the_binary_channel_takes_the_test_boxes_away_and_gives_them_back(page):
+    """auto_install.js owns the first two of three operator rules on the Auto-install page,
+    asserted here against the real rendered page because they are pure client-side state:
 
       * BINARY disables and UNCHECKS a row's Tests and TX boxes — a prebuilt artifact has no test
         tree, and the server refuses the combination outright, so offering the tick would invite a
         run that is rejected;
-      * BINARY -> SOURCE gives them back, for the stacks that declare a test tree;
-      * the "All" box then ticks every box it may legitimately touch and never a disabled one.
+      * BINARY -> SOURCE gives them back, for the stacks that declare a test tree.
 
-    The binary half runs only where a row actually offers that channel: `binary_available()` is
-    declaration plus platform, so an aarch64 lab publishes artifacts and an x86-64 one does not.
-    That witness therefore comes from CI, and no option is ever faked into the DOM here — a page
-    the product does not render proves nothing.
+    This runs only where a row actually offers that channel AND declares a test tree: only there
+    is the transition OBSERVABLE (a binary row with no test tree has its boxes disabled already,
+    so asserting they are disabled would prove nothing about the channel). `binary_available()`
+    is declaration plus platform, so an aarch64 lab publishes artifacts and an x86-64 one does
+    not: the witness comes from CI, and no option is ever faked into the DOM here — a page the
+    product does not render proves nothing. The TESTS box is the one that actually moves; the TX
+    box is checked for the same rule, but no stack currently both publishes an artifact and is
+    TX-capable, so that half is a state check rather than a witnessed transition.
     """
-    page.goto(page.lab_base + "/auto-install", wait_until="networkidle")
-    page.wait_for_selector("tr[data-stack] input.ai-tests", timeout=15000)
-    rows = page.locator("tr[data-stack]")
-
-    # A row that offers `binary` AND declares a test tree: only there is the transition
-    # OBSERVABLE. A binary row with no test tree has its boxes disabled already, so asserting
-    # they are disabled would prove nothing about the channel. The TESTS box is the one that
-    # actually moves here; the TX box is checked for the same rule, but no stack currently both
-    # publishes an artifact and is TX-capable, so that half is a state check rather than a
-    # witnessed transition.
+    rows = _auto_install_rows(page)
     binary_testable = rows.evaluate_all(
         "rs => rs.filter(r => r.dataset.testable === '1')"
         "       .filter(r => [...r.querySelector('select.ai-version').options]"
         "                    .some(o => o.value === 'binary')).map(r => r.dataset.stack)")
-    if binary_testable:
-        sid = binary_testable[0]
-        row = page.locator(f'tr[data-stack="{sid}"]')
-        row.locator("select.ai-version").select_option("dev")
-        row.locator("input.ai-tests").check()          # tick it, so we see it TAKEN AWAY
-        page.wait_for_function(
-            "sid => { const t = document.querySelector("
-            "  `tr[data-stack='${sid}'] input.ai-tests`); return t.checked && !t.disabled; }",
-            arg=sid, timeout=10000)
-        row.locator("select.ai-version").select_option("binary")
-        page.wait_for_function(
-            "sid => { const r = document.querySelector(`tr[data-stack='${sid}']`);"
-            " const t = r.querySelector('input.ai-tests'), x = r.querySelector('input.ai-tx');"
-            " return t.disabled && !t.checked && x.disabled && !x.checked; }",
-            arg=sid, timeout=10000)
-        row.locator("select.ai-version").select_option("dev")     # ...and back again
-        page.wait_for_function(
-            "sid => { const r = document.querySelector(`tr[data-stack='${sid}']`);"
-            " return r.querySelector('input.ai-tests').disabled === (r.dataset.testable !== '1'); }",
-            arg=sid, timeout=10000)
+    if not binary_testable:
+        pytest.skip("no row offers the binary channel on this platform")
+    sid = binary_testable[0]
+    row = page.locator(f'tr[data-stack="{sid}"]')
+    row.locator("select.ai-version").select_option("dev")
+    row.locator("input.ai-tests").check()          # tick it, so we see it TAKEN AWAY
+    page.wait_for_function(
+        "sid => { const t = document.querySelector("
+        "  `tr[data-stack='${sid}'] input.ai-tests`); return t.checked && !t.disabled; }",
+        arg=sid, timeout=10000)
+    row.locator("select.ai-version").select_option("binary")
+    page.wait_for_function(
+        "sid => { const r = document.querySelector(`tr[data-stack='${sid}']`);"
+        " const t = r.querySelector('input.ai-tests'), x = r.querySelector('input.ai-tx');"
+        " return t.disabled && !t.checked && x.disabled && !x.checked; }",
+        arg=sid, timeout=10000)
+    row.locator("select.ai-version").select_option("dev")     # ...and back again
+    page.wait_for_function(
+        "sid => { const r = document.querySelector(`tr[data-stack='${sid}']`);"
+        " return r.querySelector('input.ai-tests').disabled === (r.dataset.testable !== '1'); }",
+        arg=sid, timeout=10000)
 
-    # Every row onto a source channel, then the "All" rule over the whole table.
+
+def test_the_all_box_ticks_every_test_box_it_may_and_never_a_disabled_one(page):
+    """The third operator rule on the Auto-install page: with every row on a source channel, the
+    "All" box ticks every box it may legitimately touch and never a disabled one."""
+    rows = _auto_install_rows(page)
     page.locator("#ai-all-version").select_option("dev")
     page.wait_for_function(
         "() => [...document.querySelectorAll('tr[data-stack] select.ai-version')]"
@@ -174,10 +178,9 @@ def test_a_start_marks_its_stack_and_reloads_the_page_once_when_it_finishes(page
     page.wait_for_selector('.badge-starting[data-starting-for="kiss"]', timeout=15000)
     assert len(navigations) == 1, navigations
 
-    feed["tasks"] = [dict(task, state="done")]        # the job finishes -> exactly one reload
-    page.wait_for_function(
-        "() => (sessionStorage.getItem('lhpc_reloaded_starts') || '').includes('a1')",
-        timeout=15000)
+    # The job finishes -> exactly one reload. The navigation itself is the observable.
+    with page.expect_event("framenavigated", timeout=15000):
+        feed["tasks"] = [dict(task, state="done")]
     page.wait_for_function("() => document.readyState === 'complete'", timeout=15000)
     assert len(navigations) == 2, f"expected exactly one reload, saw {navigations}"
 
@@ -188,52 +191,68 @@ def test_a_start_marks_its_stack_and_reloads_the_page_once_when_it_finishes(page
     assert len(navigations) == 2, f"reloaded more than once: {navigations}"
 
 
-def test_the_rf_log_viewer_sorts_filters_toggles_columns_and_decrypts(page, lab):
-    """rflog.js is proven only here: the records table over a seeded two-segment log, sort by
-    rssi, a filter, a column off, a row appended and picked up by the poll, and the Decrypt
-    toggle — which switches the poll to the decoded API (answered by a controlled feed, so no
-    stack venv is needed) and renders the decoded column through textContent, never as HTML."""
-    import json
+def _row_times(page):
+    """Which seeded record each rendered row is, top to bottom, by its time token."""
+    return [next(t for t in ("16:00:00", "16:01:00", "16:02:00") if t in text)
+            for text in page.locator("#rfview tbody tr").all_inner_texts()]
 
-    logs = lab.root / "logs"
-    logs.mkdir(exist_ok=True)
-    older = '2026-09-12T16:00:00.000Z RX rssi=-90.00 snr=2.00 len=3 hex=aabbcc ascii="..."'
-    newer = '2026-09-12T16:01:00.000Z TX rssi=- snr=- len=3 outcome=ok tnc2="G0ABC>APRS:hello" hex=112233 ascii="..."'
-    (logs / "rf-kiss.log.1").write_text(older + "\n")
-    (logs / "rf-kiss.log").write_text(newer + "\n")
 
+def test_the_rf_log_viewer_sorts_filters_toggles_columns_and_polls(page, seeded_rf_logs):
+    """rflog.js is proven only here: the records table over a seeded two-segment log, a row
+    appended and picked up by the poll, sort by rssi in both directions, a filter, a column off,
+    and the raw view. A plaintext stack offers no Decrypt toggle."""
+    seeds = seeded_rf_logs
     page.goto(page.lab_base + "/logs/loraham-kiss-tnc?job=rf-kiss.log", wait_until="networkidle")
     page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 2", timeout=15000)
     assert page.locator("#rf-decrypt").count() == 0                     # plaintext stack: no toggle
-    rows = page.locator("#rfview tbody tr")
-    assert "16:00:00" in rows.nth(0).inner_text() and "16:01:00" in rows.nth(1).inner_text()
+    assert _row_times(page) == ["16:00:00", "16:01:00"]                 # file order, unsorted
 
-    page.locator("#rfview th[data-col=rssi] button").click()            # sort: nulls last
-    page.locator("#rfview th[data-col=rssi] button").click()            # reversed
-    assert page.locator("#rfview th[data-col=rssi]").get_attribute("aria-sort") == "descending"
-    page.fill("#rf-filter", "G0ABC")
-    page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 1", timeout=5000)
-    assert "hello" in rows.nth(0).inner_text()
-    page.fill("#rf-filter", "")
-    page.locator("#rf-cols input[value=hex]").uncheck()
-    assert page.locator("#rfview tbody tr").nth(0).locator("td").nth(7).is_hidden()
-
-    with open(logs / "rf-kiss.log", "a") as f:                            # the poll picks it up
+    with open(seeds.dir / "rf-kiss.log", "a") as f:                       # the poll picks it up
         f.write('2026-09-12T16:02:00.000Z RX rssi=-70.00 snr=8.00 len=1 hex=ff ascii="."\n')
     page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 3", timeout=15000)
 
-    page.locator("#rf-raw").click()                                       # the raw view is the file
-    assert page.locator("#logbox").is_visible() and older in page.locator("#logbox").inner_text()
-    page.locator("#rf-raw").click()
+    # Two numeric rssi rows (-90, -70) and the TX row's null: ascending puts -90 first, descending
+    # -70 first, and the null row last either way — the ROW ORDER is what proves the sort.
+    page.locator("#rfview th[data-col=rssi] button").click()
+    page.wait_for_function("() => document.querySelector('#rfview th[data-col=rssi]').getAttribute('aria-sort') === 'ascending'", timeout=5000)
+    assert _row_times(page) == ["16:00:00", "16:02:00", "16:01:00"]
+    page.locator("#rfview th[data-col=rssi] button").click()
+    page.wait_for_function("() => document.querySelector('#rfview th[data-col=rssi]').getAttribute('aria-sort') === 'descending'", timeout=5000)
+    assert _row_times(page) == ["16:02:00", "16:00:00", "16:01:00"]
 
-    # An encrypted stack: the toggle sits on its own row and, on, the page reads the decoded API.
-    (logs / "rf-meshtastic.log").write_text(
-        '{"timestamp":1789228997,"rssi":-67,"snr":11.25,"from":1,"to":4294967295,"size":4,"bytes":"01020304"}\n')
+    page.fill("#rf-filter", "G0ABC")
+    page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 1", timeout=5000)
+    assert "hello" in page.locator("#rfview tbody tr").nth(0).inner_text()
+    page.fill("#rf-filter", "")
+    page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 3", timeout=5000)
+
+    # A column off hides its header AND its cells; the cell is found by the header's position,
+    # never by a hand-counted index.
+    page.locator("#rf-cols input[value=hex]").uncheck()
+    assert page.evaluate(
+        "() => { const ths = [...document.querySelectorAll('#rfview thead th')];"
+        " const i = ths.findIndex(t => t.dataset.col === 'hex');"
+        " return i >= 0 && ths[i].hidden"
+        " && [...document.querySelectorAll('#rfview tbody tr')].every(tr => tr.children[i].hidden); }"
+    ), "unticking hex did not hide the hex column"
+
+    page.locator("#rf-raw").click()                                       # the raw view is the file
+    assert page.locator("#logbox").is_visible() and seeds.older in page.locator("#logbox").inner_text()
+    page.locator("#rf-raw").click()
+    assert page.locator("#rfview").is_visible()
+
+
+def test_the_decrypt_toggle_reads_the_decoded_api_and_renders_text_only(page, seeded_rf_logs):
+    """An encrypted stack: the toggle sits on its own row below the switcher and, on, the page
+    reads the decoded API (answered by a controlled feed, so no stack venv is needed) and renders
+    the decoded column through textContent, never as HTML; off, nothing decoded stays on screen."""
+    import json
+
+    rec = seeded_rf_logs.meshtastic_record
     decoded_hits = []
 
     def decoded(route):
         decoded_hits.append(route.request.url)
-        rec = json.loads(page.evaluate("() => fetch('/api/rflog/meshtastic?job=rf-meshtastic.log').then(r => r.text())"))["records"][0]
         body = {"target": "meshtastic", "job": "rf-meshtastic.log", "path": "x", "running": False, "error": "",
                 "records": [dict(rec, status="ok", kind="text", peer="!00000001", decoded="<b>hi from the radio</b>")]}
         route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
@@ -242,9 +261,12 @@ def test_the_rf_log_viewer_sorts_filters_toggles_columns_and_decrypts(page, lab)
     page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 1", timeout=15000)
     toggle = page.locator("#rf-decrypt")
     assert toggle.get_attribute("aria-pressed") == "false" and not decoded_hits
-    box = toggle.bounding_box()
-    nav = page.locator("nav.rfswitch").bounding_box()
-    assert box["y"] >= nav["y"] + nav["height"], "Decrypt must sit on its own row below the switcher"
+    # Its own row: outside the switcher's nav and after it in the document.
+    assert page.evaluate(
+        "() => { const nav = document.querySelector('nav.rfswitch'), btn = document.getElementById('rf-decrypt');"
+        " return !!nav && !!btn && !nav.contains(btn)"
+        " && !!(nav.compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING); }"
+    ), "Decrypt must sit on its own row below the switcher"
     toggle.click()
     page.wait_for_function("() => document.querySelector('#rfview tbody tr td:last-child').textContent.includes('hi from the radio')", timeout=15000)
     assert toggle.get_attribute("aria-pressed") == "true" and decoded_hits
@@ -253,20 +275,27 @@ def test_the_rf_log_viewer_sorts_filters_toggles_columns_and_decrypts(page, lab)
     page.wait_for_function("() => document.querySelector('#rf-decrypt').getAttribute('aria-pressed') === 'false'", timeout=5000)
     assert not page.locator("#rfview tbody tr td:last-child").inner_text().strip()
 
-    # The race: a decoded response still in flight when Decrypt goes OFF must never land.
-    page.unroute("**/api/rflog/meshtastic/decoded*")
+
+def test_a_decoded_answer_in_flight_when_decrypt_goes_off_never_lands_and_a_reload_forgets(page, seeded_rf_logs):
+    """The race: a decoded response still in flight when Decrypt goes OFF must never land. And
+    the reveal is never remembered: a reload starts with Decrypt off."""
+    import json
+
+    rec = seeded_rf_logs.meshtastic_record
     held = []
 
     def hold(route):                                                      # hold, do not answer (playwright
         held.append(route)                                                # needs a plain function here)
     page.route("**/api/rflog/meshtastic/decoded*", hold)
+    page.goto(page.lab_base + "/logs/meshtastic?job=rf-meshtastic.log", wait_until="networkidle")
+    page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 1", timeout=15000)
+    toggle = page.locator("#rf-decrypt")
     with page.expect_request("**/api/rflog/meshtastic/decoded*", timeout=5000):
         toggle.click()                                                    # ON: a decoded fetch starts and hangs
     page.wait_for_function("() => document.querySelector('#rf-decrypt').getAttribute('aria-pressed') === 'true'", timeout=5000)
     assert held, "the decoded request must be in flight"
     toggle.click()                                                        # OFF while it is in flight
     page.wait_for_function("() => document.querySelector('#rf-decrypt').getAttribute('aria-pressed') === 'false'", timeout=5000)
-    rec = json.loads(page.evaluate("() => fetch('/api/rflog/meshtastic?job=rf-meshtastic.log').then(r => r.text())"))["records"][0]
     late = {"target": "meshtastic", "job": "rf-meshtastic.log", "path": "x", "running": False, "error": "",
             "records": [dict(rec, status="ok", kind="text", peer="!00000001", decoded="LATE PLAINTEXT")]}
     # Hold every PLAIN poll from here on: a good plain response landing after the stale decoded

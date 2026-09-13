@@ -11,18 +11,13 @@ from lhpc.core import auto_install as ai_mod
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
-from lhpc.adapters.web.app import create_app
+from htmlq import parse
 
 
-def _client(tmp_path, cmdlines=None):
+def _client(web, tmp_path, cmdlines=None):
     svc = ControllerService(system=FakeSystem(cmdlines_data=cmdlines or {}).system,
                             paths=Paths(runtime_root=tmp_path))
-    return create_app(service_factory=lambda: svc).test_client(), svc
-
-
-def _csrf(c, url="/auto-install"):
-    body = c.get(url).data.decode()
-    return body.split('name="_csrf" value="')[1].split('"')[0]
+    return web(service_factory=lambda: svc), svc
 
 
 def _all_form(svc, tok, source="pinned", tests=True, tx=False, **extra):
@@ -49,34 +44,39 @@ def _sel(svc, source="pinned", tests=True, tx=False):
 
 
 @pytest.mark.contract
-def test_form_defaults_and_install_mode(tmp_path):
-    c, _ = _client(tmp_path)
+def test_form_defaults_and_install_mode(tmp_path, web):
+    c, _ = _client(web, tmp_path)
     body = c.get("/auto-install").data.decode()
+    doc = parse(body)
     assert "Install and Build all Stacks" in body
-    assert 'name="install:daemon" value="yes" checked' in body   # per-stack install default ON
-    assert 'id="ai-all-install"' in body and 'id="ai-all-version"' in body  # the "All" master row
+    install = doc.find("input", name="install:daemon")[0]
+    assert install["value"] == "yes" and install.has_attr("checked")   # per-stack install default ON
+    assert doc.present("ai-all-install") and doc.present("ai-all-version")  # the "All" master row
     # Tests + TX default OFF (opt-in): neither the master nor a per-stack tests/tx box is pre-checked.
-    assert '<input type="checkbox" id="ai-all-tests">' in body    # master Tests unchecked
-    assert 'class="ai-tests" name="tests:daemon" value="yes"' in body
-    assert 'name="tests:daemon" value="yes" checked' not in body  # per-stack Tests unchecked
-    assert 'class="ai-tx" name="tx:meshcom" value="yes" disabled' in body   # TX disabled off daemon
+    master = doc.by_id("ai-all-tests")
+    assert master["type"] == "checkbox" and not master.has_attr("checked")   # master Tests unchecked
+    tests = doc.find("input", name="tests:daemon")[0]
+    assert tests.has_class("ai-tests") and tests["value"] == "yes"        # the script's hook
+    assert not tests.has_attr("checked")                                  # per-stack Tests unchecked
+    tx = doc.find("input", name="tx:meshcom")[0]
+    assert tx.has_class("ai-tx") and tx["value"] == "yes" and tx.has_attr("disabled")   # TX disabled off daemon
     assert "several minutes" in body
     assert "Known working" in body and "Development" in body and "Latest stable" in body
 
 
-def test_post_requires_csrf(tmp_path):
-    c, _ = _client(tmp_path)
+def test_post_requires_csrf(tmp_path, web):
+    c, _ = _client(web, tmp_path)
     assert c.post("/auto-install/start", data={"source": "pinned"}).status_code == 400
     assert c.post("/auto-install/ack").status_code == 400
 
 
 @pytest.mark.contract
-def test_post_refused_while_component_running(tmp_path, monkeypatch):
-    c, svc = _client(tmp_path, cmdlines={555: ["loraham-kiss-tnc"]})
+def test_post_refused_while_component_running(tmp_path, monkeypatch, web, csrf):
+    c, svc = _client(web, tmp_path, cmdlines={555: ["loraham-kiss-tnc"]})
     called = []
     monkeypatch.setattr(type(svc), "spawn_auto_install_job",
                         lambda self, *a, **k: (called.append(1), (None, "x"))[1])
-    tok = _csrf(c)
+    tok = csrf(c, "/auto-install")
     c.post("/auto-install/start", data={"_csrf": tok, "source": "pinned",
                                         "tests": "yes"}, follow_redirects=True)
     # spawn IS called and refuses via the driver gate? No: running-stack refusal comes
@@ -86,19 +86,19 @@ def test_post_refused_while_component_running(tmp_path, monkeypatch):
 
 
 @pytest.mark.contract
-def test_post_blocked_by_unacked_interrupted_marker(tmp_path, monkeypatch):
+def test_post_blocked_by_unacked_interrupted_marker(tmp_path, monkeypatch, web, csrf):
     paths = Paths(runtime_root=tmp_path)
     m = ai_mod.new_marker("a" * 32, "install", "pinned", True, False,
                             [{"id": "daemon", "name": "d"}])
     m["state"] = "running"                                       # dead job -> interrupted
     assert ai_mod.write_marker(paths, m)
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     spawned = []
     monkeypatch.setattr(type(svc), "spawn_auto_install_job",
                         lambda self, *a, **k: (spawned.append(1), (None, "no"))[1])
     body = c.get("/auto-install").data.decode()
     assert "ended unexpectedly" in body or "Acknowledge" in body
-    tok = _csrf(c)
+    tok = csrf(c, "/auto-install")
     r = c.post("/auto-install/start", data={"_csrf": tok, "source": "pinned",
                                            "tests": "yes"}, follow_redirects=True)
     # spawn_auto_install_job (real) would refuse; monkeypatched here it reports its error flash
@@ -106,14 +106,14 @@ def test_post_blocked_by_unacked_interrupted_marker(tmp_path, monkeypatch):
 
 
 @pytest.mark.contract
-def test_ack_flow_unblocks(tmp_path):
+def test_ack_flow_unblocks(tmp_path, web, csrf):
     paths = Paths(runtime_root=tmp_path)
     m = ai_mod.new_marker("b" * 32, "install", "pinned", True, False,
                             [{"id": "daemon", "name": "d"}])
     m["state"] = "running"
     assert ai_mod.write_marker(paths, m)
-    c, svc = _client(tmp_path)
-    tok = _csrf(c)
+    c, svc = _client(web, tmp_path)
+    tok = csrf(c, "/auto-install")
     r = c.post("/auto-install/ack", data={"_csrf": tok}, follow_redirects=True)
     assert b"acknowledged" in r.data
     assert svc.auto_install_status() is None
@@ -122,22 +122,23 @@ def test_ack_flow_unblocks(tmp_path):
 
 @pytest.mark.contract
 @pytest.mark.safety("RF-TX-opt-in")
-def test_tx_post_renders_second_stage_confirmation(tmp_path, monkeypatch):
-    c, svc = _client(tmp_path)
+def test_tx_post_renders_second_stage_confirmation(tmp_path, monkeypatch, web, csrf):
+    c, svc = _client(web, tmp_path)
     spawned = []
     monkeypatch.setattr(type(svc), "spawn_auto_install_job",
                         lambda self, *a, **k: (spawned.append((a, k)), ("l", None))[1])
-    tok = _csrf(c)
+    tok = csrf(c, "/auto-install")
     r = c.post("/auto-install/start", data=_all_form(svc, tok, source="stable", tx=True))
     body = r.data.decode()
+    doc = parse(body)
     assert not spawned                                           # NOT spawned yet
     assert "will TRANSMIT" in body                                # explicit RF confirm
-    assert 'name="version:daemon" value="stable"' in body        # selection carried through
-    assert 'name="tx:daemon" value="yes"' in body
-    ctok = body.split('name="confirm_token" value="')[1].split('"')[0]
+    assert doc.field_default("version:daemon") == "stable"       # selection carried through
+    assert doc.field_default("tx:daemon") == "yes"
+    ctok = doc.field_default("confirm_token")
     assert ctok                                                  # server-staged token
     # the confirmed second submission consumes the token and spawns the bound selection
-    tok2 = body.split('name="_csrf" value="')[1].split('"')[0]
+    tok2 = doc.field_default("_csrf")
     c.post("/auto-install/start", data=_all_form(svc, tok2, source="stable", tx=True,
                                                  confirm_token=ctok))
     assert spawned and spawned[0][0][0]["daemon"] == {"install": True, "version": "stable",
@@ -150,22 +151,22 @@ def test_tx_post_renders_second_stage_confirmation(tmp_path, monkeypatch):
 
 @pytest.mark.contract
 @pytest.mark.safety("RF-TX-opt-in")
-def test_tx_without_tests_refused(tmp_path, monkeypatch):
-    c, svc = _client(tmp_path)
+def test_tx_without_tests_refused(tmp_path, monkeypatch, web, csrf):
+    c, svc = _client(web, tmp_path)
     spawned = []
     monkeypatch.setattr(type(svc), "spawn_auto_install_job",
                         lambda self, *a, **k: (spawned.append(1), ("l", None))[1])
-    tok = _csrf(c)
+    tok = csrf(c, "/auto-install")
     r = c.post("/auto-install/start", data=_all_form(svc, tok, tests=False, tx=True),
                follow_redirects=True)
     assert b"host tests" in r.data and not spawned
 
 
 @pytest.mark.needs_session
-def test_run_view_rows_and_api(tmp_path, monkeypatch):
+def test_run_view_rows_and_api(tmp_path, monkeypatch, web):
     monkeypatch.setattr(ControllerService, "_frozen_ref",
                         lambda self, comp, source: (("f" * 40, "frozen: stub"), ""))
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     svc.auto_install(apply=True, tests=True, emit=lambda s: None)
     body = c.get("/auto-install").data.decode()
     # data-stack= now appears in BOTH the selection table (8 rows) and the results table (8 rows)
@@ -179,7 +180,7 @@ def test_run_view_rows_and_api(tmp_path, monkeypatch):
     assert api2["log"].get("error") == "invalid offset"
 
 
-def test_task_detail_rendered_as_text(tmp_path):
+def test_task_detail_rendered_as_text(tmp_path, web):
     paths = Paths(runtime_root=tmp_path)
     m = ai_mod.new_marker("c" * 32, "install", "pinned", True, False,
                             [{"id": "daemon", "name": "d"}])
@@ -187,27 +188,27 @@ def test_task_detail_rendered_as_text(tmp_path):
     m["stacks"][0]["status"] = "fail"
     m["stacks"][0]["detail"] = "<script>alert(1)</script>"
     assert ai_mod.write_marker(paths, m)
-    body = _client(tmp_path)[0].get("/auto-install").data.decode()
+    body = _client(web, tmp_path)[0].get("/auto-install").data.decode()
     assert "<script>alert(1)</script>" not in body               # escaped, text only
     assert "&lt;script&gt;" in body
 
 
-def test_unsafe_marker_blocks_posts_and_shows_recovery(tmp_path, monkeypatch):
+def test_unsafe_marker_blocks_posts_and_shows_recovery(tmp_path, monkeypatch, web):
     d = tmp_path / "state"
     d.mkdir(parents=True)
     (d / "auto-install.json").write_text("{broken")
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     body = c.get("/auto-install").data.decode()
     assert "unreadable or malformed" in body and "Acknowledge" in body
     ln, err = svc.spawn_auto_install_job(_sel(svc))                      # POST path uses this
     assert ln is None and "acknowledge" in err
 
 
-def test_welcome_banner_tristate(tmp_path):
-    c, _ = _client(tmp_path)
+def test_welcome_banner_tristate(tmp_path, web):
+    c, _ = _client(web, tmp_path)
     assert b"Welcome!" in c.get("/").data                        # fresh
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)  # unmanaged tree
-    c2, _ = _client(tmp_path)
+    c2, _ = _client(web, tmp_path)
     dash = c2.get("/").data.decode()
     assert "Welcome!" not in dash and "needs attention" in dash  # recovery, not welcome
 
@@ -221,12 +222,12 @@ def _no_spawn(monkeypatch, svc):
     return spawned
 
 
-def test_direct_confirm_post_without_staged_state_refused(tmp_path, monkeypatch):
+def test_direct_confirm_post_without_staged_state_refused(tmp_path, monkeypatch, web, csrf):
     # Posting arbitrary hidden values (incl. the legacy confirm_rf) with NO staged
     # server-side confirmation: refusal with zero mutation.
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     spawned = _no_spawn(monkeypatch, svc)
-    tok = _csrf(c)
+    tok = csrf(c, "/auto-install")
     r = c.post("/auto-install/start", data=_all_form(svc, tok, tx=True,
                                                      confirm_rf="yes", confirm_token="f" * 32),
                follow_redirects=True)
@@ -235,44 +236,42 @@ def test_direct_confirm_post_without_staged_state_refused(tmp_path, monkeypatch)
     assert ai_mod.read_reservation(Paths(runtime_root=tmp_path))[0] == "absent"
 
 
-def _staged(c, svc, source="stable"):
-    tok = _csrf(c)
-    body = c.post("/auto-install/start", data=_all_form(svc, tok, source=source, tx=True)).data.decode()
-    ctok = body.split('name="confirm_token" value="')[1].split('"')[0]
-    tok2 = body.split('name="_csrf" value="')[1].split('"')[0]
-    return ctok, tok2
+def _staged(csrf, c, svc, source="stable"):
+    tok = csrf(c, "/auto-install")
+    doc = parse(c.post("/auto-install/start", data=_all_form(svc, tok, source=source, tx=True)).data)
+    return doc.field_default("confirm_token"), doc.field_default("_csrf")
 
 
-def test_confirmation_choice_changes_refused(tmp_path, monkeypatch):
-    c, svc = _client(tmp_path)
+def test_confirmation_choice_changes_refused(tmp_path, monkeypatch, web, csrf):
+    c, svc = _client(web, tmp_path)
     spawned = _no_spawn(monkeypatch, svc)
     # selector changed after confirmation: canonical mismatch -> token consumption refuses
-    ctok, tok2 = _staged(c, svc, source="stable")
+    ctok, tok2 = _staged(csrf, c, svc, source="stable")
     r = c.post("/auto-install/start", data=_all_form(svc, tok2, source="dev", tx=True,
                                                      confirm_token=ctok), follow_redirects=True)
     assert b"RF confirmation refused" in r.data and not spawned
     # tests dropped while TX kept: the coupling rule refuses even earlier (before confirmation)
-    ctok, tok2 = _staged(c, svc, source="stable")
+    ctok, tok2 = _staged(csrf, c, svc, source="stable")
     r = c.post("/auto-install/start", data=_all_form(svc, tok2, source="stable", tests=False,
                                                      tx=True, confirm_token=ctok),
                follow_redirects=True)
     assert b"host tests" in r.data and not spawned
     # TX dropped: a plain non-TX start is legitimate on its own (it does not use the RF confirmation)
-    ctok, tok2 = _staged(c, svc, source="stable")
+    ctok, tok2 = _staged(csrf, c, svc, source="stable")
     c.post("/auto-install/start", data=_all_form(svc, tok2, source="stable", tx=False,
                                                  confirm_token=ctok), follow_redirects=True)
 
 
-def test_expired_and_malformed_confirmation_refused(tmp_path, monkeypatch):
-    c, svc = _client(tmp_path)
+def test_expired_and_malformed_confirmation_refused(tmp_path, monkeypatch, web, csrf):
+    c, svc = _client(web, tmp_path)
     spawned = _no_spawn(monkeypatch, svc)
-    ctok, tok2 = _staged(c, svc)
+    ctok, tok2 = _staged(csrf, c, svc)
     with c.session_transaction() as sess:                        # force expiry
         sess["_auto_install_tx_confirm"] = dict(sess["_auto_install_tx_confirm"], exp=1.0)
     r = c.post("/auto-install/start", data=_all_form(svc, tok2, source="stable", tx=True,
                                                      confirm_token=ctok), follow_redirects=True)
     assert b"expired" in r.data and not spawned
-    ctok, tok2 = _staged(c, svc)
+    ctok, tok2 = _staged(csrf, c, svc)
     with c.session_transaction() as sess:                        # malformed staged state
         sess["_auto_install_tx_confirm"] = "garbage"
     r2 = c.post("/auto-install/start", data=_all_form(svc, tok2, source="stable", tx=True,
@@ -280,10 +279,10 @@ def test_expired_and_malformed_confirmation_refused(tmp_path, monkeypatch):
     assert b"RF confirmation refused" in r2.data and not spawned
 
 
-def test_wrong_token_refused_and_consumes_staged_state(tmp_path, monkeypatch):
-    c, svc = _client(tmp_path)
+def test_wrong_token_refused_and_consumes_staged_state(tmp_path, monkeypatch, web, csrf):
+    c, svc = _client(web, tmp_path)
     spawned = _no_spawn(monkeypatch, svc)
-    ctok, tok2 = _staged(c, svc)
+    ctok, tok2 = _staged(csrf, c, svc)
     r = c.post("/auto-install/start", data=_all_form(svc, tok2, source="stable", tx=True,
                                                      confirm_token="0" * 32), follow_redirects=True)
     assert b"RF confirmation refused" in r.data and not spawned
@@ -295,7 +294,7 @@ def test_wrong_token_refused_and_consumes_staged_state(tmp_path, monkeypatch):
 
 
 @pytest.mark.contract
-def test_dead_reservation_shows_ack_button_and_recovers(tmp_path):
+def test_dead_reservation_shows_ack_button_and_recovers(tmp_path, web, csrf):
     # Dead reservation evidence with an ABSENT run marker: the page still shows the
     # acknowledgement control and the POST recovery works.
     paths = Paths(runtime_root=tmp_path)
@@ -303,10 +302,10 @@ def test_dead_reservation_shows_ack_button_and_recovers(tmp_path):
             "argv_fp": "x", "argv_len": 1}
     ok, _ = ai_mod.write_reservation(paths, "9" * 32, 999999, dead, phase="spawned")
     assert ok
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     body = c.get("/auto-install").data.decode()
     assert "Acknowledge" in body and "reservation" in body
-    tok = _csrf(c)
+    tok = csrf(c, "/auto-install")
     r = c.post("/auto-install/ack", data={"_csrf": tok}, follow_redirects=True)
     assert b"acknowledged" in r.data
     assert ai_mod.read_reservation(paths)[0] == "absent"
@@ -315,11 +314,11 @@ def test_dead_reservation_shows_ack_button_and_recovers(tmp_path):
 
 @pytest.mark.contract
 @pytest.mark.safety("RF-TX-opt-in")
-def test_confirmed_tx_post_refused_without_callsign(tmp_path):
+def test_confirmed_tx_post_refused_without_callsign(tmp_path, web, csrf):
     # The RF disclosure page may render, but the CONFIRMED POST refuses before any child
     # is spawned when no callsign is configured (spawn_auto_install_job gate) — zero mutation.
-    c, svc = _client(tmp_path)                                   # no callsign configured
-    ctok, tok2 = _staged(c, svc, source="pinned")                # disclosure still renders
+    c, svc = _client(web, tmp_path)                                   # no callsign configured
+    ctok, tok2 = _staged(csrf, c, svc, source="pinned")                # disclosure still renders
     r = c.post("/auto-install/start", data=_all_form(svc, tok2, source="pinned", tx=True,
                                                      confirm_token=ctok), follow_redirects=True)
     assert b"callsign" in r.data                                 # typed refusal shown
@@ -327,27 +326,27 @@ def test_confirmed_tx_post_refused_without_callsign(tmp_path):
     assert svc.auto_install_status() is None                             # no marker either
 
 
-def test_unbootstrapped_root_web_post_refuses_zero_mutation(tmp_path):
+def test_unbootstrapped_root_web_post_refuses_zero_mutation(tmp_path, web, csrf):
     absent = tmp_path / "absent-root"
     svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
                             paths=Paths(runtime_root=absent))
-    c = create_app(service_factory=lambda: svc).test_client()
-    tok = _csrf(c)
+    c = web(service_factory=lambda: svc)
+    tok = csrf(c, "/auto-install")
     r = c.post("/auto-install/start", data={"_csrf": tok, "source": "pinned",
                                            "tests": "yes"}, follow_redirects=True)
     assert b"not bootstrapped" in r.data
     assert not absent.exists()                                   # ZERO runtime mutation
 
 
-def test_orphan_risk_page_requires_confirmation_checkbox(tmp_path):
+def test_orphan_risk_page_requires_confirmation_checkbox(tmp_path, web, csrf):
     paths = Paths(runtime_root=tmp_path)
     assert ai_mod.write_orphan_risk(paths, "8" * 32, 4242,
                                       "cessation unproven", None)
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     body = c.get("/auto-install").data.decode()
     assert "ORPHAN RISK" in body and "4242" in body              # pid + reason surfaced
     assert 'name="confirm_orphan"' in body                       # explicit confirmation
-    tok = _csrf(c)
+    tok = csrf(c, "/auto-install")
     r = c.post("/auto-install/ack", data={"_csrf": tok}, follow_redirects=True)
     assert b"confirmation" in r.data                             # refused without it
     assert ai_mod.read_reservation(paths)[0] == "valid"
@@ -358,7 +357,7 @@ def test_orphan_risk_page_requires_confirmation_checkbox(tmp_path):
 
 
 @pytest.mark.needs_session
-def test_starting_card_shown_after_spawn_before_marker(tmp_path):
+def test_starting_card_shown_after_spawn_before_marker(tmp_path, web):
     # LIVE FINDING: after the POST nothing appeared until the driver wrote its marker
     # (double-clicks -> 'already reserved'). A live reservation with no marker now
     # renders an immediate 'Run starting…' card with polling armed.
@@ -367,20 +366,20 @@ def test_starting_card_shown_after_spawn_before_marker(tmp_path):
     ok, _ = ai_mod.write_reservation(Paths(runtime_root=tmp_path), "7" * 32,
                                        os.getpid(), ident, phase="spawned")
     assert ok
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     body = c.get("/auto-install").data.decode()
     assert "Run starting" in body and 'id="ai-run"' in body
     assert "auto_install.js" in body                                     # polling armed
 
 
-def test_auto_install_page_defaults_to_dev(tmp_path):
-    c, _ = _client(tmp_path)
+def test_auto_install_page_defaults_to_dev(tmp_path, web):
+    c, _ = _client(web, tmp_path)
     body = c.get("/auto-install").data.decode()
     assert 'value="dev" selected' in body
 
 
 @pytest.mark.needs_session
-def test_starting_card_shown_in_spawning_phase(tmp_path):
+def test_starting_card_shown_in_spawning_phase(tmp_path, web):
     # The POST redirect lands within milliseconds — while the reservation is still in
     # phase 'spawning'. The card must show then too (LIVE FINDING: fast browsers got a
     # static page and had to reload manually).
@@ -389,14 +388,14 @@ def test_starting_card_shown_in_spawning_phase(tmp_path):
     ok, _ = ai_mod.write_reservation(Paths(runtime_root=tmp_path), "8" * 32,
                                        os.getpid(), ident, phase="spawning")
     assert ok
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     body = c.get("/auto-install").data.decode()
     assert "Run starting" in body and 'data-run-expect="' + "8" * 32 + '"' in body
     assert "auto_install.js" in body
 
 
 @pytest.mark.needs_session
-def test_starting_card_shown_over_old_terminal_marker(tmp_path):
+def test_starting_card_shown_over_old_terminal_marker(tmp_path, web):
     # LIVE FINDING (user): after a PREVIOUS completed run its terminal marker is still
     # on disk — the page showed only the old collapsed card, no poller, and the new
     # run's table needed a manual reload. A live reservation for a DIFFERENT run over a
@@ -412,7 +411,7 @@ def test_starting_card_shown_over_old_terminal_marker(tmp_path):
     ok, _ = ai_mod.write_reservation(paths, "b" * 32, os.getpid(), ident,
                                        phase="spawning")
     assert ok
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     body = c.get("/auto-install").data.decode()
     assert "Run starting" in body
     assert 'data-run-expect="' + "b" * 32 + '"' in body
@@ -442,7 +441,7 @@ def _register_log(paths, m, run_id, base, title, content=None):
     return log
 
 
-def test_component_log_stream_frames_and_advances(tmp_path):
+def test_component_log_stream_frames_and_advances(tmp_path, web):
     # Ordered, run-owned descriptors: ASCII-framed titles, drained log advances to the
     # successor, live tail keeps the cursor — all from the marker, not mtime/glob.
     paths = Paths(runtime_root=tmp_path)
@@ -452,7 +451,7 @@ def test_component_log_stream_frames_and_advances(tmp_path):
                   "daemon build output\n")
     _register_log(paths, m, rid, "build-loraham-kiss-tnc", "LoRaHAM KISS — Build log",
                   "kiss build ok\n")
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     out = svc.auto_install_component_log_chunk(rid, 0, 0)
     assert "+====" in out["data"]                                # ASCII frame
     assert "LoRaHAM Daemon" in out["data"] and "Build log" in out["data"]
@@ -467,15 +466,15 @@ def test_component_log_stream_frames_and_advances(tmp_path):
     assert "daemon build output" not in out2["data"]             # no re-send
 
 
-def test_prior_run_generic_log_never_appears(tmp_path):
-    # P1: a prior run left generic build-<comp>.log files; the new run's descriptors point
+def test_prior_run_generic_log_never_appears(tmp_path, web):
+    # a prior run left generic build-<comp>.log files; the new run's descriptors point
     # at RUN-SPECIFIC names, so the prior content can never appear in the new run's stream.
     paths = Paths(runtime_root=tmp_path)
     logs = tmp_path / "logs"; logs.mkdir()
     (logs / "build-loraham-daemon.log").write_text("PRIOR RUN CONTENT\n")   # old generic
     rid = "c" * 32
     m = _seed_running_marker(paths, rid)
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     # new run started, NO component log registered yet -> stream contains no prior text
     out = svc.auto_install_component_log_chunk(rid, 0, 0)
     assert "PRIOR RUN CONTENT" not in out["data"]
@@ -488,8 +487,8 @@ def test_prior_run_generic_log_never_appears(tmp_path):
     assert "PRIOR RUN CONTENT" not in out["data"]
 
 
-def test_immediately_consecutive_run_no_prior_evidence(tmp_path):
-    # P1: a completed prior run HAS component logs; a new run begins within the same
+def test_immediately_consecutive_run_no_prior_evidence(tmp_path, web):
+    # a completed prior run HAS component logs; a new run begins within the same
     # second (former 2s mtime window). Before the new run creates its own log, its API
     # response contains none of the prior run's text or frame.
     paths = Paths(runtime_root=tmp_path)
@@ -502,7 +501,7 @@ def test_immediately_consecutive_run_no_prior_evidence(tmp_path):
     # new run, same wall-clock second, brand-new run_id, empty component_logs
     rid = "c" * 32
     _seed_running_marker(paths, rid)
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     out = svc.auto_install_component_log_chunk(rid, 0, 0)
     assert out["data"] == "" and "PRIOR OUTPUT" not in out["data"]
     assert "+====" not in out["data"]                            # no frame from prior run
@@ -510,8 +509,8 @@ def test_immediately_consecutive_run_no_prior_evidence(tmp_path):
     assert svc._auto_install_component_log_list(svc.auto_install_status()) == []
 
 
-def test_component_log_cursor_stable_with_identical_timestamps(tmp_path):
-    # P1: ordering comes from the durable list, not timestamps — two logs sharing an
+def test_component_log_cursor_stable_with_identical_timestamps(tmp_path, web):
+    # ordering comes from the durable list, not timestamps — two logs sharing an
     # mtime keep a stable order and never reorder an already-emitted index.
     import os
     paths = Paths(runtime_root=tmp_path)
@@ -523,7 +522,7 @@ def test_component_log_cursor_stable_with_identical_timestamps(tmp_path):
     same = 1700000000.0
     os.utime(paths.runtime_root / "logs" / a, (same, same))
     os.utime(paths.runtime_root / "logs" / b, (same, same))       # identical mtime
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     lst = svc._auto_install_component_log_list(svc.auto_install_status())
     assert [x[1] for x in lst] == [a, b]                          # registration order kept
     # streaming index 0 then advancing never reorders
@@ -531,20 +530,20 @@ def test_component_log_cursor_stable_with_identical_timestamps(tmp_path):
     assert out["data"].index("radiolib") < out["data"].index("daemon")
 
 
-def test_component_log_stream_rejects_wrong_run(tmp_path):
+def test_component_log_stream_rejects_wrong_run(tmp_path, web):
     paths = Paths(runtime_root=tmp_path)
     _seed_running_marker(paths)
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     out = svc.auto_install_component_log_chunk("f" * 32, 0, 0)
     assert out == {"index": 0, "offset": 0, "data": ""}
 
 
-def test_api_and_template_carry_component_log_window(tmp_path, monkeypatch):
+def test_api_and_template_carry_component_log_window(tmp_path, monkeypatch, web):
     paths = Paths(runtime_root=tmp_path)
     _seed_running_marker(paths)
     (tmp_path / "logs").mkdir()
     (tmp_path / "logs" / ("auto-install-" + "c" * 8 + ".log")).write_text("x")
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     monkeypatch.setattr(type(svc), "auto_install_running", lambda self: True)
     r = c.get("/api/auto-install?offset=0&ci=0&co=0").get_json()
     assert "complog" in r and set(r["complog"]) == {"index", "offset", "data"}
@@ -562,7 +561,7 @@ def _seed_completed_marker(paths, run_id="a" * 32):
     return m
 
 
-def test_historical_run_seeds_component_log_window(tmp_path):
+def test_historical_run_seeds_component_log_window(tmp_path, web):
     # The collapsed "Last run" card now carries the SAME detailed per-component window as a live
     # run — seeded server-side (no JS), HTML-escaped, exactly one #ai-complog.
     paths = Paths(runtime_root=tmp_path)
@@ -572,7 +571,7 @@ def test_historical_run_seeds_component_log_window(tmp_path):
                   "daemon build output\n")
     _register_log(paths, m, rid, "test-loraham-daemon", "LoRaHAM Daemon — Test log",
                   "test says <b>hi</b>\n")                        # untrusted HTML-ish content
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     body = c.get("/auto-install").data.decode()
     assert "Last run " + "a" * 8 in body                          # collapsed historical card
     assert body.count('id="ai-complog"') == 1                   # exactly one window
@@ -582,7 +581,7 @@ def test_historical_run_seeds_component_log_window(tmp_path):
     assert "test says <b>hi</b>" not in body
 
 
-def test_component_log_seed_is_byte_capped(tmp_path):
+def test_component_log_seed_is_byte_capped(tmp_path, web):
     # A huge build log must not bloat the page: the seed is front-trimmed to the cap with a notice.
     from lhpc.core.services import ControllerService
     paths = Paths(runtime_root=tmp_path)
@@ -591,24 +590,24 @@ def test_component_log_seed_is_byte_capped(tmp_path):
     cap = ControllerService._COMPLOG_SEED_MAX_BYTES
     _register_log(paths, m, rid, "build-loraham-daemon", "big build",
                   ("line\n" * ((cap // 5) + 60000)))             # comfortably over the cap
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     seed = svc.auto_install_component_log_seed(rid)
     assert len(seed) <= cap                                       # bounded
     assert "[… older output trimmed …]" in seed                  # visible truncation notice
 
 
-def test_running_run_complog_empty_and_keeps_js(tmp_path, monkeypatch):
+def test_running_run_complog_empty_and_keeps_js(tmp_path, monkeypatch, web):
     # A live run: the window is present but NOT pre-seeded (auto_install.js fills it); JS still loaded.
     paths = Paths(runtime_root=tmp_path)
     _seed_running_marker(paths)
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     monkeypatch.setattr(type(svc), "auto_install_running", lambda self: True)
     body = c.get("/auto-install").data.decode()
     assert 'id="ai-complog"></pre>' in body                     # present but empty (no seed)
     assert "auto_install.js" in body                                      # live poller still loaded
 
 
-def test_spawn_refusal_output_is_shown(tmp_path):
+def test_spawn_refusal_output_is_shown(tmp_path, web):
     # LIVE FINDING: a spawned driver that REFUSES pre-claim (components running) exited
     # with its reason only in its own log — the page silently kept the starting card.
     # /auto-install?spawn=<run_id> now shows that run's output as a refusal card.
@@ -617,13 +616,13 @@ def test_spawn_refusal_output_is_shown(tmp_path):
     logs.mkdir(parents=True)
     (logs / f"auto-install-{rid[:8]}.log").write_text(
         "ERR   Refusing to start the auto-install run: component(s) are running\n")
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     body = c.get(f"/auto-install?spawn={rid}").data.decode()
     assert "Run could not start" in body
     assert "Refusing to start the auto-install run" in body
 
 
-def test_spawn_param_ignored_when_marker_matches(tmp_path):
+def test_spawn_param_ignored_when_marker_matches(tmp_path, web):
     # Once the marker for that run exists, the ?spawn param must NOT show a refusal.
     rid = "c" * 32
     paths = Paths(runtime_root=tmp_path)
@@ -631,15 +630,15 @@ def test_spawn_param_ignored_when_marker_matches(tmp_path):
     logs = tmp_path / "logs"
     logs.mkdir(parents=True)
     (logs / f"auto-install-{rid[:8]}.log").write_text("normal run output\n")
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     body = c.get(f"/auto-install?spawn={rid}").data.decode()
     assert "Run could not start" not in body
 
 
 @pytest.mark.needs_session
-def test_api_reports_spawn_liveness(tmp_path):
+def test_api_reports_spawn_liveness(tmp_path, web):
     from lhpc.core import procident
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     r = c.get("/api/auto-install?offset=0").get_json()
     assert r["spawn_live"] is False                              # nothing reserved
     ident = procident.proc_identity(os.getpid())
@@ -650,7 +649,7 @@ def test_api_reports_spawn_liveness(tmp_path):
     assert r["spawn_live"] is True                               # live spawn visible
 
 
-def test_component_log_headers_emitted_exactly_once(tmp_path):
+def test_component_log_headers_emitted_exactly_once(tmp_path, web):
     # An EMPTY registered log (descriptor exists, file not yet written) must not re-frame
     # its header on every poll; the frame rides with the file's first bytes.
     paths = Paths(runtime_root=tmp_path)
@@ -661,7 +660,7 @@ def test_component_log_headers_emitted_exactly_once(tmp_path):
     (tmp_path / "logs").mkdir(exist_ok=True)
     f = tmp_path / "logs" / log
     f.write_text("")                                             # live tail, no bytes yet
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     ci = co = 0
     for _ in range(3):
         out = svc.auto_install_component_log_chunk(rid, ci, co)
@@ -676,7 +675,7 @@ def test_component_log_headers_emitted_exactly_once(tmp_path):
     assert out["data"] == ""                                     # no re-header, no re-send
 
 
-def test_component_log_list_is_append_only_from_marker(tmp_path):
+def test_component_log_list_is_append_only_from_marker(tmp_path, web):
     # The list is derived ONLY from the marker's durable descriptors, in registration
     # order — a newly registered log only ever appends at the END; earlier indices are
     # identical across polls regardless of build-vs-manifest ordering or timestamps.
@@ -685,7 +684,7 @@ def test_component_log_list_is_append_only_from_marker(tmp_path):
     m = _seed_running_marker(paths, rid)
     _register_log(paths, m, rid, "build-loraham-kiss-tnc", "LoRaHAM KISS — Build log",
                   "kiss\n")                                      # registered FIRST
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     first = svc._auto_install_component_log_list(svc.auto_install_status())
     _register_log(paths, m, rid, "build-loraham-daemon", "LoRaHAM Daemon — Build log",
                   "daemon\n")                                    # registered SECOND
@@ -696,10 +695,10 @@ def test_component_log_list_is_append_only_from_marker(tmp_path):
         ai_mod.component_log_name(rid, "build-loraham-daemon")]
 
 
-# --- P2: component-log GET/API must fail closed, never HTTP 500, never follow unsafe -----------
+# --- component-log GET/API must fail closed, never HTTP 500, never follow unsafe -----------
 
-def test_api_auto_install_200_with_symlinked_logs_dir(tmp_path):
-    # P2: a symlinked logs/ parent must never raise through the GET route.
+def test_api_auto_install_200_with_symlinked_logs_dir(tmp_path, web):
+    # a symlinked logs/ parent must never raise through the GET route.
     import os
     paths = Paths(runtime_root=tmp_path)
     rid = "c" * 32
@@ -710,7 +709,7 @@ def test_api_auto_install_200_with_symlinked_logs_dir(tmp_path):
     outside = Path(tempfile.mkdtemp())                            # genuinely OUTSIDE runtime root
     (outside / ai_mod.component_log_name(rid, "build-loraham-daemon")).write_text("SECRET\n")
     os.symlink(outside, tmp_path / "logs")                        # logs/ -> outside
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     r = c.get(f"/api/auto-install?run_id={rid}&ci=0&co=0")
     assert r.status_code == 200                                   # no 500
     d = r.get_json()
@@ -718,8 +717,8 @@ def test_api_auto_install_200_with_symlinked_logs_dir(tmp_path):
     assert "SECRET" not in json.dumps(d)                         # symlinked dir NOT followed
 
 
-def test_api_auto_install_200_with_unsafe_component_log_leaf(tmp_path):
-    # P2: a component-log LEAF swapped to a symlink pointing outside must not be read;
+def test_api_auto_install_200_with_unsafe_component_log_leaf(tmp_path, web):
+    # a component-log LEAF swapped to a symlink pointing outside must not be read;
     # the section returns a bounded, valid safe state (never a 500, never the target).
     import os
     paths = Paths(runtime_root=tmp_path)
@@ -732,7 +731,7 @@ def test_api_auto_install_200_with_unsafe_component_log_leaf(tmp_path):
     log = _register_log(paths, m, rid, "build-loraham-daemon", "LoRaHAM Daemon — Build log",
                         content=None)
     os.symlink(secret, logs / log)                               # leaf is a symlink -> outside
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     r = c.get(f"/api/auto-install?run_id={rid}&ci=0&co=0")
     assert r.status_code == 200
     d = r.get_json()
@@ -745,25 +744,25 @@ def test_api_auto_install_200_with_unsafe_component_log_leaf(tmp_path):
     assert svc._read_named_log_chunk(log, 0, 1024)[0] == -1
 
 
-def test_auto_install_page_200_and_no_500_paths(tmp_path):
-    # P2: /auto-install remains GET-safe (HTTP 200) even with a live marker present.
+def test_auto_install_page_200_and_no_500_paths(tmp_path, web):
+    # /auto-install remains GET-safe (HTTP 200) even with a live marker present.
     paths = Paths(runtime_root=tmp_path)
     _seed_running_marker(paths, "c" * 32)
-    c, _ = _client(tmp_path)
+    c, _ = _client(web, tmp_path)
     assert c.get("/auto-install").status_code == 200
 
 
-def test_read_named_log_chunk_rejects_traversal_names(tmp_path):
-    # P2: path CONSTRUCTION failures (separators/..) fail closed, never raise.
-    c, svc = _client(tmp_path)
+def test_read_named_log_chunk_rejects_traversal_names(tmp_path, web):
+    # path CONSTRUCTION failures (separators/..) fail closed, never raise.
+    c, svc = _client(web, tmp_path)
     for bad in ("../../etc/passwd", "a/b.log", "..", "x\x00y.log"):
         assert svc._read_named_log_chunk(bad, 0, 1024) == (-1, "", 0)
 
 
-# --- P1: component logs bound to the FULL 32-hex run id (no 8-hex-prefix aliasing) -------------
+# --- component logs bound to the FULL 32-hex run id (no 8-hex-prefix aliasing) -------------
 
-def test_full_run_id_binding_no_eight_hex_alias(tmp_path):
-    # P1: two DISTINCT run ids sharing their first eight hex chars must not alias the same
+def test_full_run_id_binding_no_eight_hex_alias(tmp_path, web):
+    # two DISTINCT run ids sharing their first eight hex chars must not alias the same
     # component-log names, and run B's stream must never show run A's retained log.
     run_a = "aaaaaaaa" + "1" * 24                                # first 8 = aaaaaaaa
     run_b = "aaaaaaaa" + "2" * 24                                # same first 8, diff suffix
@@ -782,14 +781,14 @@ def test_full_run_id_binding_no_eight_hex_alias(tmp_path):
     assert not ai_mod.is_component_log_for(run_b, log_a)       # B does not own A's name
     # run B begins (same first 8), NO component log yet
     _seed_running_marker(paths, run_b)
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     out = svc.auto_install_component_log_chunk(run_b, 0, 0)
     assert out["data"] == ""                                     # neither A's text ...
     assert "RUN-A OUTPUT" not in out["data"] and "+====" not in out["data"]  # ... nor A's frame
     assert svc._auto_install_component_log_list(svc.auto_install_status()) == []  # A cannot alter B's list
 
 
-# --- P2: PRIMARY run-log GET path is fail-closed too (page + API), external target ------------
+# --- PRIMARY run-log GET path is fail-closed too (page + API), external target ------------
 
 def _external_logs_symlink(tmp_path, run_id, secret):
     """Point tmp_path/logs at a directory genuinely OUTSIDE the runtime root that holds a
@@ -801,25 +800,25 @@ def _external_logs_symlink(tmp_path, run_id, secret):
     return outside
 
 
-def test_primary_auto_install_log_fail_closed_direct(tmp_path):
-    # P2: auto_install_log_chunk must not raise and must not read an escaping-symlink target.
+def test_primary_auto_install_log_fail_closed_direct(tmp_path, web):
+    # auto_install_log_chunk must not raise and must not read an escaping-symlink target.
     rid = "c" * 32
     _seed_running_marker(Paths(runtime_root=tmp_path), rid)
     _external_logs_symlink(tmp_path, rid, "PRIMARY-SECRET-XYZ")
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     res = svc.auto_install_log_chunk(rid, 0)
     assert isinstance(res, dict) and res.get("error")           # explicit safe error
     assert "PRIMARY-SECRET-XYZ" not in json.dumps(res)          # target never read
 
 
-def test_api_auto_install_200_with_escaping_primary_log(tmp_path):
-    # P2: /api/auto-install stays 200 + valid JSON; neither log nor complog leaks the secret.
+def test_api_auto_install_200_with_escaping_primary_log(tmp_path, web):
+    # /api/auto-install stays 200 + valid JSON; neither log nor complog leaks the secret.
     rid = "c" * 32
     m = _seed_running_marker(Paths(runtime_root=tmp_path), rid)
     _register_log(Paths(runtime_root=tmp_path), m, rid, "build-loraham-daemon",
                   "LoRaHAM Daemon — Build log", content=None)
     _external_logs_symlink(tmp_path, rid, "PRIMARY-SECRET-XYZ")
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     r = c.get("/api/auto-install?ci=0&co=0")
     assert r.status_code == 200                                  # no 500
     d = r.get_json()
@@ -828,8 +827,8 @@ def test_api_auto_install_200_with_escaping_primary_log(tmp_path):
     assert d["log"].get("error")                                # primary log: safe error
 
 
-def test_auto_install_page_200_with_escaping_primary_log(tmp_path):
-    # P2: /auto-install page stays 200 with an escaping logs/ symlink (interrupted marker).
+def test_auto_install_page_200_with_escaping_primary_log(tmp_path, web):
+    # /auto-install page stays 200 with an escaping logs/ symlink (interrupted marker).
     rid = "d" * 32
     paths = Paths(runtime_root=tmp_path)
     m = ai_mod.new_marker(rid, "install", "dev", True, False,
@@ -837,36 +836,36 @@ def test_auto_install_page_200_with_escaping_primary_log(tmp_path):
     m["state"] = "running"                                       # dead -> read-derived interrupted
     assert ai_mod.write_marker(paths, m)
     _external_logs_symlink(tmp_path, rid, "PRIMARY-SECRET-XYZ")
-    c, _ = _client(tmp_path)
+    c, _ = _client(web, tmp_path)
     resp = c.get("/auto-install")
     assert resp.status_code == 200
     assert b"PRIMARY-SECRET-XYZ" not in resp.data
 
 
-# --- P2: prune_logs() must be fail-closed for an escaping/unsafe logs/ parent -----------------
+# --- prune_logs() must be fail-closed for an escaping/unsafe logs/ parent -----------------
 
-def test_prune_logs_fail_closed_escaping_symlink(tmp_path):
-    # P2: a logs/ symlink escaping the runtime root must not raise from prune_logs()
+def test_prune_logs_fail_closed_escaping_symlink(tmp_path, web):
+    # a logs/ symlink escaping the runtime root must not raise from prune_logs()
     # (the logs-root resolution was outside the guard and could 500 via build()/
     # spawn_web_job()); the external target is never read or deleted.
     import tempfile
     outside = Path(tempfile.mkdtemp())
     victim = outside / "old-external.log"; victim.write_text("EXTERNAL-SECRET\n")
     os.symlink(outside, tmp_path / "logs")                       # logs/ -> outside
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     n = svc.prune_logs()                                         # must NOT raise
     assert isinstance(n, int) and n == 0                         # safe result, deleted nothing
     assert victim.exists() and victim.read_text() == "EXTERNAL-SECRET\n"   # untouched
 
 
-def test_prune_logs_missing_dir_is_safe(tmp_path):
-    # P2: an absent logs/ directory is an ordinary OSError, handled safely.
-    c, svc = _client(tmp_path)                                   # no logs/ created
+def test_prune_logs_missing_dir_is_safe(tmp_path, web):
+    # an absent logs/ directory is an ordinary OSError, handled safely.
+    c, svc = _client(web, tmp_path)                                   # no logs/ created
     assert svc.prune_logs() == 0
 
 
-def test_build_reaching_prune_returns_typed_not_500(tmp_path):
-    # P2 requirement #3: a normal build path that reaches prune_logs() with an escaping
+def test_build_reaching_prune_returns_typed_not_500(tmp_path, web):
+    # a normal build path that reaches prune_logs() with an escaping
     # logs/ symlink returns a typed ActionResult, never raising (which would surface as
     # HTTP 500 on the web mutation path).
     import tempfile
@@ -874,14 +873,14 @@ def test_build_reaching_prune_returns_typed_not_500(tmp_path):
     (tmp_path / "src" / "loraham-voice").mkdir(parents=True)
     outside = Path(tempfile.mkdtemp()); (outside / "x.log").write_text("EXTERNAL-SECRET\n")
     os.symlink(outside, tmp_path / "logs")
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     res = svc.build("voice", apply=True)                         # reaches prune_logs()
     assert isinstance(res, ActionResult)                        # typed, not a raise/500
     assert (outside / "x.log").read_text() == "EXTERNAL-SECRET\n"   # nothing external touched
 
 
-def test_get_routes_200_with_escaping_logs_during_run(tmp_path):
-    # P2 requirement #4: /auto-install and /api/auto-install stay 200 and never leak the
+def test_get_routes_200_with_escaping_logs_during_run(tmp_path, web):
+    # /auto-install and /api/auto-install stay 200 and never leak the
     # external content, even with an escaping logs/ symlink alongside a live marker.
     import tempfile
     rid = "c" * 32
@@ -889,7 +888,7 @@ def test_get_routes_200_with_escaping_logs_during_run(tmp_path):
     outside = Path(tempfile.mkdtemp())
     (outside / (ai_mod.log_name_for(rid) + ".log")).write_text("EXTERNAL-SECRET\n")
     os.symlink(outside, tmp_path / "logs")
-    c, _ = _client(tmp_path)
+    c, _ = _client(web, tmp_path)
     page = c.get("/auto-install")
     api = c.get("/api/auto-install?ci=0&co=0")
     assert page.status_code == 200 and api.status_code == 200
@@ -897,8 +896,8 @@ def test_get_routes_200_with_escaping_logs_during_run(tmp_path):
     assert "EXTERNAL-SECRET" not in json.dumps(api.get_json())
 
 
-def test_prune_logs_normal_retention_preserves_live_auto_install_logs(tmp_path):
-    # P2 requirement #5: a SAFE runtime-owned logs/ still prunes eligible old logs by the
+def test_prune_logs_normal_retention_preserves_live_auto_install_logs(tmp_path, web):
+    # a SAFE runtime-owned logs/ still prunes eligible old logs by the
     # count budget while preserving the LIVE auto-install run's component logs (full-run prefix).
     import time as _t
     paths = Paths(runtime_root=tmp_path)
@@ -906,7 +905,7 @@ def test_prune_logs_normal_retention_preserves_live_auto_install_logs(tmp_path):
     m = _seed_running_marker(paths, rid)
     live = _register_log(paths, m, rid, "build-loraham-daemon",
                          "LoRaHAM Daemon — Build log", "live\n")   # live auto-install component log
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     logs = tmp_path / "logs"
     now = _t.time()
     # create many old unrelated runtime logs (exceed the retention count budget)
@@ -919,13 +918,13 @@ def test_prune_logs_normal_retention_preserves_live_auto_install_logs(tmp_path):
     assert (logs / live).exists()                                # live auto-install log PRESERVED
 
 
-# --- P2-A/P2-B: prune retention must skip non-regular entries & fail-closed ephemeral dirs -----
+# --- prune retention must skip non-regular entries & fail-closed ephemeral dirs -----
 
-def test_prune_retains_directory_named_log(tmp_path):
+def test_prune_retains_directory_named_log(tmp_path, web):
     # P2-A: a runtime-owned DIRECTORY named `bad.log` must not raise (os.unlink would raise
     # IsADirectoryError) and must not be deleted; eligible old REGULAR logs still prune.
     import time as _t
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     logs = tmp_path / "logs"; logs.mkdir()
     (logs / "bad.log").mkdir()                                   # directory, not a file
     now = _t.time()
@@ -937,10 +936,10 @@ def test_prune_retains_directory_named_log(tmp_path):
     assert (logs / "bad.log").is_dir()                          # directory retained, untouched
 
 
-def test_prune_non_regular_entries_retained(tmp_path):
+def test_prune_non_regular_entries_retained(tmp_path, web):
     # P2-A: a FIFO named `*.log` is non-regular -> never a deletion candidate, no raise.
     import time as _t
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     logs = tmp_path / "logs"; logs.mkdir()
     fifo = logs / "pipe.log"
     try:
@@ -955,13 +954,13 @@ def test_prune_non_regular_entries_retained(tmp_path):
     assert removed > 0 and fifo.exists()                        # fifo retained, no raise
 
 
-def test_prune_deletion_refusal_not_counted(tmp_path, monkeypatch):
+def test_prune_deletion_refusal_not_counted(tmp_path, monkeypatch, web):
     # P2-A: a deletion that raises (OSError/PathContainmentError — e.g. a leaf swapped to a
     # symlink between stat and unlink) is retained, does not raise, and is NOT counted.
     import time as _t
     from lhpc.core import runtime_fs
     from lhpc.core.paths import PathContainmentError
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     logs = tmp_path / "logs"; logs.mkdir()
     now = _t.time()
     for i in range(svc.LOG_RETENTION + 6):
@@ -979,11 +978,11 @@ def test_prune_deletion_refusal_not_counted(tmp_path, monkeypatch):
     assert removed == calls["n"] - 1                            # the refused delete not counted
 
 
-def test_prune_ephemeral_escaping_dirs_fail_closed(tmp_path):
+def test_prune_ephemeral_escaping_dirs_fail_closed(tmp_path, web):
     # P2-B: state/jobs and state/post each symlinked to a genuinely external dir must not
     # make prune_logs() raise; external sentinel files remain untouched.
     import tempfile
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     (tmp_path / "logs").mkdir()
     (tmp_path / "state").mkdir()
     out_jobs = Path(tempfile.mkdtemp()); (out_jobs / "s.py").write_text("SENT-JOBS\n")
@@ -995,10 +994,10 @@ def test_prune_ephemeral_escaping_dirs_fail_closed(tmp_path):
     assert (out_post / "s.py").read_text() == "SENT-POST\n"
 
 
-def test_prune_ephemeral_normal_pruning_still_works(tmp_path):
+def test_prune_ephemeral_normal_pruning_still_works(tmp_path, web):
     # P2-B: a SAFE state/jobs still prunes eligible old regular launcher files.
     import time as _t
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     (tmp_path / "logs").mkdir()
     jdir = tmp_path / "state" / "jobs"; jdir.mkdir(parents=True)
     now = _t.time()
@@ -1011,8 +1010,8 @@ def test_prune_ephemeral_normal_pruning_still_works(tmp_path):
     assert (jdir / "not-a-launcher.dir.py").is_dir()            # non-regular retained
 
 
-def test_build_reaching_prune_typed_under_bad_log_dir(tmp_path):
-    # P2 requirement #4: an applied build reaching prune_logs() with a `bad.log` directory
+def test_build_reaching_prune_typed_under_bad_log_dir(tmp_path, web):
+    # an applied build reaching prune_logs() with a `bad.log` directory
     # (and escaping ephemeral dirs) returns a typed ActionResult, never raising.
     import tempfile
     from lhpc.core.services import ActionResult
@@ -1022,13 +1021,13 @@ def test_build_reaching_prune_typed_under_bad_log_dir(tmp_path):
     (tmp_path / "state").mkdir()
     out = Path(tempfile.mkdtemp()); (out / "s.py").write_text("EXT\n")
     os.symlink(out, tmp_path / "state" / "jobs")
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     res = svc.build("voice", apply=True)                        # reaches prune_logs()
     assert isinstance(res, ActionResult)                       # typed, not a raise/500
     assert (logs / "bad.log").is_dir() and (out / "s.py").exists()
 
 
-def test_component_log_not_created_step_waits_no_repeat_frame(tmp_path):
+def test_component_log_not_created_step_waits_no_repeat_frame(tmp_path, web):
     # BUG: a multi-step component registers ALL its step logs up front, but they are
     # created one at a time. A not-yet-created (ABSENT) step must be a WAIT frontier —
     # never framed, never advanced past. Previously absent was treated as "unavailable",
@@ -1043,7 +1042,7 @@ def test_component_log_not_created_step_waits_no_repeat_frame(tmp_path):
         m["component_logs"].append({"title": f"MeshCom QEMU — Build log (step {i+1}/4)",
                                     "log": b})
     assert ai_mod.write_marker(paths, m)
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     # only step 0 exists (running); steps 1-3 absent (not created yet)
     (logs / bases[0]).write_text("setup running\n")
     ci = co = 0
@@ -1067,7 +1066,7 @@ def test_component_log_not_created_step_waits_no_repeat_frame(tmp_path):
     assert "overlay" in acc and "openeth" in acc and "compiling" in acc   # no skipped blocks
 
 
-def test_component_log_absent_vs_unsafe_distinguished(tmp_path):
+def test_component_log_absent_vs_unsafe_distinguished(tmp_path, web):
     # An ABSENT leaf waits (-2); a genuinely UNSAFE leaf (symlink) is framed-unavailable.
     import tempfile
     paths = Paths(runtime_root=tmp_path)
@@ -1077,15 +1076,15 @@ def test_component_log_absent_vs_unsafe_distinguished(tmp_path):
     absent = ai_mod.component_log_name(rid, "build-x")
     m["component_logs"].append({"title": "X", "log": absent})
     assert ai_mod.write_marker(paths, m)
-    c, svc = _client(tmp_path)
+    c, svc = _client(web, tmp_path)
     assert svc._read_named_log_chunk(absent, 0, 10)[0] == -2       # absent sentinel
     outside = Path(tempfile.mkdtemp()) / "secret"; outside.write_text("S\n")
     os.symlink(outside, logs / absent)                            # now a symlink -> unsafe
     assert svc._read_named_log_chunk(absent, 0, 10)[0] == -1       # unsafe sentinel
 
 
-def test_pages_use_auto_install_label(tmp_path):
-    c, _ = _client(tmp_path)
+def test_pages_use_auto_install_label(tmp_path, web):
+    c, _ = _client(web, tmp_path)
     body = c.get("/auto-install").data.decode()
     assert "<title>Auto-install" in body                         # page title renamed
     assert ">Auto-install</button>" in body                      # submit button renamed
@@ -1096,16 +1095,15 @@ def test_pages_use_auto_install_label(tmp_path):
 
 # --- the "All" master row vs per-stack channels --------------------------------------------------
 
-def test_row_selects_only_offer_allowed_channels(tmp_path, monkeypatch):
+def test_row_selects_only_offer_allowed_channels(tmp_path, monkeypatch, web):
     """Server side of the same rule: a row renders ONLY its stack's channels, so a stack with
     no published artifact has no 'binary' option at all."""
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
-    from lhpc.adapters.web.app import create_app
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    body = create_app(service_factory=lambda: svc).test_client().get("/auto-install").get_data(as_text=True)
+    body = web(service_factory=lambda: svc).get("/auto-install").get_data(as_text=True)
     import re
     for sid, expect_binary in (("daemon", True), ("kiss", False)):
         m = re.search(rf'name="version:{sid}"(.*?)</select>', body, re.S)
@@ -1113,16 +1111,15 @@ def test_row_selects_only_offer_allowed_channels(tmp_path, monkeypatch):
         assert ('value="binary"' in m.group(1)) is expect_binary, sid
 
 
-def test_rows_expose_their_capabilities_for_the_script(tmp_path, monkeypatch):
+def test_rows_expose_their_capabilities_for_the_script(tmp_path, monkeypatch, web):
     """The script needs the stack's OWN testability to tell "no host test" from "binary chosen"
     — otherwise switching back to source could never re-enable the box."""
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
-    from lhpc.adapters.web.app import create_app
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    body = create_app(service_factory=lambda: svc).test_client().get("/auto-install").get_data(as_text=True)
+    body = web(service_factory=lambda: svc).get("/auto-install").get_data(as_text=True)
     import re
     rows = re.findall(r'<tr[^>]*data-stack="[^"]+"[^>]*>', body)
     assert len(rows) == len(svc.stacks()), "a row per stack, or the loop below proves nothing"

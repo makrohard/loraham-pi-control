@@ -1,4 +1,4 @@
-"""Item 8 — permanently fix the meshtastic stack on Uputronics hardware.
+"""permanently fix the meshtastic stack on Uputronics hardware.
 
 Two field-verified defects, both covered here:
 
@@ -98,7 +98,7 @@ Webserver:
 
 
 def test_meshtastic_reset_busy_params_are_optional_absent(tmp_path):
-    # Item 1: no default, no band_defaults, omit_if_empty -> the common (Uputronics) case leaves them
+    # no default, no band_defaults, omit_if_empty -> the common (Uputronics) case leaves them
     # unset and the key is omitted. Kept advanced so an exotic board can still set a real pin.
     fc = _meshtastic_comp(_svc(tmp_path)[0]).config_file
     reset = next(p for p in fc.params if p.name == "reset")
@@ -108,7 +108,7 @@ def test_meshtastic_reset_busy_params_are_optional_absent(tmp_path):
 
 
 def test_meshtastic_omits_reset_busy_even_from_a_stale_base(tmp_path):
-    # Item 1 (authoritative fix in lhpc): a base that STILL carries Reset: 6 / Busy: 12 (pre-fix
+    # a base that STILL carries Reset: 6 / Busy: 12 (pre-fix
     # template, or a regeneration path that bypasses the base hygiene) generates a meshtasticd.yaml with
     # NEITHER — the params remove the harmful active keys rather than writing an empty value.
     fc = _meshtastic_comp(_svc(tmp_path)[0]).config_file

@@ -1580,12 +1580,14 @@ def test_pinned_auto_install_freezes_artifact_commit(tmp_path, monkeypatch):
     art = [(p, exp) for p, is_art, exp in seen if is_art]
     assert art, "no artifact adoptions ran"
     assert all(exp is not None and exp[0] == art_sha for _, exp in art)
-    # the artifact path is resolved once and adopted once (chat is the only artifact source;
-    # Voice became an ordinary pinned source, so it no longer appears here)
-    shared = [p for p, _ in art]
-    assert shared.count("src/LoRaHAM_Daemon") == 1
-    art_paths = {p for p, is_art, _ in seen if is_art}
-    assert calls["n"] == len(art_paths)                          # ONE resolution per path
+    # every source the manifest declares as an artifact is adopted exactly once, whatever
+    # components share it, and resolved once per path
+    paths = [p for p, _ in art]
+    declared = {c.source.path for st in svc.stacks() for c in st.components
+                if c.source and c.source.artifact}
+    assert declared and set(paths) == declared
+    assert all(paths.count(p) == 1 for p in declared)
+    assert calls["n"] == len(declared)                           # ONE resolution per path
     # non-artifact pinned groups keep known-working/manifest-pin semantics (no freeze)
     non_art = [exp for p, is_art, exp in seen if not is_art]
     assert all(exp is None or exp[0] == "" or len(exp[0]) == 40 for exp in non_art)
@@ -1934,7 +1936,7 @@ def test_marker_carries_per_stack_selection(tmp_path, monkeypatch):
     assert not ai_mod.valid_marker(bad)
 
 
-# ---- Item B/C: adoption clone log (announce + streamed git progress) -------------------------
+# ---- adoption clone log (announce + streamed git progress) -------------------------
 
 def _clone_spec():
     import types
@@ -2103,7 +2105,6 @@ def test_auto_install_rows_are_exactly_the_manifest_stacks(tmp_path):
     # the dry-run plan and the selection feed agree with it
     assert {r["id"] for r in svc.auto_install_rows()} == manifest_ids
     assert svc.auto_install(apply=False, tests=False, tx=False).data["changes"] == len(manifest_ids)
-
 
 
 # A SYNTHETIC source-less stack. The shipped manifest no longer contains one (meshtastic became a
@@ -2302,7 +2303,6 @@ def test_selection_refuses_a_source_channel_for_a_binary_installed_stack(tmp_pat
                     "is an install, not an auto-install run (lhpc install daemon --source pinned --yes)"]
     sel["daemon"]["version"] = "binary"
     assert not any("installed from a binary" in e for e in svc._auto_install_selection_errors(scope, sel))
-
 
 
 def test_binary_row_is_blocked_when_the_start_prerequisites_are_unmet(tmp_path, monkeypatch):

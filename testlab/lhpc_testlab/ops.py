@@ -98,13 +98,15 @@ def check(svc) -> ActionResult:
     if not is_active(svc):
         return _refusal(svc)
     problems: list[str] = []
+    data = {"gpsd": bool(_gpsd_pid(svc)), "not_installed": [], "not_ready": []}
     details = [f"  scenario: {scenarios.effective_state(svc._paths)['_name']}"]
-    if not _gpsd_pid(svc):
+    if not data["gpsd"]:
         problems.append("fake gpsd is not running (run `lhpc-testlab reset`)")
     for s in svc.stacks():
         installed = svc.is_installed(s.id)
         if not installed:
             details.append(f"  {s.id}: not installed")
+            data["not_installed"].append(s.id)
             continue
         gates: list[str] = []
         for comp in s.components:
@@ -119,10 +121,11 @@ def check(svc) -> ActionResult:
                                         else "NOT READY — " + "; ".join(gates)[:180]))
         if gates:
             problems.append(f"{s.id} not ready: {gates[0]}")
+            data["not_ready"].append(s.id)
     ok = not problems
     return ActionResult(ok, "Lab check passed." if ok else
                         f"Lab check found {len(problems)} problem(s).",
-                        details=details + [f"  PROBLEM: {p}" for p in problems])
+                        details=details + [f"  PROBLEM: {p}" for p in problems], data=data)
 
 
 # ---- reset / scenario / inject -----------------------------------------------------------

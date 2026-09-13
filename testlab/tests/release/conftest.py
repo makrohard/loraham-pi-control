@@ -49,6 +49,8 @@ from lhpc_testlab.release_lane import (  # noqa: F401
 )
 from lhpc_testlab.testing import LabServer, lab_env, run_lhpc
 
+from lhpc.core.manifest import default_manifest_path, load_manifest
+
 
 def pytest_collection_modifyitems(config, items):
     if os.environ.get("LHPC_RELEASE_VERIFY") == "1":
@@ -67,8 +69,10 @@ def lab(tmp_path_factory):
     server = LabServer(root)
     server.init_and_reset()
     yield server
-    for sid in ("meshcom", "meshtastic", "reticulum", "meshcore", "graywolf", "kiss",
-                "daemon"):
+    # Every stack the packaged manifest declares, never a hand-kept list; the fake daemon last,
+    # because it is the provider the others run over.
+    stacks = [s.id for s in load_manifest(default_manifest_path())]
+    for sid in sorted(stacks, key=lambda sid: sid == "daemon"):
         run_lhpc(server.env, "stack", "stop", sid, "--yes", timeout=300)
 
 
@@ -89,11 +93,16 @@ def env(lab):
 def svc(lab):
     """An in-process ControllerService over the SAME lab root — used to read the manifest,
     render an interactive component's own start command and run the production identity
-    verifiers. Never to mutate: every lifecycle step goes through the real executable."""
+    verifiers. Never to mutate: every lifecycle step goes through the real executable.
+
+    The two env keys are set for the WHOLE lane on purpose (this is a session fixture in an
+    opt-in lane that owns its process): the service latches lab mode at construction and every
+    later read goes through the same latched instance. They are restored at teardown."""
     from lhpc.core.paths import Paths
     from lhpc.core.services import ControllerService
 
-    os.environ["LHPC_SYSTEM_PROVIDER"] = "lhpc_testlab.provider:build"
-    os.environ["LHPC_TESTLAB"] = "1"
-    return ControllerService(paths=Paths(runtime_root=lab.root))
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("LHPC_SYSTEM_PROVIDER", "lhpc_testlab.provider:build")
+        mp.setenv("LHPC_TESTLAB", "1")
+        yield ControllerService(paths=Paths(runtime_root=lab.root))
 

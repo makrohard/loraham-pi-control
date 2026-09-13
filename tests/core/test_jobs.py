@@ -17,7 +17,6 @@ from lhpc.core.probes.backends import CommandResult, FakeSystem
 from lhpc.core.services import ControllerService
 
 
-
 def _svc(tmp_path):
     return ControllerService(system=FakeSystem(cmdlines_data={}).system,
                              paths=Paths(runtime_root=tmp_path))
@@ -95,7 +94,7 @@ def test_ephemeral_launcher_scripts_are_pruned_to_the_retention_budget(tmp_path)
         assert len(remaining) <= svc.LOG_RETENTION
 
 
-# --- P2: active_jobs() marker scan must be non-blocking, bounded, fail-closed ------------------
+# --- active_jobs() marker scan must be non-blocking, bounded, fail-closed ------------------
 
 def _valid_job_marker(pid, log="build-x.log", target="x", op="build"):
     # Well-formed marker TOML. For a LIVE pid use its real identity; for a DEAD pid
@@ -113,7 +112,7 @@ def _valid_job_marker(pid, log="build-x.log", target="x", op="build"):
 
 
 def test_active_jobs_fifo_does_not_block(tmp_path):
-    # P2 #1: a FIFO named *.job must not block active_jobs()/prune_logs(); a build path
+    # a FIFO named *.job must not block active_jobs()/prune_logs(); a build path
     # returns its normal typed result.
     import signal
     from lhpc.core.services import ActionResult
@@ -140,7 +139,7 @@ def test_active_jobs_fifo_does_not_block(tmp_path):
 
 
 def test_active_jobs_ignores_nonregular_and_oversized(tmp_path):
-    # P2 #2: directory, symlink, and oversized regular .job markers are ignored safely and
+    # directory, symlink, and oversized regular .job markers are ignored safely and
     # never treated as active.
     svc = _svc(tmp_path)
     jobs = tmp_path / "state" / "jobs"; jobs.mkdir(parents=True)
@@ -154,7 +153,7 @@ def test_active_jobs_ignores_nonregular_and_oversized(tmp_path):
 
 
 def test_active_jobs_stale_cleanup_swapped_to_dir_safe(tmp_path, monkeypatch):
-    # P2 #3: a stale marker that races into a directory/symlink right before cleanup must
+    # a stale marker that races into a directory/symlink right before cleanup must
     # not raise, must not be deleted, and must not break active_jobs()/prune_logs().
     from lhpc.core import runtime_fs
     svc = _svc(tmp_path)
@@ -171,7 +170,7 @@ def test_active_jobs_stale_cleanup_swapped_to_dir_safe(tmp_path, monkeypatch):
 
 
 def test_active_jobs_unchanged_stale_marker_removed(tmp_path):
-    # P2 #4: an unchanged stale regular marker (dead identity) is safely removed.
+    # an unchanged stale regular marker (dead identity) is safely removed.
     svc = _svc(tmp_path)
     jobs = tmp_path / "state" / "jobs"; jobs.mkdir(parents=True)
     (jobs / "stale.job").write_text(_valid_job_marker(999_999_991))
@@ -181,7 +180,7 @@ def test_active_jobs_unchanged_stale_marker_removed(tmp_path):
 
 @pytest.mark.needs_session
 def test_active_jobs_live_marker_protects_its_log(tmp_path):
-    # P2 #5: a valid live identity-backed marker still protects its log from retention.
+    # a valid live identity-backed marker still protects its log from retention.
     import time as _t
     svc = _svc(tmp_path)
     logs = tmp_path / "logs"; logs.mkdir()

@@ -1,26 +1,28 @@
-"""Managed source: registry, fs, selection, check, transactions, snapshot cache, and race-safe destructive operations."""
+"""Getting a managed source onto the box and keeping it current: the source check and its
+verdicts, the source-parent transaction and its filesystem primitives, ownership records, pins
+and selectors, the activation transaction with its journal and crash recovery, race safety
+against a concurrent substitution, and the dirty/carry rules for an operator's local additions.
 
+Real git in temp directories (the `git`/`make_repo`/`installer` fixtures in conftest); the
+controller-level cases inject a FakeSystem."""
 
 from __future__ import annotations
 import errno
-import os
-import htmlq
-import pytest
 import json
-import subprocess
+import os
+import re
 import shutil
 import time
-from lhpc.core import stackupdates as su, source_fs, source_registry, status as statusmod
+import pytest
+from lhpc.core import stackupdates as su, source_fs, source_registry
 from lhpc.core.paths import Paths, PathContainmentError
 from lhpc.core.probes.backends import CommandResult as CR, FakeSystem, System, CommandResult
 from lhpc.core.services import ControllerService
 from pathlib import Path
-from lhpc.core.config import Config, OperatorConfig
+from lhpc.core.config import Config
 from lhpc.core.install import Installer
-from lhpc.core.model import Component, ComponentKind, SourceSpec, SourceState, Stack
+from lhpc.core.model import Component, ComponentKind, SourceSpec, SourceState
 from lhpc.core.probes import RealSystem
-from lhpc.core.lifecycle import Lifecycle
-from lhpc.adapters.web.app import create_app
 
 
 def _bind_unix_socket(directory, name):
@@ -43,7 +45,7 @@ def _bind_unix_socket(directory, name):
         os.close(fd)
 
 
-# ===== merged from test_source_check.py =====
+# --- the source check: what "up to date" may and may not mean --------------------------------------
 DAEMON_REMOTE = "https://github.com/makrohard/LoRaHAM_Daemon.git"
 
 
@@ -57,13 +59,6 @@ A = "a" * 40
 
 
 B = "b" * 40
-
-
-def _outcomes(res):
-    """What the start actually produced — an `any(...)` assertion otherwise reports only False,
-    which is unusable when the run that fails is a CI runner you cannot attach to."""
-    return [(r.component, getattr(r.outcome, "name", r.outcome), (r.summary or "")[:90])
-            for r in res.results]
 
 
 def _install(tmp_path, rel):
@@ -114,8 +109,9 @@ def test_mixed_up_to_date_and_unknown_is_qualified_and_not_green(tmp_path):
     ds = _install(tmp_path, "src/loraham-daemon")
     cmds = {**_ls_remote(DAEMON_REMOTE, DAEMON_BRANCH, A), **_git_src(ds, A)}
     res = _svc(tmp_path, cmds).source_check("daemon")
-    assert res.summary == "1 up to date, 1 unknown/not comparable for 'daemon'."
     assert not res.ok                                       # a partial comparison is not a green
+    assert res.data["counts"][su.UP_TO_DATE] == 1 and res.data["counts"][su.UNKNOWN] == 1
+    assert res.data["checked"] == 2
     assert "All checked sources are up to date" not in res.summary
 
 
@@ -125,7 +121,10 @@ def test_unqualified_up_to_date_requires_every_source_comparable(tmp_path):
     cmds = {**_ls_remote(DAEMON_REMOTE, DAEMON_BRANCH, A), **_git_src(ds, A),
             **_ls_remote(RADIOLIB_REMOTE, "master", A), **_git_src(rl, A)}
     res = _svc(tmp_path, cmds).source_check("daemon")
-    assert res.ok and res.summary == "All checked sources are up to date for 'daemon'."
+    assert res.ok
+    assert res.data["counts"][su.UP_TO_DATE] == res.data["checked"] == 2
+    assert res.data["counts"][su.UNKNOWN] == 0
+    assert "up to date" in res.summary                      # the token that means green
 
 
 def test_behind_with_an_unknown_sibling_is_qualified_and_not_green(tmp_path):
@@ -196,7 +195,7 @@ def test_unknown_target_errors_without_network(tmp_path):
     assert svc._system.runner.calls == []
 
 
-def test_update_status_contract_unchanged(tmp_path):
+def test_update_status_maps_behind_same_error_and_no_component(tmp_path):
     src = _install(tmp_path, "src/loraham-daemon")
     comp = _svc(tmp_path).stack("daemon").component("loraham-daemon")
 
@@ -212,170 +211,7 @@ def test_update_status_contract_unchanged(tmp_path):
     assert _svc(tmp_path).update_status(None) == "unknown"
 
 
-def _repo(tmp_path, rel):
-    """An installed git source whose probed HEAD the page will render as @<head>.
-
-    Real dirs (the probe's `is_dir()` guard) AND `FakeSystem.paths` (its data-driven `fs.exists`,
-    which `probe_source` consults before reading a head).
-    """
-    d = _install(tmp_path, rel)
-    (d / ".git").mkdir(exist_ok=True)
-    return d
-
-
-def _fs_paths(*dirs):
-    out = set()
-    for d in dirs:
-        out |= {str(d), f"{d}/.git"}
-    return out
-
-
-def _client(tmp_path, fake):
-    from lhpc.adapters.web.app import create_app
-    return create_app(service_factory=lambda: ControllerService(
-        system=fake.system, paths=Paths(runtime_root=tmp_path))).test_client()
-
-
-def _app(tmp_path, commands=None, dirs=()):
-    return _client(tmp_path, FakeSystem(commands=commands or {}, paths=_fs_paths(*dirs)))
-
-
-def _csrf(client, path="/stacks"):
-    import re
-    m = re.search(r'name="_csrf" value="([^"]+)"', client.get(path).get_data(as_text=True))
-    return m.group(1) if m else ""
-
-
-def _head_behind(body):
-    """The stack head pill that says a main source is behind: the pill's `title` attribute is the
-    typed marker (the yellow class is its styling). Only the seeded daemon can carry it here."""
-    return htmlq.parse(body).find("span", title="behind its remote")
-
-
-def _update_links(body):
-    """Every stack-row Update link (the .row-actions overlay after the row's <details>)."""
-    return htmlq.parse(body).find("a", **{"class": "update-link"})
-
-
-def _seed(tmp_path, entries, now=1000):
-    su.record(Paths(runtime_root=tmp_path), entries, now=now)
-
-
-def test_main_behind_paints_head_yellow_and_shows_the_link(tmp_path):
-    ds = _repo(tmp_path, "src/loraham-daemon")
-    _seed(tmp_path, {"loraham-daemon": _entry_for(su.BEHIND, A)})
-    body = _app(tmp_path, _git_src(ds, A), [ds]).get("/stacks").get_data(as_text=True)
-    assert _head_behind(body) and "@" + A[:9] in body      # the main's head pill is yellow
-    assert _update_links(body)                               # link is in the row-actions overlay
-
-
-def test_only_a_dependency_behind_shows_the_link_but_leaves_head_grey(tmp_path):
-    # The @head pill IS the main's commit — it must not go yellow because radiolib is stale.
-    ds = _repo(tmp_path, "src/loraham-daemon")
-    rl = _repo(tmp_path, "src/RadioLib")
-    _seed(tmp_path, {"loraham-daemon": _entry_for(su.UP_TO_DATE, A),
-                     "radiolib": _entry_for(su.BEHIND, B)})
-    cmds = {**_git_src(ds, A), **_git_src(rl, B)}
-    body = _app(tmp_path, cmds, [ds, rl]).get("/stacks").get_data(as_text=True)
-    assert _update_links(body)                               # any component behind -> link (overlay)
-    assert not _head_behind(body)                            # but the main's head (summary) stays grey
-
-
-def test_nothing_behind_and_empty_cache_show_neither(tmp_path):
-    ds = _repo(tmp_path, "src/loraham-daemon")
-    cmds = _git_src(ds, A)
-    body = _app(tmp_path, cmds, [ds]).get("/stacks").get_data(as_text=True)
-    # never checked -> no Update link in the overlay, no yellow head pill in the summary
-    assert not _update_links(body) and not _head_behind(body)
-
-    _seed(tmp_path, {"loraham-daemon": _entry_for(su.UP_TO_DATE, A)})
-    body = _app(tmp_path, cmds, [ds]).get("/stacks").get_data(as_text=True)
-    assert not _update_links(body) and not _head_behind(body)
-
-
-def test_stale_cache_renders_unchecked_not_a_stale_verdict(tmp_path):
-    # Verdicts were computed against A; the checkout has since moved to B.
-    ds = _repo(tmp_path, "src/loraham-daemon")
-    cmds = _git_src(ds, B)
-    for status in (su.BEHIND, su.UP_TO_DATE):
-        _seed(tmp_path, {"loraham-daemon": _entry_for(status, A)})
-        body = _app(tmp_path, cmds, [ds]).get("/stacks").get_data(as_text=True)
-        assert not _update_links(body), status                   # no stale nagging
-        assert not _head_behind(body), status                    # no stale yellow
-        assert "unchecked" in body                                  # Install panel says so
-
-
-def test_update_link_opens_the_install_section(tmp_path):
-    ds = _repo(tmp_path, "src/loraham-daemon")
-    _seed(tmp_path, {"loraham-daemon": _entry_for(su.BEHIND, A)})
-    links = _update_links(_app(tmp_path, _git_src(ds, A), [ds]).get("/stacks").get_data(as_text=True))
-    assert len(links) == 1
-    href = links[0]["href"]
-    assert "open=daemon" in href and "inst=daemon" in href
-    assert href.endswith("#stack-install-daemon")
-
-
-def test_every_top_level_row_has_an_actions_overlay(tmp_path):
-    # The logs / "Update" links live in a .row-actions overlay OUTSIDE each row's <summary>
-    # (a11y). Every top-level row (controller + each stack) has one.
-    body = _app(tmp_path).get("/stacks").get_data(as_text=True)
-    assert len(htmlq.parse(body).find("div", **{"class": "row-actions"})) >= 2   # controller row + at least one stack
-
-
-def test_get_stacks_never_probes_even_with_a_populated_cache(tmp_path):
-    ds = _repo(tmp_path, "src/loraham-daemon")
-    _seed(tmp_path, {"loraham-daemon": _entry_for(su.BEHIND, A)})
-    fake = FakeSystem(commands=_git_src(ds, A), paths=_fs_paths(ds))
-    c = _client(tmp_path, fake)
-    c.get("/stacks")
-    assert not any("ls-remote" in " ".join(call) for call in fake.calls)
-
-
-@pytest.mark.contract
-def test_source_check_post_does_probe_and_lands_on_install(tmp_path):
-    ds = _repo(tmp_path, "src/loraham-daemon")
-    rl = _repo(tmp_path, "src/RadioLib")
-    cmds = {**_ls_remote(DAEMON_REMOTE, DAEMON_BRANCH, B), **_git_src(ds, A),
-            **_ls_remote(RADIOLIB_REMOTE, "master", A), **_git_src(rl, A)}
-    fake = FakeSystem(commands=cmds, paths=_fs_paths(ds, rl))
-    c = _client(tmp_path, fake)
-    tok = _csrf(c)
-    r = c.post("/source-check/daemon", data={"_csrf": tok})
-    assert r.status_code == 302
-    assert "open=daemon" in r.headers["Location"] and "inst=daemon" in r.headers["Location"]
-    assert r.headers["Location"].endswith("#stack-install-daemon")
-    assert any("ls-remote" in " ".join(call) for call in fake.calls)     # it DID probe
-    assert su.view(Paths(runtime_root=tmp_path))["components"]["loraham-daemon"]["status"] == su.BEHIND
-
-
-def test_source_check_component_target_returns_to_its_stack(tmp_path):
-    _repo(tmp_path, "src/RadioLib")
-    c = _app(tmp_path)
-    r = c.post("/source-check/radiolib", data={"_csrf": _csrf(c)})
-    assert r.status_code == 302 and r.headers["Location"].endswith("#stack-install-daemon")
-
-
-@pytest.mark.contract
-def test_source_check_requires_csrf_and_a_known_target(tmp_path):
-    fake = FakeSystem()
-    c = _client(tmp_path, fake)
-    assert c.post("/source-check/daemon").status_code == 400          # no CSRF token
-    assert c.post("/source-check/nope", data={"_csrf": _csrf(c)}).status_code == 404
-    assert not any("ls-remote" in " ".join(call) for call in fake.calls)
-
-
-def test_source_check_is_not_an_action_op():
-    # It mutates nothing but the cache marker; it must not enter the lifecycle dispatch.
-    assert "source-check" not in ControllerService.WEB_ACTIONS
-    assert "check" not in ControllerService.WEB_ACTIONS
-
-
-def _entry_for(status, at):
-    return {"remote": DAEMON_REMOTE, "source_path": "src/x",
-            "local_head_at_check": at, "upstream_head": B, "status": status}
-
-
-# ===== merged from test_source_fs.py =====
+# --- the source-parent transaction and its filesystem primitives -----------------------------------
 def _paths(tmp_path):
     root = tmp_path / "rt"
     root.mkdir()
@@ -446,13 +282,6 @@ def test_leaf_kind_classifies_no_follow(tmp_path):
     assert source_fs.leaf_kind(paths, d / "gone") == "absent"
 
 
-def _git(args, cwd=None):
-    import subprocess
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
-                          env={"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
-                               "HOME": "/tmp", "PATH": os.environ.get("PATH", "")})
-
-
 _META = {"selector": "pinned", "resolved_commit": "", "remote": "", "components": ["app"],
          "had_prior": True}
 
@@ -461,8 +290,6 @@ def _activate(inst, dest: Path, staging: Path, verify_active=None) -> str:
     """Test entry to the activation transaction: open the source-parent transaction, capture
     the prior and candidate leaves, synthesize a minimal valid meta, and run `_activate_held`
     exactly as `install()` does."""
-    from lhpc.core import source_fs
-    from lhpc.core.paths import PathContainmentError
     prior = cand = None
     try:
         with source_fs.ManagedSourceTransaction(inst.paths, dest.parent) as txn:
@@ -486,18 +313,8 @@ def _activate(inst, dest: Path, staging: Path, verify_active=None) -> str:
                 h.close()
 
 
-def _make_repo(path):
-    path.mkdir(parents=True)
-    _git(["init", "-q"], cwd=path)
-    _git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty",
-          "-m", "init"], cwd=path)
-    (path / "MARK").write_text("payload")
-    _git(["add", "-A"], cwd=path)
-    _git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "add"], cwd=path)
-
-
 @pytest.mark.parametrize("cid", ["loraham-voice", "loraham-voice-cli"])
-def test_voice_verifies_its_pin_like_any_other_source(tmp_path, cid):
+def test_voice_verifies_its_pin_like_any_other_source(tmp_path, make_repo, cid):
     """Voice is an ordinary pinned source: a local checkout that is NOT at the manifest pin
     cannot satisfy a `pinned` install.
 
@@ -508,37 +325,35 @@ def test_voice_verifies_its_pin_like_any_other_source(tmp_path, cid):
     With the flag this returned True for ANY tree, so the manifest pin was decorative and a
     release-bot hold on `src/LoRaHAM_Voice` could not be enforced.
     """
-    from lhpc.core.config import Config
     from lhpc.core.manifest import load_manifest
     comp = next(c for st in load_manifest() for c in st.components if c.id == cid)
     assert comp.source.pin_commit, "the manifest must pin Voice for this to mean anything"
     paths, root = _paths(tmp_path)
     local = root / "voice"
-    _make_repo(local)                                   # a real repo whose HEAD is NOT the pin
+    make_repo(local)                                    # a real repo whose HEAD is NOT the pin
     inst = Installer(paths, load_manifest(), Config(values={}), RealSystem())
 
     assert not inst._fallback_satisfies(comp.source, local, "pinned", "")
 
 
-def test_real_git_clone_through_controller_pinned_path(tmp_path):
+def test_real_git_clone_through_controller_pinned_path(tmp_path, git, make_repo):
     paths, root = _paths(tmp_path)
     (root / "src").mkdir(parents=True)
-    upstream = tmp_path / "upstream"; _make_repo(upstream)
+    upstream = tmp_path / "upstream"; make_repo(upstream, {"MARK": "payload"})
     with source_fs.ManagedSourceTransaction(paths, root / "src") as txn:
         pin = txn.pinned_path()
         cand = f"{pin}/.app.candidate-x"
-        r = _git(["clone", "-q", f"file://{upstream}", cand])
-        assert r.returncode == 0, r.stderr
+        git(tmp_path, "clone", "-q", f"file://{upstream}", cand)
         # Git verification/check-out through the SAME controller-pinned path
-        assert _git(["-C", cand, "rev-parse", "HEAD"]).returncode == 0
+        git(tmp_path, "-C", cand, "rev-parse", "HEAD")
     # The candidate landed in the intended HELD source parent (real path)
     assert (root / "src" / ".app.candidate-x" / "MARK").read_text() == "payload"
 
 
-def test_parent_swap_after_fd_cannot_redirect_clone_outside(tmp_path):
+def test_parent_swap_after_fd_cannot_redirect_clone_outside(tmp_path, git, make_repo):
     paths, root = _paths(tmp_path)
     (root / "src").mkdir(parents=True)
-    upstream = tmp_path / "upstream"; _make_repo(upstream)
+    upstream = tmp_path / "upstream"; make_repo(upstream, {"MARK": "payload"})
     outside = tmp_path / "outside"; outside.mkdir()
     moved = tmp_path / "moved-src"
     with source_fs.ManagedSourceTransaction(paths, root / "src") as txn:
@@ -548,13 +363,13 @@ def test_parent_swap_after_fd_cannot_redirect_clone_outside(tmp_path):
         os.rename(root / "src", moved)
         os.symlink(outside, root / "src")
         cand = f"{pin}/.app.candidate-x"
-        assert _git(["clone", "-q", f"file://{upstream}", cand]).returncode == 0
+        git(tmp_path, "clone", "-q", f"file://{upstream}", cand)
     assert list(outside.iterdir()) == []                     # NOT redirected through the swap
     assert (moved / ".app.candidate-x" / "MARK").read_text() == "payload"   # landed in held inode
 
 
 def test_transaction_renames_survive_parent_swap(tmp_path):
-    # #1: a parent-path swap AFTER opening the transaction cannot redirect later renames —
+    # A parent-path swap AFTER opening the transaction cannot redirect later renames —
     # they keep hitting the ORIGINAL held inode, never the swapped-in path.
     paths, root = _paths(tmp_path)
     src = root / "src"; src.mkdir(parents=True)
@@ -608,7 +423,6 @@ def test_candidate_handle_pinned_path_writes_into_held_inode(tmp_path):
 
 
 def test_candidate_verify_detects_symlink_swap(tmp_path):
-    import shutil
     paths, root, src = _new_txn_candidate(tmp_path)
     outside = tmp_path / "outside"; outside.mkdir(); (outside / "keep").write_text("KEEP")
     with source_fs.ManagedSourceTransaction(paths, src) as txn:
@@ -628,7 +442,6 @@ def test_candidate_verify_detects_symlink_swap(tmp_path):
 
 
 def test_candidate_verify_detects_file_swap(tmp_path):
-    import shutil
     paths, root, src = _new_txn_candidate(tmp_path)
     with source_fs.ManagedSourceTransaction(paths, src) as txn:
         h = txn.create_candidate(".app.candidate")
@@ -638,7 +451,6 @@ def test_candidate_verify_detects_file_swap(tmp_path):
 
 
 def test_candidate_verify_detects_replacement_directory(tmp_path):
-    import shutil
     paths, root, src = _new_txn_candidate(tmp_path)
     with source_fs.ManagedSourceTransaction(paths, src) as txn:
         h = txn.create_candidate(".app.candidate")
@@ -702,34 +514,11 @@ def test_remove_bound_reports_a_refused_leaf_instead_of_raising(tmp_path):
         os.close(fd)
 
 
-# ===== merged from test_source_registry.py =====
-def _git_source_registry(repo: Path, *args: str) -> str:
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-    out = subprocess.run(["git", "-C", str(repo), *args], check=True,
-                         capture_output=True, text=True, env=env)
-    return out.stdout.strip()
-
-
-def _make_repo_source_registry(path: Path) -> str:
-    path.mkdir(parents=True)
-    _git_source_registry(path, "init", "-q")
-    (path / "file.txt").write_text("hello\n")
-    _git_source_registry(path, "add", "-A")
-    _git_source_registry(path, "commit", "-qm", "init")
-    return _git_source_registry(path, "rev-parse", "HEAD")
-
-
+# --- ownership records, pins and selectors ------------------------------------------------------------
 def _comp(path="src/app", local_dir="app", remote="", pin="", branch=""):
     return Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path=path, local_dir=local_dir, remote=remote,
                                        pin_commit=pin, branch=branch))
-
-
-def _inst(tmp_path, comp, extra=()):
-    cfg = Config(values={"install": {"adopt_search_root": str(tmp_path / "rt" / "local")}})
-    stacks = (Stack(id="s", name="s", main=comp.id, components=(comp, *extra)),)
-    return Installer(Paths(runtime_root=tmp_path / "rt"), stacks, cfg, RealSystem())
 
 
 def _rec(inst, rel="src/app"):
@@ -776,10 +565,10 @@ def test_malformed_and_symlinked_records_are_absent(tmp_path):
     assert source_registry.read_record(paths, "src/app") is None
 
 
-def test_adopt_writes_registry_record(tmp_path):
-    head = _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+def test_adopt_writes_registry_record(tmp_path, make_repo, installer):
+    head = make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     action = inst.adopt_source(comp, source="dev")                      # local fallback, no remote
     assert action.status == "done"
     rec = _rec(inst)
@@ -790,53 +579,61 @@ def test_adopt_writes_registry_record(tmp_path):
     assert not inst._journal_path(inst.paths.under("src", "app")).exists()
 
 
-def test_shared_source_record_lists_all_consumers(tmp_path):
-    _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+def test_shared_source_record_lists_all_consumers(tmp_path, make_repo, installer):
+    make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     sibling = Component(id="app2", name="app2", kind=ComponentKind.SERVICE,
                         source=SourceSpec(path="src/app", local_dir="app"))
-    inst = _inst(tmp_path, comp, extra=(sibling,))
+    inst = installer(comp, extra=(sibling,))
     assert inst.adopt_source(comp, source="dev").status == "done"
     assert set(_rec(inst).components) == {"app", "app2"}
 
 
-def test_failed_adoption_writes_no_record(tmp_path):
+def test_failed_adoption_writes_no_record(tmp_path, installer):
     comp = _comp()                                                      # no remote, no local
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     action = inst.adopt_source(comp, source="dev")
     assert action.status == "failed"
     assert _rec(inst) is None
 
 
-def test_pinned_adopt_records_pin_commit(tmp_path):
-    head = _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+def test_pinned_adopt_records_pin_commit(tmp_path, make_repo, installer):
+    head = make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp(pin=head)
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="pinned").status == "done"
     rec = _rec(inst)
     assert rec.selector == "pinned" and rec.resolved_commit == head
 
 
-def _advance_local(tmp_path, text="v2\n"):
+def _advance_local(git, tmp_path, text="v2\n"):
     (tmp_path / "rt" / "local" / "app" / "file.txt").write_text(text)
-    _git_source_registry(tmp_path / "rt" / "local" / "app", "add", "-A")
-    _git_source_registry(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
-    return _git_source_registry(tmp_path / "rt" / "local" / "app", "rev-parse", "HEAD")
+    git(tmp_path / "rt" / "local" / "app", "add", "-A")
+    git(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
+    return git(tmp_path / "rt" / "local" / "app", "rev-parse", "HEAD")
 
 
-def test_record_write_failure_on_update_rolls_back_in_process(tmp_path, monkeypatch):
-    # A registry-write failure during an UPDATE must not leave the new tree active under
-    # old metadata: the activation ROLLS BACK to the verified `.prev`, the prior record
-    # (never touched) still matches, and the journal is cleared (proven rollback).
-    _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+def _update_with_unwritable_record(git, make_repo, installer, monkeypatch):
+    """v1 adopted and recorded, the local advanced to v2, and the registry write failing for as
+    long as `fail["on"]` — the record writer is the collaborator stubbed here, because no injected
+    System can make a runtime-root file unwritable for the process that owns it."""
+    make_repo(installer().paths.runtime_root / "local" / "app")
     comp = _comp()
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"       # v1 active + recorded
     old = _rec(inst)
-    _advance_local(tmp_path)
+    _advance_local(git, inst.paths.runtime_root.parent)
     real_write, fail = Installer._write_registry_record, {"on": True}
     monkeypatch.setattr(Installer, "_write_registry_record",
                         lambda self, *a, **k: False if fail["on"] else real_write(self, *a, **k))
+    return comp, inst, old, fail
+
+
+def test_record_write_failure_on_update_rolls_back_in_process(git, make_repo, installer, monkeypatch):
+    # A registry-write failure during an UPDATE must not leave the new tree active under
+    # old metadata: the activation ROLLS BACK to the verified `.prev`, the prior record
+    # (never touched) still matches, and the journal is cleared (proven rollback).
+    comp, inst, old, _fail = _update_with_unwritable_record(git, make_repo, installer, monkeypatch)
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status == "failed" and "rolled back" in action.detail
     dest = inst.paths.under("src", "app")
@@ -844,17 +641,26 @@ def test_record_write_failure_on_update_rolls_back_in_process(tmp_path, monkeypa
     assert _rec(inst) == old                                            # prior record intact
     assert not inst._journal_path(dest).exists()                        # journal cleared
     assert not dest.with_name(".app.prev").exists()                     # no .prev orphan
-    # the source stays fully operable: a later update (write OK) succeeds
+
+
+def test_a_rolled_back_update_leaves_the_source_operable(git, make_repo, installer, monkeypatch):
+    # Once the write works again, the same update goes through: nothing of the rollback lingers.
+    comp, inst, _old, fail = _update_with_unwritable_record(git, make_repo, installer, monkeypatch)
+    assert inst.adopt_source(comp, force=True, source="dev").status == "failed"
     fail["on"] = False
-    assert inst.adopt_source(comp, force=True, source="dev").status == "done"
+    action = inst.adopt_source(comp, force=True, source="dev")
+    assert action.status == "done", action.detail
+    assert (inst.paths.under("src", "app") / "file.txt").read_text() == "v2\n"
 
 
-def test_record_write_failure_on_fresh_install_undoes_in_process(tmp_path, monkeypatch):
+def test_record_write_failure_on_fresh_install_undoes_in_process(tmp_path, monkeypatch, make_repo, installer):
     # Fresh install + persistent record-write failure: the promoted candidate is removed —
     # no active source, no record, no journal, never a success.
-    _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+    make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
+    # the record writer is the collaborator stubbed: no injected System makes a runtime-root
+    # file unwritable for the process that owns it
     monkeypatch.setattr(Installer, "_write_registry_record", lambda *a, **k: False)
     action = inst.adopt_source(comp, source="dev")
     assert action.status == "failed" and "rolled back" in action.detail
@@ -864,13 +670,12 @@ def test_record_write_failure_on_fresh_install_undoes_in_process(tmp_path, monke
     assert not inst._journal_path(dest).exists()                        # no journal
 
 
-def _crash_state_after_activation(tmp_path, inst, had_prior: bool, text="v2\n"):
+def _crash_state_after_activation(git, tmp_path, inst, had_prior: bool, text="v2\n"):
     """Craft the post-crash state of an activation whose record write never happened:
     dest = the NEW tree, `.prev` = the prior tree (update only), journal state `activated`
     with v3 meta (new HEAD + had_prior)."""
-    import shutil
     dest = inst.paths.under("src", "app")
-    new_head = _advance_local(tmp_path, text)
+    new_head = _advance_local(git, tmp_path, text)
     if had_prior:
         dest.rename(dest.with_name(".app.prev"))                        # archive the prior
     else:
@@ -898,43 +703,49 @@ def _crash_state_after_activation(tmp_path, inst, had_prior: bool, text="v2\n"):
     return dest, new_head
 
 
-def test_recovery_restores_prior_when_record_still_unwritable(tmp_path, monkeypatch):
+def test_recovery_restores_prior_when_record_still_unwritable(tmp_path, monkeypatch, git, make_repo, installer):
     # CRASH between activation and record write, and the record STILL cannot persist during
     # recovery (one retry): recovery rolls back to `.prev`; the prior record still matches.
-    _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+    make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"       # v1 active + recorded
     old = _rec(inst)
-    dest, _ = _crash_state_after_activation(tmp_path, inst, had_prior=True)
-    real_write, fail = Installer._write_registry_record, {"on": True}
-    monkeypatch.setattr(Installer, "_write_registry_record",
-                        lambda self, *a, **k: False if fail["on"] else real_write(self, *a, **k))
+    dest, _ = _crash_state_after_activation(git, tmp_path, inst, had_prior=True)
+    monkeypatch.setattr(Installer, "_write_registry_record",       # still unwritable (see above)
+                        lambda *a, **k: False)
     msgs = inst.recover_source_activations()
     assert any("rolled back" in m for m in msgs)
     assert (dest / "file.txt").read_text() == "hello\n"                 # prior tree restored
     assert _rec(inst) == old                                            # prior record intact
     assert not inst._journal_path(dest).exists()                        # journal cleared
-    # recovery with the write WORKING completes the record instead (normal path)
-    fail["on"] = False
-    dest, new_head = _crash_state_after_activation(tmp_path, inst, had_prior=True,
-                                                   text="v3\n")
+
+
+def test_recovery_completes_the_record_when_it_can_be_written(tmp_path, git, make_repo, installer):
+    # The same crash with the record write WORKING: recovery completes the record (normal path).
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    dest, new_head = _crash_state_after_activation(git, tmp_path, inst, had_prior=True)
     msgs = inst.recover_source_activations()
     assert any("recovered" in m for m in msgs)
     assert _rec(inst).resolved_commit == new_head                       # record completed
+    assert not inst._journal_path(dest).exists()
 
 
-def test_recovery_undoes_fresh_install_when_record_still_unwritable(tmp_path, monkeypatch):
+def test_recovery_undoes_fresh_install_when_record_still_unwritable(tmp_path, monkeypatch, git, make_repo, installer):
     # CRASH after a FRESH install's activation; record write keeps failing: recovery removes
     # the tree — no active source, no record, no falsely successful state.
-    _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+    make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     # simulate: the record from the first install never existed (fresh-install crash)
     source_registry.remove_record(inst.paths, "src/app")
-    dest, _ = _crash_state_after_activation(tmp_path, inst, had_prior=False)
-    monkeypatch.setattr(Installer, "_write_registry_record", lambda *a, **k: False)
+    dest, _ = _crash_state_after_activation(git, tmp_path, inst, had_prior=False)
+    monkeypatch.setattr(Installer, "_write_registry_record",       # still unwritable (see above)
+                        lambda *a, **k: False)
     msgs = inst.recover_source_activations()
     assert any("rolled back fresh install" in m for m in msgs)
     assert not dest.exists()                                            # no active source
@@ -942,12 +753,12 @@ def test_recovery_undoes_fresh_install_when_record_still_unwritable(tmp_path, mo
     assert not inst._journal_path(dest).exists()                        # no journal
 
 
-def test_recovery_of_rolled_back_state_writes_no_record(tmp_path):
+def test_recovery_of_rolled_back_state_writes_no_record(tmp_path, make_repo, installer):
     # dest holds the (restored) PRIOR tree; a retained v3 journal claims a DIFFERENT commit.
     # Recovery must clear the journal WITHOUT re-registering the prior under the new metadata.
-    head = _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+    head = make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     dest = inst.paths.under("src", "app")
     rel = lambda p: str(p.relative_to(inst.paths.runtime_root))
@@ -967,10 +778,10 @@ def test_recovery_of_rolled_back_state_writes_no_record(tmp_path):
     assert rec.resolved_commit == head and rec.selector == "dev"        # prior record UNTOUCHED
 
 
-def test_v3_journal_with_invalid_meta_is_retained(tmp_path):
-    _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+def test_v3_journal_with_invalid_meta_is_retained(tmp_path, make_repo, installer):
+    make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     dest = inst.paths.under("src", "app")
     rel = lambda p: str(p.relative_to(inst.paths.runtime_root))
@@ -986,13 +797,13 @@ def test_v3_journal_with_invalid_meta_is_retained(tmp_path):
     assert inst._journal_path(dest).exists()                            # retained, blocks
 
 
-def test_v2_journal_recovery_is_generation_blocked(tmp_path):
+def test_v2_journal_recovery_is_generation_blocked(tmp_path, make_repo, installer):
     # Legacy v2 journal (no identity evidence): automatic recovery REFUSES — nothing is
     # promoted, restored, or cleaned; the journal is retained with an operator diagnostic,
     # and further source mutation stays blocked.
-    _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+    make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     dest = inst.paths.under("src", "app")
     dest.mkdir(parents=True)
     (dest / "marker").write_text("LIVE")
@@ -1013,19 +824,19 @@ def test_v2_journal_recovery_is_generation_blocked(tmp_path):
     assert blocked.status == "failed" and "recovery-required" in blocked.detail
 
 
-def _svc_bits(tmp_path, remote):
+def _svc_bits(installer, remote):
     comp = _comp(remote=remote)
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     dest = inst.paths.under("src", "app")
     return comp, inst, dest
 
 
-def test_absent_record_refuses_destructive_authorization(tmp_path):
+def test_absent_record_refuses_destructive_authorization(tmp_path, git, make_repo, installer):
     # A tree with no ownership record is not LHPC's, however well its origin matches the
     # configured remote: refused, nothing registered, nothing touched, no git run.
-    comp, inst, dest = _svc_bits(tmp_path, "https://github.com/x/y.git")
-    _make_repo_source_registry(dest)
-    _git_source_registry(dest, "remote", "add", "origin", "https://github.com/x/y.git")
+    comp, inst, dest = _svc_bits(installer, "https://github.com/x/y.git")
+    make_repo(dest)
+    git(dest, "remote", "add", "origin", "https://github.com/x/y.git")
     rec, why = source_registry.verify_identity(inst.paths, inst.system, inst.config,
                                                comp, dest, components=("app",))
     assert rec is None and "no ownership record" in why
@@ -1033,15 +844,14 @@ def test_absent_record_refuses_destructive_authorization(tmp_path):
     assert (dest / ".git").exists()
 
 
-def test_symlink_at_source_destination_is_refused(tmp_path):
+def test_symlink_at_source_destination_is_refused(tmp_path, make_repo, installer):
     # CONTAINMENT: a managed source is a DIRECTORY under the runtime root. A symlink at its
     # destination is never an LHPC adoption: refused (nothing registered) without a record,
     # and refused as identity drift when a record for a managed directory exists. The
     # symlink and its target are never touched.
-    import time as _t
-    comp, inst, dest = _svc_bits(tmp_path, "https://github.com/x/y.git")
+    comp, inst, dest = _svc_bits(installer, "https://github.com/x/y.git")
     external = tmp_path / "external"
-    _make_repo_source_registry(external)
+    make_repo(external)
     dest.parent.mkdir(parents=True)
     os.symlink(str(external), dest)
     rec, why = source_registry.verify_identity(inst.paths, inst.system, inst.config,
@@ -1049,61 +859,78 @@ def test_symlink_at_source_destination_is_refused(tmp_path):
     assert rec is None and "no ownership record" in why
     assert source_registry.read_record(inst.paths, "src/app") is None      # nothing registered
     assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
-        "src/app", "https://github.com/x/y.git", "pinned", "", _t.time(), "", ("app",)))
+        "src/app", "https://github.com/x/y.git", "pinned", "", time.time(), "", ("app",)))
     rec2, why2 = source_registry.verify_identity(inst.paths, inst.system, inst.config,
                                                  comp, dest)
     assert rec2 is None and "identity drift" in why2 and "symlink" in why2
     assert dest.is_symlink() and os.readlink(dest) == str(external)         # untouched
 
 
-def test_dirty_report_untracked_blocks_but_artifacts_do_not(tmp_path):
-    _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
-    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE, bin="out/app.bin",
-                     source=SourceSpec(path="src/app", local_dir="app"))
-    inst = _inst(tmp_path, comp)
-    assert inst.adopt_source(comp, source="dev").status == "done"
-    dest = inst.paths.under("src", "app")
-    assert not inst.dirty_report(dest, "src/app")                       # clean after adopt
-    # a TRACKED modification is dirty
+def _tracked_edit(git, dest):
     (dest / "file.txt").write_text("edited\n")
-    rep = inst.dirty_report(dest, "src/app")
-    assert rep and any("file.txt" in p for p in rep.tracked)
-    _git_source_registry(dest, "checkout", "--", "file.txt")
-    # a plain UNTRACKED file is dirty (never silently discarded)
+
+
+def _untracked_file(git, dest):
     (dest / "notes.txt").write_text("operator notes")
-    rep = inst.dirty_report(dest, "src/app")
-    assert rep and any("notes.txt" in p for p in rep.untracked)
-    (dest / "notes.txt").unlink()
-    # regenerable artifacts do NOT count: ignore-dir names + the declared built binary
+
+
+def _regenerable_artifacts(git, dest):
+    # ignore-dir names + the declared built binary
     (dest / "build").mkdir()
     (dest / "build" / "obj.o").write_text("obj")
     (dest / "__pycache__").mkdir()
     (dest / "__pycache__" / "m.pyc").write_text("pyc")
     (dest / "out").mkdir()
     (dest / "out" / "app.bin").write_text("ELF")                        # declared comp.bin
-    assert not inst.dirty_report(dest, "src/app")
-    # .gitignore'd files never count (untracked-files=normal honours it)
+
+
+def _gitignored_file(git, dest):
+    # untracked-files=normal honours .gitignore
     (dest / ".gitignore").write_text("*.log\n")
-    _git_source_registry(dest, "add", ".gitignore"); _git_source_registry(dest, "commit", "-qm", "ignore")
+    git(dest, "add", ".gitignore"); git(dest, "commit", "-qm", "ignore")
     (dest / "run.log").write_text("log")
-    assert not inst.dirty_report(dest, "src/app")
+
+
+@pytest.mark.parametrize("change, dirty_as, named", [
+    pytest.param(_tracked_edit, "tracked", "file.txt", id="tracked-edit"),
+    pytest.param(_untracked_file, "untracked", "notes.txt", id="untracked-file"),
+    pytest.param(_regenerable_artifacts, None, None, id="regenerable-artifacts"),
+    pytest.param(_gitignored_file, None, None, id="gitignored-file"),
+])
+def test_dirty_report_names_edits_and_additions_but_not_artifacts(tmp_path, git, make_repo, installer,
+                                                                   change, dirty_as, named):
+    # A tracked modification and a plain untracked file are dirty (never silently discarded);
+    # regenerable artifacts and .gitignore'd files are not.
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE, bin="out/app.bin",
+                     source=SourceSpec(path="src/app", local_dir="app"))
+    inst = installer(comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    dest = inst.paths.under("src", "app")
+    assert not inst.dirty_report(dest, "src/app")                       # clean after adopt
+    change(git, dest)
+    rep = inst.dirty_report(dest, "src/app")
+    if dirty_as is None:
+        assert not rep
+    else:
+        assert rep and any(named in p for p in getattr(rep, dirty_as))
 
 
 @pytest.mark.contract
-def test_update_preserves_an_added_file(tmp_path):
+def test_update_preserves_an_added_file(tmp_path, git, make_repo, installer):
     """A stack that RUNS from its checkout writes into it (logs, generated settings). Those
     files are the operator's, not upstream's: an update replaces the tree around them and
     carries them across, byte-identical, instead of refusing."""
     repo = tmp_path / "rt" / "local" / "app"
-    _make_repo_source_registry(repo)
+    make_repo(repo)
     comp = _comp()
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     dest = inst.paths.under("src", "app")
     (dest / "precious.txt").write_text("operator work")                 # untracked, non-ignored
     (repo / "file.txt").write_text("v2\n")                              # something to update TO
-    _git_source_registry(repo, "add", "-A")
-    _git_source_registry(repo, "commit", "-qm", "v2")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "v2")
 
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status != "failed", action.detail
@@ -1113,14 +940,14 @@ def test_update_preserves_an_added_file(tmp_path):
 
 @pytest.mark.contract
 @pytest.mark.parametrize("case", ["modified", "deleted", "staged", "git-added"])
-def test_update_refuses_a_changed_upstream_source(tmp_path, case):
+def test_update_refuses_a_changed_upstream_source(tmp_path, case, git, make_repo, installer):
     """The other half of the rule: a change to the SOURCE ITSELF still refuses, and still names
     it — LHPC will not guess how to merge an operator's edit into a new version. `git add` puts
     even a brand-new file in that class: the checkout then differs from upstream by more than an
     addition an update could carry."""
-    _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+    make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     dest = inst.paths.under("src", "app")
     if case == "modified":
@@ -1129,10 +956,10 @@ def test_update_refuses_a_changed_upstream_source(tmp_path, case):
         (dest / "file.txt").unlink()
     elif case == "staged":
         (dest / "file.txt").write_text("edited\n")
-        _git_source_registry(dest, "add", "file.txt")
+        git(dest, "add", "file.txt")
     else:
         (dest / "notes.txt").write_text("mine")
-        _git_source_registry(dest, "add", "notes.txt")
+        git(dest, "add", "notes.txt")
 
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status == "failed" and "local modifications" in action.detail
@@ -1145,81 +972,67 @@ def test_update_refuses_a_changed_upstream_source(tmp_path, case):
         assert not (dest / "file.txt").exists()
     elif case == "staged":
         assert (dest / "file.txt").read_text() == "edited\n"
-        assert "file.txt" in _git_source_registry(dest, "diff", "--cached", "--name-only")
+        assert "file.txt" in git(dest, "diff", "--cached", "--name-only")
     else:
         assert (dest / "notes.txt").read_text() == "mine"
-        assert "notes.txt" in _git_source_registry(dest, "diff", "--cached", "--name-only")
+        assert "notes.txt" in git(dest, "diff", "--cached", "--name-only")
     assert not dest.with_name(".app.prev").exists()
     assert not inst._journal_path(dest).exists()
 
 
-def _tagged_repo(path: Path):
+def _tagged_repo(git, make_repo, path: Path):
     """A repo with: version tags v0.9.0 < v1.2.0 (v1.2.0 on an OLDER commit than a
     non-version tag 'nightly' that is NEWEST by date) + a final untagged commit."""
-    _make_repo_source_registry(path)
-    _git_source_registry(path, "tag", "v0.9.0")
+    make_repo(path)
+    git(path, "tag", "v0.9.0")
     (path / "file.txt").write_text("two\n")
-    _git_source_registry(path, "add", "-A"); _git_source_registry(path, "commit", "-qm", "two")
-    _git_source_registry(path, "tag", "v1.2.0")
-    v120 = _git_source_registry(path, "rev-parse", "HEAD")
+    git(path, "add", "-A"); git(path, "commit", "-qm", "two")
+    git(path, "tag", "v1.2.0")
     (path / "file.txt").write_text("three\n")
-    _git_source_registry(path, "add", "-A"); _git_source_registry(path, "commit", "-qm", "three")
-    _git_source_registry(path, "tag", "nightly")                       # newest by date, NOT version-shaped
+    git(path, "add", "-A"); git(path, "commit", "-qm", "three")
+    git(path, "tag", "nightly")                       # newest by date, NOT version-shaped
     (path / "file.txt").write_text("four\n")
-    _git_source_registry(path, "add", "-A"); _git_source_registry(path, "commit", "-qm", "four")
-    return v120
+    git(path, "add", "-A"); git(path, "commit", "-qm", "four")
 
 
-def test_stable_resolves_newest_version_tag(tmp_path):
-    v120 = _tagged_repo(tmp_path / "repo")
-    comp = _comp()
-    inst = _inst(tmp_path, comp)
+def test_stable_resolves_newest_version_tag(tmp_path, git, make_repo, installer):
+    _tagged_repo(git, make_repo, tmp_path / "repo")
+    inst = installer(_comp())
     tag = inst._resolve_stable_tag(str(tmp_path / "repo"))
     assert tag == "v1.2.0"                             # version tag beats newer-dated 'nightly'
-    assert v120                                        # (sanity)
 
 
-def test_stable_ignores_non_version_tags_and_stays_on_head(tmp_path):
-    # only NON-version tags -> "" (the caller stays on the default-branch HEAD). A build-suffixed
-    # or code-named tag is a snapshot, not a release, and the remote freeze path cannot see tag
-    # dates at all, so BOTH paths ignore it rather than disagreeing about it.
+@pytest.mark.parametrize("tags", [["alpha", "beta"], []], ids=["only-non-version-tags", "no-tags"])
+def test_stable_ignores_non_version_tags_and_stays_on_head(tmp_path, git, make_repo, installer, tags):
+    # only NON-version tags, or no tags at all -> "" (the caller stays on the default-branch HEAD).
+    # A build-suffixed or code-named tag is a snapshot, not a release, and the remote freeze path
+    # cannot see tag dates at all, so BOTH paths ignore it rather than disagreeing about it.
     repo = tmp_path / "r1"
-    _make_repo_source_registry(repo)
-    _git_source_registry(repo, "tag", "alpha")
-    (repo / "file.txt").write_text("2\n")
-    _git_source_registry(repo, "add", "-A")
-    # a DISTINCT, later committer date so `-creatordate` ordering is deterministic
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
-           "GIT_COMMITTER_DATE": "2030-01-01T00:00:00", "GIT_AUTHOR_DATE": "2030-01-01T00:00:00"}
-    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "2"], check=True,
-                   capture_output=True, env=env)
-    _git_source_registry(repo, "tag", "beta")
-    comp = _comp()
-    inst = _inst(tmp_path, comp)
-    assert inst._resolve_stable_tag(str(repo)) == ""
-    # NO tags at all -> "" (caller stays on the default-branch HEAD)
-    repo2 = tmp_path / "r2"
-    _make_repo_source_registry(repo2)
-    assert inst._resolve_stable_tag(str(repo2)) == ""
+    make_repo(repo)
+    for n, tag in enumerate(tags):
+        if n:
+            # a DISTINCT, later committer date so `-creatordate` ordering is deterministic
+            (repo / "file.txt").write_text("2\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "2", env={"GIT_COMMITTER_DATE": "2030-01-01T00:00:00",
+                                                 "GIT_AUTHOR_DATE": "2030-01-01T00:00:00"})
+        git(repo, "tag", tag)
+    assert installer(_comp())._resolve_stable_tag(str(repo)) == ""
 
 
-def _frozen_ls_remote(svc, tags_out, head_sha):
-    """Bind a fake `git ls-remote` to `svc` so `_frozen_ref` can be driven directly."""
-    real = svc._system.runner.run
-
-    def run(argv, timeout, *a, **k):
-        argv = list(argv)
-        if argv[:3] == ["git", "ls-remote", "--tags"]:
-            return CommandResult(0, tags_out, "")
-        if argv[:2] == ["git", "ls-remote"] and argv[-1] == "HEAD":
-            return CommandResult(0, f"{head_sha}\tHEAD\n", "")
-        return real(argv, timeout, *a, **k)
-
-    svc._system.runner.run = run
-
-
-def test_both_stable_paths_agree_on_the_real_manifest_tag_shapes(tmp_path):
+@pytest.mark.parametrize("name, shapes, expected", [
+    # (upstream, its tag shapes, the release the rule must pick — "" means default-branch HEAD)
+    ("loraham-daemon", ["v0.4.0", "v112"], "v112"),         # a bare numeric version IS a version
+    ("kiss-tnc", ["v0.5.1"], "v0.5.1"),
+    ("reticulum", ["1.5.2", "1.8.2-pre"], "1.5.2"),         # a prerelease is not a release
+    ("meshcore-cli", ["v1.6.3", "v1.6.2"], "v1.6.3"),
+    # build-suffixed snapshots are NOT releases: no version tag -> default-branch HEAD
+    ("meshtastic", ["v2.7.26.54e0d8d", "v2.8.0.7239fe8"], ""),
+    ("meshcom-firmware", ["v4.35p.08.29", "v4.35s"], ""),
+    ("no-tags-at-all", [], ""),
+], ids=lambda v: v if isinstance(v, str) and not v.startswith("v") and "." not in v else None)
+def test_both_stable_paths_agree_on_the_real_manifest_tag_shapes(tmp_path, git, make_repo, installer,
+                                                                  name, shapes, expected):
     """One selector, one commit, whichever PRODUCTION path the operator reaches it through.
 
     `lhpc install --source stable` resolves in a full clone (Installer._resolve_stable_tag);
@@ -1229,113 +1042,72 @@ def test_both_stable_paths_agree_on_the_real_manifest_tag_shapes(tmp_path):
     functions — not the shared helper — over the tag shapes each pinned upstream actually
     publishes, and asserts they land on the same commit.
     """
-    # (upstream, its tag shapes, the release the rule must pick — "" means default-branch HEAD)
-    cases = [
-        ("loraham-daemon", ["v0.4.0", "v112"], "v112"),         # a bare numeric version IS a version
-        ("kiss-tnc", ["v0.5.1"], "v0.5.1"),
-        ("reticulum", ["1.5.2", "1.8.2-pre"], "1.5.2"),         # a prerelease is not a release
-        ("meshcore-cli", ["v1.6.3", "v1.6.2"], "v1.6.3"),
-        # build-suffixed snapshots are NOT releases: no version tag -> default-branch HEAD
-        ("meshtastic", ["v2.7.26.54e0d8d", "v2.8.0.7239fe8"], ""),
-        ("meshcom-firmware", ["v4.35p.08.29", "v4.35s"], ""),
-        ("no-tags-at-all", [], ""),
-    ]
-    svc = _svc(tmp_path / "svc")
-    comp_remote = next(c for st in svc.stacks() if st.id == "daemon"
-                       for c in st.components if c.id == "loraham-daemon")
-    inst = _inst(tmp_path, _comp())
+    # LOCAL path: a real repo carrying those tags.
+    repo = tmp_path / "up"
+    make_repo(repo)
+    for tag in shapes:
+        git(repo, "tag", tag)
+    local_tag = installer(_comp())._resolve_stable_tag(str(repo))
+    assert local_tag == expected, f"{name}: local picked {local_tag!r}, expected {expected!r}"
+
+    # REMOTE path: the same tag names over a faked `ls-remote`, each ANNOTATED so the
+    # peeled commit is what must be selected (the plain tag object sha must not be).
     head_sha = "9" * 40
-    for name, shapes, expected in cases:
-        # LOCAL path: a real repo carrying those tags.
-        repo = tmp_path / f"up-{name}"
-        _make_repo_source_registry(repo)
-        for tag in shapes:
-            _git_source_registry(repo, "tag", tag)
-        local_tag = inst._resolve_stable_tag(str(repo))
-        assert local_tag == expected, f"{name}: local picked {local_tag!r}, expected {expected!r}"
-        local_sha = (_git_source_registry(repo, "rev-parse", local_tag) if local_tag
-                     else _git_source_registry(repo, "rev-parse", "HEAD"))
+    lines, peel = [], {}
+    for i, tag in enumerate(shapes):
+        tag_obj, peeled = f"{i:040x}", f"{i:039x}f"
+        peel[tag] = peeled
+        lines.append(f"{tag_obj}\trefs/tags/{tag}\n{peeled}\trefs/tags/{tag}^{{}}\n")
+    svc = _svc(tmp_path / "svc", {
+        ("git", "ls-remote", "--tags", DAEMON_REMOTE): CR(0, "".join(lines), ""),
+        ("git", "ls-remote", DAEMON_REMOTE, "HEAD"): CR(0, f"{head_sha}\tHEAD\n", "")})
+    comp_remote = svc.stack("daemon").component("loraham-daemon")
+    (fz, why) = svc._frozen_ref(comp_remote, "stable")
+    assert why == "", f"{name}: frozen resolution failed: {why}"
+    remote_sha = fz[0]
+    expected_remote = peel[expected] if expected else head_sha
+    assert remote_sha == expected_remote, (
+        f"{name}: remote picked {remote_sha!r}, expected {expected_remote!r}")
 
-        # REMOTE path: the same tag names over a faked `ls-remote`, each ANNOTATED so the
-        # peeled commit is what must be selected (the plain tag object sha must not be).
-        lines, peel = [], {}
-        for i, tag in enumerate(shapes):
-            tag_obj, peeled = f"{i:040x}", f"{i:039x}f"
-            peel[tag] = peeled
-            lines.append(f"{tag_obj}\trefs/tags/{tag}\n{peeled}\trefs/tags/{tag}^{{}}\n")
-        _frozen_ls_remote(svc, "".join(lines), head_sha)
-        (fz, why) = svc._frozen_ref(comp_remote, "stable")
-        assert why == "", f"{name}: frozen resolution failed: {why}"
-        remote_sha = fz[0]
-        expected_remote = peel[expected] if expected else head_sha
-        assert remote_sha == expected_remote, (
-            f"{name}: remote picked {remote_sha!r}, expected {expected_remote!r}")
-
-        # the two production paths agree on WHICH tag (their shas differ only because the
-        # fixtures are different repositories)
-        picked_remote = next((t for t, sha in peel.items() if sha == remote_sha), "")
-        assert picked_remote == local_tag, (
-            f"{name}: stable diverges — local {local_tag!r} vs remote {picked_remote!r}")
-        assert local_sha                                          # (sanity: the local ref resolved)
+    # the two production paths agree on WHICH tag (their shas differ only because the
+    # fixtures are different repositories)
+    picked_remote = next((t for t, sha in peel.items() if sha == remote_sha), "")
+    assert picked_remote == local_tag, (
+        f"{name}: stable diverges — local {local_tag!r} vs remote {picked_remote!r}")
 
 
-def test_artifact_source_same_for_every_selector(tmp_path):
+@pytest.mark.parametrize("sel", ["pinned", "dev", "stable"])
+def test_artifact_source_same_for_every_selector(tmp_path, make_repo, installer, sel):
     # An artifact source adopts the SAME declared artifact for pinned/dev/stable — including
     # `pinned` with NO configured pin (no unverified-blocked for artifacts).
-    head = _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
-    for sel in ("pinned", "dev", "stable"):
-        comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                         source=SourceSpec(path="src/app", local_dir="app", artifact=True))
-        inst = _inst(tmp_path / sel, comp)
-        (tmp_path / sel / "rt" / "local").mkdir(parents=True, exist_ok=True)
-        (tmp_path / sel / "rt" / "local" / "app").symlink_to(
-            tmp_path / "rt" / "local" / "app")
-        action = inst.adopt_source(comp, source=sel)
-        assert action.status == "done", f"{sel}: {action.detail}"
-        assert action.provenance == "artifact-head"
-        assert _rec(inst).resolved_commit == head      # identical resolution
+    head = make_repo(tmp_path / "rt" / "local" / "app")
+    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
+                     source=SourceSpec(path="src/app", local_dir="app", artifact=True))
+    inst = installer(comp)
+    action = inst.adopt_source(comp, source=sel)
+    assert action.status == "done", f"{sel}: {action.detail}"
+    assert action.provenance == "artifact-head"
+    assert _rec(inst).resolved_commit == head      # identical resolution
 
 
-def test_dev_unavailable_branch_is_typed(tmp_path):
+def test_dev_unavailable_branch_is_typed(tmp_path, make_repo, installer):
     # dev with a configured branch the local fallback is NOT on: the SELECTOR is unavailable —
     # never a silent adoption of a different ref.
-    _make_repo_source_registry(tmp_path / "rt" / "local" / "app")             # on master/main, not 'feature/x'
+    make_repo(tmp_path / "rt" / "local" / "app")             # on master/main, not 'feature/x'
     comp = _comp(branch="feature/x")
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     action = inst.adopt_source(comp, source="dev")
     assert action.status == "failed"
     assert "selector unavailable" in action.detail and "feature/x" in action.detail
     assert _rec(inst) is None
 
 
-def test_shared_path_coherence_check(tmp_path):
-    from lhpc.core.manifest import parse_manifest, ManifestError
-    import pytest
-    base = {
-        "stack": [{
-            "id": "s", "name": "s", "main": "a",
-            "component": [
-                {"id": "a", "name": "a", "kind": "service", "run": "true",
-                 "readiness": "process",
-                 "source": {"path": "src/x", "remote": "https://github.com/x/y.git"}},
-                {"id": "b", "name": "b", "kind": "service", "run": "true",
-                 "readiness": "process",
-                 "source": {"path": "src/x", "remote": "https://github.com/OTHER/z.git"}},
-            ],
-        }],
-    }
-    with pytest.raises(ManifestError, match="share source path"):
-        parse_manifest(base)
-    base["stack"][0]["component"][1]["source"]["remote"] = "https://github.com/x/y.git"
-    assert parse_manifest(base)                        # identical specs -> valid
-
-
-def test_update_refuses_unknown_non_git_tree(tmp_path):
+def test_update_refuses_unknown_non_git_tree(tmp_path, make_repo, installer):
     # An existing CLEAN tree that is not a git checkout (and unregistered) is unknown —
     # update refuses and changes nothing.
-    _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+    make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     dest = inst.paths.under("src", "app")
     dest.mkdir(parents=True)
     (dest / "data.txt").write_text("operator data")
@@ -1344,64 +1116,56 @@ def test_update_refuses_unknown_non_git_tree(tmp_path):
     assert (dest / "data.txt").read_text() == "operator data"           # tree unchanged
 
 
-def test_update_refuses_wrong_origin(tmp_path):
+def test_update_refuses_wrong_origin(tmp_path, git, make_repo, installer):
     # An existing clean git tree whose origin differs from the configured remote is not
     # LHPC's adoption — update refuses, tree unchanged.
-    _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+    make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp(remote="https://github.com/x/y.git")
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     dest = inst.paths.under("src", "app")
-    _make_repo_source_registry(dest)
-    _git_source_registry(dest, "remote", "add", "origin", "https://github.com/OTHER/z.git")
-    before = _git_source_registry(dest, "rev-parse", "HEAD")
+    make_repo(dest)
+    git(dest, "remote", "add", "origin", "https://github.com/OTHER/z.git")
+    before = git(dest, "rev-parse", "HEAD")
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status == "failed" and "ownership/identity not proven" in action.detail
-    assert _git_source_registry(dest, "rev-parse", "HEAD") == before                    # tree unchanged
+    assert git(dest, "rev-parse", "HEAD") == before                    # tree unchanged
 
 
-def test_update_refuses_registered_source_at_drifted_commit(tmp_path):
+def test_update_refuses_registered_source_at_drifted_commit(tmp_path, git, make_repo, installer):
     # A registered source manually moved to a different CLEAN commit: update refuses.
-    head1 = _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+    head1 = make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     dest = inst.paths.under("src", "app")
     (dest / "file.txt").write_text("moved\n")
-    _git_source_registry(dest, "add", "-A"); _git_source_registry(dest, "commit", "-qm", "moved")       # clean, NEW commit
+    git(dest, "add", "-A"); git(dest, "commit", "-qm", "moved")       # clean, NEW commit
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status == "failed" and "identity drift" in action.detail
-    assert _git_source_registry(dest, "rev-parse", "HEAD") != head1                     # tree left as found
+    assert git(dest, "rev-parse", "HEAD") != head1                     # tree left as found
 
 
-def test_install_and_update_refuse_hostile_destination_leaves(tmp_path):
+@pytest.mark.parametrize("plant", [
+    pytest.param(lambda d: os.symlink("does-not-exist", d), id="dangling-symlink"),
+    pytest.param(lambda d: d.write_text("a file"), id="regular-file"),
+    pytest.param(os.mkfifo, id="special"),
+])
+@pytest.mark.parametrize("force", [False, True], ids=["install", "update"])
+def test_install_and_update_refuse_hostile_destination_leaves(tmp_path, make_repo, installer, plant, force):
     # A dangling symlink, a regular file, or a special leaf at the destination is NOT an
     # installable empty destination: refuse with ZERO rename/cleanup/deletion.
-    _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+    make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
-    for maker, label in (
-        (lambda d: os.symlink("does-not-exist", d), "dangling symlink"),
-        (lambda d: d.write_text("a file"), "regular file"),
-        (lambda d: os.mkfifo(d), "special"),
-    ):
-        root = tmp_path / label.replace(" ", "-")
-        inst = _inst(root if False else tmp_path, comp)                 # fresh rt per case below
-        # per-case runtime root to isolate
-        from lhpc.core.paths import Paths as _P
-        from lhpc.core.config import Config as _C
-        from lhpc.core.probes import RealSystem as _RS
-        inst = Installer(_P(runtime_root=root / "rt"), inst.stacks,
-                         _C(values={"install": {"adopt_search_root": str(tmp_path / "rt" / "local")}}),
-                         _RS())
-        dest = inst.paths.under("src", "app")
-        dest.parent.mkdir(parents=True)
-        maker(dest)
-        for force in (False, True):                                     # install AND update
-            action = inst.adopt_source(comp, force=force, source="dev")
-            assert action.status == "failed", (label, force, action.detail)
-            assert "refusing" in action.detail
-        assert os.path.lexists(dest), label                             # leaf untouched
-        assert not dest.with_name(".app.prev").exists()                 # zero rename
-        assert _rec(inst) is None
+    inst = installer(comp)
+    dest = inst.paths.under("src", "app")
+    dest.parent.mkdir(parents=True)
+    plant(dest)
+    action = inst.adopt_source(comp, force=force, source="dev")
+    assert action.status == "failed", action.detail
+    assert "refusing" in action.detail
+    assert os.path.lexists(dest)                                        # leaf untouched
+    assert not dest.with_name(".app.prev").exists()                     # zero rename
+    assert _rec(inst) is None
 
 
 def _mk_unsafe_registry(paths, rel, shape):
@@ -1424,82 +1188,83 @@ def _mk_unsafe_registry(paths, rel, shape):
     return rp
 
 
-def test_unsafe_registry_states_block_everything(tmp_path):
+@pytest.mark.parametrize("shape", [
+    "malformed", "symlinked", "dangling", "directory", "special",
+    pytest.param("inaccessible", marks=pytest.mark.needs_nonroot),   # chmod 0 does not bind for root
+])
+def test_unsafe_registry_states_block_everything(tmp_path, make_repo, installer, shape):
     # Every PRESENT-but-unsafe registry state blocks update/adopt-over-existing, and the
     # tri-state reader reports it distinctly ("unsafe", never "absent").
-    shapes = ["malformed", "symlinked", "dangling", "directory", "special"]
-    if os.geteuid() != 0:
-        shapes.append("inaccessible")
-    for shape in shapes:
-        root = tmp_path / shape
-        _make_repo_source_registry(root / "rt" / "local" / "app")
-        comp = _comp()
-        inst = _inst(root, comp)
-        assert inst.adopt_source(comp, source="dev").status == "done"    # genuine install
-        source_registry.remove_record(inst.paths, "src/app")
-        _mk_unsafe_registry(inst.paths, "src/app", shape)
-        state, rec, why = source_registry.record_state(inst.paths, "src/app")
-        assert state == "unsafe" and rec is None and why, shape
-        action = inst.adopt_source(comp, force=True, source="dev")       # update blocked
-        assert action.status == "failed", shape
-        assert "unsafe" in action.detail or "malformed" in action.detail \
-            or "unreadable" in action.detail or "validation" in action.detail, shape
-        dest = inst.paths.under("src", "app")
-        assert (dest / "file.txt").exists(), shape                       # zero source mutation
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"    # genuine install
+    source_registry.remove_record(inst.paths, "src/app")
+    _mk_unsafe_registry(inst.paths, "src/app", shape)
+    state, rec, why = source_registry.record_state(inst.paths, "src/app")
+    assert state == "unsafe" and rec is None and why
+    action = inst.adopt_source(comp, force=True, source="dev")       # update blocked
+    assert action.status == "failed"
+    assert "unsafe" in action.detail or "malformed" in action.detail \
+        or "unreadable" in action.detail or "validation" in action.detail
+    dest = inst.paths.under("src", "app")
+    assert (dest / "file.txt").exists()                              # zero source mutation
 
 
-def test_unsafe_registry_blocks_uninstall_clean_and_confirm(tmp_path):
-    from lhpc.core import known_working
-    from lhpc.core.services import ControllerService
-    from lhpc.core.probes.backends import FakeSystem
+@pytest.mark.parametrize("op", ["uninstall", "clean"])
+def test_unsafe_registry_blocks_uninstall_and_clean(tmp_path, op):
     paths = Paths(runtime_root=tmp_path)
     dest = tmp_path / "src" / "loraham-kiss-tnc"
     dest.mkdir(parents=True)
     _mk_unsafe_registry(paths, "src/loraham-kiss-tnc", "malformed")
     svc = ControllerService(system=FakeSystem().system, paths=paths)
-    res = svc.uninstall("kiss", apply=True)
+    res = (svc.uninstall("kiss", apply=True) if op == "uninstall"
+           else svc.clean("kiss", apply=True, purge=True))
     assert not res.ok and any("malformed" in d or "unsafe" in d for d in res.details)
     assert dest.exists()
-    res2 = svc.clean("kiss", apply=True, purge=True)
-    assert not res2.ok and dest.exists()
-    # confirmation path
+
+
+def test_unsafe_registry_blocks_known_working_confirmation(tmp_path):
+    from lhpc.core import known_working
+    paths = Paths(runtime_root=tmp_path)
     (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True)
     _mk_unsafe_registry(paths, "src/LoRaHAM_Daemon", "malformed")
     entries = {"loraham-chat": {"commit": "a" * 40, "selector": "dev", "remote": "",
                                 "source_rel": "src/LoRaHAM_Daemon", "strategy": ""}}
     assert known_working.write_candidate(paths, "chat", entries, "433")
-    svc2 = ControllerService(system=FakeSystem(cmdlines_data={5: ["loraham_chat"]}).system,
-                             paths=paths)
-    res3 = svc2.confirm_known_working("chat")
-    assert not res3.ok
+    svc = ControllerService(system=FakeSystem(cmdlines_data={5: ["loraham_chat"]}).system,
+                            paths=paths)
+    assert not svc.confirm_known_working("chat").ok
     assert known_working.load(paths, "chat") == []
+
+
+def test_a_path_never_touched_reads_absent_not_unsafe(tmp_path):
     # SAFELY ABSENT (as opposed to unsafe) is still reported for a path never touched
-    state, _, _ = source_registry.record_state(paths, "src/never-touched")
-    assert state == "absent"
+    state, rec, _why = source_registry.record_state(Paths(runtime_root=tmp_path), "src/never-touched")
+    assert state == "absent" and rec is None
 
 
-def test_non_git_directory_is_never_destructively_authorized(tmp_path):
+def test_non_git_directory_is_never_destructively_authorized(tmp_path, installer):
     # A registered path occupied by a clean NON-git directory with nothing provable
     # (no commit, no origin) is NOT ownership — refuse destructive authorization.
-    import time as _t
-    comp, inst, dest = _svc_bits(tmp_path, "")
+    comp, inst, dest = _svc_bits(installer, "")
     dest.mkdir(parents=True)
     (dest / "replaced.txt").write_text("manually placed")
     assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
-        "src/app", "", "pinned", "", _t.time(), "", ("app",)))
+        "src/app", "", "pinned", "", time.time(), "", ("app",)))
     rec, why = source_registry.verify_identity(inst.paths, inst.system, inst.config,
                                                comp, dest)
     assert rec is None and "unprovable" in why
     assert (dest / "replaced.txt").exists()                          # never deleted
 
 
-def test_dirty_carveout_is_exact_leaf_only(tmp_path):
+def test_dirty_carveout_is_exact_leaf_only(tmp_path, make_repo, installer):
     # Only the EXACT declared generated binary is ignorable; sibling/nested/unusual
     # untracked files — including newline-containing names — block. NUL-safe parsing.
-    _make_repo_source_registry(tmp_path / "rt" / "local" / "app")
+    make_repo(tmp_path / "rt" / "local" / "app")
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE, bin="out/app.bin",
                      source=SourceSpec(path="src/app", local_dir="app"))
-    inst = _inst(tmp_path, comp)
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     dest = inst.paths.under("src", "app")
     (dest / "out").mkdir()
@@ -1515,8 +1280,7 @@ def test_dirty_carveout_is_exact_leaf_only(tmp_path):
     (dest / "out" / "deep" / "x").write_text("x")
     rep = inst.dirty_report(dest, "src/app")
     assert rep and any("deep/x" in p for p in rep.untracked)
-    import shutil as _sh
-    _sh.rmtree(dest / "out" / "deep")
+    shutil.rmtree(dest / "out" / "deep")
     # newline/quote names parse EXACTLY (NUL-safe) and block
     weird = dest / 'we"ird\nname.txt'
     weird.write_text("x")
@@ -1526,7 +1290,7 @@ def test_dirty_carveout_is_exact_leaf_only(tmp_path):
     assert not inst.dirty_report(dest, "src/app")                    # clean again
 
 
-def test_a_final_0_2_10_record_and_journal_still_read_after_strategy_removal(tmp_path):
+def test_a_final_0_2_10_record_and_journal_still_read_after_strategy_removal(tmp_path, installer):
     """0.2.10 wrote a `strategy` field into both the ownership record and the transaction
     journal's meta. The field no longer exists; a record or journal that still carries it must
     read as an ordinary unknown extra, so a clean or interrupted 0.2.10 install stays usable."""
@@ -1544,7 +1308,7 @@ def test_a_final_0_2_10_record_and_journal_still_read_after_strategy_removal(tmp
     assert rec.selector == "pinned" and rec.components == ("app",)
     assert not hasattr(rec, "strategy")               # read, ignored, never resurrected
 
-    inst = _inst(tmp_path, _comp("src/app"))
+    inst = installer(_comp("src/app"), root=tmp_path)
     assert inst._valid_meta({"selector": "pinned", "resolved_commit": "a" * 40, "remote": "",
                              "strategy": "copy", "components": ["app"], "had_prior": True})
 
@@ -1565,50 +1329,37 @@ def test_unknown_selector_is_unsafe(tmp_path):
     assert state == "unsafe" and rec is None and "strict validation" in reason
 
 
-# ===== merged from test_source_selection.py =====
+# --- selectors and remotes: what may reach git ------------------------------------------------------
 def test_invalid_source_selector_rejected_not_dev(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     ln, admission, reason = svc.spawn_web_job("install", "daemon", source="evil")
     assert ln is None and admission == "blocked" and "invalid source" in reason
 
 
-class _RecordingRunner:
-    def __init__(self):
-        self.calls = []
-
-    def run(self, argv, timeout=None, cwd=None, env=None):
-        self.calls.append(list(argv))
-        return CommandResult(0, "", "")
-
-
-def _inst_with(runner, tmp_path):
+def test_malformed_remote_never_reaches_git(tmp_path, installer):
     fake = FakeSystem()
-    sys = System(runner=runner, procfs=fake, fs=fake, unix=fake)
-    return Installer(Paths(runtime_root=tmp_path / "rt"), (), Config(), sys)
-
-
-def test_malformed_remote_never_reaches_git(tmp_path):
-    runner = _RecordingRunner()
-    inst = _inst_with(runner, tmp_path)
+    inst = installer(system=fake.system)
     spec = SourceSpec(path="src/x", remote="--upload-pack=evil")
     ok = inst._clone(spec, tmp_path / "dest", "dev", remote="--upload-pack=evil")
     assert ok is False
-    assert not any("clone" in c for c in runner.calls)      # git clone NEVER invoked
+    assert not any("clone" in c for c in fake.calls)        # git clone NEVER invoked
 
 
-def test_valid_remote_reaches_git(tmp_path):
-    runner = _RecordingRunner()
-    inst = _inst_with(runner, tmp_path)
+def test_valid_remote_reaches_git(tmp_path, installer):
+    fake = FakeSystem()
+    inst = installer(system=fake.system)
     spec = SourceSpec(path="src/x", remote="https://github.com/x/y.git", branch="main")
     inst._clone(spec, tmp_path / "dest", "dev", remote="https://github.com/x/y.git")
-    assert any("clone" in c for c in runner.calls)          # a valid remote does clone
+    assert any("clone" in c for c in fake.calls)            # a valid remote does clone
 
 
-def test_post_clone_failure_names_the_step_and_reason_in_the_log(tmp_path):
+def test_post_clone_failure_names_the_step_and_reason_in_the_log(tmp_path, installer):
     """A clone that SUCCEEDS and a later git step that times out must not read as a network
     fault: the caller can only say "clone failed", so the step and the reason belong in the
     adoption log (live-found — a switch failed right after "Resolving deltas: 100%")."""
     class _Runner:
+        # a pattern stub rather than a FakeSystem table: the clone lands in a controller-pinned
+        # /proc/<pid>/fd path, so the exact argv of the later steps is not knowable up front
         def run(self, argv, timeout=None, cwd=None, env=None):
             if "checkout" in argv:
                 return CommandResult(124, "", "fatal: interrupted", timed_out=True)
@@ -1616,7 +1367,8 @@ def test_post_clone_failure_names_the_step_and_reason_in_the_log(tmp_path):
     log = tmp_path / "adopt.log"
     dest = tmp_path / "dest"
     dest.mkdir()
-    inst = _inst_with(_Runner(), tmp_path)
+    fake = FakeSystem()
+    inst = installer(system=System(runner=_Runner(), procfs=fake, fs=fake, unix=fake))
     with log.open("w") as fh:
         ok = inst._clone(SourceSpec(path="src/x", remote="https://github.com/x/y.git"),
                          dest, "pinned", remote="https://github.com/x/y.git",
@@ -1634,16 +1386,23 @@ def test_run_action_rejects_invalid_source(tmp_path):
     assert not r.ok and "Invalid source" in r.summary          # never rewritten to 'dev'
 
 
-def test_run_action_default_source_is_pinned():
-    from inspect import signature
-    assert signature(ControllerService.run_action).parameters["source"].default == "pinned"
+def test_run_action_without_a_source_installs_the_pinned_selector(tmp_path):
+    """Omitting `source` means `pinned`: the clone is the full one the pin is checked out from,
+    not the shallow branch-tracking clone `dev` makes."""
+    def clones(**kw):
+        fake = FakeSystem()
+        root = tmp_path / kw.get("source", "default")
+        root.mkdir()
+        svc = ControllerService(system=fake.system, paths=Paths(runtime_root=root))
+        svc.run_action("install", "daemon", apply=True, **kw)
+        return [c[:-1] for c in fake.calls if c[:2] == ["git", "clone"]]   # minus the fd-pinned dest
+    default = clones()
+    assert default and default == clones(source="pinned")
+    assert default != clones(source="dev")
 
 
-def test_update_status_malformed_remote_never_reaches_git(tmp_path):
-    from lhpc.core.model import Component, ComponentKind, SourceSpec
-    runner = _RecordingRunner()
-    fake = FakeSystem()
-    sys = System(runner=runner, procfs=fake, fs=fake, unix=fake)
+def test_update_status_malformed_remote_never_reaches_git(tmp_path, recording_system):
+    sys, calls = recording_system
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     (tmp_path / "src" / "x").mkdir(parents=True)                # installed source dir
     (tmp_path / "config").mkdir(parents=True)
@@ -1651,24 +1410,18 @@ def test_update_status_malformed_remote_never_reaches_git(tmp_path):
     comp = Component(id="x", name="x", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/x", remote="https://github.com/a/b.git"))
     assert svc.update_status(comp) == "unknown"                 # blocked, no check
-    assert not any("ls-remote" in c for c in runner.calls)      # git ls-remote NEVER invoked
+    assert not any("ls-remote" in c for c in calls)             # git ls-remote NEVER invoked
 
 
-# ===== merged from test_source_txn.py =====
-def _inst_source_txn(tmp_path) -> Installer:
-    cfg = Config(values={"install": {"adopt_search_root": str(tmp_path / "rt")}})
-    # Declare src/app as a MANAGED source so recovery accepts its journal (§1: recovery
-    # only ever operates on manifest-declared managed-source destinations).
-    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app"))
-    stacks = (Stack(id="s", name="s", main="app", components=(comp,)),)
-    return Installer(Paths(runtime_root=tmp_path / "rt"), stacks, cfg, RealSystem())
+# --- the activation transaction: journal, crash recovery, and what recovery may never touch ------
+# `installer(search_root=tmp_path / "rt")` declares src/app as a MANAGED source, so recovery
+# accepts its journal: recovery only ever operates on manifest-declared managed-source
+# destinations.
 
 
 def _ident_of(p, *, ctime=True):
-    import os as _os
     try:
-        st = _os.stat(p, follow_symlinks=False)
+        st = os.stat(p, follow_symlinks=False)
     except OSError:
         return None
     # v5 idents carry ctime_ns; ctime=False yields the legacy v4 [dev, ino] shape.
@@ -1720,22 +1473,21 @@ def _fin(inst, dest, prev, staging):
 
 def _fail_noreplace(monkeypatch, suffixes=(".app.candidate-1-2", ".app.prev"),
                     plant_dangling=False):
-    """Redirect the failure-injection seam to the ATOMIC promotion primitive
-    (`source_fs._rename_noreplace_at`) the activation now uses instead of os.rename."""
-    import os as _os
-    from lhpc.core import source_fs as _sf
-    real = _sf._rename_noreplace_at
+    """Make the ATOMIC promotion primitive (`source_fs._rename_noreplace_at`, the one rename
+    the activation uses) fail for the named leaves — the one seam through which a rename can
+    fail part-way through a transaction, which no injected System can produce."""
+    real = source_fs._rename_noreplace_at
     def failing(parent_fd, old, new):
         if any(old.endswith(sfx) for sfx in suffixes):
             if plant_dangling and old.endswith(".app.candidate-1-2"):
-                _os.symlink("gone", new, dir_fd=parent_fd)   # race: dangling symlink at dest
+                os.symlink("gone", new, dir_fd=parent_fd)    # race: dangling symlink at dest
             raise OSError("simulated rename failure")
         return real(parent_fd, old, new)
-    monkeypatch.setattr(_sf, "_rename_noreplace_at", failing)
+    monkeypatch.setattr(source_fs, "_rename_noreplace_at", failing)
 
 
-def test_recover_rolls_back_after_prior_archived(tmp_path):
-    inst = _inst_source_txn(tmp_path)
+def test_recover_rolls_back_after_prior_archived(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"
     prev = src / ".app.prev"
@@ -1746,8 +1498,8 @@ def test_recover_rolls_back_after_prior_archived(tmp_path):
     assert any("rolled back" in m for m in msgs)
 
 
-def test_recover_completes_activation(tmp_path):
-    inst = _inst_source_txn(tmp_path)
+def test_recover_completes_activation(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"
     staging = src / ".app.candidate-1-2"
@@ -1757,8 +1509,8 @@ def test_recover_completes_activation(tmp_path):
     assert dest.is_dir() and (dest / "marker").read_text() == "NEW"
 
 
-def test_recover_leaves_active_intact(tmp_path):
-    inst = _inst_source_txn(tmp_path)
+def test_recover_leaves_active_intact(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; dest.mkdir(); (dest / "marker").write_text("LIVE")
     prev = src / ".app.prev"; prev.mkdir()
@@ -1767,10 +1519,10 @@ def test_recover_leaves_active_intact(tmp_path):
     assert (dest / "marker").read_text() == "LIVE" and not prev.exists()  # prior cleaned
 
 
-def test_recover_refuses_escaping_journal_path(tmp_path):
+def test_recover_refuses_escaping_journal_path(tmp_path, installer):
     # A journal whose source_rel escapes the runtime root must be retained + blocked,
     # and never touch the outside path.
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     outside = tmp_path / "outside"; outside.mkdir(); (outside / "keep").write_text("KEEP")
     d = inst.paths.under("state", "source-txn"); d.mkdir(parents=True, exist_ok=True)
     (d / "app.json").write_text(json.dumps({
@@ -1782,10 +1534,10 @@ def test_recover_refuses_escaping_journal_path(tmp_path):
     assert (d / "app.json").exists()                     # journal retained
 
 
-def test_recover_refuses_non_controller_candidate_name(tmp_path):
+def test_recover_refuses_non_controller_candidate_name(tmp_path, installer):
     # Even a contained journal is rejected if the candidate/prior names don't match the
     # controller's transaction naming (so an attacker can't point recovery at a victim).
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     (src / "victim").mkdir(); (src / "victim" / "x").write_text("V")
     d = inst.paths.under("state", "source-txn"); d.mkdir(parents=True, exist_ok=True)
@@ -1800,11 +1552,11 @@ def test_recover_refuses_non_controller_candidate_name(tmp_path):
     assert inst._journal_path(src / "app").exists()      # journal retained (evidence)
 
 
-def test_shared_source_serializes_on_one_lock(tmp_path):
+def test_shared_source_serializes_on_one_lock(tmp_path, installer):
     # kiss-tnc + kiss-serial share src/loraham-kiss-tnc; a held lock on that source path blocks
     # an update of EITHER consumer.
     from lhpc.core import reslock
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src"))
     (tmp_path / "rt" / "app-src").mkdir(parents=True)
@@ -1814,26 +1566,9 @@ def test_shared_source_serializes_on_one_lock(tmp_path):
     assert action.status == "failed" and "in progress" in action.detail
 
 
-def _git_source_txn(repo, *args):
-    import subprocess, os
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, env=env)
-
-
-def _local_repo(tmp_path, name):
-    import subprocess
-    repo = tmp_path / "rt" / name; repo.mkdir(parents=True)
-    _git_source_txn(repo, "init", "-q"); (repo / "f").write_text("x"); _git_source_txn(repo, "add", "-A")
-    _git_source_txn(repo, "commit", "-qm", "c")
-    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
-                          capture_output=True, text=True).stdout.strip()
-    return repo, head
-
-
-def test_fallback_pin_mismatch_blocks_activation(tmp_path):
-    inst = _inst_source_txn(tmp_path)
-    _local_repo(tmp_path, "app-src")
+def test_fallback_pin_mismatch_blocks_activation(tmp_path, make_repo, installer):
+    inst = installer(search_root=tmp_path / "rt")
+    make_repo(tmp_path / "rt" / "app-src", {"f": "x"})
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src",
                                        pin_commit="deadbeef" * 5))   # wrong pin
@@ -1842,9 +1577,9 @@ def test_fallback_pin_mismatch_blocks_activation(tmp_path):
     assert not inst.paths.under("src", "app").exists()              # active source untouched
 
 
-def test_fallback_pin_match_activates(tmp_path):
-    inst = _inst_source_txn(tmp_path)
-    _, head = _local_repo(tmp_path, "app-src")
+def test_fallback_pin_match_activates(tmp_path, make_repo, installer):
+    inst = installer(search_root=tmp_path / "rt")
+    head = make_repo(tmp_path / "rt" / "app-src", {"f": "x"})
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src", pin_commit=head))
     action = inst.adopt_source(comp, source="pinned")
@@ -1853,16 +1588,15 @@ def test_fallback_pin_match_activates(tmp_path):
 
 def test_build_blocked_by_held_source_lock(tmp_path):
     from lhpc.core import reslock
-    from lhpc.core.services import ControllerService
-    from lhpc.core.probes.backends import FakeSystem
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    paths = Paths(runtime_root=tmp_path)
+    svc = ControllerService(system=FakeSystem().system, paths=paths)
     # The stack must be INSTALLED, or `build()` refuses as not-installed before it ever
     # contends for the lock — and the lock contention is what this test is about.
     for c in svc.stack("daemon").components:
         if c.source:
             (tmp_path / c.source.path).mkdir(parents=True, exist_ok=True)
     svc._SELF_LOCK_WAIT_S = 0.2          # fast contention (default 5.0s just delays the refusal)
-    with reslock.operation_lock(svc._paths, reslock.source_lock_key("src/loraham-daemon"),
+    with reslock.operation_lock(paths, reslock.source_lock_key("src/loraham-daemon"),
                                 "update", "x"):
         res = svc.build("daemon", apply=True)
     assert not res.ok and "blocked" in res.summary.lower()
@@ -1870,21 +1604,20 @@ def test_build_blocked_by_held_source_lock(tmp_path):
 
 def test_uninstall_blocked_by_held_source_lock(tmp_path):
     from lhpc.core import reslock
-    from lhpc.core.services import ControllerService
-    from lhpc.core.probes.backends import FakeSystem
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    paths = Paths(runtime_root=tmp_path)
+    svc = ControllerService(system=FakeSystem().system, paths=paths)
     svc._SELF_LOCK_WAIT_S = 0.2          # fast contention (default 5.0s just delays the refusal)
-    src = svc._paths.under("src", "loraham-daemon"); src.mkdir(parents=True)
-    with reslock.operation_lock(svc._paths, reslock.source_lock_key("src/loraham-daemon"),
+    src = paths.under("src", "loraham-daemon"); src.mkdir(parents=True)
+    with reslock.operation_lock(paths, reslock.source_lock_key("src/loraham-daemon"),
                                 "update", "x"):
         res = svc.uninstall("daemon", apply=True)
     assert not res.ok and "blocked" in res.summary.lower()      # atomic guard fails closed
 
 
-def test_adopt_blocks_when_recovery_required(tmp_path):
+def test_adopt_blocks_when_recovery_required(tmp_path, installer):
     # An unresolved/invalid journal for THIS source must block adopt/update before any
-    # candidate creation (P0.2 caller enforcement).
-    inst = _inst_source_txn(tmp_path)
+    # candidate creation.
+    inst = installer(search_root=tmp_path / "rt")
     inst.paths.under("src", "app").mkdir(parents=True)
     d = inst.paths.under("state", "source-txn"); d.mkdir(parents=True, exist_ok=True)
     (d / "app.json").write_text(json.dumps({          # invalid -> retained -> blocks
@@ -1898,10 +1631,10 @@ def test_adopt_blocks_when_recovery_required(tmp_path):
     assert (d / "app.json").exists()                  # journal retained, source untouched
 
 
-def test_activate_failed_restore_retains_journal(tmp_path, monkeypatch):
+def test_activate_failed_restore_retains_journal(tmp_path, monkeypatch, installer):
     # dest->prev archives, staging->dest fails, AND prev->dest restore fails ->
     # the journal MUST be retained (active source missing -> recovery-required).
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("OLD")
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "m").write_text("NEW")
@@ -1910,10 +1643,10 @@ def test_activate_failed_restore_retains_journal(tmp_path, monkeypatch):
     assert inst._journal_path(dest).exists()             # journal RETAINED (recovery-required)
 
 
-def test_adopt_blocked_by_filename_mismatch_journal(tmp_path):
+def test_adopt_blocked_by_filename_mismatch_journal(tmp_path, installer):
     # A journal named app.json but declaring a different source is invalid -> retained
     # under app.json -> adopt of app is blocked.
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     inst.paths.under("src", "app").mkdir(parents=True)
     inst.paths.under("src", "other").mkdir(parents=True)
     d = inst.paths.under("state", "source-txn"); d.mkdir(parents=True, exist_ok=True)
@@ -1928,18 +1661,18 @@ def test_adopt_blocked_by_filename_mismatch_journal(tmp_path):
     assert action.status == "failed" and "recovery-required" in action.detail
 
 
-def test_fallback_stable_tag_mismatch_blocks(tmp_path):
-    inst = _inst_source_txn(tmp_path)
-    _local_repo(tmp_path, "app-src")
+def test_fallback_stable_tag_mismatch_blocks(tmp_path, make_repo, installer):
+    inst = installer(search_root=tmp_path / "rt")
+    make_repo(tmp_path / "rt" / "app-src", {"f": "x"})
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src", pin_tag="v9.9.9"))
     action = inst.adopt_source(comp, source="stable")
     assert action.status == "failed" and "does not satisfy" in action.detail
 
 
-def test_fallback_dev_branch_mismatch_blocks(tmp_path):
-    inst = _inst_source_txn(tmp_path)
-    _local_repo(tmp_path, "app-src")          # default branch (master/main), not "nope"
+def test_fallback_dev_branch_mismatch_blocks(tmp_path, make_repo, installer):
+    inst = installer(search_root=tmp_path / "rt")
+    make_repo(tmp_path / "rt" / "app-src", {"f": "x"})          # default branch (master/main), not "nope"
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src", branch="nope"))
     action = inst.adopt_source(comp, source="dev")
@@ -1948,21 +1681,20 @@ def test_fallback_dev_branch_mismatch_blocks(tmp_path):
 
 def test_host_test_blocked_by_held_source_lock(tmp_path):
     from lhpc.core import reslock
-    from lhpc.core.services import ControllerService
-    from lhpc.core.probes.backends import FakeSystem
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    paths = Paths(runtime_root=tmp_path)
+    svc = ControllerService(system=FakeSystem().system, paths=paths)
     (tmp_path / "src" / "loraham-daemon").mkdir(parents=True)   # present, so the lock is what refuses
     svc._SELF_LOCK_WAIT_S = 0.2          # fast contention (default 5.0s just delays the refusal)
-    with reslock.operation_lock(svc._paths, reslock.source_lock_key("src/loraham-daemon"),
+    with reslock.operation_lock(paths, reslock.source_lock_key("src/loraham-daemon"),
                                 "update", "x"):
         res = svc.test("daemon", apply=True)          # host test (no --tx)
     assert not res.ok and "blocked" in res.summary.lower()
 
 
-def test_unknown_prev_blocks_and_is_not_discarded(tmp_path):
+def test_unknown_prev_blocks_and_is_not_discarded(tmp_path, installer):
     # A pre-existing .app.prev with NO active journal is an unowned orphan: activation
     # must block and must NOT recursively discard it.
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
     orphan = src / ".app.prev"; orphan.mkdir(); (orphan / "keep").write_text("ORPHAN")
@@ -1972,57 +1704,10 @@ def test_unknown_prev_blocks_and_is_not_discarded(tmp_path):
     assert (dest / "m").read_text() == "LIVE"            # active source untouched
 
 
-def test_build_launcher_acquires_and_blocks_on_source_lock(tmp_path):
-    import subprocess, sys, fcntl, os
-    from lhpc.core import commands
-    from lhpc.core.paths import Paths
-    rt = tmp_path / "rt"
-    locks = Paths(runtime_root=rt).under("state", "locks"); locks.mkdir(parents=True, exist_ok=True)
-    lock = locks / "src.lock"; lock.touch()           # the runtime-structured source lock
-    marker = tmp_path / "ran"
-    # A step that creates a marker so we can prove it ran only when unlocked.
-    steps = [{"argv": ["touch", str(marker)]}]
-    script = commands.render_build_launcher(steps, str(rt), str(tmp_path), [str(lock)])
-    launcher = tmp_path / "launch.py"; launcher.write_text(script)
-
-    # 1) lock HELD by us -> launcher must fail fast (exit 3) and not run the step.
-    fd = os.open(str(lock), os.O_RDWR)
-    fcntl.flock(fd, fcntl.LOCK_EX)
-    try:
-        env = {**os.environ, "LHPC_BUILD_LOCK_WAIT_S": "0.4"}
-        r = subprocess.run([sys.executable, str(launcher)], capture_output=True, text=True, env=env)
-        assert r.returncode == 3 and "could not acquire source lock" in r.stderr
-        assert not marker.exists()
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN); os.close(fd)
-
-    # 2) lock FREE -> launcher acquires it, runs the step, exits 0.
-    r = subprocess.run([sys.executable, str(launcher)], capture_output=True, text=True)
-    assert r.returncode == 0 and marker.exists()
-
-
-def test_build_launcher_lock_contends_with_operation_lock(tmp_path):
-    # The launcher's lock file is the SAME one reslock.operation_lock uses.
-    import subprocess, sys
-    from lhpc.core import commands, reslock
-    from lhpc.core.paths import Paths
-    paths = Paths(runtime_root=tmp_path)
-    paths.under("state", "locks").mkdir(parents=True, exist_ok=True)
-    lp = str(reslock.lock_file_path(paths, reslock.source_lock_key("src/app")))
-    script = commands.render_build_launcher([{"argv": ["true"]}], str(tmp_path),
-                                            str(tmp_path), [lp])
-    launcher = tmp_path / "l.py"; launcher.write_text(script)
-    import os
-    env = {**os.environ, "LHPC_BUILD_LOCK_WAIT_S": "0.4"}
-    with reslock.operation_lock(paths, reslock.source_lock_key("src/app"), "update", "x"):
-        r = subprocess.run([sys.executable, str(launcher)], capture_output=True, text=True, env=env)
-    assert r.returncode == 3 and "another source operation is in progress" in r.stderr
-
-
-def test_malformed_journal_blocks_unrelated_source(tmp_path):
+def test_malformed_journal_blocks_unrelated_source(tmp_path, installer):
     # A malformed journal with NO safely derivable source must block ALL source mutation,
     # even for an unrelated source.
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     inst.paths.under("src", "app").mkdir(parents=True)
     d = inst.paths.under("state", "source-txn"); d.mkdir(parents=True, exist_ok=True)
     (d / "garbage.json").write_text("{ not valid json")          # unparseable -> retained
@@ -2034,9 +1719,9 @@ def test_malformed_journal_blocks_unrelated_source(tmp_path):
     assert (d / "garbage.json").exists()                         # retained, not discarded
 
 
-def test_adopt_blocked_while_index_lock_held(tmp_path):
+def test_adopt_blocked_while_index_lock_held(tmp_path, installer):
     from lhpc.core import reslock
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     inst.paths.under("src", "app").mkdir(parents=True)
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src"))
@@ -2050,17 +1735,17 @@ def test_adopt_blocked_while_index_lock_held(tmp_path):
     pytest.param("pinned", id="pinned-without-configured-pin"),   # repo has no pin_commit
     pytest.param("stable", id="stable-without-any-tag"),          # repo has no tags
 ])
-def test_selector_without_its_target_rejected(tmp_path, mode):
-    inst = _inst_source_txn(tmp_path)
-    _local_repo(tmp_path, "app-src")
+def test_selector_without_its_target_rejected(tmp_path, mode, make_repo, installer):
+    inst = installer(search_root=tmp_path / "rt")
+    make_repo(tmp_path / "rt" / "app-src", {"f": "x"})
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src"))   # no pin_commit / no tag
     action = inst.adopt_source(comp, source=mode)
     assert action.status == "failed" and "does not satisfy" in action.detail
 
 
-def test_valid_target_journal_recovered_through_adopt(tmp_path):
-    inst = _inst_source_txn(tmp_path)
+def test_valid_target_journal_recovered_through_adopt(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "m").write_text("NEW")
@@ -2076,23 +1761,25 @@ def test_valid_target_journal_recovered_through_adopt(tmp_path):
     assert not inst._journal_path(dest).exists()        # journal cleared by recovery
 
 
-def test_adopt_target_does_not_self_contend(tmp_path):
+def test_adopt_target_does_not_self_contend(tmp_path, git, make_repo, installer):
     # Same source has a valid completing journal; adopt(force) must recover it and then
     # re-stage, never blocking on its own source lock.
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
-    dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
+    dest = src / "app"
+    _register_tree(git, inst, dest, _comp(), files={"m": "LIVE"})       # an owned, active prior
     _journal(inst, dest, src / ".app.prev", src / ".app.candidate-1-2", "prior-archived")
+    make_repo(tmp_path / "rt" / "app-src", {"m": "NEW"})
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src"))
-    (tmp_path / "rt" / "app-src").mkdir(parents=True)
-    action = inst.adopt_source(comp, force=True)
-    assert action.status != "failed" or "in progress" not in action.detail
+    action = inst.adopt_source(comp, force=True, source="dev")
+    assert action.status == "done", action.detail                    # recovered, then re-staged
+    assert (dest / "m").read_text() == "NEW"
     assert not inst._journal_path(dest).exists()
 
 
-def test_recovery_required_preserves_candidate_and_prior(tmp_path, monkeypatch):
-    inst = _inst_source_txn(tmp_path)
+def test_recovery_required_preserves_candidate_and_prior(tmp_path, monkeypatch, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("OLD")
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "m").write_text("NEW")
@@ -2102,14 +1789,15 @@ def test_recovery_required_preserves_candidate_and_prior(tmp_path, monkeypatch):
     assert inst._journal_path(dest).exists()                            # journal retained
 
 
-def test_journal_unlink_failure_after_activation_is_recovery_required(tmp_path, monkeypatch):
+def test_journal_unlink_failure_after_activation_is_recovery_required(tmp_path, monkeypatch, installer):
     from lhpc.core import runtime_fs
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("OLD")
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "m").write_text("NEW")
     # The activation renames succeed, but the owned-journal removal fails -> typed
-    # recovery-required (never an untyped exception), journal retained.
+    # recovery-required (never an untyped exception), journal retained. The marker's remove is
+    # the collaborator stubbed: an unlink that fails on an owned runtime file has no System seam.
     monkeypatch.setattr(runtime_fs.OwnedMarker, "remove", lambda self: False)
     assert _activate(inst, dest, staging) == "recovery-required"
     assert (dest / "m").read_text() == "NEW"                  # activation DID happen
@@ -2117,11 +1805,10 @@ def test_journal_unlink_failure_after_activation_is_recovery_required(tmp_path, 
 
 
 def test_malformed_journal_blocks_build_and_uninstall(tmp_path):
-    from lhpc.core.services import ControllerService
-    from lhpc.core.probes.backends import FakeSystem
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    src = svc._paths.under("src", "loraham-daemon"); src.mkdir(parents=True)
-    d = svc._paths.under("state", "source-txn"); d.mkdir(parents=True, exist_ok=True)
+    paths = Paths(runtime_root=tmp_path)
+    svc = ControllerService(system=FakeSystem().system, paths=paths)
+    src = paths.under("src", "loraham-daemon"); src.mkdir(parents=True)
+    d = paths.under("state", "source-txn"); d.mkdir(parents=True, exist_ok=True)
     (d / "garbage.json").write_text("{ not valid")        # unresolved -> blocks all mutation
     rb = svc.build("daemon", apply=True)
     assert not rb.ok and "blocked" in rb.summary.lower()
@@ -2129,61 +1816,12 @@ def test_malformed_journal_blocks_build_and_uninstall(tmp_path):
     assert any("blocked" in x.lower() for x in ([ru.summary] + list(ru.details)))
 
 
-def _render_launcher(tmp_path, marker, with_journal):
-    from lhpc.core import commands, reslock
-    from lhpc.core.paths import Paths
-    paths = Paths(runtime_root=tmp_path)
-    paths.under("state", "locks").mkdir(parents=True, exist_ok=True)
-    txn = paths.under("state", "source-txn"); txn.mkdir(parents=True, exist_ok=True)
-    if with_journal:
-        (txn / "garbage.json").write_text("{ unresolved")
-    idx = str(reslock.lock_file_path(paths, "source-txn-index"))
-    script = commands.render_build_launcher([{"argv": ["touch", str(marker)]}], str(tmp_path),
-                                            str(tmp_path), [], index_lock=idx)
-    launcher = tmp_path / "l.py"; launcher.write_text(script)
-    return launcher
-
-
-def test_detached_launcher_blocks_on_pending_journal(tmp_path):
-    import subprocess, sys, os
-    marker = tmp_path / "ran"
-    launcher = _render_launcher(tmp_path, marker, with_journal=True)
-    env = {**os.environ, "LHPC_BUILD_LOCK_WAIT_S": "0.4"}
-    r = subprocess.run([sys.executable, str(launcher)], capture_output=True, text=True, env=env)
-    assert r.returncode == 3 and "unresolved source-transaction journal" in r.stderr
-    assert not marker.exists()                    # never touched the source
-
-
-def test_detached_launcher_runs_when_no_journal(tmp_path):
-    import subprocess, sys, os
-    marker = tmp_path / "ran"
-    launcher = _render_launcher(tmp_path, marker, with_journal=False)
-    env = {**os.environ, "LHPC_BUILD_LOCK_WAIT_S": "0.4"}
-    r = subprocess.run([sys.executable, str(launcher)], capture_output=True, text=True, env=env)
-    assert r.returncode == 0 and marker.exists()
-
-
-def test_detached_launcher_blocks_while_index_held(tmp_path):
-    import subprocess, sys, os
-    from lhpc.core import reslock
-    from lhpc.core.paths import Paths
-    marker = tmp_path / "ran"
-    launcher = _render_launcher(tmp_path, marker, with_journal=False)
-    paths = Paths(runtime_root=tmp_path)
-    env = {**os.environ, "LHPC_BUILD_LOCK_WAIT_S": "0.4"}
-    with reslock.operation_lock(paths, "source-txn-index", "adopt", "x"):
-        r = subprocess.run([sys.executable, str(launcher)], capture_output=True, text=True, env=env)
-    assert r.returncode == 3 and "index busy" in r.stderr
-    assert not marker.exists()
-
-
 def test_retained_journal_blocks_every_source_op(tmp_path):
-    from lhpc.core.services import ControllerService
-    from lhpc.core.probes.backends import FakeSystem
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    svc._paths.under("src", "loraham-daemon").mkdir(parents=True)
-    svc._paths.under("src", "LoRaHAM_Daemon").mkdir(parents=True)
-    d = svc._paths.under("state", "source-txn"); d.mkdir(parents=True, exist_ok=True)
+    paths = Paths(runtime_root=tmp_path)
+    svc = ControllerService(system=FakeSystem().system, paths=paths)
+    paths.under("src", "loraham-daemon").mkdir(parents=True)
+    paths.under("src", "LoRaHAM_Daemon").mkdir(parents=True)
+    d = paths.under("state", "source-txn"); d.mkdir(parents=True, exist_ok=True)
     (d / "garbage.json").write_text("{ retained")        # unresolved -> blocks all source ops
     assert "blocked" in svc.build("daemon", apply=True).summary.lower()
     assert "blocked" in svc.test("daemon", apply=True).summary.lower()
@@ -2197,22 +1835,20 @@ def test_retained_journal_blocks_every_source_op(tmp_path):
 def test_source_guard_holds_index_during_handoff(tmp_path):
     # While the index lock is held externally, the guard cannot even check -> ResourceBusy
     # (no window where a clean op proceeds past a concurrently-created journal).
-    from lhpc.core.services import ControllerService
-    from lhpc.core.probes.backends import FakeSystem
     from lhpc.core import reslock
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    svc._paths.under("src", "loraham-daemon").mkdir(parents=True)
-    with reslock.operation_lock(svc._paths, "source-txn-index", "adopt", "x"):
+    paths = Paths(runtime_root=tmp_path)
+    svc = ControllerService(system=FakeSystem().system, paths=paths)
+    paths.under("src", "loraham-daemon").mkdir(parents=True)
+    with reslock.operation_lock(paths, "source-txn-index", "adopt", "x"):
         res = svc.build("daemon", apply=True)
     assert not res.ok and "blocked" in res.summary.lower()
 
 
-def test_broken_active_symlink_not_treated_as_intact(tmp_path):
-    import os as _os
-    inst = _inst_source_txn(tmp_path)
+def test_broken_active_symlink_not_treated_as_intact(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"
-    _os.symlink(src / "does-not-exist", dest)            # dangling active symlink
+    os.symlink(src / "does-not-exist", dest)            # dangling active symlink
     prev = src / ".app.prev"; prev.mkdir(); (prev / "m").write_text("PRIOR")
     msg = _fin(inst, dest, prev, src / ".app.candidate-1-2")
     assert "intact" not in msg                            # broken symlink != usable source
@@ -2222,25 +1858,28 @@ def test_broken_active_symlink_not_treated_as_intact(tmp_path):
     assert (prev / "m").read_text() == "PRIOR"            # prior retained at .prev
 
 
-def test_failed_journal_unlink_is_recovery_required(tmp_path, monkeypatch):
+def test_failed_journal_unlink_is_recovery_required(tmp_path, monkeypatch, installer):
     from lhpc.core import runtime_fs
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
     prev = src / ".app.prev"; prev.mkdir()
     jf = inst._journal_path(dest); jf.parent.mkdir(parents=True, exist_ok=True); jf.write_text("{}")
+    # the marker's remove is the collaborator stubbed (no System seam for an owned-file unlink)
     monkeypatch.setattr(runtime_fs.OwnedMarker, "remove", lambda self: False)   # removal "fails"
     msg = _fin(inst, dest, prev, src / ".app.candidate-1-2")   # must NOT raise
     assert "recovery-required" in msg and "journal could not be removed" in msg
     assert jf.exists()
 
 
-def test_failed_prev_cleanup_after_activation_retains_journal(tmp_path, monkeypatch):
-    inst = _inst_source_txn(tmp_path)
+def test_failed_prev_cleanup_after_activation_retains_journal(tmp_path, monkeypatch, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
     prev = src / ".app.prev"; prev.mkdir()
     jf = inst._journal_path(dest); jf.parent.mkdir(parents=True, exist_ok=True); jf.write_text("{}")
+    # the bound removal of `.prev` is the collaborator stubbed: a recursive delete that fails
+    # half-way needs a device error no injected System can produce
     monkeypatch.setattr(type(inst), "_prev_cleanup_ok",
                         lambda self, txn, prev, ident=None, **kw: False)  # prev removal "fails"
     msg = _fin(inst, dest, prev, src / ".app.candidate-1-2")
@@ -2248,21 +1887,20 @@ def test_failed_prev_cleanup_after_activation_retains_journal(tmp_path, monkeypa
     assert jf.exists() and prev.exists()                  # journal + prior retained
 
 
-def test_dangling_linked_source_not_activated(tmp_path):
-    import os as _os
-    inst = _inst_source_txn(tmp_path)
+def test_dangling_linked_source_not_activated(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"
     staging = src / ".app.candidate-1-2"
-    _os.symlink(src / "gone", staging)              # candidate symlink -> NONEXISTENT dir
+    os.symlink(src / "gone", staging)              # candidate symlink -> NONEXISTENT dir
     outcome = _activate(inst, dest, staging)
     assert outcome == "recovery-required"           # dangling link is NOT a usable source
     assert inst._journal_path(dest).exists()        # journal retained (not deleted)
     assert dest.is_symlink() and not dest.is_dir()  # the dangling link occupies dest
 
 
-def test_regular_file_active_source_not_activated(tmp_path):
-    inst = _inst_source_txn(tmp_path)
+def test_regular_file_active_source_not_activated(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"
     staging = src / ".app.candidate-1-2"; staging.write_text("not a dir")  # regular file
@@ -2271,8 +1909,8 @@ def test_regular_file_active_source_not_activated(tmp_path):
     assert inst._journal_path(dest).exists()
 
 
-def test_real_dir_candidate_activates(tmp_path):
-    inst = _inst_source_txn(tmp_path)
+def test_real_dir_candidate_activates(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "f").write_text("x")
@@ -2280,9 +1918,9 @@ def test_real_dir_candidate_activates(tmp_path):
     assert dest.is_dir() and not inst._journal_path(dest).exists()
 
 
-def test_recovery_rejects_regular_file_active_source(tmp_path):
+def test_recovery_rejects_regular_file_active_source(tmp_path, installer):
     # recovery must also require a usable DIRECTORY before clearing the journal.
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; dest.write_text("regular file")      # not a dir
     prev = src / ".app.prev"; prev.mkdir(); (prev / "m").write_text("PRIOR")
@@ -2290,11 +1928,11 @@ def test_recovery_rejects_regular_file_active_source(tmp_path):
     assert "intact" not in msg                       # a file is not a usable active source
 
 
-def test_activate_failed_rename_leaving_dangling_dest_restores_prior(tmp_path, monkeypatch):
+def test_activate_failed_rename_leaving_dangling_dest_restores_prior(tmp_path, monkeypatch, installer):
     # dest->prev archives; staging->dest fails AND an external race leaves dest a DANGLING
     # symlink. _activate must NOT accept the dangling symlink as usable: it restores the
     # prior to a usable dir before clearing the journal (no erased recovery evidence).
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "m").write_text("NEW")
@@ -2308,10 +1946,10 @@ def test_activate_failed_rename_leaving_dangling_dest_restores_prior(tmp_path, m
     assert inst._journal_path(dest).exists()
 
 
-def test_activate_dangling_dest_unrestorable_retains_journal(tmp_path, monkeypatch):
+def test_activate_dangling_dest_unrestorable_retains_journal(tmp_path, monkeypatch, installer):
     # Same race, but the prior restore ALSO fails -> retain journal (recovery-required),
     # never clear it leaving an unusable active source.
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
     staging = src / ".app.candidate-1-2"; staging.mkdir()
@@ -2320,13 +1958,14 @@ def test_activate_dangling_dest_unrestorable_retains_journal(tmp_path, monkeypat
     assert inst._journal_path(dest).exists()           # journal retained (recovery route)
 
 
-def test_activation_prev_cleanup_failure_recovery_required_then_recoverable(tmp_path, monkeypatch):
-    inst = _inst_source_txn(tmp_path)
+def test_activation_prev_cleanup_failure_recovery_required_then_recoverable(tmp_path, monkeypatch, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("OLD")
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "m").write_text("NEW")
     real = type(inst)._prev_cleanup_ok
     fail = {"on": True}
+    # the bound removal of `.prev` is the collaborator stubbed (see the test above)
     monkeypatch.setattr(
         type(inst), "_prev_cleanup_ok",
         lambda self, txn, prev, ident=None, **kw: False if fail["on"]
@@ -2348,9 +1987,8 @@ def _txn_dir(inst):
     return inst.paths.under("state", "source-txn")
 
 
-def test_symlinked_journal_blocks_recovery_not_skipped(tmp_path):
-    import os
-    inst = _inst_source_txn(tmp_path)
+def test_symlinked_journal_blocks_recovery_not_skipped(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     d = _txn_dir(inst); d.mkdir(parents=True)
     outside = tmp_path / "evil.json"
     outside.write_text('{"version": 2, "state": "planned", "source_rel": "src/x", '
@@ -2362,9 +2000,8 @@ def test_symlinked_journal_blocks_recovery_not_skipped(tmp_path):
     assert (d / "app.json").is_symlink()                    # evidence retained (not deleted)
 
 
-def test_symlinked_txn_dir_blocks(tmp_path):
-    import os
-    inst = _inst_source_txn(tmp_path)
+def test_symlinked_txn_dir_blocks(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     (inst.paths.under("state")).mkdir(parents=True)
     outside = tmp_path / "evil-txn"; outside.mkdir()
     (outside / "app.json").write_text("{}")
@@ -2374,8 +2011,8 @@ def test_symlinked_txn_dir_blocks(tmp_path):
     assert any("recovery-required" in m for m in msgs)
 
 
-def test_malformed_journal_is_retained_and_blocks(tmp_path):
-    inst = _inst_source_txn(tmp_path)
+def test_malformed_journal_is_retained_and_blocks(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     d = _txn_dir(inst); d.mkdir(parents=True)
     (d / "app.json").write_text("{ this is not json")
     msgs = inst.recover_source_activations()
@@ -2384,17 +2021,17 @@ def test_malformed_journal_is_retained_and_blocks(tmp_path):
     assert inst._pending_journals() is True
 
 
-def test_absent_txn_dir_is_empty_not_blocked(tmp_path):
-    inst = _inst_source_txn(tmp_path)                                   # no state/source-txn dir at all
+def test_absent_txn_dir_is_empty_not_blocked(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")                                   # no state/source-txn dir at all
     assert inst._pending_journals() is False
     assert inst.recover_source_activations() == []
 
 
-def test_journal_targeting_non_managed_path_is_blocked(tmp_path):
-    # §1: a journal whose destination is a CONTAINED but non-managed runtime path
+def test_journal_targeting_non_managed_path_is_blocked(tmp_path, installer):
+    # A journal whose destination is a CONTAINED but non-managed runtime path
     # (config/foo, state/foo, …) is retained + blocked — recovery never renames/deletes
     # outside the manifest's managed-source set, even if the filename looks plausible.
-    inst = _inst_source_txn(tmp_path)                                    # only src/app is managed
+    inst = installer(search_root=tmp_path / "rt")                                    # only src/app is managed
     victim = inst.paths.under("config", "foo"); victim.mkdir(parents=True)
     (victim / "keep").write_text("KEEP")
     d = _txn_dir(inst); d.mkdir(parents=True, exist_ok=True)
@@ -2408,11 +2045,11 @@ def test_journal_targeting_non_managed_path_is_blocked(tmp_path):
     assert inst._pending_journals() is True
 
 
-def test_adopt_reports_pinned_provenance(tmp_path):
-    # §C wired: a real local pinned repo -> adopt reports pinned-verified provenance in
+def test_adopt_reports_pinned_provenance(tmp_path, make_repo, installer):
+    # A real local pinned repo -> adopt reports pinned-verified provenance in
     # the action state + detail (local git, no network).
-    inst = _inst_source_txn(tmp_path)
-    _, head = _local_repo(tmp_path, "app-src")
+    inst = installer(search_root=tmp_path / "rt")
+    head = make_repo(tmp_path / "rt" / "app-src", {"f": "x"})
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src", pin_commit=head))
     action = inst.adopt_source(comp, source="pinned")
@@ -2420,45 +2057,42 @@ def test_adopt_reports_pinned_provenance(tmp_path):
     assert "provenance: pinned-verified" in action.detail
 
 
-def test_adopt_reports_mutable_dev_provenance(tmp_path):
-    inst = _inst_source_txn(tmp_path)
-    _local_repo(tmp_path, "app-src")
+def test_adopt_reports_mutable_dev_provenance(tmp_path, make_repo, installer):
+    inst = installer(search_root=tmp_path / "rt")
+    make_repo(tmp_path / "rt" / "app-src", {"f": "x"})
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src"))
     action = inst.adopt_source(comp, source="dev")           # explicit mutable selection
     assert action.status == "done" and action.provenance == "mutable-dev"
 
 
-def _register_tree(inst, dest, comp, remote=""):
-    """Make an EXISTING tree pass the current-identity gate: turn it into a committed git
-    repo and write a matching ownership record (HEAD + remote + strategy '')."""
-    import subprocess, time as _t
-    from lhpc.core import source_registry
-    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "PATH": "/usr/bin:/bin"}
-    subprocess.run(["git", "-C", str(dest), "init", "-q"], check=True, env=env)
-    subprocess.run(["git", "-C", str(dest), "add", "-A"], check=True, env=env)
-    subprocess.run(["git", "-C", str(dest), "commit", "-qm", "prior"], check=True,
-                   capture_output=True, env=env)
-    head = subprocess.run(["git", "-C", str(dest), "rev-parse", "HEAD"], check=True,
-                          capture_output=True, text=True, env=env).stdout.strip()
+def _register_tree(git, inst, dest, comp, remote="", files=None):
+    """Make an EXISTING tree (or one created from `files`) pass the current-identity gate: turn
+    it into a committed git repo and write a matching ownership record (HEAD + remote)."""
+    dest.mkdir(parents=True, exist_ok=True)
+    for name, text in (files or {}).items():
+        (dest / name).write_text(text)
+    git(dest, "init", "-q")
+    git(dest, "add", "-A")
+    git(dest, "commit", "-qm", "prior")
+    head = git(dest, "rev-parse", "HEAD")
     rel = str(dest.relative_to(inst.paths.runtime_root))
     assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
-        rel, remote, "pinned", head, _t.time(), "", (comp.id,)))
+        rel, remote, "pinned", head, time.time(), "", (comp.id,)))
     return head
 
 
-def test_provenance_not_ok_blocks_activation_prior_intact(tmp_path, monkeypatch):
-    # §4: a not-ok provenance result BLOCKS activation BEFORE the active source is touched.
+def test_provenance_not_ok_blocks_activation_prior_intact(tmp_path, monkeypatch, git, make_repo, installer):
+    # A not-ok provenance result BLOCKS activation BEFORE the active source is touched.
     from lhpc.core import provenance
-    inst = _inst_source_txn(tmp_path)
-    _, head = _local_repo(tmp_path, "app-src")
+    inst = installer(search_root=tmp_path / "rt")
+    head = make_repo(tmp_path / "rt" / "app-src", {"f": "x"})
     active = inst.paths.under("src", "app"); active.mkdir(parents=True)
     (active / "OLD").write_text("keep")                  # a prior active source
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src",
                                        pin_commit=head))
-    _register_tree(inst, active, comp)                   # identity gate passes -> reaches provenance
+    _register_tree(git, inst, active, comp)                   # identity gate passes -> reaches provenance
     monkeypatch.setattr(provenance, "evaluate", lambda *a, **k: provenance.ProvenanceResult(
         provenance.UNVERIFIED_BLOCKED, False, False, "forced block"))
     action = inst.adopt_source(comp, source="pinned", force=True)
@@ -2467,70 +2101,22 @@ def test_provenance_not_ok_blocks_activation_prior_intact(tmp_path, monkeypatch)
     assert (active / "OLD").read_text() == "keep"        # prior active source UNTOUCHED
 
 
-def test_signer_config_diagnostics_reach_result(tmp_path):
-    # §4: trusted-signer config diagnostics are surfaced in the install/adopt result.
-    from lhpc.core.config import Config
-    from lhpc.core.probes import RealSystem
-    _, head = _local_repo(tmp_path, "app-src")
+def test_signer_config_diagnostics_reach_result(tmp_path, make_repo, installer):
+    # Trusted-signer config diagnostics are surfaced in the install/adopt result.
+    head = make_repo(tmp_path / "rt" / "app-src", {"f": "x"})
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src", pin_commit=head))
-    cfg = Config(values={"install": {"adopt_search_root": str(tmp_path / "rt")},
-                         "provenance": {"trusted_signers": ["not-a-fingerprint"]}})
-    stacks = (Stack(id="s", name="s", main="app", components=(comp,)),)
-    inst = Installer(Paths(runtime_root=tmp_path / "rt"), stacks, cfg, RealSystem())
+    inst = installer(comp, search_root=tmp_path / "rt",
+                     values={"provenance": {"trusted_signers": ["not-a-fingerprint"]}})
     action = inst.adopt_source(comp, source="pinned")
     assert action.status == "done"
     assert "signer-config" in action.detail and "malformed" in action.detail
 
 
-def _dead_or_zombie(pid: int) -> bool:
-    try:
-        with open(f"/proc/{pid}/stat") as fh:
-            st = fh.read()
-        return st[st.rindex(")") + 2] in ("Z", "X", "x")
-    except (OSError, ValueError):
-        return True
-
-
-def test_build_launcher_step_timeout_kills_child_group(tmp_path):
-    import subprocess, sys, os, time
-    from lhpc.core import commands
-    prog = ("import subprocess, sys, time\n"
-            "c = subprocess.Popen(['sleep', '60'])\n"
-            "open(sys.argv[1], 'w').write(str(c.pid))\n"
-            "time.sleep(60)\n")
-    steps = [{"argv": [sys.executable, "-c", prog, str(tmp_path / "childpid")]}]
-    launcher = tmp_path / "l.py"
-    launcher.write_text(commands.render_build_launcher(steps, str(tmp_path), str(tmp_path), []))
-    env = {**os.environ, "LHPC_BUILD_STEP_TIMEOUT_S": "0.6"}
-    t0 = time.time()
-    r = subprocess.run([sys.executable, str(launcher)], capture_output=True, text=True, env=env)
-    assert r.returncode == 124 and "step timed out" in r.stderr
-    assert time.time() - t0 < 10
-    child = int((tmp_path / "childpid").read_text())
-    for _ in range(60):
-        if _dead_or_zombie(child):
-            break
-        time.sleep(0.1)
-    assert _dead_or_zombie(child)                          # step's child killed with the group
-
-
-def test_build_launcher_malformed_timeout_fails_safe(tmp_path):
-    import subprocess, sys, os
-    from lhpc.core import commands
-    launcher = tmp_path / "l.py"
-    launcher.write_text(commands.render_build_launcher([{"argv": ["true"]}], str(tmp_path),
-                                                       str(tmp_path), []))
-    env = {**os.environ, "LHPC_BUILD_STEP_TIMEOUT_S": "not-a-number"}
-    r = subprocess.run([sys.executable, str(launcher)], capture_output=True, text=True, env=env)
-    assert r.returncode == 3 and "invalid LHPC_BUILD_STEP_TIMEOUT_S" in r.stderr   # not unlimited
-
-
-def test_adopt_source_parent_swap_before_staging_blocks(tmp_path):
-    # §1.6.4: a symlinked source parent before staging fails closed; nothing outside touched.
-    import os
-    inst = _inst_source_txn(tmp_path)
-    _, head = _local_repo(tmp_path, "app-src")
+def test_adopt_source_parent_swap_before_staging_blocks(tmp_path, make_repo, installer):
+    # A symlinked source parent before staging fails closed; nothing outside touched.
+    inst = installer(search_root=tmp_path / "rt")
+    head = make_repo(tmp_path / "rt" / "app-src", {"f": "x"})
     outside = tmp_path / "out"; outside.mkdir(); (outside / "keep").write_text("KEEP")
     inst.paths.runtime_root.mkdir(parents=True, exist_ok=True)
     os.symlink(outside, inst.paths.runtime_root / "src")            # source parent -> outside
@@ -2542,19 +2128,19 @@ def test_adopt_source_parent_swap_before_staging_blocks(tmp_path):
     assert (outside / "keep").read_text() == "KEEP"
 
 
-def test_same_basename_sources_get_distinct_journals(tmp_path):
-    # §3/#2: src/a/app and src/b/app must never share a journal identity.
-    inst = _inst_source_txn(tmp_path)
+def test_same_basename_sources_get_distinct_journals(tmp_path, installer):
+    # src/a/app and src/b/app must never share a journal identity.
+    inst = installer(search_root=tmp_path / "rt")
     root = inst.paths.runtime_root
     ja = inst._journal_path(root / "src" / "a" / "app")
     jb = inst._journal_path(root / "src" / "b" / "app")
     assert ja.name != jb.name and ja.name.startswith("app-") and jb.name.startswith("app-")
 
 
-def test_legacy_basename_journal_is_retained_and_blocks(tmp_path):
-    # §3/#5: a legacy basename-only journal (app.json) does not match the identity-bound
+def test_legacy_basename_journal_is_retained_and_blocks(tmp_path, installer):
+    # A legacy basename-only journal (app.json) does not match the identity-bound
     # name, so recovery retains it and blocks — never silently migrates or deletes it.
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     d = inst.paths.under("state", "source-txn"); d.mkdir(parents=True, exist_ok=True)
     (d / "app.json").write_text(json.dumps({
@@ -2565,17 +2151,17 @@ def test_legacy_basename_journal_is_retained_and_blocks(tmp_path):
     assert (d / "app.json").exists()                     # legacy journal RETAINED, not migrated
 
 
-def test_post_activation_provenance_mismatch_restores_prior(tmp_path, monkeypatch):
-    # §4: a post-activation provenance failure rolls back to the prior via the held FD BEFORE
+def test_post_activation_provenance_mismatch_restores_prior(tmp_path, monkeypatch, git, make_repo, installer):
+    # A post-activation provenance failure rolls back to the prior via the held FD BEFORE
     # `.prev`/journal are cleared — prior restored, journal retained, never a green success.
     from lhpc.core import provenance
-    inst = _inst_source_txn(tmp_path)
-    _, head = _local_repo(tmp_path, "app-src")
+    inst = installer(search_root=tmp_path / "rt")
+    head = make_repo(tmp_path / "rt" / "app-src", {"f": "x"})
     active = inst.paths.under("src", "app"); active.mkdir(parents=True)
     (active / "OLD").write_text("PRIOR")                 # a prior active source
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src", pin_commit=head))
-    _register_tree(inst, active, comp)                   # identity gate passes -> reaches provenance
+    _register_tree(git, inst, active, comp)                   # identity gate passes -> reaches provenance
     calls = {"n": 0}
     real = provenance.evaluate
     def fake(runner, path, spec, source, trusted, expected_commit=""):
@@ -2592,10 +2178,10 @@ def test_post_activation_provenance_mismatch_restores_prior(tmp_path, monkeypatc
     assert not inst._journal_path(active).exists()
 
 
-def test_successful_adopt_clears_journal_only_after_provenance(tmp_path):
-    # §4: the normal success path clears the journal/.prev ONLY after final provenance passes.
-    inst = _inst_source_txn(tmp_path)
-    _, head = _local_repo(tmp_path, "app-src")
+def test_successful_adopt_clears_journal_only_after_provenance(tmp_path, make_repo, installer):
+    # The normal success path clears the journal/.prev ONLY after final provenance passes.
+    inst = installer(search_root=tmp_path / "rt")
+    head = make_repo(tmp_path / "rt" / "app-src", {"f": "x"})
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src", pin_commit=head))
     action = inst.adopt_source(comp, source="pinned")
@@ -2605,17 +2191,16 @@ def test_successful_adopt_clears_journal_only_after_provenance(tmp_path):
     assert not (dest.parent / ".app.prev").exists()      # .prev cleaned
 
 
-def test_journal_filename_uses_full_sha256(tmp_path):
-    import re
-    inst = _inst_source_txn(tmp_path)
+def test_journal_filename_uses_full_sha256(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     name = inst._journal_path(inst.paths.runtime_root / "src" / "app").name
     assert re.fullmatch(r"app-[0-9a-f]{64}\.json", name)     # FULL digest, not truncated
 
 
-def test_journal_missing_txn_id_retained_and_blocks(tmp_path):
-    # §3: a journal at the identity-bound path but with NO txn_id (legacy payload) is
+def test_journal_missing_txn_id_retained_and_blocks(tmp_path, installer):
+    # A journal at the identity-bound path but with NO txn_id (legacy payload) is
     # retained + blocked by recovery, never resumed.
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     inst.paths.under("state", "source-txn").mkdir(parents=True, exist_ok=True)
     dest = src / "app"; dest.mkdir()
@@ -2627,8 +2212,8 @@ def test_journal_missing_txn_id_retained_and_blocks(tmp_path):
     assert inst._journal_path(dest).exists()                # retained as evidence
 
 
-def test_journal_altered_txn_id_retained_and_blocks(tmp_path):
-    inst = _inst_source_txn(tmp_path)
+def test_journal_altered_txn_id_retained_and_blocks(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     inst.paths.under("state", "source-txn").mkdir(parents=True, exist_ok=True)
     dest = src / "app"; dest.mkdir()
@@ -2642,10 +2227,8 @@ def test_journal_altered_txn_id_retained_and_blocks(tmp_path):
 
 
 def test_copy_into_candidate_preserves_symlinks_and_ignores(tmp_path):
-    # §2: local-fallback copy fills the pre-created empty candidate per-entry (no
+    # The local-fallback copy fills the pre-created empty candidate per-entry (no
     # dirs_exist_ok merge), preserving symlinks unfollowed and honoring the ignore set.
-    import os
-    from lhpc.core.install import Installer
     local = tmp_path / "local"; (local / "sub").mkdir(parents=True)
     (local / "f").write_text("F"); (local / "sub" / "g").write_text("G")
     os.symlink("f", local / "ln")                       # relative symlink
@@ -2657,9 +2240,8 @@ def test_copy_into_candidate_preserves_symlinks_and_ignores(tmp_path):
     assert not (cand / "__pycache__").exists()         # ignore set honored
 
 
-def test_journal_exclusive_create_refuses_existing_leaf(tmp_path):
-    import os
-    inst = _inst_source_txn(tmp_path)
+def test_journal_exclusive_create_refuses_existing_leaf(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; prev = src / ".app.prev"; staging = src / ".app.candidate-1-2"
     inst.paths.under("state", "source-txn").mkdir(parents=True, exist_ok=True)
@@ -2671,9 +2253,9 @@ def test_journal_exclusive_create_refuses_existing_leaf(tmp_path):
     assert inst._create_journal(dest, prev, staging, _META, {}) is None     # O_NOFOLLOW refuses
 
 
-def test_injected_journal_blocks_before_prev_change(tmp_path):
-    # §2/#6: a journal appearing after the absent-preflight blocks BEFORE any dest->.prev.
-    inst = _inst_source_txn(tmp_path)
+def test_injected_journal_blocks_before_prev_change(tmp_path, installer):
+    # A journal appearing after the absent-preflight blocks BEFORE any dest->.prev.
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     inst.paths.under("state", "source-txn").mkdir(parents=True, exist_ok=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
@@ -2686,11 +2268,10 @@ def test_injected_journal_blocks_before_prev_change(tmp_path):
     assert inst._journal_path(dest).exists()                     # injected journal retained
 
 
-def test_activate_verifies_candidate_identity_before_promotion(tmp_path):
-    # §1: if the candidate is not the FD-verified inode, activation refuses (via _activate_held
+def test_activate_verifies_candidate_identity_before_promotion(tmp_path, installer):
+    # If the candidate is not the FD-verified inode, activation refuses (via _activate_held
     # receiving a mismatched handle) — proven through the transaction's verify_candidate.
-    from lhpc.core import source_fs
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     inst.paths.under("state", "source-txn").mkdir(parents=True, exist_ok=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
@@ -2703,13 +2284,12 @@ def test_activate_verifies_candidate_identity_before_promotion(tmp_path):
         fd = -1                                   # dead descriptor: no live ident either
     with source_fs.ManagedSourceTransaction(inst.paths, dest.parent) as txn:
         outcome = inst._activate_held(txn, dest, staging, _META, handle=_BadHandle())
-    assert outcome in ("recovery-required", "failed-clean")
+    assert outcome == "recovery-required"                        # a dead handle proves nothing
     assert (dest / "m").read_text() == "LIVE"                    # active source not replaced
 
 
-def test_candidate_substitution_is_recovery_required_and_preserved(tmp_path):
-    from lhpc.core import source_fs
-    inst = _inst_source_txn(tmp_path)
+def test_candidate_substitution_is_recovery_required_and_preserved(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     inst.paths.under("state", "source-txn").mkdir(parents=True, exist_ok=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
@@ -2723,12 +2303,14 @@ def test_candidate_substitution_is_recovery_required_and_preserved(tmp_path):
     assert inst._journal_path(dest).exists()                  # journal retained
 
 
-def test_journal_ownership_lost_before_update_rolls_back(tmp_path, monkeypatch):
-    inst = _inst_source_txn(tmp_path)
+def test_journal_ownership_lost_before_update_rolls_back(tmp_path, monkeypatch, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     inst.paths.under("state", "source-txn").mkdir(parents=True, exist_ok=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "m").write_text("NEW")
+    # the journal's state write is the collaborator stubbed: losing ownership of an open,
+    # fsynced marker between two steps needs a concurrent process
     monkeypatch.setattr(type(inst), "_update_journal",
                         lambda self, jh, d, p, s, state: False)   # ownership lost on update
     outcome = _activate(inst, dest, staging)
@@ -2737,10 +2319,8 @@ def test_journal_ownership_lost_before_update_rolls_back(tmp_path, monkeypatch):
     assert inst._journal_path(dest).exists()                  # journal retained
 
 
-def test_cleanup_owned_staging_removes_intact_retains_substituted(tmp_path):
-    import os, shutil
-    from lhpc.core import source_fs
-    inst = _inst_source_txn(tmp_path)
+def test_cleanup_owned_staging_removes_intact_retains_substituted(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     with source_fs.ManagedSourceTransaction(inst.paths, src) as txn:
         h = txn.create_candidate(".app.candidate-1-2")
@@ -2753,10 +2333,8 @@ def test_cleanup_owned_staging_removes_intact_retains_substituted(tmp_path):
         assert (src / ".app.candidate-3-4").is_symlink()        # substitute RETAINED
 
 
-def test_substitution_during_successful_provenance_is_recovery_required(tmp_path):
-    import shutil
-    from lhpc.core import source_fs
-    inst = _inst_source_txn(tmp_path)
+def test_substitution_during_successful_provenance_is_recovery_required(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     inst.paths.under("state", "source-txn").mkdir(parents=True, exist_ok=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
@@ -2774,10 +2352,8 @@ def test_substitution_during_successful_provenance_is_recovery_required(tmp_path
     assert (src / "app" / "evil").exists()                     # substituted active leaf retained
 
 
-def test_substitution_during_failed_provenance_does_not_delete_dest(tmp_path):
-    import shutil
-    from lhpc.core import source_fs
-    inst = _inst_source_txn(tmp_path)
+def test_substitution_during_failed_provenance_does_not_delete_dest(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     inst.paths.under("state", "source-txn").mkdir(parents=True, exist_ok=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
@@ -2794,8 +2370,8 @@ def test_substitution_during_failed_provenance_does_not_delete_dest(tmp_path):
     assert (src / ".app.prev").exists() and inst._journal_path(dest).exists()
 
 
-def test_failed_staging_cleans_controller_candidate(tmp_path):
-    inst = _inst_source_txn(tmp_path)
+def test_failed_staging_cleans_controller_candidate(tmp_path, installer):
+    inst = installer(search_root=tmp_path / "rt")
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app"))         # no remote, no local -> fails
     action = inst.adopt_source(comp, source="pinned")
@@ -2806,11 +2382,11 @@ def test_failed_staging_cleans_controller_candidate(tmp_path):
     assert leftovers == []                                     # intact candidate cleaned up
 
 
-def test_v3_journal_generation_blocked_with_substituted_leaves(tmp_path):
+def test_v3_journal_generation_blocked_with_substituted_leaves(tmp_path, installer):
     # A structurally-valid v3 journal — even with substituted candidate/dest/prev leaves —
     # triggers NO automatic promotion/restore/cleanup: typed recovery-required, everything
     # retained, further mutation blocked.
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("SUBSTITUTED DEST")
     prev = src / ".app.prev"; prev.mkdir(); (prev / "m").write_text("SUBSTITUTED PRIOR")
@@ -2832,12 +2408,12 @@ def test_v3_journal_generation_blocked_with_substituted_leaves(tmp_path):
     assert inst._journal_path(dest).exists()                    # journal retained
 
 
-def test_v5_inode_recycling_forged_ctime_prior_not_restored(tmp_path):
+def test_v5_inode_recycling_forged_ctime_prior_not_restored(tmp_path, installer):
     # DETERMINISTIC inode-recycling forgery (no reliance on real inode reuse): the journal records
     # the ORIGINAL prior's [dev, ino, ctime_ns]; a `.prev` recreated on the RECYCLED inode has the
     # SAME dev+ino but a fresh ctime. The v5 ctime check catches it -> the forged prior is NOT
     # restored, everything retained. (Candidate absent so recovery takes the prior-restore path.)
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"                                         # died after dest->.prev (dest absent)
     prev = src / ".app.prev"; prev.mkdir(); (prev / "m").write_text("SUBSTITUTE PRIOR")
@@ -2860,11 +2436,11 @@ def test_v5_inode_recycling_forged_ctime_prior_not_restored(tmp_path):
     assert inst._journal_path(dest).exists()                   # retained
 
 
-def test_v4_journal_retained_as_unprovable_not_restored(tmp_path):
+def test_v4_journal_retained_as_unprovable_not_restored(tmp_path, installer):
     # A v4 ([dev, ino]-only) journal is no longer trusted for destructive recovery — its identity is
     # forgeable via inode recycling — so it is retained-as-unprovable exactly like v2/v3, never a
     # roll-back. (An identical v5 journal DOES roll back: see test_recover_rolls_back_after_prior_archived.)
-    inst = _inst_source_txn(tmp_path)
+    inst = installer(search_root=tmp_path / "rt")
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"                                         # died after dest->.prev (dest absent)
     prev = src / ".app.prev"; prev.mkdir(); (prev / "m").write_text("PRIOR")
@@ -2877,230 +2453,10 @@ def test_v4_journal_retained_as_unprovable_not_restored(tmp_path):
     assert inst._journal_path(dest).exists()                   # journal retained
 
 
-# ===== merged from test_linked_source.py =====
-def _life(tmp_path):
-    return Lifecycle(Paths(runtime_root=tmp_path), (), Config(operator=OperatorConfig()),
-                     FakeSystem().system)
-
-
-def test_write_config_files_returns_structured_results(tmp_path):
-    from lhpc.core.services import ControllerService, ConfigWrite
-    from lhpc.core.paths import Paths
-    from lhpc.core.probes.backends import FakeSystem
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    res = svc.write_config_files("voice")        # env fmt -> runtime config dir
-    assert res and all(isinstance(w, ConfigWrite) for w in res)
-    assert any(w.component == "loraham-voice" and w.status == "written" for w in res)
-
-
-def test_write_config_failure_is_structured_not_swallowed(tmp_path, monkeypatch):
-    from lhpc.core.services import ControllerService
-    from lhpc.core.paths import Paths
-    from lhpc.core.probes.backends import FakeSystem
-    from lhpc.core import runtime_fs
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    # voice writes to {runtime}/config/files/... -> runtime policy via runtime_fs.
-    def boom(paths, path, text, mode=0o644):
-        raise OSError("disk full")
-    monkeypatch.setattr(runtime_fs, "atomic_write", boom)
-    res = svc.write_config_files("voice")
-    assert any(w.component == "loraham-voice" and w.status == "failed"
-               and "disk full" in w.detail for w in res)
-
-
-def test_start_blocks_when_generated_config_write_fails(tmp_path, monkeypatch, set_call, real_spawn):
-    from lhpc.core.services import ControllerService, ConfigWrite
-    from lhpc.core.lifecycle import Lifecycle
-    from lhpc.core.paths import Paths
-    from lhpc.core.probes.backends import FakeSystem
-    from lhpc.core.outcomes import Outcome
-    # Daemon serving both bands so voice's dependency gate passes and it reaches the
-    # config-generation step; then its config write fails -> the launch is BLOCKED.
-    # voice requires DIRECT, so the fixture daemon already reports DIRECT (gate clears).
-    STATUS = b"STATUS RADIO=READY TXMODE=DIRECT\n"
-    # Desktop-shaped fake: the GTK header present, so the GUI preflight keeps the GTK
-    # component (this test drives ITS config write; headless would drop it for the
-    # terminal variant).
-    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": STATUS,
-                                   "/tmp/loraconf868.sock": STATUS},
-                     paths={"/usr/include/gtk-3.0/gtk/gtk.h"}).system
-    (tmp_path / "src" / "LoRaHAM_Voice").mkdir(parents=True)   # source present (installed)
-    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
-    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
-    monkeypatch.setattr(type(svc), "is_built", lambda self, c: True)
-    monkeypatch.setattr(type(svc), "_running_conflicts", lambda self, c, b: False)
-    monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, c: [])
-    monkeypatch.setattr(type(svc), "_lifecycle", lambda self: Lifecycle(
-        self._paths, self.stacks(), self.config(), self._system, spawn=real_spawn))
-    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None, **kw: [
-        ConfigWrite("loraham-voice", "/x/voice.conf", "failed", "disk full")])
-    set_call(svc)
-    res = svc.start("voice", apply=True)
-    assert any(r.component == "loraham-voice" and r.outcome == Outcome.BLOCKED
-               and "config generation failed" in (r.summary or "") for r in res.results), \
-        _outcomes(res)
-
-
-def test_interactive_start_blocks_when_config_generation_fails(tmp_path, monkeypatch, set_call, real_spawn):
-    # §5.3: an interactive component whose required config CANNOT be generated must be
-    # BLOCKED — no interactive marker written, no manual command presented as ready.
-    from lhpc.core.services import ControllerService, ConfigWrite
-    from lhpc.core.lifecycle import Lifecycle
-    from lhpc.core.paths import Paths
-    from lhpc.core.probes.backends import FakeSystem
-    from lhpc.core.outcomes import Outcome
-    STATUS = b"STATUS RADIO=READY TXMODE=MANAGED\n"
-    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": STATUS,
-                                   "/tmp/loraconf868.sock": STATUS}).system
-    (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True)
-    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
-    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
-    monkeypatch.setattr(type(svc), "is_built", lambda self, c: True)
-    monkeypatch.setattr(type(svc), "_running_conflicts", lambda self, c, b: False)
-    monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, c: [])
-    monkeypatch.setattr(type(svc), "_lifecycle", lambda self: Lifecycle(
-        self._paths, self.stacks(), self.config(), self._system, spawn=real_spawn))
-    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None, **kw: [
-        ConfigWrite("loraham-chat", "/x/lorachat.conf", "failed", "disk full")])
-    marks = {"n": 0}
-    monkeypatch.setattr(type(svc), "mark_interactive", lambda self, s, b="": marks.__setitem__("n", marks["n"] + 1))
-    set_call(svc)
-    res = svc.start("chat", apply=True)
-    assert not res.ok
-    assert any(r.component == "loraham-chat" and r.outcome == Outcome.BLOCKED
-               and "config could not be generated" in (r.summary or "") for r in res.results)
-    assert marks["n"] == 0                       # interactive marker NOT written
-
-
-# ===== merged from test_snapshot_cache.py =====
-def _svc_snapshot_cache(tmp_path):
-    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-
-
-def _count_assessments(monkeypatch):
-    n = []
-    orig = statusmod.StatusProber.assess_stacks
-    monkeypatch.setattr(statusmod.StatusProber, "assess_stacks",
-                        lambda self, stacks: (n.append(1), orig(self, stacks))[1])
-    return n
-
-
-def test_render_assesses_the_snapshot_once_per_request(tmp_path, monkeypatch):
-    # The Apps page calls build_snapshot ~15× (one per stack helper). The memo must collapse that
-    # to a SINGLE assessment — this is the whole performance fix.
-    n = _count_assessments(monkeypatch)
-    c = create_app(lambda: _svc_snapshot_cache(tmp_path)).test_client()
-    n.clear(); c.get("/stacks")
-    assert len(n) == 1, f"one render must assess once, got {len(n)}"
-
-
-def test_each_request_reassesses_fresh(tmp_path, monkeypatch):
-    # before_request drops the cache, so a second request never serves the first request's snapshot.
-    n = _count_assessments(monkeypatch)
-    c = create_app(lambda: _svc_snapshot_cache(tmp_path)).test_client()
-    n.clear(); c.get("/stacks"); c.get("/stacks"); c.get("/")
-    assert len(n) == 3, f"each request reassesses exactly once, got {len(n)}"
-
-
-def test_memo_returns_same_object_until_invalidated(tmp_path):
-    svc = _svc_snapshot_cache(tmp_path)
-    a = svc.build_snapshot()
-    assert svc.build_snapshot() is a                 # memoized within the operation
-    svc.invalidate_snapshot()
-    assert svc.build_snapshot() is not a             # invalidated -> recompute
-
-
-def test_fresh_bypasses_cache_and_refreshes_it(tmp_path):
-    # The authoritative under-lock rechecks pass fresh=True and must NEVER get a cached snapshot.
-    svc = _svc_snapshot_cache(tmp_path)
-    a = svc.build_snapshot()
-    b = svc.build_snapshot(fresh=True)
-    assert b is not a                                # fresh forced a recompute
-    assert svc.build_snapshot() is b                 # and refreshed the cache for later readers
-
-
-def test_mutating_ops_drop_the_memo(tmp_path):
-    # A public mutating entry must never let a later read serve a pre-mutation snapshot, even in
-    # the same process (CLI sequences, an outer op reading after an inner public stop). Entry+exit
-    # invalidation also covers refusal paths, so this holds regardless of the op's outcome.
-    svc = _svc_snapshot_cache(tmp_path)
-    a = svc.build_snapshot()
-    svc.stop("kiss", apply=False)                    # traverses the decorated public entry
-    assert svc.build_snapshot() is not a
-
-
-def test_nested_public_stop_refreshes_the_outer_readers(tmp_path):
-    # The owner-stop window inside start(): after an inner public stop returns, the outer op's next
-    # build_snapshot() must recompute (the inner exit-invalidation is what restores the guarantee).
-    svc = _svc_snapshot_cache(tmp_path)
-    a = svc.build_snapshot()
-    try:
-        svc.stop("kiss", apply=True)                 # outcome irrelevant; finally invalidates
-    except Exception:                                # noqa: BLE001 — harness has no processes
-        pass
-    assert svc.build_snapshot() is not a
-
-
-def test_snapshot_memo_is_thread_local(tmp_path):
-    # The shared ControllerService is hit by concurrent Waitress worker threads. The memo must be
-    # thread-local: one thread's invalidation must NOT clobber another thread's cached snapshot, and
-    # each thread computes its own. Sequenced with events so the interleaving is deterministic.
-    import threading
-    svc = _svc_snapshot_cache(tmp_path)
-    r = {}
-    a_built, b_done = threading.Event(), threading.Event()
-
-    def thread_a():
-        r["a1"] = svc.build_snapshot()          # A memoizes in A's thread-local
-        a_built.set()
-        b_done.wait(5)                          # ... while B builds + invalidates on its own thread
-        r["a2"] = svc.build_snapshot()          # must return A's SAME object (B could not clobber it)
-
-    def thread_b():
-        a_built.wait(5)
-        r["b1"] = svc.build_snapshot()          # B memoizes in B's own thread-local (distinct object)
-        svc.invalidate_snapshot()               # clears ONLY B's memo
-        b_done.set()
-
-    ta, tb = threading.Thread(target=thread_a), threading.Thread(target=thread_b)
-    ta.start(); tb.start(); ta.join(5); tb.join(5)
-
-    assert r["a1"] is r["a2"]                    # A's memo survived B's invalidate -> thread-local
-    assert r["b1"] is not r["a1"]               # each thread assessed its own snapshot
-
-
-# ===== merged from test_race_safety.py =====
-def _git_race_safety(repo: Path, *args: str) -> str:
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-    out = subprocess.run(["git", "-C", str(repo), *args], check=True,
-                         capture_output=True, text=True, env=env)
-    return out.stdout.strip()
-
-
-def _make_repo_race_safety(path: Path) -> str:
-    path.mkdir(parents=True)
-    _git_race_safety(path, "init", "-q")
-    (path / "file.txt").write_text("hello\n")
-    _git_race_safety(path, "add", "-A")
-    _git_race_safety(path, "commit", "-qm", "init")
-    return _git_race_safety(path, "rev-parse", "HEAD")
-
-
-def _comp_race_safety():
-    return Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app", local_dir="app"))
-
-
-def _inst_race_safety(tmp_path, comp):
-    cfg = Config(values={"install": {"adopt_search_root": str(tmp_path / "rt" / "local")}})
-    stacks = (Stack(id="s", name="s", main=comp.id, components=(comp,)),)
-    return Installer(Paths(runtime_root=tmp_path / "rt"), stacks, cfg, RealSystem())
-
-
+# --- race safety: a concurrent substitution at every seam of a destructive operation --------------
 def _seam(monkeypatch, point: str, action):
-    """Fire `action(path)` exactly once at seam `point`."""
+    """Fire `action(path)` exactly once at seam `point` — `source_fs.race_seam` is the
+    production no-op hook that exists for exactly this injection."""
     fired = {"done": False}
     def hook(p, path=""):
         if p == point and not fired["done"]:
@@ -3110,10 +2466,10 @@ def _seam(monkeypatch, point: str, action):
     return fired
 
 
-def test_update_refuses_substituted_dir_at_archive(tmp_path, monkeypatch):
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+def test_update_refuses_substituted_dir_at_archive(tmp_path, monkeypatch, make_repo, installer):
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"       # v1 active + recorded
     dest = inst.paths.under("src", "app")
 
@@ -3132,10 +2488,10 @@ def test_update_refuses_substituted_dir_at_archive(tmp_path, monkeypatch):
     assert not list(dest.parent.glob(".app.candidate-*"))               # candidate cleaned
 
 
-def test_update_refuses_substituted_symlink_at_archive(tmp_path, monkeypatch):
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+def test_update_refuses_substituted_symlink_at_archive(tmp_path, monkeypatch, make_repo, installer):
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     dest = inst.paths.under("src", "app")
     outside = tmp_path / "outside"
@@ -3152,12 +2508,12 @@ def test_update_refuses_substituted_symlink_at_archive(tmp_path, monkeypatch):
     assert outside.exists()                                             # target untouched
 
 
-def test_fresh_install_refuses_injected_empty_dir(tmp_path, monkeypatch):
+def test_fresh_install_refuses_injected_empty_dir(tmp_path, monkeypatch, make_repo, installer):
     # plain rename(2) silently REPLACES an empty directory — the atomic NOREPLACE promotion
     # must refuse instead, leaving the injected directory exactly in place.
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
     dest = inst.paths.under("src", "app")
 
     def inject(_path):
@@ -3172,10 +2528,10 @@ def test_fresh_install_refuses_injected_empty_dir(tmp_path, monkeypatch):
     assert not list(dest.parent.glob(".app.candidate-*"))               # candidate cleaned
 
 
-def test_fresh_install_refuses_injected_symlink(tmp_path, monkeypatch):
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+def test_fresh_install_refuses_injected_symlink(tmp_path, monkeypatch, make_repo, installer):
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
     dest = inst.paths.under("src", "app")
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -3191,20 +2547,37 @@ def test_fresh_install_refuses_injected_symlink(tmp_path, monkeypatch):
     assert not any(outside.iterdir())                                   # target never written
 
 
-def test_unchanged_update_and_install_still_succeed(tmp_path):
+def test_unchanged_update_and_install_still_succeed(tmp_path, git, make_repo, installer):
     # The protocols must not break legitimate operation: fresh install then a clean update.
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
-    _git_race_safety(tmp_path / "rt" / "local" / "app", "add", "-A")
-    _git_race_safety(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
+    git(tmp_path / "rt" / "local" / "app", "add", "-A")
+    git(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status == "done", action.detail
     dest = inst.paths.under("src", "app")
     assert (dest / "file.txt").read_text() == "v2\n"
     assert not list(dest.parent.glob(".app.quarantine-*"))              # no artifacts
+
+
+class _OriginOf:
+    """A runner answering the one git question the identity gate asks — the origin of the
+    checkout — and delegating everything else to the FakeSystem. A pattern stub rather than a
+    commands-table entry because the gate asks through a controller-pinned `/proc/<pid>/fd/N`
+    path, so the exact argv is only knowable by resolving it."""
+
+    def __init__(self, fake, dest, url):
+        self._fake, self._dest, self._url = fake, os.path.realpath(str(dest)), url
+
+    def run(self, argv, timeout, *a, **k):
+        argv = list(argv)
+        if (argv[:2] == ["git", "-C"] and len(argv) >= 4 and os.path.realpath(argv[2]) == self._dest
+                and argv[3:] == ["config", "--get", "remote.origin.url"]):
+            return CR(0, self._url + "\n", "")
+        return self._fake.run(argv, timeout, *a, **k)
 
 
 def _svc_env(tmp_path):
@@ -3216,19 +2589,10 @@ def _svc_env(tmp_path):
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "pinned", "", time.time(),
                                        "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    from lhpc.core.probes.backends import CommandResult
-    real_run = svc._system.runner.run
-    dest_real = os.path.realpath(str(dest))
-    def run(argv, timeout, *a, **k):
-        argv = list(argv)
-        if (len(argv) >= 4 and argv[:2] == ["git", "-C"]
-                and os.path.realpath(argv[2]) == dest_real
-                and argv[3:] == ["config", "--get", "remote.origin.url"]):
-            return CommandResult(
-                0, "https://github.com/makrohard/loraham-kiss-tnc.git\n", "")
-        return real_run(argv, timeout, *a, **k)
-    svc._system.runner.run = run
+    fake = FakeSystem()
+    runner = _OriginOf(fake, dest, "https://github.com/makrohard/loraham-kiss-tnc.git")
+    svc = ControllerService(system=System(runner=runner, procfs=fake, fs=fake, unix=fake),
+                            paths=Paths(runtime_root=tmp_path))
     return svc, dest
 
 
@@ -3300,20 +2664,20 @@ def test_orphan_quarantine_evidence_blocks_and_is_retained(tmp_path):
     assert dest.exists()                                                # source untouched
 
 
-def test_unavailable_renameat2_refuses_before_any_mutation(tmp_path, monkeypatch):
+def test_unavailable_renameat2_refuses_before_any_mutation(tmp_path, monkeypatch, make_repo, installer):
     # Without the atomic no-clobber primitive, source lifecycle mutation refuses TYPED —
     # no journal, candidate, source, or registry change; and NO check-then-rename fallback.
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
-    monkeypatch.setattr(source_fs, "_renameat2_fn", None)
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
+    monkeypatch.setattr(source_fs, "_renameat2_fn", None)     # the libc symbol is absent
     action = inst.adopt_source(comp, source="dev")
     assert action.status == "failed" and "renameat2" in action.detail
     dest = inst.paths.under("src", "app")
     assert not dest.exists()                                            # no source
     assert not inst._journal_path(dest).exists()                        # no journal
     assert source_registry.read_record(inst.paths, "src/app") is None   # no registry
-    assert not list(dest.parent.glob(".app.candidate-*")) if dest.parent.exists() else True
+    assert not list(dest.parent.glob(".app.candidate-*"))               # no candidate either
     # uninstall/clean refuse likewise, before any detach
     svc, sdest = _svc_env(tmp_path / "svc")
     res = svc.uninstall("kiss", apply=True)
@@ -3321,12 +2685,12 @@ def test_unavailable_renameat2_refuses_before_any_mutation(tmp_path, monkeypatch
     assert sdest.exists()
 
 
-def test_injected_prev_at_archive_blocks_with_zero_mutation(tmp_path, monkeypatch):
+def test_injected_prev_at_archive_blocks_with_zero_mutation(tmp_path, monkeypatch, make_repo, installer):
     # A leaf injected at `.prev` between the preflight and the archive rename: the NOREPLACE
     # archive refuses — nothing renamed, injected leaf + active source untouched.
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     dest = inst.paths.under("src", "app")
     prev = dest.with_name(".app.prev")
@@ -3343,18 +2707,13 @@ def test_injected_prev_at_archive_blocks_with_zero_mutation(tmp_path, monkeypatc
     assert not inst._journal_path(dest).exists()
 
 
-def test_recovery_retains_occupied_dest_and_substituted_prev(tmp_path):
-    # prior-archived crash state: an OCCUPIED destination (injected dir) is never deleted to
-    # restore the prior; a SUBSTITUTED `.prev` (v4 ident mismatch) is never restored/removed.
-    import json
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+def _prior_archived_crash(inst):
+    """The prior-archived crash state: `.prev` holds the archived prior (its v5 ident in the
+    journal), no candidate, dest absent. Returns (dest, prev)."""
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"
     prev = src / ".app.prev"
     prev.mkdir(); (prev / "m").write_text("PRIOR")
-    dest.mkdir(); (dest / "foreign").write_text("injected occupant")
     rel = lambda q: str(q.relative_to(inst.paths.runtime_root))
     cand_rel = rel(src / ".app.candidate-1-2")
     st = os.stat(prev, follow_symlinks=False)
@@ -3366,30 +2725,43 @@ def test_recovery_retains_occupied_dest_and_substituted_prev(tmp_path):
         "meta": {"selector": "dev", "resolved_commit": "a" * 40, "remote": "",
                  "strategy": "", "components": ["app"], "had_prior": True},
         "idents": {"candidate": None, "prev": [st.st_dev, st.st_ino, st.st_ctime_ns]}}))
+    return dest, prev
+
+
+def test_recovery_retains_an_occupied_destination(installer):
+    # prior-archived crash state: an OCCUPIED destination (injected dir) is never deleted to
+    # restore the prior.
+    inst = installer()
+    dest, prev = _prior_archived_crash(inst)
+    dest.mkdir(); (dest / "foreign").write_text("injected occupant")
     msgs = inst.recover_source_activations()
     assert any("recovery-required" in m and ("occupied" in m or "unverified occupant" in m)
                for m in msgs)
     assert (dest / "foreign").exists()                                  # occupant retained
     assert (prev / "m").read_text() == "PRIOR"                          # prior retained
     assert inst._journal_path(dest).exists()                            # journal retained
-    # now clear the occupant but SUBSTITUTE .prev: recovery must refuse to restore it
-    import shutil
-    shutil.rmtree(dest)
+
+
+def test_recovery_never_restores_a_substituted_prev(installer):
+    # prior-archived crash state: a SUBSTITUTED `.prev` (ident mismatch) is never restored or
+    # removed — recovery refuses and retains it.
+    inst = installer()
+    dest, prev = _prior_archived_crash(inst)
     shutil.rmtree(prev)
     prev.mkdir(); (prev / "m").write_text("SUBSTITUTE")                 # different inode
-    msgs2 = inst.recover_source_activations()
-    assert any("substituted" in m for m in msgs2)
+    msgs = inst.recover_source_activations()
+    assert any("substituted" in m and "recovery-required" in m for m in msgs)
+    assert not dest.exists()                                            # nothing restored
     assert (prev / "m").read_text() == "SUBSTITUTE"                     # untouched
     assert inst._journal_path(dest).exists()
 
 
-def test_v5_recovery_promotion_substitution_after_preproof(tmp_path, monkeypatch):
+def test_v5_recovery_promotion_substitution_after_preproof(tmp_path, monkeypatch, make_repo, installer):
     # The candidate is swapped between the recovery pre-rename ident proof and the rename:
     # the POST-promotion re-proof (dev+ino) detects it — no foreign promotion, no cleanup, retained.
-    import json
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"
     staging = src / ".app.candidate-1-2"
@@ -3424,16 +2796,16 @@ def _substitute_dir(path):
     (path / "foreign").write_text("substitute")
 
 
-def test_substitution_at_prev_delete_is_retained(tmp_path, monkeypatch):
+def test_substitution_at_prev_delete_is_retained(tmp_path, monkeypatch, git, make_repo, installer):
     # Normal activation: `.prev` swapped between its final proof point and deletion —
     # the ident-bound remove refuses; journal retained (recovery-required), prior safe.
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
-    _git_race_safety(tmp_path / "rt" / "local" / "app", "add", "-A")
-    _git_race_safety(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
+    git(tmp_path / "rt" / "local" / "app", "add", "-A")
+    git(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
     prev = inst.paths.under("src", ".app.prev")
     fired = _seam(monkeypatch, "pre-prev-delete", lambda _p: _substitute_dir(prev))
     action = inst.adopt_source(comp, force=True, source="dev")
@@ -3460,19 +2832,19 @@ def test_substitution_at_quarantine_delete_is_retained(tmp_path, monkeypatch):
     assert q and (q[0] / "foreign").read_text() == "substitute"  # evidence retained
 
 
-def test_probe_level_renameat2_unsupported_refuses(tmp_path, monkeypatch):
+def test_probe_level_renameat2_unsupported_refuses(tmp_path, monkeypatch, make_repo, installer):
     # The libc symbol exists but the PROBE on the actual filesystem fails: refusal before
     # any candidate/journal/source/registry mutation.
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
     real = source_fs._rename_noreplace_at
     def unsupported(parent_fd, old, new):
         if ".lhpc-atomic-probe-" in old:
             raise source_fs.AtomicRenameUnavailable("probe: unsupported filesystem")
         return real(parent_fd, old, new)
-    monkeypatch.setattr(source_fs, "_rename_noreplace_at", unsupported)
-    monkeypatch.setattr(source_fs, "_ATOMIC_OK_DEVS", set())    # no cached positive
+    monkeypatch.setattr(source_fs, "_rename_noreplace_at", unsupported)   # the probe's one seam
+    monkeypatch.setattr(source_fs, "_ATOMIC_OK_DEVS", set())    # no cached positive from another test
     action = inst.adopt_source(comp, source="dev")
     assert action.status == "failed" and "unsupported" in action.detail
     dest = inst.paths.under("src", "app")
@@ -3481,17 +2853,17 @@ def test_probe_level_renameat2_unsupported_refuses(tmp_path, monkeypatch):
     assert source_registry.read_record(inst.paths, "src/app") is None
 
 
-def test_a_file_added_during_staging_is_carried(tmp_path, monkeypatch):
+def test_a_file_added_during_staging_is_carried(tmp_path, monkeypatch, git, make_repo, installer):
     """The carry inventory is taken INSIDE the activation, so a file created after the initial
     check — while the candidate was still cloning — is still preserved. This is why the
     authoritative inventory runs after the archive rather than at the start."""
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
-    _git_race_safety(tmp_path / "rt" / "local" / "app", "add", "-A")
-    _git_race_safety(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
+    git(tmp_path / "rt" / "local" / "app", "add", "-A")
+    git(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
     dest = inst.paths.under("src", "app")
     fired = _seam(monkeypatch, "pre-archive",
                   lambda _p: (dest / "new-user-file.txt").write_text("late"))
@@ -3502,16 +2874,16 @@ def test_a_file_added_during_staging_is_carried(tmp_path, monkeypatch):
     assert (dest / "new-user-file.txt").read_text() == "late"    # the late addition survived
 
 
-def test_upstream_modified_during_staging_blocks_archive(tmp_path, monkeypatch):
+def test_upstream_modified_during_staging_blocks_archive(tmp_path, monkeypatch, git, make_repo, installer):
     # A TRACKED file is edited AFTER the initial dirty check (during staging): the FINAL
     # recheck before the archive preserves the source and refuses, with zero mutation.
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
-    _git_race_safety(tmp_path / "rt" / "local" / "app", "add", "-A")
-    _git_race_safety(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
+    git(tmp_path / "rt" / "local" / "app", "add", "-A")
+    git(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
     dest = inst.paths.under("src", "app")
     fired = _seam(monkeypatch, "pre-archive",
                   lambda _p: (dest / "file.txt").write_text("late operator edit\n"))
@@ -3526,7 +2898,7 @@ def test_upstream_modified_during_staging_blocks_archive(tmp_path, monkeypatch):
 def test_dirty_file_created_before_uninstall_removal_blocks(tmp_path, monkeypatch):
     # A file created between the initial dirty check and the irreversible detach: the
     # final recheck preserves the source and returns incomplete.
-    from lhpc.core.install import Installer, DirtyReport
+    from lhpc.core.install import DirtyReport
     svc, dest = _svc_env(tmp_path)
     (dest / ".git").mkdir()                                      # dirty checks engage
     calls = {"n": 0}
@@ -3537,6 +2909,8 @@ def test_dirty_file_created_before_uninstall_removal_blocks(tmp_path, monkeypatc
             (dest / "late-user-file.txt").write_text("late")
             return DirtyReport()
         return DirtyReport(untracked=("late-user-file.txt",))   # FINAL recheck: dirty
+    # the dirty scan is the collaborator stubbed: on a FakeSystem `git status` answers nothing,
+    # and the race window between the two scans has no seam of its own
     monkeypatch.setattr(Installer, "dirty_report", wrapped)
     res = svc.uninstall("kiss", apply=True)
     assert not res.ok
@@ -3544,17 +2918,17 @@ def test_dirty_file_created_before_uninstall_removal_blocks(tmp_path, monkeypatc
     assert dest.exists() and (dest / "late-user-file.txt").exists()   # source preserved
 
 
-def test_a_file_added_after_the_archive_is_still_carried(tmp_path, monkeypatch):
+def test_a_file_added_after_the_archive_is_still_carried(tmp_path, monkeypatch, git, make_repo, installer):
     """The inventory is taken through the CAPTURED prior handle after the archive, so even a
     file that lands in the tree at that last moment is carried. This is the window the
     after-archive placement exists to close."""
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
-    _git_race_safety(tmp_path / "rt" / "local" / "app", "add", "-A")
-    _git_race_safety(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
+    git(tmp_path / "rt" / "local" / "app", "add", "-A")
+    git(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
     dest = inst.paths.under("src", "app")
     prev = dest.with_name(".app.prev")
 
@@ -3571,19 +2945,19 @@ def test_a_file_added_after_the_archive_is_still_carried(tmp_path, monkeypatch):
     assert not inst._journal_path(dest).exists()
 
 
-def test_upstream_modified_after_the_archive_restores_prior(tmp_path, monkeypatch):
+def test_upstream_modified_after_the_archive_restores_prior(tmp_path, monkeypatch, git, make_repo, installer):
     # A TRACKED file is edited INSIDE the (unchanged) prior directory AFTER the pre-archive
     # check, once it is already archived at `.prev`: the post-archive rescan through the
     # captured handle catches it — no promotion, prior restored no-clobber at its original
     # path, the edit survives, registry/journal state stays consistent.
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     rec_before = source_registry.read_record(inst.paths, "src/app")
     (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
-    _git_race_safety(tmp_path / "rt" / "local" / "app", "add", "-A")
-    _git_race_safety(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
+    git(tmp_path / "rt" / "local" / "app", "add", "-A")
+    git(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
     dest = inst.paths.under("src", "app")
     prev = dest.with_name(".app.prev")
 
@@ -3602,16 +2976,16 @@ def test_upstream_modified_after_the_archive_restores_prior(tmp_path, monkeypatc
     assert not inst._journal_path(dest).exists()          # proven restore -> journal cleared
 
 
-def test_update_dirty_after_archive_unprovable_restore_is_recovery(tmp_path, monkeypatch):
+def test_update_dirty_after_archive_unprovable_restore_is_recovery(tmp_path, monkeypatch, git, make_repo, installer):
     # Same window, but the freed destination slot is REOCCUPIED before the restore: the
     # no-clobber restore cannot land — journal + `.prev` + injected leaf are all retained.
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
-    _git_race_safety(tmp_path / "rt" / "local" / "app", "add", "-A")
-    _git_race_safety(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
+    git(tmp_path / "rt" / "local" / "app", "add", "-A")
+    git(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
     dest = inst.paths.under("src", "app")
     prev = dest.with_name(".app.prev")
 
@@ -3628,25 +3002,30 @@ def test_update_dirty_after_archive_unprovable_restore_is_recovery(tmp_path, mon
     assert inst._journal_path(dest).exists()              # journal retained (recovery)
 
 
-def test_uninstall_dirty_after_detach_restores_source(tmp_path, monkeypatch):
-    # An untracked file lands inside the quarantined directory AFTER the pre-detach check:
-    # the post-detach rescan catches it — the source is restored no-clobber at its original
-    # path, the new file survives, the registry record and config stay untouched, and the
-    # result is a truthful incomplete (never success).
-    from lhpc.core.probes import RealSystem
+def _registered_kiss_checkout(git, make_repo, tmp_path):
+    """A REAL committed kiss checkout at its managed path, registered as LHPC's own at HEAD."""
     dest = tmp_path / "src" / "loraham-kiss-tnc"
-    _make_repo_race_safety(dest)
-    _git_race_safety(dest, "remote", "add", "origin",
-         "https://github.com/makrohard/loraham-kiss-tnc.git")
-    head = _git_race_safety(dest, "rev-parse", "HEAD")
+    make_repo(dest)
+    git(dest, "remote", "add", "origin", "https://github.com/makrohard/loraham-kiss-tnc.git")
+    head = git(dest, "rev-parse", "HEAD")
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc",
                                        "https://github.com/makrohard/loraham-kiss-tnc.git",
                                        "pinned", head, time.time(), "",
                                        ("loraham-kiss-tnc", "loraham-kiss-serial")))
-    svc = ControllerService(system=RealSystem(), paths=Paths(runtime_root=tmp_path))
-    rec_before = source_registry.read_record(svc._paths, "src/loraham-kiss-tnc")
+    return dest
+
+
+def test_uninstall_dirty_after_detach_restores_source(tmp_path, git, make_repo, monkeypatch):
+    # An untracked file lands inside the quarantined directory AFTER the pre-detach check:
+    # the post-detach rescan catches it — the source is restored no-clobber at its original
+    # path, the new file survives, the registry record and config stay untouched, and the
+    # result is a truthful incomplete (never success).
+    dest = _registered_kiss_checkout(git, make_repo, tmp_path)
+    paths = Paths(runtime_root=tmp_path)
+    svc = ControllerService(system=RealSystem(), paths=paths)
+    rec_before = source_registry.read_record(paths, "src/loraham-kiss-tnc")
 
     def late_file(path):
         q = next(dest.parent.glob(".loraham-kiss-tnc.quarantine-*"))
@@ -3659,26 +3038,15 @@ def test_uninstall_dirty_after_detach_restores_source(tmp_path, monkeypatch):
     assert (dest / "file.txt").read_text() == "hello\n"   # source RESTORED at original path
     assert (dest / "late-user-file.txt").read_text() == "late"   # the new file SURVIVES
     assert not list(dest.parent.glob(".loraham-kiss-tnc.quarantine-*"))  # nothing left behind
-    assert source_registry.read_record(svc._paths,
-                                       "src/loraham-kiss-tnc") == rec_before  # record intact
+    assert source_registry.read_record(paths, "src/loraham-kiss-tnc") == rec_before  # record intact
 
 
-def test_uninstall_dirty_after_detach_reoccupied_is_recovery(tmp_path, monkeypatch):
+def test_uninstall_dirty_after_detach_reoccupied_is_recovery(tmp_path, git, make_repo, monkeypatch):
     # Same window, but the original path is REOCCUPIED before the restore: the quarantine
     # evidence is preserved, the injected leaf untouched, the record retained — recovery.
-    from lhpc.core.probes import RealSystem
-    dest = tmp_path / "src" / "loraham-kiss-tnc"
-    _make_repo_race_safety(dest)
-    _git_race_safety(dest, "remote", "add", "origin",
-         "https://github.com/makrohard/loraham-kiss-tnc.git")
-    head = _git_race_safety(dest, "rev-parse", "HEAD")
-    assert source_registry.write_record(
-        Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc",
-                                       "https://github.com/makrohard/loraham-kiss-tnc.git",
-                                       "pinned", head, time.time(), "",
-                                       ("loraham-kiss-tnc", "loraham-kiss-serial")))
-    svc = ControllerService(system=RealSystem(), paths=Paths(runtime_root=tmp_path))
+    dest = _registered_kiss_checkout(git, make_repo, tmp_path)
+    paths = Paths(runtime_root=tmp_path)
+    svc = ControllerService(system=RealSystem(), paths=paths)
 
     def late_and_occupy(path):
         q = next(dest.parent.glob(".loraham-kiss-tnc.quarantine-*"))
@@ -3693,26 +3061,14 @@ def test_uninstall_dirty_after_detach_reoccupied_is_recovery(tmp_path, monkeypat
     q = list(dest.parent.glob(".loraham-kiss-tnc.quarantine-*"))
     assert q and (q[0] / "late-user-file.txt").exists()   # quarantine evidence retained
     assert (dest / "foreign").exists()                    # injected leaf untouched
-    assert source_registry.read_record(svc._paths,
-                                       "src/loraham-kiss-tnc") is not None  # record retained
+    assert source_registry.read_record(paths, "src/loraham-kiss-tnc") is not None  # record retained
 
 
 @pytest.mark.safety("P0.5")
-def test_uninstall_still_refuses_a_tree_holding_an_added_file(tmp_path):
+def test_uninstall_still_refuses_a_tree_holding_an_added_file(tmp_path, git, make_repo):
     """The relaxation is for UPDATES only. Uninstall carries nothing forward, so an added file
     there really would be lost — it keeps the full dirty rule and refuses."""
-    from lhpc.core.probes import RealSystem
-    dest = tmp_path / "src" / "loraham-kiss-tnc"
-    _make_repo_race_safety(dest)
-    _git_race_safety(dest, "remote", "add", "origin",
-                     "https://github.com/makrohard/loraham-kiss-tnc.git")
-    head = _git_race_safety(dest, "rev-parse", "HEAD")
-    assert source_registry.write_record(
-        Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc",
-                                       "https://github.com/makrohard/loraham-kiss-tnc.git",
-                                       "pinned", head, time.time(), "",
-                                       ("loraham-kiss-tnc", "loraham-kiss-serial")))
+    dest = _registered_kiss_checkout(git, make_repo, tmp_path)
     (dest / "user-data.txt").write_text("precious")        # a plain local ADDITION
     svc = ControllerService(system=RealSystem(), paths=Paths(runtime_root=tmp_path))
 
@@ -3722,16 +3078,17 @@ def test_uninstall_still_refuses_a_tree_holding_an_added_file(tmp_path):
     assert (dest / "user-data.txt").read_text() == "precious"    # nothing removed
 
 
-def _v2_update_env(tmp_path):
-    """Installed v1, local advanced to v2 — ready for a force update."""
-    _make_repo_race_safety(tmp_path / "rt" / "local" / "app")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+@pytest.fixture
+def v2_update_env(tmp_path, git, make_repo, installer):
+    """Installed v1, local advanced to v2 — ready for a force update: (comp, inst, dest, v2_head)."""
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
-    _git_race_safety(tmp_path / "rt" / "local" / "app", "add", "-A")
-    _git_race_safety(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
-    v2_head = _git_race_safety(tmp_path / "rt" / "local" / "app", "rev-parse", "HEAD")
+    git(tmp_path / "rt" / "local" / "app", "add", "-A")
+    git(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
+    v2_head = git(tmp_path / "rt" / "local" / "app", "rev-parse", "HEAD")
     return comp, inst, inst.paths.under("src", "app"), v2_head
 
 
@@ -3767,21 +3124,21 @@ def _enoent(src, name="objects/ce"):
     return (f"{src}/{name}", "", f"[Errno {errno.ENOENT}] No such file or directory: '{src}/{name}'")
 
 
-def test_a_repack_during_the_git_copy_does_not_fail_the_adoption(tmp_path, monkeypatch):
+def test_a_repack_during_the_git_copy_does_not_fail_the_adoption(tmp_path, monkeypatch, git, make_repo, installer):
     """Git may repack the source mid-copy: loose objects are packed and their fan-out
     directories pruned between `copytree`'s listing and its read, so an entry vanishes.
     That is the same repository in a different physical representation, not a changed
     source, so the adoption must survive it."""
     repo = tmp_path / "rt" / "local" / "app"
-    _make_repo_race_safety(repo)
+    make_repo(repo)
     (repo / ".gitignore").write_text("settings.json\n")
-    _git_race_safety(repo, "add", "-A")
-    _git_race_safety(repo, "commit", "-qm", "ignore")
-    head = _git_race_safety(repo, "rev-parse", "HEAD")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "ignore")
+    head = git(repo, "rev-parse", "HEAD")
     (repo / "settings.json").write_text('{"mine": true}')          # ignored, still operator data
 
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+    comp = _comp()
+    inst = installer(comp)
     calls = _inject_on_git_copy(
         monkeypatch, lambda src, dst: shutil.Error([_enoent(src)]))
 
@@ -3791,19 +3148,19 @@ def test_a_repack_during_the_git_copy_does_not_fail_the_adoption(tmp_path, monke
     dest = inst.paths.under("src", "app")
     assert (dest / "file.txt").read_text() == "hello\n"            # tracked content
     assert (dest / "settings.json").read_text() == '{"mine": true}'  # ignored content
-    assert _git_race_safety(dest, "rev-parse", "HEAD") == head     # identity intact
+    assert git(dest, "rev-parse", "HEAD") == head     # identity intact
     assert not (dest / ".git" / "already-copied").exists()         # partial .git was REPLACED
 
 
-def test_a_mixed_copy_failure_is_not_retried_into_success(tmp_path, monkeypatch):
+def test_a_mixed_copy_failure_is_not_retried_into_success(tmp_path, monkeypatch, make_repo, installer):
     """`copytree` aggregates every nested failure into one `shutil.Error`. A missing path
     beside a permission failure is NOT the benign repack: retrying it would hide a real
     copy failure behind the harmless one and activate an incomplete tree. Only an
     exclusively-ENOENT error may be retried — `all`, never `any`."""
     repo = tmp_path / "rt" / "local" / "app"
-    _make_repo_race_safety(repo)
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+    make_repo(repo)
+    comp = _comp()
+    inst = installer(comp)
     calls = _inject_on_git_copy(monkeypatch, lambda src, dst: shutil.Error([
         _enoent(src),
         (f"{src}/config", "", f"[Errno {errno.EACCES}] Permission denied: '{src}/config'"),
@@ -3814,31 +3171,31 @@ def test_a_mixed_copy_failure_is_not_retried_into_success(tmp_path, monkeypatch)
     assert not inst.paths.under("src", "app").exists()             # nothing activated
 
 
-def test_an_ignored_file_survives_an_update(tmp_path):
+def test_an_ignored_file_survives_an_update(tmp_path, git, make_repo, installer):
     """A stack's own settings/log file is usually `.gitignore`d — `git status` never even shows
     it. It is still the operator's data and must survive."""
     repo = tmp_path / "rt" / "local" / "app"
-    _make_repo_race_safety(repo)
+    make_repo(repo)
     (repo / ".gitignore").write_text("settings.json\nlogs/\n")
-    _git_race_safety(repo, "add", "-A")
-    _git_race_safety(repo, "commit", "-qm", "ignore")
-    comp = _comp_race_safety()
-    inst = _inst_race_safety(tmp_path, comp)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "ignore")
+    comp = _comp()
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     dest = inst.paths.under("src", "app")
     (dest / "settings.json").write_text('{"mine": true}')
     (repo / "file.txt").write_text("v2\n")
-    _git_race_safety(repo, "add", "-A"); _git_race_safety(repo, "commit", "-qm", "v2")
+    git(repo, "add", "-A"); git(repo, "commit", "-qm", "v2")
 
     assert inst.adopt_source(comp, force=True, source="dev").status != "failed"
     assert (dest / "file.txt").read_text() == "v2\n"
     assert (dest / "settings.json").read_text() == '{"mine": true}'
 
 
-def test_a_nested_added_file_survives_with_its_directories_and_mode(tmp_path):
+def test_a_nested_added_file_survives_with_its_directories_and_mode(tmp_path, v2_update_env):
     """Nested paths are reproduced whole, and the file's own permission bits come with it —
     a stack that writes an executable helper still finds it executable."""
-    comp, inst, dest, _head = _v2_update_env(tmp_path)
+    comp, inst, dest, _head = v2_update_env
     (dest / "logs").mkdir()
     (dest / "logs" / "history.log").write_text("line one\n")
     (dest / "run-me.sh").write_text("#!/bin/sh\necho hi\n")
@@ -3850,37 +3207,31 @@ def test_a_nested_added_file_survives_with_its_directories_and_mode(tmp_path):
     assert os.stat(dest / "run-me.sh").st_mode & 0o777 == 0o755         # mode carried
 
 
-def test_an_added_file_survives_two_consecutive_updates(tmp_path):
+def test_an_added_file_survives_two_consecutive_updates(tmp_path, git, v2_update_env):
     """The carried file lands as an ordinary local addition, so the NEXT update inventories and
     carries it again — preservation is not a one-off."""
     repo = tmp_path / "rt" / "local" / "app"
-    comp, inst, dest, _head = _v2_update_env(tmp_path)
+    comp, inst, dest, _head = v2_update_env
     (dest / "notes.txt").write_text("keep me")
     assert inst.adopt_source(comp, force=True, source="dev").status != "failed"
     assert (dest / "notes.txt").read_text() == "keep me"
 
     (repo / "file.txt").write_text("v3\n")
-    _git_race_safety(repo, "add", "-A"); _git_race_safety(repo, "commit", "-qm", "v3")
+    git(repo, "add", "-A"); git(repo, "commit", "-qm", "v3")
     assert inst.adopt_source(comp, force=True, source="dev").status != "failed"
     assert (dest / "file.txt").read_text() == "v3\n"
     assert (dest / "notes.txt").read_text() == "keep me"                # survived update #2
 
 
-
-
-
-
-
-
 @pytest.mark.safety("source-additions-preserved")
-def test_an_added_file_colliding_with_the_new_upstream_refuses(tmp_path):
+def test_an_added_file_colliding_with_the_new_upstream_refuses(tmp_path, git, v2_update_env):
     """Upstream has taken ownership of that pathname. LHPC does not merge, rename or pick a
     winner — it refuses and leaves the old checkout in place for the operator to resolve."""
     repo = tmp_path / "rt" / "local" / "app"
-    comp, inst, dest, _head = _v2_update_env(tmp_path)
+    comp, inst, dest, _head = v2_update_env
     (dest / "settings.json").write_text("mine")                         # local addition
     (repo / "settings.json").write_text("upstream now ships this\n")    # ...upstream adds it too
-    _git_race_safety(repo, "add", "-A"); _git_race_safety(repo, "commit", "-qm", "v3")
+    git(repo, "add", "-A"); git(repo, "commit", "-qm", "v3")
 
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status == "failed"
@@ -3891,15 +3242,15 @@ def test_an_added_file_colliding_with_the_new_upstream_refuses(tmp_path):
     assert not inst._journal_path(dest).exists()
 
 
-def test_an_added_path_blocked_by_a_new_upstream_file_refuses(tmp_path):
+def test_an_added_path_blocked_by_a_new_upstream_file_refuses(tmp_path, git, v2_update_env):
     """Parent-path collision: the local file needs `conf/` to be a directory, but the new
     upstream ships `conf` as a FILE."""
     repo = tmp_path / "rt" / "local" / "app"
-    comp, inst, dest, _head = _v2_update_env(tmp_path)
+    comp, inst, dest, _head = v2_update_env
     (dest / "conf").mkdir()
     (dest / "conf" / "mine.ini").write_text("local")
     (repo / "conf").write_text("upstream file, not a directory\n")
-    _git_race_safety(repo, "add", "-A"); _git_race_safety(repo, "commit", "-qm", "v3")
+    git(repo, "add", "-A"); git(repo, "commit", "-qm", "v3")
 
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status == "failed" and "conf" in action.detail
@@ -3908,14 +3259,14 @@ def test_an_added_path_blocked_by_a_new_upstream_file_refuses(tmp_path):
 
 
 @pytest.mark.safety("source-additions-preserved")
-def test_a_carry_failure_restores_the_prior_and_refuses(tmp_path, monkeypatch):
+def test_a_carry_failure_restores_the_prior_and_refuses(tmp_path, monkeypatch, v2_update_env):
     """If the carry cannot be PROVEN to have succeeded, the update refuses and the previous
     source stays authoritative — never a green result over lost local data."""
-    comp, inst, dest, _head = _v2_update_env(tmp_path)
+    comp, inst, dest, _head = v2_update_env
     (dest / "notes.txt").write_text("keep me")
     # The copy primitive's return value IS the seam: a real failure here needs ENOSPC or EIO
     # part-way through the transaction, which no injected `System` can produce.
-    monkeypatch.setattr(source_fs, "carry_extras",
+    monkeypatch.setattr(source_fs, "carry_extras",          # the copy primitive IS the seam
                         lambda *a, **k: "notes.txt: simulated copy failure")
 
     action = inst.adopt_source(comp, force=True, source="dev")
@@ -3927,10 +3278,10 @@ def test_a_carry_failure_restores_the_prior_and_refuses(tmp_path, monkeypatch):
     assert not inst._journal_path(dest).exists()                        # transaction resolved
 
 
-def test_regenerable_artifacts_neither_block_nor_are_carried(tmp_path):
+def test_regenerable_artifacts_neither_block_nor_are_carried(tmp_path, v2_update_env):
     """Build output is LHPC's to regenerate, not the operator's data: it must not block an
     update, and it need not survive one. Same exclusion the dirty report uses."""
-    comp, inst, dest, _head = _v2_update_env(tmp_path)
+    comp, inst, dest, _head = v2_update_env
     rels = [f"{d}/leftover" for d in
             (".pio", ".venv", "build", ".work", ".run", "__pycache__", "node_modules")]
     for rel in rels:
@@ -3942,20 +3293,20 @@ def test_regenerable_artifacts_neither_block_nor_are_carried(tmp_path):
     assert [r for r in rels if (dest / r).exists()] == []               # ...and none carried
 
 
-def test_a_declared_binary_is_disposable_but_a_sibling_is_carried(tmp_path):
+def test_a_declared_binary_is_disposable_but_a_sibling_is_carried(tmp_path, git, make_repo, installer):
     """The carve-out is the EXACT declared leaf — a file beside it is ordinary operator data."""
     repo = tmp_path / "rt" / "local" / "app"
-    _make_repo_race_safety(repo)
+    make_repo(repo)
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE, bin="bin/app",
                      source=SourceSpec(path="src/app", local_dir="app"))
-    inst = _inst_race_safety(tmp_path, comp)
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     dest = inst.paths.under("src", "app")
     (dest / "bin").mkdir()
     (dest / "bin" / "app").write_text("built")                          # the declared binary
     (dest / "bin" / "helper.sh").write_text("operator helper")          # its sibling
     (repo / "file.txt").write_text("v2\n")
-    _git_race_safety(repo, "add", "-A"); _git_race_safety(repo, "commit", "-qm", "v2")
+    git(repo, "add", "-A"); git(repo, "commit", "-qm", "v2")
 
     assert inst.adopt_source(comp, force=True, source="dev").status != "failed"
     assert (dest / "file.txt").read_text() == "v2\n"
@@ -3963,13 +3314,13 @@ def test_a_declared_binary_is_disposable_but_a_sibling_is_carried(tmp_path):
     assert (dest / "bin" / "helper.sh").read_text() == "operator helper"
 
 
-def test_prev_dirty_before_cleanup_is_retained_operator_only(tmp_path, monkeypatch):
+def test_prev_dirty_before_cleanup_is_retained_operator_only(tmp_path, monkeypatch, v2_update_env):
     # An upstream file is MODIFIED inside the archived `.prev` AFTER the post-archive recheck,
     # immediately before the cleanup: the edit survives, `.prev` stays, the journal is
     # marked prior-dirty-retained, the ACTIVE NEW source + its record stay coherent, the
     # result is truthful incomplete — and no later automatic recovery deletes the prior.
     # (An ADDED file here is not retained: the carry already reproduced it in the live tree.)
-    comp, inst, dest, v2_head = _v2_update_env(tmp_path)
+    comp, inst, dest, v2_head = v2_update_env
     prev = dest.with_name(".app.prev")
 
     def late_edit(_path):
@@ -3997,52 +3348,52 @@ def test_prev_dirty_before_cleanup_is_retained_operator_only(tmp_path, monkeypat
     assert blocked.status == "failed" and "recovery-required" in blocked.detail
 
 
-def test_an_lhpc_patched_checkout_still_carries_an_added_file(tmp_path):
+def test_an_lhpc_patched_checkout_still_carries_an_added_file(tmp_path, git, make_repo, installer):
     """A checkout whose only tracked change is LHPC's own declared build-time patch (openHop is
     the live case) is not operator work, and an ADDED file beside it must not resurrect that
     judgement: the patch verdict is taken from the tracked diff alone. The update proceeds and
     carries the addition; a real operator edit on top still refuses."""
     local = tmp_path / "rt" / "local" / "app"
-    _make_repo_race_safety(local)
+    make_repo(local)
     (local / "a.txt").write_text("one\ntwo\n")
-    _git_race_safety(local, "add", "-A"); _git_race_safety(local, "commit", "-qm", "a")
+    git(local, "add", "-A"); git(local, "commit", "-qm", "a")
     (local / "a.txt").write_text("one\ntwo\nPATCHED\n")             # the change LHPC ships
     patch = tmp_path / "lhpc.patch"
-    patch.write_text(_git_race_safety(local, "diff") + "\n")          # a patch ends in a newline
-    _git_race_safety(local, "checkout", "--", "a.txt")                # upstream stays clean
+    patch.write_text(git(local, "diff") + "\n")          # a patch ends in a newline
+    git(local, "checkout", "--", "a.txt")                # upstream stays clean
 
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app",
                                        patches=(str(patch),)))
-    inst = _inst_race_safety(tmp_path, comp)
+    inst = installer(comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     dest = inst.paths.under("src", "app")
-    _git_race_safety(dest, "apply", str(patch))                       # the build step patches it
+    git(dest, "apply", str(patch))                       # the build step patches it
     (dest / "notes.txt").write_text("operator data\n")                # ...and a local addition
     rep = inst.dirty_report(dest, "src/app")
     assert rep.untracked and not rep.blocks_update()    # untracked kept, but the patch is exempt
     assert rep                                          # ...and uninstall/clean still see it
     (local / "file.txt").write_text("v2\n")
-    _git_race_safety(local, "add", "-A"); _git_race_safety(local, "commit", "-qm", "v2")
+    git(local, "add", "-A"); git(local, "commit", "-qm", "v2")
 
     assert inst.adopt_source(comp, force=True, source="dev").status != "failed"
     assert (dest / "file.txt").read_text() == "v2\n"                  # updated
     assert (dest / "notes.txt").read_text() == "operator data\n"      # addition carried
     assert (dest / "a.txt").read_text() == "one\ntwo\n"               # fresh clone, build repatches
 
-    _git_race_safety(dest, "apply", str(patch))
+    git(dest, "apply", str(patch))
     (dest / "a.txt").write_text("one\ntwo\nPATCHED\nOPERATOR\n")     # a REAL edit on top
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status == "failed" and "local modifications" in action.detail
 
 
 @pytest.mark.safety("source-additions-preserved")
-def test_recovery_rolls_back_an_update_interrupted_before_the_carry(tmp_path):
+def test_recovery_rolls_back_an_update_interrupted_before_the_carry(tmp_path, v2_update_env):
     """CRASH BETWEEN ARCHIVE AND CARRY. The journal records no carry state on purpose, so a
     recovery that finds a staged candidate beside an archived prior holding local additions
     cannot prove the candidate has them. It must therefore NOT complete the activation: it
     undoes the transaction, and the next update carries the additions again."""
-    comp, inst, dest, _v2 = _v2_update_env(tmp_path)
+    comp, inst, dest, _v2 = v2_update_env
     (dest / "notes.txt").write_text("operator data\n")
     (dest / "notes.txt").chmod(0o640)
     prev = dest.with_name(".app.prev")
@@ -4077,12 +3428,12 @@ def test_recovery_rolls_back_an_update_interrupted_before_the_carry(tmp_path):
 
 
 @pytest.mark.safety("source-additions-preserved")
-def test_a_substituted_active_source_retains_the_archive(tmp_path, monkeypatch):
+def test_a_substituted_active_source_retains_the_archive(tmp_path, monkeypatch, v2_update_env):
     """What licenses destroying `.prev` is that the ACTIVE tree carries everything the archive
     held — proven about one inode. If the destination is swapped between that proof and the
     delete, the licence belonged to a tree that is no longer there, so the archive stays.
     In-process the authority is the retained candidate handle (dev+ino: the fd pins the inode)."""
-    comp, inst, dest, _v2 = _v2_update_env(tmp_path)
+    comp, inst, dest, _v2 = v2_update_env
     (dest / "notes.txt").write_text("operator data\n")
     prev = dest.with_name(".app.prev")
 
@@ -4102,10 +3453,10 @@ def test_a_substituted_active_source_retains_the_archive(tmp_path, monkeypatch):
 
 
 @pytest.mark.safety("source-additions-preserved")
-def test_recovery_retains_the_archive_when_the_active_source_was_substituted(tmp_path, monkeypatch):
+def test_recovery_retains_the_archive_when_the_active_source_was_substituted(tmp_path, monkeypatch, v2_update_env):
     """The same boundary under crash RECOVERY, where the authority is the journal's full v5
     candidate ident (the promotion rename refreshed it, so it describes the active leaf)."""
-    comp, inst, dest, v2_head = _v2_update_env(tmp_path)
+    comp, inst, dest, v2_head = v2_update_env
     prev = dest.with_name(".app.prev")
     # Craft the interruption: record complete, activation done, `.prev` still archived.
     shutil.move(str(dest), str(prev))
@@ -4143,7 +3494,7 @@ def test_recovery_retains_the_archive_when_the_active_source_was_substituted(tmp
 
 
 @pytest.mark.safety("source-additions-preserved")
-def test_recovery_retains_a_candidate_whose_carry_had_already_started(tmp_path):
+def test_recovery_retains_a_candidate_whose_carry_had_already_started(tmp_path, v2_update_env):
     """CRASH *DURING* THE CARRY. The journal records the candidate's identity at
     `prior-archived` — before the carry — and the carry then writes the additions INTO that
     candidate, moving its ctime. Recovery therefore can no longer prove the candidate, and the
@@ -4153,7 +3504,7 @@ def test_recovery_retains_a_candidate_whose_carry_had_already_started(tmp_path):
 
     So this interruption is fail-closed rather than auto-rolled-back: nothing is lost, the
     operator resolves it. Found by SIGKILLing a real update during a 3 GB carry."""
-    comp, inst, dest, _v2 = _v2_update_env(tmp_path)
+    comp, inst, dest, _v2 = v2_update_env
     (dest / "notes.txt").write_text("operator data\n")
     prev = dest.with_name(".app.prev")
     staging = dest.with_name(".app.candidate-1-2")
@@ -4189,13 +3540,13 @@ def test_recovery_retains_a_candidate_whose_carry_had_already_started(tmp_path):
 
 
 @pytest.mark.safety("source-additions-preserved")
-def test_recovery_never_deletes_a_candidate_on_a_recycled_inode(tmp_path):
+def test_recovery_never_deletes_a_candidate_on_a_recycled_inode(tmp_path, v2_update_env):
     """The candidate twin of `test_v5_inode_recycling_forged_ctime_prior_not_restored`, and the
     reason the ctime may not be dropped from the deletion above: a DIFFERENT directory that has
     taken the candidate's hidden pathname and been handed its recycled dev+ino is
     indistinguishable from the real candidate by inode alone. Only the ctime separates them, and
     recovery is about to delete that leaf recursively."""
-    comp, inst, dest, _v2 = _v2_update_env(tmp_path)
+    comp, inst, dest, _v2 = v2_update_env
     (dest / "notes.txt").write_text("operator data\n")     # additions -> the carry is unprovable
     prev = dest.with_name(".app.prev")
     staging = dest.with_name(".app.candidate-1-2")
@@ -4227,11 +3578,11 @@ def test_recovery_never_deletes_a_candidate_on_a_recycled_inode(tmp_path):
 
 
 @pytest.mark.safety("source-additions-preserved")
-def test_recovery_of_an_unprovable_prior_touches_nothing(tmp_path):
+def test_recovery_of_an_unprovable_prior_touches_nothing(tmp_path, v2_update_env):
     """Same interruption, but the archived prior is SUBSTITUTED before recovery runs. Recovery
     must decide nothing from a tree it cannot prove is the journal's own: no inventory of it, no
     deletion of the staged candidate, no restore — everything retained as evidence."""
-    comp, inst, dest, _v2 = _v2_update_env(tmp_path)
+    comp, inst, dest, _v2 = v2_update_env
     (dest / "notes.txt").write_text("operator data\n")
     prev = dest.with_name(".app.prev")
     staging = dest.with_name(".app.candidate-1-2")
@@ -4266,11 +3617,11 @@ def test_recovery_of_an_unprovable_prior_touches_nothing(tmp_path):
 
 
 @pytest.mark.safety("source-additions-preserved")
-def test_an_addition_made_after_the_carry_retains_the_archived_prior(tmp_path, monkeypatch):
+def test_an_addition_made_after_the_carry_retains_the_archived_prior(tmp_path, monkeypatch, v2_update_env):
     """The `.prev` cleanup destroys the archive, so it runs only once every local addition the
     archive still holds is PROVEN present in the activated source. A file that appears in `.prev`
     after the carry is in neither — it must never be deleted as collateral."""
-    comp, inst, dest, v2_head = _v2_update_env(tmp_path)
+    comp, inst, dest, v2_head = v2_update_env
     (dest / "notes.txt").write_text("carried\n")
     prev = dest.with_name(".app.prev")
 
@@ -4296,11 +3647,11 @@ def test_an_addition_made_after_the_carry_retains_the_archived_prior(tmp_path, m
     assert (prev / "late.log").exists() and jf.exists()
 
 
-def test_prev_dirty_during_recovery_cleanup_is_retained(tmp_path, monkeypatch):
+def test_prev_dirty_during_recovery_cleanup_is_retained(tmp_path, monkeypatch, v2_update_env):
     # Interrupted activation (journal 'activated', record complete, `.prev` still present):
     # an upstream file MODIFIED inside `.prev` right before RECOVERY's cleanup marks the
     # transaction prior-dirty-retained — recovery completes nothing destructive, all retained.
-    comp, inst, dest, v2_head = _v2_update_env(tmp_path)
+    comp, inst, dest, v2_head = v2_update_env
     prev = dest.with_name(".app.prev")
     # Build the crash state MANUALLY (a real run removes .prev before the journal, so the
     # needed interruption point — record written, .prev still archived — is crafted):
@@ -4343,545 +3694,15 @@ def test_prev_dirty_during_recovery_cleanup_is_retained(tmp_path, monkeypatch):
     assert (prev / "file.txt").exists() and jf.exists()
 
 
-def test_clean_prev_cleanup_still_succeeds_when_not_dirty(tmp_path):
+def test_clean_prev_cleanup_still_succeeds_when_not_dirty(tmp_path, v2_update_env):
     # Sanity: an update whose archived prior stays clean completes exactly as before —
     # `.prev` removed, journal cleared, record updated.
-    comp, inst, dest, v2_head = _v2_update_env(tmp_path)
+    comp, inst, dest, v2_head = v2_update_env
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status == "done", action.detail
     assert not dest.with_name(".app.prev").exists()
     assert not inst._journal_path(dest).exists()
     assert source_registry.read_record(inst.paths, "src/app").resolved_commit == v2_head
-
-
-# ---------------------------------------------------------------------------
-# Voice on Lite (audit round): the surfaces beyond the three GUI preflights
-# ---------------------------------------------------------------------------
-
-def _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False, patch_reqs=True):
-    """A voice-startable service. desktop=True fakes the GTK header (GUI app stays) and a
-    display; desktop=False also fakes the ABSENCE of a display, so the host running the
-    tests never leaks its own DISPLAY into the "Lite" scenario. patch_reqs=False keeps the
-    REAL missing_requirements so the GUI-unavailability predicate stays live."""
-    from lhpc.core.services import ControllerService
-    from lhpc.core.lifecycle import Lifecycle
-    from lhpc.core.paths import Paths
-    from lhpc.core.probes.backends import FakeSystem
-    STATUS = b"STATUS RADIO=READY TXMODE=DIRECT\n"
-    paths = {"/usr/include/gtk-3.0/gtk/gtk.h"} if desktop else set()
-    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": STATUS,
-                                   "/tmp/loraconf868.sock": STATUS},
-                     paths=paths).system
-    (tmp_path / "src" / "LoRaHAM_Voice").mkdir(parents=True)
-    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
-    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
-    monkeypatch.setattr(type(svc), "is_built", lambda self, c: True)
-    monkeypatch.setattr(type(svc), "_running_conflicts", lambda self, c, b: False)
-    monkeypatch.setattr(type(svc), "display_available", staticmethod(lambda: desktop))
-    if patch_reqs:
-        monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, c: [])
-    monkeypatch.setattr(type(svc), "_lifecycle", lambda self: Lifecycle(
-        self._paths, self.stacks(), self.config(), self._system, spawn=real_spawn))
-    return svc
-
-
-def test_lite_voice_start_seeds_config_despite_display_skip(tmp_path, monkeypatch, set_call, real_spawn):
-    # F1 (audit): the display-skipped GTK component OWNS loraham_voice.conf; its config
-    # must still be generated so the terminal variant the operator is told to run never
-    # sees an absent/stale file.
-    from lhpc.core.services import ConfigWrite
-    from lhpc.core.outcomes import Outcome
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
-    writes = []
-    monkeypatch.setattr(type(svc), "write_config_files",
-                        lambda self, t, b="", overrides=None, **kw: writes.append(t) or [
-                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "written", "")])
-    set_call(svc)
-    res = svc.start("voice", apply=True)
-    assert "loraham-voice" in writes, "GTK component's config must be written before the skip"
-    assert any(r.component == "loraham-voice" and r.outcome == Outcome.SKIPPED
-               for r in res.results), _outcomes(res)
-    # F3: the stack start is OK — the interactive sidecar's MANUAL_REQUIRED and the
-    # gui_optional display-skip are both accepted, and the summary carries the command.
-    assert res.ok is True, _outcomes(res)
-    cli = next(r for r in res.results if r.component == "loraham-voice-cli")
-    assert cli.outcome == Outcome.MANUAL_REQUIRED
-    assert "run it yourself in a terminal:" in (cli.summary or "")
-
-
-def test_lite_voice_start_blocks_when_shared_config_fails(tmp_path, monkeypatch, set_call, real_spawn):
-    # F1 (audit): a FAILED write of the shared config is a typed BLOCKED, never a
-    # silent skip that leaves the terminal variant with stale configuration.
-    from lhpc.core.services import ConfigWrite
-    from lhpc.core.outcomes import Outcome
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
-    monkeypatch.setattr(type(svc), "write_config_files",
-                        lambda self, t, b="", overrides=None, **kw: [
-                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "failed", "disk full")])
-    set_call(svc)
-    res = svc.start("voice", apply=True)
-    assert any(r.component == "loraham-voice" and r.outcome == Outcome.BLOCKED
-               and "config generation failed" in (r.summary or "") for r in res.results), \
-        _outcomes(res)
-
-
-def test_interactive_voice_cli_start_creates_its_config_files_symlink(tmp_path, monkeypatch, set_call, real_spawn):
-    # LIVE-FOUND on the Pi: an interactive component never reaches `life.start`, the ONLY
-    # caller of run_pre_steps — so the CLI's config/files symlink was never created and the
-    # MANUAL_REQUIRED command handed to the operator failed with ENOENT. The app resolves
-    # loraham_voice.conf from dirname(argv0), so that symlink is what makes the command work.
-    from lhpc.core.services import ConfigWrite
-    from lhpc.core.outcomes import Outcome
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
-    monkeypatch.setattr(type(svc), "write_config_files",
-                        lambda self, t, b="", overrides=None, **kw: [
-                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "written", "")])
-    set_call(svc)
-    link = tmp_path / "config" / "files" / "loraham_voice_cli"
-    assert not link.is_symlink()                                   # precondition
-    res = svc.start("voice", apply=True)
-    cli = next(r for r in res.results if r.component == "loraham-voice-cli")
-    assert cli.outcome == Outcome.MANUAL_REQUIRED, _outcomes(res)
-    assert link.is_symlink(), "the manual command's argv0 must exist after the start"
-    assert str(link) in (cli.summary or ""), cli.summary
-
-
-def test_direct_terminal_variant_start_is_refused_and_names_the_stack(tmp_path, monkeypatch, set_call, real_spawn):
-    # P1 (audit): loraham_voice.conf — including the LICENSED CALLSIGN — is owned by
-    # loraham-voice. A direct component start visits only the CLI and the daemon, so no
-    # config is written and upstream falls back to its compiled-in default callsign. Refuse,
-    # and leave NO side effect behind (no symlink, no marker, no config).
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
-    set_call(svc)
-    res = svc.start("loraham-voice-cli", apply=True)
-    assert res.ok is False
-    assert "lhpc stack start voice" in res.summary, res.summary
-    assert "run it yourself" not in res.summary
-    # PREFLIGHT: refused before the component loop — no per-component results, no
-    # daemon ensure, no already-healthy shortcut.
-    assert res.results == (), _outcomes(res)
-    assert not (tmp_path / "config" / "files" / "loraham_voice_cli").is_symlink()
-    assert not (tmp_path / "config" / "files" / "loraham_voice.conf").exists()
-    assert svc.interactive_band("voice") is None
-
-
-def test_direct_start_refusal_is_a_preflight_even_with_marker_and_ready_daemon(tmp_path, monkeypatch, set_call, real_spawn):
-    # P1 (audit): with the Voice marker present and the daemon ready, a direct CLI start
-    # used to hit the already-healthy shortcut and return SUCCESS; without it the daemon
-    # was ensured/reconfigured before the refusal. The refusal must come before any of
-    # that: no feed clearing, no daemon work, no shortcut.
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
-    svc.mark_interactive("voice", "433")
-    fed = []
-    monkeypatch.setattr(type(svc), "clear_daemon_feed",
-                        lambda self, *a, **kw: fed.append(a) or 0, raising=False)
-    set_call(svc)
-    res = svc.start("loraham-voice-cli", apply=True)
-    assert res.ok is False
-    assert "lhpc stack start voice" in res.summary, res.summary
-    assert "already healthy" not in res.summary.lower()
-    assert res.results == ()
-    assert fed == []                          # zero side effects
-
-
-def test_direct_start_of_other_interactive_sidecars_stays_unrefused(tmp_path, monkeypatch, set_call, real_spawn):
-    # P1 (audit): the fallback policy is derived from the manifest shape (non-main
-    # interactive + gui_optional MAIN) and must capture ONLY voice's terminal variant —
-    # nomadnet (reticulum) and meshcore-cli (meshcore) keep their long-standing behaviour.
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
-    assert svc._gui_fallback_refusal("loraham-voice-cli") is not None
-    for other in ("nomadnet", "meshcore-cli", "loraham-chat"):
-        assert svc._gui_fallback_refusal(other) is None, other
-    set_call(svc)
-    res = svc.start("nomadnet", apply=True)
-    assert "shares" not in res.summary       # never the voice refusal
-    assert any(r.component == "nomadnet" for r in res.results), \
-        "the component loop must be reached"
-
-
-def test_plan_omits_the_terminal_command_where_the_gtk_app_runs(tmp_path, monkeypatch, set_call, real_spawn):
-    # P2 (audit): the apply=False PLAN (CLI dry-run and the web confirm page) must obey
-    # the same fallback policy — a desktop `start voice` plan may not render the CLI
-    # command it would refuse to honour.
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=True)
-    set_call(svc)
-    res = svc.start("voice", apply=False)
-    text = "\n".join(res.details)
-    assert "loraham_voice_cli" not in text, text
-    assert "run it yourself" not in text, text
-    assert "[skip] loraham-voice-cli" in text, text
-    # A direct CLI plan is refused outright by the same preflight.
-    res2 = svc.start("loraham-voice-cli", apply=False)
-    assert res2.ok is False and "lhpc stack start voice" in res2.summary
-    # On a Lite box the plan still presents the command — that is the fallback working.
-    lite = _voice_svc(real_spawn, tmp_path / "lite", monkeypatch, desktop=False)
-    set_call(lite)
-    res3 = lite.start("voice", apply=False)
-    assert "run it yourself" in "\n".join(res3.details)
-
-
-def test_direct_restart_of_the_fallback_refuses_before_any_stop(tmp_path, monkeypatch, set_call, real_spawn):
-    # P1 (audit): restart stops BEFORE starting, so the start-side refusal used to arrive
-    # only after the component and its daemon were already taken down (marker cleared,
-    # daemon released). Both restart entries must refuse first — marker, daemon, feed and
-    # owner state untouched — and the dry-run must show the real reason, not a plan
-    # suggesting the impossible apply.
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
-    svc.mark_interactive("voice", "433")
-    touched = []
-    for m in ("stop", "clear_daemon_feed"):
-        monkeypatch.setattr(type(svc), m,
-                            (lambda name: lambda self, *a, **kw: touched.append(name))(m),
-                            raising=False)
-    set_call(svc)
-    for apply in (False, True):
-        res = svc.restart("loraham-voice-cli", apply=apply)
-        assert res.ok is False, (apply, res.summary)
-        assert "lhpc stack start voice" in res.summary, (apply, res.summary)
-        assert res.results == ()
-    assert touched == []                      # no stop, no feed clearing
-    assert svc.interactive_band("voice") == "433"   # marker survives
-
-
-def test_desktop_daemon_recovery_is_ok_despite_a_running_gtk_app(tmp_path, monkeypatch, set_call, real_spawn):
-    # P2 (audit): on a desktop with the GTK app holding the audio device, `start voice`
-    # after a daemon failure must recover the daemon and return OK — the INACTIVE fallback
-    # is SKIPPED before the resource gate, never BLOCKED into a failed result.
-    from lhpc.core.services import ConfigWrite
-    from lhpc.core.outcomes import Outcome
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=True)
-    monkeypatch.setattr(type(svc), "_running_conflicts",
-                        lambda self, c, b: c.id == "loraham-voice-cli")
-    monkeypatch.setattr(type(svc), "write_config_files",
-                        lambda self, t, b="", overrides=None, **kw: [
-                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "written", "")])
-    set_call(svc)
-    res = svc.start("voice", apply=True)
-    cli = next(r for r in res.results if r.component == "loraham-voice-cli")
-    assert cli.outcome == Outcome.SKIPPED, _outcomes(res)
-    assert "resource conflict" not in (cli.summary or "")
-    assert res.ok is True, _outcomes(res)
-
-
-def test_second_start_noop_does_not_fabricate_already_healthy_for_the_fallback(tmp_path, monkeypatch, set_call, real_spawn):
-    # P2 (audit): the already-healthy shortcut used to synthesize
-    # 'loraham-voice-cli already_healthy already running' — a lie twice over: on Lite the
-    # marker only proves the command was PRESENTED, and the gui-skipped GTK app is not
-    # runnable at all. Components the health predicate skipped are omitted.
-    from lhpc.core.services import ConfigWrite
-    from lhpc.core.outcomes import Outcome
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
-    monkeypatch.setattr(type(svc), "write_config_files",
-                        lambda self, t, b="", overrides=None, **kw: [
-                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "written", "")])
-    set_call(svc)
-    first = svc.start("voice", apply=True)
-    assert first.ok is True, _outcomes(first)
-    assert svc.interactive_band("voice") is not None      # command presented
-    second = svc.start("voice", apply=True)
-    assert second.ok is True, _outcomes(second)
-    assert "already healthy" in second.summary
-    comps = {r.component: r.outcome for r in second.results}
-    assert "loraham-voice-cli" not in comps, comps        # marker-satisfied, not "running"
-    assert "loraham-voice" not in comps, comps            # gui-skipped, not "running"
-    assert comps.get("loraham-daemon") == Outcome.ALREADY_HEALTHY, comps
-
-
-def test_terminal_variant_not_presented_when_shared_config_fails(tmp_path, monkeypatch, set_call, real_spawn):
-    # P1 (audit): the CLI must not reach pre-steps, marker creation or command presentation
-    # unless the shared-config OWNER completed. A failed GTK config write previously still
-    # produced a marker and a printed command over an absent shared config.
-    from lhpc.core.services import ConfigWrite
-    from lhpc.core.outcomes import Outcome
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
-    monkeypatch.setattr(type(svc), "write_config_files",
-                        lambda self, t, b="", overrides=None, **kw: [
-                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf",
-                                        "failed", "disk full")])
-    set_call(svc)
-    res = svc.start("voice", apply=True)
-    gtk = next(r for r in res.results if r.component == "loraham-voice")
-    cli = next(r for r in res.results if r.component == "loraham-voice-cli")
-    assert gtk.outcome == Outcome.BLOCKED, _outcomes(res)
-    assert cli.outcome == Outcome.BLOCKED, _outcomes(res)
-    assert "did not complete" in (cli.summary or ""), cli.summary
-    assert "run it yourself" not in (cli.summary or "")
-    assert not (tmp_path / "config" / "files" / "loraham_voice_cli").is_symlink()
-    assert svc.interactive_band("voice") is None
-
-
-def test_terminal_variant_blocked_while_a_sibling_holds_the_audio_device(tmp_path, monkeypatch, set_call, real_spawn):
-    # P2 (audit): both voice components claim audio.default EXCLUSIVELY. The interactive
-    # branch used to return before the resource gate, so the documented "can never run at
-    # once" guarantee was not enforced for the terminal variant.
-    from lhpc.core.services import ConfigWrite
-    from lhpc.core.outcomes import Outcome
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
-    monkeypatch.setattr(type(svc), "_running_conflicts",
-                        lambda self, c, b: c.id == "loraham-voice-cli")
-    monkeypatch.setattr(type(svc), "write_config_files",
-                        lambda self, t, b="", overrides=None, **kw: [
-                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "written", "")])
-    set_call(svc)
-    res = svc.start("voice", apply=True)
-    cli = next(r for r in res.results if r.component == "loraham-voice-cli")
-    assert cli.outcome == Outcome.BLOCKED, _outcomes(res)
-    assert "resource conflict" in (cli.summary or ""), cli.summary
-    assert not (tmp_path / "config" / "files" / "loraham_voice_cli").is_symlink()
-    assert svc.interactive_band("voice") is None
-
-
-def test_interactive_start_blocks_when_its_pre_steps_fail(tmp_path, monkeypatch, set_call, real_spawn):
-    # A pre-step failure is a typed BLOCKED — never a manual command that cannot run.
-    from lhpc.core import commands
-    from lhpc.core.services import ConfigWrite
-    from lhpc.core.outcomes import Outcome
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
-    monkeypatch.setattr(type(svc), "write_config_files",
-                        lambda self, t, b="", overrides=None, **kw: [
-                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "written", "")])
-
-    def _boom(steps, runtime, source, band=""):
-        raise commands.CommandError("pre-step failed: denied")
-
-    monkeypatch.setattr(commands, "run_pre_steps", _boom)
-    set_call(svc)
-    res = svc.start("voice", apply=True)
-    cli = next(r for r in res.results if r.component == "loraham-voice-cli")
-    assert cli.outcome == Outcome.BLOCKED, _outcomes(res)
-    assert "pre-start setup failed" in (cli.summary or "")
-    assert "run it yourself" not in (cli.summary or "")
-
-
-def test_desktop_voice_start_stays_ok_with_interactive_sidecar(tmp_path, monkeypatch, set_call, real_spawn):
-    # F3 (audit) + P2 (audit): on a desktop the GTK app starts as before and the terminal
-    # variant is NOT presented at all — the GUI main is usable, owns the shared config and
-    # holds the exclusive audio device, so offering a fallback would contradict the
-    # "can never run at once" claim. Desktop behaviour is exactly pre-branch behaviour.
-    from lhpc.core.services import ConfigWrite
-    from lhpc.core.outcomes import Outcome
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=True)
-    monkeypatch.setattr(type(svc), "write_config_files",
-                        lambda self, t, b="", overrides=None, **kw: [
-                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "written", "")])
-    set_call(svc)
-    res = svc.start("voice", apply=True)
-    outcomes = {r.component: r.outcome for r in res.results}
-    assert outcomes.get("loraham-voice-cli") == Outcome.SKIPPED
-    cli = next(r for r in res.results if r.component == "loraham-voice-cli")
-    assert "fallback" in (cli.summary or ""), cli.summary
-    assert "run it yourself" not in (cli.summary or "")
-    assert res.ok is True, _outcomes(res)
-    assert "Run applied" in res.summary or "manual" not in res.summary.lower(), res.summary
-
-
-def test_lite_voice_unbuilt_gate_ignores_the_dropped_gtk_component(tmp_path, monkeypatch, real_spawn):
-    # F2 (audit): the web start gate's unbuilt_components must not count the
-    # gui-dropped GTK component (shared checkout exists, binary can never be built
-    # here) — otherwise the console loops needs-build forever.
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False, patch_reqs=False)
-    monkeypatch.setattr(type(svc), "is_built",
-                        lambda self, c: c.id != "loraham-voice")   # CLI built, GTK not
-    assert "loraham-voice" in svc.gui_unavailable_components(svc.stack("voice"))  # precondition
-    assert "loraham-voice" not in svc.unbuilt_components("voice")
-
-
-def test_lite_status_overlay_marks_unbuildable_gtk_not_applicable(tmp_path, monkeypatch, real_spawn):
-    # F6 (audit): with the SHARED checkout installed by the terminal variant, the
-    # stopped-but-unbuildable GTK app must read NOT_APPLICABLE on a Lite console,
-    # not present as a startable stopped app.
-    from lhpc.core.model import RunState
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False, patch_reqs=False)
-    assert "loraham-voice" in svc.gui_unavailable_components(svc.stack("voice"))  # precondition
-    snap = svc.build_snapshot()
-    ss = next(x for x in snap.stacks if x.stack.id == "voice")
-    assert ss.components["loraham-voice"].run_state is RunState.NOT_APPLICABLE
-
-
-def test_desktop_without_gtk_deps_start_voice_is_ok(tmp_path, monkeypatch, set_call, real_spawn):
-    # V1 (verification audit): a box WITH a display but WITHOUT the GTK dev deps
-    # (default bootstrap, no --with-gui) must start voice OK — the toolkit-missing
-    # GTK component is typed-SKIPPED by the same predicate that admitted the stack,
-    # never BLOCKED on its missing requirements or build.
-    from lhpc.core.services import ConfigWrite
-    from lhpc.core.outcomes import Outcome
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False, patch_reqs=False)
-    monkeypatch.setattr(type(svc), "display_available", staticmethod(lambda: True))
-    # REAL missing_requirements stays live (it drives the GUI predicate under test); only the
-    # terminal variant's OWN codec2/ALSA/ncurses headers are treated as present, since this
-    # host is not the Pi. Without this the CLI blocks on ITS deps, which is a different case.
-    monkeypatch.setattr(type(svc), "start_blocking_requirements",
-                        lambda self, c: [] if c.id == "loraham-voice-cli"
-                        else self._lifecycle().missing_requirements(c))
-    monkeypatch.setattr(type(svc), "write_config_files",
-                        lambda self, t, b="", overrides=None, **kw: [
-                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "written", "")])
-    set_call(svc)
-    res = svc.start("voice", apply=True)
-    gtk = next(r for r in res.results if r.component == "loraham-voice")
-    assert gtk.outcome == Outcome.SKIPPED and "GUI toolkit not installed" in (gtk.summary or "")
-    assert res.ok is True, _outcomes(res)
-
-
-def test_other_stack_start_keeps_voice_sidecar_marker(tmp_path, monkeypatch, real_spawn):
-    # V2 (verification audit): the interactive-marker reaper must judge voice by its
-    # RUNNING terminal sidecar, not by the GTK main (never RUNNING on Lite) — a live
-    # TUI's command block must survive another stack's start.
-    from lhpc.core.model import RunState
-    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
-    assert svc.mark_interactive("voice", "868")
-
-    class _St:                       # snapshot stub: the sidecar TUI is process-detected
-        def __init__(self, rs): self.run_state = rs
-    class _SS:
-        def __init__(self, comps): self.components = comps
-        stack = None
-    snap = type("Snap", (), {"stacks": [
-        type("X", (), {"components": {"loraham-voice": _St(RunState.NOT_APPLICABLE),
-                                      "loraham-voice-cli": _St(RunState.RUNNING)}})()]})()
-    monkeypatch.setattr(type(svc), "build_snapshot", lambda self: snap)
-    cleared = svc.clear_stale_interactive(keep="kiss")
-    assert "voice" not in cleared, "a RUNNING terminal sidecar must keep its marker"
-    # ...and with the TUI gone, the marker is reaped exactly like chat's.
-    snap.stacks[0].components["loraham-voice-cli"] = _St(RunState.STOPPED)
-    assert "voice" in svc.clear_stale_interactive(keep="kiss")
-
-
-# ===== the render contract "once per request" =====
-def _count_calls(monkeypatch, owner, name):
-    n = []
-    orig = getattr(owner, name)
-    monkeypatch.setattr(owner, name, lambda self, *a, **k: (n.append(1), orig(self, *a, **k))[1])
-    return n
-
-
-def test_a_render_reads_firewall_status_and_listeners_once(tmp_path, monkeypatch):
-    # A /stacks render once called firewall_status() 10–13× and tcp_listeners() once per
-    # TCP endpoint; both are now render-wide reads passed down the existing seams.
-    from lhpc.core.probes.backends import FakeSystem as _FS
-    fw = _count_calls(monkeypatch, ControllerService, "firewall_status")
-    lis = _count_calls(monkeypatch, _FS, "tcp_listeners")
-    c = create_app(lambda: _svc_snapshot_cache(tmp_path)).test_client()
-    for path in ("/stacks", "/", "/stacks/meshcore/body"):
-        fw.clear(); lis.clear()
-        assert c.get(path).status_code == 200
-        assert len(fw) <= 2, (path, len(fw))          # the render-wide read (+ the settings view)
-        assert len(lis) <= 2, (path, len(lis))        # the snapshot assessment + ONE shared read
-
-
-def test_stack_config_is_loaded_once_per_stack_and_band_per_request(tmp_path, monkeypatch):
-    # 467 `load_stack_config` reads per render (every parameter row) collapse to one per
-    # (stack, band) through the thread-local request memo.
-    from lhpc.core import service_params as _sp
-    n = []
-    orig = _sp.load_stack_config
-    monkeypatch.setattr(_sp, "load_stack_config",
-                        lambda *a, **k: (n.append((a[1], a[2] if len(a) > 2 else k.get("band", ""))),
-                                         orig(*a, **k))[1])
-    svc = _svc_snapshot_cache(tmp_path)
-    c = create_app(lambda: svc).test_client()
-    n.clear(); assert c.get("/stacks").status_code == 200
-    assert len(n) == len(set(n)), "the same (stack, band) file was read more than once in a render"
-    assert len(n) <= 3 * len(svc.stacks())
-
-
-def test_request_memo_is_thread_local_and_cleared_with_the_snapshot(tmp_path):
-    import threading
-    svc = _svc_snapshot_cache(tmp_path)
-    a = svc._request_memo(("k",), object)
-    assert svc._request_memo(("k",), object) is a            # memoized within the request
-    svc.invalidate_snapshot()
-    b = svc._request_memo(("k",), object)
-    assert b is not a                                          # dropped with the snapshot
-    svc._invalidate_config()
-    assert svc._request_memo(("k",), object) is not b          # dropped by a config write too
-    r = {}
-    def other():
-        r["t"] = svc._request_memo(("k",), object)
-    t = threading.Thread(target=other); t.start(); t.join(5)
-    assert r["t"] is not svc._request_memo(("k",), object)    # per thread, never shared
-    # a failing compute is never memoized
-    calls = []
-    def boom():
-        calls.append(1)
-        raise ValueError("x")
-    for _ in range(2):
-        try:
-            svc._request_memo(("boom",), boom)
-        except ValueError:
-            pass
-    assert calls == [1, 1]
-
-
-def test_consumed_source_lines_run_git_once_per_component_per_request(tmp_path):
-    svc = _svc_snapshot_cache(tmp_path)
-    comp = next(c for s in svc.stacks() for c in s.components if c.build_requires and c.build_marker)
-    before = len(svc._system.runner.calls)
-    first = svc._consumed_source_lines(comp)
-    n_git = len(svc._system.runner.calls) - before
-    assert n_git >= 1 and svc._consumed_source_lines(comp) == first
-    assert len(svc._system.runner.calls) - before == n_git      # the second read hit the memo
-    svc.invalidate_snapshot()
-    svc._consumed_source_lines(comp)
-    assert len(svc._system.runner.calls) - before == 2 * n_git  # a new request recomputes
-
-
-def test_runtime_root_realpath_is_resolved_once_but_every_target_per_call(tmp_path, monkeypatch):
-    import os as _os
-    from lhpc.core.paths import PathContainmentError, Paths
-    root = tmp_path / "rt"
-    (root / "state").mkdir(parents=True)
-    p = Paths(runtime_root=root)
-    p.under("state")                                           # warms the root's realpath
-    n = []
-    orig = _os.path.realpath
-    monkeypatch.setattr(_os.path, "realpath", lambda x, *a, **k: (n.append(x), orig(x, *a, **k))[1])
-    p.under("state", "x.json"); p.under("logs", "y.log")
-    assert len(n) == 2 and all(str(root) != str(x) for x in n)  # targets only, never the root again
-    (root / "state" / "esc").symlink_to(tmp_path)              # a symlink leaving the root
-    with pytest.raises(PathContainmentError):
-        p.under("state", "esc", "z")                           # still caught per call
-
-
-def test_components_sharing_a_checkout_and_pin_are_probed_once_per_snapshot(tmp_path):
-    # kiss-tnc and kiss-serial both build from src/loraham-kiss-tnc at the same pin: one snapshot asks git
-    # about that checkout ONCE (two subprocesses), not once per component.
-    from lhpc.core.probes.backends import FakeSystem
-    from lhpc.core.status import StatusProber
-    src = tmp_path / "src" / "loraham-kiss-tnc"
-    fake = FakeSystem(paths={str(src), str(src / ".git")}, commands=_git_src(src, "a" * 40))
-    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
-    comps = [c for s in svc.stacks() for c in s.components
-             if c.source and c.source.path == "src/loraham-kiss-tnc"]
-    assert len(comps) >= 2 and len({c.source.pin_commit for c in comps}) == 1   # precondition
-    prober = StatusProber(fake.system, svc._paths)
-    snap = prober.assess_stacks(svc.stacks())
-    git = [c for c in fake.system.runner.calls if c[:3] == ["git", "-C", str(src)]]
-    assert len(git) == 2, git                                   # status + describe, once
-    heads = {snap.stacks[i].components[c.id].source_head for i, s in enumerate(svc.stacks())
-             for c in comps if c.id in snap.stacks[i].components}
-    assert heads == {"a" * 40}
-    # a DIFFERENT pin on the same path is a different question -> its own probe
-    from lhpc.core.model import SourceSpec
-    other = SourceSpec(path="src/loraham-kiss-tnc", pin_commit="b" * 40)
-    prober2 = StatusProber(fake.system, svc._paths)
-    fake.system.runner.calls.clear()
-    prober2._assess_source(type("C", (), {"id": "x", "source": other})())
-    prober2._assess_source(type("C", (), {"id": "y", "source": comps[0].source})())
-    assert len([c for c in fake.system.runner.calls if c[:1] == ["git"]]) == 4
-
-
-def test_a_restart_plan_assesses_the_snapshot_once(tmp_path, monkeypatch, set_call):
-    # The combined restart plan (start leg + stop collateral) goes through the INNER planners: the
-    # public entries would drop the snapshot and the request memo between the two legs and assess
-    # everything twice inside one web Restart click.
-    n = _count_assessments(monkeypatch)
-    svc = _svc_snapshot_cache(tmp_path)
-    set_call(svc)
-    n.clear()
-    plan = svc.restart("kiss", apply=False)
-    assert plan.ok and "dependents" in plan.data
-    assert len(n) <= 2, f"restart plan assessed {len(n)}×"          # one memoized (+ one fresh recheck)
 
 
 def test_symlinked_source_is_absent_for_every_operation(tmp_path):
@@ -4906,7 +3727,7 @@ def test_symlinked_source_is_absent_for_every_operation(tmp_path):
         r = getattr(svc, op)("daemon", apply=True)
         assert not r.ok, (op, r.summary)
         assert "not installed" in " ".join([r.summary or ""] + list(r.details or [])).lower(), (op, r.summary, r.details)
-    assert not list((tmp_path / "logs").glob("*loraham-daemon*")) if (tmp_path / "logs").exists() else True
+    assert not list((tmp_path / "logs").glob("*loraham-daemon*"))               # no log through the link
     assert not any(str(link) in " ".join(c) for c in svc._system.runner.calls)   # nothing through the link
     assert link.is_symlink() and outside.is_dir()                                # untouched
 
@@ -4931,32 +3752,25 @@ def test_detach_and_remove_clears_a_checkout_holding_a_runtime_socket(tmp_path):
     assert not leaf.exists() and not list((tmp_path / "src").iterdir())    # no quarantine left
 
 
-def _repo_with_lhpc_patch(repo: Path):
+def _repo_with_lhpc_patch(git, make_repo, repo: Path):
     """A committed checkout whose ONLY working-tree change is an applied patch file (the shape a
     build-time `openhop-apply-patch.sh` leaves behind). Returns (head, patch_path)."""
-    import subprocess
-    repo.mkdir(parents=True)
-    g = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@x"]
-    subprocess.run([*g, "init", "-q"], check=True)
-    (repo / "a.txt").write_text("one\n"); (repo / "b.txt").write_text("keep\n")
-    subprocess.run([*g, "add", "."], check=True); subprocess.run([*g, "commit", "-q", "-m", "base"], check=True)
-    head = subprocess.run([*g, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    head = make_repo(repo, {"a.txt": "one\n", "b.txt": "keep\n"})
     (repo / "a.txt").write_text("one\ntwo\n")
     patch = repo.parent / "lhpc.patch"
-    patch.write_text(subprocess.run([*g, "diff"], capture_output=True, text=True, check=True).stdout)
-    subprocess.run([*g, "checkout", "--", "a.txt"], check=True)
-    subprocess.run([*g, "apply", str(patch)], check=True)
+    patch.write_text(git(repo, "diff") + "\n")                        # a patch ends in a newline
+    git(repo, "checkout", "--", "a.txt")
+    git(repo, "apply", str(patch))
     return head, patch
 
 
-def test_probe_reports_an_lhpc_patched_tree_as_clean(tmp_path):
+def test_probe_reports_an_lhpc_patched_tree_as_clean(tmp_path, git, make_repo):
     """A checkout whose only modifications are LHPC's own build-time patch is not dirty: status
     says MATCH (so known-working can confirm it), and the version drops `-dirty`. Without the
     declared patch, or with one extra edit, it is dirty as before."""
-    from lhpc.core.probes import RealSystem
     from lhpc.core.probes.source import probe_source
     repo = tmp_path / "src" / "app"
-    head, patch = _repo_with_lhpc_patch(repo)
+    head, patch = _repo_with_lhpc_patch(git, make_repo, repo)
     sysx = RealSystem()
     plain = probe_source(sysx, SourceSpec(path="src/app", pin_commit=head), str(repo))
     assert plain.state is SourceState.DIRTY
@@ -4968,21 +3782,16 @@ def test_probe_reports_an_lhpc_patched_tree_as_clean(tmp_path):
     assert p2.state is SourceState.DIRTY
 
 
-def test_dirty_report_ignores_the_shipped_patch_only(tmp_path):
+def test_dirty_report_ignores_the_shipped_patch_only(tmp_path, git, make_repo, installer):
     """The update's overwrite gate: a tree carrying exactly the declared patch is not "local
     modifications"; any other tracked change still refuses the overwrite."""
-    from lhpc.core.probes import RealSystem
-    comp0 = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                      source=SourceSpec(path="src/app", local_dir="app"))
-    inst = _inst(tmp_path, comp0)
+    inst = installer(_comp())
     dest = inst.paths.under("src", "app")
-    head, patch = _repo_with_lhpc_patch(dest)
-    inst.system = RealSystem()
+    head, patch = _repo_with_lhpc_patch(git, make_repo, dest)
     assert inst.dirty_report(dest, "src/app")                          # undeclared patch: dirty
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app", patches=(str(patch),)))
-    inst = _inst(tmp_path, comp)
-    inst.system = RealSystem()
+    inst = installer(comp)
     assert not inst.dirty_report(dest, "src/app")                      # exactly the patch: clean
     (dest / "a.txt").write_text("one\ntwo\nthree\n")                     # an extra hunk
     assert inst.dirty_report(dest, "src/app")

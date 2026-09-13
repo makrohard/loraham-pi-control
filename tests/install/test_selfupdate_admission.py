@@ -1,4 +1,4 @@
-"""Item 7: the self-update gate must block on every relevant durable task state — including a job
+"""The self-update gate must block on every relevant durable task state — including a job
 marker whose safety cannot be PROVEN (unsafe jobs dir, symlinked/non-regular/oversized/malformed
 marker), not only a live job. active_jobs(include_unsafe=True) surfaces those as blockers.
 """
@@ -58,7 +58,7 @@ def test_self_update_apply_blocks_on_unsafe_job_marker(tmp_path, monkeypatch):
 
 
 def test_self_update_blockers_are_centralized(tmp_path):
-    # Item 4: trigger AND direct apply share ONE strict blocker scan. It blocks on an unprovable job.
+    # Trigger AND direct apply share ONE strict blocker scan. It blocks on an unprovable job.
     svc = _svc(tmp_path)
     assert svc._self_update_blockers() is None                       # clean
     d = jobs.jobs_dir(svc._paths); d.mkdir(parents=True, exist_ok=True)
@@ -85,7 +85,7 @@ def test_trigger_uses_strict_scan_and_admission(tmp_path, monkeypatch):
 
 
 def test_helper_owns_inflight_pid_and_start_time(tmp_path):
-    # Item 1: the managed helper may proceed with an in-flight request ONLY when the record's PID AND
+    # The managed helper may proceed with an in-flight request ONLY when the record's PID AND
     # /proc start time both match this process — a foreign/forged/PID-reused owner is refused.
     import os, json
     from lhpc.core import runtime_fs, updater_units

@@ -9,10 +9,9 @@ import textwrap
 import pytest
 
 from fake_loraham_daemon import TX_RESULT_STATUS_CHANNEL_BUSY, FakeLoRaHAMDaemon
+from harness import make_radio, wait_for
 from meshcore_host.config import ConfigError, load_config
-from meshcore_host.loraham_radio import LoRaHAMRadio
 from meshcore_host.rflog import RfLog, format_rx, format_tx, parse_switch
-from test_loraham_radio import make_radio, wait_for
 
 # ---- lines -------------------------------------------------------------------
 
@@ -193,14 +192,23 @@ async def test_a_link_drop_with_the_frame_written_is_unconfirmed(logged, daemon)
 
 
 async def test_a_daemon_error_frame_is_not_a_transmission(logged, daemon):
+    """The daemon refused the frame: nothing was radiated, nothing is logged. Every RF-log
+    write happens inside send() itself, so once it has returned no writer for that frame is
+    left and the empty log is a fact, not a wait. The positive twin: the ERROR forces a
+    resync, and the next frame — with a real TX_RESULT — is the log's only line."""
     radio, path = logged
     daemon.set_tx_result(respond=False)
     task = asyncio.create_task(radio.send(b"hi"))
     await daemon.wait_tx(b"hi")
     await daemon.send_error("TX rejected")
     assert await task is None
-    await asyncio.sleep(0.05)
     assert _read(path) == []
+    daemon.set_tx_result(respond=True)
+    assert await wait_for(lambda: radio.tx_ready, timeout=5.0)
+    assert await radio.send(b"ok") is not None
+    lines = _read(path)
+    assert len(lines) == 1
+    assert lines[0].endswith(' TX rssi=- snr=- len=2 outcome=ok hex=6f6b ascii="ok"')
 
 
 async def test_a_bad_path_fails_the_radio_before_the_daemon_link(daemon):
@@ -212,7 +220,7 @@ async def test_a_bad_path_fails_the_radio_before_the_daemon_link(daemon):
 
 async def test_aclose_releases_the_log(daemon, tmp_path):
     radio = make_radio(daemon, rf_log_path=str(tmp_path / "rf.log"))
-    assert radio._rflog.active
+    assert radio._rflog.active                  # private: a released fd has no public observable
     await radio.aclose()
     assert not radio._rflog.active
 

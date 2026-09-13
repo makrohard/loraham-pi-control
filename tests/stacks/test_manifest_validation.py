@@ -264,7 +264,6 @@ def test_shipped_manifest_binary_declarations():
             assert cid in s.binary.covers
 
 
-
 # --- build_inputs: the non-source values a completion marker records ----------------------------
 # Each one ends up verbatim inside a sidecar that is compared byte for byte, so the loader is the
 # place that refuses anything which could not survive that round trip — and the place that binds
@@ -406,3 +405,19 @@ def test_a_value_that_could_not_survive_the_marker_is_refused(value):
 def test_a_name_that_is_not_an_identifier_is_refused():
     with pytest.raises(ManifestError, match="not an identifier"):
         parse_manifest(_manifest(_with_inputs(_input(name="web client"))))
+
+
+def test_components_sharing_a_source_path_must_declare_the_same_source():
+    """Two components may build from ONE checkout (kiss-tnc + kiss-serial), but only when their
+    source specs are identical — a second remote for the same path would be two different
+    repositories fighting over one directory."""
+    def comp(cid, remote):
+        return {"id": cid, "name": cid, "kind": "service", "run": "true", "readiness": "process",
+                "source": {"path": "src/x", "remote": remote}}
+    base = {"stack": [{"id": "s", "name": "s", "main": "a",
+                       "component": [comp("a", "https://github.com/x/y.git"),
+                                     comp("b", "https://github.com/OTHER/z.git")]}]}
+    with pytest.raises(ManifestError, match="share source path"):
+        parse_manifest(base)
+    base["stack"][0]["component"][1]["source"]["remote"] = "https://github.com/x/y.git"
+    assert parse_manifest(base)                        # identical specs -> valid

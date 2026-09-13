@@ -59,6 +59,21 @@ def _data_packet(dest_hash: bytes, data: bytes, packet_type=RNS.Packet.DATA, con
     return bytes([flags, 0]) + dest_hash + bytes([context]) + data
 
 
+class _RnsIfac:
+    """What RNS gives an IFAC'd interface, derived as `Reticulum.__apply_config` does at the
+    pinned RNS: full_hash(netname) ‖ full_hash(netkey), hashed again, hkdf(64) under
+    Reticulum.IFAC_SALT. Written out here rather than taken from the decoder, so a slip in its
+    copy of that derivation cannot pass. A frame recorded on the box would pin it independently
+    of any copy; none has been recorded yet."""
+
+    def __init__(self, netname: str, netkey: str, size: int):
+        origin = RNS.Identity.full_hash(netname.encode("utf-8")) + RNS.Identity.full_hash(netkey.encode("utf-8"))
+        self.ifac_size = size
+        self.ifac_key = RNS.Cryptography.hkdf(length=64, derive_from=RNS.Identity.full_hash(origin),
+                                              salt=RNS.Reticulum.IFAC_SALT, context=None)
+        self.ifac_identity = RNS.Identity.from_bytes(self.ifac_key)
+
+
 def test_the_recorded_meshchat_announce_decodes_to_its_display_name(tmp_path):
     decode = dec.make_decoder(_config(tmp_path), _meshchat(tmp_path))
     r = decode("k", _line(MESHCHAT_ANNOUNCE, "TX"))
@@ -69,6 +84,8 @@ def test_the_recorded_meshchat_announce_decodes_to_its_display_name(tmp_path):
 def test_a_single_packet_to_our_lxmf_destination_opens_plain_and_with_a_ratchet(tmp_path):
     me = RNS.Identity()
     dest = RNS.Destination.hash_from_name_and_identity("lxmf.delivery", me)
+    # RNS privates: the public path (Destination.enable_ratchets / rotate_ratchets) needs a
+    # Transport-registered destination, i.e. a running RNS — there is no offline API.
     ratchet = RNS.Identity._generate_ratchet()
     ratchet_pub = RNS.Identity._ratchet_public_bytes(ratchet)
     decode = dec.make_decoder(_config(tmp_path), _meshchat(tmp_path, me, ratchet))
@@ -87,7 +104,7 @@ def test_a_single_packet_to_our_lxmf_destination_opens_plain_and_with_a_ratchet(
 
 def test_the_ratchet_file_is_only_read(tmp_path):
     me = RNS.Identity()
-    ratchet = RNS.Identity._generate_ratchet()
+    ratchet = RNS.Identity._generate_ratchet()          # RNS private, see above
     mc = _meshchat(tmp_path, me, ratchet)
     before = {p: p.stat().st_mtime_ns for p in (tmp_path / "meshchat").rglob("*") if p.is_file()}
     dec.make_decoder(_config(tmp_path), mc)
@@ -99,7 +116,7 @@ def test_an_ifac_frame_is_unmasked_with_rns_own_code(tmp_path):
     me = RNS.Identity()
     dest = RNS.Destination.hash_from_name_and_identity("lxmf.delivery", me)
     raw = _data_packet(dest, me.encrypt(b"RF-PROOF behind IFAC"))
-    ctx = dec._IfacContext("labnet", "generated-passphrase-42", 8)
+    ctx = _RnsIfac("labnet", "generated-passphrase-42", 8)
     masked = RNS.Transport.handle_outgoing_ifac(ctx, raw)        # what the radio actually carried
     assert masked[0] & 0x80
     decode = dec.make_decoder(_config(tmp_path, "labnet", "generated-passphrase-42"), _meshchat(tmp_path, me))

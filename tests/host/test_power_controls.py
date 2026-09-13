@@ -123,7 +123,7 @@ def test_power_supported_requires_tools_and_logind_yes(tmp_path, monkeypatch):
 
 
 def test_power_authorization_is_per_action(tmp_path, monkeypatch):
-    """RE-AUDIT: CanReboot=yes with CanPowerOff=no must expose ONLY the reboot side —
+    """CanReboot=yes with CanPowerOff=no must expose ONLY the reboot side —
     never both buttons from one shared verdict."""
     svc = _svc(tmp_path, files=dict(_TOOLS))
     _busctl(svc, monkeypatch, per={"CanReboot": 's "yes"\n', "CanPowerOff": 's "no"\n'})
@@ -137,7 +137,7 @@ def test_power_authorization_is_per_action(tmp_path, monkeypatch):
 def test_power_visibility_cache_bounded_both_ways(tmp_path, monkeypatch):
     """Verdicts cache per action with a bounded TTL BOTH ways: repeated GETs inside the TTL
     never re-probe, and BOTH a later install AND a revocation become visible once the TTL
-    passes (RE-AUDIT: a forever-yes kept revoked buttons alive until restart)."""
+    passes (a forever-yes kept revoked buttons alive until restart)."""
     import time as _time
     svc = _svc(tmp_path, files=dict(_TOOLS))
     calls = []
@@ -400,53 +400,46 @@ def test_second_power_click_is_refused_while_pending(tmp_path, monkeypatch):
 # --- web ------------------------------------------------------------------------------------------
 
 
-def _web(tmp_path, monkeypatch=None, supported=False):
-    from lhpc.adapters.web.app import create_app
+def _web(web, tmp_path, monkeypatch=None, supported=False):
     svc = _svc(tmp_path)
     if monkeypatch is not None and supported:
         monkeypatch.setattr(ControllerService, "power_supported",
                             lambda self, kind=None: True)
-    return svc, create_app(lambda: svc).test_client()
+    return svc, web(service_factory=lambda: svc)
 
 
-def _tok(c):
-    body = c.get("/stacks").get_data(as_text=True)
-    return re.search(r'name="_csrf" value="([^"]+)"', body).group(1)
-
-
-def test_web_hidden_and_404_when_unsupported(tmp_path):
-    _, c = _web(tmp_path)
+def test_web_hidden_and_404_when_unsupported(web, csrf, tmp_path):
+    _, c = _web(web, tmp_path)
     body = c.get("/").get_data(as_text=True)
     assert "Shut down" not in body and "/power/" not in body
-    assert c.post("/power/reboot", data={"_csrf": _tok(c)}).status_code == 404
+    assert c.post("/power/reboot", data={"_csrf": csrf(c)}).status_code == 404
 
 
-def test_web_buttons_and_routes_gate_per_action(tmp_path, monkeypatch):
-    """RE-AUDIT: reboot-only authorization renders ONLY the Reboot button, and the poweroff
+def test_web_buttons_and_routes_gate_per_action(web, csrf, tmp_path, monkeypatch):
+    """reboot-only authorization renders ONLY the Reboot button, and the poweroff
     route 404s — never both surfaces from one shared verdict."""
-    from lhpc.adapters.web.app import create_app
     svc = _svc(tmp_path)
     monkeypatch.setattr(ControllerService, "power_supported",
                         lambda self, kind=None: kind == "reboot")
-    c = create_app(lambda: svc).test_client()
+    c = web(service_factory=lambda: svc)
     body = c.get("/").get_data(as_text=True)
     assert 'action="/power/reboot"' in body
     assert 'action="/power/poweroff"' not in body
-    tok = _tok(c)
+    tok = csrf(c)
     assert c.post("/power/poweroff", data={"_csrf": tok}).status_code == 404
     assert c.post("/power/reboot", data={"_csrf": tok}).status_code == 200
 
 
-def test_web_csrf_required(tmp_path, monkeypatch):
-    _, c = _web(tmp_path, monkeypatch, supported=True)
+def test_web_csrf_required(web, tmp_path, monkeypatch):
+    _, c = _web(web, tmp_path, monkeypatch, supported=True)
     assert c.post("/power/reboot").status_code == 400
 
 
-def test_web_buttons_confirm_and_apply(tmp_path, monkeypatch):
-    _, c = _web(tmp_path, monkeypatch, supported=True)
+def test_web_buttons_confirm_and_apply(web, csrf, tmp_path, monkeypatch):
+    _, c = _web(web, tmp_path, monkeypatch, supported=True)
     body = c.get("/").get_data(as_text=True)
     assert 'action="/power/reboot"' in body and 'action="/power/poweroff"' in body
-    tok = _tok(c)
+    tok = csrf(c)
     # unknown kind -> 404 even when supported
     assert c.post("/power/halt", data={"_csrf": tok}).status_code == 404
     # stage 1: the confirm page, posting back to the SAME power route

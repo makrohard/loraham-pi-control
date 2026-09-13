@@ -21,7 +21,6 @@ from lhpc.core.install import Installer
 from lhpc.core.probes import RealSystem
 
 
-# ===== merged from test_runtime_fs.py =====
 def test_atomic_write_rejects_symlink_leaf(tmp_path):
     p = Paths(runtime_root=tmp_path)
     outside = tmp_path / "outside.txt"; outside.write_text("orig")
@@ -374,7 +373,6 @@ def test_rename_leaf_no_replace_fallback_matches_renameat2(tmp_path, monkeypatch
     assert src.read_text() == "again\n" and dst.read_text() == "normal\n"
 
 
-# ===== merged from test_runtime_fs_anchored.py =====
 def _rt(tmp_path):
     rt = tmp_path / "rt"; rt.mkdir()
     return rt, Paths(runtime_root=rt)
@@ -561,7 +559,6 @@ def test_concurrent_same_process_writes_one_leaf_no_corruption(tmp_path):
     assert not list((rt / "config").glob(".x.conf.tmp-*"))
 
 
-# ===== merged from test_runtime_fs_hardening.py =====
 def _fifo(tmp_path, name="f"):
     p = tmp_path / name
     os.mkfifo(p)
@@ -652,7 +649,6 @@ def test_open_log_truncate_refuses_fifo_and_does_not_touch_it(tmp_path):
     assert _stat.S_ISFIFO(os.lstat(fifo).st_mode)
 
 
-# ===== merged from test_wrapper_runtime_anchored.py =====
 def _paths(tmp_path):
     root = tmp_path / "rt"
     root.mkdir()
@@ -774,7 +770,6 @@ def test_mkdir_prestep_over_symlink_refused(tmp_path):
     assert oct(outside.stat().st_mode & 0o777) == "0o700"          # target mode unchanged
 
 
-# ===== merged from test_path_containment.py =====
 def test_resolve_source_rejects_escape(tmp_path):
     p = Paths(runtime_root=tmp_path)
     assert p.resolve_source("src/daemon") == (tmp_path / "src" / "daemon")
@@ -869,7 +864,6 @@ def test_config_lock_acquires_normally(tmp_path):
     assert (tmp_path / "config" / ".lock").exists()
 
 
-# ===== merged from test_containment.py =====
 def _manifest_dict():
     from lhpc.core.config import asset_path
     return tomllib.load(open(asset_path("manifest.example.toml"), "rb"))
@@ -1169,3 +1163,20 @@ def test_open_marker_excl_no_fd_leak_when_dup_fails(tmp_path, monkeypatch):
 def Paths_(rt):
     from lhpc.core.paths import Paths
     return Paths(runtime_root=rt)
+
+
+def test_runtime_root_realpath_is_resolved_once_but_every_target_per_call(tmp_path, monkeypatch):
+    """`Paths.under` resolves the runtime root's realpath once and memoizes it; every TARGET is
+    still resolved on each call, so a symlink that later leaves the root is caught per call."""
+    root = tmp_path / "rt"
+    (root / "state").mkdir(parents=True)
+    p = Paths(runtime_root=root)
+    p.under("state")                                           # warms the root's realpath
+    n = []
+    orig = os.path.realpath
+    monkeypatch.setattr(os.path, "realpath", lambda x, *a, **k: (n.append(x), orig(x, *a, **k))[1])
+    p.under("state", "x.json"); p.under("logs", "y.log")
+    assert len(n) == 2 and all(str(root) != str(x) for x in n)  # targets only, never the root again
+    (root / "state" / "esc").symlink_to(tmp_path)              # a symlink leaving the root
+    with pytest.raises(PathContainmentError):
+        p.under("state", "esc", "z")                           # still caught per call

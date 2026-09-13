@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 
 from lhpc.core import deps as deps_mod
 from lhpc.core import lifecycle as lcmod
@@ -159,7 +158,7 @@ def test_shared_ap_way_home_actions_are_required_and_granted(tmp_path):
 # --- connect + PSK hygiene ------------------------------------------------------------------------
 
 
-def test_scan_empty_in_ap_mode_explains_and_manual_form_renders(tmp_path, monkeypatch):
+def test_scan_empty_in_ap_mode_explains_and_manual_form_renders(web, tmp_path, monkeypatch):
     """LIVE-FOUND: hosting the AP blinds the radio — a 0-result scan must say why, and the
     panel must offer manual SSID entry as the commissioning path."""
     from unittest.mock import patch
@@ -169,8 +168,7 @@ def test_scan_empty_in_ap_mode_explains_and_manual_form_renders(tmp_path, monkey
                       "device wifi list": (0, "lhpc-e293:0:WPA2\n", "")})
     res = svc.network_scan()
     assert res.ok and "scanning is limited" in res.summary
-    from lhpc.adapters.web.app import create_app
-    c = create_app(lambda: svc).test_client()
+    c = web(service_factory=lambda: svc)
     with patch.object(ControllerService, "network_view", lambda self: dict(VIEW)), \
          patch.object(ControllerService, "network_supported", lambda self: True):
         body = c.get("/stacks").get_data(as_text=True)
@@ -572,29 +570,23 @@ VIEW = {"supported": True, "authorized": True, "mode": "ap", "active": {},
         "scan": [{"ssid": "Other", "signal": 60, "security": "WPA2"}], "pending": False}
 
 
-def _web(tmp_path):
-    from lhpc.adapters.web.app import create_app
+def _web(web, tmp_path):
     svc = _svc(tmp_path)
-    return svc, create_app(lambda: svc).test_client()
+    return svc, web(service_factory=lambda: svc)
 
 
-def _tok(c):
-    body = c.get("/stacks").get_data(as_text=True)
-    return re.search(r'name="_csrf" value="([^"]+)"', body).group(1)
-
-
-def test_web_hidden_and_404_when_unsupported(tmp_path):
-    _, c = _web(tmp_path)
+def test_web_hidden_and_404_when_unsupported(web, csrf, tmp_path):
+    _, c = _web(web, tmp_path)
     body = c.get("/stacks").get_data(as_text=True)
     assert "controller-network" not in body
-    assert c.post("/network/scan", data={"_csrf": _tok(c)}).status_code == 404
+    assert c.post("/network/scan", data={"_csrf": csrf(c)}).status_code == 404
     assert c.post("/network/scan").status_code == 400      # CSRF first
 
 
-def test_web_panel_confirm_and_apply(tmp_path, monkeypatch):
+def test_web_panel_confirm_and_apply(web, csrf, tmp_path, monkeypatch):
     from unittest.mock import patch
-    _, c = _web(tmp_path)
-    tok = _tok(c)
+    _, c = _web(web, tmp_path)
+    tok = csrf(c)
     with patch.object(ControllerService, "network_view", lambda self: dict(VIEW)), \
          patch.object(ControllerService, "network_supported", lambda self: True):
         body = c.get("/stacks").get_data(as_text=True)
@@ -728,10 +720,10 @@ def test_ap_now_clears_preference_and_spawns_finalize(tmp_path, monkeypatch):
     assert rec["op"] == "ap" and rec["uuid"] == "AP-UUID-1"
 
 
-def test_web_ap_button_and_confirm(tmp_path, monkeypatch):
+def test_web_ap_button_and_confirm(web, csrf, tmp_path, monkeypatch):
     from unittest.mock import patch
-    _, c = _web(tmp_path)
-    tok = _tok(c)
+    _, c = _web(web, tmp_path)
+    tok = csrf(c)
     client_view = {**VIEW, "mode": "client",
                    "active": {"uuid": "U1", "name": "HomeNet",
                               "address": "192.168.178.106/24"}}
@@ -913,7 +905,7 @@ def test_retry_stamp_is_boot_and_uuid_bound(tmp_path, monkeypatch):
 
 def test_finalize_refuses_stale_and_other_boot_records_even_with_token(tmp_path,
                                                                        monkeypatch):
-    """RE-AUDIT: a revived helper past the TTL, or one from another boot, must never act
+    """a revived helper past the TTL, or one from another boot, must never act
     even with a matching token — freshness is checked in finalize itself (never via the
     pruning gate), and the record is left alone."""
     svc, _order, _pw = _finalize_svc(tmp_path)
@@ -931,7 +923,7 @@ def test_finalize_refuses_stale_and_other_boot_records_even_with_token(tmp_path,
 
 
 def test_connect_preflight_exception_fails_closed(tmp_path, monkeypatch):
-    """RE-AUDIT: an unverifiable firewall refuses the join — never allowed=True."""
+    """an unverifiable firewall refuses the join — never allowed=True."""
     svc = _svc(tmp_path)
     _fake_nmcli(svc, _std_replies())
     monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-1")
@@ -945,7 +937,7 @@ def test_connect_preflight_exception_fails_closed(tmp_path, monkeypatch):
 
 
 def test_finalize_refuses_malformed_record_shape(tmp_path, monkeypatch):
-    """RE-AUDIT: the record is the sole authority, so its shape is strict — truthy
+    """the record is the sole authority, so its shape is strict — truthy
     non-bool allow_console, a non-canonical pwfile path, an unknown op, and an ap record
     claiming console/secret are all refused without acting."""
     svc, order, _pw = _finalize_svc(tmp_path)

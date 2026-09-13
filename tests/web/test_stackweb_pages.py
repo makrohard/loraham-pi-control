@@ -8,13 +8,13 @@ from __future__ import annotations
 import pytest
 
 from lhpc.adapters.cli.main import main
-from lhpc.adapters.web.app import create_app
 from lhpc.core import config as cfgmod
 from lhpc.core import webserver
 from lhpc.core.manifest import ManifestError, load_manifest
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem, Listener
 from lhpc.core.services import ControllerService
+from htmlq import parse
 
 _TWO_PAGES = '''
 [[stack]]
@@ -134,7 +134,6 @@ def _web_upstream(svc, page_id):
 def _web_deny(svc, page_id):
     p = svc.web_page(page_id)
     return tuple(p.deny_paths) if p is not None else ()
-
 
 
 def _svc(tmp_path, listeners=()):
@@ -324,25 +323,19 @@ def test_client_links_point_each_web_endpoint_at_its_own_pages_proxy(tmp_path):
 
 # --- the console -----------------------------------------------------------------------------
 
-def _csrf(client, path="/stacks"):
-    import re
-    m = re.search(r'name="_csrf" value="([^"]+)"', client.get(path).get_data(as_text=True))
-    return m.group(1) if m else ""
-
-
-def test_the_stack_panel_renders_one_webserver_subpanel_and_password_block_per_page(tmp_path):
+def test_the_stack_panel_renders_one_webserver_subpanel_and_password_block_per_page(tmp_path, web):
     svc = _svc(tmp_path)
-    body = create_app(lambda: svc).test_client().get("/stacks?open=two").get_data(as_text=True)
-    assert 'id="stack-webserver-two"' in body and 'id="stack-webserver-two-b"' in body
-    assert "Webserver (web UI proxy) — Dashboard" in body
-    assert 'name="page" value="two-b"' in body
-    assert 'id="stack-password-b"' in body and 'id="stack-password-a"' not in body
+    doc = parse(web(service_factory=lambda: svc).get("/stacks?open=two").get_data(as_text=True))
+    assert doc.present("stack-webserver-two") and doc.present("stack-webserver-two-b")
+    assert "Webserver (web UI proxy) — Dashboard" in doc.text
+    assert doc.within(doc.by_id("stack-webserver-two-b")).field_default("page") == "two-b"
+    assert doc.present("stack-password-b") and not doc.present("stack-password-a")
 
 
-def test_the_route_saves_the_named_page_and_refuses_a_foreign_one(tmp_path):
+def test_the_route_saves_the_named_page_and_refuses_a_foreign_one(tmp_path, web, csrf):
     svc = _svc(tmp_path)
-    client = create_app(lambda: svc).test_client()
-    tok = _csrf(client)
+    client = web(service_factory=lambda: svc)
+    tok = csrf(client)
     r = client.post("/stacks/two/webserver", data={"_csrf": tok, "page": "two-b", "mode": "local",
                                                    "port": "8446", "scheme": "https",
                                                    "access_mode": "local-open-remote-auth"})
@@ -427,7 +420,7 @@ def test_a_main_component_declared_first_still_yields_the_stack_id_to_the_web_co
     assert pages[1].name == "Main" and pages[1].label == "Main First · Main"
 
 
-def test_a_password_file_declared_outside_the_runtime_root_is_never_read(tmp_path):
+def test_a_password_file_declared_outside_the_runtime_root_is_never_read(tmp_path, web):
     # `ui_password_file` is unvalidated at manifest load; `Paths.under` is the containment gate.
     m = tmp_path / "escape.toml"
     m.write_text(_TWO_PAGES.replace('ui_password_file = "state/b/admin.txt"',
@@ -441,6 +434,6 @@ def test_a_password_file_declared_outside_the_runtime_root_is_never_read(tmp_pat
     creds = svc.ui_credentials("two", "b")
     assert creds["value"] is None and creds["path"] == "" and creds["exists"] is False
     assert "outside the runtime root" in creds["reason"]
-    body = create_app(lambda: svc).test_client().get("/stacks?open=two").get_data(as_text=True)
+    body = web(service_factory=lambda: svc).get("/stacks?open=two").get_data(as_text=True)
     assert "outside the runtime root" in body and "never-read" not in body
     assert str(outside) not in body                        # never the path either

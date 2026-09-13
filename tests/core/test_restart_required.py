@@ -189,7 +189,7 @@ def test_module_merge_rules(tmp_path):
     assert fresh["mode"] == "restart" and fresh["params"] == ["x"] and fresh["band"] == "433"
     unsafe = {"unsafe": True, "stack": "chat", "mode": "restart", "params": ["junk"], "reason": "r"}
     assert _json.loads(rr.merged_payload(unsafe, "chat", ["y"], "", now=1.0))["params"] == ["y"]
-    assert rr.merged_payload(None, "chat", [], "", mode="build", now=1.0).count('"mode": "build"') == 1
+    assert _json.loads(rr.merged_payload(None, "chat", [], "", mode="build", now=1.0))["mode"] == "build"
 
 
 def test_module_clear_is_silent_on_a_missing_marker(tmp_path):

@@ -1,9 +1,14 @@
-"""P0.8 — packaged data assets resolve via importlib.resources, so the controller
-works as an installed wheel, not only from a source checkout. (The full isolated
-wheel-install smoke test is in docs/maintenance.md / the milestone commands.)"""
+"""Packaged data assets resolve via importlib.resources, so the controller works as an
+installed wheel, not only from a source checkout. (The full isolated wheel-install smoke test is
+in docs/maintenance.md / the milestone commands.)"""
+
+import os
+import subprocess
+import tomllib
 
 import pytest
 
+import repo_paths
 from lhpc.core.assets import asset_path, asset_text
 from lhpc.core.manifest import default_manifest_path, load_manifest
 
@@ -39,9 +44,7 @@ def test_every_shipped_asset_tree_is_in_the_package_data_allow_list():
     This guards the DECLARATION. That the wheel really carries the files is proven by the
     isolated wheel-install smoke test in docs/maintenance.md, which the suite deliberately does
     not run (see this module's header)."""
-    import tomllib
-    from pathlib import Path
-    root = Path(__file__).resolve().parents[2]
+    root = repo_paths.REPO
     patterns = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["setuptools"][
         "package-data"]["lhpc"]
     data = root / "lhpc" / "data"
@@ -73,10 +76,11 @@ def test_every_file_in_a_shipped_asset_tree_is_tracked_by_git():
     `dist/` silently swallowed two files of MeshChat's rnode-flasher, `git add -A` said nothing,
     and the wheel built from the working tree still contained them — so only a box installing
     from a clone would have found the UI incomplete. Compare tracked files against the disk."""
-    import subprocess
-    from pathlib import Path
-    root = Path(__file__).resolve().parents[2]
+    root = repo_paths.REPO
     if not (root / ".git").exists():
+        # A source export has nothing to compare; CI runs from actions/checkout and MUST have it.
+        if os.environ.get("CI"):
+            pytest.fail("no .git in this checkout — CI must run from a git checkout for this guard")
         pytest.skip("not a git checkout")
     for tree in sorted(p for p in (root / "lhpc" / "data").iterdir()
                        if p.is_dir() and p.name.endswith("-dist")):

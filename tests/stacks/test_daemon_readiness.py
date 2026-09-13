@@ -206,7 +206,7 @@ def test_radio_not_ready_hint_names_a_running_hardware_claimant(tmp_path, monkey
 
     # DEGRADED means "running, but an endpoint/readiness is missing" — the process still holds the
     # radio, so it must be named too. Missing it sent the operator to power-cycle the Pi over a
-    # process they could simply stop (audit).
+    # process they could simply stop.
     from lhpc.core.model import RunState as _RS
     _St.run_state = _RS.DEGRADED
     hint = svc._radio_not_ready_hint("433")

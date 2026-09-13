@@ -11,14 +11,7 @@ from lhpc.core.model import Component, ComponentKind, Stack
 from lhpc.core.paths import Paths
 from lhpc.core.probes import RealSystem
 from lhpc.core.probes.backends import FakeSystem
-
-
-# ===== merged from test_post_start.py =====
-def _outcomes(res):
-    """What the start actually produced — an `any(...)` assertion otherwise reports only False,
-    which is unusable when the run that fails is a CI runner you cannot attach to."""
-    return [(r.component, getattr(r.outcome, "name", r.outcome), (r.summary or "")[:90])
-            for r in res.results]
+from seams import outcomes
 
 
 def _real_life(tmp_path):
@@ -81,6 +74,8 @@ def test_start_action_carries_typed_results(tmp_path):
 
 
 def _fake_life_factory(real_spawn, svc):
+    """The service's real Lifecycle, spawning through the `real_spawn` fixture: a detached
+    `sleep` stands in for the component's binary, so the launch is a real, ownable process."""
     return Lifecycle(svc._paths, svc.stacks(), svc.config(), svc._system,
                      spawn=real_spawn)
 
@@ -325,7 +320,6 @@ def _serve_once(port, delay=0.0, accepts=1):
     t = threading.Thread(target=run, daemon=True); t.start()
     if not delay:                             # a delayed listener is the point of that test
         assert listening.wait(10.0), "listener never came up"
-    t.listening = listening
     return t
 
 
@@ -451,6 +445,8 @@ def test_schedule_spacing_measured():
     t.join(10)
     assert len(stamps) == 4
     gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+    # Stamps are taken at accept() on the listener, so accept-side jitter on the earlier send
+    # can shorten a measured gap below the sleep the runner actually took: 10 % tolerance.
     for gap, want in zip(gaps, (0.2, 0.2, 0.8)):
         assert gap >= want * 0.9, f"gap {gap:.3f}s is shorter than the {want}s it asked for"
 
@@ -1238,7 +1234,7 @@ def test_run_post_start_announces_detached_runner_log(tmp_path):
 
 @pytest.mark.needs_session
 def test_start_details_announce_start_capture_log(tmp_path, monkeypatch, set_call, real_spawn):
-    # Item B: the start flow announces the start capture log as a copy-pasteable tail line.
+    # the start flow announces the start capture log as a copy-pasteable tail line.
     svc = _kiss_svc(tmp_path)
     set_call(svc)
     monkeypatch.setattr(ControllerService, "_lifecycle",
@@ -1681,14 +1677,7 @@ def test_required_outcome_unchanged_for_a_bandless_stack(tmp_path, set_call):
         p.terminate(); p.wait()
 
 
-# ===== merged from test_truthful_outcomes.py =====
 STATUS = b"STATUS RADIO=READY TXMODE=MANAGED\n"
-
-
-def _fake_life(real_spawn, svc):
-    # A lifecycle whose spawn "succeeds" without launching a real process.
-    return Lifecycle(svc._paths, svc.stacks(), svc.config(), svc._system,
-                     spawn=real_spawn)
 
 
 def _built_daemon(tmp_path):
@@ -1704,7 +1693,7 @@ def test_daemon_both_fails_when_one_band_never_comes_up(tmp_path, monkeypatch, r
     sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": STATUS}).system
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(type(svc), "_lifecycle",
-                        lambda s: _fake_life(real_spawn, s))
+                        lambda s: _fake_life_factory(real_spawn, s))
     res = svc.start("daemon", apply=True)              # --radio both (default)
     assert not res.ok
     assert any("868 CONF socket never came up" in d for d in res.details)
@@ -1716,7 +1705,7 @@ def test_start_ok_when_daemon_serving_both(tmp_path, monkeypatch, real_spawn):
                                    "/tmp/loraconf868.sock": STATUS}).system
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(type(svc), "_lifecycle",
-                        lambda s: _fake_life(real_spawn, s))
+                        lambda s: _fake_life_factory(real_spawn, s))
     res = svc.start("daemon", apply=True)
     assert res.ok
 
@@ -1917,7 +1906,7 @@ def test_running_band_marker_failure_downgrades_to_unverified(tmp_path, monkeypa
     res = svc.start("voice", apply=True, band="433")
     assert any(r.component == "loraham-voice" and r.outcome == Outcome.UNVERIFIED
                and "running-band marker" in (r.summary or "") for r in res.results), \
-        _outcomes(res)
+        outcomes(res)
 
 
 def _kiss_with_held_required_post_start(svc, monkeypatch, real_spawn):
@@ -1993,7 +1982,7 @@ def test_a_config_save_during_required_post_start_completes_and_keeps_its_warnin
     t.join(30)
     assert not t.is_alive(), "start never finished"
 
-    assert out["res"].ok, _outcomes(out["res"])
+    assert out["res"].ok, outcomes(out["res"])
     assert "434.500" not in seen["launcher"]       # the post step applied A...
     assert "433.900" in seen["launcher"]
     assert svc._stored_param_value("kiss", "run", "loraham-kiss-tnc", "tx_freq") == "434.500"

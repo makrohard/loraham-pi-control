@@ -126,7 +126,7 @@ class _FailingSink:
 
 
 def test_controlled_runner_flags_log_write_failure_without_crashing(tmp_path):
-    # P2: the drain reads the child's output but CANNOT persist it. Cessation/draining are still proven (no
+    # the drain reads the child's output but CANNOT persist it. Cessation/draining are still proven (no
     # unsafe), but the result must carry log_write_failed so the job is not reported as a success.
     r = RealCommandRunner().run_streaming(
         ["echo", "compiling firmware"], timeout=10, log_fh=_FailingSink(),

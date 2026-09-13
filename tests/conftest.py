@@ -75,7 +75,7 @@ def _no_pip_install(monkeypatch):
     lets that through installs a throwaway package from a pytest tmp dir into the shared venv and
     breaks the NEXT run, not its own: the editable finder then points `lhpc` at a directory that
     no longer exists, and 4,500 tests stop collecting with a FileNotFoundError that names /tmp and
-    never names pip. Same shape as `_no_binary_network` below: turn a silent poisoning into a loud
+    never names pip. Same shape as `_no_binary_network` above: turn a silent poisoning into a loud
     failure in the test that causes it.
     """
     from lhpc.core.probes.backends import RealCommandRunner
@@ -342,3 +342,109 @@ def manifest_with_moved_input():
         return "".join(out), old
     return _apply
 
+
+@pytest.fixture
+def recording_system():
+    """A FakeSystem whose runner records every subprocess argv it is asked to run, then runs it
+    on the fake as usual. Returns `(system, calls)`; `calls` is the list of argv lists in order.
+    For the "this surface never shells out to X" invariants (the console GET surface, the
+    updater trigger paths) — drive the seam, do not read the code."""
+    from lhpc.core.probes.backends import FakeSystem
+    sys_ = FakeSystem().system
+    inner = sys_.runner
+    calls: list[list[str]] = []
+
+    class _Recording:
+        def run(self, argv, timeout=None, *a, **k):
+            calls.append(list(argv))
+            return inner.run(argv, timeout, *a, **k)
+
+    sys_.runner = _Recording()
+    return sys_, calls
+
+
+# --- console clients and binary receipts, shared by web/, host/ and install/ ---------------------
+# One way to build a test client over a FakeSystem and one way to read a page's CSRF token:
+#
+#     def test_x(web, csrf):
+#         client = web()                                  # FakeSystem, runtime root = tmp_path
+#         token = csrf(client, "/stacks?open=daemon")     # the token the page rendered
+#         client.post("/action", data={"_csrf": token, ...})
+#
+# `web(cmdlines=..., commands=..., manifest=..., paths=..., system=..., guard=..., service_factory=...)`
+# covers every variant the former local copies had grown.
+
+import re  # noqa: E402
+
+from lhpc.adapters.web.app import create_app  # noqa: E402
+from lhpc.core.paths import Paths  # noqa: E402
+from lhpc.core.probes.backends import FakeSystem  # noqa: E402
+
+
+@pytest.fixture
+def web(tmp_path):
+    """A factory: `web()` → a Flask test client over `ControllerService(FakeSystem(...))` rooted
+    at `tmp_path`. Keyword arguments: `cmdlines` (FakeSystem's `cmdlines_data`), `commands`
+    (FakeSystem's exact-argv results), `manifest` (a manifest path), `paths` (a `Paths`),
+    `system` (a ready System), `guard` (a callable wrapping the built service — e.g. a read-only
+    guard that fails the test on a mutating call), `service_factory` (bring your own — the other
+    arguments are then ignored). The app is reachable as `client.application` for the rare test
+    that flips a Flask config flag."""
+    def _make(*, cmdlines=None, commands=None, manifest=None, paths=None, system=None,
+              guard=None, service_factory=None):
+        if service_factory is None:
+            p = paths or Paths(runtime_root=tmp_path)
+            sys_ = system or FakeSystem(cmdlines_data=cmdlines or {},
+                                        commands=commands or {}).system
+
+            def service_factory():
+                kw = {"system": sys_, "paths": p}
+                if manifest is not None:
+                    kw["manifest_path"] = manifest
+                svc = ControllerService(**kw)
+                return guard(svc) if guard is not None else svc
+        return create_app(service_factory=service_factory).test_client()
+    return _make
+
+
+@pytest.fixture
+def csrf():
+    """`csrf(client, path="/stacks")` → the `_csrf` value the page at `path` rendered ("" when the
+    page carries no form)."""
+    def _read(client, path="/stacks"):
+        m = re.search(r'name="_csrf" value="([^"]+)"', client.get(path).get_data(as_text=True))
+        return m.group(1) if m else ""
+    return _read
+
+
+@pytest.fixture
+def binary_receipt():
+    """`binary_receipt(svc, stack="daemon", *, commits=None, extra_files=(), provenance=None,
+    sha="ab"*32, probe="ok") -> BinaryReceipt`: a completed binary install of `stack` on `svc`'s
+    box — the artifact's proof-path files (plus `extra_files`) laid down as `b"ELF"`, and a
+    receipt written whose components are the manifest pins (or `commits`). The snapshot is
+    invalidated so the service sees it. Re-write a `dataclasses.replace`d copy for a variant."""
+    import hashlib
+
+    from lhpc.core import binary_receipt as brx
+
+    def _lay_down(svc, stack="daemon", *, commits=None, extra_files=(), provenance=None,
+                  sha="ab" * 32, probe="ok"):
+        root = svc._paths.runtime_root
+        spec = svc.binary_spec(stack)
+        files = list(spec.proof_paths) + list(extra_files)
+        for rel in files:
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_bytes(b"ELF")
+        digest = hashlib.sha256(b"ELF").hexdigest()
+        rec = brx.BinaryReceipt(
+            stack=stack, artifact_sha256=sha, artifact_size=9,
+            filename=f"{stack}-{sha}.tar.zst", url="https://example.invalid/a.tar.zst",
+            components=dict(commits) if commits is not None else dict(svc._binary_pins(stack)),
+            provenance=dict(provenance or {}), files=tuple(files),
+            file_hashes={rel: digest for rel in files}, proof_paths=tuple(spec.proof_paths),
+            registry_baseline={}, probe=probe)
+        assert brx.write_receipt(svc._paths, rec)
+        svc.invalidate_snapshot()
+        return rec
+    return _lay_down

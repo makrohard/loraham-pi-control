@@ -238,7 +238,7 @@
             <option value="off"{% if g.rflog.value == 'off' %} selected{% endif %}>off</option>
           </select>
           <button type="submit">Save</button>
-          <span class="muted">Configured: <strong>{{ g.rflog.value }}</strong>{% if g.rflog.restart_required %} · <span class="ver ver-yellow">restart required</span> — the running writer keeps its current setting until the stack restarts{% endif %}</span>
+          <span class="muted">Configured: <strong>{{ g.rflog.value }}</strong>{% if g.rflog.restart_required %} · <span class="ver ver-yellow" id="rflog-restart-{{ g.stack.id }}">restart required</span> — the running writer keeps its current setting until the stack restarts{% endif %}</span>
         </form>
         <ul class="clean">
           {% for j in g.rflog.jobs %}

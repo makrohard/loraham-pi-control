@@ -10,15 +10,14 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult, FakeSystem, Listener, CommandResult as CR
 from lhpc.core.service_base import ActionResult
 from lhpc.core.services import ControllerService
-from lhpc.adapters.web.app import create_app, run_server
+from lhpc.adapters.web.app import run_server
 from pathlib import Path
 from lhpc.adapters.cli.main import main
 from lhpc.core.config import ConfigError, WebserverConfig, load_config, save_webserver_config
 from lhpc.adapters.web import app as webapp
+from htmlq import parse
 
 
-
-# ===== merged from test_webserver_apply.py =====
 def _svc(tmp_path, fake=None):
     return ControllerService(system=(fake or FakeSystem()).system,
                              paths=Paths(runtime_root=tmp_path))
@@ -571,21 +570,15 @@ def test_monitor_view_running_pill_is_nginx_or_lhpc_web(tmp_path):
     assert down["posture"]["run"] == "lhpc-web" and down["posture"]["run_level"] == "warn"
 
 
-# ===== merged from test_webserver_blockers.py =====
 def _svc_webserver_blockers(tmp_path, fake=None):
     return ControllerService(system=(fake or FakeSystem()).system,
                              paths=Paths(runtime_root=tmp_path))
 
 
-def _app(tmp_path):
+def _app(web, tmp_path):
+    """(client, service) over a fresh runtime root."""
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    return create_app(lambda: svc), svc
-
-
-def _csrf(c):
-    with c.session_transaction() as s:
-        s["_csrf"] = "tok"
-    return "tok"
+    return web(service_factory=lambda: svc), svc
 
 
 def _staged_webserver_blockers(paths):
@@ -632,12 +625,12 @@ def test_init_recreate_requires_confirmation(tmp_path):
     assert svc.webserver_init(confirm=True).ok                   # explicit confirm recreates
 
 
-def test_gui_expose_uses_typed_phrase(tmp_path):
+def test_gui_expose_uses_typed_phrase(tmp_path, web, csrf):
     # The unified Apply (/webserver/configure) enforces the same typed-phrase ladder the dedicated
     # expose form used to: wrong phrase refuses, 'enable-remote' clears a private range, and a public
     # range (0.0.0.0/0) additionally demands the elevated 'enable-remote-danger'.
-    app, svc = _app(tmp_path)
-    c = app.test_client(); tok = _csrf(c)
+    c, svc = _app(web, tmp_path)
+    tok = csrf(c)
     c.post("/webserver/configure", data={"_csrf": tok, "bind": "0.0.0.0", "cidrs": "192.168.0.0/24",
                                          "confirm_phrase": "nope"})
     assert svc.config().webserver.remote_exposed is False        # wrong phrase -> not exposed
@@ -654,9 +647,9 @@ def test_gui_expose_uses_typed_phrase(tmp_path):
     assert svc.config().webserver.remote_exposed is True
 
 
-def test_gui_revoke_requires_typed_label(tmp_path):
-    app, svc = _app(tmp_path)
-    c = app.test_client(); tok = _csrf(c)
+def test_gui_revoke_requires_typed_label(tmp_path, web, csrf):
+    c, svc = _app(web, tmp_path)
+    tok = csrf(c)
     svc.webserver_init(); svc.webserver_cert_issue("laptop", "pw")
     c.post("/webserver/cert", data={"_csrf": tok, "op": "revoke", "label": "laptop",
                                     "confirm_phrase": "wrong"})
@@ -668,82 +661,81 @@ def test_gui_revoke_requires_typed_label(tmp_path):
                if x["label"] == "laptop")
 
 
-def test_trusted_host_enforced_in_all_modes(tmp_path):
-    # Item 1: the trusted-host policy is enforced in EVERY serving mode — including the interactive
+def test_trusted_host_enforced_in_all_modes(tmp_path, web):
+    # the trusted-host policy is enforced in EVERY serving mode — including the interactive
     # loopback console (Secure cookies off), not only productive/HTTPS.
-    app, _ = _app(tmp_path)
-    c = app.test_client()
+    c, _ = _app(web, tmp_path)
     # interactive (Secure cookies off) -> an unknown/rebinding Host is STILL rejected; loopback allowed
     assert c.get("/stacks", headers={"Host": "evil.example"}).status_code == 400
     assert c.get("/stacks", headers={"Host": "127.0.0.1"}).status_code == 200
     # productive HTTPS -> identical policy
-    app.config["SESSION_COOKIE_SECURE"] = True
+    c.application.config["SESSION_COOKIE_SECURE"] = True
     assert c.get("/stacks", headers={"Host": "evil.example"}).status_code == 400
     assert c.get("/stacks", headers={"Host": "127.0.0.1"}).status_code == 200
 
 
-def _productive(tmp_path, **ws):
+def _productive(web, tmp_path, **ws):
     """A productive-mode client whose [webserver] config is `ws`."""
     from lhpc.core import config as _config
     if ws:
         _config.save_webserver_config(Paths(runtime_root=tmp_path), **ws)
-    app, svc = _app(tmp_path)
+    c, svc = _app(web, tmp_path)
     svc._invalidate_config()
-    app.config["SESSION_COOKIE_SECURE"] = True
-    return app.test_client()
+    c.application.config["SESSION_COOKIE_SECURE"] = True
+    return c
 
 
-def test_exposed_console_accepts_its_lan_ip_as_host(tmp_path):
+def test_exposed_console_accepts_its_lan_ip_as_host(tmp_path, web):
     # THE REPORTED BUG: bind=0.0.0.0 + remote_exposed, empty ip_sans -> every remote request 400'd,
     # because `bind` ("0.0.0.0") is the only IP in the allowlist and no browser ever sends it.
-    c = _productive(tmp_path, bind="0.0.0.0", remote_exposed=True, allowed_cidrs=["0.0.0.0/0"])
+    c = _productive(web, tmp_path, bind="0.0.0.0", remote_exposed=True, allowed_cidrs=["0.0.0.0/0"])
     assert c.get("/stacks", headers={"Host": "192.168.178.66:8443"}).status_code == 200
 
 
-def test_exposed_console_still_rejects_a_name_so_rebinding_stays_blocked(tmp_path):
+def test_exposed_console_still_rejects_a_name_so_rebinding_stays_blocked(tmp_path, web):
     # The whole relaxation rests on this: DNS rebinding needs a NAME. Only IP literals are relaxed.
-    c = _productive(tmp_path, bind="0.0.0.0", remote_exposed=True, allowed_cidrs=["0.0.0.0/0"])
+    c = _productive(web, tmp_path, bind="0.0.0.0", remote_exposed=True, allowed_cidrs=["0.0.0.0/0"])
     assert c.get("/stacks", headers={"Host": "evil.example"}).status_code == 400
     assert c.get("/stacks", headers={"Host": "pi.local"}).status_code == 400   # name, not in dns_sans
 
 
-def test_loopback_only_console_rejects_a_lan_ip_host(tmp_path):
-    c = _productive(tmp_path)                       # remote_exposed defaults to False
+def test_loopback_only_console_rejects_a_lan_ip_host(tmp_path, web):
+    c = _productive(web, tmp_path)                       # remote_exposed defaults to False
     assert c.get("/stacks", headers={"Host": "192.168.178.66"}).status_code == 400
 
 
-def test_wildcard_bind_is_never_a_valid_host(tmp_path):
-    c = _productive(tmp_path, bind="0.0.0.0")       # bind set, but NOT exposed
+def test_wildcard_bind_is_never_a_valid_host(tmp_path, web):
+    c = _productive(web, tmp_path, bind="0.0.0.0")       # bind set, but NOT exposed
     assert c.get("/stacks", headers={"Host": "0.0.0.0"}).status_code == 400
 
 
-def test_ipv6_loopback_host_is_accepted(tmp_path):
+def test_ipv6_loopback_host_is_accepted(tmp_path, web):
     # `[::1]:8443`.split(":")[0] == "[" -> the hardcoded ::1 entry was unreachable before.
-    c = _productive(tmp_path)
+    c = _productive(web, tmp_path)
     assert c.get("/stacks", headers={"Host": "[::1]:8443"}).status_code == 200
 
 
-def test_ipv6_literal_is_accepted_only_while_exposed(tmp_path):
+def test_ipv6_literal_is_accepted_only_while_exposed(tmp_path, web):
     exposed = tmp_path / "exposed"
     loopback = tmp_path / "loopback"
     exposed.mkdir()
     loopback.mkdir()
-    c_exposed = _productive(exposed, bind="0.0.0.0", remote_exposed=True,
+    c_exposed = _productive(web, exposed, bind="0.0.0.0", remote_exposed=True,
                             allowed_cidrs=["0.0.0.0/0"])
     assert c_exposed.get("/stacks", headers={"Host": "[2001:db8::1]:8443"}).status_code == 200
-    c_loopback = _productive(loopback)
+    c_loopback = _productive(web, loopback)
     assert c_loopback.get("/stacks", headers={"Host": "[2001:db8::1]:8443"}).status_code == 400
 
 
-def test_ip_sans_match_by_parsed_value_not_string(tmp_path):
+def test_ip_sans_match_by_parsed_value_not_string(tmp_path, web):
     # An ip_sans entry of the compressed form must match a request for the expanded form.
-    c = _productive(tmp_path, ip_sans=["2001:db8::1"])
+    c = _productive(web, tmp_path, ip_sans=["2001:db8::1"])
     assert c.get("/stacks", headers={"Host": "[2001:db8:0:0:0:0:0:1]:8443"}).status_code == 200
 
 
-def test_rejection_is_plain_text_actionable_and_logged(tmp_path, caplog):
+def test_rejection_is_plain_text_actionable_and_logged(tmp_path, caplog, web):
     import logging
-    c = _productive(tmp_path)
+    c = _productive(web, tmp_path)
     with caplog.at_level(logging.WARNING):
         r = c.get("/stacks", headers={"Host": "evil.example"})
     assert r.status_code == 400
@@ -768,14 +760,14 @@ def test_host_echo_can_never_reflect_markup():
     assert len(_host_echo("a" * 500)) <= 80
 
 
-def test_illegal_host_header_is_safe_200_or_400(tmp_path):
+def test_illegal_host_header_is_safe_200_or_400(tmp_path, web):
     # An unparseable Host must be SAFE either way and must never 500. Werkzeug's behaviour varies across
     # 3.1.x: 3.1.7 fail-closes by RAISING SecurityError (a BadRequest, .code == 400) from the test client;
     # 3.1.8 blanks request.host to "" -> 200. Both are fine — nothing downstream trusts a Host claim, and a
     # raised 400 is the same fail-closed outcome as a returned 400. (A fresh install resolves the newest
     # Werkzeug flask allows, so this is 200 in practice; the pinned floor werkzeug>=3.1 also covers 3.1.7.)
     from werkzeug.exceptions import HTTPException
-    c = _productive(tmp_path)
+    c = _productive(web, tmp_path)
     try:
         r = c.get("/stacks", headers={"Host": "a<b.com"})
     except HTTPException as exc:                  # 3.1.7 raises SecurityError(code=400) instead of returning it
@@ -786,14 +778,14 @@ def test_illegal_host_header_is_safe_200_or_400(tmp_path):
     assert r.status_code in (200, 400)            # 200 = blanked, 400 = fail-closed; never 500
 
 
-def test_webserver_modules_and_page_present_from_installed_package(tmp_path):
+def test_webserver_modules_and_page_present_from_installed_package(tmp_path, web):
     # The exact 59f00de defect: these modules/template were referenced but missing. Importing
     # them + rendering the page proves they ship.
     import importlib
     importlib.import_module("lhpc.core.webserver")
     importlib.import_module("lhpc.core.pki")
-    app, _ = _app(tmp_path)
-    assert app.test_client().get("/stacks").status_code == 200   # template renders
+    c, _ = _app(web, tmp_path)
+    assert c.get("/stacks").status_code == 200   # template renders
 
 
 def test_no_key_or_passphrase_leak_in_status_or_evidence(tmp_path):
@@ -808,7 +800,6 @@ def test_no_key_or_passphrase_leak_in_status_or_evidence(tmp_path):
     assert "BEGIN" not in ev and "PRIVATE KEY" not in ev and "sup3r-secret-pass" not in ev
 
 
-# ===== merged from test_webserver_cli.py =====
 def _env(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
     (tmp_path / "config").mkdir(exist_ok=True)
@@ -929,7 +920,6 @@ def test_cli_proxy_rejects_bad_enum(monkeypatch, tmp_path):
             main(["webserver", "proxy", "meshcom", *bad])
 
 
-# ===== merged from test_webserver_config.py =====
 def _paths(tmp_path: Path) -> Paths:
     return Paths(runtime_root=tmp_path)
 
@@ -1030,7 +1020,6 @@ def test_save_webserver_fail_closed(tmp_path):
     assert load_config(paths).webserver == WebserverConfig()
 
 
-# ===== merged from test_webserver_corrections.py =====
 def _svc_webserver_corrections(tmp_path, fake=None):
     return ControllerService(system=(fake or FakeSystem()).system,
                              paths=Paths(runtime_root=tmp_path))
@@ -1083,7 +1072,7 @@ def test_verify_does_not_touch_live_config(tmp_path):
     assert _live(tmp_path).read_text() == "SENTINEL\n"
 
 
-def test_init_persists_sans_for_trusted_host_and_renew(tmp_path):
+def test_init_persists_sans_for_trusted_host_and_renew(tmp_path, web):
     svc = _svc_webserver_corrections(tmp_path)
     svc.webserver_init(dns_sans=["pi.local"], ip_sans=["192.168.0.10"])
     cfg = svc.config().webserver
@@ -1091,9 +1080,8 @@ def test_init_persists_sans_for_trusted_host_and_renew(tmp_path):
     # tls-renew uses the saved SANs (no empty-SAN failure)
     assert ControllerService(system=FakeSystem().system, paths=svc._paths).webserver_tls_renew().ok
     # productive trusted-host accepts the SANs
-    app = create_app(lambda: ControllerService(system=FakeSystem().system, paths=svc._paths))
-    app.config["SESSION_COOKIE_SECURE"] = True
-    c = app.test_client()
+    c = web(service_factory=lambda: ControllerService(system=FakeSystem().system, paths=svc._paths))
+    c.application.config["SESSION_COOKIE_SECURE"] = True
     assert c.get("/stacks", headers={"Host": "pi.local"}).status_code == 200
     assert c.get("/stacks", headers={"Host": "192.168.0.10"}).status_code == 200
 
@@ -1240,7 +1228,6 @@ def test_start_service_enables_and_starts(monkeypatch, tmp_path):
     assert (tmp_path / "logs").is_dir()                     # nginx error/access log parent
 
 
-# ===== merged from test_webserver_evidence.py =====
 def test_evidence_absent_and_roundtrip(tmp_path):
     paths = _paths(tmp_path)
     assert webserver.read_evidence(paths) == {}
@@ -1328,7 +1315,7 @@ def test_monitor_not_exposed_is_a_single_disabled_info(tmp_path):
 
 
 def test_monitor_desired_disabled_but_live_listener_exposed_warns(tmp_path):
-    # P2: `webserver_disable_remote` writes intent only (no reload). If the old nginx still binds
+    # `webserver_disable_remote` writes intent only (no reload). If the old nginx still binds
     # 0.0.0.0, the panel must NOT say "disabled — loopback only" — that is what is actually reachable.
     cfg = WebserverConfig(remote_exposed=False)     # desired disabled…
     view = webserver.monitor_view(_paths(tmp_path), cfg, live_listener_scope="exposed")  # …live exposed
@@ -1454,23 +1441,16 @@ def test_verify_reports_missing_nginx_and_certs(tmp_path):
     assert ev["checks"]["server_cert"] == "failed"      # no CA/cert issued
 
 
-# ===== merged from test_webserver_gui.py =====
-def _app_svc(tmp_path: Path):
+def _app_svc(web, tmp_path: Path):
+    """(client, service) over a fresh runtime root."""
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    return create_app(lambda: svc), svc
+    return web(service_factory=lambda: svc), svc
 
 
-def _csrf_webserver_gui(client):
-    with client.session_transaction() as s:
-        s["_csrf"] = "tok"
-    return "tok"
-
-
-def test_webserver_component_inline_on_stacks_cached_only(tmp_path):
+def test_webserver_component_inline_on_stacks_cached_only(tmp_path, web):
     # The Webserver component is rendered INLINE in the controller row on /stacks (no separate
     # page); GET must not probe/mutate.
-    app, svc = _app_svc(tmp_path)
-    c = app.test_client()
+    c, svc = _app_svc(web, tmp_path)
     r = c.get("/stacks")
     assert r.status_code == 200
     body = r.data.decode()
@@ -1480,51 +1460,47 @@ def test_webserver_component_inline_on_stacks_cached_only(tmp_path):
     assert not (tmp_path / "state" / "webserver.json").exists()
 
 
-def test_console_running_pill_is_request_scoped(tmp_path):
+def test_console_running_pill_is_request_scoped(tmp_path, web):
     # The console running pill reflects HOW THIS SESSION arrived, not whether some nginx is running:
     # a direct dev-server request (no X-LHPC-Peer) reads yellow "lhpc-web"; a request proxied through
     # nginx (which sets X-LHPC-Peer) reads green "nginx".
-    app, _ = _app_svc(tmp_path)
-    c = app.test_client()
+    c, _ = _app_svc(web, tmp_path)
     assert ">lhpc-web</span>" in c.get("/stacks").get_data(as_text=True)
     proxied = c.get("/stacks", headers={"X-LHPC-Peer": "loopback"}).get_data(as_text=True)
     assert ">nginx</span>" in proxied and ">lhpc-web</span>" not in proxied
 
 
-def test_console_pill_reattaches_port_behind_nginx(tmp_path):
+def test_console_pill_reattaches_port_behind_nginx(tmp_path, web):
     # nginx forwards a PORTLESS Host ($host), so the console pill must reattach the nginx console port;
     # the raw dev server carries the port in Host directly. A behind-nginx REMOTE peer means the console
     # is remote-exposed, so the bare IP-literal Host is legitimately accepted by the trusted-host policy.
     from lhpc.core import config as _config
     _config.save_webserver_config(Paths(runtime_root=tmp_path), remote_exposed=True)
-    app, _ = _app_svc(tmp_path)
-    c = app.test_client()
+    c, _ = _app_svc(web, tmp_path)
     proxied = c.get("/stacks", headers={"X-LHPC-Peer": "remote", "Host": "192.168.1.5"}).get_data(as_text=True)
     assert "192.168.1.5:8443" in proxied                     # host + nginx console port
     direct = c.get("/stacks", headers={"Host": "127.0.0.1:8770"}).get_data(as_text=True)
     assert "127.0.0.1:8770" in direct                        # dev server: port already in Host
 
 
-def test_old_webserver_path_redirects_to_stacks(tmp_path):
-    app, _ = _app_svc(tmp_path)
-    c = app.test_client()
+def test_old_webserver_path_redirects_to_stacks(tmp_path, web):
+    c, _ = _app_svc(web, tmp_path)
     r = c.get("/stacks/loraham-pi-control")
     assert r.status_code == 302 and r.headers["Location"].endswith("#webserver-row")
 
 
-def test_webserver_logs_page_and_component_link(tmp_path):
+def test_webserver_logs_page_and_component_link(tmp_path, web):
     from lhpc.core import runtime_fs
-    app, svc = _app_svc(tmp_path)
+    c, svc = _app_svc(web, tmp_path)
     runtime_fs.mkdir(svc._paths, "logs")
     runtime_fs.atomic_write(svc._paths, svc._paths.under("logs", "nginx-error.log"),
                             "boom [emerg] mkdir failed\n", 0o644)
     runtime_fs.atomic_write(svc._paths, svc._paths.under("logs", "nginx-access.log"),
                             "GET / 200\n", 0o644)
-    c = app.test_client()
     body = c.get("/stacks").data.decode()
     # each of the three webserver sub-section headers (Settings/Monitor/Certificates) carries its own
     # "logs" affordance, laid out like the main stack rows (overlay OUTSIDE the summary).
-    assert body.count('aria-label="webserver logs"') == 3
+    assert len(parse(body).find("a", **{"aria-label": "webserver logs"})) == 3
     # component on /stacks links to the logs page
     assert "/webserver/logs" in body
     # error log (default + explicit) and access log render their tails
@@ -1537,12 +1513,11 @@ def test_webserver_logs_page_and_component_link(tmp_path):
 
 @pytest.mark.contract
 @pytest.mark.safety("exposure-fail-closed")
-def test_expose_failure_without_cidr_is_refused_and_not_exposed(tmp_path):
+def test_expose_failure_without_cidr_is_refused_and_not_exposed(tmp_path, web, csrf):
     # A remote-exposure (bind off-loopback) with a valid phrase but no CIDR is refused via the unified
     # Apply: the failure detail is shown and, critically, the listener is NOT exposed.
-    app, svc = _app_svc(tmp_path)
-    c = app.test_client()
-    tok = _csrf_webserver_gui(c)
+    c, svc = _app_svc(web, tmp_path)
+    tok = csrf(c)
     r = c.post("/webserver/configure",
                data={"_csrf": tok, "bind": "0.0.0.0", "cidrs": "", "confirm_phrase": "enable-remote"},
                follow_redirects=True)
@@ -1552,18 +1527,16 @@ def test_expose_failure_without_cidr_is_refused_and_not_exposed(tmp_path):
 
 @pytest.mark.contract
 @pytest.mark.safety("exposure-fail-closed")
-def test_post_requires_csrf(tmp_path):
-    app, _ = _app_svc(tmp_path)
-    c = app.test_client()
+def test_post_requires_csrf(tmp_path, web):
+    c, _ = _app_svc(web, tmp_path)
     assert c.post("/webserver/configure", data={"access_mode": "no-auth"}).status_code == 400
 
 
 @pytest.mark.contract
 @pytest.mark.safety("exposure-fail-closed")
-def test_configure_via_post(tmp_path):
-    app, svc = _app_svc(tmp_path)
-    c = app.test_client()
-    tok = _csrf_webserver_gui(c)
+def test_configure_via_post(tmp_path, web, csrf):
+    c, svc = _app_svc(web, tmp_path)
+    tok = csrf(c)
     r = c.post("/webserver/configure", data={"_csrf": tok, "access_mode": "auth-everywhere"})
     assert r.status_code == 302
     assert svc.config().webserver.access_mode == "auth-everywhere"
@@ -1571,10 +1544,9 @@ def test_configure_via_post(tmp_path):
 
 @pytest.mark.contract
 @pytest.mark.safety("exposure-fail-closed")
-def test_expose_requires_confirmation(tmp_path):
-    app, svc = _app_svc(tmp_path)
-    c = app.test_client()
-    tok = _csrf_webserver_gui(c)
+def test_expose_requires_confirmation(tmp_path, web, csrf):
+    c, svc = _app_svc(web, tmp_path)
+    tok = csrf(c)
     # bind off-loopback (remote) with a CIDR but no confirmation phrase -> refused, not exposed.
     c.post("/webserver/configure", data={"_csrf": tok, "bind": "0.0.0.0", "cidrs": "192.168.0.0/24"})
     assert svc.config().webserver.remote_exposed is False
@@ -1582,10 +1554,9 @@ def test_expose_requires_confirmation(tmp_path):
 
 @pytest.mark.contract
 @pytest.mark.safety("exposure-fail-closed")
-def test_p12_download_is_loopback_only(tmp_path):
-    app, svc = _app_svc(tmp_path)
-    c = app.test_client()
-    tok = _csrf_webserver_gui(c)
+def test_p12_download_is_loopback_only(tmp_path, web, csrf):
+    c, svc = _app_svc(web, tmp_path)
+    tok = csrf(c)
     svc.webserver_init()
     c.post("/webserver/cert", data={"_csrf": tok, "op": "issue", "label": "laptop"})
     # remote peer (nginx-set header) -> refused
@@ -1597,18 +1568,16 @@ def test_p12_download_is_loopback_only(tmp_path):
     assert r.headers["Content-Disposition"].endswith('laptop.p12"')
 
 
-def test_webserver_reachable_from_stacks_and_not_a_managed_stack(tmp_path):
+def test_webserver_reachable_from_stacks_and_not_a_managed_stack(tmp_path, web):
     # Reachable inline under the controller row on /stacks; the controller id is NOT a managed
     # stack (a bogus stack-detail 404s; it never enters build_snapshot).
-    app, _ = _app_svc(tmp_path)
-    c = app.test_client()
+    c, _ = _app_svc(web, tmp_path)
     body = c.get("/stacks").data.decode()
     assert 'id="webserver-row"' in body and "Webserver (HTTPS / mTLS)" in body
     assert c.get("/stacks/loraham-pi-control").status_code == 302        # old path -> redirect
     assert c.get("/stacks/loraham-pi-control-bogus").status_code == 404
 
 
-# ===== merged from test_webserver_hardening.py =====
 def test_session_secret_persists_and_rotates(tmp_path):
     paths = _paths(tmp_path)
     s1 = config.web_session_secret(paths)
@@ -1643,7 +1612,6 @@ def test_peer_is_loopback_trusts_only_nginx_header(tmp_path):
         assert webapp.peer_is_loopback() is True
 
 
-# ===== merged from test_webserver_nginx.py =====
 def _render(tmp_path, **kw):
     cfg = WebserverConfig(**kw)
     return webserver.render_nginx_config(_paths(tmp_path), cfg)
@@ -1810,7 +1778,6 @@ def test_nginx_serves_static_updating_page_on_502(tmp_path):
     assert "Return to the console" in html and "<script" not in html
 
 
-# ===== merged from test_webserver_serve.py =====
 def test_tcp_mode_still_refuses_non_loopback():
     # Interactive TCP path keeps the loopback-only guard (regression of existing behavior).
     assert run_server(host="1.2.3.4", port=8770, socket=False) == 1
@@ -1827,7 +1794,6 @@ def test_socket_mode_fail_closed_without_waitress(monkeypatch, tmp_path: Path):
     assert rc == 1        # refused; no dev-server fallback on the productive path
 
 
-# ===== merged from test_webserver_service.py =====
 def _svc_webserver_service(tmp_path: Path, fake: FakeSystem | None = None) -> ControllerService:
     return ControllerService(system=(fake or FakeSystem()).system,
                              paths=Paths(runtime_root=tmp_path))
@@ -2119,7 +2085,7 @@ def test_no_auth_elevation_offers_the_authenticated_alternative(tmp_path):
 def test_allowed_gate_warning_survives_every_outcome(tmp_path, monkeypatch):
     """An ALLOWED gate can still warn (exposure reduced, firewall scripts not regenerated). That
     warning and its remedy must reach the operator on whatever the operation returns — success or
-    failure — or they act on a stale apply script with no hint why (audit P2a)."""
+    failure — or they act on a stale apply script with no hint why."""
     svc = _svc(tmp_path)
     warn = "exposure reduced, but the firewall scripts could not be regenerated (EACCES)"
     monkeypatch.setattr(ControllerService, "firewall_gate_activation",
@@ -2364,12 +2330,11 @@ def test_ws_fetch_commands_build_real_paste_ready_scp_lines(tmp_path, monkeypatc
     assert "ca" in web_app._ws_fetch_commands("[::1]", str(tmp_path))
 
 
-def test_certificates_section_renders_the_fetch_boxes(tmp_path, monkeypatch):
+def test_certificates_section_renders_the_fetch_boxes(tmp_path, monkeypatch, web):
     """Placement contract, in the RENDERED page: the server-trust copybox sits below the renew
     form, the per-cert box below the Issue form — each below where the thing it fetches is
     created. Asserted on what an operator sees, so rewriting the template (a loop instead of two
     macro calls, say) is free as long as the page still reads in that order."""
-    from lhpc.adapters.web.app import create_app
     from lhpc.core import pki as pkimod
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
@@ -2383,29 +2348,30 @@ def test_certificates_section_renders_the_fetch_boxes(tmp_path, monkeypatch):
     monkeypatch.setattr(pkimod, "list_client_certs",
                         lambda paths: [{"label": "handy", "state": "active",
                                         "serial": "ab", "not_after": "2099-01-01T00:00:00+00:00"}])
-    page = create_app(lambda: svc).test_client().get(
+    page = web(service_factory=lambda: svc).get(
         "/stacks", headers={"X-LHPC-Peer": "remote"}).get_data(as_text=True)
 
-    assert (page.index("Renew server certificate")
-            < page.index('data-copy="ws-fetch-ca"')
-            < page.index("Issue client cert")
-            < page.index('data-copy="ws-fetch-p12-handy"'))
+    doc = parse(page)
+    renew = next(b for b in doc.find("button") if b.text == "Renew server certificate")
+    issue = next(lb for lb in doc.find("label") if lb.text == "Issue client cert")
+    ca_box = doc.find("button", **{"data-copy": "ws-fetch-ca"})[0]
+    p12_box = doc.find("button", **{"data-copy": "ws-fetch-p12-handy"})[0]
+    assert doc.index(renew) < doc.index(ca_box) < doc.index(issue) < doc.index(p12_box)
 
     # A cert with NO stored export explains itself rather than rendering nothing — live-found,
     # because an empty space is indistinguishable from a broken feature.
     (tmp_path / "config" / "tls" / "exports" / "handy.p12").unlink()
-    bare = create_app(lambda: svc).test_client().get(
+    bare = web(service_factory=lambda: svc).get(
         "/stacks", headers={"X-LHPC-Peer": "remote"}).get_data(as_text=True)
     assert "No stored" in bare and "reissue" in bare
 
 
-def test_fetch_commands_render_in_every_serving_mode(tmp_path, monkeypatch):
+def test_fetch_commands_render_in_every_serving_mode(tmp_path, monkeypatch, web):
     """The fetch copyboxes are operator conveniences (SSH user + paths for a box the operator
     already owns), NOT secret material — the scp still needs the operator's own SSH credentials
     to run. So they render in every serving mode, remote or loopback, regardless of the applied
     access policy. The one gate that stays is the .p12 box's active-cert requirement (a revoked
     or absent cert is never offered), covered by test_ws_fetch_commands_* above."""
-    from lhpc.adapters.web.app import create_app
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
@@ -2427,7 +2393,7 @@ def test_fetch_commands_render_in_every_serving_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(pkimod, "list_client_certs",
                         lambda paths: [{"label": "handy", "state": "active",
                                         "serial": "ab", "not_after": "2099-01-01T00:00:00+00:00"}])
-    c = create_app(lambda: svc).test_client()
+    c = web(service_factory=lambda: svc)
 
     def page(remote):
         # remote-vs-loopback is decided by the nginx-set X-LHPC-Peer header, not the
@@ -2444,18 +2410,17 @@ def test_fetch_commands_render_in_every_serving_mode(tmp_path, monkeypatch):
         assert "ws-fetch-p12-handy" in page(remote=False), f"loopback/{mode or 'unknown'}"
 
 
-def test_server_ca_download_is_public_and_keyless(tmp_path):
+def test_server_ca_download_is_public_and_keyless(tmp_path, web):
     """The CA certificate download: public material, so no loopback gate (unlike the .p12,
     which holds a private key and stays loopback-only); 404 when no PKI exists; the served
     bytes are exactly the PEM on disk and carry a download disposition."""
-    from lhpc.adapters.web.app import create_app
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
 
     (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    c = create_app(lambda: svc).test_client()
+    c = web(service_factory=lambda: svc)
 
     assert c.get("/webserver/ca.crt").status_code == 404          # no PKI yet
 

@@ -10,27 +10,24 @@ import socket
 import time
 
 import pytest
-from lhpc_testlab.release import wait_http
+from lhpc_testlab.release import (
+    GRAYWOLF_UI,
+    KISS_TCP,
+    MESHCORE_COMPANION,
+    wait_http,
+    wait_tcp,
+)
 from lhpc_testlab.testing import run_lab, run_lhpc
 
 
 def _kiss_serving() -> bool:
-    """True when kiss's KISS/TCP listener actually accepts a connection on 8001 — a
-    functional liveness probe that does not depend on lhpc's /proc-based status."""
+    """True when kiss's KISS/TCP listener accepts a connection RIGHT NOW — a one-shot functional
+    liveness probe that does not depend on lhpc's /proc-based status."""
     try:
-        socket.create_connection(("127.0.0.1", 8001), timeout=5).close()
+        socket.create_connection(("127.0.0.1", KISS_TCP), timeout=5).close()
         return True
     except OSError:
         return False
-
-
-def _wait_serving(timeout: float) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if _kiss_serving():
-            return True
-        time.sleep(1.0)
-    return False
 
 
 @pytest.fixture(scope="module")
@@ -48,7 +45,7 @@ def chain(lab):
 def test_kiss_rx_and_tx_round_trip(chain):
     """Injected APRS frame -> fake daemon framed RX -> real kiss TNC -> valid AX.25/KISS
     on TCP 8001; the same frame written back is a TX the fake daemon captures."""
-    s = socket.create_connection(("127.0.0.1", 8001), timeout=10)
+    s = socket.create_connection(("127.0.0.1", KISS_TCP), timeout=10)
     s.settimeout(15)
     run_lab(chain.env, "inject", "433", "aprs-position", check=True)
     data = s.recv(1024)
@@ -73,11 +70,8 @@ def test_kiss_rx_and_tx_round_trip(chain):
 
 @pytest.mark.slow
 def test_kiss_stop_restart_and_status(chain):
-    r = run_lhpc(chain.env, "stack", "restart", "kiss", "--yes", check=True,
-                 timeout=300)
-    assert "kiss" in (r.stdout + r.stderr)
-    out = run_lhpc(chain.env, "status", check=True).stdout
-    assert "kiss" in out
+    run_lhpc(chain.env, "stack", "restart", "kiss", "--yes", check=True, timeout=300)
+    assert wait_tcp(KISS_TCP, 120), "kiss not serving on 8001 after restart"
 
 
 @pytest.mark.slow
@@ -86,12 +80,14 @@ def test_graywolf_shows_injected_station(chain):
     station. Needs dpkg-deb (Debian containers — the devcontainer/CI always has it)."""
     if not shutil.which("dpkg-deb"):
         pytest.skip("dpkg-deb not installed (graywolf fetch unpacks a .deb)")
+    import urllib.error
     import urllib.request
     run_lhpc(chain.env, "install", "graywolf", "--yes", check=True, timeout=900)
     run_lhpc(chain.env, "build", "graywolf", "--yes", check=True, timeout=900)
     run_lhpc(chain.env, "stack", "start", "graywolf", "--yes", check=True, timeout=300)
     try:
-        assert wait_http("http://127.0.0.1:8080/", 120, accept=(200, 401, 403)), "graywolf's UI never answered on 8080"
+        assert wait_http(f"http://127.0.0.1:{GRAYWOLF_UI}/", 120, accept=(200, 401, 403)), \
+            "graywolf's UI never answered on 8080"
         # authenticate exactly like the production provision step: the generated admin
         # password lives under state/graywolf (0600), sessions ride a cookie jar
         import http.cookiejar
@@ -100,40 +96,43 @@ def test_graywolf_shows_injected_station(chain):
         jar = http.cookiejar.CookieJar()
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         login = urllib.request.Request(
-            "http://127.0.0.1:8080/api/auth/login",
+            f"http://127.0.0.1:{GRAYWOLF_UI}/api/auth/login",
             data=json.dumps({"username": "admin", "password": pw}).encode(),
             headers={"Content-Type": "application/json"}, method="POST")
         opener.open(login, timeout=10).read()
         run_lab(chain.env, "inject", "433", "aprs-position", check=True)
+        # The pinned graywolf's packet list. One endpoint, polled until the frame has travelled
+        # the chain; a 404 is retried (the API is not up before the UI is), any other HTTP error
+        # is graywolf refusing or breaking and must surface, not be retried into a timeout.
         found = False
         deadline = time.monotonic() + 45
         while time.monotonic() < deadline and not found:
-            for api in ("/api/v1/packets?limit=50", "/api/packets?limit=50",
-                        "/api/v1/stations", "/api/stations"):
-                try:
-                    raw = opener.open(f"http://127.0.0.1:8080{api}", timeout=5).read()
-                    if b"DL0LAB" in raw:
-                        found = True
-                        break
-                except OSError:
-                    pass
+            try:
+                raw = opener.open(f"http://127.0.0.1:{GRAYWOLF_UI}/api/packets?limit=50",
+                                  timeout=5).read()
+                found = b"DL0LAB" in raw
+            except urllib.error.HTTPError as exc:
+                if exc.code != 404:
+                    raise
+            except OSError:
+                pass
             time.sleep(2)
-        assert found, "injected station never appeared in graywolf"
+        assert found, "injected station never appeared in graywolf's packet list"
     finally:
         run_lhpc(chain.env, "stack", "stop", "graywolf", "--yes", timeout=300)
 
 
 @pytest.mark.slow
 def test_meshcore_real_process_over_fake_868(chain):
-    """The real MeshCore host (python venv) starts against the fake 868 daemon and stops
-    verified — the second real stack family on the chain."""
+    """The real MeshCore host (python venv) starts against the fake 868 daemon and serves its
+    companion port, and stops verified — the second real stack family on the chain. The
+    release lane proves the same start at release time; this runs on every push."""
     run_lhpc(chain.env, "install", "meshcore", "--yes", check=True, timeout=900)
     run_lhpc(chain.env, "build", "meshcore", "--yes", check=True, timeout=900)
     r = run_lhpc(chain.env, "stack", "start", "meshcore", "--yes", timeout=300)
     try:
         assert r.returncode == 0, (r.stdout[-1500:], r.stderr[-500:])
-        out = run_lhpc(chain.env, "status", check=True).stdout
-        assert "meshcore" in out
+        assert wait_tcp(MESHCORE_COMPANION, 180), "MeshCore companion never opened TCP 5000"
     finally:
         run_lhpc(chain.env, "stack", "stop", "meshcore", "--yes", timeout=300)
 
@@ -163,7 +162,7 @@ def test_meshcom_starts_on_the_prebuilt_image(chain):
 
 @pytest.mark.slow
 def test_simulated_reboot_restores_running_stacks(chain):
-    """RE-AUDIT: with kiss running, a simulated reboot advances the boot id AND brings
+    """With kiss running, a simulated reboot advances the boot id AND brings
     the previously-running stacks back (no operator-stop tombstone)."""
     # Verify kiss by its REAL endpoint (the KISS/TCP listener on 8001), not by lhpc's
     # status string: proof-based /proc ownership is unreliable under nested-qemu (a running
@@ -175,7 +174,7 @@ def test_simulated_reboot_restores_running_stacks(chain):
     if not _kiss_serving():
         run_lhpc(chain.env, "stack", "start", "daemon", "--yes", timeout=200)
         run_lhpc(chain.env, "stack", "start", "kiss", "--yes", timeout=300)
-    assert _wait_serving(120), "kiss not serving on 127.0.0.1:8001 before reboot"
+    assert wait_tcp(KISS_TCP, 120), "kiss not serving on 127.0.0.1:8001 before reboot"
     before = (chain.root / "state" / "testlab" / "host" / "boot_id").read_text().strip()
     run_lab(chain.env, "_power", "--kind", "reboot", check=True, timeout=300)
     after = (chain.root / "state" / "testlab" / "host" / "boot_id").read_text().strip()
@@ -186,4 +185,4 @@ def test_simulated_reboot_restores_running_stacks(chain):
     # operator-stopped by an earlier test in this shared module).
     assert not (chain.root / "state" / "stop-intent" / "kiss.json").exists(), \
         "reboot wrongly left a kiss operator-stop tombstone"
-    assert _wait_serving(90), "kiss not serving on 127.0.0.1:8001 after reboot (restore)"
+    assert wait_tcp(KISS_TCP, 90), "kiss not serving on 127.0.0.1:8001 after reboot (restore)"

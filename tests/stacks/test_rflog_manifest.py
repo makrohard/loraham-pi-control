@@ -37,7 +37,8 @@ def test_every_owner_declares_one_public_switch_on_its_writer(tmp_path, entry):
     p = declared[0][2]
     assert p.kind == "enum" and tuple(p.choices) == ("on", "off") and p.default == "on"
     assert p.group == rflog.GROUP and p.apply_mode == "restart"
-    assert not getattr(p, "hidden", False)
+    # Only a file param can be hidden (`FileParam.hidden`); a run param is always shown.
+    assert entry.kind == "run" or not p.hidden
 
 
 def test_graywolf_declares_no_switch_of_its_own(tmp_path):
@@ -64,7 +65,10 @@ def test_argv_writers_get_the_switch_and_the_registry_file(tmp_path, surface, ba
     svc = _svc(tmp_path)
     e = rflog.entry(surface)
     comp = svc.stack(e.owner).component(e.writer)
-    base = {"radio": band, "hw": "loraham", "txmode": "managed", "cadmon": "off", "cadrssi": "-90"}
+    # The writer's own declared defaults, so a new required run param cannot break this test.
+    base = {p.name: p.default for p in comp.run_params}
+    if band:
+        base["radio"] = band
     for value in ("on", "off"):
         argv = commands.expand_argv(comp.run_argv, comp, {**base, "rf_log": value},
                                     svc.config().operator, "/rt", "/src", band)

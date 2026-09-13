@@ -130,7 +130,7 @@ def test_log_tail_reads_approved_log(tmp_path):
     assert path.endswith("build-x.log") and "line2" in lines
 
 
-# --- P1.5 stop/restart carry typed results in ActionResult.results -----------
+# --- stop/restart carry typed results in ActionResult.results -----------
 
 def test_stop_attaches_typed_results(tmp_path, monkeypatch):
     svc = _svc(tmp_path)

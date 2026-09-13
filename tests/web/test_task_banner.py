@@ -58,20 +58,18 @@ def test_derived_interrupted_without_timestamp_is_excluded(tmp_path, monkeypatch
     assert not any(t["kind"] == "hmac" for t in svc.running_tasks())   # derived-interrupted, never invented
 
 
-def test_api_tasks_is_get_safe(tmp_path):
-    from lhpc.adapters.web.app import create_app
+def test_api_tasks_is_get_safe(tmp_path, web):
     svc = _svc(tmp_path)
-    c = create_app(lambda: svc).test_client()
+    c = web(service_factory=lambda: svc)
     r = c.get("/api/tasks")
     assert r.status_code == 200 and "tasks" in r.get_json()
 
 
-def test_banner_renders_on_dash_and_stacks(tmp_path, monkeypatch):
-    from lhpc.adapters.web.app import create_app
+def test_banner_renders_on_dash_and_stacks(tmp_path, monkeypatch, web):
     svc = _svc(tmp_path)
     _write_hmac(svc, "running")
     monkeypatch.setattr(ControllerService, "log_running", lambda self, *a, **k: True)
-    c = create_app(lambda: svc).test_client()
+    c = web(service_factory=lambda: svc)
     for path in ("/", "/stacks"):
         body = c.get(path).get_data(as_text=True)
         assert 'id="task-banner"' in body and "HMAC renew on meshcom" in body
@@ -277,7 +275,7 @@ def test_job_items_carry_op_and_stack_and_start_hints_are_the_summary(tmp_path):
 
 
 def test_job_items_expose_the_admitted_flag_for_the_reload_decision(tmp_path):
-    # RE-AUDIT: a FAILED start/restart that was admitted may have mutated lifecycle state, so the
+    # a FAILED start/restart that was admitted may have mutated lifecycle state, so the
     # Apps page must refresh for it; a failed non-admitted one changed nothing. The banner feed
     # carries the marker's own `admitted` flag — no new state.
     from lhpc.core import jobresult

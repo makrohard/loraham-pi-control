@@ -283,7 +283,7 @@ def test_soft_cs_is_idempotent(tmp_path):
 
 def test_conflicting_soft_cs_fails_closed(tmp_path):
     # SPI already enabled WITHOUT the soft-CS overlay (hardware-CS layout) -> refuse to add it.
-    # Item P: the conflict is caught in the UP-FRONT pre-flight, so NOTHING is mutated (the old code
+    # the conflict is caught in the UP-FRONT pre-flight, so NOTHING is mutated (the old code
     # aborted only at the config.txt step, after apt + the nginx disable had already run).
     r, cfg, apt, um = _run(tmp_path, ["--spi-mode", "soft-cs", "--operator-user", _USER],
                            config_seed="dtparam=spi=on\n")
@@ -944,7 +944,7 @@ def test_dry_run_fails_on_a_graphical_package(tmp_path):
 
 
 def test_dry_run_accepts_the_alsa_dependency_it_declares(tmp_path):
-    # P1 (audit): libasound2-dev is part of the DEFAULT transaction — voice's ncurses terminal
+    # libasound2-dev is part of the DEFAULT transaction — voice's ncurses terminal
     # variant is a first-class headless component — so the headless guard must not reject the
     # very package the script declares. It used to: --dry-run exited 6 naming libasound2-dev,
     # breaking the documented fresh-image procedure. ALSA is a kernel sound API, not a desktop
@@ -1060,7 +1060,7 @@ def test_nginx_step_does_not_touch_the_lhpc_user_unit(tmp_path):
     assert "apt-get purge" not in text and "apt-get remove" not in text   # package stays installed
 
 
-# --- Item O: the pipefail + `grep -q` unit-presence inversion ------------------------------------
+# --- the pipefail + `grep -q` unit-presence inversion ------------------------------------
 # Found live in round 4: `systemctl list-unit-files | grep -q '^nginx\.service'` reported the unit
 # ABSENT on a box where apt had just installed and started it. grep -q exits at the (early) match,
 # systemctl dies of SIGPIPE (141), and `set -o pipefail` makes the pipeline non-zero → the guard
@@ -1121,7 +1121,7 @@ def test_inspection_failure_aborts_up_front_with_nothing_mutated(tmp_path):
 
 
 def test_swap_stale_fstab_missing_file_recreates_without_a_scary_error(tmp_path):
-    # Item Q: fstab still DECLARES the swapfile but the file was deleted. The old code ran a
+    # fstab still DECLARES the swapfile but the file was deleted. The old code ran a
     # reactivation `swapon` on the absent file, leaking "swapon: cannot open ... No such file or
     # directory" — which reads like a failure — right before its own "swap: created" line. That
     # doomed probe is now skipped with a clear message, and the file recreated. P1a's unsuppressed
@@ -1272,3 +1272,15 @@ def test_power_op_resolution_without_groups_is_gated_on_the_flags():
     assert "usermod" not in text                               # really the no-groups branch
     assert "49-lhpc-power.rules <<POWERRULE" in text
     assert "49-lhpc-network.rules <<NETWORKRULE" in text
+
+
+def test_shipped_script_is_what_the_service_renders_now(tmp_path):
+    """The committed bootstrap-deps.sh is a snapshot of `lhpc deps --script`; it must equal what
+    the service renders now (regenerate it when the declared dependencies change)."""
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert _BOOTSTRAP.exists(), "bootstrap-deps.sh snapshot missing — run `lhpc deps --script > bootstrap-deps.sh`"
+    assert _BOOTSTRAP.read_text() == svc.deps_script(), \
+        "bootstrap-deps.sh is stale — regenerate with `lhpc deps --script > bootstrap-deps.sh`"

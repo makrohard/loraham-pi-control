@@ -1,4 +1,4 @@
-"""P0.4 — updates stage into a candidate dir and activate atomically; a failed
+"""updates stage into a candidate dir and activate atomically; a failed
 acquisition never destroys the active source; dirty trees are not overwritten."""
 
 from lhpc.core.install import Installer

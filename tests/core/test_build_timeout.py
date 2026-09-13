@@ -156,7 +156,7 @@ def test_runner_path_no_duplicate_local_bin(monkeypatch):
     assert backends._runner_path().split(":").count("/home/operator/.local/bin") == 1
 
 
-# --- Item 3: MeshCom realistic timeout + firmware-co-located completion marker ---------------------
+# --- MeshCom realistic timeout + firmware-co-located completion marker ---------------------
 
 def _meshcom(svc):
     return next(c for s in svc.stacks() for c in s.components if c.id == "meshcom-qemu")
@@ -225,7 +225,7 @@ def test_meshcom_failed_rebuild_leaves_no_marker(tmp_path, monkeypatch):
     assert not res.ok and not marker.exists() and not svc.is_built(comp)   # stale flash != built
 
 
-# --- Item 2: strict marker semantics (is_built regular-file+content; fail-closed invalidation) ----
+# --- strict marker semantics (is_built regular-file+content; fail-closed invalidation) ----
 
 import os as _os
 

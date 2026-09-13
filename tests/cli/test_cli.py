@@ -210,7 +210,7 @@ def test_self_update_repair_and_recover_cli(capsys, monkeypatch):
 
 
 @pytest.mark.contract
-def test_self_update_apply_cli_yes(capsys, monkeypatch):
+def test_self_update_apply_cli_yes(capsys, monkeypatch, no_venv_sync):
     # DETERMINISM: `self_update_apply_operator` REFUSES inside a managed systemd unit, which it
     # detects via INVOCATION_ID. A hosted CI runner executes under systemd and therefore has that
     # variable set ambiently, so the refusal — not the stubbed apply — would be what this test
@@ -223,24 +223,13 @@ def test_self_update_apply_cli_yes(capsys, monkeypatch):
         seen["force"] = force
         return ActionResult(True, "Update applied — restart the web console to load it.",
                             next_commands=["stop the console (Ctrl-C) and re-run:  lhpc web"])
-    # The apply wrapper syncs the venv with a REAL `pip install -e <repo>`; these tests are
-    # about the CLI wiring, not about that step, and a test must never install into the
-    # developer's venv (tests/conftest.py::_no_pip_install). Pointing the repo root at None
-    # skips the sync at its own seam; the sync itself is covered in test_selfupdate.py.
-    from lhpc.core import selfupdate as _su
-    monkeypatch.setattr(_su, "repo_root", lambda: None)
     monkeypatch.setattr(ControllerService, "self_update_apply", fake_apply)
-    # NOT about systemd units: this runtime root is a temp directory with no checkout, so the
-    # post-update unit refresh has nothing real to verify. Its own contract is covered by
-    # test_selfupdate.py / test_updater_units.py against a canonical unit set.
-    monkeypatch.setattr(ControllerService, "_refresh_units_post_update",
-                        lambda self: (True, "n/a"))
     assert main(["self-update", "--apply", "--overwrite", "--yes"]) == 0
     out = capsys.readouterr().out
     assert "Update applied" in out and "lhpc web" in out and seen["force"] is True
 
 
-def test_self_update_overwrite_implies_apply(capsys, monkeypatch):
+def test_self_update_overwrite_implies_apply(capsys, monkeypatch, no_venv_sync):
     """`--overwrite --yes` without `--apply` must APPLY (force), never silently degrade to the
     read-only check — an operator typing it believes they updated."""
     monkeypatch.delenv("INVOCATION_ID", raising=False)  # see test_self_update_apply_cli_yes
@@ -249,18 +238,7 @@ def test_self_update_overwrite_implies_apply(capsys, monkeypatch):
     def fake_apply(self, *, force=False):
         seen["force"] = force
         return ActionResult(True, "Update applied — restart the web console to load it.")
-    # The apply wrapper syncs the venv with a REAL `pip install -e <repo>`; these tests are
-    # about the CLI wiring, not about that step, and a test must never install into the
-    # developer's venv (tests/conftest.py::_no_pip_install). Pointing the repo root at None
-    # skips the sync at its own seam; the sync itself is covered in test_selfupdate.py.
-    from lhpc.core import selfupdate as _su
-    monkeypatch.setattr(_su, "repo_root", lambda: None)
     monkeypatch.setattr(ControllerService, "self_update_apply", fake_apply)
-    # NOT about systemd units: this runtime root is a temp directory with no checkout, so the
-    # post-update unit refresh has nothing real to verify. Its own contract is covered by
-    # test_selfupdate.py / test_updater_units.py against a canonical unit set.
-    monkeypatch.setattr(ControllerService, "_refresh_units_post_update",
-                        lambda self: (True, "n/a"))
     monkeypatch.setattr(ControllerService, "self_update_check",
                         lambda self: (_ for _ in ()).throw(AssertionError("check must not run")))
     assert main(["self-update", "--overwrite", "--yes"]) == 0
@@ -818,7 +796,7 @@ def test_firewall_cli_points_at_the_deferred_webserver_apply(tmp_path, monkeypat
 
 
 def test_explain_models_the_meshtastic_cli_as_tx_capable(tmp_path, monkeypatch, capsys):
-    # RE-AUDIT: the manifest is the capability model — the managed CLI can transmit through the
+    # the manifest is the capability model — the managed CLI can transmit through the
     # node, so `lhpc explain` must not call it RX-only (as the MeshCore CLI is not).
     _rt(monkeypatch, tmp_path, capsys)
     assert main(["explain", "meshtastic"]) == 0
@@ -867,7 +845,6 @@ def test_install_source_fallback_is_gated_and_confirmed(monkeypatch, capsys):
     calls.clear(); asked.clear()
     assert m.main(["install", "--source", "binary"]) != 0
     assert not asked
-
 
 
 # ---- rflog: the registry, not the generic log command ------------------------------------------
@@ -934,7 +911,8 @@ def test_rflog_decrypt_is_refused_on_plaintext_logs(tmp_path, monkeypatch, capsy
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
     for surface in ("graywolf", "meshcom"):
         assert main(["rflog", surface, "--decrypt"]) == 2
-        assert "plaintext already" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert out.startswith("ERR") and "plaintext already" in out   # the CLI has no typed field; the sentence is the contract
     assert main(["rflog", "daemon", "--band", "433", "--decrypt"]) == 2
 
 

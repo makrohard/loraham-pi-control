@@ -14,15 +14,9 @@ import pytest
 from meshcore import MeshCore
 
 from fake_loraham_daemon import FakeLoRaHAMDaemon
+from harness import host_config, inject_advert, make_peer, wait_for, write_identity
 from meshcore_host.app import HostApp
 from meshcore_host.persistence import CompanionStore, StoreError
-from test_companion_integration import (
-    host_config,
-    inject_advert,
-    make_peer,
-    wait_for,
-    write_identity,
-)
 
 
 @pytest.fixture
@@ -304,7 +298,6 @@ def test_node_name_is_not_a_persisted_pref():
     from meshcore_host.persistence import PERSISTED_PREFS, PERSISTED_PREFS_HEX
 
     assert "node_name" not in PERSISTED_PREFS + PERSISTED_PREFS_HEX
-
 
 
 async def test_unrestorable_channel_fails_closed_and_is_preserved(tmp_path, daemon):

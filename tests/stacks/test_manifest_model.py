@@ -455,7 +455,6 @@ def test_build_time_patches_are_recorded_on_the_source():
     assert comps["loraham-daemon"].source.patches == ()
 
 
-
 def test_every_client_endpoint_is_labelled():
     """A `client` endpoint becomes a PIN on the Dashboard, and the pin's text is the endpoint's
     `description`. Without one it falls back to the raw upstream address — so a web UI that is

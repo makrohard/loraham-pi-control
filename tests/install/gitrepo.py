@@ -7,6 +7,7 @@ importing one another; `tests/install/` is on `sys.path` for its own tests.
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -20,8 +21,16 @@ ENV = {
 }
 
 
-def git(cwd, *args):
-    r = subprocess.run(["git", *args], cwd=str(cwd), env={**ENV, "PATH": "/usr/bin:/bin"},
+# The binary is resolved ONCE from the developer's PATH; the child then runs under the hermetic
+# environment above, whose PATH is deliberately minimal (nothing of the host's toolchain leaks in).
+GIT = shutil.which("git")
+assert GIT, "the install suites drive real git in temp directories; `git` must be on PATH"
+
+
+def git(cwd, *args, env=None):
+    """`git(cwd, *args) -> stdout.strip()`; a non-zero exit fails the test naming the command.
+    `env` adds to the hermetic environment (a committer date, say) without replacing it."""
+    r = subprocess.run([GIT, *args], cwd=str(cwd), env={**ENV, "PATH": "/usr/bin:/bin", **(env or {})},
                        capture_output=True, text=True)
     assert r.returncode == 0, f"git {args} failed: {r.stderr}"
     return r.stdout.strip()

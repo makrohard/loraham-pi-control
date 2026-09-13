@@ -35,6 +35,26 @@ def client(lab):
     return Client(lab.base)
 
 
+@pytest.fixture(scope="session")
+def app_rules(tmp_path_factory):
+    """The real app's url_map, built ONCE in process purely to ENUMERATE routes — every request
+    the sweeps make goes to the running server. One builder, so the GET and POST sweeps can never
+    disagree about what the surface is. The scratch runtime root is pytest's, and LHPC_TESTLAB is
+    withheld for the build only, so this in-process service never latches onto a lab root."""
+    from lhpc.adapters.web.app import create_app
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    root = tmp_path_factory.mktemp("urlmap")
+    (root / "config" / "stacks").mkdir(parents=True)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.delenv("LHPC_TESTLAB", raising=False)
+        svc = ControllerService(system=FakeSystem(files={"/proc/uptime": "1 2\n"}).system,
+                                paths=Paths(runtime_root=root))
+        app = create_app(lambda: svc)
+    return [r for r in app.url_map.iter_rules() if r.endpoint != "static"]
+
+
 @pytest.fixture(autouse=True)
 def _fresh_scenario(request, lab):
     """Deterministic baseline per test: healthy scenario via the REAL executable.

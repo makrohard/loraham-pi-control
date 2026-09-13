@@ -1,4 +1,4 @@
-"""P1 — a ready=true Unix/path endpoint must be runtime-contained unless external;
+"""a ready=true Unix/path endpoint must be runtime-contained unless external;
 external endpoints never gate readiness or cessation."""
 
 from lhpc.core.services import ControllerService

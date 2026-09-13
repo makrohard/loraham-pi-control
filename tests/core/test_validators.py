@@ -1,4 +1,4 @@
-"""P0.1 — input validation: no user value can inject into a shell, create files,
+"""input validation: no user value can inject into a shell, create files,
 alter argv structure, or escape a config path."""
 
 import pytest

@@ -2,7 +2,6 @@
 (never a traceback), while HTTP errors keep their status and EXPECTED unsafe runtime-root
 states stay typed (no 500). debug/reloader are off."""
 
-from lhpc.adapters.web.app import create_app
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -16,10 +15,10 @@ class _Boom(ControllerService):
         raise RuntimeError("unexpected internal explosion with secrets in the traceback")
 
 
-def test_unexpected_error_renders_clean_500_not_traceback(tmp_path):
+def test_unexpected_error_renders_clean_500_not_traceback(tmp_path, web):
     def factory():
         return _Boom(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    client = create_app(service_factory=factory).test_client()
+    client = web(service_factory=factory)
     resp = client.get("/")
     assert resp.status_code == 500
     body = resp.get_data(as_text=True)
@@ -28,10 +27,10 @@ def test_unexpected_error_renders_clean_500_not_traceback(tmp_path):
     assert "Traceback" not in body and "explosion with secrets" not in body
 
 
-def test_404_still_typed_not_500(tmp_path):
+def test_404_still_typed_not_500(tmp_path, web):
     def factory():
         return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    client = create_app(service_factory=factory).test_client()
+    client = web(service_factory=factory)
     resp = client.get("/no/such/path")
     assert resp.status_code == 404 and "Traceback" not in resp.get_data(as_text=True)
 

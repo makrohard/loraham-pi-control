@@ -10,11 +10,12 @@ from __future__ import annotations
 import re
 import subprocess
 import textwrap
-from pathlib import Path
 
 import pytest
 
-WORKFLOWS = sorted((Path(__file__).resolve().parents[2] / ".github" / "workflows").glob("*.yml"))
+import repo_paths
+
+WORKFLOWS = sorted((repo_paths.REPO / ".github" / "workflows").glob("*.yml"))
 
 
 def _run_blocks(text: str):
@@ -80,7 +81,7 @@ def test_a_comment_in_a_workflow_shell_block_carries_no_quote():
 # and a retry that guesses is how a red verdict becomes green. Its safety comes from WHERE it is
 # used, which the last test here pins.
 
-RETRY = Path(__file__).resolve().parents[2] / ".github" / "scripts" / "retry.sh"
+RETRY = repo_paths.REPO / ".github" / "scripts" / "retry.sh"
 
 
 def _retry(script: str):

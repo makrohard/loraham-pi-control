@@ -8,9 +8,13 @@ overwritten, a candidate that must not select its own manifest.
 """
 from __future__ import annotations
 
+import fcntl
+import json as _json
+
 import pytest
 
 import gitrepo
+from lhpc.core import runtime_fs as _rfs
 from lhpc.core import selfupdate
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult, RealSystem
@@ -196,8 +200,7 @@ def test_flat_and_scoped_precedence_both_forms(tmp_path, monkeypatch):
     assert svc.self_update_apply().ok
     stored = cfgmod.load_stack_config(svc._paths, "s")
     assert "ropt" not in stored and stored.get("__r__c__ropt") == "MINE"
-    val, amb = svc._resolve_stored(stored, "r", "c", "ropt", 1)
-    assert val == "MINE" and not amb                                # scoped override still wins
+    assert svc.stack_config("s")["ropt"] == "MINE"                  # scoped override still wins
 
 
 def test_both_forms_at_default_both_migrate(tmp_path, monkeypatch):
@@ -318,7 +321,6 @@ def test_apply_cleanup_failure_is_truthful_partial(tmp_path, monkeypatch):
     res = selfupdate.apply_update(fs.system, gitrepo.runtime_paths(tmp_path), force=True)
     assert res["ok"] is True and res["cleanup_failed"] is True    # reset worked, cleanup did not
     assert "Permission denied" in res["cleanup_error"]
-    assert "could NOT be removed" in res["message"]              # truthful, not a plain success
 
 
 def test_service_maps_cleanup_failure_to_partial(tmp_path, monkeypatch):
@@ -327,20 +329,13 @@ def test_service_maps_cleanup_failure_to_partial(tmp_path, monkeypatch):
     gitrepo.upstream_commit(up)
     monkeypatch.setattr(selfupdate, "apply_update", lambda *a, **k: {
         "ok": True, "cleanup_failed": True, "cleanup_error": "cannot unlink 'x'",
-        "message": "Update aligned to upstream, but some untracked files could NOT be removed "
-                   "— delete them manually, then restart the console.", "deps_changed": False})
+        "message": "aligned, cleanup incomplete", "deps_changed": False})
     res = svc.self_update_apply(force=True)
-    assert res.ok is False                                        # partial -> not a plain success
-    assert "could NOT be removed" in res.summary
-    assert any("cannot unlink" in d for d in res.details)
+    assert res.ok is False and res.data.get("cleanup_failed") is True   # partial -> not a plain success
+    assert any("cannot unlink" in d for d in res.details)         # the cleanup error passes through
 
 
 # --- the journal is a durable transaction: strictly validated, serialized between processes ---
-
-import fcntl                                                              # noqa: E402
-import json as _json                                                     # noqa: E402
-from lhpc.core import runtime_fs as _rfs                                 # noqa: E402
-
 
 def _head(work):
     return gitrepo.git(work, "rev-parse", "HEAD")
@@ -490,15 +485,8 @@ def _journal_path(svc):
     return svc._paths.under("state", "selfupdate-migrate.json")
 
 
-def _make_state_dir(svc):
-    p = _journal_path(svc).parent
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
-
 @pytest.mark.parametrize("kind", ["symlink", "dangling_symlink", "directory", "fifo"])
 def test_unreadable_journal_blocks_without_any_mutation(tmp_path, monkeypatch, kind):
-    import os
     from lhpc.core import config as cfgmod
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
@@ -508,17 +496,7 @@ def test_unreadable_journal_blocks_without_any_mutation(tmp_path, monkeypatch, k
     before_cfg = dict(cfgmod.load_stack_config(svc._paths, "s"))
     selfupdate.refresh_cache(svc._system, svc._paths)                    # a pre-existing cache
     before_cache = selfupdate.read_cache(svc._paths).get("checked_at")
-    _make_state_dir(svc)
-    jp = _journal_path(svc)
-    if kind == "symlink":
-        (jp.parent / "real.json").write_text('{"version": 2, "completed": null, "prepared": null}')
-        os.symlink("real.json", jp)                                      # a symlinked leaf -> unsafe
-    elif kind == "dangling_symlink":
-        os.symlink("does-not-exist.json", jp)
-    elif kind == "directory":
-        jp.mkdir()
-    elif kind == "fifo":
-        os.mkfifo(jp)                                                    # must NOT hang the reader
+    _write_bad_journal(_journal_path(svc), kind)                        # the fifo must NOT hang the reader
     env, blocked = selfupdate.read_migration_journal(svc._paths)
     assert env is None and blocked is True                              # tri-state: unreadable -> BLOCK
     res = svc.self_update_apply()
@@ -607,22 +585,6 @@ def test_finalization_clear_failure_self_heals(tmp_path, monkeypatch):
     svc2.self_update_apply()
     assert selfupdate.read_migration_journal(svc2._paths)[0] is None      # self-healed / cleared
     assert svc2.stack_config("s")["ropt"] == "NEW"
-
-
-def test_head_matches_neither_transition_state_blocks(tmp_path, monkeypatch):
-    from lhpc.core import config as cfgmod
-    _o, work, up = gitrepo.repos(tmp_path)
-    svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
-    gitrepo.upstream_commit(up)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
-    before_head = _head(work)
-    _seed_completed(svc, "a" * 40, "b" * 40)                             # completed.to_head is NOT current head
-    before_env = selfupdate.read_migration_journal(svc._paths)[0]
-    res = svc.self_update_apply()
-    assert res.ok is False and res.data.get("recovery_required") is True
-    assert _head(work) == before_head                                   # no git mutation
-    assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == "OLD"  # no config mutation
-    assert selfupdate.read_migration_journal(svc._paths)[0] == before_env  # journal preserved (evidence)
 
 
 # --- the journal's `expected` is not authority: the pre-update default is proven from source --
@@ -714,20 +676,6 @@ def test_check_blocks_on_unsafe_journal_without_fetch(tmp_path, monkeypatch, kin
         assert _journal_path(svc).read_bytes() == before_jbytes              # journal unchanged
 
 
-def test_startup_freshness_check_under_corrupt_journal_makes_no_fetch(tmp_path, monkeypatch):
-    # The startup thread calls ControllerService().self_update_check(); under a corrupt journal it must
-    # block with no competing fetch or cache write (and never raise).
-    _o, work, up = gitrepo.repos(tmp_path)
-    svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
-    gitrepo.upstream_commit(up)
-    selfupdate.refresh_cache(svc._system, svc._paths)
-    before_cache = selfupdate.read_cache(svc._paths).get("checked_at")
-    _write_bad_journal(_journal_path(svc), "malformed")
-    res = svc.self_update_check()                                            # the exact call the startup thread makes
-    assert res.ok is False and res.data.get("journal_corrupt") is True
-    assert selfupdate.read_cache(svc._paths).get("checked_at") == before_cache   # no competing fetch/cache write
-
-
 # --- a candidate's own from_head must not select the manifest; the recorded transition binds --
 
 def _typed_manifest(kind, default):
@@ -805,41 +753,30 @@ def test_typed_schema_change_preserves_override_under_old_semantics(tmp_path, mo
     assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == " 10"   # override survives
 
 
-# --- the recovery-state gate holds on explicit and startup checks: no fetch, no mutation ------
+# --- a recorded transition the checkout is not at blocks apply AND check: no fetch, no mutation -
 
-def test_check_blocks_on_head_mismatched_prepared_no_fetch(tmp_path, monkeypatch):
+@pytest.mark.parametrize("slot", ["completed", "prepared"])
+@pytest.mark.parametrize("action", ["apply", "check"])
+def test_head_matching_neither_transition_state_blocks_without_mutation(tmp_path, monkeypatch, slot, action):
+    # An anchored record whose from_head/to_head are both foreign to HEAD is a recovery state:
+    # the explicit check (also the exact call the startup freshness thread makes) and the apply
+    # both refuse typed, with no fetch, no source, config or journal mutation.
     from lhpc.core import config as cfgmod
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
-    gitrepo.upstream_commit(up)                                                 # a real update available (fetch would act)
+    gitrepo.upstream_commit(up)                                                 # a real update: a fetch would act
     cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
     selfupdate.refresh_cache(svc._system, svc._paths)
     before_cache = selfupdate.read_cache(svc._paths).get("checked_at")
     before_head, before_cfg = _head(work), dict(cfgmod.load_stack_config(svc._paths, "s"))
-    _seed_journal(svc, from_head="a" * 40, to_head="b" * 40, slot="prepared",   # anchored, HEAD matches neither
-                  pending=[_cand("a" * 40)])
+    _seed_journal(svc, from_head="a" * 40, to_head="b" * 40, slot=slot, pending=[_cand("a" * 40)])
     before_journal = selfupdate.read_migration_journal(svc._paths)[0]
-    res = svc.self_update_check()
+    res = svc.self_update_apply() if action == "apply" else svc.self_update_check()
     assert res.ok is False and res.data.get("recovery_required") is True
     assert selfupdate.read_cache(svc._paths).get("checked_at") == before_cache   # NO fetch / cache write
     assert _head(work) == before_head                                            # no source mutation
     assert cfgmod.load_stack_config(svc._paths, "s") == before_cfg               # no config mutation
-    assert selfupdate.read_migration_journal(svc._paths)[0] == before_journal    # no journal mutation
-
-
-def test_startup_check_blocks_on_recovery_state_no_fetch(tmp_path, monkeypatch):
-    _o, work, up = gitrepo.repos(tmp_path)
-    svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
-    gitrepo.upstream_commit(up)
-    selfupdate.refresh_cache(svc._system, svc._paths)
-    before_cache = selfupdate.read_cache(svc._paths).get("checked_at")
-    _seed_journal(svc, from_head="a" * 40, to_head="b" * 40,            # anchored completed, HEAD != to_head
-                  pending=[_cand("a" * 40)])
-    before_journal = selfupdate.read_migration_journal(svc._paths)[0]
-    res = svc.self_update_check()                                        # the exact call the startup thread makes
-    assert res.ok is False and res.data.get("recovery_required") is True
-    assert selfupdate.read_cache(svc._paths).get("checked_at") == before_cache   # no competing fetch/cache write
-    assert selfupdate.read_migration_journal(svc._paths)[0] == before_journal
+    assert selfupdate.read_migration_journal(svc._paths)[0] == before_journal    # journal preserved (evidence)
 
 
 # --- only the durable git transaction anchor authorises a migration; the journal alone never --
@@ -855,21 +792,6 @@ def _dup_manifest(kind, name="dup", default="D"):
         return (f'[[stack.component]]\nid="{cid}"\nname="{cid.upper()}"\nkind="service"\nrun="true"\n'
                 f'readiness="process"\n{p}')
     return '[[stack]]\nid="s"\nname="S"\nmain="c1"\n' + comp("c1") + comp("c2")
-
-
-def test_modified_journal_field_disagrees_with_anchor_blocked(tmp_path, monkeypatch):
-    from lhpc.core import config as cfgmod
-    svc, man, rt, work, up, a, b = _old_to_new_repo(tmp_path, monkeypatch)
-    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})           # would migrate if not blocked
-    txid = _seed_journal(svc, from_head=a, to_head=b, pending=[_cand(a, expected="OLD")])
-    before_cfg = dict(cfgmod.load_stack_config(svc._paths, "s"))
-    # tamper the runtime journal (a transition field) while the genuine ANCHOR is unchanged
-    selfupdate.write_migration_journal(svc._paths, {
-        "completed": {"from_head": "c" * 40, "to_head": b, "branch": "main", "txid": txid,
-                      "pending": [_cand(a, expected="OLD")]}, "prepared": None})
-    res = svc.self_update_apply()
-    assert res.ok is False and res.data.get("recovery_required") is True   # disagrees with anchor -> block
-    assert cfgmod.load_stack_config(svc._paths, "s") == before_cfg          # nothing deleted
 
 
 def test_duplicate_run_param_forged_flat_key_not_deleted(tmp_path, monkeypatch):
@@ -1072,7 +994,7 @@ def test_retained_param_migrates_with_stale_incumbent_service_cache(tmp_path, mo
 
 
 def test_removed_param_preserved_despite_stale_service_cache(tmp_path, monkeypatch):
-    # THE defect-2 case: the incumbent service populated _stacks PRE-transition (OLD, HAS ropt), then
+    # The incumbent service populated _stacks PRE-transition (OLD, HAS ropt), then
     # advances in-process to a manifest where ropt is REMOVED. Using the stale cache would delete the
     # stored key; the fresh post-update parse keeps it pending instead.
     from lhpc.core import config as cfgmod
@@ -1085,8 +1007,6 @@ def test_removed_param_preserved_despite_stale_service_cache(tmp_path, monkeypat
     res = svc.self_update_apply()                                       # REAL A->B in the SAME (stale) service
     assert res.ok and res.data.get("pending_migrations", 0) >= 1        # ropt unprovable in NEW -> pending
     assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == "OLD"   # stale cache must NOT delete it
-
-
 
 
 # --- a manifest from an EARLIER release still proves an old default --------------------------

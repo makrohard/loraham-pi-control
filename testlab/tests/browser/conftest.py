@@ -71,3 +71,30 @@ def page(browser, lab):
     yield pg
     context.close()
     assert not errors, f"JS console errors: {errors}"
+
+
+@pytest.fixture()
+def seeded_rf_logs(lab):
+    """The RF logs rflog.js is proved over, written fresh for each test: a two-segment
+    plaintext kiss log (an older rotated segment and the live one) and a one-record meshtastic
+    log, the stack whose payloads are encrypted. `meshtastic_record` is that record exactly as
+    the plain API serves it — fetched here, in Python, so a route handler that answers the
+    decoded API never has to call back into the page for it."""
+    import json
+    import urllib.request
+    from types import SimpleNamespace
+
+    logs = lab.root / "logs"
+    logs.mkdir(exist_ok=True)
+    older = '2026-09-12T16:00:00.000Z RX rssi=-90.00 snr=2.00 len=3 hex=aabbcc ascii="..."'
+    newer = ('2026-09-12T16:01:00.000Z TX rssi=- snr=- len=3 outcome=ok '
+             'tnc2="G0ABC>APRS:hello" hex=112233 ascii="..."')
+    (logs / "rf-kiss.log.1").write_text(older + "\n")
+    (logs / "rf-kiss.log").write_text(newer + "\n")
+    (logs / "rf-meshtastic.log").write_text(
+        '{"timestamp":1789228997,"rssi":-67,"snr":11.25,"from":1,"to":4294967295,'
+        '"size":4,"bytes":"01020304"}\n')
+    with urllib.request.urlopen(lab.base + "/api/rflog/meshtastic?job=rf-meshtastic.log",
+                                timeout=10) as r:
+        record = json.loads(r.read())["records"][0]
+    return SimpleNamespace(dir=logs, older=older, newer=newer, meshtastic_record=record)

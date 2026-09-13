@@ -1266,7 +1266,7 @@ def test_driver_defect_is_clean_integrity_failure(tmp_path, monkeypatch):
     assert "TypeError" in res.summary
 
 
-# --- audit round 4: tri-state prune, strict prune schema, blocked projection --------------------
+# --- tri-state prune, strict prune schema, blocked projection --------------------
 
 def test_prune_present_but_unreadable_leaf_is_not_pruned(tmp_path, monkeypatch):
     # A malformed-but-present evidence leaf must stay in `left` (blocking journal replacement) —

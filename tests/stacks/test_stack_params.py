@@ -11,45 +11,12 @@ from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
 import repo_paths
+from seams import LifecycleSeam
 
 
 def _svc(tmp_path):
     (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-
-
-def _hold_lock_unpublished(root: str, key: str) -> None:
-    """Hold ONLY the flock, never publishing an owner record — the unidentifiable-holder state.
-    Module-level so `spawn` can pickle it; `spawn` (not fork) avoids the Py3.13
-    fork-in-threaded-process warning the suite gates on."""
-    import fcntl
-    import time as _t
-    from lhpc.core import reslock, runtime_fs
-    from lhpc.core.paths import Paths as _P
-    paths = _P(runtime_root=__import__("pathlib").Path(root))
-    lockfile = paths.under("state", "locks", reslock.canonical_key(key) + ".lock")
-    fh = runtime_fs.open_lock(paths, lockfile)
-    fcntl.flock(fh, fcntl.LOCK_EX)
-    _t.sleep(60)
-
-
-def _lock_is_held(svc, key: str) -> bool:
-    """True when the flock is taken, independently of whether ownership was published."""
-    import fcntl
-    from lhpc.core import reslock, runtime_fs
-    path = svc._paths.under("state", "locks", reslock.canonical_key(key) + ".lock")
-    try:
-        fh = runtime_fs.open_lock(svc._paths, path)
-    except OSError:
-        return False
-    try:
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        fcntl.flock(fh, fcntl.LOCK_UN)
-        return False
-    except OSError:
-        return True
-    finally:
-        fh.close()
 
 
 # --- identity detection -------------------------------------------------------
@@ -208,188 +175,6 @@ def test_dependency_param_override_channel(tmp_path):
     assert r2.ok and svc.stack_config("kiss").get("tx_freq") == "433.900"
 
 
-def test_same_process_claim_waits_then_succeeds(tmp_path, monkeypatch):
-    """Two overlapping controller ops in DIFFERENT threads of the SAME process that share a claim
-    must SERIALIZE (wait), not fail with "your own stack is busy". A different-process holder
-    still fails fast (covered by reslock's external-contention tests).
-
-    This owns the OTHER branch of `_acquire_key` from the test below: here ownership IS published,
-    so the contender identifies the holder as our own pid and enters the bounded retry loop. The
-    holder therefore waits for that contention to be OBSERVED before releasing — with a fixed
-    sleep instead, a contender that arrived after the holder had already let go would find the
-    lock free, never wait at all, and still satisfy the assertion.
-    """
-    import contextlib
-    import threading
-    from lhpc.core import reslock
-
-    svc = _svc(tmp_path)
-    svc._SELF_LOCK_WAIT_S = 3.0
-    key = "claim.loraham.daemon-socket.433"
-    held, released, contended = threading.Event(), threading.Event(), threading.Event()
-
-    real_lock = reslock.operation_lock
-
-    @contextlib.contextmanager
-    def watch_busy(paths, k, op, target, *a, **kw):
-        # Every refusal of THIS key is one turn of the contender's retry loop.
-        try:
-            with real_lock(paths, k, op, target, *a, **kw) as v:
-                yield v
-        except reslock.ResourceBusy:
-            if reslock.canonical_key(k) == key:
-                contended.set()
-            raise
-
-    monkeypatch.setattr(reslock, "operation_lock", watch_busy)
-
-    def hold():
-        with real_lock(svc._paths, key, "stop", "meshcom"):
-            # `operation_lock` publishes the owner record before it yields, so the state is
-            # already true here — assert it rather than polling for it. (An UNPUBLISHED owner is
-            # a different branch, exercised by the test below.)
-            assert reslock.read_owner(svc._paths, key), "operation_lock yielded without an owner"
-            held.set()
-            contended.wait(10.0)      # ...and hold until the contender has actually been refused
-            released.set()
-
-    t = threading.Thread(target=hold)
-    t.start()
-    try:
-        assert held.wait(5.0), "holder never published its ownership record"
-        with contextlib.ExitStack() as st:
-            svc._acquire_key(st, key, "start", "kiss")    # waits for the same-process holder
-            assert contended.is_set(), "the claim was never contended — nothing was serialized"
-            assert released.is_set()                      # proved it waited past the release
-    finally:
-        contended.set()                                   # never leave the holder parked
-        t.join(10.0)
-
-
-def test_same_process_claim_retries_while_ownership_is_unpublished(tmp_path, monkeypatch):
-    """REGRESSION: `operation_lock` takes the flock and only THEN writes its `.owner` record. A
-    second same-process thread arriving inside that window got a ResourceBusy whose holder was
-    unidentifiable, was treated as an EXTERNAL conflict, and failed immediately instead of
-    serializing — intermittently, and most often under load (i.e. exactly when two controller
-    threads overlap). Here publication is deliberately delayed to make that window deterministic."""
-    import threading, contextlib
-    from lhpc.core import reslock, runtime_fs
-    svc = _svc(tmp_path)
-    svc._SELF_LOCK_WAIT_S = 3.0
-    key = "claim.loraham.daemon-socket.433"
-    flocked = threading.Event()
-    publish_now = threading.Event()
-    released = threading.Event()
-
-    real_write_marker = runtime_fs.write_marker
-
-    def slow_publish(paths, path, text, *a, **k):
-        # Only the OWNER record of this key is delayed; every other marker write is untouched.
-        if path.name.endswith(".owner"):
-            flocked.set()
-            publish_now.wait(5.0)
-        return real_write_marker(paths, path, text, *a, **k)
-
-    monkeypatch.setattr(runtime_fs, "write_marker", slow_publish)
-
-    def hold():
-        with reslock.operation_lock(svc._paths, key, "stop", "meshcom"):
-            released.set()          # ordered BEFORE the flock is dropped, so no wait is needed
-
-    # The production seam this test is ABOUT: reslock serializes taking the flock with publishing
-    # the owner record on a per-key mutex (reslock._PUBLISH_LOCKS), so no other thread here can
-    # ever see one without the other. Wrap that mutex so the test can observe the contender
-    # BLOCKING on it — the exact moment the serialization is doing its job. Waiting for that
-    # instead of sleeping is what makes this deterministic, and asserting it is what keeps the
-    # test able to fail: if the serialization were removed the contender would not block here at
-    # all, it would flock-fail against an unpublished owner and be refused as an external holder,
-    # which is the defect.
-    contending = threading.Event()
-
-    class _WatchedLock:
-        def __init__(self, inner):
-            self._inner = inner
-
-        def acquire(self, *a, **kw):
-            if self._inner.locked():          # held by the publisher -> we are about to WAIT
-                contending.set()
-            return self._inner.acquire(*a, **kw)
-
-        def release(self):
-            return self._inner.release()
-
-        def __enter__(self):
-            self.acquire()
-            return self
-
-        def __exit__(self, *_exc):
-            self.release()
-
-    # via monkeypatch: the registry is process-global and must not leak to other tests.
-    monkeypatch.setitem(reslock._PUBLISH_LOCKS, key, _WatchedLock(threading.Lock()))
-
-    t = threading.Thread(target=hold); t.start()
-    try:
-        assert flocked.wait(5.0), "holder never reached the publication window"
-        # The flock IS held and the owner record does NOT exist yet — the ambiguous state.
-        assert reslock.read_owner(svc._paths, key) is None
-        contender = {}
-        def acquire():
-            try:
-                with contextlib.ExitStack() as st:
-                    svc._acquire_key(st, key, "start", "kiss")
-                    contender["ok"] = released.is_set()      # serialized behind the holder
-            except reslock.ResourceBusy as exc:
-                contender["busy"] = str(exc)
-        c = threading.Thread(target=acquire, name="contender"); c.start()
-        assert contending.wait(10.0), (
-            "the contender never blocked on the publish mutex — acquire and publish are no "
-            "longer serialized, so an overlapping op of OURS can see a flock with no owner "
-            "record and be refused as an external holder")
-        assert reslock.read_owner(svc._paths, key) is None    # still the ambiguous window
-        publish_now.set()                                     # ownership becomes visible
-        c.join(10.0)
-    finally:
-        publish_now.set()
-        t.join(10.0)
-    assert "busy" not in contender, f"retried window still reported busy: {contender}"
-    assert contender.get("ok") is True, contender
-
-
-def test_unknown_owner_still_fails_after_the_bounded_grace(tmp_path, monkeypatch):
-    """An UNIDENTIFIABLE holder must not become a five-second stall: it is retried only for the
-    short publication grace and then surfaces the typed ResourceBusy. Proven with a lock held by a
-    real external process whose owner record never appears."""
-    import contextlib, time
-    import multiprocessing as mp
-    import pytest as _pytest
-    from lhpc.core import reslock
-    svc = _svc(tmp_path)
-    svc._SELF_LOCK_WAIT_S = 5.0
-    key = "claim.loraham.daemon-socket.433"
-    proc = mp.get_context("spawn").Process(target=_hold_lock_unpublished,
-                                           args=(str(tmp_path), key))
-    proc.start()
-    try:
-        for _ in range(500):                                 # wait for the flock, NOT the owner
-            if _lock_is_held(svc, key):
-                break
-            time.sleep(0.02)
-        assert _lock_is_held(svc, key), "external holder never took the lock"
-        assert reslock.read_owner(svc._paths, key) is None   # deliberately never published
-        started = time.monotonic()
-        with _pytest.raises(reslock.ResourceBusy):
-            with contextlib.ExitStack() as st:
-                svc._acquire_key(st, key, "start", "kiss")
-        waited = time.monotonic() - started
-        # bounded by the grace, nowhere near the same-process budget
-        assert waited < svc._SELF_LOCK_WAIT_S / 2, f"waited {waited:.2f}s — grace not bounded"
-    finally:
-        proc.terminate(); proc.join(10)
-        if proc.is_alive():
-            proc.kill(); proc.join()
-
-
 @pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
 def test_component_booting_tracks_live_post_runner(tmp_path):
     # A running component reads 'booting' while its post-start (--setcall) runner is still alive,
@@ -416,15 +201,10 @@ def test_component_booting_tracks_live_post_runner(tmp_path):
 
 # --- direct-component identity/config scope + ephemeral run-param normalization --------------
 
-class _Seam(Exception):
-    """Raised at the first lifecycle side effect (daemon ensure / config write) — proves whether a
-    start reached the seam or was blocked BEFORE any side effect."""
-
-
 def _seam_svc(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     def seam(*a, **k):
-        raise _Seam()
+        raise LifecycleSeam()
     monkeypatch.setattr(svc, "_ensure_daemon", seam)
     monkeypatch.setattr(svc, "write_config_files", seam)
     return svc
@@ -434,7 +214,7 @@ def _seam_svc(tmp_path, monkeypatch):
 def test_direct_licensed_component_rejects_bad_call_before_side_effects(tmp_path, monkeypatch, call):
     svc = _seam_svc(tmp_path, monkeypatch)
     _seed_raw(svc, "meshcom", {"mc_callsign": call})                       # the SAVED value
-    res = svc._start_impl("meshcom-qemu", apply=True)                       # no _Seam
+    res = svc._start_impl("meshcom-qemu", apply=True)                       # no LifecycleSeam
     assert not res.ok
     assert "callsign" in (res.summary + str(res.details)).lower()
     assert res.data.get("enforce_fields") == ["c_mc_callsign"]              # the Settings row
@@ -443,7 +223,7 @@ def test_direct_licensed_component_rejects_bad_call_before_side_effects(tmp_path
 def test_direct_unlicensed_component_rejects_empty_node_before_side_effects(tmp_path, monkeypatch, set_call):
     svc = _seam_svc(tmp_path, monkeypatch)
     # MeshCore's node name is a REQUIRED local identity (default "", never {callsign}):
-    # a fresh config is blocked before any side effect / _Seam — with or without a global
+    # a fresh config is blocked before any side effect / LifecycleSeam — with or without a global
     # operator callsign, which unlicensed stacks never inherit.
     res = svc._start_impl("meshcore-node", apply=True)
     assert not res.ok and res.data.get("enforce_fields") == ["f_node_name"]
@@ -455,7 +235,7 @@ def test_direct_unlicensed_component_rejects_empty_node_before_side_effects(tmp_
 def test_direct_valid_identity_reaches_start_seam(tmp_path, monkeypatch):
     svc = _seam_svc(tmp_path, monkeypatch)
     assert svc.save_config_bundle("meshcom", values={"mc_callsign": "XX0XXA-3"}).ok
-    with pytest.raises(_Seam):                                             # enforcement passed
+    with pytest.raises(LifecycleSeam):                                             # enforcement passed
         svc._start_impl("meshcom-qemu", apply=True)
 
 
@@ -483,7 +263,7 @@ def _lock_seam_svc(tmp_path, monkeypatch):
     that reaches lock/radio planning trips the seam, and one blocked earlier does not."""
     svc = _svc(tmp_path)
     def seam(*a, **k):
-        raise _Seam()
+        raise LifecycleSeam()
     monkeypatch.setattr(svc, "_daemon_needs", seam)
     monkeypatch.setattr(svc, "_lifecycle_guard", seam)
     return svc
@@ -491,7 +271,7 @@ def _lock_seam_svc(tmp_path, monkeypatch):
 
 def test_public_start_valid_params_reach_lock_seam(tmp_path, monkeypatch):
     svc = _lock_seam_svc(tmp_path, monkeypatch)
-    with pytest.raises(_Seam):                                             # the band -> planning
+    with pytest.raises(LifecycleSeam):                                             # the band -> planning
         svc.start("daemon", apply=True, band="433")
 
 
@@ -501,7 +281,7 @@ def _restart_lock_seam(tmp_path, monkeypatch):
     """Seams for the public restart lock-planning path (`_daemon_needs`, `_lifecycle_guard`)."""
     svc = _svc(tmp_path)
     def seam(*a, **k):
-        raise _Seam()
+        raise LifecycleSeam()
     monkeypatch.setattr(svc, "_daemon_needs", seam)
     monkeypatch.setattr(svc, "_lifecycle_guard", seam)
     return svc
@@ -510,7 +290,7 @@ def _restart_lock_seam(tmp_path, monkeypatch):
 def test_public_restart_invalid_identity_no_lock(tmp_path, monkeypatch):
     svc = _restart_lock_seam(tmp_path, monkeypatch)
     # a SAVED N0CALL / an empty local with no global: the preflight refuses before any lock/stop
-    # side effect (no _Seam raised), naming the Settings row.
+    # side effect (no LifecycleSeam raised), naming the Settings row.
     _seed_raw(svc, "graywolf", {"call": "N0CALL"})
     res = svc.restart("graywolf", apply=True)
     assert res.ok is False and "callsign" in (res.summary + str(res.details)).lower()
@@ -524,20 +304,20 @@ def test_public_restart_invalid_identity_no_lock(tmp_path, monkeypatch):
 def test_public_restart_valid_reaches_lock_seam(tmp_path, monkeypatch):
     svc = _restart_lock_seam(tmp_path, monkeypatch)
     assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-10"}).ok
-    with pytest.raises(_Seam):                                             # preflight passed
+    with pytest.raises(LifecycleSeam):                                             # preflight passed
         svc.restart("graywolf", apply=True)
 
 
 def test_restart_impl_validates_before_its_stop(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     def seam(*a, **k):
-        raise _Seam()
+        raise LifecycleSeam()
     monkeypatch.setattr(svc, "stop", seam)                                 # stop() is the seam
     # an unusable SAVED identity -> typed failure BEFORE stop()
     _seed_raw(svc, "graywolf", {"call": "N0CALL"})
     assert svc._restart_impl("graywolf", apply=True).ok is False
     assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-10"}).ok
-    with pytest.raises(_Seam):                                             # valid -> reaches stop()
+    with pytest.raises(LifecycleSeam):                                             # valid -> reaches stop()
         svc._restart_impl("graywolf", apply=True)
 
 
@@ -575,105 +355,6 @@ def test_direct_component_config_save_owner_scope(tmp_path):
                                   remotes={"meshcom-qemu": "https://x/y.git"}).ok is False
     assert svc.save_config_bundle("meshcom",                                                 # stack: unchanged
                                   values={"autostart_meshcom-gps-relay": "on"}).ok
-
-
-# --- Area 1: saved config stays STABLE across an applied start/restart -----------------------
-
-def _exclusive_available(paths) -> bool:
-    """True iff the EXCLUSIVE config lock is free (a config SAVE could proceed right now). False
-    means a start/restart holds the SHARED stability guard and a save would BLOCK."""
-    import fcntl
-    from lhpc.core import runtime_fs
-    fh = runtime_fs.open_lock(paths, paths.under("config", ".lock"))
-    try:
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        fcntl.flock(fh, fcntl.LOCK_UN)
-        return True
-    except OSError:
-        return False
-    finally:
-        fh.close()
-
-
-def test_config_guard_held_across_applied_start(tmp_path, monkeypatch, set_call):
-    svc = _svc(tmp_path)
-    set_call(svc)                                                  # valid persisted call
-    assert _exclusive_available(svc._paths) is True               # free before the start
-    seen = {}
-    def spy(*a, **k):
-        seen["exclusive"] = _exclusive_available(svc._paths)       # inside the start (after identity)
-        seen["call"] = svc.stack_config("graywolf").get("call")
-        raise _Seam()
-    monkeypatch.setattr(svc, "_ensure_daemon", spy)
-    with pytest.raises(_Seam):
-        svc.start("graywolf", apply=True)
-    assert seen["exclusive"] is False                             # a save would BLOCK mid-start
-    assert seen["call"] == "XX0XXA"                               # config read is the stable snapshot
-    assert _exclusive_available(svc._paths) is True               # released afterwards
-
-
-def test_direct_start_impl_and_restart_impl_hold_config_guard(tmp_path, monkeypatch, set_call):
-    from lhpc.core.services import ActionResult
-    svc = _svc(tmp_path)
-    set_call(svc)
-    held = {}
-    def spy(*a, **k):
-        held["v"] = _exclusive_available(svc._paths)
-        raise _Seam()
-    monkeypatch.setattr(svc, "_ensure_daemon", spy)
-    with pytest.raises(_Seam):
-        svc._start_impl("graywolf", apply=True)                     # DIRECT internal call
-    assert held["v"] is False                                    # guard held — cannot be bypassed
-    monkeypatch.setattr(svc, "stop", lambda *a, **k: ActionResult(True, "stopped"))
-    held.clear()
-    with pytest.raises(_Seam):
-        svc._restart_impl("graywolf", apply=True)                   # DIRECT internal restart
-    assert held["v"] is False
-
-
-def test_competing_save_blocks_until_start_completes_then_succeeds(tmp_path, monkeypatch, set_call):
-    import threading, time
-    svc = _svc(tmp_path)
-    set_call(svc)
-    done = threading.Event()
-    def spy(*a, **k):
-        threading.Thread(target=lambda: (svc.save_config_bundle("graywolf", values={"call": "DJ0XYZ"}),
-                                         done.set())).start()
-        time.sleep(0.3)
-        assert not done.is_set()                                 # competing save BLOCKED during start
-        assert svc.stack_config("graywolf").get("call") == "XX0XXA" # generation would read the stable value
-        raise _Seam()
-    monkeypatch.setattr(svc, "_ensure_daemon", spy)
-    with pytest.raises(_Seam):
-        svc.start("graywolf", apply=True)
-    done.wait(3)                                                  # after the guard released, save runs
-    assert done.is_set() and svc.stack_config("graywolf").get("call") == "DJ0XYZ"
-
-
-def test_restart_not_stopped_then_failed_by_concurrent_invalid_save(tmp_path, monkeypatch):
-    import threading, time
-    from lhpc.core.services import ActionResult
-    svc = _svc(tmp_path)
-    svc.save_config_bundle("graywolf", values={"call": "XX0XXA-5"})  # valid persisted call
-    stops = []
-    monkeypatch.setattr(svc, "stop",
-                        lambda *a, **k: (stops.append(1), ActionResult(True, "stopped"))[1])
-    saved = threading.Event()
-    def spy(*a, **k):
-        # a competing save flipping the call to N0CALL must be BLOCKED for the whole restart, so the
-        # restart's start still sees the VALID call — it never stops then rejects the target.
-        threading.Thread(target=lambda: (svc.save_config_bundle("graywolf", values={"call": "XX0XXB-5"}),
-                                         saved.set())).start()
-        time.sleep(0.3)
-        assert not saved.is_set()
-        assert svc.stack_config("graywolf").get("call") == "XX0XXA-5"
-        raise _Seam()
-    monkeypatch.setattr(svc, "_ensure_daemon", spy)
-    with pytest.raises(_Seam):
-        svc.restart("graywolf", apply=True)
-    assert stops == [1]                                           # stopped ONCE (reached the start)
-    saved.wait(3)
-    assert saved.is_set()                                        # invalid save applied only AFTER restart
 
 
 # --- Area 2: direct component file-config generation stays COMPONENT-scoped ------------------
@@ -858,7 +539,7 @@ def test_ambiguous_flat_legacy_fails_typed_before_any_seam(tmp_path, monkeypatch
     svc = _scope2_svc(tmp_path)
     _seed_flat(svc, "ostack2", {"rp": "LEGACY"})                 # rp declared by tgt AND dep -> ambiguous
     def boom(*a, **k):
-        raise _Seam()
+        raise LifecycleSeam()
     monkeypatch.setattr(svc, "write_config_files", boom)         # config-write seam
     monkeypatch.setattr(Lifecycle, "start", boom)               # spawn seam
     res = svc.start("tgt", apply=True)                           # must NOT raise
@@ -922,12 +603,12 @@ def test_identity_selected_component_not_masked_by_sibling(tmp_path, monkeypatch
     from lhpc.core.lifecycle import Lifecycle
     svc = _id_collide_svc(tmp_path)
     def boom(*a, **k):
-        raise _Seam()
+        raise LifecycleSeam()
     monkeypatch.setattr(svc, "write_config_files", boom)
     monkeypatch.setattr(Lifecycle, "start", boom)
     # the SELECTED licensed field (tgt.call) is EMPTY (no global set); a later same-named
     # component (dep.call) is valid — the start must still BLOCK on tgt, before any
-    # lifecycle side effect (no _Seam), never masked by the sibling's valid value.
+    # lifecycle side effect (no LifecycleSeam), never masked by the sibling's valid value.
     assert svc.save_config_bundle("ids", values={"dep.call": "XX0XXA-1"}).ok
     res = svc.start("ids", apply=True)
     assert res.ok is False and "callsign" in res.summary.lower()
@@ -938,10 +619,10 @@ def test_qualified_identity_valid_reaches_start_seam(tmp_path, monkeypatch):    
     from lhpc.core.lifecycle import Lifecycle
     svc = _id_collide_svc(tmp_path)
     def boom(*a, **k):
-        raise _Seam()
+        raise LifecycleSeam()
     monkeypatch.setattr(Lifecycle, "start", boom)                               # controlled non-hardware seam
     assert svc.save_config_bundle("ids", values={"tgt.call": "XX0XXA-5", "dep.call": "XX0XXA-6"}).ok
-    with pytest.raises(_Seam):
+    with pytest.raises(LifecycleSeam):
         svc.start("ids", apply=True)
 
 
@@ -1052,7 +733,6 @@ def test_empty_non_default_override_is_kept(tmp_path):
     assert svc.save_config_bundle("s", values={"opt": ""}).ok
     assert cfgmod.load_stack_config(svc._paths, "s").get("opt") == ""   # empty override persisted
     assert svc.stack_config("s")["opt"] == ""
-
 
 
 # ---- an invalid SAVED launch value refuses before any mutation -------------------

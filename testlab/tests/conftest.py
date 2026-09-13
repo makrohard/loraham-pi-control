@@ -1,6 +1,8 @@
 """Test-lab suite fixtures: make ControllerService pick up the lab provider (the same env
 the devcontainer sets) for the whole session."""
 
+import re
+
 import pytest
 
 
@@ -11,3 +13,10 @@ def pytest_configure(config):
 @pytest.fixture(autouse=True)
 def _lab_provider(monkeypatch):
     monkeypatch.setenv("LHPC_SYSTEM_PROVIDER", "lhpc_testlab.provider:build")
+
+
+@pytest.fixture(scope="session")
+def lab_banner():
+    """The lab banner as an element, not a sentence: the one element the lab overlay injects
+    into every page, identified by the class its own stylesheet addresses."""
+    return re.compile(r'class="[^"]*\blab-banner\b')

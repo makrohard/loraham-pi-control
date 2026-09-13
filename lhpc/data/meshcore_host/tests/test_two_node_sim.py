@@ -31,7 +31,7 @@ from openhop_core.protocol.packet import Packet
 
 from fake_loraham_daemon import FakeLoRaHAMDaemon
 from meshcore_host.app import HostApp
-from test_companion_integration import host_config, wait_for, write_identity
+from harness import host_config, wait_for, write_identity
 
 
 class Ether:

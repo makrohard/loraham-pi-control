@@ -14,9 +14,9 @@ from lhpc.core.services import ControllerService
 from lhpc.core import config as cfgmod
 from lhpc.core.model import Component, ComponentKind, SourceSpec, FileConfig
 from lhpc.core.probes.backends import FakeSystem
+from seams import LifecycleSeam, outcomes, seed_built
 
 
-# ===== merged from test_config.py =====
 def _paths(tmp_path: Path) -> Paths:
     return Paths(runtime_root=tmp_path)
 
@@ -488,7 +488,6 @@ def test_update_rejects_control_key_leaves_file_unchanged(tmp_path):
     assert p.read_text() == before
 
 
-# ===== merged from test_config_bundle.py =====
 def _svc_config_bundle(tmp_path):
     from lhpc.core.probes.backends import FakeSystem
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
@@ -892,7 +891,6 @@ def test_deeply_nested_toml_is_reported_as_a_diagnostic_not_a_crash(tmp_path):
     assert cfgobj.diagnostics                         # surfaced as a diagnostic
 
 
-# ===== merged from test_config_containment.py =====
 def _svc_config_containment(tmp_path):
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
@@ -1040,7 +1038,6 @@ def test_stack_config_path_escaping_stacks_dir_raises_validationerror(tmp_path):
         config.load_stack_config(paths, "voice")
 
 
-# ===== merged from test_config_failclosed.py =====
 def _write_malformed(paths, stack_id, band=""):
     p = _stack_config_path(paths, stack_id, band)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -1104,7 +1101,6 @@ def test_web_returns_409_on_malformed_config(tmp_path):
     assert b"Traceback" not in r.data and b"this is not" not in r.data   # no traceback, no echo
 
 
-# ===== merged from test_config_safety.py =====
 def test_stack_config_write_is_atomic_and_no_temp_left(tmp_path):
     p = save_stack_config(Paths(runtime_root=tmp_path), "kiss", {"a": "1"}, "868")
     assert p.exists() and p.read_text().strip().endswith('a = "1"')
@@ -1242,7 +1238,6 @@ def test_reset_config_preserves_daemon_profile_and_unrelated(tmp_path):
     assert stored["manual"] == 7                     # unrelated manual scalar preserved
 
 
-# ===== merged from test_config_stable.py =====
 def _svc_config_stable(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     svc.bootstrap(apply=True)
@@ -1319,7 +1314,136 @@ def test_save_under_shared_guard_takes_the_normal_path(tmp_path):
         assert not svc._holds_config_exclusive()
 
 
-# ===== merged from test_config_typed.py =====
+# --- the stability guard: saved config stays STABLE across an applied start/restart ---------
+
+def _guard_svc(tmp_path):
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+
+def _observe_refused_writes(monkeypatch):
+    """An Event set the first time a config WRITER is refused the exclusive flock — the moment
+    the stability guard is doing its job. The kernel flock is the collaborator stubbed here,
+    and only to watch: every call is passed through unchanged. Only config.py's calls route
+    through the proxy (the guard itself flocks through its own import), so the event can only
+    mean a writer met a held guard. Waiting on it, instead of sleeping and hoping the save
+    thread had reached the lock, is what lets the negative assertion below fail."""
+    import fcntl as _fcntl
+    refused = threading.Event()
+
+    class _Watched:
+        def __getattr__(self, name):
+            return getattr(_fcntl, name)
+
+        def flock(self, fh, op):
+            try:
+                return _fcntl.flock(fh, op)
+            except OSError:
+                if op == (_fcntl.LOCK_EX | _fcntl.LOCK_NB):
+                    refused.set()
+                raise
+
+    monkeypatch.setattr(cfgmod, "fcntl", _Watched())
+    return refused
+
+
+def _exclusive_available(paths) -> bool:
+    """True iff the EXCLUSIVE config lock is free (a config SAVE could proceed right now). False
+    means a start/restart holds the SHARED stability guard and a save would BLOCK."""
+    import fcntl
+    from lhpc.core import runtime_fs
+    fh = runtime_fs.open_lock(paths, paths.under("config", ".lock"))
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fh, fcntl.LOCK_UN)
+        return True
+    except OSError:
+        return False
+    finally:
+        fh.close()
+
+
+def test_config_guard_held_across_applied_start(tmp_path, monkeypatch, set_call):
+    svc = _guard_svc(tmp_path)
+    set_call(svc)                                                  # valid persisted call
+    assert _exclusive_available(svc._paths) is True               # free before the start
+    seen = {}
+    def spy(*a, **k):
+        seen["exclusive"] = _exclusive_available(svc._paths)       # inside the start (after identity)
+        seen["call"] = svc.stack_config("graywolf").get("call")
+        raise LifecycleSeam()
+    monkeypatch.setattr(svc, "_ensure_daemon", spy)
+    with pytest.raises(LifecycleSeam):
+        svc.start("graywolf", apply=True)
+    assert seen["exclusive"] is False                             # a save would BLOCK mid-start
+    assert seen["call"] == "XX0XXA"                               # config read is the stable snapshot
+    assert _exclusive_available(svc._paths) is True               # released afterwards
+
+
+def test_direct_start_impl_and_restart_impl_hold_config_guard(tmp_path, monkeypatch, set_call):
+    from lhpc.core.services import ActionResult
+    svc = _guard_svc(tmp_path)
+    set_call(svc)
+    held = {}
+    def spy(*a, **k):
+        held["v"] = _exclusive_available(svc._paths)
+        raise LifecycleSeam()
+    monkeypatch.setattr(svc, "_ensure_daemon", spy)
+    with pytest.raises(LifecycleSeam):
+        svc._start_impl("graywolf", apply=True)                     # DIRECT internal call
+    assert held["v"] is False                                    # guard held — cannot be bypassed
+    monkeypatch.setattr(svc, "stop", lambda *a, **k: ActionResult(True, "stopped"))
+    held.clear()
+    with pytest.raises(LifecycleSeam):
+        svc._restart_impl("graywolf", apply=True)                   # DIRECT internal restart
+    assert held["v"] is False
+
+
+def test_competing_save_blocks_until_start_completes_then_succeeds(tmp_path, monkeypatch, set_call):
+    svc = _guard_svc(tmp_path)
+    set_call(svc)
+    refused = _observe_refused_writes(monkeypatch)
+    done = threading.Event()
+    def spy(*a, **k):
+        threading.Thread(target=lambda: (svc.save_config_bundle("graywolf", values={"call": "DJ0XYZ"}),
+                                         done.set())).start()
+        assert refused.wait(5), "the competing save never met the guard"
+        assert not done.is_set()                                 # competing save BLOCKED during start
+        assert svc.stack_config("graywolf").get("call") == "XX0XXA" # generation would read the stable value
+        raise LifecycleSeam()
+    monkeypatch.setattr(svc, "_ensure_daemon", spy)
+    with pytest.raises(LifecycleSeam):
+        svc.start("graywolf", apply=True)
+    done.wait(3)                                                  # after the guard released, save runs
+    assert done.is_set() and svc.stack_config("graywolf").get("call") == "DJ0XYZ"
+
+
+def test_restart_not_stopped_then_failed_by_concurrent_invalid_save(tmp_path, monkeypatch):
+    from lhpc.core.services import ActionResult
+    svc = _guard_svc(tmp_path)
+    svc.save_config_bundle("graywolf", values={"call": "XX0XXA-5"})  # valid persisted call
+    refused = _observe_refused_writes(monkeypatch)
+    stops = []
+    monkeypatch.setattr(svc, "stop",
+                        lambda *a, **k: (stops.append(1), ActionResult(True, "stopped"))[1])
+    saved = threading.Event()
+    def spy(*a, **k):
+        # a competing save flipping the call to N0CALL must be BLOCKED for the whole restart, so the
+        # restart's start still sees the VALID call — it never stops then rejects the target.
+        threading.Thread(target=lambda: (svc.save_config_bundle("graywolf", values={"call": "XX0XXB-5"}),
+                                         saved.set())).start()
+        assert refused.wait(5), "the competing save never met the guard"
+        assert not saved.is_set()
+        assert svc.stack_config("graywolf").get("call") == "XX0XXA-5"
+        raise LifecycleSeam()
+    monkeypatch.setattr(svc, "_ensure_daemon", spy)
+    with pytest.raises(LifecycleSeam):
+        svc.restart("graywolf", apply=True)
+    assert stops == [1]                                           # stopped ONCE (reached the start)
+    saved.wait(3)
+    assert saved.is_set()                                        # invalid save applied only AFTER restart
+
+
 def _svc_config_typed(tmp_path):
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
@@ -1446,3 +1570,90 @@ def test_config_reloads_on_mtime_change(tmp_path):
     lp.write_text('[operator]\ncallsign = "OE1BBB"\n')
     os.utime(lp, (2000, 2000))                         # newer mtime
     assert svc.config().operator.callsign == "OE1BBB"  # reloaded, not stale
+
+
+# ===== generated config files: typed write results, and a start that cannot generate its config =====
+
+def _startable(tmp_path, monkeypatch, real_spawn, *, txmode="DIRECT", fake_paths=()):
+    """A service whose daemon already reports READY in `txmode` on both bands (voice needs DIRECT,
+    chat MANAGED), with
+    the daemon, RadioLib and both Voice binaries seeded as built. The requirement scan is stubbed
+    because this host has no codec2/ALSA/GTK dev headers, and the lifecycle is rebuilt with the
+    real-but-harmless spawn because ownership recording needs a live /proc identity."""
+    from lhpc.core.lifecycle import Lifecycle
+    STATUS = f"STATUS RADIO=READY TXMODE={txmode}\n".encode()
+    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": STATUS,
+                                   "/tmp/loraconf868.sock": STATUS}, paths=set(fake_paths)).system
+    seed_built(tmp_path, "loraham-daemon/loraham_daemon/loraham_daemon", "RadioLib/build/libRadioLib.a",
+                "LoRaHAM_Voice/loraham_voice", "LoRaHAM_Voice/loraham_voice_cli",
+                "LoRaHAM_Daemon/loraham_chat")
+    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, c: [])
+    monkeypatch.setattr(type(svc), "_lifecycle", lambda self: Lifecycle(
+        self._paths, self.stacks(), self.config(), self._system, spawn=real_spawn))
+    return svc
+
+
+def test_write_config_files_returns_structured_results(tmp_path):
+    from lhpc.core.services import ConfigWrite
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    res = svc.write_config_files("voice")        # env fmt -> runtime config dir
+    assert res and all(isinstance(w, ConfigWrite) for w in res)
+    assert any(w.component == "loraham-voice" and w.status == "written" for w in res)
+
+
+def test_write_config_failure_is_structured_not_swallowed(tmp_path, monkeypatch):
+    from lhpc.core import runtime_fs
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    # voice writes to {runtime}/config/files/... -> runtime policy via runtime_fs.
+    def boom(paths, path, text, mode=0o644):
+        raise OSError("disk full")
+    monkeypatch.setattr(runtime_fs, "atomic_write", boom)
+    res = svc.write_config_files("voice")
+    assert any(w.component == "loraham-voice" and w.status == "failed"
+               and "disk full" in w.detail for w in res)
+
+
+def test_start_blocks_when_generated_config_write_fails(tmp_path, monkeypatch, set_call, real_spawn):
+    """The daemon serves both bands so voice's dependency gate passes and it reaches the
+    config-generation step; that write fails -> the launch is BLOCKED. Desktop-shaped fake (the
+    GTK header present), so the GUI preflight keeps the GTK component whose write this is."""
+    from lhpc.core.services import ConfigWrite
+    from lhpc.core.outcomes import Outcome
+    svc = _startable(tmp_path, monkeypatch, real_spawn, fake_paths={"/usr/include/gtk-3.0/gtk/gtk.h"})
+    # the config write IS the seam under test: injected as the failure the filesystem would report
+    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None, **kw: [
+        ConfigWrite("loraham-voice", "/x/voice.conf", "failed", "disk full")])
+    set_call(svc)
+    res = svc.start("voice", apply=True)
+    assert any(r.component == "loraham-voice" and r.outcome == Outcome.BLOCKED
+               and "config generation failed" in (r.summary or "") for r in res.results), \
+        outcomes(res)
+
+
+def test_interactive_start_blocks_when_config_generation_fails(tmp_path, monkeypatch, set_call, real_spawn):
+    """An interactive component whose required config CANNOT be generated is BLOCKED — no
+    interactive marker written, no manual command presented as ready."""
+    from lhpc.core.services import ConfigWrite
+    from lhpc.core.outcomes import Outcome
+    svc = _startable(tmp_path, monkeypatch, real_spawn, txmode="MANAGED")
+    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None, **kw: [
+        ConfigWrite("loraham-chat", "/x/lorachat.conf", "failed", "disk full")])
+    set_call(svc)
+    res = svc.start("chat", apply=True)
+    assert not res.ok
+    assert any(r.component == "loraham-chat" and r.outcome == Outcome.BLOCKED
+               and "config could not be generated" in (r.summary or "") for r in res.results), \
+        outcomes(res)
+    assert svc.interactive_band("chat") is None                  # interactive marker NOT written
+
+
+def test_config_param_groups_mark_the_fixture_relay_group_optional_with_a_rule(tmp_path):
+    # The fixture-relay settings group is separated by a rule and marked optional.
+    # Named '(fixture)': production GPS comes from the global source, and
+    # this component replays a synthetic file — the name has to say so.
+    svc = _svc(tmp_path)
+    # The typed group is what LHPC decides; the separator is the template's rendering of it.
+    groups = {g["name"]: g for g in svc.config_param_groups("meshcom", "")}
+    assert groups["MeshCom GPS relay (fixture)"]["rule_before"] is True
+    assert groups["MeshCom GPS relay (fixture)"]["optional"] is True

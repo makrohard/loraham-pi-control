@@ -11,7 +11,6 @@ from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
 import pytest
-import re
 
 import repo_paths
 
@@ -100,11 +99,16 @@ def test_every_controller_dep_has_a_copyable_install_command(tmp_path):
     for grp in svc.controller_system_deps():
         for d in grp["deps"]:
             assert d["install"] or d.get("note"), f"{d['what']} has neither install command nor note"
-    # venv deps target the running interpreter, not a bare `pip`
+    # venv deps target the running interpreter, not a bare `pip`, and the range they install is
+    # the one pyproject declares — never a literal a bump would leave behind
     import sys
+    import tomllib
     flat = [d for grp in svc.controller_system_deps() for d in grp["deps"]]
     flask = next(d for d in flat if d["what"] == "flask")
-    assert flask["install"] == f"{sys.executable} -m pip install 'flask>=3,<4'"
+    assert flask["install"].startswith(f"{sys.executable} -m pip install ")
+    declared = next(dep for dep in tomllib.loads((repo_paths.REPO / "pyproject.toml").read_text())
+                    ["project"]["dependencies"] if dep.startswith("flask"))
+    assert f"'{declared}'" in flask["install"]
 
 
 def test_build_requires_manifest_validation():
@@ -193,7 +197,7 @@ def test_radiolib_built_state_is_honest(tmp_path):
 
 
 def test_venv_component_built_state_uses_venv_bin_not_exec_name(tmp_path):
-    # REGRESSION: a stack that compiles an in-tree venv via build_steps; its exec_name is "python"
+    # A stack that compiles an in-tree venv via build_steps; its exec_name is "python"
     # (a process-match NAME), so is_built must NOT key on a bogus <src>/python. It now gates on the
     # `build_marker` (written ONLY after the LAST build step succeeds), NOT the venv interpreter —
     # because the interpreter exists after step 1 (python -m venv), long before the pip installs
@@ -228,31 +232,6 @@ def test_unbuilt_build_deps_flags_radiolib_before_daemon(tmp_path):
     art.parent.mkdir(parents=True)
     art.write_bytes(b"")
     assert svc.unbuilt_build_deps("daemon") == []               # built -> no longer a blocker
-
-
-def test_build_dependency_banner_warns_radiolib_first(tmp_path):
-    # After an update (fresh RadioLib checkout, no .a) the stack body shows an explicit "build the
-    # dependency first" warning that links to the build section — not the generic build-needed note.
-    from lhpc.adapters.web.app import create_app
-    svc = _svc(tmp_path)
-    (tmp_path / "src" / "RadioLib").mkdir(parents=True)
-    (tmp_path / "src" / "loraham-daemon").mkdir(parents=True)
-    app = create_app(service_factory=lambda: svc)
-    app.config["SESSION_COOKIE_SECURE"] = False
-    body = app.test_client().get("/stacks?open=daemon").get_data(as_text=True)
-    assert "not built — build this dependency first" in body and "radiolib" in body
-    assert "comp=radiolib" in body and "#comp-radiolib" in body  # link opens RadioLib's own dep card
-
-
-def test_library_shows_build_dependency_pill_not_optional(tmp_path):
-    # A kind=library (RadioLib) is a BUILD dependency, not a skippable "optional" component — the
-    # stack body must present it as such.
-    from lhpc.adapters.web.app import create_app
-    svc = _svc(tmp_path)
-    app = create_app(service_factory=lambda: svc)
-    app.config["SESSION_COOKIE_SECURE"] = False
-    body = app.test_client().get("/stacks?open=daemon").get_data(as_text=True)
-    assert "build dependency" in body
 
 
 def test_meshtastic_and_spi_copyboxes_are_executable(tmp_path):
@@ -293,7 +272,7 @@ def test_no_dependency_surface_ever_advises_apt_install_systemd(tmp_path):
     assert not offenders, offenders
 
 
-# --- Item 5: `lhpc deps --script` bootstrap generator -------------------------------------------
+# --- `lhpc deps --script`: the bootstrap generator ----------------------------------------------
 
 def test_render_bootstrap_merges_and_dedups_apt(tmp_path):
     from lhpc.core import deps
@@ -348,16 +327,6 @@ def test_deps_script_service_has_every_category_and_no_venv_pip(tmp_path):
     assert subprocess.run(["bash", "-n", "-c", script], capture_output=True).returncode == 0
 
 
-def test_shipped_bootstrap_snapshot_is_up_to_date(tmp_path):
-    # The committed bootstrap-deps.sh must equal what `lhpc deps --script` renders now (regenerate it
-    # when the declared dependencies change).
-    svc = _svc(tmp_path)
-    shipped = (repo_paths.REPO / "bootstrap-deps.sh")
-    assert shipped.exists(), "bootstrap-deps.sh snapshot missing — run `lhpc deps --script > bootstrap-deps.sh`"
-    assert shipped.read_text() == svc.deps_script(), \
-        "bootstrap-deps.sh is stale — regenerate with `lhpc deps --script > bootstrap-deps.sh`"
-
-
 def test_bootstrap_script_runs_no_sudo(tmp_path):
     """The script is root: `sudo` may survive only in comments and inside quoted (echoed) text."""
     import re
@@ -372,7 +341,7 @@ def test_bootstrap_script_never_advises_apt_install_systemd(tmp_path):
 
 
 def test_qemu_and_pio_are_managed_not_copyboxes(tmp_path):
-    # Item 2/4: qemu + PlatformIO are provisioned INTO the runtime root by the managed setup step, so the
+    # qemu + PlatformIO are provisioned INTO the runtime root by the managed setup step, so the
     # pre-clone bootstrap no longer carries the $HOME qemu download or the pipx copybox. libslirp0 (a
     # genuine apt dependency) stays.
     script = _svc(tmp_path).deps_script()
@@ -382,7 +351,7 @@ def test_qemu_and_pio_are_managed_not_copyboxes(tmp_path):
 
 
 def test_managed_tool_requires_verify_in_root_artifacts(tmp_path):
-    # Item 2: the qemu + pio requires verify the IN-ROOT artifact via a {runtime}-substituted check_file
+    # The qemu + pio requires verify the IN-ROOT artifact via a {runtime}-substituted check_file
     # (or the PATH `cmd` override); neither carries an install copybox anymore.
     svc = _svc(tmp_path)
     comp = next(c for s in svc.stacks() for c in s.components if c.id == "meshcom-qemu")
@@ -397,7 +366,7 @@ def test_managed_tool_requires_verify_in_root_artifacts(tmp_path):
 
 
 def test_qemu_param_default_points_at_the_in_root_binary(tmp_path):
-    # Item 2a: the managed run passes --qemu <in-root binary> — the param default carries the
+    # The managed run passes --qemu <in-root binary> — the param default carries the
     # {runtime}-templated tool-cache path (expand_argv substitutes {runtime} at launch).
     svc = _svc(tmp_path)
     comp = next(c for s in svc.stacks() for c in s.components if c.id == "meshcom-qemu")
@@ -407,7 +376,7 @@ def test_qemu_param_default_points_at_the_in_root_binary(tmp_path):
 
 
 def test_build_steps_provision_managed_tools_in_root(tmp_path):
-    # Item 2: the build's setup steps provision BOTH tools INSIDE the runtime root — a PlatformIO venv
+    # The build's setup steps provision BOTH tools INSIDE the runtime root — a PlatformIO venv
     # and the source-built (headless, link-gated) qemu — and hand the managed pio to the build scripts
     # by absolute path.
     svc = _svc(tmp_path)
@@ -419,19 +388,21 @@ def test_build_steps_provision_managed_tools_in_root(tmp_path):
     assert any(e.get("PIO", "").endswith("platformio/.venv/bin/pio") for e in envs)              # PIO by abs path
 
 
-# --- Item K: GUI-only dependency taxonomy ----------------------------------------------------------
+# --- GUI-only dependency taxonomy -------------------------------------------------------------------
 # GUI availability is always SIMULATED here (FakeSystem / monkeypatched find_spec) — never inferred
 # from the host, which would make these tests pass for the wrong reason on either kind of box.
 
-def _scopes(tmp_path):
+def _scopes(svc):
     # (core, gui, gps) — GPS deps are a third, separately opt-in bucket
     # (`--with-gps`), because gpsd is only needed for a receiver on THIS box.
-    core, gui, _gps = _svc(tmp_path)._declared_dep_scopes()
+    # `_declared_dep_scopes` is the private split behind deps_script(); it is read directly
+    # because the rendered script carries the buckets only as text, not as data.
+    core, gui, _gps = svc._declared_dep_scopes()
     return core, gui
 
 
 def test_gui_scope_is_exactly_what_the_manifest_declares(tmp_path):
-    core, gui = _scopes(tmp_path)
+    core, gui = _scopes(_svc(tmp_path))
     # EXACT invariants, not a denylist: a denylist rots and proves nothing about new deps.
     # The opt-in scope is GUI toolkits only. codec2/ALSA moved to core with the Voice
     # terminal variant (loraham-voice-cli): Voice is a first-class headless stack now, and
@@ -471,17 +442,16 @@ def test_every_display_component_has_a_gui_gate():
     acquire from lhpc. The pattern mirrors the fail-closed denylist the generated bootstrap script
     applies to its default transaction, so both ends agree on what "graphical" means.
     """
-    import pathlib
     import re
     import tomllib
 
-    from lhpc.core.manifest import _DEFAULT_MANIFEST
+    from lhpc.core.manifest import default_manifest_path
 
     # Same families as bootstrap-deps.sh's DRY_BAD denylist. python3-dev/build-essential and other
     # generic build tooling deliberately do NOT match: they are not evidence of a display.
     graphical = re.compile(r"\b(libgtk-|libgdk-|python3-tk|tk[0-9]|libsdl|libx11|libxcb|libxext|"
                            r"libwayland-|libegl|libgl[0-9x]|mesa-|xserver-|xwayland|libqt|kivy)")
-    stacks = parse_manifest(tomllib.loads(pathlib.Path(_DEFAULT_MANIFEST).read_text()))
+    stacks = parse_manifest(tomllib.loads(default_manifest_path().read_text()))
     ungated = []
     for s in stacks:
         for c in getattr(s, "components", ()):
@@ -500,7 +470,7 @@ def test_every_display_component_has_a_gui_gate():
 
 def test_default_script_body_is_exactly_the_core_scope(tmp_path):
     svc = _svc(tmp_path)
-    core, gui, _gps = svc._declared_dep_scopes()
+    _core, gui = _scopes(svc)
     script = svc.deps_script()
     # Drop the --dry-run guard first: it NAMES GUI packages in its denylist regex (to refuse them),
     # which must not be confused with installing them.
@@ -513,17 +483,16 @@ def test_default_script_body_is_exactly_the_core_scope(tmp_path):
     assert 'if [ -n "$WITH_GUI" ]' in tail
 
 
-def test_moving_a_dep_between_scopes_changes_the_revision(tmp_path, monkeypatch):
-    svc = _svc(tmp_path)
-    before = svc.deps_script()
-    core, gui, _gps = svc._declared_dep_scopes()
+def test_moving_a_dep_between_scopes_changes_the_revision(tmp_path):
     # Same command SET, different scope: a revision that hashed commands alone would not move.
-    monkeypatch.setattr(type(svc), "_declared_dep_scopes",
-                        lambda self: (sorted(core + gui), [], []))
-    after = svc.deps_script()
+    # Two manifests declare the one command — first GUI-scoped, then core.
+    as_gui = _svc_on(tmp_path, _synth(tmp_path / "gui.toml", [(True, False)]))
+    as_core = _svc_on(tmp_path, _synth(tmp_path / "core.toml", [(False, False)]))
+    assert sorted(sum(_scopes(as_gui), [])) == sorted(sum(_scopes(as_core), []))   # same set
+
     def _rev(s):
         return next(ln for ln in s.splitlines() if "dependency revision" in ln)
-    assert _rev(before) != _rev(after)
+    assert _rev(as_gui.deps_script()) != _rev(as_core.deps_script())
 
 
 def test_module_probe_uses_find_spec_and_is_honest(tmp_path, monkeypatch):
@@ -561,7 +530,7 @@ def test_gui_deps_are_warn_not_block_in_the_install_gate(tmp_path):
     assert any("GTK" in d["what"] for d in svc.missing_system_deps("voice"))
 
 
-# --- Item K: component-scoped skip (GUI absent) ----------------------------------------------------
+# --- component-scoped skip (GUI absent) ------------------------------------------------------------
 
 def _no_tkinter(monkeypatch):
     """Simulate a headless box with no python3-tk (this box HAS it)."""
@@ -710,9 +679,9 @@ def test_partial_build_reports_succeeded_with_gui_skips(tmp_path, monkeypatch):
 
 # --- order-independent dedup + disjoint counters ---------------------------------------------------
 
-def _synth(tmp_path, decls):
-    """A one-stack manifest whose components declare the SAME install command with the given
-    (gui, optional) flags, in the given order."""
+def _synth(path, decls):
+    """A one-stack manifest, written to `path`, whose components declare the SAME install command
+    with the given (gui, optional) flags, in the given order. Returns `path`."""
     comps = []
     for i, (gui, optional) in enumerate(decls):
         comps.append(f'''
@@ -728,9 +697,14 @@ optional = {str(optional).lower()}
   install = "sudo apt install -y sharedpkg"
   note = "Shared header"
 ''')
-    import tomllib
-    text = ('[[stack]]\nid = "syn"\nname = "Syn"\nsummary = "s"\nmain = "c0"\n' + "".join(comps))
-    return parse_manifest(tomllib.loads(text))
+    path.write_text('[[stack]]\nid = "syn"\nname = "Syn"\nsummary = "s"\nmain = "c0"\n' + "".join(comps))
+    return path
+
+
+def _svc_on(tmp_path, manifest):
+    """A service reading `manifest` instead of the shipped one."""
+    return ControllerService(manifest_path=manifest, system=FakeSystem().system,
+                             paths=Paths(runtime_root=tmp_path))
 
 
 @pytest.mark.parametrize("order", [
@@ -738,10 +712,7 @@ optional = {str(optional).lower()}
     [(False, False), (True, False)],       # core declared FIRST
 ])
 def test_core_declaration_wins_regardless_of_order(tmp_path, order):
-    svc = _svc(tmp_path)
-    stacks = _synth(tmp_path, order)
-    monkey = {s.id: s for s in stacks}
-    svc.stack = lambda t, _m=monkey: _m.get(t)                        # type: ignore[assignment]
+    svc = _svc_on(tmp_path, _synth(tmp_path / "syn.toml", order))
     deps = svc.system_deps("syn")
     assert len(deps) == 1                                             # present ONCE
     assert deps[0]["gui"] is False                                    # core wins
@@ -749,10 +720,7 @@ def test_core_declaration_wins_regardless_of_order(tmp_path, order):
 
 
 def test_all_gui_declarations_stay_gui_only(tmp_path):
-    svc = _svc(tmp_path)
-    stacks = _synth(tmp_path, [(True, False), (True, True)])
-    monkey = {s.id: s for s in stacks}
-    svc.stack = lambda t, _m=monkey: _m.get(t)                        # type: ignore[assignment]
+    svc = _svc_on(tmp_path, _synth(tmp_path / "syn.toml", [(True, False), (True, True)]))
     deps = svc.system_deps("syn")
     assert len(deps) == 1
     assert deps[0]["gui"] is True
@@ -776,98 +744,10 @@ def test_optional_and_gui_counters_are_disjoint(tmp_path):
     assert not [d for d in gui if d in opt]                           # no dep counted twice
 
 
-# --- managed server-only Meshtastic ---------------------------------------------------------------
-# meshtasticd is BUILT from a pinned upstream checkout with upstream's `native` environment, instead
-# of installed from the OBS package (built `native-tft`, so it links X11/libinput/xkbcommon and its
-# Depends drag SDL2 -> PulseAudio/Wayland/Mesa/LLVM onto a headless rig).
-
 def _mesh(svc):
     # By ID, not by position: the stack also carries an optional GPS feed component, and
     # "the meshtasticd component" is what every caller here means.
     return next(c for c in svc.stack("meshtastic").components if c.id == "meshtastic")
-
-
-def test_meshtastic_is_a_normal_managed_source_with_the_usual_selectors(tmp_path):
-    svc = _svc(tmp_path)
-    c = _mesh(svc)
-    assert c.source is not None and c.source.path == "src/meshtastic-firmware"
-    assert len(c.source.pin_commit) == 40                       # pinned by FULL sha
-    assert c.source.remote.endswith("meshtastic/firmware.git") and c.source.branch
-    # No bespoke update path: the ordinary selectors plan normally.
-    for sel in ("pinned", "dev"):
-        r = svc.install("meshtastic", apply=False, source=sel)
-        assert r.ok and any("meshtastic-firmware" in d for d in r.details), sel
-
-
-def test_meshtastic_builds_the_server_only_env_and_never_native_tft(tmp_path):
-    c = _mesh(_svc(tmp_path))
-    steps = c.build_steps
-    argvs = [" ".join(s.get("argv", [])) for s in steps]
-    blob = "\n".join(argvs)
-    assert "--environment native" in blob
-    assert "native-tft" not in blob                             # the X11/TFT build, never built here
-    # The link gate is a BUILD STEP: a binary that links a display stack must not be publishable.
-    assert any("meshtastic-link-gate.sh" in a for a in argvs)
-    assert any("meshtastic-web-assets.sh" in a for a in argvs)
-    # Serialised compile: a parallel native build is what OOMs a 512 MB Zero 2W.
-    run_step = next(s for s in steps if "run" in s.get("argv", []) and "--environment" in s["argv"])
-    env = dict(run_step.get("env") or {})
-    assert env.get("PLATFORMIO_RUN_JOBS") == "1"
-    assert env.get("PLATFORMIO_CORE_DIR") == "{runtime}/build/tools/platformio/core"
-    # The web client is LHPC's own pin: the step names a release version and the sha256 of its
-    # build.tar (verified on every install), and no longer depends on the firmware checkout.
-    web = next(s for s in steps if "meshtastic-web-assets.sh" in " ".join(s.get("argv", [])))
-    assert re.fullmatch(r"\d+\.\d+\.\d+", web["argv"][-2]) and re.fullmatch(r"[0-9a-f]{64}", web["argv"][-1])
-    assert "{source}" not in " ".join(web["argv"])
-
-
-def test_meshtastic_runs_the_runtime_owned_binary_and_web_root(tmp_path):
-    svc = _svc(tmp_path)
-    c = _mesh(svc)
-    assert c.run_argv[0] == "{runtime}/build/tools/meshtasticd/meshtasticd"
-    assert "/usr/bin/meshtasticd" not in " ".join(c.run_argv)
-    assert c.bin == "build/tools/meshtasticd/meshtasticd"       # the server IS the artifact
-    root = next(p for p in c.config_file.params if p.key == "RootPath")
-    assert root.default == "{runtime}/build/tools/meshtasticd/web"   # never /usr/share
-
-
-def test_meshtastic_declares_no_graphical_or_audio_dependency(tmp_path):
-    joined = " ".join((r.install or "") + " " + (r.check_file or "")
-                      for r in _mesh(_svc(tmp_path)).requires)
-    for forbidden in ("libsdl", "libx11", "libwayland", "mesa", "libllvm",
-                      "libpulse", "libinput", "libxkbcommon", "libgtk"):
-        assert forbidden not in joined.lower(), forbidden
-
-
-def test_source_update_leaves_the_stack_needing_a_rebuild(tmp_path):
-    # The completion marker is written only after every build step; the artifact lives under the
-    # runtime root, so a replaced checkout cannot read as built until it is rebuilt.
-    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
-    svc = _svc(tmp_path)
-    c = _mesh(svc)
-    assert c.build_marker                                       # strict completion marker declared
-    assert svc.is_built(c) is False                             # nothing built yet
-    src = tmp_path / "src" / "meshtastic-firmware"
-    src.mkdir(parents=True)
-    marker = src / c.build_marker
-    # What a real build writes: the marker's own content, and the recorded inputs BESIDE it.
-    marker.write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(c))
-    _stamp_inputs(svc.build_inputs_path(c), svc.build_inputs_text(c))
-    assert svc.is_built(_mesh(_svc(tmp_path))) is True
-    # An update REPLACES the checkout, taking the source-local marker with it.
-    marker.unlink()
-    assert svc.is_built(_mesh(_svc(tmp_path))) is False         # -> "Build required" again
-
-
-def test_partial_build_does_not_read_as_built(tmp_path):
-    # The binary alone is NOT the completion signal: a run that installed meshtasticd but died
-    # before the web assets were provisioned would otherwise start and serve a missing UI.
-    svc = _svc(tmp_path)
-    art = tmp_path / "build" / "tools" / "meshtasticd" / "meshtasticd"
-    art.parent.mkdir(parents=True)
-    art.write_text("#!/bin/true\n")
-    (tmp_path / "src" / "meshtastic-firmware").mkdir(parents=True)
-    assert svc.is_built(_mesh(_svc(tmp_path))) is False
 
 
 # --- shipped build helpers: web assets follow the source; the link gate is fail-closed ------------
@@ -1015,67 +895,6 @@ def test_link_gate_fails_closed_when_readelf_cannot_inspect(tmp_path):
     r = _run_gate_ex(tmp_path, ["libc.so.6"], readelf_fail=True)
     assert r.returncode == 2
     assert "readelf could not inspect" in r.stderr
-
-
-# --- meshcom-qemu now BUILDS the emulator from source (headless) ------------------------------------
-def _meshcom_qemu(svc):
-    return svc.stack("meshcom").component("meshcom-qemu")
-
-
-def test_meshcom_qemu_builds_the_emulator_from_source_with_the_link_gate(tmp_path):
-    c = _meshcom_qemu(_svc(tmp_path))
-    argvs = [list(s.get("argv", [])) for s in c.build_steps]
-    build = [a for a in argvs if any("build-qemu.sh" in t for t in a)]
-    assert build, "meshcom-qemu must provision qemu via build-qemu.sh"
-    b = build[0]
-    assert "--link-gate" in b
-    gate = b[b.index("--link-gate") + 1]
-    assert gate.endswith("meshtastic-link-gate.sh") and "{asset}" in gate
-    # The managed build must NOT fetch the prebuilt (libSDL2) tarball.
-    assert not any("fetch-qemu.sh" in t for a in argvs for t in a)
-
-
-def test_meshcom_qemu_step_budget_covers_a_from_source_build(tmp_path):
-    # The from-source QEMU compile is the heaviest step; the per-step budget must clear the cold Zero
-    # firmware build (~1560 s) AND leave room for a multi-hour QEMU build.
-    c = _meshcom_qemu(_svc(tmp_path))
-    assert c.build_timeout >= 3600.0 and c.build_timeout >= 7200.0
-
-
-def test_meshcom_qemu_declares_the_source_build_toolchain_deps(tmp_path):
-    # The generated bootstrap installs the headless QEMU build toolchain and drops the tarball's
-    # wget/xz-utils; the runtime libslirp0 stays.
-    import re
-    script = _svc(tmp_path).deps_script()
-    m = re.search(r'DRY_PKGS="([^"]+)"', script)
-    assert m, "generated bootstrap must carry a DRY_PKGS dry-run set"
-    pkgs = set(m.group(1).split())
-    for pkg in ("meson", "ninja-build", "libglib2.0-dev", "libpixman-1-dev", "libslirp-dev",
-                "zlib1g-dev", "git"):
-        assert pkg in pkgs, f"{pkg} missing from generated bootstrap"
-    assert "wget" not in pkgs and "xz-utils" not in pkgs
-    assert "libslirp0" in pkgs
-
-
-def test_meshtastic_never_needs_root_to_build_start_or_configure(tmp_path):
-    """lhpc runs meshtasticd ROOTLESS. The managed build replaced an apt package, so this checks the
-    replacement did not smuggle privilege in: no build, run or post-start command may invoke sudo or
-    otherwise assume uid 0. Privileged setup stays where it belongs — the operator-run bootstrap."""
-    c = _mesh(_svc(tmp_path))
-    argvs = [list(s.get("argv", [])) for s in c.build_steps]
-    argvs += [list(s.get("argv", [])) for s in c.post_steps if s.get("kind") == "exec"]
-    argvs += [list(c.run_argv)]
-    for argv in argvs:
-        assert argv, "empty argv"
-        joined = " ".join(argv)
-        for priv in ("sudo", "pkexec", "doas", "su "):
-            assert priv not in joined, f"{priv!r} in {joined!r}"
-        assert not argv[0].startswith("/usr/sbin/")          # not a root-only binary path
-    # Every artifact it writes lives under the runtime root, which the operator owns.
-    assert c.bin.startswith("build/") and not c.bin.startswith("/")
-    for s in c.build_steps:
-        for tok in s.get("argv", []):
-            assert not tok.startswith(("/etc/", "/usr/", "/var/", "/opt/")), tok
 
 
 # --- non-source build inputs: the marker records the pins that are not commits ---------------

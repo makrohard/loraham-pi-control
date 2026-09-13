@@ -14,11 +14,18 @@ import os
 import pathlib
 import subprocess
 import tomllib
-from pathlib import Path
 
 import pytest
 
-REPO = Path(__file__).resolve().parents[2]
+import repo_paths
+from lhpc.core.manifest import load_manifest
+
+REPO = repo_paths.REPO
+
+# Every stack whose artifact carries recorded build inputs: the members this guard checks.
+# Derived from the shipped manifest so a new binary-channel stack joins the guard by itself.
+BINARY_STACKS_WITH_INPUTS = sorted(
+    s.id for s in load_manifest() if s.binary and any(c.build_inputs for c in s.components))
 
 
 def _released_tags(limit: int = 3) -> list:
@@ -61,18 +68,29 @@ def _inside(member: str, roots: list) -> bool:
     return any(member == r or member.startswith(r + "/") for r in roots)
 
 
-@pytest.mark.parametrize("stack", ["meshtastic"])
-def test_every_member_this_release_adds_is_inside_older_publish_roots(stack, capsys):
+@pytest.fixture
+def released_tags():
+    """The newest released tags, or a skip — and in CI a FAILURE. A shallow checkout has no
+    tags to compare against, which is a fine reason to skip on a workstation and NO reason at
+    all in CI: this guard exists because the released roots are the only ones that matter, and
+    a required check that silently skips is not a check. CI fetches the tags; if they are
+    missing there, the fetch broke and this must say so."""
     tags = _released_tags()
     if not tags:
-        # A shallow checkout has no tags to compare against, which is a fine reason to skip on a
-        # workstation and NO reason at all in CI: this guard exists because the released roots
-        # are the only ones that matter, and a required check that silently skips is not a check.
-        # CI fetches the tags; if they are missing there, the fetch broke and this must say so.
         if os.environ.get("CI"):
             pytest.fail("no release tags in this checkout — CI must fetch them for this guard "
                         "(actions/checkout needs fetch-depth: 0), not skip it")
         pytest.skip("no release tags in this checkout")
+    return tags
+
+
+def test_the_guard_covers_a_stack():
+    assert BINARY_STACKS_WITH_INPUTS, "no binary stack records build inputs — the guard checks nothing"
+
+
+@pytest.mark.parametrize("stack", BINARY_STACKS_WITH_INPUTS)
+def test_every_member_this_release_adds_is_inside_older_publish_roots(stack, released_tags, capsys):
+    tags = released_tags
     print(f"comparing against released publish roots at: {', '.join(tags)}")
     members = _members_this_release_adds(stack)
     assert members, f"{stack} records no build inputs — this guard has stopped checking anything"
@@ -84,16 +102,12 @@ def test_every_member_this_release_adds_is_inside_older_publish_roots(stack, cap
                 f"would be REFUSED on every box running {tag}")
 
 
-@pytest.mark.parametrize("stack", ["meshtastic"])
-def test_a_member_outside_those_roots_is_caught(stack):
+@pytest.mark.parametrize("stack", BINARY_STACKS_WITH_INPUTS)
+def test_a_member_outside_those_roots_is_caught(stack, released_tags):
     """The guard's own teeth. A member one directory above a publish root is exactly the shape
     that shipped and was refused on every released box; if this ever passes, the comparison
     above has stopped comparing."""
-    tags = _released_tags()
-    if not tags:
-        if os.environ.get("CI"):
-            pytest.fail("no release tags in this checkout — CI must fetch them for this guard")
-        pytest.skip("no release tags in this checkout")
+    tags = released_tags
     roots = _roots_at(tags[0], stack)
     assert roots, f"{tags[0]} declares no publish roots for {stack}"
     outside = str(pathlib.PurePosixPath(roots[0]).parent / ".lhpc-build-inputs")

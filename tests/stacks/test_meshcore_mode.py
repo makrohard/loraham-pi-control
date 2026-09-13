@@ -100,7 +100,7 @@ def test_a_repeater_mode_without_the_repeaters_name_is_refused_at_save_time(tmp_
     # included), so the SAVE refuses it — the same rule the host and the start apply.
     svc = _svc(tmp_path)
     r = svc.save_config(mm.STACK_ID, {"file_mode": "repeater"})
-    assert not r.ok and any("repeater's own node name" in d for d in [r.summary, *r.details])
+    assert not r.ok and r.data.get("reason") == mm.REASON_REPEATER_NAME_REQUIRED
     assert svc.meshcore_mode() == "chat"                           # nothing persisted
     r = svc.save_config(mm.STACK_ID, {"file_mode": "repeater", "file_repeater_name": "Relay 1"})
     assert r.ok, (r.summary, r.details)
@@ -113,8 +113,8 @@ def test_a_stale_repeater_mode_without_a_name_still_refuses_the_start(tmp_path):
     (tmp_path / "config" / "stacks" / "meshcore.toml").write_text('file_mode = "repeater"\n')
     svc._invalidate_config()
     r = svc._meshcore_mode_refusal(mm.STACK_ID)
-    assert r is not None and "repeater's own node name" in r.summary
-    assert any("repeater_name" in d for d in r.details)
+    assert r is not None and r.data.get("reason") == mm.REASON_REPEATER_NAME_REQUIRED
+    assert any("repeater_name" in d for d in r.details), "the remedy names the field"
     assert svc._meshcore_mode_refusal("daemon") is None            # other stacks: not our business
     assert svc.restart(mm.STACK_ID, apply=True).ok is False       # refused BEFORE any stop
 

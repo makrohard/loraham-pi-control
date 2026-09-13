@@ -97,7 +97,7 @@ def test_web_launcher_superseded_attempt_runs_no_step(tmp_path, monkeypatch):
     assert jobresult._read_raw(svc._paths, _LOG)["attempt_id"] == _B   # B's reservation untouched
 
 
-# ---- P1 race/correctness fixes: liveness, unverified-timeout, handshake, spawn/install ------------
+# ---- race/correctness fixes: liveness, unverified-timeout, handshake, spawn/install ------------
 
 
 def test_is_live_attempt_requires_log_attempt_and_identity(tmp_path):

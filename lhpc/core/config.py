@@ -34,7 +34,13 @@ _DEFAULTS_PATH = asset_path("defaults.toml")
 
 
 class ConfigError(Exception):
-    """A config file could not be parsed — surfaced as a diagnostic, never a crash."""
+    """A config file could not be parsed, or a save was refused — surfaced as a diagnostic,
+    never a crash. `reason` is the stable token a refusal carries into
+    `ActionResult.data["reason"]` ("" for a parse failure)."""
+
+    def __init__(self, message: str = "", reason: str = ""):
+        super().__init__(message)
+        self.reason = reason
 
 
 class ConfigLockBusy(ConfigError):
@@ -1795,7 +1801,7 @@ def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path
             raise ConfigError(f"recovery-required: journal cleanup failed ({exc}); "
                               "journal retained") from exc
         raise ConfigError("config transaction failed and was rolled back: "
-                          f"{failure}") from failure
+                          f"{failure}", reason=getattr(failure, "reason", "")) from failure
     try:
         runtime_fs.unlink(paths, jp)              # success — remove the journal
     except (OSError, PathContainmentError) as exc:

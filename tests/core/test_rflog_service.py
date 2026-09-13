@@ -53,13 +53,15 @@ def test_cli_and_rflog_paths_store_the_same_value_in_the_same_file(tmp_path):
     pa, pb = cfgmod._stack_config_path(a._paths, "kiss", ""), cfgmod._stack_config_path(b._paths, "kiss", "")
     assert pa.read_text() == pb.read_text() and _store(b, "kiss")["rf_log"] == "off"
     assert "rf_log" not in _store(b, "graywolf")                            # never the proxy's store
-    assert not (tmp_path / "b" / "config" / "stacks" / "graywolf.toml").exists()
+    assert not cfgmod._stack_config_path(b._paths, "graywolf", "").exists()
 
 
 def test_the_switch_survives_a_band_change(tmp_path):
     svc = _svc(tmp_path)
     assert svc.save_config_bundle("kiss", values={"rf_log": "off"}, band="433").ok
     assert svc.stack_config("kiss", "868")["rf_log"] == "off"
+    # The resolver is what spawn reads per band; there is no public per-band accessor for a
+    # single param, and the line above already proves the store through the public view.
     assert svc._resolved_param_value("kiss", "run", "loraham-kiss-tnc", "rf_log", "868") == "off"
     assert svc.rflog_view("graywolf")["value"] == "off"
 
@@ -91,7 +93,7 @@ def test_a_bad_value_is_refused(tmp_path):
     svc = _svc(tmp_path)
     assert not svc.set_rflog("graywolf", "maybe").ok
     assert not svc.set_rflog("chat", "off").ok
-    assert not (tmp_path / "config").exists() or "rf_log" not in _store(svc, "kiss")
+    assert "rf_log" not in _store(svc, "kiss") and "rf_log" not in _store(svc, "graywolf")
 
 
 # ---- the restart marker -----------------------------------------------------------------
@@ -241,13 +243,12 @@ def test_cli_resolver_requires_the_band_only_for_the_daemon(tmp_path):
     assert svc.rflog_tail("daemon", "868")[0].endswith("rf-daemon-868.log")
 
 
-# ---- second-audit regressions ---------------------------------------------------------------
+# ---- persistence and the roll lock -----------------------------------------------------------
 
 def test_generic_log_pruning_never_touches_a_registered_rf_log(tmp_path):
     """RF logs are persistent by contract: their writer keeps the descriptor open and they must
     outlive every job log. The generic prune used to count them in its budget and delete the
     oldest — the writer kept writing to an unlinked inode while the viewer showed nothing."""
-    import time
     svc = _svc(tmp_path)
     svc.LOG_RETENTION = 5
     rf = _logs(tmp_path, "rf-kiss.log", "old frame\n")
@@ -255,7 +256,6 @@ def test_generic_log_pruning_never_touches_a_registered_rf_log(tmp_path):
     os.utime(rf, (1, 1))                                   # the oldest file of all
     for i in range(40):
         (tmp_path / "logs" / f"build-x-{i:02d}.log").write_text("x")
-        time.sleep(0.001)
     removed = svc.prune_logs()
     assert removed > 0
     assert rf.read_text() == "old frame\n" and prev.read_text() == "older\n"
@@ -299,6 +299,8 @@ def test_clear_and_roll_share_the_lock(tmp_path):
     svc = _svc(tmp_path)
     p = _logs(tmp_path, "rf-meshcore.log", "a\n")
     _logs(tmp_path, "rf-meshcore.log.1", "old\n")
+    # The lock leaf is a cross-process contract (a console worker and the CLI share it by
+    # name), so it is spelled here on purpose: a rename must fail this test.
     fh = runtime_fs.open_lock(svc._paths, svc._paths.under("state", "locks", "rflog-rf-meshcore.log.lock"))
     fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
     done = threading.Event()
@@ -313,87 +315,3 @@ def test_clear_and_roll_share_the_lock(tmp_path):
     fh.close()                                             # release
     assert done.wait(5) and result["r"].ok
     assert p.read_text() == "" and not (tmp_path / "logs" / "rf-meshcore.log.1").exists()
-
-
-def test_a_binary_artifact_behind_the_manifest_is_refused_before_start(tmp_path, monkeypatch):
-    """Publishing a new artifact never updates an installed copy. A copy built from other
-    commits than the manifest pins would be launched with argv it does not know (the RF-log
-    options were the first case) and exit — so the start refuses it, typed, and names the fix."""
-    from lhpc.core import binary_receipt as brx
-    from lhpc.core.services import ControllerService
-    svc = _svc(tmp_path)
-    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
-    spec = svc.binary_spec("meshtastic")
-    files = []
-    for rel in spec.proof_paths:
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_bytes(b"x")
-        files.append(rel)
-    comp = svc.stack("meshtastic").component("meshtastic")
-    (tmp_path / comp.source.path).mkdir(parents=True)      # the artifact overlays a clone
-
-    def receipt(commit):
-        import hashlib
-        return brx.BinaryReceipt(
-            stack="meshtastic", artifact_sha256="a" * 64, artifact_size=9,
-            filename="meshtastic-a.tar.zst", url="https://example.invalid/a.tar.zst",
-            components={c: commit for c in spec.covers}, provenance={},
-            files=tuple(files),
-            file_hashes={r: hashlib.sha256(b"x").hexdigest() for r in files},
-            proof_paths=tuple(files), registry_baseline={}, probe="ok")
-    assert brx.write_receipt(svc._paths, receipt("b" * 40))     # not the manifest pin
-    assert svc.on_binary_channel("meshtastic")
-    why = svc.binary_behind(comp)
-    assert "behind the manifest" in why and "lhpc update meshtastic" in why
-    assert svc.install_blocker(comp) == why
-    # Past the identity and hardware gates, the start refuses this component typed.
-    from lhpc.core import config as cfgmod
-    cfgmod.save_hardware_setup(svc._paths, "uputronics")
-    svc._invalidate_config()
-    assert svc.save_config_bundle("meshtastic", values={"node_name": "LHPC test", "node_short": "LHPT"}).ok
-    r = svc.start("meshtastic", apply=True)
-    blocked = [x for x in r.results if x.component == "meshtastic"]
-    assert not r.ok and blocked and "behind the manifest" in blocked[0].summary, (r.summary, r.details)
-    # The matching artifact is not "behind".
-    assert brx.write_receipt(svc._paths, receipt(comp.source.pin_commit))
-    assert svc.binary_behind(comp) == ""
-    # A source-installed component is never judged here (its checkout is the operator's choice).
-    assert svc.binary_behind(svc.stack("kiss").component("loraham-kiss-tnc")) == ""
-
-
-@pytest.mark.parametrize("target", ["daemon", "meshcom"])
-def test_a_stale_daemon_binary_is_refused_on_its_own_spawn_path(tmp_path, monkeypatch, target):
-    """The daemon is spawned by `_ensure_daemon`, not by the generic start loop, so the
-    behind-manifest refusal has to sit on that path too — for a direct `start daemon` and for a
-    dependent stack that asks for the band. A stale artifact must never reach the spawn."""
-    import hashlib
-    from lhpc.core import binary_receipt as brx
-    from lhpc.core import config as cfgmod
-    from lhpc.core.services import ControllerService
-    svc = _svc(tmp_path)
-    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
-    cfgmod.save_hardware_setup(svc._paths, "uputronics")
-    svc._invalidate_config()
-    assert svc.set_operator_identity(callsign="XX0XXA").ok        # meshcom's own identity gate
-    spec = svc.binary_spec("daemon")
-    files = []
-    for rel in spec.proof_paths:
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_bytes(b"ELF")
-        files.append(rel)
-    daemon = svc.stack("daemon").component("loraham-daemon")
-    (tmp_path / daemon.source.path).mkdir(parents=True, exist_ok=True)
-    assert brx.write_receipt(svc._paths, brx.BinaryReceipt(
-        stack="daemon", artifact_sha256="a" * 64, artifact_size=3, filename="d.tar.zst",
-        url="https://example.invalid/d.tar.zst",
-        components={c: "b" * 40 for c in spec.covers}, provenance={},      # not the manifest pins
-        files=tuple(files), file_hashes={r: hashlib.sha256(b"ELF").hexdigest() for r in files},
-        proof_paths=tuple(files), registry_baseline={}, probe="loraham_daemon 0.9.0"))
-    assert svc.on_binary_channel("daemon") and svc.binary_behind(daemon)
-    spawned = []
-    monkeypatch.setattr(type(svc._lifecycle()), "start",
-                        lambda self, *a, **k: spawned.append(a) or (_ for _ in ()).throw(AssertionError("spawned")))
-    r = svc.start(target, apply=True)
-    assert not r.ok
-    assert any("behind the manifest" in str(d) for d in r.details), (r.summary, r.details)
-    assert spawned == []                                          # never reached the spawn

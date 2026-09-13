@@ -43,8 +43,8 @@ def _sample(ts, *, net=None, swap=False, power=False, time_row=False):
     if power:
         d["power"] = {"source": "hwmon-alarm", "undervolt_alarm": False}
     if time_row:
-        # `epoch` AND `utc` are what anchor the local 1 Hz clock (system.js:297) — without
-        # both, the row shows the sent string and never ticks.
+        # `epoch` AND `utc` are what anchor the local 1 Hz clock — without both, the row
+        # shows the sent string and never ticks.
         d["time"] = {"local": "2026-01-01 13:00:00", "utc": "2026-01-01 12:00:00",
                      "tz": "CET", "label": "synced", "epoch": 1767268800.0,
                      "daemons": ["chrony"]}
@@ -96,7 +96,7 @@ def test_an_omitted_net_sample_does_not_inflate_the_rate(page):
         "() => { const e = document.getElementById('sys-net-val');"
         " return e && /kB\\/s/.test(e.textContent); }", timeout=20000)
     text = page.locator("#sys-net-val").inner_text()
-    assert "2.0 kB/s" not in text, f"the omitted sample doubled the rate: {text!r}"
+    assert "1.0 kB/s" in text, f"expected 1.0 kB/s; the omitted sample doubled the rate: {text!r}"
 
 
 def test_an_optional_row_disappears_with_its_source(page):
@@ -114,8 +114,6 @@ def test_an_optional_row_disappears_with_its_source(page):
 
 
 def test_the_clock_advances_without_a_new_request(page):
-    # One response, then no more: the displayed time must still move, from the local
-    # timer anchored on that response.
     # One response, then the endpoint goes silent: each poll RE-anchors the clock, so only a
     # sample-free interval can show that the seconds move from the local timer.
     _serve(page, [_sample(0, net=0, time_row=True)], then_silent=True)

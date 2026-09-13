@@ -22,6 +22,16 @@ from lhpc_testlab.testing import run_lhpc
 
 REQUIRED_CASES_FILE = "required-release-cases.json"
 
+# The lab box's well-known ports, named once for every lane (what each stack serves when up).
+KISS_TCP = 8001
+GRAYWOLF_UI = 8080
+MESHCORE_COMPANION = 5000
+MESHCORE_WEBUI = 8788
+MESHCHAT_UI = 8790
+REPEATER_DASHBOARD = 8000
+MESHCOM_UI = 18083
+MESHTASTIC_API = 4403
+
 STACK_REGRESSION_PHASES = ("install", "build", "start", "readiness")
 _STACK_ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
 
@@ -337,6 +347,17 @@ def wait_tcp(port: int, timeout: float, host: str = "127.0.0.1") -> bool:
         except OSError:
             time.sleep(1.0)
     return False
+
+
+def wait_for(predicate, timeout: float, every: float = 5.0) -> bool:
+    """Poll `predicate()` until it is true (True) or `timeout` seconds pass (False)."""
+    deadline = time.monotonic() + timeout
+    while True:
+        if predicate():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(every)
 
 
 def wait_http(url: str, timeout: float, accept=(200,)) -> int:

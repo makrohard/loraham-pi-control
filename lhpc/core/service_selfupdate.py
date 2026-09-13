@@ -402,7 +402,7 @@ class SelfUpdateOpsMixin:
             # VISIBLE, not buried in data: a successful-looking update that left stale
             # units disables boot restore, and the operator has no reason to suspect it.
             res = _dc.replace(
-                res, ok=False,
+                res, ok=False, data={**res.data, "reason": "units-refresh-failed"},
                 summary=("Update applied, but the managed systemd units could NOT be "
                          f"refreshed — {unit_detail}. Boot restore will be skipped until "
                          "this is repaired: lhpc self-update --repair-integration"))
@@ -421,7 +421,8 @@ class SelfUpdateOpsMixin:
         from .service_base import AdmissionRefused
         if _os.environ.get("INVOCATION_ID"):
             return ActionResult(False, "refusing to stop/start services from a managed unit — run "
-                                "`lhpc self-update --apply` from an interactive operator shell")
+                                "`lhpc self-update --apply` from an interactive operator shell",
+                                data={"reason": "managed-unit"})
         _S = 30.0
         act = self._system.runner.run(
             ["systemctl", "--user", "is-active", "--quiet", updater_units.WEB_UNIT], _S)

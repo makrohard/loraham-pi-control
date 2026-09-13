@@ -98,7 +98,7 @@ def test_apply_set_oversized_readback_not_confirmed(tmp_path):
     assert not ok and not confirmed and "did not report" in detail.lower()
 
 
-# --- P0.4 TX-test STATS uses the ONE bounded parser --------------------------
+# --- TX-test STATS uses the ONE bounded parser --------------------------
 
 def _life_stats(tmp_path, reply: bytes):
     from lhpc.core.lifecycle import Lifecycle

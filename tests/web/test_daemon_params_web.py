@@ -9,25 +9,12 @@ from htmlq import parse
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
-from lhpc.adapters.web.app import create_app
-
-
-def _app(tmp_path):
-    def factory():
-        return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    return create_app(service_factory=factory).test_client()
-
-
-def _csrf(client, path="/stacks"):
-    m = re.search(r'name="_csrf" value="([^"]+)"', client.get(path).get_data(as_text=True))
-    return m.group(1) if m else ""
 
 
 def _row(body, sid):
-    # Slice a single stack's row out of the combined /stacks page (all stacks render inline now).
-    start = body.index('id="stackrow-' + sid + '"')
-    nxt = body.find('id="stackrow-', start + 1)
-    return body[start:(nxt if nxt != -1 else len(body))]
+    """One stack's row on the combined /stacks page, as an htmlq scope."""
+    doc = parse(body)
+    return doc.within(doc.by_id(f"stackrow-{sid}"))
 
 
 def test_server_side_validation_rejects_bad_values(tmp_path):
@@ -41,10 +28,10 @@ def test_server_side_validation_rejects_bad_values(tmp_path):
 
 
 @pytest.mark.contract
-def test_live_mode_fsk_confirm_warns(tmp_path):
+def test_live_mode_fsk_confirm_warns(web, csrf):
     # The live-setting confirm page for MODE=FSK must carry the break-LoRa warning.
-    c = _app(tmp_path)
-    tok = _csrf(c)
+    c = web()
+    tok = csrf(c)
     body = c.post("/radio/433/set",
                   data={"_csrf": tok, "key": "MODE", "value": "FSK"}).get_data(as_text=True)
     assert "MODE=FSK" in body and "break LoRa" in body        # FSK warning present
@@ -55,14 +42,17 @@ def test_live_mode_fsk_confirm_warns(tmp_path):
 
 
 @pytest.mark.contract
-def test_apply_live_disabled_unless_running_or_daemon(tmp_path):
-    c = _app(tmp_path)
+def test_apply_live_disabled_unless_running_or_daemon(web):
+    c = web()
     # Panels live in the (lazy) stack bodies — fetch each row force-opened.
     mc = c.get("/stacks?open=meshcom").get_data(as_text=True)
     dm = c.get("/stacks?open=daemon").get_data(as_text=True)
-    disabled = 'disabled title="Available only while the stack is running"'
-    assert disabled in _row(mc, "meshcom")         # app, not running
-    assert disabled not in _row(dm, "daemon")      # daemon: always on
+    def apply_live_disabled(body, sid):
+        buttons = [b for b in _row(body, sid).find("button") if b.text == "Apply live"]
+        assert buttons, "no Apply live button"
+        return all(b.has_attr("disabled") for b in buttons)
+    assert apply_live_disabled(mc, "meshcom")        # app, not running
+    assert not apply_live_disabled(dm, "daemon")     # daemon: always on
 
 
 @pytest.mark.contract
@@ -72,13 +62,13 @@ def test_apply_live_rejected_server_side_when_not_running(tmp_path):
     assert not r.ok and "running" in r.summary
 
 
-def test_meshtastic_has_no_daemon_panel(tmp_path):
-    body = _app(tmp_path).get("/stacks?open=meshtastic").get_data(as_text=True)   # force its lazy body inline
-    assert "Daemon radio parameters" not in _row(body, "meshtastic")   # direct-SPI: no daemon panel
+def test_meshtastic_has_no_daemon_panel(web):
+    body = web().get("/stacks?open=meshtastic").get_data(as_text=True)   # force its lazy body inline
+    assert "Daemon radio parameters" not in _row(body, "meshtastic").text   # direct-SPI: no daemon panel
 
 
-def test_daemon_panel_follows_upper_band_switch(tmp_path):
-    c = _app(tmp_path)
+def test_daemon_panel_follows_upper_band_switch(web):
+    c = web()
     # The per-component band badge (Dependencies list) carries each stack's configured band. A 433
     # stack shows (433 MHz), an 868 stack shows (868 MHz); both now live in their lazy stack bodies.
     assert "(433 MHz)" in c.get("/stacks?open=meshcom").get_data(as_text=True)          # 433-band stack
@@ -86,19 +76,19 @@ def test_daemon_panel_follows_upper_band_switch(tmp_path):
 
 
 @pytest.mark.contract
-def test_apply_live_saves_then_reports(tmp_path):
+def test_apply_live_saves_then_reports(web, csrf):
     # Daemon unreachable in tests: Apply persists the values, then reports it can't reach it.
-    c = _app(tmp_path)
-    tok = _csrf(c)
+    c = web()
+    tok = csrf(c)
     r = c.post("/stacks/meshcom/daemon-params/apply",
                data={"_csrf": tok, "band": "433", "dp_CADIDLE": "33"})
     assert r.status_code in (302, 303)
     assert 'value="33"' in c.get("/stacks?open=meshcom").get_data(as_text=True)  # saved (lazy body)
 
 
-def test_save_then_reset_daemon_params(tmp_path):
-    c = _app(tmp_path)
-    tok = _csrf(c)
+def test_save_then_reset_daemon_params(web, csrf):
+    c = web()
+    tok = csrf(c)
     r = c.post("/stacks/meshcom/daemon-params",
                data={"_csrf": tok, "band": "433", "dp_CADIDLE": "40", "dp_CADWAIT": ""})
     assert r.status_code in (302, 303)
@@ -109,9 +99,9 @@ def test_save_then_reset_daemon_params(tmp_path):
     assert 'value="28"' in body and 'value="40"' not in body  # back to default
 
 
-def test_panel_stays_open_after_save(tmp_path):
-    c = _app(tmp_path)
-    tok = _csrf(c)
+def test_panel_stays_open_after_save(web, csrf):
+    c = web()
+    tok = csrf(c)
     r = c.post("/stacks/meshcom/daemon-params",
                data={"_csrf": tok, "band": "433", "dp_CADIDLE": "40"})
     loc = r.headers["Location"]
@@ -126,27 +116,27 @@ def test_panel_stays_open_after_save(tmp_path):
         .by_id("stack-daemon-params-meshcom") is None
 
 
-def test_dp_target_specific_opens_only_matching_panel(tmp_path):
-    doc = parse(_app(tmp_path).get("/stacks?open=meshcom&dp=meshcom").get_data(as_text=True))
+def test_dp_target_specific_opens_only_matching_panel(web):
+    doc = parse(web().get("/stacks?open=meshcom&dp=meshcom").get_data(as_text=True))
     # ONLY meshcom's daemon panel is forced open; the daemon stack's row is closed, so its whole
     # body (and its own daemon panel) is lazy-loaded → absent, and thus certainly not forced open.
     assert doc.by_id("stack-daemon-params-meshcom").has_attr("open")
     assert doc.by_id("stack-daemon-params-daemon") is None
 
 
-def test_dp1_no_longer_opens_every_daemon_panel(tmp_path):
+def test_dp1_no_longer_opens_every_daemon_panel(web):
     # Regression: the old ?dp=1 opened EVERY daemon-params panel globally. `dp` must now match a
     # stack id, so a non-matching value opens NONE. We force meshcom's body inline (so a daemon panel
     # is actually rendered) — dp=1 must still not force it open.
-    doc = parse(_app(tmp_path).get("/stacks?open=meshcom&dp=1").get_data(as_text=True))
+    doc = parse(web().get("/stacks?open=meshcom&dp=1").get_data(as_text=True))
     panels = doc.find("details", **{"class": "advcfg dparams"})
     assert panels                                            # panels present...
     assert not any(p.has_attr("open") for p in panels)       # ...but none forced open by dp=1
 
 
-def test_save_rejects_out_of_range(tmp_path):
-    c = _app(tmp_path)
-    tok = _csrf(c)
+def test_save_rejects_out_of_range(web, csrf):
+    c = web()
+    tok = csrf(c)
     c.post("/stacks/meshcom/daemon-params",
            data={"_csrf": tok, "band": "433", "dp_CADIDLE": "99999", "dp_CADWAIT": ""})
     body = c.get("/stacks?open=meshcom").get_data(as_text=True)   # meshcom panel force-opened (lazy body)
@@ -154,8 +144,8 @@ def test_save_rejects_out_of_range(tmp_path):
 
 
 @pytest.mark.contract
-def test_save_requires_csrf(tmp_path):
-    c = _app(tmp_path)
+def test_save_requires_csrf(web):
+    c = web()
     r = c.post("/stacks/meshcom/daemon-params",
                data={"band": "433", "dp_CADIDLE": "40"})     # no token
     assert r.status_code == 400
@@ -214,10 +204,10 @@ def test_apply_live_reports_confirmed_vs_sent_unconfirmed(tmp_path):
     assert "CADIDLE" in d["confirmed"]
 
 
-def test_apply_live_failure_flashes_warning(tmp_path):
+def test_apply_live_failure_flashes_warning(web, csrf):
     # Daemon unreachable in _app: save persists, apply fails -> the flash is a warning, not green.
-    c = _app(tmp_path)
-    tok = _csrf(c)
+    c = web()
+    tok = csrf(c)
     r = c.post("/stacks/daemon/daemon-params/apply",
                data={"_csrf": tok, "band": "433", "dp_CADIDLE": "40"})
     body = c.get(r.headers["Location"]).get_data(as_text=True)
@@ -347,16 +337,13 @@ def _daemon_svc(tmp_path):
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 
-
-
 # --- Area 1: strict Start-confirm dp_* field parsing -----------------------------------------
 
-def _daemon_web(tmp_path):
+def _daemon_web(web, tmp_path):
     import os
     b = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
     b.parent.mkdir(parents=True); b.write_text("#!/bin/sh\n"); os.chmod(b, 0o755)
-    return create_app(service_factory=lambda: ControllerService(
-        system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))).test_client()
+    return web()
 
 
 def _start_post(c, extra):
@@ -394,23 +381,25 @@ def test_meshtastic_direct_spi_has_no_daemon_params_view(tmp_path):
     assert _plain_svc(tmp_path).daemon_params_view("meshtastic", "") == {}
 
 
-def test_daemon_params_band_chooser_rendered(tmp_path):
-    c = _app(tmp_path)
+def test_daemon_params_band_chooser_rendered(web):
+    c = web()
 
     def dp_seg(sid):
-        body = c.get(f"/stacks?open={sid}").get_data(as_text=True)   # panel is in the lazy body
-        i = body.index('id="stack-daemon-params-' + sid + '"')
-        return body[i:i + 1500]
+        doc = parse(c.get(f"/stacks?open={sid}").get_data(as_text=True))   # panel is in the lazy body
+        switch = doc.within(doc.by_id(f"stack-daemon-params-{sid}")).find("span", class_="bandswitch")
+        assert switch, "no band switch"
+        return doc.within(switch[0])
 
     # single-band stack (meshcom): its band is a link, the other band a disabled span.
     ms = dp_seg("meshcom")
-    assert "bandswitch" in ms
-    assert "band=433" in ms and "dp=meshcom" in ms and "#stack-daemon-params-meshcom" in ms
-    assert '<span class="disabled"' in ms and "868 MHz" in ms
+    hrefs = [a["href"] for a in ms.find("a")]
+    assert any("band=433" in h and "dp=meshcom" in h and h.endswith("#stack-daemon-params-meshcom") for h in hrefs)
+    assert [s.text for s in ms.find("span", class_="disabled")] == ["868 MHz"]
     # dual-band stack (kiss): both bands are links, none disabled.
     ks = dp_seg("kiss")
-    assert "band=433" in ks and "band=868" in ks and '<span class="disabled"' not in ks
-
+    hrefs = [a["href"] for a in ks.find("a")]
+    assert any("band=433" in h for h in hrefs) and any("band=868" in h for h in hrefs)
+    assert not ks.find("span", class_="disabled")
 
 
 def test_a_start_applies_the_saved_daemon_params_and_nothing_else(tmp_path):
@@ -428,12 +417,12 @@ def test_a_start_applies_the_saved_daemon_params_and_nothing_else(tmp_path):
     assert svc._daemon_param_applies("daemon", "868")["CADIDLE"] == "222"
 
 
-def test_crafted_start_post_fields_are_ignored_not_applied(tmp_path):
+def test_crafted_start_post_fields_are_ignored_not_applied(tmp_path, web):
     # A crafted web POST carrying the OLD per-launch fields (dp_<band>_<PARAM>, p_<name>) changes
     # nothing: the start runs the saved configuration, the saved daemon params stay untouched,
     # and no "invalid daemon parameter" refusal exists any more.
     from lhpc.core import config as cfgmod
-    c = _daemon_web(tmp_path)
+    c = _daemon_web(web, tmp_path)
     from lhpc.core.services import ControllerService as _CS
     svc = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     svc.save_daemon_params("daemon", "433", {"CADIDLE": "40"})

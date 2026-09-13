@@ -17,38 +17,8 @@ from fake_loraham_daemon import (
     TX_RESULT_STATUS_RADIO_ERROR,
     FakeLoRaHAMDaemon,
 )
+from harness import make_radio, wait_for
 from meshcore_host.loraham_radio import RX_QUEUE_MAX, LoRaHAMRadio
-
-
-def make_radio(daemon, **overrides):
-    kwargs = dict(
-        data_socket=str(daemon.data_socket),
-        config_socket=str(daemon.config_socket),
-        frequency=869618000,
-        bandwidth=62500,
-        spreading_factor=8,
-        coding_rate=8,
-        txpower=14,
-        preamble=16,
-        enable_tx=True,
-        connect_timeout=1.0,
-        reconnect_delay=0.2,
-        tx_result_margin=0.5,
-        noise_poll_interval=0.05,
-        resolve_sockets=False,
-    )
-    kwargs.update(overrides)
-    return LoRaHAMRadio(**kwargs)
-
-
-async def wait_for(predicate, timeout=2.0, interval=0.01):
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-    while loop.time() < deadline:
-        if predicate():
-            return True
-        await asyncio.sleep(interval)
-    return False
 
 
 @pytest.fixture

@@ -5,9 +5,6 @@ with 400 before any session, CSRF, or mutation, and the client-supplied X-Forwar
 
 from pathlib import Path
 
-import re
-
-from lhpc.adapters.web.app import create_app
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -32,38 +29,32 @@ class _MutationSpy:
         return getattr(self._svc, name)
 
 
-def _client(tmp_path: Path, spy: dict | None = None):
+def _client(web, tmp_path: Path, spy: dict | None = None):
     def factory():
         svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
         if spy is not None:
             svc = _MutationSpy(svc)
             spy["svc"] = svc
         return svc
-    app = create_app(service_factory=factory)
-    app.config["SESSION_COOKIE_SECURE"] = False        # interactive plain-HTTP console (the risky mode)
-    return app.test_client()
-
-
-def _csrf(client):
-    body = client.get("/stacks").get_data(as_text=True)
-    m = re.search(r'name="_csrf" value="([^"]+)"', body)
-    return m.group(1) if m else ""
+    c = web(service_factory=factory)
+    c.application.config["SESSION_COOKIE_SECURE"] = False   # interactive plain-HTTP console (the risky mode)
+    return c
 
 
 # --- rebinding rejection in interactive mode ------------------------------------------------------
 
-def test_interactive_console_rejects_rebinding_host(tmp_path):
-    c = _client(tmp_path)
+def test_interactive_console_rejects_rebinding_host(tmp_path, web):
+    c = _client(web, tmp_path)
     r = c.get("/", headers={"Host": "evil.example"})
     assert r.status_code == 400
     assert b"evil.example" in r.data           # bounded, text/plain — no HTML reflection
     assert b"<" not in r.data                  # not reflected into markup
 
 
-def test_post_cannot_mutate_config_through_hostile_host(tmp_path):
+def test_post_cannot_mutate_config_through_hostile_host(tmp_path, web, csrf):
     spy = {}
-    c = _client(tmp_path, spy=spy)
-    token = _csrf(c)                            # obtained via a legitimate (localhost) request
+    c = _client(web, tmp_path, spy=spy)
+    token = csrf(c)                            # obtained via a legitimate (localhost) request
     r = c.post("/action", data={"_csrf": token, "op": "start", "target": "daemon"},
                headers={"Host": "attacker.rebind"})
     assert r.status_code == 400                 # rejected in before_request, before dispatch
@@ -72,23 +63,23 @@ def test_post_cannot_mutate_config_through_hostile_host(tmp_path):
 
 # --- legitimate loopback forms accepted -----------------------------------------------------------
 
-def test_loopback_forms_are_accepted(tmp_path):
-    c = _client(tmp_path)
+def test_loopback_forms_are_accepted(tmp_path, web):
+    c = _client(web, tmp_path)
     for host in ("localhost", "127.0.0.1", "127.0.0.1:8770", "[::1]", "[::1]:9443"):
         assert c.get("/", headers={"Host": host}).status_code == 200, host
 
 
 # --- empty / missing Host rejected ----------------------------------------------------------------
 
-def test_empty_host_is_rejected(tmp_path):
-    c = _client(tmp_path)
+def test_empty_host_is_rejected(tmp_path, web):
+    c = _client(web, tmp_path)
     assert c.get("/", headers={"Host": ""}).status_code == 400
 
 
 # --- X-Forwarded-Host is never trusted ------------------------------------------------------------
 
-def test_x_forwarded_host_is_not_trusted(tmp_path):
-    c = _client(tmp_path)
+def test_x_forwarded_host_is_not_trusted(tmp_path, web):
+    c = _client(web, tmp_path)
     # A hostile real Host with a spoofed X-Forwarded-Host claiming loopback must STILL be rejected —
     # enforcement keys on the real Host, never the forwarded header.
     r = c.get("/", headers={"Host": "evil.example", "X-Forwarded-Host": "localhost"})

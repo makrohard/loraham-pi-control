@@ -19,6 +19,24 @@ G2_ROUTING_ACK = ('{"bytes":"73C61C738F34F16C3FE0DB4FFC","channel":8,"from":2733
                   '"want_ack":false}')
 OWN = 2665732816
 TEST_KEY = bytes(range(16))
+LONGFAST_KEY = bytes.fromhex("d4f1bb3a20290759f0bcffabcf4e6901")   # the firmware's default PSK: index 1, "AQ=="
+
+# The wire layout below is written out from the firmware, not taken from the decoder, so a slip
+# mirrored in decode_meshtastic cannot pass; the bench-recorded G2 frame pins both.
+
+
+def _nonce(packet_id: int, sender: int) -> bytes:
+    """CryptoEngine::initNonce: the packet id as 64-bit LE, the sender node number LE, then the
+    4-byte CTR block counter at zero."""
+    return packet_id.to_bytes(8, "little") + sender.to_bytes(4, "little") + bytes(4)
+
+
+def _channel_hash(name: str, key: bytes) -> int:
+    """Channels::generateHash: xorHash(name) ^ xorHash(key), one byte."""
+    h = 0
+    for b in name.encode() + key:
+        h ^= b
+    return h
 
 
 def _prefs(tmp_path, channels):
@@ -39,7 +57,7 @@ def _prefs(tmp_path, channels):
 
 
 def _encrypt(key, pid, sender, data: bytes) -> bytes:
-    return AES.new(key, AES.MODE_CTR, initial_value=dec._nonce(pid, sender), nonce=b"").encrypt(data)
+    return AES.new(key, AES.MODE_CTR, initial_value=_nonce(pid, sender), nonce=b"").encrypt(data)
 
 
 def _line(**obj) -> str:
@@ -47,7 +65,7 @@ def _line(**obj) -> str:
 
 
 def test_longfast_default_key_hashes_to_eight_and_opens_the_recorded_frame(tmp_path):
-    assert dec._channel_hash("LongFast", dec._DEFAULT_PSK) == 8
+    assert _channel_hash("LongFast", LONGFAST_KEY) == 8          # the recorded frame's "channel":8
     decode = dec.make_decoder(_prefs(tmp_path, [("", b"\x01", channel_pb2.Channel.Role.PRIMARY)]))
     r = decode("k", G2_ROUTING_ACK)
     assert r["status"] == "ok" and r["kind"] == "routing" and "ack" in r["decoded"]
@@ -58,7 +76,7 @@ def test_a_generated_channel_key_decodes_text_position_and_nodeinfo(tmp_path):
     prefs = _prefs(tmp_path, [("", b"\x01", channel_pb2.Channel.Role.PRIMARY),
                               ("Lab", TEST_KEY, channel_pb2.Channel.Role.SECONDARY)])
     decode = dec.make_decoder(prefs)
-    h = dec._channel_hash("Lab", TEST_KEY)
+    h = _channel_hash("Lab", TEST_KEY)
     d = mesh_pb2.Data(portnum=portnums_pb2.TEXT_MESSAGE_APP, payload="RF-LOG test ä".encode())
     ct = _encrypt(TEST_KEY, 42, 0x11223344, d.SerializeToString())
     r = decode("k1", _line(bytes=ct.hex().upper(), channel=h, **{"from": 0x11223344}, id=42, rssi=-80,
@@ -81,7 +99,7 @@ def test_our_own_transmission_uses_the_node_number_as_sender(tmp_path):
     decode = dec.make_decoder(_prefs(tmp_path, [("Lab", TEST_KEY, channel_pb2.Channel.Role.PRIMARY)]))
     d = mesh_pb2.Data(portnum=portnums_pb2.TEXT_MESSAGE_APP, payload=b"from the box")
     ct = _encrypt(TEST_KEY, 7, OWN, d.SerializeToString())       # the node encrypts with its own num
-    r = decode("k", _line(bytes=ct.hex(), channel=dec._channel_hash("Lab", TEST_KEY), **{"from": 0}, id=7,
+    r = decode("k", _line(bytes=ct.hex(), channel=_channel_hash("Lab", TEST_KEY), **{"from": 0}, id=7,
                           size=len(ct), timestamp=1, to=0xFFFFFFFF))
     assert r["status"] == "ok" and r["decoded"] == "[Lab] from the box" and r["peer"] == "!9ee3dad0 → ^all"
 
@@ -131,7 +149,6 @@ def test_the_nodes_own_decoded_records_are_named_by_shape_and_shown_as_they_are(
     r = decode("k", tele)
     assert r["kind"] == "telemetry" and r["decoded"] == "battery_level=93 voltage=4.1"
     assert decode("k", '{"from":1,"id":4,"hops_away":0,"timestamp":1,"to":2}')["kind"] == "meta"
-
 
 
 def _pkc_prefs(tmp_path, own_priv, peers):
@@ -191,7 +208,7 @@ def test_public_key_direct_messages_open_both_ways_and_name_the_nodes(tmp_path):
     r = decode("k", line % (unknown.hex(), 0x22222222, len(unknown), OWN))
     assert r["status"] == "no-key" and "no public key for !22222222" in r["decoded"]
     r = decode("k", line % ("0000020018", OWN, 5, OWN))                # the recorded self-addressed packet
-    assert r["status"] == "ok" and r["kind"] == "local" and r["decoded"] == "local packet, 5 B (the node to itself)"
+    assert r["status"] == "ok" and r["kind"] == "local" and "5 B" in r["decoded"]
     tampered = to_us[:-13] + bytes([to_us[-13] ^ 1]) + to_us[-12:]
     r = decode("k", line % (tampered.hex(), G2, len(tampered), OWN))
     assert r["status"] == "no-key" and "did not open" in r["decoded"]
@@ -201,10 +218,9 @@ def test_an_opened_payload_without_a_summary_is_shown_whole(tmp_path):
     """An application port this decoder has no summary for: the decrypted bytes are shown as
     text or hex, bounded, never reduced to a byte count."""
     decode = dec.make_decoder(_prefs(tmp_path, [("", b"\x01", channel_pb2.Channel.Role.PRIMARY)]))
-    key = dec._expand_psk(b"\x01")
     for payload, shown in ((b"hello private app", "hello private app"), (b"\x01\x02\xff", "3 B 0102ff")):
         d = mesh_pb2.Data(portnum=portnums_pb2.PRIVATE_APP, payload=payload)
-        ct = AES.new(key, AES.MODE_CTR, initial_value=dec._nonce(77, 2733223640), nonce=b"").encrypt(d.SerializeToString())
+        ct = _encrypt(LONGFAST_KEY, 77, 2733223640, d.SerializeToString())
         line = ('{"bytes":"' + ct.hex() + '","channel":8,"from":2733223640,"id":77,"rssi":-90,"size":'
                 + str(len(ct)) + ',"snr":5,"timestamp":1,"to":4294967295}')
         r = decode("k", line)

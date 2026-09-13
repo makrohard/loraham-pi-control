@@ -78,3 +78,19 @@ def problem(values) -> str:
     """Every rule, for the generation path: the endpoint first (it is what the operator most
     likely just changed), then the IFAC."""
     return endpoint_problem(values) or ifac_problem(values)
+
+
+# The refusal REASONS, as stable tokens for `ActionResult.data["reason"]` (tests and adapters
+# branch on these; the sentences above are for people and may change).
+REASON_ENDPOINT_INCOMPLETE = "internet-endpoint-incomplete"
+REASON_IFAC_KEY_MISSING = "internet-ifac-no-passphrase"
+REASON_IFAC_NETNAME_MISSING = "internet-ifac-no-netname"
+
+
+def reason(values) -> str:
+    """The token for `problem(values)` ("" when there is nothing to refuse)."""
+    if endpoint_problem(values):
+        return REASON_ENDPOINT_INCOMPLETE
+    if ifac_problem(values):
+        return REASON_IFAC_KEY_MISSING if _get(values, NETNAME) else REASON_IFAC_NETNAME_MISSING
+    return ""

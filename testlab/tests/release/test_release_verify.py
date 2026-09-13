@@ -7,11 +7,18 @@ next claims it. Each case names its own evidence; none of them is a log grep.
 from __future__ import annotations
 
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
 from lhpc_testlab.release import (
+    GRAYWOLF_UI,
+    KISS_TCP,
+    MESHCHAT_UI,
+    MESHCOM_UI,
+    MESHCORE_COMPANION,
+    MESHCORE_WEBUI,
+    MESHTASTIC_API,
+    REPEATER_DASHBOARD,
     alive,
     gui_startable,
     install_build,
@@ -21,21 +28,15 @@ from lhpc_testlab.release import (
     stack_regression,
     start_component,
     stop,
+    wait_for,
     wait_http,
     wait_tcp,
 )
 from lhpc_testlab.testing import run_lhpc
 
-pytestmark = pytest.mark.slow
+from lhpc.core.manifest import default_manifest_path, load_manifest
 
-MESHCORE_COMPANION = 5000
-MESHCORE_WEBUI = 8788
-MESHCHAT_UI = 8790
-REPEATER_DASHBOARD = 8000
-MESHCOM_UI = 18083
-MESHTASTIC_API = 4403
-KISS_TCP = 8001
-GRAYWOLF_UI = 8080
+pytestmark = pytest.mark.slow
 
 # What each interactive component DRAWS when it is working, read from the pinned source of the
 # program itself: chat's title window, NomadNet's menu bar, meshcli's interactive banner, the
@@ -285,19 +286,22 @@ def test_release_reticulum(env, svc):
     assert alive(env, "rns"), (f"{stack_regression('reticulum', 'readiness')}\n"
                                "LHPC does not report rns running")
     root = Path(env["LHPC_RUNTIME_ROOT"])
-    rnstatus = root / "src" / "reticulum" / ".venv" / "bin" / "rnstatus"
+    # The venv lives in the node's own checkout (its `bin` and `build_marker` are declared
+    # relative to it), so the tool's path follows the manifest's source path.
+    rns = next(c for c in svc.stack("reticulum").components if c.id == "rns")
+    rnstatus = svc._paths.resolve_source(rns.source.path) / ".venv" / "bin" / "rnstatus"
     assert rnstatus.exists(), (f"{stack_regression('reticulum', 'install')}\n"
                                f"reticulum did not install its own tools ({rnstatus})")
     out = ""
-    deadline = time.monotonic() + 120
-    while time.monotonic() < deadline:
+
+    def _rnstatus_lists_an_interface():
+        nonlocal out
         r = subprocess.run([str(rnstatus), "--config", str(root / "state" / "reticulum")],
                            capture_output=True, text=True, timeout=60, check=False)
         out = r.stdout + r.stderr
-        if "Interface" in out:
-            break
-        time.sleep(5)
-    assert "Interface" in out, (f"{stack_regression('reticulum', 'readiness')}\n"
+        return "Interface" in out
+
+    assert wait_for(_rnstatus_lists_an_interface, 120), (f"{stack_regression('reticulum', 'readiness')}\n"
                                 f"rnstatus listed no interface:\n{out[-1500:]}")
     assert "lora" in out.lower(), (f"{stack_regression('reticulum', 'readiness')}\n"
                                    f"rnstatus lists no LoRa interface:\n{out[-1500:]}")
@@ -370,19 +374,25 @@ def _web_client_is_the_pinned_one(env) -> None:
 
     The fetch script writes its own provenance beside the assets; that file is the artifact's
     statement of what it carries.
+
+    Version, digest and destination are read from the fetch step the packaged manifest declares
+    (`meshtastic-web-assets.sh <dest> <version> <sha256>` is the script's own usage line), and
+    the version is cross-checked against the `build_inputs` the completion marker records.
     """
-    import re
+    comps = [c for s in load_manifest(default_manifest_path()) for c in s.components]
+    steps = [st for c in comps for st in c.build_steps
+             if len(st.get("argv", ())) > 1
+             and str(st["argv"][1]).endswith("meshtastic-web-assets.sh")]
+    assert len(steps) == 1, "the manifest no longer declares exactly one web-client fetch step"
+    argv = steps[0]["argv"]
+    assert len(argv) == 5, f"the web-client fetch step's argv changed shape: {argv}"
+    dest, want_version, want_sha = str(argv[2]), str(argv[3]), str(argv[4])
+    owner = next(c for c in comps if steps[0] in c.build_steps)
+    recorded = dict(owner.build_inputs).get("meshtastic-web")
+    assert recorded == want_version, (
+        f"the fetch step pins web client {want_version} but build_inputs records {recorded}")
 
-    from lhpc.core.manifest import default_manifest_path
-
-    manifest = default_manifest_path().read_text()
-    m = re.search(r'meshtastic-web-assets\.sh",\s*"[^"]+",\s*"([0-9.]+)",\s*"([0-9a-f]{64})"',
-                  manifest)
-    assert m, "the manifest no longer states a web-client version and digest"
-    want_version, want_sha = m.group(1), m.group(2)
-
-    prov = (Path(env["LHPC_RUNTIME_ROOT"]) / "build" / "tools" / "meshtasticd"
-            / "web.provenance")
+    prov = Path(dest.replace("{runtime}", env["LHPC_RUNTIME_ROOT"])).parent / "web.provenance"
     assert prov.exists(), f"no web-client provenance at {prov}"
     got = dict(line.split("=", 1) for line in prov.read_text().splitlines() if "=" in line)
     assert got.get("web_version") == want_version, (
@@ -407,48 +417,35 @@ def test_release_meshcom(env, svc):
 # --------------------------------------------------------------------------- identity
 
 
-def test_release_identity_matches_candidate_manifest(env, svc):
-    """THE release check: what is installed IS the candidate, and NOTHING mandatory is missing.
+def _candidate_pins() -> dict:
+    """`{component id: (source path, pin commit, artifact?)}` for every pinned component of the
+    REAL packaged manifest — not the lab overlay, which retargets the daemon and RadioLib at
+    local fixtures."""
+    return {c.id: (c.source.path, c.source.pin_commit, c.source.artifact)
+            for st in load_manifest(default_manifest_path()) for c in st.components
+            if c.source is not None and c.source.pin_commit}
 
-    Every managed source is re-proved NOW through the production verifier (record + live HEAD).
-    A PINNED source is then compared with the pin in the REAL packaged manifest — not the lab
-    overlay, which retargets the daemon and RadioLib at local fixtures. An `artifact = true`
-    source has no such comparison to make: every selector resolves to the upstream default
-    branch, so the verifier above is its whole identity. Those two are named as the
-    exception; their artifact is proved by the binary builder's own smoke and clean-runtime
-    test, never here.
 
-    An absent component is a FAILURE unless LHPC's own GUI predicate says it cannot run on this
-    box. Collecting the absent ones and printing them would let a lane that installed nothing
-    report success as loudly as one that installed everything.
-    """
-    import tomllib
+def _binary_receipts(svc) -> dict:
+    """`{stack id: (state, receipt, why)}` for every stack that has a binary channel."""
+    from lhpc.core import binary_receipt
+    out = {}
+    for stack in svc.stacks():
+        if svc.binary_spec(stack.id):
+            out[stack.id] = binary_receipt.receipt_state(svc._paths, stack.id)
+    return out
 
+
+def _source_identity(svc, pins: dict, from_binary: set):
+    """Every managed source checkout against its candidate pin.
+
+    Returns `(checked, excluded, permitted, missing, wrong)`: what was proved, what is
+    legitimately not a checkout here (a lab fixture or covered by an artifact), what LHPC's own
+    GUI predicate allows to be absent, what is absent without that permission, and what is
+    installed but is NOT the candidate."""
     from lhpc_testlab.manifest_overlay import RETARGETS
 
-    from lhpc.core import binary_receipt, source_registry
-    from lhpc.core.manifest import default_manifest_path
-
-    candidate = tomllib.loads(default_manifest_path().read_text())
-    pins, stack_of = {}, {}
-    for st in candidate["stack"]:
-        for c in st.get("component", []):
-            src = c.get("source") or {}
-            if src.get("pin_commit"):
-                pins[c["id"]] = (src["path"], src["pin_commit"], bool(src.get("artifact")))
-                stack_of[c["id"]] = st["id"]
-
-    # A stack installed from an artifact has no managed checkout for the components that
-    # artifact covers — the artifact IS the install, and its receipt is what proves it (below).
-    from_binary, binary_ok = set(), {}
-    for stack in svc.stacks():
-        spec = svc.binary_spec(stack.id)
-        if not spec:
-            continue
-        state, rec, why = binary_receipt.receipt_state(svc._paths, stack.id)
-        binary_ok[stack.id] = (state, rec, why)
-        if state == "valid":
-            from_binary.update(spec.covers)
+    from lhpc.core import source_registry
 
     config = svc.config()
     checked, excluded, permitted, missing, wrong = [], [], [], [], []
@@ -491,28 +488,60 @@ def test_release_identity_matches_candidate_manifest(env, svc):
                              f"pins {pin[:9]}")
             else:
                 checked.append(comp.id)
+    return checked, excluded, permitted, missing, wrong
 
-    # Every binary stack must be installed from its artifact, and the artifact must carry the
-    # candidate's commits for EVERY component it covers — the full map, not whatever it lists.
-    for stack in svc.stacks():
-        spec = svc.binary_spec(stack.id)
-        if not spec:
-            continue
-        state, rec, why = binary_ok[stack.id]
+
+def _artifact_identity(svc, pins: dict, receipts: dict):
+    """Every binary stack installed from its artifact, and the artifact carrying the candidate's
+    commits for EVERY component it covers — the full map, not whatever it lists.
+
+    Returns `(checked, missing, wrong)`."""
+    checked, missing, wrong = [], [], []
+    for stack_id, (state, rec, why) in receipts.items():
         if state != "valid":
-            missing.append(f"{stack.id} (binary receipt {state}: {why})")
+            missing.append(f"{stack_id} (binary receipt {state}: {why})")
             continue
-        for cid in spec.covers:
+        for cid in svc.binary_spec(stack_id).covers:
             want = pins.get(cid)
             got = rec.components.get(cid)
             if want is None:
                 continue
             if got is None:
-                wrong.append(f"{stack.id}: the artifact records no commit for {cid}")
+                wrong.append(f"{stack_id}: the artifact records no commit for {cid}")
             elif got != want[1]:
-                wrong.append(f"{stack.id}: artifact carries {cid} {got[:9]}, candidate manifest "
+                wrong.append(f"{stack_id}: artifact carries {cid} {got[:9]}, candidate manifest "
                              f"pins {want[1][:9]}")
-        checked.append(f"{stack.id} (binary)")
+        checked.append(f"{stack_id} (binary)")
+    return checked, missing, wrong
+
+
+def test_release_identity_matches_candidate_manifest(env, svc):
+    """THE release check: what is installed IS the candidate, and NOTHING mandatory is missing.
+
+    Every managed source is re-proved NOW through the production verifier (record + live HEAD).
+    A PINNED source is then compared with the pin in the REAL packaged manifest — not the lab
+    overlay, which retargets the daemon and RadioLib at local fixtures. An `artifact = true`
+    source has no such comparison to make: every selector resolves to the upstream default
+    branch, so the verifier above is its whole identity. Those two are named as the
+    exception; their artifact is proved by the binary builder's own smoke and clean-runtime
+    test, never here.
+
+    An absent component is a FAILURE unless LHPC's own GUI predicate says it cannot run on this
+    box. Collecting the absent ones and printing them would let a lane that installed nothing
+    report success as loudly as one that installed everything.
+    """
+    pins = _candidate_pins()
+    receipts = _binary_receipts(svc)
+    # A stack installed from an artifact has no managed checkout for the components that
+    # artifact covers — the artifact IS the install, and its receipt is what proves it.
+    from_binary = {cid for sid, (state, _rec, _why) in receipts.items() if state == "valid"
+                   for cid in svc.binary_spec(sid).covers}
+
+    checked, excluded, permitted, missing, wrong = _source_identity(svc, pins, from_binary)
+    b_checked, b_missing, b_wrong = _artifact_identity(svc, pins, receipts)
+    checked += b_checked
+    missing += b_missing
+    wrong += b_wrong
 
     # Readable evidence beside the machine check — never instead of it.
     versions = run_lhpc(env, "status", "--versions", timeout=180).stdout

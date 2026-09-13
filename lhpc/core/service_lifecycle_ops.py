@@ -230,7 +230,8 @@ class LifecycleOpsMixin:
                 return ActionResult(
                     False, f"Cannot start '{target}': mode '{mode}' needs the repeater's own node "
                            f"name — {exc}",
-                    details=[f"lhpc config {_mm.STACK_ID} repeater_name <name>"])
+                    details=[f"lhpc config {_mm.STACK_ID} repeater_name <name>"],
+                    data={"reason": _mm.REASON_REPEATER_NAME_REQUIRED})
         return None
 
     def _ready_endpoints_present(self, comp) -> tuple[bool, list[str]]:
@@ -2690,14 +2691,22 @@ class LifecycleOpsMixin:
         # node has already been stopped: a half-configured Internet IFAC saved cleanly (the save
         # can only judge the endpoint, not the passphrase) would take a working node down and
         # leave it down. So the same rule refuses here, before any mutation.
-        if (why := self._reticulum_internet_preflight(order, cfg_band)):
+        why, reason = self._reticulum_internet_verdict(order, cfg_band)
+        if why:
             return ActionResult(False, f"Cannot {op} '{target}': {why}",
-                                next_commands=[f"lhpc config {_ri.STACK_ID}"])
+                                next_commands=[f"lhpc config {_ri.STACK_ID}"],
+                                data={"reason": reason})
         return None
 
     def _reticulum_internet_preflight(self, order, band: str) -> str:
+        """The sentence of `_reticulum_internet_verdict` ("" = nothing to refuse)."""
+        return self._reticulum_internet_verdict(order, band)[0]
+
+    def _reticulum_internet_verdict(self, order, band: str) -> tuple[str, str]:
         """The Internet interface's cross-field verdict for a run order that contains the RNS
-        node ("" = nothing to refuse, or the node is not in this order). Resolved exactly the way
+        node, as `(sentence, reason token)` — both "" when there is nothing to refuse or the
+        node is not in this order. The token is `reticulum_interfaces.reason()`'s, or
+        "secrets-unreadable" when the secrets file itself was the refusal. Resolved exactly the way
         GENERATION resolves it, because anything this seam judges differently is a node stopped
         by a restart and then refused — which is the whole defect this preflight exists for:
 
@@ -2710,18 +2719,18 @@ class LifecycleOpsMixin:
         The enabled check comes before the load: a disabled interface needs no secret, and a
         broken secrets file must not refuse a start that would never have read it."""
         if not any(c.id == _ri.NODE_ID for _stack, c in order):
-            return ""
+            return "", ""
         vals = {n: (self._resolved_param_value(_ri.STACK_ID, "file", _ri.NODE_ID, n, band) or "")
                 for n in (_ri.ENABLED, _ri.HOST, _ri.PORT, _ri.NETNAME)}
         if not _ri.enabled(vals[_ri.ENABLED]):
-            return ""
+            return "", ""
         try:
             secrets = _config.load_secrets(self._paths)
         except _config.ConfigError as exc:
-            return str(exc)
+            return str(exc), "secrets-unreadable"
         key = (secrets.get(_ri.STACK_ID) or {}).get(_ri.NETKEY)
         vals[_ri.NETKEY] = key if isinstance(key, str) else ""
-        return _ri.problem(vals)
+        return _ri.problem(vals), _ri.reason(vals)
 
     def _identity_refusal(self, target: str, band: str, op: str):
         """The typed refusal for an unusable SAVED identity, or None — the one wording the start
@@ -5207,6 +5216,7 @@ class LifecycleOpsMixin:
 
     RFLOG_DECODE_TIMEOUT_S = 10.0
     RFLOG_DECODE_MAX_OUT = 1 << 20          # bytes of decoder stdout ACCEPTED per batch (checked after the run)
+    RFLOG_KIND_MAX, RFLOG_PEER_MAX, RFLOG_DECODED_MAX = 40, 120, 4000   # per-field caps on what a decoder may say
     RFLOG_LRU_MAX = 2000                    # cached decoded records per job
     RFLOG_NOKEY_TTL_S = 30.0                # a `no-key` answer is kept this long before the frame is retried
 
@@ -5379,9 +5389,10 @@ class LifecycleOpsMixin:
             status = str(obj.get("status", ""))
             if status not in ("ok", "no-key", "undecryptable", "malformed"):
                 return {}, "decoder protocol violation (status)"
-            result[r["key"]] = {"status": status, "kind": str(obj.get("kind", ""))[:40],
-                                "peer": str(obj.get("peer", ""))[:120],
-                                "decoded": str(obj.get("decoded", ""))[:4000]}
+            result[r["key"]] = {"status": status,
+                                "kind": str(obj.get("kind", ""))[:self.RFLOG_KIND_MAX],
+                                "peer": str(obj.get("peer", ""))[:self.RFLOG_PEER_MAX],
+                                "decoded": str(obj.get("decoded", ""))[:self.RFLOG_DECODED_MAX]}
         return result, ""
 
     def rflog_tail(self, surface: str, band: str = "", lines: int = 300) -> tuple:

@@ -16,7 +16,7 @@ from openhop_core.companion.constants import ADVERT_LOC_NONE, ADVERT_LOC_SHARE
 
 from fake_loraham_daemon import FakeLoRaHAMDaemon
 from meshcore_host.app import HostApp
-from test_companion_integration import host_config, wait_for, write_identity
+from harness import host_config, wait_for, write_identity
 
 
 class FakeGpsBridge:

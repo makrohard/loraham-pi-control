@@ -101,13 +101,7 @@ def test_packaged_manifest_has_controller_and_stacks():
     assert len(mf.load_manifest()) >= 1              # load_manifest stack contract unchanged
 
 
-# --------------------------------------------------------------------------- central refusal (B2)
-
-def _svc(tmp_path) -> ControllerService:
-    return ControllerService(system=FakeSystem(cmdlines_data={}).system,
-                             paths=Paths(runtime_root=tmp_path))
-
-
+# --------------------------------------------------------------------------- central refusal
 def test_every_generic_verb_refuses_controller(tmp_path):
     svc = _svc(tmp_path)
     cid = svc.controller().id
@@ -166,8 +160,7 @@ def test_canon_git_url_distinguishes_repos():
     assert _canon_git_url(_CANON_REMOTE) != _canon_git_url("https://github.com/x/other.git")
 
 
-# --------------------------------------------------------------------------- identity proof (B3)
-
+# --------------------------------------------------------------------------- identity proof
 def _make_checkout(rt: Path, *, branch="main", origin=_CANON_REMOTE) -> Path:
     """A real git checkout at rt/src/loraham-pi-control on `branch` with `origin`, and an
     `lhpc/` package dir so `Path(lhpc.__file__).parents[1]` resolves to the checkout."""
@@ -286,8 +279,7 @@ def test_identity_rejects_wrong_origin(tmp_path, monkeypatch):
     assert not v["ok"] and "origin" in v["reason"]
 
 
-# --------------------------------------------------------------------------- cache hardening (B4)
-
+# --------------------------------------------------------------------------- cache hardening
 def _cache_path(rt: Path) -> Path:
     (rt / "state").mkdir(exist_ok=True)
     return rt / "state" / "selfupdate.json"
@@ -349,8 +341,7 @@ def test_cache_symlink_rejected(tmp_path):
     assert selfupdate.read_cache(paths) == {}
 
 
-# --------------------------------------------------------------------------- single envelope (B4)
-
+# --------------------------------------------------------------------------- single envelope
 def test_refresh_writes_full_envelope_atomically(tmp_path, monkeypatch):
     paths = Paths(runtime_root=tmp_path)
     monkeypatch.setattr(selfupdate, "local_state", lambda s: {"head": "h", "head_short": "h"})
@@ -419,8 +410,7 @@ def test_controller_status_makes_no_live_calls(tmp_path, monkeypatch):
     assert cs is not None and cs["id"] == svc.controller().id
 
 
-# --------------------------------------------------------------------------- controller-runtime lock (B6)
-
+# --------------------------------------------------------------------------- controller-runtime lock
 def test_apply_refused_while_web_shared_lock_held(tmp_path):
     paths = Paths(runtime_root=tmp_path)
     with selfupdate.controller_runtime_lock(paths, exclusive=False):     # web serving
@@ -832,6 +822,23 @@ def test_doctor_ok_when_only_optional_dep_missing(tmp_path, monkeypatch):
     assert res.ok is True
     assert "required dependencies missing" not in res.summary
     assert "nginx: not installed (optional" in "\n".join(res.details)
+
+
+def test_doctor_warns_when_boot_restore_would_be_skipped(tmp_path, monkeypatch):
+    """A controller update that changes a unit template leaves every existing box with
+    a non-canonical unit, and boot-restore then silently refuses — the operator only
+    finds out when a power cycle brings the box up with nothing running. doctor must
+    say so while it can still be fixed, and name the command that fixes it."""
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(type(svc), "_web_integration_proven",
+                        lambda self: (False, "lhpc-web.service is not canonical (modified_ours)"))
+    res = svc.doctor()
+    text = "\n".join(res.details)
+    assert "BOOT RESTORE WILL BE SKIPPED" in text
+    assert "lhpc self-update --repair-integration" in text
+
+    monkeypatch.setattr(type(svc), "_web_integration_proven", lambda self: (True, ""))
+    assert "BOOT RESTORE WILL BE SKIPPED" not in "\n".join(svc.doctor().details)
 
 
 def test_controller_dep_detection_uses_abspath_fallback(tmp_path, monkeypatch):

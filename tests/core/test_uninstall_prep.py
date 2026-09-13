@@ -1,4 +1,4 @@
-"""Item 5/10: controller uninstall-prep runs UNDER the task-admission lock (a concurrent task-start
+"""controller uninstall-prep runs UNDER the task-admission lock (a concurrent task-start
 contends), proves quiescence from durable evidence, and stops the managed stacks (clients before the
 shared daemon) with VERIFIED cessation — failing closed on jobs, auto-install/HMAC, UNKNOWN state,
 snapshot errors, or a stop that does not cease. The stop tests mock the LOWER lifecycle boundary
@@ -145,7 +145,7 @@ def test_prep_contended_admission_returns_busy(tmp_path, monkeypatch):
 
 
 def test_uninstall_guard_live_owner_refused_and_owned_release(tmp_path):
-    # Item 4: a guard owned by a LIVE process is not overwritten and blocks a second claim; release only
+    # a guard owned by a LIVE process is not overwritten and blocks a second claim; release only
     # by the owning nonce.
     import os
     from lhpc.core import updater_units
@@ -164,7 +164,7 @@ def test_uninstall_guard_live_owner_refused_and_owned_release(tmp_path):
 
 
 def test_uninstall_guard_stale_owner_is_reclaimed(tmp_path):
-    # Item 4/5: a guard whose recorded owner is PROVEN DEAD (an interrupted uninstall) is reclaimed —
+    # a guard whose recorded owner is PROVEN DEAD (an interrupted uninstall) is reclaimed —
     # the safe retry path, so a reload/stop failure can never permanently strand the deployment.
     svc = _svc(tmp_path)
     assert svc.controller_uninstall_guard_claim("1073741824", "OLD", "1").ok     # a pid that cannot exist

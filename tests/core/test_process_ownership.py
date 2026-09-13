@@ -235,7 +235,7 @@ def test_terminate_unobserved_signals_matching_identity(tmp_path, reaper):
     assert not life._proc_alive(p.pid)
 
 
-# --- P0.2 ownership-record write is mandatory --------------------------------
+# --- ownership-record write is mandatory --------------------------------
 
 def test_record_launch_symlink_leaf_rejected(tmp_path, reaper, monkeypatch):
     # The nonce'd filename makes a planted collision unguessable in practice; pin the nonce so
@@ -283,7 +283,7 @@ def test_start_fails_when_ownership_record_cannot_persist(tmp_path, monkeypatch)
     assert cleaned                                  # cleanup attempted
 
 
-# --- P0.1 truthful cleanup + complete-identity ownership ---------------------
+# --- truthful cleanup + complete-identity ownership ---------------------
 
 def test_incomplete_identity_blocks_ownership(tmp_path, reaper, monkeypatch):
     # An OBSERVED process whose /proc identity is incomplete must not be recorded.
@@ -367,7 +367,7 @@ def test_passed_identity_is_not_silently_resubstituted(tmp_path, reaper, monkeyp
     assert life.record_launch(STACK, COMP, p.pid, band="433", ident=good) is True
 
 
-# --- P0 stop truth: transient /proc, confirmed reuse, removal failure --------
+# --- stop truth: transient /proc, confirmed reuse, removal failure --------
 
 @pytest.mark.needs_session
 def test_transient_proc_error_during_stop_retains_record(tmp_path, reaper, monkeypatch):
@@ -414,7 +414,7 @@ def test_record_removal_failure_is_typed_unverified(tmp_path, reaper, monkeypatc
     assert life.owned_records("loraham-daemon")             # evidence retained
 
 
-# --- P0.1 no signal without a COMPLETE captured launch identity --------------
+# --- no signal without a COMPLETE captured launch identity --------------
 
 def test_terminate_refuses_without_complete_identity(tmp_path, reaper):
     life = _life(tmp_path)

@@ -8,7 +8,6 @@ from lhpc.core.probes.systemd import UnitState, probe_unit
 from lhpc.core.probes.source import probe_source
 
 
-# ===== merged from test_probes.py =====
 def test_process_match_accepts_pip_console_script_form():
     # LIVE FINDING: 'meshcli' is a pip console script — the kernel executes it as
     # "<venv>/bin/python3.13 <venv>/bin/meshcli …", so exec_name='meshcli' never
@@ -27,7 +26,6 @@ def test_process_match_accepts_pip_console_script_form():
     assert not matches(spec, ["/usr/bin/python3"])                    # no script token
 
 
-# ===== merged from test_probes_process_net.py =====
 def test_process_match_python_script():
     spec = ProcessSpec(exec_name="python3", all_args=("gps-relay.py",))
     argv = ["python3", "scripts/gps-relay.py", "--mode", "fixture"]
@@ -90,7 +88,6 @@ def test_parse_ipv6():
     assert lst and lst[0].port == 0x22B8 and lst[0].family == "ipv6"
 
 
-# ===== merged from test_probes_unixsock.py =====
 _VALID = (
     b"STATUS RADIO=READY TX=0 CAD=0 GETRSSI=0 TXRESULT=0 TXMODE=DIRECT TXQUEUE=1 "
     b"CADWAIT=1500 CADIDLE=250 CADPOLL=50 CADTXAFTERTIMEOUT=0 CADMONITOR=0 CADRSSI=-90\n"
@@ -152,7 +149,6 @@ def test_daemon_status_oversize_is_bounded_and_parsed_or_safe():
     assert ds.reachable and ds.radio == "READY"
 
 
-# ===== merged from test_probes_systemd.py =====
 _PROPS = "ActiveState,SubState,LoadState,UnitFileState"
 
 
@@ -195,7 +191,6 @@ def test_probe_unit_status(unit, user, result, expected):
     assert probe_unit(fake.system, unit, scope).state is expected
 
 
-# ===== merged from test_probes_source.py =====
 _PIN = "a" * 40
 
 
@@ -307,14 +302,12 @@ def test_source_symlink_leaf_is_missing_and_runs_no_git():
 def _probes_svc(tmp_path):
     from lhpc.core.paths import Paths
     from lhpc.core.services import ControllerService
-    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 
-def _kiss_serial_spec(tmp_path):
+def _kiss_serial(tmp_path):
     svc = _probes_svc(tmp_path)
-    comp = {c.id: c for s in svc.stacks() for c in s.components}["loraham-kiss-serial"]
-    return comp.process
+    return {c.id: c for s in svc.stacks() for c in s.components}["loraham-kiss-serial"]
 
 
 def test_an_unrelated_socat_is_not_our_kiss_bridge(tmp_path):
@@ -326,7 +319,7 @@ def test_an_unrelated_socat_is_not_our_kiss_bridge(tmp_path):
     Found while bridging gpsd between two boxes with socat; it looked exactly like stale state,
     and cleared the instant those forwarders were killed.
     """
-    spec = _kiss_serial_spec(tmp_path)
+    spec = _kiss_serial(tmp_path).process
     foreign = [
         ["socat", "TCP-LISTEN:2947,bind=192.168.1.7,fork,reuseaddr", "TCP:127.0.0.1:12947"],
         ["socat", "-d", "-d", "PTY,link=/tmp/somebody-elses-pty,raw", "TCP:10.0.0.1:9000"],
@@ -339,28 +332,36 @@ def test_an_unrelated_socat_is_not_our_kiss_bridge(tmp_path):
 def test_our_own_kiss_bridge_is_still_matched(tmp_path):
     """The narrowing must not go so far that lhpc stops recognising its own process — then a
     running bridge would read as stopped and a second one could be started on top."""
-    spec = _kiss_serial_spec(tmp_path)
-    ours = ["socat", "-d", "-d",
-            f"PTY,link={tmp_path}/state/loraham_kiss,raw,echo=0,waitslave,mode=666",
-            "TCP:127.0.0.1:8001"]
-    assert matches(spec, ours) is True
+    comp = _kiss_serial(tmp_path)
+    ours = [a.replace("{runtime}", str(tmp_path)) for a in comp.run_argv]   # its own run line
+    assert matches(comp.process, ours) is True
 
 
-def test_requested_provider_fails_closed(tmp_path, monkeypatch):
+@pytest.mark.parametrize("spec", [
+    pytest.param("no_colon_here", id="malformed-spec"),                  # no "module:factory"
+    pytest.param("lhpc_no_such_provider_xyz:build", id="unimportable"),  # named, cannot be loaded
+])
+def test_a_requested_provider_that_cannot_be_delivered_fails_closed(tmp_path, monkeypatch, spec):
     """A REQUESTED simulation provider that cannot be delivered must fail CLOSED — never
     silently fall back to the real command runner while a harness believes it is sandboxed
-    (the test-lab-fails-open audit finding: real runner active under a SIMULATED banner)."""
+    (the test-lab-fails-open audit finding: real runner active under a SIMULATED banner).
+    Driven through the constructor with nothing injected, which is the only path that
+    consults the provider."""
+    from lhpc.core.paths import Paths
+    from lhpc.core.services import ControllerService
+    monkeypatch.setenv("LHPC_SYSTEM_PROVIDER", spec)
+    with pytest.raises(RuntimeError):
+        ControllerService(paths=Paths(runtime_root=tmp_path))
+
+
+def test_no_provider_and_a_declining_provider_both_resolve_to_none(tmp_path, monkeypatch):
+    """The other side of the boundary. The module-level factory is the unit here: the
+    constructor answers both cases with a RealSystem, so only the factory's return tells
+    'nothing requested' from 'requested, and the provider declined' — and None is what
+    makes the constructor fall through to RealSystem."""
     from lhpc.core.paths import Paths
     from lhpc.core.services import _load_system_provider
     paths = Paths(runtime_root=tmp_path)
-    # malformed spec (no "module:factory") raises rather than yielding RealSystem
-    monkeypatch.setenv("LHPC_SYSTEM_PROVIDER", "no_colon_here")
-    with pytest.raises(RuntimeError):
-        _load_system_provider(paths)
-    # a named-but-unimportable provider raises (refuses to run against real hardware)
-    monkeypatch.setenv("LHPC_SYSTEM_PROVIDER", "lhpc_no_such_provider_xyz:build")
-    with pytest.raises(RuntimeError):
-        _load_system_provider(paths)
     # production (env unset) is unchanged: no provider requested -> None -> RealSystem
     monkeypatch.delenv("LHPC_SYSTEM_PROVIDER", raising=False)
     assert _load_system_provider(paths) is None

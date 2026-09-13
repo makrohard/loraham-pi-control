@@ -23,7 +23,6 @@ def _web_deny(svc, page_id):
     return tuple(p.deny_paths) if p is not None else ()
 
 
-
 def _svc(tmp_path, mode="chat+repeater"):
     (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))

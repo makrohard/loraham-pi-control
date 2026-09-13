@@ -109,7 +109,12 @@ class ConfigWrite:
 
 @dataclass
 class ActionResult:
-    """Uniform result object rendered identically by every adapter."""
+    """Uniform result object rendered identically by every adapter.
+
+    `summary`/`details` are for people and may be reworded. A refusal that an adapter or a test
+    needs to tell apart carries a stable machine token in `data["reason"]` (kebab-case, e.g.
+    `internet-endpoint-incomplete`, `managed-unit`, `invalid-choice`); branch on that, never on
+    the sentence."""
 
     ok: bool
     summary: str

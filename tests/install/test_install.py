@@ -18,7 +18,6 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes import RealSystem
 
 
-
 def _git(repo: Path, *args: str) -> None:
     env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
@@ -144,8 +143,6 @@ def test_plan_install_reports_present_and_absent(tmp_path):
     assert inst.plan_install().actions[0].kind == "adopt"   # absent -> adopt
     inst.adopt_source(comp)
     assert inst.plan_install().actions[0].kind == "verify"  # present -> verify
-
-
 
 
 def test_bootstrap_links_docs_and_readme_into_the_checkout(tmp_path):

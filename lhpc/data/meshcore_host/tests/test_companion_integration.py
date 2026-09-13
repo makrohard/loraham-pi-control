@@ -14,55 +14,12 @@ import pytest
 from meshcore import MeshCore
 from openhop_core.companion.models import Contact
 from openhop_core.protocol.constants import PAYLOAD_TYPE_TXT_MSG
-from openhop_core.protocol.identity import LocalIdentity
 from openhop_core.protocol.packet import Packet
 from openhop_core.protocol.packet_builder import PacketBuilder
 
 from fake_loraham_daemon import FakeLoRaHAMDaemon
+from harness import host_config, inject_advert, make_peer, wait_for, write_identity
 from meshcore_host.app import HostApp
-from meshcore_host.config import HostConfig
-
-
-def write_identity(tmp_path):
-    ident = LocalIdentity()
-    seed = ident.signing_key.encode()
-    key_file = tmp_path / "meshcore_identity.key"
-    key_file.write_text(seed.hex() + "\n")
-    os.chmod(key_file, 0o600)
-    return key_file, ident
-
-
-def host_config(tmp_path, daemon, key_file, **overrides):
-    cfg = HostConfig(
-        name="TESTNODE",
-        bind="127.0.0.1",
-        port=0,
-        key_file=str(key_file),
-        data_socket=str(daemon.data_socket),
-        config_socket=str(daemon.config_socket),
-        frequency=869618000,
-        bandwidth=62500,
-        spreading_factor=8,
-        coding_rate=8,
-        txpower=14,
-        txmaxpower=14,
-        preamble=16,
-        enable_tx=True,
-    )
-    for key, value in overrides.items():
-        setattr(cfg, key, value)
-    return cfg
-
-
-async def wait_for(predicate, timeout=5.0, interval=0.02):
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-    while loop.time() < deadline:
-        result = predicate()
-        if result:
-            return result
-        await asyncio.sleep(interval)
-    return None
 
 
 @pytest.fixture
@@ -95,15 +52,6 @@ async def client(app):
     yield mc
     with contextlib.suppress(Exception):
         await mc.disconnect()
-
-
-def make_peer():
-    return LocalIdentity()
-
-
-async def inject_advert(daemon, peer, name="PEER"):
-    pkt = PacketBuilder.create_advert(peer, name, route_type="flood")
-    await daemon.send_rx(pkt.write_to())
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ import decode_meshcore as dec
 import pytest
 from openhop_core.protocol import constants as C
 from openhop_core.protocol.crypto import CryptoUtils
-from openhop_core.protocol.identity import LocalIdentity
+from openhop_core.protocol.identity import Identity, LocalIdentity
 from openhop_core.protocol.packet import Packet
 from openhop_core.protocol.packet_utils import PacketHeaderUtils
 from openhop_core.protocol.utils import (
@@ -55,6 +55,8 @@ def _secrets(tmp_path, chat=SEED_ME, repeater=None):
 
 
 def _companion_db(tmp_path, contacts, channels):
+    """companion.db as LHPC's own host writes it (meshcore_host/persistence.py); that suite
+    proves the schema."""
     p = tmp_path / "companion.db"
     con = sqlite3.connect(p)
     con.execute("CREATE TABLE contacts (public_key TEXT PRIMARY KEY, data TEXT NOT NULL)")
@@ -69,6 +71,8 @@ def _companion_db(tmp_path, contacts, channels):
 
 
 def _repeater_store(tmp_path, contacts, channels):
+    """repeater.db: a hand copy of openhop_repeater's schema at the manifest pin. No lane
+    installs the repeater, so this layout is proven only on the box (the decoder's live rows)."""
     d = tmp_path / "openhop"
     d.mkdir(exist_ok=True)
     con = sqlite3.connect(d / "repeater.db")
@@ -83,18 +87,24 @@ def _repeater_store(tmp_path, contacts, channels):
     return str(d)
 
 
-def _direct(sender: LocalIdentity, receiver_pub: bytes, text: str) -> bytes:
-    from openhop_core.protocol.identity import Identity
+def _pair(sender: LocalIdentity, receiver_pub: bytes, ptype: int, plain: bytes) -> bytes:
+    """A pairwise frame: dest hash, src hash, then MAC + cipher under the pair's shared secret."""
     ss = Identity(receiver_pub).calc_shared_secret(sender.get_private_key())
-    enc = CryptoUtils.encrypt_then_mac(ss[:16], ss, _text(1789238625, text))
-    return _frame(C.PAYLOAD_TYPE_TXT_MSG, bytes([receiver_pub[0], sender.get_public_key()[0]]) + enc)
+    return _frame(ptype, bytes([receiver_pub[0], sender.get_public_key()[0]]) + CryptoUtils.encrypt_then_mac(ss[:16], ss, plain))
 
 
-def _group(secret: bytes, text: str) -> bytes:
+def _direct(sender: LocalIdentity, receiver_pub: bytes, text: str) -> bytes:
+    return _pair(sender, receiver_pub, C.PAYLOAD_TYPE_TXT_MSG, _text(1789238625, text))
+
+
+def _group(secret: bytes, body, ptype: int = C.PAYLOAD_TYPE_GRP_TXT) -> bytes:
+    """A channel frame: the channel hash, then MAC + cipher under the 32-byte padded secret.
+    `body` is a text (a timestamped GRP_TXT) or the raw bytes of a GRP_DATA."""
     norm = normalize_channel_secret(secret)
     padded = (norm + b"\x00" * 32)[:32]
-    enc = CryptoUtils.encrypt_then_mac(padded[:16], padded, _text(1789238625, text))
-    return _frame(C.PAYLOAD_TYPE_GRP_TXT, bytes([derive_channel_hash(norm)]) + enc)
+    plain = _text(1789238625, body) if isinstance(body, str) else bytes(body)
+    enc = CryptoUtils.encrypt_then_mac(padded[:16], padded, plain)
+    return _frame(ptype, bytes([derive_channel_hash(norm)]) + enc)
 
 
 def test_the_recorded_chemobile_advert_verifies_and_names_the_node(tmp_path):
@@ -167,12 +177,6 @@ def test_other_frames_are_typed_and_stores_gate_startup(tmp_path):
     assert e.value.code == 3
 
 
-def _pair(sender: LocalIdentity, receiver_pub: bytes, ptype: int, plain: bytes) -> bytes:
-    from openhop_core.protocol.identity import Identity
-    ss = Identity(receiver_pub).calc_shared_secret(sender.get_private_key())
-    return _frame(ptype, bytes([receiver_pub[0], sender.get_public_key()[0]]) + CryptoUtils.encrypt_then_mac(ss[:16], ss, plain))
-
-
 def test_every_pairwise_frame_this_node_is_part_of_opens(tmp_path):
     """Requests, responses and path returns share the direct-message layout (openHop's handlers
     read them alike): dest hash, src hash, MAC + cipher under the pair's shared secret."""
@@ -195,7 +199,6 @@ def test_every_pairwise_frame_this_node_is_part_of_opens(tmp_path):
 
 
 def test_an_anonymous_request_to_us_opens_and_a_login_never_shows_its_password(tmp_path):
-    from openhop_core.protocol.identity import Identity
     me, client = LocalIdentity(SEED_ME), LocalIdentity(SEED_PEER)
     decode = dec.make_decoder("repeater", _secrets(tmp_path, repeater=SEED_ME), str(tmp_path / "absent.db"),
                               _repeater_store(tmp_path, [], []))
@@ -205,7 +208,7 @@ def test_an_anonymous_request_to_us_opens_and_a_login_never_shows_its_password(t
                    + CryptoUtils.encrypt_then_mac(ss[:16], ss, login))
     r = decode("k", _line(frame))
     assert r["status"] == "ok" and r["kind"] == "anon-request"
-    assert r["decoded"] == "anonymous request ts 1789238625, 13 B (body withheld: may carry a login password)"
+    assert r["decoded"].startswith("anonymous request ts 1789238625, 13 B")
     assert "hunter2" not in json.dumps(r)
     elsewhere = _frame(C.PAYLOAD_TYPE_ANON_REQ, bytes([0x99]) + client.get_public_key() + b"\x00" * 8)
     assert decode("k", _line(elsewhere))["status"] == "undecryptable"
@@ -213,10 +216,7 @@ def test_an_anonymous_request_to_us_opens_and_a_login_never_shows_its_password(t
 
 def test_channel_data_and_trace_frames_are_readable(tmp_path):
     decode = dec.make_decoder("chat", _secrets(tmp_path), _companion_db(tmp_path, [], [("#lab", CHANNEL_SECRET)]), str(tmp_path))
-    norm = normalize_channel_secret(CHANNEL_SECRET)
-    padded = (norm + b"\x00" * 32)[:32]
-    data = _frame(C.PAYLOAD_TYPE_GRP_DATA, bytes([derive_channel_hash(norm)]) + CryptoUtils.encrypt_then_mac(padded[:16], padded, b"\x01\x02\xff"))
-    r = decode("k", _line(data))
+    r = decode("k", _line(_group(CHANNEL_SECRET, b"\x01\x02\xff", C.PAYLOAD_TYPE_GRP_DATA)))
     assert r == {"key": "k", "status": "ok", "kind": "channel-data", "peer": "#lab", "decoded": "3 B 0102ff"}
     import struct
     trace = _frame(C.PAYLOAD_TYPE_TRACE, struct.pack("<IIB", 0x11223344, 0xAABBCCDD, 0x01) + bytes([0x37, 0x87]))

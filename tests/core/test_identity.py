@@ -44,7 +44,7 @@ def _svc(tmp_path):
     ("XX1/XX0XXA/P",  False, False, False, False),   # 12 characters
     ("XX1/XX0XXA-P",  False, False, False, False),   # 12 characters
     ("N0CALL",        False, False, False, False),
-    # global-negative rows (audit): the global is the INTERSECTION — digit-bearing
+    # global-negative rows: the global is the INTERSECTION — digit-bearing
     # amateur structure — so a value MeshCom cannot carry can never be saved globally.
     ("ABCDEF",        False, True,  True,  False),
     ("ABC123",        False, True,  True,  False),
@@ -220,7 +220,7 @@ def test_global_card_renders_and_never_marked_required(tmp_path):
 # ===== audit-found launch/materialization regressions =====
 
 def test_tx_identity_resolves_per_band(tmp_path):
-    # P2 (audit): a band-scoped local identity must identify the TX test on ITS band.
+    # a band-scoped local identity must identify the TX test on ITS band.
     svc = _svc(tmp_path)
     svc.set_operator_identity(callsign="XX0XXA")
     assert svc.stack_bands("voice") == ("433", "868")         # genuinely band-switchable
@@ -244,7 +244,7 @@ def test_deliberate_local_pin_equal_to_global_survives_migration_snapshot(tmp_pa
 # ===== external-audit regressions =====
 
 def test_start_refuses_identity_before_boot_hook_and_feed_clear(tmp_path, monkeypatch):
-    # P1 (audit): a CLI/API/boot-restore start with a missing identity previously ran the
+    # a CLI/API/boot-restore start with a missing identity previously ran the
     # boot-restore claim hook and cleared the daemon feed before the inner check refused.
     from lhpc.core.services import ActionResult
     svc = _svc(tmp_path)
@@ -268,7 +268,7 @@ def test_start_refuses_identity_before_boot_hook_and_feed_clear(tmp_path, monkey
 
 
 def test_settings_page_never_prefills_the_inherited_global(tmp_path):
-    # P1 (audit): config_param_groups fed the substituted global into the Settings input,
+    # config_param_groups fed the substituted global into the Settings input,
     # so saving ANY other setting persisted it as a local override.
     svc = _svc(tmp_path)
     svc.set_operator_identity(callsign="XX0XXA")
@@ -297,7 +297,7 @@ def test_settings_page_never_prefills_the_inherited_global(tmp_path):
 
 
 def test_fresh_meshtastic_refusal_prints_both_commands(tmp_path):
-    # P2 (audit): one copyable command per missing identity field, same attempt.
+    # one copyable command per missing identity field, same attempt.
     svc = _svc(tmp_path)
     hints = svc._identity_config_hints("meshtastic")
     assert len(hints) == 2, hints
@@ -333,7 +333,7 @@ def test_legacy_corrections_are_only_printed_when_valid(tmp_path, legacy, expect
 
 
 def test_global_change_marks_running_inherited_stacks_restart_required(tmp_path, monkeypatch):
-    # P2 (audit): live drift — a running licensed stack inheriting the global keeps the old
+    # live drift — a running licensed stack inheriting the global keeps the old
     # callsign on air; the change must mark it restart-required and say so.
     svc = _svc(tmp_path)
     svc.set_operator_identity(callsign="XX0XXA")
@@ -352,7 +352,7 @@ def test_global_change_marks_running_inherited_stacks_restart_required(tmp_path,
 # ===== external re-audit regressions (@959618e findings) =====
 
 def test_start_identity_follows_the_implicit_running_band(tmp_path, monkeypatch):
-    # P1 (audit): enforcement read the raw band argument while the launch resolved the
+    # enforcement read the raw band argument while the launch resolved the
     # running-band marker — voice with per-band identities was judged on the wrong band.
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "running_band",
@@ -372,7 +372,7 @@ def test_start_identity_follows_the_implicit_running_band(tmp_path, monkeypatch)
 
 
 def test_global_change_marking_is_band_aware(tmp_path, monkeypatch):
-    # P1 (audit): affected stacks are judged on their ACTUAL running band.
+    # affected stacks are judged on their ACTUAL running band.
     svc = _svc(tmp_path)
     svc.set_operator_identity(callsign="XX0XXA")
     # voice runs on 868; its 868 identity is a LOCAL override -> NOT marked
@@ -390,7 +390,7 @@ def test_global_change_marking_is_band_aware(tmp_path, monkeypatch):
 
 
 def test_global_change_is_atomic_and_lock_serialized(tmp_path, monkeypatch):
-    # P1 (audit): the [operator] patch and the restart markers are ONE all-or-recoverable
+    # the [operator] patch and the restart markers are ONE all-or-recoverable
     # transaction inside ONE config-lock critical section.
     from lhpc.core import config as cfgmod2
     svc = _svc(tmp_path)
@@ -423,7 +423,7 @@ def test_global_change_is_atomic_and_lock_serialized(tmp_path, monkeypatch):
 
 
 def test_poststart_refuses_bad_identity_before_any_runner_cancellation(tmp_path, monkeypatch):
-    # P1 (audit): poststart bypassed identity enforcement and fed raw {callsign}
+    # poststart bypassed identity enforcement and fed raw {callsign}
     # substitution to identity-bearing post steps.
     from lhpc.core import config as cfgmod2
     from lhpc.core.lifecycle import Lifecycle
@@ -444,7 +444,7 @@ def test_poststart_refuses_bad_identity_before_any_runner_cancellation(tmp_path,
 
 
 def test_refusal_remedy_targets_the_refusing_band(tmp_path, monkeypatch):
-    # P2 (audit): the refusal is judged on the running band, so the printed remedy must
+    # the refusal is judged on the running band, so the printed remedy must
     # carry --band for that band — a band-less hint saved into the primary store and the
     # same refusal repeated.
     svc = _svc(tmp_path)
@@ -468,7 +468,7 @@ def _lite_voice_marker(svc, band="868"):
 
 
 def test_lite_interactive_marker_keeps_a_bandless_start_on_its_band(tmp_path, monkeypatch):
-    # P1 (audit): the interactive marker is Voice-on-Lite's only band record; a bandless
+    # the interactive marker is Voice-on-Lite's only band record; a bandless
     # second start must judge identity AND plan daemon/locks/feed on that band — and a
     # stale marker must never override a usable desktop GTK main.
     svc = _svc(tmp_path)                                        # no GTK -> fallback active
@@ -498,7 +498,7 @@ def test_lite_interactive_marker_keeps_a_bandless_start_on_its_band(tmp_path, mo
 
 
 def test_pending_journal_is_recovered_before_global_mutation_reads(tmp_path):
-    # P1 (audit): the setter previously read/patched a partially-written local.toml BEFORE
+    # the setter previously read/patched a partially-written local.toml BEFORE
     # transaction recovery — resurrecting rolled-back data. Recovery must come first.
     import json
     svc = _svc(tmp_path)
@@ -532,7 +532,7 @@ def test_pending_journal_is_recovered_before_global_mutation_reads(tmp_path):
 
 
 def test_global_change_sees_the_lite_fallback_and_preserves_build_markers(tmp_path, monkeypatch):
-    # P1 (audit): the active Voice Lite fallback (main gui-skipped, marker presented) was
+    # the active Voice Lite fallback (main gui-skipped, marker presented) was
     # invisible to stack_running(); and a blind marker replace destroyed a stronger
     # build-required warning.
     import json
@@ -569,7 +569,7 @@ def test_global_change_sees_the_lite_fallback_and_preserves_build_markers(tmp_pa
 
 
 def test_poststart_config_change_after_preflight_refuses_before_cancellation(tmp_path, monkeypatch):
-    # P1 (audit): the locked backstop previously cancelled the live runner BEFORE
+    # the locked backstop previously cancelled the live runner BEFORE
     # re-resolving identity — a config change between the public preflight and the locked
     # impl must refuse with ZERO mutation.
     from lhpc.core import config as cfgmod2
@@ -607,7 +607,7 @@ def test_poststart_config_change_after_preflight_refuses_before_cancellation(tmp
 
 
 def test_legacy_correction_executes_through_the_real_cli_on_the_refusing_band(tmp_path, monkeypatch):
-    # P2 (audit): the displayed legacy correction must target the judged band and actually
+    # the displayed legacy correction must target the judged band and actually
     # clear the refusal when executed through the real CLI.
     import re
     from lhpc.core import config as cfgmod2
@@ -630,7 +630,7 @@ def test_legacy_correction_executes_through_the_real_cli_on_the_refusing_band(tm
 # ===== closure RE-audit regressions (@b3f42bb findings) =====
 
 def test_marker_dismissed_mid_start_cannot_move_the_operation_band(tmp_path, monkeypatch):
-    # P1 (audit): the inner path re-resolved the band hint, and the interactive marker is
+    # the inner path re-resolved the band hint, and the interactive marker is
     # mutable outside the guards — a dismiss in the window moved the applied operation off
     # the band everything was planned/locked/cleared for. The resolved CONCRETE band now
     # travels into _start_impl.
@@ -659,7 +659,7 @@ def test_marker_dismissed_mid_start_cannot_move_the_operation_band(tmp_path, mon
 
 
 def test_fresh_identity_hints_are_shell_safe_templates(tmp_path):
-    # P1 (audit): <angle-bracket> placeholders are shell redirection; quoted ones reach
+    # <angle-bracket> placeholders are shell redirection; quoted ones reach
     # validation literally. Fresh refusal hints must be shell-safe, marked-for-replacement
     # templates naming every required parameter.
     import shlex
@@ -688,7 +688,7 @@ def test_fresh_identity_hints_are_shell_safe_templates(tmp_path):
      "created_at": 1.0},
 ])
 def test_structurally_invalid_markers_are_unsafe_and_never_rewritten(tmp_path, monkeypatch, bad):
-    # P2 (audit): parseable-but-invalid markers were trusted — unknown mode downgraded,
+    # parseable-but-invalid markers were trusted — unknown mode downgraded,
     # string params iterated char-by-char, integer params raised uncaught.
     import json
     svc = _svc(tmp_path)
@@ -1110,7 +1110,7 @@ def test_a_tx_test_is_never_unidentified(tmp_path, monkeypatch):
 
     The spy is on `Lifecycle.run_daemon_tx_test` — the object that actually drives RF. The previous
     version of this test spied on ControllerService, which production never calls, so its
-    "no frame was sent" assertion proved nothing (audit-found)."""
+    "no frame was sent" assertion proved nothing."""
     from lhpc.core import config as cfgmod
     from lhpc.core.lifecycle import Lifecycle
 
@@ -1298,7 +1298,6 @@ def test_tx_refuses_a_legacy_invalid_local_identity(tmp_path, monkeypatch):
     assert not svc.test("chat", tx=True, apply=False).ok
     assert not svc.test("chat", tx=True, apply=True).ok
     assert sent == [], sent                                     # never transmitted as XX0XXA
-
 
 
 # ---- the identity is SAVED configuration; the plan and the apply judge it alike ----------
@@ -1495,7 +1494,7 @@ def test_a_stale_confirmed_band_is_refused_never_remapped(tmp_path, monkeypatch)
     assert resp.status_code == 302 and started == []
     page = client.get("/stacks").get_data(as_text=True)
     assert "now runs it on 868" in page and "confirm again" in page
-    # RE-AUDIT: the target MOVED while both bands stay served — an explicit band outranks the
+    # the target MOVED while both bands stay served — an explicit band outranks the
     # running-band marker in operation_band, so the live band is checked on its own here.
     monkeypatch.setattr(type(svc), "stack_bands", lambda self, t: ("433", "868"))
     monkeypatch.setattr(type(svc), "running_band", lambda self, sid, d="": "868")

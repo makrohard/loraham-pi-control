@@ -2682,7 +2682,6 @@ def test_partial_gps_save_while_off_keeps_the_stored_fields(tmp_path):
     assert (g.host, g.port) == ("gps.lan", 2948)
 
 
-
 def test_marker_is_fresh_rules():
     now = 1_000_000.0
     assert gps_mod.marker_is_fresh({"updated": now - 10}, now) is True

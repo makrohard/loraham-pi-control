@@ -1275,10 +1275,10 @@ class ParamsConfigMixin:
             for k in rmv:
                 merged.pop(k, None)
             if sid == _meshcore_mode.STACK_ID and (_why := self._meshcore_mode_save_refusal(merged)):
-                raise ConfigError(_why)         # rolls the whole submission back, like identity
+                raise ConfigError(_why, reason=_meshcore_mode.REASON_REPEATER_NAME_REQUIRED)   # rolls the submission back, like identity
             if sid == _reticulum_interfaces.STACK_ID and (
                     _why := self._reticulum_internet_save_refusal(merged)):
-                raise ConfigError(_why)         # same rollback; the start would refuse it anyway
+                raise ConfigError(_why, reason=_reticulum_interfaces.REASON_ENDPOINT_INCOMPLETE)   # same rollback
             return render_stack_config(tgt, merged)
         targets.append(("stack", _stack_config_path(self._paths, sid, cfg_band), _render_stack, 0o644))
         if (auto_set or auto_remove) and cfg_band:
@@ -1388,7 +1388,8 @@ class ParamsConfigMixin:
             else:
                 apply_config_transaction(self._paths, targets)
         except ConfigError as exc:
-            return ActionResult(False, f"Config not saved for '{target}'.", details=[str(exc)])
+            return ActionResult(False, f"Config not saved for '{target}'.", details=[str(exc)],
+                                data={"reason": exc.reason} if getattr(exc, "reason", "") else {})
         self._invalidate_config()               # saved operator/remotes visible immediately
         return ActionResult(True, f"Config saved for '{target}'.",
                             details=self._apply_hints(target, modes,

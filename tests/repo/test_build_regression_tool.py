@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 import pytest
 
-REPO = Path(__file__).resolve().parents[2]
-TOOL = REPO / "tools" / "build_regression.py"
+import repo_paths
+
+TOOL = repo_paths.REPO / "tools" / "build_regression.py"
 
 
 def _run(stack: str, captured: str, tmp_path: Path):
@@ -29,9 +29,8 @@ def _run(stack: str, captured: str, tmp_path: Path):
 
 def _owned_log(stack_id: str) -> str:
     from lhpc.core.build_regression import own_step_logs
-    from lhpc.core.manifest import parse_manifest
-    doc = tomllib.loads((REPO / "lhpc/data/manifest.example.toml").read_text())
-    stack = next(s for s in parse_manifest(doc) if s.id == stack_id)
+    from lhpc.core.manifest import load_manifest
+    stack = next(s for s in load_manifest() if s.id == stack_id)      # the shipped manifest
     return sorted(own_step_logs(stack))[0]
 
 

@@ -280,8 +280,15 @@ def test_app_data_list_is_identical_in_both_scripts_and_in_the_docs():
     assert "state/graywolf" in listed and "state/meshchat" in listed
     ops = (REPO / "docs" / "operations.md").read_text()
     pat = re.compile(r"state/[A-Za-z0-9_.-]+")
-    prose = set(pat.findall(ops.split("(the `APP_DATA` list")[0].split("**App data under")[-1]))
-    recipe = set(pat.findall(ops.split("tar -czpf")[1].split("```")[0]))
+    # Both windows are anchored so that a missing anchor FAILS here instead of silently widening
+    # the window to the whole file: the bullet runs from its bold lead-in to the parenthesis that
+    # names the list's owner, the recipe from the tar command to the end of its code fence.
+    bullet = re.search(r"\*\*App data under `state/`\*\*(.*?)\(the `APP_DATA` list", ops, re.S)
+    assert bullet, "operations.md: the app-data bullet's anchors moved"
+    fence = re.search(r"tar -czpf(.*?)```", ops, re.S)
+    assert fence, "operations.md: the tar backup recipe is gone"
+    prose = set(pat.findall(bullet.group(1)))
+    recipe = set(pat.findall(fence.group(1)))
     assert prose == listed, "operations.md's prose list drifted"
     assert recipe == listed, "operations.md's backup recipe drifted"
 
@@ -475,7 +482,7 @@ def test_uninstall_leaves_other_targets_service_and_link(tmp_path):
 
 
 def test_uninstall_stop_failure_aborts_and_retains(tmp_path):
-    # Item 6: a `systemctl --user stop` failure ABORTS the uninstall — controller code, state, units,
+    # a `systemctl --user stop` failure ABORTS the uninstall — controller code, state, units,
     # and the guard are ALL retained, nonzero exit — never a partial "removed anyway".
     home = tmp_path / "home"; home.mkdir()
     root = home / "loraham-pi-control"
@@ -613,7 +620,7 @@ def test_uninstall_rejects_copied_marker_from_other_root(tmp_path):
 
 
 def test_uninstall_customized_same_root_unit_aborts(tmp_path):
-    """Item 6: a customized (non-byte-exact) unit that references THIS root ABORTS the uninstall —
+    """a customized (non-byte-exact) unit that references THIS root ABORTS the uninstall —
     we never delete a root a unit still points at. It is left in place and nothing is removed."""
     home = tmp_path / "home"; home.mkdir()
     root = home / "loraham-pi-control"
@@ -635,16 +642,17 @@ def test_web_units_set_killmode_process():
     web restart or self-update kills only the console — never the controller-managed stacks and detached
     jobs it lifecycle-tracks. Controller uninstall is the one path that stops+verifies them."""
     from lhpc.core import updater_units
+    canonical = updater_units.deployment_paths("/home/pi/loraham-pi-control")
     assert "KillMode=process" in (repo_paths.REPO / "deploy/lhpc-web.service").read_text()
-    assert "KillMode=process" in updater_units._WEB
+    assert "KillMode=process" in updater_units.render(updater_units.WEB_UNIT, *canonical)
     # same property for boot restore: restored stacks live in ITS cgroup — a later stop/restart/
     # timeout of the oneshot must never take them down with it
     assert "KillMode=process" in (repo_paths.REPO / "deploy/lhpc-boot-restore.service").read_text()
-    assert "KillMode=process" in updater_units._BOOT_RESTORE
+    assert "KillMode=process" in updater_units.render(updater_units.BOOT_RESTORE_UNIT, *canonical)
 
 
 def test_uninstall_daemon_reload_failure_restores_units_and_retains(tmp_path):
-    # Item 5: a daemon-reload failure RESTORES the staged unit files (systemd still has them) and
+    # a daemon-reload failure RESTORES the staged unit files (systemd still has them) and
     # retains ALL controller code/state + the guard — never a half-torn-down deployment.
     home = tmp_path / "home"; home.mkdir()
     root = home / "loraham-pi-control"
@@ -661,7 +669,7 @@ def test_uninstall_daemon_reload_failure_restores_units_and_retains(tmp_path):
 
 
 def test_uninstall_retry_after_reload_failure_succeeds(tmp_path):
-    # Item 5/4: after an interrupted uninstall (reload failed, guard retained), a RETRY with a working
+    # after an interrupted uninstall (reload failed, guard retained), a RETRY with a working
     # systemctl reclaims the stale guard, re-stages, reloads, and only THEN removes controller files.
     home = tmp_path / "home"; home.mkdir()
     root = home / "loraham-pi-control"
@@ -677,7 +685,7 @@ def test_uninstall_retry_after_reload_failure_succeeds(tmp_path):
 
 
 def test_uninstall_concurrent_guard_refused(tmp_path):
-    # Item 4: a pre-existing guard owned by a LIVE process (this test process) is NOT overwritten and
+    # a pre-existing guard owned by a LIVE process (this test process) is NOT overwritten and
     # blocks a second uninstall.
     home = tmp_path / "home"; home.mkdir()
     root = home / "loraham-pi-control"
@@ -699,7 +707,7 @@ def _unit_dir(home: Path) -> Path:
 
 
 def test_uninstall_reload_failure_with_broken_restore_leaves_staged_and_retains(tmp_path):
-    # Item 3: when daemon-reload fails AND the restore itself cannot complete, the run must NOT report
+    # when daemon-reload fails AND the restore itself cannot complete, the run must NOT report
     # success or delete anything — it retains ALL code/state + the guard and leaves the staged unit
     # files behind so a retry can recover them (the reload requirement is never bypassed).
     home = tmp_path / "home"; home.mkdir()
@@ -718,7 +726,7 @@ def test_uninstall_reload_failure_with_broken_restore_leaves_staged_and_retains(
 
 
 def test_uninstall_retry_recovers_leftover_staged_units_then_completes(tmp_path):
-    # Item 3: a retry after an interrupted uninstall that left ONLY `*.uninstall-staged` files (canonical
+    # a retry after an interrupted uninstall that left ONLY `*.uninstall-staged` files (canonical
     # absent) must restore + successfully daemon-reload them BEFORE it may delete code/state. Run 1 breaks
     # both the reload and the restore (leftover staged, no canonical); run 2 (working) recovers + finishes.
     home = tmp_path / "home"; home.mkdir()
@@ -739,7 +747,7 @@ def test_uninstall_retry_recovers_leftover_staged_units_then_completes(tmp_path)
 
 
 def test_uninstall_fails_closed_when_canonical_and_staged_both_exist(tmp_path):
-    # Item 3: a live canonical unit AND a `*.uninstall-staged` counterpart is ambiguous — refuse to
+    # a live canonical unit AND a `*.uninstall-staged` counterpart is ambiguous — refuse to
     # overwrite either and remove nothing.
     home = tmp_path / "home"; home.mkdir()
     root = home / "loraham-pi-control"
@@ -754,7 +762,7 @@ def test_uninstall_fails_closed_when_canonical_and_staged_both_exist(tmp_path):
 
 
 def test_uninstall_fails_closed_on_malformed_leftover_staged(tmp_path):
-    # Item 3: a leftover `*.uninstall-staged` whose content is NOT byte-exact canonical (customized or
+    # a leftover `*.uninstall-staged` whose content is NOT byte-exact canonical (customized or
     # corrupt), with no live canonical counterpart, must not be restored or deleted — fail closed.
     home = tmp_path / "home"; home.mkdir()
     root = home / "loraham-pi-control"
@@ -770,7 +778,7 @@ def test_uninstall_fails_closed_on_malformed_leftover_staged(tmp_path):
 
 
 def test_uninstall_reload_failure_restore_handles_spaces_in_path(tmp_path):
-    # Item 3: staged-path handling is space-safe (the staged paths live in a quoted Bash array). A
+    # staged-path handling is space-safe (the staged paths live in a quoted Bash array). A
     # reload failure under a home with a space still restores every unit and leaves no staging leftover.
     home = tmp_path / "ho me"; home.mkdir()
     root = home / "loraham-pi-control"

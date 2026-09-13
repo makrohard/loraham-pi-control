@@ -1139,6 +1139,7 @@ class WebserverOpsMixin:
             if value not in allowed:
                 return ActionResult(False, f"cannot configure the stack web UIs — choose "
                                     f"a{'n' if field[0] in 'ae' else ''} {field}",
+                                    data={"reason": "invalid-choice", "field": field},
                                     details=[f"  - {field}: {value!r} is not one of "
                                              f"{', '.join(allowed)}"])
         cidrs = list(cidrs or [])

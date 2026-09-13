@@ -12,6 +12,7 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.service_base import ActionResult
 from lhpc.core.services import ControllerService
+from htmlq import parse
 
 _RID = "a" * 32
 
@@ -22,16 +23,9 @@ def _svc(tmp_path):
     return svc
 
 
-def _web(tmp_path):
-    from lhpc.adapters.web.app import create_app
+def _web(web, tmp_path):
     svc = _svc(tmp_path)
-    return create_app(lambda: svc).test_client(), svc
-
-
-def _csrf(client):
-    with client.session_transaction() as s:
-        s["_csrf"] = "tok"
-    return "tok"
+    return web(service_factory=lambda: svc), svc
 
 
 def _xr_pw(tmp_path):
@@ -254,7 +248,7 @@ def _fail_marker_write_when(monkeypatch, predicate):
 
 
 def test_initial_marker_write_failure_makes_no_mutation(tmp_path, monkeypatch):
-    # P1: if the INITIAL run marker cannot be persisted, the secret is never touched (no build/restart either).
+    # if the INITIAL run marker cannot be persisted, the secret is never touched (no build/restart either).
     svc = _svc(tmp_path)
     calls = []
     monkeypatch.setattr(type(svc), "hmac_set_secret",
@@ -268,7 +262,7 @@ def test_initial_marker_write_failure_makes_no_mutation(tmp_path, monkeypatch):
 
 
 def test_midrun_marker_write_failure_stops_before_build(tmp_path, monkeypatch):
-    # P1: a nonterminal transition-write failure (firmware=running) aborts BEFORE the build runs.
+    # a nonterminal transition-write failure (firmware=running) aborts BEFORE the build runs.
     svc = _svc(tmp_path)
     built = []
     monkeypatch.setattr(type(svc), "hmac_set_secret", lambda self, sid, a: ActionResult(True, "secret set"))
@@ -281,7 +275,7 @@ def test_midrun_marker_write_failure_stops_before_build(tmp_path, monkeypatch):
 
 
 def test_success_terminal_write_failure_is_not_reported_as_success(tmp_path, monkeypatch):
-    # P1: if the FINAL success write fails, the run returns FAILURE (never rc 0 / a recorded completion).
+    # if the FINAL success write fails, the run returns FAILURE (never rc 0 / a recorded completion).
     svc = _svc(tmp_path)
     _fake_build_restart(svc, monkeypatch)
     _fail_marker_write_when(monkeypatch, lambda d: d.get("phase") == "done")
@@ -291,7 +285,7 @@ def test_success_terminal_write_failure_is_not_reported_as_success(tmp_path, mon
 
 
 def test_failure_terminal_write_failure_still_returns_failure(tmp_path, monkeypatch):
-    # P1: a build failure whose terminal marker write ALSO fails still returns failure (never success).
+    # a build failure whose terminal marker write ALSO fails still returns failure (never success).
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "build", lambda self, t, **k: ActionResult(False, "compile error"))
     _fail_marker_write_when(monkeypatch, lambda d: d.get("phase") == "failed")
@@ -300,7 +294,7 @@ def test_failure_terminal_write_failure_still_returns_failure(tmp_path, monkeypa
 
 
 def test_unsafe_terminal_write_failure_still_returns_failure(tmp_path, monkeypatch):
-    # P1: an UNSAFE build outcome whose terminal marker write fails still returns failure (never success).
+    # an UNSAFE build outcome whose terminal marker write fails still returns failure (never success).
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "build", lambda self, t, **k: ActionResult(
         False, "unproven", data={"unsafe": True, "unsafe_scope": "session-unverified",
@@ -311,7 +305,7 @@ def test_unsafe_terminal_write_failure_still_returns_failure(tmp_path, monkeypat
 
 
 def test_unsafe_write_failure_still_blocks_next_apply(tmp_path, monkeypatch):
-    # P1 (observable invariant): if the UNSAFE terminal write fails, the driver exits, and the ordinary
+    # Observable invariant: if the UNSAFE terminal write fails, the driver exits, and the ordinary
     # `interrupted` derivation would normally make the run retryable. It MUST NOT — the leftover run marker
     # (a step still `running`, driver gone) is re-derived as BLOCKING unsafe, and a new apply is REFUSED.
     svc = _svc(tmp_path)
@@ -481,11 +475,11 @@ def test_apply_log_chunk_redacts_the_secret(tmp_path, monkeypatch):
     assert chunk["offset"] > 0                         # cursor advanced by RAW bytes
 
 
-def test_apply_never_leaks_secret_from_build_output(tmp_path, monkeypatch):
+def test_apply_never_leaks_secret_from_build_output(tmp_path, monkeypatch, web):
     # P1-2: a verbose/hostile firmware build could echo the baked secret in its summary/details. Those are
     # emitted (→ CLI stdout / log) and, on failure, stored in the marker detail (→ /api + rendered page).
     # ALL of those surfaces must be redacted, not only the log-chunk read.
-    client, svc = _web(tmp_path)
+    client, svc = _web(web, tmp_path)
 
     def fake_build(self, target, **k):
         tok = _xr_pw(tmp_path).read_text().strip()     # the secret written by step 1
@@ -616,9 +610,9 @@ def test_hmac_disable_cli_gate_fires_before_the_step_runner(tmp_path, monkeypatc
 
 
 @pytest.mark.contract
-def test_hmac_disable_web_requires_phrase(tmp_path, monkeypatch):
-    client, svc = _web(tmp_path)
-    tok = _csrf(client)
+def test_hmac_disable_web_requires_phrase(tmp_path, monkeypatch, web, csrf):
+    client, svc = _web(web, tmp_path)
+    tok = csrf(client)
     spawned = []
     monkeypatch.setattr(type(svc), "_lifecycle",
                         lambda self: type("L", (), {"spawn_job": lambda *a, **k: spawned.append(1)})())
@@ -631,9 +625,9 @@ def test_hmac_disable_web_requires_phrase(tmp_path, monkeypatch):
 
 
 @pytest.mark.contract
-def test_hmac_disable_web_starts_with_the_correct_phrase(tmp_path, monkeypatch):
-    client, svc = _web(tmp_path)
-    tok = _csrf(client)
+def test_hmac_disable_web_starts_with_the_correct_phrase(tmp_path, monkeypatch, web, csrf):
+    client, svc = _web(web, tmp_path)
+    tok = csrf(client)
     monkeypatch.setattr(type(svc), "_lifecycle",
                         lambda self: type("L", (), {"spawn_job":
                             lambda self, name, argv, cwd, env=None: (name + ".log", 4242)})())
@@ -690,8 +684,8 @@ def test_normal_config_save_unaffected_by_the_guard(tmp_path):
 
 # ---- Part D + Part C web: the meshcom Install-section UI + warn/apply page ------------------------
 
-def test_stacks_shows_hmac_row_and_flag_for_meshcom_only(tmp_path):
-    client, _ = _web(tmp_path)
+def test_stacks_shows_hmac_row_and_flag_for_meshcom_only(tmp_path, web):
+    client, _ = _web(web, tmp_path)
     body = client.get("/stacks?open=meshcom").get_data(as_text=True)   # HMAC row is in meshcom's deferred body
     assert "HMAC Password" in body                              # the action row
     assert "HMAC Password disabled" in body                     # first-position yellow flag (default off)
@@ -702,8 +696,8 @@ def test_stacks_shows_hmac_row_and_flag_for_meshcom_only(tmp_path):
 
 
 @pytest.mark.contract
-def test_hmac_apply_page_is_the_warning_with_an_apply_button(tmp_path):
-    client, _ = _web(tmp_path)
+def test_hmac_apply_page_is_the_warning_with_an_apply_button(tmp_path, web):
+    client, _ = _web(web, tmp_path)
     r = client.get("/stacks/meshcom/hmac/renew")
     assert r.status_code == 200
     body = r.get_data(as_text=True)
@@ -712,10 +706,10 @@ def test_hmac_apply_page_is_the_warning_with_an_apply_button(tmp_path):
     assert 'action="/stacks/meshcom/hmac/renew/apply"' in body and "_csrf" in body
 
 
-def test_hmac_apply_page_reoffers_apply_after_an_interrupted_run(tmp_path, monkeypatch):
+def test_hmac_apply_page_reoffers_apply_after_an_interrupted_run(tmp_path, monkeypatch, web):
     # An interrupted (driver-gone) run is terminal: the page still shows it, but the Apply button
     # comes back so the operator can retry (and the live poller stays off).
-    client, svc = _web(tmp_path)
+    client, svc = _web(web, tmp_path)
     marker = {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "running",
               "finished": False, "steps": svc._hmac_initial_steps()}
     runtime_fs.atomic_write(svc._paths, svc._paths.under("state", "hmac_apply.json"),
@@ -728,27 +722,27 @@ def test_hmac_apply_page_reoffers_apply_after_an_interrupted_run(tmp_path, monke
 
 
 @pytest.mark.contract
-def test_hmac_apply_page_rejects_bad_action_and_stack(tmp_path):
-    client, _ = _web(tmp_path)
+def test_hmac_apply_page_rejects_bad_action_and_stack(tmp_path, web):
+    client, _ = _web(web, tmp_path)
     assert client.get("/stacks/meshcom/hmac/bogus").status_code == 404
     assert client.get("/stacks/kiss/hmac/enable").status_code == 404      # HMAC does not apply
 
 
 @pytest.mark.contract
-def test_hmac_apply_post_requires_csrf_and_starts_the_run(tmp_path, monkeypatch):
-    client, svc = _web(tmp_path)
+def test_hmac_apply_post_requires_csrf_and_starts_the_run(tmp_path, monkeypatch, web, csrf):
+    client, svc = _web(web, tmp_path)
     assert client.post("/stacks/meshcom/hmac/enable/apply").status_code == 400   # no CSRF
     calls = []
     monkeypatch.setattr(type(svc), "hmac_apply_start",
                         lambda self, sid, action, confirm=False: calls.append((sid, action))
                         or ActionResult(True, "started", data={"run_id": _RID}))
-    tok = _csrf(client)
+    tok = csrf(client)
     r = client.post("/stacks/meshcom/hmac/enable/apply", data={"_csrf": tok})
     assert r.status_code == 302 and calls == [("meshcom", "enable")]
 
 
-def test_hmac_api_is_get_safe_tristate(tmp_path, monkeypatch):
-    client, svc = _web(tmp_path)
+def test_hmac_api_is_get_safe_tristate(tmp_path, monkeypatch, web):
+    client, svc = _web(web, tmp_path)
     assert client.get("/api/hmac-apply").get_json()["state"] == {"absent": True}
     marker = {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "running",
               "finished": False, "steps": svc._hmac_initial_steps()}
@@ -920,10 +914,10 @@ def test_foreground_cli_tracks_job_marker_as_running(tmp_path, monkeypatch):
     assert not marker.exists()                                        # retired after the terminal write
 
 
-def test_apply_page_seeds_only_for_terminal_runs(tmp_path, monkeypatch):
+def test_apply_page_seeds_only_for_terminal_runs(tmp_path, monkeypatch, web):
     # While RUNNING the live poller fills both windows from offset 0 — the server must NOT seed them (that
     # would double-render the head). A TERMINAL page (no poller) DOES seed the final content.
-    client, svc = _web(tmp_path)
+    client, svc = _web(web, tmp_path)
     runtime_fs.mkdir(svc._paths, "logs")
     _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "running",
                         "finished": False, "steps": svc._hmac_initial_steps()})
@@ -943,11 +937,11 @@ def test_apply_page_seeds_only_for_terminal_runs(tmp_path, monkeypatch):
     assert "BUILD-OUTPUT-MARKER" in body2                                       # seeded for the terminal page
 
 
-def test_running_apply_page_loads_the_live_poller(tmp_path, monkeypatch):
+def test_running_apply_page_loads_the_live_poller(tmp_path, monkeypatch, web):
     # Regression: `active` MUST reach the `scripts` block so the poller loads while a run is live. A Jinja
     # {% set %} inside the content block is invisible to the sibling scripts block (block scoping) — the
     # symptom was empty windows until a manual reload. A running page loads hmac.js and hides the prestart card.
-    client, svc = _web(tmp_path)
+    client, svc = _web(web, tmp_path)
     _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "running",
                         "finished": False, "steps": svc._hmac_initial_steps()})
     monkeypatch.setattr(ControllerService, "log_running", lambda self, *a, **k: True)
@@ -1008,10 +1002,10 @@ def test_step_log_never_leaks_secret_into_window_two(tmp_path, monkeypatch):
     assert token not in seed and "****" in seed
 
 
-def test_malformed_marker_fails_closed_and_recover_archives(tmp_path, monkeypatch):
-    # P1: an unreadable/malformed marker must FAIL CLOSED — no new run overwrites the corrupt evidence, the
+def test_malformed_marker_fails_closed_and_recover_archives(tmp_path, monkeypatch, web):
+    # an unreadable/malformed marker must FAIL CLOSED — no new run overwrites the corrupt evidence, the
     # page suppresses Apply, and only an explicit archive (Recover) resolves it.
-    client, svc = _web(tmp_path)
+    client, svc = _web(web, tmp_path)
     runtime_fs.mkdir(svc._paths, "state")
     runtime_fs.atomic_write(svc._paths, svc._paths.under("state", "hmac_apply.json"), "{not json", 0o600)
     st = svc.hmac_apply_status()
@@ -1034,10 +1028,10 @@ def test_malformed_marker_fails_closed_and_recover_archives(tmp_path, monkeypatc
     assert (tmp_path / "state" / "hmac_apply.corrupt.json").read_text() == "{not json"
 
 
-def test_persisted_unsafe_page_suppresses_apply(tmp_path, monkeypatch):
-    # P2: a persisted phase=="unsafe" run has no top-level st.unsafe, but Apply MUST still be suppressed
+def test_persisted_unsafe_page_suppresses_apply(tmp_path, monkeypatch, web):
+    # a persisted phase=="unsafe" run has no top-level st.unsafe, but Apply MUST still be suppressed
     # (the recovery card handles it) — showing Apply would contradict the blocking safety state.
-    client, svc = _web(tmp_path)
+    client, svc = _web(web, tmp_path)
     _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "unsafe",
                         "finished": True, "steps": svc._hmac_initial_steps(),
                         "unsafe_scope": "escaped-or-output-unverified",
@@ -1048,7 +1042,7 @@ def test_persisted_unsafe_page_suppresses_apply(tmp_path, monkeypatch):
 
 
 def test_archive_preserves_marker_when_copy_fails(tmp_path, monkeypatch):
-    # P2: if the .corrupt copy cannot be durably written, the live corrupt marker is NOT removed and recovery
+    # if the .corrupt copy cannot be durably written, the live corrupt marker is NOT removed and recovery
     # reports failure — the page's "preserved as evidence" promise must hold.
     from lhpc.core import runtime_fs as _rfs
     svc = _svc(tmp_path)
@@ -1067,7 +1061,7 @@ def test_archive_preserves_marker_when_copy_fails(tmp_path, monkeypatch):
 
 
 def test_archive_empty_marker_is_removed_not_claimed_archived(tmp_path):
-    # P2: an unreadable/empty marker (nothing to archive) is REMOVED as an explicit acknowledgement — the
+    # an unreadable/empty marker (nothing to archive) is REMOVED as an explicit acknowledgement — the
     # message must NOT claim it was archived.
     svc = _svc(tmp_path)
     runtime_fs.mkdir(svc._paths, "state")
@@ -1098,7 +1092,7 @@ def test_live_run_step_frames_survive_pruning(tmp_path, monkeypatch):
 
 
 def test_recover_reports_failure_when_terminal_rewrite_fails(tmp_path, monkeypatch):
-    # P1: recovery must NOT report success (nor admit a new run) if the terminal marker cannot be durably
+    # recovery must NOT report success (nor admit a new run) if the terminal marker cannot be durably
     # written — the unsafe block must persist.
     svc = _svc(tmp_path)
     _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "unsafe",
@@ -1110,11 +1104,10 @@ def test_recover_reports_failure_when_terminal_rewrite_fails(tmp_path, monkeypat
     assert not r.ok and "not written" in r.summary.lower()
 
 
-def test_the_meshcom_password_section_follows_the_hmac_state(tmp_path):
+def test_the_meshcom_password_section_follows_the_hmac_state(tmp_path, web):
     """MeshCom's Password section is the HMAC password — present while enabled (the first
     line of `config/secrets/xr_pw`), with the HMAC actions as the way to change it; 'Enable it
     first' while disabled; never an edit command (the firmware bakes the secret at build)."""
-    from lhpc.adapters.web.app import create_app
     svc = _svc(tmp_path)
     rows = [r for r in svc.ui_credentials_list("meshcom") if r.get("hmac")]
     assert len(rows) == 1 and rows[0]["enabled"] is False and rows[0]["value"] is None
@@ -1123,21 +1116,21 @@ def test_the_meshcom_password_section_follows_the_hmac_state(tmp_path):
     secret = (tmp_path / "config" / "secrets" / "xr_pw").read_text().splitlines()[0]
     assert row["enabled"] is True and row["value"] == secret and row["edit_command"] == ""
     assert not any(r.get("hmac") for r in svc.ui_credentials_list("kiss"))      # meshcom only
-    body = create_app(lambda: svc).test_client().get("/stacks?open=meshcom").get_data(as_text=True)
-    assert 'id="stack-password-meshcom-bridge"' in body or "stack-password-" in body
-    assert f'>{secret}</pre>' in body and body.count(secret) == 1
-    assert "Change password" in body and "Renew" in body and "nano" not in body.split("HMAC password", 1)[1][:900]
+    body = web(service_factory=lambda: svc).get("/stacks?open=meshcom").get_data(as_text=True)
+    doc = parse(body)
+    section = doc.within(doc.by_id("stack-password-meshcom-bridge"))
+    assert any(p.text == secret for p in section.find("pre")) and body.count(secret) == 1
+    assert "Change password" in section.text and "Renew" in section.text and "nano" not in section.text
     # the ActionResult / task feeds stay value-free
     assert secret not in svc.hmac_set_secret("meshcom", "renew").summary
     assert secret not in str(svc.running_tasks())
 
 
-def test_the_meshcom_password_row_says_when_the_secret_file_is_missing(tmp_path):
-    from lhpc.adapters.web.app import create_app
+def test_the_meshcom_password_row_says_when_the_secret_file_is_missing(tmp_path, web):
     svc = _svc(tmp_path)
     assert svc.hmac_set_secret("meshcom", "enable").ok
     (tmp_path / "config" / "secrets" / "xr_pw").unlink()             # enabled, file gone
     row = next(r for r in svc.ui_credentials_list("meshcom") if r.get("hmac"))
     assert row["enabled"] is True and row["value"] is None and row["exists"] is False
-    body = create_app(lambda: svc).test_client().get("/stacks?open=meshcom").get_data(as_text=True)
+    body = web(service_factory=lambda: svc).get("/stacks?open=meshcom").get_data(as_text=True)
     assert "HMAC password file not found" in body and "Renew it" in body

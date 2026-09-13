@@ -14,7 +14,6 @@ from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
 
-
 # --- token boundaries ---------------------------------------------------------
 
 def test_emit_param_returns_separate_tokens():

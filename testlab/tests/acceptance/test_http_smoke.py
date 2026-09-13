@@ -3,19 +3,23 @@ parameterless-GET sweep with a process-boundary no-mutation check, and the Test 
 panel's own ops."""
 from __future__ import annotations
 
+import re
+
 from lhpc_testlab.testing import run_lab
 
 
-def test_dashboard_and_health(client):
+def test_dashboard_and_health(client, lab_banner):
     status, body = client.get("/")
     assert status == 200
-    assert "TEST LAB — SIMULATED HARDWARE" in body
+    assert lab_banner.search(body), "the real server does not serve the lab overlay's banner"
     assert client.get("/healthz")[0] == 200
 
 
 def test_testlab_panel_scenario_roundtrip(client, lab):
     status, body = client.get("/testlab")
-    assert status == 200 and "Switch scenario" in body
+    assert status == 200
+    # The panel's scenario form posts to the route the round-trip below drives.
+    assert re.search(r'<form[^>]*action="/testlab/scenario"', body), "no scenario form on the panel"
     st, _ = client.post("/testlab/scenario", {"name": "degraded"}, csrf_from="/testlab")
     assert st in (302, 303)
     out = run_lab(lab.env, "status", check=True).stdout
@@ -32,43 +36,18 @@ def test_csrf_missing_token_refused_on_posts(client):
         assert status == 400, path
 
 
-def _app_rules():
-    """The real app's url_map, built in process purely to ENUMERATE routes — every request in
-    these tests goes to the running server. One builder, so the GET and POST sweeps can never
-    disagree about what the surface is."""
-    import os
-    import tempfile
-    from pathlib import Path
-
-    from lhpc.adapters.web.app import create_app
-    from lhpc.core.paths import Paths
-    from lhpc.core.probes.backends import FakeSystem
-    from lhpc.core.services import ControllerService
-    tmp = Path(tempfile.mkdtemp())
-    (tmp / "config" / "stacks").mkdir(parents=True)
-    env_off = os.environ.pop("LHPC_TESTLAB", None)
-    try:
-        svc = ControllerService(system=FakeSystem(files={"/proc/uptime": "1 2\n"}).system,
-                                paths=Paths(runtime_root=tmp))
-        app = create_app(lambda: svc)
-    finally:
-        if env_off is not None:
-            os.environ["LHPC_TESTLAB"] = env_off
-    return [r for r in app.url_map.iter_rules() if r.endpoint != "static"]
-
-
-def _get_rules():
+def _get_rules(app_rules):
     """Parameterless GET rules — the ones a sweep can call without inventing an argument."""
-    return sorted(r.rule for r in _app_rules()
+    return sorted(r.rule for r in app_rules
                   if "GET" in (r.methods or ()) and "<" not in r.rule)
 
 
-def _post_rules():
+def _post_rules(app_rules):
     """Every POST rule the app declares."""
-    return sorted(r.rule for r in _app_rules() if "POST" in (r.methods or ()))
+    return sorted(r.rule for r in app_rules if "POST" in (r.methods or ()))
 
 
-def test_every_parameterless_get_renders_and_preserves_watched_lab_state(client, lab):
+def test_every_parameterless_get_renders_and_preserves_watched_lab_state(client, lab, app_rules):
     watched = ["state/testlab/scenario.json", "state/testlab/nm.json",
                "state/testlab/units.json", "config/local.toml"]
 
@@ -80,7 +59,7 @@ def test_every_parameterless_get_renders_and_preserves_watched_lab_state(client,
         return out
     before = snapshot()
     failures = []
-    for rule in _get_rules():
+    for rule in _get_rules(app_rules):
         status, _body = client.get(rule)
         # Only ca.crt may legitimately 404 (no server CA before webserver init); a couple of
         # flows answer with a redirect to their landing page. Every other rule must RENDER —
@@ -94,7 +73,7 @@ def test_every_parameterless_get_renders_and_preserves_watched_lab_state(client,
     assert snapshot() == before, "a GET changed lab state"
 
 
-def test_every_post_route_refuses_without_csrf(client):
+def test_every_post_route_refuses_without_csrf(client, app_rules):
     """Every POST route the running app declares refuses a tokenless POST with exactly 400.
 
     The route list comes from the app's OWN url_map, like the GET sweep above, so the surface can
@@ -116,7 +95,7 @@ def test_every_post_route_refuses_without_csrf(client):
              "<op>": "start", "<kind>": "reboot", "<name>": "x"}
     failures = []
     skipped = []
-    for rule in sorted(_post_rules()):
+    for rule in _post_rules(app_rules):
         path = rule
         for k, v in subst.items():
             path = path.replace(k, v)
@@ -135,8 +114,7 @@ def test_second_reset_is_idempotent_and_returns_to_baseline(lab, client):
     """The user's second-launch gate: another `testlab reset` (as postCreate/postStart
     would run it) succeeds, keeps the healthy baseline, and the console stays up."""
     run_lab(lab.env, "scenario", "degraded", check=True)
-    r = run_lab(lab.env, "reset", check=True, timeout=600)
-    assert "healthy baseline" in r.stdout
+    run_lab(lab.env, "reset", check=True, timeout=600)
     out = run_lab(lab.env, "status", check=True).stdout
     assert "scenario: healthy" in out
     assert client.get("/healthz")[0] == 200

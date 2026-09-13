@@ -1,4 +1,4 @@
-"""Binary CHANNEL resolution + coverage predicates (B3).
+"""Binary CHANNEL resolution + coverage predicates.
 
 The channel is a fourth selector, never a persisted preference: declaration + platform decide
 availability, a valid receipt decides "is it on binary now", and SOURCE_CHOICES stays 3-valued
@@ -14,13 +14,6 @@ from lhpc.core.services import ControllerService
 from lhpc.core.model import SourceState
 
 
-# ===== merged from test_binary_channel.py =====
-def _h(root, rel):
-    """sha256 of an installed test file — the receipt validator requires one hash per file."""
-    import hashlib
-    return hashlib.sha256((root / rel).read_bytes()).hexdigest()
-
-
 def _stamp_inputs(path, text):
     """Write the recorded inputs where a real build puts them — beside the built artifact, whose
     directory a real build has already created."""
@@ -33,26 +26,6 @@ def _svc(tmp_path, target="aarch64-trixie", monkeypatch=None):
     if monkeypatch is not None:
         monkeypatch.setattr(ControllerService, "binary_target", lambda self: target)
     return svc
-
-
-def _receipt_for(svc, tmp_path, stack_id="daemon"):
-    spec = svc.binary_spec(stack_id)
-    files = []
-    for rel in spec.proof_paths:
-        p = tmp_path
-        for seg in rel.split("/")[:-1]:
-            p = p / seg
-        p.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_bytes(b"x")
-        files.append(rel)
-    return brx.BinaryReceipt(
-        stack=stack_id, artifact_sha256="a" * 64, artifact_size=9,
-        filename=f"{stack_id}-{'a' * 64}.tar.zst", url="https://example.invalid/a.tar.zst",
-        # A real artifact records the manifest pins (check_pins enforces equality at install).
-        components={c: svc._binary_pins(stack_id).get(c, "b" * 40) for c in spec.covers}, provenance={},
-        files=tuple(files), file_hashes={r: _h(tmp_path, r) for r in files},
-        proof_paths=tuple(files),
-        registry_baseline={}, probe="ok")
 
 
 def test_declared_stacks_offer_binary(tmp_path, monkeypatch):
@@ -119,17 +92,17 @@ def test_channel_error(tmp_path, monkeypatch, channel, stack, ok):
     assert (err == "") is ok
 
 
-def test_receipt_drives_on_binary_channel(tmp_path, monkeypatch):
+def test_receipt_drives_on_binary_channel(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
     assert svc.on_binary_channel("daemon") is False
-    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    binary_receipt(svc)
     assert svc.on_binary_channel("daemon") is True
     assert svc.binary_receipt_state("daemon")[0] == "valid"
 
 
-def test_binary_covers_only_covered_components(tmp_path, monkeypatch):
+def test_binary_covers_only_covered_components(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    binary_receipt(svc)
     assert svc.binary_covers("loraham-daemon") is True
     assert svc.binary_covers("radiolib") is True            # covered by the same artifact
     assert svc.binary_covers("loraham-kiss-tnc") is False   # different stack, no receipt
@@ -141,10 +114,10 @@ def test_stack_without_declaration_never_covers(tmp_path, monkeypatch):
     assert svc.binary_covers("loraham-kiss-tnc") is False
 
 
-def test_superseded_receipt_is_not_on_binary_channel(tmp_path, monkeypatch):
+def test_superseded_receipt_is_not_on_binary_channel(tmp_path, monkeypatch, binary_receipt):
     from lhpc.core import source_registry
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    rec = _receipt_for(svc, tmp_path)
+    rec = binary_receipt(svc)
     rec = brx.BinaryReceipt(**{**rec.__dict__, "registry_baseline": {"src/loraham-daemon": ""}})
     assert brx.write_receipt(svc._paths, rec)
     assert svc.on_binary_channel("daemon") is True
@@ -157,20 +130,20 @@ def test_superseded_receipt_is_not_on_binary_channel(tmp_path, monkeypatch):
     assert svc.binary_covers("loraham-daemon") is False
 
 
-def test_block_reason_only_while_on_binary(tmp_path, monkeypatch):
+def test_block_reason_only_while_on_binary(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
     assert svc.binary_block_reason("daemon", "build") == ""
-    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    binary_receipt(svc)
     msg = svc.binary_block_reason("daemon", "build")
     assert "prebuilt binary" in msg and "build" in msg
 
 
-def test_open_journal_makes_the_receipt_unsafe(tmp_path, monkeypatch):
+def test_open_journal_makes_the_receipt_unsafe(tmp_path, monkeypatch, binary_receipt):
     """A receipt written INSIDE an unfinished transaction is not the truth yet: recovery may
-    still unwind it, so status must not report the stack as binary-installed (audit finding)."""
+    still unwind it, so status must not report the stack as binary-installed."""
     from lhpc.core import binary_install as bi
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    binary_receipt(svc)
     svc.invalidate_snapshot()
     assert svc.binary_receipt_state("daemon")[0] == "valid"
     bi.open_txn(svc._paths, "daemon", "txnO")
@@ -180,19 +153,19 @@ def test_open_journal_makes_the_receipt_unsafe(tmp_path, monkeypatch):
     assert svc.on_binary_channel("daemon") is False
 
 
-def test_open_journal_for_another_stack_does_not_shadow_this_one(tmp_path, monkeypatch):
+def test_open_journal_for_another_stack_does_not_shadow_this_one(tmp_path, monkeypatch, binary_receipt):
     from lhpc.core import binary_install as bi
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    binary_receipt(svc)
     bi.open_txn(svc._paths, "meshcom", "txnP")
     svc.invalidate_snapshot()
     assert svc.binary_receipt_state("daemon")[0] == "valid"
 
 
-def test_committed_journal_leaves_the_receipt_authoritative(tmp_path, monkeypatch):
+def test_committed_journal_leaves_the_receipt_authoritative(tmp_path, monkeypatch, binary_receipt):
     from lhpc.core import binary_install as bi
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    binary_receipt(svc)
     bi.open_txn(svc._paths, "daemon", "txnQ")
     j, _st = bi.read_journal(svc._paths)
     assert bi.write_journal(svc._paths, {**j, "state": "committed"})
@@ -200,21 +173,21 @@ def test_committed_journal_leaves_the_receipt_authoritative(tmp_path, monkeypatc
     assert svc.binary_receipt_state("daemon")[0] == "valid"
 
 
-def test_unreadable_journal_reads_unsafe_for_every_stack(tmp_path, monkeypatch):
+def test_unreadable_journal_reads_unsafe_for_every_stack(tmp_path, monkeypatch, binary_receipt):
     from lhpc.core import binary_install as bi
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    binary_receipt(svc)
     bi.journal_path(svc._paths).write_text("{broken")
     svc.invalidate_snapshot()
     assert svc.binary_receipt_state("daemon")[0] == "unsafe"
 
 
-def test_retire_recovers_an_interrupted_transaction_first(tmp_path, monkeypatch):
+def test_retire_recovers_an_interrupted_transaction_first(tmp_path, monkeypatch, binary_receipt):
     """Retiring must act on the SETTLED install: an open transaction is recovered first, so a
     half-published artifact is never the thing that gets removed."""
     from lhpc.core import binary_install as bi
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    rec = _receipt_for(svc, tmp_path)
+    rec = binary_receipt(svc)
     assert brx.write_receipt(svc._paths, rec)
     bi.open_txn(svc._paths, "daemon", "txnR", old_receipt=brx.read_raw(svc._paths, "daemon"))
     svc.invalidate_snapshot()
@@ -225,21 +198,21 @@ def test_retire_recovers_an_interrupted_transaction_first(tmp_path, monkeypatch)
     assert not (tmp_path / rec.files[0]).exists()
 
 
-def test_retire_refuses_on_an_unrecoverable_journal(tmp_path, monkeypatch):
+def test_retire_refuses_on_an_unrecoverable_journal(tmp_path, monkeypatch, binary_receipt):
     from lhpc.core import binary_install as bi
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    binary_receipt(svc)
     bi.journal_path(svc._paths).write_text("{broken")
     svc.invalidate_snapshot()
     res = svc.binary_retire("daemon")
     assert not res.ok and "unreadable" in res.summary
 
 
-def test_forced_retire_discards_an_unrecoverable_journal(tmp_path, monkeypatch):
+def test_forced_retire_discards_an_unrecoverable_journal(tmp_path, monkeypatch, binary_receipt):
     """`clean --purge` is the escape hatch: it must still be able to remove every trace."""
     from lhpc.core import binary_install as bi
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    rec = _receipt_for(svc, tmp_path)
+    rec = binary_receipt(svc)
     assert brx.write_receipt(svc._paths, rec)
     bi.journal_path(svc._paths).write_text("{broken")
     svc.invalidate_snapshot()
@@ -249,12 +222,12 @@ def test_forced_retire_discards_an_unrecoverable_journal(tmp_path, monkeypatch):
     assert not (tmp_path / rec.files[0]).exists()
 
 
-def test_doctor_names_a_broken_binary_install(tmp_path, monkeypatch):
+def test_doctor_names_a_broken_binary_install(tmp_path, monkeypatch, binary_receipt):
     """A receipt whose files are gone (a source adoption of a shared checkout displaced them —
     live-found on the Zero) reads as an ordinary source state in `status`. `doctor` is where
     that must surface, with the reason and the command that fixes it."""
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    rec = _receipt_for(svc, tmp_path)
+    rec = binary_receipt(svc)
     assert brx.write_receipt(svc._paths, rec)
     (tmp_path / rec.proof_paths[0]).unlink()          # what the source adoption did
     svc.invalidate_snapshot()
@@ -264,61 +237,42 @@ def test_doctor_names_a_broken_binary_install(tmp_path, monkeypatch):
     assert any("lhpc install daemon --yes" in d for d in out.details)
 
 
-def test_doctor_is_quiet_for_a_healthy_binary_install(tmp_path, monkeypatch):
+def test_doctor_is_quiet_for_a_healthy_binary_install(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    binary_receipt(svc)
     svc.invalidate_snapshot()
     assert not any("binary install" in d for d in svc.doctor().details)
 
 
-def _stub_pipeline(monkeypatch, svc):
-    """Everything up to the download stubbed out (the index/target/pin checks are covered in
-    test_binary_install.py) so these tests observe ONLY the receipt gate."""
-    from lhpc.core import binary_install as bi
-    entry = bi.IndexEntry(
-        stack="daemon", filename="daemon-" + "a" * 64 + ".tar.zst",
-        url="https://example.invalid/daemon-" + "a" * 64 + ".tar.zst", sha256="a" * 64,
-        size=10, components=dict(svc._binary_pins("daemon")),
-        runtime_deps=(), target="aarch64-trixie",
-        provenance={"smoke": {"mode": "mandatory", "result": "passed"}})
-    monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 2, "stacks": {}})
-    monkeypatch.setattr(bi, "index_entry", lambda idx, sid: entry)
-    monkeypatch.setattr(bi, "require_zstd", lambda: None)
-
-    def _boom(*a, **k):
-        raise bi.BinaryInstallError("DOWNLOAD-REACHED")
-    monkeypatch.setattr(bi, "download_artifact", _boom)
-
-
-def test_reinstall_repairs_a_drifted_receipt(tmp_path, monkeypatch):
+def test_reinstall_repairs_a_drifted_receipt(tmp_path, monkeypatch, binary_receipt, stub_pipeline):
     """A receipt whose artifact file vanished reads unsafe, and re-installing is the DOCUMENTED
     repair — it must not be refused (doctor points at exactly this command). Only an unreadable
     receipt blocks, because then we cannot know what the previous install owned."""
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    rec = _receipt_for(svc, tmp_path)
+    rec = binary_receipt(svc)
     assert brx.write_receipt(svc._paths, rec)
     (tmp_path / rec.proof_paths[0]).unlink()
     svc.invalidate_snapshot()
-    _stub_pipeline(monkeypatch, svc)
+    stub_pipeline(svc)
     res = svc.binary_install("daemon", apply=True)
     assert not res.ok and "DOWNLOAD-REACHED" in res.summary      # got past the receipt gate
 
 
-def test_unreadable_receipt_still_blocks_a_reinstall(tmp_path, monkeypatch):
+def test_unreadable_receipt_still_blocks_a_reinstall(tmp_path, monkeypatch, stub_pipeline):
     from lhpc.core import runtime_fs
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
     runtime_fs.mkdir(svc._paths, "state", "binary")
     brx.receipt_path(svc._paths, "daemon").write_text("{not json")
     svc.invalidate_snapshot()
-    _stub_pipeline(monkeypatch, svc)
+    stub_pipeline(svc)
     res = svc.binary_install("daemon", apply=True)
     assert not res.ok and "malformed" in res.summary
     assert res.next_commands == ["lhpc clean daemon --purge --yes"]
 
 
-def test_retire_removes_a_receipt_whose_file_is_gone(tmp_path, monkeypatch):
+def test_retire_removes_a_receipt_whose_file_is_gone(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    rec = _receipt_for(svc, tmp_path)
+    rec = binary_receipt(svc)
     assert brx.write_receipt(svc._paths, rec)
     (tmp_path / rec.files[0]).unlink()
     svc.invalidate_snapshot()
@@ -327,9 +281,9 @@ def test_retire_removes_a_receipt_whose_file_is_gone(tmp_path, monkeypatch):
     assert svc.binary_receipt_state("daemon")[0] == "absent"
 
 
-def test_retire_still_refuses_a_modified_file(tmp_path, monkeypatch):
+def test_retire_still_refuses_a_modified_file(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    rec = _receipt_for(svc, tmp_path)
+    rec = binary_receipt(svc)
     assert brx.write_receipt(svc._paths, rec)
     (tmp_path / rec.files[0]).write_bytes(b"operator edit")
     svc.invalidate_snapshot()
@@ -337,11 +291,11 @@ def test_retire_still_refuses_a_modified_file(tmp_path, monkeypatch):
     assert not res.ok and "changed since installation" in res.summary
 
 
-def test_retire_removes_an_owned_directory(tmp_path, monkeypatch):
+def test_retire_removes_an_owned_directory(tmp_path, monkeypatch, binary_receipt):
     """A provisioned venv is owned as a DIRECTORY (half of it is symlinks the per-file guard
     cannot touch) — retirement must take the whole thing, not leave a broken environment."""
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    rec = _receipt_for(svc, tmp_path)
+    rec = binary_receipt(svc)
     venv = tmp_path / "build" / "tools" / "meshtastic-cli" / ".venv" / "bin"
     venv.mkdir(parents=True)
     (venv / "meshtastic").write_bytes(b"x")
@@ -356,10 +310,10 @@ def test_retire_removes_an_owned_directory(tmp_path, monkeypatch):
     assert not (tmp_path / "build" / "tools" / "meshtastic-cli").exists()
 
 
-def test_receipt_with_an_escaping_owned_dir_is_unsafe(tmp_path, monkeypatch):
+def test_receipt_with_an_escaping_owned_dir_is_unsafe(tmp_path, monkeypatch, binary_receipt):
     import json
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    binary_receipt(svc)
     p = brx.receipt_path(svc._paths, "daemon")
     d = json.loads(p.read_text())
     d["owned_dirs"] = ["../../etc"]                 # every owned dir is rmtree'd at retirement
@@ -401,24 +355,24 @@ def test_recovery_sweeps_staging_left_by_a_killed_run(tmp_path, monkeypatch):
     assert keep.is_dir()                       # only our own staging prefix is swept
 
 
-def test_recovery_fails_loudly_when_the_receipt_cannot_be_removed(tmp_path, monkeypatch):
+def test_recovery_fails_loudly_when_the_receipt_cannot_be_removed(tmp_path, monkeypatch, binary_receipt):
     """There was no receipt before the run, so the failed install's one must go. If removal
     fails, the journal and backups MUST stay — dropping them discards the only evidence a
-    later attempt could converge from (audit finding)."""
+    later attempt could converge from."""
     from lhpc.core import binary_install as bi
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    binary_receipt(svc)
     bi.open_txn(svc._paths, "daemon", "txnZ", old_receipt=None)     # nothing to restore
-    monkeypatch.setattr(brx, "remove_receipt", lambda *a, **k: False)
-    ok, why = svc.binary_recover()
+    with monkeypatch.context() as m:                    # only this stub is lifted afterwards
+        m.setattr(brx, "remove_receipt", lambda *a, **k: False)
+        ok, why = svc.binary_recover()
     assert not ok and "receipt could not be removed" in why
     assert bi.read_journal(svc._paths)[1] == "valid"                # evidence retained
-    monkeypatch.undo()
     assert svc.binary_recover()[0] is True                          # …and it converges later
     assert bi.read_journal(svc._paths)[1] == "absent"
 
 
-# ===== merged from test_binary_receipt.py =====
+# ---- the receipt itself: validation and supersession -------------------------------------------
 def _paths(tmp_path):
     return Paths(runtime_root=tmp_path)
 
@@ -509,7 +463,7 @@ def test_missing_proof_path_is_unsafe_not_superseded(tmp_path):
     assert brx.write_receipt(paths, rec)
     (tmp_path / rec.proof_paths[0]).unlink()
     state, _r, reason = brx.receipt_state(paths, "demo")
-    # a missing artifact file is DRIFT, not source supersession (audit correction)
+    # a missing artifact file is DRIFT, not source supersession
     assert state == "unsafe" and "is gone" in reason
 
 
@@ -603,7 +557,7 @@ def test_remove_receipt_is_idempotent(tmp_path):
 @pytest.mark.parametrize("bad", ["/etc/passwd", "../../etc/passwd", "a/../../b", "~/x"])
 def test_receipt_with_escaping_paths_is_unsafe(tmp_path, bad):
     # Every listed path is DELETED at retirement — a hand-edited receipt must read UNSAFE,
-    # never reach the filesystem (audit finding).
+    # never reach the filesystem.
     paths = _paths(tmp_path)
     rec = _receipt(tmp_path)
     assert brx.write_receipt(paths, rec)
@@ -622,7 +576,7 @@ def test_receipt_with_escaping_paths_is_unsafe(tmp_path, bad):
 ])
 def test_receipt_hash_set_must_match_file_set(tmp_path, mutate):
     """Retirement deletes every `files` entry while verify_files only checks hashed ones — an
-    unhashed file could authorize an unverified deletion (audit finding)."""
+    unhashed file could authorize an unverified deletion."""
     paths = _paths(tmp_path)
     assert brx.write_receipt(paths, _receipt(tmp_path))
     d = json.loads(brx.receipt_path(paths, "demo").read_text())
@@ -631,26 +585,16 @@ def test_receipt_hash_set_must_match_file_set(tmp_path, mutate):
     assert brx.receipt_state(paths, "demo")[0] == "unsafe"
 
 
-# ===== merged from test_binary_status.py =====
-def _svc_binary_status(tmp_path, monkeypatch):
-    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
-    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+# ---- what status reports for a binary-installed stack ------------------------------------------
+ARTIFACT_HEAD = "cd" * 20
 
 
-def _install_binary(svc, tmp_path, stack="daemon", sha="ab" * 32, commits=None):
+def _install_binary(binary_receipt, svc, stack="daemon"):
+    """An artifact whose every covered component was built at ARTIFACT_HEAD (not the manifest
+    pins), so the head status reports can only have come from the receipt."""
     spec = svc.binary_spec(stack)
-    for rel in spec.proof_paths:
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_bytes(b"ELF")
-    comps = commits or {c: "cd" * 20 for c in spec.covers}
-    assert brx.write_receipt(svc._paths, brx.BinaryReceipt(
-        stack=stack, artifact_sha256=sha, artifact_size=9,
-        filename=f"{stack}-{sha}.tar.zst", url="https://example.invalid/a.tar.zst",
-        components=comps, provenance={"lhpc_commit": "ee" * 20},
-        files=tuple(spec.proof_paths),
-        file_hashes={r: _h(tmp_path, r) for r in spec.proof_paths},
-        proof_paths=tuple(spec.proof_paths), registry_baseline={}, probe="ok"))
-    svc._snapshot_state.cache = None
+    return binary_receipt(svc, stack, commits={c: ARTIFACT_HEAD for c in spec.covers},
+                          provenance={"lhpc_commit": "ee" * 20})
 
 
 def _cs(svc, stack, cid):
@@ -658,127 +602,70 @@ def _cs(svc, stack, cid):
 
 
 def test_without_receipt_source_reads_missing(tmp_path, monkeypatch):
-    svc = _svc_binary_status(tmp_path, monkeypatch)
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
     st = _cs(svc, "daemon", "loraham-daemon")
     assert st.source_state is SourceState.MISSING
     assert st.run_state.value == "not-installed"
 
 
-def test_binary_receipt_gives_binary_state_and_provenance(tmp_path, monkeypatch):
-    svc = _svc_binary_status(tmp_path, monkeypatch)
-    _install_binary(svc, tmp_path)
+def test_binary_receipt_gives_binary_state_and_provenance(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    _install_binary(binary_receipt, svc)
     st = _cs(svc, "daemon", "loraham-daemon")
     assert st.source_state is SourceState.BINARY
     assert st.source_version == "binary@" + ("ab" * 32)[:9]
-    assert st.source_head == "cd" * 20                      # the artifact's component commit
+    assert st.source_head == ARTIFACT_HEAD                  # the artifact's component commit
     assert st.run_state.value != "not-installed"            # THE bug this branch prevents
 
 
-def test_every_covered_component_reports_binary(tmp_path, monkeypatch):
+def test_every_covered_component_reports_binary(tmp_path, monkeypatch, binary_receipt):
     # RadioLib has no clone at all in binary mode; it must not read "missing".
-    svc = _svc_binary_status(tmp_path, monkeypatch)
-    _install_binary(svc, tmp_path)
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    _install_binary(binary_receipt, svc)
     assert _cs(svc, "daemon", "radiolib").source_state is SourceState.BINARY
 
 
-def test_uncovered_stacks_are_untouched(tmp_path, monkeypatch):
-    svc = _svc_binary_status(tmp_path, monkeypatch)
-    _install_binary(svc, tmp_path)
+def test_uncovered_stacks_are_untouched(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    _install_binary(binary_receipt, svc)
     assert _cs(svc, "kiss", "loraham-kiss-tnc").source_state is SourceState.MISSING
 
 
-def test_superseded_receipt_falls_back_to_git_probe(tmp_path, monkeypatch):
+def test_superseded_receipt_falls_back_to_git_probe(tmp_path, monkeypatch, binary_receipt):
     from lhpc.core import source_registry
-    svc = _svc_binary_status(tmp_path, monkeypatch)
-    spec = svc.binary_spec("daemon")
-    for rel in spec.proof_paths:
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_bytes(b"ELF")
-    assert brx.write_receipt(svc._paths, brx.BinaryReceipt(
-        stack="daemon", artifact_sha256="ab" * 32, artifact_size=9,
-        filename="daemon-x.tar.zst", url="https://example.invalid/a", components={},
-        provenance={}, files=tuple(spec.proof_paths),
-        file_hashes={r: _h(tmp_path, r) for r in spec.proof_paths},
-        proof_paths=tuple(spec.proof_paths),
-        registry_baseline={"src/loraham-daemon": ""}, probe="ok"))
-    svc._snapshot_state.cache = None
+    import dataclasses
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    rec = binary_receipt(svc)
+    assert brx.write_receipt(svc._paths, dataclasses.replace(
+        rec, registry_baseline={"src/loraham-daemon": ""}))   # "no source record at install"
+    svc.invalidate_snapshot()
     assert _cs(svc, "daemon", "loraham-daemon").source_state is SourceState.BINARY
     source_registry.write_record(svc._paths, source_registry.RegistryRecord(
         source_rel="src/loraham-daemon", remote="https://example.invalid/d.git",
         selector="pinned", resolved_commit="c" * 40, adopted_at=1.0, txn_id="txn-1",
         components=("loraham-daemon",)))
-    svc._snapshot_state.cache = None
+    svc.invalidate_snapshot()
     # receipt superseded -> the ordinary git probe answers again
     assert _cs(svc, "daemon", "loraham-daemon").source_state is not SourceState.BINARY
 
 
-def test_status_versions_shows_artifact_provenance(tmp_path, monkeypatch):
-    svc = _svc_binary_status(tmp_path, monkeypatch)
-    _install_binary(svc, tmp_path)
+def test_status_versions_shows_artifact_provenance(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    _install_binary(binary_receipt, svc)
     res = svc.status_versions()
     line = next(d for d in res.details if "loraham-daemon" in d)
     assert "binary" in line and "binary@" in line and "built_from=" in line
 
 
-def test_status_versions_unchanged_for_source_stacks(tmp_path, monkeypatch):
-    svc = _svc_binary_status(tmp_path, monkeypatch)
-    _install_binary(svc, tmp_path)
+def test_status_versions_unchanged_for_source_stacks(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    _install_binary(binary_receipt, svc)
     line = next(d for d in svc.status_versions().details if "loraham-kiss-tnc" in d)
     assert "pin=" in line and "tag=" in line and "binary@" not in line
 
 
-def test_web_pill_renders_provenance(tmp_path, monkeypatch):
-    from lhpc.adapters.web.app import create_app
-    svc = _svc_binary_status(tmp_path, monkeypatch)
-    _install_binary(svc, tmp_path)
-    client = create_app(service_factory=lambda: svc).test_client()
-    # the source pill lives in the stack SUMMARY row on the overview page
-    body = client.get("/stacks").get_data(as_text=True)
-    assert "src: binary" in body and "binary@" + ("ab" * 32)[:9] in body
-    # ONE version pill in the row (the version cell); the artifact tooltip rides on it
-    assert body.count("binary@" + ("ab" * 32)[:9]) == 1
-    assert "verified prebuilt artifact" in body
-
-
-def test_web_binary_stack_is_not_offered_as_missing(tmp_path, monkeypatch):
-    """A binary-installed stack has no clone by design: its row must not carry the
-    "Not installed yet — run Install" banner that gates a source stack."""
-    from lhpc.adapters.web.app import create_app
-    svc = _svc_binary_status(tmp_path, monkeypatch)
-    _install_binary(svc, tmp_path)                                    # daemon from the artifact
-    body = create_app(service_factory=lambda: svc).test_client().get("/stacks").get_data(as_text=True)
-    row = body[body.index('id="stackrow-daemon"'):]
-    row = row[:row.find('id="stackrow-', 10)] if row.find('id="stackrow-', 10) > 0 else row
-    assert "src: binary" in row and "Not installed yet" not in row
-
-
-# ===== merged from test_binary_predicates.py =====
-def _svc_binary_predicates(tmp_path, monkeypatch):
-    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
-    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-
-
-def _install_daemon_binary(svc, tmp_path):
-    """Lay down exactly what the artifact lays down (daemon binary only — NO clone, no
-    RadioLib) plus the receipt."""
-    spec = svc.binary_spec("daemon")
-    for rel in spec.proof_paths:
-        p = tmp_path
-        for seg in rel.split("/")[:-1]:
-            p = p / seg
-        p.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_bytes(b"ELF")
-    rec = brx.BinaryReceipt(
-        stack="daemon", artifact_sha256="a" * 64, artifact_size=10,
-        filename=f"daemon-{'a' * 64}.tar.zst", url="https://example.invalid/d.tar.zst",
-        components={c: svc._binary_pins("daemon").get(c, "b" * 40) for c in spec.covers}, provenance={},
-        files=tuple(spec.proof_paths),
-        file_hashes={r: _h(tmp_path, r) for r in spec.proof_paths},
-        proof_paths=tuple(spec.proof_paths),
-        registry_baseline={}, probe="loraham_daemon 1.0")
-    assert brx.write_receipt(svc._paths, rec)
-
-
+# ---- the predicates a binary install flips: installed, built, blockers -------------------------
+# The artifact lays down the daemon binary only — NO clone, no RadioLib — plus the receipt.
 def _comp(svc, cid):
     for st in svc.stacks():
         for c in st.components:
@@ -787,59 +674,59 @@ def _comp(svc, cid):
     raise AssertionError(cid)
 
 
-def test_is_built_is_unchanged_for_binary_artifacts(tmp_path, monkeypatch):
+def test_is_built_is_unchanged_for_binary_artifacts(tmp_path, monkeypatch, binary_receipt):
     # The artifact lands exactly at the manifest `bin` path, so the PHYSICAL probe answers
     # "built" with no receipt involvement at all.
-    svc = _svc_binary_predicates(tmp_path, monkeypatch)
-    _install_daemon_binary(svc, tmp_path)
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    binary_receipt(svc)
     assert svc.is_built(_comp(svc, "loraham-daemon")) is True
 
 
-def test_install_blocker_accepts_covered_component_without_clone(tmp_path, monkeypatch):
-    svc = _svc_binary_predicates(tmp_path, monkeypatch)
+def test_install_blocker_accepts_covered_component_without_clone(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
     daemon = _comp(svc, "loraham-daemon")
     assert "not installed" in svc.install_blocker(daemon)     # nothing there yet
-    _install_daemon_binary(svc, tmp_path)
+    binary_receipt(svc)
     assert svc.install_blocker(daemon) == ""                  # binary-covered: no clone needed
 
 
-def test_install_blocker_unchanged_for_uncovered_component(tmp_path, monkeypatch):
-    svc = _svc_binary_predicates(tmp_path, monkeypatch)
-    _install_daemon_binary(svc, tmp_path)
+def test_install_blocker_unchanged_for_uncovered_component(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    binary_receipt(svc)
     kiss = _comp(svc, "loraham-kiss-tnc")
     assert "not installed" in svc.install_blocker(kiss)       # different stack, still source
 
 
-def test_auto_install_installed_predicate_ignores_covered_clones(tmp_path, monkeypatch):
+def test_auto_install_installed_predicate_ignores_covered_clones(tmp_path, monkeypatch, binary_receipt):
     # RadioLib has NO clone in binary mode; the stack must still read "installed".
-    svc = _svc_binary_predicates(tmp_path, monkeypatch)
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
     st = svc.stack("daemon")
     assert svc._auto_install_stack_installed(st) is False
-    _install_daemon_binary(svc, tmp_path)
+    binary_receipt(svc)
     assert svc._auto_install_stack_installed(st) is True
 
 
-def test_predicates_revert_when_receipt_retired(tmp_path, monkeypatch):
-    svc = _svc_binary_predicates(tmp_path, monkeypatch)
-    _install_daemon_binary(svc, tmp_path)
+def test_predicates_revert_when_receipt_retired(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    binary_receipt(svc)
     assert svc._auto_install_stack_installed(svc.stack("daemon")) is True
     assert brx.remove_receipt(svc._paths, "daemon")
     # without the receipt the source-dir requirement is back (RadioLib is missing)
     assert svc._auto_install_stack_installed(svc.stack("daemon")) is False
 
 
-def test_build_refused_on_binary_stack(tmp_path, monkeypatch):
-    svc = _svc_binary_predicates(tmp_path, monkeypatch)
-    _install_daemon_binary(svc, tmp_path)
+def test_build_refused_on_binary_stack(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    binary_receipt(svc)
     res = svc.build("daemon", apply=True)
     assert not res.ok and "prebuilt binary" in res.summary
     assert res.data.get("binary_channel") is True
     assert any("--source pinned" in c for c in res.next_commands)
 
 
-def test_host_test_refused_on_binary_stack(tmp_path, monkeypatch):
-    svc = _svc_binary_predicates(tmp_path, monkeypatch)
-    _install_daemon_binary(svc, tmp_path)
+def test_host_test_refused_on_binary_stack(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    binary_receipt(svc)
     res = svc.test("daemon", apply=True)
     assert not res.ok and "host tests" in res.summary
     assert res.data.get("skipped") == "binary-install"
@@ -848,106 +735,73 @@ def test_host_test_refused_on_binary_stack(tmp_path, monkeypatch):
 def test_build_and_test_allowed_without_receipt(tmp_path, monkeypatch):
     # No receipt -> the historical behaviour must be byte-identical (these fail for the
     # ordinary "not installed" reasons, never the binary refusal).
-    svc = _svc_binary_predicates(tmp_path, monkeypatch)
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
     for res in (svc.build("daemon", apply=False), svc.test("daemon", apply=False)):
         assert "prebuilt binary" not in res.summary
 
 
-def test_web_job_refuses_build_on_binary_stack(tmp_path, monkeypatch):
-    svc = _svc_binary_predicates(tmp_path, monkeypatch)
-    _install_daemon_binary(svc, tmp_path)
+def test_web_job_refuses_build_on_binary_stack(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    binary_receipt(svc)
     _job, state, reason = svc.spawn_web_job("build", "daemon")
     assert state == "blocked" and "prebuilt binary" in reason
 
 
 def test_web_job_accepts_binary_channel_for_install(tmp_path, monkeypatch):
     # The web install path must accept the new channel (and still reject nonsense).
-    svc = _svc_binary_predicates(tmp_path, monkeypatch)
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
     _job, state, reason = svc.spawn_web_job("install", "kiss", source="binary")
     assert state == "blocked" and "binary channel unavailable" in reason
     _job2, state2, reason2 = svc.spawn_web_job("install", "daemon", source="bogus")
     assert state2 == "blocked" and "invalid source" in reason2
 
 
-# ===== merged from test_binary_hmac_firewall.py =====
-def _svc_binary_hmac_firewall(tmp_path, monkeypatch):
-    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
-    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-
-
-def _lay_down(svc, tmp_path, stack="meshcom"):
-    import hashlib
-    spec = svc.binary_spec(stack)
-    files, hashes = [], {}
-    for rel in spec.proof_paths:
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_bytes(b"ELF")
-        files.append(rel)
-        hashes[rel] = hashlib.sha256(b"ELF").hexdigest()
-    assert brx.write_receipt(svc._paths, brx.BinaryReceipt(
-        stack=stack, artifact_sha256="ab" * 32, artifact_size=9,
-        filename=f"{stack}-{'ab' * 32}.tar.zst", url="https://example.invalid/a.tar.zst",
-        components=dict(svc._binary_pins(stack)), provenance={}, files=tuple(files),
-        file_hashes=hashes, proof_paths=tuple(spec.proof_paths), registry_baseline={},
-        probe="qemu 9.0"))
-    svc.invalidate_snapshot()
-
-
-def test_hmac_applies_stays_true_but_blocks_with_reason(tmp_path, monkeypatch):
-    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)
+# ---- what the binary channel does to the mesh password and the firewall model -------------------
+def test_hmac_applies_stays_true_but_blocks_with_reason(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    binary_receipt(svc, "meshcom")
     # NOT flipped to "does not apply" — the UI must show the reason
     assert svc.hmac_applies("meshcom") is True
     reason = svc.hmac_binary_block("meshcom")
     assert "NO mesh password" in reason and "open auth" in reason
 
 
-def test_hmac_apply_start_refused(tmp_path, monkeypatch):
-    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)
+def test_hmac_apply_start_refused(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    binary_receipt(svc, "meshcom")
     res = svc.hmac_apply_start("meshcom", "enable")
     assert not res.ok and res.data.get("binary_channel") is True
     assert any("--source pinned" in c for c in res.next_commands)
 
 
-def test_hmac_cli_refused(tmp_path, monkeypatch):
-    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)
+def test_hmac_cli_refused(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    binary_receipt(svc, "meshcom")
     lines = []
     assert svc.hmac_apply_cli("meshcom", "enable", lines.append) == 1
     assert any("NO mesh password" in ln for ln in lines)
 
 
-def test_hmac_driver_refused_authoritatively(tmp_path, monkeypatch):
+def test_hmac_driver_refused_authoritatively(tmp_path, monkeypatch, binary_receipt):
     # The shared step runner gates too — a CLI/web-only check could be bypassed.
-    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    binary_receipt(svc, "meshcom")
     lines = []
     assert svc._hmac_run_steps("meshcom", "enable", "f" * 32, lines.append) == 1
     assert any("refused" in ln and "NO mesh password" in ln for ln in lines)
 
 
-def test_hmac_set_secret_enable_refused_disable_allowed(tmp_path, monkeypatch):
-    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)
+def test_hmac_set_secret_enable_refused_disable_allowed(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    binary_receipt(svc, "meshcom")
     assert svc.hmac_set_secret("meshcom", "enable").ok is False
     # `disable` is what the binary install itself performs — it must stay available
     assert "NO mesh password" not in svc.hmac_set_secret("meshcom", "disable").summary
 
 
 def test_hmac_unblocked_without_receipt(tmp_path, monkeypatch):
-    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
     assert svc.hmac_binary_block("meshcom") == ""
-
-
-def test_hmac_page_shows_reason(tmp_path, monkeypatch):
-    from lhpc.adapters.web.app import create_app
-    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)
-    client = create_app(service_factory=lambda: svc).test_client()
-    body = client.get("/stacks/meshcom/hmac/enable").get_data(as_text=True)
-    assert "not available" in body and "NO mesh password" in body
-    assert "--source pinned" in body
 
 
 def _bridge_scope(svc):
@@ -963,21 +817,21 @@ def _bridge_scope(svc):
 
 
 def test_bridge_listener_is_password_auth_on_source(tmp_path, monkeypatch):
-    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
     ep = _bridge_scope(svc)
     assert ep is not None and ep["auth"] == "password"
 
 
-def test_bridge_listener_is_open_auth_on_binary(tmp_path, monkeypatch):
-    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)
+def test_bridge_listener_is_open_auth_on_binary(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    binary_receipt(svc, "meshcom")
     ep = _bridge_scope(svc)
     assert ep is not None and ep["auth"] == "none"
 
 
-def test_clean_force_retires_binary(tmp_path, monkeypatch):
-    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)
+def test_clean_force_retires_binary(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    binary_receipt(svc, "meshcom")
     proof = tmp_path / svc.binary_spec("meshcom").proof_paths[0]
     assert proof.exists()
     svc.clean("meshcom", apply=True, purge=True)
@@ -985,9 +839,9 @@ def test_clean_force_retires_binary(tmp_path, monkeypatch):
     assert brx.receipt_state(svc._paths, "meshcom")[0] == "absent"
 
 
-def test_uninstall_retires_binary(tmp_path, monkeypatch):
-    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path, stack="daemon")
+def test_uninstall_retires_binary(tmp_path, monkeypatch, binary_receipt):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    binary_receipt(svc)
     proof = tmp_path / svc.binary_spec("daemon").proof_paths[0]
     assert proof.exists()
     res = svc.uninstall("daemon", apply=True)
@@ -996,13 +850,13 @@ def test_uninstall_retires_binary(tmp_path, monkeypatch):
     assert any("binary" in d for d in res.details)
 
 
-def test_clean_keeps_the_binary_when_a_component_started_mid_flight(tmp_path, monkeypatch):
+def test_clean_keeps_the_binary_when_a_component_started_mid_flight(tmp_path, monkeypatch, binary_receipt):
     """`clean` retires the artifact FORCEFULLY, so it must happen only after the authoritative
     post-lock running recheck — otherwise a start that slipped in loses its binary and the
-    clean then aborts with nothing else done (audit finding)."""
+    clean then aborts with nothing else done."""
     from lhpc.core.model import RunState
-    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path, stack="daemon")
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    binary_receipt(svc)
     proof = tmp_path / svc.binary_spec("daemon").proof_paths[0]
     real = svc.build_snapshot
 
@@ -1024,9 +878,9 @@ def test_clean_keeps_the_binary_when_a_component_started_mid_flight(tmp_path, mo
 def test_interrupted_install_restores_the_mesh_password(tmp_path, monkeypatch):
     """The install switches meshcom to open auth BEFORE downloading. The journal is opened
     first and carries the previous value, so an interrupted run puts password auth back —
-    the crash used to leave the bridge open with nothing to recover from (audit finding)."""
+    the crash used to leave the bridge open with nothing to recover from."""
     from lhpc.core import binary_install as bi
-    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
     r = svc.hmac_set_secret("meshcom", "enable")
     assert r.ok, r.summary
     before = svc._resolved_param_value("meshcom", "run",
@@ -1052,7 +906,7 @@ def test_committed_transaction_keeps_open_auth(tmp_path, monkeypatch):
     """Past the commit point the NEW install is the truth: recovery must NOT put the password
     back (the installed firmware has none)."""
     from lhpc.core import binary_install as bi
-    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
     assert svc.hmac_set_secret("meshcom", "enable").ok
     prev = svc._resolved_param_value("meshcom", "run",
                                      svc._hmac_component("meshcom").id, "password_file")
@@ -1069,12 +923,12 @@ def test_committed_transaction_keeps_open_auth(tmp_path, monkeypatch):
                                      svc._hmac_component("meshcom").id, "password_file") == ""
 
 
-def test_welcome_banner_does_not_call_a_binary_install_an_unmanaged_tree(tmp_path, monkeypatch):
+def test_welcome_banner_does_not_call_a_binary_install_an_unmanaged_tree(tmp_path, monkeypatch, binary_receipt):
     """A binary artifact publishes INTO the component's source path and adopts no source, so there
     is no ownership record by design. Calling that an "unmanaged tree" told the operator to "move
     it away or Clean" — which would destroy a working binary install (live-found on a fresh Zero)."""
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    rec = _receipt_for(svc, tmp_path)
+    rec = binary_receipt(svc)
     assert brx.write_receipt(svc._paths, rec)
     # the artifact's own file under the daemon's source path, with NO registry record
     src = tmp_path / "src" / "loraham-daemon" / "loraham_daemon"
@@ -1099,14 +953,14 @@ def _unmet(svc, sid):
     return {d.label for d in g["system"] + g["build"] if not d.satisfied}
 
 
-def test_binary_channel_drops_build_only_prerequisites(tmp_path, monkeypatch):
+def test_binary_channel_drops_build_only_prerequisites(tmp_path, monkeypatch, binary_receipt):
     """`build` is REFUSED on the binary channel, so demanding its inputs is asking the operator
     for something they cannot act on. A fresh Zero was told to install a RadioLib checkout and
     PlatformIO for stacks it had just installed as binaries (live-found)."""
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
     before = _unmet(svc, "daemon")
     assert any("radiolib source checkout" in lbl for lbl in before)
-    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    binary_receipt(svc)
     svc.invalidate_snapshot()
     after = _unmet(svc, "daemon")
     assert not any("radiolib source checkout" in lbl for lbl in after), after
@@ -1114,10 +968,9 @@ def test_binary_channel_drops_build_only_prerequisites(tmp_path, monkeypatch):
     assert len(after) == len(before) - 1
 
 
-def test_binary_channel_separates_build_tools_from_artifact_delivered_runtime_deps(
-        tmp_path, monkeypatch):
+def test_binary_channel_separates_build_tools_from_artifact_delivered_runtime_deps(tmp_path, monkeypatch, binary_receipt):
     """The dependency report and the START gate must classify a provisioned requirement the SAME
-    way (audit): a pure BUILD tool the artifact never ships is irrelevant on the binary channel,
+    way: a pure BUILD tool the artifact never ships is irrelevant on the binary channel,
     while a path the receipt OWNS is a real, missing runtime dependency — cheap receipt validation
     only restats proof paths, so nothing else would notice it is gone."""
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
@@ -1126,7 +979,7 @@ def test_binary_channel_separates_build_tools_from_artifact_delivered_runtime_de
     before = _unmet(svc, "meshcom")
     assert any(lbl.startswith(_QEMU) for lbl in before), before
 
-    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path, stack_id="meshcom"))
+    binary_receipt(svc, "meshcom")
     svc.invalidate_snapshot()
     assert svc.on_binary_channel("meshcom")
     report = [d for g in svc.deps_report("meshcom").values() for d in g]
@@ -1157,24 +1010,24 @@ def test_source_channel_still_demands_its_build_inputs(tmp_path, monkeypatch):
                for lbl in _unmet(svc, "meshcom"))
 
 
-def test_is_installed_rests_on_the_receipt_not_on_a_lucky_directory(tmp_path, monkeypatch):
+def test_is_installed_rests_on_the_receipt_not_on_a_lucky_directory(tmp_path, monkeypatch, binary_receipt):
     """Every artifact today happens to create something under the main source path, so the
     directory probe is accidentally right. Make it intentional: with a valid receipt the stack is
     installed even if no source directory exists at all."""
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
     assert svc.is_installed("daemon") is False
-    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    binary_receipt(svc)
     svc.invalidate_snapshot()
     assert svc.is_installed("daemon") is True
 
 
-def test_doctor_counts_binary_covered_sources_as_provided_not_missing(tmp_path, monkeypatch):
+def test_doctor_counts_binary_covered_sources_as_provided_not_missing(tmp_path, monkeypatch, binary_receipt):
     """A binary-covered component has no checkout BY DESIGN. Counting it as a missing source made
     a healthy binary install read half-installed (live-found on a fresh box)."""
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
     before = next(d for d in svc.doctor().details if "configured sources" in d)
     assert "missing" in before
-    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    binary_receipt(svc)
     svc.invalidate_snapshot()
     after = next(d for d in svc.doctor().details if "configured sources" in d)
     assert "provided by a binary artifact" in after
@@ -1204,40 +1057,35 @@ def test_prune_empty_dirs_clears_a_whole_emptied_tree(tmp_path, monkeypatch):
     assert (tmp_path / "build").is_dir()                     # runtime skeleton -> never pruned
 
 
-def test_start_gate_uses_the_shared_classifier(tmp_path, monkeypatch):
+def test_start_gate_uses_the_shared_classifier(tmp_path, monkeypatch, binary_receipt):
     """`start_blocking_requirements()` returns real `Requirement` objects (downstream renderers
-    depend on that) and drops only what the shared classifier calls irrelevant."""
-    from lhpc.core.model import Requirement
-
-    class _Comp:
-        id = "meshcom-qemu"
-
+    depend on that) and drops only what the shared classifier calls irrelevant — judged from
+    the receipt of a real meshcom artifact, over meshcom-qemu's own declared requirements."""
+    from lhpc.core.lifecycle import Lifecycle
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    owned = Requirement(check_file="{runtime}/build/tool-cache/x/qemu", provisioned=True,
-                        install="lhpc build meshcom", note="QEMU")
-    build_only = Requirement(check_file="{runtime}/build/tools/platformio/.venv/bin/pio",
-                             provisioned=True, install="lhpc build meshcom", note="PlatformIO CLI")
-    plain = Requirement(check_file="/usr/include/pixman-1/pixman.h", install="sudo apt install x",
-                        note="pixman headers")
-    monkeypatch.setattr(type(svc._lifecycle()), "missing_requirements",
-                        lambda self, comp: [owned, build_only, plain], raising=False)
-    monkeypatch.setattr(ControllerService, "binary_covers", lambda self, cid: True)
-    monkeypatch.setattr(ControllerService, "binary_requirement_class",
-                        lambda self, cid, req: {"QEMU": "artifact-missing",
-                                                "PlatformIO CLI": "irrelevant"}.get(
-                                                    req.note, "blocker"))
-    out = svc.start_blocking_requirements(_Comp())
-    assert [r.note for r in out] == [svc.ARTIFACT_MISSING_NOTE, "pixman headers"]
+    rec = binary_receipt(svc, "meshcom")
+    comp = _comp(svc, "meshcom-qemu")
+    owned = next(r for r in comp.requires
+                 if r.provisioned and r.check_file.endswith("/qemu-system-xtensa"))
+    build_only = next(r for r in comp.requires if r.provisioned and r.check_file.endswith("/pio"))
+    plain = next(r for r in comp.requires if not r.provisioned and "pixman" in r.check_file)
+    assert any(f.endswith("/qemu-system-xtensa") for f in rec.files)   # the artifact SHIPS qemu
+    # Stubbed as a collaborator: `missing_requirements` consults the host's own filesystem and
+    # PATH, and this box may or may not carry pixman headers or a `pio` — the gate's verdict on
+    # exactly these three is the subject, not what this host has installed.
+    monkeypatch.setattr(Lifecycle, "missing_requirements",
+                        lambda self, c: [owned, build_only, plain])
+    out = svc.start_blocking_requirements(comp)
+    assert [r.note for r in out] == [svc.ARTIFACT_MISSING_NOTE, plain.note]
     assert out[0].install == "lhpc install meshcom --source binary --yes"   # artifact remedy
-    assert out[1].install == "sudo apt install x"                           # untouched
+    assert out[1].install == plain.install                                  # untouched
 
 
-
-def test_known_working_confirm_names_the_missing_composition_for_a_binary_stack(tmp_path, monkeypatch):
+def test_known_working_confirm_names_the_missing_composition_for_a_binary_stack(tmp_path, monkeypatch, binary_receipt):
     # A binary-installed stack has no source composition, so the offer never appears; the CLI
     # confirm must say that, not "start the stack first" to an operator who just started it.
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
-    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    binary_receipt(svc)
     res = svc.confirm_known_working("daemon")
     assert not res.ok and "no source composition" in res.summary
     # graywolf is a fetched release: no source at all, the same answer
@@ -1254,18 +1102,15 @@ def test_known_working_confirm_names_the_missing_composition_for_a_binary_stack(
 # artifact's own completion marker is consulted too.
 
 
-def _mesh_on_binary(tmp_path, monkeypatch, manifest=None):
+def _mesh_on_binary(binary_receipt, tmp_path, monkeypatch, manifest=None):
     """A box with the Meshtastic artifact installed and its marker recording TODAY's inputs."""
     from lhpc.core.lifecycle import BUILD_MARKER_TEXT
     svc = ControllerService(manifest_path=manifest, system=FakeSystem().system,
                             paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
-    import dataclasses
     # Components equal to the manifest pins: this box is current on the COMMIT half, so a
     # "behind" verdict below can only come from the marker.
-    rec = dataclasses.replace(_receipt_for(svc, tmp_path, "meshtastic"),
-                              components=dict(svc._binary_pins("meshtastic")))
-    assert brx.write_receipt(svc._paths, rec)
+    binary_receipt(svc, "meshtastic")
     comp = _comp(svc, "meshtastic")
     src = tmp_path / "src" / "meshtastic-firmware"
     src.mkdir(parents=True, exist_ok=True)
@@ -1281,24 +1126,24 @@ def _manifest_with_a_newer_web_client(tmp_path, moved):
     return path
 
 
-def test_an_artifact_matching_the_manifest_is_current(tmp_path, monkeypatch):
-    svc = _mesh_on_binary(tmp_path, monkeypatch)
+def test_an_artifact_matching_the_manifest_is_current(tmp_path, monkeypatch, binary_receipt):
+    svc = _mesh_on_binary(binary_receipt, tmp_path, monkeypatch)
     assert svc.binary_freshness("meshtastic") == {"state": "current", "behind": []}
 
 
-def test_an_artifact_built_before_a_web_client_bump_is_behind(tmp_path, monkeypatch, manifest_with_moved_input):
+def test_an_artifact_built_before_a_web_client_bump_is_behind(tmp_path, monkeypatch, manifest_with_moved_input, binary_receipt):
     """No component commit moved, so the pin comparison alone would call this current and the
     box would never be offered the newer artifact."""
-    _mesh_on_binary(tmp_path, monkeypatch)                       # marker written at 2.7.2
+    _mesh_on_binary(binary_receipt, tmp_path, monkeypatch)       # marker written at the manifest's web-client value
     svc = ControllerService(manifest_path=_manifest_with_a_newer_web_client(tmp_path, manifest_with_moved_input),
                             system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     fresh = svc.binary_freshness("meshtastic")
     assert fresh["state"] == "behind" and "meshtastic" in fresh["behind"]
 
 
-def test_freshness_still_reads_no_network_for_the_marker_check(tmp_path, monkeypatch, manifest_with_moved_input):
+def test_freshness_still_reads_no_network_for_the_marker_check(tmp_path, monkeypatch, manifest_with_moved_input, binary_receipt):
     from lhpc.core import binary_install as bi
-    _mesh_on_binary(tmp_path, monkeypatch)
+    _mesh_on_binary(binary_receipt, tmp_path, monkeypatch)
     svc = ControllerService(manifest_path=_manifest_with_a_newer_web_client(tmp_path, manifest_with_moved_input),
                             system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(bi, "_http_get",
@@ -1306,26 +1151,83 @@ def test_freshness_still_reads_no_network_for_the_marker_check(tmp_path, monkeyp
     assert svc.binary_freshness("meshtastic")["state"] == "behind"
 
 
-def test_the_remedy_for_a_covered_component_is_a_reinstall_not_a_build(tmp_path, monkeypatch):
+def test_the_remedy_for_a_covered_component_is_a_reinstall_not_a_build(tmp_path, monkeypatch, binary_receipt):
     """`lhpc build` is refused on the binary channel, so offering it to a box whose artifact is
     stale is a dead end: the console said "run: lhpc build meshtastic" and that command refuses."""
-    svc = _mesh_on_binary(tmp_path, monkeypatch)
+    svc = _mesh_on_binary(binary_receipt, tmp_path, monkeypatch)
     assert svc.build_remedy("meshtastic", "meshtastic") == \
         "lhpc install meshtastic --source binary --yes"
 
 
-def test_the_remedy_for_a_source_component_is_still_the_build(tmp_path, monkeypatch):
-    svc = _mesh_on_binary(tmp_path, monkeypatch)
+def test_the_remedy_for_a_source_component_is_still_the_build(tmp_path, monkeypatch, binary_receipt):
+    svc = _mesh_on_binary(binary_receipt, tmp_path, monkeypatch)
     assert svc.build_remedy("kiss", "kiss-serial") == "lhpc build kiss"
     assert svc.build_remedy("meshtastic") == "lhpc build meshtastic"
 
 
-def test_a_stale_artifact_names_the_reinstall_when_it_blocks_a_launch(tmp_path, monkeypatch, manifest_with_moved_input):
+def test_a_stale_artifact_names_the_reinstall_when_it_blocks_a_launch(tmp_path, monkeypatch, manifest_with_moved_input, binary_receipt):
     """The operator-visible end of it: the blocker string carries the command that works."""
-    _mesh_on_binary(tmp_path, monkeypatch)
+    _mesh_on_binary(binary_receipt, tmp_path, monkeypatch)
     svc = ControllerService(manifest_path=_manifest_with_a_newer_web_client(tmp_path, manifest_with_moved_input),
                             system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
     blocker = svc.install_blocker(_comp(svc, "meshtastic"))
     assert "not built" in blocker
     assert "lhpc install meshtastic --source binary --yes" in blocker
+
+
+# ---- an installed artifact behind the manifest is refused before any start ----------------------
+
+def test_a_binary_artifact_behind_the_manifest_is_refused_before_start(tmp_path, monkeypatch, binary_receipt):
+    """Publishing a new artifact never updates an installed copy. A copy built from other
+    commits than the manifest pins would be launched with argv it does not know (the RF-log
+    options were the first case) and exit — so the start refuses it, typed, and names the fix."""
+    from lhpc.core import config as cfgmod
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    spec = svc.binary_spec("meshtastic")
+    comp = svc.stack("meshtastic").component("meshtastic")
+    (tmp_path / comp.source.path).mkdir(parents=True)      # the artifact overlays a clone
+    binary_receipt(svc, "meshtastic", commits={c: "b" * 40 for c in spec.covers})   # not the pin
+    assert svc.on_binary_channel("meshtastic")
+    why = svc.binary_behind(comp)
+    assert "behind the manifest" in why and "lhpc update meshtastic" in why
+    assert svc.install_blocker(comp) == why
+    # Past the identity and hardware gates, the start refuses this component typed.
+    cfgmod.save_hardware_setup(svc._paths, "uputronics")
+    svc._invalidate_config()
+    assert svc.save_config_bundle("meshtastic", values={"node_name": "LHPC test", "node_short": "LHPT"}).ok
+    r = svc.start("meshtastic", apply=True)
+    blocked = [x for x in r.results if x.component == "meshtastic"]
+    assert not r.ok and blocked, (r.summary, r.details)
+    assert blocked[0].outcome.value == "blocked" and blocked[0].summary == why
+    # The matching artifact is not "behind".
+    binary_receipt(svc, "meshtastic")                          # components == the manifest pins
+    assert svc.binary_behind(comp) == ""
+    # A source-installed component is never judged here (its checkout is the operator's choice).
+    assert svc.binary_behind(svc.stack("kiss").component("loraham-kiss-tnc")) == ""
+
+
+@pytest.mark.parametrize("target", ["daemon", "meshcom"])
+def test_a_stale_daemon_binary_is_refused_on_its_own_spawn_path(tmp_path, monkeypatch, target, binary_receipt):
+    """The daemon is spawned by `_ensure_daemon`, not by the generic start loop, so the
+    behind-manifest refusal has to sit on that path too — for a direct `start daemon` and for a
+    dependent stack that asks for the band. A stale artifact must never reach the spawn."""
+    from lhpc.core import config as cfgmod
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    cfgmod.save_hardware_setup(svc._paths, "uputronics")
+    svc._invalidate_config()
+    assert svc.set_operator_identity(callsign="XX0XXA").ok        # meshcom's own identity gate
+    spec = svc.binary_spec("daemon")
+    daemon = svc.stack("daemon").component("loraham-daemon")
+    (tmp_path / daemon.source.path).mkdir(parents=True, exist_ok=True)
+    binary_receipt(svc, commits={c: "b" * 40 for c in spec.covers},      # not the manifest pins
+                   probe="loraham_daemon 0.9.0")
+    why = svc.binary_behind(daemon)
+    assert svc.on_binary_channel("daemon") and why
+    spawned = []
+    monkeypatch.setattr(type(svc._lifecycle()), "start",
+                        lambda self, *a, **k: spawned.append(a) or (_ for _ in ()).throw(AssertionError("spawned")))
+    r = svc.start(target, apply=True)
+    assert not r.ok
+    assert any(why in str(d) for d in r.details), (r.summary, r.details)
+    assert spawned == []                                          # never reached the spawn

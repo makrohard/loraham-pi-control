@@ -1156,7 +1156,7 @@ def test_gate_refuses_even_already_exposed_when_unverified(tmp_path, monkeypatch
 def test_gate_allows_when_no_remote_listener(tmp_path, monkeypatch):
     """Closing the LAST remote listener is always allowed — and must still regenerate the firewall
     scripts, because the intent changed. Returning early on the empty set left firewall-apply.sh
-    advertising an ingress that no longer exists (audit)."""
+    advertising an ingress that no longer exists."""
     svc = _svc_fw_installed(tmp_path, monkeypatch, live_ok=False, config_ok=False)
     rendered = []
     monkeypatch.setattr(type(svc), "firewall_render",
@@ -1826,33 +1826,26 @@ def test_firewall_log_tail_reader(tmp_path, monkeypatch):
     assert svc.firewall_has_log() is True
 
 
-def test_firewall_row_anchor_is_on_the_details_element(tmp_path):
+def test_firewall_row_anchor_is_on_the_details_element(web, tmp_path):
     # The anchor must land on the <details> itself (so the hash-open logic opens the tab),
     # never on a wrapping <div> (closest('details') would then miss it).
-    body = _svc_client(tmp_path).get("/stacks?open=kiss").get_data(as_text=True)
-    assert 'class="advcfg" id="firewall-row"' in body
-    assert 'class="ws-sub-wrap" id="firewall-row"' not in body
+    from htmlq import parse
+    row = parse(_svc_client(web, tmp_path).get("/stacks?open=kiss").get_data(as_text=True)).by_id("firewall-row")
+    assert row is not None and row.tag == "details" and row.has_class("advcfg")
 
 
-def _svc_client(tmp_path):
-    from lhpc.adapters.web.app import create_app
-    from lhpc.core.paths import Paths
-    from lhpc.core.probes.backends import FakeSystem
-    from lhpc.core.services import ControllerService
-
-    def factory():
-        (tmp_path / "config").mkdir(exist_ok=True)
-        return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    return create_app(service_factory=factory).test_client()
+def _svc_client(web, tmp_path):
+    # The factory builds a fresh service per request (the former inline factory was `_svc` verbatim).
+    return web(service_factory=lambda: _svc(tmp_path))
 
 
-def test_dashboard_logs_link_in_header_and_fw_line(tmp_path, monkeypatch):
+def test_dashboard_logs_link_in_header_and_fw_line(web, tmp_path, monkeypatch):
     from lhpc.core.services import ControllerService
     monkeypatch.setattr(ControllerService, "firewall_has_log", lambda self: True)
-    body = _svc_client(tmp_path).get("/").get_data(as_text=True)
-    # header logs link (right-aligned via hdrlogs) present in the wsbox summary
-    assert 'class="logslink hdrlogs"' in body
-    assert "/firewall/logs" in body                    # firewall line logs link
+    from htmlq import parse
+    doc = parse(_svc_client(web, tmp_path).get("/").get_data(as_text=True))
+    # the firewall line's logs link, inside the webserver box
+    assert doc.within(doc.by_id("wsbox")).find("a", href="/firewall/logs")
 
 
 def test_reset_script_removes_known_files_then_rmdir():
@@ -2151,7 +2144,7 @@ def test_uninstall_detects_partial_firewall_integration():
 # --- FW-R4: GET discipline, fail-closed validation, DHCP scoping ------------------------------
 
 def test_settings_view_writes_no_scripts_on_get(tmp_path):
-    # P2: rendering the Firewall settings section must NOT write the operator scripts (a GET
+    # rendering the Firewall settings section must NOT write the operator scripts (a GET
     # side effect). The files are (re)written only on a mutation (configure/render).
     svc = _svc(tmp_path)
     svc.firewall_status()
@@ -2386,7 +2379,7 @@ def test_narrowing_allowed_only_when_console_removal_is_the_whole_change(tmp_pat
     """The gate must stop a port BINDING ahead of a verified firewall, never one being CLOSED — but
     it may only conclude that from the receipt's own intent hash. Proving the DELTA (current
     candidate + the removed console ingress == what the firewall was applied for) is what makes
-    every stale-evidence bypass impossible (audit P1)."""
+    every stale-evidence bypass impossible."""
     svc, _applied = _narrowing_env(tmp_path, monkeypatch)
     _listeners(monkeypatch, ["0.0.0.0"])
     ok, msg, _cmds = svc.firewall_gate_activation({8445})
@@ -2454,7 +2447,7 @@ def test_console_still_remote_is_never_a_narrowing(tmp_path, monkeypatch):
 
 def test_gate_never_names_a_script_it_could_not_render(tmp_path, monkeypatch):
     """No result may point at firewall-apply.sh unless THIS call rewrote it — a stale or missing
-    script applies the wrong intent (audit P2a). Holds for the narrowing, the refusal and the
+    script applies the wrong intent. Holds for the narrowing, the refusal and the
     partially-installed branch."""
     from lhpc.core import config as cfgmod
     svc, _applied = _narrowing_env(tmp_path, monkeypatch)
@@ -2766,10 +2759,9 @@ def test_bootstrap_on_an_existing_root_restores_missing_firewall_scripts(tmp_pat
     assert svc.bootstrap(apply=False).data["changes"] == 0
 
 
-def test_a_gate_deferred_apply_raises_the_persistent_notice_until_the_marker_clears(tmp_path, monkeypatch):
+def test_a_gate_deferred_apply_raises_the_persistent_notice_until_the_marker_clears(web, tmp_path, monkeypatch):
     # End to end: the firewall gate refuses a console Apply -> the durable marker is set -> every
     # page carries the notice; the marker cleared (the watchdog's completion) -> the notice is gone.
-    from lhpc.adapters.web.app import create_app
     fw = {"installed": True, "config_ok": False, "boot_ok": True, "live_ok": False,
           "transitional": False, "foreign": [], "reason": "changes-pending",
           "line": "Firewall: Changes pending", "level": "warn", "candidate": None}
@@ -2777,7 +2769,7 @@ def test_a_gate_deferred_apply_raises_the_persistent_notice_until_the_marker_cle
     r = svc.webserver_apply()
     assert not r.ok and r.data.get("firewall_gate") == "pending"
     assert svc.webserver_apply_pending() is True
-    client = create_app(lambda: svc).test_client()
+    client = web(service_factory=lambda: svc)
     body = client.get("/", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
     assert 'id="fw-pending-notice"' in body and "#firewall-apply" in body
     svc._ws_apply_pending_clear()

@@ -15,6 +15,7 @@ These pin the properties an audit flagged as load-bearing:
 
 import pytest
 
+from lhpc.core import reticulum_interfaces as ri
 from lhpc.core.config import update_ini
 from lhpc.core.manifest import ManifestError, load_manifest
 from lhpc.core.model import ResourceMode
@@ -235,9 +236,6 @@ def test_band_choice_does_not_leak_between_stacks(tmp_path, monkeypatch):
 
     svc = ControllerService()
     bands = svc.stack_bands("reticulum")
-    if not bands or "868" not in bands:
-        import pytest
-        pytest.skip("this box does not serve 868")
 
     # With no explicit band the stack resolves to its DECLARED primary, not bands[0].
     assert svc._config_band("reticulum", "") == "868"
@@ -306,9 +304,6 @@ def test_a_multiband_stack_is_running_on_one_band_not_all_of_them(monkeypatch):
     from lhpc.core.services import ControllerService
 
     svc = ControllerService()
-    if "868" not in (svc.stack_bands("reticulum") or ()):
-        pytest.skip("this box does not serve 868")
-
     monkeypatch.setattr(svc, "running_band", lambda sid, default="": "868")
     assert svc.runs_on_band("reticulum", "868") is True
     assert svc.runs_on_band("reticulum", "433") is False
@@ -564,6 +559,8 @@ def test_starting_the_other_band_while_running_is_refused(tmp_path, monkeypatch)
     _cfg.save_hardware_setup(svc._paths, "loraham")   # else the refusal fires for the wrong reason
     svc._invalidate_config()
     svc._set_running_band("reticulum", "433")
+    # stubbed: the real check is a full system snapshot scan; this test is about band
+    # arbitration, not process discovery.
     monkeypatch.setattr(svc, "_band_owner_is_up", lambda sid: True)
     assert svc.running_band("reticulum", "") == "433"
 
@@ -593,6 +590,8 @@ def test_an_unknown_band_claims_every_possible_band(monkeypatch):
     monkeypatch.setattr(svc, "running_band", lambda sid, default="": "")
     monkeypatch.setattr(svc, "interactive_band", lambda sid: None)
 
+    # stubbed both ways: the real check is a full system snapshot scan; this test is about
+    # band arbitration, not process discovery.
     monkeypatch.setattr(svc, "_band_owner_is_up", lambda sid: True)
     assert svc._operation_bands("reticulum", "", "", "start") == {"433", "868"}
 
@@ -697,25 +696,6 @@ def test_components_without_requires_keep_the_static_marker():
 # rather than replaced by a synthetic box that would only re-pin the implementation.
 
 
-def test_doctor_warns_when_boot_restore_would_be_skipped(monkeypatch):
-    """A controller update that changes a unit template leaves every existing box with
-    a non-canonical unit, and boot-restore then silently refuses — the operator only
-    finds out when a power cycle brings the box up with nothing running. doctor must
-    say so while it can still be fixed."""
-    from lhpc.core.services import ControllerService
-
-    svc = ControllerService()
-    monkeypatch.setattr(type(svc), "_web_integration_proven",
-                        lambda self: (False, "lhpc-web.service is not canonical (modified_ours)"))
-    res = svc.doctor()
-    text = "\n".join(res.details)
-    assert "BOOT RESTORE WILL BE SKIPPED" in text
-    assert "lhpc self-update --repair-integration" in text
-
-    monkeypatch.setattr(type(svc), "_web_integration_proven", lambda self: (True, ""))
-    assert "BOOT RESTORE WILL BE SKIPPED" not in "\n".join(svc.doctor().details)
-
-
 def test_a_component_id_is_told_which_stack_owns_it():
     """`install` adopts a whole STACK (a lone component leaves unmet build_requires and
     a broken run order); `update` refreshes ONE source. That split is deliberate — but
@@ -793,7 +773,8 @@ def test_meshchat_listens_on_loopback_and_is_proxied():
     port = ep.address.split(":")[1]
     assert any(r.key == f"tcp.port.{port}" and r.mode is ResourceMode.EXCLUSIVE
                for r in m.resources), "every listener this stack opens is claimed exclusively"
-    assert f"--port {port}" in _run_line(m), (
+    argv = m.run_argv
+    assert argv[argv.index("--port") + 1] == port, (
         "the port is written in three places — the run line, the endpoint and the resource "
         "claim — with nothing deriving it, so they must be asserted to agree")
 
@@ -970,7 +951,6 @@ def test_an_enabled_internet_interface_needs_its_whole_endpoint(values, missing)
     """RNS reads `target_host` and does `int(target_port)` while CONSTRUCTING the interface, so
     a missing endpoint is a construction failure — a different path from the merely unreachable
     target the node is built to tolerate (`panic_on_interface_error = No`)."""
-    from lhpc.core import reticulum_interfaces as ri
     why = ri.endpoint_problem(values)
     assert why
     for name in missing:
@@ -984,7 +964,6 @@ def test_an_enabled_internet_interface_needs_its_whole_endpoint(values, missing)
     {"internet_enabled": "yes", "internet_host": "hub.example.org", "internet_port": "4965"},
 ])
 def test_a_complete_or_disabled_internet_interface_is_accepted(values):
-    from lhpc.core import reticulum_interfaces as ri
     assert ri.endpoint_problem(values) == ""
 
 
@@ -997,7 +976,6 @@ def test_a_half_configured_internet_ifac_is_refused(values):
     configuration is not refused by RNS — the link just silently passes nothing. Our own LoRa
     driver already refuses this for the radio; this is the same policy for the interface RNS
     owns."""
-    from lhpc.core import reticulum_interfaces as ri
     full = {"internet_host": "hub.example.org", "internet_port": "4965", **values}
     assert ri.ifac_problem(full)
     assert ri.problem(full)
@@ -1008,7 +986,6 @@ def test_a_half_configured_internet_ifac_is_refused(values):
     {"internet_ifac_netname": "private", "internet_ifac_netkey": "s3cret"},
 ])
 def test_both_or_neither_internet_ifac_halves_are_accepted(values):
-    from lhpc.core import reticulum_interfaces as ri
     full = {"internet_enabled": "yes", "internet_host": "hub.example.org",
             "internet_port": "4965", **values}
     assert ri.ifac_problem(full) == ""
@@ -1018,7 +995,6 @@ def test_both_or_neither_internet_ifac_halves_are_accepted(values):
 def test_a_disabled_interface_never_refuses_however_broken_its_fields():
     """Staging is allowed: the operator may save a host today and the port tomorrow. Only
     turning the interface ON asks for a complete configuration."""
-    from lhpc.core import reticulum_interfaces as ri
     assert ri.problem({"internet_enabled": "no", "internet_ifac_netname": "private"}) == ""
 
 
@@ -1028,9 +1004,9 @@ def test_saving_an_enabled_internet_interface_without_an_endpoint_is_refused():
     from lhpc.core.services import ControllerService
     svc = ControllerService()
     r = svc.save_config("reticulum", {"file_internet_enabled": "yes"})
-    assert not r.ok
-    assert "endpoint is incomplete" in " ".join([r.summary, *r.details])
-    assert "rolled" in " ".join(r.details), "a refused submission persists nothing"
+    assert not r.ok and r.data.get("reason") == ri.REASON_ENDPOINT_INCOMPLETE
+    assert not ri.enabled(svc.file_config_values("reticulum")["internet_enabled"]), \
+        "a refused submission persists nothing"
     # the COMPONENT target is the same rule: a save persists into the owner stack's config
     # either way, so refusing only the stack target would leave `lhpc config rns` a way past it.
     assert not svc.save_config("rns", {"file_internet_enabled": "yes"}).ok
@@ -1112,24 +1088,26 @@ def test_another_stack_is_never_refused_for_reticulums_configuration(tmp_path):
 
 
 @pytest.mark.parametrize("target", ["rns", "reticulum"])
-@pytest.mark.parametrize("secrets_body,mode,needle", [
-    pytest.param(None, 0o600, "passphrase", id="no-passphrase"),
+@pytest.mark.parametrize("secrets_body,mode,needle,reason", [
+    pytest.param(None, 0o600, "passphrase", ri.REASON_IFAC_KEY_MISSING, id="no-passphrase"),
     # A BARE NUMBER is not a passphrase to generation (`isinstance(val, str)`), so a preflight
     # that str()-s whatever TOML holds would pass a configuration generation then rejects — and
     # the node is already stopped by then.
     pytest.param('[reticulum]\ninternet_ifac_netkey = 123456\n', 0o600, "passphrase",
-                 id="numeric-passphrase"),
+                 ri.REASON_IFAC_KEY_MISSING, id="numeric-passphrase"),
     # The loader refuses a group/other-readable secrets file with its own typed message and a
     # chmod remedy. Generation fails on exactly that, so this seam must too.
     pytest.param('[reticulum]\ninternet_ifac_netkey = "s3cret"\n', 0o644, "chmod 600",
-                 id="unsafe-secrets-file"),
+                 "secrets-unreadable", id="unsafe-secrets-file"),
 ])
 def test_every_secret_input_generation_rejects_is_refused_before_the_stop(
-        tmp_path, monkeypatch, target, secrets_body, mode, needle):
-    """The preflight and config generation must agree on EVERY input, not just the obvious one:
-    any disagreement is a node stopped by a restart and refused afterwards, which is the defect
-    this check exists to prevent. Each row is rejected by generation, so each must be refused
-    before the stop — for a component target and a stack target alike."""
+        tmp_path, monkeypatch, target, secrets_body, mode, needle, reason):
+    """Generation is the authoritative check, but on a RESTART it runs AFTER the stop: the node
+    would be taken down and left down by a configuration that saved cleanly. So the preflight
+    at the pre-mutation boundary must agree with generation on EVERY input, not just the
+    obvious one — any disagreement is exactly that defect. Each row is rejected by generation,
+    so each must be refused before the stop, typed — for a component target and a stack target
+    alike, since a save can reach this state through either."""
     from lhpc.core.services import ControllerService
     svc = _half_ifac_runtime(tmp_path)
     secrets = svc._paths.runtime_root / "config" / "secrets.toml"
@@ -1144,30 +1122,11 @@ def test_every_secret_input_generation_rejects_is_refused_before_the_stop(
         raise AssertionError("restart reached its stop despite a config generation rejects")
 
     monkeypatch.setattr(ControllerService, "stop", _stop_is_a_failure)
-    r = svc.restart(target, apply=True)
-    assert not r.ok and needle in r.summary
+    r = svc.restart(target, apply=True)          # raises if it ever reaches the stop
+    assert not r.ok and r.data.get("reason") == reason and needle in r.summary
     assert "s3cret" not in r.summary and "123456" not in r.summary, \
         "a refusal names the file and the remedy, never the value"
-
-
-@pytest.mark.parametrize("target", ["rns", "reticulum"])
-def test_a_half_configured_ifac_refuses_before_restart_stops_the_node(tmp_path, monkeypatch, target):
-    """Generation is the authoritative check, but on a RESTART it runs AFTER the stop: the node
-    would be taken down and left down by a configuration that saved cleanly. The same rule must
-    therefore refuse at the pre-mutation boundary, for a component target and a stack target
-    alike — a save can reach this state through either."""
-    from lhpc.core.services import ControllerService
-    svc = _half_ifac_runtime(tmp_path)
-    assert any(w.status == "failed" for w in svc.write_config_files("rns")), "generation still refuses"
-
-    def _stop_is_a_failure(self, *a, **k):
-        raise AssertionError("restart reached its stop despite a deterministically invalid config")
-
-    monkeypatch.setattr(ControllerService, "stop", _stop_is_a_failure)
-    r = svc.restart(target, apply=True)          # raises if it ever reaches the stop
-    assert not r.ok, "a restart must not proceed into its stop with this configuration"
-    assert "passphrase" in r.summary and "private" not in r.summary, \
-        "typed, and it names the location of the secret rather than any value"
+    assert "private" not in r.summary, "it names the location of the secret, never the netname"
 
 
 def test_a_valid_or_disabled_internet_interface_still_starts(tmp_path):

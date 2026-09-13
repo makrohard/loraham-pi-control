@@ -1,4 +1,4 @@
-"""Item 1/2: task admission is a HELD interprocess lock (`controller-task-admission`), acquired as
+"""task admission is a HELD interprocess lock (`controller-task-admission`), acquired as
 lock-order #1 around a task's check→reserve/spawn. It refuses new task-starts while a controller
 self-update or uninstall is pending, is reentrant per thread (nested start in an admitted restart),
 and does NOT gate stop (needed to quiesce during uninstall). A second ControllerService on the same
@@ -14,7 +14,6 @@ from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
 
-# ===== merged from test_task_admission.py =====
 def _svc(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=Path(tmp_path)))
     svc.bootstrap(apply=True)
@@ -65,7 +64,7 @@ def test_dry_run_is_preserved_during_uninstall(tmp_path):
 
 
 def test_stop_is_allowed_during_uninstall(tmp_path):
-    # Item 2: uninstall writes .lhpc-uninstalling FIRST, so an APPLIED stop must still run to quiesce.
+    # uninstall writes .lhpc-uninstalling FIRST, so an APPLIED stop must still run to quiesce.
     svc = _svc(tmp_path)
     _guard(tmp_path)
     res = svc.stop("daemon", apply=True)
@@ -73,7 +72,7 @@ def test_stop_is_allowed_during_uninstall(tmp_path):
 
 
 def test_restart_refuses_before_any_stop_when_pending(tmp_path):
-    # Item 2: restart acquires admission at its OUTER boundary — so when update/uninstall is pending it
+    # restart acquires admission at its OUTER boundary — so when update/uninstall is pending it
     # refuses BEFORE issuing any stop (a real applied restart, no monkeypatching the boundary).
     svc = _svc(tmp_path)
     stops = []
@@ -171,7 +170,7 @@ def test_admission_acquired_before_config_stable(tmp_path, monkeypatch):
 
 
 def test_start_refused_by_guard_does_not_clear_daemon_feed(tmp_path, monkeypatch):
-    # Item 2: an applied start refused by a pending uninstall must NOT clear daemon-feed state (the
+    # an applied start refused by a pending uninstall must NOT clear daemon-feed state (the
     # clear happens INSIDE admission, after it is granted).
     svc = _svc(tmp_path)
     _guard(tmp_path)
@@ -204,7 +203,6 @@ def test_second_thread_start_and_config_do_not_invert(tmp_path):
         release.set(); t.join(3)
 
 
-# ===== merged from test_admission_holes.py =====
 @pytest.fixture
 def held_admission(tmp_path, monkeypatch):
     """Yields (svc_b) while a second service (svc_a) HOLDS admission on the same root."""

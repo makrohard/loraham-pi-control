@@ -1,4 +1,4 @@
-"""Binary install transaction (B4): index → verify → extract → publish → probe → receipt.
+"""Binary install transaction: index → verify → extract → publish → probe → receipt.
 
 Everything runs against a LOCAL fake release (no network): `_http_get` is stubbed with a
 byte-serving fake, and tarballs are built on the fly — including the hostile ones (symlink
@@ -20,11 +20,9 @@ from lhpc.core.services import ControllerService
 from lhpc.core.probes import RealSystem
 
 
-pytestmark = pytest.mark.requires_zstd
 _REAL_HTTP_GET = bi._http_get      # captured at import, before the conftest's network stub
 
 
-# ===== merged from test_binary_install.py =====
 def _paths(tmp_path):
     return Paths(runtime_root=tmp_path)
 
@@ -115,6 +113,7 @@ def test_index_and_entry_round_trip(tmp_path, monkeypatch):
     assert got.components == {"demo-main": "c" * 40}
 
 
+@pytest.mark.requires_zstd
 @pytest.mark.parametrize("payload,msg", [
     (b"{not json", "not valid JSON"),
     (json.dumps({"schema": 1, "stacks": {}}).encode(), "schema 1 is not supported"),
@@ -218,6 +217,7 @@ def test_download_size_mismatch_refuses(tmp_path, monkeypatch):
 ROOTS = ("src/demo/bin", "build/tools/demo")
 
 
+@pytest.mark.requires_zstd
 def test_extract_valid_members(tmp_path):
     tar = _make_tar(tmp_path, {"src/demo/bin/demo": b"BINARY",
                                "build/tools/demo/asset": b"A"})
@@ -245,9 +245,10 @@ def test_extract_rejects_hostile_archive(tmp_path, members, match):
         bi.validate_and_extract(tar, stage, ROOTS)
 
 
+@pytest.mark.requires_zstd
 def test_extract_rejects_a_duplicate_member(tmp_path):
     """A second member with the same name would overwrite an already-validated file after it
-    was checked — refuse the archive instead (audit finding)."""
+    was checked — refuse the archive instead."""
     # Ordered-sequence form: two members with the SAME name (a dict cannot express this).
     out = _make_tar(tmp_path, [("src/demo/bin/demo", b"first"),
                                ("src/demo/bin/demo", b"second")], name="dup.tar.zst")
@@ -255,15 +256,17 @@ def test_extract_rejects_a_duplicate_member(tmp_path):
         bi.validate_and_extract(out, str(tmp_path / "st"), ["src/demo/bin"])
 
 
+@pytest.mark.requires_zstd
 def test_extract_refuses_an_oversized_expansion(tmp_path, monkeypatch):
     """The sha256 covers the COMPRESSED bytes; the expansion must be bounded separately or a
-    zstd bomb fills the SD card before anything notices (audit finding)."""
+    zstd bomb fills the SD card before anything notices."""
     monkeypatch.setattr(bi, "_MAX_TOTAL_BYTES", 8)
     tar = _make_tar(tmp_path, {"src/demo/bin/demo": b"0123456789"})
     with pytest.raises(bi.BinaryInstallError, match="size limit"):
         bi.validate_and_extract(tar, str(tmp_path / "st2"), ["src/demo/bin"])
 
 
+@pytest.mark.requires_zstd
 def test_extract_refuses_too_many_members(tmp_path, monkeypatch):
     monkeypatch.setattr(bi, "_MAX_MEMBERS", 2)
     tar = _make_tar(tmp_path, {f"src/demo/bin/f{i}": b"x" for i in range(5)})
@@ -271,6 +274,7 @@ def test_extract_refuses_too_many_members(tmp_path, monkeypatch):
         bi.validate_and_extract(tar, str(tmp_path / "st3"), ["src/demo/bin"])
 
 
+@pytest.mark.requires_zstd
 def test_extract_rejects_empty_archive(tmp_path):
     tar = _make_tar(tmp_path, {})
     stage = tmp_path / "stage"; stage.mkdir()
@@ -313,7 +317,7 @@ def test_publish_replaces_only_declared_roots(tmp_path):
     assert (tmp_path / "src/demo/bin/demo").read_bytes() == b"NEW"
     assert (tmp_path / "src/other/keep").read_bytes() == b"KEEP"
     # the transaction stays OPEN until commit() — that is what lets a failed probe restore
-    # the PREVIOUS install instead of destroying it (audit finding)
+    # the PREVIOUS install instead of destroying it
     assert bi.read_journal(paths)[1] == "valid"
     assert bi.commit(paths)
     assert bi.read_journal(paths)[1] == "absent"
@@ -321,7 +325,7 @@ def test_publish_replaces_only_declared_roots(tmp_path):
 
 def test_publish_without_an_open_transaction_refuses(tmp_path):
     """Nothing may be promoted outside a journaled transaction — a crash would then leave
-    published files with no record of what they replaced (audit finding)."""
+    published files with no record of what they replaced."""
     paths = _paths(tmp_path)
     with pytest.raises(bi.BinaryInstallError, match="journal"):
         bi.publish(paths, "demo", _staged(tmp_path), ["src/demo/bin/demo"], "txnX")
@@ -367,7 +371,7 @@ def test_rollback_restores_the_previous_binary(tmp_path):
 
 def test_rollback_removes_a_file_the_run_created(tmp_path):
     # A file that did NOT exist before has no backup — recovery must DELETE it, or an
-    # unreceipted partial install survives (audit finding).
+    # unreceipted partial install survives.
     paths = _paths(tmp_path)
     _open(paths, txn="txnC")
     bi.publish(paths, "demo", _staged(tmp_path), ["src/demo/bin/demo"], "txnC")
@@ -531,6 +535,7 @@ def test_require_zstd_refuses_with_apt_command(monkeypatch):
         bi.require_zstd()
 
 
+@pytest.mark.requires_zstd
 def test_extract_allows_ancestor_directory_entries(tmp_path):
     # A real tarball (`tar -C stage -cf . `) carries the intermediate DIRECTORY entries that lead
     # to a publish root. They must be accepted (the root cannot be placed otherwise) — while a
@@ -542,6 +547,7 @@ def test_extract_allows_ancestor_directory_entries(tmp_path):
     assert files == ["src/demo/bin/demo"]          # dirs are not reported as installed files
 
 
+@pytest.mark.requires_zstd
 def test_extract_still_rejects_file_at_ancestor_level(tmp_path):
     tar = _make_tar(tmp_path, {"src": ("dir",), "src/rogue": b"EVIL",
                                "src/demo/bin/demo": b"OK"})
@@ -569,7 +575,7 @@ def test_publish_never_destroys_sibling_files(tmp_path):
 
 def test_download_is_streamed_not_buffered(tmp_path, monkeypatch):
     """The artifact must never be held whole in RAM: this feature exists for 512 MB boxes.
-    A reader that refuses an unbounded read proves chunking (audit finding)."""
+    A reader that refuses an unbounded read proves chunking."""
     import contextlib
     import io
     tar = _make_tar(tmp_path, {"src/demo/bin/demo": b"B" * 4096})
@@ -683,7 +689,7 @@ def test_journal_with_an_escaping_created_dir_reads_unsafe(tmp_path):
 def test_rollback_restores_directories_before_the_files_inside_them(tmp_path):
     """ORDER IS THE CONTRACT: a displaced FILE can live inside a displaced DIRECTORY — the
     artifact's binary sits in the source checkout a channel switch sets aside. Restoring files
-    first put them back only for the directory restore to wipe them (audit finding)."""
+    first put them back only for the directory restore to wipe them."""
     paths = _paths(tmp_path)
     checkout = tmp_path / "src" / "app"
     (checkout / "bin").mkdir(parents=True)
@@ -702,7 +708,7 @@ def test_rollback_restores_directories_before_the_files_inside_them(tmp_path):
     assert not (checkout / "bin" / "new").exists()
 
 
-# ===== merged from test_binary_switching.py =====
+# ---- switching between the binary and the source channel -----------------------------------------
 def _svc(tmp_path, monkeypatch):
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
@@ -710,27 +716,6 @@ def _svc(tmp_path, monkeypatch):
 
 def _pins(svc, stack="daemon"):
     return svc._binary_pins(stack)
-
-
-def _lay_down(svc, tmp_path, stack="daemon", commits=None, extra_files=()):
-    """Simulate a completed binary install (artifact files + receipt)."""
-    spec = svc.binary_spec(stack)
-    files = list(spec.proof_paths) + list(extra_files)
-    hashes = {}
-    import hashlib
-    for rel in files:
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_bytes(b"ELF")
-        hashes[rel] = hashlib.sha256(b"ELF").hexdigest()
-    rec = brx.BinaryReceipt(
-        stack=stack, artifact_sha256="ab" * 32, artifact_size=9,
-        filename=f"{stack}-{'ab' * 32}.tar.zst", url="https://example.invalid/a.tar.zst",
-        components=commits if commits is not None else dict(_pins(svc, stack)),
-        provenance={}, files=tuple(files), file_hashes=hashes,
-        proof_paths=tuple(spec.proof_paths), registry_baseline={}, probe="ok")
-    assert brx.write_receipt(svc._paths, rec)
-    svc.invalidate_snapshot()
-    return rec
 
 
 @pytest.mark.contract
@@ -750,33 +735,10 @@ def test_install_binary_channel_refuses_all_stacks(tmp_path, monkeypatch):
     assert not res.ok and "ONE stack at a time" in res.summary
 
 
-class _Adopted:
-    """What a SUCCESSFUL `_adopt_dev_fallback` returns."""
-
-    status, detail, provenance = "done", "", ""
-
-
-def _stub_adopt(svc, monkeypatch, *, records=True):
-    """A SUCCESSFUL adoption INCLUDING the ownership record it writes — the switch is not
-    complete until every adopted path is recorded, so a stub that skips the record is a failed
-    switch, not a successful one. `records=False` simulates exactly that."""
-    from lhpc.core import source_registry
-
-    def _adopt(self, inst, st, comp, selector, resolved, force=False, locked=False):
-        if records:
-            source_registry.write_record(svc._paths, source_registry.RegistryRecord(
-                source_rel=comp.source.path,
-                remote=comp.source.remote or "https://example.invalid/x.git",
-                selector=selector, resolved_commit="e" * 40, adopted_at=1.0,
-                txn_id="txn-" + comp.id, components=(comp.id,)))
-        return _Adopted()
-    monkeypatch.setattr(ControllerService, "_adopt_dev_fallback", _adopt)
-
-
-def test_successful_switch_retires_the_binary_for_good(tmp_path, monkeypatch):
+def test_successful_switch_retires_the_binary_for_good(tmp_path, monkeypatch, binary_receipt, stub_adopt):
     svc = _svc(tmp_path, monkeypatch)
-    rec = _lay_down(svc, tmp_path)
-    _stub_adopt(svc, monkeypatch)
+    rec = binary_receipt(svc)
+    stub_adopt(svc)
     res = svc.install("daemon", apply=True, source="pinned")
     assert res.ok, res.summary
     assert brx.receipt_state(svc._paths, "daemon")[0] == "absent"
@@ -785,13 +747,13 @@ def test_successful_switch_retires_the_binary_for_good(tmp_path, monkeypatch):
     assert list((tmp_path / "state" / "binary").glob(".backup-*")) == []
 
 
-def test_failed_source_switch_restores_the_binary_without_the_network(tmp_path, monkeypatch):
+def test_failed_source_switch_restores_the_binary_without_the_network(tmp_path, monkeypatch, binary_receipt):
     """THE switch regression: the artifact is moved aside locally, so a failed adoption puts
     the EXACT previous install back — no download, no release lookup, no pin re-check. An
     operator switching to source is usually doing it BECAUSE the published binary is behind;
-    a restore that re-downloads would hit that same pin gate and refuse (audit finding)."""
+    a restore that re-downloads would hit that same pin gate and refuse."""
     svc = _svc(tmp_path, monkeypatch)
-    rec = _lay_down(svc, tmp_path)
+    rec = binary_receipt(svc)
     before = (tmp_path / rec.proof_paths[0]).read_bytes()
     monkeypatch.setattr(ControllerService, "binary_install",
                         lambda *a, **k: pytest.fail("restoring must never reach the network"))
@@ -803,10 +765,10 @@ def test_failed_source_switch_restores_the_binary_without_the_network(tmp_path, 
     assert bi.read_journal(svc._paths)[1] == "absent"
 
 
-def test_failed_switch_restores_an_owned_directory_too(tmp_path, monkeypatch):
+def test_failed_switch_restores_an_owned_directory_too(tmp_path, monkeypatch, binary_receipt):
     import dataclasses
     svc = _svc(tmp_path, monkeypatch)
-    rec = _lay_down(svc, tmp_path)
+    rec = binary_receipt(svc)
     venv = tmp_path / "build" / "tools" / "meshtastic-cli" / ".venv" / "bin"
     venv.mkdir(parents=True)
     (venv / "meshtastic").write_bytes(b"CLI")
@@ -833,13 +795,13 @@ def test_switch_refuses_when_the_receipt_cannot_be_read(tmp_path, monkeypatch):
     assert bi.read_journal(svc._paths)[1] == "absent"               # …and nothing left open
 
 
-def test_superseded_receipt_is_retired_on_a_switch(tmp_path, monkeypatch):
+def test_superseded_receipt_is_retired_on_a_switch(tmp_path, monkeypatch, binary_receipt, stub_adopt):
     """A SUPERSEDED receipt still names files this box owns — `on_binary_channel` (valid only)
-    let those bypass retirement entirely (audit finding)."""
+    let those bypass retirement entirely."""
     from lhpc.core import source_registry
     import dataclasses
     svc = _svc(tmp_path, monkeypatch)
-    rec = _lay_down(svc, tmp_path)
+    rec = binary_receipt(svc)
     # recorded "no source record at install" -> a record appears == the source channel took over
     rec = dataclasses.replace(rec, registry_baseline={"src/loraham-daemon": ""})
     assert brx.write_receipt(svc._paths, rec)
@@ -849,24 +811,24 @@ def test_superseded_receipt_is_retired_on_a_switch(tmp_path, monkeypatch):
         components=("loraham-daemon",)))
     svc.invalidate_snapshot()
     assert brx.receipt_state(svc._paths, "daemon")[0] == "superseded"
-    _stub_adopt(svc, monkeypatch)
+    stub_adopt(svc)
     res = svc.install("daemon", apply=True, source="pinned")
     assert res.ok, res.summary
     assert brx.receipt_state(svc._paths, "daemon")[0] == "absent"
     assert not (tmp_path / rec.proof_paths[0]).exists()
 
 
-def test_source_dry_run_never_retires(tmp_path, monkeypatch):
+def test_source_dry_run_never_retires(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch)
-    rec = _lay_down(svc, tmp_path)
+    rec = binary_receipt(svc)
     svc.install("daemon", apply=False, source="pinned")
     assert (tmp_path / rec.proof_paths[0]).exists()
     assert svc.on_binary_channel("daemon") is True
 
 
-def test_retire_refuses_when_files_changed(tmp_path, monkeypatch):
+def test_retire_refuses_when_files_changed(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch)
-    rec = _lay_down(svc, tmp_path)
+    rec = binary_receipt(svc)
     (tmp_path / rec.files[0]).write_bytes(b"OPERATOR EDIT")
     res = svc.binary_retire("daemon")
     assert not res.ok and "changed since installation" in res.summary
@@ -876,9 +838,9 @@ def test_retire_refuses_when_files_changed(tmp_path, monkeypatch):
     assert not res2.ok and "changed since installation" in res2.summary
 
 
-def test_retire_force_ignores_hash_mismatch(tmp_path, monkeypatch):
+def test_retire_force_ignores_hash_mismatch(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch)
-    rec = _lay_down(svc, tmp_path)
+    rec = binary_receipt(svc)
     (tmp_path / rec.files[0]).write_bytes(b"EDIT")
     assert svc.binary_retire("daemon", force=True).ok
     assert brx.receipt_state(svc._paths, "daemon")[0] == "absent"
@@ -890,9 +852,9 @@ def test_retire_without_receipt_is_noop(tmp_path, monkeypatch):
     assert res.ok and "no binary install" in res.summary
 
 
-def test_update_binary_to_binary_when_current(tmp_path, monkeypatch):
+def test_update_binary_to_binary_when_current(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)                                 # components == manifest pins
+    binary_receipt(svc)                                 # components == manifest pins
     seen = {}
     monkeypatch.setattr(ControllerService, "binary_install",
                         lambda self, sid, apply=False: seen.setdefault("args", (sid, apply)))
@@ -901,13 +863,13 @@ def test_update_binary_to_binary_when_current(tmp_path, monkeypatch):
     assert seen["args"] == ("daemon", True)                  # fast path, no dialog
 
 
-def test_update_tries_the_published_binary_even_when_the_receipt_lags(tmp_path, monkeypatch):
+def test_update_tries_the_published_binary_even_when_the_receipt_lags(tmp_path, monkeypatch, binary_receipt):
     """An installed receipt behind the manifest pins says nothing about the PUBLISHER: the
     update fetches the index and lets the pin check decide (a lagging artifact is refused there
     with the source offer), instead of steering every binary box into an hours-long build."""
     svc = _svc(tmp_path, monkeypatch)
     stale = {cid: "9" * 40 for cid in _pins(svc)}
-    _lay_down(svc, tmp_path, commits=stale)
+    binary_receipt(svc, commits=stale)
     seen = {}
     monkeypatch.setattr(ControllerService, "binary_install",
                         lambda self, sid, apply=False: seen.setdefault("args", (sid, apply)))
@@ -915,13 +877,10 @@ def test_update_tries_the_published_binary_even_when_the_receipt_lags(tmp_path, 
     assert seen["args"] == ("daemon", True)
 
 
-def test_lagging_published_binary_is_refused_with_the_source_offer(tmp_path, monkeypatch):
+def test_lagging_published_binary_is_refused_with_the_source_offer(tmp_path, monkeypatch, binary_receipt, stub_pipeline):
     svc = _svc(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)
-    monkeypatch.setattr(bi, "require_zstd", lambda: None)
-    monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 2, "stacks": {}})
-    monkeypatch.setattr(bi, "index_entry", lambda idx, sid: _fake_entry(svc, sid))
-    monkeypatch.setattr(bi, "check_target", lambda e, tgt: None)
+    binary_receipt(svc)
+    stub_pipeline(svc)
     monkeypatch.setattr(bi, "check_pins", lambda e, p: (_ for _ in ()).throw(
         bi.BinaryInstallError("published artifact lags the pins")))
     res = svc.update("daemon", apply=True, source="binary")
@@ -931,45 +890,45 @@ def test_lagging_published_binary_is_refused_with_the_source_offer(tmp_path, mon
 
 
 @pytest.mark.parametrize("selector", ["dev", "stable", "pinned"])
-def test_update_with_explicit_source_selector_points_at_install(tmp_path, monkeypatch, selector):
+def test_update_with_explicit_source_selector_points_at_install(tmp_path, monkeypatch, selector, binary_receipt):
     # EVERY source selector is an explicit channel switch — including "pinned" (it must not be
     # silently hijacked into a binary update; audit finding).
     svc = _svc(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)
+    binary_receipt(svc)
     res = svc.update("daemon", apply=True, source=selector)
     assert not res.ok and "is an install, not an update" in res.summary
     assert any(f"--source {selector}" in c for c in res.next_commands)
 
 
-def test_update_unaffected_for_source_stacks(tmp_path, monkeypatch):
+def test_update_unaffected_for_source_stacks(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)                                 # daemon on binary
+    binary_receipt(svc)                                 # daemon on binary
     res = svc.update("kiss", apply=False, source="pinned")   # a source stack
     assert "only as source" not in res.summary
     assert "is an install" not in res.summary
 
 
-def test_freshness_current_and_behind(tmp_path, monkeypatch):
+def test_freshness_current_and_behind(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch)
     assert svc.binary_freshness("daemon") == {"state": "n/a", "behind": []}
-    _lay_down(svc, tmp_path)
+    binary_receipt(svc)
     assert svc.binary_freshness("daemon")["state"] == "current"
     brx.remove_receipt(svc._paths, "daemon")
-    _lay_down(svc, tmp_path, commits={cid: "9" * 40 for cid in _pins(svc)})
+    binary_receipt(svc, commits={cid: "9" * 40 for cid in _pins(svc)})
     f = svc.binary_freshness("daemon")
     assert f["state"] == "behind" and "loraham-daemon" in f["behind"]
 
 
-def test_freshness_is_local_only(tmp_path, monkeypatch):
+def test_freshness_is_local_only(tmp_path, monkeypatch, binary_receipt):
     # GET-safe: the freshness answer must never touch the network.
     svc = _svc(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)
+    binary_receipt(svc)
     monkeypatch.setattr(bi, "_http_get",
                         lambda *a, **k: pytest.fail("freshness must not fetch"))
     assert svc.binary_freshness("daemon")["state"] == "current"
 
 
-def test_clone_required_is_adopted_before_the_overlay(tmp_path, monkeypatch):
+def test_clone_required_is_adopted_before_the_overlay(tmp_path, monkeypatch, stub_pipeline):
     # HYBRID stacks (meshcom): the artifact overlays build output, but the run scripts live in
     # the repo — the pinned clone MUST be adopted or the stack installs "fine" and cannot start.
     # (Live-found on the Zero, where a pre-existing clone had masked the gap.)
@@ -1001,19 +960,13 @@ def test_clone_required_is_adopted_before_the_overlay(tmp_path, monkeypatch):
     # the index fetch happens FIRST (gates before mutation), so nothing was adopted yet
     assert adopted == []
 
-    monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 2, "stacks": {}})
-    monkeypatch.setattr(bi, "index_entry", lambda idx, sid: _fake_entry(svc, sid))
-    monkeypatch.setattr(bi, "check_target", lambda e, t: None)
-    monkeypatch.setattr(bi, "check_pins", lambda e, p: None)
-    monkeypatch.setattr(bi, "require_zstd", lambda: None)
-    monkeypatch.setattr(ControllerService, "_dpkg_installed", lambda self, p: True)
-    monkeypatch.setattr(bi, "download_artifact",
-                        lambda e, d: (_ for _ in ()).throw(bi.BinaryInstallError("stop after clone")))
+    stub_pipeline(svc, download=lambda e, d: (_ for _ in ()).throw(
+        bi.BinaryInstallError("stop after clone")))
     svc.binary_install("meshcom", apply=True)
     assert ("meshcom-qemu", "pinned") in adopted        # adopted BEFORE the download
 
 
-def test_binary_install_refuses_a_clone_required_checkout_with_local_changes(tmp_path, monkeypatch):
+def test_binary_install_refuses_a_clone_required_checkout_with_local_changes(tmp_path, monkeypatch, stub_pipeline):
     """The ONE place a local file blocks a BINARY install: a component whose artifact only
     overlays build output while the code it runs lives in the repo (`clone_required` — today
     meshcom's QEMU node). There a local file would put operator code under a "pinned" install, so
@@ -1050,14 +1003,7 @@ def test_binary_install_refuses_a_clone_required_checkout_with_local_changes(tmp
     monkeypatch.setattr(ControllerService, "_installer", lambda self: _FakeInstaller())
     monkeypatch.setattr(source_registry, "verify_identity",
                         lambda *a, **k: (_Rec(), ""))        # proven ours, at the pin
-    monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 2, "stacks": {}})
-    monkeypatch.setattr(bi, "index_entry", lambda idx, sid: _fake_entry(svc, sid))
-    monkeypatch.setattr(bi, "check_target", lambda e, t: None)
-    monkeypatch.setattr(bi, "check_pins", lambda e, p: None)
-    monkeypatch.setattr(bi, "require_zstd", lambda: None)
-    monkeypatch.setattr(ControllerService, "_dpkg_installed", lambda self, p: True)
-    monkeypatch.setattr(bi, "download_artifact",
-                        lambda e, d: pytest.fail("must refuse BEFORE downloading anything"))
+    stub_pipeline(svc, download=lambda e, d: pytest.fail("must refuse BEFORE downloading anything"))
 
     res = svc.binary_install("meshcom", apply=True)
     assert not res.ok                                        # refused...
@@ -1065,6 +1011,7 @@ def test_binary_install_refuses_a_clone_required_checkout_with_local_changes(tmp
     assert any("notes.txt" in d for d in res.details)        # ...and the file it protects
 
 
+@pytest.mark.requires_zstd
 def test_binary_install_does_not_self_contend_on_its_own_source_guard(tmp_path, monkeypatch):
     """`binary_install` guards every path in `spec.covers`, then adopts the `clone_required`
     checkout inside that same guard. Passing the bare `locked` told adoption the lock was free
@@ -1137,21 +1084,13 @@ def test_binary_install_does_not_self_contend_on_its_own_source_guard(tmp_path, 
     assert "meshcom-qemu" in spec.clone_required
 
 
-def _fake_entry(svc, sid):
-    return bi.IndexEntry(
-        stack=sid, filename=f"{sid}-{'a' * 64}.tar.zst", url="https://example.invalid/a.tar.zst",
-        sha256="a" * 64, size=10,
-        components=dict(svc._binary_pins(sid)), runtime_deps=(), target="aarch64-trixie",
-        provenance={"smoke": {"mode": "mandatory", "result": "passed"}})
-
-
-def test_switch_plan_counts_a_change_even_when_sources_exist(tmp_path, monkeypatch):
+def test_switch_plan_counts_a_change_even_when_sources_exist(tmp_path, monkeypatch, binary_receipt):
     # The CLI's dry-run short-circuit skips apply when `changes == 0`. With the source dirs
     # already present the adoption plan is empty, so the RETIREMENT must be counted — otherwise
     # `lhpc install <stack> --source pinned --yes` reports "Nothing to do" and silently leaves
     # the stack on the binary channel (live-found on the Zero).
     svc = _svc(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)
+    binary_receipt(svc)
     res = svc.install("daemon", apply=False, source="pinned")
     assert res.data.get("changes", 0) >= 1
     assert any("retire the binary install" in d for d in res.details)
@@ -1163,11 +1102,11 @@ def test_switch_plan_unchanged_without_receipt(tmp_path, monkeypatch):
     assert not any("retire the binary install" in d for d in res.details)
 
 
-def test_retire_leaves_sibling_source_files_intact(tmp_path, monkeypatch):
+def test_retire_leaves_sibling_source_files_intact(tmp_path, monkeypatch, binary_receipt):
     """Retirement removes ONLY the receipt's own files and prunes only the directories they
     left empty — a source directory that also holds tracked files must survive untouched."""
     svc = _svc(tmp_path, monkeypatch)
-    rec = _lay_down(svc, tmp_path)
+    rec = binary_receipt(svc)
     live_dir = (tmp_path / rec.files[0]).parent
     (live_dir / "build.sh").write_bytes(b"TRACKED")
     assert svc.binary_retire("daemon").ok
@@ -1180,40 +1119,35 @@ def _running(monkeypatch, comps):
     monkeypatch.setattr(ControllerService, "_binary_running_components", lambda self, sid: comps)
 
 
-def test_binary_install_refuses_while_running(tmp_path, monkeypatch):
+def test_binary_install_refuses_while_running(tmp_path, monkeypatch, binary_receipt, stub_pipeline):
     """A binary update replaces the very executable/firmware the stack is running from — the
-    authoritative recheck happens UNDER the held locks (audit finding)."""
+    authoritative recheck happens UNDER the held locks."""
     svc = _svc(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)
+    binary_receipt(svc)
     _running(monkeypatch, ["loraham-daemon"])
     # the read-only gates (index, pins, target) run first — the RUNNING check guards the
     # mutation, under the held locks
-    monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 2, "stacks": {}})
-    monkeypatch.setattr(bi, "index_entry", lambda idx, sid: _fake_entry(svc, sid))
-    monkeypatch.setattr(bi, "check_target", lambda e, tgt: None)
-    monkeypatch.setattr(bi, "check_pins", lambda e, p: None)
-    monkeypatch.setattr(bi, "require_zstd", lambda: None)
-    monkeypatch.setattr(ControllerService, "_dpkg_installed", lambda self, p: True)
-    monkeypatch.setattr(bi, "download_artifact",
-                        lambda e, d: (_ for _ in ()).throw(AssertionError("must not download")))
+    stub_pipeline(svc, download=lambda e, d: (_ for _ in ()).throw(AssertionError("must not download")))
     res = svc.binary_install("daemon", apply=True)
     assert not res.ok and "running" in res.summary
 
 
-def test_binary_retire_refuses_while_running(tmp_path, monkeypatch):
+def test_binary_retire_refuses_while_running(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch)
-    rec = _lay_down(svc, tmp_path)
+    rec = binary_receipt(svc)
     _running(monkeypatch, ["loraham-daemon"])
     res = svc.binary_retire("daemon")
     assert not res.ok and "running" in res.summary
     assert (tmp_path / rec.files[0]).exists()          # nothing deleted
 
 
-def test_retire_keeps_the_receipt_when_a_file_cannot_be_removed(tmp_path, monkeypatch):
+def test_retire_keeps_the_receipt_when_a_file_cannot_be_removed(tmp_path, monkeypatch, binary_receipt):
     """A swallowed unlink failure would leave binary files with NO ownership record."""
     import os as _os
     svc = _svc(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)
+    binary_receipt(svc)
+    # Patched process-wide: retirement unlinks through `os` directly (binary_install.py has no
+    # FileSystem seam for removal), and a chmod-based refusal does not bind for root.
     monkeypatch.setattr(_os, "unlink",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("EPERM")))
     res = svc.binary_retire("daemon", force=True)
@@ -1224,7 +1158,7 @@ def test_retire_keeps_the_receipt_when_a_file_cannot_be_removed(tmp_path, monkey
 def test_update_source_binary_on_a_source_stack_routes_to_binary_install(tmp_path, monkeypatch):
     """`--source binary` on a source-installed stack must reach the binary channel. The source
     planners only understand pinned/dev/stable, so the selector used to be ignored and a full
-    SOURCE update ran instead (audit finding)."""
+    SOURCE update ran instead."""
     svc = _svc(tmp_path, monkeypatch)
     seen = {}
 
@@ -1248,13 +1182,13 @@ def test_update_source_binary_refuses_the_all_target(tmp_path, monkeypatch):
     assert not res.ok and "ONE stack at a time" in res.summary
 
 
-def test_switch_transaction_is_resolved_even_when_a_later_step_fails(tmp_path, monkeypatch):
+def test_switch_transaction_is_resolved_even_when_a_later_step_fails(tmp_path, monkeypatch, binary_receipt, stub_adopt):
     """The transaction must be resolved on the ADOPTION outcome, before any later early return.
     A still-open journal would make the next binary operation roll the old artifact back OVER
     the freshly installed sources."""
     svc = _svc(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)
-    _stub_adopt(svc, monkeypatch)
+    binary_receipt(svc)
+    stub_adopt(svc)
     monkeypatch.setattr(ControllerService, "_retire_candidates_for_paths",
                         lambda *a, **k: False)                   # a LATER step fails
     res = svc.install("daemon", apply=True, source="pinned")
@@ -1263,9 +1197,9 @@ def test_switch_transaction_is_resolved_even_when_a_later_step_fails(tmp_path, m
     assert brx.receipt_state(svc._paths, "daemon")[0] == "absent"
 
 
-def test_superseded_web_job_puts_the_artifact_back(tmp_path, monkeypatch):
+def test_superseded_web_job_puts_the_artifact_back(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch)
-    rec = _lay_down(svc, tmp_path)
+    rec = binary_receipt(svc)
     res = svc.install("daemon", apply=True, source="pinned", on_admit=lambda: False)
     assert not res.ok and "superseded" in res.summary
     assert (tmp_path / rec.proof_paths[0]).exists()
@@ -1273,7 +1207,7 @@ def test_superseded_web_job_puts_the_artifact_back(tmp_path, monkeypatch):
     assert bi.read_journal(svc._paths)[1] == "absent"
 
 
-# ===== merged from test_binary_switch_selector.py =====
+# ---- the selector a channel switch is asked for ---------------------------------------------------
 DAEMON_PATH = "src/loraham-daemon"
 
 
@@ -1309,33 +1243,7 @@ def test_the_binary_switch_fixture_ignores_the_real_machine(tmp_path, monkeypatc
         "the fixture must not consult the real machine")
 
 
-def _lay_down_binary_switch_selector(svc, tmp_path, stack="daemon"):
-    """A completed binary install: the artifact's files plus its receipt."""
-    spec = svc.binary_spec(stack)
-    files, hashes = [], {}
-    for rel in spec.proof_paths:
-        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_bytes(b"ELF")
-        files.append(rel)
-        hashes[rel] = hashlib.sha256(b"ELF").hexdigest()
-    rec = brx.BinaryReceipt(
-        stack=stack, artifact_sha256="ab" * 32, artifact_size=9,
-        filename=f"{stack}-{'ab' * 32}.tar.zst", url="https://example.invalid/a.tar.zst",
-        components=dict(svc._binary_pins(stack)), provenance={}, files=tuple(files),
-        file_hashes=hashes, proof_paths=tuple(spec.proof_paths), registry_baseline={},
-        probe="ok")
-    assert brx.write_receipt(svc._paths, rec)
-    svc.invalidate_snapshot()
-    return rec
-
-
-def _git(svc, cwd, *args):
-    r = svc._system.runner.run(["git", "-C", str(cwd), *args], 20.0)
-    assert r.returncode == 0, f"git {' '.join(args)}: {r.stderr}"
-    return (r.stdout or "").strip()
-
-
-def _checkout(svc, tmp_path, rel, comp_id, *, commits=2, remote=None, dirty=False,
+def _checkout(git, svc, tmp_path, rel, comp_id, *, commits=2, remote=None, dirty=False,
               at_first=False):
     """A REAL managed checkout at `rel` with an ownership record — the state an operator has
     after a source install (or, for meshcom, after a binary install kept its pinned clone).
@@ -1346,19 +1254,17 @@ def _checkout(svc, tmp_path, rel, comp_id, *, commits=2, remote=None, dirty=Fals
     origin = remote if remote is not None else (comp.source.remote or "https://x.invalid/r.git")
     d = tmp_path / rel
     d.mkdir(parents=True, exist_ok=True)
-    _git(svc, d, "init", "-q", "-b", "main")
-    _git(svc, d, "config", "user.email", "t@example.invalid")
-    _git(svc, d, "config", "user.name", "t")
+    git(d, "init", "-q", "-b", "main")
     shas = []
     for i in range(commits):
         (d / f"f{i}").write_text(str(i))
-        _git(svc, d, "add", "-A")
-        _git(svc, d, "commit", "-q", "-m", f"c{i}")
-        shas.append(_git(svc, d, "rev-parse", "HEAD"))
-    _git(svc, d, "remote", "add", "origin", origin)
+        git(d, "add", "-A")
+        git(d, "commit", "-q", "-m", f"c{i}")
+        shas.append(git(d, "rev-parse", "HEAD"))
+    git(d, "remote", "add", "origin", origin)
     if at_first:
-        _git(svc, d, "checkout", "-q", shas[0])
-    head = _git(svc, d, "rev-parse", "HEAD")
+        git(d, "checkout", "-q", shas[0])
+    head = git(d, "rev-parse", "HEAD")
     assert source_registry.write_record(svc._paths, source_registry.RegistryRecord(
         source_rel=rel, remote=origin, selector="pinned", resolved_commit=head,
         adopted_at=1.0, txn_id="txn-" + comp_id, components=(comp_id,)))
@@ -1369,76 +1275,48 @@ def _checkout(svc, tmp_path, rel, comp_id, *, commits=2, remote=None, dirty=Fals
     return head
 
 
-class _Adopted_binary_switch_selector:
-    status, detail, provenance = "done", "", ""
-
-
-class _Failed:
-    status, detail, provenance = "failed", "clone failed", ""
-
-
-def _stub_adopt_binary_switch_selector(svc, monkeypatch, *, fail_paths=(), record=True):
-    """A successful adoption INCLUDING the ownership record it writes (the switch is not
-    complete until every adopted path is recorded). Paths in `fail_paths` fail instead."""
-    seen = []
-
-    def _adopt(self, inst, st, comp, selector, resolved, force=False, locked=False):
-        path = comp.source.path
-        seen.append((path, selector, force))
-        if path in fail_paths:
-            return _Failed()
-        (svc._paths.resolve_source(path)).mkdir(parents=True, exist_ok=True)
-        if record:
-            source_registry.write_record(svc._paths, source_registry.RegistryRecord(
-                source_rel=path, remote=comp.source.remote or "https://x.invalid/r.git",
-                selector=selector, resolved_commit="e" * 40, adopted_at=2.0,
-                txn_id="txn-new-" + comp.id, components=(comp.id,)))
-        return _Adopted_binary_switch_selector()
-    monkeypatch.setattr(ControllerService, "_adopt_dev_fallback", _adopt)
-    return seen
-
-
-def test_pinned_checkout_switching_to_dev_is_replaced(tmp_path, monkeypatch):
+def test_pinned_checkout_switching_to_dev_is_replaced(tmp_path, monkeypatch, binary_receipt, stub_adopt, git):
     """The reported case: meshcom keeps its PINNED clone on the binary channel, the operator
     asks for `dev`, and the pinned tree used to be accepted as "already installed"."""
     svc = _svc_binary_switch_selector(tmp_path, monkeypatch)
-    _lay_down_binary_switch_selector(svc, tmp_path)
-    _checkout(svc, tmp_path, DAEMON_PATH, "loraham-daemon")
+    binary_receipt(svc)
+    _checkout(git, svc, tmp_path, DAEMON_PATH, "loraham-daemon")
     monkeypatch.setattr(ControllerService, "_frozen_ref",
                         lambda self, comp, sel: (("f" * 40, "dev tip"), ""))
-    seen = _stub_adopt_binary_switch_selector(svc, monkeypatch)
+    seen = stub_adopt(svc)
     res = svc.install("daemon", apply=True, source="dev")
     assert res.ok, res.summary
     assert (DAEMON_PATH, "dev", True) in seen, "the pinned tree must be REPLACED, not skipped"
 
 
-def test_dev_checkout_switching_to_pinned_reaches_the_pin(tmp_path, monkeypatch):
+def test_dev_checkout_switching_to_pinned_reaches_the_pin(tmp_path, monkeypatch, binary_receipt, stub_adopt, git):
     svc = _svc_binary_switch_selector(tmp_path, monkeypatch)
-    _lay_down_binary_switch_selector(svc, tmp_path)
-    _checkout(svc, tmp_path, DAEMON_PATH, "loraham-daemon")   # at some other commit
-    seen = _stub_adopt_binary_switch_selector(svc, monkeypatch)
+    binary_receipt(svc)
+    _checkout(git, svc, tmp_path, DAEMON_PATH, "loraham-daemon")   # at some other commit
+    seen = stub_adopt(svc)
     res = svc.install("daemon", apply=True, source="pinned")
     assert res.ok, res.summary
     assert (DAEMON_PATH, "pinned", True) in seen
 
 
-def test_checkout_already_at_the_pin_is_a_no_op(tmp_path, monkeypatch):
+def test_checkout_already_at_the_pin_is_a_no_op(tmp_path, monkeypatch, binary_receipt, git):
     """An already-correct checkout must not be re-cloned."""
     svc = _svc_binary_switch_selector(tmp_path, monkeypatch)
-    _lay_down_binary_switch_selector(svc, tmp_path)
+    binary_receipt(svc)
     comp = next(c for st in svc.stacks() for c in st.components if c.id == "loraham-daemon")
-    head = _checkout(svc, tmp_path, DAEMON_PATH, "loraham-daemon")
-    monkeypatch.setattr(type(comp.source), "pin_commit", property(lambda _s: head), raising=False)
+    head = _checkout(git, svc, tmp_path, DAEMON_PATH, "loraham-daemon")
+    import dataclasses
+    pinned_here = dataclasses.replace(comp, source=dataclasses.replace(comp.source, pin_commit=head))
     replace, refusals = svc.switch_source_plan(
-        [(DAEMON_PATH, comp, "pinned", (head, ""))], owned_files=())
+        [(DAEMON_PATH, pinned_here, "pinned", (head, ""))], owned_files=())
     assert replace == set() and refusals == []
 
 
 @pytest.mark.parametrize("kind", ["dirty", "wrong-remote"])
-def test_unprovable_checkout_refuses_without_retiring_the_binary(tmp_path, monkeypatch, kind):
+def test_unprovable_checkout_refuses_without_retiring_the_binary(tmp_path, monkeypatch, kind, binary_receipt, git):
     svc = _svc_binary_switch_selector(tmp_path, monkeypatch)
-    rec = _lay_down_binary_switch_selector(svc, tmp_path)
-    _checkout(svc, tmp_path, DAEMON_PATH, "loraham-daemon",
+    rec = binary_receipt(svc)
+    _checkout(git, svc, tmp_path, DAEMON_PATH, "loraham-daemon",
               dirty=(kind == "dirty"),
               remote=("https://elsewhere.invalid/other.git" if kind == "wrong-remote" else None))
     monkeypatch.setattr(ControllerService, "binary_retire",
@@ -1450,13 +1328,12 @@ def test_unprovable_checkout_refuses_without_retiring_the_binary(tmp_path, monke
     assert bi.read_journal(svc._paths)[1] == "absent"
 
 
-def test_second_group_failing_restores_the_binary_and_undoes_what_it_created(tmp_path,
-                                                                             monkeypatch):
+def test_second_group_failing_restores_the_binary_and_undoes_what_it_created(tmp_path, monkeypatch, binary_receipt, stub_adopt):
     """One source group succeeds, a later one fails: the previous binary must be back, and the
     checkout this switch created must be gone again (a pre-existing one is never touched)."""
     svc = _svc_binary_switch_selector(tmp_path, monkeypatch)
-    rec = _lay_down_binary_switch_selector(svc, tmp_path)
-    seen = _stub_adopt_binary_switch_selector(svc, monkeypatch, fail_paths=(RADIOLIB_PATH,))
+    rec = binary_receipt(svc)
+    seen = stub_adopt(svc, fail_paths=(RADIOLIB_PATH,))
     res = svc.install("daemon", apply=True, source="pinned")
     assert not res.ok and "FAILED" in res.summary
     assert {p for p, _s, _f in seen} == {DAEMON_PATH, RADIOLIB_PATH}
@@ -1466,22 +1343,22 @@ def test_second_group_failing_restores_the_binary_and_undoes_what_it_created(tmp
     assert bi.read_journal(svc._paths)[1] == "absent"
 
 
-def test_incomplete_ownership_record_rolls_the_switch_back(tmp_path, monkeypatch):
+def test_incomplete_ownership_record_rolls_the_switch_back(tmp_path, monkeypatch, binary_receipt, stub_adopt):
     svc = _svc_binary_switch_selector(tmp_path, monkeypatch)
-    rec = _lay_down_binary_switch_selector(svc, tmp_path)
-    _stub_adopt_binary_switch_selector(svc, monkeypatch, record=False)          # adoption "succeeds" but records nothing
+    rec = binary_receipt(svc)
+    stub_adopt(svc, record=False)          # adoption "succeeds" but records nothing
     res = svc.install("daemon", apply=True, source="pinned")
     assert not res.ok and "ownership record" in res.summary
     assert brx.receipt_state(svc._paths, "daemon")[0] == "valid"
     assert (tmp_path / rec.proof_paths[0]).exists()
 
 
-def test_failed_hmac_enablement_restores_the_binary_and_open_auth(tmp_path, monkeypatch):
+def test_failed_hmac_enablement_restores_the_binary_and_open_auth(tmp_path, monkeypatch, binary_receipt, stub_adopt):
     """MeshCom source adoption succeeds but the password cannot be enabled: the switch is not
     complete, so the binary (which runs OPEN auth) must be restored unchanged."""
     svc = _svc_binary_switch_selector(tmp_path, monkeypatch)
-    rec = _lay_down_binary_switch_selector(svc, tmp_path, stack="meshcom")
-    _stub_adopt_binary_switch_selector(svc, monkeypatch)
+    rec = binary_receipt(svc, stack="meshcom")
+    stub_adopt(svc)
     monkeypatch.setattr(ControllerService, "hmac_set_secret",
                         lambda self, sid, action, **k: ActionResult(False, "keyfile unwritable"))
     res = svc.install("meshcom", apply=True, source="pinned")
@@ -1493,10 +1370,10 @@ def test_failed_hmac_enablement_restores_the_binary_and_open_auth(tmp_path, monk
     assert bi.read_journal(svc._paths)[1] == "absent"
 
 
-def test_complete_switch_commits_the_retirement(tmp_path, monkeypatch):
+def test_complete_switch_commits_the_retirement(tmp_path, monkeypatch, binary_receipt, stub_adopt):
     svc = _svc_binary_switch_selector(tmp_path, monkeypatch)
-    rec = _lay_down_binary_switch_selector(svc, tmp_path)
-    _stub_adopt_binary_switch_selector(svc, monkeypatch)
+    rec = binary_receipt(svc)
+    stub_adopt(svc)
     res = svc.install("daemon", apply=True, source="pinned")
     assert res.ok, res.summary
     assert brx.receipt_state(svc._paths, "daemon")[0] == "absent"
@@ -1505,10 +1382,10 @@ def test_complete_switch_commits_the_retirement(tmp_path, monkeypatch):
     assert list((tmp_path / "state" / "binary").glob(".backup-*")) == []
 
 
-def _baseline_receipt(svc, tmp_path, stack, paths_):
+def _baseline_receipt(binary_receipt, svc, stack, paths_):
     """A binary receipt whose registry baseline records the CURRENT txn id of each covered
     source path — the comparison that decides valid vs superseded."""
-    rec = _lay_down_binary_switch_selector(svc, tmp_path, stack=stack)
+    rec = binary_receipt(svc, stack=stack)
     import dataclasses
     base = {}
     for rel in paths_:
@@ -1520,29 +1397,29 @@ def _baseline_receipt(svc, tmp_path, stack, paths_):
     return rec
 
 
-def test_meshcom_pinned_clone_is_restored_when_hmac_fails(tmp_path, monkeypatch):
+def test_meshcom_pinned_clone_is_restored_when_hmac_fails(tmp_path, monkeypatch, stub_adopt, git, binary_receipt):
     """THE realistic case: meshcom keeps its PINNED clone on the binary channel, `--source dev`
     replaces it, and the HMAC step then fails. The clone, its ownership record AND the binary
     receipt must all be back — a restored receipt whose baseline no longer matches the registry
-    reads SUPERSEDED, which is not a restored install (audit finding)."""
+    reads SUPERSEDED, which is not a restored install."""
     svc = _svc_binary_switch_selector(tmp_path, monkeypatch)
     qemu_path = next(c.source.path for st in svc.stacks() for c in st.components
                      if c.id == "meshcom-qemu")
-    head = _checkout(svc, tmp_path, qemu_path, "meshcom-qemu")
+    head = _checkout(git, svc, tmp_path, qemu_path, "meshcom-qemu")
     old_txn = source_registry.record_state(svc._paths, qemu_path)[1].txn_id
-    rec = _baseline_receipt(svc, tmp_path, "meshcom", [qemu_path])
+    rec = _baseline_receipt(binary_receipt, svc, "meshcom", [qemu_path])
     assert brx.receipt_state(svc._paths, "meshcom")[0] == "valid"
 
     monkeypatch.setattr(ControllerService, "_frozen_ref",
                         lambda self, comp, sel: (("f" * 40, "dev tip"), ""))
-    _stub_adopt_binary_switch_selector(svc, monkeypatch)                       # replaces the clone, writes a NEW record
+    stub_adopt(svc)                       # replaces the clone, writes a NEW record
     monkeypatch.setattr(ControllerService, "hmac_set_secret",
                         lambda self, sid, action, **k: ActionResult(False, "keyfile unwritable"))
 
     res = svc.install("meshcom", apply=True, source="dev")
     assert not res.ok and "HMAC password" in res.summary
     # the pinned clone is back, at its old commit and under its old ownership record
-    assert _git(svc, tmp_path / qemu_path, "rev-parse", "HEAD") == head
+    assert git(tmp_path / qemu_path, "rev-parse", "HEAD") == head
     state, rrec, _why = source_registry.record_state(svc._paths, qemu_path)
     assert state == "valid" and rrec.txn_id == old_txn
     # …so the restored receipt is VALID, not superseded
@@ -1551,20 +1428,20 @@ def test_meshcom_pinned_clone_is_restored_when_hmac_fails(tmp_path, monkeypatch)
     assert bi.read_journal(svc._paths)[1] == "absent"
 
 
-def test_replaced_first_source_is_restored_when_a_later_group_fails(tmp_path, monkeypatch):
+def test_replaced_first_source_is_restored_when_a_later_group_fails(tmp_path, monkeypatch, stub_adopt, git, binary_receipt):
     """First group: a pre-existing checkout is REPLACED. Second group fails. The first checkout
     and its record must return to their pre-switch state."""
     svc = _svc_binary_switch_selector(tmp_path, monkeypatch)
-    head = _checkout(svc, tmp_path, DAEMON_PATH, "loraham-daemon")
+    head = _checkout(git, svc, tmp_path, DAEMON_PATH, "loraham-daemon")
     old_txn = source_registry.record_state(svc._paths, DAEMON_PATH)[1].txn_id
-    rec = _baseline_receipt(svc, tmp_path, "daemon", [DAEMON_PATH])
+    rec = _baseline_receipt(binary_receipt, svc, "daemon", [DAEMON_PATH])
     monkeypatch.setattr(ControllerService, "_frozen_ref",
                         lambda self, comp, sel: (("f" * 40, "dev tip"), ""))
-    _stub_adopt_binary_switch_selector(svc, monkeypatch, fail_paths=(RADIOLIB_PATH,))
+    stub_adopt(svc, fail_paths=(RADIOLIB_PATH,))
 
     res = svc.install("daemon", apply=True, source="dev")
     assert not res.ok and "FAILED" in res.summary
-    assert _git(svc, tmp_path / DAEMON_PATH, "rev-parse", "HEAD") == head
+    assert git(tmp_path / DAEMON_PATH, "rev-parse", "HEAD") == head
     state, rrec, _why = source_registry.record_state(svc._paths, DAEMON_PATH)
     assert state == "valid" and rrec.txn_id == old_txn
     assert brx.receipt_state(svc._paths, "daemon")[0] == "valid"
@@ -1572,13 +1449,13 @@ def test_replaced_first_source_is_restored_when_a_later_group_fails(tmp_path, mo
     assert bi.read_journal(svc._paths)[1] == "absent"
 
 
-def test_binary_update_probe_verdict_resolves_against_the_receipt_head(tmp_path, monkeypatch):
+def test_binary_update_probe_verdict_resolves_against_the_receipt_head(tmp_path, monkeypatch, binary_receipt):
     """The binary branch of the freshness probe must record the head it judged (the receipt's
     component commit — the same head the status probe reports), or effective_status() shows
     "unchecked" forever and the console can never render the verdict it just computed."""
     from lhpc.core import stackupdates
     svc = _svc(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)                                 # valid receipt == manifest pins
+    binary_receipt(svc)                                 # valid receipt == manifest pins
     comp = svc.stack("daemon").main_component
     entry = svc._update_probe(comp)
     head = svc.binary_receipt_state("daemon")[1].components[comp.id]
@@ -1586,17 +1463,12 @@ def test_binary_update_probe_verdict_resolves_against_the_receipt_head(tmp_path,
     assert stackupdates.effective_status(entry, head) == stackupdates.UP_TO_DATE
 
 
-def test_binary_install_journal_failure_is_a_typed_refusal(tmp_path, monkeypatch):
+def test_binary_install_journal_failure_is_a_typed_refusal(tmp_path, monkeypatch, binary_receipt, stub_pipeline):
     """A journal that cannot be written refuses with the source command, never a traceback,
     and leaves no staging directory behind."""
     svc = _svc(tmp_path, monkeypatch)
-    _lay_down(svc, tmp_path)
-    monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 2, "stacks": {}})
-    monkeypatch.setattr(bi, "index_entry", lambda idx, sid: _fake_entry(svc, sid))
-    monkeypatch.setattr(bi, "check_target", lambda e, tgt: None)
-    monkeypatch.setattr(bi, "check_pins", lambda e, p: None)
-    monkeypatch.setattr(bi, "require_zstd", lambda: None)
-    monkeypatch.setattr(ControllerService, "_dpkg_installed", lambda self, p: True)
+    binary_receipt(svc)
+    stub_pipeline(svc)
     monkeypatch.setattr(bi, "open_txn", lambda *a, **k: (_ for _ in ()).throw(
         bi.BinaryInstallError("journal unwritable")))
     res = svc.binary_install("daemon", apply=True)

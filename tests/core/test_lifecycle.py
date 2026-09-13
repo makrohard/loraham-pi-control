@@ -61,7 +61,7 @@ def test_run_job_failure_state(tmp_path):
 
 
 def test_run_job_announces_log_path_at_creation(tmp_path):
-    # Item 7: on_log_open fires the MOMENT the log file exists (before the run) with the EXACT path the
+    # on_log_open fires the MOMENT the log file exists (before the run) with the EXACT path the
     # job writes to — so a long, silent build can be tailed from another terminal.
     from pathlib import Path
     argv = ["echo", "hi"]
@@ -75,7 +75,7 @@ def test_run_job_announces_log_path_at_creation(tmp_path):
 
 
 def test_logs_resolves_newest_build_log_over_stale_unsuffixed(tmp_path):
-    # Item 7: `lhpc logs <comp>` (band-less) resolves to the NEWEST job log across start/build/test,
+    # `lhpc logs <comp>` (band-less) resolves to the NEWEST job log across start/build/test,
     # so it agrees with what a just-finished build wrote — never a stale unsuffixed sibling.
     import os
     comp = Component(id="widget", name="Widget", kind=ComponentKind.SERVICE)
@@ -93,7 +93,7 @@ def test_logs_resolves_newest_build_log_over_stale_unsuffixed(tmp_path):
 
 
 def test_logs_band_scoped_still_uses_start_log(tmp_path):
-    # Item 7: a band-scoped caller (RX/TX feed) still gets the exact band's START log, unchanged.
+    # a band-scoped caller (RX/TX feed) still gets the exact band's START log, unchanged.
     comp = Component(id="widget", name="Widget", kind=ComponentKind.SERVICE)
     life = _life(FakeSystem().system, tmp_path)
     logs = life.logs_dir(); logs.mkdir(parents=True, exist_ok=True)
@@ -104,7 +104,7 @@ def test_logs_band_scoped_still_uses_start_log(tmp_path):
 
 
 def test_log_announcer_records_details_and_emits_live_and_dedups(tmp_path):
-    # Item 7: the service announcer records one copy-pasteable line per new log into `details` AND
+    # the service announcer records one copy-pasteable line per new log into `details` AND
     # emits it live via _progress (the CLI printer), deduping repeat opens of the same file.
     from lhpc.core.services import ControllerService
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
@@ -120,7 +120,7 @@ def test_log_announcer_records_details_and_emits_live_and_dedups(tmp_path):
 
 
 def test_run_job_output_unverified_alone_is_unsafe(tmp_path):
-    # P1: an escaped descendant holding the output pipe open (output_unverified) makes the job UNSAFE even
+    # an escaped descendant holding the output pipe open (output_unverified) makes the job UNSAFE even
     # when the DIRECT child exited 0 — a SUCCEEDED direct process does NOT prove a descendant stopped.
     class _Runner:
         def run_streaming(self, argv, timeout, log_fh, cwd=None, env=None,
@@ -170,7 +170,7 @@ def test_run_job_threads_low_priority_only_when_asked(tmp_path):
 
 
 def test_run_job_log_write_failure_is_not_success(tmp_path):
-    # P2: a clean-exiting, fully-drained build whose LOG could not be persisted must NOT be SUCCEEDED — the
+    # a clean-exiting, fully-drained build whose LOG could not be persisted must NOT be SUCCEEDED — the
     # recorded evidence is incomplete (but it is not `unsafe`: cessation/draining were proven).
     class _Runner:
         def run_streaming(self, argv, timeout, log_fh, cwd=None, env=None,
@@ -293,7 +293,7 @@ def test_tx_test_confirms_one_frame(tmp_path, monkeypatch):
     assert res.ok and res.txok_before == 0 and res.txok_after == 1
 
 
-# --- Item B/C: quiet-step announce preamble + per-step-kind log discoverability ---------------
+# --- quiet-step announce preamble + per-step-kind log discoverability ---------------
 
 
 def test_run_job_announce_is_first_log_content_real_child(tmp_path):

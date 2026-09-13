@@ -319,7 +319,7 @@ def _daemon_svc_owned(tmp_path, replies, owner_band):
 
 @pytest.mark.needs_session
 def test_daemon_start_skips_band_owned_by_meshtastic(tmp_path):
-    # Item 3 (one-owned): meshtastic owns 868 -> the daemon serves 433 only, reports the skip, and
+    # meshtastic owns 868 -> the daemon serves 433 only, reports the skip, and
     # NEVER starts 868 or stops meshtastic (the working band is not taken down).
     svc = _daemon_svc_owned(tmp_path, {}, "868")
     text = "\n".join(svc.start("daemon", apply=True).details)
@@ -330,7 +330,7 @@ def test_daemon_start_skips_band_owned_by_meshtastic(tmp_path):
 
 @pytest.mark.needs_session
 def test_daemon_start_all_bands_owned_is_clean_refusal(tmp_path, monkeypatch):
-    # Item 3 (all-owned): every active band owned by a running radio-direct stack -> clean refusal,
+    # every active band owned by a running radio-direct stack -> clean refusal,
     # NO daemon launch attempted.
     svc = _daemon_svc(tmp_path, {})
     monkeypatch.setattr(type(svc), "_direct_radio_owners",
@@ -344,7 +344,7 @@ def test_daemon_start_all_bands_owned_is_clean_refusal(tmp_path, monkeypatch):
 
 @pytest.mark.needs_session
 def test_daemon_start_all_free_serves_both(tmp_path):
-    # Item 3 (all-free): with no radio-direct owner running, both bands are served as before.
+    # with no radio-direct owner running, both bands are served as before.
     svc = _daemon_svc(tmp_path, {})
     text = "\n".join(svc.start("daemon", apply=True).details)
     assert _band_starts([text]) == {"433", "868"}
@@ -674,7 +674,7 @@ def test_opposite_band_meshtastic_permits_daemon_start(tmp_path):
 
 
 def test_radio_both_arbitrates_away_the_owned_band(tmp_path):
-    # Item 3: a serve-all/both daemon start ARBITRATES an owned band away and serves only the free
+    # a serve-all/both daemon start ARBITRATES an owned band away and serves only the free
     # band — it never blocks or stops a running radio-direct owner (symmetric with meshtastic start
     # stopping the daemon band). An EXPLICIT single-band request still conflicts (tests above).
     assert not any("868" in bl["resource"]
@@ -686,7 +686,7 @@ def test_radio_both_arbitrates_away_the_owned_band(tmp_path):
 
 
 def test_explicit_single_band_request_is_never_arbitrated_away(tmp_path):
-    # Item 3: `--radio 868` while meshtastic owns 868 is an EXPLICIT request — it must still conflict
+    # `--radio 868` while meshtastic owns 868 is an EXPLICIT request — it must still conflict
     # (surfaced as a blocker), not be silently skipped.
     svc = _msvc(tmp_path, "868")
     assert svc._daemon_arbitrated_bands("868") == (["868"], {})
@@ -759,7 +759,7 @@ def test_stopped_client_with_ready_daemon_applies_before_launch(tmp_path, set_ca
     assert apply_line is not None and kiss_line is not None and apply_line < kiss_line  # before launch
 
 
-# --- P1: topology-based lifecycle band resolution -------------------------------------------
+# --- topology-based lifecycle band resolution -------------------------------------------
 
 _RDYP1 = b"STATUS RADIO=READY TXMODE=MANAGED\n"
 
@@ -1082,7 +1082,7 @@ def test_restart_cascade_consent_reaches_the_stop_leg(tmp_path, monkeypatch, set
 
 
 def test_restart_plan_predicts_exactly_what_its_apply_does_with_dependents(tmp_path, monkeypatch, set_call):
-    # RE-AUDIT: the dry run rendered "[stop] graywolf" whatever `cascade` was, so the CLI (which
+    # the dry run rendered "[stop] graywolf" whatever `cascade` was, so the CLI (which
     # has no cascade option) promised a stop its apply never performed. Plan and apply now take
     # the same decision; the dependent set stays in `data` for the web's confirmation.
     svc = _kiss_with_graywolf_running(set_call, tmp_path, monkeypatch)

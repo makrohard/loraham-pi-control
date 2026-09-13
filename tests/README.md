@@ -10,6 +10,7 @@ a sentence or an equivalent JavaScript rewrite changed.
 | ordinary tests | LHPC's own behaviour, against injected fakes. No radio, no root, no network, no browser. | this directory |
 | testlab, four lanes | the simulator itself; the real executable and server over a simulated host; the console in real headless Chromium; a release's evidence — [docs/testlab.md](../docs/testlab.md#running-the-verification-lanes). | `testlab/tests/` |
 | meshcore host tests | LHPC's adapter against the pinned real openHop API. | `lhpc/data/meshcore_host` |
+| RF-log decoder tests | the three decoders against each stack's pinned libraries (meshtastic, openHop, RNS/LXMF): generated keys plus the bench-recorded frames. | `lhpc/data/rfdecode/tests` |
 | release / live matrix | a real Pi, kernel and radios. Nothing below replaces it. | [docs/test-matrix.md](../docs/test-matrix.md) |
 
 Three rules decide where something belongs:
@@ -58,11 +59,21 @@ when or how a defect was found.
 6. **Browser behaviour goes in a real browser.** Playwright with `headless=True`, waiting on observable
    state. No `wait_for_timeout`, no sleeps, no hand-built DOM.
 7. **No sibling-test imports and no `sys.path` edits.** Share through a fixture in the nearest
-   `conftest.py`, or one of the two plain helper modules here (`repo_paths.py`, `htmlq.py`).
+   `conftest.py`, or one of the plain helper modules here (`repo_paths.py`, `htmlq.py`, `seams.py`; a
+   directory may carry one of its own, such as `install/gitrepo.py`, imported only by that
+   directory's tests). The one declared exception: the two in-package suites
+   (`lhpc/data/meshcore_host/tests`, `lhpc/data/rfdecode/tests`) run under a stack's own
+   interpreter, outside this tree, and their `conftest.py` puts their package on `sys.path` — that
+   single insert is the exception, sibling-test imports there are not.
 8. **Autouse fixtures isolate the host, and say so.** They give the test a temporary runtime root,
    HOME and firewall state, refuse real downloads and real `pip install`, and reap spawned helpers.
    The two that supply a product baseline — radio hardware and a graphical session — are opt-out by
    marker (`no_default_hardware`, `no_default_display`), because nearly every test wants a working box.
+   Two sanctioned gaps, both in `host/test_deploy_scripts.py` and both stated in its docstring: the
+   `slow` full-install tests run `install.sh` as shipped, so pip reaches PyPI (a bash subprocess
+   the in-process guard cannot see; a wheelhouse is the honest fix, backlogged); and the module
+   skips on a host that carries real LHPC firewall state under `/etc/lhpc`, because
+   `uninstall.sh`'s preflight reads the canonical roots and would judge that host, not the script.
 9. **Prefer the injected `System` to patching a private method.** `FakeSystem(commands=…, files=…)` is
    the seam. Patch a private only to stub a collaborator, and say why in a comment.
 10. **A test must be able to fail.** No `assert True` fallback, no conditional body that can do

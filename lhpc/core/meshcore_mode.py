@@ -31,6 +31,7 @@ STACK_ID = "meshcore"
 NODE_ID = "meshcore-node"
 CLIENT_IDS = ("meshcore-webui", "meshcore-cli")   # Companion clients of TCP 5000
 COMPANION_PORT = 5000
+REASON_REPEATER_NAME_REQUIRED = "repeater-name-required"   # ActionResult.data["reason"] token
 DASHBOARD_PORT = 8000
 
 

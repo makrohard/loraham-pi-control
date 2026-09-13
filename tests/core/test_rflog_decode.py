@@ -38,6 +38,10 @@ def _fake(tmp_path, body):
 
 
 def _use(monkeypatch, script, *extra):
+    """Stub the decoder child with `script`. The decoder is spawned via subprocess, not through
+    the injected System, so the argv resolver is the only seam that can stand in a fake child —
+    and the only place the argv contract (interpreter, script, paths, never a key) is observable,
+    which is why the tests above call it directly as their subject."""
     monkeypatch.setattr(ControllerService, "_rflog_decoder_argv",
                         lambda self, e: ((sys.executable, str(script), *extra), ""))
 
@@ -168,10 +172,11 @@ def test_stdin_carries_key_and_raw_only_and_stdout_is_capped_per_field(tmp_path,
     svc = _svc(tmp_path)
     seen = tmp_path / "seen.json"
     _use(monkeypatch, _fake(tmp_path, f"open({str(seen)!r}, 'w').write(json.dumps(reqs))\n"
-                            "for r in reqs: print(json.dumps({'key': r['key'], 'status': 'ok', 'kind': 'k' * 99, 'decoded': 'd' * 9000}))\n"))
+                            "for r in reqs: print(json.dumps({'key': r['key'], 'status': 'ok', 'kind': 'k' * 99, 'peer': 'p' * 500, 'decoded': 'd' * 9000}))\n"))
     rec = svc.rflog_decode("meshtastic", "rf-meshtastic.log", _records(1))["records"][0]
     assert json.loads(seen.read_text()) == [{"key": _records(1)[0]["key"], "raw": _records(1)[0]["raw"]}]
-    assert len(rec["kind"]) == 40 and len(rec["decoded"]) == 4000
+    assert (len(rec["kind"]), len(rec["peer"]), len(rec["decoded"])) == \
+        (svc.RFLOG_KIND_MAX, svc.RFLOG_PEER_MAX, svc.RFLOG_DECODED_MAX)
 
 
 # ---- the cache: per job, by record key; `no-key` never sticks; meshcore's mode resets it -------
@@ -234,6 +239,10 @@ def test_the_meshcore_decoder_follows_the_running_mode_until_a_restart(tmp_path,
     resets once."""
     svc = _svc(tmp_path)
     real_argv = ControllerService._rflog_decoder_argv
+
+    def _mode(argv):
+        return argv[argv.index("--mode") + 1]
+
     py = tmp_path / "src" / "openhop-core" / ".venv" / "bin" / "python"
     py.parent.mkdir(parents=True)
     py.write_text("")
@@ -242,7 +251,7 @@ def test_the_meshcore_decoder_follows_the_running_mode_until_a_restart(tmp_path,
     monkeypatch.setattr(ControllerService, "stack_running", lambda self, s: live["running"] and s == "meshcore")
     monkeypatch.setattr(ControllerService, "meshcore_running_mode", lambda self: live["mode"])
     argv, err = svc._rflog_decoder_argv(rflog.entry("meshcore"))
-    assert err == "" and argv[argv.index("--mode") + 1] == "chat"          # saved repeater, running chat
+    assert err == "" and _mode(argv) == "chat"                            # saved repeater, running chat
     counter = tmp_path / "runs"
     _use(monkeypatch, _fake(tmp_path, f"open({str(counter)!r}, 'a').write(str(len(reqs)) + '\\n')\n" + ECHO))
     recs = _records(2)
@@ -251,14 +260,14 @@ def test_the_meshcore_decoder_follows_the_running_mode_until_a_restart(tmp_path,
     assert counter.read_text().splitlines() == ["2"]                       # cached: the mode did not move
     live["mode"] = "repeater"                                              # the restart happened
     monkeypatch.setattr(ControllerService, "_rflog_decoder_argv", real_argv)
-    assert svc._rflog_decoder_argv(rflog.entry("meshcore"))[0][5] == "repeater"
+    assert _mode(svc._rflog_decoder_argv(rflog.entry("meshcore"))[0]) == "repeater"
     _use(monkeypatch, _fake(tmp_path, f"open({str(counter)!r}, 'a').write(str(len(reqs)) + '\\n')\n" + ECHO))
     svc.rflog_decode("meshcore-node", "rf-meshcore.log", recs)
     svc.rflog_decode("meshcore-node", "rf-meshcore.log", recs)
     assert counter.read_text().splitlines() == ["2", "2"]                  # reset once, then cached again
     live["running"] = False                                                # stopped: the saved mode applies
     monkeypatch.setattr(ControllerService, "_rflog_decoder_argv", real_argv)
-    assert svc._rflog_decoder_argv(rflog.entry("meshcore"))[0][5] == "repeater"
+    assert _mode(svc._rflog_decoder_argv(rflog.entry("meshcore"))[0]) == "repeater"
 
 
 def test_one_decoder_at_a_time_per_job(tmp_path, monkeypatch):
