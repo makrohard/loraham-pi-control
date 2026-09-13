@@ -201,15 +201,10 @@ needs *Recover*. A second Start while one runs is refused ("already in progress"
 self-update or a contended admission refuses before anything is spawned. The CLI and boot
 restore start synchronously.
 
-**The RF-log viewer.** The log page shows an RF log ([maintenance](maintenance.md#rf-logs)) as
-records — one row per frame with time, direction, RSSI/SNR, length, outcome, summary (the TNC2
-text or meshtastic's `!from → !to`), hex and ascii — parsed server-side by `rflog.parse_line`
-and served by `GET /api/rflog/<writer>?job=…` (same registry authorization as the page). Sort by
-any column, filter, switch columns on and off; the raw file is one click away and is what the CLI
-prints. Below 700 px hex and ascii start off and a row tap expands them. Sort, filter and column
-choices live in the browser (`localStorage`), never on the box; the Decrypt toggle is never
-remembered — every page load starts with it off. A line the parser does not know is still a row
-with its raw text.
+**The RF-log page.** One page for every RF log — band row, stack row, the table's columns
+(time, direction, RSSI/SNR, length, outcome, summary — the TNC2 text or meshtastic's
+`!from → !to` — hex, ascii, decoded), Decrypt, the switches and Clear: [maintenance → RF
+logs](maintenance.md#rf-logs).
 
 ## Reboot / Shut down
 

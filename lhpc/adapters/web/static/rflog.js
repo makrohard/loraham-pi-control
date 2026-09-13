@@ -1,6 +1,6 @@
-// RF log page: records table with sort/filter/columns, a raw view, and the Decrypt toggle for
-// encrypted stacks. Every field is radio-controlled text: it reaches the DOM through textContent
-// only, never as HTML. State (columns, filter, direction, sort, raw, decrypt) lives in this
+// RF log page: records table in time order with header sort and column choice, a raw view, and
+// the Decrypt toggle for encrypted stacks. Every field is radio-controlled text: it reaches the
+// DOM through textContent only, never as HTML. State (columns, sort, raw) lives in this
 // browser's localStorage; nothing about it is stored on the box. Same-origin only.
 (function () {
   "use strict";
@@ -19,10 +19,9 @@
   if (canDecrypt) COLS.push("decoded");
   var LABEL = {ts: "time", dir: "dir", rssi: "rssi", snr: "snr", len: "len", outcome: "outcome",
                summary: "summary", hex: "hex", ascii: "ascii", decoded: "decoded"};
-  var narrow = window.matchMedia && window.matchMedia("(max-width: 700px)").matches;
-  var state = {cols: {}, filter: "", dir: "", sort: "", desc: false, raw: false, decrypt: false};
-  COLS.forEach(function (c) { state.cols[c] = !(narrow && (c === "hex" || c === "ascii")); });
-  var KEY = "lhpc.rflog." + job;
+  var state = {cols: {}, sort: "ts", desc: false, raw: false, decrypt: false};
+  COLS.forEach(function (c) { state.cols[c] = (c === "dir" || c === "ascii" || c === "decoded"); });
+  var KEY = "lhpc.rflog2." + job;
   try { var saved = JSON.parse(localStorage.getItem(KEY) || "null"); if (saved) { Object.assign(state, saved); } } catch (e) { /* no storage: defaults */ }
   state.decrypt = false;                     // the plaintext reveal always starts OFF; it is never remembered
   function save() {
@@ -42,14 +41,7 @@
     if (c === "rssi" || c === "snr") return Number(v).toFixed(2);
     return String(v);
   }
-  function matches(r) {
-    if (state.dir && r.dir !== state.dir) return false;
-    if (!state.filter) return true;
-    var f = state.filter.toLowerCase();
-    return ["summary", "ascii", "hex", "decoded", "raw"].some(function (c) { return r[c] && String(r[c]).toLowerCase().indexOf(f) >= 0; });
-  }
   function sorted(list) {
-    if (!state.sort) return list;
     var c = state.sort, d = state.desc ? -1 : 1;
     return list.slice().sort(function (a, b) {
       var x = a[c], y = b[c];
@@ -68,7 +60,7 @@
     });
     document.querySelectorAll("#rf-cols input[type=checkbox]").forEach(function (cb) { cb.checked = !!state.cols[cb.value]; });
     var frag = document.createDocumentFragment();
-    sorted(records.filter(matches)).forEach(function (r) {
+    sorted(records).forEach(function (r) {
       var tr = document.createElement("tr");
       if (r.status && r.status !== "ok") tr.className = "rf-" + r.status;
       COLS.forEach(function (c) {
@@ -123,10 +115,6 @@
       save(); render();
     });
   });
-  var filter = document.getElementById("rf-filter");
-  if (filter) { filter.value = state.filter; filter.addEventListener("input", function () { state.filter = filter.value; save(); render(); }); }
-  var dirsel = document.getElementById("rf-dir");
-  if (dirsel) { dirsel.value = state.dir; dirsel.addEventListener("change", function () { state.dir = dirsel.value; save(); render(); }); }
   document.querySelectorAll("#rf-cols input[type=checkbox]").forEach(function (cb) {
     cb.addEventListener("change", function () { state.cols[cb.value] = cb.checked; save(); render(); });
   });
@@ -143,8 +131,10 @@
     }
     lastSig = ""; save(); render(); poll();
   });
-  var clear = document.getElementById("rflog-clear");
-  if (clear) clear.addEventListener("submit", function (e) { if (!window.confirm(clear.getAttribute("data-confirm") || "Clear the RF log?")) e.preventDefault(); });
+  ["rflog-clear", "rflog-clear-all"].forEach(function (id) {
+    var form = document.getElementById(id);
+    if (form) form.addEventListener("submit", function (e) { if (!window.confirm(form.getAttribute("data-confirm") || "Clear the RF log?")) e.preventDefault(); });
+  });
 
   render();
   setInterval(poll, 2000);

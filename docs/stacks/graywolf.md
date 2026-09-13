@@ -43,7 +43,7 @@ PTT), a `tcp-client` KISS interface dialling the TNC (a stale interface from an 
 | `call` | inherits the global base callsign while empty | optional APRS SSID `-1`…`-15` (bare = SSID 0), shaped like `G0ABC-10` with your own call. Graywolf derives the APRS-IS passcode from it — LHPC stores no passcode |
 | `tnc_host` / `tnc_port` | `127.0.0.1` / `8001` | where `loraham-kiss-tnc` listens |
 | `use_gps` | `on` | use the global position source (`lhpc gps`) |
-| `rf_log` (kiss) | `on` | the frames cross the radio at the kiss TNC, so the file (`logs/rf-kiss.log`) and the switch (`lhpc config kiss rf_log off`) are the kiss stack's; graywolf's RF-Logs submenu shows it |
+| `rf_log` (kiss) | `on` | the frames cross the radio at the kiss TNC, so the file (`logs/rf-kiss.log`) and the switch (`lhpc config kiss rf_log off`) are the kiss stack's — in the kiss Settings (RF-Logs group) and on graywolf's log page |
 | `igate` | `0` | enable Graywolf's APRS-IS iGate |
 | `igate_server` / `igate_port` | `rotate.aprs2.net` / `14580` | |
 | `igate_filter` | *(empty)* | APRS-IS server filter, e.g. `r/48.4/9.9/100`. A negation filter (`-b/…`) cannot be a param — a leading `-` reads as an option — so set those in the UI |

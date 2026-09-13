@@ -127,7 +127,7 @@ main = "loraham-daemon"
     label = "CAD RSSI (this process, dBm)"
     # RF log: what this band's radio heard and sent, one line per frame, kept across restarts.
     # STACK-level (band-less) switch — the FILES are per band, the switch is not. The daemon's
-    # RF-Logs submenu is its only web surface for it (`config_param_fields` is empty here).
+    # log page is its only web surface for it (`config_param_fields` is empty here: no Settings form).
     [[stack.component.param]]
     name = "rf_log"
     kind = "enum"
@@ -743,7 +743,7 @@ main = "loraham-kiss-tnc"
     label = "Verbose logging"
     advanced = true
     # RF log at the TNC — the radio boundary of the kiss AND the graywolf stack (graywolf's
-    # RF-Logs submenu proxies to this switch). STACK-level (band-less); the file is named by lhpc.
+    # log page proxies to this switch). STACK-level (band-less); the file is named by lhpc.
     [[stack.component.param]]
     name = "rf_log"
     kind = "enum"

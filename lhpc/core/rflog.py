@@ -1,4 +1,4 @@
-"""RF logs — ONE registry behind the RF-Logs submenu, the log page, Clear and `lhpc rflog`.
+"""RF logs — ONE registry behind the log page, its switches and Clear, and `lhpc rflog`.
 
 Per stack, a persistent line-per-frame log of what the radio heard and sent, written at the
 radio boundary by the stack's own process (the daemon, the KISS TNC, the MeshCom bridge, the
@@ -7,11 +7,11 @@ trace instead. LHPC owns the switch, the file name and the viewer; it decodes no
 
 The table below is the ONLY authorization source: a `logs/<job>` is an RF log exactly when it
 is listed here — never by prefix, so `rf-made-up.log` is neither viewable as one nor clearable.
-Each entry names the SURFACE (the stack whose card carries the submenu), the config OWNER (the
-stack whose store holds the `rf_log` switch), the WRITER (the component whose run state is
-the page's badge and whose `logs_view` target the links use) and the job file(s). Graywolf is
-the one proxy: its submenu shows and saves the kiss-owned switch, because the TNC is where
-graywolf's frames cross the radio boundary.
+Each entry names the SURFACE (the stack the log page and the CLI call it), the config OWNER
+(the stack whose store holds the `rf_log` switch, in its Settings), the WRITER (the component
+whose run state is the page's badge and whose `logs_view` target the links use) and the job
+file(s). Graywolf is the one proxy: its log page shows and saves the kiss-owned switch, because
+the TNC is where graywolf's frames cross the radio boundary.
 
 `rf_log` is a STACK-level, band-less setting (`service_params._BANDLESS_STACK_PARAMS`): the
 daemon's FILES are per band, its SWITCH is not.
@@ -37,7 +37,7 @@ MESHTASTIC_TRACE_PARAM = "trace_file"
 
 @dataclass(frozen=True)
 class Entry:
-    surface: str          # the stack whose card shows the RF-Logs submenu
+    surface: str          # the stack name the log page and `lhpc rflog` use
     owner: str            # the stack whose config store holds the switch
     writer: str           # the component that writes the file; its run state is the badge
     key: str              # the switch's bundle key on the owner: run `rf_log` / file `file_rf_log`
