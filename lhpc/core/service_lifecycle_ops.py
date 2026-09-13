@@ -2696,7 +2696,30 @@ class LifecycleOpsMixin:
             return ActionResult(False, f"Cannot {op} '{target}': {why}",
                                 next_commands=[f"lhpc config {_ri.STACK_ID}"],
                                 data={"reason": reason})
+        # RNode framing needs the driver that implements it. A driver built before the switch
+        # existed ignores the unknown key and starts BARE — the box would look up and talk to
+        # nobody. So the switch requires the BUILT driver's framing module (what runs, not what
+        # the manifest names: a known-working composition may still hold the old driver).
+        if (any(c.id == _ri.NODE_ID for _stack, c in order)
+                and _ri.enabled(self._resolved_param_value(_ri.STACK_ID, "file", _ri.NODE_ID,
+                                                       _ri.RNODE_FRAMING, cfg_band) or "")
+                and not self._rns_driver_has_framing()):
+            return ActionResult(
+                False, f"Cannot {op} '{target}': RNode framing is on, but the built LoRa driver "
+                       "predates it and would transmit bare — update the driver and rebuild",
+                next_commands=["lhpc update rns-lora-interface", f"lhpc build {_ri.STACK_ID}"],
+                data={"reason": _ri.REASON_FRAMING_DRIVER_OLD})
         return None
+
+    def _rns_driver_has_framing(self) -> bool:
+        """Whether the LoRa driver BUILT into the RNS node's venv carries the RNode framing
+        module (the file the node imports; `loraham_rns/framing.py` arrived with the switch)."""
+        stack = self.stack(_ri.STACK_ID)
+        node = stack.component(_ri.NODE_ID) if stack else None
+        if node is None or node.source is None:
+            return False
+        venv = self._paths.resolve_source(node.source.path) / ".venv" / "lib"
+        return any(venv.glob("python3*/site-packages/loraham_rns/framing.py"))
 
     def _reticulum_internet_preflight(self, order, band: str) -> str:
         """The sentence of `_reticulum_internet_verdict` ("" = nothing to refuse)."""
@@ -5329,6 +5352,13 @@ class LifecycleOpsMixin:
             # `--config` is RNS's configdir (state/reticulum); the decoder reads its `config` file.
             extra = ["--config", str(self._paths.under("state", "reticulum")),
                      "--meshchat", str(self._paths.under("state", "meshchat"))]
+            # RNode framing is undone with the LoRa driver's own module. The driver is built
+            # into the RNS venv, not LXMF's, so the decoder gets its source checkout (the
+            # pinned commit) to import from — when it is installed.
+            drv = next((c for c in (stack.components if stack else ())
+                        if c.source is not None and c.source.path.endswith("loraham-rns-interface")), None)
+            if drv is not None and self._paths.resolve_source(drv.source.path).is_dir():
+                extra += ["--driver", str(self._paths.resolve_source(drv.source.path))]
         else:
             return (), f"no decoder for {e.surface}"
         if not py.is_file():
@@ -5371,12 +5401,19 @@ class LifecycleOpsMixin:
             now = _time.monotonic()
             out = []
             misses = []
-            for r in records:
+            for i, r in enumerate(records):
                 hit = lru.get(r["key"])
                 if hit is not None and (hit.get("status") != "no-key"
                                         or now - hit.get("_at", 0) < self.RFLOG_NOKEY_TTL_S):
                     out.append({**r, **{k: v for k, v in hit.items() if k != "_at"}})
                 else:
+                    # A split packet (RNode framing) is two records; its first half answers
+                    # "fragment" until the second is decoded IN THE SAME BATCH. So a miss takes
+                    # a cached fragment right before it back into the batch — the decoder then
+                    # sees the pair in order and the second half carries the message.
+                    if i and out[i - 1] is not None and out[i - 1].get("kind") == "fragment":
+                        out[i - 1] = None
+                        misses.append(records[i - 1])
                     out.append(None)
                     misses.append(r)
             error = ""

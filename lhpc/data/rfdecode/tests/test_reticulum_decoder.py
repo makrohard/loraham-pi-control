@@ -23,11 +23,13 @@ def _line(hexdata: str, direction="RX") -> str:
     return f'2026-09-12T18:05:02.248Z {direction} {sig} len={len(hexdata) // 2} hex={hexdata} ascii="x"'
 
 
-def _config(tmp_path, netname=None, passphrase=None, ifac_size_bits=None):
+def _config(tmp_path, netname=None, passphrase=None, ifac_size_bits=None, rnode_framing=None):
     d = tmp_path / "reticulum"
     d.mkdir(exist_ok=True)
     lines = ["[reticulum]", "  enable_transport = No", "[interfaces]", "  [[LoRa]]",
              "    type = LoRaSPIInterface", "    enabled = yes", "    frequency = 434500000"]
+    if rnode_framing:
+        lines.append(f"    rnode_framing = {rnode_framing}")
     if netname:
         lines.append(f"    networkname = {netname}")
     if passphrase:
@@ -163,3 +165,104 @@ def test_an_opened_non_lxmf_packet_is_shown_whole(tmp_path):
     decode = dec.make_decoder(_config(tmp_path), _meshchat(tmp_path, me))
     r = decode("k", _line(_data_packet(dest, me.encrypt(b"\x00\x01\x02\xff")).hex()))
     assert r["status"] == "ok" and r["decoded"] == "4 B 000102ff"
+
+
+# ---- RNode framing: the header byte is stripped and split packets reassembled first ----------
+
+def _framed(data: bytes, header: int) -> list:
+    """The frames the RNode firmware sends for one packet, through the driver's own framer."""
+    from loraham_rns import framing
+    return framing.frame(data, header=header)
+
+
+def _at(seconds: int, hexdata: str, direction="RX") -> str:
+    """A log line at a chosen second — the reassembler's stale-half clock is the log's time."""
+    return _line(hexdata, direction).replace("18:05:02.248Z", f"18:05:{seconds:02d}.000Z")
+
+
+def test_a_framed_announce_decodes_like_a_bare_one(tmp_path):
+    """With `rnode_framing = yes` every logged frame starts with the RNode header byte; the
+    decoder strips it and the packet reads exactly as it would bare. With the switch off the
+    same frame is not a Reticulum packet — a framed box and a bare box never understand each
+    other, and the decoder does not pretend otherwise."""
+    bare = dec.make_decoder(_config(tmp_path), _meshchat(tmp_path))("k", _line(MESHCHAT_ANNOUNCE))
+    framed = dec.make_decoder(_config(tmp_path, rnode_framing="yes"), _meshchat(tmp_path))
+    r = framed("k", _line(_framed(bytes.fromhex(MESHCHAT_ANNOUNCE), 0x80)[0].hex()))
+    assert r == bare and r["status"] == "ok" and r["kind"] == "announce"
+    r = dec.make_decoder(_config(tmp_path), _meshchat(tmp_path))("k", _line("80" + MESHCHAT_ANNOUNCE))
+    assert r["status"] != "ok" and r["kind"] != "announce"     # to a bare box that header byte reads as IFAC
+
+
+def test_a_split_packet_is_two_lines_and_one_decoded_message(tmp_path):
+    """A 300-byte packet leaves the RNode as two frames with the same header; the first line is
+    a fragment waiting for its second, the second completes the packet and names the sequence
+    so a reader can pair the lines. TX and RX never mix: the box's own split reply in between
+    is reassembled on its own."""
+    decode = dec.make_decoder(_config(tmp_path, rnode_framing="yes"), _meshchat(tmp_path))
+    plain_dest = RNS.Destination.hash(None, "lhpc", "plain")
+    body = b"the quick brown fox " * 15
+    packet = bytes([0x08, 0x00]) + plain_dest + bytes([0x00]) + body
+    first, second = _framed(packet, 0x40)
+    tx_first, tx_second = _framed(bytes([0x08, 0x00]) + plain_dest + bytes([0x00]) + b"reply " * 50, 0xA0)
+    r1 = decode("k1", _at(1, first.hex()))
+    assert r1["status"] == "undecryptable" and r1["kind"] == "fragment" and "seq 4" in r1["decoded"]
+    assert "waiting" in r1["decoded"]
+    t1 = decode("t1", _at(2, tx_first.hex(), "TX"))
+    assert t1["kind"] == "fragment" and "seq 10" in t1["decoded"]
+    r2 = decode("k2", _at(3, second.hex()))
+    assert r2["status"] == "ok" and r2["kind"] == "plain"
+    assert r2["decoded"] == body.decode() + " [split seq 4, two frames]"
+    t2 = decode("t2", _at(4, tx_second.hex(), "TX"))
+    assert t2["status"] == "ok" and t2["decoded"].startswith("reply ") and "[split seq 10" in t2["decoded"]
+
+
+def test_an_orphan_half_is_dropped_by_the_next_packet_or_by_age_and_a_trailer_is_named(tmp_path):
+    """The firmware's rules, plus the driver's two guards: a whole packet or a new split
+    sequence discards a pending half (reported as dropped), a half older than the stale limit
+    is not glued to a later fragment, and the header-only trailer of an exact-508-byte packet
+    is a trailer, never a malformed packet."""
+    decode = dec.make_decoder(_config(tmp_path, rnode_framing="yes"), _meshchat(tmp_path))
+    plain_dest = RNS.Destination.hash(None, "lhpc", "plain")
+    whole = bytes([0x08, 0x00]) + plain_dest + bytes([0x00]) + b"whole"
+    long_ = bytes([0x08, 0x00]) + plain_dest + bytes([0x00]) + b"x" * 300
+    first, second = _framed(long_, 0x40)
+    assert "waiting" in decode("a", _at(1, first.hex()))["decoded"]
+    r = decode("b", _at(2, _framed(whole, 0x70)[0].hex()))          # a whole packet clears the half
+    assert r["status"] == "ok" and r["decoded"] == "whole"
+    r = decode("c", _at(3, second.hex()))                             # its partner is gone: a new half
+    assert r["kind"] == "fragment" and "waiting" in r["decoded"]
+    r = decode("d", _at(4, _framed(long_, 0x50)[0].hex()))            # a different sequence replaces it
+    assert r["kind"] == "fragment" and "dropped" in r["decoded"]
+    r = decode("e", _at(5 + int(dec.FRAMING_MAX_AGE_S), _framed(long_, 0x50)[1].hex()))
+    assert r["kind"] == "fragment", "a stale half is not completed by a fragment seconds later"
+    r = decode("f", _at(6, "51"))                                     # header only: the trailer
+    assert r["status"] == "undecryptable" and r["kind"] == "trailer"
+
+
+def test_framing_on_an_older_driver_is_reported_not_crashed(tmp_path, monkeypatch):
+    """The decoder reassembles with the driver's own module; a pinned driver without it (an
+    older release) makes every framed frame an opaque, typed answer — never a traceback."""
+    import sys
+    monkeypatch.setitem(sys.modules, "loraham_rns", None)
+    decode = dec.make_decoder(_config(tmp_path, rnode_framing="yes"), _meshchat(tmp_path))
+    r = decode("k", _line("80" + MESHCHAT_ANNOUNCE))
+    assert r["status"] == "undecryptable" and r["kind"] == "framing-unsupported"
+
+
+def test_the_driver_checkout_given_on_argv_provides_the_framing_module(tmp_path, monkeypatch):
+    """On a box the decoder runs under LXMF's venv, where the driver is not installed; the
+    service passes the driver's pinned source checkout and the decoder imports from it."""
+    import shutil
+    import sys
+
+    from loraham_rns import framing as real
+    checkout = tmp_path / "driver"
+    (checkout / "loraham_rns").mkdir(parents=True)
+    (checkout / "loraham_rns" / "__init__.py").write_text("")
+    shutil.copy(real.__file__, checkout / "loraham_rns" / "framing.py")
+    for name in [m for m in sys.modules if m == "loraham_rns" or m.startswith("loraham_rns.")]:
+        monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if "rnsif" not in p and "loraham-rns-interface" not in p])
+    decode = dec.make_decoder(_config(tmp_path, rnode_framing="yes"), _meshchat(tmp_path), str(checkout))
+    r = decode("k", _line(_framed(bytes.fromhex(MESHCHAT_ANNOUNCE), 0x80)[0].hex()))
+    assert r["status"] == "ok" and r["kind"] == "announce"

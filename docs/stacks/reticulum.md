@@ -36,6 +36,7 @@ packet. The driver is [loraham-rns-interface](https://github.com/makrohard/lorah
 | `frequency` | 868 500 000 Hz / 434 500 000 Hz | per band — see [Band limits](#band-limits) |
 | `bandwidth` · `spreadingfactor` · `codingrate` | 125 000 Hz · 8 · 5 | BW 62.5–500 kHz, SF 7–12 (SF6 needs implicit-header mode, unsupported), CR 4/5–4/8 |
 | `txpower` | 14 dBm (868) / 10 dBm (433) | the driver refuses anything above the band policy: 14 dBm on 868, 10 dBm on 433 |
+| `rnode_framing` | no | talk to RNode-firmware devices: the driver puts the RNode header byte on every frame, splits packets at 254 bytes and programs the preamble the RNode firmware uses for the SF/BW (18 at SF8/BW125 — an SX127x receiver hears an RNode only with at least that). A framed box and a bare box cannot hear each other. The start refuses, before anything is stopped, while the built driver predates the switch (`lhpc update rns-lora-interface` + `lhpc build reticulum`). In the RF log every frame then starts with the header byte and a split packet is two lines; Decrypt strips and reassembles them |
 | `airtime_limit_short` / `airtime_limit_long` | 868: 5 % (15 s) / 1 % (1 h) · 433: 10 % / 10 % | advanced |
 | `rns_allow` | `127.0.0.1` | client-access allow-list; drives the managed firewall |
 | `enable_transport` | `No` | relay OTHER nodes' traffic between this node's interfaces — see [Internet and transport](#internet-and-transport) |

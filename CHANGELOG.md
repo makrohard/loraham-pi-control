@@ -2,6 +2,10 @@
 
 ## 0.5.0
 
+- Reticulum talks to RNode devices: `rnode_framing` (off by default) makes the LoRa driver use the
+  RNode firmware's air format and preamble; the RF-log decoder strips the header byte and
+  reassembles split packets; a start with the switch on refuses while the built driver predates
+  it. Driver pinned at its audited framing release.
 - RF-log console: one log page with a band row and a stack row, rows in time order with dir,
   ascii and decoded as the default columns (no filter), the switches at the bottom — the shown
   stack's and every stack's at once (`lhpc rflog --all on|off`, reads *mixed* when they differ) —

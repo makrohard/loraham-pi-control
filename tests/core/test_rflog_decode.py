@@ -83,6 +83,12 @@ def test_source_stacks_use_their_own_venv_and_name_only_paths(tmp_path, surface,
     assert err == "" and argv[0] == str(py) and argv[1].endswith(f"decode_{surface}.py")
     assert argv[4:] == tuple(x.replace("{rt}", str(tmp_path)) for x in tail)
     assert os.path.isfile(argv[1])                                        # shipped package data
+    if surface == "reticulum":
+        # The LoRa driver's checkout joins the argv once it is installed: the decoder imports
+        # the driver's framing module from it (the driver lives in the RNS venv, not LXMF's).
+        (tmp_path / "src" / "loraham-rns-interface").mkdir(parents=True)
+        argv, _ = svc._rflog_decoder_argv(e)
+        assert argv[-2:] == ("--driver", str(tmp_path / "src" / "loraham-rns-interface"))
 
 
 def test_a_venv_interpreter_is_a_symlink_out_of_the_root_and_still_resolves(tmp_path):
@@ -199,6 +205,38 @@ def test_decoded_records_are_cached_per_job_and_no_key_expires(tmp_path, monkeyp
     monkeypatch.setattr(ControllerService, "RFLOG_NOKEY_TTL_S", 0.0)     # expired: the no-key frame is retried
     svc.rflog_decode("meshtastic", "rf-meshtastic.log", recs)
     assert counter.read_text().splitlines() == ["3", "1", "3", "1"]
+
+
+def test_a_cached_fragment_rejoins_the_batch_when_its_second_half_arrives(tmp_path, monkeypatch):
+    """RNode framing splits a packet over two records that may land in different polls. A lone
+    first half answers "fragment" and would stay that forever from the cache; so a miss pulls a
+    cached fragment right before it back into the batch, in order, and the decoder sees the
+    pair. The decoder's rule is the subject of its own suite; this fake only needs to know its
+    neighbour."""
+    svc = _svc(tmp_path)
+    seen = tmp_path / "batches"
+    body = "\n".join([
+        f"open({str(seen)!r}, 'a').write(' '.join(r['raw'][-2:-1] for r in reqs) + chr(10))",
+        "prev = None",
+        "for r in reqs:",
+        "    n = r['raw'][-2:-1]",
+        "    if n == '0':",
+        "        print(json.dumps({'key': r['key'], 'status': 'undecryptable', 'kind': 'fragment', 'decoded': 'first half'}))",
+        "    elif n == '1' and prev == '0':",
+        "        print(json.dumps({'key': r['key'], 'status': 'ok', 'kind': 'plain', 'decoded': 'pair [split]'}))",
+        "    else:",
+        "        print(json.dumps({'key': r['key'], 'status': 'undecryptable', 'kind': 'fragment', 'decoded': 'alone'}))",
+        "    prev = n",
+    ]) + "\n"
+    _use(monkeypatch, _fake(tmp_path, body))
+    recs = _records(2)
+    first = svc.rflog_decode("rns", "rf-reticulum.log", recs[:1])["records"]
+    assert first[0]["kind"] == "fragment"                                   # cached as a fragment
+    both = svc.rflog_decode("rns", "rf-reticulum.log", recs)["records"]
+    assert seen.read_text().splitlines() == ["0", "0 1"], "the second poll re-sent the pair, in order"
+    assert both[0]["kind"] == "fragment" and both[1]["decoded"] == "pair [split]"
+    svc.rflog_decode("rns", "rf-reticulum.log", recs)
+    assert seen.read_text().splitlines() == ["0", "0 1"], "a settled pair is served from the cache"
 
 
 def test_the_cache_is_bounded_and_the_meshcore_mode_resets_it(tmp_path, monkeypatch):

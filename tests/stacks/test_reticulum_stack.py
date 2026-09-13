@@ -856,6 +856,63 @@ def test_the_defaults_render_transport_off_and_the_internet_interface_inert():
     assert "enable_transport = No" in asset_path("bases/reticulum.conf").read_text()
 
 
+def test_rnode_framing_is_off_by_default_and_never_rendered_with_a_preamble():
+    """`rnode_framing` reaches the driver as a plain key in [[LoRa]], off unless the operator
+    turns it on. NO `preamble` key is rendered in either state: the driver derives the RNode
+    preamble from SF/BW when framing is on (an SX127x receiver hears an RNode only with at
+    least the firmware's 18 symbols) and an explicit key would override that — the deafness
+    that cost the live check a day."""
+    for values, expect in (({}, "rnode_framing = no"), ({"rnode_framing": "yes"}, "rnode_framing = yes")):
+        lora = _render(values).split("[[LoRa]]", 1)[1].split("[[", 1)[0]
+        assert expect in lora
+        assert "preamble" not in lora
+    by_name = {p.name: p for p in _rns_file_params()[0]}
+    assert by_name["rnode_framing"].default == "no" and "preamble" not in by_name
+    from lhpc.core.services import ControllerService
+    svc = ControllerService()
+    assert svc.save_config("reticulum", {"file_rnode_framing": "yes"}).ok
+    assert svc.file_config_values("reticulum")["rnode_framing"] == "yes"
+
+
+@pytest.mark.parametrize("built_has_framing,switch,refused", [
+    pytest.param(False, "yes", True, id="old-driver-switch-on"),
+    pytest.param(True, "yes", False, id="framing-driver-switch-on"),
+    pytest.param(False, "no", False, id="old-driver-switch-off"),
+])
+def test_rnode_framing_refuses_to_start_on_a_driver_built_before_it(tmp_path, monkeypatch,
+                                                                     built_has_framing, switch, refused):
+    """The upgrade case: a box keeps its known-working composition, whose LoRa driver predates
+    the switch, upgrades LHPC and turns RNode framing on. That driver ignores the unknown key
+    and would start BARE — up, and talking to nobody. The start must refuse before any mutation
+    (a restart's stop leg included) with the update-and-rebuild remedy, judged on what is BUILT
+    into the node's venv, never on what the manifest names. Off, the old driver keeps working."""
+    from lhpc.core import config as cfgmod
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.service_base import ActionResult
+    from lhpc.core.services import ControllerService
+    paths = Paths(runtime_root=tmp_path)
+    cfgmod.save_hardware_setup(paths, "uputronics")
+    pkg = tmp_path / "src" / "reticulum" / ".venv" / "lib" / "python3.13" / "site-packages" / "loraham_rns"
+    pkg.mkdir(parents=True)
+    (pkg / "interface.py").write_text("")                     # the old driver: no framing module
+    if built_has_framing:
+        (pkg / "framing.py").write_text("")
+    svc = ControllerService(paths=paths, system=FakeSystem().system)
+    assert svc.save_config("reticulum", {"file_rnode_framing": switch}).ok
+    reached = []
+    monkeypatch.setattr(ControllerService, "stop",
+                        lambda self, *a, **k: reached.append(a) or ActionResult(True, "stopped"))
+    r = svc.restart("reticulum", apply=True)
+    if refused:
+        assert not r.ok and r.data.get("reason") == ri.REASON_FRAMING_DRIVER_OLD
+        assert not reached, "refused BEFORE the stop leg — the node was never taken down"
+        assert r.next_commands == ["lhpc update rns-lora-interface", "lhpc build reticulum"]
+    else:
+        assert r.data.get("reason") != ri.REASON_FRAMING_DRIVER_OLD and reached, \
+            "the gate is silent: the restart went on into its stop leg"
+
+
 def test_the_rendered_interface_modes_are_the_intended_trio():
     """The radio is `internal`, the client door `gateway`, the internet side `boundary` with
     `recursive_prs`.

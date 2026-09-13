@@ -8,12 +8,18 @@ frame; announces are validated with `Identity.validate_announce`; single packets
 LXMF delivery destination are opened with `Identity.decrypt` and the destination's private
 ratchets, read from LXMF's own ratchet file (read-only: never `enable_ratchets()`, which would
 create one). Link traffic and relayed packets are undecryptable by design and say so.
+
+With `rnode_framing = yes` on the interface, every logged frame starts with the RNode firmware's
+header byte and a packet longer than 254 bytes is two frames (two log lines): the frames are
+stripped and reassembled with the driver's own `loraham_rns.framing.Reassembler` — per
+direction, on log time — before any of the above.
 """
 
 import argparse
 import glob
 import os
 import sys
+from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _proto
@@ -52,8 +58,8 @@ class _IfacContext:
         self.violations += 1
 
 
-def _lora_ifac(configdir: str):
-    """The [[LoRa]] interface's IFAC from the generated RNS config (0400, ours to read)."""
+def _lora_section(configdir: str):
+    """The [[LoRa]] interface section of the generated RNS config (0400, ours to read)."""
     path = os.path.join(configdir, "config")
     if not os.path.isfile(path):
         # ConfigObj answers an absent file with an EMPTY config — which read as "no IFAC" on a
@@ -64,11 +70,14 @@ def _lora_ifac(configdir: str):
     except Exception as exc:
         _proto.fail(f"reticulum config unreadable: {path}: {exc}")
     ifaces = cfg.get("interfaces", {}) or {}
-    lora = None
     for sec in ifaces.values():
         if isinstance(sec, dict) and str(sec.get("type", "")).endswith("LoRaSPIInterface"):
-            lora = sec
-            break
+            return sec
+    return None
+
+
+def _lora_ifac(lora):
+    """The interface's IFAC context, or None without a network name/passphrase."""
     if lora is None:
         return None
     netname = str(lora.get("networkname", lora.get("network_name", "")) or "").strip() or None
@@ -82,6 +91,26 @@ def _lora_ifac(configdir: str):
     except ValueError:
         pass
     return _IfacContext(netname, netkey, size)
+
+
+def _rnode_framing(lora) -> bool:
+    """The driver's `rnode_framing` switch as the driver reads it (yes/on/true/1)."""
+    return str((lora or {}).get("rnode_framing", "no")).strip().lower() in ("yes", "on", "true", "1")
+
+
+def _log_time(raw: str) -> float:
+    """The record's own UTC timestamp (the line starts with it) as epoch seconds, so the
+    reassembler's stale-half rule runs on log time, not on the decoder's clock."""
+    try:
+        return datetime.strptime(raw[:24], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC).timestamp()
+    except ValueError:
+        return 0.0
+
+
+# A pending first half older than this (log time) is stale — the firmware sends the second
+# fragment back to back. Generous on purpose: in a viewer a stale half costs one row, a false
+# drop would hide a real packet.
+FRAMING_MAX_AGE_S = 30.0
 
 
 def _meshchat_identity(meshchat: str):
@@ -155,9 +184,45 @@ def _lxmf_summary(dest_hash: bytes, plain: bytes) -> str:
     return _printable(plain)                  # opened, not LXMF: shown whole (text or hex)
 
 
-def make_decoder(configdir: str, meshchat: str):
-    ifac = _lora_ifac(configdir)
+def make_decoder(configdir: str, meshchat: str, driver: str = ""):
+    lora = _lora_section(configdir)
+    ifac = _lora_ifac(lora)
     me, ratchets = _meshchat_identity(meshchat)
+    framing = None
+    if _rnode_framing(lora):
+        if driver and os.path.isdir(driver):
+            sys.path.insert(0, driver)                 # the driver's pinned source checkout
+        try:
+            from loraham_rns import framing  # the driver's own reassembler
+        except ImportError:
+            framing = False                            # an older driver: framed frames are opaque
+    now = {"ts": 0.0}                                  # the record being decoded, for the clock
+    reassemblers = {}                                  # one per direction: RX and TX never mix
+
+    def _unframe(key: str, raw: str, frame: bytes):
+        """Strip the RNode header; return (packet, note) or a result dict for a frame that
+        completes nothing. `note` names the sequence of a packet that came in two frames."""
+        if framing is False:
+            return _proto.result(key, "undecryptable", "framing-unsupported", "",
+                                 "RNode framing is on but the installed driver has no framing module")
+        direction = "TX" if " TX " in raw[:32] else "RX"
+        r = reassemblers.get(direction)
+        if r is None:
+            r = reassemblers[direction] = framing.Reassembler(max_age=FRAMING_MAX_AGE_S,
+                                                              clock=lambda: now["ts"])
+        now["ts"] = _log_time(raw)
+        before = r.dropped
+        packet = r.feed(frame)
+        seq = frame[0] >> 4
+        if len(frame) <= framing.HEADER_L:
+            return _proto.result(key, "undecryptable", "trailer", "",
+                                 "header-only trailer frame (an exact-508-byte packet)")
+        if packet is None:
+            what = "dropped" if r.dropped > before else "waiting for its second frame"
+            return _proto.result(key, "undecryptable", "fragment", "",
+                                 f"first half of a split packet, seq {seq}: {what}")
+        split = bool(frame[0] & framing.FLAG_SPLIT)
+        return packet, (f" [split seq {seq}, two frames]" if split else "")
 
     def decode_one(key: str, raw: str) -> dict:
         try:
@@ -166,6 +231,18 @@ def make_decoder(configdir: str, meshchat: str):
             return _proto.result(key, "malformed", decoded="no hex payload")
         if not frame:
             return _proto.result(key, "malformed", decoded="empty frame")
+        note = ""
+        if framing is not None:
+            got = _unframe(key, raw, frame)
+            if isinstance(got, dict):
+                return got
+            frame, note = got
+        res = _decode_packet(key, frame)
+        if note and res["status"] == "ok":
+            res["decoded"] = _proto.clean(res["decoded"] + note)
+        return res
+
+    def _decode_packet(key: str, frame: bytes) -> dict:
         if frame[0] & IFAC_FLAG:
             if ifac is None:
                 return _proto.result(key, "no-key", "ifac", "", "IFAC frame, no network name/passphrase configured")
@@ -224,8 +301,9 @@ def main() -> None:
     ap.add_argument("--runtime", required=True)
     ap.add_argument("--config", required=True)
     ap.add_argument("--meshchat", required=True)
+    ap.add_argument("--driver", default="")        # the LoRa driver's source checkout (RNode framing)
     a = ap.parse_args()
-    _proto.run(make_decoder(a.config, a.meshchat))
+    _proto.run(make_decoder(a.config, a.meshchat, a.driver))
 
 
 if __name__ == "__main__":

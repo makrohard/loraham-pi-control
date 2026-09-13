@@ -85,6 +85,8 @@ def problem(values) -> str:
 REASON_ENDPOINT_INCOMPLETE = "internet-endpoint-incomplete"
 REASON_IFAC_KEY_MISSING = "internet-ifac-no-passphrase"
 REASON_IFAC_NETNAME_MISSING = "internet-ifac-no-netname"
+RNODE_FRAMING = "rnode_framing"                      # the LoRa interface's switch (interfaces/LoRa)
+REASON_FRAMING_DRIVER_OLD = "rnode-framing-driver-too-old"   # the built driver predates the switch
 
 
 def reason(values) -> str:

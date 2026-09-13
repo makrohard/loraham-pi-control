@@ -2751,8 +2751,8 @@ readiness = "manual"
 path = "src/loraham-rns-interface"
 remote = "https://github.com/makrohard/loraham-rns-interface.git"
 branch = "main"
-pin_commit = "76a7a37f5b6cc8917ee5dd52a158b206fbf5705a"
-pin_tag = "76a7a37"
+pin_commit = "6bd0282bf6e8edf37ab6b57c0c29a43c800666c0"
+pin_tag = "6bd0282"
 
 [[stack.component]]
 id = "rns"
@@ -2997,6 +2997,19 @@ band_defaults = { 433 = "10", 868 = "14" }
 min = 0
 max = 17
 label = "TX power dBm — 868 SRD allows 25 mW (14 dBm); the 433 SRD band is 10 mW ERP (10 dBm)"
+# RNode air framing (driver `rnode_framing`): the RNode firmware's one header byte per frame,
+# packets split at 254 bytes, and the RNode preamble for the SF/BW — the driver derives that
+# preamble itself, so NO `preamble` key is rendered here (an explicit one would override it).
+[[stack.component.config_file.param]]
+name = "rnode_framing"
+key = "rnode_framing"
+section = "interfaces/LoRa"
+kind = "enum"
+choices = ["no", "yes"]
+default = "no"
+group = "Radio"
+label = "RNode framing"
+note = "On: the RNode firmware's air format — one header byte per frame, packets split at 254 bytes, the RNode preamble for this SF/BW. Needed to talk to RNode devices; a framed box and a bare box cannot hear each other. Off: box-to-box as before."
 [[stack.component.config_file.param]]
 name = "airtime_limit_short"
 key = "airtime_limit_short"

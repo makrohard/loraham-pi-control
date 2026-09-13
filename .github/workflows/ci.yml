@@ -272,7 +272,8 @@ jobs:
 
   rfdecode-reticulum:
     # The reticulum RF-log decoder runs under src/reticulum/.venv on a box; here under the same
-    # pinned Reticulum checkout (pin from the manifest) plus LXMF for the message summary.
+    # pinned Reticulum checkout (pin from the manifest) plus LXMF for the message summary and the
+    # pinned LoRa driver for RNode framing.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -297,13 +298,18 @@ jobs:
                       print(f"RNS_REMOTE={shlex.quote(src['remote'])}; RNS_PIN={shlex.quote(src['pin_commit'])}")
                   if src.get("path") == "src/lxmf":
                       print(f"LXMF_REMOTE={shlex.quote(src['remote'])}; LXMF_PIN={shlex.quote(src['pin_commit'])}")
+                  if src.get("path") == "src/loraham-rns-interface":
+                      print(f"DRV_REMOTE={shlex.quote(src['remote'])}; DRV_PIN={shlex.quote(src['pin_commit'])}")
           PY
           )"
-          test -n "${RNS_PIN:-}" && test -n "${LXMF_PIN:-}" || { echo "::error::reticulum/lxmf pins missing"; exit 1; }
+          test -n "${RNS_PIN:-}" && test -n "${LXMF_PIN:-}" && test -n "${DRV_PIN:-}" || { echo "::error::reticulum/lxmf/driver pins missing"; exit 1; }
           git clone -q "$RNS_REMOTE" /tmp/rns && git -C /tmp/rns checkout -q "$RNS_PIN"
           git clone -q "$LXMF_REMOTE" /tmp/lxmf && git -C /tmp/lxmf checkout -q "$LXMF_PIN"
+          git clone -q "$DRV_REMOTE" /tmp/rnsif && git -C /tmp/rnsif checkout -q "$DRV_PIN"
           retry 3 python -m pip install -q --upgrade pip
           retry 3 python -m pip install -q /tmp/rns pytest
           retry 3 python -m pip install -q --no-deps /tmp/lxmf
+          # the decoder reassembles RNode-framed frames with the driver module itself
+          retry 3 python -m pip install -q --no-deps /tmp/rnsif
       - name: Reticulum RF-log decoder tests
         run: pytest -q -rs lhpc/data/rfdecode/tests/test_reticulum_decoder.py
