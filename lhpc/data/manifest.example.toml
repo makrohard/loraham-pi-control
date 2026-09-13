@@ -183,8 +183,8 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/loraham-daemon"
-    pin_commit = "1623ae90c051e76b2b6c61419008ffd70d108a20"
-    pin_tag = "v0.9.0-1-g1623ae9"
+    pin_commit = "2a0db8872d99cb2572807865a9351af2a52850e0"
+    pin_tag = "v0.9.0-2-g2a0db88"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "loraham-daemon-hardening"
@@ -315,8 +315,8 @@ main = "loraham-chat"
 
     [stack.component.source]
     path = "src/LoRaHAM_Daemon"
-    pin_commit = "1623ae90c051e76b2b6c61419008ffd70d108a20"
-    pin_tag = "v0.9.0-1-g1623ae9"
+    pin_commit = "2a0db8872d99cb2572807865a9351af2a52850e0"
+    pin_tag = "v0.9.0-2-g2a0db88"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "LoRaHAM_Daemon"

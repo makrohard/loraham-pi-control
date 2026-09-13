@@ -2,6 +2,10 @@
 
 ## 0.5.0
 
+- Daemon pin 2a0db88: LoRa frames that fail the CRC are dropped and counted (`rx_drops`) instead of
+  being handed to the stacks — the daemon cleared the radio's IRQ flags before RadioLib could read
+  the CRC verdict, so a corrupted frame on a marginal link arrived as a valid message (chat, kiss/
+  graywolf, voice, MeshCom, MeshCore all read the daemon's frames). Same pin for the shared chat source.
 - MeshCore: a node with a fresh companion database gets the Public channel, as a MeshCore device
   has out of the box. Without it the node could not send to Public at all and logged every received
   channel message as an unknown channel hash. Seeded on a first start only, so a channel an operator
