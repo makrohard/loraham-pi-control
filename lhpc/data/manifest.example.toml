@@ -476,7 +476,8 @@ main = "loraham-voice"
       name = "sf"
       key = "{band}_sf"
       kind = "int"
-      band_defaults = { "433" = "7", "868" = "11" }
+      band_defaults = { "433" = "7", "868" = "7" }   # 868 was 11: at SF11/BW250 a voice packet
+      # spends longer on the air than the audio it carries, so the app refuses the mode
       default = "7"
       min = 7
       max = 12

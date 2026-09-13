@@ -29,7 +29,9 @@ its own TX by LoRa airtime, and a MANAGED CAD wait would gap live audio.
 |---|---|---|---|
 | `callsign` | inherits the global operator base callsign while empty | | max 11 characters; `/` and `-` allowed (portable forms such as `N0CALL/P` — use your own call); with neither a local nor a global callsign the start is refused |
 | `freq` | `434.700` | `869.525` | MHz, key `<band>_freq` |
-| `sf` | 7 | 11 | |
+| `sf` | 7 | 7 | real-time speech sets the ceiling: a voice packet must spend LESS time on the air than the
+audio it carries, or the app marks the mode `[VERBOTEN!]` and will not transmit. At 869.525/BW250 that rules out
+SF8 and slower (SF11 needs ~1.2 s for 260 ms of audio) |
 | `bw` | 125.0 | 250.0 | kHz |
 | `cr` | 5 | 5 | 4/CR |
 | `crc` | 1 | 1 | |

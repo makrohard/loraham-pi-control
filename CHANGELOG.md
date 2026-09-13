@@ -2,6 +2,9 @@
 
 ## 0.5.0
 
+- Voice on 868 can transmit: the shipped profile was SF11 at 250 kHz, where one voice packet spends
+  about 1.2 s on the air to carry 260 ms of speech, so the app refused the mode and no PTT was possible.
+  The 868 default is now SF7, like 433.
 - Daemon pin 2a0db88: LoRa frames that fail the CRC are dropped and counted (`rx_drops`) instead of
   being handed to the stacks — the daemon cleared the radio's IRQ flags before RadioLib could read
   the CRC verdict, so a corrupted frame on a marginal link arrived as a valid message (chat, kiss/

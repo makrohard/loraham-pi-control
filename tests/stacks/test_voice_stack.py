@@ -380,3 +380,38 @@ def test_other_stack_start_keeps_voice_sidecar_marker(tmp_path, monkeypatch, rea
     # ...and with the TUI gone, the marker is reaped exactly like chat's.
     snap.stacks[0].components["loraham-voice-cli"] = _St(RunState.STOPPED)
     assert "voice" in svc.clear_stale_interactive(keep="kiss")
+
+
+def test_the_868_voice_profile_is_fast_enough_for_real_time_speech():
+    """A voice packet must spend LESS time on the air than the audio it carries, or the app
+    refuses the mode (`check_voice_mode`, loraham_voice_v107.c) and no PTT is possible — that is
+    how 868 shipped: SF11 at 250 kHz needs ~1.2 s for 260 ms of speech. The rule is arithmetic,
+    so the manifest's per-band defaults are checked against it here rather than on a radio."""
+    import math
+
+    from lhpc.core.manifest import default_manifest_path, load_manifest
+
+    TARGET_AUDIO_MS, EXTRA_MS, OVERHEAD, MARGIN = 250, 50, 7, 10.0   # the app's own constants
+    FRAME_MS, FRAME_B = 20, 8                                        # Codec2-3200, the default mode
+
+    stacks = load_manifest(default_manifest_path())
+    comp = next(c for s in stacks if s.id == "voice" for c in s.components if c.id == "loraham-voice")
+    params = {p.name: p for p in comp.config_file.params}
+
+    def band(name, b):
+        return dict(params[name].band_defaults).get(b, params[name].default)
+
+    frames = -(-TARGET_AUDIO_MS // FRAME_MS)
+    payload = OVERHEAD + frames * FRAME_B
+    audio_ms = frames * FRAME_MS
+    for b in ("433", "868"):
+        sf, bw, cr = int(band("sf", b)), float(band("bw", b)), int(band("cr", b))
+        crc, preamble = int(band("crc", b)), int(band("preamble", b))
+        t_sym = (1 << sf) / (bw * 1000.0)
+        de = 1 if t_sym >= 0.016 else 0                              # ldro auto
+        num = 8.0 * payload - 4.0 * sf + 28.0 + 16.0 * crc
+        symbols = max(math.ceil(num / (4.0 * (sf - 2 * de))), 0) * cr + 8
+        airtime_ms = (preamble + 4.25 + symbols) * t_sym * (1 + MARGIN / 100.0) * 1000.0
+        assert airtime_ms + EXTRA_MS < audio_ms, (
+            f"{b}: a voice packet needs {airtime_ms:.0f} ms on the air for {audio_ms} ms of audio "
+            f"(SF{sf}/BW{bw:.0f}) — the app would mark this mode forbidden")
