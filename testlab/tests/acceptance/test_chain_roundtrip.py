@@ -10,6 +10,7 @@ import socket
 import time
 
 import pytest
+from lhpc_testlab.release import wait_http
 from lhpc_testlab.testing import run_lab, run_lhpc
 
 
@@ -90,7 +91,7 @@ def test_graywolf_shows_injected_station(chain):
     run_lhpc(chain.env, "build", "graywolf", "--yes", check=True, timeout=900)
     run_lhpc(chain.env, "stack", "start", "graywolf", "--yes", check=True, timeout=300)
     try:
-        time.sleep(3)
+        assert wait_http("http://127.0.0.1:8080/", 120, accept=(200, 401, 403)), "graywolf's UI never answered on 8080"
         # authenticate exactly like the production provision step: the generated admin
         # password lives under state/graywolf (0600), sessions ride a cookie jar
         import http.cookiejar

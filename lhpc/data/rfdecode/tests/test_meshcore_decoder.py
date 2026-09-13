@@ -5,10 +5,8 @@ mode (chat, chat+repeater, repeater) resolves its own identity and store."""
 import json
 import sqlite3
 
-import pytest
-
-pytest.importorskip("openhop_core")
 import decode_meshcore as dec
+import pytest
 from openhop_core.protocol import constants as C
 from openhop_core.protocol.crypto import CryptoUtils
 from openhop_core.protocol.identity import LocalIdentity
@@ -34,7 +32,7 @@ def _line(frame: bytes, direction="RX") -> str:
 
 def _frame(payload_type: int, payload: bytes) -> bytes:
     p = Packet()
-    p.header = PacketHeaderUtils.create_header(route_type=C.ROUTE_TYPE_FLOOD if hasattr(C, "ROUTE_TYPE_FLOOD") else 1,
+    p.header = PacketHeaderUtils.create_header(route_type=C.ROUTE_TYPE_FLOOD,
                                                payload_type=payload_type, version=0)
     p.path = bytearray()
     p.path_len = 0

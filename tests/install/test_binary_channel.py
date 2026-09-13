@@ -1274,12 +1274,10 @@ def _mesh_on_binary(tmp_path, monkeypatch, manifest=None):
     return svc
 
 
-def _manifest_with_a_newer_web_client(tmp_path):
-    from lhpc.core.manifest import default_manifest_path
-    text = (default_manifest_path().read_text()
-            .replace('"2.7.2"', '"9.9.9"').replace("web client v2.7.2", "web client v9.9.9"))
+def _manifest_with_a_newer_web_client(tmp_path, moved):
+    """`moved` is the `manifest_with_moved_input` fixture: the web client pin bumped."""
     path = tmp_path / "newer-web.toml"
-    path.write_text(text)
+    path.write_text(moved("meshtastic", "meshtastic-web", "9.9.9")[0])
     return path
 
 
@@ -1288,20 +1286,20 @@ def test_an_artifact_matching_the_manifest_is_current(tmp_path, monkeypatch):
     assert svc.binary_freshness("meshtastic") == {"state": "current", "behind": []}
 
 
-def test_an_artifact_built_before_a_web_client_bump_is_behind(tmp_path, monkeypatch):
+def test_an_artifact_built_before_a_web_client_bump_is_behind(tmp_path, monkeypatch, manifest_with_moved_input):
     """No component commit moved, so the pin comparison alone would call this current and the
     box would never be offered the newer artifact."""
     _mesh_on_binary(tmp_path, monkeypatch)                       # marker written at 2.7.2
-    svc = ControllerService(manifest_path=_manifest_with_a_newer_web_client(tmp_path),
+    svc = ControllerService(manifest_path=_manifest_with_a_newer_web_client(tmp_path, manifest_with_moved_input),
                             system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     fresh = svc.binary_freshness("meshtastic")
     assert fresh["state"] == "behind" and "meshtastic" in fresh["behind"]
 
 
-def test_freshness_still_reads_no_network_for_the_marker_check(tmp_path, monkeypatch):
+def test_freshness_still_reads_no_network_for_the_marker_check(tmp_path, monkeypatch, manifest_with_moved_input):
     from lhpc.core import binary_install as bi
     _mesh_on_binary(tmp_path, monkeypatch)
-    svc = ControllerService(manifest_path=_manifest_with_a_newer_web_client(tmp_path),
+    svc = ControllerService(manifest_path=_manifest_with_a_newer_web_client(tmp_path, manifest_with_moved_input),
                             system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(bi, "_http_get",
                         lambda *a, **k: pytest.fail("freshness must not fetch"))
@@ -1322,10 +1320,10 @@ def test_the_remedy_for_a_source_component_is_still_the_build(tmp_path, monkeypa
     assert svc.build_remedy("meshtastic") == "lhpc build meshtastic"
 
 
-def test_a_stale_artifact_names_the_reinstall_when_it_blocks_a_launch(tmp_path, monkeypatch):
+def test_a_stale_artifact_names_the_reinstall_when_it_blocks_a_launch(tmp_path, monkeypatch, manifest_with_moved_input):
     """The operator-visible end of it: the blocker string carries the command that works."""
     _mesh_on_binary(tmp_path, monkeypatch)
-    svc = ControllerService(manifest_path=_manifest_with_a_newer_web_client(tmp_path),
+    svc = ControllerService(manifest_path=_manifest_with_a_newer_web_client(tmp_path, manifest_with_moved_input),
                             system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
     blocker = svc.install_blocker(_comp(svc, "meshtastic"))

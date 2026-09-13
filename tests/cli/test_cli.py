@@ -968,7 +968,6 @@ def test_rflog_decrypt_reports_a_decoder_error_and_exits_one(tmp_path, monkeypat
 
 
 def test_rflog_decrypt_follow_prints_each_new_frame_once(tmp_path, monkeypatch, capsys):
-    from lhpc.adapters.cli import main as climain
     from lhpc.core.services import ControllerService
     rt = tmp_path / "rt"
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
@@ -986,9 +985,8 @@ def test_rflog_decrypt_follow_prints_each_new_frame_once(tmp_path, monkeypatch, 
                     f.write('{"timestamp":%d,"rssi":-61,"snr":5,"from":1,"to":2,"size":1,"bytes":"02"}\n' % ts)
         elif len(polls) == 3:
             raise KeyboardInterrupt
-    monkeypatch.setattr(climain, "_t", type("T", (), {"sleep": staticmethod(sleep)}), raising=False)
     import time as _time
-    monkeypatch.setattr(_time, "sleep", sleep)
+    monkeypatch.setattr(_time, "sleep", sleep)      # the follow loop imports `time` locally: this IS the seam
     assert main(["rflog", "meshtastic", "--decrypt", "--follow", "--lines", "1"]) == 0
     out = [ln for ln in capsys.readouterr().out.splitlines() if " text " in ln]
     assert [ln[:20] for ln in out] == [f"1970-01-01T00:00:0{i}Z" for i in (1, 2, 3, 4)]   # none lost, none twice

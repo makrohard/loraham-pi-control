@@ -1131,7 +1131,7 @@ def test_a_stack_whose_name_carries_parentheses_is_still_seen():
                     "reticulum": "degraded", "meshcom": "not-installed"}
 
 
-def test_only_a_stack_that_holds_something_counts_as_holding():
+def test_only_a_stack_that_holds_something_counts_as_holding(monkeypatch):
     """A fresh lab root reports every stack `not-installed`. Counting that as "holding" put the
     stack a case was about into the before-set, so the diff came out empty and the cleanup
     stopped nothing — for every first case of every chain."""
@@ -1139,7 +1139,7 @@ def test_only_a_stack_that_holds_something_counts_as_holding():
 
     states = {"a": "not-installed", "b": "stopped", "c": "running",
               "d": "degraded", "e": "failed", "f": "not-applicable"}
-    rel.stack_states = lambda env: states
+    monkeypatch.setattr(rel, "stack_states", lambda env: states)
     assert rel.holding_stacks({}) == {"c", "d", "e"}
 
 
@@ -1192,7 +1192,7 @@ def test_a_real_marker_write_failure_crosses_into_the_lane_unattributed(tmp_path
     assert hit is None, f"a local write failure was attributed to an owned step: {typed!r}"
 
 
-def test_the_lane_and_the_binary_builder_share_one_attribution_rule():
+def test_the_lane_and_the_binary_builder_share_one_attribution_rule(tmp_path):
     """Not two implementations that happen to agree today.
 
     The builder cannot import this package, so it runs `tools/build_regression.py` against the
@@ -1205,12 +1205,11 @@ def test_the_lane_and_the_binary_builder_share_one_attribution_rule():
     from lhpc.core import build_regression as br
     assert rel._TYPED_BUILD_FAILURE is br.TYPED_BUILD_FAILURE
     assert rel.stack_regression("meshcore", "build") == br.marker_line("meshcore", "build")
-    from pathlib import Path
 
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=Path("/tmp/x")))
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     assert rel._own_recipe_step_logs(svc, "meshcore") == br.own_step_logs(svc.stack("meshcore"))
 
 

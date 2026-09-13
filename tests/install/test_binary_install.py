@@ -21,6 +21,7 @@ from lhpc.core.probes import RealSystem
 
 
 pytestmark = pytest.mark.requires_zstd
+_REAL_HTTP_GET = bi._http_get      # captured at import, before the conftest's network stub
 
 
 # ===== merged from test_binary_install.py =====
@@ -150,9 +151,10 @@ def test_entry_requires_mandatory_passed_smoke(tmp_path):
 
 
 def test_non_https_url_refused(monkeypatch):
-    # The REAL implementation must refuse plain http BEFORE opening any socket. Drop the
-    # hermetic conftest stub for this one assertion (undo() restores the real attribute).
-    monkeypatch.undo()
+    # The REAL implementation must refuse plain http BEFORE opening any socket. Put the real
+    # function back for this one assertion only — the conftest's network stub is the one
+    # patch to lift; every other autouse guard stays (undo() would have stripped them all).
+    monkeypatch.setattr(bi, "_http_get", _REAL_HTTP_GET)
     with pytest.raises(bi.BinaryInstallError, match="non-HTTPS"):
         bi._http_get("http://example.invalid/index.json", 1024)
 
@@ -462,9 +464,9 @@ def test_commit_failure_keeps_the_backups(tmp_path, monkeypatch):
     (tmp_path / "src" / "demo" / "bin" / "demo").write_bytes(b"OLD")
     _open(paths, txn="txnF")
     bi.publish(paths, "demo", _staged(tmp_path), ["src/demo/bin/demo"], "txnF")
-    monkeypatch.setattr(bi, "write_journal", lambda *a, **k: False)
-    assert bi.commit(paths) is False
-    monkeypatch.undo()
+    with monkeypatch.context() as m:                     # only this stub is lifted afterwards
+        m.setattr(bi, "write_journal", lambda *a, **k: False)
+        assert bi.commit(paths) is False
     assert list((tmp_path / "state" / "binary").glob(".backup-*"))
     ok, _why = _unwind(paths)
     assert ok and (tmp_path / "src/demo/bin/demo").read_bytes() == b"OLD"

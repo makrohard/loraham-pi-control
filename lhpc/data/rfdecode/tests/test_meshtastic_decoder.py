@@ -4,11 +4,8 @@ general path; an unknown hash is `no-key`; a header-only trace line is `meta`.""
 
 import json
 
-import pytest
-
-pytest.importorskip("meshtastic")
-pytest.importorskip("Cryptodome")
 import decode_meshtastic as dec
+import pytest
 from Cryptodome.Cipher import AES
 from meshtastic.protobuf import (
     channel_pb2,

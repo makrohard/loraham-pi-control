@@ -9,6 +9,7 @@ asked to consent to nothing. The two behaviours that grew out of this one live n
 """
 from __future__ import annotations
 
+import os
 import pytest
 
 import gitrepo
@@ -70,6 +71,10 @@ def test_previous_release_manifest_still_parses():
     r = RealSystem().runner.run(["git", "-C", str(repo), "show",
                                  "v0.2.10:lhpc/data/manifest.example.toml"], timeout=20.0)
     if r.returncode != 0:
+        # CI fetches the full history and tags for exactly this kind of guard; a missing tag
+        # there is a broken fetch, not a reason to skip (same rule as test_artifact_portability).
+        if os.environ.get("CI"):
+            pytest.fail("v0.2.10 tag missing — CI must fetch tags for this guard, not skip it")
         pytest.skip("v0.2.10 tag not available in this checkout")
     stacks = manifest_mod.parse_manifest(tomllib.loads(r.stdout))
     assert {s.id for s in stacks} >= {"daemon", "kiss", "graywolf"}

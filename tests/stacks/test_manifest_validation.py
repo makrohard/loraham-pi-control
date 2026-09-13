@@ -369,39 +369,24 @@ def test_a_step_run_through_bash_is_the_command_it_names():
     assert comp.build_inputs == (("web", "2.7.2"),)
 
 
-def test_the_real_cli_pin_is_bound_to_the_version_the_recipe_installs():
-    """Over the REAL manifest: move only the recipe to a version that merely starts with the
-    recorded one and the load must fail. Otherwise `2.7.11` would keep "mirroring" a step that
-    installs 2.7.110, and every already-built box would report itself built on the wrong CLI."""
-    text = default_manifest_path().read_text()
-    assert text.count("meshtastic==2.7.11") == 1, "the CLI pin moved — update this case"
-    drifted = text.replace("meshtastic==2.7.11", "meshtastic==2.7.110")
+def _real_build_inputs():
+    from lhpc.core.manifest import load_manifest
+    return [(c.id, name) for s in load_manifest(default_manifest_path())
+            for c in s.components for name, _v in c.build_inputs]
+
+
+@pytest.mark.parametrize("cid,name", _real_build_inputs())
+@pytest.mark.parametrize("decoy", [False, True], ids=["moved", "moved+decoy"])
+def test_every_real_build_input_is_bound_to_the_token_its_step_consumes(cid, name, decoy, manifest_with_moved_input):
+    """Over the REAL manifest, for every recorded build input: move only the recipe's token to a
+    value that merely starts with the recorded one and the load must fail — otherwise a marker
+    would keep "mirroring" a step that installs something else, and every already-built box
+    would report itself built on the wrong client or CLI. With a decoy, a step elsewhere in the
+    recipe carries the recorded token in full; it is not what the consuming step installs and
+    must not stand in for it. The values come from the manifest, so a bump moves nothing here."""
+    text, _old = manifest_with_moved_input(cid, name, None, drift=True, decoy=decoy)   # None: old + "0"
     with pytest.raises(ManifestError, match="is not what the recipe consumes"):
-        parse_manifest(tomllib.loads(drifted))
-
-
-def test_the_real_cli_pin_is_not_satisfied_by_a_decoy_in_another_command():
-    """The same drift, with a step elsewhere in the REAL recipe carrying the recorded token in
-    full. The pip step installs 2.7.110; a token equal to `meshtastic==2.7.11` in another
-    command is not what was installed, and must not stand in for it."""
-    text = default_manifest_path().read_text()
-    venv = '{ argv = ["python3", "-m", "venv", "{runtime}/build/tools/meshtastic-cli/.venv"] },'
-    assert text.count(venv) == 1, "the CLI venv step moved — update this case"
-    drifted = text.replace("meshtastic==2.7.11", "meshtastic==2.7.110").replace(
-        venv, venv + '\n    { argv = ["printf", "meshtastic==2.7.11"] },')
-    with pytest.raises(ManifestError, match="is not what the recipe consumes"):
-        parse_manifest(tomllib.loads(drifted))
-
-
-def test_the_real_web_pin_is_bound_to_the_token_the_fetch_step_passes():
-    """The web client is passed as an argv token of its own, so its binding has no `==` to
-    anchor it: only equality with the fetch step's token does. Move the recipe alone and the
-    load must fail, or the artifact could ship one client while the marker recorded another."""
-    text = default_manifest_path().read_text()
-    assert text.count('"2.7.2"') == 2, "the web pin moved — update this case"
-    drifted = text.replace('"2.7.2", "62657b85', '"2.7.20", "62657b85')
-    with pytest.raises(ManifestError, match="is not what the recipe consumes"):
-        parse_manifest(tomllib.loads(drifted))
+        parse_manifest(tomllib.loads(text))
 
 
 def test_the_same_input_twice_is_refused():

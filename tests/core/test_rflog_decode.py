@@ -12,6 +12,7 @@ import sys
 import threading
 
 import pytest
+import repo_paths
 
 from lhpc.core import rflog
 from lhpc.core.paths import Paths
@@ -280,12 +281,15 @@ def test_one_decoder_at_a_time_per_job(tmp_path, monkeypatch):
 
 
 def test_the_decoder_scripts_ship_and_take_no_key_on_argv():
-    """Package data, run by a stack's interpreter: paths on argv, keys read by the script itself
-    from the files on the box, nothing from the environment."""
-    d = os.path.join(os.path.dirname(rflog.__file__), "..", "data", "rfdecode")
+    """A textual negative invariant over the three shipped decoder scripts (the README's declared
+    exception to rule 1): no driven path can prove that NO code in a script takes a key on argv
+    or from the environment. Its behavioural twin is
+    `test_stdin_carries_key_and_raw_only_and_stdout_is_capped_per_field` (what actually crosses
+    the process boundary) plus the argv tests above (paths only)."""
+    d = repo_paths.REPO / "lhpc" / "data" / "rfdecode"
     for e in rflog.REGISTRY:
         if e.decoder:
-            src = open(os.path.join(d, f"decode_{e.decoder}.py")).read()
+            src = (d / f"decode_{e.decoder}.py").read_text()
             assert "--key" not in src and "--psk" not in src and "os.environ" not in src
 
 

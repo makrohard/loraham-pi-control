@@ -4,6 +4,7 @@
 from __future__ import annotations
 import errno
 import os
+import htmlq
 import pytest
 import json
 import subprocess
@@ -245,18 +246,15 @@ def _csrf(client, path="/stacks"):
     return m.group(1) if m else ""
 
 
-def _row(body, sid):
-    # Summary-only slice (head/status pills live here). The action links (logs / Update) now
-    # render in a .row-actions overlay AFTER </details> — use _wrap() for those.
-    i = body.index('id="stackrow-' + sid + '"')
-    return body[i:body.index("</summary>", i)]
+def _head_behind(body):
+    """The stack head pill that says a main source is behind: the pill's `title` attribute is the
+    typed marker (the yellow class is its styling). Only the seeded daemon can carry it here."""
+    return htmlq.parse(body).find("span", title="behind its remote")
 
 
-def _wrap(body, sid):
-    # A stack's whole wrapper: its <details> AND the .row-actions overlay after it, up to the next row.
-    i = body.index('id="stackrow-' + sid + '"')
-    nxt = body.find('class="stackrow-wrap"', i + 1)
-    return body[i:(nxt if nxt != -1 else len(body))]
+def _update_links(body):
+    """Every stack-row Update link (the .row-actions overlay after the row's <details>)."""
+    return htmlq.parse(body).find("a", **{"class": "update-link"})
 
 
 def _seed(tmp_path, entries, now=1000):
@@ -267,8 +265,8 @@ def test_main_behind_paints_head_yellow_and_shows_the_link(tmp_path):
     ds = _repo(tmp_path, "src/loraham-daemon")
     _seed(tmp_path, {"loraham-daemon": _entry_for(su.BEHIND, A)})
     body = _app(tmp_path, _git_src(ds, A), [ds]).get("/stacks").get_data(as_text=True)
-    assert "ver-yellow" in _row(body, "daemon") and "@" + A[:9] in _row(body, "daemon")
-    assert ">Update</a>" in _wrap(body, "daemon")   # link is in the row-actions overlay
+    assert _head_behind(body) and "@" + A[:9] in body      # the main's head pill is yellow
+    assert _update_links(body)                               # link is in the row-actions overlay
 
 
 def test_only_a_dependency_behind_shows_the_link_but_leaves_head_grey(tmp_path):
@@ -279,8 +277,8 @@ def test_only_a_dependency_behind_shows_the_link_but_leaves_head_grey(tmp_path):
                      "radiolib": _entry_for(su.BEHIND, B)})
     cmds = {**_git_src(ds, A), **_git_src(rl, B)}
     body = _app(tmp_path, cmds, [ds, rl]).get("/stacks").get_data(as_text=True)
-    assert ">Update</a>" in _wrap(body, "daemon")   # any component behind -> link (overlay)
-    assert "ver-yellow" not in _row(body, "daemon")           # but the main's head (summary) stays grey
+    assert _update_links(body)                               # any component behind -> link (overlay)
+    assert not _head_behind(body)                            # but the main's head (summary) stays grey
 
 
 def test_nothing_behind_and_empty_cache_show_neither(tmp_path):
@@ -288,11 +286,11 @@ def test_nothing_behind_and_empty_cache_show_neither(tmp_path):
     cmds = _git_src(ds, A)
     body = _app(tmp_path, cmds, [ds]).get("/stacks").get_data(as_text=True)
     # never checked -> no Update link in the overlay, no yellow head pill in the summary
-    assert "update-link" not in _wrap(body, "daemon") and "ver-yellow" not in _row(body, "daemon")
+    assert not _update_links(body) and not _head_behind(body)
 
     _seed(tmp_path, {"loraham-daemon": _entry_for(su.UP_TO_DATE, A)})
     body = _app(tmp_path, cmds, [ds]).get("/stacks").get_data(as_text=True)
-    assert "update-link" not in _wrap(body, "daemon") and "ver-yellow" not in _row(body, "daemon")
+    assert not _update_links(body) and not _head_behind(body)
 
 
 def test_stale_cache_renders_unchecked_not_a_stale_verdict(tmp_path):
@@ -302,17 +300,17 @@ def test_stale_cache_renders_unchecked_not_a_stale_verdict(tmp_path):
     for status in (su.BEHIND, su.UP_TO_DATE):
         _seed(tmp_path, {"loraham-daemon": _entry_for(status, A)})
         body = _app(tmp_path, cmds, [ds]).get("/stacks").get_data(as_text=True)
-        assert "update-link" not in _wrap(body, "daemon"), status   # no stale nagging
-        assert "ver-yellow" not in _row(body, "daemon"), status     # no stale yellow
+        assert not _update_links(body), status                   # no stale nagging
+        assert not _head_behind(body), status                    # no stale yellow
         assert "unchecked" in body                                  # Install panel says so
 
 
 def test_update_link_opens_the_install_section(tmp_path):
     ds = _repo(tmp_path, "src/loraham-daemon")
     _seed(tmp_path, {"loraham-daemon": _entry_for(su.BEHIND, A)})
-    row = _wrap(_app(tmp_path, _git_src(ds, A), [ds]).get("/stacks").get_data(as_text=True), "daemon")
-    i = row.index(">Update</a>")
-    href = row[row.rindex('href="', 0, i) + 6:row.index('"', row.rindex('href="', 0, i) + 6)]
+    links = _update_links(_app(tmp_path, _git_src(ds, A), [ds]).get("/stacks").get_data(as_text=True))
+    assert len(links) == 1
+    href = links[0]["href"]
     assert "open=daemon" in href and "inst=daemon" in href
     assert href.endswith("#stack-install-daemon")
 
@@ -321,7 +319,7 @@ def test_every_top_level_row_has_an_actions_overlay(tmp_path):
     # The logs / "Update" links live in a .row-actions overlay OUTSIDE each row's <summary>
     # (a11y). Every top-level row (controller + each stack) has one.
     body = _app(tmp_path).get("/stacks").get_data(as_text=True)
-    assert body.count('class="row-actions"') >= 2         # controller row + at least one stack
+    assert len(htmlq.parse(body).find("div", **{"class": "row-actions"})) >= 2   # controller row + at least one stack
 
 
 def test_get_stacks_never_probes_even_with_a_populated_cache(tmp_path):
@@ -836,7 +834,9 @@ def test_record_write_failure_on_update_rolls_back_in_process(tmp_path, monkeypa
     assert inst.adopt_source(comp, source="dev").status == "done"       # v1 active + recorded
     old = _rec(inst)
     _advance_local(tmp_path)
-    monkeypatch.setattr(Installer, "_write_registry_record", lambda *a, **k: False)
+    real_write, fail = Installer._write_registry_record, {"on": True}
+    monkeypatch.setattr(Installer, "_write_registry_record",
+                        lambda self, *a, **k: False if fail["on"] else real_write(self, *a, **k))
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status == "failed" and "rolled back" in action.detail
     dest = inst.paths.under("src", "app")
@@ -845,7 +845,7 @@ def test_record_write_failure_on_update_rolls_back_in_process(tmp_path, monkeypa
     assert not inst._journal_path(dest).exists()                        # journal cleared
     assert not dest.with_name(".app.prev").exists()                     # no .prev orphan
     # the source stays fully operable: a later update (write OK) succeeds
-    monkeypatch.undo()
+    fail["on"] = False
     assert inst.adopt_source(comp, force=True, source="dev").status == "done"
 
 
@@ -907,14 +907,16 @@ def test_recovery_restores_prior_when_record_still_unwritable(tmp_path, monkeypa
     assert inst.adopt_source(comp, source="dev").status == "done"       # v1 active + recorded
     old = _rec(inst)
     dest, _ = _crash_state_after_activation(tmp_path, inst, had_prior=True)
-    monkeypatch.setattr(Installer, "_write_registry_record", lambda *a, **k: False)
+    real_write, fail = Installer._write_registry_record, {"on": True}
+    monkeypatch.setattr(Installer, "_write_registry_record",
+                        lambda self, *a, **k: False if fail["on"] else real_write(self, *a, **k))
     msgs = inst.recover_source_activations()
     assert any("rolled back" in m for m in msgs)
     assert (dest / "file.txt").read_text() == "hello\n"                 # prior tree restored
     assert _rec(inst) == old                                            # prior record intact
     assert not inst._journal_path(dest).exists()                        # journal cleared
     # recovery with the write WORKING completes the record instead (normal path)
-    monkeypatch.undo()
+    fail["on"] = False
     dest, new_head = _crash_state_after_activation(tmp_path, inst, had_prior=True,
                                                    text="v3\n")
     msgs = inst.recover_source_activations()
@@ -1899,18 +1901,11 @@ def test_adopt_blocks_when_recovery_required(tmp_path):
 def test_activate_failed_restore_retains_journal(tmp_path, monkeypatch):
     # dest->prev archives, staging->dest fails, AND prev->dest restore fails ->
     # the journal MUST be retained (active source missing -> recovery-required).
-    import os as _os
     inst = _inst_source_txn(tmp_path)
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("OLD")
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "m").write_text("NEW")
-    real_rename = _os.rename
-    def failing(a, b, *args, **kw):
-        if str(a).endswith(".app.candidate-1-2") or str(a).endswith(".app.prev"):
-            raise OSError("simulated rename failure")
-        return real_rename(a, b, *args, **kw)
-    monkeypatch.setattr("lhpc.core.install.os.rename", failing)
-    _fail_noreplace(monkeypatch)                          # promotion is atomic NOREPLACE now
+    _fail_noreplace(monkeypatch)              # the promotion primitive is the one seam (install.py renames through it, never os.rename)
     assert _activate(inst, dest, staging) == "recovery-required"
     assert inst._journal_path(dest).exists()             # journal RETAINED (recovery-required)
 
@@ -2097,18 +2092,11 @@ def test_adopt_target_does_not_self_contend(tmp_path):
 
 
 def test_recovery_required_preserves_candidate_and_prior(tmp_path, monkeypatch):
-    import os as _os
     inst = _inst_source_txn(tmp_path)
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("OLD")
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "m").write_text("NEW")
-    real = _os.rename
-    def failing(a, b, *args, **kw):
-        if str(a).endswith(".app.candidate-1-2") or str(a).endswith(".app.prev"):
-            raise OSError("simulated rename failure")
-        return real(a, b, *args, **kw)
-    monkeypatch.setattr("lhpc.core.install.os.rename", failing)
-    _fail_noreplace(monkeypatch)                          # promotion is atomic NOREPLACE now
+    _fail_noreplace(monkeypatch)              # the promotion primitive is the one seam
     assert _activate(inst, dest, staging) == "recovery-required"
     assert staging.is_dir() and (staging / "m").read_text() == "NEW"   # candidate PRESERVED
     assert inst._journal_path(dest).exists()                            # journal retained
@@ -2306,19 +2294,11 @@ def test_activate_failed_rename_leaving_dangling_dest_restores_prior(tmp_path, m
     # dest->prev archives; staging->dest fails AND an external race leaves dest a DANGLING
     # symlink. _activate must NOT accept the dangling symlink as usable: it restores the
     # prior to a usable dir before clearing the journal (no erased recovery evidence).
-    import os as _os
     inst = _inst_source_txn(tmp_path)
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "m").write_text("NEW")
-    real = _os.rename
-    def fake_rename(a, b, *args, **kw):
-        if str(a).endswith(".app.candidate-1-2"):     # staging -> dest fails
-            _os.symlink(src / "gone", b, dir_fd=kw.get("dst_dir_fd"))  # race: dangling symlink at dest
-            raise OSError("simulated activation failure")
-        return real(a, b, *args, **kw)
-    monkeypatch.setattr("lhpc.core.install.os.rename", fake_rename)
-    _fail_noreplace(monkeypatch, suffixes=(".app.candidate-1-2",), plant_dangling=True)
+    _fail_noreplace(monkeypatch, suffixes=(".app.candidate-1-2",), plant_dangling=True)   # plants the dangling leaf itself
     outcome = _activate(inst, dest, staging)
     # the injected dangling symlink is NEVER deleted to continue: evidence retained,
     # prior stays archived at .prev, journal retained for recovery
@@ -2331,20 +2311,11 @@ def test_activate_failed_rename_leaving_dangling_dest_restores_prior(tmp_path, m
 def test_activate_dangling_dest_unrestorable_retains_journal(tmp_path, monkeypatch):
     # Same race, but the prior restore ALSO fails -> retain journal (recovery-required),
     # never clear it leaving an unusable active source.
-    import os as _os
     inst = _inst_source_txn(tmp_path)
     src = inst.paths.under("src"); src.mkdir(parents=True)
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
     staging = src / ".app.candidate-1-2"; staging.mkdir()
-    real = _os.rename
-    def fake_rename(a, b, *args, **kw):
-        if str(a).endswith(".app.candidate-1-2"):
-            _os.symlink(src / "gone", b, dir_fd=kw.get("dst_dir_fd")); raise OSError("activation failed")
-        if str(a).endswith(".app.prev"):               # prior restore also fails
-            raise OSError("restore failed")
-        return real(a, b, *args, **kw)
-    monkeypatch.setattr("lhpc.core.install.os.rename", fake_rename)
-    _fail_noreplace(monkeypatch, plant_dangling=True)
+    _fail_noreplace(monkeypatch, plant_dangling=True)  # candidate AND prev restore fail; dangling leaf planted
     assert _activate(inst, dest, staging) == "recovery-required"
     assert inst._journal_path(dest).exists()           # journal retained (recovery route)
 
@@ -4319,7 +4290,7 @@ def test_an_addition_made_after_the_carry_retains_the_archived_prior(tmp_path, m
     jf = inst._journal_path(dest)
     assert json.loads(jf.read_text())["state"] == "prior-dirty-retained"
     # automatic recovery never retries the deletion either — the journal is operator-only now
-    monkeypatch.undo()
+    # (the seam hook above fires exactly once, so recovery runs with the real cleanup path)
     msgs = inst.recover_source_activations()
     assert any("late local changes" in m and "recovery-required" in m for m in msgs), msgs
     assert (prev / "late.log").exists() and jf.exists()
@@ -4365,8 +4336,8 @@ def test_prev_dirty_during_recovery_cleanup_is_retained(tmp_path, monkeypatch):
     assert json.loads(jf.read_text())["state"] == "prior-dirty-retained"
     rec = source_registry.read_record(inst.paths, "src/app")
     assert rec is not None and rec.resolved_commit == v2_head    # active record truthful
-    # a SECOND automatic recovery still refuses to delete the dirty prior
-    monkeypatch.undo()
+    # a SECOND automatic recovery still refuses to delete the dirty prior (the seam hook has
+    # already fired its once; nothing is injected any more)
     msgs2 = inst.recover_source_activations()
     assert any("late local changes" in m for m in msgs2)
     assert (prev / "file.txt").exists() and jf.exists()

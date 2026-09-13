@@ -50,8 +50,7 @@ def test_a_lifecycle_action_travels_form_to_route_to_state(page, lab):
 def test_the_gps_panel_opens_with_its_controls(page):
     page.goto(page.lab_base + "/stacks?open=gps", wait_until="networkidle")
     gps = page.locator("#gps-row")
-    if gps.count() == 0:
-        pytest.skip("this build renders no GPS panel")
+    assert gps.count() == 1, "the GPS panel is part of the Stacks page; its absence is a regression, not a build variant"
     # `?open=gps` is the deep link the console itself uses: the panel arrives OPEN, so the
     # assertion is that it carries its controls, not that a click can open it.
     page.wait_for_function(
@@ -261,20 +260,37 @@ def test_the_rf_log_viewer_sorts_filters_toggles_columns_and_decrypts(page, lab)
     def hold(route):                                                      # hold, do not answer (playwright
         held.append(route)                                                # needs a plain function here)
     page.route("**/api/rflog/meshtastic/decoded*", hold)
-    toggle.click()                                                        # ON: a decoded fetch starts and hangs
+    with page.expect_request("**/api/rflog/meshtastic/decoded*", timeout=5000):
+        toggle.click()                                                    # ON: a decoded fetch starts and hangs
     page.wait_for_function("() => document.querySelector('#rf-decrypt').getAttribute('aria-pressed') === 'true'", timeout=5000)
-    page.wait_for_function("() => true", timeout=1000)
     assert held, "the decoded request must be in flight"
     toggle.click()                                                        # OFF while it is in flight
     page.wait_for_function("() => document.querySelector('#rf-decrypt').getAttribute('aria-pressed') === 'false'", timeout=5000)
     rec = json.loads(page.evaluate("() => fetch('/api/rflog/meshtastic?job=rf-meshtastic.log').then(r => r.text())"))["records"][0]
     late = {"target": "meshtastic", "job": "rf-meshtastic.log", "path": "x", "running": False, "error": "",
             "records": [dict(rec, status="ok", kind="text", peer="!00000001", decoded="LATE PLAINTEXT")]}
-    for route in held:
-        route.fulfill(status=200, content_type="application/json", body=json.dumps(late))
-    page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 1", timeout=5000)
-    page.wait_for_timeout(1500)
+    # Hold every PLAIN poll from here on: a good plain response landing after the stale decoded
+    # one would repair the very state under test and turn a real overwrite into a false green.
+    plain_held = []
+
+    def hold_plain(route):
+        plain_held.append(route)
+    is_plain = lambda u: "/api/rflog/meshtastic?" in u and "/decoded" not in u  # noqa: E731
+    page.route(is_plain, hold_plain)
+    with page.expect_request(lambda r: is_plain(r.url), timeout=10000):       # the page is now blocked on plain
+        pass
+    with page.expect_response(lambda r: "/api/rflog/meshtastic/decoded" in r.url, timeout=5000):
+        for route in held:
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(late))
+    # The stale decoded answer has been delivered. The page's OWN next poll (issued by its
+    # 2 s interval, and held like the rest) is the observable that its handler has long since
+    # run — there is no plain data in flight that could have cleaned up after it.
+    with page.expect_request(lambda r: is_plain(r.url), timeout=10000):
+        pass
     assert "LATE PLAINTEXT" not in page.locator("#rfview").inner_text()
+    for route in plain_held:                                              # let the page carry on
+        route.continue_()
+    page.unroute(is_plain, hold_plain)
     # And the reveal is never remembered: a reload starts with Decrypt off.
     page.reload(wait_until="networkidle")
     assert page.locator("#rf-decrypt").get_attribute("aria-pressed") == "false"

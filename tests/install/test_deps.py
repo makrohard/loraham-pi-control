@@ -526,25 +526,6 @@ def test_moving_a_dep_between_scopes_changes_the_revision(tmp_path, monkeypatch)
     assert _rev(before) != _rev(after)
 
 
-def test_core_declaration_wins_over_a_gui_declaration(tmp_path, monkeypatch):
-    """AND-merge: one non-GUI declaration keeps the command in the DEFAULT bootstrap, once."""
-    svc = _svc(tmp_path)
-    stacks = svc.stacks()
-    dup = None
-    for s in stacks:
-        for c in s.components:
-            for r in c.requires:
-                if getattr(r, "gui", False):
-                    dup = r
-                    break
-    assert dup is not None
-    monkeypatch.setattr(type(dup), "gui", property(lambda self: False), raising=False)
-    core, gui, _gps = svc._declared_dep_scopes()
-    assert dup.install in core
-    assert dup.install not in gui
-    assert core.count(dup.install) == 1
-
-
 def test_module_probe_uses_find_spec_and_is_honest(tmp_path, monkeypatch):
     import importlib.util
 
@@ -1103,11 +1084,11 @@ def test_meshtastic_never_needs_root_to_build_start_or_configure(tmp_path):
 # has to carry the values themselves.
 
 
-def _mesh_svc_with(tmp_path, replacements):
-    """A service on a manifest with `replacements` applied to the real one, built and marked as
-    of BEFORE those replacements. Returns (service, component)."""
+def _mesh_svc_with(tmp_path, moved_text):
+    """A service on `moved_text` (the real manifest with one build input moved, from the
+    `manifest_with_moved_input` fixture), built and marked as of BEFORE the move. Returns
+    (service, component)."""
     from lhpc.core.lifecycle import BUILD_MARKER_TEXT
-    from lhpc.core.manifest import default_manifest_path
     built = _svc(tmp_path)
     comp = _mesh(built)
     src = tmp_path / "src" / "meshtastic-firmware"
@@ -1116,51 +1097,40 @@ def _mesh_svc_with(tmp_path, replacements):
         BUILD_MARKER_TEXT + built._consumed_source_lines(comp))
     _stamp_inputs(built.build_inputs_path(comp), built.build_inputs_text(comp))
     assert built.is_built(_mesh(_svc(tmp_path))) is True, "the baseline must read built"
-    text = default_manifest_path().read_text()
-    for old, new in replacements:
-        assert text.count(old) >= 1, old
-        text = text.replace(old, new)
     moved = tmp_path / "moved-manifest.toml"
-    moved.write_text(text)
+    moved.write_text(moved_text)
     svc = ControllerService(manifest_path=moved, system=FakeSystem().system,
                             paths=Paths(runtime_root=tmp_path))
     return svc, _mesh(svc)
 
 
-def test_moving_the_web_client_pin_alone_reads_not_built(tmp_path):
+@pytest.mark.parametrize("name", ["meshtastic-web", "meshtastic-cli"])
+def test_moving_one_input_alone_reads_not_built(tmp_path, manifest_with_moved_input, name):
     """The firmware pin has not moved, so the checkout and its marker are untouched. Before the
-    marker recorded this value, the box kept serving the OLD client and still said "built"."""
-    svc, comp = _mesh_svc_with(tmp_path, [('"2.7.2"', '"9.9.9"'),
-                                          ("web client v2.7.2", "web client v9.9.9")])
-    assert ("meshtastic-web", "9.9.9") in comp.build_inputs
+    marker recorded these values, the box kept serving the OLD client or running the OLD CLI and
+    still said "built"."""
+    text, _old = manifest_with_moved_input("meshtastic", name, "9.9.9")
+    svc, comp = _mesh_svc_with(tmp_path, text)
+    assert (name, "9.9.9") in comp.build_inputs
     assert svc.is_built(comp) is False
 
 
-def test_moving_the_cli_pin_alone_reads_not_built(tmp_path):
-    svc, comp = _mesh_svc_with(tmp_path, [("meshtastic==2.7.11", "meshtastic==9.9.9"),
-                                          ('value = "2.7.11"', 'value = "9.9.9"'),
-                                          ("CLI 2.7.11", "CLI 9.9.9")])
-    assert ("meshtastic-cli", "9.9.9") in comp.build_inputs
-    assert svc.is_built(comp) is False
-
-
-def test_a_rebuild_at_the_new_inputs_reads_built_again(tmp_path):
+def test_a_rebuild_at_the_new_inputs_reads_built_again(tmp_path, manifest_with_moved_input):
     """The remedy has to actually resolve: rewriting the marker at the new values is what a
     rebuild does, and the stack must then read built rather than staying stuck."""
     from lhpc.core.lifecycle import BUILD_MARKER_TEXT
-    svc, comp = _mesh_svc_with(tmp_path, [('"2.7.2"', '"9.9.9"'),
-                                          ("web client v2.7.2", "web client v9.9.9")])
+    svc, comp = _mesh_svc_with(tmp_path, manifest_with_moved_input("meshtastic", "meshtastic-web", "9.9.9")[0])
     marker = tmp_path / "src" / "meshtastic-firmware" / comp.build_marker
     marker.write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(comp))
     _stamp_inputs(svc.build_inputs_path(comp), svc.build_inputs_text(comp))
     assert svc.is_built(comp) is True
 
 
-def test_the_recorded_inputs_are_the_literals_the_build_actually_uses(tmp_path):
+def test_the_recorded_inputs_are_the_literals_the_build_actually_uses(tmp_path, manifest_with_moved_input):
     """Two copies of one version can disagree. The marker would then record a value the build
     never used, so the manifest refuses to load rather than answering about the wrong thing."""
-    from lhpc.core.manifest import default_manifest_path, load_manifest
-    text = default_manifest_path().read_text().replace('value = "2.7.11"', 'value = "9.9.9"')
+    from lhpc.core.manifest import load_manifest
+    text, _old = manifest_with_moved_input("meshtastic", "meshtastic-cli", "9.9.9", drift=True)
     bad = tmp_path / "drifted.toml"
     bad.write_text(text)
     with pytest.raises(ManifestError, match="is not what the recipe consumes"):

@@ -294,3 +294,51 @@ def _no_host_gpsd(monkeypatch):
     themselves (the memo lives inside the real function, so patching here bypasses it too)."""
     from lhpc.core import gps as gps_mod
     monkeypatch.setattr(gps_mod, "local_gpsd_listening", lambda: False)
+
+
+@pytest.fixture
+def manifest_with_moved_input():
+    """The shipped manifest's text with one `build_inputs` entry moved — the way a bump does it:
+    the recorded `value` and the token the consuming step renders move together
+    (`drift=False`), or only the recipe's token moves and the recorded value stays behind
+    (`drift=True`, which the loader must refuse). The current values are read from the manifest,
+    never written into a test, so a routine pin bump changes nothing here. Returns
+    `(text, old_value)`; with `decoy=True` a step carrying the OLD token is added right after
+    the drifted step, in another command, to prove it cannot stand in for the real one."""
+    import re as _re
+    import tomllib as _tomllib
+
+    from lhpc.core.manifest import default_manifest_path
+
+    def _apply(cid, name, new_value, *, drift=False, decoy=False):
+        text = default_manifest_path().read_text()
+        entry = None
+        for stack in _tomllib.loads(text)["stack"]:
+            for comp in stack.get("component", []):
+                if comp.get("id") != cid:
+                    continue
+                for item in comp.get("build_inputs", []) or []:
+                    if item.get("name") == name:
+                        entry = item
+        assert entry is not None, f"component {cid!r} has no build input named {name!r}"
+        old = str(entry["value"])
+        if new_value is None:                    # a value that merely STARTS with the recorded one
+            new_value = old + "0"
+        rendered, moved = entry["token"].replace("{value}", old), entry["token"].replace("{value}", new_value)
+        out, hits = [], 0
+        for line in text.splitlines(keepends=True):
+            if "argv" in line and entry["command"] in line and f'"{rendered}"' in line:
+                line = line.replace(f'"{rendered}"', f'"{moved}"')
+                hits += 1
+                if decoy:
+                    indent = line[:len(line) - len(line.lstrip())]
+                    out.append(line)
+                    line = f'{indent}{{ argv = ["printf", "{rendered}"] }},\n'
+            elif not drift and f'name = "{name}"' in line:
+                line, n = _re.subn(r'value = "%s"' % _re.escape(old), f'value = "{new_value}"', line, count=1)
+                assert n == 1, line
+            out.append(line)
+        assert hits == 1, f"the step consuming {name!r} must render its token exactly once ({hits})"
+        return "".join(out), old
+    return _apply
+

@@ -5,10 +5,8 @@ read-only; link traffic and foreign packets are `undecryptable`. Generated ident
 
 import os
 
-import pytest
-
-pytest.importorskip("RNS")
 import decode_reticulum as dec
+import pytest
 import RNS
 from RNS.vendor import umsgpack
 
