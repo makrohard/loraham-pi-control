@@ -31,6 +31,7 @@ from typing import Any, Optional
 
 from openhop_core.companion.companion_radio import CompanionRadio
 from openhop_core.companion.frame_server.server import CompanionFrameServer
+from openhop_core.companion.constants import DEFAULT_PUBLIC_CHANNEL_SECRET
 from openhop_core.companion.models import Channel, QueuedMessage
 
 logger = logging.getLogger("meshcore-host.persistence")
@@ -46,6 +47,9 @@ FLUSH_INTERVAL_S = 30.0
 # node_name is EXCLUDED for the same ownership reason as the radio and GPS settings above:
 # LHPC configures the node name (meshcore.toml), so a persisted value must never override the
 # configured one after a rename.
+PUBLIC_CHANNEL_NAME = "Public"   # slot 0 on every MeshCore device
+CHANNELS_SEEDED_PREF = "_channels_seeded"   # our own bookkeeping row, never a companion pref
+
 PERSISTED_PREFS = (
     "adv_type",
     "multi_acks", "telemetry_mode_base", "telemetry_mode_location",
@@ -197,11 +201,45 @@ class CompanionStore:
             except (ValueError, TypeError) as exc:
                 raise StoreError(f"corrupt pref row {key!r} in companion database: {exc}") from exc
 
+        # FIRST start only: no channel row AND no seed marker. An operator who removed every
+        # channel also leaves an empty table, and the marker is what tells the two apart.
+        seeded = False
+        if not channel_rows and not any(k == CHANNELS_SEEDED_PREF for k, _v in pref_rows):
+            seeded = self._seed_public_channel(companion)
+            if seeded:
+                self._mark_channels_seeded()
+
         self._restored = True
         logger.info(
-            "Restored companion state: %d contacts, %d channels, %d prefs, %d queued messages",
-            len(records), len(channel_rows), len(pref_rows), self.queued_message_count(),
+            "Restored companion state: %d contacts, %d channels%s, %d prefs, %d queued messages",
+            len(records), len(channel_rows), " (+Public seeded)" if seeded else "",
+            len(pref_rows), self.queued_message_count(),
         )
+
+    def _mark_channels_seeded(self) -> None:
+        """Record that this node has had its Public channel once, so a later start never
+        resurrects a channel the operator removed on purpose."""
+        try:
+            with self._lock:
+                db = self._db()
+                db.execute("INSERT OR REPLACE INTO prefs (key, value) VALUES (?, ?)",
+                           (CHANNELS_SEEDED_PREF, json.dumps(True)))
+                db.commit()
+        except sqlite3.Error as exc:
+            raise StoreError(f"cannot record the channel seed marker: {exc}") from exc
+
+    @staticmethod
+    def _seed_public_channel(companion: CompanionRadio) -> bool:
+        """Give a FIRST-START node the Public channel, as a MeshCore device has out of the box.
+
+        openHop's `ChannelStore` starts empty and we only restore rows that exist, so a node with
+        a fresh database had no channel 0: it could not send to Public at all and logged every
+        received channel message as `Unknown channel hash`. The caller seeds only on a FIRST
+        start (no channel row and no `_channels_seeded` marker), so an operator who removes
+        Public keeps it removed.
+        """
+        return bool(companion.channels.set(0, Channel(name=PUBLIC_CHANNEL_NAME,
+                                                      secret=DEFAULT_PUBLIC_CHANNEL_SECRET)))
 
     # -- save paths ----------------------------------------------------------
 

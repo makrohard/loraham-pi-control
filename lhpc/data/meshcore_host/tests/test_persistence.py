@@ -333,3 +333,53 @@ async def test_unrestorable_channel_fails_closed_and_is_preserved(tmp_path, daem
     finally:
         conn.close()
     assert row == (9999, "GHOST", b"\x11" * 16)
+
+
+async def test_a_first_start_node_gets_the_public_channel(tmp_path, daemon):
+    """A MeshCore device has Public in slot 0 out of the box; openHop's store starts empty and we
+    only restore rows that exist, so a fresh node could neither send to Public nor recognise a
+    received channel message ("Unknown channel hash"). First start seeds it, and the flush
+    persists it — so a later start restores the row instead of seeding again."""
+    import sqlite3
+
+    from openhop_core.companion.constants import DEFAULT_PUBLIC_CHANNEL_SECRET
+
+    key_file, _ = write_identity(tmp_path)
+    cfg = host_config(tmp_path, daemon, key_file, db=db_path(tmp_path))
+    app = HostApp(cfg)
+    await app.start()
+    try:
+        ch = app.companion.channels.get(0)
+        assert ch is not None and ch.name == "Public"
+        assert bytes(ch.secret) == DEFAULT_PUBLIC_CHANNEL_SECRET
+        app.store.save_channels(app.companion)
+    finally:
+        await app.stop()
+
+    conn = sqlite3.connect(db_path(tmp_path))
+    try:
+        rows = conn.execute("SELECT idx, name, secret FROM channels").fetchall()
+    finally:
+        conn.close()
+    assert rows == [(0, "Public", DEFAULT_PUBLIC_CHANNEL_SECRET)]
+
+
+async def test_an_operator_who_removed_every_channel_keeps_it_removed(tmp_path, daemon):
+    """The seed is for a FIRST start only: it runs when the database holds no channel row at all.
+    A node whose channels were removed on purpose has an empty table too — but its flush wrote
+    that emptiness, so seeding again would resurrect what the operator deleted. Guarded by the
+    `_channels_seeded` marker row written at the first seed."""
+    key_file, _ = write_identity(tmp_path)
+    cfg = host_config(tmp_path, daemon, key_file, db=db_path(tmp_path))
+    app = HostApp(cfg)
+    await app.start()
+    app.companion.channels.remove(0)
+    app.store.save_channels(app.companion)
+    await app.stop()
+
+    app2 = HostApp(host_config(tmp_path, daemon, key_file, db=db_path(tmp_path)))
+    await app2.start()
+    try:
+        assert app2.companion.channels.get(0) is None, "a removed Public must stay removed"
+    finally:
+        await app2.stop()

@@ -2,6 +2,10 @@
 
 ## 0.5.0
 
+- MeshCore: a node with a fresh companion database gets the Public channel, as a MeshCore device
+  has out of the box. Without it the node could not send to Public at all and logged every received
+  channel message as an unknown channel hash. Seeded on a first start only, so a channel an operator
+  removed stays removed.
 - Web console: the client-CA CRL is re-checked on every network-watchdog pass on every box (was: only
   on AP boxes and at a WLAN join), so a box that outlives the CRL's 30-day nextUpdate no longer locks
   every client certificate out of the exposed console.
