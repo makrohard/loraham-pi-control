@@ -586,6 +586,23 @@ def test_daemon_restart_does_not_reconfigure_band_in_use(tmp_path):
     assert "daemon already serving 433" in text
 
 
+@pytest.mark.needs_session
+def test_second_component_start_keeps_the_running_bands_config(tmp_path):
+    # A stack's OWN running component owns the radio it tuned. Starting a second component of that
+    # stack (kiss-serial next to a running kiss-tnc) must not re-apply the stack's daemon params to
+    # that band: the app is already up and never re-sends its frequency, so the band default would
+    # replace it and the whole stack would go deaf while every status still reads healthy.
+    svc = ControllerService(system=FakeSystem(
+        cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["loraham-kiss-tnc"]},
+        unix_replies={"/tmp/loraconf433.sock": _RDY6}).system,
+        paths=Paths(runtime_root=tmp_path))
+    svc._set_running_band("kiss", "433")
+    res = svc.run_action("start", "loraham-kiss-serial", apply=True)
+    text = "\n".join(res.details)
+    assert "[keep] 433 already served for 'kiss'" in text
+    assert "433: FREQ=" not in text, text          # no radio param sent to the band in use
+
+
 # --- A1: daemon stop must not orphan dependents ---------------------------------------------
 
 def test_daemon_stop_blocked_by_interactive_dependent(tmp_path, monkeypatch):

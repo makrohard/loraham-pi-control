@@ -2,6 +2,12 @@
 
 ## 0.5.0
 
+- Starting a second component of a running stack no longer retunes its radio. The stack's daemon
+  parameters are applied once before its components start, and the app then owns the radio it
+  tuned; with a component already running on that band nothing re-sends the app's frequency, so
+  the re-apply put the band back on its default (433.175 instead of the KISS TNC's 433.775) and
+  the stack went silent while status, radio state and RX readiness all still read healthy. A band
+  already served for the starting stack is now left alone, as one held by another stack already was.
 - Voice on 868 can transmit: the shipped profile was SF11 at 250 kHz, where one voice packet spends
   about 1.2 s on the air to carry 260 ms of speech, so the app refused the mode and no PTT was possible.
   The 868 default is now SF7, like 433.

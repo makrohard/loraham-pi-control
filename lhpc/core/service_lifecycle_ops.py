@@ -1942,6 +1942,17 @@ class LifecycleOpsMixin:
                     lines.append(f"  [keep] {b} in use by {', '.join(others)} — daemon "
                                  f"config left unchanged")
                     continue
+                # The SAME rule for THIS stack's own running components. The params below are
+                # applied once before a stack's components start, and the app then overwrites the
+                # radio params it owns; when a component is ALREADY running on this band there is
+                # no such overwrite, so re-applying would move the radio off the frequency that app
+                # tuned — the band goes silent while every status still reads healthy, and only a
+                # restart of the app recovers it. Starting a second component (kiss-serial next to
+                # a running kiss-tnc) must therefore leave the band's config alone.
+                if self._stack_running_on_band(start_sid, b):
+                    lines.append(f"  [keep] {b} already served for '{start_sid}' — daemon "
+                                 f"config left unchanged")
+                    continue
             plines, tx_ok = self._apply_stack_daemon_params(start_sid, b)
             lines.extend(plines)
             ok_all = ok_all and tx_ok
@@ -2135,6 +2146,18 @@ class LifecycleOpsMixin:
             eb = self._effective_band(ss.stack.id)
             return {eb} if eb else set()
         return {c.band for c in run_comps if c.band}
+
+    def _stack_running_on_band(self, stack_id: str, band: str) -> bool:
+        """Does `stack_id` ALREADY have a running component on `band`? Read from live run state
+        (the band marker alone can outlive the process it describes)."""
+        up = (RunState.RUNNING, RunState.DEGRADED)
+        for ss in self.build_snapshot().stacks:
+            if ss.stack.id != stack_id:
+                continue
+            run_comps = [c for c in ss.stack.components
+                         if ss.components[c.id].run_state in up]
+            return bool(run_comps) and band in self._running_bands_of(ss, run_comps)
+        return False
 
     def _uncertain_daemon_dependents(self, target: str) -> list[str]:
         """Running daemon-dependent stacks whose ACTIVE radio band cannot be trusted for a PER-BAND
