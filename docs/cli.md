@@ -1,7 +1,7 @@
 # LHPC CLI reference
 
-`lhpc` is the command-line interface to LoRaHAM Pi Control. Everything the web console
-does is available here too.
+`lhpc` is the command-line interface to LoRaHAM Pi Control; the web console is a front end to
+the same service layer ([architecture](architecture.md#package-layout)).
 
 ## Contents
 
@@ -22,7 +22,7 @@ does is available here too.
 - [bootstrap](#bootstrap) · [install](#install) · [auto-install](#auto-install)
 - [config](#config) · [hardware](#hardware) · [gps](#gps) · [autostart](#autostart) · [firewall](#firewall) · [hmac](#hmac) · [meshtastic](#meshtastic)
 - [stack](#stack) · [build](#build) · [test](#test) · [update](#update) · [uninstall](#uninstall) · [clean](#clean) · [known-working](#known-working)
-- [daemon](#daemon) · [logs](#logs)
+- [daemon](#daemon) · [logs](#logs) · [rflog](#rflog)
 - [web](#web) · [webserver](#webserver)
 - [self-update](#self-update) · [help](#help)
 
@@ -38,9 +38,8 @@ does is available here too.
 `lhpc explain <stack>` — explain a stack and its components (order, bands, ownership).
 
 ### doctor
-`lhpc doctor` — bounded health checks. Local except for one thing: when the position source is
-`gpsd`, it asks that gpsd (which may be on another box) whether it actually owns a receiver —
-one bounded query, because a gpsd that answers while owning nothing yields no position at all.
+`lhpc doctor` — bounded health checks. Local except for one bounded query to gpsd when the
+position source is `gpsd` ([gps](gps.md#health-and-what-the-console-shows)).
 
 ### deps
 `lhpc deps` — list every declared system prerequisite (apt packages, the SPI/`config.txt` overlay,
@@ -54,11 +53,11 @@ exact copyable command for each missing one (the per-stack **System dependencies
 `apt install` lines merged into a single non-interactive
 `apt-get install -y --no-install-recommends` that runs FIRST, SPI/group sections re-rendered as
 validated operator-safe logic). No third-party apt repository is configured — `meshtasticd` is built
-from a pinned upstream checkout. lhpc never runs privileged commands — you run the script yourself:
+from a pinned upstream checkout. You run the script yourself:
 
 ```
 lhpc deps --script > bootstrap-deps.sh
-sudo bash bootstrap-deps.sh --dry-run                 # PRE-FLIGHT: simulate only, change nothing
+bash bootstrap-deps.sh --dry-run                      # PRE-FLIGHT: simulate only, change nothing; no root
 sudo bash bootstrap-deps.sh --spi-mode soft-cs        # or hardware-cs | skip; --operator-user <name> if root
 sudo bash bootstrap-deps.sh --spi-mode soft-cs --with-gui   # ONLY on a machine with a display
 ```
@@ -75,9 +74,15 @@ idempotent and fails closed on a conflicting existing `config.txt`. Group grants
 operator (`--operator-user`, else `$SUDO_USER`, else the invoking user) — never root. QEMU + PlatformIO
 are provisioned later by `lhpc build`, not by this script.
 
-The apt package set is identical on a Pi Zero 2W and a Pi 5. A rendered snapshot (`bootstrap-deps.sh`)
-is shipped in the repo root for the pre-clone moment; regenerate it with the command above when
-dependencies change (CI shell-syntax-checks the committed snapshot).
+Optional flags: `--with-gui` (GUI application libraries only) · `--with-gps` (gpsd, for a
+receiver on this box) · `--no-swapfile` · `--swap-size <MB>` (default 768) · `--operator-user
+<name>` (when running as root directly rather than through `sudo`) · `--keep-wifi-powersave` ·
+`--no-power-controls` · `--no-network-controls` (skip the polkit rule for Reboot/Shut down, for
+the Network panel). Root is required for everything but `--dry-run` and `--help`. What the
+swapfile and the Wi-Fi power-save flags do: [running on a Pi](maintenance.md#running-on-a-pi).
+
+The apt package set is identical on a Pi Zero 2W and a Pi 5. The shipped snapshot of this
+script: [what CI enforces](maintenance.md#what-ci-enforces).
 
 ### source-check
 `lhpc source-check [<target>]` — check managed sources for available upstream updates (read-only).
@@ -91,11 +96,8 @@ dependencies change (CI shell-syntax-checks the committed snapshot).
 `lhpc install [<stack>] [--check] [--source binary|pinned|dev|stable] [--yes]` — install a stack:
 download the published **binary** artifact, or adopt/verify managed sources into the runtime root.
 
-- Without `--source`, a stack uses its default channel — binary where one is published for this
-  platform, else `pinned`. `pinned` is the newest composition the OPERATOR confirmed as
-  known-working, and the manifest pin only when there is no such record: a fresh box therefore
-  installs the release's pins, while a box with a known-working entry keeps what it proved. The
-  all-stacks form stays on that source channel. `dev` is an explicit choice.
+- Without `--source`, a stack uses its default channel ([selections](provenance.md#selections));
+  the all-stacks form stays on that source channel. `dev` is an explicit choice.
 - A failed binary install asks **explicitly** whether to build from source; it never falls back
   silently.
 - `--check` is a dry run: it shows the plan and reports missing mandatory system dependencies
@@ -107,7 +109,7 @@ download the published **binary** artifact, or adopt/verify managed sources into
 guided run.
 
 - Host tests are **off by default**; `--tests` runs them, and `--tx` implies `--tests` and
-  transmits one bounded frame per ready band (real RF — dummy loads).
+  transmits one bounded frame per ready band ([TX safety](operations.md#tx-safety)).
 - `--status` prints the run state and any recovery reason, then exits.
 - `--recover` acknowledges a crashed run and clears its leftover state so a new run can start.
   Add `--confirm-orphan` only when a spawned child's termination could not be proven (inspect and
@@ -130,35 +132,20 @@ lhpc config operator [--callsign CALL]   # show / set the GLOBAL operator identi
 ```
 
 - `operator` is a reserved subcommand (not a stack id). `--callsign` applies only to it and
-  takes the **base** callsign only — the intersection every licensed stack accepts: the
-  digit-bearing amateur structure — prefix, digit, then 1–3 letters, 3–6 characters total
-  (e.g. `G0ABC`, `M7XYZ`) — no SSID, no `/P`. `N0CALL` is refused as a placeholder, and its
-  four-letter suffix is not a valid base shape either. A value any licensed stack would refuse cannot be saved globally.
-- The global setting is **optional**. Licensed stacks (chat, Voice, Graywolf, MeshCom)
-  inherit it only while their own callsign field is empty; the local field stays empty while
-  inheriting. A per-stack value overrides it and may carry that stack's SSID or portable form:
-  `lhpc config chat call YOURCALL-10` · `lhpc config voice callsign YOURCALL/P` ·
-  `lhpc config meshcom mc_callsign YOURCALL-99` (`YOURCALL` = your own callsign — the
-  N0CALL placeholder is refused). APRS/AX.25 stacks take SSID `-1`…`-15` (a bare
-  callsign means SSID 0); MeshCom takes a numeric suffix `-1`…`-99` (plus the pinned firmware's one whitelisted
-  real-station exception `OE2YOTA-1`; its protocol-control identifiers are deliberately
-  not accepted as operator identities); Voice transmits at most
-  11 characters and allows `/` and `-` (portable forms).
-- **What this checks, and what it does not.** LHPC verifies that an identity is *configured,
-  not a placeholder, and encodable by the protocol that will transmit it* — the byte and
-  character limits, SSID ranges and callsign shape each stack's firmware or app actually accepts.
-  It cannot and does not verify that the callsign is licensed to you. Using your own call remains
-  yours; the gate stops a station transmitting under a value nobody chose.
-- **Non-licensed stacks never inherit the global callsign.** Meshtastic needs both local node
-  names (`lhpc config meshtastic node_name "Field Node"` + `node_short FN1`, 39/4 UTF-8
-  bytes); MeshCore needs its local node name (max 31 bytes). A start without a required
-  identity is refused — by the dry run already, before anything is queued or stopped — and prints
-  a command template for every missing field (replace the UPPERCASE token with your value). A start
-  or restart runs the SAVED configuration; nothing is entered per launch. `lhpc config` (like the
-  Settings page) may CLEAR an identity — a licensed callsign then falls back to the global one, and
-  with no global left, or for a Meshtastic/MeshCore node name that never inherits, the stack simply
-  cannot be started until you set one again (the web console sends you to that Settings row).
+  takes the **base** callsign only (no SSID, no `/P`). A per-stack value overrides it and may
+  carry that stack's SSID or portable form: `lhpc config chat call YOURCALL-10` ·
+  `lhpc config voice callsign YOURCALL/P` · `lhpc config meshcom mc_callsign YOURCALL-99`
+  (`YOURCALL` = your own callsign). Meshtastic's node names: `lhpc config meshtastic node_name
+  "Field Node"` + `node_short FN1`. The rules — inheritance, placeholders, what is checked and
+  what is not: [identity](architecture.md#identity-and-callsigns); the accepted syntax per
+  field: [validators](adding-a-stack.md#parameters--config-files).
+- A start without a required identity is refused — by the dry run already, before anything is
+  queued or stopped — and prints a command template for every missing field (replace the
+  UPPERCASE token with your value). `lhpc config` (like the Settings page) may CLEAR an identity.
 - A `<param>` name shared by several components must be qualified as `<component>.<param>` — the command refuses rather than guessing.
+- `lhpc config` sets one parameter per call; the stack's Settings page saves the whole form in
+  one submission, so a setting whose validation spans several parameters is set here in the
+  order its stack page gives.
 - `--band` selects the band for band-switchable stacks.
 
 Example: `lhpc config chat call YOURCALL-10` (`YOURCALL-10` = your callsign+SSID) then `lhpc stack start chat`.
@@ -166,7 +153,7 @@ Example: `lhpc config chat call YOURCALL-10` (`YOURCALL-10` = your callsign+SSID
 ### hardware
 Show or set the **radio hardware setup** — which physical board(s) this box has. This fixes which
 band(s) are served and the daemon `--hw` preset each radio launches with. A fresh install is **not
-configured**, and the daemon refuses to start until a setup is chosen.
+configured** ([daemon](stacks/daemon.md#settings)).
 
 ```
 lhpc hardware                # show the current setup + served band(s) + the catalog
@@ -180,10 +167,7 @@ lhpc hardware waveshare-433  # Waveshare SX1262 (433)
 lhpc hardware waveshare-868  # Waveshare SX1262 (868)
 ```
 
-- Only **legit** board combinations are offered (illegal ones — e.g. Waveshare + Uputronics — are
-  absent from the catalog and can never be selected).
-- With a single-radio setup lhpc shows only that radio, disables the other band's choosers, and blocks
-  stacks that need the absent band (e.g. `meshcore` needs 868) with a clear reason.
+- Which combinations are offered and what a single-radio setup blocks: [daemon](stacks/daemon.md#settings).
 - Also settable in the web console under the loraham daemon stack's **Hardware** settings section,
   which additionally offers a **Detect** probe (spawns the daemon briefly per candidate board and
   reports whether the chip responds — the board's LED lights during init).
@@ -211,12 +195,7 @@ The model, the refusals and the per-stack `use_gps` switch are in [GPS](gps.md).
 
 ### autostart
 **Boot auto-restore** — restart the stacks that were running before a reboot (default: **on**).
-At boot, `lhpc-boot-restore.service` restores every stack that was LHPC-started and not stopped
-before the reboot, replaying its saved configuration through the normal gated start path. An
-explicit `lhpc stack stop` is the last word: the stack stays down across reboots even when the
-stop could not verify the process gone — the next `stack start` makes it restorable again. It only
-runs while the web console unit is enabled and canonical. A failed restore is not retried —
-start that stack yourself with `lhpc stack start <id>`.
+What it restores, what it refuses and where its log is: [operations](operations.md#not-a-supervisor).
 
 ```
 lhpc autostart               # show the switch + the last boot-restore result
@@ -224,16 +203,14 @@ lhpc autostart off           # disable (applies at the NEXT boot)
 lhpc autostart on            # re-enable (the default)
 ```
 
-Also switchable in the web console's Webserver panel ("Boot restore"). The unit's log is
-`logs/lhpc-boot-restore.log` (web: Controller logs → boot-restore).
+Also switchable in the web console (Home → System → Autostart).
 
 ---
 
 ### firewall
 Managed **nftables firewall** status and script rendering. `lhpc` renders the ruleset; you apply
-it with one sudo command. It never edits your own firewall configuration. See
-[Firewalling the Pi](firewall.md) for the full model (modes, the three status dimensions, and how
-your existing configuration is preserved).
+it with one sudo command. See [Firewalling the Pi](firewall.md) for the full model (modes, the
+three status dimensions, and how your existing configuration is preserved).
 
 ```
 lhpc firewall                 # status: mode + Config/Boot/Live dimensions + foreign-table note
@@ -248,8 +225,7 @@ lhpc firewall --allow-endpoints "id1,id2"  # "" = no direct-access exceptions
 lhpc firewall --recommended                # safe preset; not combinable with the flags above
 ```
 
-- **Config/Boot/Live** are independent: the dashboard turns the firewall green ONLY with a
-  verified current-boot live check — declared-and-persistent alone is never green.
+- **Config/Boot/Live**: [the three status dimensions](firewall.md#the-three-status-dimensions-and-why-green-is-strict).
 - Also configurable in the web console: the controller row's **Firewall** panel on the Apps
   page (mode, per-listener
   direct-access exceptions, AP controls, and the copyable apply/check/reset commands).
@@ -269,7 +245,14 @@ after a slow QEMU cold boot outlived its retry window (`lhpc status <stack>` sho
 `lhpc build <target> [--yes]` — build a stack/component.
 
 ### test
-`lhpc test <target> [--tx] [--yes]` — run host tests, or a bounded TX test with `--tx` (real RF, dummy loads).
+`lhpc test <target> [--tx] [--yes]` — run host tests, or a bounded TX test with `--tx`
+([TX safety](operations.md#tx-safety)).
+
+An upstream's own suite, where a component declares one (openHop Core does), is a host test like
+any other: `lhpc test <component>`, the button on the stack's install section, or the tests
+checkbox in auto-install. It runs in the environment the build created, against the pinned
+upstream that box installed, so it tells the operator whether the pinned upstream itself works on
+that hardware ([policy](maintenance.md#running-on-a-pi)).
 
 ### update
 `lhpc update [<target>] [--source binary|pinned|dev|stable] [--upstream] [--yes]` — update a stack/component to
@@ -306,14 +289,14 @@ the selected source.
 RF log: what its radio heard and sent, one line per frame, kept across restarts. `daemon` needs
 `--band` (one file per band); no other stack takes one. `graywolf` shows the kiss TNC's log — its
 switch is `lhpc config kiss rf_log off`; every other stack's is `lhpc config <stack> rf_log
-on|off`, read at the writer's next start. `--clear` empties the file in place and removes its
-previous segment. `--decrypt` (meshtastic, meshcore, reticulum only — the others are plaintext
-already) prints the tail decoded with the keys on this box, one frame per line: the time, direction
-and signal, then the kind, the peer and the text; `[no-key …]`, `[undecryptable …]` or
-`[malformed …]` where that is the truth. `--follow` keeps printing new frames every 2 s until
-Ctrl-C. Output goes to the terminal only — nothing is written; piping it is the operator's
-choice. Exit 2 on a plaintext stack, 1 when the decoder cannot run (the stack is not built, a key
-store is unreadable). See [maintenance → RF logs](maintenance.md#rf-logs).
+on|off`. `--clear` empties the file in place and removes its previous segment. `--decrypt`
+(meshtastic, meshcore, reticulum only — the others are plaintext already) prints the tail decoded
+with the keys on this box, one frame per line: the time, direction and signal, then the kind, the
+peer and the text, or a `[no-key …]` / `[undecryptable …]` / `[malformed …]` tag. `--follow`
+keeps printing new frames every 2 s until Ctrl-C. Output goes to the terminal only — nothing is
+written; piping it is the operator's choice. Exit 2 on a plaintext stack, 1 when the decoder
+cannot run (the stack is not built, a key store is unreadable). The switch, retention and which
+keys open what: [maintenance → RF logs](maintenance.md#rf-logs).
 
 ---
 
@@ -351,7 +334,8 @@ lhpc webserver cert revoke <label> --confirm-label <label>
 lhpc webserver cert discard-export <label>
 ```
 
-- `expose` and `proxy` increase exposure: `lan`/remote need `--confirm-phrase enable-remote`; a public range (`0.0.0.0/0`), a `no-auth` mode, or an `http` listener need `enable-remote-danger`. Same phrases as the web UI.
+- `--port` on `proxy` is optional; `0` or absent = not proxied.
+- `expose` and `proxy` increase exposure and need a confirm phrase — the same escalation rules as the web UI ([access modes](webserver.md#access-modes)).
 - `configure`/`expose`/`proxy` write **intent** only — run `lhpc webserver apply` to activate.
 
 ---
@@ -368,9 +352,8 @@ password between bridge and firmware (default stack: meshcom).
   (secret → firmware → bridge → node). The secret value is never printed.
 - `disable` also requires `--confirm-phrase remove-auth` — it downgrades the link to
   unauthenticated.
-- Password auth is on by default for a **source** install. On the **binary** channel the
-  published firmware has no password, so meshcom runs open auth and every change here is refused
-  until you install from source.
+- Password auth is on by default for a **source** install; on the **binary** channel every
+  change here is refused until you install from source ([meshcom](stacks/meshcom.md)).
 - `abort` cancels a running apply; `recover` clears a blocking `unsafe` state left when a
   cancelled build could not be proven stopped — automatically once the session is proven gone, or
   as your explicit acknowledgement after inspecting `ps`.

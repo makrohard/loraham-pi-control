@@ -19,7 +19,9 @@ work lives in [backlog.md](backlog.md); the release-matrix procedure in
 
 On pushes to `main` and `dev`, on pull requests and on manual dispatch — Python 3.11/3.12/3.13, GitHub runners (`.github/workflows/ci.yml`):
 
-- `compileall lhpc` + `bash -n install.sh uninstall.sh bootstrap-deps.sh`
+- `compileall lhpc` + `bash -n install.sh uninstall.sh bootstrap-deps.sh` — `bootstrap-deps.sh`
+  is the rendered `lhpc deps --script` snapshot shipped in the repo root for the pre-clone
+  moment; regenerate it when dependencies change (CI shell-syntax-checks the committed copy)
 - `ruff check lhpc testlab` (the frozen ruleset) and `ruff check tests --select F,E9`
 - `pytest -q --cov=lhpc --cov-branch` — the **whole** suite with branch coverage measured and published (terminal summary, `coverage.xml` artifact per Python version, the total in the job summary); no `-m` lane, not under `setsid`
 - `bandit -q -r lhpc -lll` (high severity only) and `pip-audit . --strict` (dependency CVEs)
@@ -48,6 +50,40 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
   not tested — `adding-a-stack.md` when the manifest model changes, the operator docs when
   behaviour changes, all by hand.
 - Everything Pi-specific below only bites locally, never in CI.
+
+### Gates that still fetch at test time
+
+Some gates reach the network **while they run**, so a third-party outage reddens a release whose
+diff could not have caused it. The Pyodide boot gate once did exactly that (pulling `micropip`
+from jsDelivr mid-test); that fetch is fixed — `demo/vendor/` holds the `micropip` and
+`packaging` wheels and `boot.mjs` passes `packageCacheDir`, checked before the CDN — and
+acquisition steps across CI, testlab and Pages are retried. Three findings are deliberately left:
+
+- **The demo's dependency closure.** `micropip.install()` defaults to `deps=True`, so the lhpc
+  wheel's `flask`, `werkzeug` and `waitress` still resolve from PyPI, and `cryptography` and its
+  own dependencies from jsDelivr (measured: with only the two wheels cached and the network off,
+  the boot gate dies in `micropip.install` with *"Can't find a pure Python 3 wheel for:
+  'waitress<4,>=3', 'flask<4,>=3', 'werkzeug>=3.1'"*). Closing it means vendoring about a dozen
+  wheels, several of which must be the exact `cp312 pyodide_2024_0_wasm32` files named in
+  `pyodide-lock.json`, re-pinned whenever Pyodide moves. What holds the line: the gate is not
+  retried, so a failure is visible, and the deployed demo depends on the same CDN at run time.
+- **The testlab acceptance clones.** The chain fixture installs kiss, and the graywolf, meshcore
+  and meshcom cases install theirs, from live remotes with no transport retry inside the
+  product's `_clone`. The fix is baking those checkouts into the devcontainer image and serving
+  them through the `adopt_search_root` the lab already configures — not faking the sources,
+  because `test_kiss_rx_and_tx_round_trip` asserts real AX.25 bytes off a real TNC. What holds
+  the line: an image change plus a lab change, wanting its own round.
+- **The deploy-script full-install tests.** The six `slow` tests in
+  `tests/host/test_deploy_scripts.py` run `install.sh` as shipped — a venv plus `pip install -e`,
+  roughly eighteen cold PyPI installs per CI run, since the test overrides `HOME` and the
+  runner's pip cache is never exported. The fix is a session wheelhouse plus
+  `PIP_NO_INDEX`/`PIP_FIND_LINKS` in the test's environment, leaving `install.sh` byte-identical;
+  rewriting the script or adding `--system-site-packages` would let the identity assertion
+  resolve `lhpc` from the outer CI install instead of the deployed checkout. What holds the line:
+  the job already installs from PyPI in its own setup step.
+
+Findings in `loraham-images`, `lhpc-binaries` and `lhpc-release-bot` are owned by those
+repositories and recorded there, not here.
 
 ## Policy
 
@@ -79,8 +115,8 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
   `CHANGELOG.md` heading), so a `dev` deployment never reports the released number.
 - **A minor release (`0.X.0`) is a feature release.** It comes from `dev`: a new capability or a
   changed contract — a CLI verb, a manifest model change, a unit template, a changed refusal, a
-  stack added or removed. It runs the full [release test matrix](test-matrix.md) on the box, and
-  its result replaces the section in [live-test.md](live-test.md). The cycle's commits are
+  stack added or removed. It runs the full [release test matrix](test-matrix.md) on the box. The
+  cycle's commits are
   squashed into **one commit named by the version** (subject `<version>`, body = the changelog
   section), CI runs on that exact SHA, then `main` is fast-forwarded to it and `git tag -a
   v<version>` goes on it. That squash is the one moment `dev` is rewritten: after the tag `dev`
@@ -93,11 +129,8 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
   shapes** — the maintainer, and the release bot on its schedule.
   - **The maintainer's patch lands on `dev`** once it is release-ready, and `main` fast-forwards to
     the proven `dev` tip and is tagged there. Work that must not ship yet stays on a topic branch,
-    never on `dev`. There is no back-merge, because there is nothing to merge back: `main` stays an
-    ancestor of `dev`, so the release is a fast-forward and no pull request is created. This
-    replaced the older maintainer lane — a one-commit branch off `main` — which left a release
-    commit `dev` did not have and needed a back-merge to repair. A back-merge that is squashed
-    rather than merged does not repair it: it copies the content without the commit.
+    never on `dev`. `main` stays an ancestor of `dev`, so the release is a fast-forward and no
+    pull request is created.
   - **The bot keeps the `main`-based lane**, but only while `dev` has not diverged; the guard below
     defines that refusal.
 
@@ -107,19 +140,16 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
     unit template or the manifest model is a minor. Changing a **default** — what happens when
     the operator names nothing — is a patch, provided every explicit selector keeps its meaning
     and the release lane proves every stack on the new default.
-  - **One recorded exception (0.3.10).** Voice losing `artifact = true` changed what every
-    selector resolves to for that one source, which the line above calls a minor. It shipped as a
-    patch by maintainer decision: the pin and the branch tip were the same commit, so no box
-    installed anything different, and the release lane already proves both Voice variants through
-    the path the change introduces. The exception is the unchanged bytes plus lane proof, not the
-    selector rule itself.
+  - **One recorded exception (0.3.10):** Voice losing `artifact = true` shipped as a patch because
+    the pin and the branch tip were the same commit and the release lane already proved both Voice
+    variants — unchanged bytes plus lane proof, not a change to the selector rule.
   - The proof a patch needs is the proof its own change calls for. A **pin move** is proved by
     the binary builder's smoke and clean-runtime test plus the
     [release-verification lane](testlab.md#running-the-verification-lanes) — no box. That lane
     covers the stacks whose pins may move automatically; the daemon, RadioLib and the shared
     chat source are not among them, because the real daemon needs a radio to start. Anything
-    that changes behaviour on hardware is proved on the box and recorded in
-    [live-test.md](live-test.md).
+    that changes behaviour on hardware is proved on the box and recorded in the live-test
+    report under `docs/live-tests/`.
   - **A bot patch requires an undiverged `dev`.** The bot releases only while `dev` has not moved
     past `main`; afterwards `dev` fast-forwards to the new `main` and the branches are equal again.
     If `dev` already carries unreleased commits the bot does **not** release: it reports and leaves
@@ -134,9 +164,7 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
 - **The release bot** performs the pin patch — watch, repin, binaries, proof, release, image —
   and opens an issue instead of releasing when anything is not green. What it moves, what it only
   reports, and how to pause, retry or recover it:
-  [`lhpc-release-bot`](https://github.com/makrohard/lhpc-release-bot). It never moves the daemon,
-  RadioLib or the shared chat source: those need the radio hardware the lane does not have.
-  When the [release lane](testlab.md#running-the-verification-lanes) blames one stack by name, the
+  [`lhpc-release-bot`](https://github.com/makrohard/lhpc-release-bot). When the [release lane](testlab.md#running-the-verification-lanes) blames one stack by name, the
   bot holds that stack's pins itself and retries once, so the others keep releasing; the hold is
   lifted by hand, and the bot's own README owns that procedure.
 - **GitHub rulesets** (repository settings, not in the tree): `main` — no force push, no
@@ -179,8 +207,10 @@ CI job hard-fail on an orphaned or predating pin).
 
 Steps 1–5 are what the [release bot](https://github.com/makrohard/lhpc-release-bot) does on its
 schedule, with the release-verification lane in place of step 6 — for the pins it is allowed to
-move. The daemon, RadioLib and the shared chat source it only reports; those move by hand,
-through the recipe above.
+move ([above](#branches-and-releases)).
+
+**Graywolf is a fetched release, not a commit pin.** A version bump is the version in the
+manifest build step and its `build_marker` name plus a new sha256 in the fetch script's table.
 
 **Two pins are not commits.** The Meshtastic web client is named in the manifest by
 meshtastic/web release version and by the sha256 of that release's `build.tar`; the CLI is a pip
@@ -193,20 +223,13 @@ Either move has two consequences that a commit pin does not, and both are mandat
 - **Republish the meshtastic binary** (step 4). The artifact ships the client and the marker.
 - **Move the matching `build_inputs` entry** on the meshtastic component. Each entry names the
   build step that CONSUMES it (`command = "pip"`, `command = "meshtastic-web-assets.sh"`) and the
-  argv token it fills (`token = "meshtastic=={value}"`, or `"{value}"` for a bare version token),
-  and the loader requires that step to carry the rendered token exactly once — so moving one
-  without the other refuses to load, and a matching token in some other command does not count. Those values are recorded BESIDE the completion marker,
-  in a file of its own, which is what makes an already-built box read *Build required* — without
-  them the checkout never moves, so the box kept serving the OLD client and still called itself
-  built, and `lhpc status` called the artifact current. Beside and not inside: the marker's
-  content is compared byte for byte by every controller that ever shipped, so recording them in
-  it would make a republished artifact read *not built* on every box that had not upgraded yet,
-  and there would be no safe order for a release at all. It sits beside the BUILT ARTIFACT rather
-  than beside the source marker for a second reason: publish roots come from the installed
-  manifest, never from the artifact, so a member outside them is refused — a candidate that
-  widens its own roots proves nothing about released boxes, and an artifact shipped that way was
-  refused on all of them while installing perfectly in the lane. A box on the binary channel is told to
-  reinstall the artifact rather than to build, because `lhpc build` is refused there.
+  argv token it fills (`token = "meshtastic=={value}"`, or `"{value}"` for a bare version token);
+  the loader requires that step to carry the rendered token exactly once, so moving one without
+  the other refuses to load. The values are recorded beside the completion marker, in a file of
+  their own, next to the built artifact — that is what makes an already-built box read *Build
+  required* (a binary-channel box: reinstall the artifact). Beside, not inside: the marker's bytes
+  are compared by every controller that ever shipped, and publish roots come from the installed
+  manifest, so a member outside them is refused.
 
 Watch upstream **build systems**, not just releases: meshtasticd and `qemu-system-xtensa` are
 built from source, so a toolchain change upstream breaks the recipe silently. Builder internals:
@@ -224,23 +247,21 @@ built from source, so a toolchain change upstream breaks the recipe silently. Bu
 - **PKI has no auto-renewal** — server/client certs default to 825 days; rotate before expiry
   on long-lived deployments ([webserver.md](webserver.md)).
 - **Adding a third-party apt package** — audit before it reaches hardware:
-  1. `bash bootstrap-deps.sh --dry-run` on a fresh image (no root needed): it simulates the exact default
-     apt transaction (`apt-get install -s --no-install-recommends`), changes nothing, and exits
-     nonzero if the set cannot be resolved or would pull anything graphical/audio.
+  1. `bash bootstrap-deps.sh --dry-run` on a fresh image ([deps](cli.md#deps)).
   2. Recommends are how a cascade arrives (`git` → `openssh-client` → `xauth` → `libX11`), so
      the install runs `--no-install-recommends`; a package that genuinely needs one lists it
      explicitly, with a comment saying why.
   3. Check what a package *links* (`readelf -d`, `ldd`) against what it *declares*
      (`apt-cache show`) — one overdeclared `libsdl2` dependency is a 99-package desktop cascade.
-  4. Never installed, in any mode: a desktop environment, display manager, or X/Wayland server;
-     `--with-gui` installs GUI application libraries only.
+  4. Never installed, in any mode: a desktop environment, display manager, or X/Wayland server
+     ([`--with-gui`](cli.md#deps)).
 
 ## Security posture
 
 - The guarantees and where they are implemented: [architecture.md](architecture.md#safety-model);
   the firewall's own model: [firewall.md](firewall.md). Don't loosen either.
-- `meshtasticd 4403/9443` is the one unconditional `0.0.0.0` exposure with no upstream knob —
-  keep it firewall-contained.
+- The one unconditional `0.0.0.0` exposure and how it is contained:
+  [what actually listens](firewall.md#what-actually-listens).
 - HMAC apply/abort/recover is transactional and the token never leaks.
 - `bandit -lll` + `pip-audit` are the automated floor; everything else is review.
 
@@ -254,8 +275,9 @@ lands on the `/tmp` tmpfs (208 MB on a Zero 2W) and the full suite fills it (ENO
 tests skip — the markers themselves: [tests/README.md](../tests/README.md). Serialize heavy jobs — one full-suite/coverage run at a
 time (full `--cov` ~13 min, the suite's fast lane ~8 min on a Pi 5).
 
-**Memory on a 512 MB Zero 2W.** The three heavy stacks install from the binary channel by
-default; everything below is about source builds and runtime load.
+**Memory on a 512 MB Zero 2W.** The three heavy stacks default to the
+[binary channel](provenance.md#the-binary-channel); everything below is about source builds and
+runtime load.
 
 - The heavy builds are the from-source QEMU compile (~5 min on a Pi 5, ~68 min on a Zero 2W at
   `-j1`) and the MeshCom firmware (~26 min cold). The per-step build timeout defaults to 900 s;
@@ -279,8 +301,9 @@ default; everything below is about source builds and runtime load.
   console while the QEMU node boots. A Pi 5 has no such limit.
 - **Disk swapfile as OOM insurance.** Trixie's default swap is zram (compressed pages still in
   RAM), so a build can still be OOM-killed at `-j1`. When `MemTotal < ~600 MB`,
-  `bootstrap-deps.sh` provisions a disk-backed swapfile at lower priority than zram (its flags
-  are in the README), only when no sufficient disk swap exists and the filesystem has room.
+  `bootstrap-deps.sh` provisions a disk-backed swapfile (`/var/swap.lhpc`, 768 MB by default)
+  at lower priority than zram (`--no-swapfile`, `--swap-size`: [deps](cli.md#deps)), only when no
+  sufficient disk swap exists and the filesystem has room.
   Success means active AND declared
   (one canonical `fstab` line), so a re-run repairs whichever half is missing; a non-regular file
   at the swap path or a symlinked `/etc/fstab` is refused untouched, and if swap is required but
@@ -290,14 +313,11 @@ default; everything below is about source builds and runtime load.
   runs over Wi-Fi and enables a persistent journal so a drop is captured. `lhpc build` is
   idempotent, so a drop mid-build costs a reconnect, not the build.
 - **An interrupted `auto-install`** is recovered with `lhpc auto-install --status` / `--recover`
-  ([cli.md](cli.md)); never hand-edit the `state/auto-install*.json` markers.
+  ([cli.md](cli.md#auto-install)); never hand-edit the `state/auto-install*.json` markers.
 
-**LHPC CI runs LHPC's tests. An upstream's own suite is a host test, not a gate.** Where a
-component declares one — openHop Core does — it is reachable exactly like any other host test: the
-button on the stack's install section, `lhpc test <component>`, or the tests checkbox in
-auto-install. It runs in the environment the build created, against the pinned upstream that box
-installed, so it tells the operator whether the pinned upstream itself works on that hardware. A
-failure there is information; no external project's suite is a required check.
+**LHPC CI runs LHPC's tests. An upstream's own suite is a host test, not a gate.** A failure
+there is information; no external project's suite is a required check. How to run one:
+[test](cli.md#test).
 
 **Job logs.** Build/host-test logs are `logs/build-<comp>.log` (single-step) or
 `logs/build-<comp>-<N>.log` (multi-step); host tests `test-<comp>…`; run logs
@@ -325,16 +345,10 @@ appends to, so lhpc rolls it opportunistically — at stack start and when a pag
 the cap, keeping the last ~5 MB in `.1`. That is not a hard maximum; an unattended node grows the
 trace until the next start, read or Clear.
 
-**The viewer.** The log page shows an RF log as records — one row per frame with time, direction,
-RSSI/SNR, length, outcome, summary (the TNC2 text or meshtastic's `!from → !to`), hex and ascii —
-parsed server-side by `rflog.parse_line` and served by `GET /api/rflog/<writer>?job=…` (same
-registry authorization as the page). Sort by any column, filter, switch columns on and off; the
-raw file is one click away and is what the CLI prints. Below 700 px hex and ascii start off and a
-row tap expands them. Sort, filter and column choices live in the browser (`localStorage`), never
-on the box; the Decrypt toggle is never remembered — every page load starts with it off. A line the parser does not know is still a row with its raw text.
+The console's viewer for these logs: [operations](operations.md#operating-the-console).
 
 **Decrypt.** For the three stacks whose payloads are encrypted — meshtastic, meshcore,
-reticulum — the page carries a **Decrypt** toggle on its own row below the switcher, and the CLI
+reticulum — the log page carries a **Decrypt** toggle on its own row below the switcher, and the CLI
 `lhpc rflog <stack> --decrypt [--follow]`. Both run a small decoder script (`lhpc/data/rfdecode/`)
 under the *stack's own interpreter*, where its libraries and its keys already live: the managed
 Meshtastic CLI venv reads `state/meshtasticd/prefs/channels.proto` (channel PSKs; LongFast's is

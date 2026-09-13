@@ -2,17 +2,8 @@
 
 Position is a **global** setting, like the radio hardware. Meshtastic, MeshCom, MeshCore,
 Sideband and Graywolf all take it from the same place, so they can never disagree about where
-the box thinks it is. Per-stack settings only turn GPS **on or off**.
-
-```
-lhpc gps                                        # show (incl. what `auto` resolved to)
-lhpc gps --source auto                          # gpsd on this box if one runs, else no position (default)
-lhpc gps --source off                           # no position, explicitly
-lhpc gps --source gpsd                          # gpsd on this box
-lhpc gps --source gpsd --host 192.168.1.5       # gpsd on another box
-lhpc gps --source nmea --device /dev/ttyACM0    # a receiver directly, no gpsd (--baud optional)
-lhpc gps --source fixed --lat 51.4779 --lon -0.0015 --alt 45
-```
+the box thinks it is. Per-stack settings only turn GPS **on or off**. The commands:
+[cli](cli.md#gps).
 
 Coordinates are never echoed back: not by the CLI, the console, or any log.
 
@@ -28,8 +19,8 @@ Coordinates are never echoed back: not by the CLI, the console, or any log.
 
 ## Two settings, not one
 
-1. The **global source** above: where position comes from, for the whole box. Default
-   `auto`: use a gpsd listening on this box (`127.0.0.1:2947`), otherwise run without position.
+1. The **global source**: where position comes from, for the whole box. Default `auto`
+   ([below](#choosing-a-source)).
 2. A **per-stack switch**: whether that stack uses it. Default **on**.
 
 ```
@@ -39,8 +30,7 @@ lhpc config meshtastic use_gps off     # opt out again
 
 Out of the box: plug in a receiver, run gpsd, and every stack reports position. No gpsd?
 Everything still starts, without position, and the **Position (GPS)** card says so. In the
-console the card (LHPC row) sets the source and each stack's Settings carries its `use_gps`;
-CLI and console call the same code, so validation and refusals are identical.
+console the card (LHPC row) sets the source and each stack's Settings carries its `use_gps`.
 
 Fail-closed protection follows **explicit intent**: a source you *named* that cannot be used
 (a malformed `[gps]` section, an `nmea` device that cannot be resolved) refuses the start. The
@@ -82,17 +72,15 @@ sudo systemctl enable --now gpsd
 ```
 
 gpsd is not part of the default bootstrap; opt in with
-`./bootstrap-deps.sh --spi-mode <mode> --with-gps`. It is only needed when the source is a gpsd
-on **this** box; a remote gpsd, a directly read device or a fixed position install nothing, and
-`lhpc deps` mentions the package only when it is required.
+`./bootstrap-deps.sh --spi-mode <mode> --with-gps` ([deps](cli.md#deps)). It is only needed when
+the source is a gpsd on **this** box; a remote gpsd, a directly read device or a fixed position
+install nothing, and `lhpc deps` mentions the package only when it is required.
 
 For a USB receiver Debian's default `USBAUTO="true"` is usually enough. For a network GPS server,
 point gpsd at the device's **raw NMEA stream** in `/etc/default/gpsd`, e.g.
 `DEVICES="tcp://gps-server.lan:<raw-nmea-port>"`, then restart gpsd. That is not port 2947:
 2947 is gpsd's own protocol port, and a remote *gpsd* is reached with `--host` instead. lhpc only
-reads gpsd; if it cannot reach it, `lhpc doctor` says so and names the fix. When the source is
-`gpsd`, `lhpc doctor` also asks that gpsd whether it owns a receiver, because a gpsd that answers
-while owning nothing yields no position at all.
+reads gpsd; if it cannot reach it, `lhpc doctor` says so and names the fix.
 
 Wiring a receiver to a HAT's serial pins, `dialout` group membership and antenna placement are
 likewise outside lhpc. **Cold start takes minutes**: `gpsd reachable but no fix` is a warning,
@@ -147,9 +135,9 @@ fields); "flowing" additionally requires the fix flag set *and* populated coordi
 lone `$GPTXT` a u-blox emits in UBX mode is not navigation traffic and never admits a start. The
 marker reports `sentences`, `nav` and `fixes` so the three are distinguishable.
 
-Reaching the source is not the same as having one: gpsd accepts connections even when it owns
-no receiver (`devices: []`) and then sends nothing, so a feed stays **pre-admission** until
-validated navigation traffic arrives. A live feed refreshes its marker every few seconds as a
+gpsd accepts connections even when it owns no receiver (`devices: []`) and then sends nothing —
+when the source is `gpsd`, `lhpc doctor` asks it exactly that, one bounded query — so a feed
+stays **pre-admission** until validated navigation traffic arrives. A live feed refreshes its marker every few seconds as a
 heartbeat. A marker not refreshed within a minute, or not naming a live feed process, belongs to
 a previous run: it reads as `degraded` and cannot approve a new start.
 

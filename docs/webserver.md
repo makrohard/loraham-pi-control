@@ -7,10 +7,8 @@ Browser → HTTPS on <bind>:8443 → Nginx (TLS boundary, mTLS, source-CIDR gate
         → Waitress over a protected Unix socket → LHPC Flask app
 ```
 
-Nginx is the **only** TCP listener: the managed `lhpc-web.service` runs Waitress on a protected
-Unix socket and opens no TCP port at all ([serving model](deployment.md#serving-model)). A bare
-`lhpc web` (loopback TCP `:8770`) is a non-productive interactive mode: use it or the CLI to
-bootstrap before nginx is up.
+What listens and what does not is the [serving model](deployment.md#serving-model); use a bare
+`lhpc web` or the CLI to bootstrap before nginx is up.
 
 The Monitor view renders only **cached, proven** evidence (`state/webserver.json`): it never
 infers "active/exposed" from desired configuration and never probes the network during a page
@@ -82,10 +80,8 @@ Configuration views show a persistent red warning while `no-auth` remote is acti
 exposure is not supported: IPv6 bind/CIDR values are rejected; `::1` is honoured for local
 access only.
 
-**The managed firewall gates exposure.** With it in use, `lhpc webserver apply` is refused while
-the firewall is unapplied (*Firewall changes pending*, with the command to run; a console notice
-links to *Firewall → Apply & commands* until it is verified), and at boot nginx binds loopback-only
-until a current-boot live firewall receipt proves the rules are there. See [firewall](firewall.md).
+With the managed firewall in use, exposure — `apply` and the boot-time bind alike — is gated on
+its live receipt ([the three status dimensions](firewall.md#the-three-status-dimensions-and-why-green-is-strict)).
 
 ## Remote exposure runbook
 
@@ -95,9 +91,8 @@ range and `192.168.0.10` with the Pi's LAN address. `10.42.0.1` / `10.42.0.0/24`
 [access point](wifi-access-point.md). **Where that AP exists, include it** — it is what such a box
 raises by itself when it cannot find a network it knows, so it is the only way back into one that
 has left the bench, and leaving it out makes the console answer `403` exactly when it is the sole
-route in. The Lite image creates `lhpc-ap` on first boot; a Desktop or hand-built box has one only
-if you made it, and on a box without it these two values do not apply. Command details:
-[CLI](cli.md).
+route in. On a box without it these two values do not apply. Command details:
+[CLI](cli.md#webserver).
 
 1. **Name every address in the server certificate.** `install.sh` created the PKI with
    loopback SANs only. `configure` REPLACES each list, so repeat the loopback entries, then
@@ -113,11 +108,9 @@ if you made it, and on a box without it these two values do not apply. Command d
    configuration as applied. Client credentials already imported on a phone or laptop keep
    working, because only `init` recreates the CAs. **Never re-run `init` on a box with a PKI**:
    it voids every client certificate you have issued.
-2. **Turn on remote access.** `--cidr` is repeatable and REPLACES the allowed-source list — so a
-   later `expose` with a single `--cidr` silently drops every range you are not repeating,
-   `10.42.0.0/24` included, and the loss shows up only when you are away from the LAN and the
-   Access Point is the sole way in. List every range you want, every time. The default access mode
-   already requires a client cert off-loopback:
+2. **Turn on remote access.** `--cidr` is repeatable and REPLACES the allowed-source list: list
+   every range you want, every time. The default access mode already requires a client cert
+   off-loopback:
    ```
    lhpc webserver expose --cidr 192.168.0.0/24 --cidr 10.42.0.0/24 --confirm-phrase enable-remote
    lhpc webserver apply
@@ -127,7 +120,8 @@ if you made it, and on a box without it these two values do not apply. Command d
    and restarts `lhpc-nginx` when needed: directly from an operator shell, or from the console
    through the managed restart watcher (`lhpc-nginx-restart.path`; the console itself cannot
    command systemd, it writes a request marker that systemd consumes). `apply` reports success
-   only after the listeners match.
+   only after the listeners match; if the console does not come back, `systemctl --user restart
+   lhpc-nginx lhpc-web` from an operator shell.
 3. **Issue a device certificate** and write its bundle to a file:
    ```
    lhpc webserver cert issue lhpc-laptop                       # prints a ONE-TIME passphrase; record it
@@ -151,11 +145,9 @@ if you made it, and on a box without it these two values do not apply. Command d
 5. **Import both in the remote browser**: the CA clears the trust warning, the `.p12` supplies
    the client credential (you are prompted for the one-time passphrase). Per-platform steps
    below under [Install the client certificate in a browser](#install-the-client-certificate-in-a-browser).
-6. **Firewall.** On a box with the access point, enable its rules first — in the Firewall panel,
-   or `lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.42.0.0/24` — and do it *before* the
-   radio becomes an AP: without them a joining phone never gets a DHCP lease, so the console is
-   unreachable over the AP whatever the allow-list says. Then apply the managed firewall
-   ([firewall](firewall.md)), or open `8443` in your own; LHPC never edits your firewall.
+6. **Firewall.** On a box with the access point, enable its AP rules first
+   ([scenarios](firewall.md#scenarios)). Then apply the managed firewall
+   ([firewall](firewall.md#the-managed-firewall-one-command)), or open `8443` in your own.
 7. **Prove it:** `lhpc webserver verify`, then browse to `https://192.168.0.10:8443/` from the
    remote machine and pick the `lhpc-laptop` certificate when prompted. Afterwards discard the
    bundle on the Pi: `lhpc webserver cert discard-export lhpc-laptop` (the certificate stays).
@@ -171,10 +163,11 @@ elevated cases; plain `enable-remote` is refused.
 
 ## Stack web-UI proxies
 
-Several stacks ship their **own** web UIs; some of those ports bind all interfaces, and their
-built-in protection ranges from none (meshtasticd `:9443`, MeshCom `:18083`) to the app's own
-login (graywolf). `lhpc` fronts each one with a dedicated nginx listener carrying the same mTLS +
-source-CIDR gate as the console, so you never rely on the raw port:
+Several stacks ship their **own** web UIs; bind and built-in protection vary from loopback with a
+login (graywolf) to all interfaces with none (meshtasticd `:9443`) —
+[what actually listens](firewall.md#what-actually-listens). `lhpc` fronts each one with a
+dedicated nginx listener carrying the same mTLS + source-CIDR gate as the console, so you never
+rely on the raw port:
 
 ```
 lhpc webserver proxy meshtastic --mode lan --port 8447 --access-mode local-open-remote-auth \
@@ -186,7 +179,7 @@ lhpc webserver apply
   ranges pass) or `public` (`0.0.0.0/0`, elevated). Any non-`local` mode needs
   `--confirm-phrase enable-remote`; `public`, a `no-auth` `--access-mode`, or an `http`
   `--scheme` need `enable-remote-danger`.
-- `--port` is **required**: a page with no port is not proxied. The console suggests a stable
+- `--port` is optional; `0` or absent = not proxied. The console suggests a stable
   per-page default (console port + 1 + the page's position: the stacks' first pages sorted by
   id, then further pages; on a fresh box graywolf `8444`, meshcom `8445`, meshcore `8446`,
   meshtastic `8447`, reticulum `8448`, skipping ports already saved); any free port ≥ 1024
@@ -227,9 +220,13 @@ Two independent CAs (private keys never leave `config/tls/`, 0600):
   SAN). `tls-renew` stays under the same CA.
 - **Client-auth CA** signs client/device certificates and the CRL.
 
+Server and client certificates default to **825 days** (`server_cert_days` / `client_cert_days`
+in `config/local.toml [webserver]`); there is **no auto-renewal** — rotate before expiry on a
+long-lived box (`tls-renew`, `cert reissue`).
+
 ```
-lhpc webserver init --dns pi.local --ip 192.168.0.10     # once; --confirm-recreate to redo (voids every client cert)
-lhpc webserver cert issue lhpc-laptop                    # one-time .p12 passphrase, shown once, never stored
+lhpc webserver init --dns pi.local --ip 192.168.0.10     # once; --confirm-recreate to redo
+lhpc webserver cert issue lhpc-laptop                    # one-time .p12 passphrase
 lhpc webserver cert reissue lhpc-laptop                  # rotate + new passphrase
 lhpc webserver cert list
 lhpc webserver cert export lhpc-laptop <path> [--force]  # write the .p12 (0600; no overwrite without --force)
@@ -287,17 +284,14 @@ lhpc webserver status     # renders the cached evidence (read-only)
 The checklist covers config validity, dependency presence, the Waitress socket, `nginx -t` and
 PKI presence. A live listener, the presented certificate, mTLS behaviour and revocation
 enforcement are proven only on a box with a real proxy and real client material
-([live tests](live-test.md)); without that proof, remote exposure is reported as **not proven
+(the live tests on the reference box); without that proof, remote exposure is reported as **not proven
 active**.
 
-**Verify activates nothing and records no activation.** Beside the desired config, the evidence
-file keeps an *applied snapshot*: the console's and every enabled proxy's
-bind/port/scheme/access-mode/CIDRs as they were when nginx last **successfully loaded them**.
-That is what the security pills colour a LIVE listener with, never a freshly saved policy nginx
-has not seen. Narrowing the bind, adding client authentication or tightening the allow-list all
-read unchanged until you `apply`; a saved port change keeps the old port represented, because
-that is where the socket still is. A live exposed listener with no applied snapshot reads red
-("policy unknown") until one `apply` records it; a loopback listener is unaffected.
+**Verify activates nothing.** Beside the desired config, the evidence file keeps an *applied
+snapshot* — the console's and every enabled proxy's bind/port/scheme/access-mode/CIDRs as nginx
+last **successfully loaded them** — and that is what the security pills colour a live listener
+with, never a saved policy nginx has not seen; a live exposed listener with no applied snapshot
+reads red ("policy unknown") until one `apply` records it.
 
 ## Applying changes and recovery
 
@@ -323,7 +317,5 @@ listener has ceased. If a box comes up loopback-only (firewall gate at boot), re
   in operator context. The web service never installs packages. After any manual `apt install
   nginx`, disable the root service as in [first-time bootstrap](#first-time-bootstrap).
 - The rootless `lhpc-nginx.service` user unit is one of the canonical managed units
-  ([deployment](deployment.md#run-it-under-systemd)). `start-service` is the only path that
-  starts it — it is enabled at install but does not run until that command has generated and
-  validated its config (a `ConditionPathExists` gates it); runtime config changes reload it via
-  `nginx -s reload`, never `systemctl`, from the web process.
+  ([deployment](deployment.md#run-it-under-systemd)); a `ConditionPathExists` on its generated
+  config keeps it from running until `start-service` has produced one.

@@ -1,21 +1,21 @@
 # Live tests
 
 The newest completed live run on the reference box, and nothing else. Measured values only. Which
-releases run what is defined in [maintenance.md](maintenance.md#branches-and-releases); the
-full-matrix procedure is [test-matrix.md](test-matrix.md). CI and the [testlab](testlab.md) prove
+releases run what is defined in [maintenance.md](../maintenance.md#branches-and-releases); the
+full-matrix procedure is [test-matrix.md](../test-matrix.md). CI and the [testlab](../testlab.md) prove
 the code and the console.
 
 Earlier runs — the 0.3.12→0.3.14 release-automation campaign, the 0.3.9 added-files run, the
 0.3.0 and 0.2.10 release matrices and the 2026-09-05 on-air silicon test other pages cite for
 their measured numbers — live in this file's git history:
-`git log --follow -p -- docs/live-test.md`.
+`git log --follow -p -- docs/live-tests/live-test.md`.
 
 ## 0.5.0 — the scoped Reticulum run, 2026-09-12
 
 A **scoped** matrix on the maintainer's waiver: this cycle's change is confined to the reticulum
 stack plus two console surfaces, so row 6 runs from zero and the rest are recorded *not re-run*,
 footnoted to the 0.4.0 full matrix of 2026-09-11 — which lives in this file's git history, the
-convention the [fast lane](test-matrix.md#fast-lane) already uses for a waived row.
+convention the [fast lane](../test-matrix.md#fast-lane) already uses for a waived row.
 
 Controller `8d983ac` on `feature/reticulum-client-and-interfaces`. Box `lhpc-e293`, Pi Zero 2 W
 (415 MB), Debian 13 Lite, aarch64, `lhpc hardware` = Uputronics dual. Console left running.
@@ -80,8 +80,8 @@ file's git history) and this cycle changes nothing they cover.
 ## 0.4.0 — the full release matrix, 2026-09-11
 
 Nine of the twelve rows run on the reference box, plus the cross-cutting checks and the four rows
-[0.3.14 left owed](#not-run-and-not-claimed). Three rows are the
-[fast lane](test-matrix.md#fast-lane) waiver.
+0.3.14 left owed. Three rows are the
+[fast lane](../test-matrix.md#fast-lane) waiver.
 
 The controller under test is **v0.3.16 `f0509102d`**. 0.4.0 adds to it only the version scalars and
 this document, so every row below measures the code 0.4.0 ships. The box was taken there by the

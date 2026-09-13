@@ -3,11 +3,8 @@
 When SSH (port 22) is the only thing open on the box and you do **not** want to expose the
 console or any stack UI to the network, an SSH tunnel brings each local-only port to your own
 machine. Nothing on the box changes: the console stays on `127.0.0.1:8443`, every stack UI stays on
-its loopback port (meshtasticd excepted — see the notes), and remote exposure stays off. The tunnel
-arrives on the box as a loopback client, which under the default access mode the console serves
-**without a client certificate** ([webserver](webserver.md)), so **your SSH login is the
-authentication**. Under `auth-everywhere` a certificate is required on loopback as well, tunnel
-included. Use SSH keys, not passwords:
+its loopback port (meshtasticd excepted — see the notes), and remote exposure stays off. Use SSH
+keys, not passwords:
 
 ```bash
 ssh-copy-id lhpc@<host>        # once; then `ssh lhpc@<host>` needs no password
@@ -15,8 +12,8 @@ ssh-copy-id lhpc@<host>        # once; then `ssh lhpc@<host>` needs no password
 
 `<host>` is the box's hostname (`<hostname>.local` over mDNS on the same network) or its
 address; `lhpc` is the operator user that runs lhpc. The console reachable *without* a tunnel is
-the mTLS path in the [remote exposure runbook](webserver.md); a tunnel and mTLS coexist, and unless
-you chose `auth-everywhere` the tunnel needs no certificate.
+the mTLS path in the [remote exposure runbook](webserver.md#remote-exposure-runbook); a tunnel and
+mTLS coexist.
 
 ## Contents
 
@@ -31,8 +28,12 @@ you chose `auth-everywhere` the tunnel needs no certificate.
 ssh -N -L 8443:127.0.0.1:8443 lhpc@<host>
 ```
 
-Then open `https://127.0.0.1:8443/` on your machine. The certificate warning is the box's server certificate, signed by its own server TLS CA, expected on loopback. `-N` opens no shell; end the tunnel with
-Ctrl+C. Add `-o ServerAliveInterval=30` for a tunnel that lives for hours.
+Then open `https://127.0.0.1:8443/` on your machine. The tunnel arrives on the box as a loopback
+client, which the default [access mode](webserver.md#access-modes) serves **without a client
+certificate** — your SSH login is the authentication; under `auth-everywhere` a certificate is
+required on loopback too, tunnel included. The certificate warning is the box's server
+certificate, signed by its own server TLS CA, expected on loopback. `-N` opens no shell; end the
+tunnel with Ctrl+C. Add `-o ServerAliveInterval=30` for a tunnel that lives for hours.
 
 ## One tunnel per stack
 
@@ -43,7 +44,7 @@ port instead; forward that port too, or reach the proxy directly.)
 
 | stack | on the box | tunnel | then, on your machine |
 |---|---|---|---|
-| LHPC console | `127.0.0.1:8443` (HTTPS) | `ssh -N -L 8443:127.0.0.1:8443 lhpc@<host>` | `https://127.0.0.1:8443/` — the tunnel arrives as loopback, so the default access mode asks for no certificate (`auth-everywhere` does, on loopback too) |
+| LHPC console | `127.0.0.1:8443` (HTTPS) | `ssh -N -L 8443:127.0.0.1:8443 lhpc@<host>` | `https://127.0.0.1:8443/` |
 | Graywolf APRS | web UI `127.0.0.1:8080` | `ssh -N -L 8080:127.0.0.1:8080 lhpc@<host>` | `http://127.0.0.1:8080/` (admin login: the stack page's Password section) |
 | MeshCore web UI (an optional component, started from the stack's card or with `lhpc stack start meshcore-webui`) | `127.0.0.1:8788` | `ssh -N -L 8788:127.0.0.1:8788 lhpc@<host>` | `http://127.0.0.1:8788/` |
 | MeshCore repeater dashboard | `127.0.0.1:8000` | `ssh -N -L 8000:127.0.0.1:8000 lhpc@<host>` | `http://127.0.0.1:8000/` (password: the stack page) |
@@ -79,5 +80,5 @@ the other forwards keep working.
 
 - The console's proxies for the stack UIs (the Webserver page) are for the mTLS path; through a
   tunnel you reach each UI directly on its own port, proxy or not.
-- Only ports bound to `127.0.0.1` need a tunnel. meshtasticd's `4403`/`9443` bind to all
-  interfaces unless the managed firewall closes them ([firewall](firewall.md)).
+- Only ports bound to `127.0.0.1` need a tunnel; meshtasticd's are the exception
+  ([what actually listens](firewall.md#what-actually-listens)).

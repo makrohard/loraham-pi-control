@@ -7,13 +7,13 @@ sockets its clients use. It never transmits on its own.
 | | |
 |---|---|
 | Components | `loraham-daemon` (main) · `radiolib` — the RadioLib static library, a build-time dependency (`build_requires`), never started |
-| Source / pin | `src/loraham-daemon` ← `makrohard/LoRaHAM_Daemon` `v0.9.0` (`ff3c26a4…`) · `src/RadioLib` ← `jgromes/RadioLib` `7.7.1-57-g187ef247` |
+| Source / pin | `src/loraham-daemon` ← `makrohard/LoRaHAM_Daemon` · `src/RadioLib` ← `jgromes/RadioLib` |
 | Run | `loraham_daemon/loraham_daemon --radio <band> --hw <preset> --tx-mode managed\|direct --cad-monitor off\|on --cad-rssi <dBm>` — one process per band; lhpc computes every value at spawn |
 | Sockets (per band) | `/tmp/loraconf<band>.sock` (CONF / status), `/tmp/lora<band>f.sock` (framed), `/tmp/lora<band>.sock` (raw) — `LORAHAM_SOCKET_DIR=/tmp` |
 | State | `<runtime>/state/loraham` (mode 0700, `LORAHAM_RUNTIME_DIR`) — the lock files, including `spi0.lock` |
 | Hardware | `/dev/spidev0.0` + GPIO (`/dev/gpiochip0`); the `--hw` preset comes from `lhpc hardware` |
 | Resources | `spi.bus.0` cooperative · `loraham.radio.433` / `.868` provider · `loraham.daemon-socket.433` / `.868` provider |
-| Install channel | **binary** by default (`lhpc install daemon`: a sha256-verified prebuilt that replaces the daemon + RadioLib builds); `--source pinned\|dev\|stable` clones the sources and `lhpc build daemon` runs `loraham_daemon/build.sh` (needs `cmake`, `liblgpio-dev`, `build-essential`). Policy: [provenance](../provenance.md); operator consequences: [operations](../operations.md) |
+| Install channel | **binary** by default (`lhpc install daemon`: a prebuilt that replaces the daemon + RadioLib builds); `--source pinned\|dev\|stable` clones the sources and `lhpc build daemon` runs `loraham_daemon/build.sh` (needs `cmake`, `liblgpio-dev`, `build-essential`). Policy: [provenance](../provenance.md); operator consequences: [operations](../operations.md) |
 
 ## Contents
 
@@ -26,10 +26,10 @@ sockets its clients use. It never transmits on its own.
 ## Settings
 
 **Hardware setup** — `lhpc hardware <setup>`, or the daemon stack's *Hardware* section in the
-console (with a *Detect* probe). It fixes the served band(s) and the `--hw` preset per band:
-`loraham` (433 + 868), `uputronics` (CE0 433 + CE1 868; `uputronics-x` = crossed),
-`uputronics-433` / `-868`, `waveshare-433` / `-868` (SX1262). A fresh install is `unset` and the
-daemon refuses to start until one is chosen; the catalog is in [cli](../cli.md).
+console. It fixes the served band(s) and the `--hw` preset per band; the catalog and the *Detect*
+probe are in [cli](../cli.md#hardware). Only legit board combinations are offered, and a
+single-radio setup blocks the stacks that need the absent band (`meshcore` needs 868). A fresh
+install is `unset` and the daemon refuses to start until one is chosen.
 
 **Stack params** — `lhpc config daemon <param> <value>` or the Settings panel:
 

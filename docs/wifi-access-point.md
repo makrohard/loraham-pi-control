@@ -4,7 +4,7 @@ A box has one Wi-Fi radio and it does one job at a time: it is either its **own 
 (a phone or laptop joins it and reaches the console at `10.42.0.1`) or a **client** of your
 WLAN. The NetworkManager profile `lhpc-ap` is the managed AP, and the console's **Network**
 panel switches between the two with the AP as the automatic way home. Reaching the console
-once you are on the network is the [remote exposure runbook](webserver.md).
+once you are on the network is the [remote exposure runbook](webserver.md#remote-exposure-runbook).
 
 ## Contents
 
@@ -78,11 +78,9 @@ panel and its semantics above apply. To remove the AP: `sudo nmcli connection de
 
 ## Reaching the console over the AP
 
-The AP only puts the phone on the box's network. Order matters, certificates first and exposure
-last: follow the [remote exposure runbook](webserver.md) with `10.42.0.1` as a server-certificate
-SAN and `10.42.0.0/24` among the allowed CIDRs, issue the phone's client certificate before
-exposing, and with the managed firewall enable its AP rules **before** the radio becomes an AP
-([firewall](firewall.md)). Then browse to
+The AP only puts the phone on the box's network; exposing the console to it — certificate, SANs,
+allow-list and the firewall's AP rules — is the
+[remote exposure runbook](webserver.md#remote-exposure-runbook). Then browse to
 `https://10.42.0.1:8443` and present the certificate.
 
 ## Troubleshooting

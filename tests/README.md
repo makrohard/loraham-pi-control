@@ -8,10 +8,7 @@ a sentence or an equivalent JavaScript rewrite changed.
 | layer | proves | where |
 |---|---|---|
 | ordinary tests | LHPC's own behaviour, against injected fakes. No radio, no root, no network, no browser. | this directory |
-| testlab **unit** | the simulator itself: provider, runner, scenarios, fake systemd/NetworkManager, its own safety. | `testlab/tests/unit` |
-| testlab **acceptance** | the real `lhpc` executable and the real server, end to end against a simulated host. | `testlab/tests/acceptance` |
-| testlab **browser** | the console in real headless Chromium: JavaScript, DOM, navigation, layout. | `testlab/tests/browser` |
-| testlab **release** | every stack a pin release may move: installed on its default channel, built, started, and proved to BE the candidate manifest's commits. | `testlab/tests/release` |
+| testlab, four lanes | the simulator itself; the real executable and server over a simulated host; the console in real headless Chromium; a release's evidence — [docs/testlab.md](../docs/testlab.md#running-the-verification-lanes). | `testlab/tests/` |
 | meshcore host tests | LHPC's adapter against the pinned real openHop API. | `lhpc/data/meshcore_host` |
 | release / live matrix | a real Pi, kernel and radios. Nothing below replaces it. | [docs/test-matrix.md](../docs/test-matrix.md) |
 
@@ -98,29 +95,15 @@ failure the console script used to guard against is caught there rather than by 
 
 ```sh
 python -m pytest -q -p no:cacheprovider tests/web/test_webserver.py   # one file
-python -m pytest -q -p no:cacheprovider -m contract                   # the readable core (~12 s)
+python -m pytest -q -p no:cacheprovider -m contract                   # the readable core
 python -m pytest -q -p no:cacheprovider -m safety                     # the invariant set
 python -m pytest -q -p no:cacheprovider --basetemp="$HOME/pt-lhpc"    # everything
 rm -rf -- "$HOME/pt-lhpc"
 ```
 
-Always give the full suite a dedicated basetemp and delete exactly that path. On a Pi Zero 2 W the
-default lands on a 208 MB tmpfs and the run fills it.
+Always give the full suite a dedicated basetemp and delete exactly that path — why:
+[maintenance](../docs/maintenance.md#running-on-a-pi).
 
-CI measures branch coverage and publishes it; it does not gate on a threshold. A drop is judged in
-review.
-
-The lab lanes are off unless asked for:
-
-```sh
-LHPC_ACCEPTANCE=1     pytest testlab/tests/acceptance -q
-LHPC_BROWSER=1        pytest testlab/tests/browser -q   # pip install -e ./testlab[browser]
-LHPC_RELEASE_VERIFY=1 pytest testlab/tests/release -q -x   # installs and builds every stack; -x is required
-```
-
-Chromium is needed only for that browser lane. Never install it to run `tests/`, and never on a
+The lab lanes are opt-in; their commands: [docs/testlab.md](../docs/testlab.md#running-the-verification-lanes).
+Chromium is needed only for the browser lane. Never install it to run `tests/`, and never on a
 release box.
-
-The release lane runs with `-x` wherever a release reads it: its cases chain over one radio pair,
-so after the first failure nothing later is judged in a state that means anything — and the
-automated release freezes a stack from that JUnit.

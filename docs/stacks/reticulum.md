@@ -7,13 +7,13 @@ packet. The driver is [loraham-rns-interface](https://github.com/makrohard/lorah
 | | |
 |---|---|
 | Components | `rns` (main — owns the radio and the shared instance; runs `loraham-rns-node`) · `rns-lora-interface` (library: the direct-SPI driver, RNS interface and service runner; a build-time dependency) · `nomadnet` (optional, interactive) · `lxmd` (optional; propagation **off** by default) · `sideband` (optional desktop GUI, `--with-gui` only) · `meshchat` (optional browser GUI) |
-| Source / pin | `src/reticulum` ← `markqvist/Reticulum` `1.5.2` · `src/loraham-rns-interface` ← `makrohard/loraham-rns-interface` `3fef542` · `src/nomadnet` `ad10301` · `src/lxmf` `795fdaa` · `src/sideband` `2.1.0` (installed as `sbapp==1.9.2` from PyPI — a source install drops every `.kv` layout) · `src/meshchat` ← `liamcottle/reticulum-meshchat` `v2.4.0` @ `45f89a8` |
+| Source / pin | `src/reticulum` ← `markqvist/Reticulum` · `src/loraham-rns-interface` ← `makrohard/loraham-rns-interface` · `src/nomadnet` · `src/lxmf` · `src/sideband` (installed as `sbapp==1.9.2` from PyPI — a source install drops every `.kv` layout) · `src/meshchat` ← `liamcottle/reticulum-meshchat` |
 | Build | a venv with `--system-site-packages` (the SPI/GPIO bindings come from the `python3-libgpiod` + `python3-spidev` system packages, so the node needs no compiler — what makes it installable on a Pi Zero); Reticulum + the driver; the interface copied to `state/reticulum/interfaces/LoRaSPIInterface.py`; an import probe before the marker |
 | Run | `.venv/bin/loraham-rns-node --config <runtime>/state/reticulum --interface LoRa --ready-file <runtime>/state/reticulum/ready --client-allow <allow-list>` — it exits rather than staying up without a radio |
 | Endpoints | shared instance `127.0.0.1:37428` · instance control `:37429` · client access `:4242` · optional outbound TCP to an internet peer (no listener) · MeshChat `127.0.0.1:8790` (loopback, reached through the LHPC proxy) · readiness = the `ready` file, written only after the node owns the instance **and** the radio is online |
 | Config | `<runtime>/state/reticulum/config` (0400) from `lhpc/data/bases/reticulum.conf`, regenerated on every start — edit it through lhpc. Read-only even to its owner, so a client that offers to edit interfaces cannot; lhpc rewrites it by renaming a fresh file over it, which needs permission on the directory, not the file |
 | Resources | `loraham.radio.868` + `.433` exclusive · `spi.bus.0` cooperative · `spi.bus.0.unlocked` exclusive · `tcp.port.37428` / `.37429` / `.4242` / `.8790` exclusive |
-| System | `/dev/spidev0.0` with `dtoverlay=spi0-0cs` (`bootstrap-deps.sh --spi-mode soft-cs`); `spi` + `gpio` groups; `python3-libgpiod`, `python3-spidev` |
+| System | `/dev/spidev0.0` (`dtoverlay=spi0-0cs`); `spi` + `gpio` groups; `python3-libgpiod`, `python3-spidev` |
 | Install channel | source only |
 
 ## Contents
@@ -39,7 +39,7 @@ packet. The driver is [loraham-rns-interface](https://github.com/makrohard/lorah
 | `airtime_limit_short` / `airtime_limit_long` | 868: 5 % (15 s) / 1 % (1 h) · 433: 10 % / 10 % | advanced |
 | `rns_allow` | `127.0.0.1` | client-access allow-list; drives the managed firewall |
 | `enable_transport` | `No` | relay OTHER nodes' traffic between this node's interfaces — see [Internet and transport](#internet-and-transport) |
-| `rf_log` | on | RF log (`logs/rf-reticulum.log`) at the LoRa interface: every packet received (RSSI/SNR) or sent (`ok` on the radio's TX-done; `unconfirmed` when the window elapsed — the airtime was charged and it may have gone out; a duty-dropped packet writes nothing). Raw Reticulum packets, i.e. ciphertext — sizes, timing and signal, not contents. With transport on, relayed packets appear too. Read at the next start. The page's Decrypt toggle and `lhpc rflog reticulum --decrypt` unmask the IFAC, verify announces (with the LXMF display name), read path requests and open single packets to this box's MeshChat destination — link traffic and relayed packets stay closed by design — in memory only, see [maintenance](../maintenance.md#rf-logs) |
+| `rf_log` | on | RF log (`logs/rf-reticulum.log`) at the LoRa interface: every packet received (RSSI/SNR) or sent (`ok` on the radio's TX-done; `unconfirmed` when the window elapsed — the airtime was charged and it may have gone out; a duty-dropped packet writes nothing). Raw Reticulum packets, i.e. ciphertext — sizes, timing and signal, not contents. With transport on, relayed packets appear too. Read at the next start. Decrypt uses the LoRa interface's IFAC in `state/reticulum/config` and MeshChat's identity in `state/meshchat/` — [maintenance](../maintenance.md#rf-logs) |
 | `lora_announce_relay` | `internal` | whether the public mesh's announces may go out over the radio; `gateway` relays them. Advanced, and only read while transport is on |
 | `internet_enabled` | `no` | the optional `[[Internet]]` TCP interface |
 | `internet_host` / `internet_port` | unset | its endpoint; both are required once it is enabled |
@@ -100,7 +100,7 @@ not enforcement. From another machine use an [SSH tunnel](../ssh-tunnel.md); add
 authenticate the interface itself.
 
 **Sideband** is best run off the Pi (~277 MB resident, needs a display), pointed at the
-client-access port. On-box it is installed only where `bootstrap-deps.sh --with-gui` has run —
+client-access port. On-box it is installed only where `--with-gui` has run ([cli](../cli.md#deps)) —
 gated by `python3-dev` (`sbapp` pulls `materialyoucolor`, a C++ extension without an aarch64 wheel)
 and `libx11-dev` (the `--with-gui` marker; Kivy vendors its own SDL2); without `--with-gui` it is
 skipped, never a build error.
@@ -149,8 +149,7 @@ Two switches, both **off** by default, and deliberately independent — an inter
 of yours: set `internet_host` and `internet_port`, then enable it. It opens no listener and needs
 no firewall rule.
 
-That order matters **from the CLI**, where `lhpc config` sets one parameter per call
-([cli](../cli.md)), so enabling first would be a save with no endpoint yet:
+From the CLI ([config](../cli.md#config)) set the endpoint before enabling it:
 
 ```bash
 lhpc config reticulum internet_host <host>
@@ -159,7 +158,6 @@ lhpc config reticulum internet_enabled yes
 lhpc stack restart rns --yes
 ```
 
-The stack's Settings page saves the whole form in one submission, so there the order is free.
 Enabling it without a complete endpoint is refused when you save it — RNS builds
 the interface at start and would fail there, where an unreachable target (which the node tolerates,
 `panic_on_interface_error = No`) looks nothing like a malformed one. Once connected, your
@@ -180,25 +178,18 @@ drops every packet is a MISMATCH, two peers whose pair differs, and the symptom 
 both ends. lhpc refuses to generate the config rather than start a half-configured link, and the
 start is blocked with that message.
 
-**Interface modes are LHPC's** — with one exception. The client door is `gateway` and the
-internet side is `boundary` with `recursive_prs`; neither is a setting. The radio's mode **is**
-one, `lora_announce_relay`, because it is a policy question rather than a correctness one:
+**Interface modes are LHPC's** — the client door is `gateway`, the internet side `boundary`
+with `recursive_prs` (which keeps the radio discoverable from the internet). The one setting is
+the radio's own mode, `lora_announce_relay`, read only while transport is on:
 
 | `lora_announce_relay` | what goes out over the radio |
 |---|---|
-| `internal` *(default)* | your own announces, your clients', and those heard on the radio — **not** the public mesh's |
+| `internal` *(default)* | your own announces, your clients', and those heard on the radio — **not** the public mesh's; paths to internet nodes still resolve on demand |
 | `gateway` | those too, so radio peers discover internet-side nodes by themselves |
 
-Both relay traffic in both directions and both answer path requests in both directions; measured
-against the pinned Reticulum 1.5.2, the only difference is the unsolicited announces. On a
-3.12 kbps link with a 1 % hourly budget that difference is the expensive part, which is why the
-default keeps them off the air — the same trade an APRS igate makes. What `internal` costs is
-radio-side *discovery*: a peer on the radio can still reach any internet address it knows, and
-paths still resolve on demand, but internet nodes no longer appear by themselves.
-
-Reticulum filters announces on the **outgoing** interface, so this is the radio's own mode and not
-the internet side's; `recursive_prs` there is what keeps the radio discoverable from the internet
-while it is `internal`. With transport off the modes are indistinguishable.
+Measured against the pinned Reticulum 1.5.2 the only difference is the unsolicited announces —
+on a 3.12 kbps link with a 1 % hourly budget the expensive part, which is why the default keeps
+them off the air.
 
 **What gateway traffic cannot do** is bypass the radio's airtime limiter: `airtime_limit_short`
 and `airtime_limit_long` are enforced and persisted by our own LoRa interface, so relayed traffic

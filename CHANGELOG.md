@@ -7,7 +7,7 @@
   host, the Reticulum LoRa driver, and meshtasticd's own packet trace. One registry drives the
   RF-Logs submenu on each stack card, the log page's switcher and confirmed Clear, and the new
   `lhpc rflog` command. `rf_log` is a band-less stack setting; the restart marker now judges
-  applicability per changed parameter. Live proof: `docs/rflog-test-2026-09-12.md`.
+  applicability per changed parameter. Live proof: `docs/live-tests/rflog-test-2026-09-12.md`.
 - RF-log viewer and decrypt: the log page shows an RF log as a sortable, filterable table with
   columns on and off (phone-friendly, raw view one click away), and for meshtastic, meshcore and
   reticulum a Decrypt toggle below the switcher — plus `lhpc rflog <stack> --decrypt [--follow]` —
@@ -18,9 +18,13 @@
   venv gains `pycryptodomex` (a `build_inputs` entry), so an already-built meshtastic reads
   *Build required* once — an incremental rebuild from source, or on the binary channel the
   artifact this release publishes. Live proof:
-  `docs/rflog-decrypt-test-2026-09-13.md`.
+  `docs/live-tests/rflog-decrypt-test-2026-09-13.md`.
 - Pins: LoRaHAM_Daemon 1623ae9, loraham-kiss-tnc b9b7104, meshcom-loraham-bridge 7c86c96,
   loraham-rns-interface 76a7a37.
+- Docs: one place per fact — duplicates across the README, the operator docs and the stack docs
+  folded into their canonical file with pointers; stack docs no longer carry pin values (the
+  manifest is the one source); live-test reports moved to `docs/live-tests/` and linked from the
+  docs index only.
 
 ## 0.4.5
 
@@ -103,7 +107,7 @@
   checks, a full purge-and-`auto-install` pass (9/9 stacks, 0 blocked, 0 failed), a boot restore
   (3 restored, 0 failed) and the host tests. Every source component ends at its manifest pin and
   every binary stack at `built_from == pin`, with no OOM anywhere in the run. Measured numbers and
-  the rows that remain owed are in [live-test.md](docs/live-test.md).
+  the rows that remain owed are in [live-test.md](docs/live-tests/live-test.md).
 
 ## 0.3.16
 
@@ -206,7 +210,7 @@
 
 ## 0.3.2
 
-- Internal: core service coupling reduced — logic moved into plain core modules (`restart_required`, `power`, `jobs`, `resources`, `gps`, `procident`); no behaviour change. Public surface, CLI and routes identical; live re-proof of every moved flow in `docs/live-test.md`.
+- Internal: core service coupling reduced — logic moved into plain core modules (`restart_required`, `power`, `jobs`, `resources`, `gps`, `procident`); no behaviour change. Public surface, CLI and routes identical; live re-proof of every moved flow in `docs/live-tests/live-test.md`.
 - CI measures and publishes branch coverage (summary and `coverage.xml` per Python version); no threshold.
 
 ## 0.3.1
@@ -217,7 +221,7 @@
 ## 0.3.0
 
 Breaking pre-1.0 cleanup; a fresh image or a clean final-0.2.10 install is the supported path. Pins
-unchanged since 0.2.10. Release test: `docs/live-test.md` (from-zero install, all stacks, boot restore
+unchanged since 0.2.10. Release test: `docs/live-tests/live-test.md` (from-zero install, all stacks, boot restore
 on a Zero 2 W).
 
 - **iGate removed;** Graywolf is the APRS station (RF↔APRS-IS through the KISS TNC, with a web UI).

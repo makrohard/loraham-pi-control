@@ -14,7 +14,7 @@ transmission. Log timestamps are UTC; the box clock is CEST.
 
 **How the writers reached the box.** The daemon and the meshcom stack are on the binary channel,
 whose artifacts predate the writers, and the moved pins cannot be carried by an artifact that does
-not exist yet — the release publishes it first ([maintenance](maintenance.md#rf-logs)). So:
+not exist yet — the release publishes it first ([maintenance](../maintenance.md#rf-logs)). So:
 `lhpc install daemon --source pinned` + `lhpc build daemon` (RadioLib and the daemon from source at
 `1623ae9`); `lhpc update kiss` + `lhpc build kiss` (`c2d359c`); `rns-lora-interface` via
 `--source dev` — `--source pinned` honoured this box's known-working composition (`3fef542`) over

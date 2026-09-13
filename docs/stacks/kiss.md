@@ -6,7 +6,7 @@ socket consumer, never a radio owner: every frame goes out through the daemon in
 | | |
 |---|---|
 | Components | `loraham-kiss-tnc` (main) · `loraham-kiss-serial` (optional socat PTY, needs `socat`) |
-| Source / pin | `src/loraham-kiss-tnc` ← `makrohard/loraham-kiss-tnc` `v0.5.1` (`3c4461e4…`) |
+| Source / pin | `src/loraham-kiss-tnc` ← `makrohard/loraham-kiss-tnc` |
 | Run | `./loraham-kiss-tnc --config loraham_kiss_tnc.conf.example` + the params below as flags (`--kiss-port`, `--bind`, `--kiss-host`, `--rx-freq`, `--tx-freq`, `--data-socket`, `--conf-socket`, `--rx-only`, `--verbose`) |
 | Endpoints | KISS over TCP `127.0.0.1:8001` (no auth — `--bind` is the only gate) · serial PTY `<runtime>/state/loraham_kiss` (the socat component, `socat PTY,link=… TCP:127.0.0.1:8001`) |
 | Resources | `tcp.port.8001` exclusive · `loraham.daemon-socket.<band>` consumer · `serial.loraham-kiss` exclusive (PTY) |
@@ -31,7 +31,7 @@ socket consumer, never a radio owner: every frame goes out through the daemon in
 | `data_socket` / `conf_socket` | per band | advanced |
 | `rx_only` | off | `lhpc config kiss rx_only on` — the TNC never transmits; visible in its argv and read by `lhpc status` |
 | `verbose` | off | |
-| `rf_log` | on | RF log at the TNC (`logs/rf-kiss.log`): RX frames with RSSI/SNR, TX frames after the daemon's result (`ok`, or `unconfirmed` when the confirmation was lost); the TNC2 text where the frame carries it. Read at the next start; graywolf's RF-Logs submenu shows and saves this same switch |
+| `rf_log` | on | RF log at the TNC (`logs/rf-kiss.log`): RX frames with RSSI/SNR, TX frames after the daemon's result (`ok`, or `unconfirmed` when the confirmation was lost); the TNC2 text where the frame carries it. Read at the next start |
 
 Radio parameters (the LoRaHAM amateur profile, SF12/BW125) live in [daemon](daemon.md).
 

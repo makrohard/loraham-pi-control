@@ -153,8 +153,8 @@ also needs `firewall` metadata and a `tcp.port.<n>` claim.
 
 ### Parameters & config files
 
-`param` entries become CLI args (built from the SAVED values at start) and web **Settings**
-fields; Settings is the only place a value changes, a start never takes per-launch input. A
+`param` entries become CLI args (built from the saved values at start —
+[config layers](architecture.md#manifest-and-config-layers)) and web **Settings** fields. A
 `config_file` lets LHPC generate a component's config from a base, updating just the named keys.
 
 ```toml
@@ -202,7 +202,7 @@ lhpc stack stop meshcom      # identity-verified stop (SIGTERM only), endpoints 
 lhpc update meshcom --yes    # refresh on the current channel (see cli.md § update); --source pinned for the pin
 ```
 
-The web console exposes the same actions per stack, each with a plan + confirmation.
+The web console exposes the same actions per stack.
 
 ## Add a new stack
 
@@ -212,8 +212,7 @@ The web console exposes the same actions per stack, each with a plan + confirmat
    `run`/`run_argv` + `readiness` (+ `readiness_timeout` if slow), `process.exec_name`, any
    `endpoint`s (`ready = true` for the one that proves it's up), `param`s, `resource` claims,
    and `depends_on` / `start_order`.
-3. Keep RF safety in mind: declare `requires_daemon_tx` and the `band`; LHPC never
-   auto-enables TX.
+3. Declare `requires_daemon_tx` and the `band` ([TX safety](operations.md#tx-safety)).
 4. `lhpc install <id> --check` → `lhpc build <id>` → `lhpc stack start <id>` and watch the typed
    outcomes.
 

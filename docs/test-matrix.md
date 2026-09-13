@@ -8,14 +8,10 @@ CI proves the code, the [testlab](testlab.md) proves the console; this matrix pr
 **When it applies:** a minor release (`0.X.0`) runs it before the tag. A patch release runs the
 live checks its own change calls for instead — the release policy is
 [maintenance](maintenance.md#branches-and-releases). Results replace the section in
-[live-test.md](live-test.md).
+`docs/live-tests/live-test.md`.
 
-A **pin patch** is the one case with no box step: the moved pins are proved by the binary
-builder's smoke and clean-runtime test plus the
-[release-verification lane](testlab.md#running-the-verification-lanes), which installs, builds,
-starts and identity-proves every stack it moved. That lane cannot start the real daemon — it has
-no radio — so the **daemon, RadioLib and the shared chat source are never moved by a pin patch**.
-They move by hand, and this matrix is their proof.
+A **pin patch** has no box step ([maintenance](maintenance.md#branches-and-releases)); the
+daemon, RadioLib and the shared chat source move by hand, and this matrix is their proof.
 
 Evidence is the controller's own typed outcome plus the stack's own state (`lhpc status`, the
 node's info, an HTTP answer, `rnstatus` counters). Log greps are not evidence.
@@ -36,8 +32,8 @@ node's info, an HTTP answer, `rnstatus` counters). Log greps are not evidence.
 |---|---|
 | Box | `lhpc-e293`, Raspberry Pi Zero 2 W (512 MB, 415 MB usable after zram), Lite image, LAN |
 | Radio | LoRaHAM daemon serving 433 and 868; record `lhpc hardware` at the start of the run |
-| Channels | `pinned` = the manifest pins, and the default install for every stack without a published binary ([provenance](provenance.md#selections)); `dev` = the branch tip, an explicit choice; `binary` for daemon, meshtastic and meshcom. All three are covered, see [Coverage](#coverage) |
-| Console | left running for the light stacks; **stopped for the heavy compiles** (`systemctl --user stop lhpc-web lhpc-nginx`), as the 512 MB box requires (see [maintenance](maintenance.md)) |
+| Channels | `binary` (daemon, meshtastic, meshcom), `pinned` and `dev` — what each resolves to: [provenance](provenance.md#selections). All three are covered, see [Coverage](#coverage) |
+| Console | left running for the light stacks; **stopped for the heavy compiles** (`systemctl --user stop lhpc-web lhpc-nginx`) — why: [maintenance](maintenance.md#running-on-a-pi) |
 | Radio budget | one stack per band at a time: 433 belongs to the daemon chain (kiss, graywolf, meshcom), 868 to one of meshtastic / MeshCore / Reticulum. Stop the previous owner before starting the next |
 
 ## Procedure per stack
@@ -56,12 +52,11 @@ lhpc status <stack>                           # 5. verify: the row's evidence co
 t lhpc stack stop <stack> --yes               # 6. stop; `lhpc status` shows nothing left running
 ```
 
-- **A binary row's build is REFUSED, not skipped.** `lhpc build` on a binary install has no
-  source tree to build and says so; that typed refusal is the correct outcome and is recorded as
-  the row's build result.
+- **A binary row's build is REFUSED, not skipped** ([operations](operations.md#install-channels));
+  the typed refusal is recorded as the row's build result.
 - **Times.** `install` is the wrapper's number for step 2, `build` for step 3, `start` for step 4
   (the controller returns when the components are verified). Where a stack is *usable* later than
-  it is *verified* (MeshCom's web UI answers 502 until the firmware has booted), record both.
+  it is *verified* (MeshCom: [meshcom](stacks/meshcom.md#notes)), record both.
 - **Memory / OOM** during every build and every start of a heavy stack: `vmstat -n 10 >
   ~/vm-<stack>.log &` alongside, `free -m` before and after, and `dmesg -T | grep -iE
   'oom|killed process'` afterwards. Any OOM line, any exit code from a killed child, and the
@@ -82,12 +77,12 @@ sources) is still purged and reinstalled on its own.
 | 3 | `voice` | pinned | `loraham-voice-cli` (GTK variant skipped on Lite) | interactive | the terminal variant's printed command runs; GTK reported skipped, not failed |
 | 4 | `kiss` | pinned | `loraham-kiss-tnc` | 433 | verified; TCP `127.0.0.1:8001` answers |
 | 5 | `graywolf` | fetched release | — | 433 (needs kiss) | verified; web UI `127.0.0.1:8080` answers; the KISS client is held |
-| 6 | `reticulum` | pinned | rns, nomadnet, lxmd, meshchat (sideband skipped on Lite) | the free band | `rnstatus` lists the LoRa interface with `Mode: Internal`; the ready marker present; MeshChat's UI answers 200 on `127.0.0.1:8790`, and the generated config is `0400`. The stack's own full matrix is [reticulum-test-2026-09-12](reticulum-test-2026-09-12.md) |
+| 6 | `reticulum` | pinned | rns, nomadnet, lxmd, meshchat (sideband skipped on Lite) | the free band | `rnstatus` lists the LoRa interface with `Mode: Internal`; the ready marker present; MeshChat's UI answers 200 on `127.0.0.1:8790`, and the generated config is `0400`. The stack's own full matrix is the dated report `docs/live-tests/reticulum-test-2026-09-12.md` |
 | 7 | `meshcore` | pinned | node, webui, openhop repeater source | 868, mode chat+repeater | node and repeater verified; web UI `:8788` and dashboard `:8000` answer; `meshcore-cli` listed on the Dashboard |
 | 8 | `meshtastic` | binary | refused (no source tree) | 868 (MeshCore stopped) | verified; `lhpc meshtastic --info` returns the node; `meshtastic-cli` listed |
 | 9 | `meshtastic` | pinned (from source) | meshtasticd | 868 | as row 8; build time and memory recorded |
 | 10 | `daemon` | pinned (from source) | RadioLib + daemon | both bands | as row 1; build time and memory recorded |
-| 11 | `meshcom` | binary | refused (no source tree) | 433 (graywolf/kiss stopped) | verified; web UI `:18083` 502 until boot then 200; callsign switches from the placeholder |
+| 11 | `meshcom` | binary | refused (no source tree) | 433 (graywolf/kiss stopped) | verified; web UI `:18083` answers 200 once the node has booted; callsign switches from the placeholder |
 | 12 | `meshcom` | pinned (from source) | QEMU, firmware, bridge | 433 | as row 11 — the longest row by far (build times: [maintenance](maintenance.md#running-on-a-pi)); memory watched throughout |
 
 Rows 9–12 are the heavy compiles: console stopped, `vmstat` running, `dmesg` checked after each.
@@ -161,8 +156,6 @@ already proved and timed every compile, and a Zero 2 W's Wi-Fi can drop under a 
 Remote exposure with mTLS and the managed firewall needs the operator's one root step (the copy-paste
 `sudo` line the console prints — [firewall](firewall.md), [webserver](webserver.md)); it is exercised as the last from-zero step when the operator enters
 that line, otherwise its contracts rest on the unit tests.
-
-The result lines replace the section in [live-test.md](live-test.md).
 
 ## Refused as designed
 

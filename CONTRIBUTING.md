@@ -5,13 +5,10 @@ that does not may still be taken, but the chances are lower and it will take lon
 
 ## Branches
 
-- **Open your PR against `dev`.** Work on a topic branch off `dev`, rebase it on `dev` before the
-  PR, and land it as **one commit** (squash-merge). The maintainer's own work follows the same path.
-- `dev` is rewritten once per MINOR release, when the cycle is squashed into the release commit —
-  rebase an open topic branch onto the new `dev` afterwards. A maintainer patch lands on `dev`
-  like any other work, and `main` fast-forwards from the proven `dev` tip.
-- The branch model, the release procedure and the hotfix path:
-  [Branches and releases](docs/maintenance.md#branches-and-releases).
+- **Open your PR against `dev`**, from a topic branch rebased on `dev`; it lands as **one
+  commit** (squash-merge).
+- The branch model (when `dev` is rewritten and what to do then), the release procedure and the
+  hotfix path: [Branches and releases](docs/maintenance.md#branches-and-releases).
 
 ## Commits
 
@@ -42,8 +39,9 @@ Run these locally before opening the PR — each is one command in a venv with
 | shipped snapshot | `lhpc deps --script` must equal `bootstrap-deps.sh` when `lhpc/core/deps.py` changed |
 
 The suite is expected to be fully green locally: no failures, and nothing skipped on an ordinary
-developer machine. Coverage is measured, not gated — it is a diagnostic, so do not chase the
-percentage, and do not let it drop when you touch `lhpc/`.
+developer machine. Coverage is a diagnostic, not a gate
+([what CI does not enforce](docs/maintenance.md#what-ci-does-not-enforce)); do not let it drop
+when you touch `lhpc/`.
 
 ## What a good change looks like
 
@@ -51,8 +49,7 @@ percentage, and do not let it drop when you touch `lhpc/`.
   its widest-seam happy and refusal case `@pytest.mark.contract`.
 - **Docs in the same commit.** The CLI reference, the operator docs and `CHANGELOG.md` change
   with the code. Docs state the current contract only; history lives in the changelog, and
-  [live-test.md](docs/live-test.md) holds the newest live run. Numbers in docs are measured,
-  never estimated.
+  `docs/live-tests/` holds the live runs. Numbers in docs are measured, never estimated.
 - **Both READMEs.** A factual change to `README.md` is mirrored in `README.de.md`.
 - **No architecture change without a discussion first.** Open an issue; the
   [architecture](docs/architecture.md) doc is the model to argue against.

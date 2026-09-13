@@ -38,9 +38,10 @@ Every source lives under the runtime root as a managed clone. For a source check
 Every adoption records durable ownership (`state/source-registry/`): remote, selector, exact
 resolved commit, transaction id — written inside the activation transaction and completable by
 recovery. A record that no longer matches its tree is never rewritten silently, and a tree
-without one is not LHPC's to touch. Update, uninstall and clean re-prove the record first
-(update also needs the affected stacks stopped); what they refuse, and how to recover, is in
-[operations.md](operations.md).
+without one is not LHPC's to touch. Update, uninstall and clean re-prove the record first and
+refuse when the checkout's `HEAD` or origin no longer matches it — the tree changed outside an
+LHPC transaction (update also needs the affected stacks stopped); the recovery commands are in
+[operations.md](operations.md#identity-drift-on-clean-or-uninstall).
 
 **New files: OK.** Files added by the user or by the stack to a managed source checkout —
 logs, generated settings, a scratch script, whether ignored by Git or not — are preserved
@@ -121,8 +122,6 @@ URL (https or scp-style ssh) before any Git use, and a non-string/malformed remo
 at config load — it can never silently weaken the selected pin/signature policy or reach Git.
 Moving a pin is a maintainer task: [maintenance.md](maintenance.md).
 
-**Changing the source itself:** fork the upstream project, make the changes in your fork, and
-point the component at it — the override selects the remote, and the commit it installs still
-comes from the selector and the pin, so a `pinned` install also needs the pin moved to a commit
-of your fork (a manifest change). Do not keep source edits in the managed checkout: they are
-exactly what makes it dirty, and every update will refuse until they are gone.
+**Changing the source itself** (the fork from [Ownership records](#ownership-records)): the
+override selects the remote, and the commit it installs still comes from the selector and the
+pin, so a `pinned` install also needs the pin moved to a commit of your fork (a manifest change).

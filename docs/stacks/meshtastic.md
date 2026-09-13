@@ -7,14 +7,14 @@ and cannot run while the daemon serves that band.
 | | |
 |---|---|
 | Components | `meshtastic` (main) · `meshtastic-gps` (feed, admitted by the global GPS plan, not a manual choice) · `meshtastic-cli` (on-demand, `lhpc meshtastic …`) |
-| Source / pin | `src/meshtastic-firmware` ← `meshtastic/firmware` `v2.7.26.54e0d8d` (`54e0d8d0…`), a normal managed git source (pinned / stable / dev selectors, Check / Update / Build flows) |
+| Source / pin | `src/meshtastic-firmware` ← `meshtastic/firmware`, a normal managed git source (pinned / stable / dev selectors, Check / Update / Build flows) |
 | Run | `build/tools/meshtasticd/meshtasticd -c <runtime>/config/files/meshtasticd.yaml -d <runtime>/state/meshtasticd` |
-| Endpoints | TCP API `:4403` · web UI `:9443` (HTTPS; rootless cannot bind 443) — both bind all interfaces with no auth, so the managed firewall denies them by default; the sanctioned remote path is the stack web proxy or an [SSH tunnel](../ssh-tunnel.md) |
+| Endpoints | TCP API `:4403` · web UI `:9443` (HTTPS; rootless cannot bind 443) — both bind all interfaces with no auth; containment: [firewall](../firewall.md#what-actually-listens) |
 | Config | `<runtime>/config/files/meshtasticd.yaml`, regenerated per band from `lhpc/data/bases/meshtasticd.yaml` at every start (per-band LoRa pins, web root, TLS paths, log level) |
 | Artifacts | `build/tools/meshtasticd/meshtasticd`, its web UI at `build/tools/meshtasticd/web`, the managed CLI venv `build/tools/meshtastic-cli/.venv` (`meshtastic==2.7.11`, `pycryptodomex==3.23.0` for the RF-log decoder) |
 | Resources | `loraham.radio.868` + `.433` exclusive · `spi.bus.0.unlocked` exclusive · `tcp.port.4403` + `.9443` exclusive |
 | System | `/dev/spidev0.0` (`dtoverlay=spi0-0cs`), `spi` + `gpio` group membership, the packaged root `meshtasticd.service` must be disabled (`sudo systemctl disable --now meshtasticd`) |
-| Install channel | **binary** by default (a sha256-verified prebuilt of the binary + web assets, built from the pinned commit); `--source pinned\|dev\|stable` builds natively instead. Policy: [provenance](../provenance.md) |
+| Install channel | **binary** by default (a prebuilt of the binary + web assets); `--source pinned\|dev\|stable` builds natively instead. Policy: [provenance](../provenance.md) |
 
 ## Contents
 
@@ -30,9 +30,9 @@ and cannot run while the daemon serves that band.
 | param | default | notes |
 |---|---|---|
 | `region` | `EU_868` (433: `EU_433`) | LoRa region — required for TX; applied after start (a failed push fails the start) |
-| `node_name` / `node_short` | *(empty)* | the node's own names (39 / 4 UTF-8 bytes), never the operator callsign; the start is refused until both are set — node names never inherit ([architecture](../architecture.md#identity-and-callsigns)) |
+| `node_name` / `node_short` | *(empty)* | the node's own names (39 / 4 UTF-8 bytes), never the operator callsign; the start is refused until both are set ([architecture](../architecture.md#identity-and-callsigns)) |
 | `use_gps` | `on` | use the global position source |
-| `rf_log` | `on` | RF log = meshtasticd's own per-packet JSON trace (`Logging.TraceFile` → `logs/rf-meshtastic.log`), not the common line format. Append-only by the node: lhpc rolls it opportunistically (at start and when the page reads it over 5 MB) — no hard cap. The page's Decrypt toggle and `lhpc rflog meshtastic --decrypt` open channel traffic with the PSKs in `prefs/channels.proto` and direct messages to/from this node with its key in `prefs/config.proto`, in memory only — see [maintenance](../maintenance.md#rf-logs) |
+| `rf_log` | `on` | `logs/rf-meshtastic.log` — meshtasticd's own per-packet JSON trace (`Logging.TraceFile`), not the common line format. Decrypt uses the keys in `state/meshtasticd/prefs/` (`channels.proto`, `config.proto`) — [maintenance](../maintenance.md#rf-logs) |
 | `loglevel`, `max_nodes`, `ble`, `mqtt`, `cs`, `irq`, `reset`, `busy`, `ssl_key`, `ssl_cert`, `web_root` | advanced | YAML keys. `cs`/`irq` default 7/16 (868) and 8/25 (433); `reset`/`busy` are omitted when empty — the Uputronics RF95 boards have neither line, and BCM 6/13 are the daemon's LEDs |
 
 Region, node identity, GPS mode and fixed position are device settings applied through the
@@ -52,7 +52,7 @@ firmware's `bin/web.version`, which is upstream's last-known-good for the ESP32 
 has stayed at 2.6.7 across the 2.7.x/2.8.0 firmware lines; the pairing is tested on the reference
 box and moved with the pin recipe) → the CLI venv. The
 completion marker lives in the checkout and is written after the last step, so an updated checkout
-reads *Build required* until rebuilt. A native C++ build takes hours on a Pi Zero 2W.
+reads *Build required* until rebuilt. A native C++ build takes about 2¾ h on a Pi Zero 2W (measured).
 
 The marker also records the two pins that are **not** commits — the web-client version and the
 CLI version (`build_inputs`). Moving the firmware pin replaces the checkout and takes the marker
@@ -100,7 +100,7 @@ lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --
 - A freshly reset node cannot be direct-messaged until node info has been exchanged (modern
   firmware rejects a channel-encrypted DM with `NO_CHANNEL`; the default node-info interval is 3 h) —
   `lhpc stack poststart meshtastic` re-applies the identity and triggers an immediate node-info
-  broadcast. Broadcasts are unaffected. Evidence: [live tests](../live-test.md).
+  broadcast. Broadcasts are unaffected (witnessed in the live tests).
 - The `gpiochip` is not hard-coded in the YAML base: the Pi Zero 2W header is `gpiochip0`; a Pi 5
   puts it on another chip — add a per-pin `gpiochip:` only if your kernel needs it.
 - The web TLS certificate is generated into the writable data dir (`state/meshtasticd/ssl`).
@@ -109,6 +109,5 @@ lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --
 
 - Claims `loraham.radio.<band>` exclusively: not with the daemon on that band (so not with
   kiss/graywolf/chat/voice/meshcom on 433, meshcore on 868), and not with reticulum on that band.
-- `spi.bus.0.unlocked`: `meshtastic + reticulum` is refused outright; `daemon + meshtastic` on
-  opposite bands is allowed — the model and the accepted hazard are in
-  [architecture](../architecture.md#radios-bands-and-resource-claims).
+- `spi.bus.0.unlocked`: `meshtastic + reticulum` is refused on any band pair
+  ([architecture](../architecture.md#radios-bands-and-resource-claims)).

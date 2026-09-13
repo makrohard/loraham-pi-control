@@ -32,8 +32,11 @@ normal gated start path (hardware, band arbitration, callsign, firewall exposure
 strictly from saved config) — the same saved configuration every web or CLI start runs. It refuses to act unless the web
 console unit is enabled AND byte-exact canonical — a customized or foreign console unit disables
 autonomous restarts — and honours the fail-closed `[boot] restore` switch in `local.toml`
-(strictly boolean; anything else disables restore). A failed restore is not
-retried — the dashboard banner and `lhpc autostart` name the stacks to start manually.
+(strictly boolean; anything else disables restore). An explicit `lhpc stack stop` is the last
+word: the stack stays down across reboots even when the stop could not verify the process gone —
+the next `stack start` makes it restorable again. A failed restore is not retried — the dashboard
+banner and `lhpc autostart` name the stacks to start manually. The unit's log is
+`logs/lhpc-boot-restore.log` (web: Controller logs → boot-restore).
 
 ## Install channels
 
@@ -47,8 +50,7 @@ What the binary channel means in practice:
 
 - **No source tree**, so `build` and host tests refuse; the bounded TX test still works (it
   exercises the running stack).
-- **meshcom runs open auth** — the published firmware has no mesh password
-  ([stacks/meshcom.md](stacks/meshcom.md)).
+- **meshcom runs open auth** ([stacks/meshcom.md](stacks/meshcom.md)).
 - **Every binary mutation needs the stack stopped** — install, update, retire, uninstall and
   clean recheck under the operation locks, so a start slipping in mid-flight cannot be overwritten.
 - **A failed install never costs you the previous one** — any failure restores the previous
@@ -57,9 +59,8 @@ What the binary channel means in practice:
   binary operation recovers it.
 - **Switching to source is transactional too** — a dirty, foreign or wrong-remote checkout
   refuses the switch with the artifact untouched ([provenance.md](provenance.md)).
-- **Ordinary files you add to a source checkout survive an update** — logs a stack writes, your own
-  settings or scratch files. Editing upstream files does not: that makes the checkout dirty and
-  blocks the update, and the fix is a fork, not a local edit ([provenance.md](provenance.md)).
+- **Ordinary files you add to a source checkout survive an update**; editing upstream files
+  blocks it ([ownership records](provenance.md#ownership-records)).
 - **No binary rollback**: going back means installing from source.
 - **meshcom keeps its pinned clone** even on this channel (its run scripts live there), and
   **meshtastic provisions its CLI virtualenv locally** after extraction (it embeds absolute paths,
@@ -74,8 +75,8 @@ What the binary channel means in practice:
 - Fast & bounded (no build, no mutation, no RF): `status`, `explain`, `doctor`, `logs`,
   `web` page loads. These do no network I/O, with one bounded exception when the position
   source is `gpsd` ([gps.md](gps.md)).
-- Explicit & gated (print a plan, need `--yes` or a confirmation): `install`,
-  `build`, `update`, `stack start/stop`, `test`, `uninstall`.
+- Explicit & gated ([conventions](cli.md#conventions)): `install`, `build`, `update`,
+  `stack start/stop`, `test`, `uninstall`.
 
 ## TX safety
 
@@ -93,11 +94,14 @@ Callsign, passwords, HMAC keys and private keys live only in git-ignored local
 config (`~/loraham-pi-control/config/local.toml`, `config/secrets.toml` mode
 `0600`, and file-based secrets such as the MeshCom `xr_pw` and the web session
 key in `config/secrets/`, mode `0600`); nothing of that ever reaches tracked files or output
-([architecture.md](architecture.md)). The one place a stored password is reachable is the
-stack page's authenticated Password section, which masks the value behind a *Show* toggle and a
-copy button (a
-file that is not `0600` shows a reason instead). A stack password is never changed by a generic Settings save: MeshCom's is renewed through the HMAC Password actions ([stacks/meshcom.md](stacks/meshcom.md)); an app's own stored password is edited in its file, with the command that section prints.
-Uninstall keeps local config by default.
+([architecture.md](architecture.md)). No command prints a password: the value never reaches a
+log, a flash message or the API; from a shell on the Pi, read the file itself. The one place a
+stored password is reachable in the console is the stack page's authenticated Password section,
+which masks the value behind a *Show* toggle and a copy button (a file that is not `0600` shows a
+reason instead). A stack password is never changed by a generic Settings save: MeshCom's is
+renewed through the HMAC Password actions ([stacks/meshcom.md](stacks/meshcom.md)); an app's own
+stored password is edited in its file, with the command that section prints. Which file each
+stack uses is in its stack page. Uninstall keeps local config by default.
 
 ## Backup & restore
 
@@ -105,7 +109,11 @@ All of your settings live under the runtime root (`$LHPC_RUNTIME_ROOT`, default
 `~/loraham-pi-control`). Three things hold operator-authored data worth backing up — all of them kept by a
 default `uninstall.sh` (which also keeps `backups/` and the `.lhpc-root` marker) and reused by a reinstall; everything else (`src/`, `build/`,
 `logs/`, `systemd/` and the controller's own entries under `state/`) is regenerated by
-install/apply and can be discarded.
+install/apply and can be discarded. `uninstall.sh` writes the `.lhpc-uninstalling` guard (blocks
+new task admission), refuses on active or unprovable jobs or any UNKNOWN component, stops
+clients before the shared daemon and verifies cessation; if quiescence cannot be proven the
+guard is removed and nothing is deleted. Only byte-exact canonical same-root units are stopped
+and removed.
 
 - **`config/`** — every setting: operator identity + per-stack params (`local.toml`,
   `stacks/*.toml`), secrets (`secrets.toml`, `0600`), and the webserver PKI (`tls/` — CAs, server
@@ -146,30 +154,30 @@ restored `config/` and known-working records then drive the rebuild.
 
 ## Operating the console
 
-The console is a front end to the CLI — every action is dispatched through the same service
-layer as the `lhpc` verbs, so validation, gating and results are identical. How it is served and
-exposed: [webserver.md](webserver.md). Four areas:
+The console dispatches every action through the same service layer as the `lhpc` verbs
+([architecture](architecture.md#package-layout)). How it is served and exposed:
+[webserver.md](webserver.md). Four areas:
 
 - **Dashboard** — per band: the daemon monitor (live RSSI/stats/CAD), the stacks running on that
   band, a control to start another, and the System box (live host metrics, Autostart, Reboot / Shut down).
 - **Apps** (`/stacks`) — the controller row, then every stack with Install / Build / Start /
   Stop / Test / Update / Uninstall / Clean. Interactive (TUI) apps show the command to run
-  yourself; services start and stop directly. **Auto-install** installs (or updates), builds and optionally tests every
-  stack in one guided run.
+  yourself ([adding-a-stack](adding-a-stack.md#run--readiness)); services start and stop
+  directly. **Auto-install** installs (or updates), builds and optionally tests every stack in
+  one guided run.
 - **Settings** (per stack, on the Apps page) — the **only** place configuration changes: run
   params, config-file params and, for daemon clients, the daemon radio parameters
   ([stacks/daemon.md](stacks/daemon.md)). A save is validated as a whole and patches only its
   own keys; an unsupported structure refuses the save and preserves the file byte-for-byte.
 - **System panels** — Firewall, Webserver, GPS, Hardware, System dependencies, and per-target logs.
 
-Every mutating action needs an **explicit confirm**: install, update, stop, uninstall and clean
-show a dry-run plan first (TX-capable ones add an RF/dummy-load warning; clean requires typing
-the stack id); daemon live settings apply only whitelisted keys (TX/CAD tuning and the radio
-params — [stacks/daemon.md](stacks/daemon.md)). The safety model behind this:
+Every mutating action needs an **explicit confirm** ([conventions](cli.md#conventions));
+TX-capable ones add an RF/dummy-load warning and clean requires typing the stack id. Daemon live
+settings: [daemon control](architecture.md#daemon-control). The safety model behind this:
 [architecture.md](architecture.md#safety-model).
 
-**Start means start.** A Start or Restart from the Dashboard or the Apps page runs exactly the
-**saved** configuration — there are no per-launch values. The click freezes the operation band
+**Start means start.** A Start or Restart from the Dashboard or the Apps page runs the **saved**
+configuration ([config layers](architecture.md#manifest-and-config-layers)). The click freezes the operation band
 (the Apps dropdown, else the running band, else the primary), plans the run (hardware, band
 arbitration, GPS, radio mode, firewall exposure, resource conflicts, identity) and then:
 
@@ -193,6 +201,16 @@ needs *Recover*. A second Start while one runs is refused ("already in progress"
 self-update or a contended admission refuses before anything is spawned. The CLI and boot
 restore start synchronously.
 
+**The RF-log viewer.** The log page shows an RF log ([maintenance](maintenance.md#rf-logs)) as
+records — one row per frame with time, direction, RSSI/SNR, length, outcome, summary (the TNC2
+text or meshtastic's `!from → !to`), hex and ascii — parsed server-side by `rflog.parse_line`
+and served by `GET /api/rflog/<writer>?job=…` (same registry authorization as the page). Sort by
+any column, filter, switch columns on and off; the raw file is one click away and is what the CLI
+prints. Below 700 px hex and ascii start off and a row tap expands them. Sort, filter and column
+choices live in the browser (`localStorage`), never on the box; the Decrypt toggle is never
+remembered — every page load starts with it off. A line the parser does not know is still a row
+with its raw text.
+
 ## Reboot / Shut down
 
 The dashboard's system card ends with **Reboot…** / **Shut down…** buttons (each behind a
@@ -201,11 +219,10 @@ the SD card is safe and running stacks come back via boot restore on the next po
 buttons render **only** when logind authorizes that action for the operator, probed per button
 (`CanReboot` / `CanPowerOff`), because the rule file
 `/etc/polkit-1/rules.d/49-lhpc-power.rules` lives in a directory the operator process cannot
-read on stock Debian. Fresh installs get the rule from
-`bootstrap-deps.sh` (opt out with `--no-power-controls`); on an existing box the
-System-dependencies panel (and `lhpc doctor`) shows a paste-ready install command. lhpc never
-installs the rule itself — it never runs privileged commands. A refusal at apply time is typed
-and repeats the install command. Apply then records a short-lived pending marker that refuses
+read on stock Debian. Installing the rule is [README step 4](../README.md#4-install-dependencies);
+on an existing box the System-dependencies panel (and `lhpc doctor`) shows a paste-ready install
+command. A refusal at apply time is typed and repeats the install command. Apply then records a
+short-lived pending marker that refuses
 new builds and updates until the trigger fires (an unreadable or stale marker is named in that
 refusal and is yours to delete); failures after the authorization land only in
 `logs/power-<kind>.log`.
@@ -224,9 +241,7 @@ preferred WLAN in the Network panel afterwards is mandatory, not optional.
 
 ## Identity drift on clean or uninstall
 
-Every adopted source carries an ownership record (`state/source-registry/`) naming the commit
-LHPC checked out ([provenance.md](provenance.md)). A destructive command re-proves that record
-first and refuses when the checkout's HEAD or origin no longer matches it — the tree changed outside an LHPC transaction,
-so LHPC will not delete it. Inspect the checkout (`git -C src/<name> log -1`, `git remote -v`);
-if it is yours to drop, remove it and its record by hand (`rm -rf src/<name>
-state/source-registry/<name>-*.json`) and reinstall.
+A destructive command re-proves the source's ownership record first and refuses on drift
+([ownership records](provenance.md#ownership-records)). Inspect the checkout
+(`git -C src/<name> log -1`, `git remote -v`); if it is yours to drop, remove it and its record
+by hand (`rm -rf src/<name> state/source-registry/<name>-*.json`) and reinstall.

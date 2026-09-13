@@ -36,33 +36,20 @@ safe single-process; do not run multiple workers.
 
 ## Self-hosted deployment layout
 
-The supported deployment makes the runtime root a **plain container** and keeps LHPC's own
-source under it, exactly like the managed stack sources — so "the code that runs" and "the code
-self-update fetches" are one tree:
+The layout — a plain runtime root with LHPC's own checkout under `src/` and the venv outside it —
+is [the runtime root](architecture.md#the-runtime-root). The unit sets
+`LHPC_RUNTIME_ROOT=~/loraham-pi-control` **explicitly**, runs `venv/lhpc/bin/lhpc web`, and works
+from `src/loraham-pi-control`. Keeping the venv *outside* the checkout means self-update's
+`git clean` can never reach it.
 
-```
-~/loraham-pi-control/            runtime root — a PLAIN container, NOT a git checkout
-├── src/
-│   ├── loraham-pi-control/      LHPC's OWN checkout (.git lives HERE, nowhere else)
-│   └── loraham-daemon/  RadioLib/  …   managed stack sources
-├── config/  logs/  state/  backups/
-└── venv/lhpc/                   the venv, OUTSIDE the checkout
-```
-
-The unit sets `LHPC_RUNTIME_ROOT=~/loraham-pi-control` **explicitly**, runs
-`venv/lhpc/bin/lhpc web`, and works from `src/loraham-pi-control`. Keeping the venv *outside*
-the checkout means self-update's `git clean` can never reach it.
-
-LHPC's checkout is a **dedicated controller identity**, not a stack — generic verbs aimed at it
-refuse and point you at `lhpc self-update` ([architecture.md](architecture.md)). `lhpc status`
-shows a distinct `[controller]` row with its cached version / update / identity state.
-
-**The identity policy.** The runtime root and the controller checkout must be **owned by the
-service user** with **no group/other write bit** (`lhpc bootstrap` hardens them to `0700`).
-Every apply verifies that layout live before mutating anything and refuses (`unsafe`)
-otherwise; the verdicts are defined in [architecture.md](architecture.md).
+`lhpc status` shows a distinct `[controller]` row with its cached version / update / identity
+state; the identity itself, its live verdicts and what every apply re-checks:
+[controller identity](architecture.md#controller-identity--self-update).
 
 ## Self-update
+
+Back up `config/`, `profiles/` and the app data under `state/` first
+([backup & restore](operations.md#backup--restore)).
 
 - **One-click (normal path).** The console **cannot** run `systemctl` — its unit blocks the
   user D-Bus (`InaccessiblePaths=%t/bus %t/systemd/private`). "Update now" writes an
@@ -83,9 +70,6 @@ otherwise; the verdicts are defined in [architecture.md](architecture.md).
 - **Venv sync** runs automatically after a real advance on both paths; if it fails the update
   is reported failed, never half-applied, and the result names the `pip install -e` command to
   run by hand.
-- **Applying always re-checks live.** Every apply performs a fresh identity/provenance check
-  immediately before mutating the checkout — it never trusts the cached verdict — and runs with
-  the web service stopped; the one-click updater unit handles that stop/start for you.
 
 ### Recovery
 
@@ -133,36 +117,15 @@ loginctl enable-linger "$USER"     # keep running after logout
 
 ### Why these unit settings
 
-- **Bounded restart** (`Restart=on-failure`, `RestartSec=3`, `StartLimitBurst=5` /
-  `StartLimitIntervalSec=60`): auto-recovers from a crash but stops flapping instead of
-  looping forever.
-- **File logging** (`StandardOutput=append:`, `StandardError=append:`): stdout/stderr are appended to `logs/lhpc-web.log` under the runtime root; the journal carries only systemd's own unit messages (`SyslogIdentifier=lhpc-web`).
-- **Least-privilege hardening**: `NoNewPrivileges`, `ProtectSystem=strict`,
-  `ProtectHome=read-only`, `RestrictNamespaces`, `ProtectKernel*`, `ProtectControlGroups`,
-  `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_BLUETOOTH`. The **only**
-  writable areas are `ReadWritePaths=%h/loraham-pi-control /tmp` — the runtime root and the
-  shared `/tmp` — plus the optional `-%h/.meshcore_nm` entry (the leading `-` skips it when
-  absent; no shipped component uses it). The service gets no write access to the rest of your
-  home or to `/var`.
-- **`KillMode=process`** on `lhpc-web.service` AND `lhpc-boot-restore.service`: LHPC
-  identity-tracks and lifecycle-manages the stacks and detached build/test jobs it starts, so a
-  web restart or a self-update must not tear those workloads down (the default
-  `control-group` would kill them on every web restart; controller uninstall is the one path
-  that stops and verifies them explicitly). For the boot-restore oneshot
-  (`RemainAfterExit=yes`) the same applies on a later stop, restart or start timeout of the
-  unit: the restored stacks live in its control group.
-- **Runtime-owned build/tool caches**: builds (cmake / PlatformIO / pip) and the QEMU emulator
-  write toolchain caches; the unit points `PLATFORMIO_CORE_DIR`, `IDF_TOOLS_PATH`,
-  `XDG_CACHE_HOME` and `PIP_CACHE_DIR` at `build/tool-cache/` under the runtime root, inherited
-  by every build/test/QEMU child — nothing is written to `~/.platformio`, `~/.espressif` or
-  `~/.cache`. (Install the ESP QEMU/toolchain into `IDF_TOOLS_PATH` rather than `~/.espressif`.)
-- **`MemoryDenyWriteExecute` is deliberately omitted** — QEMU's TCG JIT (the meshcom
-  emulator) needs writable-executable memory. It is the single documented exception; every
-  other protection stays on.
-- **`PrivateTmp=false`** — deliberately: the console must see the daemon's shared Unix
-  sockets in `/tmp` (`/tmp/loraconf*.sock`, `/tmp/lora*.sock`). A private `/tmp` would hide
-  them and break status/monitor. `/tmp` is the one shared writable location (it also holds
-  the daemon self-test's scratch dir).
+| Directive | Why |
+|---|---|
+| `Restart=on-failure`, `RestartSec=3`, `StartLimitBurst=5` / `StartLimitIntervalSec=60` | recovers from a crash, stops flapping instead of looping |
+| `StandardOutput=append:` / `StandardError=append:` → `logs/lhpc-web.log`, `SyslogIdentifier=lhpc-web` | the file carries the app output; the journal only systemd's own unit messages |
+| `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome=read-only`, `RestrictNamespaces`, `ProtectKernel*`, `ProtectControlGroups`, `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_BLUETOOTH` | least privilege; the only writable areas are `ReadWritePaths=%h/loraham-pi-control /tmp` plus the optional `-%h/.meshcore_nm` (the leading `-` skips it when absent; no shipped component uses it) |
+| `KillMode=process` on `lhpc-web.service` and `lhpc-boot-restore.service` | the stacks and detached jobs LHPC starts live in the unit's control group; the default `control-group` would kill them on every web restart or self-update (controller uninstall is the one path that stops them explicitly) — for the `RemainAfterExit=yes` oneshot the same holds on a later stop, restart or start timeout |
+| `PLATFORMIO_CORE_DIR`, `IDF_TOOLS_PATH`, `XDG_CACHE_HOME`, `PIP_CACHE_DIR` → `build/tool-cache/` | build and QEMU toolchain caches stay under the runtime root, inherited by every build/test/QEMU child — nothing in `~/.platformio`, `~/.espressif` or `~/.cache` (install the ESP QEMU/toolchain into `IDF_TOOLS_PATH`) |
+| `MemoryDenyWriteExecute` omitted | QEMU's TCG JIT (the meshcom emulator) needs writable-executable memory — the single documented exception |
+| `PrivateTmp=false` | the console must see the daemon's shared sockets in `/tmp` (`/tmp/loraconf*.sock`, `/tmp/lora*.sock`); `/tmp` is the one shared writable location (also the daemon self-test's scratch dir) |
 
 ## Controller status & updates on the web console
 

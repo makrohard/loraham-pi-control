@@ -10,7 +10,7 @@ GPS, persistence, readiness and lifecycle. The node never drives SPI or GPIO its
 | | |
 |---|---|
 | Components | `meshcore-node` (main — the one openhop process: chat node and/or repeater, by `mode`) · `meshcore-gps` (position feed, admitted by the global GPS plan) · `meshcore-webui` (optional browser GUI) · `meshcore-cli` (optional REPL) · `openhop-repeater-src` (library: the pinned repeater checkout, build-time only) |
-| Source / pin | `src/openhop-core` ← `openhop-dev/openhop_core` `dev` @ `c95a684` — **built pristine, LHPC carries no patch against it**, so the checkout is plain upstream and any modification makes it dirty. `main`/PyPI = Latest stable; selector policy: [provenance](../provenance.md) · `src/openhop-repeater` ← `openhop-dev/openhop_repeater` `dev` @ `9e375da` · `src/meshcore-webui` ← `adradr/meshcore-webui` `94dcc3d` (+ `meshcore-webui-lhpc-guards.patch`, applied idempotently at build — a conflict fails the build; because that patch is declared, the patched checkout still reports `match`, while changes beyond it make it dirty) · `src/meshcore-cli` ← `meshcore-dev/meshcore-cli` `v1.6.3` |
+| Source / pin | `src/openhop-core` ← `openhop-dev/openhop_core` — **built pristine, LHPC carries no patch against it**, so the checkout is plain upstream and any modification makes it dirty. `main`/PyPI = Latest stable; selector policy: [provenance](../provenance.md) · `src/openhop-repeater` ← `openhop-dev/openhop_repeater` · `src/meshcore-webui` ← `adradr/meshcore-webui` (+ `meshcore-webui-lhpc-guards.patch`, applied idempotently at build — a conflict fails the build; because that patch is declared, the patched checkout still reports `match`, while changes beyond it make it dirty) · `src/meshcore-cli` ← `meshcore-dev/meshcore-cli` |
 | Build | `lhpc build meshcore`: in-tree `.venv` (`--system-site-packages`) → openHop Core → `meshcore_host` (shipped with lhpc) → the repeater's pinned closure (`openhop-repeater-constraints.txt`) and checkout. Web UI: a backend venv from `meshcore-webui-constraints.txt`; the React frontend is prebuilt package data (no npm on the box). Nothing is gui-gated — everything builds headless |
 | Run | `.venv/bin/python -m meshcore_host <runtime>/config/files/meshcore.toml` — the same command in every mode |
 | Config | `<runtime>/config/files/meshcore.toml` (0600 — it carries the private key), rendered from `lhpc/data/bases/meshcore.toml` on every start |
@@ -37,13 +37,13 @@ GPS, persistence, readiness and lifecycle. The node never drives SPI or GPIO its
 |---|---|---|
 | `preset` | `eu_uk_narrow` | RF preset (`eu_uk_long` / `eu_uk_medium` / `eu_uk_narrow`); narrow = 869.618 MHz, BW 62.5 kHz, SF8, CR8 — the T-Deck MeshCore firmware default |
 | `enable_tx` | on | off = RX only |
-| `node_name` | *(empty)* | max 31 bytes; the node's own name, never the operator callsign; the start is refused until set — node names never inherit ([architecture](../architecture.md#identity-and-callsigns)) |
+| `node_name` | *(empty)* | max 31 bytes; the node's own name, never the operator callsign; the start is refused until set ([architecture](../architecture.md#identity-and-callsigns)) |
 | `meshcore_allow` | `127.0.0.1` | who may connect to TCP 5000 (no auth); drives the managed firewall |
 | `txpower` | 14 dBm | advanced (0–20) |
 | `frequency` | blank = the preset's | Hz; an explicit value overrides the preset frequency |
 | `airtime` | 10 % | duty-cycle limit |
 | `use_gps` | on | use the global position source |
-| `rf_log` | on | RF log (`logs/rf-meshcore.log`) written by the host's radio adapter in every mode: raw frames received (RSSI/SNR) or sent (`ok` after `TX_RESULT_STATUS_OK`; `unconfirmed` when the result was never learned; a refused send writes nothing). Read at the next start. The page's Decrypt toggle and `lhpc rflog meshcore --decrypt` open adverts, channel text/data and every pairwise frame this node is one end of (direct messages, requests, responses, path returns, anonymous requests to it) with the identity and stores of the running `mode`, in memory only — see [maintenance](../maintenance.md#rf-logs) |
+| `rf_log` | on | RF log (`logs/rf-meshcore.log`) written by the host's radio adapter in every mode: raw frames received (RSSI/SNR) or sent (`ok` after `TX_RESULT_STATUS_OK`; `unconfirmed` when the result was never learned; a refused send writes nothing). Read at the next start. Decrypt uses the identity in `config/secrets/` and the stores of the running `mode` — [maintenance](../maintenance.md#rf-logs) |
 | `mode` | `chat` | see [Mode](#mode) |
 | `repeater_name` | *(empty)* | required in the repeater modes; the repeater's own name, never the operator callsign |
 | `repeater_mode` | `forward` | upstream's behaviour: `forward` relays, `monitor` listens and advertises without relaying, `no_tx` only receives |
@@ -92,7 +92,7 @@ continuously by the `meshcore-gps` bridge as a normalized feed (line-JSON `{"fix
 |---|---|
 | `off`, or `use_gps off` | no bridge, no coordinates |
 | `fixed` | the coordinates are written to the config; no bridge |
-| `auto` | a bridge when a gpsd is reachable, otherwise nothing — never blocks a start |
+| `auto` | a bridge while a local gpsd listens, else nothing |
 | `gpsd` | a bridge fed from that gpsd |
 | `nmea` | a bridge that owns the receiver and republishes it — the node never reads the hardware |
 
@@ -144,26 +144,18 @@ after an arrival can return nothing — use the REPL for send-and-read; the node
   lhpc build meshcore --yes                       # ~8 min on a Zero 2 W
   ```
 
-  **Keep that directory until you are satisfied**, then remove it. Moving rather than deleting is
-  the point: the old patch touched exactly two files —
-  `src/openhop_core/companion/companion_radio.py` and `tests/test_companion_radio.py` — but
-  knowing that is not enough to delete safely. Your own edits may sit *inside* those same two
-  files, where a file-name check cannot see them, and `git status --porcelain` does not list
-  ignored files at all, so anything gitignored in that tree would go without ever appearing in the
-  check. A move loses nothing and costs one directory.
-
-  To see what you had, once the new checkout is in place:
-  `git -C ~/openhop-core.before-pristine status --porcelain` for tracked changes, and
-  `git -C ~/openhop-core.before-pristine status --porcelain --ignored` to include the rest.
+  Keep that directory until you are satisfied, then remove it: a move loses nothing (your own
+  edits and gitignored files included), a delete might. `git -C ~/openhop-core.before-pristine
+  status --porcelain --ignored` shows what you had.
 
   Only the checkout moves. The config (`config/files/meshcore.toml`), the identity keys and the
   repeater's admin file all live outside it and are untouched, so the node keeps its public key
   and its settings. A fresh install needs none of this: nothing modifies the checkout any more.
-- On-air validation against a MeshCore T-Deck Pro: [live tests](../live-test.md).
+- On-air validated against a MeshCore T-Deck Pro in the live tests.
 
 ## Conflicts
 
 - One app stack per band ([kiss](kiss.md)): not with meshtastic or reticulum on 868 (they own the
   band exclusively), not with the daemon serving 868 for another client.
-- `meshcore.companion-client`: the Web UI and the CLI share one slot — shown as an advisory
-  conflict on the Apps page; the lock handoff above resolves it at run time.
+- `meshcore.companion-client`: advisory — one Companion client at a time, see
+  [Command-line client](#command-line-client).

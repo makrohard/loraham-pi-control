@@ -20,7 +20,7 @@ APRS-IS <-> graywolf <-> KISS/TCP 8001 <-> loraham-kiss-tnc <-> framed DATA <-> 
 | Password file | `<runtime>/state/graywolf/graywolf-admin.txt` (0600), user `admin` |
 | Resources | `tcp.port.8080` exclusive · `tcp.port.8001` consumer |
 | Depends on | `loraham-kiss-tnc` + `loraham-daemon`, `requires_daemon_tx = MANAGED` |
-| Install channel | the release fetch above (the stack's Install tab and `lhpc auto-install` do the same). `lhpc clean graywolf --purge` removes `build/tools/graywolf`. *Check upstream* compares the latest `chrissnell/graywolf` release; an opted-in newer version is verified against that release's own `checksums.txt` (`--from-upstream`). A version bump = the version in the manifest build step and its `build_marker` name + a new sha256 in the fetch script's table |
+| Install channel | the release fetch above (the stack's Install tab and `lhpc auto-install` do the same). `lhpc clean graywolf --purge` removes `build/tools/graywolf`. *Check upstream* compares the latest `chrissnell/graywolf` release; an opted-in newer version is verified against that release's own `checksums.txt` (`lhpc update graywolf --upstream`). Moving the version: [maintenance](../maintenance.md#moving-a-pin) |
 
 ## Contents
 
@@ -43,7 +43,7 @@ PTT), a `tcp-client` KISS interface dialling the TNC (a stale interface from an 
 | `call` | inherits the global base callsign while empty | optional APRS SSID `-1`…`-15` (bare = SSID 0), shaped like `G0ABC-10` with your own call. Graywolf derives the APRS-IS passcode from it — LHPC stores no passcode |
 | `tnc_host` / `tnc_port` | `127.0.0.1` / `8001` | where `loraham-kiss-tnc` listens |
 | `use_gps` | `on` | use the global position source (`lhpc gps`) |
-| `rf_log` (kiss) | `on` | RF log — the frames cross the radio at the kiss TNC, so the file is `logs/rf-kiss.log` and the switch is the kiss stack's (`lhpc config kiss rf_log off`); graywolf's RF-Logs submenu shows and saves it |
+| `rf_log` (kiss) | `on` | the frames cross the radio at the kiss TNC, so the file (`logs/rf-kiss.log`) and the switch (`lhpc config kiss rf_log off`) are the kiss stack's; graywolf's RF-Logs submenu shows it |
 | `igate` | `0` | enable Graywolf's APRS-IS iGate |
 | `igate_server` / `igate_port` | `rotate.aprs2.net` / `14580` | |
 | `igate_filter` | *(empty)* | APRS-IS server filter, e.g. `r/48.4/9.9/100`. A negation filter (`-b/…`) cannot be a param — a leading `-` reads as an option — so set those in the UI |
@@ -71,7 +71,7 @@ directions — a global source turned off, or `use_gps = off`, actively pushes `
 | `lhpc gps --source` | pushed to graywolf |
 |---|---|
 | `gpsd` (local or remote) | `source=gpsd`, `gpsd_host`, `gpsd_port` |
-| `auto` | as `gpsd` on `127.0.0.1:2947` while one listens, else `source=none` |
+| `auto` | as `gpsd` while a local one listens, else `source=none` |
 | `nmea` | `source=serial`, `serial_port`, `baud_rate` |
 | `fixed` | `source=none` — graywolf's GPS has no fixed mode; a fixed position belongs to its beacons, which are yours to set |
 | `off`, or `use_gps = off` | `source=none` |
@@ -93,13 +93,12 @@ latitude/longitude — graywolf's setting, not LHPC's. The model is in [GPS](../
   reported as TX-enabled.
 - With the iGate on, received and sent traffic reaches the public APRS-IS network; `igate = 0`
   (the default) keeps a bench test local.
-- Verified round trips against an ESP32 LoRa-APRS tracker: [live tests](../live-test.md).
+- Round trips against an ESP32 LoRa-APRS tracker are verified in the live tests.
 
 ## Conflicts
 
 - **Not with `loraham-kiss-serial`** — the TNC serves one KISS client; if the PTY holds it
   graywolf's dial is refused and it retries, if graywolf holds it the PTY is dead. An operator
   constraint, not reslock-enforced.
-- **One band at a time.** Graywolf claims no radio, but the chain it needs does
-  ([kiss](kiss.md)): a start on the other band is refused while graywolf, or its `kiss`/daemon
-  chain, is up on one. Stop the holder first or start on the band the chain already serves.
+- One app stack per band ([kiss](kiss.md)): graywolf claims no radio, but its `kiss`/daemon
+  chain does, so a start on the other band is refused while that chain is up.

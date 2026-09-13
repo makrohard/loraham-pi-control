@@ -60,8 +60,9 @@ and sideband are GTK/Kivy GUIs that launch headless under Xvfb (not remotely vie
 **Codespace (one click):** the badge above. The container builds from
 `.devcontainer/Dockerfile` (apt deps), then onCreate installs and builds every stack; the console
 starts automatically on port **8770** (forwarded privately). Stack UIs: graywolf **8080**, meshcom
-**18083**, meshcore's Web UI **8788** (Companion TCP **5000**), stackweb proxy pages
-**8444–8447**. meshtastic's UI is on **9080**: a plain-HTTP socat bridge `start.sh` runs in front
+**18083**, meshcore's Web UI **8788** (Companion TCP **5000**); ports **8444–8447** are forwarded
+for stack proxy pages, of which the lab installs none — create them on the Webserver page.
+meshtastic's UI is on **9080**: a plain-HTTP socat bridge `start.sh` runs in front
 of meshtasticd's self-signed HTTPS on `:9443`, because a Codespace's forwarding proxy 502s on the
 self-signed TLS. A restarted codespace re-runs the idempotent start script.
 
@@ -130,27 +131,19 @@ executable and server over simulated hardware, `browser` for real headless Chrom
   HEAD with the candidate manifest's pin, and every artifact against its receipt. Case names are
   the contract (`test_release_<stack>`) and the required ones are named in
   `testlab/lhpc_testlab/data/required-release-cases.json`, so an automated release can require
-  the stack it moved to have PASSED — a skip is not proof, and neither is a count, which any
-  fourteen renamed cases satisfy. The lane's first case fails if that list and the module ever
-  disagree. A case name is not evidence of WHICH stack broke — a case also stops the previous
-  stack and starts the lab's fake daemon — so a failure at a genuine per-stack step carries the
-  one-line marker `STACK-REGRESSION stack=<id> phase=<install|build|start|readiness>` in its
-  JUnit failure text, and everything else deliberately carries none. An automation may freeze a
-  stack only on a marked failure; the grammar and the list of sites left unmarked are in
-  `lhpc_testlab.release.stack_regression`. A build is marked only where the recipe itself
-  declares the failed step its own (`attributable = true` in the manifest — a compile, a patch,
-  a check over what earlier steps fetched), never at a step that fetches: pip failing on a
-  package mirror is typed exactly like a broken recipe.
+  the stack it moved to have PASSED — a skip is not proof, and neither is a count. The lane's
+  first case fails if that list and the module ever disagree. A failure at a genuine per-stack
+  step carries the one-line marker `STACK-REGRESSION stack=<id> phase=<install|build|start|readiness>`
+  in its JUnit failure text; everything else deliberately carries none (the grammar and the
+  unmarked sites: `lhpc_testlab.release.stack_regression`). A build is marked only where the
+  recipe declares the failed step its own (`attributable = true` in the manifest — a compile, a
+  patch, a check over what earlier steps fetched), never at a step that fetches. An automation
+  may freeze a stack only on a marked failure.
   - **It runs with `-x`.** The cases chain over one radio pair, so after the first failure
-    nothing later is judged in a meaningful state: continuing turned a genuine failure into an
-    unmarked prerequisite failure that suppressed the freeze, and a failed cleanup into an
-    innocent stack's own marker. A stopped run may still supply the attribution for its FIRST
-    regression; it can never satisfy the publication gate, which needs every required case to
-    have passed. Cleanup still runs, and a stop that fails is a visible teardown error.
-  - **What it cannot prove:** the daemon and RadioLib are the lab's fixtures, and the real daemon
-    needs a radio to start. Their pins move by hand, with the box
-    [test matrix](test-matrix.md); their artifact is proved by the binary builder's own smoke and
-    clean-runtime test.
+    nothing later is judged in a meaningful state. A stopped run may still supply the attribution
+    for its FIRST regression; it can never satisfy the publication gate, which needs every
+    required case to have passed. Cleanup still runs, and a stop that fails is a visible teardown
+    error.
   - In CI it is the `release-verify` job: pushes to `main`, or a dispatch with
     `release_verify=true` on a candidate branch. It uploads `junit-release.xml`, the recorded
     versions and the lab's own logs.

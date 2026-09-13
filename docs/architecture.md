@@ -112,19 +112,30 @@ when that leaves it long.
 
 ## Identity and callsigns
 
-There is one global base callsign (`lhpc config operator --callsign`). A **licensed** identity
-field (a stack that transmits under a callsign) may be left empty and then **inherits** the
-global base at launch — the empty field keeps meaning "inherit", and changing the global reports
-every running inheriting stack as restart-required. Meshtastic and MeshCore **node identities
-never inherit**: they are local node names, required on the stack itself, and a placeholder
-(`N0CALL`, `YOURCALL`, `NODENAME`, …) is refused like an empty one. The check is "configured, not
-a placeholder, and encodable by the protocol that transmits it" — LHPC cannot verify licensure
-and does not claim to. Enforcement judges the saved configuration at plan time, again under the
-operation locks immediately before the apply, and before every identity-bearing post-start
-step (`service_params.enforce_identity`, called from `service_lifecycle_ops`), so the CLI dry
-run, the web click and the locked mutation share one verdict: a start with no resolvable
-identity is refused, never launched with a placeholder, and the web sends the operator to the
-offending Settings row. The validator table per field type: [adding-a-stack.md](adding-a-stack.md).
+There is one global base callsign (`lhpc config operator --callsign`), optional, and it takes
+the **base** callsign only — the intersection every licensed stack accepts: the digit-bearing
+amateur structure — prefix, digit, then 1–3 letters, 3–6 characters total (e.g. `G0ABC`,
+`M7XYZ`) — no SSID, no `/P`. `N0CALL` is refused as a placeholder, and its four-letter suffix is
+not a valid base shape either; a value any licensed stack would refuse cannot be saved globally.
+A **licensed** identity field (a stack that transmits under a callsign: chat, Voice, Graywolf,
+MeshCom) may be left empty and then **inherits** the global base at launch — the empty field
+keeps meaning "inherit", and changing the global reports every running inheriting stack as
+restart-required. A per-stack value overrides it and may carry that stack's SSID or portable
+form. Meshtastic and MeshCore **node identities never inherit**: they are local node names,
+required on the stack itself, and a placeholder (`N0CALL`, `YOURCALL`, `NODENAME`, …) is refused
+like an empty one. The check is "configured, not a placeholder, and encodable by the protocol
+that transmits it" — the byte and character limits, SSID ranges and callsign shape each stack's
+firmware or app actually accepts; LHPC cannot verify that the callsign is licensed to you and
+does not claim to. Using your own call remains yours; the gate stops a station transmitting
+under a value nobody chose. Clearing an identity (`lhpc config`, or the Settings page) makes a
+licensed callsign fall back to the global one; with no global left, or for a node name that
+never inherits, the stack cannot be started until one is set again. Enforcement judges the saved
+configuration at plan time, again under the operation locks immediately before the apply, and
+before every identity-bearing post-start step (`service_params.enforce_identity`, called from
+`service_lifecycle_ops`), so the CLI dry run, the web click and the locked mutation share one
+verdict: a start with no resolvable identity is refused, never launched with a placeholder, and
+the web sends the operator to the offending Settings row. The validator table per field type:
+[adding-a-stack.md](adding-a-stack.md#parameters--config-files).
 
 ## Probes and status
 
@@ -164,8 +175,9 @@ The claims that matter for the radios:
   design.
 
 Each stack document lists its own claims; a band, a TCP port and a serial device are claimed the
-same way. A claim marked `advisory = true` — the single MeshCore companion-client slot — is
-reported as a conflict but never blocks a start.
+same way. A claim marked `advisory = true` — the single MeshCore companion-client slot
+([meshcore](stacks/meshcore.md#command-line-client)) — is reported as a conflict but never blocks
+a start.
 
 ## Daemon control
 
@@ -205,16 +217,10 @@ The guarantees the controller gives, each with where it is implemented and prove
   never destroys the active source, and an unresolved or malformed journal blocks all source
   mutation until an operator resolves it. `core/install.py`, `core/source_fs.py`;
   `tests/install/test_staged_update.py`, `tests/install/test_source.py`.
-- **Locally added files are never collateral.** An update copies the operator's and the stack's
-  own added files into the new source inside the activation (descriptor-relative, `O_NOFOLLOW`,
-  `O_EXCL`, so a path the new upstream also ships is a refusal, never a merge). The archived
-  prior is destroyed only after each addition it still holds is proven present in the activated
-  source — bytes, mode, symlink target — so a carry that never ran, or a file added after it,
-  retains the archive instead of losing data. Recovery decides nothing from a leaf it cannot
-  identity-prove: an interruption before the carry is rolled back automatically, and one during
-  it — which moves the candidate's recorded ctime — is retained whole for the operator rather
-  than cleaned up on a weaker proof. Editing or deleting an upstream-tracked file, or staging any
-  Git change, still refuses the update; the operator-facing rule is [provenance](provenance.md).
+- **Locally added files are never collateral.** An update carries the operator's and the
+  stack's own added files into the new source inside the activation and destroys the archived
+  prior only after each of them is proven present there; a path the new upstream also ships is a
+  refusal, never a merge. The operator-facing rule: [provenance](provenance.md#ownership-records).
   `core/install.py`, `core/source_fs.py`; `tests/install/test_source.py`.
 - **Locking.** Start, stop, restart, build, update, uninstall and clean take named non-blocking
   locks; a contended operation refuses immediately, naming the holder. `core/reslock.py`.
@@ -243,7 +249,7 @@ The guarantees the controller gives, each with where it is implemented and prove
   config paths are proven to stay inside `config/stacks/`
   (`tests/web/test_web.py::test_config_path_cannot_escape_via_band_or_id`). No GET route runs a
   network or git-remote command (`tests/web/test_web.py::test_get_routes_make_no_network_calls`).
-  Network exposure is the nginx + mTLS front end, never a public bind — [webserver.md](webserver.md).
+  Network exposure is the nginx front end ([serving model](deployment.md#serving-model)).
 - **Evidence once per request.** A page render reads each piece of evidence once (status
   snapshot, per-(stack, band) config, consumed-source SHAs, firewall status, listeners, git
   state per distinct checkout) through a thread-local request memo dropped at every request
@@ -252,16 +258,13 @@ The guarantees the controller gives, each with where it is implemented and prove
   marker (`state/jobresults/<log>.json`), spawns the child under task admission, captures its
   process identity, releases its own admission, and only then publishes the `.job` tracking
   marker, so the child's `verify_tracked` gate passes only once the parent no longer holds the
-  flock the child must take. An untrackable child is terminated (or the attempt marked *unsafe*
-  when its stop is unproven). Job markers are PID-reuse-resistant; `prune_logs()` never deletes
-  the log of an active job.
+  flock the child must take. An untrackable child is terminated, or the attempt marked *unsafe*
+  when its stop is unproven (what the operator sees: [operations](operations.md#operating-the-console)).
+  Job markers are PID-reuse-resistant; `prune_logs()` never deletes the log of an active job.
 - **Uninstall protection.** Uninstall refuses while a target runs, never removes a source still
   referenced by another component (`loraham-kiss-tnc` and `loraham-kiss-serial` share `src/loraham-kiss-tnc`), and never deletes
-  config, secrets or profiles (`tests/core/test_uninstall_safety.py`). `uninstall.sh` writes the
-  `.lhpc-uninstalling` guard (blocks new task admission), refuses on active or unprovable jobs
-  or any UNKNOWN component, stops clients before the shared daemon and verifies cessation; if
-  quiescence cannot be proven the guard is removed and nothing is deleted. Only byte-exact
-  canonical same-root units are stopped and removed.
+  config, secrets or profiles (`tests/core/test_uninstall_safety.py`). What `uninstall.sh` does
+  and keeps: [operations](operations.md#backup--restore).
 - **Boot restore replays only saved configuration** through the normal gated start path —
   [operations.md](operations.md).
 - **Packaging.** Tracked assets live in `lhpc/data/` and load via `importlib.resources`

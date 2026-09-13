@@ -4,9 +4,8 @@
 stacks: some open ports on **all interfaces** with no authentication at all. Two answers:
 
 1. **The managed firewall** (this page's focus): `lhpc` renders an nftables ruleset and you
-   apply it with **one sudo command**. It lives in its own `table inet lhpc`, never edits your
-   own firewall configuration, and its dashboard status is honest about what it has and has not
-   verified.
+   apply it with **one sudo command**. It lives in its own `table inet lhpc`, and its dashboard
+   status is honest about what it has and has not verified.
 2. **Do it yourself**: the raw `nft` commands are shown throughout so you can integrate them
    into an existing firewall instead.
 
@@ -36,14 +35,17 @@ nftables.
 | 5000 | MeshCore companion | loopback default | source allow-list | direct-access row |
 | 8000 | openHop repeater dashboard (MeshCore repeater modes) | loopback hardcoded | password (JWT) | already safe (reach it via its `meshcore-meshcore-node` proxy page) |
 | 7000 | MeshCom bridge | loopback default | password<sup>†</sup> | direct-access row |
+| 8080 | Graywolf web UI | loopback hardcoded | password | already safe (reach it via its `graywolf` proxy page) |
+| 8788 | MeshCore Web UI | loopback hardcoded | **none** | already safe (reach it via its `meshcore` proxy page) |
+| 8790 | MeshChat (reticulum) | loopback hardcoded | **none** | already safe (reach it via its `reticulum` proxy page) |
+| 4242 | Reticulum client access | loopback (bind locked) | source allow-list (`rns_allow`), no app auth | direct-access row |
 | 18083/12323 | MeshCom QEMU | loopback hardcoded | — | already safe |
 | 8443 | lhpc console (nginx) | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
 | 8444–8448 (+1 per further page, e.g. 8449) | stack proxy pages | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
 
-<sup>†</sup> **unless the stack is installed from the [binary channel](provenance.md)**: the
-published MeshCom firmware is built without a mesh password, so the bridge runs open and the
-firewall model classifies this listener as `auth: none`; the direct-access checkbox then carries
-the unauthenticated-exposure warning. Install meshcom from source to run it password-protected.
+<sup>†</sup> `auth: none` while meshcom is installed from the [binary channel](provenance.md)
+([why](stacks/meshcom.md)); the direct-access checkbox then carries the unauthenticated-exposure
+warning.
 
 **meshtastic 4403/9443 are the reason this feature exists**: reachable from anywhere on your
 network the moment the stack starts, with no upstream option to bind them to loopback. The
@@ -52,19 +54,11 @@ the web UI ([stack web-UI proxies](webserver.md)).
 
 ## Strategy: default-deny vs close-what-we-open
 
-**Close-what-we-open** (allow everything, add targeted drops for the known-bad ports) fails
-*open*: every future stack, package or misconfiguration that opens a port is exposed until
-someone notices; the meshtasticd problem recurs forever.
-
-**Default-deny** (block everything, allow only what is wanted) fails *closed*: a new listener is
-unreachable until deliberately allowed, the ruleset *is* the inventory of intended exposure, and
-a stale ruleset errs toward too-closed (an availability bug you notice) rather than too-open (a
-security hole you don't). The cost is that you must enumerate wants, which `lhpc` already does,
-because every wanted port comes from its own configuration, and the essential plumbing (loopback,
-conntrack, ICMPv6/NDP, DHCP client, mDNS, SSH) is always allowed.
-
-`lhpc`'s **secure-default** mode is default-deny. Its **compatibility** mode is the narrower
-close-what-we-open form, for boxes that already run a custom firewall.
+**Close-what-we-open** (allow everything, drop the known-bad ports) fails *open*: every future
+listener is exposed until someone notices. **Default-deny** (block everything, allow what is
+wanted) fails *closed*, and `lhpc` can enumerate the wants because every wanted port comes from
+its own configuration. **Secure-default** mode is default-deny; **compatibility** mode is the
+narrower close-what-we-open form, for boxes that already run a custom firewall.
 
 ## The managed firewall: one command
 
@@ -78,8 +72,7 @@ lhpc webserver apply
 ```
 
 That script (rendered by `lhpc`, executed by you) installs a small **root-owned** helper and
-three systemd units, then applies the ruleset and runs an immediate live check. `lhpc` itself
-never runs a privileged command.
+three systemd units, then applies the ruleset and runs an immediate live check.
 
 **Until you run it, nothing is filtered.** There is no `table inet lhpc`, every listener a stack
 opens is reachable from your network, and both `lhpc firewall` and the dashboard say
@@ -230,7 +223,7 @@ table inet lhpc {
 }
 ```
 
-`lhpc` never edits your firewall configuration; this is the raw material, yours to place.
+This is the raw material, yours to place.
 
 ## Scope and deliberate limitations
 
@@ -243,9 +236,7 @@ unprotected.
 
 **Install channels change nothing here.** A stack installed from the binary channel is gated
 exactly like a source-built one: the firewall reasons about *listeners*, not about how the
-binary got onto the box. The one difference is truthfulness: while a binary receipt is valid the
-meshcom bridge is modeled as unauthenticated (see the table above), because the published
-firmware has no mesh password to authenticate against.
+binary got onto the box (the meshcom bridge's `auth: none` on that channel: the table above).
 
 **Verified across updates.** The installed root helper stamps a revision (a hash of its own
 source) into every receipt; after an lhpc update replaces the helper, the old attestation no
