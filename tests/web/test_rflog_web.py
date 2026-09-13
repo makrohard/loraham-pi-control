@@ -1,5 +1,6 @@
-"""The RF-Logs submenu on a stack card, its one-key switch route, and the RF log page with its
-switcher and confirmed Clear — all driven by the registry, authorized by nothing else."""
+"""The RF log page — band row, stack row, the switches at the bottom, the scoped Clear and
+Clear all — and the dashboard's RF-log links: all driven by the registry, authorized by nothing
+else."""
 
 from __future__ import annotations
 
@@ -20,51 +21,47 @@ def _logs(tmp_path, name, text=""):
     return tmp_path / "logs" / name
 
 
-def _links(doc, target, job):
-    return doc.find("a", href=f"/logs/{target}?job={job}")
+def _links(doc, target, job, band=""):
+    """The links to one RF log, by their parsed URL (query order is nobody's contract)."""
+    from urllib.parse import parse_qs, urlsplit
+    want = {"job": [job], **({"band": [band]} if band else {})}
+    return [a for a in doc.find("a") if a["href"] and urlsplit(a["href"]).path == f"/logs/{target}"
+            and parse_qs(urlsplit(a["href"]).query) == want]
+
+
+def _row(doc, label):
+    return doc.within(doc.find("nav", **{"aria-label": label})[0])
+
+
+def _owner_values(paths):
+    return {e.owner: cfgmod.load_stack_config(paths, e.owner, "").get(e.key) for e in rflog.REGISTRY}
 
 
 def _scripts(doc):
     return [s["src"] or "" for s in doc.find("script")]
 
 
-# ---- the submenu -------------------------------------------------------------------------------
+# ---- the switches at the bottom of the page ---------------------------------------------------
 
-def test_graywolf_card_carries_the_kiss_switch_and_link(web):
-    doc = parse(web().get("/stacks?open=graywolf").get_data(as_text=True))
-    assert doc.present("stack-rflog-graywolf")
-    assert doc.field_default("value") == "on"
-    assert doc.by_id("rflog-switch-graywolf")["name"] == "value"
-    assert _links(doc, "loraham-kiss-tnc", "rf-kiss.log")           # the registry's target/job
-    assert not _links(doc, "graywolf", "rf-graywolf.log")
-
-
-def test_daemon_card_links_both_band_logs(web):
-    doc = parse(web().get("/stacks?open=daemon").get_data(as_text=True))
-    assert doc.present("stack-rflog-daemon")
-    assert _links(doc, "loraham-daemon", "rf-daemon-433.log")
-    assert _links(doc, "loraham-daemon", "rf-daemon-868.log")
-
-
-@pytest.mark.parametrize("sid", ["chat", "kiss", "voice"])
-def test_stacks_without_an_rf_log_have_no_submenu(sid, web):
-    doc = parse(web().get(f"/stacks?open={sid}").get_data(as_text=True))
-    assert doc.present(f"stackrow-{sid}") and not doc.present(f"stack-rflog-{sid}")
-
-
-def test_switch_saves_one_key_on_the_owner_and_merges(tmp_path, web, csrf):
+def test_the_stack_switch_saves_one_key_on_the_owner_and_returns_to_the_page(tmp_path, web, csrf):
     c = web()
     paths = Paths(runtime_root=tmp_path)
     svc = ControllerService(system=FakeSystem().system, paths=paths)
     assert svc.save_config_bundle("kiss", values={"rx_only": "on"}).ok
     before = cfgmod.load_stack_config(paths, "kiss", "")
-    r = c.post("/stacks/graywolf/rflog", data={"_csrf": csrf(c), "value": "off"})
-    assert r.status_code == 302
+    r = c.post("/stacks/graywolf/rflog", data={"_csrf": csrf(c), "value": "off", "from": "logs",
+                                               "job": "rf-kiss.log"})
+    assert r.status_code == 302 and r.headers["Location"].endswith("/logs/loraham-kiss-tnc?job=rf-kiss.log")
     after = cfgmod.load_stack_config(paths, "kiss", "")
     assert after["rf_log"] == "off" and {k: v for k, v in after.items() if k != "rf_log"} == before
     assert "rf_log" not in cfgmod.load_stack_config(paths, "graywolf", "")
-    doc = parse(c.get("/stacks?open=graywolf").get_data(as_text=True))
-    assert doc.field_default("value") == "off"
+    doc = parse(c.get("/logs/loraham-kiss-tnc?job=rf-kiss.log").get_data(as_text=True))
+    form = doc.within(doc.by_id("rflog-switch"))
+    assert form.field_default("value") == "off" and form.field_default("from") == "logs"
+    assert form.field_default("job") == "rf-kiss.log"
+    # Without `from=logs` (another page's form) the save lands on the owner's Settings.
+    r = c.post("/stacks/graywolf/rflog", data={"_csrf": csrf(c), "value": "on"})
+    assert r.status_code == 302 and "/stacks?open=graywolf#stack-settings-graywolf" in r.headers["Location"]
 
 
 def test_switch_requires_csrf_and_a_known_stack(tmp_path, web, csrf):
@@ -76,34 +73,71 @@ def test_switch_requires_csrf_and_a_known_stack(tmp_path, web, csrf):
     assert not (tmp_path / "config" / "stacks").exists()
 
 
-def test_submenu_says_restart_required_after_a_live_change(monkeypatch, web, csrf):
+def test_the_page_says_restart_required_after_a_live_change(monkeypatch, web, csrf):
     monkeypatch.setattr(ControllerService, "stack_running", lambda self, sid: sid == "kiss")
     monkeypatch.setattr(ControllerService, "running_band", lambda self, sid, d="": "433")
     c = web()
+    url = "/logs/loraham-kiss-tnc?job=rf-kiss.log"
+    assert not parse(c.get(url).get_data(as_text=True)).present("rflog-restart")
     assert c.post("/stacks/graywolf/rflog", data={"_csrf": csrf(c), "value": "off"}).status_code == 302
-    doc = parse(c.get("/stacks?open=graywolf").get_data(as_text=True))
-    # The typed flag (`rflog_view(...)["restart_required"]`) is owned by tests/core; the submenu
-    # renders it only as this phrase, so the phrase is asserted INSIDE the submenu.
-    assert doc.present("rflog-restart-graywolf")
+    # The typed flag (`rflog_switch(...)["restart_required"]`) is owned by tests/core; the page
+    # renders it only as this phrase, so the phrase is asserted inside the stack form.
+    doc = parse(c.get(url).get_data(as_text=True))
+    assert doc.within(doc.by_id("rflog-switch")).present("rflog-restart")
+
+
+def test_logging_sets_every_owner_at_once_and_shows_mixed(tmp_path, web, csrf):
+    c = web()
+    paths = Paths(runtime_root=tmp_path)
+    url = "/logs/loraham-kiss-tnc?job=rf-kiss.log"
+    r = c.post("/rflog/all", data={"_csrf": csrf(c), "value": "off", "job": "rf-kiss.log"})
+    assert r.status_code == 302 and r.headers["Location"].endswith(url)
+    assert set(_owner_values(paths).values()) == {"off"}
+    doc = parse(c.get(url).get_data(as_text=True))
+    assert doc.by_id("rflog-all-state")["data-state"] == "off"
+    assert doc.within(doc.by_id("rflog-all")).field_default("value") == "off"
+    assert c.post("/stacks/graywolf/rflog", data={"_csrf": csrf(c), "value": "on"}).status_code == 302
+    doc = parse(c.get(url).get_data(as_text=True))
+    assert doc.by_id("rflog-all-state")["data-state"] == "mixed"
+    # A bad value changes nothing; without a CSRF token the route refuses outright.
+    assert c.post("/rflog/all", data={"_csrf": csrf(c), "value": "maybe", "job": "rf-kiss.log"}).status_code == 302
+    assert c.post("/rflog/all", data={"value": "on", "job": "rf-kiss.log"}).status_code == 400
+    doc = parse(c.get(url).get_data(as_text=True))
+    assert doc.by_id("rflog-all-state")["data-state"] == "mixed" and _owner_values(paths)["daemon"] == "off"
 
 
 # ---- the page ----------------------------------------------------------------------------------
 
-def test_rf_log_page_has_the_switcher_and_a_scoped_clear_form(web):
+@pytest.mark.parametrize("band", ControllerService.RADIO_BANDS)
+def test_the_page_has_a_band_row_and_the_stack_row_of_that_band(tmp_path, band, web):
+    """Both rows are plain links. The band row lists every band and marks the shown one; the
+    stack row is the registry's answer for that band (owned by tests/core), rendered complete,
+    each pill carrying the band so the next page opens on the same one."""
     c = web()
-    doc = parse(c.get("/logs/loraham-kiss-tnc?job=rf-kiss.log").get_data(as_text=True))
-    nav = doc.find("nav", **{"aria-label": "RF logs"})
-    assert nav
-    current = doc.find("a", **{"aria-current": "page"})
-    assert [a["href"] for a in current] == ["/logs/loraham-kiss-tnc?job=rf-kiss.log"]
-    # The switcher is complete: exactly one link per registered (writer, job). The job names
-    # themselves are pinned by tests/stacks/test_rflog_manifest.py, not spelled again here.
-    switcher = doc.within(nav[0])
-    for e in rflog.REGISTRY:
-        for _band, job in e.jobs:
-            assert len(_links(switcher, e.writer, job)) == 1, (e.writer, job)
+    doc = parse(c.get(f"/logs/loraham-kiss-tnc?job=rf-kiss.log&band={band}").get_data(as_text=True))
+    bands = _row(doc, "RF log bands")
+    assert [a.text for a in bands.find("a")] == list(ControllerService.RADIO_BANDS)
+    assert [a.text for a in bands.find("a", **{"aria-current": "page"})] == [band]
+    for b in ControllerService.RADIO_BANDS:
+        assert len(_links(bands, "loraham-kiss-tnc", "rf-kiss.log", b)) == 1
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    expected = svc.rflog_switcher("rf-kiss.log", band)["stacks"]
+    stacks = _row(doc, "RF logs")
+    assert len(stacks.find("a")) == len(expected) > 1
+    for st in expected:
+        assert len(_links(stacks, st["target"], st["job"], band)) == 1, st
+    assert [a.text for a in stacks.find("a", **{"aria-current": "page"})] == ["graywolf"]
     assert doc.find("form", action="/logs/loraham-kiss-tnc/clear")
-    assert doc.find("input", name="job")[0]["value"] == "rf-kiss.log"
+    assert doc.within(doc.by_id("rflog-clear")).field_default("job") == "rf-kiss.log"
+
+
+def test_the_shown_band_falls_back_to_the_files_own_band(web):
+    doc = parse(web().get("/logs/loraham-daemon?job=rf-daemon-868.log").get_data(as_text=True))
+    bands = _row(doc, "RF log bands")
+    assert [a.text for a in bands.find("a", **{"aria-current": "page"})] == ["868"]
+    assert [a.text for a in _row(doc, "RF logs").find("a", **{"aria-current": "page"})] == ["daemon 868"]
+    # On the daemon's page a band pill opens THAT band's file in one tap (one file per band).
+    assert len(_links(bands, "loraham-daemon", "rf-daemon-433.log", "433")) == 1
 
 
 @pytest.mark.parametrize("url", ["/logs/loraham-kiss-tnc?job=rf-made-up.log",
@@ -111,8 +145,8 @@ def test_rf_log_page_has_the_switcher_and_a_scoped_clear_form(web):
                                  "/logs/loraham-kiss-tnc"])
 def test_other_logs_get_neither_switcher_nor_clear(url, web):
     doc = parse(web().get(url).get_data(as_text=True))
-    assert not doc.find("nav", **{"aria-label": "RF logs"})
-    assert not doc.find("input", name="job")
+    assert not doc.find("nav", **{"aria-label": "RF logs"}) and not doc.find("nav", **{"aria-label": "RF log bands"})
+    assert not doc.find("input", name="job") and not doc.find("form", action="/rflog/all")
 
 
 def test_page_and_api_show_both_segments(tmp_path, web):
@@ -158,6 +192,49 @@ def test_clear_requires_csrf_and_refuses_a_symlink(tmp_path, web, csrf):
     assert c.post("/logs/meshcom-bridge/clear",
                   data={"_csrf": csrf(c), "job": "rf-meshcom.log"}).status_code == 302
     assert outside.read_text() == "precious\n"
+
+
+def test_clear_all_empties_every_registered_log_and_nothing_else(tmp_path, web, csrf):
+    jobs = [j for e in rflog.REGISTRY for _b, j in e.jobs]
+    live = [_logs(tmp_path, j, "x\n") for j in jobs]
+    prev = [_logs(tmp_path, j + ".1", "old\n") for j in jobs]
+    keep = [_logs(tmp_path, n, "keep\n") for n in ("rf-made-up.log", "start-loraham-daemon-433.log")]
+    c = web()
+    assert c.post("/rflog/clear-all", data={"job": "rf-kiss.log"}).status_code == 400   # no CSRF
+    assert all(p.read_text() == "x\n" for p in live)
+    r = c.post("/rflog/clear-all", data={"_csrf": csrf(c), "job": "rf-kiss.log"})
+    assert r.status_code == 302 and r.headers["Location"].endswith("/logs/loraham-kiss-tnc?job=rf-kiss.log")
+    assert all(p.read_text() == "" for p in live) and not any(p.exists() for p in prev)
+    assert all(p.read_text() == "keep\n" for p in keep)
+    doc = parse(c.get("/logs/loraham-kiss-tnc?job=rf-kiss.log").get_data(as_text=True))
+    assert doc.by_id("rflog-clear-all")["data-confirm"] and doc.by_id("rflog-clear")["data-confirm"]
+    assert doc.by_id("rflog-clear-all")["data-confirm"] != doc.by_id("rflog-clear")["data-confirm"]
+
+
+# ---- the dashboard's second line -----------------------------------------------------------------
+
+def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
+    """Under each radio card's daemon control: the daemon's file for that band, then the file of
+    every running stack the registry knows — on its own band only. No file exists yet, and the
+    links still lead to a page that says so."""
+    def factory():
+        svc = ControllerService(
+            system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["meshtasticd"]},
+                              unix_replies={"/tmp/loraconf433.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system,
+            paths=Paths(runtime_root=tmp_path))
+        svc._set_running_band("meshtastic", "868")
+        return svc
+    c = web(service_factory=factory)
+    doc = parse(c.get("/").get_data(as_text=True))
+    col433 = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
+    col868 = doc.within(doc.find("div", **{"data-radio-band": "868"})[0])
+    assert len(_links(col433, "loraham-daemon", "rf-daemon-433.log")) == 1
+    assert not _links(col433, "meshtastic", "rf-meshtastic.log")
+    assert len(_links(col868, "loraham-daemon", "rf-daemon-868.log")) == 1
+    assert len(_links(col868, "meshtastic", "rf-meshtastic.log")) == 1
+    assert not _links(col868, "loraham-kiss-tnc", "rf-kiss.log")           # not running
+    r = c.get(_links(col868, "meshtastic", "rf-meshtastic.log")[0]["href"])
+    assert r.status_code == 200 and "(no log file yet)" in r.get_data(as_text=True)
 
 
 # ---- the viewer's records and the Decrypt toggle -----------------------------------------------
@@ -233,7 +310,8 @@ def test_a_decoder_level_error_is_reported_with_the_records_intact(tmp_path, mon
 ])
 def test_the_page_carries_the_table_and_decrypt_only_where_keys_can_open_it(url, encrypted, web):
     doc = parse(web().get(url).get_data(as_text=True))
-    assert doc.by_id("rfview") and doc.by_id("rf-filter") and doc.by_id("rf-raw")
+    assert doc.by_id("rfview") and doc.by_id("rf-cols") and doc.by_id("rf-raw")
+    assert not doc.find("input", type="search") and not doc.find("select", id="rf-dir")   # no filter
     assert doc.by_id("log-card")["data-decoder"] == ("1" if encrypted else "0")
     assert bool(doc.by_id("rf-decrypt")) == encrypted
     assert bool(doc.find("th", **{"data-col": "decoded"})) == encrypted
@@ -241,7 +319,7 @@ def test_the_page_carries_the_table_and_decrypt_only_where_keys_can_open_it(url,
     if encrypted:
         # its own row, below the switcher, off by default
         nav = doc.find("nav", **{"aria-label": "RF logs"})[0]
-        assert doc.index(nav) < doc.index(doc.by_id("rf-decrypt")) < doc.index(doc.by_id("rf-filter"))
+        assert doc.index(nav) < doc.index(doc.by_id("rf-decrypt")) < doc.index(doc.by_id("rf-cols"))
         assert doc.by_id("rf-decrypt")["aria-pressed"] == "false"
     scripts = _scripts(doc)
     assert any(s.endswith("/rflog.js") for s in scripts) and not any(s.endswith("/logs.js") for s in scripts)

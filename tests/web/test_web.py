@@ -1175,6 +1175,34 @@ def test_last_apply_success_suppressed_failure_shown(tmp_path, web):
     assert "Last update run" in web(guard=ReadOnlyGuard).get("/stacks").get_data(as_text=True)
 
 
+_RDY = b"STATUS RADIO=READY TXMODE=MANAGED\n"
+_DAEMON_UP = {100: ["loraham_daemon", "--radio", "433"]}
+
+
+@pytest.mark.parametrize("state,cmdlines,socks", [
+    ("ready", {}, {"/tmp/loraconf433.sock": _RDY}),
+    ("occupied", {}, {"/tmp/loraconf433.sock": b"STATUS RADIO=FAILED TXMODE=MANAGED\n"}),
+    ("offline-installed", _DAEMON_UP, {}),
+], ids=["ready", "occupied", "offline-installed"])
+def test_the_radio_card_log_links_sit_directly_under_the_daemon_control(tmp_path, web, state, cmdlines, socks):
+    """One link block per band card, defined once: the element right after the daemon's own
+    Stop/Start form, in every state the daemon is installed in."""
+    c = web(system=FakeSystem(cmdlines_data=cmdlines, unix_replies=socks).system)
+    doc = parse(c.get("/").get_data(as_text=True))
+    col = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
+    forms = [f for f in col.find("form") if col.within(f).field_default("target") == "daemon"]
+    assert len(forms) == 1, "exactly one daemon control on the card"
+    links = col.find("p", class_="links")
+    assert len(links) == 1 and links[0].index == forms[0].end + 1
+    assert col.within(links[0]).find("a", href="/logs/loraham-daemon?band=433")
+
+
+def test_the_radio_card_has_no_log_links_without_a_daemon(web):
+    doc = parse(web().get("/").get_data(as_text=True))
+    col = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
+    assert not col.find("p", class_="links") and not col.find("a", href="/logs/loraham-daemon?band=433")
+
+
 def test_dash_radio_config_link_opens_daemon_settings(tmp_path, web):
     # With a configured setup and an answering CONF socket the dashboard emits the link, so it
     # can be asserted where the operator sees it rather than by scraping one template line.

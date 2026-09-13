@@ -330,9 +330,10 @@ job announces its exact path at start.
 line per frame, written by the stack's own process at its radio boundary and kept across
 restarts (run logs are overwritten; these are not). The six user-facing logs, their config owner
 and their writer are the registry in `lhpc/core/rflog.py`, which is the **only** authorization
-for the viewer, the switcher and Clear: a job absent from it is never an RF log, whatever its
-name. `rf_log` is a stack-level, band-less switch (`_BANDLESS_STACK_PARAMS`), read at the
-writer's next start; graywolf proxies to the kiss TNC's switch.
+for the log page, its rows, its switches and Clear: a job absent from it is never an RF log,
+whatever its name. `rf_log` is a stack-level, band-less switch (`_BANDLESS_STACK_PARAMS`) in
+the owner's Settings (group *RF-Logs*; the daemon has no Settings form — its switch is the log
+page or the CLI), read at the writer's next start; graywolf proxies to the kiss TNC's switch.
 
 Retention, per job: the writer copy-truncates at 5 MB into `<job>.1` — the inode never changes,
 so Clear (truncate in place, delete `.1`) is safe under a running writer — which retains at most
@@ -345,10 +346,28 @@ appends to, so lhpc rolls it opportunistically — at stack start and when a pag
 the cap, keeping the last ~5 MB in `.1`. That is not a hard maximum; an unattended node grows the
 trace until the next start, read or Clear.
 
-The console's viewer for these logs: [operations](operations.md#operating-the-console).
+**The log page** (`/logs/<writer>?job=<file>`) is one page for every RF log. Each dashboard
+radio card links it under the daemon control: the band's daemon log, then *RF log:* the daemon's
+file for that band and the file of each running stack the registry knows. Under the page header
+sit two rows of plain links. The band row lists every band. The stack row lists the RF logs of
+the shown band: the daemon's file for it, then every stack whose components declare that band,
+in registry order. The shown band is the `band` query arg, else the file's own band (the
+daemon), else the stack's declared band. Encrypted stacks get the Decrypt row below (next
+paragraph). The table shows one row per frame, oldest first; any header sorts, a second tap
+reverses. Columns are a per-browser choice; by default only *dir*, *ascii* and *decoded* are on,
+so a phone fits. *Raw* shows the file as the CLI prints it; a row tap expands its payload. The
+rows come from `GET /api/rflog/<writer>?job=…` (parsed server-side by `rflog.parse_line`, the
+same registry authorization; a line the parser does not know is still a row with its raw text).
+Column and sort choices live in the browser's `localStorage` (`lhpc.rflog2.<file>`), never on
+the box; Decrypt is never remembered. At the bottom: **Stack log** saves the shown stack's switch
+on its config owner — the same key Settings saves, and "restart required" while the running
+writer keeps its old value. **Logging** saves every stack's switch at once and reads *on*, *off*
+or *mixed* when they differ. **Clear RF log** empties the shown file and removes its `.1`;
+**Clear all RF logs** does that for every registered file, each under its own lock — run logs are
+never touched. The CLI does the same: [`lhpc rflog`](cli.md#rflog).
 
 **Decrypt.** For the three stacks whose payloads are encrypted — meshtastic, meshcore,
-reticulum — the log page carries a **Decrypt** toggle on its own row below the switcher, and the CLI
+reticulum — the log page carries a **Decrypt** toggle on its own row below the stack row, and the CLI
 `lhpc rflog <stack> --decrypt [--follow]`. Both run a small decoder script (`lhpc/data/rfdecode/`)
 under the *stack's own interpreter*, where its libraries and its keys already live: the managed
 Meshtastic CLI venv reads `state/meshtasticd/prefs/channels.proto` (channel PSKs; LongFast's is

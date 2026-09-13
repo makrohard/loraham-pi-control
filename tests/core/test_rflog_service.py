@@ -1,6 +1,7 @@
-"""The RF-log service behind the RF-Logs submenu, the log page and `lhpc rflog`: the band-less
-switch and its restart marker, the two-segment tail, the scoped Clear, and the meshtastic
-retention exception. Everything is authorized by the registry, never by a file name."""
+"""The RF-log service behind the log page and `lhpc rflog`: the band-less switch (one stack's
+and every stack's at once) and its restart marker, the band row and stack row, the two-segment
+tail, the scoped Clear and Clear all, and the meshtastic retention exception. Everything is
+authorized by the registry, never by a file name."""
 
 from __future__ import annotations
 
@@ -49,7 +50,7 @@ def test_a_banded_save_changes_only_the_bandless_store(tmp_path):
 def test_cli_and_rflog_paths_store_the_same_value_in_the_same_file(tmp_path):
     a, b = _svc(tmp_path / "a"), _svc(tmp_path / "b")
     assert a.save_config_bundle("kiss", values={"rf_log": "off"}).ok       # lhpc config kiss rf_log off
-    assert b.set_rflog("graywolf", "off").ok                                # the graywolf submenu
+    assert b.set_rflog("graywolf", "off").ok                                # the graywolf log page
     pa, pb = cfgmod._stack_config_path(a._paths, "kiss", ""), cfgmod._stack_config_path(b._paths, "kiss", "")
     assert pa.read_text() == pb.read_text() and _store(b, "kiss")["rf_log"] == "off"
     assert "rf_log" not in _store(b, "graywolf")                            # never the proxy's store
@@ -63,7 +64,7 @@ def test_the_switch_survives_a_band_change(tmp_path):
     # The resolver is what spawn reads per band; there is no public per-band accessor for a
     # single param, and the line above already proves the store through the public view.
     assert svc._resolved_param_value("kiss", "run", "loraham-kiss-tnc", "rf_log", "868") == "off"
-    assert svc.rflog_view("graywolf")["value"] == "off"
+    assert svc.rflog_switch("graywolf")["value"] == "off"
 
 
 def test_on_is_the_default_and_clears_the_key(tmp_path):
@@ -71,7 +72,7 @@ def test_on_is_the_default_and_clears_the_key(tmp_path):
     assert svc.save_config_bundle("kiss", values={"rf_log": "off"}).ok
     assert svc.save_config_bundle("kiss", values={"rf_log": "on"}).ok
     assert "rf_log" not in _store(svc, "kiss")                              # no third state
-    assert svc.rflog_view("graywolf")["value"] == "on"
+    assert svc.rflog_switch("graywolf")["value"] == "on"
 
 
 def test_a_file_param_owner_stores_its_file_key_bandless(tmp_path):
@@ -79,7 +80,7 @@ def test_a_file_param_owner_stores_its_file_key_bandless(tmp_path):
     assert svc.save_config_bundle("meshcore", values={"file_rf_log": "off"}).ok
     assert _store(svc, "meshcore")["file_rf_log"] == "off"
     assert svc.file_config_values("meshcore")["rf_log"] == "off"
-    assert svc.rflog_view("meshcore")["value"] == "off"
+    assert svc.rflog_switch("meshcore")["value"] == "off"
 
 
 def test_the_daemon_switch_is_read_per_band_at_spawn(tmp_path):
@@ -104,7 +105,7 @@ def test_a_cross_band_edit_of_the_switch_marks_the_live_band(tmp_path, monkeypat
     assert svc.save_config_bundle("kiss", values={"rf_log": "off"}, band="433").ok
     m = svc.restart_required("kiss")
     assert m is not None and m["params"] == ["rf_log"] and m["band"] == "868"
-    assert svc.rflog_view("graywolf")["restart_required"] is True
+    assert svc.rflog_switch("graywolf")["restart_required"] is True
 
 
 def test_a_mixed_cross_band_save_names_only_the_bandless_param(tmp_path, monkeypatch):
@@ -144,19 +145,67 @@ def test_the_viewer_tails_both_segments_as_one(tmp_path):
     assert svc.log_tail("loraham-kiss-tnc", 300, job="rf-kiss.log")[1] == [f"new {i}" for i in range(220)]
 
 
-def test_the_view_lists_the_registry_jobs_with_paths_and_sizes(tmp_path):
+def _declared(svc, surface):
+    return {b for c in svc.stack(surface).components for b in (c.bands or ([c.band] if c.band else []))}
+
+
+@pytest.mark.parametrize("band", ControllerService.RADIO_BANDS)
+def test_the_stack_row_is_the_registry_for_that_band(tmp_path, band):
+    """Every band in the band row; in the stack row the daemon's file for the band plus every
+    registered stack whose manifest components declare it, in registry order — nothing
+    hand-typed here, the registry and the manifest are the expectation."""
     svc = _svc(tmp_path)
-    _logs(tmp_path, "rf-daemon-433.log", "x" * 2048)
-    v = svc.rflog_view("daemon")
-    assert [j["job"] for j in v["jobs"]] == ["rf-daemon-433.log", "rf-daemon-868.log"]
-    assert v["jobs"][0]["size"] == 2048 and v["jobs"][1]["size"] is None
-    assert v["jobs"][0]["path"] == str(tmp_path / "logs" / "rf-daemon-433.log")
-    assert v["owner"] == "daemon" and v["writer"] == "loraham-daemon"
-    assert svc.rflog_view("chat") is None
-    assert [s["job"] for s in svc.rflog_switcher()] == [j for e in rflog.REGISTRY for _b, j in e.jobs]
+    sw = svc.rflog_switcher("rf-kiss.log", band)
+    assert sw["band"] == band
+    assert [(b["band"], b["current"]) for b in sw["bands"]] == [(b, b == band) for b in ControllerService.RADIO_BANDS]
+    expected = [(e.writer, e.job(band) if e.banded else e.job(), e.surface) for e in rflog.REGISTRY
+                if e.banded or band in _declared(svc, e.surface)]
+    assert [(s["target"], s["job"], s["surface"]) for s in sw["stacks"]] == expected
+    assert [s["surface"] for s in sw["stacks"] if s["current"]] == ["graywolf"]
+    assert [s["label"] for s in sw["stacks"] if s["surface"] == "daemon"] == [f"daemon {band}"]
+    assert svc.rflog_switch("chat") is None
     assert svc.rflog_job("loraham-kiss-tnc", "rf-kiss.log")["surface"] == "graywolf"
     assert svc.rflog_job("loraham-daemon", "rf-kiss.log") is None        # not this writer's
     assert svc.rflog_job("loraham-kiss-tnc", "rf-made-up.log") is None
+
+
+def test_the_shown_band_is_the_arg_else_the_files_band_else_the_stacks_own(tmp_path):
+    svc = _svc(tmp_path)
+    assert svc.rflog_switcher("rf-daemon-868.log")["band"] == "868"            # the file's band
+    assert svc.rflog_switcher("rf-daemon-868.log", "433")["band"] == "433"     # the arg wins
+    assert svc.rflog_switcher("rf-daemon-868.log", "900")["band"] == "868"     # an invalid arg is ignored
+    primary = next(c.band for c in svc.stack("meshtastic").components if c.band)
+    assert svc.rflog_switcher("rf-meshtastic.log")["band"] == primary          # the stack's own band
+    assert [s["current"] for s in svc.rflog_switcher("rf-daemon-868.log", "433")["stacks"]] == \
+        [False] * len(svc.rflog_switcher("rf-daemon-868.log", "433")["stacks"])   # the 868 file is not on 433
+
+
+# ---- every stack at once -----------------------------------------------------------------
+
+def test_set_rflog_all_writes_every_owner_once_and_marks_each_running_one(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    _live(monkeypatch, svc, "kiss", "868")
+    saved = []
+    real = ControllerService.save_config_bundle
+    monkeypatch.setattr(ControllerService, "save_config_bundle",
+                        lambda self, target, **kw: saved.append(target) or real(self, target, **kw))
+    res = svc.set_rflog_all("off")
+    owners = list(dict.fromkeys(e.owner for e in rflog.REGISTRY))
+    assert res.ok and saved == owners and len(res.details) == len(owners)
+    for e in rflog.REGISTRY:
+        assert _store(svc, e.owner)[e.key] == "off"
+    assert svc.restart_required("kiss")["params"] == ["rf_log"]
+    assert svc.restart_required("daemon") is None                              # not running: no marker
+    bad = svc.set_rflog_all("maybe")
+    assert not bad.ok and bad.data["reason"] == "invalid-choice" and saved == owners
+
+
+def test_logging_state_is_on_off_or_mixed(tmp_path):
+    svc = _svc(tmp_path)
+    assert svc.rflog_logging_state() == "on"                                    # every default
+    assert svc.set_rflog_all("off").ok and svc.rflog_logging_state() == "off"
+    assert svc.set_rflog("graywolf", "on").ok and svc.rflog_logging_state() == "mixed"
+    assert svc.set_rflog_all("on").ok and svc.rflog_logging_state() == "on"
 
 
 # ---- Clear -------------------------------------------------------------------------------
@@ -185,6 +234,29 @@ def test_clear_refuses_anything_outside_the_registry(tmp_path, target, job):
     made_up = _logs(tmp_path, "rf-made-up.log", "keep\n")
     assert not svc.rflog_clear(target, job).ok
     assert f.read_text() == "keep\n" and made_up.read_text() == "keep\n"
+
+
+def test_clear_all_clears_every_registry_job_and_nothing_else(tmp_path):
+    svc = _svc(tmp_path)
+    jobs = [j for e in rflog.REGISTRY for _b, j in e.jobs]
+    live = [_logs(tmp_path, j, "x\n") for j in jobs]
+    prev = [_logs(tmp_path, j + ".1", "old\n") for j in jobs]
+    keep = [_logs(tmp_path, n, "keep\n") for n in ("rf-made-up.log", "start-loraham-daemon-433.log")]
+    inodes = [os.stat(p).st_ino for p in live]
+    res = svc.rflog_clear_all()
+    assert res.ok and len(res.details) == len(jobs)
+    assert all(p.read_text() == "" for p in live) and [os.stat(p).st_ino for p in live] == inodes
+    assert not any(p.exists() for p in prev) and all(p.read_text() == "keep\n" for p in keep)
+
+
+def test_clear_all_reports_the_one_job_it_could_not_clear(tmp_path):
+    svc = _svc(tmp_path)
+    outside = tmp_path / "outside.log"
+    outside.write_text("precious\n")
+    kiss = _logs(tmp_path, "rf-kiss.log", "x\n")
+    os.symlink(outside, tmp_path / "logs" / "rf-meshcom.log")
+    res = svc.rflog_clear_all()
+    assert not res.ok and outside.read_text() == "precious\n" and kiss.read_text() == ""
 
 
 def test_clear_never_truncates_through_a_symlink(tmp_path):

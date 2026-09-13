@@ -192,20 +192,30 @@ def test_a_start_marks_its_stack_and_reloads_the_page_once_when_it_finishes(page
 
 
 def _row_times(page):
-    """Which seeded record each rendered row is, top to bottom, by its time token."""
-    return [next(t for t in ("16:00:00", "16:01:00", "16:02:00") if t in text)
-            for text in page.locator("#rfview tbody tr").all_inner_texts()]
+    """Which seeded record each rendered row is, top to bottom, by its time cell — read from the
+    DOM by the header's position, whether the column is shown or not."""
+    cells = page.evaluate(
+        "() => { const i = [...document.querySelectorAll('#rfview thead th')].findIndex(t => t.dataset.col === 'ts');"
+        " return [...document.querySelectorAll('#rfview tbody tr')].map(tr => tr.children[i].textContent); }")
+    return [next(t for t in ("16:00:00", "16:01:00", "16:02:00") if t in text) for text in cells]
 
 
-def test_the_rf_log_viewer_sorts_filters_toggles_columns_and_polls(page, seeded_rf_logs):
-    """rflog.js is proven only here: the records table over a seeded two-segment log, a row
-    appended and picked up by the poll, sort by rssi in both directions, a filter, a column off,
-    and the raw view. A plaintext stack offers no Decrypt toggle."""
+_VISIBLE_COLS = ("[...document.querySelectorAll('#rfview thead th')]"
+                 ".filter(t => !t.hidden).map(t => t.dataset.col)")
+
+
+def test_the_rf_log_viewer_sorts_toggles_columns_and_polls(page, seeded_rf_logs):
+    """rflog.js is proven only here: the records table over a seeded two-segment log in time
+    order with dir and ascii as the only default columns, a row appended and picked up by the
+    poll, sort by rssi in both directions, a column off, and the raw view. A plaintext stack
+    offers no Decrypt toggle."""
     seeds = seeded_rf_logs
     page.goto(page.lab_base + "/logs/loraham-kiss-tnc?job=rf-kiss.log", wait_until="networkidle")
     page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 2", timeout=15000)
     assert page.locator("#rf-decrypt").count() == 0                     # plaintext stack: no toggle
-    assert _row_times(page) == ["16:00:00", "16:01:00"]                 # file order, unsorted
+    assert page.evaluate("() => " + _VISIBLE_COLS) == ["dir", "ascii"]
+    assert page.locator("#rfview th[data-col=ts]").get_attribute("aria-sort") == "ascending"
+    assert _row_times(page) == ["16:00:00", "16:01:00"]                 # time order
 
     with open(seeds.dir / "rf-kiss.log", "a") as f:                       # the poll picks it up
         f.write('2026-09-12T16:02:00.000Z RX rssi=-70.00 snr=8.00 len=1 hex=ff ascii="."\n')
@@ -213,6 +223,8 @@ def test_the_rf_log_viewer_sorts_filters_toggles_columns_and_polls(page, seeded_
 
     # Two numeric rssi rows (-90, -70) and the TX row's null: ascending puts -90 first, descending
     # -70 first, and the null row last either way — the ROW ORDER is what proves the sort.
+    page.locator("#rf-cols input[value=rssi]").check()                   # a column on shows its header
+    page.wait_for_function("() => " + _VISIBLE_COLS + ".includes('rssi')", timeout=5000)
     page.locator("#rfview th[data-col=rssi] button").click()
     page.wait_for_function("() => document.querySelector('#rfview th[data-col=rssi]').getAttribute('aria-sort') === 'ascending'", timeout=5000)
     assert _row_times(page) == ["16:00:00", "16:02:00", "16:01:00"]
@@ -220,21 +232,15 @@ def test_the_rf_log_viewer_sorts_filters_toggles_columns_and_polls(page, seeded_
     page.wait_for_function("() => document.querySelector('#rfview th[data-col=rssi]').getAttribute('aria-sort') === 'descending'", timeout=5000)
     assert _row_times(page) == ["16:02:00", "16:00:00", "16:01:00"]
 
-    page.fill("#rf-filter", "G0ABC")
-    page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 1", timeout=5000)
-    assert "hello" in page.locator("#rfview tbody tr").nth(0).inner_text()
-    page.fill("#rf-filter", "")
-    page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 3", timeout=5000)
-
     # A column off hides its header AND its cells; the cell is found by the header's position,
     # never by a hand-counted index.
-    page.locator("#rf-cols input[value=hex]").uncheck()
+    page.locator("#rf-cols input[value=ascii]").uncheck()
     assert page.evaluate(
         "() => { const ths = [...document.querySelectorAll('#rfview thead th')];"
-        " const i = ths.findIndex(t => t.dataset.col === 'hex');"
+        " const i = ths.findIndex(t => t.dataset.col === 'ascii');"
         " return i >= 0 && ths[i].hidden"
         " && [...document.querySelectorAll('#rfview tbody tr')].every(tr => tr.children[i].hidden); }"
-    ), "unticking hex did not hide the hex column"
+    ), "unticking ascii did not hide the ascii column"
 
     page.locator("#rf-raw").click()                                       # the raw view is the file
     assert page.locator("#logbox").is_visible() and seeds.older in page.locator("#logbox").inner_text()
@@ -323,3 +329,69 @@ def test_a_decoded_answer_in_flight_when_decrypt_goes_off_never_lands_and_a_relo
     # And the reveal is never remembered: a reload starts with Decrypt off.
     page.reload(wait_until="networkidle")
     assert page.locator("#rf-decrypt").get_attribute("aria-pressed") == "false"
+
+
+def test_the_band_row_leads_to_the_stack_row_of_that_band(page, seeded_rf_logs):
+    """Two rows of plain links: a band pill reloads the same log on that band, and the stack
+    row then offers that band's logs — the daemon's file for it first."""
+    page.goto(page.lab_base + "/logs/loraham-kiss-tnc?job=rf-kiss.log", wait_until="networkidle")
+    page.locator("nav.rfbands a", has_text="868").click()
+    page.wait_for_url("**/logs/loraham-kiss-tnc?job=rf-kiss.log&band=868", timeout=15000)
+    assert page.locator("nav.rfbands a[aria-current=page]").inner_text() == "868"
+    assert page.locator("nav.rfswitch a[aria-current=page]").inner_text() == "graywolf"
+    page.locator("nav.rfswitch a", has_text="daemon 868").click()
+    page.wait_for_url("**/logs/loraham-daemon?job=rf-daemon-868.log*", timeout=15000)
+    assert page.locator("nav.rfbands a[aria-current=page]").inner_text() == "868"
+    assert page.locator("nav.rfswitch a[aria-current=page]").inner_text() == "daemon 868"
+    assert page.locator("#log-card").get_attribute("data-job") == "rf-daemon-868.log"
+
+
+def test_the_bottom_forms_switch_one_stack_and_every_stack(page, seeded_rf_logs):
+    """The shown stack's switch and every stack's at once, each a form that returns to this
+    page; the Logging state reads "mixed" while they disagree. Leaves every switch on."""
+    url = page.lab_base + "/logs/loraham-kiss-tnc?job=rf-kiss.log"
+    page.goto(url, wait_until="networkidle")
+    assert page.locator("#rflog-all-state").get_attribute("data-state") == "on"
+    page.locator("#rf-switch").select_option("off")
+    with page.expect_response(lambda r: "/stacks/graywolf/rflog" in r.url, timeout=15000):
+        page.locator("#rflog-switch button[type=submit]").click()
+    page.wait_for_url(url, timeout=15000)
+    assert page.locator("#rf-switch").input_value() == "off"
+    assert page.locator("#rflog-all-state").get_attribute("data-state") == "mixed"
+    page.locator("#rf-all").select_option("on")
+    with page.expect_response(lambda r: r.url.endswith("/rflog/all"), timeout=15000):
+        page.locator("#rflog-all button[type=submit]").click()
+    page.wait_for_url(url, timeout=15000)
+    assert page.locator("#rf-switch").input_value() == "on"
+    assert page.locator("#rflog-all-state").get_attribute("data-state") == "on"
+
+
+def test_raw_on_a_phone_hides_the_table_and_shows_the_file(page, seeded_rf_logs):
+    """At a phone width the stylesheet turns tables into scrolling blocks; `hidden` must still
+    win, or Raw shows the table and the file at once."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(page.lab_base + "/logs/loraham-kiss-tnc?job=rf-kiss.log", wait_until="networkidle")
+    page.wait_for_function("() => document.querySelectorAll('#rfview tbody tr').length === 2", timeout=15000)
+    assert page.locator("#rfview").is_visible() and not page.locator("#logbox").is_visible()
+    page.locator("#rf-raw").click()
+    page.wait_for_function("() => document.getElementById('rfview').hidden", timeout=5000)
+    assert not page.locator("#rfview").is_visible()
+    assert page.locator("#logbox").is_visible() and seeded_rf_logs.older in page.locator("#logbox").inner_text()
+
+
+def test_clear_all_asks_first_and_then_clears_every_log(page, seeded_rf_logs):
+    """The confirm gates the request: dismissed, nothing is sent and nothing changes; accepted,
+    every registered log is emptied and a run log is not."""
+    seeds = seeded_rf_logs
+    run_log = seeds.dir / "start-loraham-kiss-tnc.log"
+    run_log.write_text("keep\n")
+    page.goto(page.lab_base + "/logs/loraham-kiss-tnc?job=rf-kiss.log", wait_until="networkidle")
+    page.once("dialog", lambda d: d.dismiss())
+    page.locator("#rflog-clear-all button[type=submit]").click()          # the confirm is synchronous:
+    assert (seeds.dir / "rf-kiss.log").read_text() == seeds.newer + "\n"  # a refused submit sends nothing
+    page.once("dialog", lambda d: d.accept())
+    with page.expect_response(lambda r: r.url.endswith("/rflog/clear-all"), timeout=15000):
+        page.locator("#rflog-clear-all button[type=submit]").click()
+    page.wait_for_url("**/logs/loraham-kiss-tnc?job=rf-kiss.log", timeout=15000)
+    assert (seeds.dir / "rf-kiss.log").read_text() == "" and not (seeds.dir / "rf-kiss.log.1").exists()
+    assert (seeds.dir / "rf-meshtastic.log").read_text() == "" and run_log.read_text() == "keep\n"

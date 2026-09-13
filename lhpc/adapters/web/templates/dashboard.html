@@ -47,6 +47,15 @@
   <div class="radiogrid" data-pending-interactive="{{ '1' if pending_interactive else '0' }}"
        data-dash-sig="{{ dash_sig }}">
     {% for r in radios %}
+      {# The band's log links, defined once and placed directly under the daemon control in every
+         state the daemon is installed in (never when it is not). An absent file still links; the
+         page says "no log file yet". dash.js only rewrites the badge, so a static block is safe. #}
+      {% set links %}
+        <p class="links">
+          <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}">daemon log</a><br>
+          RF log: {% for l in r.rflogs %}{% if not loop.first %} · {% endif %}<a class="pill" href="{{ url_for('logs_view', target=l.target, job=l.job) }}">{{ l.label }}</a>{% endfor %}
+        </p>
+      {% endset %}
       <div class="card radio-col{{ ' radio-stray' if r.stray }}" data-radio-band="{{ r.band }}">
         <header>
           <h2>{{ r.band }} MHz{% if r.stray %} <span class="pill">not in radio mode</span>{% endif %}</h2>
@@ -73,6 +82,7 @@
                 <input type="hidden" name="from" value="dash">
                 <button type="submit" class="warnbtn">Stop daemon ({{ r.band }})</button>
               </form>
+              {{ links }}
             </div>
           {% else %}
 
@@ -94,9 +104,7 @@
                 <button type="submit">Stop daemon ({{ r.band }})</button>
               </form>
             </h3>
-            <p class="links">
-              <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}">daemon log</a>
-            </p>
+            {{ links }}
             <details class="monitor" id="monitor-{{ r.band }}" open>
               <summary>RX-TX Monitor</summary>
               <table class="monrssi">
@@ -137,6 +145,7 @@
                 <input type="hidden" name="from" value="dash">
                 <button type="submit">Start daemon ({{ r.band }} only)</button>
               </form>
+              {{ links }}
             {% endif %}
           {% endif %}
 
@@ -285,11 +294,6 @@
             </form>
           {% endif %}
 
-          {% if r.daemon.process_up and not r.daemon.reachable %}
-            <p class="links">
-              <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}">daemon log</a>
-            </p>
-          {% endif %}
           {% endif %}{# /r.stray else #}
         </div>
       </div>

@@ -220,36 +220,6 @@
     </details>
   {% endif %}
 
-  {# ===== RF-Logs — the switch (saved on the config OWNER, band-less) and the log links.
-     Everything here comes from the registry (`lhpc/core/rflog.py`), never from the stack name:
-     graywolf's link opens the kiss TNC's `rf-kiss.log`, the daemon has one file per band. ===== #}
-  {% if g.rflog %}
-    <details class="advcfg" id="stack-rflog-{{ g.stack.id }}">
-      <summary>RF-Logs</summary>
-      <div class="body">
-        <p class="muted">What the radio heard and sent, one line per frame, kept across restarts
-          ({{ 'the node\'s own per-packet JSON trace' if g.rflog.native else '5 MB plus one previous segment' }}).
-          {% if g.rflog.owner != g.stack.id %}The switch belongs to the <strong>{{ g.rflog.owner }}</strong> stack, whose TNC is where these frames cross the radio.{% endif %}</p>
-        <form method="post" action="{{ url_for('stack_rflog_save', stack_id=g.stack.id) }}" class="inline">
-          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-          <label for="rflog-switch-{{ g.stack.id }}">RF log</label>
-          <select id="rflog-switch-{{ g.stack.id }}" name="value" aria-label="RF log switch">
-            <option value="on"{% if g.rflog.value == 'on' %} selected{% endif %}>on</option>
-            <option value="off"{% if g.rflog.value == 'off' %} selected{% endif %}>off</option>
-          </select>
-          <button type="submit">Save</button>
-          <span class="muted">Configured: <strong>{{ g.rflog.value }}</strong>{% if g.rflog.restart_required %} · <span class="ver ver-yellow" id="rflog-restart-{{ g.stack.id }}">restart required</span> — the running writer keeps its current setting until the stack restarts{% endif %}</span>
-        </form>
-        <ul class="clean">
-          {% for j in g.rflog.jobs %}
-            <li><a class="pill" href="{{ url_for('logs_view', target=j.target, job=j.job) }}">{{ j.label }} log</a>
-              <span class="muted">{{ j.path }} · {{ j.size_text }}</span></li>
-          {% endfor %}
-        </ul>
-      </div>
-    </details>
-  {% endif %}
-
   {# ===== Settings (existing partial — reused, not duplicated) ===== #}
   {% with stack = g.stack, view = g.view, config_groups = g.config_groups, settings_id = 'stack-settings-' ~ g.stack.id %}
     {% include "_stack_settings.html" %}

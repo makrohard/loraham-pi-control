@@ -299,6 +299,17 @@ def _cmd_config(svc, args) -> int:
 
 def _cmd_rflog(svc, args) -> int:
     from lhpc.core import rflog as _rflog
+    if args.all or args.clear_all:
+        # Every stack at once: the two flags are exclusive and take no stack and no band.
+        if args.surface or args.band or (args.all and args.clear_all):
+            print("usage: lhpc rflog --all on|off | lhpc rflog --clear-all (no stack, no --band)",
+                  file=sys.stderr)
+            return 2
+        return _render(svc.set_rflog_all(args.all) if args.all else svc.rflog_clear_all())
+    if not args.surface:
+        print("usage: lhpc rflog <stack> [--band B] [--lines N] [--clear] [--decrypt [--follow]]"
+              " | --all on|off | --clear-all", file=sys.stderr)
+        return 2
     if _rflog.entry(args.surface) is None:
         print(f"ERR   '{args.surface}' has no RF log (one of: "
               f"{', '.join(x.surface for x in _rflog.REGISTRY)})")
@@ -580,7 +591,12 @@ def build_parser() -> argparse.ArgumentParser:
     # RF logs read the same registry as the web UI (lhpc/core/rflog.py): graywolf maps to the
     # kiss TNC's file, the daemon has one file per band, nothing else is reachable here.
     p_rf = sub.add_parser("rflog", help="Show or clear a stack's RF log (what its radio heard and sent)")
-    p_rf.add_argument("surface", help="daemon | graywolf | meshcom | meshtastic | meshcore | reticulum")
+    p_rf.add_argument("surface", nargs="?", default="",
+                      help="daemon | graywolf | meshcom | meshtastic | meshcore | reticulum")
+    p_rf.add_argument("--all", choices=("on", "off"),
+                      help="Switch every stack's RF log on or off (no stack, no --band)")
+    p_rf.add_argument("--clear-all", action="store_true",
+                      help="Clear every stack's RF log (no stack, no --band)")
     p_rf.add_argument("--band", default="", help="daemon only: 433 or 868 (one file per band)")
     p_rf.add_argument("--lines", type=int, default=300, help="Tail length")
     p_rf.add_argument("--clear", action="store_true",

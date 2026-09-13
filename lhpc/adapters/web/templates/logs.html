@@ -8,11 +8,16 @@
         {{ 'process running' if running else 'process ended' }}</span>
     </header>
     {% if switcher %}
-      {# One row per RF-logging stack the manifest installs (registry order); plain links, a full
-         page load — logs.js polls whatever data-job the loaded card carries. #}
+      {# Two rows, plain links (a full page load — rflog.js polls whatever data-job the loaded
+         card carries): every band, then the RF logs of the shown band in registry order. #}
+      <nav class="rfbands" aria-label="RF log bands">
+        {% for b in switcher.bands %}
+          <a class="pill" href="{{ url_for('logs_view', target=b.target, job=b.job, band=b.band) }}"{% if b.current %} aria-current="page"{% endif %}>{{ b.band }}</a>
+        {% endfor %}
+      </nav>
       <nav class="rfswitch" aria-label="RF logs">
-        {% for s in switcher %}
-          <a class="pill" href="{{ url_for('logs_view', target=s.target, job=s.job) }}"{% if s.job == job %} aria-current="page"{% endif %}>{{ s.label }}</a>
+        {% for s in switcher.stacks %}
+          <a class="pill" href="{{ url_for('logs_view', target=s.target, job=s.job, band=band) }}"{% if s.current %} aria-current="page"{% endif %}>{{ s.label }}</a>
         {% endfor %}
       </nav>
     {% endif %}
@@ -28,10 +33,6 @@
       <p class="muted">{{ path or '(no log file yet)' }}</p>
       {% if rflog %}
         <div class="rfcontrols">
-          <label for="rf-filter">Filter</label>
-          <input type="search" id="rf-filter" placeholder="summary, ascii, hex, decoded">
-          <label for="rf-dir">Direction</label>
-          <select id="rf-dir" aria-label="Direction filter"><option value="">RX + TX</option><option value="RX">RX</option><option value="TX">TX</option></select>
           <span id="rf-cols">Columns:
             {% for c in (['ts', 'dir', 'rssi', 'snr', 'len', 'outcome', 'summary', 'hex', 'ascii'] + (['decoded'] if rflog.decoder else [])) %}
               <label><input type="checkbox" value="{{ c }}" checked> {{ {'ts': 'time'}.get(c, c) }}</label>
@@ -54,14 +55,49 @@
       <pre id="logbox" class="logbox"{% if rflog %} hidden{% endif %}>{% for line in lines %}{{ line }}
 {% endfor %}{% if not lines %}(no output yet){% endif %}</pre>
       {% if rflog %}
-        {# Clear applies to the SHOWN log only: the form posts this card's target and job. #}
-        <form method="post" action="{{ url_for('logs_clear', target=target) }}" class="inline"
-              id="rflog-clear" data-confirm="Do you really want to delete the RF log?">
-          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-          <input type="hidden" name="job" value="{{ job }}">
-          <button type="submit">Clear RF log</button>
-          <span class="muted">empties {{ job }} and removes {{ job }}.1</span>
-        </form>
+        {# The switches: the shown stack's (saved on its config OWNER, band-less, the same route
+           as Settings; `from=logs` brings the operator back here) and every stack's at once. #}
+        <div class="rfforms">
+          <form method="post" action="{{ url_for('stack_rflog_save', stack_id=rflog.surface) }}" class="inline" id="rflog-switch">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="from" value="logs">
+            <input type="hidden" name="job" value="{{ job }}">
+            <label for="rf-switch">Stack log</label>
+            <select id="rf-switch" name="value" aria-label="Stack log switch">
+              <option value="on"{% if switch.value == 'on' %} selected{% endif %}>on</option>
+              <option value="off"{% if switch.value == 'off' %} selected{% endif %}>off</option>
+            </select>
+            <button type="submit">Save</button>
+            <span class="muted">Configured: <strong>{{ switch.value }}</strong>{% if switch.restart_required %} · <span class="ver ver-yellow" id="rflog-restart">restart required</span>{% endif %}</span>
+          </form>
+          <form method="post" action="{{ url_for('rflog_all') }}" class="inline" id="rflog-all">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="job" value="{{ job }}">
+            <label for="rf-all">Logging</label>
+            <select id="rf-all" name="value" aria-label="Logging switch for every stack">
+              <option value="on"{% if logging == 'on' %} selected{% endif %}>on</option>
+              <option value="off"{% if logging == 'off' %} selected{% endif %}>off</option>
+            </select>
+            <button type="submit">Save</button>
+            <span class="muted">every stack · <strong id="rflog-all-state" data-state="{{ logging }}">{{ logging }}</strong></span>
+          </form>
+        </div>
+        <div class="rfforms">
+          {# Clear applies to the SHOWN log only: the form posts this card's target and job. #}
+          <form method="post" action="{{ url_for('logs_clear', target=target) }}" class="inline"
+                id="rflog-clear" data-confirm="Do you really want to delete the RF log?">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="job" value="{{ job }}">
+            <button type="submit">Clear RF log</button>
+            <span class="muted">empties {{ job }} and removes {{ job }}.1</span>
+          </form>
+          <form method="post" action="{{ url_for('rflog_clear_all') }}" class="inline"
+                id="rflog-clear-all" data-confirm="Do you really want to delete every RF log?">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="job" value="{{ job }}">
+            <button type="submit">Clear all RF logs</button>
+          </form>
+        </div>
       {% endif %}
     </div>
   </div>

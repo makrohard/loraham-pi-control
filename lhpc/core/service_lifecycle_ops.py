@@ -4777,7 +4777,8 @@ class LifecycleOpsMixin:
     def radio_overview(self) -> list[dict]:
         """Per-band view for the radio dashboard: daemon/radio config (if running),
         which stack (+ its components) is up on that band, and which stacks can be
-        started on it. Live RSSI/CAD/feed are polled separately via /api/daemon."""
+        started on it, and the RF logs of the band (`rflogs`). Live RSSI/CAD/feed are polled
+        separately via /api/daemon."""
         snap = self.build_snapshot()
         live = {cid: st for ss in snap.stacks for cid, st in ss.components.items()}
         up = (RunState.RUNNING, RunState.DEGRADED)
@@ -4803,10 +4804,7 @@ class LifecycleOpsMixin:
             other_served = [b for b in usable_bands if b != band]
             running, startable, interactive = [], [], []
             for s in self.stacks():
-                # Bands this stack can run on (multi-band stacks list several).
-                sbands = set()
-                for c in s.components:
-                    sbands |= set(c.bands) if c.bands else ({c.band} if c.band else set())
+                sbands = self._declared_bands(s)
                 if band not in sbands:
                     continue
                 multi = bool(self.stack_bands(s.id))
@@ -4936,6 +4934,7 @@ class LifecycleOpsMixin:
                 "running": running,
                 "startable": startable,
                 "interactive": interactive,
+                "rflogs": self._rflogs_for_band(band, running),
                 # Two+ stacks sharing one radio (e.g. a manually-started chat plus a
                 # running chat) fight over the daemon's tuning — flag it red. Stacks that
                 # reach RF THROUGH another one are filtered out first: they are its client,
@@ -4974,7 +4973,17 @@ class LifecycleOpsMixin:
                     "liverssi": dv.channel.get("LIVERSSI") if dv.reachable else None,
                 },
                 "running": [], "startable": [], "interactive": [], "conflict": [],
+                "rflogs": self._rflogs_for_band(band, []),
             })
+        return out
+
+    @staticmethod
+    def _declared_bands(s) -> set:
+        """Bands a stack's components declare (`bands`, else `band`) — the dashboard's per-band
+        membership and the RF-log page's stack row read the same set."""
+        out = set()
+        for c in s.components:
+            out |= set(c.bands) if c.bands else ({c.band} if c.band else set())
         return out
 
     def _read_job_marker(self, job: str) -> dict | None:
@@ -5134,43 +5143,88 @@ class LifecycleOpsMixin:
                 return st.run_state in (RunState.RUNNING, RunState.DEGRADED)
         return False
 
-    def rflog_switcher(self) -> list[dict]:
-        """One row per RF-logging job this manifest installs, in registry order — the log page's
-        header switcher."""
+    def _rflog_entries(self) -> list:
+        """The registry entries this manifest installs, in registry order."""
+        return [e for e in _rflog.REGISTRY if self.stack(e.surface) is not None]
+
+    def _rflogs_for_band(self, band: str, running: list) -> list[dict]:
+        """The dashboard's RF-log links for a band: the daemon's file for it, then the file of
+        every running stack the registry knows."""
+        up = {s["id"] for s in running}
         out = []
-        for e in _rflog.REGISTRY:
-            if self.stack(e.surface) is None:
-                continue
-            for band, job in e.jobs:
-                out.append({"target": e.writer, "job": job, "surface": e.surface, "band": band,
-                            "label": f"{e.surface} {band}".strip()})
+        for e in self._rflog_entries():
+            if e.banded:
+                out.append({"label": f"{e.surface} {band}", "target": e.writer, "job": e.job(band)})
+            elif e.surface in up:
+                out.append({"label": e.surface, "target": e.writer, "job": e.job()})
         return out
+
+    def rflog_switcher(self, job: str, band: str = "") -> dict:
+        """The log page's two rows for a registered `job`: every band, and the RF logs of the
+        shown band — the daemon's file for it plus every registered stack whose declared bands
+        include it. The shown band is `band` when valid, else the job's own band (the daemon),
+        else the shown stack's declared band, else the first active band."""
+        e, jband = _rflog.by_job(job)
+        stack_band = next((c.band for c in self.stack(e.surface).components if c.band), "")
+        shown = (band if band in self.RADIO_BANDS else "") or jband or stack_band \
+            or (self.active_bands() or self.RADIO_BANDS)[0]
+        stacks = []
+        for x in self._rflog_entries():
+            if x.banded:
+                xjob, xband = x.job(shown), shown
+            elif shown in self._declared_bands(self.stack(x.surface)):
+                xjob, xband = x.job(), ""
+            else:
+                continue
+            stacks.append({"target": x.writer, "job": xjob, "surface": x.surface, "band": xband,
+                           "label": f"{x.surface} {xband}".strip(), "current": xjob == job})
+        # A band pill keeps the shown file, except the daemon's: there it opens that band's file.
+        bands = [{"band": b, "current": b == shown, "target": e.writer,
+                  "job": e.job(b) if e.banded else job} for b in self.RADIO_BANDS]
+        return {"band": shown, "bands": bands, "stacks": stacks}
 
     def _rflog_switch_value(self, e) -> str:
         return (_rflog.ON if _rflog.is_on(self._resolved_param_value(
             e.owner, e.kind, e.writer, _rflog.RF_LOG_PARAM, "")) else _rflog.OFF)
 
-    def rflog_view(self, stack_id: str) -> dict | None:
-        """The RF-Logs submenu of a stack card: the owner's switch (configured value, whether a
-        restart is still pending for it), and each job with its path and size."""
-        e = _rflog.entry(stack_id)
+    def rflog_switch(self, surface: str) -> dict | None:
+        """The shown stack's switch as the log page's bottom form renders it: the owner, its
+        configured value, and whether a restart is still pending for it."""
+        e = _rflog.entry(surface)
         if e is None or self.stack(e.owner) is None:
             return None
         marker = self.restart_required(e.owner) or {}
-        jobs = []
-        for band, job in e.jobs:
-            p = self._rflog_path(job)
-            st = runtime_fs.stat_leaf_nofollow(self._paths, p)
-            size = int(st.st_size) if st is not None else None
-            jobs.append({"job": job, "band": band, "target": e.writer, "path": str(p),
-                         "label": f"{e.surface} {band}".strip(), "size": size,
-                         "size_text": (f"{size / 1048576:.1f} MB" if size is not None and size >= 1048576
-                                       else f"{size / 1024:.0f} kB" if size is not None and size >= 1024
-                                       else f"{size} B" if size is not None else "no file yet")})
-        return {"surface": e.surface, "owner": e.owner, "writer": e.writer, "key": e.key,
-                "native": e.native, "value": self._rflog_switch_value(e),
-                "restart_required": _rflog.RF_LOG_PARAM in (marker.get("params") or []),
-                "jobs": jobs}
+        return {"owner": e.owner, "value": self._rflog_switch_value(e),
+                "restart_required": _rflog.RF_LOG_PARAM in (marker.get("params") or [])}
+
+    def rflog_logging_state(self) -> str:
+        """Every installed stack's switch at once: "on" or "off" when they agree, else "mixed"."""
+        values = {self._rflog_switch_value(e) for e in self._rflog_entries()}
+        return values.pop() if len(values) == 1 else "mixed"
+
+    def set_rflog_all(self, value) -> ActionResult:
+        """Save the switch on every config owner the manifest installs, one owner at a time
+        through the same one-key bundle path as `set_rflog` (so every owner's restart marker
+        comes for free). One result, one detail line per owner."""
+        v = str(value or "").strip().lower()
+        if v not in (_rflog.ON, _rflog.OFF):
+            return ActionResult(False, "RF log: the switch is 'on' or 'off'.",
+                                data={"reason": "invalid-choice"})
+        owners = dict.fromkeys((e.owner, e.key) for e in self._rflog_entries())
+        results = [(owner, self.save_config_bundle(owner, values={key: v})) for owner, key in owners]
+        ok = all(r.ok for _o, r in results)
+        return ActionResult(ok, f"RF logging {v} on every stack." if ok
+                            else "RF logging: not every stack was saved.",
+                            [f"{owner}: {'saved' if r.ok else r.summary}" for owner, r in results])
+
+    def rflog_clear_all(self) -> ActionResult:
+        """Clear every registered RF log the manifest installs, one job at a time through
+        `rflog_clear` (the same lock and the same refusals). Run logs are never in the loop."""
+        results = [(job, self.rflog_clear(e.writer, job))
+                   for e in self._rflog_entries() for _band, job in e.jobs]
+        ok = all(r.ok for _j, r in results)
+        return ActionResult(ok, "Every RF log cleared." if ok else "Not every RF log was cleared.",
+                            [f"{job}: {'cleared' if r.ok else r.summary}" for job, r in results])
 
     def set_rflog(self, stack_id: str, value) -> ActionResult:
         """Save the switch on the CONFIG OWNER through the one-key bundle path (values merge; no

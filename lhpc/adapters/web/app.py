@@ -37,6 +37,7 @@ from flask import (
 
 from lhpc.core import config as _config
 from lhpc.core import meshcore_mode as _meshcore_mode
+from lhpc.core import rflog as _rflog
 from lhpc.core import validators
 from lhpc.core.services import ControllerService
 from lhpc.core.status import rollup_states, stack_dependencies, summarize
@@ -919,8 +920,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 # None when HMAC does not apply here (no flag/row); else whether it is ENABLED.
                 "hmac_enabled": service.hmac_status(stack.id),
                 "restart_required": service.restart_required(stack.id),
-                # The RF-Logs submenu: None for a stack without an RF log (chat, voice, kiss).
-                "rflog": service.rflog_view(stack.id),
                 "conflicts": [c for c in all_conflicts
                               if any(h in member_ids for h in c.holders)],
             })
@@ -1574,13 +1573,41 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         band = _safe_band(request.args.get("band"))
         path, lines = service.log_tail(target, 300, job=job, band=band)
         # An RF log (registry-authorized, never by name): the writer's run state is the badge,
-        # the header carries the switcher and the card a confirmed Clear.
+        # the header carries the band row and the stack row, the bottom the switches and Clear.
         rf = service.rflog_job(target, job)
-        return render_template("logs.html", version=__version__, target=target, job=job, band=band,
+        switcher = service.rflog_switcher(job, band) if rf else None
+        return render_template("logs.html", version=__version__, target=target, job=job,
+                               band=switcher["band"] if rf else band,
                                stack_id=service.stack_of(target), path=path, lines=lines,
                                running=(service.rflog_running(job) if rf
                                         else service.log_running(target, job)),
-                               rflog=rf, switcher=service.rflog_switcher() if rf else [])
+                               rflog=rf, switcher=switcher,
+                               switch=service.rflog_switch(rf["surface"]) if rf else None,
+                               logging=service.rflog_logging_state() if rf else "")
+
+    def _rflog_back(job):
+        # Back to the RF log page a bottom form came from (a registered job, else the dashboard).
+        job = _safe_job(job)
+        rf = _rflog.by_job(job or "")
+        return redirect(url_for("logs_view", target=rf[0].writer, job=job) if rf
+                        else url_for("dashboard"))
+
+    @app.post("/rflog/all")
+    def rflog_all():
+        # Every stack's switch at once, through the same per-owner path as one switch.
+        if not _csrf_ok():
+            abort(400)
+        result = service.set_rflog_all(request.form.get("value", ""))
+        flash(result.summary, "ok" if result.ok else "warn")
+        return _rflog_back(request.form.get("job"))
+
+    @app.post("/rflog/clear-all")
+    def rflog_clear_all():
+        if not _csrf_ok():
+            abort(400)
+        result = service.rflog_clear_all()
+        flash(result.summary, "ok" if result.ok else "warn")
+        return _rflog_back(request.form.get("job"))
 
     @app.get("/api/rflog/<target>")
     def rflog_records_api(target: str):
@@ -1760,7 +1787,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         result = service.set_rflog(stack_id, request.form.get("value", ""))
         flash(result.summary, "ok" if result.ok else "warn")
-        return redirect(url_for("stacks_overview", open=stack_id) + "#stack-rflog-" + stack_id)
+        if request.form.get("from") == "logs":       # the log page's bottom form
+            return _rflog_back(request.form.get("job"))
+        return redirect(url_for("stacks_overview", open=stack_id) + "#stack-settings-" + stack_id)
 
     @app.post("/stacks/<stack_id>/daemon-params")
     def daemon_params_save(stack_id: str):

@@ -858,6 +858,38 @@ def test_rflog_usage_errors_exit_two(tmp_path, monkeypatch, capsys, argv):
     assert capsys.readouterr().out.startswith("ERR")
 
 
+@pytest.mark.parametrize("argv", [["rflog"],                                    # a stack, --all or --clear-all
+                                  ["rflog", "graywolf", "--all", "on"],         # every stack: no stack
+                                  ["rflog", "--band", "433", "--all", "off"],   # ...and no band
+                                  ["rflog", "meshcom", "--clear-all"],
+                                  ["rflog", "--all", "on", "--clear-all"]])     # one of the two
+def test_rflog_bulk_flags_take_no_stack_and_exclude_each_other(tmp_path, monkeypatch, capsys, argv):
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+    assert main(argv) == 2
+    assert capsys.readouterr().err.startswith("usage:")
+    assert not (tmp_path / "rt" / "config" / "stacks").exists()
+
+
+def test_rflog_all_and_clear_all_reach_every_registered_log(tmp_path, monkeypatch, capsys):
+    from lhpc.core import config as cfgmod, rflog
+    from lhpc.core.paths import Paths
+    rt = tmp_path / "rt"
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
+    assert main(["rflog", "--all", "off"]) == 0
+    assert capsys.readouterr().out.startswith("OK")
+    for e in rflog.REGISTRY:
+        assert cfgmod.load_stack_config(Paths(runtime_root=rt), e.owner, "")[e.key] == "off"
+    (rt / "logs").mkdir(parents=True, exist_ok=True)
+    jobs = [j for e in rflog.REGISTRY for _b, j in e.jobs]
+    for j in jobs:
+        (rt / "logs" / j).write_text("x\n")
+        (rt / "logs" / (j + ".1")).write_text("old\n")
+    (rt / "logs" / "start-loraham-daemon-433.log").write_text("keep\n")
+    assert main(["rflog", "--clear-all"]) == 0
+    assert all((rt / "logs" / j).read_text() == "" and not (rt / "logs" / (j + ".1")).exists() for j in jobs)
+    assert (rt / "logs" / "start-loraham-daemon-433.log").read_text() == "keep\n"
+
+
 def test_rflog_graywolf_reads_the_kiss_file_and_clears_it(tmp_path, monkeypatch, capsys):
     rt = tmp_path / "rt"
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))

@@ -2,6 +2,12 @@
 
 ## 0.5.0
 
+- RF-log console: one log page with a band row and a stack row, rows in time order with dir,
+  ascii and decoded as the default columns (no filter), the switches at the bottom — the shown
+  stack's and every stack's at once (`lhpc rflog --all on|off`, reads *mixed* when they differ) —
+  and Clear all (`lhpc rflog --clear-all`); the per-stack RF-Logs submenu is gone (the switch is
+  in Settings), each dashboard radio card links the band's RF logs under its daemon control, and a
+  hidden table stays hidden on a phone.
 - RF logs: every stack's radio boundary writes what it heard and sent, one line per frame, kept
   across restarts — the daemon per band, the KISS TNC (graywolf), the MeshCom bridge, the MeshCore
   host, the Reticulum LoRa driver, and meshtasticd's own packet trace. One registry drives the
