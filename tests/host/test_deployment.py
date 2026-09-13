@@ -170,6 +170,57 @@ def test_update_check_interval_clamps_and_disables(tmp_path, monkeypatch):
     assert with_value("true") == 12 * 3600.0                     # bool is not an int here
 
 
+class _WatchSvc:
+    """Stand-in for ControllerService in the watchdog pass: records what the pass called."""
+
+    def __init__(self, *, ap_box, apply_pending=False, heal_raises=False):
+        self.ap_box, self.apply_pending, self.heal_raises = ap_box, apply_pending, heal_raises
+        self.calls = []
+
+    def webserver_apply_complete_pending(self):
+        self.calls.append("apply-complete")
+
+    def crl_refresh_if_expired(self):
+        self.calls.append("crl-heal")
+        if self.heal_raises:
+            raise RuntimeError("boom")
+        return True
+
+    def network_supported(self):
+        return self.ap_box
+
+    def webserver_apply_pending(self):
+        return self.apply_pending
+
+    def _network_watch_tick(self):
+        self.calls.append("tick")
+
+
+def test_network_watch_pass_heals_crl_on_every_box():
+    """LIVE-FOUND (box B, 2026-09-13): the CRL heal lived only in the AP-box tick and the
+    WLAN-join path, so a non-AP box (Desktop image on cable) that outlived its CRL's 30-day
+    nextUpdate had nginx refuse every client cert with nothing revoked, and no watchdog pass
+    ever healed it. The pass must run the heal on BOTH box kinds, before the AP tick."""
+    from lhpc.adapters.web.app import network_watch_pass
+    non_ap = _WatchSvc(ap_box=False)
+    assert network_watch_pass(non_ap) == 300.0                  # non-AP: probe rarely...
+    assert non_ap.calls == ["apply-complete", "crl-heal"]       # ...but the heal DID run, no tick
+    ap = _WatchSvc(ap_box=True)
+    assert network_watch_pass(ap) == 60.0
+    assert ap.calls == ["apply-complete", "crl-heal", "tick"]   # heal before the tick
+    owed = _WatchSvc(ap_box=False, apply_pending=True)
+    assert network_watch_pass(owed) == 60.0                     # an owed Apply keeps the fast cadence
+
+
+def test_network_watch_pass_survives_a_failing_heal():
+    """Every unit of the pass is its own try/except: a heal that raises must not starve the
+    AP tick, and the interval is still returned."""
+    from lhpc.adapters.web.app import network_watch_pass
+    svc = _WatchSvc(ap_box=True, heal_raises=True)
+    assert network_watch_pass(svc) == 60.0
+    assert svc.calls == ["apply-complete", "crl-heal", "tick"]
+
+
 def test_devcontainer_no_sudo_boundary_fails_closed():
     """The lab's no-sudo boundary is one RUN chain (unprivileged user, sudoers drop-ins removed,
     vscode out of sudo). Only the optional `deluser` may tolerate failure — a bare trailing

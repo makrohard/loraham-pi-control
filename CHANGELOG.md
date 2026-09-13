@@ -2,6 +2,9 @@
 
 ## 0.5.0
 
+- Web console: the client-CA CRL is re-checked on every network-watchdog pass on every box (was: only
+  on AP boxes and at a WLAN join), so a box that outlives the CRL's 30-day nextUpdate no longer locks
+  every client certificate out of the exposed console.
 - Reticulum talks to RNode devices: `rnode_framing` (off by default) makes the LoRa driver use the
   RNode firmware's air format and preamble; the RF-log decoder strips the header byte and
   reassembles split packets; a start with the switch on refuses while the built driver predates

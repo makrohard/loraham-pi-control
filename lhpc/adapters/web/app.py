@@ -2206,6 +2206,35 @@ def update_check_interval_s() -> float:
     return float(min(max(raw, UPDATE_CHECK_MIN_HOURS), UPDATE_CHECK_MAX_HOURS)) * 3600.0
 
 
+def network_watch_pass(svc) -> float:
+    """ONE pass of the console's network watchdog; returns the seconds to sleep before the next.
+    The two maintenance units (1, 2) each have their own try/except so neither can starve the
+    other or the AP tick; the AP probe and tick (3) rely on the caller's loop-level catch:
+      1. an Apply the firewall gate deferred is completed;
+      2. the client-CA CRL is rebuilt when its nextUpdate has passed — on EVERY box, every pass.
+         LIVE-FOUND (box B, 2026-09-13): the heal used to live only inside the AP-box tick and the
+         WLAN-join path, so a box without the AP feature (a Desktop image on cable) that simply kept
+         running past the CRL's 30-day nextUpdate had nginx refuse EVERY client cert ("400 The SSL
+         certificate error") with nothing revoked — a total remote-console lockout that no tick
+         would ever heal. The rebuild is unprivileged and reads one file, so it costs nothing to run
+         here; the first pass at console start covers a box restored from an old backup;
+      3. the AP-box tick (only where the Wi-Fi feature exists)."""
+    try:                            # an Apply the firewall gate deferred
+        svc.webserver_apply_complete_pending()
+    except Exception:
+        pass
+    try:
+        svc.crl_refresh_if_expired()
+    except Exception:
+        pass
+    ap_box = svc.network_supported()
+    # non-AP box: probe rarely, exit never — unless an Apply is still owed
+    interval_s = 60.0 if (ap_box or svc.webserver_apply_pending()) else 300.0
+    if ap_box:
+        svc._network_watch_tick()
+    return interval_s
+
+
 def run_server(host: str = "127.0.0.1", port: int = 8770, socket: bool = False) -> int:
     """Run the console. Two serving modes:
 
@@ -2300,21 +2329,14 @@ def run_server(host: str = "127.0.0.1", port: int = 8770, socket: bool = False) 
         # from service construction: CLI runs and tests must not spawn threads). Each tick
         # reads the current preference/state fresh, so enabling Prefer later just takes
         # effect; the first pass primes the cached views for cold-process GETs. Same shape
-        # as the self-check loop: ≤30 s sleep slices, every unit in its own try/except.
+        # as the self-check loop: ≤30 s sleep slices, every unit in its own try/except. The
+        # pass itself is `network_watch_pass` (module level, so it is unit-tested) — it also
+        # carries the CRL heal for every box, AP feature or not.
         def _network_watch_loop():
             interval_s = 60.0
             while True:
                 try:
-                    svc = ControllerService()
-                    try:                            # an Apply the firewall gate deferred
-                        svc.webserver_apply_complete_pending()
-                    except Exception:
-                        pass
-                    ap_box = svc.network_supported()
-                    # non-AP box: probe rarely, exit never — unless an Apply is still owed
-                    interval_s = 60.0 if (ap_box or svc.webserver_apply_pending()) else 300.0
-                    if ap_box:
-                        svc._network_watch_tick()
+                    interval_s = network_watch_pass(ControllerService())
                 except Exception:
                     pass
                 deadline = time.monotonic() + interval_s

@@ -241,6 +241,13 @@ label. A bundle that reached the wrong hands is a credential to withdraw, not on
 `revoke` it and issue a fresh one; the revocation is effective once the proxy has reloaded with the
 new CRL.
 
+The CRL itself is valid for 30 days. The web console's network watchdog rebuilds it on every pass
+(every 60 s on a box with the Wi-Fi feature, every 300 s otherwise) once its `nextUpdate` has
+passed, and reloads the proxy — on every box, and on the first pass after the console starts. Without
+that rebuild nginx would refuse **every** client certificate after those 30 days ("400 The SSL
+certificate error") with nothing revoked. The heal needs the console running; a box that serves
+remote clients with the console stopped keeps its CRL only as long as it is valid.
+
 Each client certificate is exported as an encrypted PKCS#12 `.p12` bundle under
 `config/tls/exports/` (0600); the private key exists only inside that bundle. The fetch commands in the Certificates panel (username, paths, labels) render in every serving mode — operator conveniences, not secret material; a `.p12` command is listed only for a certificate that is currently active.
 
