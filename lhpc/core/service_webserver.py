@@ -238,7 +238,8 @@ class WebserverOpsMixin:
                            "reachable directly, bypassing this proxy's authentication.")
         return ActionResult(ok, summary, details=details, data=ev)
 
-    def webserver_init(self, *, dns_sans=None, ip_sans=None, confirm=False) -> ActionResult:
+    def webserver_init(self, *, dns_sans=None, ip_sans=None, confirm=False,
+                       accept_unverified: bool = False) -> ActionResult:
         """First-time bootstrap (correction #2): create BOTH CAs, the server leaf, and an
         initial (empty) CRL. Remote exposure stays disabled until explicitly enabled + proven.
         RE-initializing when a CA already exists is DESTRUCTIVE (invalidates every issued
@@ -260,6 +261,9 @@ class WebserverOpsMixin:
         # for ANY reason (validation, ConfigError/lock, unsafe path, malformed local.toml, I/O)
         # we abort BEFORE touching any PKI material — no CA/cert/CRL/inventory is created or
         # replaced, and no success is reported.
+        refused = self._clock_gate("create the PKI", accept_unverified)
+        if refused is not None:
+            return refused
         from . import config as _config
         try:
             _config.save_webserver_config(self._paths, dns_sans=dns, ip_sans=ips)
@@ -291,7 +295,8 @@ class WebserverOpsMixin:
 
     def webserver_configure_apply(self, *, bind=None, port=None, scheme=None, access_mode=None,
                                   dns_sans=None, ip_sans=None, allowed_cidrs=None,
-                                  confirm=False, confirm_public=False) -> ActionResult:
+                                  confirm=False, confirm_public=False,
+                                  accept_unverified: bool = False) -> ActionResult:
         """Unified controller Settings action (the single 'Apply' button): derive `remote_exposed` from
         `bind`, gate remote exposure with `plan_exposure` (elevated confirm for public/no-auth/http), then
         — only on accept — save ALL fields in ONE write (incl. `remote_exposed` + `allowed_cidrs`), add the
@@ -326,6 +331,14 @@ class WebserverOpsMixin:
             if not confirm:
                 return ActionResult(False, "remote exposure needs explicit confirmation",
                                     details=["re-run with confirmation to proceed"])
+        # Remote exposure adds the host IP SAN and REISSUES the server certificate, so it dates
+        # PKI material. The gate has to run before the config write, not before the reissue: a
+        # saved exposure whose certificate was refused is a half-applied change.
+        if remote:
+            refused = self._clock_gate("expose this box remotely (it reissues the server "
+                                       "certificate)", accept_unverified)
+            if refused is not None:
+                return refused
         try:
             _config.save_webserver_config(self._paths, bind=e_bind, port=e_port, scheme=e_scheme,
                                           access_mode=e_access, remote_exposed=remote,
@@ -1203,7 +1216,7 @@ class WebserverOpsMixin:
                             next_commands=ar.next_commands, data=ar.data)
 
     def webserver_expose(self, cidrs, *, access_mode=None, confirm=False,
-                         confirm_public=False) -> ActionResult:
+                         confirm_public=False, accept_unverified: bool = False) -> ActionResult:
         """Enable remote exposure. Requires >=1 CIDR; a public default route (0.0.0.0/0) or
         a no-auth remote mode needs elevated confirmation. Writes desired config only — the
         listener is not proven active until verify/apply."""
@@ -1226,6 +1239,10 @@ class WebserverOpsMixin:
         if missing:
             return ActionResult(False, "cannot enable remote exposure — unmet requirement(s):",
                                 details=[f"  - {m}" for m in missing])
+        refused = self._clock_gate("enable remote exposure (it reissues the server certificate)",
+                                   accept_unverified)
+        if refused is not None:
+            return refused
         try:
             _config.save_webserver_config(self._paths, bind="0.0.0.0", remote_exposed=True,
                                           allowed_cidrs=cidrs, access_mode=mode)
@@ -1370,7 +1387,37 @@ class WebserverOpsMixin:
                             "cessation UNPROVEN (start/repair the service to prove it)",
                             details=detail, next_commands=["lhpc webserver verify"], data=ev)
 
-    def webserver_tls_renew(self) -> ActionResult:
+    # --- the clock gate ---------------------------------------------------------------------
+    # A certificate outlives the boot that made it. A box with no RTC that comes up in 1970, or
+    # one whose GPS handed it a rolled-back date, will mint material that is "not yet valid" for
+    # years and lock the operator out of the console it was meant to protect. So every PKI
+    # mutation asks the clock first.
+    #
+    # Placement is the whole point: BEFORE any write, not inside the signing routine. A refusal
+    # at signing time would fire after `reissue_client_cert` has already revoked the old
+    # certificate, leaving the operator with neither.
+    #
+    # What this does NOT do: prove the clock is right. It enforces "unverified or unsynchronised
+    # time may not mutate the PKI", which is a weaker and honest claim -- a synchronised but
+    # wrong source passes.
+    def _clock_gate(self, what: str, accept_unverified: bool = False) -> ActionResult | None:
+        """None when the operation may proceed; a refusal ActionResult when it may not.
+
+        `accept_unverified` is ONE-SHOT: a parameter on this call, never a stored setting, and
+        deliberately distinct from any destructive confirmation the caller may also require.
+        """
+        if accept_unverified:
+            return None
+        from .service_system import clock_refusal, clock_verified
+        ok, reason = clock_verified(self._system.fs, self._paths.runtime_root)
+        if ok:
+            return None
+        return ActionResult(False, clock_refusal(reason, what))
+
+    def webserver_tls_renew(self, accept_unverified: bool = False) -> ActionResult:
+        refused = self._clock_gate("renew the server certificate", accept_unverified)
+        if refused is not None:
+            return refused
         from . import pki as _pki
         cfg = self.config().webserver
         try:
@@ -1381,7 +1428,10 @@ class WebserverOpsMixin:
         return ActionResult(True, f"server certificate renewed (serial {summ['serial']})",
                             data=summ)
 
-    def webserver_cert_issue(self, label, passphrase) -> ActionResult:
+    def webserver_cert_issue(self, label, passphrase, accept_unverified: bool = False) -> ActionResult:
+        refused = self._clock_gate(f"issue a certificate for '{label}'", accept_unverified)
+        if refused is not None:
+            return refused
         from . import pki as _pki
         cfg = self.config().webserver
         try:
@@ -1394,7 +1444,12 @@ class WebserverOpsMixin:
                                      f"sha256: {summ['export_sha256']}",
                                      f"expires: {summ['not_after']}"], data=summ)
 
-    def webserver_cert_reissue(self, label, passphrase) -> ActionResult:
+    def webserver_cert_reissue(self, label, passphrase, accept_unverified: bool = False) -> ActionResult:
+        # THE case the placement exists for: reissue REVOKES the old certificate before issuing
+        # its replacement, so a refusal any later leaves the operator with neither.
+        refused = self._clock_gate(f"reissue the certificate for '{label}'", accept_unverified)
+        if refused is not None:
+            return refused
         from . import pki as _pki
         cfg = self.config().webserver
         try:
@@ -1409,7 +1464,12 @@ class WebserverOpsMixin:
         return ActionResult(True, "client certificates",
                             data={"certs": _pki.list_client_certs(self._paths)})
 
-    def webserver_cert_revoke(self, label) -> ActionResult:
+    def webserver_cert_revoke(self, label, accept_unverified: bool = False) -> ActionResult:
+        # Revocation dates the CRL (lastUpdate/nextUpdate/revocationDate) from this clock, so it
+        # mutates the PKI just as much as issuance does.
+        refused = self._clock_gate(f"revoke '{label}'", accept_unverified)
+        if refused is not None:
+            return refused
         from . import pki as _pki
         try:
             _pki.revoke_client_cert(self._paths, label)
@@ -1452,7 +1512,9 @@ class WebserverOpsMixin:
                            next_commands=[*res.next_commands, *(gate_cmds or [])])
 
     def crl_refresh_if_expired(self) -> bool:
-        """Rebuild the client-CA CRL when its nextUpdate lies in the past, then reload nginx
+        """Rebuild the client-CA CRL when it is stale — nextUpdate in the past, OR lastUpdate in
+        the FUTURE (minted while the clock was wrong; nginx rejects it the moment the clock is
+        corrected, and it would never expire on its own) — then reload nginx
         via the normal apply. An AP-isolated box gets NTP the
         moment it joins a WLAN, the clock jumps months forward past the CRL's nextUpdate,
         and nginx then rejects EVERY client cert ("The SSL certificate error") — a total
@@ -1468,11 +1530,17 @@ class WebserverOpsMixin:
 
             from . import pki as _pki
             from . import runtime_fs as _rfs
+            from .service_system import clock_verified
+
+            # A rebuild DATES the new CRL from this clock, so an unverified clock must not
+            # trigger one: healing a lockout with a wrong date just makes a differently broken
+            # CRL. Unlike the operator-facing paths there is nobody here to accept the risk, so
+            # this simply waits -- the watchdog calls again on every pass, and a box gets its
+            # clock the moment it joins a WLAN. Retrying a PENDING RELOAD stays allowed: that
+            # re-reads a file already on disk and writes no dates.
+            clock_ok, _why = clock_verified(self._system.fs, self._paths.runtime_root)
+
             pending = self._paths.under("state", "crl-reload-pending")
-            if pending.exists():
-                if self.webserver_apply().ok:
-                    self._safe_unlink(pending)
-                return True                  # acted (retried the reload)
             p = self._paths.under("config", "tls", "client-ca", "crl.pem")
             if not p.exists():
                 return False
@@ -1483,8 +1551,27 @@ class WebserverOpsMixin:
             nu = getattr(crl, "next_update_utc", None) or crl.next_update
             if nu.tzinfo is None:
                 nu = nu.replace(tzinfo=_dt.UTC)
-            if nu > _dt.datetime.now(_dt.UTC):
+            lu = getattr(crl, "last_update_utc", None) or crl.last_update
+            if lu.tzinfo is None:
+                lu = lu.replace(tzinfo=_dt.UTC)
+            now = _dt.datetime.now(_dt.UTC)
+            # lastUpdate in the FUTURE is the case a pure nextUpdate check cannot see: a CRL
+            # minted while the clock was wrong is rejected by nginx from the moment the clock is
+            # corrected, and its nextUpdate is even further out -- so it would never expire and
+            # never be rebuilt.
+            stale = nu <= now or lu > now
+
+            # Ordering fix: the pending-reload early return used to run BEFORE the CRL was ever
+            # loaded, so a marker left by a failed reload retried forever against a file that was
+            # itself invalid and could never become valid by reloading it.
+            if pending.exists() and not stale:
+                if self.webserver_apply().ok:
+                    self._safe_unlink(pending)
+                return True                  # acted (retried the reload)
+            if not stale:
                 return False
+            if not clock_ok:
+                return False                 # wait for a clock; rewriting now would re-break it
             _pki.build_crl(self._paths)
             if not self.webserver_apply().ok:   # nginx must re-read the fresh CRL
                 _rfs.atomic_write(self._paths, pending, "reload-pending\n", 0o600)

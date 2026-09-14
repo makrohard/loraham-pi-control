@@ -178,6 +178,26 @@ class SelfUpdateOpsMixin:
                  "purpose": "the Apps page's Network panel (join Wi-Fi with AP fallback; "
                             "actions stay refused until this is installed)"},
             ]}] if self.network_supported() else []),
+            # Time source: the copybox for an existing box. `bootstrap: False` for the same
+            # reason as the two rules below — it has its own (default-on) scaffold in
+            # bootstrap-deps.sh and must never be folded into the generated script twice.
+            # The NMEA refusal lives in `deps.time_source_offer`, not here, so every surface
+            # that renders this inherits it; the controller already knows its own GPS source,
+            # so nothing re-parses the config.
+            {"title": "Time source", "deps": [
+                {"what": "clock discipline (chrony + gpsd)",
+                 "required": False, "bootstrap": False,
+                 "satisfied": self._time_source_present(),
+                 # `dependencies.html` renders this command only when NOT satisfied, so what keeps
+                 # the repair reachable is the per-run stamp: a setup that failed partway leaves
+                 # the row unsatisfied and the command visible. The command itself is idempotent,
+                 # and re-running it IS the documented repair.
+                 "install": _deps_mod.time_source_offer(
+                     self._gps_source_for_offer(), _getpass.getuser())[1],
+                 "purpose": "a Pi has no battery-backed clock; chrony sets it from NTP, or from "
+                            "GPS when nothing better is reachable. Re-running the command below "
+                            "is also the repair when setup failed partway"},
+            ]},
             {"title": "Power controls", "deps": [
                 # `bootstrap: False` — this copybox embeds THIS box's username and has its own
                 # dedicated (opt-out) scaffold in bootstrap-deps.sh, so `_declared_dep_scopes`
@@ -195,6 +215,46 @@ class SelfUpdateOpsMixin:
                             "buttons stay hidden until this is installed)"},
             ]},
         ]
+
+    def _gps_source_for_offer(self) -> str:
+        """The configured GPS source, for the copybox decision only. Defensive because this
+        method is also called in contexts that have no real runtime root (the README drift
+        check builds one from a plain string), and a dependency LISTING must never be the thing
+        that raises.
+
+        A failure returns the UNKNOWN sentinel, not "". Those are different states: "" is an
+        absent [gps] section, which legitimately means `auto` and is the fresh-image case;
+        unknown means ownership cannot be determined, and `time_source_offer` refuses to render
+        an installable command for it. The earlier version returned "" for both and so offered
+        an `apt install` on a box whose configuration it had just failed to read."""
+        from . import deps as _d
+        try:
+            return self.config().gps.source or ""
+        except Exception:
+            return _d.TIME_SOURCE_SOURCE_UNKNOWN
+
+    def _time_source_present(self) -> bool:
+        """Are the time source's own files on this box? File reads only, no subprocess.
+
+        The witness is `TIME_SOURCE_STAMP_PATH`, which the setup REMOVES before it touches
+        anything and writes only after its verdict passes — so it means "the most recent run
+        completed", not "a run once completed". /usr/lib/clock-epoch cannot serve here: it is a
+        persistent boot floor by design, so after one good install it survives every later failed
+        re-run, and re-running bootstrap is the documented recovery path. Reporting satisfied then
+        hides the repair copybox (`dependencies.html` renders it only when NOT satisfied), which
+        is exactly when the operator needs it.
+
+        A chrony installed by someone else, without our refclock, is still NOT this feature.
+        Whether the daemons are actually healthy is `lhpc doctor`'s question and the setup's own
+        loud nonzero exit; this row only says whether the files are there.
+        """
+        from . import deps as _deps_mod
+        try:
+            fs = self._system.fs
+            return (fs.exists(_deps_mod.CHRONY_DROPIN_PATH)
+                    and fs.exists(_deps_mod.TIME_SOURCE_STAMP_PATH))
+        except Exception:
+            return False
 
     def self_update_check(self) -> ActionResult:
         """Explicit upstream freshness check (NETWORK: `git fetch`) — refreshes the cached marker so

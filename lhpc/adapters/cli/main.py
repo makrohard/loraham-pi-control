@@ -46,6 +46,19 @@ _TOPICS = {
 }
 
 
+def _add_clock_override(parser) -> None:
+    """The one-shot acceptance of an unverified clock, on every PKI-mutating subcommand.
+
+    Deliberately its own flag rather than a meaning folded into `--confirm-recreate` or
+    `--confirm-label`: those confirm that the operator wants something DESTROYED, which is a
+    different statement from "I know this box's clock is not verified and I accept certificates
+    dated from it". Nothing persists it — it is a parameter on one call.
+    """
+    parser.add_argument("--accept-unverified-clock", action="store_true",
+                        help="Proceed even though this box's clock is not verified (certificates "
+                             "and CRLs will be dated from it)")
+
+
 def _confirm(prompt: str) -> bool:
     try:
         return input(prompt).strip().lower() in ("y", "yes")
@@ -761,7 +774,8 @@ def build_parser() -> argparse.ArgumentParser:
     ws_sub.add_parser("start-service", help="Operator-context: generate config + enable/start nginx")
     ws_sub.add_parser("disable-remote", help="Disable remote exposure (bind loopback)")
     ws_sub.add_parser("reset-defaults", help="Reset desired config to safe defaults")
-    ws_sub.add_parser("tls-renew", help="Renew the HTTPS server certificate")
+    p_ws_tls = ws_sub.add_parser("tls-renew", help="Renew the HTTPS server certificate")
+    _add_clock_override(p_ws_tls)
     p_ws_logs = ws_sub.add_parser("logs", help="Tail the nginx front-end access/error log")
     p_ws_logs.add_argument("--access", action="store_true", help="Access log (default: error log)")
     p_ws_logs.add_argument("--lines", type=int, default=300, help="Lines to tail (default 300)")
@@ -770,6 +784,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ws_init.add_argument("--ip", action="append", default=[], help="IP SAN (repeatable)")
     p_ws_init.add_argument("--confirm-recreate", action="store_true",
                            help="Confirm DESTRUCTIVE re-init when a CA already exists")
+    _add_clock_override(p_ws_init)
     p_ws_cfg = ws_sub.add_parser("configure", help="Set desired webserver config")
     p_ws_cfg.add_argument("--bind", help="Listen address: 127.0.0.1 (loopback) or 0.0.0.0 (remote)")
     p_ws_cfg.add_argument("--port", type=int, help="HTTPS port (default 8443)")
@@ -778,6 +793,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ws_cfg.add_argument("--dns", action="append", help="DNS SAN for the server cert (repeatable)")
     p_ws_cfg.add_argument("--ip", action="append", help="IP SAN for the server cert (repeatable)")
     p_ws_exp = ws_sub.add_parser("expose", help="Enable remote exposure (opt-in)")
+    _add_clock_override(p_ws_exp)
     p_ws_exp.add_argument("--cidr", action="append", default=[], help="Allowed source CIDR (repeatable)")
     p_ws_exp.add_argument("--access-mode", "--auth", choices=_WS_MODES,
                           help="Client-certificate policy: " + " | ".join(_WS_MODES))
@@ -813,6 +829,8 @@ def build_parser() -> argparse.ArgumentParser:
     for _n in ("issue", "reissue", "discard-export"):
         _pc = cert_sub.add_parser(_n, help=_CERT_HELP[_n])
         _pc.add_argument("label", help="Client certificate label (device name)")
+        if _n != "discard-export":                   # deleting an export dates nothing
+            _add_clock_override(_pc)
     p_cert_exp = cert_sub.add_parser("export",
                                      help="Write a device's PKCS#12 (.p12) bundle to a file")
     p_cert_exp.add_argument("label", help="Client certificate label to export")
@@ -821,6 +839,7 @@ def build_parser() -> argparse.ArgumentParser:
                             help="Overwrite an existing destination file")
     p_ws_rev = cert_sub.add_parser("revoke", help="Revoke a client certificate (updates the CRL)")
     p_ws_rev.add_argument("label", help="Client certificate label to revoke")
+    _add_clock_override(p_ws_rev)
     p_ws_rev.add_argument("--confirm-label", default="",
                           help="Must equal <label> to confirm revocation")
 
@@ -1405,8 +1424,10 @@ def _run(argv: list[str] | None = None) -> int:
         if cmd == "start-service":
             return _render(svc.webserver_start_service())
         if cmd == "init":
-            return _render(svc.webserver_init(dns_sans=args.dns or None, ip_sans=args.ip or None,
-                                              confirm=args.confirm_recreate))
+            return _render(svc.webserver_init(
+                dns_sans=args.dns or None, ip_sans=args.ip or None,
+                confirm=args.confirm_recreate,
+                accept_unverified=getattr(args, "accept_unverified_clock", False)))
         if cmd == "configure":
             fields = {k: v for k, v in (
                 ("bind", args.bind), ("port", args.port), ("access_mode", args.access_mode),
@@ -1417,7 +1438,8 @@ def _run(argv: list[str] | None = None) -> int:
             return _render(svc.webserver_expose(
                 args.cidr, access_mode=args.access_mode,
                 confirm=phrase in ("enable-remote", "enable-remote-danger"),
-                confirm_public=(phrase == "enable-remote-danger")))
+                confirm_public=(phrase == "enable-remote-danger"),
+                accept_unverified=getattr(args, "accept_unverified_clock", False)))
         if cmd == "proxy":
             phrase = (args.confirm_phrase or "").strip()
             return _render(svc.stack_web_configure(
@@ -1430,7 +1452,8 @@ def _run(argv: list[str] | None = None) -> int:
         if cmd == "reset-defaults":
             return _render(svc.webserver_reset_defaults())
         if cmd == "tls-renew":
-            return _render(svc.webserver_tls_renew())
+            return _render(svc.webserver_tls_renew(
+                getattr(args, "accept_unverified_clock", False)))
         if cmd == "logs":
             path, ls = svc.webserver_log_tail("access" if args.access else "error", args.lines)
             print(path or "(no log file yet)")
@@ -1452,7 +1475,8 @@ def _run(argv: list[str] | None = None) -> int:
             if cc in ("issue", "reissue"):
                 pw = _secrets.token_urlsafe(18)   # one-time; shown once, never persisted/logged
                 fn = svc.webserver_cert_issue if cc == "issue" else svc.webserver_cert_reissue
-                res = fn(args.label, pw)
+                res = fn(args.label, pw,
+                         getattr(args, "accept_unverified_clock", False))
                 if res.ok:
                     print(f"OK    {res.summary}")
                     for line in res.details:
@@ -1466,7 +1490,8 @@ def _run(argv: list[str] | None = None) -> int:
                     print(f"ERR   revocation refused — pass --confirm-label {args.label} "
                           "to confirm revoking this exact certificate")
                     return 1
-                return _render(svc.webserver_cert_revoke(args.label))
+                return _render(svc.webserver_cert_revoke(
+                    args.label, getattr(args, "accept_unverified_clock", False)))
             if cc == "discard-export":
                 return _render(svc.webserver_cert_discard_export(args.label))
             if cc == "export":

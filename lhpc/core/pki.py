@@ -214,6 +214,22 @@ def _new_key():
     return ec.generate_private_key(ec.SECP256R1())
 
 
+# Leaf certificates are backdated by a DAY, not the minute the CAs use. A minute is far too
+# tight to absorb an ordinary clock difference at validation time: the browser or nginx checking
+# the certificate may be seconds-to-hours off from the Pi that signed it, and a leaf that is "not
+# yet valid" is indistinguishable from a broken one to the person locked out by it. A day costs
+# nothing (the certificate is no more powerful for existing yesterday) and is ordinary CA practice.
+#
+# The CAs deliberately keep the one-minute backdate: they are signed once, their lifetime is
+# measured in years, and widening it buys nothing the leaves do not already get.
+#
+# This is a TOLERANCE, not a verification -- it does not rescue a box whose clock is wrong by more
+# than a day, which is what the clock gate in service_webserver is for. Existing certificates are
+# NOT reissued to apply it.
+_LEAF_BACKDATE = _dt.timedelta(days=1)
+_CA_BACKDATE = _dt.timedelta(minutes=1)
+
+
 def _sign_ca(key, common_name: str, days: int):
     now = _now()
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
@@ -224,7 +240,7 @@ def _sign_ca(key, common_name: str, days: int):
             .subject_name(name).issuer_name(name)
             .public_key(key.public_key())
             .serial_number(x509.random_serial_number())
-            .not_valid_before(now - _dt.timedelta(minutes=1))
+            .not_valid_before(now - _CA_BACKDATE)
             .not_valid_after(now + _dt.timedelta(days=days))
             .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
             .add_extension(ku, critical=True)
@@ -244,7 +260,7 @@ def _sign_leaf(ca_key, ca_cert, leaf_key, common_name: str, days: int, *, eku, s
                .issuer_name(ca_cert.subject)
                .public_key(leaf_key.public_key())
                .serial_number(x509.random_serial_number())
-               .not_valid_before(now - _dt.timedelta(minutes=1))
+               .not_valid_before(now - _LEAF_BACKDATE)
                .not_valid_after(now + _dt.timedelta(days=days))
                .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
                .add_extension(ku, critical=True)

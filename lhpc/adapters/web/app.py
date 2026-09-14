@@ -1966,7 +1966,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         phrase = f.get("confirm_phrase", "").strip()
         r = service.webserver_configure_apply(
             **fields, confirm=phrase in ("enable-remote", "enable-remote-danger"),
-            confirm_public=(phrase == "enable-remote-danger"))
+            confirm_public=(phrase == "enable-remote-danger"),
+            accept_unverified=(f.get("accept_unverified_clock") == "1"))
         flash(r.summary, "ok" if r.ok else "err")
         for d in r.details:
             flash(d, "warn")
@@ -2099,6 +2100,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
               "ok" if st.get("live_ok") else "warn")
         return _fw_back()
 
+    def _accept_unverified_clock() -> bool:
+        """The WebGUI half of the one-shot clock override. Read per REQUEST and never stored,
+        which is what makes it one-shot: there is no session flag and no setting to forget to
+        clear. It is its own checkbox, deliberately separate from the typed destructive
+        confirmations beside it -- "yes, recreate my CAs" and "yes, I accept certificates dated
+        from a clock this box cannot verify" are different statements."""
+        return request.form.get("accept_unverified_clock") == "1"
+
     @app.route("/webserver/init", methods=["POST"])
     def webserver_init():
         if not _csrf_ok():
@@ -2106,7 +2115,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # First-time init on a fresh PKI needs no phrase; RE-initializing (destructive) requires
         # the typed phrase 'recreate'.
         confirm = request.form.get("confirm_phrase", "").strip() == "recreate"
-        r = service.webserver_init(confirm=confirm)
+        r = service.webserver_init(confirm=confirm,
+                                   accept_unverified=_accept_unverified_clock())
         flash(r.summary, "ok" if r.ok else "err")
         return _ws_back()
 
@@ -2114,7 +2124,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     def webserver_tls_renew():
         if not _csrf_ok():
             abort(400)
-        r = service.webserver_tls_renew()
+        r = service.webserver_tls_renew(_accept_unverified_clock())
         flash(r.summary, "ok" if r.ok else "err")
         return _ws_back()
 
@@ -2126,7 +2136,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         op, label = f.get("op", ""), f.get("label", "")
         if op == "issue":
             pw = _secrets.token_urlsafe(18)     # one-time; shown once, never persisted/logged
-            r = service.webserver_cert_issue(label, pw)
+            r = service.webserver_cert_issue(label, pw, _accept_unverified_clock())
             if r.ok:
                 flash(f"{r.summary}. One-time passphrase (record it now): {pw}", "ok")
                 if peer_is_loopback():
@@ -2141,7 +2151,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             if f.get("confirm_phrase", "").strip() != label:
                 flash(f"type the certificate label '{label}' to confirm revocation", "err")
             else:
-                r = service.webserver_cert_revoke(label)
+                r = service.webserver_cert_revoke(label, _accept_unverified_clock())
                 flash(r.summary, "ok" if r.ok else "err")
         else:
             flash("unknown certificate action", "err")

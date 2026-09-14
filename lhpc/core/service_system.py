@@ -257,6 +257,73 @@ def tz_name_from_link(target: str) -> str:
             return name
     return ""
 
+# --- the clock gate the PKI uses -------------------------------------------------------------
+# ONE predicate, defined here beside the constants it uses, so nothing downstream has to invent
+# what "verified" means. It answers a narrower question than the Time row: not "is this clock
+# good enough to show the operator", but "may this clock date material that outlives the boot".
+#
+# What it CANNOT do, stated so nothing claims otherwise: prove the time is CORRECT. LHPC reads
+# the kernel's synchronisation evidence, not a trusted date. A source that is synchronised and
+# wrong passes this gate, and a rolled-back GPS receiver is exactly such a source. The property
+# actually enforced is "unverified or unsynchronised time may not mutate the PKI".
+# NOTE: clock_verified() deliberately uses NO filesystem timestamps. See its docstring.
+def clock_verified(fs, runtime_root, now: float | None = None) -> tuple[bool, str]:
+    """(ok, reason). `reason` is operator-facing and names what failed, never just "bad clock".
+
+    Three conditions, all from evidence that already exists:
+      1. the kernel says synchronised (not STA_UNSYNC, and ntp_adjtime did not return TIME_ERROR);
+      2. maxerror is inside _GREEN_MAXERROR_US -- the same bound the Time row calls green;
+      3. the clock is at or above _NOT_BEFORE -- a STABLE compile-time lower bound.
+
+    **File mtimes are deliberately NOT an input, and this is the correction that matters.** An
+    earlier version took the newest mtime among the runtime and PKI paths as a floor, reasoning
+    that the clock cannot legitimately read earlier than something this box has written. That is
+    circular: those timestamps were produced by the same possibly-wrong clock. A CRL minted while
+    the clock was a year fast has a file mtime a year in the future, so the floor then rejects the
+    CORRECTED time -- and CRL repair, which needs a verified clock, refuses to replace the very
+    file that is locking the operator out. The box stays locked out until the erroneous future
+    date, and no operator override helps because the watchdog is unattended.
+
+    A floor is only useful if it is independent of the thing being checked. `_NOT_BEFORE` is;
+    mtimes are not. They remain fine as DIAGNOSTICS -- the Time row still uses its write floor to
+    label an obviously implausible clock -- but they must not authorise issuance or repair.
+
+    _CLOCK_EPOCH_FLOOR from the GPS time source is deliberately NOT an input: this must hold on a
+    box that never re-ran bootstrap and has no such floor.
+    """
+    kernel = read_kernel_time_state()
+    if kernel is None:
+        return False, "kernel time state unavailable — cannot tell whether the clock is synchronised"
+    if not kernel["synced"]:
+        return False, "the clock is not synchronised (no time source has set it yet)"
+    maxerror = int(kernel["maxerror_us"])
+    if maxerror > _GREEN_MAXERROR_US:
+        return False, (f"the clock's estimated error is {maxerror / 1_000_000:.1f} s, above the "
+                       f"{_GREEN_MAXERROR_US / 1_000_000:.0f} s this needs")
+    stamp = time.time() if now is None else now
+    if stamp < float(_NOT_BEFORE):
+        return False, ("the clock reads "
+                       f"{time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime(stamp))}, before the "
+                       "earliest date this software can plausibly run")
+    return True, ""
+
+
+# The operator's way past it. ONE-SHOT and NON-PERSISTENT by construction: it is a parameter on
+# the call, never a stored setting, so it cannot leak into the next operation. It is also
+# separate from every destructive confirmation in the codebase -- "yes, replace my certificates"
+# and "yes, I accept that this box's clock is unverified" are different statements, and treating
+# one as the other is how an operator ends up with certificates dated to 1970 they never agreed
+# to. The flag is named for what it accepts, not for what it bypasses.
+CLOCK_OVERRIDE_FLAG = "--accept-unverified-clock"
+
+
+def clock_refusal(reason: str, what: str) -> str:
+    """The refusal text. Names the clock as the cause, what was NOT done, and the exact way to
+    proceed anyway -- a refusal the operator cannot act on is a dead end, not a safeguard."""
+    return (f"refusing to {what}: {reason}. Nothing was changed. "
+            f"Fix the clock (see `lhpc doctor`), or accept the risk with {CLOCK_OVERRIDE_FLAG}.")
+
+
 class SystemStatsMixin:
     """Read-only host metrics (`GET /api/system`). File reads only, via the injected System.fs."""
 

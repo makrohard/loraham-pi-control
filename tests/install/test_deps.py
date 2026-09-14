@@ -4,6 +4,8 @@ uninstall refcounting. LHPC never installs system packages itself."""
 
 import time
 
+import re
+
 from lhpc.core import source_registry
 from lhpc.core.manifest import ManifestError, parse_manifest
 from lhpc.core.paths import Paths
@@ -268,7 +270,21 @@ def test_no_dependency_surface_ever_advises_apt_install_systemd(tmp_path):
     for s in svc.stacks():
         installs += [d["install"] for d in svc.system_deps(s.id)]
         installs += [d["install"] for lst in svc.install_dep_gate(s.id).values() for d in lst]
-    offenders = [c for c in installs if "systemd" in (c or "")]
+    # Match the rule's own stated intent — "none may INSTALL systemd", not "none may say the
+    # word". A multi-line copybox legitimately explains itself, and the time-source one has to
+    # mention systemd twice (the boot floor is a systemd mechanism, and gpsd cannot be started
+    # where no systemd is running). Flag an apt/aptitude install that names a systemd package,
+    # which is the thing that is actually nonsense on a non-systemd host.
+    apt_install = re.compile(r"\b(?:apt|apt-get|aptitude)\b[^\n]*\binstall\b[^\n]*")
+    pkg_systemd = re.compile(r"(?<![\w-])systemd(?![\w-])")
+    offenders = []
+    for c in installs:
+        for line in (c or "").splitlines():
+            if line.lstrip().startswith("#"):
+                continue                       # an explanation is not a command
+            for cmd in apt_install.findall(line):
+                if pkg_systemd.search(cmd):
+                    offenders.append(line.strip())
     assert not offenders, offenders
 
 

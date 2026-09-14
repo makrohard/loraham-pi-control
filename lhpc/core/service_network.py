@@ -692,6 +692,13 @@ class NetworkOpsMixin:
         # console extension — the operator just keeps the by-name cert warning.
         try:
             from . import pki as _pki
+            from .service_system import clock_verified
+            # Same rule as every other issuing path: an unverified clock may not date a
+            # certificate. Fail-soft like the rest of this block -- the console extension itself
+            # stands, and the operator keeps the by-name cert warning until the clock is fixed.
+            ok, _why = clock_verified(self._system.fs, self._paths.runtime_root)
+            if not ok:
+                raise RuntimeError("clock unverified")
             fresh = self.config().webserver
             _pki.issue_server_cert(self._paths, dns_sans=list(fresh.dns_sans),
                                    ip_sans=list(fresh.ip_sans),
