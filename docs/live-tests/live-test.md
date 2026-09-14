@@ -45,7 +45,31 @@ dotfiles set does not reach PlatformIO. Only the uppercase names work, and git n
 | per-stack proxies | ✓ 200 with the stack up | ✓ graywolf `:8446`, meshcore webui `:8447` = 200; 502 exactly when the upstream is down |
 | boot restore with the default running set | ✓ reboot, journal `2 restored, 0 failed`, identical set back | ✓ (earlier run: `3 restored, 0 failed`) |
 | host tests, last | ✓ kiss rc 0 | ✓ |
-| from-zero reinstall (§13) | deferred — fast lane | run separately |
+| from-zero reinstall (§13) | deferred — fast lane | ✓ steps 1–8 plus the secrets and exposure restore |
+
+## From-zero reinstall on B (§13)
+
+Wipe and rebuild from nothing, following the README's happy path verbatim. Both teardown scripts
+returned rc 0 and the box was verified clean down to the user units and `/etc/lhpc`. The installer
+brought the controller up with identity **ok** on `342a069` and started the console itself.
+
+Step 4's contract proved twice over: a licensed stack first refused with "no radio hardware
+configured", and after `lhpc hardware loraham` refused again with the typed callsign refusal and its
+`lhpc config operator --callsign` hint. Step 6 passes byte-for-byte — the graywolf admin password shown
+on the stack page equals `state/graywolf/graywolf-admin.txt`. Step 8 started and stopped every stack;
+chat's `manual start required` and meshcore/meshtastic's `'node_name' is required` after a purge are the
+designed refusals, cleared by setting the identity (meshtastic per band).
+
+The restore was verified from outside the box: the old server certificate is served again, the
+operator's client certificate is active, the console answers 200 with a client certificate and 403
+without, the proxies 403 without and 502 while their stacks are down, and the firewall reports
+Config ✓ Boot ✓ Live ✓.
+
+**Second proxy finding, and a trap.** `auto-install` from the web console reached 1 of 9 stacks on this
+box: the `lhpc-web` service environment carries no proxy, so every binary fetch failed with
+`[Errno 113]`. The same run from the CLI with the proxy exported completed 9/9, 0 blocked, 0 failed.
+A systemd drop-in carrying the proxy is **not** a workaround — the integrity check refuses managed
+units that have drop-ins. Full evidence: `part2-box-b-from-zero.md` in the release-automation tree.
 
 ## Result
 
