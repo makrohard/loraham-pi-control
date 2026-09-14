@@ -212,6 +212,49 @@ overwrites the shared fields again.
 Keep the native port firewalled and reach the UI through the proxy port
 ([what actually listens](firewall.md#what-actually-listens)).
 
+### The clock gate
+
+A certificate outlives the boot that made it. A Pi has no battery-backed clock, so a box that comes
+up in 1970 — or one whose GPS handed it a rolled-back date — would mint material that is "not yet
+valid" for years and lock you out of the console the PKI protects.
+
+So every operation that **dates** PKI material asks the clock first: `webserver init`, `tls-renew`,
+`cert issue`, `cert reissue`, `cert revoke`. The check runs **before anything is written**. That
+placement matters most for `cert reissue`, which revokes the old certificate before issuing its
+replacement — a refusal any later would leave you with neither.
+
+Time counts as verified when the kernel says the clock is synchronised, its estimated error is
+within one second, and it is not before 2025 — a fixed date compiled into LHPC. If it is not:
+
+```
+ERR   refusing to reissue the certificate for 'phone': the clock is not synchronised
+      (no time source has set it yet). Nothing was changed. Fix the clock (see `lhpc doctor`),
+      or accept the risk with --accept-unverified-clock
+```
+
+`--accept-unverified-clock` proceeds anyway. It is one-shot — a flag on that one command, never
+remembered — and it is deliberately **not** the same thing as `--confirm-recreate` or
+`--confirm-label`. Those say "yes, destroy this"; this one says "yes, I accept certificates dated
+from a clock I cannot verify". They are different statements.
+
+File timestamps are deliberately **not** part of that test. They were written by the same clock, so
+they cannot bound it: a CRL created while the clock ran fast carries a future timestamp, and treating
+that as a lower bound would reject the corrected time and block the repair that fixes it. Timestamps
+remain useful as a *diagnostic* — the System panel's Time row uses them to flag an implausible clock —
+but they never authorise a PKI change.
+
+**What this does not do:** prove the clock is *right*. LHPC reads the kernel's synchronisation
+evidence, not a trusted date, so a source that is synchronised and wrong still passes. The property
+enforced is "unverified or unsynchronised time may not mutate the PKI" — worth having, and honest
+about its limits. See [Clock](operations.md#clock).
+
+**The CRL repairs itself** when it is stale: `nextUpdate` in the past, or `lastUpdate` in the
+*future* — the second is a CRL minted while the clock was wrong, which nginx rejects the moment the
+clock is corrected and which would otherwise never expire. Repair happens only with a verified
+clock (there is no operator present to accept the risk), and it preserves the CA and every revoked
+serial. Nothing else is ever regenerated automatically: replacing a certificate cannot fix one
+already installed on a phone.
+
 ## Certificates and the two-CA PKI
 
 Two independent CAs (private keys never leave `config/tls/`, 0600):

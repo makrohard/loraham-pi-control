@@ -13,6 +13,7 @@ Operational rules for `lhpc`. Internals and the safety model: [architecture.md](
 - [Operating the console](#operating-the-console)
 - [Reboot / Shut down](#reboot--shut-down)
 - [Network](#network)
+- [Clock](#clock)
 - [Identity drift on clean or uninstall](#identity-drift-on-clean-or-uninstall)
 
 ## Not a supervisor
@@ -233,6 +234,71 @@ console-allowlist step: [wifi-access-point.md](wifi-access-point.md).
 A purge (`uninstall.sh --purge` or `lhpc clean --purge`) removes the preferred-network record, so
 the box falls back to its own access point at the next link loss or reboot. Re-declaring a
 preferred WLAN in the Network panel afterwards is mandatory, not optional.
+
+## Clock
+
+A Pi has no battery-backed clock — only the Pi 5 has an RTC — so an offline box boots with the last
+time it happened to write. Every log line, certificate and receipt after that is wrong until something
+corrects it.
+
+`bootstrap-deps.sh` installs **chrony** to discipline the clock and **gpsd** to feed it the receiver's
+time when there is one. This is ON by default; `--no-time-source` skips it.
+
+**chrony replaces systemd-timesyncd.** On Trixie both declare `Provides/Conflicts/Replaces: time-daemon`,
+so installing chrony removes timesyncd. That is the reason the opt-out exists.
+
+**NTP always wins when it is reachable.** The setup adds `prefer` to the NTP declarations already in
+`/etc/chrony/chrony.conf` and `/etc/chrony/sources.d/`, so any of them outranks the GPS regardless of
+measured error. GPS carries the clock only when none of them is selectable — which, on an offline box,
+is the case it exists for: **GPS is then the only source, so its time is accepted, not corroborated.**
+
+**Scope of that guarantee:** it covers the declarations present when bootstrap ran. NTP servers supplied
+by DHCP (written to `/run/chrony-dhcp/` at lease time with fixed options) and declarations added later
+still take part in normal chrony selection, but carry no guarantee. To make one authoritative, add
+`prefer` to it, or re-run `bootstrap-deps.sh`.
+
+**Which source is in use is not shown in LHPC.** The System panel's Time row reports whether the clock
+is synchronised and how far it may be out, and nothing more. To see the source:
+
+```
+chronyc sources        # every source, and which one is selected (^*)
+chronyc tracking       # the selected source and the current error estimate
+```
+
+**If the box also uses GPS for position**, the time source needs `[gps] source = gpsd`. With
+`source = nmea`, LHPC reads the receiver directly and gpsd must not also own it — bootstrap detects that
+and skips the time source rather than take the device. See [gps](gps.md).
+
+**A boot floor** is written to `/usr/lib/clock-epoch`: systemd advances a clock below that date at
+startup, so a box that comes up in 1970 is plausible before the first certificate is written. It is a
+floor, not a clock — systemd takes the highest of its own build time, this file and
+`/var/lib/systemd/timesync/clock`. After chrony replaces timesyncd, that last file stops being updated
+and simply becomes a leftover; `/usr/lib/clock-epoch` is the one LHPC maintains.
+
+Beside it, `/usr/lib/clock-epoch.ok` records that the **most recent** setup run completed: it is
+removed before the setup changes anything and written again only if everything it promised succeeded.
+That is what the console's Dependencies panel reads, so a run that failed halfway keeps offering the
+command that repairs it. The boot floor itself cannot say this — it survives every later failed
+re-run, which is the point of a floor.
+
+**Paste-lines** for an existing box are in the console's dependency panel, or re-run
+`bootstrap-deps.sh`.
+
+**Turning it off again.** `--no-time-source` only skips *future* setup — it does not undo an install.
+To disable time disciplining on a box that already has it:
+
+```
+sudo rm -f /etc/chrony/conf.d/10-lhpc-gps.conf   # the refclock
+sudo systemctl disable --now gpsd                # stop gpsd owning the receiver
+```
+
+and remove the word `prefer` from any line bootstrap added it to. A **full** rollback to the previous
+state also removes the packages and restores timesyncd:
+
+```
+sudo apt purge gpsd chrony && sudo apt install systemd-timesyncd
+sudo rm -f /usr/lib/clock-epoch /usr/lib/clock-epoch.ok
+```
 
 ## Identity drift on clean or uninstall
 

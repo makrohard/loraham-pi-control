@@ -176,7 +176,7 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs
   disables Wi-Fi power-save when the install runs over Wi-Fi (a warning prints the revert), both
   for the long builds ([Running on a Pi](docs/maintenance.md#running-on-a-pi)) · installs two
   polkit rules (and the `polkitd` package) so the WebGUI's Reboot/Shut down buttons and its Network
-  panel are authorised (`--no-power-controls` / `--no-network-controls` skip them) · enables a
+  panel are authorised (`--no-power-controls` / `--no-network-controls` skip them)  · installs `chrony` and `gpsd` so the box can set its clock (a Pi has no battery-backed clock; GPS is used only when no NTP source is reachable, and this REPLACES `systemd-timesyncd`) (`--no-time-source` skips it) · enables a
   persistent journal (`/var/log/journal`) · disables a packaged `meshtasticd.service` if one exists.
 
 <details><summary><em>Manual — install only what the stacks you'll run need (bootstrap-deps.sh is the source of truth; preview with <code>--dry-run</code>, regenerate with <code>lhpc deps --script</code>)</em></summary>
@@ -205,6 +205,8 @@ sudo usermod -aG spi,gpio "$USER"                        # → applied by the re
 
 The WebGUI's Reboot/Shut down buttons and its Network panel additionally need `polkitd` plus two
 polkit rules — `lhpc deps` (or Apps → LoRaHAM Pi Control → Dependencies) prints the exact commands.
+The clock needs `chrony` and `gpsd`, installed by default and printed the same way
+([Clock](docs/operations.md#clock)).
 </details>
 
 #### 5. Install lhpc

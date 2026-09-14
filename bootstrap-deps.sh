@@ -11,7 +11,7 @@
 # unprivileged on purpose: the pre-flight is read-only and zero-trust, meant to be vetted
 # BEFORE the script is ever granted root. lhpc itself never runs privileged commands.
 #
-#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls]
+#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--no-time-source] [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls]
 #   bootstrap-deps.sh --dry-run        PRE-FLIGHT: simulate only, change nothing
 #     soft-cs      software CS (/dev/spidev0.0): dtparam=spi=on + dtoverlay=spi0-0cs  (LoRaHAM Pi / Uputronics rigs, single-radio AND dual Uputronics: daemon + meshtasticd drive CS7/CS8 as GPIOs — the kernel must NOT claim CE0/CE1)
 #     hardware-cs  kernel-driven CE0+CE1, no overlay: dtparam=spi=on only  (only for boards that really use kernel chip-selects; NOT for Uputronics — CE0/CE1=GPIO7/8 would collide with the daemon's GPIO chip-selects)
@@ -40,9 +40,12 @@
 #                        no graphical/audio stack; nonzero when it cannot be resolved or would
 #                        install one. Run this FIRST on a fresh image — the package closure is
 #                        then known before anything is installed, not discovered mid-install.
-#     --with-gps         ALSO install gpsd, for using a GPS receiver attached to THIS box
+#     --with-gps         COMPATIBILITY ONLY: gpsd is installed by the default time source,
+#                        so this flag now installs nothing extra and only prints a note
 #                        as the shared position source (see `lhpc gps`). Not needed for a
 #                        gpsd on another machine.
+#     --no-time-source   do NOT install chrony/gpsd or configure the clock (default is ON;
+#                        chrony REPLACES systemd-timesyncd, and a direct-NMEA box needs this)
 #     --with-gui         ALSO install the GUI-only dependencies (GTK/Tk) that the desktop components need. OMITTED BY DEFAULT: this script must never pull a graphical stack onto a headless image. It installs GUI application LIBRARIES only — never a desktop environment, display manager or X/Wayland server — and assumes you already run a graphical session.
 #     --keep-wifi-powersave  Do NOT touch Wi-Fi settings. BY DEFAULT — but ONLY when the install actually runs over Wi-Fi (the default route's device is a NetworkManager TYPE=wifi device, or no route/type is determinable); a LAN-carried install leaves Wi-Fi untouched automatically — this script DISABLES Wi-Fi power-save on a NetworkManager-managed wlan interface, because on a Pi Zero 2W the brcmfmac Wi-Fi firmware drops (the interface can vanish until reboot) under a long build's sustained CPU load — which breaks a headless install over Wi-Fi. It writes ONE NetworkManager drop-in (revert: rm /etc/NetworkManager/conf.d/wifi-nopowersave.conf && systemctl restart NetworkManager). Pass this flag to leave Wi-Fi untouched (e.g. Ethernet, or you manage it yourself); a warning then explains the risk.
 #
@@ -51,10 +54,11 @@
 set -euo pipefail
 
 usage() {
-	echo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls]" >&2
+	echo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--no-time-source] [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls]" >&2
 	echo "       bootstrap-deps.sh --dry-run   (simulate the default apt transaction; no changes)" >&2
 }
 
+BOOTSTRAP_FAILED=""
 SPI_MODE=""
 OPERATOR_USER=""
 NO_SWAPFILE=""
@@ -63,6 +67,7 @@ NO_NETWORK=""
 SWAP_SIZE_MB=""
 WITH_GUI=""
 WITH_GPS=""
+NO_TIME_SOURCE=""
 KEEP_WIFI=""
 DRY_RUN=""
 while [ $# -gt 0 ]; do
@@ -74,6 +79,7 @@ while [ $# -gt 0 ]; do
 		--no-network-controls) NO_NETWORK=1; shift ;;
 		--with-gui) WITH_GUI=1; shift ;;
 		--with-gps) WITH_GPS=1; shift ;;
+		--no-time-source) NO_TIME_SOURCE=1; shift ;;
 		--keep-wifi-powersave) KEEP_WIFI=1; shift ;;
 		--dry-run) DRY_RUN=1; shift ;;
 		--swap-size) SWAP_SIZE_MB="${2:?--swap-size needs a value (MB)}"; shift 2 ;;
@@ -89,19 +95,97 @@ done
 POLKIT_PKG="polkitd"
 [ -n "$NO_POWER" ] && [ -n "$NO_NETWORK" ] && POLKIT_PKG=""
 
+# The time source (chrony disciplines the clock, gpsd feeds it GPS time). Default ON:
+# a Pi has no battery-backed clock, so an offline box boots with the last time it wrote
+# and every log line and certificate after that is wrong. Subtracted by --no-time-source,
+# exactly like $POLKIT_PKG above, so it rides the SAME merged transaction the dry-run
+# simulates. NOTE chrony REPLACES systemd-timesyncd (both Provides/Conflicts/Replaces:
+# time-daemon on Trixie) — that is why the opt-out exists.
+TIME_PKGS="chrony gpsd"
+
+# PRE-FLIGHT, before the packages are even chosen: gpsd must never claim a receiver that
+# an LHPC `nmea` source reads DIRECTLY. This is not only device contention — gpsd switches
+# u-blox receivers into UBX binary mode and they STAY there after gpsd stops, so a later
+# `nmea` read finds a stream with no NMEA in it until the chip is reset with an external
+# tool. Uncertainty fails SAFE (skip): a skipped box is one re-run away from the feature,
+# a UBX-locked receiver is not. Absent config = fresh box = proceed, which is the case the
+# whole feature exists for.
+if [ -z "$NO_TIME_SOURCE" ]; then
+	# Resolve the operator the SAME WAY the script does further down (explicit
+	# --operator-user, else SUDO_USER). The documented command is `sudo bash
+	# bootstrap-deps.sh --spi-mode soft-cs` with NO --operator-user, so keying this check
+	# on the flag alone left the ordinary existing-box path with no check at all -- the
+	# image build passes the flag and was safe, which is exactly why it went unnoticed.
+	TS_USER="$OPERATOR_USER"
+	if [ -z "$TS_USER" ] && [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER:-}" != "root" ]; then
+		TS_USER="$SUDO_USER"
+	fi
+	# `|| true`, and only with a user to look up: this runs BEFORE operator validation,
+	# and `getent passwd ""` exits 2 -- under set -e + pipefail that killed the whole
+	# script before it printed anything at all.
+	TS_HOME=""
+	if [ -n "$TS_USER" ]; then
+		TS_HOME="$(getent passwd "$TS_USER" 2>/dev/null | cut -d: -f6 || true)"
+	fi
+	TS_ROOT="${LHPC_RUNTIME_ROOT:-}"
+	if [ -z "$TS_ROOT" ] && [ -n "$TS_HOME" ]; then TS_ROOT="$TS_HOME/loraham-pi-control"; fi
+	# A DRY RUN mutates nothing, so there is no receiver to lose and no reason to
+	# suppress anything: the simulation must show the DEFAULT package set, which is the
+	# whole point of the closure gate for two newly-default packages. Only a config that
+	# POSITIVELY reads `source = nmea` still suppresses, so the simulation matches what a
+	# real run on that box would do.
+	if [ -z "$TS_ROOT" ] && [ -z "$DRY_RUN" ]; then
+		# Cannot locate an lhpc configuration at all, so direct NMEA cannot be ruled out.
+		# Fail SAFE: a skipped box is one re-run away from the feature, a u-blox left in UBX
+		# mode needs an external tool. A fresh image is unaffected -- the image build passes
+		# --operator-user explicitly, and a `sudo bash` install has SUDO_USER.
+		NO_TIME_SOURCE=1
+		echo "[bootstrap-deps] time source SKIPPED: could not determine the operator (no"
+		echo "                  --operator-user, no SUDO_USER) so an lhpc [gps] source = nmea"
+		echo "                  cannot be ruled out. Re-run with --operator-user <user>, or with"
+		echo "                  --no-time-source to skip it deliberately."
+	fi
+	TS_CFG="$TS_ROOT/config/local.toml"
+	if [ -n "$TS_ROOT" ] && [ -e "$TS_CFG" ]; then
+		if [ ! -r "$TS_CFG" ] && [ -z "$DRY_RUN" ]; then
+			NO_TIME_SOURCE=1
+			echo "[bootstrap-deps] time source SKIPPED: $TS_CFG exists but cannot be read, so an"
+			echo "                  lhpc [gps] source = nmea cannot be ruled out. Re-run with"
+			echo "                  --no-time-source to silence this, or make the file readable."
+		elif awk '/^[ \t]*\[/ { insect = ($0 ~ /^[ \t]*\[gps\]/) }
+		              insect && /^[ \t]*source[ \t]*=/ && /nmea/ { found = 1 }
+		              END { exit(found ? 0 : 1) }' "$TS_CFG"; then
+			NO_TIME_SOURCE=1
+			echo "[bootstrap-deps] time source SKIPPED: lhpc [gps] source = nmea reads the receiver"
+			echo "                  directly, and gpsd must not also own it (it would also leave a"
+			echo "                  u-blox in UBX binary mode). Switch [gps] source to gpsd and"
+			echo "                  re-run to enable GPS as a time source."
+		fi
+	fi
+fi
+[ -n "$NO_TIME_SOURCE" ] && TIME_PKGS=""
+
 # --- --dry-run: simulate the DEFAULT apt transaction, change NOTHING -----------------------
 # The blocker this guards against: discovering the real package closure only while
 # installing on hardware. `apt-get install -s` resolves it against the local apt database
 # without touching the system, so a from-zero run can be vetted first. The GUI opt-in is NOT
 # part of this verdict — the default transaction is what a headless image gets.
 if [ -n "$DRY_RUN" ]; then
-	echo "[bootstrap-deps] DRY RUN — simulating the default apt transaction; nothing is installed or changed."
+	echo "[bootstrap-deps] DRY RUN — simulating the DEFAULT (fresh-image) apt transaction; nothing is installed or changed."
+	echo "[bootstrap-deps]   It resolves against an EMPTY package database, so the verdict is the FULL closure a fresh image gets, not a delta for this box."
+	echo "[bootstrap-deps]   The time-source pre-flight HAS already run, so a box configured for [gps] source = nmea shows the set without chrony/gpsd."
 	if ! command -v apt-get >/dev/null 2>&1; then
 		echo "ERROR: dry-run: apt-get is not available — cannot simulate the transaction." >&2
 		exit 5
 	fi
-	DRY_PKGS="build-essential ca-certificates cmake curl git iw libasound2-dev libbluetooth-dev libcodec2-dev libgcrypt20-dev libglib2.0-dev libgpiod-dev libi2c-dev liblgpio-dev libncurses-dev libpixman-1-dev libslirp-dev libslirp0 libssl-dev libulfius-dev libusb-1.0-0-dev libuv1-dev libyaml-cpp-dev meson nftables nginx ninja-build pkg-config python3 python3-libgpiod python3-pip python3-spidev python3-venv socat zlib1g-dev zstd $POLKIT_PKG"
-	# Simulate EXACTLY what the install below runs (same flags, same package set).
+	DRY_PKGS="build-essential ca-certificates cmake curl git iw libasound2-dev libbluetooth-dev libcodec2-dev libgcrypt20-dev libglib2.0-dev libgpiod-dev libi2c-dev liblgpio-dev libncurses-dev libpixman-1-dev libslirp-dev libslirp0 libssl-dev libulfius-dev libusb-1.0-0-dev libuv1-dev libyaml-cpp-dev meson nftables nginx ninja-build pkg-config python3 python3-libgpiod python3-pip python3-spidev python3-venv socat zlib1g-dev zstd $POLKIT_PKG $TIME_PKGS"
+	# Simulate the DEFAULT transaction: same flags, same package set. The time-source
+	# pre-flight runs ABOVE this block, so $TIME_PKGS is already empty on a box configured
+	# for direct NMEA and the simulation reflects that (verified on box E, 2026-09-14).
+	# What it is still NOT is a per-box delta: -o Dir::State::status=/dev/null resolves
+	# against an EMPTY installed-package database, so the verdict is the full closure a
+	# FRESH image would get. Both halves have to be said, or the gate reads as a promise
+	# about this machine.
 	# -o Dir::State::status=/dev/null resolves against an EMPTY installed-package
 	# database, so the verdict is the FULL closure a fresh image would get, not the delta
 	# for THIS machine. Without it a box that already has the packages reports a clean
@@ -244,7 +328,7 @@ apt-get install -y --no-install-recommends \
     socat \
     zlib1g-dev \
     zstd \
-    $POLKIT_PKG
+    $POLKIT_PKG $TIME_PKGS
 
 # --- system nginx: keep the package, disable the ROOT service ----------------------------
 nginx_rc=0; unit_present nginx.service || nginx_rc=$?
@@ -282,15 +366,284 @@ else
 	echo "[bootstrap-deps] GUI dependencies skipped (headless-safe default). On a machine with a display, re-run with --with-gui."
 fi
 
-# --- GPS (opt-in) ---------------------------------------------------------------------------
-# gpsd is only needed when the shared position source is a receiver on THIS box. A gpsd on
-# another machine, a directly-read device, or a fixed position need nothing here — so this is
-# opt-in rather than part of the default set, and lhpc never configures gpsd itself.
+# --- GPS (compatibility) --------------------------------------------------------------------
+# --with-gps used to install gpsd here. gpsd is now part of the default time-source
+# scope, which is the only place that checks whether lhpc reads the receiver directly
+# ([gps] source = nmea). Installing it from a second place would bypass that check.
 if [ -n "$WITH_GPS" ]; then
-	apt-get install -y \
-		gpsd
+	echo "[bootstrap-deps] --with-gps: gpsd is already part of the default time-source scope; the flag is retained for compatibility and installs nothing extra."
+fi
+
+# --- time source (chrony + gpsd; opt out with --no-time-source) ------------------------------
+if [ -z "$NO_TIME_SOURCE" ]; then
+	if sh -s <<'LHPC_TIME_SOURCE'
+set -eu
+
+# Did anything that the feature PROMISES fail? On a box with a running systemd, the
+# promises are: NTP outranks GPS (`prefer` applied), chrony runs, gpsd runs. If any of
+# those could not be established the setup exits NONZERO, so the caller cannot print
+# "time source: chrony disciplines the clock" over a box where it does not. Inside a
+# container/image build with no systemd, daemon activation is genuinely not possible and
+# stays best-effort -- that branch never sets this.
+TS_FAILED=0
+
+# Every path is a seam with its real value as the default, so the test harness can point
+# the whole step at a tmp tree. On a real box nothing sets these and the defaults apply.
+CHRONY_DROPIN="${CHRONY_DROPIN:-/etc/chrony/conf.d/10-lhpc-gps.conf}"
+CHRONY_CONF="${CHRONY_CONF:-/etc/chrony/chrony.conf}"
+CHRONY_SOURCES_DIR="${CHRONY_SOURCES_DIR:-/etc/chrony/sources.d}"
+GPSD_DEFAULT="${GPSD_DEFAULT:-/etc/default/gpsd}"
+CLOCK_EPOCH="${CLOCK_EPOCH:-/usr/lib/clock-epoch}"
+TS_STAMP="${TS_STAMP:-$CLOCK_EPOCH.ok}"
+LHPC_TMPDIR="${LHPC_TMPDIR:-/run}"
+
+# Retract any previous success BEFORE changing anything: from here until the verdict, the
+# most recent run has not completed, and nothing should claim otherwise.
+rm -f "$TS_STAMP"
+
+# 1. The refclock. LHPC owns this file outright; chrony.conf ends with `confdir`.
+install -D -m 0644 /dev/stdin "$CHRONY_DROPIN" <<'LHPC_DROPIN'
+# Installed by LoRaHAM Pi Control - GPS as a time source of last resort.
+# NTP takeover is `prefer` on the NTP declarations in chrony.conf, not a number here.
+#
+# EVERY comment here is on its OWN LINE. chrony honours a comment character only as the
+# FIRST non-space character of a line (cmdparse.c: `if (first && strchr("!;#%", *p))`),
+# so a trailing comment is parsed as extra ARGUMENTS and chronyd refuses to start:
+#   Fatal error : Too many arguments for makestep directive
+# Which, with systemd-timesyncd already removed, leaves the box with no time daemon at
+# all. Do not move these onto the directive lines.
+refclock SHM 0 refid GPS delay 1.0 precision 0.1 poll 2
+# an RTC-less box can boot years out; allow a step at any time
+makestep 1.0 -1
+# write back to the RTC where the board has one (Pi 5)
+rtcsync
+LHPC_DROPIN
+
+# 2. `prefer` on every NTP declaration chrony already has, so any of them outranks the
+#    GPS. EDITED, never rewritten: operator options, comments and every other line come
+#    back byte-identical, and a line that already has the option is left alone. chrony.conf
+#    is ucf --three-way managed, so a narrow local edit survives package upgrades.
+#    `prefer` goes in as the LAST OPTION OF THE DIRECTIVE, which on a line with a trailing
+#    `#` means BEFORE it. Note what that does and does NOT claim: chrony honours a comment
+#    character only at the START of a line, so a directive with a trailing comment is
+#    ALREADY fatal to chronyd before LHPC touches it. Inserting before the `#` is the
+#    least surprising edit and preserves the operator's bytes; it is not a rescue.
+#    awk, not sed: mawk is the Debian default and has no `-i inplace`. Write a temp, fsync
+#    it, then RENAME over the target. Three separate reasons, none of them optional:
+#      - rename is atomic for READERS, so chronyd never sees a half-written file;
+#      - `cat` back into place would keep the inode but TRUNCATES first, so an interrupted
+#        write leaves a chrony.conf that still PARSES and has lost its pool and keyfile
+#        lines -- which no 'is this valid?' check would ever catch;
+#      - rename is NOT atomic against power loss. Without the sync, a crash can leave the
+#        directory entry pointing at data that never reached the disk: a present,
+#        correctly named, EMPTY chrony.conf. That is the same end state, by another road,
+#        and an RTC-less Pi losing power is this feature's entire premise.
+#    Mode and owner are copied across, the only thing the changed inode costs. ucf is
+#    unaffected: it compares the file's CONTENT hash to its record, not its inode, so a
+#    rename looks exactly like the local edit ucf exists to merge on upgrade.
+cat > "$LHPC_TMPDIR/lhpc-prefer.awk" <<'LHPC_AWK'
+{
+  line = $0; cr = ""
+  if (line ~ /\r$/) { cr = "\r"; sub(/\r$/, "", line) }
+  body = line; comment = ""
+  hash = index(line, "#")
+  if (hash > 0) { body = substr(line, 1, hash - 1); comment = substr(line, hash) }
+  if (body ~ /^[ \t]*(pool|server|peer)[ \t]/) {
+    n = split(body, field, /[ \t]+/); have = 0
+    for (i = 1; i <= n; i++) if (field[i] == "prefer") have = 1
+    if (have == 0) {
+      trimmed = body; sub(/[ \t]*$/, "", trimmed)
+      print trimmed " prefer" substr(body, length(trimmed) + 1) comment cr
+      next
+    }
+  }
+  print line cr
+}
+LHPC_AWK
+for conf in "$CHRONY_CONF" "$CHRONY_SOURCES_DIR"/*.sources; do
+  [ -f "$conf" ] || continue
+  # Every failure below happens BEFORE the rename, i.e. before $conf is touched, so
+  # skipping is safe. It is never SILENT: a file that was not migrated is one whose NTP
+  # sources will not outrank the GPS, and an operator who is not told will not know.
+  if ! awk -f "$LHPC_TMPDIR/lhpc-prefer.awk" "$conf" > "$conf.lhpc-new"; then
+    rm -f "$conf.lhpc-new"
+    echo "[bootstrap-deps] ERROR: could not rewrite $conf - NTP will NOT be preferred over" >&2
+    echo "[bootstrap-deps]        GPS for its sources. Add `prefer` to them by hand." >&2
+    TS_FAILED=1
+    continue
+  fi
+  # FAIL CLOSED on the mode, do not `|| true` it. The temp was created by a shell
+  # redirect, so it carries the UMASK, not the original mode -- if --reference fails on a
+  # 0600 sources file, renaming it into place would silently WIDEN its permissions. That
+  # reads as harmless best-effort and is not.
+  if ! chmod --reference="$conf" "$conf.lhpc-new" 2>/dev/null \
+     || ! chown --reference="$conf" "$conf.lhpc-new" 2>/dev/null; then
+    rm -f "$conf.lhpc-new"
+    echo "[bootstrap-deps] ERROR: could not preserve mode/owner of $conf - left unchanged" >&2
+    echo "[bootstrap-deps]        rather than replaced with different permissions, so NTP is" >&2
+    echo "[bootstrap-deps]        NOT preferred over GPS for its sources." >&2
+    TS_FAILED=1
+    continue
+  fi
+  sync "$conf.lhpc-new" 2>/dev/null || sync
+  mv -f "$conf.lhpc-new" "$conf"
+  sync "$(dirname "$conf")" 2>/dev/null || true
+done
+rm -f "$LHPC_TMPDIR/lhpc-prefer.awk"
+
+# 3. gpsd must poll without waiting for a client: chrony is not a gpsd client, it reads
+#    SHM, so without -n there are never any samples. EDITED, never overwritten -- this
+#    file carries the operator's DEVICES and USBAUTO.
+#
+#    Two things this has to get right, both learned the hard way:
+#      - The VALUE is shell-quoted and may carry trailing whitespace outside the quotes,
+#        which systemd discards. Detecting the closing quote before trimming wrapped an
+#        already-quoted value in a second pair and produced `\"\"-G -D 2\" -n\"`.
+#      - The question is whether `-n` is present as an ARGUMENT, not as a substring:
+#        `-P /run/gpsd-node.pid` contains the letters but supplies no such option.
+#    awk therefore trims first, then unquotes, then splits the value into fields and
+#    compares whole tokens.
+touch "$GPSD_DEFAULT"
+cat > "$LHPC_TMPDIR/lhpc-gpsd.awk" <<'LHPC_GPSD_AWK'
+# Emits the rewritten line on stdout and its verdict on fd 3:
+#   have  - the option was already present, nothing to do
+#   added - the line was rewritten with -n appended
+#   none  - no GPSD_OPTIONS assignment exists at all
+function unquote(v,   q, n) {
+  # \r too, not just spaces and tabs: a CRLF environment file left the carriage return
+  # attached, so the closing quote was not the last character and the value got wrapped
+  # in a second pair -- the same corruption as an untrimmed trailing space. systemd
+  # discards carriage returns outside quotes, so CRLF input is ordinary valid input.
+  sub(/^[ \t\r]+/, "", v); sub(/[ \t\r]+$/, "", v)
+  q = substr(v, 1, 1); n = length(v)
+  # 047 is the octal escape for a single quote; a literal one cannot appear in this
+  # program, which is wrapped in a single-quoted shell heredoc. No apostrophes.
+  if (n >= 2 && (q == "\"" || q == "\047") && substr(v, n, 1) == q) {
+    QUOTE = q; return substr(v, 2, n - 2)
+  }
+  QUOTE = "\""; return v
+}
+/^GPSD_OPTIONS=/ && !seen {
+  seen = 1
+  val = unquote(substr($0, index($0, "=") + 1))
+  k = split(val, f, /[ \t]+/)
+  for (i = 1; i <= k; i++) if (f[i] == "-n") { print; verdict = "have"; next }
+  printf "GPSD_OPTIONS=%s%s%s-n%s\n", QUOTE, val, (val == "" ? "" : " "), QUOTE
+  verdict = "added"; next
+}
+{ print }
+END { print (seen ? verdict : "none") > "/dev/fd/3" }
+LHPC_GPSD_AWK
+# Redirection ORDER matters: 3>&1 must duplicate the command-substitution pipe BEFORE
+# stdout is pointed at the new file, or fd 3 ends up writing the verdict into the file.
+GPSD_VERDICT="$(awk -f "$LHPC_TMPDIR/lhpc-gpsd.awk" "$GPSD_DEFAULT" \
+  3>&1 1>"$GPSD_DEFAULT.lhpc-new")" || GPSD_VERDICT=error
+rm -f "$LHPC_TMPDIR/lhpc-gpsd.awk"
+case "$GPSD_VERDICT" in
+  added)
+    # Same transactional shape as the chrony edit: this file is the operator's, `cat`
+    # back would TRUNCATE it first, and a power cut on an RTC-less Pi is the case this
+    # whole feature exists for. Losing DEVICES leaves gpsd with no receiver at all.
+    chmod --reference="$GPSD_DEFAULT" "$GPSD_DEFAULT.lhpc-new" 2>/dev/null || exit 1
+    chown --reference="$GPSD_DEFAULT" "$GPSD_DEFAULT.lhpc-new" 2>/dev/null || exit 1
+    sync "$GPSD_DEFAULT.lhpc-new" 2>/dev/null || sync
+    mv -f "$GPSD_DEFAULT.lhpc-new" "$GPSD_DEFAULT"
+    sync "$(dirname "$GPSD_DEFAULT")" 2>/dev/null || true
+    ;;
+  have)
+    rm -f "$GPSD_DEFAULT.lhpc-new"
+    ;;
+  none)
+    rm -f "$GPSD_DEFAULT.lhpc-new"
+    printf "%s\n" 'GPSD_OPTIONS="-n"' >> "$GPSD_DEFAULT"
+    ;;
+  *)
+    rm -f "$GPSD_DEFAULT.lhpc-new"
+    echo "[bootstrap-deps] ERROR: could not rewrite $GPSD_DEFAULT; gpsd will not feed" >&2
+    echo "[bootstrap-deps]        chrony. Add -n to GPSD_OPTIONS by hand." >&2
+    TS_FAILED=1
+    ;;
+esac
+
+# 5. Installing and configuring does not make a running daemon adopt any of it. BEST
+#    EFFORT, deliberately: the image build runs this inside a container where there may
+#    be no running systemd, and `set -eu` would turn that into a failed image build. The
+#    packages own their own enablement at install time; this only covers the case where
+#    the daemon was already there. A failure is reported, never swallowed.
+# gpsd is restarted UNCONDITIONALLY whenever the time source is set up, and the result is
+# checked -- exactly like chrony below. Two reasons, both found by audit:
+#   - `enable --now` starts an INACTIVE unit and does nothing to an active one, so a
+#     refused restart used to be swallowed and the old process kept its old arguments
+#     while setup published success;
+#   - conditioning the restart on "we just edited the file" makes the failure permanent:
+#     on the retry the file already has -n, so nothing would ever restart it again.
+# Rerunning setup is the documented repair, so it must repair this too.
+systemctl enable gpsd >/dev/null 2>&1 || true
+if ! systemctl restart gpsd >/dev/null 2>&1; then
+  if [ -d /run/systemd/system ]; then
+    echo "[bootstrap-deps] WARNING: gpsd could not be enabled/started. GPS time will not be" >&2
+    echo "[bootstrap-deps]          available until it is: sudo systemctl status gpsd" >&2
+    TS_FAILED=1
+  else
+    echo "[bootstrap-deps] NOTE: no running systemd here; enable gpsd after boot with"
+    echo "[bootstrap-deps]       sudo systemctl enable --now gpsd"
+  fi
+fi
+if ! systemctl restart chrony >/dev/null 2>&1; then
+  # Distinguish the two reasons, because they need opposite reactions and the previous
+  # wording covered both with 'no action is needed'. On a box with a live systemd, a
+  # refused start is chronyd REJECTING the configuration -- and since this run already
+  # removed systemd-timesyncd, the box now has NO time daemon at all. Saying nothing is
+  # needed there is worse than saying nothing: it is a false all-clear. (This is exactly
+  # how a fatal drop-in error survived a full install on box E, 2026-09-14.)
+  if [ -d /run/systemd/system ]; then
+    echo "[bootstrap-deps] ERROR: chrony REFUSED to start and systemd-timesyncd has been" >&2
+    echo "[bootstrap-deps]        removed, so this box now has NO time daemon. See why:" >&2
+    echo "[bootstrap-deps]          sudo systemctl status chrony" >&2
+    echo "[bootstrap-deps]          sudo /usr/sbin/chronyd -Q -f /etc/chrony/chrony.conf" >&2
+    TS_FAILED=1
+  else
+    echo "[bootstrap-deps] NOTE: no running systemd here (a container/image build), so"
+    echo "[bootstrap-deps]       chrony was not started. It reads this configuration at boot."
+  fi
+fi
+
+# The verdict. `set -eu` cannot carry this: every failure above is deliberately caught so
+# the remaining steps still run (a box that got chrony but not gpsd is better off than
+# one that got neither). What must NOT happen is reporting success over it.
+if [ "$TS_FAILED" -ne 0 ]; then
+  echo "[bootstrap-deps] time source setup INCOMPLETE - see the errors above." >&2
+  exit 1
+fi
+
+# The boot floor, published LAST and only on success (see CLOCK_EPOCH_FLOOR). A floor, not
+# a clock: systemd takes the HIGHEST of its build time, this mtime and timesync/clock, so a
+# past date is inert.
+#
+# It is written after the verdict so a FAILED FIRST install does not leave it behind.
+# It is NOT a witness that the latest run succeeded, and nothing may treat it as one: it
+# is a persistent boot floor, so after one good install it survives every later failed
+# re-run. The dependency panel therefore reports what it can actually see (the files are
+# present). What keeps the repair reachable is the per-run stamp beside this file: a setup
+# that failed leaves the row UNSATISFIED, and dependencies.html renders the copybox only
+# then. Re-running bootstrap is the documented recovery path; hiding it was the bug.
+install -D -m 0644 /dev/null "$CLOCK_EPOCH"
+touch -d 2026-09-14 "$CLOCK_EPOCH"
+
+# Only now: this run did everything it promised.
+install -D -m 0644 /dev/null "$TS_STAMP"
+LHPC_TIME_SOURCE
+	then
+		echo "[bootstrap-deps] time source: chrony disciplines the clock (this REPLACED systemd-timesyncd); gpsd feeds it GPS time when a receiver is attached."
+	else
+		echo "[bootstrap-deps] time source setup did NOT complete — this box may have no working time daemon and systemd-timesyncd was removed. Fix the errors above and re-run." >&2
+		# The CALLER has to learn this too. Printing the failure and returning 0 means any
+		# automation running the full bootstrap -- including the image build -- sees success
+		# over a box whose timesyncd was replaced by a chrony that will not start.
+		BOOTSTRAP_FAILED=1
+	fi
 else
-	echo "[bootstrap-deps] gpsd skipped (opt-in). Re-run with --with-gps if the position source will be a GPS attached to this box."
+	echo "[bootstrap-deps] time source skipped — systemd-timesyncd left in place. This box keeps whatever was already disciplining its clock."
 fi
 
 # --- SPI / boot config (idempotent; only the chosen --spi-mode mutates config.txt) ----------
@@ -638,5 +991,11 @@ fi
 if [ -n "$_SWAP_FAILED" ]; then
 	echo "[bootstrap-deps] swap was REQUIRED on this low-memory host but could not be provisioned (see above). Fix the reported problem and re-run, or pass --no-swapfile to proceed without it (builds may be OOM-killed)." >&2
 	exit 4
+fi
+if [ -n "$BOOTSTRAP_FAILED" ]; then
+	echo "[bootstrap-deps] the time source did not come up (see above). systemd-timesyncd was replaced, so this box may have NO working time daemon: fix the reported problem and re-run, or re-run with --no-time-source to leave the clock alone." >&2
+	# 11: 2-10 are already taken by other refusals in this script, and an exit code that
+	# collides with another cause is worse than no exit code at all.
+	exit 11
 fi
 echo "[bootstrap-deps] done. Next: install lhpc (install.sh), then ONE reboot applies SPI + groups + PATH — see README steps 5-6."

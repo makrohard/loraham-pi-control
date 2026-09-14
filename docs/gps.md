@@ -54,7 +54,7 @@ start meshcom-gps` is refused unless the current plan uses it.
 |---|---|---|
 | `auto` | default | gpsd on `127.0.0.1:2947` if one is listening, otherwise no position; never refuses a start |
 | `gpsd` | almost always | USB receiver, HAT, or a GPS server on the network all look the same through gpsd; `--host` reaches a gpsd on another box |
-| `nmea` | no gpsd, one consumer | opens the device directly, so gpsd must **not** also own it |
+| `nmea` | no gpsd, one consumer | opens the device directly, so gpsd must **not** also own it. Bootstrap it with `--no-time-source`, or it will install gpsd — see below |
 | `fixed` | the station does not move | no receiver needed |
 | `off` | no position | explicit |
 
@@ -64,15 +64,21 @@ start meshcom-gps` is refused unless the current plan uses it.
 
 lhpc keeps the one setting, starts the feed each stack needs, writes the right device into each
 app's config, applies the position mode to the node, refuses unsafe combinations and reports
-what is wrong. It **does not configure gpsd**: that is a system service.
+what is wrong. It **does not configure gpsd for position**: that is a system service.
+
+One exception, and it is narrow: `bootstrap-deps.sh` installs gpsd and adds `-n` to its options so
+**chrony** can take the receiver's time ([Clock](operations.md#clock)). It never touches `DEVICES`
+or `USBAUTO`, and it never changes which source lhpc uses for position.
 
 ```
 sudo apt install gpsd gpsd-clients          # gpsd-clients only for gpspipe/cgps
 sudo systemctl enable --now gpsd
 ```
 
-gpsd is not part of the default bootstrap; opt in with
-`./bootstrap-deps.sh --spi-mode <mode> --with-gps` ([deps](cli.md#deps)). It is only needed when
+**gpsd is installed by default** as of the time-source feature, because a fresh image with a receiver
+must be able to set its clock without the operator opting in. `--no-time-source` skips both it and
+chrony; `--with-gps` still works and now only prints a note, since gpsd is no longer opt-in
+([deps](cli.md#deps)). For **position** it is only needed when
 the source is a gpsd on **this** box; a remote gpsd, a directly read device or a fixed position
 install nothing, and `lhpc deps` mentions the package only when it is required.
 
@@ -143,6 +149,11 @@ a previous run: it reads as `degraded` and cannot approve a new start.
 
 ## Refusals you may hit
 
+- **the time source skipped because `[gps] source = nmea`**: `bootstrap-deps.sh` refuses to install
+  gpsd when lhpc is configured to read the receiver directly. This is not only about the two of them
+  fighting over the device — gpsd switches u-blox receivers into UBX binary mode and they **stay**
+  there (below), so a later `nmea` read would find no NMEA at all until the chip is reset with an
+  external tool. Switch the source to `gpsd` and re-run, or keep `nmea` and accept no GPS time.
 - **`nmea` while gpsd owns the receiver**: two readers on one device lose fixes intermittently,
   so lhpc refuses. `/dev/ttyACM0` and `/dev/serial/by-id/...` are recognised as the same
   receiver (resolved through the device identity, `st_rdev`).

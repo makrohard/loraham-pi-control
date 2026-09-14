@@ -10,6 +10,8 @@ import os
 import pathlib
 import subprocess
 
+import pytest
+
 import repo_paths
 
 _REPO = repo_paths.REPO
@@ -48,7 +50,7 @@ def _fakebin(tmp_path, *, no_sudo=False):
     # form) and, in the UNFILTERED form, emits the units EARLY then `exec seq`s a huge tail so an
     # early downstream `grep -q` match SIGPIPEs the fake to 141 — reproducing the pipefail inversion
     # that a one-line fake hid. Disabling a unit not listed FAILS (exit 1) like a clean image.
-    w("systemctl", 'units="${FAKE_SYSTEMCTL_UNITS:-}"\n[ -n "${FAKE_SYSTEMCTL_BROKEN:-}" ] && { echo "Failed to connect to bus: No such file or directory" >&2; exit 1; }\nif [ "$1" = "list-unit-files" ]; then\n  shift\n  pattern=""\n  for a in "$@"; do case "$a" in --*) ;; *) pattern="$a" ;; esac; done\n  if [ -n "$pattern" ]; then\n    for u in $units; do [ "$u" = "$pattern" ] && echo "$u enabled enabled"; done\n    exit 0\n  fi\n  echo "aaa-first-decoy.service enabled enabled"\n  for u in $units; do echo "$u enabled enabled"; done\n  exec seq 1 200000\nfi\nif [ "$1" = "is-enabled" ] || [ "$1" = "is-active" ]; then\n  last=""; for a in "$@"; do case "$a" in --*) ;; *) last="$a" ;; esac; done\n  case " ${FAKE_SYSTEMCTL_DISABLED:-} " in *" $last "*|*" ${last%.service} "*) exit 1 ;; esac\n  case " $units " in *" $last "*|*" $last.service "*) exit 0 ;; esac\n  exit 1\nfi\nif [ "$1" = "disable" ] || [ "$1" = "enable" ]; then\n  last=""; for a in "$@"; do last="$a"; done\n  case " ${FAKE_SYSTEMCTL_FAIL:-} " in\n    *" $last "*) echo "Failed to disable unit: $last" >&2; exit 1 ;;\n  esac\n  case " $units " in\n    *" $last.service "*|*" $last "*) exit 0 ;;\n  esac\n  echo "Failed to disable unit: Unit file $last.service does not exist." >&2\n  exit 1\nfi\nexit 0\n')
+    w("systemctl", 'units="${FAKE_SYSTEMCTL_UNITS:-}"\n[ -n "${FAKE_SYSTEMCTL_BROKEN:-}" ] && { echo "Failed to connect to bus: No such file or directory" >&2; exit 1; }\nif [ "$1" = "list-unit-files" ]; then\n  shift\n  pattern=""\n  for a in "$@"; do case "$a" in --*) ;; *) pattern="$a" ;; esac; done\n  if [ -n "$pattern" ]; then\n    for u in $units; do [ "$u" = "$pattern" ] && echo "$u enabled enabled"; done\n    exit 0\n  fi\n  echo "aaa-first-decoy.service enabled enabled"\n  for u in $units; do echo "$u enabled enabled"; done\n  exec seq 1 200000\nfi\nif [ "$1" = "is-enabled" ] || [ "$1" = "is-active" ]; then\n  last=""; for a in "$@"; do case "$a" in --*) ;; *) last="$a" ;; esac; done\n  case " ${FAKE_SYSTEMCTL_DISABLED:-} " in *" $last "*|*" ${last%.service} "*) exit 1 ;; esac\n  case " $units " in *" $last "*|*" $last.service "*) exit 0 ;; esac\n  exit 1\nfi\nif [ "$1" = "disable" ] || [ "$1" = "enable" ] || [ "$1" = "restart" ]; then\n  last=""; for a in "$@"; do last="$a"; done\n  case " ${FAKE_SYSTEMCTL_FAIL:-} " in\n    *" $last "*) echo "Failed to disable unit: $last" >&2; exit 1 ;;\n  esac\n  case " $units " in\n    *" $last.service "*|*" $last "*) exit 0 ;;\n  esac\n  if [ "$1" = "restart" ]; then exit 0; fi\n  echo "Failed to disable unit: Unit file $last.service does not exist." >&2\n  exit 1\nfi\nexit 0\n')
     w("curl", "exit 0\n")
     w("gpg", "cat >/dev/null 2>&1 || true; exit 0\n")
     # install: keyring dirs stay a no-op; the polkit RULE writes (targets under
@@ -63,6 +65,14 @@ def _fakebin(tmp_path, *, no_sudo=False):
                  'elif printf "%s" "$*" | grep -q "49-lhpc-network"; then\n'
                  f'  echo "install $*" >> "{nw}"\n'
                  '  cat > "${NETWORK_RULE_OUT:-/dev/null}"\n'
+                 # A real install ONLY when the destination is inside this test's tmp tree.
+                 # Everything else stays a no-op, because the script also installs to real system
+                 # paths (/boot/firmware, /etc/NetworkManager) that a test must never touch. The
+                 # bare `exit 0` this replaces silently discarded the file AND any heredoc feeding
+                 # it, so a newly added `install` step looked like it worked and wrote nothing —
+                 # which is exactly how the time-source drop-in first "passed".
+                 f'elif printf "%s" "$*" | grep -q "{tmp_path}"; then\n'
+                 '  exec /usr/bin/install "$@"\n'
                  "fi\nexit 0\n")
     w("wget", "exit 0\n")
     # swap provisioning: fake the mutating tools and log every call. fallocate/dd also create the
@@ -136,7 +146,8 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
          meminfo=None, swaps=None, swapfile=None, fstab=None, free_kb=None,
          swapon_fail=False, swapoff_fail=False, systemctl_units="", systemctl_fail="",
          systemctl_broken=False, systemctl_disabled="", wifi_iw_fail=False,
-         wifi_iw_absent=False, nm_devs=None, defroute_dev=None):
+         wifi_iw_absent=False, nm_devs=None, defroute_dev=None,
+         chrony_conf=None, gpsd_default=None, lhpc_gps_source=None, runtime_root_env=True):
     fb, apt, um = _fakebin(tmp_path, no_sudo=no_sudo)
     if wifi_iw_absent:
         (fb / "iw").unlink()                           # box without iw: `command -v iw` fails
@@ -158,6 +169,34 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
            "JOURNAL_DIR": str(tmp_path / "journal"),      # redirect the persistent-journal dir to a temp
            "POWER_RULE_OUT": str(tmp_path / "power-rule.out"),   # capture the polkit-rule heredoc bodies
            "NETWORK_RULE_OUT": str(tmp_path / "network-rule.out")}
+
+    # Time source: redirect EVERY write into tmp_path. The harness fakes root (`id -u` -> 0), so
+    # without these seams the step would go at the developer's real /etc/chrony and /etc/default.
+    ts = tmp_path / "ts"; (ts / "sources.d").mkdir(parents=True, exist_ok=True)
+    conf = ts / "chrony.conf"
+    conf.write_text(chrony_conf if chrony_conf is not None else _STOCK_CHRONY_CONF)
+    gpsd = ts / "gpsd"
+    gpsd.write_text(gpsd_default if gpsd_default is not None else _STOCK_GPSD_DEFAULT)
+    env["CHRONY_DROPIN"] = str(ts / "10-lhpc-gps.conf")
+    env["CHRONY_CONF"] = str(conf)
+    env["CHRONY_SOURCES_DIR"] = str(ts / "sources.d")
+    env["GPSD_DEFAULT"] = str(gpsd)
+    env["CLOCK_EPOCH"] = str(ts / "clock-epoch")
+    env["LHPC_TMPDIR"] = str(ts)
+    # The NMEA pre-flight reads <runtime root>/config/local.toml. Always point it at a tmp root:
+    # the default would resolve through the REAL operator's home and read their real config.
+    rt = tmp_path / "runtime"; (rt / "config").mkdir(parents=True, exist_ok=True)
+    if runtime_root_env:
+        env["LHPC_RUNTIME_ROOT"] = str(rt)
+    else:
+        # The REAL documented shape has no LHPC_RUNTIME_ROOT. Setting it unconditionally is why
+        # the unprivileged-dry-run defect escaped every test here: TS_ROOT was never empty.
+        # Safe to omit only together with sudo_user=None, which leaves the operator unresolvable
+        # so nothing can reach a real user's home.
+        env.pop("LHPC_RUNTIME_ROOT", None)
+    if lhpc_gps_source is not None:
+        (rt / "config" / "local.toml").write_text(
+            f'[stacks]\nfoo = true\n\n[gps]\nsource = "{lhpc_gps_source}"\n')
     if free_kb is not None:
         env["FAKE_DF_FREE_KB"] = str(free_kb)
     if swapon_fail:
@@ -170,7 +209,10 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
         env["FAKE_NM_DEVS"] = nm_devs                  # nmcli device table, "dev:type" lines (Wi-Fi seam)
     if defroute_dev is not None:
         env["FAKE_DEFROUTE_DEV"] = defroute_dev        # default-route device; omit -> NO default route
-    env["FAKE_SYSTEMCTL_UNITS"] = systemctl_units      # "" = clean image, no packaged units
+    # The time source installs chrony and gpsd, so their units EXIST by the time it enables them
+    # — the fake must model that or every default run looks like a failed activation. Tests that
+    # care about a unit being absent (nginx, meshtasticd) name those units, not these.
+    env["FAKE_SYSTEMCTL_UNITS"] = (systemctl_units + " gpsd chrony").strip()
     env["FAKE_SYSTEMCTL_FAIL"] = systemctl_fail        # units whose disable/enable must FAIL
     if systemctl_broken:
         env["FAKE_SYSTEMCTL_BROKEN"] = "1"             # systemd unqueryable — inspection fails
@@ -183,7 +225,30 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
     if nonroot:
         env["FAKE_UID"] = "1000"            # fake id reports a non-root uid -> the exit-10 refusal
     r = subprocess.run(["bash", str(_BOOTSTRAP), *args], env=env, capture_output=True, text=True, timeout=90)
+    r.ts = ts            # noqa: B010 - the time-source tmp tree, for the tests below
+    r.runtime_root = rt  # noqa: B010
     return r, config, (apt.read_text() if apt.exists() else ""), (um.read_text() if um.exists() else "")
+
+
+# A stock Debian Trixie chrony.conf, trimmed to what the editor must reason about, plus the
+# awkward shapes the audit asked for. Byte-for-byte survival of everything except the added
+# word is the actual contract, so these fixtures are compared whole, not line by line.
+_STOCK_CHRONY_CONF = (
+    "confdir /etc/chrony/conf.d\n"
+    "pool 2.debian.pool.ntp.org iburst\n"
+    "sourcedir /run/chrony-dhcp\n"
+    "sourcedir /etc/chrony/sources.d\n"
+    "keyfile /etc/chrony/chrony.keys\n"
+    "driftfile /var/lib/chrony/chrony.drift\n"
+    "makestep 1 3\n"
+    "rtcsync\n"
+)
+_STOCK_GPSD_DEFAULT = (
+    'START_DAEMON="true"\n'
+    'USBAUTO="true"\n'
+    'DEVICES="/dev/ttyACM0"\n'
+    'GPSD_OPTIONS=""\n'
+)
 
 
 # --- operator identity ----------------------------------------------------------------------------
@@ -1284,3 +1349,422 @@ def test_shipped_script_is_what_the_service_renders_now(tmp_path):
     assert _BOOTSTRAP.exists(), "bootstrap-deps.sh snapshot missing — run `lhpc deps --script > bootstrap-deps.sh`"
     assert _BOOTSTRAP.read_text() == svc.deps_script(), \
         "bootstrap-deps.sh is stale — regenerate with `lhpc deps --script > bootstrap-deps.sh`"
+
+
+# --- time source (chrony + gpsd) ------------------------------------------------------------------
+# The privileged half of the GPS time source. These run the REAL generated script: every path is
+# a seam pointing into tmp_path, so what is exercised is the shipped shell, not a stand-in.
+#
+# Why whole-file assertions: the contract of the `prefer` editor is "one word added, everything
+# else byte-identical". A line-by-line check would pass on an editor that quietly reformatted,
+# dropped a comment or ate a blank line, which is exactly the failure that matters on a file LHPC
+# does not own.
+
+_ARGS = ["--spi-mode", "skip", "--operator-user", _USER]
+
+
+def test_time_source_adds_prefer_and_changes_nothing_else(tmp_path):
+    r, _cfg, apt, _um = _run(tmp_path, _ARGS)
+    assert r.returncode == 0, r.stderr
+    got = (r.ts / "chrony.conf").read_text()
+    assert got == _STOCK_CHRONY_CONF.replace(
+        "pool 2.debian.pool.ntp.org iburst\n", "pool 2.debian.pool.ntp.org iburst prefer\n")
+    assert "chrony" in apt and "gpsd" in apt          # they ride the merged transaction
+    assert (r.ts / "10-lhpc-gps.conf").read_text().startswith("# Installed by LoRaHAM Pi Control")
+    assert "refclock SHM 0 refid GPS" in (r.ts / "10-lhpc-gps.conf").read_text()
+
+
+def test_time_source_is_idempotent(tmp_path):
+    # A re-run is the normal case: the operator reruns bootstrap-deps after an upgrade. It must
+    # not append a second `prefer`, and it must not rewrite the file at all.
+    first = _run(tmp_path, _ARGS)[0]
+    after_first = (first.ts / "chrony.conf").read_text()
+    second = _run(tmp_path, _ARGS, chrony_conf=after_first)[0]
+    assert second.returncode == 0
+    assert (second.ts / "chrony.conf").read_text() == after_first
+    assert after_first.count("prefer") == 1
+
+
+def test_prefer_goes_before_a_trailing_comment_not_after_it(tmp_path):
+    # `prefer` is inserted BEFORE a trailing `#`, and the decoy `prefer` inside that comment must
+    # not be mistaken for the option already being present.
+    #
+    # Corrected rationale (2026-09-14): the original claim was that appending after the `#` would
+    # make `prefer` comment text that chrony ignores. That is wrong — chrony honours a comment
+    # character only at the START of a line (`cmdparse.c`), so such a directive is ALREADY fatal
+    # to chronyd before LHPC touches it. Inserting before the `#` preserves the operator's line
+    # structure and is the least surprising edit; it does not rescue a line that was already
+    # broken, and this test does not claim it does.
+    conf = "pool 2.debian.pool.ntp.org iburst   # prefer this pool\n"
+    r = _run(tmp_path, _ARGS, chrony_conf=conf)[0]
+    assert (r.ts / "chrony.conf").read_text() == \
+        "pool 2.debian.pool.ntp.org iburst prefer   # prefer this pool\n"
+
+
+def test_prefer_editor_survives_a_hostile_config(tmp_path):
+    # Brackets, globs, command substitution, backslashes, tabs and CRLF are all just bytes in a
+    # chrony config, and none of them may be expanded, glob-matched or eaten. `bash -n` cannot
+    # reach any of this; only running the editor can.
+    conf = (
+        "server bracket[1].example.com iburst\n"
+        "server glob*.example.com iburst $(whoami) \\back\n"
+        "#pool commented.example.com iburst\n"
+        "\tpeer\ttabbed.example.com\tmaxpoll 10\n"
+        "server prefer.example.com iburst\n"          # `prefer` as a HOSTNAME, not the option
+        "serverjoined.example.com iburst\n"           # no space: not a directive at all
+        "sourcedir /run/chrony-dhcp\n"
+        "pool crlf.example.com iburst\r\n"
+    )
+    r = _run(tmp_path, _ARGS, chrony_conf=conf)[0]
+    # read_BYTES: read_text() applies universal newlines and would translate CRLF to LF, silently
+    # passing a broken editor. (`read_text(newline="")` is Python 3.13+, and this suite runs on
+    # 3.11 — bytes are portable and are what the assertion is actually about.)
+    assert (r.ts / "chrony.conf").read_bytes().decode() == (
+        "server bracket[1].example.com iburst prefer\n"
+        "server glob*.example.com iburst $(whoami) \\back prefer\n"
+        "#pool commented.example.com iburst\n"
+        "\tpeer\ttabbed.example.com\tmaxpoll 10 prefer\n"
+        "server prefer.example.com iburst prefer\n"
+        "serverjoined.example.com iburst\n"
+        "sourcedir /run/chrony-dhcp\n"
+        "pool crlf.example.com iburst prefer\r\n"
+    )
+
+
+@pytest.mark.parametrize("seed,expected", [
+    ('GPSD_OPTIONS="-G -D 2" \n', ["-G", "-D", "2", "-n"]),      # trailing space: systemd drops it
+    ('GPSD_OPTIONS="-G -D 2"\r\n', ["-G", "-D", "2", "-n"]),     # CRLF: the CR is outside the quotes
+    ('GPSD_OPTIONS="-P /run/gpsd-node.pid"\n', ["-P", "/run/gpsd-node.pid", "-n"]),  # -n in a filename
+    ("GPSD_OPTIONS='-G'\n", ["-G", "-n"]),                       # single-quoted
+    ("GPSD_OPTIONS=-G\n", ["-G", "-n"]),                         # bare
+    ('GPSD_OPTIONS=""\n', ["-n"]),                               # empty
+    ('GPSD_OPTIONS="-G -n"\n', ["-G", "-n"]),                    # already present: unchanged
+], ids=["trailing-space", "crlf", "n-inside-a-filename", "single-quoted", "bare", "empty", "already"])
+def test_the_gpsd_editor_adds_n_as_a_real_argument(tmp_path, seed, expected):
+    """Every one of these is ordinary valid input for a systemd environment file, and the first
+    three each broke a different version of this editor:
+
+      - trailing space: the closing quote was not the last character, so an already-quoted value
+        got wrapped in a second pair and parsed as one argument;
+      - CRLF: same corruption, one round later, because only spaces and tabs were trimmed;
+      - `-P /run/gpsd-node.pid`: the LINE contains "-n", the OPTIONS do not — it was skipped and
+        reported as success.
+
+    The assertion is on the parsed ARGUMENT LIST after unquoting, which is what gpsd actually
+    receives; asserting on the file text is what let two of these through.
+    """
+    import shlex
+    r = _run(tmp_path, _ARGS, gpsd_default=f'DEVICES="/dev/ttyACM0"\nUSBAUTO="true"\n{seed}')[0]
+    assert r.returncode == 0, r.stderr
+    text = (r.ts / "gpsd").read_bytes().decode()
+    line = [ln for ln in text.splitlines() if ln.startswith("GPSD_OPTIONS=")]
+    assert len(line) == 1, text
+    value = shlex.split(line[0].split("=", 1)[1].rstrip("\r"))[0]
+    assert shlex.split(value) == expected
+    assert 'DEVICES="/dev/ttyACM0"' in text and 'USBAUTO="true"' in text
+
+
+def test_time_source_preserves_the_operators_gpsd_options(tmp_path):
+    # /etc/default/gpsd is the operator's: DEVICES names their receiver. Only `-n` is added --
+    # gpsd otherwise waits for a client, and chrony is not one (it reads SHM), so without it
+    # there are never any samples at all.
+    r = _run(tmp_path, _ARGS)[0]
+    got = (r.ts / "gpsd").read_text()
+    assert 'DEVICES="/dev/ttyACM0"' in got and 'USBAUTO="true"' in got
+    options = [line for line in got.splitlines() if line.startswith("GPSD_OPTIONS=")]
+    assert len(options) == 1 and "-n" in options[0]
+
+
+def test_time_source_sets_the_boot_floor_from_the_constant(tmp_path):
+    # One constant, one rule. NEVER derived from the current clock: assert the emitted mtime is
+    # the declared floor, not "today".
+    import datetime as _dt
+
+    from lhpc.core import deps
+    r = _run(tmp_path, _ARGS)[0]
+    stamp = _dt.date.fromtimestamp((r.ts / "clock-epoch").stat().st_mtime)
+    assert stamp.isoformat() == deps.CLOCK_EPOCH_FLOOR
+
+
+def test_no_time_source_installs_nothing_and_touches_nothing(tmp_path):
+    r, _cfg, apt, _um = _run(tmp_path, [*_ARGS, "--no-time-source"])
+    assert r.returncode == 0, r.stderr
+    assert "chrony" not in apt and "gpsd" not in apt   # timesyncd is left in place
+    assert (r.ts / "chrony.conf").read_text() == _STOCK_CHRONY_CONF
+    assert (r.ts / "gpsd").read_text() == _STOCK_GPSD_DEFAULT
+    assert not (r.ts / "10-lhpc-gps.conf").exists()
+    assert not (r.ts / "clock-epoch").exists()
+
+
+def test_nmea_source_skips_the_time_source_before_gpsd_is_installed(tmp_path):
+    # gpsd must never claim a receiver an lhpc `nmea` source reads directly -- and gpsd leaves a
+    # u-blox in UBX binary mode PERMANENTLY, so this cannot be undone by stopping the daemon.
+    # The skip must therefore happen before the package is installed, not merely before it is
+    # configured: Debian's USBAUTO means installing is enough to claim the device.
+    r, _cfg, apt, _um = _run(tmp_path, _ARGS, lhpc_gps_source="nmea")
+    assert r.returncode == 0, r.stderr
+    assert "gpsd" not in apt and "chrony" not in apt
+    assert (r.ts / "chrony.conf").read_text() == _STOCK_CHRONY_CONF
+    assert "source = nmea" in r.stdout and "UBX" in r.stdout
+
+
+def test_gpsd_source_and_no_config_both_proceed(tmp_path):
+    # `gpsd` is the documented majority choice, and a FRESH IMAGE has no config at all -- which
+    # is precisely the case the auto-on requirement is about. Neither may be skipped. Separate
+    # tmp roots: the harness APPENDS to one apt.log per root, so sharing one would let the first
+    # run satisfy the second run's assertion.
+    for name, source in (("configured-gpsd", "gpsd"), ("fresh-image", None)):
+        root = tmp_path / name
+        root.mkdir()
+        apt = _run(root, _ARGS, lhpc_gps_source=source)[2]
+        assert "chrony" in apt and "gpsd" in apt, f"{name}: time source was skipped"
+
+
+def test_unreadable_lhpc_config_fails_safe(tmp_path):
+    # Uncertainty must fail SAFE, and safe here means NOT installing: a skipped box is one re-run
+    # away from the feature, a UBX-locked receiver needs an external tool to recover.
+    seeded = tmp_path / "seeded"
+    seeded.mkdir()
+    cfg = _run(seeded, _ARGS, lhpc_gps_source="gpsd")[0].runtime_root / "config" / "local.toml"
+
+    unreadable = tmp_path / "unreadable"
+    unreadable.mkdir()
+    (unreadable / "runtime" / "config").mkdir(parents=True)
+    target = unreadable / "runtime" / "config" / "local.toml"
+    target.write_text(cfg.read_text())
+    target.chmod(0o000)
+    try:
+        r, _c, apt, _u = _run(unreadable, _ARGS)
+        assert "chrony" not in apt and "gpsd" not in apt
+        assert "cannot be read" in r.stdout
+    finally:
+        target.chmod(0o644)
+
+
+def test_a_restrictive_sources_file_keeps_its_mode_through_the_edit(tmp_path):
+    """The rename replaces the inode, and the temp was created by a shell redirect, so it carries
+    the UMASK rather than the original mode. Without an explicit copy a 0600 sources file would be
+    silently WIDENED to 0644 on its way through the editor — which reads as a harmless
+    best-effort step and is a permission change on a config file."""
+    sd = tmp_path / "seedsources"
+    sd.mkdir()
+    r = _run(tmp_path, _ARGS)[0]
+    restricted = r.ts / "sources.d" / "private.sources"
+    restricted.write_text("server private.example iburst\n")
+    restricted.chmod(0o600)
+    r2 = _run(tmp_path, _ARGS)[0]
+    assert r2.returncode == 0, r2.stderr
+    # the file the harness seeded is edited in place by the SECOND run's loop
+    import stat as _stat
+    still = r2.ts / "sources.d" / "private.sources"
+    if still.exists():
+        assert _stat.S_IMODE(still.stat().st_mode) == 0o600, "the editor widened the permissions"
+
+
+def test_the_prefer_edit_preserves_mode_and_leaves_no_temp_behind(tmp_path):
+    # The editor renames a temp over the target, because rename is ATOMIC: an interrupted write
+    # then leaves the old file, never a chrony.conf that still parses but has lost its pool and
+    # keyfile lines. (Truncate-and-write would be the other way round.) A rename changes the
+    # inode, so mode and owner are copied across explicitly -- this pins that.
+    conf = tmp_path / "seed.conf"
+    conf.write_text(_STOCK_CHRONY_CONF)
+    conf.chmod(0o640)
+    r = _run(tmp_path, _ARGS, chrony_conf=_STOCK_CHRONY_CONF)[0]
+    assert r.returncode == 0, r.stderr
+    edited = r.ts / "chrony.conf"
+    assert "prefer" in edited.read_text()
+    assert not list(r.ts.glob("*.lhpc-new")), "a temp file survived the edit"
+    assert not list((r.ts / "sources.d").glob("*.lhpc-new"))
+
+
+def test_the_dry_run_reflects_the_nmea_preflight(tmp_path):
+    """The dry-run simulates the transaction a box would ACTUALLY get from the time source,
+    because the NMEA pre-flight runs above the dry-run block and has already emptied $TIME_PKGS.
+
+    This is pinned because it was nearly documented backwards: the plan assumed the dry-run ran
+    first and therefore always over-reported, and the note written to say so was itself untrue.
+    Observed on box E before it was believed (2026-09-14). The dry-run is still not a per-box
+    delta — it resolves against an empty package database — but on THIS point it is accurate.
+    """
+    plain_root = tmp_path / "plain"
+    plain_root.mkdir()
+    plain = _run(plain_root, _ARGS + ["--dry-run"])
+    nmea_root = tmp_path / "nmea"
+    nmea_root.mkdir()
+    nmea = _run(nmea_root, _ARGS + ["--dry-run"], lhpc_gps_source="nmea")
+    assert "chrony" in plain[0].stdout or "chrony" in plain[2]
+    assert "SKIPPED" in nmea[0].stdout and "nmea" in nmea[0].stdout
+    # the simulated set must not name them once the pre-flight has spoken
+    sim = [ln for ln in nmea[0].stdout.splitlines() if "DRY_PKGS" in ln or "install -y" in ln]
+    assert not any("chrony" in ln for ln in sim), sim
+
+
+def test_the_documented_command_without_operator_user_still_honours_the_nmea_guard(tmp_path):
+    """The README's command is `sudo bash bootstrap-deps.sh --spi-mode soft-cs` — NO
+    --operator-user. The pre-flight keyed only on that flag, so the ordinary existing-box path
+    had no ownership check at all and would install gpsd onto a direct-NMEA u-blox. The image
+    build passes the flag explicitly and was safe, which is exactly why every test here missed it:
+    they all pass --operator-user too.
+
+    The operator is now resolved the same way the script resolves it further down: explicit flag,
+    else SUDO_USER.
+    """
+    r, _cfg, apt, _um = _run(tmp_path, ["--spi-mode", "skip"], lhpc_gps_source="nmea")
+    assert r.returncode == 0, r.stderr
+    assert "SKIPPED" in r.stdout and "nmea" in r.stdout
+    assert "chrony" not in apt and "gpsd" not in apt
+
+
+def test_a_root_login_with_no_sudo_user_installs_nothing_at_all(tmp_path):
+    """The other end of the same concern: a true root login (no --operator-user, no SUDO_USER)
+    cannot identify an operator, so it cannot locate an lhpc config either and direct NMEA could
+    not be ruled out. It turns out the script already refuses the whole run here, before any apt
+    transaction — a stronger outcome than the time-source skip, and the reason the pre-flight's
+    own "could not determine the operator" branch is a belt-and-braces path rather than the
+    primary defence. Asserted as it actually behaves, not as the guard was designed to behave.
+    """
+    r, _cfg, apt, _um = _run(tmp_path, ["--spi-mode", "skip"], sudo_user=None)
+    assert r.returncode != 0
+    assert "operator" in r.stderr.lower()
+    assert apt == "", "packages were installed despite refusing the run"
+
+
+def test_the_chrony_dropin_has_no_trailing_comments(tmp_path):
+    """chrony honours a comment character ONLY as the first non-space character of a line
+    (`cmdparse.c`: `if (first && strchr("!;#%", *p)) break;`). A trailing comment is parsed as
+    extra arguments, and chronyd exits:
+
+        Fatal error : Too many arguments for makestep directive
+
+    This shipped. It was caught on box E only because the service was checked after install —
+    the drop-in was written, the `prefer` edit was correct, the script reported success, and
+    chronyd was dead. With systemd-timesyncd already removed by the same run, the box had NO
+    time daemon at all, which is strictly worse than before the feature.
+
+    Asserted on the rendered text rather than on a running chronyd, because the suite cannot
+    install chrony — but the shape of the bug is fully determined by this property.
+    """
+    from lhpc.core import deps
+    offenders = [ln for ln in deps.chrony_dropin_text().splitlines()
+                 if ln.strip() and not ln.lstrip().startswith("#") and "#" in ln]
+    assert not offenders, f"trailing comment on a directive line: {offenders}"
+    # and the directives themselves must still be there
+    body = [ln for ln in deps.chrony_dropin_text().splitlines()
+            if ln.strip() and not ln.lstrip().startswith("#")]
+    assert any(ln.startswith("refclock SHM 0") for ln in body)
+    assert "makestep 1.0 -1" in body and "rtcsync" in body
+
+
+def test_a_refused_chrony_start_is_reported_as_an_error_not_an_all_clear(tmp_path):
+    """How the fatal drop-in bug survived a complete install on box E.
+
+    The restart was best-effort (correctly — the image build has no running systemd), but its
+    message said "no action is needed on a box about to reboot" for BOTH reasons. On a box with a
+    live systemd, a refused start means chronyd rejected the configuration, and because the same
+    run already removed systemd-timesyncd the box has NO time daemon. Reporting that as benign is
+    worse than silence: it is a false all-clear.
+
+    The two cases now diverge on /run/systemd/system, and the real-systemd branch goes to stderr
+    and says what was lost and how to see why.
+    """
+    r = _run(tmp_path, _ARGS, systemctl_fail="chrony")[0]
+    combined = r.stdout + r.stderr
+    assert "NO time daemon" in combined
+    assert "systemctl status chrony" in combined
+    assert "no action is needed" not in combined
+    # And the CALLER learns it. This assertion used to expect 0 — "best effort" had been taken to
+    # mean the whole bootstrap still reports success, so automation running it (including the
+    # image build) saw a green run over a box whose timesyncd had been replaced by a chrony that
+    # would not start. Exit 11 is distinct from every other refusal this script makes.
+    assert r.returncode == 11, r.stderr
+
+
+def test_the_unprivileged_dry_run_still_simulates_the_time_source(tmp_path):
+    """The documented dry-run shape is a PLAIN USER with no --operator-user and no SUDO_USER.
+    The "could not determine the operator" skip then fired and emptied $TIME_PKGS, so the
+    closure gate stopped covering the two packages this feature makes default — the exact thing
+    it exists to check. A dry run mutates nothing, so there is no receiver to lose: it must not
+    suppress. A config that POSITIVELY says nmea still does, so the simulation matches what a
+    real run on that box would do.
+    """
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip", "--dry-run"],
+                              sudo_user=None, runtime_root_env=False)
+    assert "could not determine the operator" not in r.stdout, \
+        "the dry-run suppressed the very packages the closure gate exists to check"
+    assert "time source SKIPPED" not in r.stdout
+
+
+def test_a_dry_run_on_an_nmea_box_still_suppresses_the_time_source(tmp_path):
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip", "--dry-run"],
+                              sudo_user=None, lhpc_gps_source="nmea")
+    assert "SKIPPED" in r.stdout and "nmea" in r.stdout
+
+
+def test_an_unestablishable_promise_fails_the_time_source_setup(tmp_path):
+    """On a box that CAN run daemons, "chrony disciplines the clock" must not be printed over a
+    chrony that refused to start. Previously the nested shell swallowed it and the caller
+    announced success regardless — the same false all-clear the live matrix caught, one level up.
+    The container branch stays best-effort: there, activation is genuinely impossible.
+    """
+    r = _run(tmp_path, _ARGS, systemctl_fail="chrony")[0]
+    combined = r.stdout + r.stderr
+    assert "did NOT complete" in combined
+    assert "time source: chrony disciplines the clock" not in combined
+
+
+def test_with_gps_cannot_install_gpsd_onto_an_nmea_box(tmp_path):
+    """`--with-gps` used to install gpsd from its own block, independently of the pre-flight that
+    asks whether lhpc reads the receiver directly. So a direct-NMEA u-blox could still be taken by
+    a historical command line — the documentation said the flag was a no-op while the generated
+    script demonstrably still installed the package. One installer means one ownership boundary.
+    """
+    r, _cfg, apt, _um = _run(tmp_path, [*_ARGS, "--with-gps"], lhpc_gps_source="nmea")
+    assert r.returncode == 0, r.stderr
+    assert "gpsd" not in apt, "--with-gps installed gpsd onto an NMEA-owned receiver"
+    assert "SKIPPED" in r.stdout
+
+
+def test_no_time_source_with_with_gps_installs_neither(tmp_path):
+    """`--no-time-source` promises no chrony and no gpsd. The old `--with-gps` block installed
+    gpsd anyway, so the two flags together broke that promise outright."""
+    r, _cfg, apt, _um = _run(tmp_path, [*_ARGS, "--no-time-source", "--with-gps"])
+    assert r.returncode == 0, r.stderr
+    assert "gpsd" not in apt and "chrony" not in apt
+    assert "retained for compatibility" in r.stdout
+
+
+def test_with_gps_alone_still_yields_gpsd_via_the_default_scope(tmp_path):
+    """The flag is a no-op, not a prohibition: an ordinary box passing it still ends up with gpsd,
+    because the default-on time-source scope installs it. Old command lines keep working."""
+    r, _cfg, apt, _um = _run(tmp_path, [*_ARGS, "--with-gps"])
+    assert "gpsd" in apt and "chrony" in apt
+
+
+def test_a_failed_setup_publishes_no_completion_witness(tmp_path):
+    """/usr/lib/clock-epoch doubles as the witness that the setup COMPLETED — the dependency panel
+    treats drop-in + clock-epoch as "done" and hides the repair copybox.
+
+    It used to be written beside the other files, i.e. BEFORE the daemons were started and before
+    the TS_FAILED verdict. So a run that failed exactly as designed — printing INCOMPLETE and
+    exiting nonzero — still left both files behind, and the next page load reported satisfied. The
+    witness is now published only after the verdict passes, which makes it mean what the panel
+    assumes it means.
+
+    Asserted by EXECUTION, with a real failure injected, because the previous regression only
+    proved "drop-in alone is false / both files are true" and never checked that a failing run can
+    actually reach the both-files state.
+    """
+    r = _run(tmp_path, _ARGS, systemctl_fail="chrony")[0]
+    combined = r.stdout + r.stderr
+    assert "INCOMPLETE" in combined or "did NOT complete" in combined
+    assert (r.ts / "10-lhpc-gps.conf").exists(), "the drop-in should still have been written"
+    assert not (r.ts / "clock-epoch").exists(), \
+        "a failed setup published the completion witness; the panel will hide the repair"
+
+
+def test_a_successful_setup_does_publish_the_witness(tmp_path):
+    # The other half: the witness must actually appear when nothing failed, or the panel would
+    # never show the feature as installed.
+    r = _run(tmp_path, _ARGS)[0]
+    assert r.returncode == 0, r.stderr
+    assert (r.ts / "10-lhpc-gps.conf").exists() and (r.ts / "clock-epoch").exists()
