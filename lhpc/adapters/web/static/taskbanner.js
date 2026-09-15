@@ -1,4 +1,5 @@
-/* Running-task indicator: 2 s poll of the read-only /api/tasks (auto-install + HMAC + build/test/install
+/* Running-task indicator: polls the read-only /api/tasks — 2 s while a job is RUNNING, 15 s otherwise
+ * (auto-install + HMAC + build/test/install
  * + detached start/restart jobs). The SERVER owns visibility (done expires after 60 s; failed/unsafe
  * STAY) — the client renders whatever the server returns, keyed by kind+run_id. A `failed` item gets a
  * ✕ (dismiss); an `unsafe` JOB gets a Recover button — both POST (CSRF) to /api/tasks/{dismiss,recover}.
@@ -156,13 +157,55 @@
     });
   }
 
-  function tick() {
-    fetch("/api/tasks", {cache: "no-store"})
-      .then(function (r) { return r.json(); })
-      .then(function (d) { render(d.tasks); })
-      .catch(function () { /* transient */ });
+  // Two speeds, because the feed is rarely interesting. FAST only while something is RUNNING;
+  // everything else — an empty feed, or one holding only terminal items — polls slowly. That
+  // distinction matters: the server keeps `failed`/`unsafe` items until they are dismissed or
+  // recovered, so "poll fast whenever the feed is non-empty" would poll every 2 s forever after a
+  // single failure. A fixed slow interval, not escalating backoff: deterministic, and it caps how
+  // late a job started from another device can appear.
+  var FAST_MS = 2000, SLOW_MS = 15000;
+  var timer = null, polling = false;
+
+  function clearTimer() {
+    if (timer !== null) { clearTimeout(timer); timer = null; }
   }
 
-  setInterval(tick, 2000);
+  function schedule(ms) {
+    clearTimer();
+    // Hidden page: no timer at all. MDN's own example for the Page Visibility API is a dashboard
+    // that should stop polling when it is not visible; browsers also throttle background timers,
+    // so this mostly removes work the browser would already have slowed.
+    if (reloading || document.hidden) return;
+    timer = setTimeout(tick, ms);
+  }
+
+  function tick() {
+    clearTimer();
+    // A single in-flight guard. "Arm the next timer only after this fetch settles" is NOT enough on
+    // its own: tick() is also reachable from the Recover button and from becoming visible, either
+    // of which can fire while a request is already outstanding. A call that arrives mid-flight does
+    // nothing — the in-flight request finishes and schedules normally.
+    if (polling) return;
+    polling = true;
+    fetch("/api/tasks", {cache: "no-store"})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var tasks = (d && d.tasks) || [];
+        render(tasks);
+        var running = tasks.some(function (t) { return t.state === "running"; });
+        polling = false;
+        schedule(running ? FAST_MS : SLOW_MS);
+      })
+      .catch(function () {            // transient: keep the slow cadence, never spin on failure
+        polling = false;
+        schedule(SLOW_MS);
+      });
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) { clearTimer(); return; }
+    tick();                           // one immediate refresh on return, then normal scheduling
+  });
+
   tick();
 })();

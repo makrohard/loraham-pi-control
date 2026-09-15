@@ -152,6 +152,52 @@ def test_the_all_box_ticks_every_test_box_it_may_and_never_a_disabled_one(page):
     assert not ticked_anyway, f"All ticked a disabled host-test box: {ticked_anyway}"
 
 
+def _armed_poll_delays(page, feed):
+    """The delays taskbanner.js arms, captured by wrapping setTimeout before any page script runs.
+
+    Asserting the ARMED INTERVAL rather than counting intercepted requests: the interval is the
+    decision under test, it is observable as soon as the first poll settles, and it does not depend
+    on how a routed fetch resolves. Only the banner's own two constants are returned; other page
+    scripts poll with setInterval, not setTimeout.
+
+    Waits for the observable rather than sleeping a fixed time — the banner arms its next poll the
+    moment the first one settles, so there is nothing to sit out."""
+    import json
+    page.add_init_script(
+        "window.__st=[];var o=window.setTimeout;"
+        "window.setTimeout=function(f,ms){window.__st.push(ms);return o.apply(this,arguments);};")
+    page.route("**/api/tasks*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps(feed)))
+    page.goto(page.lab_base + "/stacks", wait_until="networkidle")
+    page.wait_for_function(
+        "() => (window.__st || []).some(d => d === 2000 || d === 15000)", timeout=15000)
+    return [d for d in page.evaluate("() => window.__st") if d in (2000, 15000)]
+
+
+def test_the_banner_polls_slowly_when_nothing_is_running(page):
+    """The server keeps `failed`/`unsafe` items until they are dismissed or recovered, so a
+    scheduler that polls fast whenever the feed is NON-EMPTY would poll every 2 s forever after one
+    failure — worse than the flat interval it replaced. `admitted` is false so this terminal item
+    triggers no reload (a failure that never passed its pre-mutation boundary changed nothing)."""
+    feed = {"tasks": [{"kind": "job", "op": "start", "state": "failed", "stack": "kiss",
+                       "run_id": "r9", "attempt_id": "a9", "label": "start kiss",
+                       "admitted": False, "no_dismiss": True}]}
+    delays = _armed_poll_delays(page, feed)
+    assert delays, "the banner armed no poll at all"
+    assert 2000 not in delays, f"terminal-only feed armed the FAST cadence: {delays}"
+    assert 15000 in delays, f"expected the slow cadence, got {delays}"
+
+
+def test_the_banner_polls_fast_while_a_job_runs(page):
+    """The other half: a running job must still be noticed promptly."""
+    feed = {"tasks": [{"kind": "job", "op": "start", "state": "running", "stack": "kiss",
+                       "run_id": "r8", "attempt_id": "a8", "label": "start kiss",
+                       "admitted": True}]}
+    delays = _armed_poll_delays(page, feed)
+    assert 2000 in delays, f"running feed did not arm the fast cadence: {delays}"
+    assert 15000 not in delays, f"running feed armed the slow cadence too: {delays}"
+
+
 def test_a_start_marks_its_stack_and_reloads_the_page_once_when_it_finishes(page):
     """taskbanner.js is not decoration: while a start job runs it marks that stack, and when the
     job turns terminal it reloads the page EXACTLY once so the server-rendered rows become

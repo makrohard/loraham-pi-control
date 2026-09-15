@@ -110,6 +110,16 @@ LHPC_BROWSER=1 pytest testlab/tests/browser -q     # headless Chromium (pip inst
 LHPC_RELEASE_VERIFY=1 pytest testlab/tests/release -q -x  # release lane: every stack installed, built, started
 ```
 
+**From a worktree, prefix these with `PYTHONPATH=$PWD`.** The lab lanes start the console and the
+CLI as SUBPROCESSES, and those resolve `lhpc` through the editable install in the venv — which
+points at whichever checkout was `pip install -e`'d, not at the tree you are sitting in. `pytest`
+itself picks up the local tree (the working directory precedes site-packages on `sys.path`), so the
+unit tests test your code while a lab lane can serve another checkout's code and static assets
+entirely. It greens, and the green means nothing. `PYTHONPATH=$PWD` puts the tree under test first
+for the subprocesses too; the alternative is to re-run `pip install -e . && pip install -e ./testlab`
+from the checkout you are testing. CI is unaffected — it builds a fresh venv inside a copy of the
+commit and installs both from there.
+
 The lab has four lanes — `testlab/tests/unit` for the simulator itself, `acceptance` for the real
 executable and server over simulated hardware, `browser` for real headless Chromium, and
 `release` for a release's evidence. What they prove differs in depth, and the difference matters:
