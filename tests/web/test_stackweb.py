@@ -85,6 +85,23 @@ def test_lan_proxy_reuses_the_console_client_ca():
     assert conf.count("/GOLDEN/config/tls/client-ca/crl.pem") == 2
 
 
+def test_only_non_2xx_3xx_reaches_the_access_log():
+    """The goldens are regenerated whenever this render changes, so they cannot be this change's
+    proof — a wrong output would simply be blessed. Assert the mechanism directly.
+
+    Polarity matters and is easy to invert: nginx SKIPS a request when the condition is "0" or
+    empty, so 2xx/3xx must map to 0 and everything else to 1. `combined` must also be named
+    explicitly — `access_log path if=...` without a format is a config error."""
+    conf = webserver.render_nginx_config(_paths(), WebserverConfig())
+    assert "map $status $lhpc_loggable {" in conf
+    body = conf.split("map $status $lhpc_loggable {")[1].split("}")[0]
+    assert "~^[23]" in body and "0;" in body          # success is NOT logged
+    assert "default 1;" in body                       # everything else IS
+    assert "access_log /GOLDEN/logs/nginx-access.log combined if=$lhpc_loggable;" in conf
+    # exactly one access_log: a nested one would cancel this inherited directive outright
+    assert conf.count("access_log ") == 1
+
+
 def test_the_fallback_page_says_nothing_console_specific():
     """The page nginx serves on 502/503/504 is ONE file shared by the console block and every
     stack block, so its wording must be true in both. It used to say "The console is restarting"

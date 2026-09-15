@@ -761,7 +761,15 @@ error_log {_abs(paths, _ERR_LOG)} warn;
 worker_processes 1;
 events {{ worker_connections 256; }}
 http {{
-    access_log {_abs(paths, _ACC_LOG)};
+    # Non-2xx/3xx only. A console page polls continuously, so routine success is the bulk of the
+    # traffic and none of the evidence (6,836 of 6,919 lines on 2026-09-15), and nothing rotates
+    # this file — the rootless nginx is outside /etc/logrotate.d/nginx's reach.
+    # This REDUCES growth, it does not bound it: 4xx/5xx still log without limit.
+    map $status $lhpc_loggable {{
+        ~^[23]  0;
+        default 1;
+    }}
+    access_log {_abs(paths, _ACC_LOG)} combined if=$lhpc_loggable;
     client_body_temp_path {_abs(paths, NGINX_TEMP)}/body;
     proxy_temp_path {_abs(paths, NGINX_TEMP)}/proxy;
     fastcgi_temp_path {_abs(paths, NGINX_TEMP)}/fastcgi;
