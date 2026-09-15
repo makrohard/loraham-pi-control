@@ -1,77 +1,73 @@
-# Install-all matrix, 0.5.0 — both boxes, 2026-09-14
+# Install-all matrix, 0.6.0 — box B, 2026-09-15
 
-Run on `342a069` (main). Box **E** = Pi Zero 2 W (Lite, the matrix's reference box, fast lane by the
-maintainer's waiver of 2026-09-13). Box **B** = Pi 5 (Desktop, full lane, added as a second column).
+Run on `c4ae47c` (the 0.6.0 candidate). Box **B** = Pi 5 (Desktop, 4 GB), full lane, every row.
 
 Evidence rule: the controller's own typed outcome plus the stack's own state. Log greps are not evidence.
 
+**Three deviations from `test-matrix.md`, accepted by the maintainer before the run:**
+
+1. **The bench is box B, not box E.** The documented reference box is the Pi Zero 2 W (512 MB). Box E
+   was needed for GPS-time testing and is powered down, so every row ran on the Pi 5. Build times below
+   are therefore optimistic against the documented bench, and the memory/OOM observations the procedure
+   asks for say nothing about the constrained box — nothing came close to pressure at 4 GB.
+2. **Box B reached the internet through a temporary second address.** Its own gateway (192.168.0.10) is
+   down. A second address on the working subnet was added through LHPC's own polkit network rule — no
+   root — and removed after the run. This is what closed row 12; see below.
+3. **Box B does not carry the time-source feature.** `bootstrap-deps.sh` was never run there, so it
+   still keeps time with `systemd-timesyncd` against its hard-configured NTP server, and chrony is not
+   installed. **This matrix therefore proves that 0.6.0 does not regress the stacks — not that the time
+   source works.** That was proven separately on box E and is recorded in the feature report.
+
 ## Rows
 
-| # | stack | channel | box E | box B |
-|---|---|---|---|---|
-| 1 | daemon | binary | ✓ install from index (`loraham-daemon@2a0db8872`), build refused as designed, `RADIO=READY` on the CONF socket | ✓ same |
-| 2 | chat | pinned | ✓ typed `manual start required for loraham-chat` — the interactive contract | ✓ same |
-| 3 | voice | pinned | ✓ `pinned-verified` adopt, terminal variant started | ✓ GTK main started |
-| 4 | kiss | pinned | ✓ `127.0.0.1:8001` answers | ✓ same |
-| 5 | graywolf | fetched release | ✓ `:8080` answers, post-start provisioning completed | ✓ same |
-| 6 | reticulum | pinned | ✓ rns/nomadnet/lxmd/meshchat built rc 0, rns at its ready marker | ✓ same |
-| 7 | meshcore | pinned | ✓ node verified on `:5000` | ✓ node on `:5000`, webui on `:8788` |
-| 8 | meshtastic | binary | ✓ verified on `:4403`, `--info` returns LHPCBENCH | ✓ returns LHPCPI5 |
-| 9 | meshtastic | pinned (source) | *not re-run* — fast-lane waiver 2026-09-13 | ✓ built rc 0, verified, `--versions` = `match` |
-| 10 | daemon | pinned (source) | *not re-run* — fast-lane waiver | ✓ daemon + RadioLib in **55 s**, runs `src match` |
-| 11 | meshcom | binary | ✓ bridge `:7000`, node `:12323`, UI `:18083` = 200 | ✓ bridge and node verified |
-| 12 | meshcom | pinned (source) | *not re-run* — fast-lane waiver | ✗ **blocked** — see below |
+| # | stack | channel | install | build | start | evidence |
+|---|---|---|---|---|---|---|
+| 1 | daemon | binary | 20 s | *refused* | 5 s | `RADIO=READY TXMODE=MANAGED` on **both** 433 and 868 |
+| 2 | chat | pinned | 4 s | 1 s | *manual* | typed `manual_required: loraham-chat is interactive` — the contract |
+| 3 | voice | pinned | 4 s | 2 s | 2 s | both components started |
+| 4 | kiss | pinned | 4 s | 3 s | 3 s | verified |
+| 5 | graywolf | pinned | 0 s | 8 s | 3 s | verified |
+| 6 | reticulum | pinned | 49 s | 91 s | 2 s | rns on 868, ready marker present, three TCP endpoints, `src match`. **Sideband built here** — the Lite bench skips it |
+| 7 | meshcore | pinned | 28 s | 122 s | 2 s | node on `:5000`, 868, `src match` |
+| 8 | meshtastic | binary | 43 s | *refused* | 15 s | `:4403` and `:9443` present |
+| 9 | meshtastic | pinned | 15 s | **636 s** | 16 s | `:4403` + `:9443`, `src match`, post-start completed |
+| 10 | daemon | pinned | 23 s | 35 s | 6 s | RadioLib + daemon, runs `src match` |
+| 11 | meshcom | binary | 26 s | *refused* | 46 s | bridge + node verified |
+| 12 | meshcom | pinned | 24 s | **471 s** | 47 s | QEMU built (link gate clean), firmware built, `:7000` + `:12323` verified, **`:18083` → 200** |
 
-**Row 12 on B, blocked by the bench's network, not by the code.** B has no internet of its own. Uppercase
-`HTTPS_PROXY`/`HTTP_PROXY` carried the PlatformIO *library* stage (this is what unblocked row 9) and
-`git config --global http.proxy` carried the *git-clone* stage, but the ESP32 platform and Arduino
-framework resolution still ends in `HTTPClientError`. Hand pre-resolution is not available either: the
-`qemu-headless` environment only exists after LHPC applies its overlay, so `pio pkg install -e
-qemu-headless` in the plain checkout fails with `UnknownEnvNamesError`. The bridge component of the same
-row builds rc 0 and runs verified on `:7000`, and the binary channel for the same stack (row 11) passes
-on both boxes.
+*refused* = the documented typed refusal on a binary channel: `build needs the source channel`.
 
-**Proxy note worth carrying into the matrix:** on a proxied box the lowercase `https_proxy` that the
-dotfiles set does not reach PlatformIO. Only the uppercase names work, and git needs its own
-`http.proxy`. Symptom without them: `OSError: [Errno 113] No route to host`.
+**Every build passed.** The heavy compiles — meshtasticd, RadioLib + daemon, and QEMU + MeshCom
+firmware — all completed.
 
-## Cross-cutting checks
+## Row 12 is closed
 
-| check | E | B |
-|---|---|---|
-| pins vs binaries (`status --versions`) | ✓ all three binary stacks `built_from == pin` | ✓ `match` on all, after its source builds |
-| known-working recorded per source-built stack | ✓ kiss, meshcore, reticulum | ✓ kiss, meshcore, reticulum, meshtastic |
-| console through the firewall (mTLS, client cert) | ✓ `:8443` = 200, refused without a certificate | ✓ same |
-| per-stack proxies | ✓ 200 with the stack up | ✓ graywolf `:8446`, meshcore webui `:8447` = 200; 502 exactly when the upstream is down |
-| boot restore with the default running set | ✓ reboot, journal `2 restored, 0 failed`, identical set back | ✓ (earlier run: `3 restored, 0 failed`) |
-| host tests, last | ✓ kiss rc 0 | ✓ |
-| from-zero reinstall (§13) | deferred — fast lane | ✓ steps 1–8 plus the secrets and exposure restore |
+0.5.0 could only record row 12 as **blocked** on this box: it had no internet of its own, and
+PlatformIO could not resolve the ESP32 platform through a proxy. With real connectivity the row
+completes — QEMU builds and passes its own link gate, the firmware builds, and the node answers on
+`:18083`. The blocker was the bench, exactly as the 0.5.0 report suspected, and not the code.
 
-## From-zero reinstall on B (§13)
+## Two bench findings, neither a defect
 
-Wipe and rebuild from nothing, following the README's happy path verbatim. Both teardown scripts
-returned rc 0 and the box was verified clean down to the user units and `/etc/lhpc`. The installer
-brought the controller up with identity **ok** on `342a069` and started the console itself.
+**The purge removes the node identity.** `lhpc clean --purge` removes a stack's config, which includes
+`node_name` / `node_short` / `mc_callsign`, and the controller then correctly refuses to start a stack
+that has no identity. The documented procedure runs purge → install → build → start with no step that
+restores it, so on a box where identity was not already set, every identity-bearing row fails at start.
+The 0.5.0 evidence column (`--info returns LHPCPI5`) implies a configured node, so this has always been
+assumed rather than stated. **`test-matrix.md` should say so.**
 
-Step 4's contract proved twice over: a licensed stack first refused with "no radio hardware
-configured", and after `lhpc hardware loraham` refused again with the typed callsign refusal and its
-`lhpc config operator --callsign` hint. Step 6 passes byte-for-byte — the graywolf admin password shown
-on the stack page equals `state/graywolf/graywolf-admin.txt`. Step 8 started and stopped every stack;
-chat's `manual start required` and meshcore/meshtastic's `'node_name' is required` after a purge are the
-designed refusals, cleared by setting the identity (meshtastic per band).
+**A GPS-capable stack blocks on its GPS bridge.** meshtastic, meshcore and meshcom each have a `*-gps`
+component, and the stack's main component declares a dependency on it. On a box with no receiver the
+bridge cannot verify (`GPS feed never reached its source (gpsd connection closed)`) and the main
+component is never started — `[blocked] meshcore-node: depends on meshcore-gps, which did not start`.
+`use_gps off` is the correct configuration for a receiver-less bench and every affected row then passes.
+This never surfaces on the documented bench, which has a u-blox attached. **Also worth stating in
+`test-matrix.md`.**
 
-The restore was verified from outside the box: the old server certificate is served again, the
-operator's client certificate is active, the console answers 200 with a client certificate and 403
-without, the proxies 403 without and 502 while their stacks are down, and the firewall reports
-Config ✓ Boot ✓ Live ✓.
+## Observed, not proven
 
-**Second proxy finding, and a trap.** `auto-install` from the web console reached 1 of 9 stacks on this
-box: the `lhpc-web` service environment carries no proxy, so every binary fetch failed with
-`[Errno 113]`. The same run from the CLI with the proxy exported completed 9/9, 0 blocked, 0 failed.
-A systemd drop-in carrying the proxy is **not** a workaround — the integrity check refuses managed
-units that have drop-ins. Full evidence: `part2-box-b-from-zero.md` in the release-automation tree.
-
-## Result
-
-E's fast lane is green on every row it runs. B is green on 11 of 12, with row 12 blocked by the box's
-lack of internet rather than by anything in the release. No defect was found in Part 2.
+- **meshcore's web UI (`:8788`) read absent** after `stack start` returned rc 0 and the node verified on
+  `:5000`. The 0.5.0 run recorded it present on this box. The node is proven; the web UI is not, and it
+  is recorded that way rather than assumed.
+- The **cold-boot GPS-only case** (RTC-less, no network) and the **live valid-client / revoked-client
+  check after CRL repair** remain release acceptance items, unproven here and unchanged by this run.

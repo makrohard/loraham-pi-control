@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0
+
+- GPS as a time source. `bootstrap-deps.sh` installs chrony and gpsd by default; chrony sets the
+  clock from NTP, or from the receiver over SHM when no NTP source is selectable. NTP always wins
+  when reachable. `--no-time-source` opts out; a box with `[gps] source = nmea` is skipped, because
+  gpsd would take the receiver. Installing chrony REMOVES systemd-timesyncd.
+- Unverified time may not mutate the PKI. Issuance, reissue, revocation and remote exposure refuse
+  before their first write unless the clock is synchronised, within a second, and not before 2025 —
+  an RTC-less box booting in 1970 would otherwise mint certificates that lock out the console.
+  `--accept-unverified-clock`, or a WebGUI checkbox, accepts the risk for one operation.
+- The client CRL now also repairs itself when its `lastUpdate` is in the future, not only when expired.
+
+## 0.5.1
+
+- Image-only release (`loraham-images` v0.5.1: Desktop slimming). No controller changes.
+
 ## 0.5.0
 
 - Starting a second component of a running stack no longer retunes its radio. The stack's daemon

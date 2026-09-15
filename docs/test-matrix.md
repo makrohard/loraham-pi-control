@@ -52,6 +52,16 @@ lhpc status <stack>                           # 5. verify: the row's evidence co
 t lhpc stack stop <stack> --yes               # 6. stop; `lhpc status` shows nothing left running
 ```
 
+- **Restore the node identity between install and start.** `lhpc clean --purge` removes the
+  stack's config, and that includes `node_name` / `node_short` (meshtastic, meshcore) and
+  `mc_callsign` (meshcom). The controller then correctly refuses to start a stack with no
+  identity, so on a box where they were not already set every identity-bearing row fails at step
+  4. Set them after step 2.
+- **A box with no GPS receiver needs `use_gps off` on the GPS-capable stacks.** meshtastic,
+  meshcore and meshcom each have a `*-gps` component and their main component *depends* on it. With
+  no receiver the bridge cannot verify (`GPS feed never reached its source`) and the main component
+  is never started (`[blocked] … depends on …-gps, which did not start`). This never shows on the
+  bench box, which has a u-blox attached.
 - **A binary row's build is REFUSED, not skipped** ([operations](operations.md#install-channels));
   the typed refusal is recorded as the row's build result.
 - **Times.** `install` is the wrapper's number for step 2, `build` for step 3, `start` for step 4
