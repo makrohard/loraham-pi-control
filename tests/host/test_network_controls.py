@@ -450,6 +450,161 @@ def _ups(calls):
     return [c for c in calls if "up" in c and "CL-UUID-2" in c]
 
 
+def _tick_at(tmp_path, monkeypatch, uptime, station=""):
+    """One watchdog pass at a given /proc/uptime, against the state left by earlier passes."""
+    svc = _svc(tmp_path, uptime=f"{uptime} 200.0\n")
+    calls = _fake_nmcli(svc, {**_std_replies(), "connection modify": (0, "", ""),
+                              "connection up": (0, "activated\n", ""),
+                              "station dump": (0, station, "")})
+    _prefer_homenet(svc, monkeypatch)
+    ok, msg = svc._network_watch_tick()
+    return svc, calls, ok, msg
+
+
+STATION = "Station aa:bb:cc:dd:ee:ff (on wlan0)\n\tinactive time:\t10 ms\n"
+
+
+def test_a_client_seen_while_the_interval_was_not_due_still_defers_when_it_becomes_due(
+        tmp_path, monkeypatch):
+    """The sequence the whole change exists for, and the one the first design missed.
+
+    _ap_idle() used to run only AFTER the retry-interval early return, so a client that associated
+    AND left inside one 600 s interval left no trace at all — and the moment the interval expired
+    the AP was torn down, seconds after the operator's phone dropped. Sampling now happens BEFORE
+    that return, so the observation survives to the pass where it matters.
+
+    t=100  AP idle, interval due (no prior attempt)  -> attempt runs, attempt stamp written
+    t=690  a client is associated; interval NOT due  -> observation stamped anyway
+    t=705  client gone, interval now due             -> grace must still defer"""
+    _, calls1, _, _ = _tick_at(tmp_path, monkeypatch, 100.0)
+    assert _ups(calls1), "the first pass should have attempted (idle AP, no prior attempt)"
+
+    svc2, _, _, _ = _tick_at(tmp_path, monkeypatch, 690.0, station=STATION)
+    rec = json.loads(svc2._net_retry_path().read_text())
+    assert rec["last_nonidle_uptime"] == 690.0, "the observation must be stamped even when the interval is not due"
+    assert rec["attempt_uptime"] == 100.0, "the earlier attempt must survive the observation"
+    assert rec["uuid"] == "CL-UUID-2", "the attempt's own uuid must survive the observation too"
+
+    svc3, calls3, ok, msg = _tick_at(tmp_path, monkeypatch, 705.0)
+    assert ok and "not provably idle" in msg, msg
+    assert not _ups(calls3), "the AP was torn down 15 s after the client left"
+
+
+def test_the_grace_expires_and_the_retry_then_runs(tmp_path, monkeypatch):
+    """The other side: the window must end. Otherwise one association would defer forever."""
+    _tick_at(tmp_path, monkeypatch, 100.0)
+    _tick_at(tmp_path, monkeypatch, 690.0, station=STATION)
+    _, calls, ok, msg = _tick_at(tmp_path, monkeypatch, 690.0 + 181.0)
+    assert _ups(calls), f"grace should have expired: {msg}"
+
+
+def test_an_explicit_retry_ignores_the_grace(tmp_path, monkeypatch):
+    """force=True is the operator pressing Retry. It bypasses the automatic grace entirely — and
+    must not sample or stamp either, or a manual retry would arm a window against the next pass."""
+    _tick_at(tmp_path, monkeypatch, 100.0)
+    _tick_at(tmp_path, monkeypatch, 690.0, station=STATION)
+    svc = _svc(tmp_path, uptime="700.0 200.0\n")
+    calls = _fake_nmcli(svc, {**_std_replies(), "connection modify": (0, "", ""),
+                              "connection up": (0, "activated\n", ""),
+                              "station dump": (0, STATION, "")})
+    _prefer_homenet(svc, monkeypatch)
+    assert svc.network_retry_now().ok
+    assert len(_ups(calls)) == 1
+    assert not [c for c in calls if os.path.basename(c[0]) == "iw"], "force must not probe the AP"
+
+
+def test_a_stamp_from_a_previous_boot_is_not_honoured(tmp_path, monkeypatch):
+    """The stamp is uptime-based, so it is meaningless across a reboot — and a previous boot's
+    uptime is usually LARGER, which would defer the retry for as long as that boot ran."""
+    _tick_at(tmp_path, monkeypatch, 100.0)
+    svc = _svc(tmp_path)
+    svc._net_retry_path().write_text(json.dumps(
+        {"boot_id": "an-older-boot", "last_nonidle_uptime": 5000.0,
+         "attempt_uptime": 4000.0, "uuid": "CL-UUID-OLD"}))
+    _, calls, ok, msg = _tick_at(tmp_path, monkeypatch, 800.0)
+    assert _ups(calls), f"a previous boot's stamp must not defer this boot: {msg}"
+
+    # ...and the normalization itself, which only runs when a stamp is actually WRITTEN. A pass
+    # over an idle AP never calls _net_stamp_nonidle, so the case has to be driven with the AP
+    # busy: the previous boot's attempt fields must not survive into this boot's record, or a
+    # stale attempt_uptime would look current and defer a needed retry for that boot's uptime.
+    svc2 = _svc(tmp_path)
+    svc2._net_retry_path().write_text(json.dumps(
+        {"boot_id": "an-older-boot", "last_nonidle_uptime": 5000.0,
+         "attempt_uptime": 4000.0, "uuid": "CL-UUID-OLD"}))
+    _tick_at(tmp_path, monkeypatch, 900.0, station=STATION)
+    rec = json.loads((tmp_path / "state" / "network-retry.json").read_text())
+    assert rec["boot_id"] == "boot-1" and rec["last_nonidle_uptime"] == 900.0
+    assert "attempt_uptime" not in rec, "a previous boot's attempt survived the stamp"
+    assert "uuid" not in rec, "a previous boot's uuid survived the stamp"
+
+
+def test_a_future_stamp_is_rejected_as_corrupt(tmp_path, monkeypatch):
+    """A stamp later than now cannot have been observed. Honouring it would defer far beyond the
+    window — the same failure the attempt stamp's negative-delta guard already prevents."""
+    svc = _svc(tmp_path)
+    svc._net_retry_path().write_text(json.dumps(
+        {"boot_id": "boot-1", "last_nonidle_uptime": 99999.0}))
+    _, calls, ok, msg = _tick_at(tmp_path, monkeypatch, 800.0)
+    assert _ups(calls), f"a future stamp must not defer: {msg}"
+
+
+def test_an_empty_boot_id_never_matches(tmp_path, monkeypatch):
+    """current_boot_id() can return empty; an empty stored id must not match it, exactly as the
+    attempt stamp requires (`rec.get("boot_id") == cur_boot and cur_boot`)."""
+    svc = _svc(tmp_path)
+    svc._net_retry_path().write_text(json.dumps({"boot_id": "", "last_nonidle_uptime": 795.0}))
+    monkeypatch.setattr(lcmod, "current_boot_id", lambda: "")
+    svc2 = _svc(tmp_path, uptime="800.0 200.0\n")
+    calls = _fake_nmcli(svc2, {**_std_replies(), "connection modify": (0, "", ""),
+                               "connection up": (0, "activated\n", ""),
+                               "station dump": (0, "", "")})
+    svc2._net_preferred_path().write_text(json.dumps({"uuid": "CL-UUID-2", "ssid": "HomeNet"}))
+    monkeypatch.setattr(lcmod, "current_boot_id", lambda: "")
+    svc2._network_watch_tick()
+    assert _ups(calls), "an empty boot id must not match an empty stored one"
+
+
+OTHER_CL_ROW = "CL-UUID-3:OtherNet:802-11-wireless:no:0\n"
+
+
+def test_the_grace_survives_a_change_of_preferred_network(tmp_path, monkeypatch):
+    """The attempt stamp is uuid-bound because an attempt belongs to the network it targeted. A
+    station does not: a client is associated to the AP whatever the console currently prefers, so
+    binding this stamp to the uuid too would drop the grace whenever preference changed.
+
+    The preferred network must therefore become a DIFFERENT uuid, not merely a different ssid — a
+    uuid-bound implementation would sail through a rename."""
+    _tick_at(tmp_path, monkeypatch, 100.0)
+    _tick_at(tmp_path, monkeypatch, 690.0, station=STATION)
+    assert json.loads((tmp_path / "state" / "network-retry.json").read_text())["uuid"] == "CL-UUID-2"
+
+    svc = _svc(tmp_path, uptime="705.0 200.0\n")
+    calls = _fake_nmcli(svc, {**_std_replies(conns=AP_ROW + CL_ROW + OTHER_CL_ROW),
+                              "connection modify": (0, "", ""),
+                              "connection up": (0, "activated\n", ""), "station dump": (0, "", "")})
+    svc._net_preferred_path().write_text(json.dumps({"uuid": "CL-UUID-3", "ssid": "OtherNet"}))
+    monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-1")
+    ok, msg = svc._network_watch_tick()
+    assert ok and "not provably idle" in msg, msg
+    assert not [c for c in calls if "up" in c and "CL-UUID-3" in c]
+
+
+def test_a_permission_denied_probe_defers_like_a_present_station(tmp_path, monkeypatch):
+    """rc 126 joins rc 127 and the exceptions: not provably idle, so defer and stamp. _ap_idle is
+    two-valued and cannot tell a real station from a broken probe; both want the same outcome."""
+    svc = _svc(tmp_path)
+    calls = _fake_nmcli(svc, {**_std_replies(), "connection modify": (0, "", ""),
+                              "connection up": (0, "activated\n", ""),
+                              "station dump": (126, "", "permission denied")})
+    _prefer_homenet(svc, monkeypatch)
+    ok, msg = svc._network_watch_tick()
+    assert ok and "retry deferred" in msg
+    assert not _ups(calls)
+    rec = json.loads(svc._net_retry_path().read_text())
+    assert "last_nonidle_uptime" in rec and "attempt_uptime" not in rec
+
+
 def test_watchdog_defers_retry_while_a_client_is_on_the_ap(tmp_path, monkeypatch):
     # Single radio: the attempt takes the AP down, never under a connected client.
     svc = _svc(tmp_path)
@@ -460,7 +615,13 @@ def test_watchdog_defers_retry_while_a_client_is_on_the_ap(tmp_path, monkeypatch
     _prefer_homenet(svc, monkeypatch)
     ok, msg = svc._network_watch_tick()                    # retry due (no stamp yet)
     assert ok and "client is connected" in msg
-    assert not _ups(calls) and not svc._net_retry_path().exists()   # stamp untouched
+    # No attempt, and — the point — the ATTEMPT stamp is not written, so deferring never consumes
+    # the retry interval. The record itself now exists to carry the grace stamp: the AP was seen
+    # not-idle, and that observation is exactly what must survive to the next pass.
+    assert not _ups(calls)
+    rec = json.loads(svc._net_retry_path().read_text())
+    assert "attempt_uptime" not in rec
+    assert "last_nonidle_uptime" in rec
     assert [c[1:] for c in calls if os.path.basename(c[0]) == "iw"] == [
         ["dev", "wlan0", "station", "dump"]]
     assert svc.network_retry_now().ok                      # explicit Retry still acts
@@ -476,7 +637,11 @@ def test_watchdog_defers_retry_when_the_station_table_is_unreadable(tmp_path, mo
     _prefer_homenet(svc, monkeypatch)
     ok, msg = svc._network_watch_tick()
     assert ok and "retry deferred" in msg
-    assert not _ups(calls) and not svc._net_retry_path().exists()
+    assert not _ups(calls)
+    # A failed probe is "not provably idle" and stamps exactly like a real station does — the
+    # fail-safe direction. The attempt stamp still must not be written.
+    rec = json.loads(svc._net_retry_path().read_text())
+    assert "attempt_uptime" not in rec and "last_nonidle_uptime" in rec
 
 
 def test_watchdog_rearms_a_disarmed_ap_profile(tmp_path, monkeypatch):

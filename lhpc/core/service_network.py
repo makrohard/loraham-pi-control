@@ -54,6 +54,15 @@ class NetworkOpsMixin:
     # Preferred-network retry cadence: each attempt costs a bounded AP outage while the
     # WLAN is away, so this is deliberately generous. The panel offers "Retry now".
     NET_RETRY_INTERVAL_S: ClassVar[float] = 600.0
+    # Grace after the AP was last seen NOT provably idle. A phone that locks its screen, or that
+    # leaves an SSID with no internet (which an AP-mode box by definition has), ends the
+    # association while the operator is still sitting in front of the box; the retry then tore the
+    # AP down seconds later. Sized from measurement on 2026-09-15: the longest observed flap was
+    # 63 s and the shortest genuine departure 1172 s, an empty band 1109 s wide between them.
+    # The watchdog samples once a minute, so the effective protection is 120-180 s after the real
+    # disassociation, not a literal 180 s — still ~2x the longest flap at its worst. One line to
+    # move if a longer flap is ever observed.
+    AP_CLIENT_GRACE_S: ClassVar[float] = 180.0
     # Capability/authorization verdicts re-probe at most this often — both ways.
     _NET_PROBE_TTL_S: ClassVar[float] = 60.0
     _NET_VIEW_TTL_S: ClassVar[float] = 10.0
@@ -887,6 +896,49 @@ class NetworkOpsMixin:
         return (getattr(r, "returncode", 1) == 0
                 and not (getattr(r, "stdout", "") or "").strip())
 
+    def _net_grace_remaining(self, rec: dict, cur_boot: str, now_up: float):
+        """Seconds of AP_CLIENT_GRACE_S still to run since the AP was last NOT provably idle, or
+        None when the grace does not apply.
+
+        Bound to boot_id ONLY, deliberately NOT to the preferred network's uuid. The attempt stamp
+        beside it IS uuid-bound, because an attempt belongs to the network it targeted; a station
+        does not — a client is associated to the AP whatever the console currently prefers. Binding
+        this to the uuid would silently drop the grace the moment the operator changed preference.
+
+        Same two guards the attempt stamp uses: an empty boot id never matches (not even another
+        empty one), and a stamp in the future is stale or corrupt — honouring it would defer the
+        automatic retry for far longer than the window."""
+        if not cur_boot or rec.get("boot_id") != cur_boot:
+            return None
+        try:
+            seen = float(rec["last_nonidle_uptime"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if seen > now_up:
+            return None                      # future stamp: stale/corrupt, do not honour it
+        left = self.AP_CLIENT_GRACE_S - (now_up - seen)
+        return left if left > 0 else None
+
+    def _net_stamp_nonidle(self, rec: dict, cur_boot: str, now_up: float) -> None:
+        """Record that the AP was not provably idle just now, in the EXISTING retry record.
+
+        A record from a previous boot is normalized first: its attempt_uptime is meaningless under
+        this boot, and carrying it across while stamping the current boot_id would make a stale
+        attempt look current and defer a needed retry for up to the previous boot's uptime. On the
+        same boot the attempt's own fields are preserved untouched — in particular its uuid is NOT
+        rewritten just because the preferred network has since changed."""
+        out: dict = {"boot_id": cur_boot, "last_nonidle_uptime": now_up}
+        if rec.get("boot_id") == cur_boot and cur_boot:
+            if "attempt_uptime" in rec:
+                out["attempt_uptime"] = rec["attempt_uptime"]
+            if "uuid" in rec:
+                out["uuid"] = rec["uuid"]
+        try:
+            runtime_fs.atomic_write(self._paths, self._net_retry_path(),
+                                    json.dumps(out), 0o600)
+        except (OSError, PathContainmentError):
+            pass
+
     def network_retry_now(self) -> ActionResult:
         ok, msg = self._network_watch_tick(force=True)
         return ActionResult(ok, msg or "nothing to retry")
@@ -966,6 +1018,7 @@ class NetworkOpsMixin:
                 from .lifecycle import current_boot_id
                 cur_boot = current_boot_id()
                 last = None
+                rec: dict = {}          # always bound: the grace code below reads it
                 try:
                     rec = json.loads(runtime_fs.read_text_regular(
                         self._paths, self._net_retry_path(), max_bytes=512) or "")
@@ -977,13 +1030,39 @@ class NetworkOpsMixin:
                             last = None      # negative delta: stale, attempt now
                 except Exception:
                     last = None
+                    rec = {}
+                if not isinstance(rec, dict):
+                    rec = {}
+                # Sample the AP BEFORE the interval check, not after it. `_ap_idle` used to run
+                # only once the interval was already due, so a client that associated AND left
+                # inside one interval left no trace at all — and the retry then tore the AP down
+                # the moment the interval expired, which is exactly the case the grace exists for.
+                # ONE sample per automatic pass, reused by the decision below: `iw` must not run
+                # twice on an interval-due pass.
+                #
+                # `_ap_idle` is two-valued on purpose: False means a station is associated OR the
+                # probe failed (no `iw`, bad rc, an exception). It cannot tell those apart, and no
+                # tri-state probe is wanted just for this, so the stamp records "not provably
+                # idle" and is named for that. Both branches want the same fail-safe outcome.
+                ap_idle = None
+                if not force:
+                    ap_idle = self._ap_idle(act.get("device") or "wlan0")
+                    if not ap_idle:
+                        self._net_stamp_nonidle(rec, cur_boot, now_up)
+                    else:
+                        grace = self._net_grace_remaining(rec, cur_boot, now_up)
+                        if grace is not None:
+                            # NOT "a client was connected": the stamp is written for a failed probe
+                            # too, and this cannot tell the two apart. Say what is actually known.
+                            return (True, f"the AP was not provably idle within the last "
+                                          f"{int(self.AP_CLIENT_GRACE_S)}s — retry deferred")
                 if not force and last is not None \
                         and now_up - last < self.NET_RETRY_INTERVAL_S:
                     return (True, "retry interval not elapsed")
                 # Single radio: the attempt takes the AP down. Never do that under a connected
                 # client, and never on a guess — the stamp stays untouched, so the next minute
                 # re-checks and the retry runs as soon as the AP is provably idle.
-                if not force and not self._ap_idle(act.get("device") or "wlan0"):
+                if not force and not ap_idle:
                     return (True, "a client is connected to the AP (or its station table "
                                   "is unreadable) — retry deferred")
                 try:

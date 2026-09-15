@@ -15,7 +15,9 @@
     <p class="muted">This box joins an existing Wi-Fi as a client; its own AP is the safety
       net — back automatically after reboots and whenever the network is unreachable. A
       <strong>preferred</strong> network is re-joined whenever it reappears (the AP drops for
-      up to a minute per retry while it is away).</p>
+      up to a minute per retry while it is away). That retry waits while the AP is busy — and for
+      three minutes after it last looked busy — so a phone that briefly drops off does not come
+      back to a missing network. <em>Retry now</em> ignores the wait.</p>
     <p>Current: <strong>{% if nv.mode == 'client' %}{{ nv.active.name }} ({{ nv.active.address }})
       {% elif nv.mode == 'ap' %}own AP{% else %}no active Wi-Fi{% endif %}</strong>
       — reachable as <code>https://{{ nv.hostname }}.local:{{ ws_mon.desired.port if ws_mon else 8443 }}</code> on a joined network.</p>
