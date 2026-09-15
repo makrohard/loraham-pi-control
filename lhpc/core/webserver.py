@@ -36,7 +36,8 @@ NGINX_PID = ("state", "run", "nginx.pid")
 NGINX_TEMP = ("state", "run", "nginx")
 _ERR_LOG = ("logs", "nginx-error.log")
 _ACC_LOG = ("logs", "nginx-access.log")
-# Static "console is restarting" page nginx serves on a 502/503/504 (e.g. during a self-update when
+# Static "not responding" page nginx serves on a 502/503/504 — for the console (e.g. during a
+# self-update when
 # the Waitress upstream is briefly gone) — no JS, no upstream, so it always renders.
 _UPDATING_PAGE = ("config", "nginx", "_lhpc_updating.html")
 
@@ -689,6 +690,17 @@ def _stack_blocks(paths: Paths, cfg: WebserverConfig, stack_webs) -> tuple:
 {tls}
         {_stack_allow_deny(swc)}
 {_stack_deny_locations(s)}
+        # Same branded fallback the console block gets: a stack UI whose upstream is down (stopped,
+        # restarting, or crashed) must not answer with nginx's raw "502 Bad Gateway". The page is
+        # written unconditionally by stage_and_validate() before every validation, so it is always
+        # present wherever this references it — if that write ever becomes conditional, every 502
+        # here silently degrades into a misleading 404.
+        error_page 502 503 504 /_lhpc_updating.html;
+        location = /_lhpc_updating.html {{
+            internal;
+            alias {_abs(paths, _UPDATING_PAGE)};
+        }}
+
         location / {{
             if ($lhpc_need_auth_{tok}) {{ return 403; }}
 
@@ -851,7 +863,7 @@ def stage_and_validate(system, paths: Paths, cfg: WebserverConfig, stack_webs=()
 _UPDATING_PAGE_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Console restarting — LoRaHAM Pi Control</title>
+<title>Not responding — LoRaHAM Pi Control</title>
 <style>
   body { font-family: system-ui, sans-serif; background: #f4f6f9; color: #223; margin: 0;
          display: flex; min-height: 100vh; align-items: center; justify-content: center; }
@@ -876,11 +888,10 @@ _UPDATING_PAGE_HTML = """<!doctype html>
   }
 </style></head>
 <body><div class="card">
-  <h1>The console is restarting&hellip;</h1>
-  <p>LoRaHAM Pi Control is updating or restarting and will be back shortly (usually well under a
-     minute). This page does not refresh on its own &mdash; click below when you are ready, and
-     reload once more if it is still coming up.</p>
-  <a class="btn" href="/">Return to the console &rarr;</a>
+  <h1>This page is not responding</h1>
+  <p>The service behind this page is starting, restarting or stopped. This page does not refresh
+     on its own &mdash; use the button below to try again, and once more if it is still coming up.</p>
+  <a class="btn" href="/">Try again &rarr;</a>
 </div></body></html>
 """
 

@@ -1775,7 +1775,12 @@ def test_nginx_serves_static_updating_page_on_502(tmp_path):
     page = tmp_path / "config" / "nginx" / "_lhpc_updating.html"
     assert page.is_file()
     html = page.read_text()
-    assert "Return to the console" in html and "<script" not in html
+    # Identity, not wording: the point is that the served path holds THE branded page. Asserting a
+    # phrase pinned the console-specific copy, which broke as soon as the same file started serving
+    # stack UI blocks too (where "Return to the console" is wrong twice: the console is fine, and
+    # `/` on a stack port is the stack page).
+    assert html == webserver._UPDATING_PAGE_HTML
+    assert "<script" not in html
 
 
 def test_tcp_mode_still_refuses_non_loopback():

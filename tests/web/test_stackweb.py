@@ -85,6 +85,54 @@ def test_lan_proxy_reuses_the_console_client_ca():
     assert conf.count("/GOLDEN/config/tls/client-ca/crl.pem") == 2
 
 
+def test_the_fallback_page_says_nothing_console_specific():
+    """The page nginx serves on 502/503/504 is ONE file shared by the console block and every
+    stack block, so its wording must be true in both. It used to say "The console is restarting"
+    with a "Return to the console" link — shown on a stack UI that is wrong twice over: the
+    console is fine, and on a stack port `/` returns to the stack page, not the console. Found by
+    serving it from a real stack block on the box, which no unit test could have shown.
+
+    It is also entirely standalone: nginx serves it from disk with no upstream, so it must not
+    reference the console's CSS or any script."""
+    html = webserver._UPDATING_PAGE_HTML
+    lowered = html.lower()
+    for phrase in ("the console is restarting", "return to the console", "console restarting"):
+        assert phrase not in lowered, phrase
+    # No EXTERNAL references: nginx serves this from disk with no upstream, so a stylesheet or
+    # script link would simply fail. (The word "style.css" appears in a comment explaining exactly
+    # that, so match on real references rather than the bare filename.)
+    assert "<script" not in lowered
+    assert "<link" not in lowered
+    assert "/static/" not in lowered
+
+
+def test_every_stack_block_serves_the_branded_page_instead_of_a_raw_502():
+    """A stack UI whose upstream is down must answer with the console's branded fallback, not
+    nginx's raw "502 Bad Gateway". The four golden fixtures cannot catch this: they are the
+    NO-STACK render, where `_stack_blocks` emits nothing, so byte-identity stays green whether
+    this directive is present or absent. This asserts the intent directly, per block."""
+    conf = webserver.render_nginx_config(_paths(), WebserverConfig(), [
+        _proxy("meshcom", mode="lan", port=8444, allowed_cidrs=("10.0.0.0/8",)),
+        _proxy("meshtastic", "127.0.0.1:9443", "https", mode="local", port=8445),
+    ])
+    # console + both stack blocks
+    assert conf.count("error_page 502 503 504 /_lhpc_updating.html;") == 3
+    assert conf.count("location = /_lhpc_updating.html {") == 3
+    assert conf.count("alias /GOLDEN/config/nginx/_lhpc_updating.html;") == 3
+
+
+def test_the_branded_page_is_internal_in_every_block_that_references_it():
+    """`internal` is what stops the fallback being fetchable as an ordinary URL; a block that
+    referenced the page without it would expose a route the console deliberately does not."""
+    conf = webserver.render_nginx_config(_paths(), WebserverConfig(),
+                                         [_proxy("meshcom", mode="lan", port=8444,
+                                                 allowed_cidrs=("10.0.0.0/8",))])
+    blocks = conf.split("location = /_lhpc_updating.html {")
+    assert len(blocks) == 3, "console + one stack block"
+    for tail in blocks[1:]:
+        assert tail.split("}")[0].strip().startswith("internal;")
+
+
 def test_websocket_map_appears_exactly_once_for_many_blocks():
     conf = webserver.render_nginx_config(_paths(), WebserverConfig(), [
         _proxy("meshcom", mode="lan", port=8444, allowed_cidrs=("10.0.0.0/8",)),

@@ -171,7 +171,15 @@ def test_repeater_dashboard_proxy_denies_every_config_mutating_route(tmp_path):
         [StackWebProxy(_SWC(), up[0], up[1], _web_deny(svc, "meshcore-meshcore-node"))])
     for p in required:
         assert f"location ~ {ws.deny_location_regex(p)} {{ return 404; }}" in out, p
-    assert "location = " not in out.split("# meshcore-meshcore-node web UI")[1]   # no exact-only form
+    stack_block = out.split("# meshcore-meshcore-node web UI")[1]
+    # Deny rules must never be exact-match — `location = /api/x` is bypassed by a trailing slash or
+    # any suffix, so they are emitted as regexes. Assert that PER DENY PATH rather than banning
+    # `location = ` outright: the block legitimately carries exactly one exact-match location, the
+    # internal branded 502/503/504 page, which is not a deny rule and is not reachable as a URL.
+    for p in required:
+        assert f"location = {p}" not in stack_block, p
+    assert [ln.strip() for ln in stack_block.splitlines()
+            if ln.strip().startswith("location = ")] == ["location = /_lhpc_updating.html {"]
     assert "upstream lhpc_ui_meshcore_meshcore_node {" in out
 
 
