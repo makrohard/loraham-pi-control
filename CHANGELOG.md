@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.1
+
+- The AP is no longer torn down seconds after a phone drops off it. A screen lock, or a phone
+  leaving an SSID with no internet — which an AP-mode box by definition has — ends the association
+  while the operator is still in front of the box, and the preferred-network retry fired within
+  seconds. It now waits 180 s after the AP was last seen not provably idle. "Retry now" ignores it.
+- A stack's web UI serves the branded "not responding" page instead of nginx's raw 502 when its
+  upstream is stopped or restarting. Only the console block had it.
+- The nginx access log keeps non-2xx/3xx only. Routine success was 6,836 of 6,919 lines in one day
+  and nothing rotates this file. That reduces growth; it does not bound it — errors still log
+  without limit.
+- The task banner polls every 2 s only while a job is running, and every 15 s otherwise.
+
 ## 0.6.0
 
 - GPS as a time source. `bootstrap-deps.sh` installs chrony and gpsd by default; chrony sets the
