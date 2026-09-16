@@ -150,6 +150,16 @@ class ParamsConfigMixin:
         fixed = sorted({c.band for c in (s.components if s else ()) if c.band} & set(active))
         return fixed[0] if fixed else active[0]
 
+    def chip_family_for_band(self, band: str) -> str:
+        """Chip family of the board serving `band` ("sx127x" / "sx1262"), or "" when no hardware
+        is configured or the preset is unknown.
+
+        The accepted POWER range depends on it: daemon 1.0.0 enforces 2..17 on SX127x (below 2
+        RadioLib drives RFO instead of PA_BOOST, and 18..20 are refused) against 0..20 on SX1262.
+        "" deliberately narrows nothing — see `daemon_control.int_range`."""
+        from . import config as cfgmod
+        return cfgmod.hw_preset_family(self.hw_preset_for_band(band))
+
     def _daemon_param_overrides(self, stack_id: str, band: str) -> dict:
         """Persisted operator overrides for a stack's daemon params, read from the stack's
         runtime-local config as flat `dp_<band>_<PARAM>` keys (dot-free, so TOML never nests
@@ -157,10 +167,11 @@ class ParamsConfigMixin:
         from . import config as cfgmod
         from . import daemon_params
         stored = cfgmod.load_stack_config(self._paths, self._owner_stack_id(stack_id))
+        family = self.chip_family_for_band(band)
         out: dict[str, str] = {}
         for name in daemon_params.ALL_PARAMS:
             v = stored.get(f"dp_{band}_{name}")
-            if v not in (None, "") and daemon_control.validate_set(name, str(v)) is None:
+            if v not in (None, "") and daemon_control.validate_set(name, str(v), family) is None:
                 out[name] = str(v)
         return out
 
@@ -2966,7 +2977,7 @@ class ParamsConfigMixin:
         if not daemon_control.is_valid_band(band):
             return ActionResult(False, f"Invalid band '{band}' (allowed: "
                                 f"{', '.join(daemon_control.ALLOWED_BANDS)}).")
-        err = daemon_control.validate_set(key, value)
+        err = daemon_control.validate_set(key, value, self.chip_family_for_band(band))
         if err:
             return ActionResult(False, f"Invalid setting: {err}",
                                 next_commands=[f"lhpc daemon {band}"])

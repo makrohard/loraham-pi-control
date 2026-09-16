@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.2
+
+- Pins the KISS TNC to 0.6.2: no TX retune when RX and TX are equal.
+- `POWER` is validated against the chip actually fitted. LoRaHAM daemon 1.0.0 accepts 2–17 dBm on
+  SX127x boards (below 2 the driver transmits on RFO instead of the antenna's PA_BOOST pin; 18 and
+  19 RadioLib refuses; 20 carries a duty-cycle contract the daemon does not enforce) and keeps
+  0–20 on SX1262. lhpc admitted 0–20 for every board, so an operator with a LoRaHAM or Uputronics
+  box could enter `POWER=0`, have it accepted, and get `ERR INVALID` from the daemon. The board's
+  `--hw` preset now decides the range at the gate that admits the SET *and* in the number input
+  beside it. A box with no hardware configured, or an unknown preset, still validates the union of
+  both families and leaves the refusal to the daemon — narrowing by guess would make a Waveshare
+  box refuse power levels its SX1262 accepts. No stack default changes: chat and kiss ask for 17,
+  meshcore 14, meshtastic 17/10, reticulum 10.
+
 ## 0.6.1
 
 - The AP is no longer torn down seconds after a phone drops off it. A screen lock, or a phone

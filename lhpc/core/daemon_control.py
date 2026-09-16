@@ -28,8 +28,13 @@ _KEY_RE = re.compile(r"[A-Za-z0-9_]+")        # daemon CONF key grammar
 
 # Live SET keys the daemon (hardening build) accepts on the CONF socket, verified
 # against config_dispatch.h (TX/CAD monitoring) + config_validate.cpp/config_apply.cpp
-# (radio params). The daemon applies a SET SILENTLY (no socket reply); only GET
-# returns data. NO raw passthrough.
+# (radio params). NO raw passthrough.
+#
+# The daemon DOES reply to every command line -- `config_dispatch_reply()` writes exactly one
+# newline-terminated "OK" or "ERR ..." per line, and has since before 2a0db88; `docs/conf-protocol.md`
+# states it as the contract. What it does not do is ECHO a radio param back in GET STATUS/CHANNEL,
+# which is a different thing and is what `is_confirmable` below is about. This comment used to say
+# the daemon was silent; it was wrong about the ack and right about the echo.
 _ALLOWED_SET: dict[str, set[str]] = {
     # TX / CAD monitoring (config_dispatch)
     "TXMODE": {"MANAGED", "DIRECT"},
@@ -51,10 +56,29 @@ _ALLOWED_SET_INT: dict[str, tuple[int, int]] = {
     "CADWAIT": (50, 5000),
     "CADIDLE": (0, 2000),
     "CADPOLL": (10, 500),
-    "POWER": (0, 20),
+    "POWER": (0, 20),          # union of both chip families; see _POWER_RANGE
     "SF": (7, 12),
     "CR": (5, 8),
     "PREAMBLE": (6, 65535),
+}
+
+# POWER is the one key whose accepted range depends on the chip. Daemon 1.0.0
+# (`config_policy.cpp:92`, `config_policy_power_valid_family`) enforces:
+#
+#   SX127x   2..17   below 2 RadioLib drives the RFO pin instead of PA_BOOST -- a different
+#                    output path, and not the one the antenna is on, so POWER=0 meant
+#                    "transmit into an unconnected pin" while reporting success. RadioLib
+#                    itself rejects 18 and 19; 20 is declined because its +20 dBm path carries
+#                    a duty-cycle contract the daemon does not enforce.
+#   SX1262   0..20   unchanged.
+#
+# The entry in _ALLOWED_SET_INT stays the UNION so that a caller who does not know the family
+# still admits everything the daemon might accept, and the daemon -- which knows its own
+# hardware -- issues the refusal. A caller that DOES know the family gets the real answer here,
+# before a doomed SET reaches the socket.
+_POWER_RANGE: dict[str, tuple[int, int]] = {
+    "sx127x": (2, 17),
+    "sx1262": (0, 20),
 }
 
 
@@ -204,8 +228,24 @@ def read_view(system: System, band: str) -> DaemonView:
     return view
 
 
-def validate_set(key: str, value: str) -> str | None:
-    """Return an error string if (key, value) is not an allowed SET, else None."""
+def int_range(key: str, family: str = "") -> tuple[int, int] | None:
+    """Inclusive (lo, hi) for a numeric SET key, narrowed to `family` where the chip matters.
+
+    `family` is "sx127x" / "sx1262" (see `config.hw_preset_family`); "" or an unknown value
+    means "family not known here" and yields the union range, leaving the narrower refusal to
+    the daemon. Returns None for keys that are not numeric.
+    """
+    if key == "POWER":
+        return _POWER_RANGE.get(family, _ALLOWED_SET_INT["POWER"])
+    return _ALLOWED_SET_INT.get(key)
+
+
+def validate_set(key: str, value: str, family: str = "") -> str | None:
+    """Return an error string if (key, value) is not an allowed SET, else None.
+
+    `family` narrows the POWER range to the chip actually fitted; omitted, POWER is validated
+    against the union of both families and the daemon refuses what its own chip cannot do.
+    """
     key = key.upper()
     value = value.upper()
     if key in _ALLOWED_SET:
@@ -213,7 +253,7 @@ def validate_set(key: str, value: str) -> str | None:
             return f"{key} must be one of {sorted(_ALLOWED_SET[key])}"
         return None
     if key in _ALLOWED_SET_INT:
-        lo, hi = _ALLOWED_SET_INT[key]
+        lo, hi = int_range(key, family)
         try:
             n = int(value)
         except ValueError:
@@ -306,9 +346,10 @@ def is_confirmable(key: str) -> bool:
 def apply_set(system: System, band: str, key: str, value: str) -> tuple[bool, bool, str]:
     """Apply one validated SET to the CONF socket and CONFIRM via read-back.
 
-    The daemon applies a SET SILENTLY (no socket ack; only GET replies). So: send the
-    SET, then GET the field that reports it back and check the hardware actually took
-    the value before reporting success. Returns (ok, confirmed, detail):
+    The daemon acks every command line ("OK" / "ERR ..."), but does not ECHO every radio
+    param back in GET STATUS/CHANNEL. Confirmation therefore means read-back, not the ack:
+    send the SET, then GET the field that reports it back and check the hardware actually
+    took the value before reporting success. Returns (ok, confirmed, detail):
       * read-back matches                     -> (True,  True,  "… confirmed")
       * key the daemon never reports back     -> (True,  False, "… SENT but UNCONFIRMED …")
       * read-back mismatch / not reported     -> (False, False, "NOT applied — daemon reports …")

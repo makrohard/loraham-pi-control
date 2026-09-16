@@ -2020,7 +2020,8 @@ class LifecycleOpsMixin:
         can_apply = is_daemon or self.stack_running(sid)
         return {"stack": target, "band": b, "bands": applicable, "all_bands": list(self.RADIO_BANDS),
                 "is_daemon": is_daemon, "can_apply": can_apply,
-                "rows": daemon_params.stack_view(sid, b, self._daemon_param_overrides(target, b))}
+                "rows": daemon_params.stack_view(sid, b, self._daemon_param_overrides(target, b),
+                                                 self.chip_family_for_band(b))}
 
     def save_daemon_params(self, target: str, band: str, values: dict) -> ActionResult:
         """Persist operator overrides for a stack's daemon params (band-scoped). Semantics:
@@ -2051,7 +2052,7 @@ class LifecycleOpsMixin:
             if raw == "":
                 updates[key] = ""                                  # explicit blank -> clear this key
                 continue
-            err = daemon_control.validate_set(name, raw)
+            err = daemon_control.validate_set(name, raw, self.chip_family_for_band(band))
             if err:
                 return ActionResult(False, f"{name}: {err}")
             canon = daemon_control.canonical_value(name, raw)

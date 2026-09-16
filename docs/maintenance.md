@@ -140,9 +140,16 @@ repositories and recorded there, not here.
     unit template or the manifest model is a minor. Changing a **default** — what happens when
     the operator names nothing — is a patch, provided every explicit selector keeps its meaning
     and the release lane proves every stack on the new default.
-  - **One recorded exception (0.3.10):** Voice losing `artifact = true` shipped as a patch because
+  - **Recorded exception (0.3.10):** Voice losing `artifact = true` shipped as a patch because
     the pin and the branch tip were the same commit and the release lane already proved both Voice
     variants — unchanged bytes plus lane proof, not a change to the selector rule.
+  - **Recorded exception (0.6.2), by the maintainer's decision:** narrowing `POWER` to the chip
+    fitted is a changed refusal, and therefore a minor by the rule above. It shipped in the pin
+    patch that moves the daemon to 1.0.0, because that daemon is what introduces the narrower
+    range: releasing the pin without it would knowingly ship a controller that accepts values its
+    own daemon refuses. The exception is the *lane*, not the rule — a refusal change still needs a
+    minor's justification, and this one's is that it restores agreement with the pin in the same
+    release rather than adding a restriction of lhpc's own.
   - The proof a patch needs is the proof its own change calls for. A **pin move** is proved by
     the binary builder's smoke and clean-runtime test plus the
     [release-verification lane](testlab.md#running-the-verification-lanes) — no box. That lane

@@ -147,6 +147,28 @@ def hw_preset_label(preset: str) -> str:
     return HW_PRESET_LABELS.get(preset, preset)
 
 
+# Chip family per `--hw` wire preset. NOT a guess: these are the `p->family` assignments in the
+# daemon's own `loraham_daemon/hardware_profile.cpp`, which is the only thing that decides which
+# driver — and therefore which limits — a preset gets. Keep the two in step when a preset is added.
+HW_PRESET_FAMILY = {
+    "loraham": "sx127x",            # SX1278 (433) + RFM95 (868)
+    "uputronics-ce0": "sx127x",
+    "uputronics-ce1": "sx127x",
+    "waveshare-sx1262": "sx1262",
+}
+
+
+def hw_preset_family(preset: str) -> str:
+    """Chip family for a `--hw` wire preset, or "" when the preset is unknown or absent.
+
+    "" means "do not narrow anything": callers validate against the union of both families and
+    leave the family-specific refusal to the daemon, which knows its own hardware. An unknown
+    preset must never silently pick a family — that is how a Waveshare box would inherit SX127x
+    limits it does not have.
+    """
+    return HW_PRESET_FAMILY.get(preset, "")
+
+
 @dataclass(frozen=True)
 class BootConfig:
     """[boot] — boot auto-restore switch. FAIL-CLOSED like the firewall's ap_enabled (strict

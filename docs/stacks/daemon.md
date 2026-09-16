@@ -53,8 +53,15 @@ daemon **once**, after the daemon reports READY and before the stack's component
 
 | group | params | ranges |
 |---|---|---|
-| radio | `MODE`, `FREQ`, `SF`, `BW`, `CR`, `CRC`, `LDRO`, `PREAMBLE`, `SYNC`, `POWER` | LORA/FSK · 150–960 MHz · 7–12 · 7.8–500 kHz · 5–8 · 0/1 · AUTO/0/1 · 6–65535 symbols · hex byte · 0–20 dBm |
+| radio | `MODE`, `FREQ`, `SF`, `BW`, `CR`, `CRC`, `LDRO`, `PREAMBLE`, `SYNC`, `POWER` | LORA/FSK · 150–960 MHz · 7–12 · 7.8–500 kHz · 5–8 · 0/1 · AUTO/0/1 · 6–65535 symbols · hex byte · **2–17 dBm on SX127x, 0–20 on SX1262** |
 | listen-before-talk | `TXMODE`, `TXQUEUE`, `CADMONITOR`, `CADRSSI`, `CADWAIT`, `CADIDLE`, `CADTXAFTERTIMEOUT` | MANAGED/DIRECT · 0/1 · 0/1 · −130…0 dBm · 50–5000 ms · 0–2000 ms · 0/1 |
+
+**`POWER` is the one range that depends on the board.** The daemon accepts 2–17 dBm on the SX127x
+boards (LoRaHAM, Uputronics) and 0–20 on the SX1262 (Waveshare): below 2 dBm the SX127x driver
+transmits on the RFO pin instead of the antenna's PA_BOOST pin, RadioLib itself refuses 18 and 19,
+and 20 carries a duty-cycle contract the daemon does not enforce. lhpc validates against the range
+of the board configured in the daemon Hardware settings, and against the union of both when no
+board is configured — the daemon, which knows its own hardware, issues the refusal in that case.
 
 The client app re-`SET`s its own radio params and `TXMODE` when it connects, so those rows are
 **app-owned**: lhpc still applies them, the app overwrites them, and the panel greys them.

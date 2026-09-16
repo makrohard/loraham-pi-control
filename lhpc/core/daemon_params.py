@@ -40,6 +40,10 @@ DROPDOWN_CHOICES = {
 
 # Params rendered as a bounded number input (min, max). Server-side validation is authoritative
 # (daemon_control.validate_set); these bounds are a client-side convenience only.
+#
+# POWER is the exception that must not be read from this table directly: its range depends on the
+# chip fitted (SX127x 2..17, SX1262 0..20), so `numeric_range()` below resolves it per family.
+# The value here is the union, for a caller that does not know the family.
 NUMERIC_RANGE = {
     "FREQ": ("150", "960"),        # MHz (decimal)
     "PREAMBLE": ("6", "65535"),
@@ -48,6 +52,20 @@ NUMERIC_RANGE = {
     "CADWAIT": ("50", "5000"),
     "CADIDLE": ("0", "2000"),
 }
+
+
+def numeric_range(name: str, family: str = "") -> tuple[str, str] | None:
+    """Bounds for a numeric param, narrowed to the chip family where the chip matters.
+
+    Delegates POWER to `daemon_control.int_range` so the input the operator sees and the gate
+    that admits the SET cannot drift apart — showing 0..20 beside a gate that refuses 0 is the
+    defect this exists to prevent. `family` "" keeps the union.
+    """
+    if name == "POWER":
+        from . import daemon_control
+        lo, hi = daemon_control.int_range("POWER", family)
+        return (str(lo), str(hi))
+    return NUMERIC_RANGE.get(name)
 # SYNC is free text (hex or decimal byte).
 
 # Short per-field help shown next to each input.
@@ -61,7 +79,7 @@ PARAM_DESC = {
     "LDRO": "Low-data-rate optimize: 0 / 1 / AUTO.",
     "PREAMBLE": "Preamble length, symbols.",
     "SYNC": "LoRa sync word / network id, e.g. 0x12.",
-    "POWER": "TX power, dBm (0–20).",
+    "POWER": "TX power, dBm.",
     "TXMODE": "MANAGED = listen-before-talk; DIRECT = transmit immediately.",
     "TXQUEUE": "Queue outgoing frames instead of dropping when busy: 0 / 1.",
     "CADMONITOR": "Continuous channel-activity monitor: 0 / 1.",
@@ -147,16 +165,20 @@ def _app_owned(stack_id: str, band: str, name: str) -> bool:
     return any(name in per.get(key, {}) for key in (band, "*"))
 
 
-def stack_view(stack_id: str, band: str, overrides: dict[str, str] | None = None) -> list[dict]:
+def stack_view(stack_id: str, band: str, overrides: dict[str, str] | None = None,
+               family: str = "") -> list[dict]:
     """Grouped, ordered parameter rows for one stack+band. Every param is editable; `overrides`
     are persisted operator values. Each row: name, group, value (override or default), default,
-    app_owned (greyed hint — still applied, but the app overwrites it), desc."""
+    app_owned (greyed hint — still applied, but the app overwrites it), desc.
+
+    `family` ("sx127x" / "sx1262") narrows the POWER input to what the fitted chip accepts; ""
+    shows the union of both."""
     overrides = overrides or {}
     rows: list[dict] = []
     for group, names in (("radio", RADIO_PARAMS), ("lbt", LBT_PARAMS)):
         for name in names:
             dv = default_value(stack_id, band, name)
-            num = NUMERIC_RANGE.get(name)
+            num = numeric_range(name, family)
             rows.append({"name": name, "group": group,
                          "value": overrides.get(name) or dv, "default": dv,
                          "app_owned": _app_owned(stack_id, band, name),

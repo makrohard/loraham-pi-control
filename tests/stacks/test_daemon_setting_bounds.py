@@ -77,3 +77,96 @@ def test_unconfirmable_radio_param_is_sent_not_applied(tmp_path):
 def test_is_confirmable_matches_verify_table():
     assert dc.is_confirmable("TXMODE") and dc.is_confirmable("CADIDLE")
     assert not dc.is_confirmable("FREQ") and not dc.is_confirmable("SF")
+
+
+# --- POWER: the range depends on the chip fitted -----------------------------
+#
+# Daemon 1.0.0 (`config_policy.cpp`, config_policy_power_valid_family) enforces 2..17 on SX127x
+# and 0..20 on SX1262. Below 2 the SX127x driver would transmit on RFO instead of the antenna's
+# PA_BOOST pin; 18/19 RadioLib rejects; 20 is declined for its duty-cycle contract. Validating
+# against the union would let the operator send a value the daemon will refuse.
+
+@pytest.mark.parametrize("value", ["0", "1", "18", "19", "20", "-1"])
+def test_power_outside_the_sx127x_window_is_refused(value):
+    assert dc.validate_set("POWER", value, "sx127x") is not None
+
+
+@pytest.mark.parametrize("value", ["2", "10", "17"])
+def test_power_inside_the_sx127x_window_is_accepted(value):
+    assert dc.validate_set("POWER", value, "sx127x") is None
+
+
+@pytest.mark.parametrize("value", ["0", "2", "17", "20"])
+def test_sx1262_keeps_the_full_range(value):
+    assert dc.validate_set("POWER", value, "sx1262") is None
+
+
+@pytest.mark.parametrize("family", ["", "unknown-board", "SX127X"])
+def test_unknown_family_narrows_nothing(family):
+    # "" means "the family is not known here": validate the union and let the daemon, which
+    # knows its own hardware, issue the refusal. A board must never inherit another's limits
+    # from a typo, so the match is exact and case-sensitive.
+    assert dc.validate_set("POWER", "0", family) is None
+    assert dc.validate_set("POWER", "20", family) is None
+    assert dc.validate_set("POWER", "21", family) is not None
+
+
+def test_only_power_is_family_dependent():
+    # Every other numeric key must answer the same range for every family — otherwise a caller
+    # that omits the family silently changes behaviour for a key nobody meant to make chip-specific.
+    for key in ("CADRSSI", "CADWAIT", "CADIDLE", "CADPOLL", "SF", "CR", "PREAMBLE"):
+        assert dc.int_range(key, "sx127x") == dc.int_range(key, "sx1262") == dc.int_range(key)
+
+
+def test_power_range_matches_the_daemons_own_policy():
+    assert dc.int_range("POWER", "sx127x") == (2, 17)
+    assert dc.int_range("POWER", "sx1262") == (0, 20)
+    assert dc.int_range("POWER") == (0, 20)
+
+
+# --- the family reaches the gate from the configured board -------------------
+
+@pytest.mark.parametrize("setup,band,rejected", [
+    ("loraham", "433", "20"),
+    ("loraham", "868", "0"),
+    ("uputronics", "433", "0"),
+    ("uputronics", "868", "20"),
+])
+def test_service_refuses_out_of_range_power_for_an_sx127x_board(tmp_path, setup, band, rejected):
+    from lhpc.core import config as cfgmod
+    p = Paths(runtime_root=tmp_path)
+    cfgmod.save_hardware_setup(p, setup)
+    svc = ControllerService(system=FakeSystem().system, paths=p)
+    assert svc.chip_family_for_band(band) == "sx127x"
+    r = svc.daemon_set(band, "POWER", rejected, apply=True)
+    assert not r.ok and "POWER" in r.summary
+
+
+@pytest.mark.parametrize("setup,band", [("waveshare-433", "433"), ("waveshare-868", "868")])
+def test_service_keeps_the_full_range_for_a_waveshare_board(tmp_path, setup, band):
+    # The regression that matters in the other direction: narrowing by accident would make a
+    # Waveshare box refuse power levels its SX1262 accepts.
+    from lhpc.core import config as cfgmod
+    p = Paths(runtime_root=tmp_path)
+    cfgmod.save_hardware_setup(p, setup)
+    svc = ControllerService(system=FakeSystem().system, paths=p)
+    assert svc.chip_family_for_band(band) == "sx1262"
+    assert dc.validate_set("POWER", "20", svc.chip_family_for_band(band)) is None
+    assert dc.validate_set("POWER", "0", svc.chip_family_for_band(band)) is None
+
+
+@pytest.mark.no_default_hardware
+def test_unconfigured_box_has_no_family_and_narrows_nothing(tmp_path):
+    # The test baseline pretends a LoRaHAM board is fitted (conftest `_default_hardware`), so this
+    # one opts out to reach the real fresh-install state: no board picked, no family, no narrowing.
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.chip_family_for_band("433") == ""
+    assert dc.validate_set("POWER", "20", svc.chip_family_for_band("433")) is None
+
+
+def test_every_hw_preset_has_a_family():
+    # A preset the catalog can launch but the family map does not know would silently fall back
+    # to the union range — the failure would be invisible, so it is asserted here instead.
+    from lhpc.core.config import HW_PRESETS, hw_preset_family
+    for preset in HW_PRESETS:
+        assert hw_preset_family(preset) in ("sx127x", "sx1262"), preset
