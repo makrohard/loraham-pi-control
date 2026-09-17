@@ -170,6 +170,33 @@ class DemoService(ControllerService):
                                         daemon_sim.channel(band))
         return v
 
+    def daemon_channel(self, band: str) -> dict:
+        """Passive channel read — the simulated counterpart of `GET CHANNEL NOSCAN`.
+
+        The real controller no longer puts channel fields in `daemon_view()`, so the demo has to
+        answer here too or the dashboard's RSSI telemetry simply vanishes in the browser. No scan
+        is simulated: `CADSCAN=0` and the state says no verdict was taken, exactly as the daemon
+        answers it."""
+        if not self._daemon_up_on(band):
+            return {}
+        from . import daemon_sim
+        ch = dict(daemon_sim.channel(band))
+        ch["CADSCAN"] = "0"
+        ch["CAD"] = "0"
+        ch["CADSTATE"] = "NOTSCANNED"
+        return ch
+
+    def daemon_channel_scan(self, band: str) -> dict:
+        """Operator-invoked scan — what "Scan now" calls. Here it is where the simulated CAD
+        verdict actually appears, since that is the only thing a real scan buys."""
+        if not self._daemon_up_on(band):
+            return {}
+        from . import daemon_sim
+        ch = dict(daemon_sim.channel(band))
+        ch["CADSCAN"] = "1"
+        ch["CAD"] = "1"
+        return ch
+
     def daemon_feed(self, band: str, lines: int = 40) -> list:
         if not self._daemon_up_on(band):
             return []

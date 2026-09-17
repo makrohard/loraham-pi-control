@@ -88,10 +88,15 @@ TX_RESULT_FLAG_CAD_TIMEOUT = 0x04
 # Daemon CADWAIT default (seconds) if the status reply does not report it.
 DEFAULT_CADWAIT_S = 1.5
 
-# How often to ask the daemon (GET CHANNEL) for a fresh live-channel RSSI to keep
-# get_noise_floor() current. A light cadence: the daemon answers non-destructively
-# (it skips the CAD scan when an RX packet is pending), and openHop only reads the
-# cached value.
+# How often to ask the daemon (GET CHANNEL NOSCAN) for a fresh live-channel RSSI to keep
+# get_noise_floor() current.
+#
+# This comment used to claim the daemon "answers non-destructively (it skips the CAD scan when an
+# RX packet is pending)". That was TRUE ONLY when a packet was already pending: with an idle
+# receiver the plain `GET CHANNEL` ran a CAD scan every 5 s and destroyed whatever frame was
+# arriving. Measured on a Zero 2 W, that class of polling cost ~46 % of received frames at
+# SF12/BW125. NOSCAN reports the same LIVERSSI without ever entering CAD, which is all this poller
+# ever wanted.
 NOISE_POLL_INTERVAL_S = 5.0
 
 # Daemon live-RSSI sentinel (config_status_live_rssi_dbm) returned when the radio is
@@ -487,7 +492,7 @@ class LoRaHAMRadio(_LoRaRadioBase):
         return self._noise_floor
 
     async def refresh_noise_floor(self) -> Optional[float]:
-        """Ask the daemon (GET CHANNEL) for a fresh channel read.
+        """Ask the daemon (GET CHANNEL NOSCAN) for a fresh channel read — never runs a CAD scan.
 
         Best-effort: the reply is parsed and cached by the config reader loop
         (LIVERSSI). Mirrors the TCP radio's refresh/get pair; the noise poller
@@ -496,7 +501,7 @@ class LoRaHAMRadio(_LoRaRadioBase):
         writer = self._config_writer
         if writer is not None and not writer.is_closing():
             try:
-                await self._write_config_command("GET CHANNEL\n")
+                await self._write_config_command("GET CHANNEL NOSCAN\n")
             except Exception as exc:
                 logger.debug("Noise-floor refresh failed: %s", exc)
         return self._noise_floor

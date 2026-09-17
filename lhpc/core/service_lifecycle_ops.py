@@ -4840,6 +4840,9 @@ class LifecycleOpsMixin:
             or self.binary_covers(self.DAEMON_ID)
             or daemon_up)
         dvs = {b: self.daemon_view(b) for b in self.RADIO_BANDS}
+        # LIVERSSI only, and this renders on every dashboard load -> the PASSIVE read. A scan here
+        # would destroy an arriving frame just to draw a signal bar.
+        dch = {b: (self.daemon_channel(b) if dvs[b].reachable else {}) for b in self.RADIO_BANDS}
         # OCCUPIED = reachable (may physically hold SPI, used for conflict reasoning);
         # USABLE = RADIO=READY (a working radio service). User-facing "served" summaries are
         # USABLE — a FAILED/UNINITIALIZED band is never presented as served.
@@ -4976,7 +4979,7 @@ class LifecycleOpsMixin:
                     "txmode": dv.status.get("TXMODE") if dv.reachable else None,
                     "cadrssi": dv.status.get("CADRSSI") if dv.reachable else None,
                     "cadwait": dv.status.get("CADWAIT") if dv.reachable else None,
-                    "liverssi": dv.channel.get("LIVERSSI") if dv.reachable else None,
+                    "liverssi": dch[band].get("LIVERSSI") if dv.reachable else None,
                 },
                 "running": running,
                 "startable": startable,
@@ -5017,7 +5020,7 @@ class LifecycleOpsMixin:
                     "txmode": dv.status.get("TXMODE") if dv.reachable else None,
                     "cadrssi": dv.status.get("CADRSSI") if dv.reachable else None,
                     "cadwait": dv.status.get("CADWAIT") if dv.reachable else None,
-                    "liverssi": dv.channel.get("LIVERSSI") if dv.reachable else None,
+                    "liverssi": dch[band].get("LIVERSSI") if dv.reachable else None,
                 },
                 "running": [], "startable": [], "interactive": [], "conflict": [],
                 "rflogs": self._rflogs_for_band(band, []),
@@ -5574,8 +5577,20 @@ class LifecycleOpsMixin:
     # ---- daemon monitoring + live settings -------------------------------
 
     def daemon_view(self, band: str) -> daemon_control.DaemonView:
-        """Read-only STATUS/STATS/CHANNEL for a band (RSSI bars, counters)."""
+        """Read-only STATUS/STATS for a band — passive, never touches the radio.
+
+        `.channel` is empty by design; ask for channel data explicitly (see below)."""
         return daemon_control.read_view(self._system, band)
+
+    def daemon_channel(self, band: str) -> dict[str, str]:
+        """CHANNEL fields WITHOUT a CAD scan — safe to call on a timer."""
+        return daemon_control.read_channel_passive(self._system, band)
+
+    def daemon_channel_scan(self, band: str) -> dict[str, str]:
+        """CHANNEL fields WITH a real CAD scan — DESTRUCTIVE to a frame in flight.
+
+        Operator-invoked only (`lhpc daemon <band>`, the console's "Scan now"). Never on a timer."""
+        return daemon_control.read_channel_scan(self._system, band)
 
     def daemon_socket_line(self, band: str) -> str:
         """One raw, bounded, sanitised CONF-socket status line for the live 'View Socket' monitor

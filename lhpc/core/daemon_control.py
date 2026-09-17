@@ -1,7 +1,12 @@
 """Daemon CONF-socket monitoring and live settings.
 
-Read side (safe, no RF): `GET STATUS`, `GET STATS`, `GET CHANNEL` parsed into
-field maps — used by the web monitor (RSSI bars, counters) and the CLI.
+Read side, and NOT all of it is free. `GET STATUS` and `GET STATS` are pure register/counter
+reads and never touch the radio. **`GET CHANNEL` runs a CAD scan**: it takes the radio mutex, puts
+the chip into CAD and re-arms RX afterwards, so it DESTROYS any frame in flight. A periodic caller
+therefore costs reception — measured at 54 % delivery against 100 % at SF12/BW125 when the console
+polled it every 3 s. `GET CHANNEL NOSCAN` (daemon >= 1.1.0) answers the same line without the scan
+and is what every periodic caller must use; the scanning form is reserved for a deliberate,
+operator-invoked measurement.
 
 Write side (mutating): a STRICT whitelist of `SET <key>=<value>` commands applied
 to the CONF socket. TX mode, CAD/LBT parameters, result/queue flags and the radio params are allowed. Enabling a TX-capable mode does not itself transmit — TX
@@ -210,7 +215,18 @@ def read_socket_line(system: System, band: str, command: bytes = b"GET STATUS\n"
 
 
 def read_view(system: System, band: str) -> DaemonView:
-    """Read STATUS + STATS + CHANNEL for a band (read-only, bounded)."""
+    """Read STATUS + STATS for a band — PASSIVE BY CONSTRUCTION, never touches the radio.
+
+    `view.channel` is left empty here on purpose. It used to be filled from `GET CHANNEL`, which
+    runs a CAD scan; because this is the generic status read (15 of its callers want only
+    `.ready`/`.reachable`/`.status`), every admission check, blocker test and SET read-back was
+    scanning the channel and destroying frames in flight. Channel data is now an EXPLICIT call:
+
+      * `read_channel_passive()` — for anything periodic (RSSI meters, noise floor, read-backs);
+      * `read_channel_scan()`    — a real CAD verdict, only when an operator asks for one.
+
+    Deliberately not a `channel=True` flag on this function: a flag makes it easy to reintroduce a
+    destructive scan into a generic status read, which is exactly how the defect arose."""
     view = DaemonView(band=band, reachable=False)
     if not is_valid_band(band):
         view.error = f"invalid band {band!r}"
@@ -222,10 +238,42 @@ def read_view(system: System, band: str) -> DaemonView:
             return view
         view.reachable = True
         view.stats = _query(system, band, b"GET STATS\n", "STATS")
-        view.channel = _query(system, band, b"GET CHANNEL\n", "CHANNEL")
     except OSError as exc:
         view.error = f"CONF socket unreachable: {exc}"
     return view
+
+
+def read_channel_passive(system: System, band: str) -> dict[str, str]:
+    """One CHANNEL field map WITHOUT a CAD scan — `GET CHANNEL NOSCAN` (daemon >= 1.1.0).
+
+    Use this for every periodic or automatic read. RSSI/PACKETRSSI/LIVERSSI/MODE/TXMODE are all
+    reported; `CADSCAN=0` means there is NO CAD verdict, so `CADSTATE` reads `NOTSCANNED` (or
+    `PENDING` when a received packet is waiting — the stronger state wins) and `BUSY` is only the
+    TX-busy / RSSI-threshold estimate. Never read `CAD=0` here as "CAD says the channel is free".
+
+    A daemon older than 1.1.0 answers `ERR UNKNOWN`, which `_query` rejects, so this returns `{}`
+    and the display degrades to "?" — deliberately NOT falling back to the scanning form, which
+    would silently restore the very defect this exists to remove."""
+    if not is_valid_band(band):
+        return {}
+    try:
+        return _query(system, band, b"GET CHANNEL NOSCAN\n", "CHANNEL")
+    except OSError:
+        return {}
+
+
+def read_channel_scan(system: System, band: str) -> dict[str, str]:
+    """One CHANNEL field map WITH a real CAD scan — the original `GET CHANNEL`.
+
+    DESTRUCTIVE: puts the chip into CAD and can discard a frame that is arriving. Only ever call
+    this for a deliberate, operator-invoked measurement (`lhpc daemon <band>`, the console's
+    "Scan now" button). Never on a timer."""
+    if not is_valid_band(band):
+        return {}
+    try:
+        return _query(system, band, b"GET CHANNEL\n", "CHANNEL")
+    except OSError:
+        return {}
 
 
 def int_range(key: str, family: str = "") -> tuple[int, int] | None:
@@ -300,7 +348,9 @@ _VERIFY: dict[str, tuple[bytes, str]] = {
     "CADPOLL": (b"GET STATUS\n", "CADPOLL"),
     "CADRSSI": (b"GET STATUS\n", "CADRSSI"),
     "GETRSSI": (b"GET STATUS\n", "GETRSSI"),
-    "MODE": (b"GET CHANNEL\n", "MODE"),
+    # NOSCAN, never the scanning form: confirming a MODE set is automatic, not an operator
+    # asking to measure the channel. NOSCAN reports MODE, so the read-back is unaffected.
+    "MODE": (b"GET CHANNEL NOSCAN\n", "MODE"),
 }
 
 

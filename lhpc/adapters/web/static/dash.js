@@ -1,6 +1,8 @@
 // Radio dashboard live updater. For each per-band column it polls the read-only
 // daemon API and refreshes the RSSI meter, TX-mode, daemon badge and RX/TX feed.
-// Same-origin only; no actions are taken — display refresh exclusively.
+// Same-origin only. The polling is read-only and, since 0.7.0, genuinely passive: it asks the
+// daemon for channel data WITHOUT a CAD scan, because a scan destroys a frame in flight. The one
+// action this file takes is the explicit "Scan now" button, which is a POST with a CSRF token.
 (function () {
   "use strict";
   var cols = document.querySelectorAll("[data-radio-band]");
@@ -29,7 +31,13 @@
         if (meter && rssi !== "") meter.value = rssi;
         set("rd-rssiv-" + band, rssi || "?");
         if (d.channel) {
-          set("rd-cad-" + band, d.channel.CADSTATE || "?");
+          // CADSCAN=0 means NO CAD verdict was taken — this poll is deliberately passive so it
+          // cannot cost reception. Never render CADSTATE as a verdict in that case: show a dash
+          // and let the operator ask for a real measurement with "Scan now". PENDING is real
+          // information (a received packet is waiting) and is shown as-is.
+          var scanned = d.channel.CADSCAN === "1";
+          var cad = d.channel.CADSTATE || "?";
+          set("rd-cad-" + band, (scanned || cad === "PENDING") ? cad : "—");
           set("rd-pktrssi-" + band, d.channel.PACKETRSSI || "?");
         }
         if (d.status) {
@@ -119,6 +127,35 @@
         .catch(function () { /* transient */ });
     }, pending ? 2000 : 4000);
   }
+
+  // "Scan now": ONE real CAD measurement, on explicit click only.
+  //
+  // POST + CSRF, never a GET: this genuinely changes radio state (it enters CAD and can discard
+  // an arriving frame), and this console's contract is that GET is read-only. A GET here could be
+  // fired by a refresh, prefetch or retry — which is exactly the accident this whole change undoes.
+  Array.prototype.forEach.call(
+    document.querySelectorAll("[data-scan-band]"), function (btn) {
+      btn.addEventListener("click", function () {
+        var band = btn.getAttribute("data-scan-band");
+        var cell = document.getElementById("rd-cad-" + band);
+        var token = btn.getAttribute("data-csrf") || "";
+        if (!band || !token) return;
+        var body = new URLSearchParams();
+        body.set("_csrf", token);
+        btn.disabled = true;
+        if (cell) cell.textContent = "scanning…";
+        fetch("/api/daemon/" + encodeURIComponent(band) + "/scan",
+              { method: "POST", cache: "no-store", body: body })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) {
+            if (cell) {
+              cell.textContent = (d && d.channel && d.channel.CADSTATE) ? d.channel.CADSTATE : "?";
+            }
+          })
+          .catch(function () { if (cell) cell.textContent = "?"; })
+          .then(function () { btn.disabled = false; });
+      });
+    });
 
   // Webserver box open-state persists across ORDINARY reloads too (the id-keyed sessionStorage
   // restore above only survives dash.js's own signature reloads). Server renders it collapsed;

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.7.0
+
+- **A status page no longer costs reception.** Reading `GET CHANNEL` on the daemon's CONF socket
+  runs a CAD scan: it takes the radio mutex, puts the chip into CAD and re-arms RX, so it destroys
+  a frame that is arriving. LHPC issued it constantly — the dashboard's per-band column and the
+  RX/TX activity window each polled it every 3 s (per tab, so the cost grew with open tabs), and
+  `read_view()`, the generic status read, bundled it into every admission check, blocker test and
+  SET read-back. Measured on a Pi Zero 2 W at SF12/BW125: **54 % of frames delivered with the
+  console open, 100 % with it closed**; a T-Beam on the same bench heard 12 of 12 throughout. The
+  loss scales with airtime, so it was worst on the longest-range settings — including LoRa-APRS.
+- `read_view()` is now STATUS + STATS and is passive by construction. Channel data is an explicit
+  call: a passive read (`GET CHANNEL NOSCAN`, daemon 1.1.0) for anything periodic, and a scanning
+  read reserved for a deliberate, operator-invoked measurement. Not a flag on the old function —
+  a flag is how a destructive operation gets back into a generic status read.
+- The RX/TX activity window polls a feed-only endpoint; it used to fetch the whole radio view and
+  discard everything except the log text. MeshCore's noise-floor poller, which asked every 5 s for
+  an RSSI it could get passively, now does. `SET MODE=…` no longer scans to confirm itself.
+- The dashboard shows CAD state as "—" until something scans, with a **Scan now** button
+  (POST + CSRF — it changes radio state, so it is not a GET). `CADSCAN=0` means *no verdict was
+  taken*, not "the channel is free".
+- **Listen-before-talk is unchanged.** The daemon still runs CAD before every transmission in
+  MANAGED mode. What changed is that reading a status page no longer does.
+- `lhpc daemon <band>` still takes a real measurement: asking once, by hand, is the case CAD is
+  for.
+
 ## 0.6.2
 
 - Pins the LoRaHAM daemon to **1.0.0** (`4f84b6d`). The reliability release: CAD read from the

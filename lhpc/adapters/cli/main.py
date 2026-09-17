@@ -117,12 +117,12 @@ def _print_install_dep_gate(svc, stack, check: bool = False) -> bool:
     return True
 
 
-def _render_daemon(view) -> int:
+def _render_daemon(view, channel: dict[str, str] | None = None) -> int:
     if not view.reachable:
         print(f"ERR   daemon {view.band}: not reachable ({view.error or 'no CONF socket'})")
         print("\nNext:\n  lhpc stack start daemon")
         return 1
-    s, st, ch = view.status, view.stats, view.channel
+    s, st, ch = view.status, view.stats, (channel if channel is not None else {})
     if view.ready:
         print(f"OK    daemon {view.band} monitor.")
     else:
@@ -1336,7 +1336,11 @@ def _run(argv: list[str] | None = None) -> int:
             feed = svc.daemon_feed(args.band)
             print("\n".join(feed) if feed else "(no recent RX/TX activity)")
             return 0
-        return _render_daemon(svc.daemon_view(args.band))
+        # An operator ran `lhpc daemon <band>` by hand, ONCE: that is a deliberate request to
+        # measure the channel, so this is the one place that still runs a real CAD scan.
+        _dview = svc.daemon_view(args.band)
+        return _render_daemon(_dview,
+                              svc.daemon_channel_scan(args.band) if _dview.reachable else {})
     if args.command == "update":
         if getattr(args, "upstream", False):
             return _apply_flow(lambda a: svc.graywolf_upstream_update(args.target, apply=a),

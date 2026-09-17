@@ -394,6 +394,65 @@ def test_daemon_api_json(tmp_path, web):
     assert j["reachable"] and j["status"]["TXMODE"] == "MANAGED"
 
 
+def test_daemon_api_channel_never_scans(tmp_path, web):
+    """The dashboard polls /api/daemon/<band> every 3 s, so it must stay passive.
+
+    It used to call `GET CHANNEL`, whose CAD scan destroys a frame in flight — measured at 54 %
+    delivery against 100 % with the poll stopped. A GET route is also contractually read-only
+    (app.py: "GET = read-only"), which this now actually is."""
+    seen: list[bytes] = []
+
+    class Rec:
+        def request(self, path, payload, timeout, maxb):
+            seen.append(payload)
+            return (b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90\n"
+                    if payload == b"GET STATUS\n" else b"")
+        def send(self, *a): ...
+
+    sysobj = FakeSystem().system
+    sysobj.unix = Rec()
+    c = web(system=sysobj)
+    assert c.get("/api/daemon/433").status_code == 200
+    assert b"GET CHANNEL\n" not in seen           # the scanning form must never be issued here
+    assert b"GET CHANNEL NOSCAN\n" in seen
+
+
+def test_daemon_feed_endpoint_does_not_read_the_radio(tmp_path, web):
+    """The RX/TX activity window polls only the feed.
+
+    It used to poll /api/daemon/<band> and discard everything but `feed`, dragging a destructive
+    CAD scan behind a text log every 3 s."""
+    seen: list[bytes] = []
+
+    class Rec:
+        def request(self, path, payload, timeout, maxb):
+            seen.append(payload)
+            return b""
+        def send(self, *a): ...
+
+    sysobj = FakeSystem().system
+    sysobj.unix = Rec()
+    c = web(system=sysobj)
+    j = c.get("/api/daemon/433/feed").get_json()
+    assert "feed" in j and j["band"] == "433"
+    assert not any(b"CHANNEL" in s for s in seen)
+    assert c.get("/api/daemon/999/feed").status_code == 404
+
+
+def test_daemon_scan_is_post_and_requires_csrf(tmp_path, web, csrf):
+    """"Scan now" changes radio state, so it is POST + CSRF — never a GET.
+
+    It takes the radio mutex, enters CAD and can destroy an arriving frame. Encoded as a GET, a
+    refresh, prefetch or retry could fire it — which is, in miniature, how a status read came to
+    scan the channel in the first place."""
+    c = _daemon_client(web, tmp_path)
+    assert c.get("/api/daemon/433/scan").status_code != 200       # GET must never reach it
+    assert c.post("/api/daemon/433/scan", data={}).status_code == 400   # no CSRF -> refused
+    r = c.post("/api/daemon/433/scan", data={"_csrf": csrf(c)})
+    assert r.status_code == 200
+    assert c.post("/api/daemon/999/scan", data={"_csrf": csrf(c)}).status_code == 404
+
+
 def test_radio_set_requires_csrf(tmp_path, web):
     c = _daemon_client(web, tmp_path)
     r = c.post("/radio/433/set", data={"key": "TXMODE", "value": "DIRECT"})
