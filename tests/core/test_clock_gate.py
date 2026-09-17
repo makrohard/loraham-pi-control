@@ -902,3 +902,52 @@ def test_verify_reports_a_provisional_pki_without_failing_it(tmp_path, monkeypat
     normal = _svc(tmp_path, monkeypatch=monkeypatch)
     assert normal.pki_clock_normalise() == "normalised"
     assert normal.webserver_verify().data["checks"]["pki_provisional"] == "no"
+
+
+# --- the two lock-boundary races the implementation audit found -----------------------------
+
+def test_exposure_revalidates_the_gate_if_the_san_vanishes_before_the_reissue(tmp_path, monkeypatch):
+    # P1 (audit): the decision saw the SAN present -> no certificate mutation -> no gate. A
+    # concurrent config change removes the SAN before the reissue helper reloads config; the
+    # helper would then add it back and mint a certificate past a gate that never ran. The
+    # verdict has to hold through the transaction, so the gate is re-run under the lock.
+    p = _init_pki(tmp_path)
+    pki.issue_server_cert(p, dns_sans=("box.lan",), ip_sans=("10.42.0.1",), days=30)
+    svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
+    assert svc.webserver_configure(ip_sans=["10.42.0.1"]).ok
+    _lan_ip(monkeypatch, "10.42.0.1")
+    real = svc._exposure_reissue_decision
+
+    def decision_then_the_san_vanishes(target, accept):
+        out = real(target, accept)
+        assert out[1] is None                                  # SAN present: no gate, correctly
+        assert svc.webserver_configure(ip_sans=["192.0.2.9"]).ok   # ...and now it is gone
+        svc._invalidate_config()
+        return out
+    monkeypatch.setattr(svc, "_exposure_reissue_decision", decision_then_the_san_vanishes)
+    serial = _server_cert_serial(tmp_path)
+
+    res = svc.webserver_expose(["10.42.0.0/24"], confirm=True)
+
+    assert res.ok                                              # exposure itself is saved, as always
+    assert _server_cert_serial(tmp_path) == serial, "minted past a gate that never ran"
+    assert any("NOT reissued" in d and "not synchronised" in d for d in res.details)
+    svc._invalidate_config()
+    assert "10.42.0.1" not in svc.config().webserver.ip_sans  # nothing half-written either
+
+
+def test_init_rechecks_the_destructive_precondition_under_the_lock(tmp_path, monkeypatch):
+    # P2 (audit): two fresh inits can both pass the no-PKI check before the lock; the second
+    # would then wait and run force=True over the CAs the first just created, with no
+    # destructive confirmation from anyone. The precondition is re-read under the lock.
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    calls = {"n": 0}
+
+    def absent_then_present(paths):
+        calls["n"] += 1
+        present = calls["n"] > 1                               # a peer got there first
+        return {"server_ca": {"present": present}, "client_ca": {"present": present}}
+    monkeypatch.setattr(pki, "pki_status", absent_then_present)
+    res = svc.webserver_init()
+    assert not res.ok and "DESTRUCTIVE" in res.summary
+    assert not _tls(tmp_path, "server-ca", "ca.crt").exists()

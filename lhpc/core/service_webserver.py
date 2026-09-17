@@ -283,6 +283,15 @@ class WebserverOpsMixin:
         self._invalidate_config()
         try:
             with self._pki_lock("init"):
+                # Re-check under the lock: two fresh inits can both pass the no-PKI check above,
+                # and the second would otherwise wait, then run force=True over the CAs the
+                # first just created -- a destructive recreate nobody confirmed.
+                st = _pki.pki_status(self._paths)
+                if ((st["server_ca"].get("present") or st["client_ca"].get("present"))
+                        and not confirm):
+                    return ActionResult(False, "PKI already exists (created concurrently) — "
+                                        "recreating the CAs is DESTRUCTIVE. Confirm to proceed.",
+                                        next_commands=["lhpc webserver init --confirm-recreate"])
                 from .service_system import clock_verified
                 clock_ok, _why = clock_verified(self._system.fs, self._paths.runtime_root)
                 validity = None if clock_ok else _pki.PROVISIONAL_VALIDITY
@@ -419,7 +428,8 @@ class WebserverOpsMixin:
         except (ValidationError, _config.ConfigError) as exc:
             return ActionResult(False, f"invalid webserver config: {exc}")
         self._invalidate_config()
-        san_notes = self._expose_add_san_and_reissue(lan_ip) if remote else []
+        san_notes = (self._expose_add_san_and_reissue(lan_ip, accept_unverified)
+                     if remote else [])
         ar = self.webserver_apply()
         return ActionResult(ar.ok, ar.summary, details=[*san_notes, *ar.details],
                             next_commands=ar.next_commands, data=ar.data)
@@ -1327,7 +1337,7 @@ class WebserverOpsMixin:
         # ORDERING: every step reads FRESHLY-loaded config. `self.config()` is memoized, so a `cfg`
         # captured before the write above would silently drop any ip_sans another writer persisted in
         # between, and would reissue the cert from pre-exposure state.
-        san_notes = self._expose_add_san_and_reissue(lan_ip)
+        san_notes = self._expose_add_san_and_reissue(lan_ip, accept_unverified)
         return ActionResult(
             True, "remote exposure enabled (desired) — now APPLY to rebind the listener to "
             f"0.0.0.0:{self.config().webserver.port} and reload nginx (until then it stays on "
@@ -1337,14 +1347,19 @@ class WebserverOpsMixin:
                      "lhpc webserver start-service   # if nginx is not running yet"],
             next_commands=["lhpc webserver apply"])
 
-    def _expose_add_san_and_reissue(self, ip: str) -> list:
+    def _expose_add_san_and_reissue(self, ip: str, accept_unverified: bool = False) -> list:
         """Persist this host's LAN IP as an `ip_sans` entry and reissue the server cert from the FINAL
         persisted config. Returns truthful detail lines; never raises, never fails the exposure.
 
         `ip` is the address `_exposure_reissue_decision` resolved and gated on -- it is not
         re-resolved here, so the gate and the reissue cannot disagree about which address.
-        While the PKI is provisional the reissue uses the provisional window and keeps the marker;
-        normalisation replaces it with normal dates once the clock is verified.
+
+        The SAN check, the gate and the issuance all happen INSIDE the PKI lock, and the gate is
+        re-run here when a reissue turns out to be needed: the decision up front may have seen the
+        SAN present (no certificate mutation, so no gate), and a concurrent config change can remove
+        it before this runs. If this invocation is going to mint a certificate, it passes the same
+        gate it would have faced up front, or it does not mint. While the PKI is provisional the
+        reissue uses the provisional window and keeps the marker.
 
         FAIL-SOFT by contract: the exposure config is already written. `issue_server_cert` raises when
         the server CA is not initialized — rolling the exposure back over that would leave the operator
@@ -1352,32 +1367,40 @@ class WebserverOpsMixin:
         from . import config as _config
         from . import pki as _pki
         from .reslock import ResourceBusy
-        cfg = self.config().webserver                    # FRESH: post-exposure-write state
         if not ip:
             return ["  SAN: this host's LAN address could not be determined — no SAN added; add it "
                     "by hand to [webserver] ip_sans, then: lhpc webserver tls-renew"]
-        if ip in cfg.ip_sans:
-            return [f"  SAN: {ip} is already an IP SAN — certificate left untouched"]
-        try:
-            _config.save_webserver_config(self._paths, ip_sans=[*cfg.ip_sans, ip])
-        except Exception as exc:
-            return [f"  SAN: could not persist {ip} as an IP SAN ({exc}) — add it by hand, then: "
-                    "lhpc webserver tls-renew"]
-        self._invalidate_config()
-        cfg = self.config().webserver                    # FRESH again: the cert follows what is on disk
         try:
             with self._pki_lock("expose-reissue"):
-                validity = (_pki.PROVISIONAL_VALIDITY if _pki.provisional_pending(self._paths)
-                            else None)
-                _pki.issue_server_cert(self._paths, dns_sans=list(cfg.dns_sans),
-                                       ip_sans=list(cfg.ip_sans), days=cfg.server_cert_days,
-                                       validity=validity)
+                cfg = self.config().webserver                # FRESH, and now stable against PKI writers
+                if ip in cfg.ip_sans:
+                    return [f"  SAN: {ip} is already an IP SAN — certificate left untouched"]
+                if _pki.provisional_pending(self._paths):
+                    validity = _pki.PROVISIONAL_VALIDITY
+                else:
+                    validity = None
+                    refused = self._clock_gate("reissue the server certificate for the new SAN",
+                                               accept_unverified)
+                    if refused is not None:
+                        return [f"  SAN: {ip} is not an IP SAN and the certificate was NOT reissued "
+                                f"— {refused.summary}"]
+                try:
+                    _config.save_webserver_config(self._paths, ip_sans=[*cfg.ip_sans, ip])
+                except Exception as exc:
+                    return [f"  SAN: could not persist {ip} as an IP SAN ({exc}) — add it by hand, "
+                            "then: lhpc webserver tls-renew"]
+                self._invalidate_config()
+                cfg = self.config().webserver                # FRESH again: the cert follows what is on disk
+                try:
+                    _pki.issue_server_cert(self._paths, dns_sans=list(cfg.dns_sans),
+                                           ip_sans=list(cfg.ip_sans), days=cfg.server_cert_days,
+                                           validity=validity)
+                except Exception as exc:
+                    return [f"  SAN: {ip} added to ip_sans, but the certificate was NOT reissued ({exc})",
+                            "       run: lhpc webserver init   # then: lhpc webserver tls-renew"]
         except ResourceBusy:
-            return [f"  SAN: {ip} added to ip_sans, but the certificate was NOT reissued (another "
-                    "PKI operation is in progress)", "       run: lhpc webserver tls-renew"]
-        except Exception as exc:
-            return [f"  SAN: {ip} added to ip_sans, but the certificate was NOT reissued ({exc})",
-                    "       run: lhpc webserver init   # then: lhpc webserver tls-renew"]
+            return [f"  SAN: {ip} could not be added — another PKI operation is in progress; "
+                    "run: lhpc webserver tls-renew"]
         if validity is not None:
             return [f"  SAN: {ip} added to ip_sans and the server certificate was reissued for it "
                     "(provisional window — the clock is unverified; normalised automatically later)"]

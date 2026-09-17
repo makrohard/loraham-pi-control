@@ -993,6 +993,41 @@ def test_extend_console_saves_sans_and_reissues(tmp_path, monkeypatch):
     assert "10.42.0.0/24" in swc.allowed_cidrs                   # existing scope kept
 
 
+def test_wlan_join_decides_provisional_under_the_pki_lock(tmp_path, monkeypatch):
+    """P1 (0.7.0 audit): the WLAN-join reissue decided `provisional` BEFORE taking the PKI lock.
+    Joining a WLAN is exactly what brings the first NTP sync, so the watchdog can normalise and
+    clear the marker while this call waits for the lock -- a stale decision then mints a
+    provisional leaf with the marker gone, which nothing ever normalises again."""
+    from lhpc.core import config as _config
+    from lhpc.core import pki as pki_mod
+    from lhpc.core import service_system
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(service_system, "read_kernel_time_state",
+                        lambda: {"synced": False, "maxerror_us": 1000})
+    assert svc.webserver_init().ok and pki_mod.provisional_pending(svc._paths)
+    monkeypatch.setattr(service_system, "read_kernel_time_state",   # verified by join time
+                        lambda: {"synced": True, "maxerror_us": 1000})
+    _config.save_webserver_config(svc._paths, bind="0.0.0.0", remote_exposed=True,
+                                  allowed_cidrs=["10.42.0.0/24"],
+                                  access_mode="local-open-remote-auth")
+    monkeypatch.setattr(ControllerService, "webserver_apply", lambda self: __import__(
+        "lhpc.core.services", fromlist=["ActionResult"]).ActionResult(True, "applied"))
+    real_lock = svc._pki_lock
+
+    def the_watchdog_wins_the_lock_first(operation, target=""):
+        if operation == "wlan-join-reissue":
+            assert svc.pki_clock_normalise() == "normalised"   # marker cleared while we waited
+        return real_lock(operation, target)
+    monkeypatch.setattr(svc, "_pki_lock", the_watchdog_wins_the_lock_first)
+
+    state, _cmd, _msg = svc._network_extend_console("192.168.178.0/24", ip="192.168.178.42",
+                                                    extra_dns=["h.local"])
+    assert state == "applied"
+    assert not pki_mod.provisional_pending(svc._paths)
+    assert pki_mod.server_cert_is_provisional(svc._paths) is False, \
+        "a provisional leaf was minted after normalisation had cleared the marker"
+
+
 # --- audit round: parser, preflight, finalize gate, retry stamp -----------------------------------
 
 
