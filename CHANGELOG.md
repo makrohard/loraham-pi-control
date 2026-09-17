@@ -61,7 +61,10 @@
   the first release with the records: after updating to 0.7.0 six components read *Build
   required* once. Two are binary-covered and take the index reinstall the console offers
   (meshtastic, meshcom — nobody rebuilds QEMU); four rebuild locally in minutes (graywolf,
-  meshcore-node, meshcore-webui, meshchat). Fresh installs and images are unaffected.
+  meshcore-node, meshcore-webui, meshchat). Fresh installs and images are unaffected. The same
+  rule reaches the binary channel: an artifact built by an older controller carries no asset
+  records and reads *behind* until the index holds one built at 0.7.0 — so this release
+  republishes meshtastic and meshcom, not only the daemon.
 
 
 ## 0.6.2

@@ -106,6 +106,32 @@ def test_asset_digest_is_content_not_metadata(tmp_path, monkeypatch):
         assets.asset_digest("nope")
 
 
+def test_what_pip_leaves_in_the_asset_is_not_the_asset(tmp_path, monkeypatch):
+    # Caught by the testlab on the first dev push: `pip install {asset}/meshcore_host` builds IN
+    # PLACE and leaves build/ and meshcore_host.egg-info/ inside the package data, so the digest
+    # recorded before the install never matched the one recomputed after it — every meshcore
+    # build read NOT built the moment it finished.
+    root = tmp_path / "data"
+    (root / "meshcore_host" / "meshcore_host").mkdir(parents=True)
+    (root / "meshcore_host" / "meshcore_host" / "__init__.py").write_text("")
+    (root / "meshcore_host" / "pyproject.toml").write_text("[project]\nname='meshcore_host'\n")
+    monkeypatch.setattr(assets, "asset_path", lambda name: root / name)
+    assets.clear_digest_cache()
+    before = assets.asset_digest("meshcore_host")
+    # exactly what the reproduction on this PC showed pip leaving behind:
+    (root / "meshcore_host" / "build" / "lib" / "meshcore_host").mkdir(parents=True)
+    (root / "meshcore_host" / "build" / "lib" / "meshcore_host" / "__init__.py").write_text("")
+    (root / "meshcore_host" / "meshcore_host.egg-info").mkdir()
+    (root / "meshcore_host" / "meshcore_host.egg-info" / "PKG-INFO").write_text("Name: x\n")
+    (root / "meshcore_host" / "meshcore_host" / "__pycache__").mkdir()
+    (root / "meshcore_host" / "meshcore_host" / "__pycache__" / "a.pyc").write_bytes(b"x")
+    assets.clear_digest_cache()
+    assert assets.asset_digest("meshcore_host") == before
+    (root / "meshcore_host" / "meshcore_host" / "__init__.py").write_text("changed = True\n")
+    assets.clear_digest_cache()
+    assert assets.asset_digest("meshcore_host") != before             # real content still counts
+
+
 def test_the_digest_cache_follows_the_stat_fingerprint(tmp_path, monkeypatch):
     # The cache is what keeps a 12 MB dist off the rendered-page path; it must still notice a
     # changed asset — an update replaces files, so sizes/mtimes move.

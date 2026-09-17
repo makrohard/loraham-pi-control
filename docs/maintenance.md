@@ -247,7 +247,11 @@ Either move has two consequences that a commit pin does not, and both are mandat
   building. Now such a component reads *Build required* until rebuilt (binary channel:
   reinstall). Build steps only — a `config_file.base`, a `run` line or a `post_steps` entry
   resolves the asset fresh every time and is not a build input. An asset in a build step
-  without a `build_marker` refuses to load.
+  without a `build_marker` refuses to load. LHPC already did this for SOURCES (a moved pin
+  reads *Build required* until rebuilt); assets now follow the same rule. It reaches the
+  binary channel too: an artifact whose sidecar predates the records reads *behind*, so a
+  release that adds or changes recorded inputs republishes every binary stack whose build
+  consumes one (meshtastic, meshcom), not only the stacks whose pins moved.
 
 Watch upstream **build systems**, not just releases: meshtasticd and `qemu-system-xtensa` are
 built from source, so a toolchain change upstream breaks the recipe silently. Builder internals:

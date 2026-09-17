@@ -28,7 +28,13 @@ def asset_text(name: str) -> str:
     return (resources.files(_PACKAGE) / _DATA / name).read_text(encoding="utf-8")
 
 
-_DIGEST_SKIP_DIRS = frozenset({"__pycache__"})
+# Not the asset: what the interpreter and pip leave INSIDE a directory they consume. pip builds a
+# local directory IN PLACE (since 21.3), so `pip install {asset}/meshcore_host` drops `build/` and
+# `meshcore_host.egg-info/` into the package data it just read — the digest recorded before the
+# install would never match the one recomputed after it, and every such component would read
+# NOT built the moment it was built. The repo's own .gitignore names exactly these as non-content.
+_DIGEST_SKIP_DIRS = frozenset({"__pycache__", "build", "dist"})
+_DIGEST_SKIP_DIR_SUFFIXES = (".egg-info", ".dist-info")
 _DIGEST_SKIP_SUFFIXES = (".pyc", ".pyo")
 
 # digest cache: resolved asset path -> (stat fingerprint, sha256). `is_built` is consulted on
@@ -44,7 +50,8 @@ def _digest_members(root: Path):
     """The regular files a directory asset consists of, in sorted relative-path order."""
     for p in sorted(root.rglob("*")):
         rel = p.relative_to(root)
-        if any(part in _DIGEST_SKIP_DIRS for part in rel.parts) or p.suffix in _DIGEST_SKIP_SUFFIXES:
+        if (any(part in _DIGEST_SKIP_DIRS or part.endswith(_DIGEST_SKIP_DIR_SUFFIXES)
+                for part in rel.parts) or p.suffix in _DIGEST_SKIP_SUFFIXES):
             continue
         if p.is_symlink() or not p.is_file():
             continue
