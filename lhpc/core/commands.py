@@ -866,7 +866,8 @@ def render_build_launcher(steps: list, runtime: str, source: str,
                           lock_paths: list | tuple = (), index_lock: str = "",
                           result_name: str = "", attempt_id: str = "",
                           op: str = "", target: str = "", stack: str = "",
-                          marker_path: str = "", marker_text: str = "") -> str:
+                          marker_path: str = "", marker_text: str = "",
+                          inputs_path: str = "", inputs_text: str = "") -> str:
     """A self-contained Python launcher that runs build/test steps sequentially with
     NO shell: it resolves `{pkgconfig:NAME}` via pkg-config and runs each argv with
     its env and cwd, streaming output. Returns nonzero on the first failing step.
@@ -920,7 +921,10 @@ def render_build_launcher(steps: list, runtime: str, source: str,
             # Build-completion marker (plain paths/identity text, no secrets): the CLI
             # path writes it via lifecycle.build(); the detached path must do the same,
             # or a web Build succeeds while the component still reads NOT built.
-            "marker_path": marker_path, "marker_text": marker_text}
+            "marker_path": marker_path, "marker_text": marker_text,
+            # Build-input sidecar (declared inputs + consumed-asset digests), written BEFORE
+            # the marker — the same contract as lifecycle.build().
+            "inputs_path": inputs_path, "inputs_text": inputs_text}
     return _BUILD_RUNNER.replace("__SPEC__", repr(spec))
 
 

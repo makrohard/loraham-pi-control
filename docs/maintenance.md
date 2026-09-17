@@ -237,6 +237,17 @@ Either move has two consequences that a commit pin does not, and both are mandat
   required* (a binary-channel box: reinstall the artifact). Beside, not inside: the marker's bytes
   are compared by every controller that ever shipped, and publish roots come from the installed
   manifest, so a member outside them is refused.
+- **Packaged assets a build step consumes are recorded the same way, automatically.** Every
+  `{asset}/…` token in a component's `build_steps` (a pip install of shipped package data such as
+  `meshcore_host`, a patch, a fetch or gate script, a pre-built web dist) lands in that sidecar
+  as `asset <rel> <sha256>` with the asset's content digest. A build step bakes the asset into
+  the built tree, so an lhpc update that changes the asset would otherwise leave the built tree
+  stale with every pin and value unchanged — the 0.7.0 MeshCore poller was exactly that: fixed in
+  the shipped source, still the old code in the venv of every box that updated instead of
+  building. Now such a component reads *Build required* until rebuilt (binary channel:
+  reinstall). Build steps only — a `config_file.base`, a `run` line or a `post_steps` entry
+  resolves the asset fresh every time and is not a build input. An asset in a build step
+  without a `build_marker` refuses to load.
 
 Watch upstream **build systems**, not just releases: meshtasticd and `qemu-system-xtensa` are
 built from source, so a toolchain change upstream breaks the recipe silently. Builder internals:

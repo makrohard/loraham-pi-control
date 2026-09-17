@@ -50,6 +50,19 @@
   then overwrite that revocation. `init`, renew, issue, reissue, revoke, discard-export, the CRL
   heal and normalisation all take it; the watchdog skips a pass it cannot get, an operator gets
   "PKI operation busy". The CRL heal also now reloads nginx instead of running Apply.
+- **An lhpc update can no longer leave a built stack running old shipped code.** Some build steps
+  bake lhpc-shipped assets into what they build — the MeshCore host package, the meshcore-webui
+  patch, the MeshChat frontend, fetch and gate scripts. Their sources are pinned and did not
+  move, so nothing marked them stale when the asset changed: the passive-read fix above reached
+  the source tree of a box that updated, but its MeshCore venv kept polling with the scanning
+  command until someone rebuilt. Every asset a build step consumes is now recorded beside the
+  completion marker with its content digest, and `is_built` recomputes it — a changed asset reads
+  **Build required** (binary channel: reinstall) until the component is rebuilt. Consequence of
+  the first release with the records: after updating to 0.7.0 six components read *Build
+  required* once. Two are binary-covered and take the index reinstall the console offers
+  (meshtastic, meshcom — nobody rebuilds QEMU); four rebuild locally in minutes (graywolf,
+  meshcore-node, meshcore-webui, meshchat). Fresh installs and images are unaffected.
+
 
 ## 0.6.2
 

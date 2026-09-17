@@ -2136,6 +2136,7 @@ def test_fetched_binary_stack_offers_uninstall_in_the_console(tmp_path, web):
     marker = svc._lifecycle().source_dir(comp) / comp.build_marker
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(comp))
+    svc.build_inputs_path(comp).write_text(svc.build_inputs_text(comp))   # 0.7.0 sidecar
     assert svc.unbuilt_components("graywolf") == []
     body = app_for(root).get("/stacks?open=graywolf").get_data(as_text=True)
     assert 'value="uninstall"' in body

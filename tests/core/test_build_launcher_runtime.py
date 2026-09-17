@@ -206,6 +206,22 @@ def test_detached_build_replaces_a_stale_receipt(tmp_path):
     assert marker.read_text() == receipt, "the marker must be the EXACT current receipt"
 
 
+def test_a_detached_build_records_its_inputs_before_the_marker(tmp_path):
+    """0.7.0: the web Build goes through this launcher, not lifecycle.build(); without the
+    build-input sidecar every web-driven build of a component that consumes a packaged asset
+    (meshcore-node, meshchat, ...) would read NOT built forever."""
+    receipt = "lhpc build complete\nconsumed openhop-core aaa\n"
+    spec, marker = _marker_spec(tmp_path, steps=[{"argv": ["true"]}], marker_text=receipt)
+    side = marker.parent / "bin" / ".lhpc-build-inputs"
+    side.parent.mkdir(parents=True, exist_ok=True)
+    spec["inputs_path"] = str(side)
+    spec["inputs_text"] = "asset meshcore_host " + "0" * 64 + "\n"
+    blr.run(spec)
+    assert marker.read_text() == receipt
+    assert side.read_text() == spec["inputs_text"]
+    assert side.stat().st_mtime_ns <= marker.stat().st_mtime_ns   # sidecar first, then the marker
+
+
 def test_a_failed_detached_build_leaves_no_marker(tmp_path):
     """Invalidate before step one, write only after every step passes: a failed build
     must leave the marker ABSENT, never the stale one and never a fresh one."""

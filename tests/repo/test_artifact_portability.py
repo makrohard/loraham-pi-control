@@ -25,7 +25,8 @@ REPO = repo_paths.REPO
 # Every stack whose artifact carries recorded build inputs: the members this guard checks.
 # Derived from the shipped manifest so a new binary-channel stack joins the guard by itself.
 BINARY_STACKS_WITH_INPUTS = sorted(
-    s.id for s in load_manifest() if s.binary and any(c.build_inputs for c in s.components))
+    s.id for s in load_manifest() if s.binary
+    and any(c.build_inputs or c.asset_inputs for c in s.components))
 
 
 def _released_tags(limit: int = 3) -> list:
@@ -53,13 +54,15 @@ def _members_this_release_adds(stack: str) -> list:
     from lhpc.core.services import ControllerService
 
     root = "/ARTIFACT-ROOT"
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=root))
+    # A Path, as production constructs it: the sidecar path resolves the artifact's run params
+    # (meshcom-qemu's {env}) through the saved stack config, which lives under the root.
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=pathlib.Path(root)))
     out = []
     for st in svc.stacks():
         if st.id != stack:
             continue
         for c in st.components:
-            if c.build_inputs:
+            if c.build_inputs or c.asset_inputs:
                 out.append(str(svc.build_inputs_path(c)).removeprefix(root + "/"))
     return out
 

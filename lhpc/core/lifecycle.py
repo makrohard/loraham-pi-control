@@ -42,6 +42,7 @@ from .probes.process import probe_process
 # it only after EVERY step succeeds, and a rebuild invalidates it (fail-closed) before the first step.
 BUILD_MARKER_TEXT = "lhpc build complete\n"
 _BUILD_MARKER_MAX = 512                        # bounded marker read (text + consumed-source lines)
+_BUILD_INPUTS_MAX = 4096                       # bounded sidecar read (declared inputs + asset digests)
 
 # Surfaced when a groups grant is CONFIGURED (usermod done) but not yet EFFECTIVE in this process — the
 # fix is a restart, not another usermod. Kept here so both dependency render sites use the one wording.

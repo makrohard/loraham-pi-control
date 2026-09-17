@@ -468,6 +468,15 @@ class Component:
     # TOKEN the value fills; the loader binds the two by exact equality, so only the (name, value)
     # the sidecar records survives into here.
     build_inputs: tuple[tuple[str, str], ...] = ()
+    # Packaged assets (`{asset}/<rel>` tokens) the build steps CONSUME — implicit build inputs the
+    # loader derives from the recipe, recorded in the same sidecar as `asset <rel> <sha256>` with
+    # the asset's CONTENT digest. A build step bakes the asset into the built tree (a pip install
+    # of package data, a patch, a fetch script), so an lhpc update that changes the asset leaves
+    # the built tree stale while the component's own source has not moved; nothing else would
+    # notice. `is_built` recomputes the digest, so the component reads NOT built until rebuilt
+    # (or, on the binary channel, its artifact reinstalled). Build steps only: a `config_file.base`
+    # or a `run` line resolves the asset fresh every time and is not a build input.
+    asset_inputs: tuple[str, ...] = ()
     requires: tuple[Requirement, ...] = ()   # external commands needed to run
     optional: bool = False       # an optional dependency component within a stack
     # Optional ONLY for the GUI-dependency preflights (build refusal, gui_skipped_stack /

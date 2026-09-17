@@ -108,7 +108,8 @@ def test_successful_build_stamps_marker_and_is_built_flips(tmp_path, monkeypatch
     monkeypatch.setattr(lifecycle_mod, "run_job",
                         lambda runner, **kw: JobResult(name="b", state=JobState.SUCCEEDED,
                                                        returncode=0, log_path="", tail=[]))
-    res = svc._lifecycle().build(comp, marker_extra=svc._consumed_source_lines(comp))
+    res = svc._lifecycle().build(comp, marker_extra=svc._consumed_source_lines(comp),
+                                 inputs=svc._build_inputs_to_record(comp))
     assert res.ok
     assert (src / comp.build_marker).exists()
     assert svc.is_built(comp)
@@ -120,8 +121,9 @@ def test_rebuild_removes_stale_marker_before_running(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     comp = _meshcore(svc)
     src = svc._lifecycle().source_dir(comp)
-    (src / ".venv").mkdir(parents=True, exist_ok=True)
+    (src / ".venv" / "bin").mkdir(parents=True, exist_ok=True)
     (src / comp.build_marker).write_text(_receipt(svc, comp))
+    svc.build_inputs_path(comp).write_text(svc.build_inputs_text(comp))
     assert svc.is_built(comp)
 
     monkeypatch.setattr(lifecycle_mod, "run_job",
@@ -187,6 +189,7 @@ def test_meshcom_marker_is_colocated_with_flash_and_gates_is_built(tmp_path):
     assert not svc.is_built(comp)                               # ...but no marker -> NOT built
     # Removing/cleaning the firmware dir takes the marker with it (co-located): still not built.
     (svc._lifecycle().source_dir(comp) / comp.build_marker).write_text("lhpc build complete\n")
+    svc.build_inputs_path(comp).write_text(svc.build_inputs_text(comp))   # 0.7.0 sidecar
     assert svc.is_built(comp)
     import shutil
     shutil.rmtree(fd)                                           # clean the firmware artifact + its marker
@@ -205,7 +208,7 @@ def test_meshcom_successful_build_stamps_marker_only_after_last_step(tmp_path, m
         assert not marker.exists()          # marker must NOT exist during any step (only after the last)
         return JobResult(name="b", state=JobState.SUCCEEDED, returncode=0, log_path="", tail=[])
     monkeypatch.setattr(lifecycle_mod, "run_job", _fake_run_job)
-    res = svc._lifecycle().build(comp)
+    res = svc._lifecycle().build(comp, inputs=svc._build_inputs_to_record(comp))
     assert res.ok and steps_run["n"] == len(comp.build_steps)   # every step ran
     assert marker.exists() and svc.is_built(comp)               # stamped only after the last step
 
@@ -217,6 +220,7 @@ def test_meshcom_failed_rebuild_leaves_no_marker(tmp_path, monkeypatch):
     (fd / "flash.bin").write_text("stale firmware\n")
     marker = svc._lifecycle().source_dir(comp) / comp.build_marker
     marker.write_text("lhpc build complete\n")                                # a prior build's marker
+    svc.build_inputs_path(comp).write_text(svc.build_inputs_text(comp))     # ... and its sidecar (0.7.0)
     assert svc.is_built(comp)
     monkeypatch.setattr(lifecycle_mod, "run_job",
                         lambda runner, **kw: JobResult(name="b", state=JobState.FAILED,
@@ -253,6 +257,8 @@ def test_is_built_missing_marker_is_not_built(tmp_path):
 
 def test_is_built_requires_exact_regular_marker_content(tmp_path):
     svc = _svc(tmp_path); comp = _meshcore(svc); m = _mk(svc, comp)
+    side = svc.build_inputs_path(comp)                                          # 0.7.0 sidecar
+    side.parent.mkdir(parents=True, exist_ok=True); side.write_text(svc.build_inputs_text(comp))
     m.write_text(_receipt(svc, comp));      assert svc.is_built(comp)           # exact -> built
     m.write_text(_receipt(svc, comp)[:-1]); assert not svc.is_built(comp)       # missing newline
     m.write_text("wrong\n");                assert not svc.is_built(comp)       # wrong content

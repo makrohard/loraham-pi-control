@@ -3088,9 +3088,7 @@ class LifecycleOpsMixin:
                                      redactor=redactor, should_cancel=should_cancel,
                                      on_log_open=self._log_announcer(comp.id, details),
                                      marker_extra=self._consumed_source_lines(comp),
-                                     inputs=(self.build_inputs_path(comp),
-                                             self.build_inputs_text(comp))
-                                     if comp.build_inputs else None)
+                                     inputs=self._build_inputs_to_record(comp))
                     ok = ok and res.ok
                     details.append(f"  [{res.state.value}] build {comp.id} "
                                    f"(rc {res.returncode}, log {res.log_path})")
@@ -3363,10 +3361,13 @@ class LifecycleOpsMixin:
                     marker_path = str(life.source_dir(c) / c.build_marker) if _mark else ""
                     marker_text = (BUILD_MARKER_TEXT + self._consumed_source_lines(c)
                                    if _mark else "")
+                    inputs = self._build_inputs_to_record(c) if _mark else None
                     script = commands.render_build_launcher(
                         steps, runtime, src, lock_paths, index_lock=index_lock,
                         result_name=log, attempt_id=aid, op=op, target=c.id, stack=self.stack_of(c.id) or "",
-                        marker_path=marker_path, marker_text=marker_text)
+                        marker_path=marker_path, marker_text=marker_text,
+                        inputs_path=str(inputs[0]) if inputs else "",
+                        inputs_text=inputs[1] if inputs else "")
                 except commands.CommandError as exc:
                     jobresult.terminalize(self._paths, log, aid, "failed", detail=str(exc)[:200])
                     return None, aid, f"cannot {op} '{c.id}': {exc}"
@@ -4484,6 +4485,16 @@ class LifecycleOpsMixin:
             lines.append(f"consumed {cid} {sha or 'unknown'}\n")
         return "".join(lines)
 
+    def _build_inputs_to_record(self, comp):
+        """`(path, text)` for the sidecar a build must write, or None when the component records
+        nothing. A packaged asset that is missing makes the digest unreadable; the build step that
+        consumes it fails on its own (`_asset_token`), so nothing is recorded rather than a lie."""
+        try:
+            text = self.build_inputs_text(comp)
+        except FileNotFoundError:
+            return None
+        return (self.build_inputs_path(comp), text) if text else None
+
     def build_inputs_path(self, comp):
         """Where a component's recorded non-source build inputs live: beside its BUILT ARTIFACT.
 
@@ -4501,18 +4512,47 @@ class LifecycleOpsMixin:
         refused on every box while installing perfectly on the candidate that had widened its own
         roots. `bin` is inside a publish root by definition for a stack with a binary channel.
         """
-        return (Path(self._paths.runtime_root) / comp.bin).with_name(".lhpc-build-inputs")
+        rel = comp.bin
+        if "{" in rel:                       # the same run-param substitution `is_built` applies to `bin`
+            cfg = self.stack_config(self.stack_of(comp.id) or "")
+            for prm in comp.run_params:
+                rel = rel.replace("{" + prm.name + "}", cfg.get(prm.name, prm.default))
+        return (self._artifact_anchor(comp, rel) / rel).with_name(".lhpc-build-inputs")
+
+    def _artifact_anchor(self, comp, rel: str):
+        """What a component's `bin` is relative to. The recipes use one convention: a build output
+        under the runtime's shared tool areas (`build/tools/…`, `build/tool-cache/…` — the
+        `{runtime}/build/tools/…` paths the run lines name) is runtime-anchored, and so is anything
+        of a component without a source checkout; every other `bin` (a venv interpreter, a `.work`
+        firmware image, a library in the checkout's own `build/`) lives in the checkout. The
+        sidecar follows the artifact: beside `build/tools/meshtasticd/meshtasticd` (the published
+        location every released controller expects) or beside `src/openhop-core/.venv/bin/python`."""
+        runtime = Path(self._paths.runtime_root)
+        if not comp.source or rel.startswith(("build/tools/", "build/tool-cache/")):
+            return runtime
+        return self._lifecycle().source_dir(comp)
 
     def build_inputs_text(self, comp) -> str:
-        return "".join(f"input {n} {v}\n" for n, v in comp.build_inputs)
+        """The sidecar's exact content: the declared `build_inputs`, then one `asset <rel> <sha256>`
+        line per packaged asset the build steps consume (`Component.asset_inputs`), digested from
+        the asset's CURRENT content. Compared byte for byte by `is_built`, so a changed asset —
+        an lhpc update that ships a different meshcore_host, patch or fetch script — reads NOT
+        built until the component is rebuilt. Raises FileNotFoundError for a missing asset."""
+        lines = [f"input {n} {v}\n" for n, v in comp.build_inputs]
+        lines += [f"asset {rel} {self._asset_digest(rel)}\n" for rel in comp.asset_inputs]
+        return "".join(lines)
+
+    def _asset_digest(self, rel: str) -> str:
+        from . import assets
+        return self._request_memo(("asset-digest", rel), lambda: assets.asset_digest(rel))
 
     def _inputs_recorded(self, comp) -> bool:
         """The recorded inputs are present and are the ones the manifest names."""
         from . import runtime_fs
-        from .lifecycle import _BUILD_MARKER_MAX
+        from .lifecycle import _BUILD_INPUTS_MAX
         try:
             return (runtime_fs.read_text_regular(self._paths, self.build_inputs_path(comp),
-                                                 max_bytes=_BUILD_MARKER_MAX)
+                                                 max_bytes=_BUILD_INPUTS_MAX)
                     == self.build_inputs_text(comp))
         except (FileNotFoundError, OSError, PathContainmentError):
             return False
@@ -4542,7 +4582,9 @@ class LifecycleOpsMixin:
                                                   max_bytes=_BUILD_MARKER_MAX)
                         != BUILD_MARKER_TEXT + self._consumed_source_lines(comp)):
                     return False
-                return not comp.build_inputs or self._inputs_recorded(comp)
+                # Declared inputs AND consumed assets: an old sidecar without the asset
+                # lines mismatches and reads NOT built, exactly like a missing one.
+                return not (comp.build_inputs or comp.asset_inputs) or self._inputs_recorded(comp)
             except (FileNotFoundError, OSError, PathContainmentError):
                 return False
         rel = self._build_artifact(comp)

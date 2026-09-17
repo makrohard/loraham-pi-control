@@ -221,6 +221,10 @@ def test_venv_component_built_state_uses_venv_bin_not_exec_name(tmp_path):
     # repeater checkout too): the static text plus the consumed-source lines is_built recomputes.
     from lhpc.core.lifecycle import BUILD_MARKER_TEXT
     (src / mc.build_marker).write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(mc))
+    # ... and, since 0.7.0, the build-input sidecar beside the venv interpreter: the node's build
+    # bakes lhpc's own meshcore_host package into the venv, so its content digest is part of "built".
+    assert not svc.is_built(mc)
+    svc.build_inputs_path(mc).write_text(svc.build_inputs_text(mc))
     assert svc.is_built(mc)
     assert "meshcore-node" not in svc.unbuilt_components("meshcore")
 
