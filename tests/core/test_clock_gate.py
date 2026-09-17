@@ -940,7 +940,12 @@ def test_init_rechecks_the_destructive_precondition_under_the_lock(tmp_path, mon
     # P2 (audit): two fresh inits can both pass the no-PKI check before the lock; the second
     # would then wait and run force=True over the CAs the first just created, with no
     # destructive confirmation from anyone. The precondition is re-read under the lock.
+    # Round 2 (audit AMBER): the refusal must also leave the SAN config exactly as it found it.
+    # Previously the request's SANs were saved BEFORE the lock, so the losing init reported the
+    # refusal having already rewritten local.toml -- and the winner's certificate carried the
+    # winner's SANs while desired config carried the loser's.
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert svc.webserver_configure(dns_sans=["winner.lan"], ip_sans=["10.42.0.1"]).ok
     calls = {"n": 0}
 
     def absent_then_present(paths):
@@ -948,6 +953,10 @@ def test_init_rechecks_the_destructive_precondition_under_the_lock(tmp_path, mon
         present = calls["n"] > 1                               # a peer got there first
         return {"server_ca": {"present": present}, "client_ca": {"present": present}}
     monkeypatch.setattr(pki, "pki_status", absent_then_present)
-    res = svc.webserver_init()
+    res = svc.webserver_init(dns_sans=["loser.lan"], ip_sans=["192.0.2.7"])
     assert not res.ok and "DESTRUCTIVE" in res.summary
     assert not _tls(tmp_path, "server-ca", "ca.crt").exists()
+    svc._invalidate_config()
+    ws = svc.config().webserver
+    assert (list(ws.dns_sans), list(ws.ip_sans)) == (["winner.lan"], ["10.42.0.1"]), \
+        "the refused init rewrote the SAN config"

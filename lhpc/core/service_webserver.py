@@ -269,18 +269,7 @@ class WebserverOpsMixin:
         if not dns and not ips:
             dns = ["localhost"]                    # usable loopback default SANs — must match the
             ips = ["127.0.0.1"]                    # advertised https://127.0.0.1:8443/ endpoint
-        # Persist the SANs into DESIRED config (correction 3) so productive trusted-host
-        # enforcement AND `tls-renew` use them. FAIL CLOSED (correction A): if persistence fails
-        # for ANY reason (validation, ConfigError/lock, unsafe path, malformed local.toml, I/O)
-        # we abort BEFORE touching any PKI material — no CA/cert/CRL/inventory is created or
-        # replaced, and no success is reported.
         from . import config as _config
-        try:
-            _config.save_webserver_config(self._paths, dns_sans=dns, ip_sans=ips)
-        except Exception as exc:
-            return ActionResult(False, f"webserver init aborted — could not persist SANs to "
-                                f"config ({exc}); no PKI was created or replaced")
-        self._invalidate_config()
         try:
             with self._pki_lock("init"):
                 # Re-check under the lock: two fresh inits can both pass the no-PKI check above,
@@ -292,6 +281,19 @@ class WebserverOpsMixin:
                     return ActionResult(False, "PKI already exists (created concurrently) — "
                                         "recreating the CAs is DESTRUCTIVE. Confirm to proceed.",
                                         next_commands=["lhpc webserver init --confirm-recreate"])
+                # Persist the SANs into DESIRED config (correction 3) so productive trusted-host
+                # enforcement AND `tls-renew` use them. Under the lock and AFTER the re-check: a
+                # refused init must leave config exactly as it found it, and the certificate
+                # minted here must match the SANs persisted here, not a peer's. FAIL CLOSED
+                # (correction A): if persistence fails for ANY reason (validation, ConfigError/
+                # lock, unsafe path, malformed local.toml, I/O) we abort BEFORE touching any PKI
+                # material — no CA/cert/CRL/inventory is created or replaced.
+                try:
+                    _config.save_webserver_config(self._paths, dns_sans=dns, ip_sans=ips)
+                except Exception as exc:
+                    return ActionResult(False, f"webserver init aborted — could not persist SANs "
+                                        f"to config ({exc}); no PKI was created or replaced")
+                self._invalidate_config()
                 from .service_system import clock_verified
                 clock_ok, _why = clock_verified(self._system.fs, self._paths.runtime_root)
                 validity = None if clock_ok else _pki.PROVISIONAL_VALIDITY
