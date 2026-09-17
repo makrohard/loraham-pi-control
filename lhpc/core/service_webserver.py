@@ -233,18 +233,31 @@ class WebserverOpsMixin:
         ok = not failed
         summary = "webserver verified" if ok else f"verification found issues: {', '.join(failed)}"
         details = []
+        if ev["checks"].get("pki_provisional") == "yes":
+            details.append("  NOTE: the PKI was created without a verified clock (fixed provisional "
+                           "validity); the server certificate and CRL are normalised automatically "
+                           "once the clock is verified — see `lhpc doctor`")
         for sid in ev["checks"].get("upstream_bypass_stacks", []):
             details.append(f"  WARNING: {sid}'s upstream port is listening on all interfaces — "
                            "reachable directly, bypassing this proxy's authentication.")
         return ActionResult(ok, summary, details=details, data=ev)
 
-    def webserver_init(self, *, dns_sans=None, ip_sans=None, confirm=False,
-                       accept_unverified: bool = False) -> ActionResult:
+    def webserver_init(self, *, dns_sans=None, ip_sans=None, confirm=False) -> ActionResult:
         """First-time bootstrap (correction #2): create BOTH CAs, the server leaf, and an
         initial (empty) CRL. Remote exposure stays disabled until explicitly enabled + proven.
         RE-initializing when a CA already exists is DESTRUCTIVE (invalidates every issued
-        certificate) and requires explicit `confirm`."""
+        certificate) and requires explicit `confirm`.
+
+        NOT clock-gated. Commissioning may not depend on a clock: a Lite box has no RTC, in AP
+        mode it has no NTP, and it may or may not have a GPS fix -- and firstboot runs this before
+        the console exists, so a refusal here leaves nobody able to fix the clock. When the clock is
+        unverified the material gets the FIXED provisional window (pki.PROVISIONAL_VALIDITY) rather
+        than dates from a clock we have just declared untrustworthy, a marker records that fact
+        BEFORE the first PKI write, and the watchdog normalises the leaf and CRL once time arrives.
+        The verdict is taken ONCE and frozen for the whole creation, so a clock that synchronises
+        halfway through cannot produce a half-provisional PKI."""
         from . import pki as _pki
+        from .reslock import ResourceBusy
         st = _pki.pki_status(self._paths)
         if (st["server_ca"].get("present") or st["client_ca"].get("present")) and not confirm:
             return ActionResult(False, "PKI already exists — recreating the CAs is DESTRUCTIVE "
@@ -261,9 +274,6 @@ class WebserverOpsMixin:
         # for ANY reason (validation, ConfigError/lock, unsafe path, malformed local.toml, I/O)
         # we abort BEFORE touching any PKI material — no CA/cert/CRL/inventory is created or
         # replaced, and no success is reported.
-        refused = self._clock_gate("create the PKI", accept_unverified)
-        if refused is not None:
-            return refused
         from . import config as _config
         try:
             _config.save_webserver_config(self._paths, dns_sans=dns, ip_sans=ips)
@@ -272,15 +282,77 @@ class WebserverOpsMixin:
                                 f"config ({exc}); no PKI was created or replaced")
         self._invalidate_config()
         try:
-            _pki.init_server_ca(self._paths, force=True)
-            _pki.init_client_ca(self._paths, force=True)
-            _pki.issue_server_cert(self._paths, dns_sans=dns, ip_sans=ips,
-                                   days=cfg.server_cert_days)
-            _pki.build_crl(self._paths)
+            with self._pki_lock("init"):
+                from .service_system import clock_verified
+                clock_ok, _why = clock_verified(self._system.fs, self._paths.runtime_root)
+                validity = None if clock_ok else _pki.PROVISIONAL_VALIDITY
+                if not clock_ok:
+                    # Fail closed on the record, not on the box: material we cannot record as
+                    # provisional is material we can never normalise.
+                    try:
+                        _pki.mark_provisional(self._paths)
+                    except Exception as exc:
+                        return ActionResult(False, "webserver init aborted — could not record "
+                                            f"the unverified clock ({exc}); no PKI was created "
+                                            "or replaced")
+                _pki.init_server_ca(self._paths, force=True, validity=validity)
+                _pki.init_client_ca(self._paths, force=True, validity=validity)
+                _pki.issue_server_cert(self._paths, dns_sans=dns, ip_sans=ips,
+                                       days=cfg.server_cert_days, validity=validity)
+                _pki.build_crl(self._paths, validity=validity)
+                if clock_ok:
+                    _pki.clear_provisional(self._paths)   # a verified re-init supersedes a marker
+        except ResourceBusy as exc:
+            return self._pki_busy(exc)
         except _pki.PKIError as exc:
             return ActionResult(False, f"webserver init failed: {exc}")
+        if not clock_ok:
+            return ActionResult(True, "webserver PKI initialized (two CAs + server cert + CRL) "
+                                "under an UNVERIFIED clock: dated with the fixed provisional "
+                                "window, not from this clock; the server certificate and CRL "
+                                "are normalised automatically once time is verified",
+                                next_commands=["lhpc webserver verify", "lhpc doctor"])
         return ActionResult(True, "webserver PKI initialized (two CAs + server cert + CRL)",
                             next_commands=["lhpc webserver verify"])
+
+    # ---- one lock for every PKI writer -------------------------------------------------------
+    # There was none: tls-renew, issue, reissue, revoke and discard-export called pki.py straight
+    # after the clock check, while the watchdog rebuilds the CRL from a background thread on every
+    # box -- so a CRL refresh could load the index, an operator revoke could commit a revocation,
+    # and the refresh then overwrite it with the CRL and index it had loaded earlier. One
+    # runtime-owned flock (reslock) around the OUTER service transaction; the inner pki.py
+    # functions stay lock-free so `reissue` (= revoke + issue) cannot contend with itself.
+    # Contention policy: an operator gets a typed "busy"; the watchdog skips the pass.
+    def _pki_lock(self, operation: str, target: str = ""):
+        from . import reslock
+        return reslock.operation_lock(self._paths, "pki", operation, target)
+
+    @staticmethod
+    def _pki_busy(exc) -> ActionResult:
+        holder = getattr(exc, "holder", None) or {}
+        what = holder.get("operation") or "another PKI operation"
+        return ActionResult(False, f"PKI operation busy — {what} is in progress; retry shortly")
+
+    # ---- exposure: gate the certificate, not the exposure ------------------------------------
+    def _exposure_reissue_decision(self, target_ip_sans, accept_unverified: bool):
+        """Resolve this host's LAN address ONCE and decide, before any config write, whether
+        exposing will actually reissue the server certificate. Returns (ip, refusal-or-None).
+
+            SAN already present            -> no certificate dates change -> no gate
+            SAN missing + provisional PKI  -> reissued with the provisional window -> no gate
+            SAN missing, commissioned PKI  -> ordinary operation -> clock gate as before
+
+        The same resolved `ip` MUST be handed to `_expose_add_san_and_reissue`, or the check is a
+        TOCTOU hole against a multihomed box whose default route changes between the two."""
+        from . import pki as _pki
+        from . import webserver as _ws
+        ip = _ws.local_ip()
+        if not ip or ip in set(target_ip_sans or ()):
+            return ip, None
+        if _pki.provisional_pending(self._paths):
+            return ip, None
+        return ip, self._clock_gate("expose this box remotely (it reissues the server "
+                                    "certificate)", accept_unverified)
 
     def webserver_configure(self, **fields) -> ActionResult:
         from . import config as _config
@@ -334,9 +406,9 @@ class WebserverOpsMixin:
         # Remote exposure adds the host IP SAN and REISSUES the server certificate, so it dates
         # PKI material. The gate has to run before the config write, not before the reissue: a
         # saved exposure whose certificate was refused is a half-applied change.
+        lan_ip = ""
         if remote:
-            refused = self._clock_gate("expose this box remotely (it reissues the server "
-                                       "certificate)", accept_unverified)
+            lan_ip, refused = self._exposure_reissue_decision(e_ip, accept_unverified)
             if refused is not None:
                 return refused
         try:
@@ -347,7 +419,7 @@ class WebserverOpsMixin:
         except (ValidationError, _config.ConfigError) as exc:
             return ActionResult(False, f"invalid webserver config: {exc}")
         self._invalidate_config()
-        san_notes = self._expose_add_san_and_reissue() if remote else []
+        san_notes = self._expose_add_san_and_reissue(lan_ip) if remote else []
         ar = self.webserver_apply()
         return ActionResult(ar.ok, ar.summary, details=[*san_notes, *ar.details],
                             next_commands=ar.next_commands, data=ar.data)
@@ -1239,8 +1311,7 @@ class WebserverOpsMixin:
         if missing:
             return ActionResult(False, "cannot enable remote exposure — unmet requirement(s):",
                                 details=[f"  - {m}" for m in missing])
-        refused = self._clock_gate("enable remote exposure (it reissues the server certificate)",
-                                   accept_unverified)
+        lan_ip, refused = self._exposure_reissue_decision(ws_now.ip_sans, accept_unverified)
         if refused is not None:
             return refused
         try:
@@ -1256,7 +1327,7 @@ class WebserverOpsMixin:
         # ORDERING: every step reads FRESHLY-loaded config. `self.config()` is memoized, so a `cfg`
         # captured before the write above would silently drop any ip_sans another writer persisted in
         # between, and would reissue the cert from pre-exposure state.
-        san_notes = self._expose_add_san_and_reissue()
+        san_notes = self._expose_add_san_and_reissue(lan_ip)
         return ActionResult(
             True, "remote exposure enabled (desired) — now APPLY to rebind the listener to "
             f"0.0.0.0:{self.config().webserver.port} and reload nginx (until then it stays on "
@@ -1266,18 +1337,22 @@ class WebserverOpsMixin:
                      "lhpc webserver start-service   # if nginx is not running yet"],
             next_commands=["lhpc webserver apply"])
 
-    def _expose_add_san_and_reissue(self) -> list:
+    def _expose_add_san_and_reissue(self, ip: str) -> list:
         """Persist this host's LAN IP as an `ip_sans` entry and reissue the server cert from the FINAL
         persisted config. Returns truthful detail lines; never raises, never fails the exposure.
+
+        `ip` is the address `_exposure_reissue_decision` resolved and gated on -- it is not
+        re-resolved here, so the gate and the reissue cannot disagree about which address.
+        While the PKI is provisional the reissue uses the provisional window and keeps the marker;
+        normalisation replaces it with normal dates once the clock is verified.
 
         FAIL-SOFT by contract: the exposure config is already written. `issue_server_cert` raises when
         the server CA is not initialized — rolling the exposure back over that would leave the operator
         strictly worse off than a missing SAN, so we keep ok=True and disclose."""
         from . import config as _config
         from . import pki as _pki
-        from . import webserver as _ws
+        from .reslock import ResourceBusy
         cfg = self.config().webserver                    # FRESH: post-exposure-write state
-        ip = _ws.local_ip()
         if not ip:
             return ["  SAN: this host's LAN address could not be determined — no SAN added; add it "
                     "by hand to [webserver] ip_sans, then: lhpc webserver tls-renew"]
@@ -1291,11 +1366,21 @@ class WebserverOpsMixin:
         self._invalidate_config()
         cfg = self.config().webserver                    # FRESH again: the cert follows what is on disk
         try:
-            _pki.issue_server_cert(self._paths, dns_sans=list(cfg.dns_sans),
-                                   ip_sans=list(cfg.ip_sans), days=cfg.server_cert_days)
+            with self._pki_lock("expose-reissue"):
+                validity = (_pki.PROVISIONAL_VALIDITY if _pki.provisional_pending(self._paths)
+                            else None)
+                _pki.issue_server_cert(self._paths, dns_sans=list(cfg.dns_sans),
+                                       ip_sans=list(cfg.ip_sans), days=cfg.server_cert_days,
+                                       validity=validity)
+        except ResourceBusy:
+            return [f"  SAN: {ip} added to ip_sans, but the certificate was NOT reissued (another "
+                    "PKI operation is in progress)", "       run: lhpc webserver tls-renew"]
         except Exception as exc:
             return [f"  SAN: {ip} added to ip_sans, but the certificate was NOT reissued ({exc})",
                     "       run: lhpc webserver init   # then: lhpc webserver tls-renew"]
+        if validity is not None:
+            return [f"  SAN: {ip} added to ip_sans and the server certificate was reissued for it "
+                    "(provisional window — the clock is unverified; normalised automatically later)"]
         return [f"  SAN: {ip} added to ip_sans and the server certificate was reissued for it"]
 
     def webserver_disable_remote(self) -> ActionResult:
@@ -1419,10 +1504,14 @@ class WebserverOpsMixin:
         if refused is not None:
             return refused
         from . import pki as _pki
+        from .reslock import ResourceBusy
         cfg = self.config().webserver
         try:
-            summ = _pki.issue_server_cert(self._paths, dns_sans=list(cfg.dns_sans),
-                                          ip_sans=list(cfg.ip_sans), days=cfg.server_cert_days)
+            with self._pki_lock("tls-renew"):
+                summ = _pki.issue_server_cert(self._paths, dns_sans=list(cfg.dns_sans),
+                                              ip_sans=list(cfg.ip_sans), days=cfg.server_cert_days)
+        except ResourceBusy as exc:
+            return self._pki_busy(exc)
         except _pki.PKIError as exc:
             return ActionResult(False, f"server certificate renewal failed: {exc}")
         return ActionResult(True, f"server certificate renewed (serial {summ['serial']})",
@@ -1433,10 +1522,14 @@ class WebserverOpsMixin:
         if refused is not None:
             return refused
         from . import pki as _pki
+        from .reslock import ResourceBusy
         cfg = self.config().webserver
         try:
-            summ = _pki.issue_client_cert(self._paths, label, days=cfg.client_cert_days,
-                                          passphrase=passphrase)
+            with self._pki_lock("cert-issue", label):
+                summ = _pki.issue_client_cert(self._paths, label, days=cfg.client_cert_days,
+                                              passphrase=passphrase)
+        except ResourceBusy as exc:
+            return self._pki_busy(exc)
         except Exception as exc:
             return ActionResult(False, f"client certificate issue failed: {exc}")
         return ActionResult(True, f"issued client certificate '{summ['label']}'",
@@ -1451,10 +1544,14 @@ class WebserverOpsMixin:
         if refused is not None:
             return refused
         from . import pki as _pki
+        from .reslock import ResourceBusy
         cfg = self.config().webserver
         try:
-            summ = _pki.reissue_client_cert(self._paths, label, days=cfg.client_cert_days,
-                                            passphrase=passphrase)
+            with self._pki_lock("cert-reissue", label):
+                summ = _pki.reissue_client_cert(self._paths, label, days=cfg.client_cert_days,
+                                                passphrase=passphrase)
+        except ResourceBusy as exc:
+            return self._pki_busy(exc)
         except Exception as exc:
             return ActionResult(False, f"reissue failed: {exc}")
         return ActionResult(True, f"reissued client certificate '{summ['label']}'", data=summ)
@@ -1471,8 +1568,12 @@ class WebserverOpsMixin:
         if refused is not None:
             return refused
         from . import pki as _pki
+        from .reslock import ResourceBusy
         try:
-            _pki.revoke_client_cert(self._paths, label)
+            with self._pki_lock("cert-revoke", label):
+                _pki.revoke_client_cert(self._paths, label)
+        except ResourceBusy as exc:
+            return self._pki_busy(exc)
         except Exception as exc:
             return ActionResult(False, f"revoke failed: {exc}")
         return ActionResult(True, f"revocation RECORDED for '{label}' and CRL regenerated — "
@@ -1480,8 +1581,14 @@ class WebserverOpsMixin:
                             next_commands=["lhpc webserver verify"])
 
     def webserver_cert_discard_export(self, label) -> ActionResult:
+        # Edits client-index.json, so it races the same load/save cycle as a CRL rebuild.
         from . import pki as _pki
-        removed = _pki.discard_export(self._paths, label)
+        from .reslock import ResourceBusy
+        try:
+            with self._pki_lock("discard-export", label):
+                removed = _pki.discard_export(self._paths, label)
+        except ResourceBusy as exc:
+            return self._pki_busy(exc)
         return ActionResult(True, f"export {'discarded' if removed else 'already absent'} for '{label}'")
 
     def webserver_server_ca_bytes(self) -> bytes | None:
@@ -1565,19 +1672,87 @@ class WebserverOpsMixin:
             # loaded, so a marker left by a failed reload retried forever against a file that was
             # itself invalid and could never become valid by reloading it.
             if pending.exists() and not stale:
-                if self.webserver_apply().ok:
+                if self._nginx_reload_if_active():
                     self._safe_unlink(pending)
                 return True                  # acted (retried the reload)
             if not stale:
                 return False
             if not clock_ok:
                 return False                 # wait for a clock; rewriting now would re-break it
-            _pki.build_crl(self._paths)
-            if not self.webserver_apply().ok:   # nginx must re-read the fresh CRL
+            from .reslock import ResourceBusy
+            try:
+                with self._pki_lock("crl-refresh"):
+                    _pki.build_crl(self._paths)
+            except ResourceBusy:
+                return False                 # an operator holds the PKI; next pass retries
+            if not self._nginx_reload_if_active():   # nginx must re-read the fresh CRL
                 _rfs.atomic_write(self._paths, pending, "reload-pending\n", 0o600)
             return True
         except Exception:
             return False
+
+    def _nginx_reload_if_active(self) -> bool:
+        """Reload the ALREADY-ACTIVE nginx so it re-reads certificate/CRL files. This is the
+        low-level `webserver.reload()`, never `webserver_apply()`: apply evaluates the firewall
+        gate, stages and promotes the DESIRED policy and restarts the unit -- run from a background
+        worker it would push an operator's saved-but-deliberately-unapplied policy live, breaking
+        Save != Apply. Returns True when nginx reloaded OR is not active (the files are on disk and
+        the next start loads them); False only when an active nginx refused the reload."""
+        from . import webserver as _ws
+        status, _msg = _ws.reload(self._system, self._paths)
+        return status in ("reloaded", "repair_required")
+
+    # ---- normalisation of a provisional PKI ---------------------------------------------------
+    def pki_normalise_pending(self) -> bool:
+        """True while the PKI was minted under an unverified clock and has not been normalised."""
+        from . import pki as _pki
+        try:
+            return _pki.provisional_pending(self._paths)
+        except Exception:
+            return False
+
+    def pki_clock_normalise(self) -> str:
+        """Watchdog: once the clock is verified, replace the provisional server leaf and CRL with
+        normally-dated ones. Returns 'noop' (nothing pending), 'waiting' (clock still unverified),
+        'busy' (an operator holds the PKI), 'reload-pending' (files normalised, nginx did not
+        reload) or 'normalised'.
+
+        Restartable, not atomic: each file replacement is atomic, the marker is cleared LAST, and a
+        crash between the two replacements leaves a valid mixed-generation PKI (keys and CAs are
+        untouched, so old-leaf-with-new-CRL and the reverse both verify) that the next pass
+        converges. It never mints twice: the provisional window is a fixed value, so a pass that
+        finds the leaf and CRL already normal retries only the nginx reload. The CAs are NEVER
+        touched -- their provisional window is clock-independent by construction, and rotating the
+        client CA would invalidate every client certificate already in a browser."""
+        from . import pki as _pki
+        from . import runtime_fs as _rfs
+        from .reslock import ResourceBusy
+        from .service_system import clock_verified
+        if not self.pki_normalise_pending():
+            return "noop"
+        clock_ok, _why = clock_verified(self._system.fs, self._paths.runtime_root)
+        if not clock_ok:
+            return "waiting"
+        pending = self._paths.under("state", "crl-reload-pending")
+        try:
+            with self._pki_lock("clock-normalise"):
+                cfg = self.config().webserver
+                if _pki.server_cert_is_provisional(self._paths):
+                    _pki.issue_server_cert(self._paths, dns_sans=list(cfg.dns_sans),
+                                           ip_sans=list(cfg.ip_sans),
+                                           days=cfg.server_cert_days, keep_key=True)
+                if _pki.crl_is_provisional(self._paths):
+                    _pki.build_crl(self._paths)
+                if not self._nginx_reload_if_active():
+                    _rfs.atomic_write(self._paths, pending, "reload-pending\n", 0o600)
+                    return "reload-pending"                # marker stays; next pass reloads only
+                self._safe_unlink(pending)
+                _pki.clear_provisional(self._paths)      # LAST: only after everything took
+                return "normalised"
+        except ResourceBusy:
+            return "busy"
+        except Exception:
+            return "waiting"
 
     def webserver_apply(self) -> ActionResult:
         """Activate the DESIRED config: render + validate the nginx config FIRST (never

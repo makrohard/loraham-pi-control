@@ -2146,8 +2146,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # First-time init on a fresh PKI needs no phrase; RE-initializing (destructive) requires
         # the typed phrase 'recreate'.
         confirm = request.form.get("confirm_phrase", "").strip() == "recreate"
-        r = service.webserver_init(confirm=confirm,
-                                   accept_unverified=_accept_unverified_clock())
+        # No clock override: init is not clock-gated (commissioning may not depend on a clock),
+        # and an unverified clock yields the fixed provisional window, not dates from the clock.
+        r = service.webserver_init(confirm=confirm)
         flash(r.summary, "ok" if r.ok else "err")
         return _ws_back()
 
@@ -2268,9 +2269,14 @@ def network_watch_pass(svc) -> float:
         svc.crl_refresh_if_expired()
     except Exception:
         pass
+    try:                            # a PKI minted under an unverified clock, once time arrives
+        svc.pki_clock_normalise()
+    except Exception:
+        pass
     ap_box = svc.network_supported()
-    # non-AP box: probe rarely, exit never — unless an Apply is still owed
-    interval_s = 60.0 if (ap_box or svc.webserver_apply_pending()) else 300.0
+    # non-AP box: probe rarely, exit never — unless an Apply or a normalisation is still owed
+    interval_s = (60.0 if (ap_box or svc.webserver_apply_pending()
+                           or svc.pki_normalise_pending()) else 300.0)
     if ap_box:
         svc._network_watch_tick()
     return interval_s

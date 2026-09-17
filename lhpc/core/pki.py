@@ -36,6 +36,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from . import runtime_fs, validators
 from .paths import PathContainmentError, Paths
+from .service_system import PKI_NOT_BEFORE
 
 _TLS = ("config", "tls")
 _SERVER_CA, _CLIENT_CA, _SERVER, _EXPORTS = "server-ca", "client-ca", "server", "exports"
@@ -43,6 +44,23 @@ _INDEX = "client-index.json"
 INDEX_SCHEMA = 1
 _CA_DAYS_DEFAULT = 3650
 _CRL_DAYS_DEFAULT = 30
+
+# --------------------------------------------------------------------------- provisional validity
+#
+# Material minted while the clock is UNVERIFIED -- commissioning on a box with no RTC, no NTP and no
+# GPS fix -- gets a FIXED window, never one derived from that clock. A clock we have just declared
+# untrustworthy cannot anchor a validity period in either direction: a stale clock would mint
+# material that expires early, a fast one material that is "not yet valid" to a correct-clock
+# browser from the first minute. The lower bound is the clock gate's own floor; the upper bound is
+# the last instant expressible as UTCTime, so the encoding never crosses into GeneralizedTime
+# (Phase 0, 2026-09-17: verified with OpenSSL 3.5, Python TLS, NSS and GnuTLS).
+PROVISIONAL_NOT_BEFORE = _dt.datetime.fromtimestamp(PKI_NOT_BEFORE, _dt.UTC)
+PROVISIONAL_NOT_AFTER = _dt.datetime(2049, 12, 31, 23, 59, 59, tzinfo=_dt.UTC)
+PROVISIONAL_VALIDITY = (PROVISIONAL_NOT_BEFORE, PROVISIONAL_NOT_AFTER)
+# The marker meaning exactly "this PKI still needs normalising". It lives INSIDE config/tls so the
+# image seal removes it with the material it describes, and it is written BEFORE the first PKI write
+# so a power cut can never leave provisional material that LHPC has forgotten about.
+_PROVISIONAL_MARKER = "unverified-clock"
 
 
 class PKIError(Exception):
@@ -68,6 +86,63 @@ def ensure_layout(paths: Paths) -> None:
     runtime_fs.chmod(paths, _p(paths), 0o700, create_dir=True)
     for sub in (_SERVER_CA, _CLIENT_CA, _SERVER, _EXPORTS):
         runtime_fs.chmod(paths, _p(paths, sub), 0o700, create_dir=True)
+
+
+# --------------------------------------------------------------------------- provisional marker
+
+def provisional_marker_path(paths: Paths) -> Path:
+    return _p(paths, _PROVISIONAL_MARKER)
+
+
+def mark_provisional(paths: Paths) -> None:
+    """Record, durably and BEFORE any material is written, that what follows is provisional.
+    Raises on failure: material that cannot be recorded as provisional must not be created."""
+    ensure_layout(paths)
+    runtime_fs.atomic_write(paths, provisional_marker_path(paths), "unverified-clock\n", mode=0o600)
+
+
+def provisional_pending(paths: Paths) -> bool:
+    """True while the PKI was minted under an unverified clock and has not been normalised."""
+    return _exists(paths, provisional_marker_path(paths))
+
+
+def clear_provisional(paths: Paths) -> None:
+    runtime_fs.unlink(paths, provisional_marker_path(paths))
+
+
+def _is_provisional_window(not_before, not_after) -> bool:
+    return not_before == PROVISIONAL_NOT_BEFORE and not_after == PROVISIONAL_NOT_AFTER
+
+
+def server_cert_is_provisional(paths: Paths):
+    """True/False for the server leaf's window, None when there is no leaf. Decidable because
+    the provisional window is a fixed value -- which is what lets normalisation be restartable
+    without minting again."""
+    cert = _read_cert(paths, _p(paths, _SERVER, "server.crt"))
+    if cert is None:
+        return None
+    return _is_provisional_window(cert.not_valid_before_utc, cert.not_valid_after_utc)
+
+
+def crl_is_provisional(paths: Paths):
+    crl_p = _p(paths, _CLIENT_CA, "crl.pem")
+    if not _exists(paths, crl_p):
+        return None
+    try:
+        crl = x509.load_pem_x509_crl(runtime_fs.read_text_regular(paths, crl_p).encode("ascii"))
+    except (OSError, ValueError, PathContainmentError) as exc:
+        raise PKIError(f"unreadable CRL {crl_p}: {exc}") from exc
+    lu = getattr(crl, "last_update_utc", None) or crl.last_update.replace(tzinfo=_dt.UTC)
+    nu = getattr(crl, "next_update_utc", None) or crl.next_update.replace(tzinfo=_dt.UTC)
+    return _is_provisional_window(lu, nu)
+
+
+def _validity(backdate: _dt.timedelta, days: int, validity):
+    """(notBefore, notAfter): the fixed provisional window when given, else now-based."""
+    if validity is not None:
+        return validity
+    now = _now()
+    return now - backdate, now + _dt.timedelta(days=days)
 
 
 # --------------------------------------------------------------------------- read/write
@@ -230,8 +305,8 @@ _LEAF_BACKDATE = _dt.timedelta(days=1)
 _CA_BACKDATE = _dt.timedelta(minutes=1)
 
 
-def _sign_ca(key, common_name: str, days: int):
-    now = _now()
+def _sign_ca(key, common_name: str, days: int, *, validity=None):
+    not_before, not_after = _validity(_CA_BACKDATE, days, validity)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
     ku = x509.KeyUsage(digital_signature=False, content_commitment=False, key_encipherment=False,
                        data_encipherment=False, key_agreement=False, key_cert_sign=True,
@@ -240,8 +315,8 @@ def _sign_ca(key, common_name: str, days: int):
             .subject_name(name).issuer_name(name)
             .public_key(key.public_key())
             .serial_number(x509.random_serial_number())
-            .not_valid_before(now - _CA_BACKDATE)
-            .not_valid_after(now + _dt.timedelta(days=days))
+            .not_valid_before(not_before)
+            .not_valid_after(not_after)
             .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
             .add_extension(ku, critical=True)
             .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
@@ -250,8 +325,9 @@ def _sign_ca(key, common_name: str, days: int):
             .sign(key, hashes.SHA256()))
 
 
-def _sign_leaf(ca_key, ca_cert, leaf_key, common_name: str, days: int, *, eku, san=None):
-    now = _now()
+def _sign_leaf(ca_key, ca_cert, leaf_key, common_name: str, days: int, *, eku, san=None,
+               validity=None):
+    not_before, not_after = _validity(_LEAF_BACKDATE, days, validity)
     ku = x509.KeyUsage(digital_signature=True, content_commitment=False, key_encipherment=True,
                        data_encipherment=False, key_agreement=False, key_cert_sign=False,
                        crl_sign=False, encipher_only=False, decipher_only=False)
@@ -260,8 +336,8 @@ def _sign_leaf(ca_key, ca_cert, leaf_key, common_name: str, days: int, *, eku, s
                .issuer_name(ca_cert.subject)
                .public_key(leaf_key.public_key())
                .serial_number(x509.random_serial_number())
-               .not_valid_before(now - _LEAF_BACKDATE)
-               .not_valid_after(now + _dt.timedelta(days=days))
+               .not_valid_before(not_before)
+               .not_valid_after(not_after)
                .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
                .add_extension(ku, critical=True)
                .add_extension(x509.ExtendedKeyUsage([eku]), critical=False)
@@ -291,24 +367,29 @@ def _build_san(dns_sans, ip_sans):
 
 # --------------------------------------------------------------------------- CA lifecycle
 
-def _init_ca(paths: Paths, which: str, cn: str, *, days: int, force: bool) -> dict:
+def _init_ca(paths: Paths, which: str, cn: str, *, days: int, force: bool,
+             validity=None) -> dict:
     ensure_layout(paths)
     key_p, crt_p = _ca_paths(paths, which)
     if _exists(paths, crt_p) and not force:
         raise PKIError(f"{which} already exists — rotate (destructive) to replace it")
     key = _new_key()
-    cert = _sign_ca(key, cn, days)
+    cert = _sign_ca(key, cn, days, validity=validity)
     _write_key(paths, key_p, key)
     _write_cert(paths, crt_p, cert)
     return _summary(cert, which)
 
 
-def init_server_ca(paths: Paths, *, days: int = _CA_DAYS_DEFAULT, force: bool = False) -> dict:
-    return _init_ca(paths, _SERVER_CA, "LHPC Server TLS CA", days=days, force=force)
+def init_server_ca(paths: Paths, *, days: int = _CA_DAYS_DEFAULT, force: bool = False,
+                   validity=None) -> dict:
+    return _init_ca(paths, _SERVER_CA, "LHPC Server TLS CA", days=days, force=force,
+                    validity=validity)
 
 
-def init_client_ca(paths: Paths, *, days: int = _CA_DAYS_DEFAULT, force: bool = False) -> dict:
-    return _init_ca(paths, _CLIENT_CA, "LHPC Client Auth CA", days=days, force=force)
+def init_client_ca(paths: Paths, *, days: int = _CA_DAYS_DEFAULT, force: bool = False,
+                   validity=None) -> dict:
+    return _init_ca(paths, _CLIENT_CA, "LHPC Client Auth CA", days=days, force=force,
+                    validity=validity)
 
 
 def rotate_server_ca(paths: Paths, *, days: int = _CA_DAYS_DEFAULT) -> dict:
@@ -328,16 +409,26 @@ def rotate_client_ca(paths: Paths, *, days: int = _CA_DAYS_DEFAULT) -> dict:
 
 # --------------------------------------------------------------------------- server leaf
 
-def issue_server_cert(paths: Paths, *, dns_sans=(), ip_sans=(), days: int) -> dict:
+def issue_server_cert(paths: Paths, *, dns_sans=(), ip_sans=(), days: int,
+                      validity=None, keep_key: bool = False) -> dict:
+    """Issue the HTTPS server leaf. `keep_key=True` re-signs the EXISTING key (normalisation: the
+    browser sees the same CA and the same key, only new dates); the default mints a fresh one."""
     ca_key = _read_key(paths, _ca_paths(paths, _SERVER_CA)[0])
     ca_cert = _read_cert(paths, _ca_paths(paths, _SERVER_CA)[1])
     if ca_key is None or ca_cert is None:
         raise PKIError("server TLS CA not initialized")
     san = _build_san(dns_sans, ip_sans)         # raises on empty / invalid / 0.0.0.0
-    key = _new_key()
+    key_p = _p(paths, _SERVER, "server.key")
+    if keep_key:
+        key = _read_key(paths, key_p)
+        if key is None:
+            raise PKIError("no server key to keep — issue a new certificate instead")
+    else:
+        key = _new_key()
     cert = _sign_leaf(ca_key, ca_cert, key, "lhpc-web", days,
-                      eku=ExtendedKeyUsageOID.SERVER_AUTH, san=san)
-    _write_key(paths, _p(paths, _SERVER, "server.key"), key)
+                      eku=ExtendedKeyUsageOID.SERVER_AUTH, san=san, validity=validity)
+    if not keep_key:
+        _write_key(paths, key_p, key)
     _write_cert(paths, _p(paths, _SERVER, "server.crt"), cert)
     return _summary(cert, "server")
 
@@ -492,7 +583,8 @@ def revoke_client_cert(paths: Paths, label: str) -> dict:
     return chit
 
 
-def _build_and_write_crl(paths: Paths, index: dict, *, days: int = _CRL_DAYS_DEFAULT) -> None:
+def _build_and_write_crl(paths: Paths, index: dict, *, days: int = _CRL_DAYS_DEFAULT,
+                         validity=None) -> None:
     """Build the CRL from `index`'s revoked certs (using `index['crl_number']`) and atomically
     write crl.pem. Raises PKIError/OSError on missing CA or build/write failure. Does NOT
     persist `index` — the caller commits it only after this succeeds."""
@@ -501,10 +593,11 @@ def _build_and_write_crl(paths: Paths, index: dict, *, days: int = _CRL_DAYS_DEF
     if ca_key is None or ca_cert is None:
         raise PKIError("client-auth CA not initialized")
     now = _now()
+    last_update, next_update = _validity(_dt.timedelta(minutes=1), days, validity)
     builder = (x509.CertificateRevocationListBuilder()
                .issuer_name(ca_cert.subject)
-               .last_update(now - _dt.timedelta(minutes=1))
-               .next_update(now + _dt.timedelta(days=days))
+               .last_update(last_update)
+               .next_update(next_update)
                .add_extension(x509.CRLNumber(int(index["crl_number"])), critical=False))
     for e in index["certs"]:
         if e.get("state") == "revoked":
@@ -519,10 +612,10 @@ def _build_and_write_crl(paths: Paths, index: dict, *, days: int = _CRL_DAYS_DEF
                             mode=0o644)
 
 
-def build_crl(paths: Paths, *, days: int = _CRL_DAYS_DEFAULT) -> Path:
+def build_crl(paths: Paths, *, days: int = _CRL_DAYS_DEFAULT, validity=None) -> Path:
     idx = _load_index(paths)
     idx["crl_number"] = int(idx.get("crl_number", 0)) + 1
-    _build_and_write_crl(paths, idx, days=days)
+    _build_and_write_crl(paths, idx, days=days, validity=validity)
     _save_index(paths, idx)
     return _p(paths, _CLIENT_CA, "crl.pem")
 
@@ -552,6 +645,8 @@ def pki_status(paths: Paths) -> dict:
                         if server else {"present": False}),
         "clients": list_client_certs(paths),
         "crl_present": _exists(paths, _p(paths, _CLIENT_CA, "crl.pem")),
+        # Minted under an unverified clock and not yet normalised (fixed provisional window).
+        "provisional": provisional_pending(paths),
     }
 
 

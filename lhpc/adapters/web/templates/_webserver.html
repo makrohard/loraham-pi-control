@@ -165,7 +165,8 @@
           server-CA {{ 'present' if mon.pki.server_ca.present else 'absent' }} ·
           client-CA {{ 'present' if mon.pki.client_ca.present else 'absent' }} ·
           server-cert {{ 'present' if mon.pki.server_cert.present else 'absent' }} ·
-          CRL {{ 'present' if mon.pki.crl_present else 'absent' }}</li>
+          CRL {{ 'present' if mon.pki.crl_present else 'absent' }}{% if mon.pki.provisional %} ·
+          <strong>provisional</strong> (created without a verified clock; the server certificate and CRL are renewed automatically once time is verified){% endif %}</li>
       </ul>
       <h3>System dependencies</h3>
       <ul class="kv sysdeps">
@@ -193,9 +194,7 @@
         <p class="setting"><label for="ws-init-confirm">Initialize PKI</label>
           <input id="ws-init-confirm" name="confirm_phrase" autocomplete="off">
           <span class="muted">To RE-create existing CAs (destructive) type <code>recreate</code></span></p>
-          <p class="setting"><label for="ws-init-clock">Accept unverified clock</label>
-            <input id="ws-init-clock" type="checkbox" name="accept_unverified_clock" value="1">
-            <span class="muted">Only if this box's clock is not synchronised. Certificates will be dated from it. Not the same as confirming a destructive change.</span></p>
+          <p class="muted">Needs no clock: if this box's clock is not yet verified, the certificates get a fixed provisional validity (not dates from the clock) and are renewed automatically once time is available.</p>
         <button type="submit">Initialize / recreate PKI</button>
       </form>
       <form method="post" action="{{ url_for('webserver_tls_renew') }}">

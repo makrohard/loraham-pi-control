@@ -1224,6 +1224,9 @@ def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=(),
     if client_auth_required(cfg, stack_webs):
         checks["client_ca"] = "ok" if st["client_ca"].get("present") else "failed"
         checks["crl"] = "ok" if st["crl_present"] else "failed"
+    # Minted under an unverified clock (fixed provisional window) and not yet normalised. NOT a
+    # failure -- the material verifies -- so it is reported, never counted as "failed".
+    checks["pki_provisional"] = "yes" if st.get("provisional") else "no"
 
     # Render + validate a STAGED config (verify NEVER mutates the live config) — the SAME config
     # `apply` would promote, stack proxies included.

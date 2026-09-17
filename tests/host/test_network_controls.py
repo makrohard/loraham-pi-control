@@ -813,18 +813,24 @@ def _write_crl(svc, next_update_delta_days: int):
 def test_crl_refresh_only_when_expired(tmp_path, monkeypatch):
     """LIVE-FOUND: the box's first NTP sync (arriving with the joined WLAN) jumped the clock
     past the CRL's nextUpdate and nginx rejected EVERY client cert. The heal rebuilds the
-    CRL and reloads nginx — and never touches a still-valid one."""
+    CRL and reloads nginx — and never touches a still-valid one.
+
+    The reload is the low-level `webserver.reload()`, NEVER `webserver_apply()`: apply stages
+    and promotes the DESIRED policy, so a background heal calling it would push an operator's
+    saved-but-unapplied settings live (0.7.0)."""
     from lhpc.core import pki as pki_mod
+    from lhpc.core import webserver as ws_mod
     svc = _svc(tmp_path)
-    from lhpc.core.services import ActionResult
-    rebuilt, reloaded = [], []
+    rebuilt, reloaded, applied = [], [], []
     apply_ok = {"v": True}
 
-    def fake_apply(self):
+    def fake_reload(system, paths):
         reloaded.append(True)
-        return ActionResult(apply_ok["v"], "x")
+        return ("reloaded", "x") if apply_ok["v"] else ("failed", "nginx said no")
     monkeypatch.setattr(pki_mod, "build_crl", lambda paths: rebuilt.append(True))
-    monkeypatch.setattr(ControllerService, "webserver_apply", fake_apply)
+    monkeypatch.setattr(ws_mod, "reload", fake_reload)
+    monkeypatch.setattr(ControllerService, "webserver_apply",
+                        lambda self: applied.append(True))
     assert svc.crl_refresh_if_expired() is False           # no CRL at all -> no-op
     _write_crl(svc, +30)
     assert svc.crl_refresh_if_expired() is False           # valid -> untouched
@@ -839,6 +845,7 @@ def test_crl_refresh_only_when_expired(tmp_path, monkeypatch):
     apply_ok["v"] = True
     assert svc.crl_refresh_if_expired() is True            # ...but the marker retries
     assert len(reloaded) == 2 and not marker.exists()      # cleared only on success
+    assert applied == [], "the CRL heal reached webserver_apply() — Save != Apply broken"
 
 
 def test_watchdog_tick_heals_expired_crl(tmp_path, monkeypatch):
@@ -962,8 +969,8 @@ def test_extend_console_saves_sans_and_reissues(tmp_path, monkeypatch):
                                   access_mode="local-open-remote-auth")
     issued = {}
     monkeypatch.setattr(pki_mod, "issue_server_cert",
-                        lambda paths, dns_sans, ip_sans, days: issued.update(
-                            dns=list(dns_sans), ip=list(ip_sans)))
+                        lambda paths, dns_sans, ip_sans, days, **kw: issued.update(
+                            dns=list(dns_sans), ip=list(ip_sans), validity=kw.get("validity")))
     monkeypatch.setattr(ControllerService, "webserver_apply", lambda self: __import__(
         "lhpc.core.services", fromlist=["ActionResult"]).ActionResult(True, "applied"))
     # an enabled remote STACK PROXY must be extended too (live-found: 8444 answered 403)
@@ -979,6 +986,7 @@ def test_extend_console_saves_sans_and_reissues(tmp_path, monkeypatch):
     assert "192.168.178.42" in cfg.ip_sans
     assert "h.fritz.box" in cfg.dns_sans and "h.local" in cfg.dns_sans
     assert issued["ip"] and "192.168.178.42" in issued["ip"]     # cert reissued with them
+    assert issued["validity"] is None                            # verified clock: normal dates
     swc = _config.load_config(svc._paths).stackweb.get("meshcom")
     assert swc is not None and swc.enabled and swc.remote        # fixture really is exposable
     assert "192.168.178.0/24" in swc.allowed_cidrs               # proxy allowlist extended

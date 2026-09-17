@@ -784,7 +784,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_ws_init.add_argument("--ip", action="append", default=[], help="IP SAN (repeatable)")
     p_ws_init.add_argument("--confirm-recreate", action="store_true",
                            help="Confirm DESTRUCTIVE re-init when a CA already exists")
-    _add_clock_override(p_ws_init)
+    # No clock override on init (0.7.0): it is not clock-gated, and under an unverified clock it
+    # uses the fixed provisional window rather than dating from the clock -- the flag would have
+    # nothing to override and its help text would describe the opposite of what happens.
     p_ws_cfg = ws_sub.add_parser("configure", help="Set desired webserver config")
     p_ws_cfg.add_argument("--bind", help="Listen address: 127.0.0.1 (loopback) or 0.0.0.0 (remote)")
     p_ws_cfg.add_argument("--port", type=int, help="HTTPS port (default 8443)")
@@ -1428,10 +1430,11 @@ def _run(argv: list[str] | None = None) -> int:
         if cmd == "start-service":
             return _render(svc.webserver_start_service())
         if cmd == "init":
+            # init takes no --accept-unverified-clock: it is not clock-gated, and under an
+            # unverified clock it uses the fixed provisional window rather than dating from it.
             return _render(svc.webserver_init(
                 dns_sans=args.dns or None, ip_sans=args.ip or None,
-                confirm=args.confirm_recreate,
-                accept_unverified=getattr(args, "accept_unverified_clock", False)))
+                confirm=args.confirm_recreate))
         if cmd == "configure":
             fields = {k: v for k, v in (
                 ("bind", args.bind), ("port", args.port), ("access_mode", args.access_mode),

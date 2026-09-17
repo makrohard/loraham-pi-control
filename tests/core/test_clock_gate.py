@@ -93,12 +93,11 @@ def test_a_good_clock_is_verified(tmp_path, monkeypatch):
 
 # --- the gate on every mutating path --------------------------------------------------------
 
-_MUTATORS = ("init", "tls_renew", "cert_issue", "cert_reissue", "cert_revoke")
+# `init` is deliberately NOT here any more: commissioning may not depend on a clock (0.7.0).
+_MUTATORS = ("tls_renew", "cert_issue", "cert_reissue", "cert_revoke")
 
 
 def _call(svc, which, *, accept=False):
-    if which == "init":
-        return svc.webserver_init(confirm=True, accept_unverified=accept)
     if which == "tls_renew":
         return svc.webserver_tls_renew(accept)
     if which == "cert_issue":
@@ -159,22 +158,13 @@ def test_the_override_is_one_shot_and_not_remembered(tmp_path, monkeypatch):
     assert not second.ok and "--accept-unverified-clock" in second.summary
 
 
-def test_a_destructive_confirm_does_not_imply_accepting_the_clock(tmp_path, monkeypatch):
-    # `--confirm-recreate` says "yes, destroy my CAs". It does NOT say "yes, date them from a
-    # clock I cannot verify". Conflating the two is how an operator gets certificates they never
-    # agreed to.
-    _init_pki(tmp_path)
+def test_the_marker_does_not_bypass_the_gated_operations(tmp_path, monkeypatch):
+    # The provisional marker widens exactly two things -- commissioning and the exposure
+    # reissue -- and nothing else. Ordinary post-commissioning mutation stays gated.
+    _provisional_box(tmp_path, monkeypatch)
     svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
-    res = svc.webserver_init(confirm=True)
+    res = svc.webserver_cert_issue("dev", "x" * 12)
     assert not res.ok and "--accept-unverified-clock" in res.summary
-
-
-def test_a_refused_init_does_not_replace_the_existing_cas(tmp_path, monkeypatch):
-    p = _init_pki(tmp_path)
-    fp_before = pki.pki_status(p)["server_ca"]
-    svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
-    assert not svc.webserver_init(confirm=True).ok
-    assert pki.pki_status(p)["server_ca"] == fp_before
 
 
 # --- automatic CRL repair --------------------------------------------------------------------
@@ -292,11 +282,58 @@ def _server_cert_serial(tmp_path):
     return x509.load_pem_x509_certificate(p.read_bytes()).serial_number if p.exists() else None
 
 
+def _lan_ip(monkeypatch, ip):
+    """Pin what `webserver.local_ip()` resolves -- the default-route address, NOT the AP one."""
+    from lhpc.core import webserver as _ws
+    monkeypatch.setattr(_ws, "local_ip", lambda: ip)
+
+
+def _tls(tmp_path, *parts):
+    return tmp_path.joinpath("config", "tls", *parts)
+
+
+def _cert(tmp_path, *parts):
+    return x509.load_pem_x509_certificate(_tls(tmp_path, *parts).read_bytes())
+
+
+def _window(cert):
+    return cert.not_valid_before_utc, cert.not_valid_after_utc
+
+
+def _crl(tmp_path):
+    return x509.load_pem_x509_crl(_tls(tmp_path, "client-ca", "crl.pem").read_bytes())
+
+
+def _crl_window(crl):
+    lu = getattr(crl, "last_update_utc", None) or crl.last_update.replace(tzinfo=_dt.UTC)
+    nu = getattr(crl, "next_update_utc", None) or crl.next_update.replace(tzinfo=_dt.UTC)
+    return lu, nu
+
+
+def _crl_number(crl):
+    return crl.extensions.get_extension_for_class(x509.CRLNumber).value.crl_number
+
+
+def _pubkey(cert):
+    from cryptography.hazmat.primitives import serialization
+    return cert.public_key().public_bytes(serialization.Encoding.PEM,
+                                          serialization.PublicFormat.SubjectPublicKeyInfo)
+
+
+def _provisional_box(tmp_path, monkeypatch):
+    """A box commissioned with NO verified clock -- the field-day Lite: no RTC, no NTP, no fix."""
+    svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
+    res = svc.webserver_init()
+    assert res.ok, res.summary
+    return Paths(runtime_root=tmp_path)
+
+
 def test_expose_refuses_an_unverified_clock_and_changes_nothing(tmp_path, monkeypatch):
     _init_pki(tmp_path)
     pki.issue_server_cert(Paths(runtime_root=tmp_path), dns_sans=("box.lan",),
                           ip_sans=(), days=30)
     svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
+    _lan_ip(monkeypatch, "192.168.0.50")                    # not a SAN -> a reissue is required
     bind_before = svc.config().webserver.bind
     serial_before = _server_cert_serial(tmp_path)
 
@@ -314,6 +351,7 @@ def test_configure_apply_with_a_remote_bind_refuses_an_unverified_clock(tmp_path
     pki.issue_server_cert(Paths(runtime_root=tmp_path), dns_sans=("box.lan",),
                           ip_sans=(), days=30)
     svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
+    _lan_ip(monkeypatch, "192.168.0.50")
     sans_before = tuple(svc.config().webserver.ip_sans)
     serial_before = _server_cert_serial(tmp_path)
 
@@ -343,6 +381,7 @@ def test_the_override_lets_exposure_through(tmp_path, monkeypatch):
     pki.issue_server_cert(Paths(runtime_root=tmp_path), dns_sans=("box.lan",),
                           ip_sans=(), days=30)
     svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
+    _lan_ip(monkeypatch, "192.168.0.50")
     res = svc.webserver_expose(["192.168.0.0/24"], confirm=True, accept_unverified=True)
     assert "--accept-unverified-clock" not in res.summary
     svc._invalidate_config()
@@ -512,3 +551,354 @@ def test_a_half_finished_setup_does_not_read_as_satisfied(tmp_path, monkeypatch)
     assert svc._time_source_present() is False
     seen.add(deps.TIME_SOURCE_STAMP_PATH)     # the per-run witness, written only after the verdict
     assert svc._time_source_present() is True
+
+
+# =============================================================================================
+# 0.7.0 -- commissioning may not depend on a clock
+# ---------------------------------------------------------------------------------------------
+# A Lite box has no RTC, in AP mode it has no NTP, and it may or may not have a GPS fix. Firstboot
+# runs `webserver init` before the console exists, so a clock refusal there left NOBODY able to fix
+# the clock (the 0.6.2 Lite image died exactly here, at Gate A2). Creation is now unconditional;
+# an unverified clock yields a FIXED provisional window rather than dates from the bad clock, a
+# marker written BEFORE the first PKI write records it, and the watchdog normalises the leaf and
+# CRL once time is verified. Ordinary post-commissioning mutation stays gated.
+
+
+def test_the_provisional_window_is_the_frozen_phase_0_value():
+    # Phase 0 (2026-09-17) tested three upper bounds against OpenSSL, Python TLS, NSS and GnuTLS
+    # and froze 2049-12-31: the last instant expressible as UTCTime, so the encoding never crosses
+    # into GeneralizedTime. The lower bound is the clock gate's own floor -- one constant.
+    from lhpc.core import service_system
+    assert pki.PROVISIONAL_NOT_BEFORE == _dt.datetime(2025, 1, 1, tzinfo=_dt.UTC)
+    assert pki.PROVISIONAL_NOT_AFTER == _dt.datetime(2049, 12, 31, 23, 59, 59, tzinfo=_dt.UTC)
+    assert pki.PROVISIONAL_NOT_BEFORE.timestamp() == service_system.PKI_NOT_BEFORE
+    assert pki.PROVISIONAL_NOT_AFTER.year < 2050
+
+
+def test_the_marker_lives_inside_the_pki_tree(tmp_path):
+    # So the image seal (which removes config/tls wholesale) removes it with the material it
+    # describes, and it can never outlive that material.
+    p = Paths(runtime_root=tmp_path)
+    assert pki.provisional_marker_path(p) == _tls(tmp_path, "unverified-clock")
+
+
+def test_init_takes_no_clock_override():
+    import inspect
+    assert "accept_unverified" not in inspect.signature(ControllerService.webserver_init).parameters
+
+
+def test_init_under_an_unverified_clock_succeeds_with_the_provisional_window(tmp_path, monkeypatch):
+    p = _provisional_box(tmp_path, monkeypatch)
+    assert pki.provisional_pending(p) and pki.pki_status(p)["provisional"] is True
+    for f in (("server-ca", "ca.crt"), ("client-ca", "ca.crt"), ("server", "server.crt")):
+        assert _window(_cert(tmp_path, *f)) == pki.PROVISIONAL_VALIDITY, f
+    assert _crl_window(_crl(tmp_path)) == pki.PROVISIONAL_VALIDITY
+    assert pki.server_cert_is_provisional(p) is True and pki.crl_is_provisional(p) is True
+
+
+def test_a_clock_far_ahead_still_yields_material_valid_now(tmp_path, monkeypatch):
+    # The forward-skew case a backdate can never absorb: the window is fixed, so it does not
+    # matter what the clock reads -- material is valid to a correct-clock browser from minute one.
+    p = _provisional_box(tmp_path, monkeypatch)
+    now = _dt.datetime.now(_dt.UTC)
+    nb, na = _window(_cert(tmp_path, "server", "server.crt"))
+    assert nb < now < na
+    assert p  # provisional_box already asserted the marker
+
+
+def test_init_with_a_verified_clock_is_normal_and_unmarked(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert svc.webserver_init().ok
+    p = Paths(runtime_root=tmp_path)
+    assert not pki.provisional_pending(p) and pki.pki_status(p)["provisional"] is False
+    assert pki.server_cert_is_provisional(p) is False and pki.crl_is_provisional(p) is False
+
+
+def test_a_destructive_reinit_under_an_unverified_clock_is_not_refused(tmp_path, monkeypatch):
+    # An earlier version of this design gated re-init on "material already present". That would
+    # have stranded a firstboot RETRY: creation and its marker are not atomic, so material can
+    # legitimately exist on a retry. Creation carries no clock gate at all.
+    _init_pki(tmp_path)
+    svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
+    res = svc.webserver_init(confirm=True)
+    assert res.ok and "UNVERIFIED" in res.summary
+    assert pki.provisional_pending(Paths(runtime_root=tmp_path))
+
+
+def test_the_marker_is_written_before_any_material(tmp_path, monkeypatch):
+    # Power cut after the server CA: the marker must already be there, or the box would carry
+    # provisional material LHPC had forgotten about. Then a retry with verified time must produce
+    # normal material and clear the marker only after it succeeded.
+    svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
+    p = Paths(runtime_root=tmp_path)
+    real = pki.init_client_ca
+
+    def power_cut(*a, **k):
+        assert pki.provisional_pending(p), "the client CA was created before the marker"
+        raise pki.PKIError("simulated power cut")
+    monkeypatch.setattr(pki, "init_client_ca", power_cut)
+    assert not svc.webserver_init().ok
+    assert pki.provisional_pending(p)                              # conservative: still marked
+    assert _tls(tmp_path, "server-ca", "ca.crt").exists()         # partial material exists
+
+    monkeypatch.setattr(pki, "init_client_ca", real)
+    retry = _svc(tmp_path, monkeypatch=monkeypatch)               # time arrived
+    assert retry.webserver_init(confirm=True).ok
+    assert not pki.provisional_pending(p)
+    assert pki.server_cert_is_provisional(p) is False and pki.crl_is_provisional(p) is False
+
+
+def test_a_failed_marker_write_creates_no_pki(tmp_path, monkeypatch):
+    # Fail closed on the RECORD: material that cannot be recorded as provisional is material
+    # that can never be normalised, so none is created.
+    svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
+
+    def disk_full(paths):
+        raise OSError("disk full")
+    monkeypatch.setattr(pki, "mark_provisional", disk_full)
+    res = svc.webserver_init()
+    assert not res.ok and "no PKI was created" in res.summary
+    assert not _tls(tmp_path, "server-ca", "ca.crt").exists()
+
+
+def test_the_clock_verdict_is_frozen_for_the_whole_init(tmp_path, monkeypatch):
+    # chrony synchronises halfway through creation. One verdict, taken once: everything is still
+    # provisional and marked. A per-artefact re-check would mint a half-provisional PKI whose
+    # marker means neither thing.
+    from lhpc.core import service_system
+    calls = {"n": 0}
+
+    def flips_to_synced_after_the_first_read():
+        calls["n"] += 1
+        return {"synced": calls["n"] > 1, "maxerror_us": 1000}
+    monkeypatch.setattr(service_system, "read_kernel_time_state", flips_to_synced_after_the_first_read)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.webserver_init().ok
+    p = Paths(runtime_root=tmp_path)
+    assert pki.provisional_pending(p)
+    assert _window(_cert(tmp_path, "client-ca", "ca.crt")) == pki.PROVISIONAL_VALIDITY
+    assert pki.server_cert_is_provisional(p) is True and pki.crl_is_provisional(p) is True
+
+
+# --- normalisation ---------------------------------------------------------------------------
+
+def test_normalisation_waits_for_a_verified_clock(tmp_path, monkeypatch):
+    p = _provisional_box(tmp_path, monkeypatch)
+    svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
+    before = _tls(tmp_path, "server", "server.crt").read_bytes()
+    assert svc.pki_clock_normalise() == "waiting"
+    assert _tls(tmp_path, "server", "server.crt").read_bytes() == before
+    assert pki.provisional_pending(p)
+
+
+def test_normalisation_keeps_the_key_and_the_cas_and_clears_the_marker_last(tmp_path, monkeypatch):
+    p = _provisional_box(tmp_path, monkeypatch)
+    key_before = _tls(tmp_path, "server", "server.key").read_bytes()
+    pub_before = _pubkey(_cert(tmp_path, "server", "server.crt"))
+    cas_before = [_tls(tmp_path, d, "ca.crt").read_bytes() for d in ("server-ca", "client-ca")]
+
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert svc.pki_clock_normalise() == "normalised"
+
+    assert not pki.provisional_pending(p)
+    assert _tls(tmp_path, "server", "server.key").read_bytes() == key_before
+    cert = _cert(tmp_path, "server", "server.crt")
+    assert _pubkey(cert) == pub_before                              # same key, new dates
+    assert _window(cert) != pki.PROVISIONAL_VALIDITY
+    assert pki.server_cert_is_provisional(p) is False and pki.crl_is_provisional(p) is False
+    # The CAs are NEVER touched: their provisional window is clock-independent by construction,
+    # and a new client CA would invalidate every client certificate already in a browser.
+    assert [_tls(tmp_path, d, "ca.crt").read_bytes() for d in ("server-ca", "client-ca")] == cas_before
+    assert svc.pki_clock_normalise() == "noop"                      # never fires unprompted
+
+
+def test_normalisation_preserves_revocations(tmp_path, monkeypatch):
+    p = _provisional_box(tmp_path, monkeypatch)
+    pki.issue_client_cert(p, "doomed", days=30, passphrase="x" * 12)
+    pki.revoke_client_cert(p, "doomed")
+    serial = int(next(c["serial"] for c in pki.list_client_certs(p) if c["label"] == "doomed"), 16)
+    pki.build_crl(p, validity=pki.PROVISIONAL_VALIDITY)              # back to a provisional CRL
+    assert pki.crl_is_provisional(p) is True
+
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert svc.pki_clock_normalise() == "normalised"
+
+    assert serial in {r.serial_number for r in _crl(tmp_path)}
+    assert all(c["state"] != "active" for c in pki.list_client_certs(p) if c["label"] == "doomed")
+
+
+def test_a_failed_reload_keeps_the_marker_and_the_retry_does_not_mint_again(tmp_path, monkeypatch):
+    from lhpc.core import webserver as _ws
+    p = _provisional_box(tmp_path, monkeypatch)
+    monkeypatch.setattr(_ws, "reload", lambda system, paths: ("failed", "nginx said no"))
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+
+    assert svc.pki_clock_normalise() == "reload-pending"
+    assert pki.provisional_pending(p) and (tmp_path / "state" / "crl-reload-pending").exists()
+    serial, crl_no = _server_cert_serial(tmp_path), _crl_number(_crl(tmp_path))
+    assert pki.server_cert_is_provisional(p) is False                # files already normal
+
+    assert svc.pki_clock_normalise() == "reload-pending"            # retry: reload only
+    assert _server_cert_serial(tmp_path) == serial and _crl_number(_crl(tmp_path)) == crl_no
+
+    monkeypatch.setattr(_ws, "reload", lambda system, paths: ("reloaded", "ok"))
+    assert svc.pki_clock_normalise() == "normalised"
+    assert not pki.provisional_pending(p)
+    assert not (tmp_path / "state" / "crl-reload-pending").exists()
+    assert _server_cert_serial(tmp_path) == serial                    # never minted twice
+
+
+def test_an_inactive_nginx_counts_as_normalised(tmp_path, monkeypatch):
+    # No nginx master (the FakeSystem has none): the files are on disk and the next start loads
+    # them. That is a success, not a failed normalisation.
+    p = _provisional_box(tmp_path, monkeypatch)
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert svc.pki_clock_normalise() == "normalised"
+    assert not pki.provisional_pending(p)
+    assert not (tmp_path / "state" / "crl-reload-pending").exists()
+
+
+def test_normalisation_never_calls_webserver_apply(tmp_path, monkeypatch):
+    # apply stages and promotes the DESIRED policy; from a background worker it would push an
+    # operator's saved-but-deliberately-unapplied settings live. Normalisation reloads only.
+    import types
+    _provisional_box(tmp_path, monkeypatch)
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    applied = []
+    monkeypatch.setattr(svc, "webserver_apply",
+                        lambda *a, **k: applied.append(1) or types.SimpleNamespace(ok=True))
+    assert svc.pki_clock_normalise() == "normalised"
+    assert applied == []
+
+
+def test_normalisation_skips_while_another_process_holds_the_pki_lock(tmp_path, monkeypatch):
+    # The lock is a cross-process flock, so the contention has to come from a second PROCESS: a
+    # thread-level fake, or holding a recursive lock on the same thread, would prove nothing.
+    import os
+    import subprocess
+    import sys
+    import textwrap
+
+    import lhpc
+    p = _provisional_box(tmp_path, monkeypatch)
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(lhpc.__file__)))
+    holder = subprocess.Popen(
+        [sys.executable, "-c", textwrap.dedent(f"""
+            import pathlib, sys, time
+            from lhpc.core import reslock
+            from lhpc.core.paths import Paths
+            with reslock.operation_lock(Paths(runtime_root=pathlib.Path({str(tmp_path)!r})),
+                                        "pki", "cert-revoke", "dev"):
+                print("held", flush=True)
+                time.sleep(30)
+        """)],
+        stdout=subprocess.PIPE, text=True,
+        env={**os.environ, "PYTHONPATH": repo + os.pathsep + os.environ.get("PYTHONPATH", "")})
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        svc = _svc(tmp_path, monkeypatch=monkeypatch)
+        assert svc.pki_clock_normalise() == "busy"
+        assert pki.provisional_pending(p)                             # nothing touched
+        res = svc.webserver_cert_issue("dev", "x" * 12, True)         # an operator, past the gate
+        assert not res.ok and "busy" in res.summary and "cert-revoke" in res.summary
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+# --- exposure: gate the certificate, not the exposure ----------------------------------------
+
+def test_exposure_with_the_san_already_present_is_not_gated(tmp_path, monkeypatch):
+    # No certificate dates change, so there is nothing for a clock gate to protect.
+    p = _init_pki(tmp_path)
+    pki.issue_server_cert(p, dns_sans=("box.lan",), ip_sans=("10.42.0.1",), days=30)
+    svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
+    assert svc.webserver_configure(ip_sans=["10.42.0.1"]).ok
+    _lan_ip(monkeypatch, "10.42.0.1")
+    serial = _server_cert_serial(tmp_path)
+    res = svc.webserver_expose(["10.42.0.0/24"], confirm=True)
+    assert res.ok and "--accept-unverified-clock" not in res.summary
+    assert _server_cert_serial(tmp_path) == serial                  # nothing reissued
+
+
+def test_a_multihomed_provisional_box_reissues_provisionally_and_is_not_gated(tmp_path, monkeypatch):
+    # THE firstboot counterexample: `local_ip()` follows the DEFAULT ROUTE. Lite with the AP up
+    # and an ethernet lead plugged in resolves to the ethernet address, which is not a SAN, so a
+    # reissue IS required -- and while the PKI is provisional it must happen with the provisional
+    # window, ungated, marker kept. The legacy override is irrelevant to the issuance mode.
+    p = _provisional_box(tmp_path, monkeypatch)
+    _lan_ip(monkeypatch, "192.168.1.50")
+    svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
+    res = svc.webserver_expose(["192.168.1.0/24"], confirm=True)
+    assert res.ok and "--accept-unverified-clock" not in res.summary
+    cert = _cert(tmp_path, "server", "server.crt")
+    ips = {str(i) for i in cert.extensions.get_extension_for_class(
+        x509.SubjectAlternativeName).value.get_values_for_type(x509.IPAddress)}
+    assert "192.168.1.50" in ips
+    assert _window(cert) == pki.PROVISIONAL_VALIDITY                # not dated from the bad clock
+    assert pki.provisional_pending(p)
+
+
+def test_a_multihomed_commissioned_box_without_the_marker_is_still_gated(tmp_path, monkeypatch):
+    p = _init_pki(tmp_path)
+    pki.issue_server_cert(p, dns_sans=("box.lan",), ip_sans=(), days=30)
+    _lan_ip(monkeypatch, "192.168.1.50")
+    svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
+    serial = _server_cert_serial(tmp_path)
+    res = svc.webserver_expose(["192.168.1.0/24"], confirm=True)
+    assert not res.ok and "--accept-unverified-clock" in res.summary
+    assert _server_cert_serial(tmp_path) == serial
+
+
+# --- the CRL heal, same contract -------------------------------------------------------------
+
+def test_the_crl_heal_never_calls_webserver_apply(tmp_path, monkeypatch):
+    import types
+    _init_pki(tmp_path)
+    now = _dt.datetime.now(_dt.UTC)
+    _stale_crl(tmp_path, last_update=now - _dt.timedelta(days=60),
+               next_update=now - _dt.timedelta(days=30))
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    applied = []
+    monkeypatch.setattr(svc, "webserver_apply",
+                        lambda *a, **k: applied.append(1) or types.SimpleNamespace(ok=True))
+    assert svc.crl_refresh_if_expired() is True
+    assert applied == []
+
+
+def test_the_crl_heal_leaves_a_provisional_crl_to_normalisation(tmp_path, monkeypatch):
+    # By the heal's own rule (nextUpdate passed, or lastUpdate in the future) a provisional CRL
+    # is never stale, so the heal never touches it -- normalisation is the ONLY path that does.
+    p = _provisional_box(tmp_path, monkeypatch)
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    before = _tls(tmp_path, "client-ca", "crl.pem").read_bytes()
+    assert svc.crl_refresh_if_expired() is False
+    assert _tls(tmp_path, "client-ca", "crl.pem").read_bytes() == before
+    assert pki.crl_is_provisional(p) is True
+
+
+# --- the surfaces --------------------------------------------------------------------------
+
+def test_the_cli_init_command_has_no_clock_override():
+    import argparse
+
+    from lhpc.adapters.cli.main import build_parser
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["webserver", "init", "--accept-unverified-clock"])
+    # ...while the gated commands keep it
+    ns = parser.parse_args(["webserver", "tls-renew", "--accept-unverified-clock"])
+    assert ns.accept_unverified_clock is True
+    assert isinstance(parser, argparse.ArgumentParser)
+
+
+def test_verify_reports_a_provisional_pki_without_failing_it(tmp_path, monkeypatch):
+    _provisional_box(tmp_path, monkeypatch)
+    svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
+    res = svc.webserver_verify()
+    assert res.data["checks"]["pki_provisional"] == "yes"
+    assert any("provisional" in d for d in res.details)
+    assert res.data["checks"].get("server_ca") != "failed"
+    normal = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert normal.pki_clock_normalise() == "normalised"
+    assert normal.webserver_verify().data["checks"]["pki_provisional"] == "no"

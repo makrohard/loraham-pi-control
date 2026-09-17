@@ -24,6 +24,28 @@
   MANAGED mode. What changed is that reading a status page no longer does.
 - `lhpc daemon <band>` still takes a real measurement: asking once, by hand, is the case CAD is
   for.
+- **Commissioning no longer depends on a clock.** `webserver init` refused to create the PKI on an
+  unverified clock (0.6.0's gate), and firstboot runs it before the console exists — so a Lite box
+  in AP mode with no RTC, no NTP and no GPS fix never finished commissioning: no console, no
+  firewall, no way for anyone to fix the clock. The 0.6.2 Lite image failed its firstboot gate
+  exactly there. `init` is now ungated. Under an unverified clock it mints the PKI with a **fixed
+  provisional validity** (2025-01-01 to 2049-12-31 — the last date expressible as UTCTime, tested
+  against OpenSSL, NSS and GnuTLS) instead of dates from the bad clock, writes a marker
+  *before* the first certificate, and the console watchdog normalises the server certificate
+  (same key) and the CRL once the clock is verified — reloading nginx, never running Apply, so a
+  saved-but-unapplied setting is not pushed live in the background. The CAs are never rotated
+  automatically. `tls-renew`, `cert issue/reissue/revoke` and a certificate-changing exposure stay
+  gated; `--accept-unverified-clock` is removed from `init`, where it now had nothing to override.
+- Enabling remote exposure is gated on whether it will actually **reissue the certificate**, not
+  on exposure itself: an address already in the SANs changes nothing and is never refused; a
+  missing one is reissued provisionally while the PKI is provisional, and gated as before once
+  commissioned. `local_ip()` follows the default route, so a Lite box with the AP up and an
+  ethernet lead plugged in hit the missing-SAN case at firstboot.
+- One lock for every PKI writer. There was none: the watchdog rebuilds the CRL from a background
+  thread on every box, so it could load the inventory, an operator could revoke, and the rebuild
+  then overwrite that revocation. `init`, renew, issue, reissue, revoke, discard-export, the CRL
+  heal and normalisation all take it; the watchdog skips a pass it cannot get, an operator gets
+  "PKI operation busy". The CRL heal also now reloads nginx instead of running Apply.
 
 ## 0.6.2
 

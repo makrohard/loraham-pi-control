@@ -218,10 +218,29 @@ A certificate outlives the boot that made it. A Pi has no battery-backed clock, 
 up in 1970 — or one whose GPS handed it a rolled-back date — would mint material that is "not yet
 valid" for years and lock you out of the console the PKI protects.
 
-So every operation that **dates** PKI material asks the clock first: `webserver init`, `tls-renew`,
-`cert issue`, `cert reissue`, `cert revoke`. The check runs **before anything is written**. That
+So every operation that **dates** PKI material on a commissioned box asks the clock first:
+`tls-renew`, `cert issue`, `cert reissue`, `cert revoke`, and enabling remote exposure when that
+has to reissue the server certificate. The check runs **before anything is written**. That
 placement matters most for `cert reissue`, which revokes the old certificate before issuing its
 replacement — a refusal any later would leave you with neither.
+
+**Commissioning is not gated.** `webserver init` needs no clock: a Lite box has no RTC, in AP mode
+it has no NTP, and it may or may not have a GPS fix — and firstboot runs `init` before the console
+exists, so a refusal there would leave nobody able to fix the clock. When the clock is unverified,
+`init` still creates the PKI, but with a **fixed provisional validity** (2025-01-01 to 2049-12-31)
+instead of dates taken from a clock LHPC has just declared untrustworthy — a stale clock would
+mint material that expires early, a fast one material that is "not yet valid" to your browser from
+the first minute. A marker (`config/tls/unverified-clock`) records this *before* the first
+certificate is written, and the console's watchdog **normalises** the server certificate and the
+CRL — same key, ordinary dates, nginx reloaded — within a minute of the clock becoming verified.
+The two CAs keep their provisional window: it is clock-independent by construction, and replacing
+the client CA would invalidate every client certificate you had already installed. `lhpc webserver
+verify` and the Certificates panel show `provisional` until normalisation has run.
+
+While the PKI is provisional, enabling exposure on a box whose LAN address is not yet a SAN
+reissues the server certificate with the same provisional window rather than refusing — the box
+must be reachable to be fixed. Exposure on a box whose address is already a SAN changes no
+certificate dates and is never gated.
 
 Time counts as verified when the kernel says the clock is synchronised, its estimated error is
 within one second, and it is not before 2025 — a fixed date compiled into LHPC. If it is not:
@@ -252,8 +271,8 @@ about its limits. See [Clock](operations.md#clock).
 *future* — the second is a CRL minted while the clock was wrong, which nginx rejects the moment the
 clock is corrected and which would otherwise never expire. Repair happens only with a verified
 clock (there is no operator present to accept the risk), and it preserves the CA and every revoked
-serial. Nothing else is ever regenerated automatically: replacing a certificate cannot fix one
-already installed on a phone.
+serial. Beyond that and the normalisation of a provisionally-minted server certificate, nothing is
+ever regenerated automatically: replacing a certificate cannot fix one already installed on a phone.
 
 ## Certificates and the two-CA PKI
 
