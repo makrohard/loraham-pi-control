@@ -2,6 +2,12 @@
 
 ## 0.6.2
 
+- Pins the LoRaHAM daemon to **1.0.0** (`4f84b6d`). The reliability release: CAD read from the
+  chip's registers instead of a pin it may not route, so Uputronics boards get real
+  listen-before-talk; a failed GPIO call is no longer mistaken for a logic level; `POWER` and the
+  OCP limited to what the board can reach; FSK frames limited to the 63 bytes the FIFO holds; LDRO
+  actually written at long symbol times; English, UTC-stamped log output. Both daemon sites move
+  together — the chat stack builds from the same repository.
 - Pins the KISS TNC to 0.6.2: no TX retune when RX and TX are equal.
 - `POWER` is validated against the chip actually fitted. LoRaHAM daemon 1.0.0 accepts 2–17 dBm on
   SX127x boards (below 2 the driver transmits on RFO instead of the antenna's PA_BOOST pin; 18 and
