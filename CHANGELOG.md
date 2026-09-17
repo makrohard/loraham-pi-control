@@ -24,6 +24,10 @@
   MANAGED mode. What changed is that reading a status page no longer does.
 - `lhpc daemon <band>` still takes a real measurement: asking once, by hand, is the case CAD is
   for.
+- Pins the LoRaHAM daemon to **1.1.0** (`58051e9`), which adds the `GET CHANNEL NOSCAN` the passive
+  reads above depend on. Measured on a Pi Zero 2 W at SF12/BW125, polling the CONF socket at the
+  console's own cadence: **3 of 12 frames delivered with the scanning command, 24 of 24 with the
+  new one** — indistinguishable from not polling at all.
 - **Commissioning no longer depends on a clock.** `webserver init` refused to create the PKI on an
   unverified clock (0.6.0's gate), and firstboot runs it before the console exists — so a Lite box
   in AP mode with no RTC, no NTP and no GPS fix never finished commissioning: no console, no
