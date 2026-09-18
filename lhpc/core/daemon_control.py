@@ -86,6 +86,19 @@ _POWER_RANGE: dict[str, tuple[int, int]] = {
     "sx1262": (0, 20),
 }
 
+# Daemon 1.2.0: exactly 20 joins the SX127x set when the process was started with `--high-power`
+# (the datasheet's restricted +20 dBm mode; 18 and 19 stay refused — the pinned RadioLib API admits
+# 2..17 and exactly 20). The contiguous range above is unchanged; this is the disjoint extra the
+# permission unlocks, so a caller that holds the permission admits `_POWER_RANGE | _POWER_EXTRA`
+# and one that does not admits `_POWER_RANGE` alone.
+_POWER_EXTRA: dict[str, frozenset] = {
+    "sx127x": frozenset({20}),
+}
+
+# The daemon's own spelling of its chip family in `STATUS CHIPFAMILY=` (daemon 1.2.0,
+# `daemon_chip_family_name()`), normalised to the family keys used here.
+_STATUS_FAMILY = {"SX127X": "sx127x", "SX1262": "sx1262"}
+
 
 @dataclass
 class DaemonView:
@@ -288,11 +301,18 @@ def int_range(key: str, family: str = "") -> tuple[int, int] | None:
     return _ALLOWED_SET_INT.get(key)
 
 
-def validate_set(key: str, value: str, family: str = "") -> str | None:
+def validate_set(key: str, value: str, family: str = "", high_power: bool = False) -> str | None:
     """Return an error string if (key, value) is not an allowed SET, else None.
 
     `family` narrows the POWER range to the chip actually fitted; omitted, POWER is validated
     against the union of both families and the daemon refuses what its own chip cannot do.
+
+    `high_power` is the band's SAVED high-power switch (`service.high_power_for_band`): with it,
+    exactly 20 is admitted on an SX127x family. It matters ONLY when the family is known to be
+    SX127x — with no family this stays the non-authoritative union utility (`apply_set` calls it
+    that way), and its default of False must never turn that second check into a refusal of an
+    already-authorised 20: the union admits 20 regardless. The authorisation boundary for a LIVE
+    20 is `live_power_error`, not this function.
     """
     key = key.upper()
     value = value.upper()
@@ -306,9 +326,16 @@ def validate_set(key: str, value: str, family: str = "") -> str | None:
             n = int(value)
         except ValueError:
             return f"{key} must be an integer in [{lo}, {hi}]"
-        if not (lo <= n <= hi):
-            return f"{key} must be in [{lo}, {hi}]"
-        return None
+        if lo <= n <= hi:
+            return None
+        extra = _POWER_EXTRA.get(family, frozenset()) if key == "POWER" else frozenset()
+        if n in extra and high_power:
+            return None
+        if extra:
+            return (f"{key} must be in [{lo}, {hi}] (or exactly "
+                    f"{', '.join(str(x) for x in sorted(extra))} with the band's high-power "
+                    "switch on)")
+        return f"{key} must be in [{lo}, {hi}]"
     if key == "FREQ":
         # Mirror the daemon's config_value_parse_float_exact + f>0 + setFrequency domain,
         # but STRICTLY: only a plain finite positive decimal (no exponent, NaN, inf, sign,
@@ -370,6 +397,75 @@ def _norm(val: str) -> str:
         return str(int(f))
     except (ValueError, OverflowError):
         return v
+
+
+def chip_family_from_status(status: dict) -> str:
+    """The RUNNING chip family, "sx127x" / "sx1262", read off the daemon's own `STATUS
+    CHIPFAMILY=` field (daemon 1.2.0). "" when the field is absent or unrecognised — an older
+    daemon, an unreachable one, or garbage — which every caller must treat as UNKNOWN, never as
+    a family. It is deliberately not the saved hardware setup: `set_hardware_setup` writes config
+    without replacing the process, so the saved family can differ from the running one."""
+    return _STATUS_FAMILY.get(str(status.get("CHIPFAMILY", "")).strip().upper(), "")
+
+
+def high_power_from_status(status: dict) -> bool | None:
+    """The RUNNING `--high-power` permission from `STATUS HIGHPOWER=` (daemon 1.2.0): True /
+    False, or None when the field is absent or malformed — unknown, never "off"."""
+    v = str(status.get("HIGHPOWER", "")).strip()
+    if v == "1":
+        return True
+    if v == "0":
+        return False
+    return None
+
+
+def live_power_error(value: str, running_family: str, live_high_power: bool | None,
+                     saved_on: bool) -> str | None:
+    """The LIVE POWER predicate — authoritative for EVERY live POWER value, not only 20.
+
+    Rule: the RUNNING `CHIPFAMILY` decides the live numeric set; the saved hardware family decides
+    only what may be persisted for the next launch (`validate_set`). Otherwise a Hardware setup
+    saved after the daemon started lets a live `POWER=0` reach a running SX127x (which refuses it
+    while the unconfirmable SET is reported "sent"), or refuses a legitimate `POWER=0` on a
+    running SX1262.
+
+      * running SX1262           -> 0..20; the permission is irrelevant
+      * running SX127x           -> 2..17, or exactly 20 only when the running daemon reports
+                                    HIGHPOWER=1 AND the band's switch is saved on; 0/1 and
+                                    18/19 refused
+      * family unknown (older    -> 2..17 only, the intersection of both families; 0/1 and 20
+        daemon / no field)          are refused as family-dependent rather than guessed from the
+                                    saved board
+
+    Returns the reason string, or None when the value may be sent. `saved_on` is
+    `service.high_power_for_band(band)`; `live_high_power` is `high_power_from_status`."""
+    try:
+        n = int(str(value).strip())
+    except ValueError:
+        return "POWER must be an integer"
+    if running_family == "sx1262":
+        return None if 0 <= n <= 20 else "POWER must be in [0, 20] on the running SX1262"
+    if running_family == "sx127x":
+        if 2 <= n <= 17:
+            return None
+        if n == 20:
+            if live_high_power is True and saved_on:
+                return None
+            if live_high_power is True:
+                return ("POWER=20 refused: the band's high-power switch is saved off; the "
+                        "running daemon still holds the permission until it is restarted")
+            if live_high_power is False:
+                return ("POWER=20 refused: high-power permission is not enabled on the running "
+                        "daemon (switch it on in the daemon Hardware settings, then restart the "
+                        "daemon)")
+            return ("POWER=20 refused: the running daemon does not report HIGHPOWER= (older "
+                    "daemon) — update it")
+        return "POWER must be in [2, 17] on the running SX127x (or exactly 20 with high-power)"
+    if 2 <= n <= 17:
+        return None
+    return (f"POWER={n} refused: the running daemon does not report its chip family (older "
+            "daemon or not reachable), so only 2..17 can be sent live — update or restart "
+            "the daemon")
 
 
 def canonical_value(key: str, value: str) -> str:
