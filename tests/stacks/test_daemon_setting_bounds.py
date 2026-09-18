@@ -136,10 +136,20 @@ def test_service_refuses_out_of_range_power_for_an_sx127x_board(tmp_path, setup,
     from lhpc.core import config as cfgmod
     p = Paths(runtime_root=tmp_path)
     cfgmod.save_hardware_setup(p, setup)
-    svc = ControllerService(system=FakeSystem().system, paths=p)
+    # 0.10.0: a LIVE POWER is judged by the RUNNING daemon's family (STATUS CHIPFAMILY=), not by the
+    # saved board, so the fake daemon reports the SX127x it is. Without a permission, 20 is refused
+    # like 0 (`tests/stacks/test_high_power.py` has the permission rows).
+    status = (b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90 RXREADY=1 "
+              b"HIGHPOWER=0 CHIPFAMILY=SX127x\n")
+    fs = FakeSystem(unix_replies={dc.conf_socket(band): status})
+    svc = ControllerService(system=fs.system, paths=p)
     assert svc.chip_family_for_band(band) == "sx127x"
     r = svc.daemon_set(band, "POWER", rejected, apply=True)
     assert not r.ok and "POWER" in r.summary
+    assert fs.sent == []                       # refused before anything reached the socket
+    # And an unreachable daemon refuses a live POWER too, naming the key.
+    r2 = ControllerService(system=FakeSystem().system, paths=p).daemon_set(band, "POWER", "17")
+    assert not r2.ok and "POWER" in r2.summary
 
 
 @pytest.mark.parametrize("setup,band", [("waveshare-433", "433"), ("waveshare-868", "868")])

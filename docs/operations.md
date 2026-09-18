@@ -88,6 +88,9 @@ What the binary channel means in practice:
   **dummy load**, and confirms unless `--yes`. It sends one frame per band and
   verifies `TXOK` incremented.
 - Read-only status/doctor/page loads never transmit and never initialise a radio.
+- +20 dBm on an SX127x board is off by default and needs the band's high-power switch plus a daemon
+  restart ([daemon](stacks/daemon.md#settings)). Nothing measures or enforces its duty-cycle, VSWR or
+  supply limits; it is unvalidated on the LoRaHAM 433 RFM98PW.
 
 ## Secrets and passwords
 

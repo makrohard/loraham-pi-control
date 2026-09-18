@@ -1921,6 +1921,13 @@ class LifecycleOpsMixin:
                 dparams["txmode"] = dparams.get(f"tx_{b}", "managed")
                 dparams["cadmon"] = dparams.get(f"cadmon_{b}", "off")
                 dparams["cadrssi"] = dparams.get(f"cadrssi_{b}", "-90")
+                # The +20 dBm permission: the injected `hipower` is a flag-kind param that emits
+                # the bare `--high-power` when on and NO token when off. ONE source of truth --
+                # `high_power_for_band`, a literal compare against the canonical `on` -- so a
+                # stray or hand-edited stored value can never enable a safety-relevant mode
+                # through the permissive flag emitter (the daemon is skipped by the generic
+                # saved-launch refusal; this is its gate).
+                dparams["hipower"] = "on" if self.high_power_for_band(b) else "off"
                 # The RF-log switch is STACK-level (band-less) while the file it names is per
                 # band (`{band}` in the run line); the path itself is never a stored value.
                 dparams[_rflog.RF_LOG_PARAM] = self._resolved_param_value(
@@ -1997,7 +2004,22 @@ class LifecycleOpsMixin:
         TXMODE is gating (the app needs its mode); radio params (sent-unconfirmed) and CAD tuning
         are non-gating."""
         lines, tx_ok = [], True
-        for key, val in self._daemon_param_applies(stack_id, band).items():
+        applies = self._daemon_param_applies(stack_id, band)
+        # Preflight an explicit POWER=20 BEFORE the batch: a permission mismatch is known from
+        # the daemon's own STATUS without touching the radio, and refusing here avoids a
+        # half-retuned daemon. This one failure is START-GATING — the whole point of the
+        # high-power switch is explicit authorisation, so knowingly starting the app without it
+        # would not be truthful configuration. Every other radio-param failure stays warn-only.
+        if str(applies.get("POWER", "")).strip() == "20":
+            view = daemon_control.read_view(self._system, band)
+            err = (self._live_power_error(band, "20", view.status) if view.reachable
+                   else f"daemon not serving {band} MHz")
+            if err:
+                lines.append(f"  [fail] {band}: {stack_id} requests POWER=20 but {err} "
+                             f"(saved switch {'on' if self.high_power_for_band(band) else 'off'}, "
+                             f"running HIGHPOWER={view.status.get('HIGHPOWER', '?')})")
+                return lines, False
+        for key, val in applies.items():
             ok, detail = self._apply_daemon_param(band, key, val)
             gating = key == "TXMODE"                     # the app needs its mode; radio/CAD not
             if gating:
@@ -2035,8 +2057,10 @@ class LifecycleOpsMixin:
         can_apply = is_daemon or self.stack_running(sid)
         return {"stack": target, "band": b, "bands": applicable, "all_bands": list(self.RADIO_BANDS),
                 "is_daemon": is_daemon, "can_apply": can_apply,
+                "high_power": self.high_power_state(b),
                 "rows": daemon_params.stack_view(sid, b, self._daemon_param_overrides(target, b),
-                                                 self.chip_family_for_band(b))}
+                                                 self.chip_family_for_band(b),
+                                                 self.high_power_for_band(b))}
 
     def save_daemon_params(self, target: str, band: str, values: dict) -> ActionResult:
         """Persist operator overrides for a stack's daemon params (band-scoped). Semantics:
@@ -2067,7 +2091,8 @@ class LifecycleOpsMixin:
             if raw == "":
                 updates[key] = ""                                  # explicit blank -> clear this key
                 continue
-            err = daemon_control.validate_set(name, raw, self.chip_family_for_band(band))
+            err = daemon_control.validate_set(name, raw, self.chip_family_for_band(band),
+                                              self.high_power_for_band(band))
             if err:
                 return ActionResult(False, f"{name}: {err}")
             canon = daemon_control.canonical_value(name, raw)
@@ -5097,6 +5122,10 @@ class LifecycleOpsMixin:
                     "cadrssi": dv.status.get("CADRSSI") if dv.reachable else None,
                     "cadwait": dv.status.get("CADWAIT") if dv.reachable else None,
                     "liverssi": dch[band].get("LIVERSSI") if dv.reachable else None,
+                    # daemon 1.2.0 witnesses: the RUNNING permission and family, off the
+                    # daemon's own STATUS — the SX127x +20 dBm banner keys on these, never on
+                    # the saved switch (a stray band after a Hardware change renders it too).
+                    "high_power": self.high_power_state(band, dv),
                 },
                 "running": running,
                 "startable": startable,
@@ -5138,6 +5167,10 @@ class LifecycleOpsMixin:
                     "cadrssi": dv.status.get("CADRSSI") if dv.reachable else None,
                     "cadwait": dv.status.get("CADWAIT") if dv.reachable else None,
                     "liverssi": dch[band].get("LIVERSSI") if dv.reachable else None,
+                    # daemon 1.2.0 witnesses: the RUNNING permission and family, off the
+                    # daemon's own STATUS — the SX127x +20 dBm banner keys on these, never on
+                    # the saved switch (a stray band after a Hardware change renders it too).
+                    "high_power": self.high_power_state(band, dv),
                 },
                 "running": [], "startable": [], "interactive": [], "conflict": [],
                 "rflogs": self._rflogs_for_band(band, []),

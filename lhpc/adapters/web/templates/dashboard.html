@@ -64,6 +64,18 @@
         </header>
         <div class="body">
 
+          {% if r.daemon.high_power and r.daemon.high_power.warn %}
+            {# daemon 1.2.0: keyed on the RUNNING family + permission (STATUS), never the saved
+               switch — so it also renders on a stray band after a Hardware change. #}
+            <p class="depnote depnote-warn" id="rd-hp-{{ r.band }}">⚠ SX127x +20 dBm permission is
+              enabled on {{ r.band }} MHz. This does not report the selected TX power. At +20 dBm
+              obey the 1 % duty-cycle and 3:1 VSWR limits and provide suitable supply and cooling.
+              Duty cycle is not measured or enforced. Warranty void if disregarded.</p>
+          {% endif %}
+          {% if r.daemon.high_power and r.daemon.high_power.mismatch %}
+            <p class="depnote depnote-warn" id="rd-hp-mismatch-{{ r.band }}">High-power switch, {{ r.band }} MHz: {{ r.daemon.high_power.mismatch }}</p>
+          {% endif %}
+
           {% if r.stray %}
             <div class="depnote depnote-warn">
               <strong>A daemon is still running on {{ r.band }} MHz, which the current radio mode

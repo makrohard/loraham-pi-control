@@ -165,6 +165,7 @@ lhpc hardware uputronics-433 # Uputronics 433 only (CE0)
 lhpc hardware uputronics-868 # Uputronics 868 only (CE1)
 lhpc hardware waveshare-433  # Waveshare SX1262 (433)
 lhpc hardware waveshare-868  # Waveshare SX1262 (868)
+lhpc hardware --high-power 433 on|off  # allow POWER=20 on an SX127x band; takes effect at that band's next daemon start
 ```
 
 - Which combinations are offered and what a single-radio setup blocks: [daemon](stacks/daemon.md#settings).

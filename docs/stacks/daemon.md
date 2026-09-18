@@ -31,14 +31,17 @@ probe are in [cli](../cli.md#hardware). Only legit board combinations are offere
 single-radio setup blocks the stacks that need the absent band (`meshcore` needs 868). A fresh
 install is `unset` and the daemon refuses to start until one is chosen.
 
-**Stack params** — `lhpc config daemon <param> <value>` or the Settings panel:
+**Stack params** — kept in `config/stacks/daemon.toml`. `lhpc config daemon` lists none (by design: the
+daemon's radio params are the daemon-parameter panel); `hipower_<band>` is set on the Hardware settings
+or with `lhpc hardware --high-power`, `rf_log` on its log page, the rest in that file:
 
 | param | default | meaning |
 |---|---|---|
 | `tx_433` / `tx_868` | `managed` | TX mode per band. `MANAGED` = bounded CAD/LBT, a busy channel returns `CHANNEL_BUSY`; `DIRECT` = immediate TX, no CAD |
 | `cadmon_433` / `cadmon_868` | `off` | continuous channel-activity monitor |
 | `cadrssi_433` / `cadrssi_868` | `-90` | channel-busy RSSI threshold, dBm (−130…0) |
-| `rf_log` | `on` | RF log: every frame the radio received (RSSI/SNR) or sent (after `transmit()` returned OK — a CAD-refused send writes nothing), raw hex + ASCII, one file per band (`logs/rf-daemon-433.log`, `-868.log`). Stack-level switch, read at the daemon's next start; the daemon has no Settings form, so the switch is on its log page or `lhpc config daemon rf_log off` |
+| `hipower_433` / `hipower_868` | `off` | the +20 dBm permission per band (daemon 1.2.0 `--high-power`): `on` injects the bare flag at the band's next daemon start, so the daemon admits exactly `POWER=20` on an SX127x board. Strict `off`/`on`. Saving marks the daemon restart-required and restarts nothing; a running daemon keeps the permission it was started with. Inert on an SX1262. The datasheet limits +20 dBm to a transmit duty cycle ≤ 1 %, VSWR ≤ 3:1 and VDD 2.4–3.7 V — nothing measures or enforces that, keep the chip cooled, **warranty void if disregarded**. Unvalidated on the LoRaHAM 433 RFM98PW. Set it on the daemon's Hardware settings (its own control) or with `lhpc hardware --high-power <band> on|off` — `lhpc config daemon <param>` exposes none of the daemon's start options |
+| `rf_log` | `on` | RF log: every frame the radio received (RSSI/SNR) or sent (after `transmit()` returned OK — a CAD-refused send writes nothing), raw hex + ASCII, one file per band (`logs/rf-daemon-433.log`, `-868.log`). Stack-level switch, read at the daemon's next start; the daemon has no Settings form, so the switch is on its log page |
 
 A client stack declares the TX mode it needs (`requires_daemon_tx`: MANAGED for kiss, graywolf,
 chat, meshcom and meshcore; DIRECT for voice), and lhpc applies it live when that stack starts.
@@ -56,12 +59,18 @@ daemon **once**, after the daemon reports READY and before the stack's component
 | radio | `MODE`, `FREQ`, `SF`, `BW`, `CR`, `CRC`, `LDRO`, `PREAMBLE`, `SYNC`, `POWER` | LORA/FSK · 150–960 MHz · 7–12 · 7.8–500 kHz · 5–8 · 0/1 · AUTO/0/1 · 6–65535 symbols · hex byte · **2–17 dBm on SX127x, 0–20 on SX1262** |
 | listen-before-talk | `TXMODE`, `TXQUEUE`, `CADMONITOR`, `CADRSSI`, `CADWAIT`, `CADIDLE`, `CADTXAFTERTIMEOUT` | MANAGED/DIRECT · 0/1 · 0/1 · −130…0 dBm · 50–5000 ms · 0–2000 ms · 0/1 |
 
-**`POWER` is the one range that depends on the board.** The daemon accepts 2–17 dBm on the SX127x
-boards (LoRaHAM, Uputronics) and 0–20 on the SX1262 (Waveshare): below 2 dBm the SX127x driver
-transmits on the RFO pin instead of the antenna's PA_BOOST pin, RadioLib itself refuses 18 and 19,
-and 20 carries a duty-cycle contract the daemon does not enforce. lhpc validates against the range
-of the board configured in the daemon Hardware settings, and against the union of both when no
-board is configured — the daemon, which knows its own hardware, issues the refusal in that case.
+**`POWER` is the one range that depends on the board — and on a permission.** The daemon accepts
+2–17 dBm on the SX127x boards (LoRaHAM, Uputronics) and 0–20 on the SX1262 (Waveshare): below 2 dBm
+the SX127x driver transmits on the RFO pin instead of the antenna's PA_BOOST pin, and RadioLib's
+PA_BOOST API admits 2–17 and exactly 20, so 18 and 19 do not exist on that path. Exactly 20 is the
+datasheet's restricted +20 dBm mode and needs the band's high-power switch (`hipower_<band>`, above)
+saved on *and* the daemon restarted with it. Saved values are validated against the board configured
+in the daemon Hardware settings plus that saved switch; **live** requests are validated against what
+the running daemon reports in `STATUS` (`CHIPFAMILY=`, `HIGHPOWER=`), because a Hardware setup saved
+after the daemon started is not what is running — an older daemon that reports neither gets only
+2–17 live. A stack profile asking for `POWER=20` without the running permission is refused at start.
+The daemon never echoes `POWER`, so a sent 20 is "sent", not "confirmed", and no software here
+measures the output or the duty cycle.
 
 The client app re-`SET`s its own radio params and `TXMODE` when it connects, so those rows are
 **app-owned**: lhpc still applies them, the app overwrites them, and the panel greys them.

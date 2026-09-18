@@ -170,6 +170,15 @@ def _render_daemon(view, channel: dict[str, str] | None = None) -> int:
               "(NOT READY) — no usable radio; dependents cannot start.")
     print(f"Radio: {s.get('RADIO','?')}   TX mode: {s.get('TXMODE','?')}   "
           f"TX active: {s.get('TX','?')}")
+    # daemon 1.2.0 witnesses: the RUNNING chip family and +20 dBm permission (never the saved
+    # switch). Absent fields = an older daemon: say "unknown", never "off".
+    hp, fam = s.get("HIGHPOWER"), s.get("CHIPFAMILY")
+    print(f"Chip:  {fam or 'unknown'}   high-power permission: "
+          f"{'ON' if hp == '1' else 'off' if hp == '0' else 'unknown (older daemon)'}")
+    if hp == "1" and str(fam).upper() == "SX127X":
+        print("WARN  SX127x +20 dBm permission is enabled on this band. At +20 dBm obey the 1 % "
+              "duty-cycle and 3:1 VSWR limits and provide suitable supply and cooling; nothing "
+              "measures or enforces this. Warranty void if disregarded.")
     print(f"RSSI:  live {ch.get('LIVERSSI','?')} dBm   packet {ch.get('PACKETRSSI','?')} dBm   "
           f"CAD threshold {s.get('CADRSSI','?')} dBm")
     print(f"CAD:   state {ch.get('CADSTATE','?')}   CADWAIT {s.get('CADWAIT','?')}ms   "
@@ -682,6 +691,13 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Show or set the radio hardware setup (which board(s) the box has)")
     p_hw.add_argument("setup", nargs="?", choices=tuple(_HW_SETUPS),
                       help="e.g. loraham | uputronics | waveshare-433 (no arg: show current + list)")
+    # The per-band +20 dBm permission lives beside the hardware setup (daemon 1.2.0 --high-power):
+    # `lhpc config daemon` deliberately exposes none of the daemon's run params, so this is the CLI
+    # for the switch. Saves and marks the daemon restart-required; restarts nothing.
+    p_hw.add_argument("--high-power", nargs=2, metavar=("BAND", "off|on"),
+                      help="Allow POWER=20 on an SX127x board for BAND (433|868), off|on. Takes "
+                           "effect at the band's next daemon start. At +20 dBm: duty cycle <= 1 %%, "
+                           "VSWR <= 3:1, cooling; nothing enforces it; warranty void if disregarded")
 
     # Guarded passthrough to the managed Meshtastic CLI (parsed by _cmd_meshtastic, not here — it
     # forwards arbitrary upstream argv). Registered only so it appears in the command list.
@@ -1312,6 +1328,11 @@ def _run(argv: list[str] | None = None) -> int:
                 print("  failed stacks are NOT retried — restart them with:  lhpc stack start <id>")
         return 0
     if args.command == "hardware":
+        if args.high_power:
+            if args.setup:
+                print("ERR   --high-power and a hardware setup are separate settings — one at a time")
+                return 2
+            return _render(svc.set_high_power(args.high_power[0], args.high_power[1]))
         return _render(svc.set_hardware_setup(args.setup))
     if args.command == "gps":
         if args.monitor or args.sats:

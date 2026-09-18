@@ -5,6 +5,21 @@
 **Upgrading with MeshCom installed:** MeshCom does not start until it is updated (its QEMU moves to
 9.2.2): run `lhpc update meshcom --yes`.
 
+- +20 dBm on SX127x is a per-band opt-in: `hipower_433` / `hipower_868` (off by default, daemon
+  Hardware settings, or `lhpc hardware --high-power <band> on|off`) starts that band's daemon with
+  LoRaHAM daemon 1.2.0's `--high-power`, which admits exactly `POWER=20`. Saving marks the daemon
+  restart-required; a running daemon keeps the permission it started with. 18 and 19 stay refused;
+  inert on an SX1262. Nothing enforces the datasheet's limits (duty cycle ≤ 1 %, VSWR ≤ 3:1,
+  VDD 2.4–3.7 V): keep the chip cooled, warranty void if disregarded. Unvalidated on the LoRaHAM
+  433 RFM98PW.
+- Live `POWER` (direct set, profile apply, start preflight) is checked against the chip family and
+  permission the running daemon reports (`CHIPFAMILY=`, `HIGHPOWER=` in `STATUS`), not the saved
+  board. A live `POWER=0` to a running SX127x was reported "sent" although the daemon refused it.
+- A stack whose profile asks for SX127x `POWER=20` without the permission does not start; the
+  refusal names the saved and running state.
+- The high-power banner (dashboard, daemon settings, `lhpc daemon <band>`) follows the running
+  daemon: it stays up until the restart that revokes a switched-off permission.
+- LoRaHAM daemon 1.2.0 (both pins).
 - `lhpc stack start <stack> --band 433|868` starts a band-switchable stack on one band, as the
   console's per-band Start does; a band the hardware or the stack cannot serve is refused.
 - `lhpc stack start meshcore-cli` is no longer refused while MeshCore runs: the Companion slot the
