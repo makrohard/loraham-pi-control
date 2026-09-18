@@ -53,6 +53,47 @@
           <p class="depnote depnote-{{ 'ok' if hw_probe.present else ('warn' if hw_probe.busy else 'bad') }}">
             {{ hw_probe.message }}{% if hw_probe.diagnostic %} — {{ hw_probe.diagnostic }}{% endif %}</p>
         {% endif %}
+        {% if view.high_power %}
+          {# The +20 dBm permission (daemon 1.2.0 --high-power): an explicit per-band control, not
+             a generic run-param row — this page renders none of the daemon's run params. Saved
+             intent beside what the RUNNING daemon reports; the two can differ until a restart. #}
+          <details class="advcfg" id="high-power-daemon">
+            <summary>High-power +20 dBm permission (SX127x)</summary>
+            <p class="muted">Allow <code>POWER=20</code> on this band. Default off; the daemon on
+              that band must be restarted for a change to take effect, and a running daemon keeps
+              the permission it was started with. <strong>At +20 dBm the transmit duty cycle must
+              not exceed 1 %</strong> (SX1276/7/8 datasheet §5.4.3), the antenna VSWR must stay
+              ≤ 3:1, and the chip needs suitable supply and cooling. <strong>LHPC does not measure
+              or enforce the duty cycle.</strong> Outside-spec operation can damage hardware —
+              <strong>warranty void if disregarded.</strong> Unvalidated on the LoRaHAM 433 RFM98PW:
+              its module documentation does not specify this drive condition. No effect on an
+              SX1262.</p>
+            {% for hp in view.high_power %}
+              <form method="post" action="{{ url_for('hardware_high_power') }}" class="act">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="band" value="{{ hp.band }}">
+                <label>{{ hp.band }} MHz
+                  <select name="value" aria-label="high-power {{ hp.band }}">
+                    <option value="off"{% if not hp.saved %} selected{% endif %}>off</option>
+                    <option value="on"{% if hp.saved %} selected{% endif %}>on</option>
+                  </select>
+                </label>
+                <button type="submit">Save</button>
+                <span class="muted" id="hp-live-{{ hp.band }}">running daemon:
+                  {% if not hp.reachable %}not serving{% elif hp.live is none %}HIGHPOWER unknown (older daemon){% elif hp.live %}permission ON{% else %}permission OFF{% endif %}{% if hp.family %} ({{ hp.family }}){% endif %}</span>
+              </form>
+              {% if hp.mismatch %}
+                <p class="depnote depnote-warn" id="hp-mismatch-{{ hp.band }}">{{ hp.band }} MHz: {{ hp.mismatch }}</p>
+              {% endif %}
+              {% if hp.warn %}
+                <p class="depnote depnote-warn" id="hp-warn-{{ hp.band }}">⚠ SX127x +20 dBm permission is enabled on {{ hp.band }} MHz.
+                  This does not report the selected TX power. At +20 dBm obey the 1 % duty-cycle and
+                  3:1 VSWR limits and provide suitable supply and cooling. Duty cycle is not measured
+                  or enforced. Warranty void if disregarded.</p>
+              {% endif %}
+            {% endfor %}
+          </details>
+        {% endif %}
       </section>
     {% endif %}
     {% if view.bands %}

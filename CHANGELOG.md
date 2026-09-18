@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.10.0
+
+- **+20 dBm on SX127x is an explicit, per-band opt-in.** LoRaHAM daemon 1.2.0 admits exactly
+  `POWER=20` on an SX127x board only when the process was started with its new bare `--high-power`
+  flag; lhpc carries that as one saved switch per band (`hipower_433` / `hipower_868`, a strict
+  `off`/`on` enum, default off, under *advanced*) on the daemon's Hardware settings and injects the
+  flag into that band's argv at the next start. Saving restarts nothing — it marks the daemon
+  restart-required like every other start option — and a running daemon keeps the permission it was
+  started with until it is restarted. 18 and 19 stay refused, the flag is inert on an SX1262, and no
+  duty-cycle governor or airtime calculator was added: the operator accepts the datasheet's contract
+  (duty cycle ≤ 1 %, VSWR ≤ 3:1, VDD 2.4–3.7 V) and the switch, the console and the daemon's own log
+  say so — cooling, no enforcement, warranty void if disregarded. Unvalidated on the LoRaHAM 433
+  RFM98PW, whose module documentation does not specify this drive condition. CLI:
+  `lhpc hardware --high-power <band> on|off` (`lhpc config daemon` exposes no daemon start option).
+- **Live POWER is decided by the running daemon, not by the saved board.** The daemon now reports
+  `HIGHPOWER=` and `CHIPFAMILY=` in `STATUS`; a Hardware setup saved after the daemon started does
+  not replace the process, so every live `POWER` request (direct SET, profile apply, the start
+  preflight) is checked against the *reported* family and permission: SX1262 0–20, SX127x 2–17 or
+  exactly 20 with the permission running *and* saved on, and only 2–17 when an older daemon reports
+  no family. Before, a live `POWER=0` could be sent to a running SX127x that refuses it while lhpc
+  reported it "sent". Against an older daemon that reports neither field — only possible if a
+  behind artifact were running, which 0.8.0's pin gate never starts — a live `POWER` of 0, 1 or 20
+  is refused with "update it" rather than guessed from the saved board; that is the intended
+  conservative reading, not a regression.
+- A stack whose profile asks for SX127x `POWER=20` while the permission is unavailable **does not
+  start**; the refusal names the saved and running state. Every other radio-param failure stays a
+  warning, as before.
+- The SX127x high-power banner on the dashboard card, the daemon-params panel and `lhpc daemon
+  <band>` keys on the daemon's report, so it stays up on a pending-off switch (until the restart
+  that revokes it) and on a stray band after a Hardware change, and never appears for an SX1262.
+- Pins LoRaHAM daemon 1.2.0 (both sites; the chat stack builds from the same repository).
+
 ## 0.9.2
 
 - **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step

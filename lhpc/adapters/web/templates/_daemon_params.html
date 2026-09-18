@@ -9,6 +9,12 @@
       overwrites them when it starts. <em>Save</em> stores; <em>Apply live</em> pushes them to the
       running daemon now (only while the stack is running, or here on the daemon page); <em>Reset</em>
       restores defaults.</p>
+    {% if daemon_params.high_power and daemon_params.high_power.warn %}
+      <p class="depnote depnote-warn" id="dp-hp-{{ stack_id }}">⚠ SX127x +20 dBm permission is enabled on
+        {{ daemon_params.band }} MHz. At +20 dBm obey the 1 % duty-cycle and 3:1 VSWR limits and provide
+        suitable supply and cooling. LHPC does not measure or enforce the duty cycle. Warranty void if
+        disregarded.</p>
+    {% endif %}
       {# 433/868 chooser (like the Settings band switch); bands this stack can't use are disabled. #}
       <p><strong>Band:</strong>
         <span class="bandswitch">

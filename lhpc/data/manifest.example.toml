@@ -58,12 +58,14 @@ main = "loraham-daemon"
   # leader and stop() can identity-verify it before signalling.
   # v112+ daemon: ONE radio per process. `--radio` is mandatory; `--hw` selects the board preset;
   # the plain (NON band-suffixed) --tx-mode/--cad-monitor/--cad-rssi apply to this process's band.
-  # lhpc injects `radio`/`hw`/`txmode`/`cadmon`/`cadrssi` per band at spawn (see _ensure_daemon).
+  # lhpc injects `radio`/`hw`/`txmode`/`cadmon`/`cadrssi`/`hipower` per band at spawn (see _ensure_daemon).
+  # `{hipower}` is a FLAG-kind param: it renders the bare `--high-power` when this band's saved
+  # `hipower_<band>` switch is on and NOTHING when it is off (daemon 1.2.0: the +20 dBm permission).
   # `{rf_log}` renders `--rflog on|off` (the STACK-level switch, injected per band like the rest);
   # the file is per band and named by lhpc — the daemon never derives a path itself.
-  run = "loraham_daemon/loraham_daemon --radio {radio} --hw {hw} --tx-mode {txmode} --cad-monitor {cadmon} --cad-rssi {cadrssi} {rf_log} --rflog-path {runtime}/logs/rf-daemon-{band}.log"
+  run = "loraham_daemon/loraham_daemon --radio {radio} --hw {hw} --tx-mode {txmode} --cad-monitor {cadmon} --cad-rssi {cadrssi} {hipower} {rf_log} --rflog-path {runtime}/logs/rf-daemon-{band}.log"
   # Structured (shell-free) execution — preferred over `run`/`pre` above.
-  run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "--hw", "{param:hw}", "--tx-mode", "{param:txmode}", "--cad-monitor", "{param:cadmon}", "--cad-rssi", "{param:cadrssi}", "{param:rf_log}", "--rflog-path", "{runtime}/logs/rf-daemon-{band}.log"]
+  run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "--hw", "{param:hw}", "--tx-mode", "{param:txmode}", "--cad-monitor", "{param:cadmon}", "--cad-rssi", "{param:cadrssi}", "{param:hipower}", "{param:rf_log}", "--rflog-path", "{runtime}/logs/rf-daemon-{band}.log"]
   run_cwd = "{source}"
   # v112 sockets default to /run/loraham (systemd, tmpfiles-provisioned). lhpc runs the daemon DIRECT
   # as a user, so point its sockets at /tmp — the daemon has no /tmp fallback of its own, and all
@@ -125,6 +127,15 @@ main = "loraham-daemon"
     min = -130
     max = 0
     label = "CAD RSSI (this process, dBm)"
+    # The +20 dBm permission for THIS process: a flag-kind param (bare `--high-power` when on,
+    # no token when off), computed at spawn from the band's `hipower_<band>` below. The permissive
+    # flag emitter is fed ONLY the canonical `on` of that strict enum — never a raw stored value.
+    [[stack.component.param]]
+    name = "hipower"
+    kind = "flag"
+    flag = "--high-power"
+    default = "off"
+    label = "High-power +20 dBm permission (this process)"
     # RF log: what this band's radio heard and sent, one line per frame, kept across restarts.
     # STACK-level (band-less) switch — the FILES are per band, the switch is not. The daemon's
     # log page is its only web surface for it (`config_param_fields` is empty here: no Settings form).
@@ -164,6 +175,24 @@ main = "loraham-daemon"
     default = "off"
     label = "CAD monitor 868"
     advanced = true
+    # The saved per-band +20 dBm switch (daemon 1.2.0 `--high-power`). A STRICT enum, not a flag:
+    # generic flag validation keeps any string and the emitter reads anything but 0/false/off as
+    # on, which is the wrong contract for a safety-relevant opt-in. Takes effect on the band's next
+    # daemon start (restart it); a running daemon keeps the permission it was started with.
+    [[stack.component.param]]
+    name = "hipower_433"
+    kind = "enum"
+    choices = ["off", "on"]
+    default = "off"
+    label = "High-power +20 dBm permission 433 (SX127x; restart the daemon; duty cycle <= 1 %, cooling, warranty void if disregarded; unvalidated on the LoRaHAM RFM98PW)"
+    advanced = true
+    [[stack.component.param]]
+    name = "hipower_868"
+    kind = "enum"
+    choices = ["off", "on"]
+    default = "off"
+    label = "High-power +20 dBm permission 868 (SX127x; restart the daemon; duty cycle <= 1 %, cooling, warranty void if disregarded)"
+    advanced = true
     [[stack.component.param]]
     name = "cadrssi_433"
     kind = "int"
@@ -183,8 +212,8 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/loraham-daemon"
-    pin_commit = "e8e748efc04f0d0bf817819230c5e370b1385dd6"
-    pin_tag = "v1.1.1"
+    pin_commit = "926cceda154594da7e73e6c043056095cb15ea83"
+    pin_tag = ""            # feature/high-power; becomes v1.2.0 at the daemon release
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "loraham-daemon-hardening"
@@ -315,8 +344,8 @@ main = "loraham-chat"
 
     [stack.component.source]
     path = "src/LoRaHAM_Daemon"
-    pin_commit = "e8e748efc04f0d0bf817819230c5e370b1385dd6"
-    pin_tag = "v1.1.1"
+    pin_commit = "926cceda154594da7e73e6c043056095cb15ea83"
+    pin_tag = ""            # feature/high-power; becomes v1.2.0 at the daemon release
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "LoRaHAM_Daemon"
