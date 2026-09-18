@@ -26,6 +26,9 @@ def _svc(tmp_path, installed="0.14.12"):
     marker = svc._lifecycle().source_dir(main) / main.build_marker
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(main))
+    side = svc.build_inputs_path(main)                      # 0.7.0: the fetch script is a build input
+    side.parent.mkdir(parents=True, exist_ok=True)
+    side.write_text(svc.build_inputs_text(main))
     return svc
 
 

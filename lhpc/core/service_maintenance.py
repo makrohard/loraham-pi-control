@@ -963,6 +963,11 @@ class MaintenanceOpsMixin:
         # text) — otherwise the start gate would read "not built" for the freshly fetched tree.
         try:
             marker = self._lifecycle().source_dir(main) / main.build_marker
+            # The sidecar first (the fetch script is itself a recorded build input), then the
+            # marker — a crash in between leaves the tree NOT built, never built-and-unrecorded.
+            inputs = self._build_inputs_to_record(main)
+            if inputs is not None:
+                runtime_fs.atomic_write(self._paths, inputs[0], inputs[1], 0o644)
             runtime_fs.atomic_write(self._paths, marker,
                                     BUILD_MARKER_TEXT + self._consumed_source_lines(main), 0o644)
         except (OSError, PathContainmentError) as exc:

@@ -183,8 +183,8 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/loraham-daemon"
-    pin_commit = "4f84b6dfe0ba8cf038568989ec43f3474f4e143a"
-    pin_tag = "v1.0.0"
+    pin_commit = "e8e748efc04f0d0bf817819230c5e370b1385dd6"
+    pin_tag = "v1.1.1"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "loraham-daemon-hardening"
@@ -315,8 +315,8 @@ main = "loraham-chat"
 
     [stack.component.source]
     path = "src/LoRaHAM_Daemon"
-    pin_commit = "4f84b6dfe0ba8cf038568989ec43f3474f4e143a"
-    pin_tag = "v1.0.0"
+    pin_commit = "e8e748efc04f0d0bf817819230c5e370b1385dd6"
+    pin_tag = "v1.1.1"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "LoRaHAM_Daemon"
@@ -1795,8 +1795,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "579e463e290757b096356b889007c9d150fe150b"
-    pin_tag = "579e463"
+    pin_commit = "b322a88958ec884208438f34f5d7aca43fc8cf47"
+    pin_tag = "b322a88"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2044,8 +2044,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "579e463e290757b096356b889007c9d150fe150b"
-    pin_tag = "579e463"
+    pin_commit = "b322a88958ec884208438f34f5d7aca43fc8cf47"
+    pin_tag = "b322a88"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2093,9 +2093,12 @@ main = "meshcom-qemu"
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD build surface unchanged.
     #
     # Cloned BY REF by meshcom-qemu's `setup.sh --ref <sha>` step: the checkout IS this pin, and the
-    # QEMU overlay in makrohard/meshcom-qemu-raspi 579e463 applies to exactly this commit (it also
-    # bounds the per-loop GPS UART drain under QEMU: an unpaced socket UART starves loop() and
-    # leaves the net-console deaf). EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
+    # QEMU overlay in makrohard/meshcom-qemu-raspi b322a88 applies to exactly this commit -- the
+    # overlay moved, THIS firmware pin did not. The overlay bounds the per-loop GPS UART drain under
+    # QEMU (an unpaced socket UART starves loop() and leaves the net-console deaf) and now builds at
+    # TX_OUTPUT_POWER 17: the daemon accepts 2..17 dBm on SX127x since 1.0.0 and refuses the old 20,
+    # which left the bridge unable to configure the radio at all.
+    # EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
     path = "src/MeshCom-Firmware"
     pin_commit = "6edc74997154da97b32c516624f3c4566095081c"
     pin_tag = "v4.35t"

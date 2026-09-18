@@ -116,7 +116,16 @@
               <table>
                 <tr><th>Radio</th><td class="mono" id="rd-radio-{{ r.band }}">{{ r.daemon.radio or '?' }}</td>
                     <th>TX mode</th><td class="mono" id="rd-txmode-{{ r.band }}">{{ r.daemon.txmode or '?' }}</td></tr>
-                <tr><th>CAD state</th><td class="mono" id="rd-cad-{{ r.band }}">?</td>
+                {#- CAD state is shown as "—" while nothing has scanned: the dashboard poll is
+                    deliberately passive (a CAD scan destroys a frame in flight, so a status page
+                    must not run one). "Scan now" takes a real measurement on request. The daemon's
+                    listen-before-talk is UNAFFECTED — it still gates every transmission. -#}
+                <tr><th>CAD state</th>
+                    <td class="mono"><span id="rd-cad-{{ r.band }}">—</span>
+                      <button type="button" class="btn-link" data-scan-band="{{ r.band }}"
+                              data-csrf="{{ csrf_token() }}"
+                              title="Take one real CAD measurement. Briefly interrupts reception.">
+                        Scan now</button></td>
                     <th>TX active</th><td class="mono" id="rd-tx-{{ r.band }}">?</td></tr>
                 <tr><th>Packet RSSI</th><td class="mono" id="rd-pktrssi-{{ r.band }}">?</td>
                     <th>CAD RSSI</th><td class="mono" id="rd-cadrssi-{{ r.band }}">{{ r.daemon.cadrssi or '?' }}</td></tr>

@@ -1311,13 +1311,44 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.get("/api/daemon/<band>")
     def daemon_api(band: str):
+        # The dashboard's per-band column polls this every 3 s. It is a GET, so by this app's
+        # contract it must be READ-ONLY — and it now genuinely is: the channel fields come from
+        # the PASSIVE read, which never puts the radio into CAD. It used to call `GET CHANNEL`,
+        # whose CAD scan destroyed frames in flight and cost ~46 % of reception at SF12/BW125.
         if band not in ("433", "868"):
             abort(404)
         view = service.daemon_view(band)
+        channel = service.daemon_channel(band) if view.reachable else {}
         return jsonify(band=band, reachable=view.reachable, ready=view.ready,
                        radio_state=view.radio_state, status=view.status,
-                       stats=view.stats, channel=view.channel,
+                       stats=view.stats, channel=channel,
                        feed=service.daemon_feed(band, 40))
+
+    @app.get("/api/daemon/<band>/feed")
+    def daemon_feed_api(band: str):
+        # The "RX/TX activity" window polls ONLY this. It used to poll /api/daemon/<band> and
+        # throw away everything except `feed`, dragging a full CAD scan behind a text log every
+        # 3 s. Nothing here touches the radio.
+        if band not in ("433", "868"):
+            abort(404)
+        return jsonify(band=band, feed=service.daemon_feed(band, 40))
+
+    @app.post("/api/daemon/<band>/scan")
+    def daemon_scan_api(band: str):
+        # A real CAD measurement, on explicit operator request only.
+        #
+        # POST + CSRF, NOT a GET: this is state-changing by this app's contract — it takes the
+        # radio mutex, puts the chip into CAD and can destroy a frame that is arriving. Encoding
+        # it as a nominally-safe GET would let a refresh, prefetch or retry fire it, which is in
+        # miniature how a status read came to scan the channel in the first place. No confirm
+        # page: the button click is sufficient operator intent.
+        if band not in ("433", "868"):
+            abort(404)
+        if not _csrf_ok():
+            abort(400)
+        view = service.daemon_view(band)
+        channel = service.daemon_channel_scan(band) if view.reachable else {}
+        return jsonify(band=band, reachable=view.reachable, channel=channel)
 
     @app.get("/api/daemon/<band>/socket")
     def daemon_socket_api(band: str):
@@ -2115,8 +2146,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # First-time init on a fresh PKI needs no phrase; RE-initializing (destructive) requires
         # the typed phrase 'recreate'.
         confirm = request.form.get("confirm_phrase", "").strip() == "recreate"
-        r = service.webserver_init(confirm=confirm,
-                                   accept_unverified=_accept_unverified_clock())
+        # No clock override: init is not clock-gated (commissioning may not depend on a clock),
+        # and an unverified clock yields the fixed provisional window, not dates from the clock.
+        r = service.webserver_init(confirm=confirm)
         flash(r.summary, "ok" if r.ok else "err")
         return _ws_back()
 
@@ -2237,9 +2269,14 @@ def network_watch_pass(svc) -> float:
         svc.crl_refresh_if_expired()
     except Exception:
         pass
+    try:                            # a PKI minted under an unverified clock, once time arrives
+        svc.pki_clock_normalise()
+    except Exception:
+        pass
     ap_box = svc.network_supported()
-    # non-AP box: probe rarely, exit never — unless an Apply is still owed
-    interval_s = 60.0 if (ap_box or svc.webserver_apply_pending()) else 300.0
+    # non-AP box: probe rarely, exit never — unless an Apply or a normalisation is still owed
+    interval_s = (60.0 if (ap_box or svc.webserver_apply_pending()
+                           or svc.pki_normalise_pending()) else 300.0)
     if ap_box:
         svc._network_watch_tick()
     return interval_s

@@ -472,11 +472,13 @@ def test_noise_floor_ignores_non_channel_and_malformed_lines():
 
 
 async def test_noise_floor_populated_from_daemon_poll(daemon, radio):
-    # The poller issues GET CHANNEL on connect; the config reader parses the
-    # daemon's LIVERSSI into get_noise_floor().
+    # The poller issues GET CHANNEL NOSCAN on connect; the config reader parses the daemon's
+    # LIVERSSI into get_noise_floor(). It must be the PASSIVE form: the plain GET CHANNEL runs a
+    # CAD scan, and a 5 s poll of it destroys frames that are arriving.
     daemon.live_rssi = -107.0
     assert await wait_for(lambda: radio.get_noise_floor() == -107.0)
-    assert "GET CHANNEL" in daemon.config_commands
+    assert "GET CHANNEL NOSCAN" in daemon.config_commands
+    assert "GET CHANNEL" not in daemon.config_commands
 
 
 async def test_refresh_noise_floor_tracks_new_readings(daemon, radio):

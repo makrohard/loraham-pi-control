@@ -94,7 +94,9 @@
       wrap.hidden = false;
       body.textContent = "loading RX/TX activity (" + band + " MHz)…";
       function poll() {
-        fetch("/api/daemon/" + encodeURIComponent(band), { cache: "no-store" })
+        // FEED ONLY. This used to poll /api/daemon/<band> and discard status/stats/channel,
+        // which dragged a destructive CAD scan behind a text log every 3 s.
+        fetch("/api/daemon/" + encodeURIComponent(band) + "/feed", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var next = (d && d.feed && d.feed.length) ? d.feed.join("\n")

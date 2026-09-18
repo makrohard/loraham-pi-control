@@ -782,5 +782,6 @@ class BinaryOpsMixin:
         covers = set(spec.covers) if spec is not None else set()
         behind += [c.id for c in (st.components if st is not None else ())
                    if c.id in covers and c.id not in behind
-                   and c.build_marker and c.build_inputs and not self.is_built(c)]
+                   and c.build_marker and (c.build_inputs or c.asset_inputs)
+                   and not self.is_built(c)]
         return {"state": "behind" if behind else "current", "behind": sorted(behind)}

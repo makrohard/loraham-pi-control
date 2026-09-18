@@ -934,7 +934,9 @@ class ParamsConfigMixin:
                 # Populate each control with the daemon's REAL current value: STATUS + CHANNEL are
                 # what it actually reports; the configured daemon-param value is the fallback for
                 # radio params the daemon does not echo (FREQ/SF/BW/…).
-                actual = {**dv.channel, **dv.status}
+                # PASSIVE channel read: this renders a settings form, it is not an operator
+                # asking to measure the channel. A scan here would destroy an arriving frame.
+                actual = {**self.daemon_channel(live_band), **dv.status}
                 cfg = self._daemon_param_applies("daemon", live_band) if dv.reachable else {}
                 view["radios"] = [{"band": live_band, "reachable": dv.reachable,
                                    "error": dv.error, "status": actual, "config": cfg}]

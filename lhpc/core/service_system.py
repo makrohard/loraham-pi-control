@@ -156,7 +156,11 @@ _GREEN_MAXERROR_US = 1_000_000    # <= 1 s of estimated error to call the state 
 
 # Nothing lhpc writes can predate the commit that introduced this check. A realtime clock reading
 # before this is not merely unsynchronised, it is demonstrably wrong.
-_NOT_BEFORE = 1_735_689_600   # 2025-01-01T00:00:00Z
+# The earliest date this software can plausibly run. PUBLIC and purpose-named because two
+# things share it: the clock gate below, and provisional PKI issuance (pki.py), which uses it as
+# the fixed notBefore of material minted while the clock is unverified. One constant, on purpose.
+PKI_NOT_BEFORE = 1_735_689_600   # 2025-01-01T00:00:00Z
+_NOT_BEFORE = PKI_NOT_BEFORE
 
 # Operator guidance, shown only when the pin is not green. TEXT ONLY — lhpc never runs any of it.
 # The COMMAND is kept separate from the prose so the element carrying it can be select-all

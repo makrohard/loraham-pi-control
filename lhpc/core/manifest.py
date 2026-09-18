@@ -731,6 +731,24 @@ def _parse_build_inputs(raw: dict) -> tuple[tuple[str, str], ...]:
     return tuple(out)
 
 
+def _asset_inputs(raw: dict) -> tuple[str, ...]:
+    """The packaged assets a component's build steps consume (`{asset}/<rel>` argv tokens), as
+    the sorted relative paths — implicit build inputs, see `Component.asset_inputs`. Consuming an
+    asset in a build step without a `build_marker` is a manifest error, for the same reason a
+    declared `build_input` without one is: the sidecar lives beside the marker, so without a
+    marker nothing could ever record what was consumed and a changed asset could never read NOT
+    built."""
+    rels = sorted({str(t)[len("{asset}"):].lstrip("/")
+                   for st in raw.get("build_steps", []) for t in st.get("argv", [])
+                   if str(t).startswith("{asset}/")})
+    if rels and not raw.get("build_marker"):
+        raise ManifestError(
+            f"component {raw.get('id', '?')!r} consumes packaged assets in a build step "
+            f"({', '.join(rels)}) without a build_marker: nothing could record what was consumed, "
+            f"so a changed asset could never read NOT built")
+    return tuple(rels)
+
+
 def _parse_component(raw: dict) -> Component:
     _derive_structured(raw)
     return Component(
@@ -747,6 +765,7 @@ def _parse_component(raw: dict) -> Component:
         depends_on=tuple(raw.get("depends_on", [])),
         build_requires=tuple(raw.get("build_requires", [])),
         build_inputs=_parse_build_inputs(raw),
+        asset_inputs=_asset_inputs(raw),
         source=_with_patches(_parse_source(raw.get("source")), raw.get("build_steps", [])),
         log_paths=tuple(raw.get("log_paths", [])),
         start_order=raw.get("start_order"),

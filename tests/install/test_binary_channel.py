@@ -1141,6 +1141,25 @@ def test_an_artifact_built_before_a_web_client_bump_is_behind(tmp_path, monkeypa
     assert fresh["state"] == "behind" and "meshtastic" in fresh["behind"]
 
 
+def test_an_artifact_built_before_a_shipped_script_changed_is_behind(tmp_path, monkeypatch, binary_receipt):
+    """0.7.0: the build steps consume lhpc-shipped scripts, recorded beside the marker by digest.
+    An update that changes one leaves the artifact stale with every pin and value unchanged."""
+    import shutil
+    from lhpc.core import assets
+    data = tmp_path / "data" / "scripts"
+    data.mkdir(parents=True)
+    for rel in ("scripts/meshtastic-link-gate.sh", "scripts/meshtastic-web-assets.sh"):
+        shutil.copy(assets.asset_path(rel), data)
+    monkeypatch.setattr(assets, "asset_path", lambda name: tmp_path / "data" / name)
+    assets.clear_digest_cache()
+    _mesh_on_binary(binary_receipt, tmp_path, monkeypatch)       # marker + sidecar at today's digests
+    (data / "meshtastic-link-gate.sh").write_text("#!/bin/sh\n# a different gate\n")
+    assets.clear_digest_cache()
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    fresh = svc.binary_freshness("meshtastic")
+    assert fresh["state"] == "behind" and "meshtastic" in fresh["behind"]
+
+
 def test_freshness_still_reads_no_network_for_the_marker_check(tmp_path, monkeypatch, manifest_with_moved_input, binary_receipt):
     from lhpc.core import binary_install as bi
     _mesh_on_binary(binary_receipt, tmp_path, monkeypatch)

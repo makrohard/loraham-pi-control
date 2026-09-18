@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.7.0
+
+- **A status page no longer costs reception.** Reading `GET CHANNEL` on the daemon's CONF socket
+  runs a CAD scan: it takes the radio mutex, puts the chip into CAD and re-arms RX, so it destroys
+  a frame that is arriving. LHPC issued it constantly — the dashboard's per-band column and the
+  RX/TX activity window each polled it every 3 s (per tab, so the cost grew with open tabs), and
+  `read_view()`, the generic status read, bundled it into every admission check, blocker test and
+  SET read-back. Measured on a Pi Zero 2 W at SF12/BW125: **54 % of frames delivered with the
+  console open, 100 % with it closed**; a T-Beam on the same bench heard 12 of 12 throughout. The
+  loss scales with airtime, so it was worst on the longest-range settings — including LoRa-APRS.
+- `read_view()` is now STATUS + STATS and is passive by construction. Channel data is an explicit
+  call: a passive read (`GET CHANNEL NOSCAN`, daemon 1.1.0) for anything periodic, and a scanning
+  read reserved for a deliberate, operator-invoked measurement. Not a flag on the old function —
+  a flag is how a destructive operation gets back into a generic status read.
+- The RX/TX activity window polls a feed-only endpoint; it used to fetch the whole radio view and
+  discard everything except the log text. MeshCore's noise-floor poller, which asked every 5 s for
+  an RSSI it could get passively, now does. `SET MODE=…` no longer scans to confirm itself.
+- The dashboard shows CAD state as "—" until something scans, with a **Scan now** button
+  (POST + CSRF — it changes radio state, so it is not a GET). `CADSCAN=0` means *no verdict was
+  taken*, not "the channel is free".
+- **Listen-before-talk is unchanged.** The daemon still runs CAD before every transmission in
+  MANAGED mode. What changed is that reading a status page no longer does.
+- `lhpc daemon <band>` still takes a real measurement: asking once, by hand, is the case CAD is
+  for.
+- Pins the LoRaHAM daemon to **1.1.0** (`58051e9`), which adds the `GET CHANNEL NOSCAN` the passive
+  reads above depend on. Measured on a Pi Zero 2 W at SF12/BW125, polling the CONF socket at the
+  console's own cadence: **3 of 12 frames delivered with the scanning command, 24 of 24 with the
+  new one** — indistinguishable from not polling at all.
+- **Commissioning no longer depends on a clock.** `webserver init` refused to create the PKI on an
+  unverified clock (0.6.0's gate), and firstboot runs it before the console exists — so a Lite box
+  in AP mode with no RTC, no NTP and no GPS fix never finished commissioning: no console, no
+  firewall, no way for anyone to fix the clock. The 0.6.2 Lite image failed its firstboot gate
+  exactly there. `init` is now ungated. Under an unverified clock it mints the PKI with a **fixed
+  provisional validity** (2025-01-01 to 2049-12-31 — the last date expressible as UTCTime, tested
+  against OpenSSL, NSS and GnuTLS) instead of dates from the bad clock, writes a marker
+  *before* the first certificate, and the console watchdog normalises the server certificate
+  (same key) and the CRL once the clock is verified — reloading nginx, never running Apply, so a
+  saved-but-unapplied setting is not pushed live in the background. The CAs are never rotated
+  automatically. `tls-renew`, `cert issue/reissue/revoke` and a certificate-changing exposure stay
+  gated; `--accept-unverified-clock` is removed from `init`, where it now had nothing to override.
+- Enabling remote exposure is gated on whether it will actually **reissue the certificate**, not
+  on exposure itself: an address already in the SANs changes nothing and is never refused; a
+  missing one is reissued provisionally while the PKI is provisional, and gated as before once
+  commissioned. `local_ip()` follows the default route, so a Lite box with the AP up and an
+  ethernet lead plugged in hit the missing-SAN case at firstboot.
+- One lock for every PKI writer. There was none: the watchdog rebuilds the CRL from a background
+  thread on every box, so it could load the inventory, an operator could revoke, and the rebuild
+  then overwrite that revocation. `init`, renew, issue, reissue, revoke, discard-export, the CRL
+  heal and normalisation all take it; the watchdog skips a pass it cannot get, an operator gets
+  "PKI operation busy". The CRL heal also now reloads nginx instead of running Apply.
+- **An lhpc update can no longer leave a built stack running old shipped code.** Some build steps
+  bake lhpc-shipped assets into what they build — the MeshCore host package, the meshcore-webui
+  patch, the MeshChat frontend, fetch and gate scripts. Their sources are pinned and did not
+  move, so nothing marked them stale when the asset changed: the passive-read fix above reached
+  the source tree of a box that updated, but its MeshCore venv kept polling with the scanning
+  command until someone rebuilt. Every asset a build step consumes is now recorded beside the
+  completion marker with its content digest, and `is_built` recomputes it — a changed asset reads
+  **Build required** (binary channel: reinstall) until the component is rebuilt. Consequence of
+  the first release with the records: after updating to 0.7.0 six components read *Build
+  required* once. Two are binary-covered and take the index reinstall the console offers
+  (meshtastic, meshcom — nobody rebuilds QEMU); four rebuild locally in minutes (graywolf,
+  meshcore-node, meshcore-webui, meshchat). Fresh installs and images are unaffected. The same
+  rule reaches the binary channel: an artifact built by an older controller carries no asset
+  records and reads *behind* until the index holds one built at 0.7.0 — so this release
+  republishes meshtastic and meshcom, not only the daemon.
+
+
 ## 0.6.2
 
 - Pins the LoRaHAM daemon to **1.0.0** (`4f84b6d`). The reliability release: CAD read from the

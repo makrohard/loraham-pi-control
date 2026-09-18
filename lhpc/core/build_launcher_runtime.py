@@ -313,6 +313,11 @@ def run(spec: dict) -> None:
             # this line is never reached and the marker stays absent.
             if marker_path and spec.get("marker_text"):
                 try:
+                    # The build-input sidecar first (a crash in between leaves NOT built,
+                    # never built-and-unrecorded), then the marker.
+                    if spec.get("inputs_path") and spec.get("inputs_text"):
+                        runtime_fs.atomic_write(paths, Path(spec["inputs_path"]),
+                                                spec["inputs_text"], 0o644)
                     runtime_fs.atomic_write(paths, Path(marker_path),
                                             spec["marker_text"], 0o644)
                 except (OSError, PathContainmentError) as exc:

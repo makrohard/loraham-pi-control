@@ -276,6 +276,12 @@ class FakeLoRaHAMDaemon:
 
                     if command == "GET STATUS" and self.respond_to_status:
                         await self._send_config_line(self._status_line())
+                    elif command == "GET CHANNEL NOSCAN" and self.respond_to_channel:
+                        # The passive form: same line, no CAD scan, so CADSCAN=0 and the state
+                        # says no verdict was taken rather than implying a free channel.
+                        await self._send_config_line(
+                            self._channel_line().replace("CADSCAN=1", "CADSCAN=0")
+                                                .replace("CADSTATE=FREE", "CADSTATE=NOTSCANNED"))
                     elif command == "GET CHANNEL" and self.respond_to_channel:
                         await self._send_config_line(self._channel_line())
         finally:
