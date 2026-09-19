@@ -35,12 +35,18 @@ import threading
 import time
 from typing import ClassVar
 
-from .gps import (
+from .gps import (  # noqa: F401 -- the classifier names are re-exported for the tests
+    _NAV_SENTENCES,
     FEED_COMPONENTS,
     OUT_POSJSON,
     OUT_PTY,
+    NmeaSnapshot,
+    _coords_present,
     bridge_endpoint_path,
     bridge_state_dir,
+    carries_position,
+    classify_sentence,
+    nmea_checksum_ok,
 )
 
 # Exit codes — distinct so the lifecycle can tell "you configured this wrong" from
@@ -492,87 +498,122 @@ def _bounded(partial: bytes) -> bytes:
     return partial if len(partial) <= _MAX_PARTIAL else b""
 
 
-_NAV_SENTENCES = (b"GGA", b"RMC", b"GLL", b"GNS")
+# The NMEA classifier (`nmea_checksum_ok`, `classify_sentence`, `carries_position`) lives in
+# gps.py now, shared with the monitor parser; imported above. Behaviour unchanged.
 
 
-def nmea_checksum_ok(line: bytes) -> bool:
-    """Does `line` carry a well-formed `*HH` checksum that matches its payload?
+class MonitorServer:
+    """Best-effort observability for a `source=nmea` feed: `state/gps/<consumer>/monitor.sock`, a
+    Unix server socket answering each connection with ONE JSON line — the `NmeaSnapshot` of what
+    this feed pumps, plus its last 22 lines — then closing. The console reads it while this feed
+    owns the receiver, because nothing else may open that serial port at the same time.
 
-    Readiness is a claim about the SOURCE, so it must not be built on corrupt input: a garbled
-    line can present any flag value at all. Sentences without a checksum are rejected too —
-    every navigation sentence a receiver emits has one.
+    STRUCTURAL CONTRACT: nothing here may affect the feed. Every failure — publish, feed, serve,
+    cleanup — is caught, logged ONCE as the exception's TYPE only (its text may carry data), and
+    swallowed; `out.write()`, readiness, the pump loop and the exit status never see it. The
+    monitor lock is never held during client socket I/O, so a slow client cannot stall the pump.
+    Nothing is written to disk. The directory is made private (0700) BEFORE bind — a pathname
+    socket is created under the umask — and the socket is 0600.
     """
-    if not line.startswith(b"$") or b"*" not in line:
-        return False
-    body, _, tail = line[1:].partition(b"*")
-    if len(tail) < 2:
-        return False
-    try:
-        want = int(tail[:2], 16)
-    except ValueError:
-        return False
-    got = 0
-    for b in body:
-        got ^= b
-    return got == want
 
+    def __init__(self, consumer: str, paths=None):
+        self.consumer = consumer
+        self.paths = paths
+        self.snapshot = NmeaSnapshot()
+        self.path = os.path.join(bridge_state_dir(paths.runtime_root, consumer), "monitor.sock") \
+            if paths is not None else ""
+        self._server: socket.socket | None = None
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._logged: set = set()
+        self.enabled = False
 
-def _coords_present(f: list, lat_i: int) -> bool:
-    """Are the lat/lon fields populated with plausible hemispheres? (Never parsed as numbers —
-    the bridge must not handle coordinates, only notice that they exist.)"""
-    try:
-        lat, ns, lon, ew = f[lat_i], f[lat_i + 1], f[lat_i + 2], f[lat_i + 3]
-    except IndexError:
-        return False
-    return bool(lat.strip() and lon.strip()
-                and ns.strip().upper() in (b"N", b"S")
-                and ew.strip().upper() in (b"E", b"W"))
+    def _once(self, where: str, exc: BaseException) -> None:
+        tag = f"{where}:{type(exc).__name__}"
+        if tag not in self._logged:
+            self._logged.add(tag)
+            _log(f"monitor {where} error ({type(exc).__name__}) — feed unaffected")
 
+    def publish(self) -> None:
+        """Never raises. Failure leaves `enabled` False and the feed exactly as before."""
+        if not self.path:
+            return
+        try:
+            from pathlib import Path
 
-def classify_sentence(line: bytes) -> tuple[bool, bool]:
-    """(is_navigation, has_fix) for one NMEA line.
+            from . import runtime_fs
+            d = Path(os.path.dirname(self.path))
+            runtime_fs.ensure_dir(self.paths, d)
+            dfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fchmod(dfd, 0o700)          # descriptor-anchored: never follows a swapped link
+            finally:
+                os.close(dfd)
+            try:
+                runtime_fs.unlink(self.paths, Path(self.path))
+            except (OSError, runtime_fs.PathContainmentError):
+                pass
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            server.bind(self.path)
+            os.chmod(self.path, 0o600)
+            server.listen(4)
+            server.settimeout(1.0)
+            self._server = server
+            self._thread = threading.Thread(target=self._serve, name="gps-monitor", daemon=True)
+            self._thread.start()
+            self.enabled = True
+        except Exception as exc:
+            self._once("publish", exc)
+            try:
+                if self._server is not None:
+                    self._server.close()
+            except OSError:
+                pass
+            self._server = None
 
-    `is_navigation` — a checksum-valid GGA/RMC/GLL/GNS with a legal status field. This is what
-    "the receiver is talking to us" means; a `$GPTXT` banner is NOT navigation traffic, and a
-    receiver stuck in UBX binary mode emits exactly that and nothing else.
+    def feed(self, line: bytes) -> None:
+        """The tee. `NmeaSnapshot.feed` never raises; this guards the guard."""
+        try:
+            self.snapshot.feed(line)
+        except Exception as exc:
+            self._once("parser", exc)
 
-    `has_fix` — the same, and its status says the fix is usable AND the coordinate fields are
-    populated. An RMC can be flagged `A` with empty coordinates; that is not a position.
-    """
-    if not nmea_checksum_ok(line) or len(line) < 7:
-        return False, False
-    kind = line[3:6]
-    if kind not in _NAV_SENTENCES:
-        return False, False
-    f = line.split(b",")
-    try:
-        if kind == b"GGA":
-            q = f[6].strip()
-            if not q.isdigit() or int(q) > 8:       # legal quality indicators are 0..8
-                return False, False
-            return True, q != b"0" and _coords_present(f, 2)
-        if kind == b"RMC":
-            st = f[2].strip().upper()
-            if st not in (b"A", b"V"):
-                return False, False
-            return True, st == b"A" and _coords_present(f, 3)
-        if kind == b"GLL":
-            st = f[6].strip().upper()
-            if st not in (b"A", b"V"):
-                return False, False
-            return True, st == b"A" and _coords_present(f, 1)
-        # GNS: one mode character per constellation; N = no fix from that one.
-        mode = f[6].strip().upper()
-        if not mode or not all(c in b"NAEDFMPRS" for c in mode):
-            return False, False
-        return True, any(c not in b"N" for c in mode) and _coords_present(f, 2)
-    except IndexError:
-        return False, False                          # truncated -> not usable evidence
+    def _serve(self) -> None:
+        import json
+        while not self._stop.is_set():
+            try:
+                client, _ = self._server.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            try:
+                client.settimeout(1.0)
+                body = json.dumps(self.snapshot.snapshot()) + "\n"
+                client.sendall(body.encode("utf-8"))
+            except Exception as exc:
+                self._once("serve", exc)
+            finally:
+                try:
+                    client.close()
+                except OSError:
+                    pass
 
+    def close(self) -> None:
+        self._stop.set()
+        try:
+            if self._server is not None:
+                self._server.close()
+        except OSError:
+            pass
+        if self.path:
+            try:
+                from pathlib import Path
 
-def carries_position(line: bytes) -> bool:
-    """True when the sentence carries a VALID position. See `classify_sentence`."""
-    return classify_sentence(line)[1]
+                from . import runtime_fs
+                runtime_fs.unlink(self.paths, Path(self.path))
+            except Exception as exc:
+                self._once("cleanup", exc)
 
 
 class Readiness:
@@ -734,7 +775,7 @@ def _pump_gpsd(host: str, port: int, out: _Output, ready: Readiness, stop) -> No
 
 
 def _pump_nmea(device: str, baud: int, out: _Output, ready: Readiness, stop,
-               expect_key: str = "") -> None:
+               expect_key: str = "", monitor: MonitorServer | None = None) -> None:
     """A character device we open ourselves. Configures the port, because an unconfigured
     one silently yields garbage at the wrong speed."""
     delay = _RECONNECT_MIN_S
@@ -787,6 +828,8 @@ def _pump_nmea(device: str, baud: int, out: _Output, ready: Readiness, stop,
                         is_nav, has_fix = classify_sentence(line)
                         nav += is_nav
                         fixes += has_fix
+                        if monitor is not None:      # the tee; never raises (its contract)
+                            monitor.feed(line)
                 if n:
                     sentences += n
                     nav_seen += nav
@@ -920,8 +963,16 @@ def run(consumer: str, paths, stop=None) -> int:
         if plan.source == "gpsd":
             _pump_gpsd(plan.host, plan.port, out, ready, stop)
         elif plan.source == "nmea":
-            _pump_nmea(plan.device, plan.nmea_baud, out, ready, stop,
-                       expect_key=plan.device_key)
+            # Only this branch gets the monitor: the feed owns a serial receiver the console
+            # cannot safely read itself. gpsd and fixed feeds are untouched (the console is its
+            # own gpsd client; fixed values come from config). Best effort, never gating.
+            monitor = MonitorServer(consumer, paths)
+            monitor.publish()
+            try:
+                _pump_nmea(plan.device, plan.nmea_baud, out, ready, stop,
+                           expect_key=plan.device_key, monitor=monitor)
+            finally:
+                monitor.close()
         elif plan.source == "fixed":
             alt = float(plan.fixed_alt) if plan.fixed_alt else None
             _pump_fixed(float(plan.fixed_lat), float(plan.fixed_lon), alt, out, ready, stop)

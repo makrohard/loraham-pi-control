@@ -1,73 +1,73 @@
-# Install-all matrix, 0.6.0 — box B, 2026-09-15
+# Release matrix, 0.8.0 — box E (`lhpc-e293`), 2026-09-19
 
-Run on `c4ae47c` (the 0.6.0 candidate). Box **B** = Pi 5 (Desktop, 4 GB), full lane, every row.
+Run on `1921ae1` (the 0.8.0 release commit: GPS Monitor; pins unchanged since v0.7.0). Box **E** =
+Pi Zero 2 W, Lite image, Uputronics dual (433 + 868), **Wi-Fi only** (the USB Ethernet adapter was
+removed earlier that day — it was jamming the GPS receiver). Console left running throughout.
 
-Evidence rule: the controller's own typed outcome plus the stack's own state. Log greps are not evidence.
+Evidence rule: the controller's own typed outcome plus the stack's own state. Log greps are not
+evidence. The runner (`~/matrix-0.8.0/run.log`, `rows.md` on the box) drove every row with the
+matrix's six-step loop and recorded the wrapper's times.
 
-**Three deviations from `test-matrix.md`, accepted by the maintainer before the run:**
+**Fast lane, by the maintainer's explicit waiver of 2026-09-19 ("no heavy compile jobs on the
+box"):** rows 9, 10 and 12 — the from-source meshtastic, daemon and MeshCom builds — are *not
+re-run*. Their pins are unchanged since the three binary artifacts were built at v0.7.0
+(`cd7e1f3`): meshtastic `54e0d8d`, daemon `e8e748e` + RadioLib `187ef24`, MeshCom `7c86c96` /
+`6edc749` / `b322a88`; the binary rows 1, 8 and 11 prove those artifacts. The compiles were last
+measured in the 0.6.0 run on box B (this file's git history).
 
-1. **The bench is box B, not box E.** The documented reference box is the Pi Zero 2 W (512 MB). Box E
-   was needed for GPS-time testing and is powered down, so every row ran on the Pi 5. Build times below
-   are therefore optimistic against the documented bench, and the memory/OOM observations the procedure
-   asks for say nothing about the constrained box — nothing came close to pressure at 4 GB.
-2. **Box B reached the internet through a temporary second address.** Its own gateway (192.168.0.10) is
-   down. A second address on the working subnet was added through LHPC's own polkit network rule — no
-   root — and removed after the run. This is what closed row 12; see below.
-3. **Box B does not carry the time-source feature.** `bootstrap-deps.sh` was never run there, so it
-   still keeps time with `systemd-timesyncd` against its hard-configured NTP server, and chrony is not
-   installed. **This matrix therefore proves that 0.6.0 does not regress the stacks — not that the time
-   source works.** That was proven separately on box E and is recorded in the feature report.
+**Deviations, all recorded here rather than hidden:**
+
+1. **From-zero reinstall: not run.** It starts with `firewall-reset.sh` under `sudo` (the managed
+   firewall is installed on this box), and this run had no root. The from-zero section is therefore
+   *blocked*, not passed.
+2. **Host tests for daemon, chat and voice: not run** — their lane compiles the daemon's test
+   binaries, which the waiver excludes. kiss, graywolf, reticulum and meshcore ran; meshtastic and
+   meshcom are refused on the binary channel as designed.
+3. **Identities.** The box carried no Meshtastic, MeshCore or MeshCom identity. The runner set
+   `node_name`/`node_short e293` (Meshtastic), `node_name e293` (MeshCore) and the MeshCom callsign
+   from the box's operator callsign with SSID `-15`; they remain in the box's config after the run.
+4. **Restored settings.** The box's daemon config carried `hipower_433 = on` and `POWER 20` from the
+   unreleased high-power branch; the released daemon refuses `POWER 20` on an SX127x, so the restore
+   after each purge dropped both (default power). The shared `LoRaHAM_Daemon` checkout was found at
+   an unpinned commit (`4943b8e`, with an untracked build directory), which made chat read `differs`
+   after the auto-install; it was moved to the pin `e8e748e` and chat/voice read `match`.
 
 ## Rows
 
 | # | stack | channel | install | build | start | evidence |
 |---|---|---|---|---|---|---|
-| 1 | daemon | binary | 20 s | *refused* | 5 s | `RADIO=READY TXMODE=MANAGED` on **both** 433 and 868 |
-| 2 | chat | pinned | 4 s | 1 s | *manual* | typed `manual_required: loraham-chat is interactive` — the contract |
-| 3 | voice | pinned | 4 s | 2 s | 2 s | both components started |
-| 4 | kiss | pinned | 4 s | 3 s | 3 s | verified |
-| 5 | graywolf | pinned | 0 s | 8 s | 3 s | verified |
-| 6 | reticulum | pinned | 49 s | 91 s | 2 s | rns on 868, ready marker present, three TCP endpoints, `src match`. **Sideband built here** — the Lite bench skips it |
-| 7 | meshcore | pinned | 28 s | 122 s | 2 s | node on `:5000`, 868, `src match` |
-| 8 | meshtastic | binary | 43 s | *refused* | 15 s | `:4403` and `:9443` present |
-| 9 | meshtastic | pinned | 15 s | **636 s** | 16 s | `:4403` + `:9443`, `src match`, post-start completed |
-| 10 | daemon | pinned | 23 s | 35 s | 6 s | RadioLib + daemon, runs `src match` |
-| 11 | meshcom | binary | 26 s | *refused* | 46 s | bridge + node verified |
-| 12 | meshcom | pinned | 24 s | **471 s** | 47 s | QEMU built (link gate clean), firmware built, `:7000` + `:12323` verified, **`:18083` → 200** |
+| 1 | `daemon` | binary | 7s | *refused* (binary) | 13s | `lhpc status daemon`: running, both bands READY; `lhpc daemon 433` / `868` answer; build *refused* (binary, as designed) |
+| 2 | `chat` | pinned | 5s | 5s | 5s (refused) | typed `manual_required` — the interactive contract; source at the pin after the run |
+| 3 | `voice` | pinned | 4s | 5s | 8s | `loraham-voice-cli` built and listed; GTK variant `not-applicable` on Lite |
+| 4 | `kiss` | pinned | 4s | 16s | 9s | verified; TCP `127.0.0.1:8001` answers |
+| 5 | `graywolf` | pinned | 2s | 16s | 11s | verified; web UI `127.0.0.1:8080` → 200; KISS client held |
+| 6 | `reticulum` | pinned | 212s | 248s | 12s | rns on 868 with ready marker, nomadnet, lxmd, meshchat built; MeshChat UI `:8790` → 200; Sideband skipped on Lite |
+| 7 | `meshcore` | pinned | 71s | 435s | 13s | node + webui verified on 868 (`:8788` → 200), openhop repeater source `match`; `known-working` recorded |
+| 8 | `meshtastic` | binary | 133s | *refused* (binary) | 3s (refused) | **first attempt refused as designed**: `node_short` missing (the box had no Meshtastic identity; the runner set only `node_name`). Row 8r below is the re-run |
+| 9 | `meshtastic` | pinned (from source) | — | *not re-run* | — | maintainer's waiver 2026-09-19; pin `54e0d8d` unchanged since the artifact was built at v0.7.0 — row 8r proves that artifact |
+| 10 | `daemon` | pinned (from source) | — | *not re-run* | — | same waiver; pin `e8e748e` (1.1.1) + RadioLib `187ef24` unchanged since v0.7.0 — row 1 proves that artifact |
+| 11 | `meshcom` | binary | 25s | *refused* (binary) | 360s | bridge + QEMU node + gps feed running on 433; web UI `:18083` → 200 once the node had booted; build *refused* (binary) |
+| 12 | `meshcom` | pinned (from source) | — | *not re-run* | — | same waiver; pins `7c86c96` / `6edc749` / `b322a88` unchanged since v0.7.0 — row 11 proves that artifact |
+| 8r | `meshtastic` | binary (re-run, `node_short` set) | 134s | *refused* (binary) | 33s | verified on 868: `meshtastic-gps` *position source live (5 sentences)* through gpsd with a real fix, `meshtastic` ready on `:4403`, post-start completed, `lhpc meshtastic --info` → `Owner: e293` |
 
-*refused* = the documented typed refusal on a binary channel: `build needs the source channel`.
+Memory stayed between 219 and 246 MB available (`free -m`) across the rows; no OOM line.
 
-**Every build passed.** The heavy compiles — meshtasticd, RadioLib + daemon, and QEMU + MeshCom
-firmware — all completed.
+## Cross-cutting checks
 
-## Row 12 is closed
+| check | result |
+|---|---|
+| **auto-install consistency** | every stack purged, then `lhpc auto-install --yes`: **9/9 successful, 0 blocked, 0 failed, 0 skipped**, 19 min 24 s (17:35:03 → 17:54:27); daemon, meshtastic and meshcom from the published binaries, the light stacks built from source; `lhpc status --versions` afterwards: every source component `match` (chat after the checkout correction above) |
+| **`dev` selector spot-check (kiss)** | `install --source dev` resolved the branch tip and built; kiss started under the daemon; reinstalled on the default channel: `match` (the tip is the pin) |
+| **known-working** | recorded for kiss, reticulum and meshcore after their green starts (`lhpc known-working <stack>`) |
+| **boot restore** | one reboot through the console's own Reboot action with the release's default running set (nothing): see below |
+| **web console** | `/`, `/stacks`, `/auto-install`, `/dependencies`, `/controller/logs`, `/healthz` → 200; every `/stacks/<stack>` → 302 to its anchor and `/stacks/<stack>/body` → 200; `/healthz` reports `0.8.0`, 9 stacks; **0 tracebacks** in the console journal across the run |
+| **pins vs binaries** | daemon `built_from e8e748e = pin`, RadioLib `187ef24 = pin`, meshtastic `54e0d8d = pin`, MeshCom bridge/qemu/firmware `7c86c96` / `b322a88` / `6edc749` = pins |
+| **host tests** | kiss 22 s rc 0 · graywolf 2 s rc 0 (nothing to do) · reticulum 3 s rc 0 (nothing to do) · meshcore 155 s rc 0 · meshtastic / meshcom *refused on the binary channel* (as designed) · daemon / chat / voice *not run* (waiver) |
+| **from-zero reinstall** | **blocked — needs root** (firewall reset); not run |
 
-0.5.0 could only record row 12 as **blocked** on this box: it had no internet of its own, and
-PlatformIO could not resolve the ESP32 platform through a proxy. With real connectivity the row
-completes — QEMU builds and passes its own link gate, the firmware builds, and the node answers on
-`:18083`. The blocker was the bench, exactly as the 0.5.0 report suspected, and not the code.
+## Boot restore
 
-## Two bench findings, neither a defect
-
-**The purge removes the node identity.** `lhpc clean --purge` removes a stack's config, which includes
-`node_name` / `node_short` / `mc_callsign`, and the controller then correctly refuses to start a stack
-that has no identity. The documented procedure runs purge → install → build → start with no step that
-restores it, so on a box where identity was not already set, every identity-bearing row fails at start.
-The 0.5.0 evidence column (`--info returns LHPCPI5`) implies a configured node, so this has always been
-assumed rather than stated. **`test-matrix.md` should say so.**
-
-**A GPS-capable stack blocks on its GPS bridge.** meshtastic, meshcore and meshcom each have a `*-gps`
-component, and the stack's main component declares a dependency on it. On a box with no receiver the
-bridge cannot verify (`GPS feed never reached its source (gpsd connection closed)`) and the main
-component is never started — `[blocked] meshcore-node: depends on meshcore-gps, which did not start`.
-`use_gps off` is the correct configuration for a receiver-less bench and every affected row then passes.
-This never surfaces on the documented bench, which has a u-blox attached. **Also worth stating in
-`test-matrix.md`.**
-
-## Observed, not proven
-
-- **meshcore's web UI (`:8788`) read absent** after `stack start` returned rc 0 and the node verified on
-  `:5000`. The 0.5.0 run recorded it present on this box. The node is proven; the web UI is not, and it
-  is recorded that way rather than assumed.
-- The **cold-boot GPS-only case** (RTC-less, no network) and the **live valid-client / revoked-client
-  check after CRL repair** remain release acceptance items, unproven here and unchanged by this run.
+One reboot through the console's own Reboot action (logind, no root) with nothing running, at
+18:09. The box came back on its home Wi-Fi, `lhpc-web` active, `/healthz` → `{"stacks":9,"status":"ok","version":"0.8.0"}`,
+boot-restore recorded `state: no-plan` with no issues — nothing had been running, so nothing to restore (`lhpc status`: nothing
+running — the release's default set), and no stack came up that had not been running.

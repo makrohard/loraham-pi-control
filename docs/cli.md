@@ -187,7 +187,12 @@ lhpc gps --source gpsd --host 192.168.1.5       # gpsd on ANOTHER box
 lhpc gps --source nmea --device /dev/ttyACM0    # a serial/USB GPS directly, no gpsd
 lhpc gps --source nmea --device /dev/ttyACM0 --baud 9600
 lhpc gps --source fixed --lat 51.4779 --lon -0.0015 --alt 45   # a station that does not move
+lhpc gps --monitor                              # live receiver state (read-only; coordinates on this terminal only)
+lhpc gps --monitor --sats                       # ... plus the satellite table
 ```
+
+`--monitor` takes no setting flag. What each state means, and how a direct receiver is read without
+ever becoming a second reader: [GPS → Monitor](gps.md#monitor).
 
 The model, the refusals and the per-stack `use_gps` switch are in [GPS](gps.md).
 

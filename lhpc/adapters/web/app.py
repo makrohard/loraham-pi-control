@@ -1753,6 +1753,18 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                 open=stack_id, dp=stack_id)
                         + "#stack-daemon-params-" + stack_id)
 
+    @app.get("/api/gps")
+    def gps_monitor_api():
+        # The GPS Monitor pane polls this only while open. READ-ONLY and it logs nothing: the
+        # response carries coordinates by design (docs/gps.md, "Monitor"); no log line may.
+        return jsonify(service.gps_monitor())
+
+    @app.get("/api/gps/nmea")
+    def gps_nmea_api():
+        # gpsd sources only; for a direct receiver the sample's own tail rides in /api/gps and this
+        # answers [] — it never opens a serial device (one reader, one sample).
+        return jsonify(lines=service.gps_nmea())
+
     @app.post("/gps")
     def gps_set():
         """Set the GLOBAL position source. Same single entry point the CLI uses, so the two

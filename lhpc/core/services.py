@@ -2396,6 +2396,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     # How long to WAIT for a resource claim held by our OWN controller process before failing.
     _SELF_LOCK_WAIT_S = 5.0
+    GPS_MONITOR_OP = "gps-monitor"     # the owner-record operation of the Monitor's sample
 
     def _acquire_key(self, stack, k: str, op: str, target: str) -> None:
         """Enter one reslock key into `stack`. A claim held by ANOTHER process is a real external
@@ -2432,9 +2433,29 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             except reslock.ResourceBusy as busy:
                 holder = busy.holder if isinstance(busy.holder, dict) else {}
                 pid = holder.get("pid")
+                # THE ONE NARROW EXCEPTION to fail-fast-on-external: a start/restart that meets
+                # the GPS Monitor's bounded one-shot sample on a `claim.gps.*` key waits for it
+                # within this same deadline instead of failing a perfectly valid start. The
+                # sample holds the claim for a few seconds at most (docs/gps.md, "Monitor").
+                # `operation_lock()` takes the flock before it publishes the owner record and
+                # removes the record before it unlocks, and its publication mutex covers only
+                # threads of ONE process — so a CLI start racing the web process can observe a
+                # held GPS flock with NO owner record for a moment. On a GPS claim during a
+                # start that momentarily unidentifiable holder is re-read within the deadline
+                # until it becomes identifiable (then: the monitor -> keep waiting; anything
+                # else -> fail fast as before) or the lock is free. Every other key keeps the
+                # existing rule unchanged; nothing waits past the deadline.
+                gps_start = op in ("start", "restart") and k.startswith("claim.gps.")
                 if pid is None or not str(pid).strip():
+                    if gps_start and time.monotonic() < deadline:
+                        time.sleep(0.1)
+                        continue
                     raise                   # unidentifiable => external -> fail fast
                 if str(pid) != str(os.getpid()):
+                    if (gps_start and holder.get("operation") == self.GPS_MONITOR_OP
+                            and time.monotonic() < deadline):
+                        time.sleep(0.1)
+                        continue
                     raise                   # a genuinely EXTERNAL holder -> fail fast, as before
                 if time.monotonic() >= deadline:
                     raise

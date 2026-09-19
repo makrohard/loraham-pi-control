@@ -117,6 +117,45 @@ def _print_install_dep_gate(svc, stack, check: bool = False) -> bool:
     return True
 
 
+def _render_gps_monitor(m: dict, sats: bool) -> int:
+    """`lhpc gps --monitor`: the same snapshot the console's Monitor shows. Coordinates go to
+    this terminal only; nothing here is logged."""
+    ok = m["state"] != "unavailable"
+    print(f"{'OK   ' if ok else 'WARN '} GPS monitor — source {m['source']}"
+          + (f" (resolved: {m['resolved_source']})" if m["resolved_source"] != m["source"] else "")
+          + f": {m['label']}")
+    if m.get("error"):
+        print(f"  error:     {m['error']}")
+    if m.get("note"):
+        print(f"  note:      {m['note']}")
+    if m.get("device"):
+        print(f"  device:    {m['device']}")
+    elif m.get("devices"):
+        print(f"  devices:   {', '.join(m['devices'])}")
+    if m.get("lat") is not None and m.get("lon") is not None:
+        print(f"  position:  {m['lat']:.6f}, {m['lon']:.6f}")
+        if m.get("alt") is not None:
+            kind = {"msl": "m MSL", "hae": "m HAE"}.get(m.get("alt_kind"), "m (legacy alt)")
+            print(f"  altitude:  {m['alt']:.1f} {kind}")
+    if m.get("time"):
+        print(f"  time:      {m['time']}" + ("" if m.get("time_has_date") else " (date unavailable)"))
+    if m.get("sats_used") is not None or m.get("sats_seen") is not None:
+        used = "?" if m.get("sats_used") is None else m["sats_used"]
+        seen = "n/a" if m.get("sats_seen") is None else m["sats_seen"]
+        print(f"  satellites: {used} used of {seen} seen")
+    if sats:
+        rows = m.get("satellites") or []
+        if not rows:
+            print("  (no satellites reported)")
+        for s_ in rows:
+            def _f(v, w):
+                return f"{v:>{w}.0f}" if isinstance(v, (int, float)) and v is not None else " " * (w - 1) + "-"
+            used = {True: "used", False: "    ", None: "  ? "}.get(s_.get("used"), "  ? ")
+            print(f"  {s_.get('talker', '  ')}{s_['prn']:>4}  el {_f(s_.get('el'), 3)}  "
+                  f"az {_f(s_.get('az'), 3)}  snr {_f(s_.get('ss'), 3)}  {used}")
+    return 0 if ok else 1
+
+
 def _render_daemon(view, channel: dict[str, str] | None = None) -> int:
     if not view.reachable:
         print(f"ERR   daemon {view.band}: not reachable ({view.error or 'no CONF socket'})")
@@ -659,6 +698,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_gps.add_argument("--lat", dest="fixed_lat", help="fixed latitude (decimal degrees)")
     p_gps.add_argument("--lon", dest="fixed_lon", help="fixed longitude (decimal degrees)")
     p_gps.add_argument("--alt", dest="fixed_alt", help="fixed altitude (metres, optional)")
+    # The Monitor: read-only, prints what the running source reports (docs/gps.md, "Monitor").
+    # Mutually exclusive with every setting flag above, checked before dispatch reaches set_gps().
+    p_gps.add_argument("--monitor", action="store_true",
+                       help="Show the live receiver state: fix, coordinates, altitude, satellites "
+                            "(read-only; coordinates are printed to this terminal only)")
+    p_gps.add_argument("--sats", action="store_true",
+                       help="With --monitor: also list the satellites (PRN, elevation, azimuth, SNR, used)")
 
     # Internal: the per-consumer NMEA bridge, started by the lifecycle. Not operator-facing
     # (same underscore convention as _hmac-apply).
@@ -1249,6 +1295,20 @@ def _run(argv: list[str] | None = None) -> int:
     if args.command == "hardware":
         return _render(svc.set_hardware_setup(args.setup))
     if args.command == "gps":
+        if args.monitor or args.sats:
+            if args.sats and not args.monitor:
+                print("ERR   --sats needs --monitor")
+                return 2
+            stray = [n for n, v in (("--source", args.source), ("--host", args.host),
+                                     ("--port", args.port), ("--device", args.device),
+                                     ("--baud", args.nmea_baud), ("--lat", args.fixed_lat),
+                                     ("--lon", args.fixed_lon), ("--alt", args.fixed_alt))
+                     if v is not None]
+            if stray:
+                print("ERR   --monitor is read-only and takes no setting flags "
+                      f"(remove: {', '.join(stray)})")
+                return 2
+            return _render_gps_monitor(svc.gps_monitor(), args.sats)
         fields = {k: v for k, v in (
             ("source", args.source), ("host", args.host), ("port", args.port),
             ("device", args.device), ("nmea_baud", args.nmea_baud),

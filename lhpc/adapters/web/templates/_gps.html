@@ -24,9 +24,47 @@
       {% if gps_global.running %}<span class="ver ver-red">in use</span>{% endif %}
     </summary>
 
-    {# The fields sit DIRECTLY under this card — no nested "Settings" sub-panel. GPS has one
-       job and one form; a second collapsible layer would just be a click in the way. #}
     <div class="ws-sub-wrap">
+      {# ---- Monitor: the status, read live from gpsd / the owning feed / one sample of an idle
+              direct receiver (docs/gps.md, "Monitor"). Rendered by gps.js from /api/gps while open;
+              nothing here is a form. Coordinates are shown on purpose, on this surface only. ---- #}
+      <details class="advcfg" id="gps-monitor"{% if request.args.get('open') == 'gps' %} open{% endif %}>
+        <summary>Monitor <span class="muted" id="gps-mon-summary"></span></summary>
+        <section class="cfgsec" data-gps-source="{{ gps_global.source }}">
+          <p class="muted">Live receiver state — <span id="gps-mon-state">loading…</span></p>
+          <p class="depnote" id="gps-mon-note" hidden></p>
+          <table class="paramgrid dptab" id="gps-mon-table">
+            <tr><th>Latitude</th><td class="mono" id="gps-mon-lat">—</td><td class="dphelp muted">decimal degrees</td></tr>
+            <tr><th>Longitude</th><td class="mono" id="gps-mon-lon">—</td><td class="dphelp muted">decimal degrees</td></tr>
+            <tr><th>Altitude</th><td class="mono" id="gps-mon-alt">—</td><td class="dphelp muted">with its datum: MSL, HAE, or legacy</td></tr>
+            <tr><th>Receiver time (reported)</th><td class="mono" id="gps-mon-time">—</td><td class="dphelp muted">as the receiver reports it, never the box's clock</td></tr>
+            <tr><th>Satellites</th><td class="mono" id="gps-mon-sats">—</td><td class="dphelp muted">used of seen</td></tr>
+            <tr><th>Source</th><td class="mono" id="gps-mon-device">—</td><td class="dphelp muted">gpsd device, feed, or the sampled receiver</td></tr>
+          </table>
+          <p class="livequery">
+            <button type="button" class="livebtn" id="gps-sky-btn" data-pane="sky">Skyview</button>
+            <button type="button" class="livebtn" id="gps-nmea-btn" data-pane="nmea">NMEA stream</button>
+            <span class="muted" id="gps-pane-hint">polled only while this section is open</span>
+          </p>
+          <div class="liveout-wrap" id="gps-sky-wrap" hidden>
+            <hr class="sep">
+            <button type="button" class="liveclose" id="gps-sky-close" aria-label="Close" title="Close">✕</button>
+            <svg id="gps-sky" viewBox="0 0 320 320" width="320" height="320" role="img"
+                 aria-label="Satellite skyview: azimuth clockwise from north, elevation towards the centre"></svg>
+            <p class="muted">filled = used in the fix · size = signal strength · N at the top</p>
+          </div>
+          <div class="liveout-wrap" id="gps-nmea-wrap" hidden>
+            <hr class="sep">
+            <button type="button" class="liveclose" id="gps-nmea-close" aria-label="Close" title="Close">✕</button>
+            <p class="muted" id="gps-nmea-label">NMEA stream</p>
+            <pre class="next liveout-body stream22" id="gps-nmea-body"></pre>
+          </div>
+        </section>
+      </details>
+
+      {# ---- Settings: the form, exactly as it was. ---- #}
+      <details class="advcfg" id="gps-settings"{% if request.args.get('open') == 'gps' and request.args.get('cfg') == 'gps' %} open{% endif %}>
+        <summary>Settings</summary>
       <section class="cfgsec">
         {# The consumer names are DERIVED from the manifest (stacks declaring `use_gps`) — a
            hand-written list here drifted every time a stack gained the switch. #}
@@ -111,6 +149,7 @@
           <p><button type="submit">Apply</button></p>
         </form>
       </section>
+      </details>
     </div>
   </details>
 {% endif %}

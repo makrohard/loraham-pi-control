@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.8.0
+
+- **GPS Monitor.** Under *Position (GPS)* the console gains **Monitor** (first) and **Settings** (the
+  form as it was). The Monitor shows the receiver's fix state, coordinates, altitude with its datum,
+  the receiver's reported time, satellites used of seen, a Skyview and an NMEA-stream pane, polling
+  only while open. `lhpc gps --monitor [--sats]` prints the same snapshot, read-only.
+- gpsd sources are read on demand by a disposable, bounded gpsd JSON client: reports correlated per
+  device, never merged across devices, a listed device not called a receiver until it reports a
+  position, altitude as `altMSL` / `altHAE` / legacy `alt` with the datum named.
+- A **direct receiver** (`source = nmea`) is monitored without ever becoming a second serial reader:
+  through the owning MeshCom/MeshCore feed's new best-effort `monitor.sock`, shown as *held* while
+  Meshtastic, graywolf or Sideband reads it natively, and by one bounded sample under the lifecycle's
+  own device claim when nobody holds it. A stack start that meets the Monitor's short claim waits
+  for it instead of failing.
+- **Privacy contract changed on purpose:** coordinates are never logged; they are displayed only on
+  the Monitor surfaces, under the console's configured access policy.
+- `gpsd_owns_device()` now answers *indeterminate* for a reported local device path it cannot
+  identify (it used to answer "free"); the direct-NMEA start gate inherits that.
+- The NMEA classifier moved from the bridge into `gps.py`, shared with the new parser; the bridge's
+  behaviour is unchanged, and gpsd and fixed feeds carry no monitor at all.
+- Live proof on the reference box (gpsd, real u-blox, including the no-fix → 3D-fix progression, and the browser poll stop/resume row): `docs/live-tests/gps-monitor-test-2026-09-19.md`.
+- The 0.7.0 full-stack live test is documented: `docs/live-tests/full-stack-test-2026-09-18.md`.
+- CI: the test job's timeout is 30 min (was 20). The suite with branch coverage runs 15–19 min per
+  Python lane on the hosted runners, and this release's ~90 new tests pushed the 3.12 lane over the
+  old limit twice.
+
 ## 0.7.0
 
 - **A status page no longer costs reception.** Reading `GET CHANNEL` on the daemon's CONF socket

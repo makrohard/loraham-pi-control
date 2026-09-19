@@ -2060,9 +2060,11 @@ def test_gps_card_follows_the_webserver_panel_layout(web):
     assert card.find("div", class_="ws-sub-wrap")
     table = card.find("table", class_="paramgrid")
     assert table and table[0].has_class("dptab")
-    # The fields sit directly under the card — no nested "Settings" sub-panel to click
-    # through for a single form.
-    assert not any(s.text == "Settings" for s in card.find("summary"))
+    # GPS Monitor (maintainer's decision): the card carries two sub-sections, Monitor FIRST
+    # (the live status) and Settings (the form as it was) — the one nested layer this panel
+    # has, because status and configuration are different things and the status polls.
+    summaries = [s.text.strip().split()[0] for s in card.find("summary") if s.text.strip()]
+    assert summaries.index("Monitor") < summaries.index("Settings")
     assert len(card.find("td", class_="dphelp")) >= 6, "each row explains itself"
 
     # No control may be left without an accessible name.

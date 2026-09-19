@@ -35,7 +35,7 @@ from .config import (
 )
 from .gps import USE_GPS_PARAM, use_gps_default
 from .lifecycle import GROUP_MISSING_HINT, GROUP_RESTART_HINT
-from .model import RunState
+from .model import ComponentKind, RunState
 from .paths import PathContainmentError
 from .service_base import ActionResult, ConfigWrite
 from .snapshot_memo import invalidates_snapshot
@@ -1888,6 +1888,332 @@ class ParamsConfigMixin:
         v["running"] = self.gps_consumers_running(snap=self._snapshot_or_none())
         v["legacy"] = self.legacy_gps_values()
         return v
+
+    # ---- GPS Monitor ------------------------------------------------------------------------
+    # The status half of the GPS block (docs/gps.md, "Monitor"). Reads gpsd's own JSON on demand
+    # for gpsd sources, the configured values for `fixed`, and for a direct-NMEA receiver one of
+    # three states: through the owning feed's monitor socket, "held" while something reads the
+    # device, or ONE bounded sample under the lifecycle's own claim when nobody does. It mutates
+    # no configuration or lifecycle state and logs nothing.
+
+    _MONITOR_HOLD_BUDGET_S = 4.5       # the whole hold must fit under the lifecycle's 5 s wait
+    _MONITOR_SAMPLE_S = 2.5
+    _MONITOR_FEED_BUDGET_S = 1.0
+
+    def gps_monitor(self) -> dict:
+        """The Monitor snapshot for the console and `lhpc gps --monitor`. Fails soft: never an
+        exception into a page. See `gps.gpsd_snapshot` / `gps.NmeaSnapshot` for the shapes."""
+        from . import gps as _gps
+        v = self.gps_settings()
+        out = {"source": v["source"], "resolved_source": v["source"], "available": False,
+               "state": "off", "label": "", "note": "", "error": "", "nmea_ok": False,
+               "devices": [], "device": None, "mode": None, "lat": None, "lon": None,
+               "alt": None, "alt_kind": None, "time": None, "time_has_date": False,
+               "sats_used": None, "sats_seen": None, "satellites": [], "nmea": []}
+        try:
+            if not v["valid"]:
+                out.update(state="off", error=v["reason"])
+            elif v["source"] == "off":
+                out.update(state="off")
+            elif v["source"] == "fixed":
+                out.update(state="fixed", available=True, resolved_source="fixed")
+                for k, src in (("lat", "fixed_lat"), ("lon", "fixed_lon"), ("alt", "fixed_alt")):
+                    raw = str(v.get(src) or "").strip()
+                    try:
+                        out[k] = float(raw) if raw else None
+                    except ValueError:
+                        out[k] = None
+                out["alt_kind"] = "msl" if out["alt"] is not None else None
+            elif v["source"] == "auto" and not _gps.local_gpsd_listening():
+                # The Monitor's OWN live probe: current availability, not the lifecycle's frozen
+                # verdict; it changes no cached config (refresh_gps_auto() at the request boundary
+                # stays what it is).
+                out.update(state="auto-off", resolved_source="off")
+            elif v["source"] in ("auto", "gpsd"):
+                host, port = ((_gps.AUTO_GPSD_HOST, _gps.AUTO_GPSD_PORT) if v["source"] == "auto"
+                              else (v["host"], int(v["port"])))
+                out.update(resolved_source="gpsd", available=True)
+                snap = _gps.gpsd_snapshot(host, port)
+                out.update({k: snap[k] for k in ("state", "devices", "device", "mode", "lat",
+                                                  "lon", "alt", "alt_kind", "time",
+                                                  "time_has_date", "sats_used", "sats_seen",
+                                                  "satellites", "nmea_ok", "note", "error")})
+                if not snap["ok"]:
+                    out.update(state="unavailable", nmea_ok=False)
+            elif v["source"] == "nmea":
+                out.update(resolved_source="nmea", available=True)
+                out.update(self._gps_monitor_nmea())
+        except Exception as exc:
+            out.update(state="unavailable", error=f"monitor failed ({type(exc).__name__})")
+        out["label"] = _gps.monitor_label(out["state"])
+        return out
+
+    def gps_nmea(self) -> list[str]:
+        """gpsd's NMEA output for a gpsd source, bounded. `[]` for every other source — for a
+        direct receiver the sample's own tail rides in `gps_monitor()`, so this never opens a
+        serial device (one reader, one sample)."""
+        from . import gps as _gps
+        v = self.gps_settings()
+        try:
+            if v["source"] == "gpsd" and v["valid"]:
+                return _gps.gpsd_nmea_window(v["host"], int(v["port"]))
+            if v["source"] == "auto" and v["valid"] and _gps.local_gpsd_listening():
+                return _gps.gpsd_nmea_window(_gps.AUTO_GPSD_HOST, _gps.AUTO_GPSD_PORT)
+        except Exception:
+            return []
+        return []
+
+    # -- direct NMEA: holders, the feed socket, the one sample ------------------------------
+
+    def _gps_positively_disabled(self, stack_id: str) -> bool:
+        """True ONLY when the stack's `use_gps` is readable and exactly off. An unreadable or
+        malformed config is NOT a disabled stack — `gps_enabled_for()` answers False there, which
+        would drop a native reader that still holds the open device (audit F1)."""
+        try:
+            cfg = self._stack_config_cached(stack_id)
+        except Exception:
+            return False
+        return str(cfg.get("use_gps", "")).strip().lower() == "off"
+
+    def _gps_monitor_holders(self, snap=None) -> list[dict]:
+        """Everything that may hold the direct receiver right now, DERIVED: every live
+        (RUNNING/DEGRADED/UNKNOWN) GPS consumer or feed from the unfiltered liveness set,
+        minus native consumers with a positively established opt-out. Each entry:
+        {"cid", "stack", "kind": "feed"|"native", "unknown"}."""
+        from .gps import consumer_for_component
+        live = self.gps_liveness_blockers(tuple(sorted(self._gps_stacks())), snap=snap,
+                                          require_enabled=False)
+        feeds = self._all_gps_feed_ids()
+        out = []
+        for entry in live:
+            cid = entry.split(" ", 1)[0]
+            unknown = "(state unknown)" in entry
+            sid = self._owner_stack_id(cid) or cid
+            kind = "feed" if cid in feeds else "native"
+            if kind == "native" and not unknown and self._gps_positively_disabled(sid):
+                continue
+            out.append({"cid": cid, "stack": sid, "kind": kind, "unknown": unknown,
+                        "consumer": consumer_for_component(cid) if kind == "feed" else ""})
+        return out
+
+    def _gps_runtime_holders(self, deadline: float) -> list[dict] | None:
+        """`_gps_monitor_holders` for the re-check UNDER the receiver claim: the same consumer and
+        feed ids, judged from process and unit evidence alone — no snapshot build, no source or
+        git probe, nothing that can outlive `deadline`. Live = a unit active or the process
+        present; a component whose evidence cannot be read counts as a holder. Returns None when
+        the check itself runs out of time (the caller fails closed: held)."""
+        from .gps import consumer_for_component
+        from .probes.process import probe_process
+        from .probes.systemd import _TIMEOUT_S as _UNIT_PROBE_S
+        from .probes.systemd import UnitState, probe_unit
+        try:
+            watch = self._gps_consumer_ids() | self._all_gps_feed_ids()
+            if not self._meshcore_consumes_position(_meshcore_mode.STACK_ID,
+                                                    self.meshcore_running_mode()):
+                watch = watch - {_meshcore_mode.NODE_ID}
+            feeds = self._all_gps_feed_ids()
+            index = self._component_index()
+            out = []
+            for cid in sorted(watch):
+                if time.monotonic() >= deadline:
+                    return None
+                hit = index.get(cid)
+                if hit is None:
+                    continue
+                sid, comp = hit[0].id, hit[1]
+                if comp.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE) or (
+                        comp.kind == ComponentKind.ONESHOT and not comp.interactive):
+                    continue
+                states = []
+                for u in comp.units:
+                    # a unit probe may hang for its whole timeout: never start one that could
+                    # end past the deadline — fail closed instead
+                    if time.monotonic() + _UNIT_PROBE_S > deadline:
+                        return None
+                    states.append(probe_unit(self._system, u.name, u.scope).state)
+                matched = comp.process is not None and probe_process(self._system, comp.process).matched
+                live = matched or any(st is UnitState.ACTIVE for st in states)
+                unknown = (not live and bool(states)
+                           and all(st in (UnitState.UNAVAILABLE, UnitState.TIMEOUT) for st in states))
+                if not live and not unknown:
+                    continue
+                kind = "feed" if cid in feeds else "native"
+                if kind == "native" and not unknown and self._gps_positively_disabled(sid):
+                    continue
+                out.append({"cid": cid, "stack": sid, "kind": kind, "unknown": unknown,
+                            "consumer": consumer_for_component(cid) if kind == "feed" else ""})
+            return out
+        except Exception:
+            return None
+
+    def _gps_feed_monitor(self, consumer: str) -> dict | None:
+        """The owning feed's monitor snapshot, or None when its evidence cannot be trusted
+        (stale marker, dead pid, missing or broken socket)."""
+        import json
+        import os as _os
+        import socket as _socket
+        from pathlib import Path
+
+        from . import runtime_fs
+        from .gps import bridge_state_dir, marker_is_fresh, marker_owner_pid
+        state_dir = bridge_state_dir(self._paths.runtime_root, consumer)
+        try:
+            marker = json.loads(runtime_fs.read_text(self._paths, Path(state_dir) / "readiness.json"))
+        except Exception:
+            return None
+        if not isinstance(marker, dict) or not marker_is_fresh(marker, time.time()):
+            return None
+        pid = marker_owner_pid(marker)
+        if pid is None:
+            return None
+        try:
+            _os.kill(pid, 0)
+        except OSError:
+            return None
+        deadline = time.monotonic() + self._MONITOR_FEED_BUDGET_S
+        try:
+            with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as sock:
+                sock.settimeout(self._MONITOR_FEED_BUDGET_S)
+                sock.connect(_os.path.join(state_dir, "monitor.sock"))
+                buf = b""
+                while b"\n" not in buf and len(buf) < 65536 and time.monotonic() < deadline:
+                    chunk = sock.recv(8192)
+                    if not chunk:
+                        break
+                    buf += chunk
+            line = buf.split(b"\n", 1)[0]
+            got = json.loads(line) if line else None
+            return got if isinstance(got, dict) and got.get("ok") else None
+        except Exception:
+            return None
+
+    def _gps_monitor_nmea(self) -> dict:
+        """The three states for a direct receiver (docs/gps.md, "Monitor")."""
+        from . import gps as _gps
+        cfg = self.config()
+        plan = _gps.plan_from_config(cfg)
+        if not plan.valid or plan.source != "nmea" or not plan.device:
+            return {"state": "unavailable", "error": plan.reason or "direct source not resolvable"}
+        held = {"state": "held", "device": plan.device, "nmea_ok": False}
+        holders = self._gps_monitor_holders()
+        feeds = [h for h in holders if h["kind"] == "feed"]
+        natives = [h for h in holders if h["kind"] == "native"]
+        if feeds:
+            h = feeds[0]
+            got = None if h["unknown"] else self._gps_feed_monitor(h["consumer"])
+            if got is None:
+                held["note"] = f"feed running ({h['cid']}); monitor unavailable"
+                return held
+            res = {k: got.get(k) for k in ("state", "mode", "lat", "lon", "alt", "alt_kind", "time",
+                                            "time_has_date", "sats_used", "sats_seen",
+                                            "satellites", "nmea")}
+            res.update(device=plan.device, nmea_ok=True,
+                       note=f"via the {h['stack']} GPS feed",
+                       feed_state=got.get("state"))
+            res["state"] = got.get("state") or "no-data"
+            return res
+        if natives:
+            names = ", ".join(sorted({h["stack"] for h in natives}))
+            held["note"] = (f"device {plan.device} is read by {names} directly; nothing else can "
+                            "read a serial port at the same time")
+            return held
+        return self._gps_direct_sample(plan)
+
+    def _gps_direct_sample(self, plan) -> dict:
+        """ONE bounded read of the idle receiver, in this order and no step skipped: the gpsd
+        ownership gate -> the lifecycle's own `claim.gps.<key>` lock (non-blocking, operation
+        `gps-monitor`) -> a FRESH derived holder re-check while holding it -> open with the pump's
+        identity check -> read -> close -> release. The whole hold carries one absolute deadline
+        under the lifecycle's 5 s wait; exhaustion abandons the sample and releases the claim."""
+        from . import gps as _gps
+        from . import reslock
+        held = {"state": "held", "device": plan.device, "nmea_ok": False}
+        deadline = time.monotonic() + self._MONITOR_HOLD_BUDGET_S
+        owned, detail = _gps.gpsd_owns_device(plan.device, _gps.AUTO_GPSD_HOST,
+                                              _gps.AUTO_GPSD_PORT, timeout=1.0)
+        if owned is not False:
+            held["note"] = ("cannot establish that the device is free" +
+                            (f" ({detail})" if detail else "") +
+                            " — use the gpsd source to monitor a receiver gpsd owns")
+            return held
+        key = f"claim.{plan.device_key}" if plan.device_key.startswith("gps.") \
+            else f"claim.gps.{plan.device_key}"
+        try:
+            with reslock.operation_lock(self._paths, key, self.GPS_MONITOR_OP, "gps"):
+                # the re-check under the claim: a start may have begun between the first check
+                # and the lock. RUNTIME EVIDENCE ONLY — a snapshot build here would run the
+                # source probes (git, 3 s each per checkout) while holding the receiver claim a
+                # starting stack waits on, and the budget would be a number, not a bound.
+                holders = self._gps_runtime_holders(deadline)
+                if holders is None or time.monotonic() >= deadline:
+                    held["note"] = "monitor budget exhausted before the device could be read"
+                    return held
+                if holders:
+                    held["note"] = "a GPS consumer started while the monitor was checking"
+                    return held
+                remaining = min(self._MONITOR_SAMPLE_S, deadline - time.monotonic())
+                if remaining <= 0.2:
+                    held["note"] = "monitor budget exhausted before the device could be read"
+                    return held
+                return self._gps_read_device(plan, remaining)
+        except reslock.ResourceBusy as busy:
+            who = busy.holder.get("operation", "") if isinstance(busy.holder, dict) else ""
+            held["note"] = "device claimed by " + (who or "another operation")
+            return held
+
+    def _gps_read_device(self, plan, budget: float) -> dict:
+        """The read itself: the pump's open flags and identity check, no command sent to the
+        receiver, bounded, closed afterwards. Not hardware-inert (a tty is configured)."""
+        import os as _os
+        import stat as _stat
+
+        from . import gps as _gps
+        from .gps_bridge import _configure_port
+        snap = _gps.NmeaSnapshot()
+        fd = -1
+        try:
+            fd = _os.open(plan.device, _os.O_RDONLY | _os.O_NOCTTY | _os.O_NONBLOCK)
+            st = _os.fstat(fd)
+            if not _stat.S_ISCHR(st.st_mode):
+                return {"state": "unavailable", "error": "not a character device"}
+            if plan.device_key and \
+                    f"serial.dev.{_os.major(st.st_rdev)}:{_os.minor(st.st_rdev)}" != plan.device_key:
+                return {"state": "unavailable",
+                        "error": "device now resolves to a different receiver than the one claimed"}
+            _configure_port(fd, plan.nmea_baud)
+            end = time.monotonic() + budget
+            buf = b""
+            raw = 0
+            while time.monotonic() < end:
+                try:
+                    chunk = _os.read(fd, 4096)
+                except BlockingIOError:
+                    time.sleep(0.05)
+                    continue
+                if not chunk:
+                    break
+                raw += len(chunk)
+                buf += chunk
+                lines = buf.split(b"\n")
+                buf = lines.pop() if len(lines[-1]) <= 4096 else b""
+                for line in lines:
+                    if line.startswith(b"$"):
+                        snap.feed(line)
+        except OSError as exc:
+            return {"state": "unavailable", "error": f"device unreadable ({type(exc).__name__})"}
+        finally:
+            if fd >= 0:
+                try:
+                    _os.close(fd)
+                except OSError:
+                    pass
+        got = snap.snapshot()
+        got.update(device=plan.device, nmea_ok=True, note="one sample of the idle receiver")
+        if got["state"] == "no-data":
+            got["note"] = ("data but no NMEA sentences — receiver in binary mode? (a u-blox left in "
+                           "UBX mode by gpsd does this)" if raw > 0 and snap.sentences == 0
+                           else "no data from the device in the sampling window")
+        return got
 
     def set_gps(self, **fields) -> ActionResult:
         """Show or set the GLOBAL position source (`[gps]` in local.toml).

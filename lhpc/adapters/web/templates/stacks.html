@@ -217,4 +217,6 @@
   {# Preserve the tree's open/close + scroll across form-POST actions (external per CSP). #}
   <script src="{{ url_for('static', filename='stacks_state.js') }}" defer></script>
   <script src="{{ url_for('static', filename='taskbanner.js') }}" defer></script>
+  {# The GPS Monitor pane (polls /api/gps only while open; skyview + NMEA panes). #}
+  <script src="{{ url_for('static', filename='gps.js') }}" defer></script>
 {% endblock %}

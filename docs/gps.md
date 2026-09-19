@@ -5,10 +5,18 @@ Sideband and Graywolf all take it from the same place, so they can never disagre
 the box thinks it is. Per-stack settings only turn GPS **on or off**. The commands:
 [cli](cli.md#gps).
 
-Coordinates are never echoed back: not by the CLI, the console, or any log.
+**Coordinates are never logged.** They are displayed only on explicit monitor surfaces to the
+operator: the GPS Monitor on the console (subject to the console's configured access policy —
+productive serving is HTTPS, the default `local-open-remote-auth` is open on loopback and requires a
+client certificate remotely, and a `no-auth` mode exists as the operator's explicit choice — with
+`Cache-Control: no-store` as on every page) and `lhpc gps --monitor` in the operator's terminal. No
+other LHPC monitor output, page, log line or state file introduced by the Monitor carries them; the
+bridge's rule is unchanged. (A configured fixed position and the generated Sideband configuration
+necessarily hold configured coordinates, and upstream applications keep their own logging policies.)
 
 ## Contents
 
+- [Monitor](#monitor)
 - [Two settings, not one](#two-settings-not-one)
 - [Choosing a source](#choosing-a-source)
 - [gpsd is yours](#gpsd-is-yours)
@@ -16,6 +24,60 @@ Coordinates are never echoed back: not by the CLI, the console, or any log.
 - [A u-blox that has met gpsd stays in binary mode](#a-u-blox-that-has-met-gpsd-stays-in-binary-mode)
 - [Health, and what the console shows](#health-and-what-the-console-shows)
 - [Refusals you may hit](#refusals-you-may-hit)
+
+## Monitor
+
+Under *Position (GPS)* on the console the first sub-section is **Monitor**, the second **Settings**
+(the form). `lhpc gps --monitor` prints the same snapshot; `--sats` adds the satellite table. Both are
+read-only: `--monitor` refuses every setting flag.
+
+The Monitor shows the receiver's state, coordinates, altitude **with its datum** (`512.3 m MSL`,
+`560.8 m HAE`, or `(legacy alt)`), the receiver's reported time (never the box's clock; without an
+RMC date it reads `12:34:56 UTC (date unavailable)`), satellites used of seen, a **Skyview** pane
+(azimuth clockwise from north, elevation towards the centre, filled = used, size = SNR) and an
+**NMEA stream** pane. It polls only while it is open, and only after the previous request settled.
+
+| state | meaning |
+|---|---|
+| `3D fix` / `2D fix` | the receiver's fix; gpsd `mode` 3 / 2, or a direct receiver's GSA |
+| `fix (dimension unknown)` | a direct receiver reports a usable position but no recent GSA |
+| `no fix` | the receiver talks, no usable position; with mode 0 or 1 no coordinate is shown |
+| `no gpsd device` | gpsd lists no device |
+| `gpsd device present, no position data yet` | a device is listed but produced no position report in the 2.5 s budget — a listed path may be RTCM or AIS, so it is not called a receiver until it reports |
+| `several position sources` | two gpsd devices produced positions, or an untagged report sits beside several devices; nothing is merged and the NMEA pane is disabled |
+| `gpsd unavailable` | no connection, protocol failure, or an unsupported protocol major |
+| `stale` | a direct receiver sent no navigation sentence for 20 s |
+| `fixed position (configured)` | the manual source; altitude is MSL (that is how the fixed feed emits it) |
+| `held` | a direct receiver is read by something else right now (below) |
+
+**gpsd sources.** The console is a disposable gpsd client: one connection per poll, a total budget
+of 2.5 s covering name resolution, every address attempt and every read, newline-framed with a bounded
+buffer (gpsd reports can be split across reads or truncated at 10 240 characters — a truncated report
+is dropped, never guessed). Reports are correlated **per device**; a report without a `device` tag is
+attributed only when gpsd lists exactly one device. The NMEA pane shows **gpsd's NMEA output** (for a
+receiver gpsd runs in binary mode that is pseudo-NMEA), combined across devices. Watching may
+activate a gpsd-managed receiver on a server not running gpsd with `-n`; it changes no LHPC
+configuration. LHPC's own time-source gpsd runs with `-n`.
+
+**Direct receiver (`nmea`).** A serial port has one reader, so the Monitor has three states:
+
+* **via the feed** — a MeshCom or MeshCore feed owns the device: the Monitor reads that feed's own
+  `monitor.sock` (best effort; a feed with a broken monitor shows "feed running; monitor
+  unavailable" and the device is never opened beside it).
+* **held** — Meshtastic, graywolf or Sideband reads the device natively: no live position or skyview
+  during that operation, because none of those programs share their port. Also `held` while
+  local gpsd owns the receiver ("cannot establish that the device is free" — use the gpsd source).
+* **one sample** — nobody holds it: the Monitor takes the lifecycle's own device claim, re-checks
+  from process and unit evidence alone that nothing started meanwhile (no source probe runs under
+  the claim, so the hold is bounded at 4.5 s), reads the receiver for 2.5 s, closes, releases. A
+  stack start that meets the Monitor's claim waits for it (at most 5 s) instead of failing. The NMEA pane then shows
+  the sample's own lines; `/api/gps/nmea` never opens a serial device. Opening a tty configures it;
+  no command is sent to the receiver.
+
+A stack whose config cannot be read counts as a holder; only a positively saved `use_gps = off` frees
+a native consumer. Coordinates and altitude disappear the moment a navigation sentence reports no
+fix, and every retained value (altitude, satellite counts, each GSA and GSV group) ages out
+separately at 20 s.
 
 ## Two settings, not one
 
