@@ -320,9 +320,6 @@ main = "loraham-chat"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "LoRaHAM_Daemon"
-    # Single-file artifact source: every selector (Known working / Development /
-    # Latest stable) resolves to the same declared artifact (default-branch HEAD).
-    artifact = true
 
     # Seeded into {runtime}/config/files/lorachat.conf (KEY=VALUE, split on '=').
     [stack.component.config_file]

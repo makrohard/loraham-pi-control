@@ -1548,6 +1548,15 @@ def test_local_advance_after_plan_still_frozen(tmp_path):
 # --- M2 round-6: artifact sources frozen for EVERY auto-install selector -----------------------------
 
 @pytest.mark.needs_session
+def _mark_chat_artifact(svc):
+    """No shipped component is an artifact source any more (Voice lost the flag in 0.3.10, chat
+    in 0.8.1). The freeze/refusal mechanism stays and these tests exercise it on the chat
+    component marked artifact for the test only — the real manifest must declare none."""
+    assert not any(c.source and c.source.artifact for st in svc.stacks() for c in st.components)
+    chat = next(c for st in svc.stacks() for c in st.components if c.id == "loraham-chat")
+    object.__setattr__(chat.source, "artifact", True)
+
+
 def test_pinned_auto_install_freezes_artifact_commit(tmp_path, monkeypatch):
     # A `pinned` auto-install plan resolves every ARTIFACT group to a non-empty exact commit and
     # passes it to adoption (artifacts never use known-working entries — the plan-time
@@ -1576,6 +1585,7 @@ def test_pinned_auto_install_freezes_artifact_commit(tmp_path, monkeypatch):
                         lambda self, t, apply=False, auto_install_ctx=None, **k:
                         ActionResult(True, "b"))
     svc = _svc(tmp_path)
+    _mark_chat_artifact(svc)
     svc.auto_install(apply=True, tests=False, source="pinned", emit=lambda s: None)
     art = [(p, exp) for p, is_art, exp in seen if is_art]
     assert art, "no artifact adoptions ran"
@@ -1619,6 +1629,7 @@ def test_artifact_remote_advance_after_plan_is_ignored(tmp_path, monkeypatch):
                         lambda self, t, apply=False, auto_install_ctx=None, **k:
                         ActionResult(True, "b"))
     svc = _svc(tmp_path)
+    _mark_chat_artifact(svc)
     svc.auto_install(apply=True, tests=False, source="pinned", emit=lambda s: None)
     assert seen and all(sha == sha_a for _, sha in seen)         # ALL frozen @ A
 
@@ -1628,6 +1639,7 @@ def test_artifact_resolution_failure_refuses_before_marker(tmp_path, monkeypatch
     monkeypatch.setattr(ControllerService, "_frozen_ref",
                         lambda self, comp, source: ((None, None), "remote unreachable"))
     svc = _svc(tmp_path)
+    _mark_chat_artifact(svc)
     r = svc.auto_install(apply=True, tests=False, source="pinned", emit=lambda s: None)
     assert not r.ok and "resolution" in " ".join([r.summary] + r.details)
     assert svc.auto_install_status() is None                             # no run marker

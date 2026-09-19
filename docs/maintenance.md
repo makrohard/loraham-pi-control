@@ -143,6 +143,10 @@ repositories and recorded there, not here.
   - **Recorded exception (0.3.10):** Voice losing `artifact = true` shipped as a patch because
     the pin and the branch tip were the same commit and the release lane already proved both Voice
     variants — unchanged bytes plus lane proof, not a change to the selector rule.
+  - **Recorded exception (0.8.1):** chat losing `artifact = true`, the same change as 0.3.10 for the
+    same reason — the pin and the branch tip differ by documentation only, so the installed bytes
+    are unchanged; the flag had made the v0.8.0 image unbuildable (the tip is installed, the
+    composition check refuses it).
   - **Recorded exception (0.6.2), by the maintainer's decision:** narrowing `POWER` to the chip
     fitted is a changed refusal, and therefore a minor by the rule above. It shipped in the pin
     patch that moves the daemon to 1.0.0, because that daemon is what introduces the narrower

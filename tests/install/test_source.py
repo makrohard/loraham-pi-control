@@ -313,10 +313,12 @@ def _activate(inst, dest: Path, staging: Path, verify_active=None) -> str:
                 h.close()
 
 
-@pytest.mark.parametrize("cid", ["loraham-voice", "loraham-voice-cli"])
+@pytest.mark.parametrize("cid", ["loraham-voice", "loraham-voice-cli", "loraham-chat"])
 def test_voice_verifies_its_pin_like_any_other_source(tmp_path, make_repo, cid):
-    """Voice is an ordinary pinned source: a local checkout that is NOT at the manifest pin
-    cannot satisfy a `pinned` install.
+    """Voice (0.3.10) and chat (0.8.1) are ordinary pinned sources: a local checkout that is NOT
+    at the manifest pin cannot satisfy a `pinned` install. Chat's flag cost the v0.8.0 image: the
+    daemon repo's tip moved past the pin by a docs commit, the image installed the tip, and the
+    composition check refused the build.
 
     Both Voice components share one checkout, and NOTHING else in the suite would notice if only
     one of them lost `artifact = true` — the pin-consistency gate compares `pin_commit`/`pin_tag`
@@ -327,7 +329,7 @@ def test_voice_verifies_its_pin_like_any_other_source(tmp_path, make_repo, cid):
     """
     from lhpc.core.manifest import load_manifest
     comp = next(c for st in load_manifest() for c in st.components if c.id == cid)
-    assert comp.source.pin_commit, "the manifest must pin Voice for this to mean anything"
+    assert comp.source.pin_commit, "the manifest must pin the source for this to mean anything"
     paths, root = _paths(tmp_path)
     local = root / "voice"
     make_repo(local)                                    # a real repo whose HEAD is NOT the pin

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1
+
+- Chat is an ordinary pinned source. Its `artifact` flag made every install take the LoRaHAM daemon
+  repository's branch tip instead of the manifest pin; the day after 0.8.0 that tip was one
+  documentation commit past the pin, the image build installed it, and the image's composition
+  check refused the result. Chat now installs and verifies the pinned commit like every other
+  source (the same change Voice had in 0.3.10). No shipped component carries the flag any more.
+
 ## 0.8.0
 
 - **GPS Monitor.** Under *Position (GPS)* the console gains **Monitor** (first) and **Settings** (the

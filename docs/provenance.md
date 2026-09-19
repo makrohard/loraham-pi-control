@@ -28,7 +28,7 @@ explicit — nothing reaches them by leaving a selector alone.
 
 An **unpinned** component cannot be installed as `pinned` — with no configured pin it is
 `unverified-blocked`, and you must choose `dev` or `stable` explicitly. lhpc never fabricates
-a missing pin or signature. An **artifact** source (`artifact = true`: chat) resolves every selector to the same declared artifact (`artifact-head`).
+a missing pin or signature. An **artifact** source (`artifact = true`) resolves every selector to the same declared artifact (`artifact-head`); no shipped component declares it today (Voice lost it in 0.3.10, chat in 0.8.1).
 Every source lives under the runtime root as a managed clone. For a source checkout,
 `lhpc status --versions` reads `match` only while the checked-out ref still equals the pin: a
 `dev` checkout turns to `differs` once upstream moved.
