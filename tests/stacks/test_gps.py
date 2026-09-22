@@ -10,6 +10,8 @@ No real coordinates anywhere: Greenwich is used wherever a concrete position is 
 
 from __future__ import annotations
 
+import re
+
 import json
 import os
 import socket
@@ -2494,10 +2496,15 @@ def test_meshcore_cli_build_byte_compiles_the_pinned_source():
 
     The build still byte-compiles the source so a future pin that regresses on 3.11 fails
     the BUILD with file and line instead of a SyntaxError at first run. This test pins both
-    halves of that contract: the guard step exists, and the pin is the vetted one."""
+    halves of that contract: the guard step exists, and the pin is never BELOW the vetted
+    release. A lower bound, not an equality: the release bot moves this pin forward on its
+    own (meshcore-cli is tag-tracked), and an equality on one commit turned the bot's first
+    0.8.2 candidate red on 2026-09-22 with every moved stack otherwise proven."""
     from lhpc.core.manifest import load_manifest
     mc = next(c for s in load_manifest() for c in s.components if c.id == "meshcore-cli")
-    assert mc.source.pin_commit == "568d158bc780c318c3d8706f71bfb980cb1ca588"   # v1.6.3
+    tag = mc.source.pin_tag
+    assert re.fullmatch(r"v\d+\.\d+\.\d+", tag), tag          # a release, never a describe-style snapshot
+    assert tuple(int(x) for x in tag[1:].split(".")) >= (1, 6, 3), tag   # v1.6.3 = first 3.11-clean release
     compile_steps = [st for st in mc.build_steps
                      if "compileall" in " ".join(st.get("argv", []))]
     assert len(compile_steps) == 1

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.2
+
+- The release bot can release again. Its policy had no rule for `src/meshchat`, so every scheduled
+  run since 2026-09-14 refused at its first stage — correctly, and reported only in its own
+  repository. The rule is in the bot; here, `pin-validation` now runs the bot's own check against
+  the checked-out manifest on every push, so a stack that pins a new source cannot merge without
+  its policy rule.
+- A test asserted meshcore-cli's exact pinned commit and turned the bot's first candidate red with
+  every moved stack otherwise proven. It now asserts a lower bound (never below v1.6.3, the first
+  3.11-clean release), which is the contract it was written for. Nothing on a box changes; no image.
+
 ## 0.8.1
 
 - Chat is an ordinary pinned source. Its `artifact` flag made every install take the LoRaHAM daemon
