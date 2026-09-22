@@ -144,6 +144,28 @@ jobs:
         with:
           python-version: "3.13"
 
+      # The release bot refuses at its first stage when a pinned source has no rule in its
+      # policy.toml — fail-closed, and correct. But the bot's own CI runs only when the BOT
+      # changes, and the drift happens HERE, when a stack pins a new source. Found 2026-09-22:
+      # `src/meshchat` had no rule for a week and every scheduled release stopped at `watch`,
+      # reported only as issues in the bot's repository. So the bot's own check runs on every
+      # controller push, against THIS checkout's manifest and the bot's policy at main: a new
+      # pinned source cannot merge without its rule.
+      - name: Check out the release bot (its policy and its checker)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: makrohard/lhpc-release-bot
+          ref: main
+          path: ext/release-bot
+          persist-credentials: false
+
+      - name: Every pinned source has a rule in the release bot's policy
+        run: |
+          set -euo pipefail
+          cd ext/release-bot
+          python -m tests.policy_covers_manifest \
+            --manifest "$GITHUB_WORKSPACE/lhpc/data/manifest.example.toml"
+
       - name: Validate EVERY pinned source against its live branch
         env:
           GIT_TERMINAL_PROMPT: "0"
