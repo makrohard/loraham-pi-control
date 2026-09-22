@@ -120,6 +120,10 @@ def _ok(comp: dict):
                  id="test_readiness_timeout_out_of_range_rejected"),
     pytest.param({"run_argv": ["./app"], "readiness": "process", "readiness_timeout": -1}, None,
                  id="test_readiness_timeout_negative_rejected"),
+    pytest.param({"run_argv": ["./app"], "readiness": "process", "stop_timeout": 601}, None,
+                 id="test_stop_timeout_out_of_range_rejected"),
+    pytest.param({"run_argv": ["./app"], "readiness": "process", "stop_timeout": -1}, None,
+                 id="test_stop_timeout_negative_rejected"),
     # Eager: a typo'd placeholder fails at manifest load, not minutes into a build.
     pytest.param({"run_argv": ["./app"], "readiness": "process",
                   "build_steps": [{"argv": ["make"], "announce": "watch {root}/build grow"}]}, None,
@@ -156,6 +160,21 @@ def test_ready_loopback_ipv6_bracketed_ok():
 
 def test_readiness_timeout_in_range_ok():
     _ok({"run_argv": ["./app"], "readiness": "process", "readiness_timeout": 45})
+
+
+def test_stop_timeout_in_range_ok_and_absent_is_the_default():
+    _ok({"run_argv": ["./app"], "readiness": "process", "stop_timeout": 40})
+    _ok({"run_argv": ["./app"], "readiness": "process"})
+
+
+def test_only_the_meshcore_node_declares_a_stop_timeout_in_the_shipped_manifest():
+    """The budget exists for one process whose graceful shutdown is longer than the lifecycle's
+    default (it stops upstream's plugin manager, its GPS feed and its radio first). Every other
+    component keeps the 5 s default — a second declaration is a decision, not a copy."""
+    from lhpc.core.manifest import load_manifest
+    declared = {c.id: c.stop_timeout for st in load_manifest() for c in st.components
+                if c.stop_timeout}
+    assert declared == {"meshcore-node": 40.0}
 
 
 def test_build_step_announce_valid_placeholders_ok():

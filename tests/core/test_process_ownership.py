@@ -695,3 +695,45 @@ def test_identity_tolerates_exec_change_same_starttime():
     assert procident.identity_matches(rec, os.getpid()) is True          # exec changed, same proc
     reused = dict(live); reused["starttime"] = int(live["starttime"]) + 7
     assert procident.identity_matches(reused, os.getpid()) is False       # different start = reuse
+
+
+def test_wait_ceased_honours_the_components_stop_timeout(tmp_path, monkeypatch):
+    """A component's `stop_timeout` is the cessation budget on its stop; 0 means the lifecycle
+    default (STOP_WAIT_S). Measured by counting polls against a process that never ceases."""
+    from lhpc.core.model import Component, ComponentKind
+    life = _life(tmp_path)
+    monkeypatch.setattr(life, "STOP_POLL_S", 0.01)
+    monkeypatch.setattr(life, "STOP_WAIT_S", 0.05)
+    monkeypatch.setattr(life, "_original_ceased", lambda rec: False)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    polls = {"n": 0}
+
+    def _never(rec):
+        polls["n"] += 1
+        return False
+    monkeypatch.setattr(life, "_original_ceased", _never)
+    assert life._wait_ceased({"pid": 1}) is False
+    default_polls = polls["n"]
+    polls["n"] = 0
+    assert life._wait_ceased({"pid": 1}, 0.3) is False
+    assert polls["n"] > default_polls * 4                   # 0.3 s of polls vs 0.05 s
+    polls["n"] = 0
+    assert life._wait_ceased({"pid": 1}, 0.0) is False
+    assert polls["n"] == default_polls                       # 0 = the default
+    # and the stop path passes the component's value through
+    comp = Component(id="loraham-daemon", name="d", kind=ComponentKind.SERVICE,
+                     readiness="process", stop_timeout=0.3)
+    seen = {}
+
+    def spy(rec, timeout=0.0, *a, **k):
+        seen["timeout"] = timeout
+        return True
+    monkeypatch.setattr(life, "_wait_ceased", spy)
+    monkeypatch.setattr(life, "verify_owned", lambda rec, *a, **k: (True, ""))
+    monkeypatch.setattr(life, "_remove_record", lambda rec, *a, **k: True)
+    monkeypatch.setattr(life, "_await_ready_endpoints_gone", lambda c, *a, **k: (True, []))
+    monkeypatch.setattr(life, "owned_records", lambda cid, *a, **k: [
+        {"pid": 424242, "pgid": 424242, "sid": 424242, "start_time": 1, "band": "", "comp": cid}])
+    monkeypatch.setattr("os.killpg", lambda pgid, sig: None)
+    life.stop(comp)
+    assert seen["timeout"] == 0.3

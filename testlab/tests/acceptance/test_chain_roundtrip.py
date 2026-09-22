@@ -14,6 +14,7 @@ from lhpc_testlab.release import (
     GRAYWOLF_UI,
     KISS_TCP,
     MESHCORE_COMPANION,
+    plugin_manager_pids,
     wait_http,
     wait_tcp,
 )
@@ -133,6 +134,9 @@ def test_meshcore_real_process_over_fake_868(chain):
     try:
         assert r.returncode == 0, (r.stdout[-1500:], r.stderr[-500:])
         assert wait_tcp(MESHCORE_COMPANION, 180), "MeshCore companion never opened TCP 5000"
+        # chat mode runs no repeater and therefore no plugin manager (the repeater roles are
+        # proven with it in the release lane)
+        assert plugin_manager_pids(chain.root) == [], "a plugin manager beside a chat node"
     finally:
         run_lhpc(chain.env, "stack", "stop", "meshcore", "--yes", timeout=300)
 

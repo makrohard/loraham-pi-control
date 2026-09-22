@@ -7,6 +7,7 @@ They drive the REAL `lhpc` executable and read LHPC's own predicates. Nothing he
 from __future__ import annotations
 
 import os
+import pathlib
 import re
 import signal
 import socket
@@ -494,6 +495,24 @@ def start_component(env: dict, component: str, timeout: float = 900.0, *,
     r = run_lhpc(env, "stack", "start", component, "--yes", timeout=timeout)
     assert r.returncode == 0, (f"{mark}starting {component} failed (rc {r.returncode}): "
                                f"{r.stdout[-2000:]}\n{r.stderr[-500:]}")
+
+
+def plugin_manager_pids(root) -> list[int]:
+    """Pids of upstream's MeshCore plugin manager (`python -m repeater.plugins`) serving THIS
+    runtime root — matched on the plugins-root path in its argv, so two labs on one host never
+    see each other's manager. The repeater roles spawn exactly one; chat spawns none."""
+    import subprocess as _sp
+    needle = str(pathlib.Path(root) / "state" / "openhop")
+    r = _sp.run(["pgrep", "-f", "-a", "repeater.plugins"], capture_output=True, text=True,
+                check=False)                                   # no match = an empty list
+    return sorted(int(line.split()[0]) for line in r.stdout.splitlines()
+                  if "--plugins-root" in line and needle in line)
+
+
+def plugin_manager_marker(root) -> pathlib.Path:
+    """The same-boot ownership marker the node's host writes before spawning the manager and
+    clears only after a clean stop (docs/stacks/meshcore.md, "Plugins")."""
+    return pathlib.Path(root) / "state" / "openhop" / ".lhpc-plugin-manager-active"
 
 
 def alive(env: dict, component: str) -> bool:

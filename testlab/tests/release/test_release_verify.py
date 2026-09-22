@@ -22,6 +22,8 @@ from lhpc_testlab.release import (
     alive,
     gui_startable,
     install_build,
+    plugin_manager_marker,
+    plugin_manager_pids,
     pty_readiness,
     require_prerequisite,
     required_release_cases,
@@ -205,6 +207,30 @@ def _meshcore_mode(env, mode: str):
     run_lhpc(env, "config", "meshcore", "mode", mode, check=True, timeout=120)
 
 
+def _assert_plugin_manager_running(env) -> None:
+    """The repeater roles spawn upstream's plugin manager beside the repeater — exactly one,
+    in this lab's runtime root, and its same-boot marker is on disk while it runs."""
+    root = env["LHPC_RUNTIME_ROOT"]
+    pids = plugin_manager_pids(root)
+    assert len(pids) == 1, (f"{stack_regression('meshcore', 'readiness')}\n"
+                            f"expected exactly one MeshCore plugin manager, found {pids}")
+    assert plugin_manager_marker(root).exists(), "plugin-manager marker missing while it runs"
+
+
+def _assert_plugin_manager_gone(env) -> None:
+    """A graceful stack stop takes the manager down and the host clears the marker: the ONE
+    acceptance criterion of the plugin-manager lifecycle (docs/stacks/meshcore.md)."""
+    import time as _t
+    root = env["LHPC_RUNTIME_ROOT"]
+    deadline = _t.monotonic() + 40                            # the node's stop_timeout budget
+    while _t.monotonic() < deadline and (plugin_manager_pids(root)
+                                         or plugin_manager_marker(root).exists()):
+        _t.sleep(0.5)
+    assert plugin_manager_pids(root) == [], "plugin manager still running after the stack stop"
+    assert not plugin_manager_marker(root).exists(), \
+        "plugin-manager marker not cleared: the manager did not stop cleanly"
+
+
 def test_release_meshcore_chat(env, svc):
     """Companion node only, plus its OPTIONAL Web UI.
 
@@ -239,7 +265,9 @@ def test_release_meshcore_chat_repeater(env):
     assert wait_tcp(MESHCORE_COMPANION, 180), (
         f"{stack_regression('meshcore', 'readiness')}\n"
         "hosted companion never opened TCP 5000")
+    _assert_plugin_manager_running(env)
     stop(env, "meshcore")
+    _assert_plugin_manager_gone(env)
 
 
 def test_release_meshcore_repeater(env):
@@ -257,7 +285,9 @@ def test_release_meshcore_repeater(env):
     # four phases — a freeze would be the wrong remedy.
     assert not wait_tcp(MESHCORE_COMPANION, 20), \
         "repeater-only mode is hosting a companion on 5000"
+    _assert_plugin_manager_running(env)
     stop(env, "meshcore")
+    _assert_plugin_manager_gone(env)
     _meshcore_mode(env, "chat")
 
 

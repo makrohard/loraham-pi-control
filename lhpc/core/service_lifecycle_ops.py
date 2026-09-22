@@ -3063,6 +3063,14 @@ class LifecycleOpsMixin:
             return ActionResult(False, f"Refusing to build '{target}': {ctx_err}")
         try:
             with self._source_operation_guard(src_paths, op="build"):
+                # A MeshCore build recreates src/openhop-core/.venv — the interpreter an orphaned
+                # plugin manager (a manager or node that died without its graceful shutdown) may
+                # still be running from. LHPC never spawned those processes and cannot see them;
+                # the same-boot marker is the evidence (meshcore_plugins.py). Under the lock, before
+                # any mutation, the same gate update/uninstall/clean apply.
+                if (_mp := self._meshcore_plugins_refusal(f"build '{target}'",
+                                                          {c.id for _, c in buildable})):
+                    return _mp
                 from . import auto_install as ai_mod
                 details = []
                 ok = True

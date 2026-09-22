@@ -1144,12 +1144,15 @@ class Lifecycle:
             return False, "not an LHPC-owned session leader"
         return True, "verified"
 
-    def _wait_ceased(self, rec: dict) -> bool:
+    def _wait_ceased(self, rec: dict, timeout: float = 0.0) -> bool:
         """Bounded wait for PROVEN cessation of the original process. A transient /proc
         error during the wait does not count as cessation (it keeps waiting, and the
-        final answer is still proof-based — UNVERIFIED if never proven)."""
+        final answer is still proof-based — UNVERIFIED if never proven). `timeout` is the
+        component's own `stop_timeout` (0 = STOP_WAIT_S) — a process whose graceful shutdown
+        is longer than the default gets its declared budget, every other one the default."""
         waited = 0.0
-        while waited < self.STOP_WAIT_S:
+        limit = timeout if timeout > 0 else self.STOP_WAIT_S
+        while waited < limit:
             if self._original_ceased(rec):
                 return True
             time.sleep(self.STOP_POLL_S)
@@ -1312,7 +1315,7 @@ class Lifecycle:
                 notes.append(f"pid {rec['pid']}: signal failed: {exc}")
                 unverified = True
                 continue
-            if self._wait_ceased(rec):
+            if self._wait_ceased(rec, comp.stop_timeout):
                 killed.append(rec["pid"])
                 notes.append(f"pid {rec['pid']}: stopped")
                 ceased.append(rec)

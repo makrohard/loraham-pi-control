@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.9.0
+
+- **MeshCore repeater: the openHop plugin manager runs beside the repeater.** The dashboard's
+  *Plugins* page needs upstream's separate manager process, which natively is a root systemd unit;
+  the node's host now spawns it in the repeater roles (new Repeater setting `plugins`, default
+  `on` — every repeater box starts it on its next stack start) and stops it with the stack. Plugins
+  are third-party wheels from upstream's catalogue, installed at the operator's click, outside
+  lhpc's pinned closure and unsandboxed: the boundary is written in `docs/stacks/meshcore.md`.
+  The manager is not restarted after a crash; an unclean manager or node death leaves a
+  same-boot marker that refuses a replacement manager and `build`/`update`/`uninstall`/`clean`
+  of the stack (and the controller uninstall) until a reboot — a duplicate plugin tree is never created.
+- Components can declare a `stop_timeout` (0–600 s) for the lifecycle's cessation wait; the
+  MeshCore node uses 40 s (its host stops the manager, the GPS feed and the radio, each bounded)
+  and every other component keeps the 5 s default. Upstream's 5 s exit watchdog is armed only
+  after that bounded cleanup.
+- Live proof on the reference box (both repeater roles, the crash/orphan/reboot semantics of the
+  marker, the maintenance refusals, and the dashboard's *Plugins* page through the proxy):
+  `docs/live-tests/meshcore-plugins-test-2026-09-22.md`. Release matrix (fast lane by the
+  maintainer's standing waiver — no heavy compile on the box): `docs/live-tests/live-test.md`.
+- Pins unchanged since 0.8.3, so the binaries published there satisfy this manifest. Upstream
+  MeshCom-Firmware has moved past the pin (`dc1a012c`, KISS mode v2), but the QEMU headless
+  overlay patch no longer applies there; the pin is held until the overlay is maintained.
+
 ## 0.8.3
 
 - MeshCom-Firmware: 6edc74997 -> 80b85a5a2 (v4.35t.09.20), used by meshcom-firmware

@@ -1456,6 +1456,35 @@ class MaintenanceOpsMixin:
         return sorted(cid for ss in snap.stacks for cid, st in ss.components.items()
                       if cid in affected and st.run_state in up)
 
+    def _meshcore_plugins_refusal(self, action: str, component_ids) -> ActionResult | None:
+        """The MeshCore plugin-manager gate for a destructive/source-changing operation over
+        `component_ids` — only when it reaches the MeshCore stack, and only after the caller's
+        authoritative running recheck (today's refusals for a RUNNING stack keep winning). `build`
+        has no running check of its own: a HEALTHY running repeater also carries a current-boot
+        marker, so that refusal names the plain remedy (stop the stack) instead of a reboot."""
+        from . import meshcore_mode as _meshcore_mode
+        from . import meshcore_plugins
+        if not meshcore_plugins.touches_meshcore(self, component_ids):
+            return None
+        refusal = meshcore_plugins.unclean_refusal(self._paths, action)
+        if refusal is None:
+            return None
+        try:
+            snap = self.build_snapshot(fresh=True)
+            live = any(cid == _meshcore_mode.NODE_ID
+                       and st.run_state in (RunState.RUNNING, RunState.DEGRADED)
+                       for ss in snap.stacks for cid, st in ss.components.items())
+        except Exception:
+            live = False
+        if live:
+            return ActionResult(False, f"Refusing to {action}: MeshCore is running, and its plugin "
+                                       "manager runs from the venv this would rewrite — stop the "
+                                       "stack first.",
+                                details=list(refusal.details),
+                                next_commands=["lhpc stack stop meshcore --yes"],
+                                data=dict(refusal.data))
+        return refusal
+
     # ---- known-working compositions (operator-confirmed) -------------------
 
     def _stack_composition_entries(self, stack_id: str) -> dict | None:
@@ -1785,6 +1814,13 @@ class MaintenanceOpsMixin:
                         "acquiring its locks.",
                         details=[f"  running: {', '.join(running)} — stop them first"],
                         next_commands=[f"lhpc stack stop {o} --yes" for o in owners])
+                # MeshCore's plugin manager runs out of the venv an update of its sources would
+                # replace; LHPC never spawned it and cannot see it. Its same-boot marker is the
+                # evidence — checked only once LHPC believes nothing runs (meshcore_plugins.py).
+                if (_mp := self._meshcore_plugins_refusal(
+                        f"update '{target or 'all'}'",
+                        {cid for p in affected for cid in self._source_consumers().get(p, ())})):
+                    return _mp
                 # ONE effective remote per shared checkout + ONE immutable plan — both
                 # built UNDER the configuration-stable and source locks (a concurrent
                 # remote save waits; the plan can never use a stale config snapshot).
@@ -2064,6 +2100,15 @@ class MaintenanceOpsMixin:
                 return ActionResult(False, f"Client stack '{sid}' did not stop cleanly — NOT stopping "
                                     "the shared daemon, and refusing to remove controller state.",
                                     details=tuple(details), data={"prep_blocked": "client_stop_failed"})
+        # 5b) The MeshCore plugin-manager marker, AFTER the client stops (a healthy manager carries a
+        #     current-boot marker that its clean stop just cleared) and BEFORE the shared daemon is
+        #     stopped (an orphaned manager tree from a host crash must not cost the daemon a stop).
+        #     `uninstall.sh --purge` would remove state/openhop, marker included, and a reinstall in
+        #     this boot would start a second manager beside the survivors.
+        from . import meshcore_plugins
+        if (_mp := meshcore_plugins.unclean_refusal(self._paths, "prepare the uninstall")) is not None:
+            return ActionResult(False, _mp.summary, details=tuple(details) + tuple(_mp.details),
+                                data={"prep_blocked": "meshcore_plugins"})
         for sid in daemons:
             res = self.stop(sid, apply=True, _operator=False)
             details.append(f"  stop {sid}: {res.summary}")
@@ -2271,6 +2316,9 @@ class MaintenanceOpsMixin:
                         "started while the uninstall was acquiring its locks.",
                         details=[f"  running: {', '.join(running)} — stop them first"],
                         next_commands=[f"lhpc stack stop {target} --yes"])
+                if (_mp := self._meshcore_plugins_refusal(f"uninstall '{target or 'all'}'",
+                                                          target_ids)):
+                    return _mp
                 if _retire_sid:
                     # Now safe: locks held, nothing running, and the run is committed to
                     # mutating. `force` clears an unsafe/superseded receipt too — uninstall
@@ -2455,6 +2503,8 @@ class MaintenanceOpsMixin:
                         "the clean was acquiring its locks.",
                         details=[f"  running: {', '.join(running)} — stop them first"],
                         next_commands=[f"lhpc stack stop {sid} --yes"])
+                if (_mp := self._meshcore_plugins_refusal(f"clean '{sid}'", comp_ids | {sid})):
+                    return _mp
                 # ONLY NOW, with the stack PROVEN stopped under the locks, retire the
                 # binary — FORCEFULLY, because "remove every trace" must also survive an
                 # edited artifact file or an unsafe receipt. Retiring before the recheck

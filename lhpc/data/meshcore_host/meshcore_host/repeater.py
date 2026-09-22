@@ -26,11 +26,15 @@ from .config import DASHBOARD_PORT, HostConfig, ConfigError
 from .gps_feed import GpsFeed
 from .identity import IdentityError, load_identity_hex
 from .loraham_radio import LoRaHAMRadio
+from .plugin_manager import KILL_GRACE_S, TERM_GRACE_S, PluginManagerChild
 
 logger = logging.getLogger("meshcore-host.repeater")
 
 EXIT_CONFIG = 2
 EXIT_IDENTITY = 3
+# Bounds on the cleanup this host owns, applied BEFORE upstream's exit watchdog is armed (see
+# `_Host.run`): deferring that watchdog must never turn its bounded shutdown into an open hang.
+CLEANUP_STEP_S = 10.0
 
 # Upstream's default duty budget is 3600 ms per minute (6 %); LHPC's `airtime` is a percentage.
 _MS_PER_MINUTE_PER_PERCENT = 600
@@ -123,6 +127,11 @@ class _Host:
             rf_log_path=cfg.rf_log_path if cfg.rf_log else "",
         )
         self.gps: Optional[GpsFeed] = None
+        # The plugin manager is part of the repeater: spawned by this host in the repeater roles
+        # (docs/stacks/meshcore.md, "Plugins"). Built here so a missing upstream module surfaces
+        # as the same ImportError -> EXIT_CONFIG as a missing repeater (integration failure).
+        self.plugins: Optional[PluginManagerChild] = (
+            PluginManagerChild(cfg.repeater_state_dir) if cfg.plugins_on else None)
         self.daemon = self._make_daemon()
 
     def _make_daemon(self):
@@ -130,12 +139,21 @@ class _Host:
         host = self
 
         class LhpcRepeaterDaemon(RepeaterDaemon):
-            """Upstream's daemon plus the two things only LHPC knows: the companion's position
-            policy and its LHPC-owned name, applied AFTER upstream has built the bridge."""
+            """Upstream's daemon plus the things only LHPC knows: the companion's position
+            policy and its LHPC-owned name, applied AFTER upstream has built the bridge — and
+            the moment its exit watchdog may arm."""
+            lhpc_watchdog_deferred = False
 
             async def initialize(self):
                 await super().initialize()
                 host._after_initialize(self)
+
+            def _arm_exit_watchdog(self):
+                # Upstream arms a 5 s `os._exit(0)` timer at the END of its own `_shutdown()`,
+                # before `run()` returns to this host — which still has the plugin manager
+                # (8 s + 2 s), the GPS feed and the radio to close. Record the intent; the host
+                # arms the ORIGINAL watchdog once its bounded cleanup is done (`_Host.run`).
+                self.lhpc_watchdog_deferred = True
 
         daemon = LhpcRepeaterDaemon(self.conf, radio=self.radio)
         # EXPLICIT: with the attribute missing OR None upstream falls back to
@@ -174,24 +192,57 @@ class _Host:
             bridge.prefs.longitude = 0.0
             bridge.prefs.advert_loc_policy = 0              # ADVERT_LOC_NONE
 
+    async def _bounded(self, name: str, coro, timeout: float = CLEANUP_STEP_S) -> None:
+        """One cleanup step, bounded and logged: a hang or an error in it must not stop the
+        next step, and must never delay the watchdog forever."""
+        try:
+            await asyncio.wait_for(coro, timeout)
+        except asyncio.TimeoutError:
+            logger.error("%s did not finish within %.0f s; continuing shutdown", name, timeout)
+        except Exception:
+            logger.exception("%s failed; continuing shutdown", name)
+
     async def run(self) -> None:
-        logger.info("Starting openHop repeater host: role=%s repeater=%s companion=%s",
+        logger.info("Starting openHop repeater host: role=%s repeater=%s companion=%s plugins=%s",
                     self.cfg.mode, self.cfg.repeater_name,
-                    self.cfg.name if self.cfg.companion_on else "-")
+                    self.cfg.name if self.cfg.companion_on else "-",
+                    "on" if self.plugins is not None else "off")
         # Upstream begins the radios IT builds; an injected one is ours to begin (sync: it
         # schedules the daemon connection manager) and ours to close (async aclose — upstream
         # only calls a sync `cleanup()` when a radio has one).
         self.radio.begin()
+        watch: Optional[asyncio.Task] = None
         try:
-            await self.daemon.run()                        # installs SIGTERM/SIGINT handlers
+            try:
+                # Manager first, like upstream's container entry; a spawn that fails leaves the
+                # repeater running with the dashboard's "plugin manager unavailable" banner.
+                if self.plugins is not None and self.plugins.start():
+                    watch = asyncio.get_running_loop().create_task(
+                        self.plugins.watch(), name="plugin-manager watch")
+                await self.daemon.run()                    # installs SIGTERM/SIGINT handlers
+            finally:
+                # ORDER (locked by a test): plugin manager -> GPS feed -> radio -> the deferred
+                # upstream watchdog. Every step bounded; the watchdog armed in the OUTER finally.
+                if watch is not None:
+                    watch.cancel()
+                    try:
+                        await watch
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                if self.plugins is not None:
+                    # blocking by design (SIGTERM, 8 s, SIGKILL, 2 s): bounded by construction,
+                    # so its step bound is that worst case plus a second, never less
+                    await self._bounded("plugin manager stop",
+                                        asyncio.to_thread(self.plugins.stop),
+                                        TERM_GRACE_S + KILL_GRACE_S + 1.0)
+                if self.gps is not None:
+                    await self._bounded("GPS feed stop", self.gps.stop())
+                await self._bounded("radio close", self.radio.aclose())
+                logger.info("openHop repeater host stopped")
         finally:
-            if self.gps is not None:
-                try:
-                    await self.gps.stop()
-                except Exception:
-                    logger.exception("GPS feed stop failed")
-            await self.radio.aclose()
-            logger.info("openHop repeater host stopped")
+            if getattr(self.daemon, "lhpc_watchdog_deferred", False):
+                from repeater.main import RepeaterDaemon   # the ORIGINAL, unchanged 5 s guard
+                RepeaterDaemon._arm_exit_watchdog(self.daemon)
 
 
 def run_repeater(cfg: HostConfig) -> int:

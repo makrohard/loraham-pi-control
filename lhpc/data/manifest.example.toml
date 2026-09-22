@@ -2136,6 +2136,11 @@ main = "meshcore-node"
   # before opening TCP 5000; give it a generous window on 512 MB / A53-class hardware so
   # start verifies instead of tearing it down. Tune down if your Pi is faster.
   readiness_timeout = 120.0
+  # In the repeater roles the host stops upstream's plugin manager (SIGTERM, up to 8 s, then
+  # SIGKILL) before its own GPS feed and radio (10 s each, bounded) — longer than the lifecycle's
+  # default 5 s cessation wait. A BUDGET, not a promise: a stop that takes longer is reported
+  # STILL_RUNNING as before. Every other component keeps the default.
+  stop_timeout = 40.0
   name = "MeshCore (OpenHop)"
   kind = "service"
   band = "868"
@@ -2367,6 +2372,18 @@ main = "meshcore-node"
       kind = "str"
       hidden = true
       default = "{runtime}/state/openhop"
+      # The openHop plugin manager (dashboard -> Plugins): upstream's separate process, spawned
+      # by the host beside the repeater in the repeater roles. `off` = the dashboard shows its
+      # "plugin manager unavailable" banner. Plugins are third-party code; see the stack doc.
+      [[stack.component.config_file.param]]
+      name = "plugins"
+      key = "plugins"
+      section = "repeater"
+      kind = "enum"
+      choices = ["on", "off"]
+      default = "on"
+      group = "Repeater"
+      label = "Plugin manager (dashboard -> Plugins): install and run openHop repeater plugins beside the repeater"
       # RF log written by the LoRaHAM radio adapter of the host (every mode). STACK-level
       # (band-less) switch; the path is lhpc's and hidden.
       [[stack.component.config_file.param]]

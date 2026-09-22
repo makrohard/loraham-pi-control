@@ -82,6 +82,41 @@ every dashboard route that would change upstream configuration, identities, radi
 LHPC-owned state; the list is `proxy_deny_paths` on the node's 8000 endpoint in the manifest.
 Statistics, packets, neighbours, logs, login and a logged-in admin's operational actions pass.
 
+**Plugins** — the dashboard's *Plugins* page needs upstream's plugin manager, a second process
+(`python -m repeater.plugins`) the dashboard reaches over a socket in the repeater's state
+directory. Natively it is a root systemd unit; here the node's host starts it beside the repeater
+in the repeater roles, from the same venv, and stops it with the stack. The `plugins` switch in
+the Repeater group (default `on`) turns it off; then the dashboard shows its "Plugin manager is
+unavailable" banner, whose advice (`manage.sh upgrade`) is for native installs and must not be
+followed on an lhpc box. The repeater's own log line *"Plugin-manager bootstrap skipped: venv not
+present"* is expected: that is upstream looking for its native install, nothing lhpc runs.
+
+What a plugin is, and where the boundary lies:
+
+* a plugin is a **third-party wheel** from upstream's catalogue, downloaded (network) and
+  pip-installed at the operator's click into its own venv under `state/openhop/plugins/<id>/`,
+  then run as a process. The catalogue checksum covers the wheel, not the dependencies pip
+  resolves for it — a plugin is **outside lhpc's pinned closure and not reproducible by lhpc**;
+* plugins are **not sandboxed**: they run as the same user as the repeater and can reach
+  everything that account can — the runtime state and the radio daemon's sockets included. The
+  separate session upstream gives each plugin is process management, not a security boundary;
+* plugins are repeater application state: `lhpc clean meshcore --purge` leaves `state/openhop`
+  alone, so they survive it; only the controller's `uninstall.sh --purge` removes them;
+* on a Zero 2 W run one plugin at a time — a plugin's install (venv + pip) and the plugin itself
+  come on top of the node's memory.
+
+What lhpc guarantees, and what it does not: the manager is stopped gracefully with the stack, and
+a graceful stop takes its plugins down with it. The manager is **not restarted** after a crash
+(the repeater keeps running; the banner returns). Because upstream keeps every plugin in its own
+session, a manager or node that died without its graceful shutdown may leave plugins running
+where lhpc cannot see them — lhpc then refuses to start a **replacement** manager in the same
+boot (a marker `state/openhop/.lhpc-plugin-manager-active`, cleared only by a clean stop), and
+`lhpc build/update/uninstall/clean meshcore` and the controller uninstall refuse until the box has
+been rebooted, which is the clean recovery (a build recreates the venv the orphaned manager runs
+from). A stop that had to kill the manager after its 8 s grace
+counts as unclean. `plugins = off` prevents the normal launch; it cannot terminate plugins an
+earlier unclean failure orphaned.
+
 ## Position (GPS)
 
 `lhpc gps` is the source; `use_gps` opts this node in or out. A **live** source is fed

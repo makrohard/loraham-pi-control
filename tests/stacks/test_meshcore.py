@@ -603,3 +603,19 @@ def test_meshcore_daemon_defaults_match_what_the_pin_applies():
     from lhpc.core import daemon_params
     assert daemon_params.default_value("meshcore", "868", "POWER") == "14"
     assert daemon_params.default_value("meshcore", "868", "PREAMBLE") == "16"
+
+
+def test_the_plugins_switch_renders_into_the_repeater_table(tmp_path):
+    """The dashboard's plugin manager is a Repeater-group setting, strict on|off, default on:
+    the generated meshcore.toml carries `plugins = "on"` under [repeater], and the saved value
+    follows it. The host validates the literal; LHPC never writes anything else."""
+    svc = _svc(tmp_path)
+    svc.write_config_files("meshcore")
+    gen = _generated(tmp_path)
+    rep = gen.split("[repeater]", 1)[1]
+    assert '\nplugins = "on"\n' in rep
+    fld = next(f for f in svc.config_param_fields("meshcore", "") if f["name"] == "plugins")
+    res = svc.save_config_bundle("meshcore", values={f"file_{fld['key']}": "off"}, band="")
+    assert res.ok, res.summary
+    svc.write_config_files("meshcore")
+    assert '\nplugins = "off"\n' in _generated(tmp_path).split("[repeater]", 1)[1]

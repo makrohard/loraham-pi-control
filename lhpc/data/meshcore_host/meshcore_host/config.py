@@ -99,6 +99,7 @@ class HostConfig:
     repeater_behaviour: str = "forward"
     dashboard_password: str = ""
     repeater_state_dir: str = ""
+    plugins_on: bool = True          # the plugin manager runs beside the repeater
 
     extra: dict = field(default_factory=dict)
 
@@ -262,5 +263,11 @@ def load_config(path: str | Path) -> HostConfig:
             raise ConfigError("[repeater] admin_password is required in the repeater roles")
         if not cfg.repeater_state_dir:
             raise ConfigError("[repeater] state_dir is required in the repeater roles")
+        # Strict literal, like every LHPC switch: only "on" and "off" mean anything — "ON",
+        # "yes" or a number are refused, never silently read as off.
+        plugins = _opt(rep, "plugins", "on", str, "repeater")
+        if plugins not in ("on", "off"):
+            raise ConfigError("[repeater] plugins must be on or off")
+        cfg.plugins_on = plugins == "on"
 
     return cfg

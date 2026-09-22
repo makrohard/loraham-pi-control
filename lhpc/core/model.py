@@ -448,6 +448,10 @@ class Component:
     readiness_timeout: float = 0.0        # seconds to wait for ready=true endpoints at start
                                           # (0 = use the service default); raise it for a
                                           # slow-booting app (e.g. a Python node opening a port)
+    stop_timeout: float = 0.0             # seconds the lifecycle waits for PROVEN cessation after
+                                          # its SIGTERM (0 = the lifecycle default, 5 s); raise it
+                                          # for a process whose own graceful shutdown is longer
+                                          # (the MeshCore repeater stops its plugin manager first)
     bin: str = ""                # built binary path (relative to source) for the 'is built' check
     build_timeout: float = 0.0   # per-component build timeout in seconds (0 = the service default);
                                  # raise it for a slow build on modest hardware (e.g. a venv + pip
