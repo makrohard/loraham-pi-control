@@ -2097,8 +2097,8 @@ main = "meshcom-qemu"
     # which left the bridge unable to configure the radio at all.
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
     path = "src/MeshCom-Firmware"
-    pin_commit = "6edc74997154da97b32c516624f3c4566095081c"
-    pin_tag = "v4.35t"
+    pin_commit = "80b85a5a2f36e26970ea02fea0d6e09ed68c1d61"
+    pin_tag = "v4.35t.09.20"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 
@@ -2396,8 +2396,8 @@ main = "meshcore-node"
     # openhop_core — so what is known-working is the upstream revision itself.
     [stack.component.source]
     path = "src/openhop-core"
-    pin_commit = "c95a68445b3f6691ffbb0bdd0123e2daed182556"
-    pin_tag = "v1.0.10-413-gc95a684"
+    pin_commit = "cedb26b4b5c687856bcf6bdd74dc945597d7fc8b"
+    pin_tag = "v1.0.10-423-gcedb26b"
     remote = "https://github.com/openhop-dev/openhop_core.git"
     branch = "dev"
 
@@ -2709,8 +2709,8 @@ main = "meshcore-node"
     # (-t -p -j -D) are all present; it byte-compiles under Python 3.11 (LHPC supports >=3.11),
     # and the byte-compile build step above fails the BUILD with file+line if a future pin
     # regresses on 3.11.
-    pin_commit = "568d158bc780c318c3d8706f71bfb980cb1ca588"
-    pin_tag = "v1.6.3"
+    pin_commit = "d4eac61bd30b9f919143499fa669fb40fd869b5d"
+    pin_tag = "v1.6.4"
     remote = "https://github.com/meshcore-dev/meshcore-cli.git"
     branch = "main"
 
@@ -2731,8 +2731,8 @@ main = "meshcore-node"
     path = "src/openhop-repeater"
     remote = "https://github.com/openhop-dev/openhop_repeater.git"
     branch = "dev"
-    pin_commit = "9e375da776826632a0b7b6a25a529b102e864018"
-    pin_tag = "1.1.4-7-g9e375da"
+    pin_commit = "277f11c3f9f5a6c740788dc3553515410618c959"
+    pin_tag = "1.1.4-43-g277f11c"
 
 [[stack]]
 id = "reticulum"

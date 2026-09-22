@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.3
+
+- MeshCom-Firmware: 6edc74997 -> 80b85a5a2 (v4.35t.09.20), used by meshcom-firmware
+- openhop-core: c95a68445 -> cedb26b4b (v1.0.10-423-gcedb26b), used by meshcore-node
+- meshcore-cli: 568d158bc -> d4eac61bd (v1.6.4), used by meshcore-cli
+- openhop-repeater: 9e375da77 -> 277f11c3f (1.1.4-43-g277f11c), used by openhop-repeater-src
+
 ## 0.8.2
 
 - The release bot can release again. Its policy had no rule for `src/meshchat`, so every scheduled
