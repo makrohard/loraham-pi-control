@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.1
+
+- Reticulum: the LoRa interface's short-term airtime guard defaults to **33 %** of its 15 s window
+  on both bands (was 5 % on 868, 10 % on 433). At 5 % one 196-byte frame at SF8 filled the window,
+  so any multi-frame reply the box had to send — an `rncp` file, a large LXMF, an attachment from
+  MeshChat — was paced to one frame per 15 s and the sender timed out, while receiving worked
+  (live test against a real RNode: `docs/live-tests/reticulum-rnode-test-2026-09-24.md`). 33 is
+  Reticulum's own example for its RNode interface. The long-term limit (the legal duty cycle,
+  1 % on 868 / 10 % on 433) is unchanged, and so is the operator's ability to set either value.
+- Pins unchanged since 0.8.3; no binary is rebuilt. Image v0.9.1 is built so the two version
+  lines stay equal.
+- Correction to the 0.9.0 note on MeshCom-Firmware: the QEMU headless build does not check the
+  firmware pin out at all — `scripts/setup.sh --ref 674413c…` in the meshcom-qemu build step is a
+  hardcoded commit (since 0.2.10), and the published meshcom artifact is labelled with the pin
+  while containing that commit plus the overlay. So the 0.8.3 pin move changed a label, not the
+  bytes, and every meshcom artifact since 0.2.10 carries the same firmware. The release bot holds
+  `src/MeshCom-Firmware` until the build follows the pin and the overlay is rebased (open item R8).
+
 ## 0.9.0
 
 - **MeshCore repeater: the openHop plugin manager runs beside the repeater.** The dashboard's

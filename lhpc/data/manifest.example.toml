@@ -3033,10 +3033,10 @@ name = "airtime_limit_short"
 key = "airtime_limit_short"
 section = "interfaces/LoRa"
 kind = "str"
-default = "5.0"
-band_defaults = { 433 = "10.0", 868 = "5.0" }
+default = "33.0"
+band_defaults = { 433 = "33.0", 868 = "33.0" }
 advanced = true
-label = "Short-term airtime limit % (15 s window)"
+label = "Short-term airtime limit % (15 s window) — a burst guard, not the legal limit (that is the long one); 33 is Reticulum's own RNode example, 5 starved every multi-frame reply"
 [[stack.component.config_file.param]]
 name = "airtime_limit_long"
 key = "airtime_limit_long"
