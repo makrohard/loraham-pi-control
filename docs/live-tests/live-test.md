@@ -84,3 +84,29 @@ came back on its home Wi-Fi at 23:51:43, `lhpc-web` active, `/healthz` → `{"st
 verified, and the plugin manager's own log shows the marker protocol crossing the boot as designed:
 `Plugin-manager marker from an earlier boot found; replacing it` — then one manager started (pid
 1526, a child of the host, same process group) and the marker now carries the new boot id.
+
+## 0.9.2 patch proof — MeshCom firmware at the pin (2026-09-25, box E)
+
+The 0.9.2 patch is the first real MeshCom firmware change since 0.2.10 (the QEMU build now
+fetches the `meshcom-firmware` pin, `80b85a5` = v4.35t.09.20, with the overlay rebased onto it —
+R8), so its proof is the meshcom binary row on the reference box plus an on-air exchange, run on
+the release commit's content (dev `8e784c6`, amended only by this section) with the artifact the
+publishing build put into the index (`lhpc_commit 8e784c6`, `built_from 74a3a08`,
+`meshcom-firmware 80b85a5`; the packer's checkout-equals-pin check passed).
+
+| step | result | evidence |
+|---|---|---|
+| `lhpc update meshcom --source binary --yes` | **refused** by the `clone_required` gate: "src/meshcom-qemu-raspi is at b322a88, the pin is 74a3a08 — the artifact's run scripts must come from the pinned checkout", with the remedy named | the gate is the point: a box must move the overlay clone before it may run the new artifact |
+| `lhpc update meshcom-qemu --source pinned --yes` | **OK** — `GitHub pinned: match (version 74a3a08)` | provenance pinned-verified |
+| `lhpc update meshcom --source binary --yes` | **OK** — 11.8 MB, sha256-verified, `provenance: meshcom-bridge@7c86c96, meshcom-firmware@80b85a5, meshcom-gps-relay@74a3a08, meshcom-qemu@74a3a08` | `lhpc status`: every meshcom component `src binary`/`match` |
+| `lhpc stack start meshcom --yes` (433 free, MeshCore stopped first — one heavy stack on the Zero) | **verified** — bridge, gps feed, QEMU node ready endpoint `:12323`, required post-start completed; `:18083` → HTTP 200 after ~8 min | start output, curl |
+| node identity | `--info` over the net-console: **`MeshCom 4.35t (build: Sep 24 2026)`**, `Call: <DJ0CHE-15>`, `NODE 39 <EBYTE_E22>` — the 4.35p (Aug 7) build every box ran since 0.2.10 is gone | net-console |
+| T-Deck (MeshCom 4.35p, `DJ0CHE-07`) → box TXT | **PASS** — node MHeard `DJ0CHE-07 … TXT rssi −45 snr 11`, daemon `RX=1`, `rf-meshcom.log` RX carries the payload `LHPC 0.9.2 fw test` | three independent readings |
+| box → T-Deck TXT (`::LHPC 0.9.2 box says hi 2` over the net-console) | **PASS** — `TX … outcome=ok` 23:00:35Z and **6 s later the box heard the T-Deck's rebroadcast of that message** (`DJ0CHE-15,DJ0CHE-07>*:LHPC 0.9.2 box says hi 2`); the T-Deck's MHeard row for `DJ0CHE-15` advanced | the peer's own relay is the outside witness |
+| restore | meshcom stopped, MeshCore chat+repeater running again on 868 | `lhpc status` |
+
+Peer observation, not lhpc's: the T-Deck's USB-CDC serial dropped twice while a serial listener
+held the port during frame arrival (the device re-enumerated; reception is proven by its relay and
+MHeard). Daemon counters were read on the CONF socket (`GET STATS`): `RX=5 TXOK=5 CADTIMEOUT=0`
+at the end — no CAD timeouts on 433.175 this time.
+

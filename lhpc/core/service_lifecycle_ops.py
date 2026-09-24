@@ -2862,9 +2862,12 @@ class LifecycleOpsMixin:
             _sid = self.stack_of(target)
             _daemon = bool(_sid and self.stack(_sid) and self.stack(_sid).main == self.DAEMON_ID)
             _will_stop = cascade or _daemon
+            _opt = self._running_optional_components(target) if self.stack(target) else []
+            data["optional_restarted"] = list(_opt)
             details = [*[(f"  [stop] {d}" if _will_stop else
                           f"  [running dependent] {d}: left running across this restart "
                           "(a cascading restart stops it first)") for d in data["dependents"]],
+                       *[f"  [optional] {c}: running — restarted with the stack" for c in _opt],
                        *res.details]
             return ActionResult(res.ok, f"Restart plan for '{target}': stop then run.",
                                 details=details, data=data,
@@ -2887,6 +2890,12 @@ class LifecycleOpsMixin:
                                        band or self._config_band(target, band))
             if _bb is not None:
                 return _bb
+        # OPTIONAL components that are UP inside the stack (MeshChat beside rns, an optional
+        # client started by name) come back after the restart: a stack start raises only the
+        # run order, so before 0.9.2 `lhpc stack restart reticulum` left a running MeshChat
+        # stopped (F-R3, reticulum-rnode-test-2026-09-24). Captured BEFORE the stop leg — after
+        # it nothing is running — and re-raised by name after the stack is back.
+        _optional_up = self._running_optional_components(target) if self.stack(target) else []
         stopped = self.stop(target, apply=True, cascade=cascade, band=band, _operator=False)
         if not stopped.ok:
             # Strict transition: never start after an unverified/failed stop. Preserve
@@ -2899,13 +2908,52 @@ class LifecycleOpsMixin:
         time.sleep(1.0)  # let sockets/locks release before re-starting
         res = self.start(target, apply=True, stop_owners=stop_owners, band=band,
                          position=position, position_note=position_note)
+        ok, details, results = res.ok, [*stopped.details, *res.details], list(res.results)
+        _reraised, _lost = [], []
+        if ok and _optional_up:
+            # Start ONLY what the stack start did not bring back itself (an optional component
+            # that is also in the run order — a GPS feed, a web UI — is up again already; a
+            # second start() would answer "already healthy" and the report would lie).
+            _still_up = set(self._running_optional_components(target))
+            for cid in [c for c in _optional_up if c not in _still_up]:
+                r2 = self.start(cid, apply=True, band=band)
+                (_reraised if r2.ok else _lost).append(cid)
+                details += [f"  [optional] {cid}: was running — "
+                            + ("started again" if r2.ok else f"NOT back: {r2.summary}"),
+                            *r2.details]
+                results += list(r2.results)
+            ok = ok and not _lost
+        summary = f"Restarted '{target}'. {res.summary}"
+        if _reraised:
+            summary += f" Optional components restarted: {', '.join(_reraised)}."
+        if _lost:
+            summary += f" An optional component did not come back: {', '.join(_lost)}."
         # Restart's typed results are the stop results followed by the start results — and so
         # are its details: a cascading restart's job log shows the dependents stopping BEFORE
         # the target comes back (the stop leg's lines were dropped).
-        return ActionResult(res.ok, f"Restarted '{target}'. {res.summary}",
-                            details=[*stopped.details, *res.details],
-                            results=tuple(stopped.results) + tuple(res.results),
+        return ActionResult(ok, summary, details=details,
+                            results=tuple(stopped.results) + tuple(results),
                             next_commands=res.next_commands)
+
+    def _running_optional_components(self, target: str) -> list[str]:
+        """Ids of the stack's OPTIONAL service components currently running/degraded that a stack
+        start does NOT raise on its own — so a restart must bring them back by name.
+
+        Excluded on purpose: components in the stack's own run order (the start leg raises
+        them); interactive components (an operator's terminal session — a start() by the
+        controller is refused by design and must not fail the restart); non-service kinds."""
+        s = self.stack(target)
+        if s is None:
+            return []
+        up = (RunState.RUNNING, RunState.DEGRADED)
+        planned = {c.id for _, c in (self._run_order(s.id) or [])}
+        for ss in self.build_snapshot().stacks:
+            if ss.stack.id == s.id:
+                return [c.id for c in s.components
+                        if c.optional and c.run_argv and not c.interactive
+                        and c.kind == ComponentKind.SERVICE and c.id not in planned
+                        and (st := ss.components.get(c.id)) is not None and st.run_state in up]
+        return []
 
     @invalidates_snapshot
     def build(self, target: str, apply: bool = False, auto_install_ctx=None,

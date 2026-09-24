@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.2
+
+- **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step
+  reads `{pin:src/MeshCom-Firmware}`, a new build-step token the manifest parser resolves to the
+  `meshcom-firmware` component's `pin_commit`; from 0.2.10 to 0.9.1 the step carried a hardcoded
+  674413c while the pin moved to 80b85a5, so every published meshcom artifact was labelled with a
+  commit it did not contain. A repo test now refuses a literal commit in any build step, an
+  unknown `{pin:…}` path is a manifest error, and the binary packer (`lhpc-binaries`) refuses to
+  pack a firmware checkout that is not the pin. The QEMU overlay was rebased onto the pin
+  (meshcom-qemu-raspi: b322a88 -> 74a3a081f), so the meshcom binary is rebuilt for this release.
+  **The MeshCom firmware itself changes with it**: nodes move from upstream 674413c (v4.35p.08.29
+  era) to the pinned 80b85a5 (v4.35t.09.20), several upstream releases at once — the first real
+  firmware change since 0.2.10. Proof: `docs/live-tests/live-test.md`, section "0.9.2 patch proof" (binary
+  install through the pinned-clone gate, node boot on the new firmware, T-Deck exchange both ways).
+- `lhpc stack restart <stack>` brings back the optional components that were running (MeshChat
+  beside rns, an optional client started by name): before, a restart raised only the run order
+  and left them stopped (F-R3, `docs/live-tests/reticulum-rnode-test-2026-09-24.md`). The plan
+  lists them as `[optional] … restarted with the stack`.
+- meshcom-qemu-raspi: b322a8895 -> 74a3a081f, used by meshcom-qemu (overlay rebased onto the
+  firmware pin; no other pin moved).
+
 ## 0.9.1
 
 - Reticulum: the LoRa interface's short-term airtime guard defaults to **33 %** of its 15 s window

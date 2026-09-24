@@ -67,7 +67,7 @@ appears in a log, marker or result. Policy:
   floor(MemTotal_GB))`, then the same link gate as meshtasticd and a smoke launch before the
   `.lhpc-qemu-built` marker. Native to the box. The toolchain and the headless library headers
   are declared requires (`lhpc deps`); the runtime needs `libslirp0`.
-- **Firmware**: `scripts/setup.sh --ref 674413c` clones the firmware into `.work/`,
+- **Firmware**: `scripts/setup.sh --ref {pin:src/MeshCom-Firmware}` clones the firmware at the `meshcom-firmware` pin into `.work/` (the token is the pin — never a literal commit; see the pin-literal guard in `tests/repo`),
   `apply-overlay.sh` applies the QEMU overlay (fail-closed `git apply --check`),
   `prepare-openeth.sh` resolves the ESP32 platform, `build.sh --env qemu-headless-extradio-gpsd`
   produces `flash.bin`. Per-step build timeout 28800 s.

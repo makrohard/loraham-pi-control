@@ -511,11 +511,53 @@ def _parse_binary(raw, stack_id: str, components: tuple[Component, ...]) -> Bina
                       probes=tuple(probes))
 
 
+_PIN_TOKEN = re.compile(r"\A\{pin:([^{}\s]+)\}\Z")
+
+
+def _resolve_pin_tokens(data: dict) -> None:
+    """Replace `{pin:<source path>}` build-step argv tokens by that source's `pin_commit`.
+
+    A build that fetches a repository by ref (the MeshCom QEMU build's `setup.sh --ref …`)
+    must fetch THE PIN, never a literal commit written next to it: from 0.2.10 to 0.9.1 the
+    step carried a hardcoded 674413c while the `meshcom-firmware` pin moved on to 80b85a5, so
+    the published artifact was labelled with a commit it did not contain. Resolved here, at
+    parse time, the step follows the pin wherever the pin goes (the release bot moves pins by
+    editing `pin_commit` lines only), and the pin-literal guard in `tests/repo` refuses a
+    literal in its place. An unknown path is a manifest error, not a silent literal.
+
+    MUTATES `data` in place (the tokens become the pin) — every caller parses a mapping it just
+    loaded; a second parse of the same mapping is a no-op."""
+    pins: dict[str, str] = {}
+    for st in data.get("stack", []):
+        for c in st.get("component", []):
+            src = c.get("source") or {}
+            if src.get("path") and src.get("pin_commit"):
+                pins[str(src["path"])] = str(src["pin_commit"])
+    for st in data.get("stack", []):
+        for c in st.get("component", []):
+            for step in c.get("build_steps", []):
+                argv = step.get("argv") if isinstance(step, dict) else None
+                if not isinstance(argv, list):
+                    continue
+                for i, tok in enumerate(argv):
+                    m = _PIN_TOKEN.match(str(tok))
+                    if m is None:
+                        continue
+                    pin = pins.get(m.group(1))
+                    if not pin:
+                        raise ManifestError(
+                            f"component {c.get('id', '?')!r} build step references "
+                            f"{{pin:{m.group(1)}}} but no component pins a source at "
+                            f"{m.group(1)!r}")
+                    argv[i] = pin
+
+
 def parse_manifest(data: dict) -> tuple[Stack, ...]:
     """Parse an already-loaded TOML mapping (kept separate for testing). Validates
     each component's structured lifecycle spec AND the whole dependency graph — an
     invalid manifest fails here rather than launching a misconfigured process."""
     stacks: list[Stack] = []
+    _resolve_pin_tokens(data)
     for stack_raw in data.get("stack", []):
         components = tuple(
             _parse_component(c) for c in stack_raw.get("component", [])

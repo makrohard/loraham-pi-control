@@ -1792,8 +1792,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "b322a88958ec884208438f34f5d7aca43fc8cf47"
-    pin_tag = "b322a88"
+    pin_commit = "74a3a081fdefbe23eb460d18dd4f71ea0b942466"
+    pin_tag = "74a3a08"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1860,7 +1860,7 @@ main = "meshcom-qemu"
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/platformio/.venv"] },
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pip", "install", "--disable-pip-version-check", "platformio==6.1.19"], announce = "[install] PlatformIO 6.1.19 into {runtime}/build/tools/platformio/.venv — pip is quiet off-TTY; progress: watch {runtime}/build/tools/platformio/.venv/lib grow" },
     { argv = ["scripts/build-qemu.sh", "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606", "--link-gate", "{asset}/scripts/meshtastic-link-gate.sh"], announce = "[build] qemu-system-xtensa FROM SOURCE (headless: no SDL/GTK/VNC/OpenGL/audio) at the pinned Espressif commit — clone + configure + compile, slow + silent off-TTY; progress: watch {runtime}/build/tool-cache/qemu-xtensa grow" },
-    { argv = ["scripts/setup.sh", "--ref", "674413ce38bebcc02969a4c1b754a6f1850bf4ba"], announce = "[clone] MeshCom-Firmware (icssw-org dev 674413c, v4.35p.08.29 + 34) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
+    { argv = ["scripts/setup.sh", "--ref", "{pin:src/MeshCom-Firmware}"], announce = "[clone] MeshCom-Firmware at the manifest pin (the meshcom-firmware component's pin_commit) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
     { argv = ["scripts/apply-overlay.sh"], attributable = true },
     { argv = ["scripts/prepare-openeth.sh"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core" }, announce = "[resolve] ESP32 platform + toolchain — large download, output is quiet; progress: watch {runtime}/build/tools/platformio/core grow" },
     { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" }, attributable = true },
@@ -2041,8 +2041,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "b322a88958ec884208438f34f5d7aca43fc8cf47"
-    pin_tag = "b322a88"
+    pin_commit = "74a3a081fdefbe23eb460d18dd4f71ea0b942466"
+    pin_tag = "74a3a08"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2089,9 +2089,11 @@ main = "meshcom-qemu"
     # repo at release v4.35p.08.06 (feature verbatim vs the tested fork tip).
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD build surface unchanged.
     #
-    # Cloned BY REF by meshcom-qemu's `setup.sh --ref <sha>` step: the checkout IS this pin, and the
-    # QEMU overlay in makrohard/meshcom-qemu-raspi b322a88 applies to exactly this commit -- the
-    # overlay moved, THIS firmware pin did not. The overlay bounds the per-loop GPS UART drain under
+    # Cloned BY REF by meshcom-qemu's `setup.sh --ref {pin:src/MeshCom-Firmware}` step: the argv
+    # token is resolved to THIS pin_commit at manifest parse time (0.9.2; before that the step
+    # carried a hardcoded 674413c and this pin was a label). The QEMU overlay in
+    # makrohard/meshcom-qemu-raspi must apply to exactly this commit — moving this pin without
+    # rebasing the overlay fails the meshcom build, which is the intended signal. The overlay bounds the per-loop GPS UART drain under
     # QEMU (an unpaced socket UART starves loop() and leaves the net-console deaf) and now builds at
     # TX_OUTPUT_POWER 17: the daemon accepts 2..17 dBm on SX127x since 1.0.0 and refuses the old 20,
     # which left the bridge unable to configure the radio at all.
