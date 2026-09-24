@@ -71,4 +71,5 @@ One file per stack. The pinned commit of every managed source is in
 ## Policy
 
 - [Contributing](../CONTRIBUTING.md) — how to open a PR and what should be green.
+- [Maintaining](../MAINTAINING.md) — the entry point for maintainers: the repositories, house rules, release checklists, incidents.
 - [Provenance](provenance.md) — supply-chain rules for managed source and the binary channel.
