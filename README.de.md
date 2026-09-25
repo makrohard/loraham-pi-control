@@ -181,8 +181,8 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs
   wird als Warnung ausgegeben), beides für die langen Builds
   ([Running on a Pi](docs/maintenance.md#running-on-a-pi)) · installiert zwei polkit-Regeln (und das Paket `polkitd`), damit die WebGUI-Schaltflächen
   Neustart/Herunterfahren und sein Netzwerk-Panel autorisiert sind (`--no-power-controls` /
-  `--no-network-controls` lassen sie weg) · installiert `chrony` und `gpsd`, damit die Box ihre Uhr
-  stellen kann (ein Pi hat keine batteriegepufferte Uhr; GPS wird nur genutzt, wenn keine
+  `--no-network-controls` lassen sie weg) · installiert `chrony`, `gpsd` und `fake-hwclock`, damit die Box ihre Uhr
+  stellen und die zuletzt bekannte Zeit über einen Neustart retten kann (ein Pi hat keine batteriegepufferte Uhr; GPS wird nur genutzt, wenn keine
   NTP-Quelle erreichbar ist, und dies ERSETZT `systemd-timesyncd`) (`--no-time-source` lässt es
   weg) · schaltet ein persistentes Journal ein
   (`/var/log/journal`) · deaktiviert eine paketierte `meshtasticd.service`, falls vorhanden.
