@@ -45,7 +45,7 @@ lhpc/
     status.py            # compose probe evidence into a RunState
     resources.py         # declared/observed conflict interpretation, band-limited radio claims
     gps.py               # the ONE typed GPS resolver: plan, consumers, feed-marker rules (no service state)
-    restart_required.py  # the durable restart-required marker: path, safe tri-state read, merge, clear
+    restart_required.py  # the durable restart-required marker: path, safe tri-state read, merge (with launch values, so a restored value un-flags), clear
     power.py             # power controls: kinds, bounded trigger, busctl verdict parse, pending-marker schema
     install.py           # adopt/verify/update sources (git, pinned); source_fs.py the transaction
     runtime_fs.py        # descriptor-anchored path containment, atomic writes

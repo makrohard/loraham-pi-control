@@ -17,6 +17,7 @@ from . import restart_required as _rr
 from . import reticulum_interfaces as _reticulum_interfaces
 from . import rflog as _rflog
 from .config import (
+    REMOVE,
     ConfigError,
     _load_runtime_toml,
     _patch_local_table,
@@ -45,6 +46,7 @@ from .snapshot_memo import invalidates_snapshot
 # (`save_config_bundle`) and the reader (`_resolved_param_value`) must agree on this set —
 # disagreeing is what made the switch read as its default while being saved as "on".
 _BANDLESS_STACK_PARAMS = (USE_GPS_PARAM, _rflog.RF_LOG_PARAM)
+_UNREAD = object()             # restart_marker_payload: read the committed marker itself
 
 # MeshCore's position is controller-owned: a LIVE source feeds it through the meshcore-gps
 # bridge, and `fixed` writes static coordinates. Either way the values come from the one
@@ -1362,16 +1364,49 @@ class ParamsConfigMixin:
                         return stored
                     return self._resolved_param_value(
                         tgt, "run" if kind == "r" else "file", c.id, p.name, _band)
+                def _key(c, p) -> str:
+                    """Which stored value a launch value belongs to: the store's band (none for
+                    a band-less param), the component, the param."""
+                    b = "" if p.name in _BANDLESS_STACK_PARAMS else (_cfg or "")
+                    return f"{b}|{c.id}|{p.name}"
+
+                # F-M1: the marker claims "saved settings differ from the running stack", so a
+                # save that brings a value BACK to its recorded launch value takes that param
+                # off the marker, and the marker goes when nothing is left. Only a value the
+                # marker recorded itself can be restored (see restart_required.merged_payload).
+                cur = self.restart_required(_sid)
+                cur = None if cur is not None and cur.get("unsafe") else cur
+                tracked = dict((cur or {}).get("launched") or {})
+                restored = {_key(c, p) for kind, c, p, v in _params
+                            if _key(c, p) in tracked
+                            and _post_effective(kind, c, p, v) == tracked[_key(c, p)]}
                 changed = [(kind, c, p) for kind, c, p, v in _params
-                           if _pre_effective(kind, c, p) != _post_effective(kind, c, p, v)]
+                           if _key(c, p) not in restored
+                           and _pre_effective(kind, c, p) != _post_effective(kind, c, p, v)]
                 modes.update(p.apply_mode for _k, _c, p in changed)
                 live_modes = {p.apply_mode for _k, _c, p in changed} & {"restart", "build"}
+                if restored:
+                    left = {k: v for k, v in tracked.items() if k not in restored}
+                    gone = {_rr.key_name(k) for k in restored} - {_rr.key_name(k) for k in left}
+                    cur = {**cur, "params": [n for n in cur["params"] if n not in gone],
+                           "launched": left}
+
+                def _unmarked():
+                    """The answer when this save adds nothing to the marker: leave it as it is,
+                    or write it reduced by what was restored, or remove it when nothing is left."""
+                    if not restored:
+                        return None
+                    if not cur["params"]:
+                        return REMOVE                 # the stack runs what is saved again
+                    return self.restart_marker_payload(_sid, [], cur.get("band", ""),
+                                                       mode=cur["mode"], current=cur)
+
                 if not live_modes:
-                    return None                       # nothing that needs a restart changed
+                    return _unmarked()                # nothing that needs a restart changed
                 live, live_band = self.active_config_consumer(_sid, fresh=True)
                 _live_seen["v"] = live         # reused by the apply hints — never probed twice
                 if not live:
-                    return None                       # nobody is reading this configuration
+                    return _unmarked()                # nobody is reading this configuration
                 marked = [(k, c, p) for k, c, p in changed if p.apply_mode in live_modes]
                 marker_band = _cfg or live_band
                 if _cfg and live_band and _cfg != live_band:
@@ -1382,12 +1417,13 @@ class ParamsConfigMixin:
                     marked = [(k, c, p) for k, c, p in marked if p.name in _BANDLESS_STACK_PARAMS]
                     marker_band = live_band
                 if not marked:
-                    return None
+                    return _unmarked()
                 names = sorted(p.name for _k, _c, p in marked)
                 return self.restart_marker_payload(
                     _sid, names, marker_band,
                     mode="build" if any(p.apply_mode == "build" for _k, _c, p in marked)
-                    else "restart")
+                    else "restart", current=cur,
+                    launched={_key(c, p): _pre_effective(k, c, p) for k, c, p in marked})
             targets.append(("state", _rr.marker_path(self._paths, sid), _render_marker, 0o600))
         try:
             if self._holds_config_exclusive():
@@ -2366,11 +2402,15 @@ class ParamsConfigMixin:
         return False, ""
 
     def restart_marker_payload(self, sid: str, params, band: str,
-                               mode: str = "restart") -> str:
+                               mode: str = "restart", current=_UNREAD,
+                               launched: dict | None = None) -> str:
         """The MERGED restart-marker JSON for `sid` — called from inside the config transaction,
-        so it merges with the marker committed RIGHT NOW. The one caller that must instead leave
-        an unreadable marker untouched (the global identity setter) checks for that itself."""
-        return _rr.merged_payload(self.restart_required(sid), sid, params, band, mode)
+        so it merges with the marker committed RIGHT NOW (or with `current`, when the caller
+        already read it inside the same transaction and adjusted it). The one caller that must
+        instead leave an unreadable marker untouched (the global identity setter) checks for
+        that itself."""
+        cur = self.restart_required(sid) if current is _UNREAD else current
+        return _rr.merged_payload(cur, sid, params, band, mode, launched=launched)
 
     def restart_required(self, stack_id: str) -> dict | None:
         """The durable restart-required marker, tri-state (None / dict / safe-side unsafe dict):

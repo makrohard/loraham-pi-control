@@ -9,6 +9,11 @@
   empty or cut reply now means "not ready". A window that ends with the call never confirmed
   fails the start as `unverified` instead of passing as "sent", and a slow check no longer
   stretches the ~13 min window.
+- "Restart required" now goes away again when a save brings a setting back to the value the
+  running stack was started with: `lhpc rflog --all off` followed by `on` no longer leaves the
+  running stacks flagged (F-M1, hardware matrix 2026-09-25). The marker records each setting's
+  launch value when it first flags it; a marker written by an older version, or by a change of
+  the global callsign, still waits for the restart.
 
 ## 0.9.2
 
