@@ -50,7 +50,7 @@ from that commit → the image tag with the same version. One more surface publi
 repository: the Pages demo, redeployed on every `main` push that touches `lhpc/` or `demo/`
 ([demo/README](demo/README.md#deploy)).
 
-**Temporary** (TEMPORARY-PR: remove after espressif/qemu PR #XXX is taken). `makrohard/qemu`, a
+**Temporary** (TEMPORARY-PR: remove after espressif/qemu PR #183 is taken). `makrohard/qemu`, a
 fork of `espressif/qemu`, exists only to carry the ESP32 cache-model fix for review while its pull
 request to Espressif is open. Nothing in LHPC pins or fetches it. While it exists its branch is kept
 rebased on Espressif's `esp-develop` (see [Regular maintenance](#regular-maintenance)). Delete the
@@ -173,7 +173,7 @@ The bot never moves the daemon, the chat source (same repository) or RadioLib.
 | Mondays after 21:30 UTC, when the schedule is enabled | read the bot's run summary; no `attempt` or `auto-freeze` issue left open without a reason | [bot README](https://github.com/makrohard/lhpc-release-bot/blob/main/README.md#when-something-is-left-behind) |
 | the 1st of each month | the images' OS refresh ran and published or said why not | [images](https://github.com/makrohard/loraham-images/blob/main/docs/maintenance.md#monthly-os-refresh-dated-releases) |
 | after ~60 days without repository activity | GitHub disables idle schedules: a manual dispatch re-enables the bot's and the images' | same two links |
-| while espressif/qemu PR #XXX is open (TEMPORARY-PR: remove this row after it is taken) | rebase the `makrohard/qemu` branch onto `esp-develop` whenever that moves, re-run the change's own tests, force-push; a pull request that no longer applies is not reviewed | the pull request |
+| while espressif/qemu PR #183 is open (TEMPORARY-PR: remove this row after it is taken) | rebase the `makrohard/qemu` branch onto `esp-develop` whenever that moves, re-run the change's own tests, force-push; a pull request that no longer applies is not reviewed | the pull request |
 | while icssw-org/MeshCom-Firmware PRs #XXX are open (TEMPORARY-PR: remove this row after they are taken) | rebase the `makrohard/MeshCom-Firmware` PR branches onto upstream `dev` whenever that moves, re-run their size builds, force-push | the pull requests |
 | before each minor | the bot's `watch-only`; the list of held pins and why each is still held | [bot README](https://github.com/makrohard/lhpc-release-bot/blob/main/README.md#freeze-a-pin) |
 | as due | dependency audit findings, Python versions, OS drift, PKI expiry, upstream toolchains | [maintenance](docs/maintenance.md#dependencies-and-platform) |
