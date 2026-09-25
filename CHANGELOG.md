@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.3
+
+- MeshCom: the post-start callsign step reads the whole `--info` answer and sends `--setcall` only
+  when the node reports a different call. Before, a slow node's reply was cut after 0.6 s of
+  silence and the step sent anyway; each such send made the firmware rewrite all its NVS keys,
+  freezing the node for about a minute on a Zero 2 W, so the next check failed too (R11). An
+  empty or cut reply now means "not ready". A window that ends with the call never confirmed is
+  shown as `unverified` in `lhpc status` (it does not fail the start, as before), and a slow check
+  no longer stretches the ~13 min window.
+
 ## 0.9.2
 
 - **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step

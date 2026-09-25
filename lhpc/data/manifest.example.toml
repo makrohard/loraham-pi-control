@@ -1907,26 +1907,21 @@ main = "meshcom-qemu"
   # --setcall for an empty / N0CALL callsign (the structured equivalent of the old shell guard).
   post_steps = [
     { kind = "tcp_wait", port = 12323, timeout = 180 },
-    # ACK-AWARE + IDEMPOTENT (17 blind connects starved the node's heap
-    # and killed its web UI): probe `--info` first and SKIP when the callsign is already
-    # set (it persists in NVS across restarts); otherwise send until the firmware ACKs
-    # ("Call:<CALL> ... set") — ONE acknowledged send, never the full blind window.
-    # probe_stop_on matches --info's DISPLAY format `...Call: <N0CALL-1>` (space + angle
-    # brackets); stop_on matches the setcall ACK `Call:N0CALL-1 Short:... set`. They DIFFER —
-    # with the ACK pattern used for the probe too, a persisted callsign was never detected, so
-    # every start re-sent --setcall, the firmware saved + auto-rebooted, and the QEMU guest
-    # wedged in the bootloader (guest reset is not survivable in qemu-xtensa).
-    # ZERO-2W COLD-BOOT WINDOW: a QEMU/TCG cold boot on a Pi Zero 2W brings the
-    # console up only after MINUTES — a fixed window (repeat=21, interval=8 -> 168 s)
-    # would expire with every probe hitting a deaf console, zero sends, and the node ran with the
-    # default callsign. The stepped `schedule` keeps the tight 8 s cadence for the first minute
-    # (fast path on Pi 4/5 and warm boots), eases to 15 s, then a 30 s cap: 36 attempts over a
-    # ~13 min window — well past the slowest observed cold boot, still only ~36 one-line
-    # exchanges (no flooding by construction). The readiness probe still guarantees NO blind
-    # send ever reaches a deaf console, and one acknowledged send still ends the window
-    # immediately. `lhpc stack poststart meshcom` re-runs this against a running stack if the
-    # window ever expires.
-    { kind = "tcp_send", port = 12323, label = "callsign", required = true, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_stop_on = "Call: <{param:mc_callsign}>", stop_on = "Call:{param:mc_callsign}", schedule = [[8, 8], [6, 15], [22, 30]], skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
+    # ACK-AWARE + IDEMPOTENT (17 blind connects starved the node's heap and killed its web UI):
+    # probe `--info` first; `probe_value` captures the node's current call from --info's DISPLAY
+    # format `...Call: <N0CALL-1>` and `probe_expect` is ours. Equal -> no send (the call
+    # persists in NVS). Different -> send until the ACK `Call:N0CALL-1 Short:... set` (stop_on;
+    # a different format from --info). A reply WITHOUT a complete `Call: <…>` (the console is
+    # slow, the reply was cut, the format changed) proves nothing -> no send: every blind
+    # --setcall makes the firmware rewrite all of its NVS keys (~1 min frozen on a Zero 2 W),
+    # which made the next probe time out again (R11). If the window ends with the call never
+    # confirmed, `lhpc status` shows it `unverified` (diagnostic; the start is not failed by it).
+    # ZERO-2W COLD-BOOT WINDOW: a QEMU/TCG cold boot on a Pi Zero 2W brings the console up only
+    # after MINUTES. The stepped `schedule` keeps an 8 s cadence for the first minute (Pi 4/5,
+    # warm boots), then 15 s, then a 30 s cap: a ~13 min window, which is a clock — a slow probe
+    # uses it up and no attempt starts after it. `lhpc stack poststart meshcom` re-runs this
+    # against a running stack if the window ever expires.
+    { kind = "tcp_send", port = 12323, label = "callsign", required = true, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_value = "Call: <([^>]*)>", probe_expect = "{param:mc_callsign}", stop_on = "Call:{param:mc_callsign}", schedule = [[8, 8], [6, 15], [22, 30]], skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
   ]
 
     # PERSISTED per-stack GPS switch — see the same param on the Meshtastic component. The
