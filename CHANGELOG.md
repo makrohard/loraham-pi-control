@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.3
+
+- The clock survives a reboot again: the time source now also installs `fake-hwclock` (saved
+  hourly and at shutdown, restored early at boot). Since 0.6.0 chrony replaced
+  systemd-timesyncd and nothing saved the clock, so a box without NTP or GPS started every boot at
+  a frozen date, days behind, and nginx read newer client certificates and the CRL as "not yet
+  valid" (F-B1). LHPC's `/etc/default/fake-hwclock` sets `FORCE=true`, making the restore
+  forward-only: fake-hwclock's default would step a Pi 5's RTC time back to the last save. A box
+  set up before this shows the time source as unsatisfied, with the repair command.
+
 ## 0.9.2
 
 - **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step

@@ -340,6 +340,26 @@ CHRONY_DROPIN_PATH = "/etc/chrony/conf.d/10-lhpc-gps.conf"
 CHRONY_CONF_PATH = "/etc/chrony/chrony.conf"
 CHRONY_SOURCES_DIR = "/etc/chrony/sources.d"
 GPSD_DEFAULT_PATH = "/etc/default/gpsd"
+# fake-hwclock keeps the last known time across a reboot: saved hourly (its systemd timer) and at
+# shutdown, restored early at boot (before fsck, long before chrony). Without it a box that
+# cannot reach NTP or GPS boots at the release's clock floor, days or weeks behind, and nginx
+# then sees newer client certificates and the CRL as "not yet valid". LHPC owns this one file.
+FAKE_HWCLOCK_DEFAULT_PATH = "/etc/default/fake-hwclock"
+
+
+def fake_hwclock_default_text() -> str:
+    """`FORCE=true` makes `fake-hwclock load` FORWARD-ONLY. Measured on Debian's fake-hwclock 0.14
+    (trixie): with the default it sets the clock to the saved time even when the clock is LATER,
+    i.e. it would step a Pi 5's correct RTC time back to the last save after every reboot; with
+    FORCE=true it sets the clock only when the saved time is ahead. (The package names the
+    variable after `save`'s "time travel" override; for `load` it is the forward-only switch.)
+    Its 0.14 man page describes `FORCE` the other way round; the script is what runs, and this
+    was checked against the script and measured, so do not "correct" it to the man page."""
+    return (
+        "# Installed by LoRaHAM Pi Control.\n"
+        "# FORCE=true: `fake-hwclock load` only moves the clock FORWARD, never back.\n"
+        "FORCE=true\n"
+    )
 CLOCK_EPOCH_PATH = "/usr/lib/clock-epoch"
 # The per-run success witness. REMOVED at the start of every setup and written only after the
 # verdict passes, so it says "the most recent run completed" rather than "a run once completed".
@@ -408,6 +428,7 @@ def time_source_setup_sh() -> str:
         'CHRONY_CONF="${CHRONY_CONF:-' + CHRONY_CONF_PATH + '}"\n'
         'CHRONY_SOURCES_DIR="${CHRONY_SOURCES_DIR:-' + CHRONY_SOURCES_DIR + '}"\n'
         'GPSD_DEFAULT="${GPSD_DEFAULT:-' + GPSD_DEFAULT_PATH + '}"\n'
+        'FAKE_HWCLOCK_DEFAULT="${FAKE_HWCLOCK_DEFAULT:-' + FAKE_HWCLOCK_DEFAULT_PATH + '}"\n'
         'CLOCK_EPOCH="${CLOCK_EPOCH:-' + CLOCK_EPOCH_PATH + '}"\n'
         # Derived from $CLOCK_EPOCH rather than hardcoded, so anything that redirects the
         # floor redirects the witness with it -- a harness cannot accidentally leave one of the
@@ -423,6 +444,18 @@ def time_source_setup_sh() -> str:
         "install -D -m 0644 /dev/stdin \"$CHRONY_DROPIN\" <<'LHPC_DROPIN'\n"
         + chrony_dropin_text()
         + "LHPC_DROPIN\n"
+        "\n"
+        "# 1b. The last known time survives a reboot: fake-hwclock saves it hourly and at shutdown\n"
+        "#     and restores it early at boot. Its default file is LHPC's (see\n"
+        "#     fake_hwclock_default_text: FORCE=true makes the restore forward-only).\n"
+        "install -D -m 0644 /dev/stdin \"$FAKE_HWCLOCK_DEFAULT\" <<'LHPC_FAKE_HWCLOCK'\n"
+        + fake_hwclock_default_text()
+        + "LHPC_FAKE_HWCLOCK\n"
+        "if ! command -v fake-hwclock >/dev/null 2>&1; then\n"
+        "  echo \"[bootstrap-deps] ERROR: fake-hwclock is not installed, so the clock falls back to\" >&2\n"
+        "  echo \"[bootstrap-deps]        the release floor at every reboot: sudo apt install fake-hwclock\" >&2\n"
+        "  TS_FAILED=1\n"
+        "fi\n"
         "\n"
         "# 2. `prefer` on every NTP declaration chrony already has, so any of them outranks the\n"
         "#    GPS. EDITED, never rewritten: operator options, comments and every other line come\n"
@@ -655,7 +688,7 @@ def time_source_install_cmd(_user: str = "") -> str:
         # paste it somewhere other than the box it was rendered for.
         "# Only run this if lhpc is NOT configured for [gps] source = nmea: gpsd would take the\n"
         "# receiver, and a u-blox stays in UBX binary mode afterwards. Check with: lhpc gps show\n"
-        "sudo apt install -y chrony gpsd\n"
+        "sudo apt install -y chrony gpsd fake-hwclock\n"
         "sudo sh -s <<'LHPC_TIME_SOURCE'\n"
         + time_source_setup_sh()
         + "LHPC_TIME_SOURCE"
@@ -939,7 +972,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "# exactly like $POLKIT_PKG above, so it rides the SAME merged transaction the dry-run",
         "# simulates. NOTE chrony REPLACES systemd-timesyncd (both Provides/Conflicts/Replaces:",
         "# time-daemon on Trixie) — that is why the opt-out exists.",
-        'TIME_PKGS="chrony gpsd"',
+        'TIME_PKGS="chrony gpsd fake-hwclock"',
         "",
         "# PRE-FLIGHT, before the packages are even chosen: gpsd must never claim a receiver that",
         "# an LHPC `nmea` source reads DIRECTLY. This is not only device contention — gpsd switches",
