@@ -1671,22 +1671,6 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "fi",
         "")
 
-    # --- persistent journal ------------------------------------------------------------------
-    # Spontaneous-reboot forensics died because Raspberry Pi OS's default
-    # VOLATILE journal loses the previous boot's kernel evidence. journald ships Storage=auto,
-    # which becomes persistent once /var/log/journal exists — so bootstrap creates it. Directory
-    # creation is FATAL on failure (no dir = no persistence — never claim it); only the tmpfiles
-    # ACL adjustment is warning-only. JOURNAL_DIR is a test seam (like CONFIG_TXT/WIFI_PSAVE_CONF).
-    out("# --- persistent journal (crash forensics survive reboots; Storage=auto honours the dir) ------",
-        'JOURNAL_DIR="${JOURNAL_DIR:-/var/log/journal}"',
-        'if [ ! -d "$JOURNAL_DIR" ]; then',
-        '\tmkdir -p "$JOURNAL_DIR" || { echo "ERROR: could not create $JOURNAL_DIR — persistent journal NOT enabled." >&2; exit 1; }',
-        "fi",
-        "# ACL fixup is best-effort: the directory alone already makes Storage=auto persistent.",
-        'systemd-tmpfiles --create --prefix="$JOURNAL_DIR" 2>/dev/null || echo "[bootstrap-deps] WARNING: systemd-tmpfiles ACL adjustment failed — the journal is persistent but may carry default permissions." >&2',
-        'echo "[bootstrap-deps] persistent journal enabled (takes effect after the reboot)."',
-        "")
-
     if groups_csv:
         # usermod exits nonzero when a named group does not exist (exit 6). On the target Raspberry
         # Pi OS image spi/gpio are present, but under `set -e` an unexpected absence would abort the
