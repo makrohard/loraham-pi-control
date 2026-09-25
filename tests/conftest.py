@@ -286,6 +286,21 @@ def pytest_sessionfinish(session, exitstatus):  # noqa: ANN001
 
 
 @pytest.fixture(autouse=True)
+def _no_host_processes(monkeypatch):
+    """HERMETIC: a service built without an injected System (every CLI `main()` call, a default
+    `ControllerService()`, an explicit `RealSystem()`) reads the HOST's process and socket tables
+    through `RealProcFs`. What the developer's machine happens to run then decides the test:
+    with the MeshCom emulator running, `lhpc gps --source fixed` was refused "in use by:
+    meshcom-qemu" (R12). Pin those three reads to a box where nothing runs — the empty
+    `FakeSystem`'s answers. A test that needs a process or listener injects its own System.
+    Proven by `tests/repo/test_suite_hygiene.py::test_a_process_running_on_the_host_is_invisible_to_the_suite`."""
+    from lhpc.core.probes import backends
+    monkeypatch.setattr(backends.RealProcFs, "cmdlines", lambda self: {})
+    monkeypatch.setattr(backends.RealProcFs, "tcp_listeners", lambda self: [])
+    monkeypatch.setattr(backends.RealProcFs, "owner_pid", lambda self, inode, budget_s: (None, False))
+
+
+@pytest.fixture(autouse=True)
 def _no_host_gpsd(monkeypatch):
     """HERMETIC: the `auto` GPS source probes the HOST's /proc/net/tcp for a localhost gpsd.
     On a dev box that happens to run one, every default-config test would resolve auto->gpsd

@@ -66,7 +66,8 @@ when or how a defect was found.
    interpreter, outside this tree, and their `conftest.py` puts their package on `sys.path` — that
    single insert is the exception, sibling-test imports there are not.
 8. **Autouse fixtures isolate the host, and say so.** They give the test a temporary runtime root,
-   HOME and firewall state, refuse real downloads and real `pip install`, and reap spawned helpers.
+   HOME, firewall state and an empty host process/socket table, refuse real downloads and real
+   `pip install`, and reap spawned helpers.
    The two that supply a product baseline — radio hardware and a graphical session — are opt-out by
    marker (`no_default_hardware`, `no_default_display`), because nearly every test wants a working box.
    Two sanctioned gaps, both in `host/test_deploy_scripts.py` and both stated in its docstring: the

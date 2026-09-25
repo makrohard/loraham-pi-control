@@ -24,6 +24,10 @@
   (F-C1). The printed command now stands on a line of its own for both, with the note below it:
   voice's note was appended to the command, so pasting the line as printed was a shell syntax
   error (F-C2).
+- The test suite no longer sees the developer machine's processes: a test that reached the real
+  process table was refused "in use by: meshcom-qemu" whenever a MeshCom emulator ran on the box
+  (R12). An autouse fixture gives every test an empty host process and socket table; a test that
+  needs a process injects its own.
 
 ## 0.9.2
 
