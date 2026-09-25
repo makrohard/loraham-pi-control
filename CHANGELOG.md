@@ -54,6 +54,10 @@
   wins over the directory, so the claim was never true (R6). `docs/maintenance.md` shows the
   drop-in that makes the journal persistent on a box being debugged.
 - Dashboard: the Webserver box names the console row "LHPC" (it said "LHCP") (C1).
+- A failed web-console restart during an updater repair now points at
+  `systemctl --user status lhpc-web.service` and the console's log file (`logs/lhpc-web.log`),
+  where its output goes. It named `journalctl --user`, which the operator cannot read on the
+  image.
 
 ## 0.9.2
 

@@ -445,6 +445,21 @@ def test_repair_integration_creates_logs_dir_and_enables_linger(tmp_path, op_svc
     assert any("linger: enabled" in d and "autostarts at boot" in d for d in r.details)
 
 
+def test_a_failed_web_restart_points_at_the_log_that_exists(tmp_path, op_svc, systemctl_ok_rows):
+    # R6+ (claude-b6's Desktop-image report): the hint said `journalctl --user -u lhpc-web.service`,
+    # which fails for the operator on the image, and the unit sends its output to logs/lhpc-web.log
+    # anyway (docs/deployment.md). The hint names the file the unit really appends to.
+    from lhpc.core import updater_units as U
+    from lhpc.core.probes.backends import CommandResult
+    rows = dict(systemctl_ok_rows)
+    rows[("systemctl", "--user", "restart", U.WEB_UNIT)] = CommandResult(1, "", "failed")
+    svc, _fake, root, _user = _repair_env(tmp_path, op_svc, rows)
+    r = svc.self_update_repair_integration()
+    assert not r.ok and r.data.get("web_restart_failed")
+    assert str(root.joinpath(*U.WEB_LOG_REL)) in r.summary
+    assert "journalctl" not in r.summary
+
+
 def test_repair_integration_attempts_linger_even_when_managed(tmp_path, monkeypatch, op_svc, systemctl_ok_rows):
     # NEVER gated on INVOCATION_ID: the GUI "Repair & update" bridge runs from a managed LEGACY web
     # unit that still has the user bus — gating would silently deny it boot autostart.
