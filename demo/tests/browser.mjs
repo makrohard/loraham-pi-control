@@ -117,6 +117,30 @@ try {
            !!cores && cores.childElementCount > 0;             // per-core CPU bars built
   }, { timeout: 30000 });
   console.log("OK: System box live — values, gauge bars, per-core CPU bars, and sparklines");
+  // GPS MONITOR (R1): under Position, the Monitor must leave "loading…" and show the simulated
+  // fix; the Skyview button must draw the satellites (the real gps.js cannot run here).
+  await page.evaluate(() => {
+    const a = [...document.querySelectorAll('a[href]')].find(
+      (x) => x.getAttribute('href') === '/stacks' || x.textContent.trim() === 'Apps');
+    if (!a) throw new Error("Apps link not found"); a.click();
+  });
+  await page.waitForFunction(() => !!document.getElementById("gps-monitor"), { timeout: 30000 });
+  await page.evaluate(() => {
+    for (const id of ["gps-row", "gps-monitor"]) {
+      const d = document.getElementById(id);
+      if (d && !d.open) (d.querySelector("summary") || d).click();
+    }
+  });
+  await page.waitForFunction(() => {
+    const t = (id) => ((document.getElementById(id) || {}).textContent || "").trim();
+    return !/loading/i.test(t("gps-mon-state")) && /\d/.test(t("gps-mon-lat")) && / of \d/.test(t("gps-mon-sats"));
+  }, { timeout: 30000 });
+  await page.evaluate(() => document.getElementById("gps-sky-btn").click());
+  await page.waitForFunction(() => {
+    const w = document.getElementById("gps-sky-wrap"), svg = document.getElementById("gps-sky");
+    return w && !w.hidden && svg && svg.querySelectorAll("circle").length > 4;   // 4 rings + satellites
+  }, { timeout: 30000 });
+  console.log("OK: GPS Monitor shows the simulated fix and the Skyview draws its satellites");
 
   // persistence across reload: kiss still running -> 433 still READY
   await page.reload({ waitUntil: "domcontentloaded" });

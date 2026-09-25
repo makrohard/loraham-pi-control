@@ -209,6 +209,33 @@ class DemoService(ControllerService):
         from . import daemon_sim
         return "STATUS " + " ".join(f"{k}={v}" for k, v in daemon_sim.status(band).items())
 
+    # --- simulated GPS receiver: make the Monitor under Position LIVE. Synthetic NMEA goes through
+    #     the product's own parser (gps.NmeaSnapshot), so the snapshot has the real shape. A
+    #     browser has no gpsd and no serial port; the real probe would only report "no receiver".
+    def _gps_sim_snapshot(self) -> dict:
+        from lhpc.core import gps as _gps
+
+        from . import gps_sim
+        snap = _gps.NmeaSnapshot()
+        for line in gps_sim.sentences():
+            snap.feed(line)
+        return snap.snapshot()
+
+    def gps_monitor(self) -> dict:
+        from lhpc.core import gps as _gps
+        s = self._gps_sim_snapshot()
+        out = {"source": "nmea", "resolved_source": "nmea", "available": True,
+               "note": "Simulated receiver (demo): a fixed position and sky.", "error": "",
+               "nmea_ok": True, "devices": [], "device": "simulated receiver (demo)"}
+        out.update({k: s[k] for k in ("state", "mode", "lat", "lon", "alt", "alt_kind", "time",
+                                      "time_has_date", "sats_used", "sats_seen", "satellites",
+                                      "nmea")})
+        out["label"] = _gps.monitor_label(out["state"])
+        return out
+
+    def gps_nmea(self) -> list[str]:
+        return list(self._gps_sim_snapshot()["nmea"])
+
     # --- simulated host metrics: make the System box LIVE. Feed synthetic RAW /proc text
     #     through the REAL parsers so the shape can never drift from the product; the browser
     #     derives rates from the growing counters between polls. -----------------------------

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.3
+
+- Pages demo: the GPS Monitor under Position shows a simulated receiver with a 3D fix, its
+  satellites in the Skyview and its NMEA stream, instead of "loading…" for ever. The demo feeds
+  synthetic NMEA through the console's real parser, so the shape matches a real receiver (R1).
+
 ## 0.9.2
 
 - **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step

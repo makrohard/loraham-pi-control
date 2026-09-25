@@ -83,6 +83,16 @@ try:
         "system_stats missing live metrics"
     R["system_sim"] = (f"cpu cores={s1['cpu']['cores']} mem={s1['mem']['total_kb']}kB "
                        f"up={int(s1['uptime_s'])}s temp={s1['temp_mc'] // 1000}C")
+    # simulated GPS receiver (R1): the Monitor's /api/gps answers a live 3D fix with a sky, in
+    # exactly the product's snapshot shape — before, the page sat at "loading…" for ever.
+    g = json.loads(c.get("/api/gps").get_data(as_text=True))
+    assert g["state"] == "3d" and g["available"] and g["lat"] and g["lon"], g
+    assert g["sats_used"] and g["sats_seen"] and len(g["satellites"]) == g["sats_seen"], g
+    assert any(sat["used"] for sat in g["satellites"]) and g["nmea_ok"] and g["nmea"], g
+    # the product's own snapshot (it fails soft without a receiver) defines the shape
+    from lhpc.core.services import ControllerService as _CS
+    assert set(_CS.gps_monitor(svc)) == set(g), sorted(set(_CS.gps_monitor(svc)) ^ set(g))
+    R["gps_sim"] = f"{g['label']}: {g['sats_used']} of {g['sats_seen']} satellites"
     # ROUTE-LEVEL: drive the REAL /action endpoint (CSRF + dispatch + spawn_web_job), not
     # only direct service calls — the web path is where impossible states slipped through.
     import re as _re
