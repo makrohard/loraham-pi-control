@@ -124,6 +124,20 @@ def test_a_same_band_save_marks_every_changed_restart_param(tmp_path, monkeypatc
     assert m is not None and m["params"] == ["rf_log", "rx_only"] and m["band"] == "868"
 
 
+def test_switching_every_log_off_and_on_again_leaves_no_marker(tmp_path, monkeypatch):
+    # F-M1 (hardware matrix 2026-09-25): `lhpc rflog --all off` then `on` left the running
+    # stacks flagged although they run with exactly the saved value again.
+    svc = _svc(tmp_path)
+    _live(monkeypatch, svc, "kiss", "868")
+    before = svc.rflog_switch("graywolf")["value"]                              # what kiss launched with
+    other = "off" if before == "on" else "on"
+    assert svc.set_rflog_all(other).ok
+    assert svc.restart_required("kiss")["params"] == ["rf_log"]
+    assert svc.set_rflog_all(before).ok
+    assert svc.restart_required("kiss") is None
+    assert svc.rflog_switch("graywolf")["restart_required"] is False
+
+
 def test_a_cross_band_edit_of_a_banded_param_alone_marks_nothing(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     _live(monkeypatch, svc, "kiss", "868")
