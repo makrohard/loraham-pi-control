@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.3
+
+- "Restart required" now goes away again when a save brings a setting back to the value the
+  running stack was started with: `lhpc rflog --all off` followed by `on` no longer leaves the
+  running stacks flagged (F-M1, hardware matrix 2026-09-25). The marker records each setting's
+  launch value when it first flags it; a marker written by an older version, or by a change of
+  the global callsign, still waits for the restart.
+
 ## 0.9.2
 
 - **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step
