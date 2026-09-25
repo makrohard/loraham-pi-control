@@ -13,6 +13,8 @@ These pin the properties an audit flagged as load-bearing:
     path, quotes what ConfigObj needs quoted, and refuses control characters.
 """
 
+import importlib.resources
+
 import pytest
 
 from lhpc.core import reticulum_interfaces as ri
@@ -364,7 +366,8 @@ def test_sideband_is_built_from_its_pinned_checkout():
     """`pip install sbapp` resolves from PyPI, which made the pin decorative — the
     installed app was not the audited source. Install the checkout itself."""
     argvs = [st.get("argv", []) for st in _comp("sideband").build_steps]
-    pip = [a for a in argvs if a and "pip" in a[0] and "install" in a]
+    pip = [a for a in argvs if a and "pip" in a[0] and "install" in a
+           and not a[-1].endswith("/src/reticulum")]
     assert pip, "sideband must have a pip install step"
     target = pip[0][-1]
     # A BARE `sbapp` floats with PyPI, so the source pin would say nothing about the
@@ -377,6 +380,58 @@ def test_sideband_is_built_from_its_pinned_checkout():
     # version survives a rebuild. One step must force the package itself back.
     forced = [a for a in argvs if a and "--force-reinstall" in a and "--no-deps" in a]
     assert forced, "a rebuild must be able to repair a bad install of the same version"
+
+
+@pytest.mark.parametrize("cid", ["lxmd", "nomadnet", "sideband"])
+def test_clients_take_rns_from_the_pinned_checkout(cid):
+    """A client that let pip resolve `rns` got PyPI's newest while the shared instance ran the
+    pin. The checkout is installed FIRST, so the client's own install finds `rns` satisfied,
+    and `build_requires` makes a moved Reticulum pin mark the client for a rebuild."""
+    comp = _comp(cid)
+    pips = [st["argv"] for st in comp.build_steps
+            if st.get("argv") and "pip" in st["argv"][0] and "install" in st["argv"]]
+    assert pips and pips[0][-1] == "{runtime}/src/reticulum", pips
+    assert "rns" in comp.build_requires
+    assert _comp("rns").source.path == "src/reticulum"
+
+
+def test_status_versions_names_a_package_that_differs(tmp_path):
+    """The clients' venvs are what the operator runs; `status --versions` shows what they hold
+    and names a package the stack runs in more than one version (MeshChat keeps its own set)."""
+    from lhpc.core.paths import Paths
+    from lhpc.core.services import ControllerService
+    from lhpc.core.probes.backends import FakeSystem
+
+    def dist(src, name, ver):
+        (tmp_path / src / ".venv/lib/python3.13/site-packages" / f"{name}-{ver}.dist-info"
+         ).mkdir(parents=True)
+
+    for src in ("src/lxmf", "src/nomadnet", "src/meshchat"):
+        dist(src, "rns", "1.5.4")
+    dist("src/lxmf", "lxmf", "1.1.0")
+    dist("src/nomadnet", "lxmf", "1.1.1")
+    dist("src/meshchat", "lxmf", "1.1.1")
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    details = svc.status_versions().details
+    line = next(d for d in details if d.strip().startswith("nomadnet "))
+    assert line.endswith(" rns=1.5.4 lxmf=1.1.1"), line
+    assert next(d for d in details if d.strip().startswith("sideband ")).endswith(
+        " rns=- lxmf=-")
+    assert "  reticulum: lxmf differs — 1.1.0 (lxmd), 1.1.1 (nomadnet, meshchat)" in details
+    assert not any("rns differs" in d for d in details)
+
+
+@pytest.mark.parametrize("bad", ['"rns"', '[1]', '[""]', '["rns lxmf"]'])
+def test_venv_packages_must_be_a_list_of_distribution_names(bad, tmp_path):
+    """A malformed `venv_packages` fails when the manifest loads: a bare string would otherwise
+    read as one package per letter, and a non-string would break `status --versions` later."""
+    text = importlib.resources.files("lhpc.data").joinpath("manifest.example.toml").read_text()
+    old = 'venv_packages = ["rns"]\n'
+    assert text.count(old) == 1
+    path = tmp_path / "manifest.toml"
+    path.write_text(text.replace(old, f"venv_packages = {bad}\n"))
+    with pytest.raises(ManifestError, match="venv_packages"):
+        load_manifest(path)
 
 
 def test_an_unsafe_secrets_file_blocks_cleanly(monkeypatch):
@@ -644,7 +699,7 @@ def test_changing_a_consumed_source_invalidates_the_completed_receipt(tmp_path, 
 
     svc = ControllerService()
     sideband = _comp("sideband")
-    assert sideband.build_requires == ("rns-lora-interface",), \
+    assert "rns-lora-interface" in sideband.build_requires, \
         "sideband must declare the driver it copies its plugin out of"
 
     # Inside the ambient runtime root on purpose: is_built() reads the marker through
@@ -681,10 +736,11 @@ def test_components_without_requires_keep_the_static_marker():
     from lhpc.core.services import ControllerService
 
     svc = ControllerService()
-    # sideband now DOES declare a build_requires (it copies the driver's plugin), so it
-    # legitimately gets receipt lines; lxmd/nomadnet consume only their own source.
-    for cid in ("lxmd", "nomadnet"):
-        assert svc._consumed_source_lines(_comp(cid)) == ""
+    # The clients install RNS from the rns checkout (sideband also copies the driver's
+    # plugin), so they legitimately get receipt lines; meshchat consumes only its own source.
+    assert svc._consumed_source_lines(_comp("meshchat")) == ""
+    for cid in ("lxmd", "nomadnet", "sideband"):
+        assert "consumed rns " in svc._consumed_source_lines(_comp(cid))
     assert "rns-lora-interface" in svc._consumed_source_lines(_comp("sideband"))
 
 

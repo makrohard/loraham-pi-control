@@ -6,6 +6,12 @@
   reports 1.5.4, the PyPI release), used by rns. MeshChat's client already pinned rns 1.5.4, so
   the shared instance and its client now run the same version. No binary contains Reticulum, so
   none is republished; `lhpc build reticulum` rebuilds rns from the moved checkout.
+- Reticulum clients: lxmd, nomadnet and Sideband install RNS from the pinned `src/reticulum`
+  checkout instead of letting pip take PyPI's newest, so they run the node's version. They now
+  consume that checkout, so after this update `lhpc build reticulum` rebuilds them. LXMF stays as
+  it was (PyPI 1.1.1; lxmd on the `src/lxmf` checkout, 1.1.0): LXMF's git lags PyPI by the
+  LXMPeer sync-backoff fix. `lhpc status --versions` shows the `rns`/`lxmf` each Reticulum
+  component's venv holds and names a package the stack runs in two versions.
 
 ## 0.9.2
 
