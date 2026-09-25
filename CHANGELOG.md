@@ -49,6 +49,10 @@
   runtime by the Web UI yielding to the CLI), but the start admission ignored the flag (F-M2,
   hardware matrix 2026-09-25). Non-advisory exclusive claims (ports, the SPI bus, the radio)
   still block.
+- `bootstrap-deps.sh` no longer creates `/var/log/journal` or claims "persistent journal
+  enabled". Raspberry Pi OS keeps the journal volatile through its own journald drop-in, which
+  wins over the directory, so the claim was never true (R6). `docs/maintenance.md` shows the
+  drop-in that makes the journal persistent on a box being debugged.
 
 ## 0.9.2
 
