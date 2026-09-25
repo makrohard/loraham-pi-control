@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.3
+
+- RF-log decrypt (meshtastic): a direct message whose sender's key is not yet in the node's saved
+  database now says so, and points at `lhpc meshtastic --nodes`. meshtasticd writes a newly
+  learned key to disk with a delay, so the old "no public key … in the node database" contradicted
+  the live node list (F-M4, hardware matrix 2026-09-25). The decoder still never contacts the node:
+  its API serves one client at a time.
+
 ## 0.9.2
 
 - **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step
