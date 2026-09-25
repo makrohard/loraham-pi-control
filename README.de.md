@@ -184,8 +184,7 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs
   `--no-network-controls` lassen sie weg) · installiert `chrony` und `gpsd`, damit die Box ihre Uhr
   stellen kann (ein Pi hat keine batteriegepufferte Uhr; GPS wird nur genutzt, wenn keine
   NTP-Quelle erreichbar ist, und dies ERSETZT `systemd-timesyncd`) (`--no-time-source` lässt es
-  weg) · schaltet ein persistentes Journal ein
-  (`/var/log/journal`) · deaktiviert eine paketierte `meshtasticd.service`, falls vorhanden.
+  weg) · deaktiviert eine paketierte `meshtasticd.service`, falls vorhanden.
 
 <details><summary><em>Manuell — nur installieren, was deine Stacks brauchen (bootstrap-deps.sh ist die Referenz; Vorschau mit <code>--dry-run</code>, Neuerzeugung mit <code>lhpc deps --script</code>)</em></summary>
 

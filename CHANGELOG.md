@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.3
+
+- `bootstrap-deps.sh` no longer creates `/var/log/journal` or claims "persistent journal
+  enabled". Raspberry Pi OS keeps the journal volatile through its own journald drop-in, which
+  wins over the directory, so the claim was never true (R6). `docs/maintenance.md` shows the
+  drop-in that makes the journal persistent on a box being debugged.
+
 ## 0.9.2
 
 - **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step

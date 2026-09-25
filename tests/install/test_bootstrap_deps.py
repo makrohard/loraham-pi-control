@@ -133,9 +133,6 @@ def _fakebin(tmp_path, *, no_sudo=False):
             'for p in /usr/sbin/ip /sbin/ip /usr/bin/ip /bin/ip; do [ -x "$p" ] && exec "$p" "$@"; done\n'
             'exit 1\n')
     w("iw", '[ -n "${FAKE_IW_FAIL:-}" ] && exit 1\nexit 0\n')
-    # journal section: tmpfiles ACL fixup is a no-op fake; the journal dir itself is redirected to a
-    # temp path via the JOURNAL_DIR seam (set in _run), so nothing touches the real /var/log.
-    w("systemd-tmpfiles", 'exit 0\n')
     return b, apt, um
 
 
@@ -166,7 +163,6 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
            "LHPC_SWAPFILE": str(swapfile or (tmp_path / "swap.lhpc")),
            "FSTAB": str(fstab or (tmp_path / "fstab")),
            "WIFI_PSAVE_CONF": str(tmp_path / "wifi-nopowersave.conf"),   # redirect the Wi-Fi write to a temp
-           "JOURNAL_DIR": str(tmp_path / "journal"),      # redirect the persistent-journal dir to a temp
            "POWER_RULE_OUT": str(tmp_path / "power-rule.out"),   # capture the polkit-rule heredoc bodies
            "NETWORK_RULE_OUT": str(tmp_path / "network-rule.out")}
 
@@ -1361,6 +1357,17 @@ def test_shipped_script_is_what_the_service_renders_now(tmp_path):
 # does not own.
 
 _ARGS = ["--spi-mode", "skip", "--operator-user", _USER]
+
+
+def test_bootstrap_makes_no_persistent_journal_claim(tmp_path):
+    """R6: creating /var/log/journal never made the journal persistent on Raspberry Pi OS (its
+    40-rpi-volatile-storage.conf drop-in sets Storage=volatile, which beats the directory), yet
+    the script said "persistent journal enabled". The step is removed; a box being debugged gets
+    a hand-written drop-in instead (docs/maintenance.md). The script must not claim it."""
+    r, _cfg, _apt, _um = _run(tmp_path, _ARGS)
+    assert r.returncode == 0, r.stderr
+    assert "persistent journal" not in (r.stdout + r.stderr).lower()
+    assert not (tmp_path / "journal").exists()
 
 
 def test_time_source_adds_prefer_and_changes_nothing_else(tmp_path):

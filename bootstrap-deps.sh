@@ -919,15 +919,6 @@ else
 	fi
 fi
 
-# --- persistent journal (crash forensics survive reboots; Storage=auto honours the dir) ------
-JOURNAL_DIR="${JOURNAL_DIR:-/var/log/journal}"
-if [ ! -d "$JOURNAL_DIR" ]; then
-	mkdir -p "$JOURNAL_DIR" || { echo "ERROR: could not create $JOURNAL_DIR — persistent journal NOT enabled." >&2; exit 1; }
-fi
-# ACL fixup is best-effort: the directory alone already makes Storage=auto persistent.
-systemd-tmpfiles --create --prefix="$JOURNAL_DIR" 2>/dev/null || echo "[bootstrap-deps] WARNING: systemd-tmpfiles ACL adjustment failed — the journal is persistent but may carry default permissions." >&2
-echo "[bootstrap-deps] persistent journal enabled (takes effect after the reboot)."
-
 # --- hardware group membership (granted to the resolved operator, never root) ------------
 if usermod -aG spi,gpio "$OP"; then
 	echo "[bootstrap-deps] granted spi,gpio to $OP — log out/in (or reboot) to take effect."
