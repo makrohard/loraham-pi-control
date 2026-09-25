@@ -4817,6 +4817,10 @@ class LifecycleOpsMixin:
                 lines.append(f"post-start: {label} NOT applied — console never became "
                              f"ready within {el}s ({n} attempts); re-apply with: "
                              f"lhpc stack poststart {stack_hint}")
+            elif oc == "unverified":
+                lines.append(f"post-start: {label} UNVERIFIED — the node answered but never "
+                             f"reported the expected value within {el}s ({n} attempts); "
+                             f"re-apply with: lhpc stack poststart {stack_hint}")
             elif oc == "ok":
                 lines.append(f"post-start: {label} applied after {el}s")
             elif oc == "failed":

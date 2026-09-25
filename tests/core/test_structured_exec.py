@@ -450,3 +450,203 @@ def test_probe_match_writes_probe_matched_result(tmp_path):
         assert not [d for d in received if d.startswith("--setcall")]
     finally:
         stop()
+
+
+# --- R11: the value probe reads the whole answer and never sends on an unproven reply ----------
+
+INFO_HEAD = "--MeshCom 4.35t (build: Sep 24 2026 / 10:00:00)\n...UPDATE: none\n"
+
+
+def _info(call):
+    """The firmware's real `--info` display format (command_functions.cpp, `...Call: <%s>`)."""
+    return f"...Call: <{call}> ...ID 1A2B3C4D ...NODE 1 <XX0XXB>\n...BATT 4.10 V\n"
+
+
+def _serve_chunks(behavior):
+    """Like `_serve`, but `behavior(received, data)` returns a list of `(delay_s, text)` chunks,
+    sent one after the other; the connection is closed after the last chunk."""
+    import socket, threading, time
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(8)
+    port = srv.getsockname()[1]
+    received = []
+    stopped = {"v": False}
+    def loop():
+        srv.settimeout(0.3)
+        while not stopped["v"]:
+            try:
+                conn, _ = srv.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            with conn:
+                conn.settimeout(0.5)
+                try:
+                    data = conn.recv(4096).decode()
+                except OSError:
+                    data = ""
+                chunks = behavior(received, data)
+                received.append(data)
+                for delay, text in chunks:
+                    time.sleep(delay)
+                    try:
+                        conn.sendall(text.encode())
+                    except OSError:
+                        break
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+    def stop():
+        stopped["v"] = True
+        srv.close()
+        t.join(2)
+    return port, received, stop
+
+
+def _value_step(port, **kw):
+    step = {"kind": "tcp_send", "port": port, "label": "callsign", "required": True,
+            "data": "--setcall {param:mc_callsign}\n", "probe": "--info\n",
+            "probe_value": "Call: <([^>]*)>", "probe_expect": "{param:mc_callsign}",
+            "stop_on": "Call:{param:mc_callsign}", "repeat": 3, "interval": 0.1}
+    step.update(kw)
+    return step
+
+
+def _sends(received):
+    return [d for d in received if d.startswith("--setcall")]
+
+
+def _run_value_step(tmp_path, behavior, **kw):
+    import json
+    port, received, stop = _serve_chunks(behavior)
+    root, rp = _sidecar_root(tmp_path)
+    try:
+        r = _run_launcher(_render([_value_step(port, **kw)], result_path=str(rp),
+                                  runtime=str(root)))
+    finally:
+        stop()
+    return r, received, json.loads(rp.read_text())["steps"][0]
+
+
+def test_split_info_reply_with_our_call_sends_nothing(tmp_path):
+    # The answer arrives in two chunks with a pause between them (a slow QEMU node): the call is
+    # already ours, so NOTHING may be sent. The old reader stopped at the first 0.6 s pause.
+    def behavior(received, data):
+        if data.startswith("--info"):
+            return [(0, INFO_HEAD), (1.0, _info("XX0XXB"))]
+        return [(0, "Call:XX0XXB Short:XX0 set\n")]
+    r, received, st = _run_value_step(tmp_path, behavior)
+    assert _sends(received) == [], received
+    assert r.returncode == 0 and st["outcome"] == "probe-matched"
+
+
+def test_cut_info_reply_is_not_ready(tmp_path):
+    # The reply ends inside the field: that proves nothing, so no send; the window ends recorded
+    # as `unverified` (diagnostic — the step's exit keeps 0.9.2's semantics, see below).
+    def behavior(received, data):
+        if data.startswith("--info"):
+            return [(0, INFO_HEAD + "...Call: <XX0X")]
+        return [(0, "Call:XX0XXB Short:XX0 set\n")]
+    r, received, st = _run_value_step(tmp_path, behavior)
+    assert _sends(received) == [], received
+    assert "incomplete" in r.stderr
+    assert r.returncode == 0 and st["outcome"] == "unverified"
+
+
+def test_node_that_never_reports_the_field_is_reported_unverified(tmp_path):
+    # A firmware whose --info carries no `Call: <…>` at all must not be pushed blind, and must not
+    # pass silently either: the outcome is `unverified` (shown by `lhpc status`). The exit stays 0,
+    # as in 0.9.2, where an answering console was sent to and passed as `sent-unacked`.
+    def behavior(received, data):
+        if data.startswith("--info"):
+            return [(0, INFO_HEAD + "...BATT 4.10 V\n")]
+        return []
+    r, received, st = _run_value_step(tmp_path, behavior)
+    assert _sends(received) == [], received
+    assert r.returncode == 0 and st["outcome"] == "unverified"
+
+
+def test_different_call_sends_once_and_acks(tmp_path):
+    def behavior(received, data):
+        if data.startswith("--info"):
+            return [(0, INFO_HEAD + _info("N0CALL-1"))]
+        return [(0, "Call:XX0XXB Short:XX0 set\n")]
+    r, received, st = _run_value_step(tmp_path, behavior)
+    assert len(_sends(received)) == 1, received
+    assert r.returncode == 0 and st["outcome"] == "acked" and st["attempts"] == 1
+
+
+def test_slow_ack_is_seen(tmp_path):
+    # The firmware prints the ACK, then saves; on a slow node the ACK comes after a pause the old
+    # 0.6 s reader gave up on.
+    def behavior(received, data):
+        if data.startswith("--info"):
+            return [(0, INFO_HEAD + _info("N0CALL-1"))]
+        return [(1.5, "Call:XX0XXB Short:XX0 set\n")]
+    r, received, st = _run_value_step(tmp_path, behavior)
+    assert len(_sends(received)) == 1, received
+    assert st["outcome"] == "acked" and st["attempts"] == 1
+
+
+def test_sent_but_never_confirmed_is_reported_unverified(tmp_path):
+    # The node keeps reporting another call and never acknowledges: recorded as `unverified`, not
+    # `sent-unacked`. The exit stays 0, exactly as 0.9.2 passed a sent-but-unacked required step.
+    def behavior(received, data):
+        if data.startswith("--info"):
+            return [(0, INFO_HEAD + _info("N0CALL-1"))]
+        return []
+    r, received, st = _run_value_step(tmp_path, behavior)
+    assert _sends(received), received
+    assert r.returncode == 0 and st["outcome"] == "unverified"
+
+
+def test_a_console_that_never_answers_still_fails_a_required_step(tmp_path):
+    # 0.9.2's one failing case is unchanged: no attempt ever reached a console that answered, so
+    # nothing was sent and the required step fails `exhausted` (exit 1).
+    def behavior(received, data):
+        return []                                               # accepts, closes, says nothing
+    r, received, st = _run_value_step(tmp_path, behavior)
+    assert _sends(received) == [], received
+    assert r.returncode != 0 and st["outcome"] == "exhausted"
+
+
+def test_probe_stop_on_keeps_its_meaning():
+    # The older substring form still renders and still skips on a match; it now reads across
+    # a pause too (same reader).
+    def behavior(received, data):
+        if data.startswith("--info"):
+            return [(0, INFO_HEAD), (1.0, _info("XX0XXB"))]
+        return [(0, "Call:XX0XXB Short:XX0 set\n")]
+    port, received, stop = _serve_chunks(behavior)
+    try:
+        r = _run_launcher(_render([{"kind": "tcp_send", "port": port,
+                                    "data": "--setcall {param:mc_callsign}\n",
+                                    "probe": "--info\n",
+                                    "probe_stop_on": "Call: <{param:mc_callsign}>",
+                                    "stop_on": "Call:{param:mc_callsign}",
+                                    "repeat": 3, "interval": 0.1}]))
+    finally:
+        stop()
+    assert _sends(received) == [], received
+    assert "probe matched" in r.stderr
+
+
+@pytest.mark.parametrize("bad", [
+    {"probe_expect": None},                                   # value without expect
+    {"probe_value": None},                                    # expect without value
+    {"probe_value": "Call: <[^>]*>"},                         # no capture group
+    {"probe_value": "(Call): <([^>]*)>"},                     # two capture groups
+    {"probe_value": "Call: <([^>]*"},                         # not a regex
+    {"probe_stop_on": "Call: <{param:mc_callsign}>"},         # both forms at once
+    {"probe": None},                                          # a value form with nothing to send
+])
+def test_probe_render_validates_value_form(bad):
+    step = _value_step(1)
+    for k, v in bad.items():
+        if v is None:
+            step.pop(k)
+        else:
+            step[k] = v
+    with pytest.raises(commands.CommandError):
+        _render([step])
