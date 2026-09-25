@@ -28,6 +28,9 @@
   process table was refused "in use by: meshcom-qemu" whenever a MeshCom emulator ran on the box
   (R12). An autouse fixture gives every test an empty host process and socket table; a test that
   needs a process injects its own.
+- Pages demo: the GPS Monitor under Position shows a simulated receiver with a 3D fix, its
+  satellites in the Skyview and its NMEA stream, instead of "loading…" for ever. The demo feeds
+  synthetic NMEA through the console's real parser, so the shape matches a real receiver (R1).
 
 ## 0.9.2
 

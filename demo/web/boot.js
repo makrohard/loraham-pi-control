@@ -209,7 +209,58 @@ function liveSystem() {
     txt("sys-info", p.join(" · "));
   }
 }
-function liveTick() { if (!bridge) return; try { liveDaemon(); liveSystem(); } catch (_) { /* never break the page */ } }
+// GPS Monitor under Position: replicates gps.js render()/renderSky() against the bridge's /api/gps
+// (the demo simulates the receiver). Runs only while the Monitor is open, like gps.js.
+function gpsText(id, v) { const el = $(id); if (el) el.textContent = (v === null || v === undefined || v === "") ? "—" : String(v); }
+function liveGps() {
+  const mon = $("gps-monitor"), outer = $("gps-row");
+  if (!mon || !mon.open || (outer && !outer.open)) return;
+  const d = ask("/api/gps"); if (!d) return;
+  const num = (v) => typeof v === "number" && isFinite(v);
+  gpsText("gps-mon-state", (d.label || d.state || "?") + (d.error ? " (" + d.error + ")" : ""));
+  gpsText("gps-mon-summary", d.label || "");
+  const note = $("gps-mon-note"); if (note) { note.hidden = !d.note; note.textContent = d.note || ""; }
+  const pos = num(d.lat) && num(d.lon);
+  gpsText("gps-mon-lat", pos ? d.lat.toFixed(6) : null);
+  gpsText("gps-mon-lon", pos ? d.lon.toFixed(6) : null);
+  gpsText("gps-mon-alt", pos && num(d.alt) ? d.alt.toFixed(1) + (d.alt_kind === "msl" ? " m MSL" : d.alt_kind === "hae" ? " m HAE" : " m (legacy alt)") : null);
+  gpsText("gps-mon-time", d.time ? d.time + (d.time_has_date ? "" : " (date unavailable)") : null);
+  gpsText("gps-mon-sats", d.sats_used != null || d.sats_seen != null
+    ? (d.sats_used == null ? "?" : d.sats_used) + " of " + (d.sats_seen == null ? "n/a" : d.sats_seen) : null);
+  gpsText("gps-mon-device", d.device || (d.devices && d.devices.length ? d.devices.join(", ") : null));
+  const nb = $("gps-nmea-btn"); if (nb) nb.disabled = !d.nmea_ok;
+  const sw = $("gps-sky-wrap"); if (sw && !sw.hidden) gpsSky(d);
+  const nw = $("gps-nmea-wrap"), body = $("gps-nmea-body");
+  if (nw && !nw.hidden && body) body.textContent = (d.nmea || []).join("\n");
+}
+function gpsSky(d) {
+  const svg = $("gps-sky"); if (!svg) return;
+  const ns = "http://www.w3.org/2000/svg", cx = 160, cy = 160, R = 140;
+  const sats = (d.satellites || []).filter((s) => typeof s.el === "number" && s.el >= 0 && typeof s.az === "number");
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const el = (name, attrs, text) => {
+    const e = document.createElementNS(ns, name);
+    for (const k of Object.keys(attrs)) e.setAttribute(k, attrs[k]);
+    if (text !== undefined) e.textContent = text;
+    svg.appendChild(e); return e;
+  };
+  for (const elev of [90, 60, 30, 0])
+    el("circle", { cx, cy, r: R * (1 - elev / 90), fill: "none", stroke: "currentColor", "stroke-opacity": "0.25" });
+  el("line", { x1: cx, y1: cy - R, x2: cx, y2: cy + R, stroke: "currentColor", "stroke-opacity": "0.25" });
+  el("line", { x1: cx - R, y1: cy, x2: cx + R, y2: cy, stroke: "currentColor", "stroke-opacity": "0.25" });
+  el("text", { x: cx, y: cy - R - 4, "text-anchor": "middle", "font-size": "11", fill: "currentColor" }, "N");
+  for (const s of sats) {
+    const r = R * (1 - s.el / 90), a = (s.az - 90) * Math.PI / 180;
+    const x = cx + r * Math.cos(a), y = cy + r * Math.sin(a);
+    const radius = typeof s.ss === "number" ? Math.max(3, Math.min(11, 3 + s.ss / 6)) : 5;
+    el("circle", { cx: x.toFixed(1), cy: y.toFixed(1), r: radius, fill: s.used ? "currentColor" : "none",
+                   stroke: "currentColor", "fill-opacity": s.used ? "0.85" : "0", "stroke-opacity": s.used === null ? "0.5" : "1" });
+    el("text", { x: (x + radius + 2).toFixed(1), y: (y + 4).toFixed(1), "font-size": "10", fill: "currentColor" },
+       (s.talker ? s.talker + " " : "") + s.prn);
+  }
+  if (!sats.length) el("text", { x: cx, y: cy + 4, "text-anchor": "middle", "font-size": "12", fill: "currentColor" }, "no satellites reported");
+}
+function liveTick() { if (!bridge) return; try { liveDaemon(); liveSystem(); liveGps(); } catch (_) { /* never break the page */ } }
 
 async function go(method, path, formData) {
   const formJson = formData ? JSON.stringify(Object.fromEntries(formData.entries())) : "";
@@ -240,12 +291,26 @@ document.addEventListener("click", (e) => {
     go("GET", "/");
     return;
   }
+  // GPS Monitor panes (gps.js wires these on the real page): open/close, then refresh at once.
+  const pane = e.target.closest && e.target.closest("#gps-sky-btn, #gps-sky-close, #gps-nmea-btn, #gps-nmea-close");
+  if (pane) {
+    const which = pane.id.indexOf("sky") >= 0 ? "gps-sky-wrap" : "gps-nmea-wrap";
+    const w = $(which); if (w) w.hidden = /close$/.test(pane.id);
+    try { liveGps(); } catch (_) { /* never break the page */ }
+    return;
+  }
   const a = e.target.closest && e.target.closest("a[href]");
   if (a) {
     const href = a.getAttribute("href");
     if (isInternal(href)) { e.preventDefault(); go("GET", href); }
   }
 });
+
+document.addEventListener("toggle", (e) => {
+  if (e.target && (e.target.id === "gps-monitor" || e.target.id === "gps-row")) {
+    try { liveGps(); } catch (_) { /* never break the page */ }
+  }
+}, true);
 
 document.addEventListener("submit", (e) => {
   const f = e.target;

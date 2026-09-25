@@ -83,6 +83,10 @@ shortcut:
   (`lhpc_demo/daemon_sim.py`) feeds the console's real radio panels with time-varying
   STATUS/STATS/CHANNEL and a rolling RX/TX packet feed, so a started band shows READY with a
   moving RSSI/monitor. The daemon comes up per-band when a stack runs on that band.
+- **GPS receiver** — also **simulated but LIVE**: the Monitor under Apps → Position shows a
+  receiver with a 3D fix (a fixed position, nine satellites, seven used). Its synthetic NMEA goes
+  through the console's real parser (`gps.NmeaSnapshot`), and the fields, the Skyview and the
+  NMEA stream fill from it. The GPS Settings form is the real one.
 
 So the demo faithfully shows **operating the box** — install/build, start/stop with
 one-stack-per-band handoff, and a live radio — but not the stacks' own software or web UIs.
