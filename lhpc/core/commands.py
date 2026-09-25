@@ -483,10 +483,31 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                 #  * probe/probe_stop_on: query first and SKIP every send when the
                 #    device already has the desired state (idempotent across restarts —
                 #    NVS-persisted settings never get re-pushed).
+                #  * probe_value/probe_expect: the VALUE form — a regex with one group captures
+                #    the device's current value; send only when a COMPLETE value is reported and
+                #    differs. A reply without it (empty, cut, other format) proves nothing: no send.
                 for fld in ("stop_on", "probe", "probe_stop_on"):
                     if step.get(fld):
                         d[fld] = _post_data(str(step[fld]), comp, params, op, runtime,
                                             source, band)
+                pv, pe = step.get("probe_value"), step.get("probe_expect")
+                if (pv is None) != (pe is None):
+                    raise CommandError("tcp_send: probe_value and probe_expect come as a pair")
+                if pv is not None:
+                    if not step.get("probe"):
+                        raise CommandError("tcp_send: probe_value needs a probe to send")
+                    if step.get("probe_stop_on"):
+                        raise CommandError("tcp_send: probe_stop_on and probe_value/probe_expect "
+                                           "are two answers to one question — use one")
+                    try:
+                        rx = re.compile(str(pv))
+                    except re.error as exc:
+                        raise CommandError(f"tcp_send: probe_value is not a regex: {exc}") from exc
+                    if rx.groups != 1:
+                        raise CommandError("tcp_send: probe_value needs exactly one capture group")
+                    d["probe_value"] = str(pv)          # a pattern: never placeholder-expanded
+                    d["probe_expect"] = _post_data(str(pe), comp, params, op, runtime,
+                                                   source, band)
             resolved.append(d)
         else:
             raise CommandError(f"unknown post-step kind {kind!r}")
@@ -778,24 +799,39 @@ for s in STEPS:
                          "label": s.get("label", "%s:%s" % (s["host"], s["port"])),
                          "host": s["host"], "port": s["port"], "outcome": oc,
                          "attempts": n, "elapsed_s": round(time.time() - t0, 1)})
-            def _reply(conn, budget=3.0):
-                conn.settimeout(0.6)
+            def _read(conn, done):
+                # ONE answer, read to its end: a slow guest (QEMU on a Zero 2 W) may take many
+                # seconds for its first byte and pause between chunks. Up to 30 s for the first
+                # byte, then at most 2 s of silence; stop as soon as `done` holds.
                 buf = b""
-                end2 = time.time() + budget
-                while time.time() < end2 and len(buf) < 4096:
+                end2 = time.time() + 30.0
+                while len(buf) < 4096:
+                    left = end2 - time.time()
+                    if left <= 0:
+                        break
+                    conn.settimeout(min(left, 2.0) if buf else left)
                     try:
                         chunk = conn.recv(1024)
-                    except socket.timeout:
-                        break
-                    except OSError:
+                    except OSError:              # includes socket.timeout
                         break
                     if not chunk:
                         break
                     buf += chunk
+                    if done(buf.decode("utf-8", "replace")):
+                        break
                 return buf.decode("utf-8", "replace")
-            probing = bool(s.get("probe") and s.get("probe_stop_on"))
+            valued = bool(s.get("probe") and s.get("probe_value"))
+            probing = valued or bool(s.get("probe") and s.get("probe_stop_on"))
             skipped = False
+            answered = False             # some probe got a reply (value form only)
+            # The schedule is a CLOCK: attempt k starts no earlier than t0 + sum(ivs[:k]), and
+            # none starts once the window is over — a required run sits inside the start's
+            # outer timeout, so slow reads must not stretch the window.
+            ivs = s.get("intervals") or [s.get("interval", 0)] * (reps - 1)
+            window_end = t0 + sum(ivs)
+            n = 0
             for i in range(reps):
+                n = i + 1
                 if not _main_ok():
                     sys.stderr.write("tcp_send %s:%s: bound main gone/replaced -> stop (no send)\\n"
                                      % (s["host"], s["port"]))
@@ -809,15 +845,32 @@ for s in STEPS:
                         # is alive, and it serves ONE exchange per connection. Probe on
                         # its OWN connection; NO REPLY = still booting -> retry WITHOUT
                         # sending; a matching reply = already set -> ZERO sends, ever.
+                        if valued:
+                            _hit = lambda t: _re.search(s["probe_value"], t) is not None
+                        else:
+                            _hit = lambda t: s["probe_stop_on"] in t
                         with socket.create_connection((s["host"], s["port"]), 2) as pc:
                             pc.sendall(s["probe"].encode())
-                            r = _reply(pc)
+                            r = _read(pc, _hit)
                         if not r.strip():
                             sys.stderr.write("tcp_send %s:%s: console not ready "
                                              "(attempt %d/%d) -> no send\\n"
                                              % (s["host"], s["port"], i + 1, reps))
                             raise OSError("console deaf")
-                        if s["probe_stop_on"] in r:
+                        if valued:
+                            answered = True
+                            m = _re.search(s["probe_value"], r)
+                            if m is None:
+                                sys.stderr.write("tcp_send %s:%s: probe reply incomplete "
+                                                 "(attempt %d/%d) -> no send\\n"
+                                                 % (s["host"], s["port"], i + 1, reps))
+                                raise OSError("probe reply incomplete")
+                            if m.group(1) == s["probe_expect"]:
+                                sys.stderr.write("tcp_send %s:%s: probe matched -> already "
+                                                 "set, skipping\\n" % (s["host"], s["port"]))
+                                skipped = True
+                                break
+                        elif s["probe_stop_on"] in r:
                             sys.stderr.write("tcp_send %s:%s: probe matched -> already "
                                              "set, skipping\\n" % (s["host"], s["port"]))
                             skipped = True
@@ -825,7 +878,7 @@ for s in STEPS:
                     with socket.create_connection((s["host"], s["port"]), 2) as c:
                         c.sendall(s["data"].encode())
                         if s.get("stop_on"):
-                            acked = s["stop_on"] in _reply(c)
+                            acked = s["stop_on"] in _read(c, lambda t: s["stop_on"] in t)
                     sent += 1                # one complete connect + sendall succeeded
                 except OSError as e:
                     sys.stderr.write("tcp_send %s:%s attempt %d/%d failed: %s\\n"
@@ -835,25 +888,36 @@ for s in STEPS:
                                      % (s["host"], s["port"], i + 1))
                     break                # ACK received: no further blind repeats
                 if i + 1 < reps:
-                    ivs = s.get("intervals")
-                    iv = ivs[i] if ivs else s.get("interval", 0)
-                    if iv:
-                        time.sleep(iv)
+                    # Decided BEFORE sleeping, so the last on-time attempt is never lost to the
+                    # sleep's own overshoot. A zero-length window (plain `repeat`) has no clock.
+                    if window_end > t0 and time.time() > window_end:
+                        break
+                    wait = t0 + sum(ivs[:i + 1]) - time.time()
+                    if wait > 0:
+                        time.sleep(wait)
             if skipped:
-                _done("probe-matched", i + 1)
+                _done("probe-matched", n)
                 continue                 # desired state already present
             # Truthful: a REQUIRED send fails only if EVERY attempt failed (one success is enough,
             # even if later idempotent repeats fail). An OPTIONAL send never gates the start.
             if acked:
-                _done("acked", i + 1)
+                _done("acked", n)
+            elif valued and answered:
+                # The node answered but never reported the wanted value (a cut reply, another
+                # format, or a send it never took): the value is UNVERIFIED — never a quiet pass.
+                _done("unverified", n)
+                if not s.get("optional", True):
+                    sys.stderr.write("tcp_send %s:%s: value never confirmed in %d attempt(s)\\n"
+                                     % (s["host"], s["port"], n))
+                    sys.exit(1)
             elif sent == 0:
-                _done("exhausted", reps)
+                _done("exhausted", n)
                 if not s.get("optional", True):
                     sys.stderr.write("tcp_send %s:%s: all %d attempt(s) failed\\n"
-                                     % (s["host"], s["port"], reps))
+                                     % (s["host"], s["port"], n))
                     sys.exit(1)
             else:
-                _done("sent-unacked", reps)
+                _done("sent-unacked", n)
     except Exception:
         _flush_results()
         if not s.get("optional", True):
