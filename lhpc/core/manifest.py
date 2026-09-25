@@ -809,6 +809,7 @@ def _parse_component(raw: dict) -> Component:
         endpoints=tuple(_parse_endpoint(e) for e in raw.get("endpoint", [])),
         depends_on=tuple(raw.get("depends_on", [])),
         build_requires=tuple(raw.get("build_requires", [])),
+        venv_packages=_parse_venv_packages(raw.get("venv_packages"), raw.get("id", "?")),
         build_inputs=_parse_build_inputs(raw),
         asset_inputs=_asset_inputs(raw),
         source=_with_patches(_parse_source(raw.get("source")), raw.get("build_steps", [])),
@@ -943,6 +944,22 @@ def _parse_endpoint(raw: dict) -> EndpointSpec:
 # verbatim into the generated nginx directive (manifest-authored input, but the validator's
 # stated contract must actually hold).
 _DENY_PATH_RE = re.compile(r"\A/[A-Za-z0-9\-._~/]*\Z")
+
+
+# A Python distribution name (PEP 508): letters and digits, with `.`, `_` or `-` inside.
+_DIST_NAME_RE = re.compile(r"\A[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\Z")
+
+
+def _parse_venv_packages(raw, cid: str) -> tuple:
+    """Distributions whose installed version `lhpc status --versions` reads from the component's
+    venv. Checked here, so a bare string (`"rns"`, which would read as r, n, s) or a non-string
+    fails at load, not later in `status`."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(isinstance(x, str) and _DIST_NAME_RE.match(x) for x in raw):
+        raise ManifestError(f"component {cid!r} venv_packages must be a list of Python "
+                            f"distribution names, got {raw!r}")
+    return tuple(raw)
 
 
 def _parse_proxy_deny_paths(raw) -> tuple:

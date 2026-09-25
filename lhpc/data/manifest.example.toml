@@ -2778,6 +2778,7 @@ bands = ["433", "868"]
 purpose = "rnsd-equivalent that OWNS the shared instance and the radio. Runs loraham-rns-node, which exits rather than staying up without a radio."
 tx_capable = true
 build_requires = ["rns-lora-interface"]
+venv_packages = ["rns"]
 readiness = "endpoint"
 readiness_timeout = 60.0
 build_marker = ".venv/.lhpc-build-complete"
@@ -3188,6 +3189,8 @@ purpose = "NomadNet browser/TUI and page node on the shared Reticulum instance. 
 tx_capable = true
 interactive = true
 depends_on = ["rns"]
+build_requires = ["rns"]
+venv_packages = ["rns", "lxmf"]
 start_order = 2
 readiness = "manual"
 build_marker = ".venv/.lhpc-build-complete"
@@ -3213,6 +3216,13 @@ path = "{runtime}/state/nomadnet"
 [[stack.component.build_steps]]
 argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
 [[stack.component.build_steps]]
+# RNS FROM THE PINNED CHECKOUT, before the client's own install, so the client's `rns`
+# requirement is already satisfied and PyPI never picks the version: the client and the
+# shared instance it attaches to run the same Reticulum. LXMF is not taken from src/lxmf:
+# its git (795fdaa = 1.1.0) lags PyPI 1.1.1, which carries the LXMPeer sync backoff fix.
+argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "{runtime}/src/reticulum"]
+announce = "[install] Reticulum from the pinned checkout into {source}/.venv"
+[[stack.component.build_steps]]
 argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "."]
 announce = "[install] NomadNet into {source}/.venv — pip is quiet off-TTY"
 
@@ -3224,6 +3234,8 @@ optional = true
 purpose = "LXMF message delivery on the shared instance. NOT a propagation node unless enable_node is turned on."
 tx_capable = true
 depends_on = ["rns"]
+build_requires = ["rns"]
+venv_packages = ["rns", "lxmf"]
 start_order = 2
 readiness = "process"
 build_marker = ".venv/.lhpc-build-complete"
@@ -3249,6 +3261,13 @@ path = "{runtime}/state/lxmd"
 [[stack.component.build_steps]]
 argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
 [[stack.component.build_steps]]
+# RNS FROM THE PINNED CHECKOUT, before the client's own install, so the client's `rns`
+# requirement is already satisfied and PyPI never picks the version: the client and the
+# shared instance it attaches to run the same Reticulum. LXMF is not taken from src/lxmf:
+# its git (795fdaa = 1.1.0) lags PyPI 1.1.1, which carries the LXMPeer sync backoff fix.
+argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "{runtime}/src/reticulum"]
+announce = "[install] Reticulum from the pinned checkout into {source}/.venv"
+[[stack.component.build_steps]]
 argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "."]
 announce = "[install] LXMF into {source}/.venv — pip is quiet off-TTY"
 
@@ -3267,7 +3286,8 @@ depends_on = ["rns"]
 # enable_sideband_plugins.py, so the driver is a real build input. Undeclared, the
 # build receipt ignored it: an updated location plugin left Sideband reading "built"
 # with the old copy still installed.
-build_requires = ["rns-lora-interface"]
+build_requires = ["rns-lora-interface", "rns"]
+venv_packages = ["rns", "lxmf"]
 start_order = 3
 readiness = "process"
 build_marker = ".venv/.lhpc-build-complete"
@@ -3301,6 +3321,13 @@ kind = "mkdir"
 path = "{runtime}/state/sideband"
 [[stack.component.build_steps]]
 argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
+[[stack.component.build_steps]]
+# RNS FROM THE PINNED CHECKOUT, before the client's own install, so the client's `rns`
+# requirement is already satisfied and PyPI never picks the version: the client and the
+# shared instance it attaches to run the same Reticulum. LXMF is not taken from src/lxmf:
+# its git (795fdaa = 1.1.0) lags PyPI 1.1.1, which carries the LXMPeer sync backoff fix.
+argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "{runtime}/src/reticulum"]
+announce = "[install] Reticulum from the pinned checkout into {source}/.venv"
 [[stack.component.build_steps]]
 # VERSION-PINNED PyPI install, deliberately not `pip install .` from the checkout.
 # Sideband's own setup.py looks for `kivymd` beside setup.py while the repo keeps it
@@ -3464,6 +3491,8 @@ note = "Sideband is provisioned into its own in-root venv by the build. It needs
   purpose = "Browser client for the Reticulum node (LXMF messaging) — a phone or laptop uses the node through it. Client only: it never owns the radio."
   tx_capable = true
   depends_on = ["rns"]
+  # MeshChat keeps its own PyPI set (meshchat-constraints.txt): `status --versions` shows it.
+  venv_packages = ["rns", "lxmf"]
   start_order = 2
   show_config_link = true
   show_log_link = true
