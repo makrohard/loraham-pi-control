@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.3
+
+- CI: the Pages demo's Pyodide gate can fail again. Since 0.4.3 its output went through `| tee`
+  without `pipefail`, so the step took tee's exit status, and a probe that failed still passed
+  the gate (found when a deliberately failing probe stayed green).
+
 ## 0.9.2
 
 - **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step

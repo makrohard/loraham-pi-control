@@ -48,6 +48,9 @@ jobs:
       - name: Gate — headless Pyodide boot + lifecycle test
         working-directory: demo
         run: |
+          # pipefail: the gate's exit status must survive the `| tee` below. Without it the step
+          # took tee's 0, and a probe that FAILED (FATAL in the log) still passed the gate.
+          set -o pipefail
           . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
           npm init -y >/dev/null 2>&1
           retry 3 npm install --no-save pyodide@0.26.2 >/dev/null 2>&1
