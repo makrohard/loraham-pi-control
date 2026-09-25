@@ -34,6 +34,9 @@
 - CI: the Pages demo's Pyodide gate can fail again. Since 0.4.3 its output went through `| tee`
   without `pipefail`, so the step took tee's exit status, and a probe that failed still passed
   the gate (found when a deliberately failing probe stayed green).
+- RF-log decrypt (reticulum): data sent over a Reticulum link — an LXMF message on a direct link,
+  split across two frames or not — is labelled link traffic instead of "not addressed to this
+  node" (F-R1, RNode live test 2026-09-24).
 
 ## 0.9.2
 
