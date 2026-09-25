@@ -1070,10 +1070,17 @@ class LifecycleOpsMixin:
         results: list[CompResult] = []   # TYPED per-component outcomes (source of truth)
         daemon_ok = True                # gate dependents on verified daemon readiness
 
-        def record(comp, stack, outcome, summary):
+        def record(comp, stack, outcome, summary, command="", note=""):
+            # A copy-paste `command` goes on a line of its own, and the `note` on the next one:
+            # a note appended to the command made the pasted line a shell syntax error (F-C2).
             results.append(CompResult(component=comp.id, stack=stack.id, action="start",
-                                      outcome=outcome, summary=summary))
+                                      outcome=outcome,
+                                      summary=f"{summary} {command}" if command else summary))
             out.append(f"  [{outcome.value}] {comp.id}: {summary}")
+            if command:
+                out.append(f"    {command}")
+            if note:
+                out.append(f"    ({note})")
 
         # Config generation + launch config are COMPONENT-scoped so a direct component start never
         # writes a sibling's config nor leaks the target's run params into a dependency: each
@@ -1278,23 +1285,17 @@ class LifecycleOpsMixin:
                                "dashboard may not show its command block)")
                 if blocker:
                     record(comp, stack, Outcome.BLOCKED, f"interactive but {blocker}")
-                elif comp.id != stack.main:
-                    # A NON-MAIN interactive sidecar: its stack card is not command-shaped, so
-                    # for a CLI/SSH operator this summary IS the surface — include the
-                    # copy-paste command in the typed outcome. lhpc cannot restart an
-                    # operator-run TUI, so a live one keeps its old config after a
+                else:
+                    # For a CLI/SSH operator this result IS the surface — there is no dashboard
+                    # card in a terminal — so the copy-paste command is printed for the
+                    # interactive main (chat, F-C1) as for a sidecar (voice-cli). lhpc cannot
+                    # restart an operator-run TUI, so a live one keeps its old config after a
                     # regeneration — say so instead of implying it applied.
                     record(comp, stack, Outcome.MANUAL_REQUIRED,
-                           "interactive — run it yourself in a terminal: "
-                           f"{self.manual_start_command(comp)}"
-                           " (an already-running instance keeps its previous config "
-                           f"until you restart it){marker_note}")
-                else:
-                    # Interactive MAIN (chat): the start COMMAND is shown on the app's
-                    # dashboard card (the interactive marker drives that) — don't
-                    # duplicate it here.
-                    record(comp, stack, Outcome.MANUAL_REQUIRED,
-                           f"interactive — start it from its card on the dashboard{marker_note}")
+                           f"interactive — run it yourself in a terminal{marker_note}:",
+                           command=self.manual_start_command(comp),
+                           note="an already-running instance keeps its previous config "
+                                "until you restart it")
                 continue
             if comp.units and not comp.run_argv:
                 # Externally supervised (systemd, root) — lhpc observes, never starts.

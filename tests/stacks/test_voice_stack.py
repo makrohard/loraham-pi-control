@@ -85,6 +85,20 @@ def test_lite_voice_start_seeds_config_despite_display_skip(tmp_path, monkeypatc
     assert "run it yourself in a terminal:" in (cli.summary or "")
 
 
+def test_voice_cli_command_is_printed_on_a_line_of_its_own(tmp_path, monkeypatch, set_call, real_spawn):
+    # F-C2: the note was appended to the command, so pasting the printed line gave
+    # "syntax error near unexpected token `('". The command line must parse as printed.
+    import subprocess
+    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
+    _config_written(monkeypatch, svc)
+    set_call(svc)
+    res = svc.start("voice", apply=True)
+    cmd = svc.manual_start_command(svc.stack("voice").component("loraham-voice-cli"))
+    assert f"    {cmd}" in res.details, res.details
+    assert subprocess.run(["bash", "-n", "-c", cmd], capture_output=True).returncode == 0
+    assert any("already-running instance" in d and cmd not in d for d in res.details)
+
+
 def test_lite_voice_start_blocks_when_shared_config_fails(tmp_path, monkeypatch, set_call, real_spawn):
     # A FAILED write of the shared config is a typed BLOCKED, never a silent skip that leaves the
     # terminal variant with stale configuration.

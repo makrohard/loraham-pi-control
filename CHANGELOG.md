@@ -19,6 +19,11 @@
   learned key to disk with a delay, so the old "no public key … in the node database" contradicted
   the live node list (F-M4, hardware matrix 2026-09-25). The decoder still never contacts the node:
   its API serves one client at a time.
+- `lhpc stack start chat` prints the command to run chat in a terminal, as voice's terminal
+  variant does; before it only pointed at the dashboard card, which an SSH operator does not have
+  (F-C1). The printed command now stands on a line of its own for both, with the note below it:
+  voice's note was appended to the command, so pasting the line as printed was a shell syntax
+  error (F-C2).
 
 ## 0.9.2
 
