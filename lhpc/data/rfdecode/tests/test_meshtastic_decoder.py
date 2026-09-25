@@ -207,6 +207,9 @@ def test_public_key_direct_messages_open_both_ways_and_name_the_nodes(tmp_path):
     unknown = _pkc_seal(third, raw(me), 352277087, 0x22222222, d.SerializeToString())
     r = decode("k", line % (unknown.hex(), 0x22222222, len(unknown), OWN))
     assert r["status"] == "no-key" and "no public key for !22222222" in r["decoded"]
+    # F-M4: meshtasticd saves a newly learned key with a delay, so the live node can already know
+    # it; the answer points at the live view instead of implying the node has no key.
+    assert "lhpc meshtastic --nodes" in r["decoded"]
     r = decode("k", line % ("0000020018", OWN, 5, OWN))                # the recorded self-addressed packet
     assert r["status"] == "ok" and r["kind"] == "local" and "5 B" in r["decoded"]
     tampered = to_us[:-13] + bytes([to_us[-13] ^ 1]) + to_us[-12:]

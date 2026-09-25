@@ -14,6 +14,11 @@
   running stacks flagged (F-M1, hardware matrix 2026-09-25). The marker records each setting's
   launch value when it first flags it; a marker written by an older version, or by a change of
   the global callsign, still waits for the restart.
+- RF-log decrypt (meshtastic): a direct message whose sender's key is not yet in the node's saved
+  database now says so, and points at `lhpc meshtastic --nodes`. meshtasticd writes a newly
+  learned key to disk with a delay, so the old "no public key … in the node database" contradicted
+  the live node list (F-M4, hardware matrix 2026-09-25). The decoder still never contacts the node:
+  its API serves one client at a time.
 
 ## 0.9.2
 
