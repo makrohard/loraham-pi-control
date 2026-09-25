@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.3
+
+- `lhpc stack start meshcore-cli` while MeshCore runs is no longer refused over the Companion slot
+  the MeshCore Web UI holds. Both declare that claim advisory (shown as a conflict, arbitrated at
+  runtime by the Web UI yielding to the CLI), but the start admission ignored the flag (F-M2,
+  hardware matrix 2026-09-25). Non-advisory exclusive claims (ports, the SPI bus, the radio)
+  still block.
+
 ## 0.9.2
 
 - **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step
