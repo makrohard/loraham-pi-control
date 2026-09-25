@@ -809,6 +809,7 @@ def _parse_component(raw: dict) -> Component:
         endpoints=tuple(_parse_endpoint(e) for e in raw.get("endpoint", [])),
         depends_on=tuple(raw.get("depends_on", [])),
         build_requires=tuple(raw.get("build_requires", [])),
+        venv_packages=tuple(raw.get("venv_packages", [])),
         build_inputs=_parse_build_inputs(raw),
         asset_inputs=_asset_inputs(raw),
         source=_with_patches(_parse_source(raw.get("source")), raw.get("build_steps", [])),
