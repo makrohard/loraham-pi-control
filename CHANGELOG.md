@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.3
+
+- `lhpc stack start chat` prints the command to run chat in a terminal, as voice's terminal
+  variant does; before it only pointed at the dashboard card, which an SSH operator does not have
+  (F-C1). The printed command now stands on a line of its own for both, with the note below it:
+  voice's note was appended to the command, so pasting the line as printed was a shell syntax
+  error (F-C2).
+
 ## 0.9.2
 
 - **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step

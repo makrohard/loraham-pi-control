@@ -1860,9 +1860,18 @@ def test_interactive_main_start_is_manual_required(tmp_path, set_call):
     assert not res.ok                                   # LHPC cannot launch the TUI
     assert any("manual_required" in d and "loraham-chat" in d for d in res.details)
     assert "manual start" in res.summary.lower()
-    # The start command must NOT be duplicated in the result — it lives on the dash card.
-    assert "run it in a terminal" not in res.summary.lower()
-    assert not any("loraham_chat" in d or "run it in a terminal" in d for d in res.details)
+    # F-C1: a CLI/SSH operator has no dashboard card, so the result prints the command, on a
+    # line of its own that a shell accepts as printed (like voice's terminal variant).
+    cmd = svc.manual_start_command(svc.stack("chat").component("loraham-chat"))
+    assert "loraham_chat" in cmd
+    assert f"    {cmd}" in res.details
+    assert _bash_syntax_ok(cmd)
+
+
+def _bash_syntax_ok(line: str) -> bool:
+    """`bash -n`: parse only, never execute."""
+    import subprocess
+    return subprocess.run(["bash", "-n", "-c", line], capture_output=True).returncode == 0
 
 
 def test_raw_launch_ok_does_not_decide_top_level_success(tmp_path):
