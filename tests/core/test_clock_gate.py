@@ -550,6 +550,10 @@ def test_a_half_finished_setup_does_not_read_as_satisfied(tmp_path, monkeypatch)
     seen.add(deps.CLOCK_EPOCH_PATH)           # the boot floor survives failed re-runs: NOT a witness
     assert svc._time_source_present() is False
     seen.add(deps.TIME_SOURCE_STAMP_PATH)     # the per-run witness, written only after the verdict
+    # A box set up before fake-hwclock joined the time source (F-B1): drop-in and stamp present,
+    # no LHPC fake-hwclock default -> NOT satisfied, so the panel offers the repair command.
+    assert svc._time_source_present() is False
+    seen.add(deps.FAKE_HWCLOCK_DEFAULT_PATH)
     assert svc._time_source_present() is True
 
 

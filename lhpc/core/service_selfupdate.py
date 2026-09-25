@@ -251,7 +251,10 @@ class SelfUpdateOpsMixin:
         from . import deps as _deps_mod
         try:
             fs = self._system.fs
+            # The fake-hwclock default is LHPC's own file, written by the same setup: a box set up
+            # before fake-hwclock joined the time source lacks it, so its row offers the repair.
             return (fs.exists(_deps_mod.CHRONY_DROPIN_PATH)
+                    and fs.exists(_deps_mod.FAKE_HWCLOCK_DEFAULT_PATH)
                     and fs.exists(_deps_mod.TIME_SOURCE_STAMP_PATH))
         except Exception:
             return False

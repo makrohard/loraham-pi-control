@@ -242,7 +242,17 @@ time it happened to write. Every log line, certificate and receipt after that is
 corrects it.
 
 `bootstrap-deps.sh` installs **chrony** to discipline the clock and **gpsd** to feed it the receiver's
-time when there is one. This is ON by default; `--no-time-source` skips it.
+time when there is one, and **fake-hwclock** so the last known time survives a reboot. This is ON by
+default; `--no-time-source` skips it.
+
+**fake-hwclock** saves the time hourly (a systemd timer) and at shutdown, and restores it early at
+boot, before chrony. A box that reaches neither NTP nor GPS therefore starts at most about an hour
+behind (plus the time it was off) instead of at the release's boot floor below. That matters for
+mTLS: client certificates and the CRL issued after the floor would otherwise read as "not yet
+valid" until the clock is synchronised. LHPC writes `/etc/default/fake-hwclock` with `FORCE=true`,
+which makes the restore **forward-only**. Without it, Debian's fake-hwclock sets the clock to the
+saved time even when the clock is later, and on a Pi 5 that would step its RTC time back to the last
+save.
 
 **chrony replaces systemd-timesyncd.** On Trixie both declare `Provides/Conflicts/Replaces: time-daemon`,
 so installing chrony removes timesyncd. That is the reason the opt-out exists.
@@ -273,7 +283,8 @@ and skips the time source rather than take the device. See [gps](gps.md).
 startup, so a box that comes up in 1970 is plausible before the first certificate is written. It is a
 floor, not a clock — systemd takes the highest of its own build time, this file and
 `/var/lib/systemd/timesync/clock`. After chrony replaces timesyncd, that last file stops being updated
-and simply becomes a leftover; `/usr/lib/clock-epoch` is the one LHPC maintains.
+and simply becomes a leftover; `/usr/lib/clock-epoch` is the floor LHPC maintains, and fake-hwclock
+(above) supplies the last known time on top of it.
 
 Beside it, `/usr/lib/clock-epoch.ok` records that the **most recent** setup run completed: it is
 removed before the setup changes anything and written again only if everything it promised succeeded.
@@ -296,8 +307,8 @@ and remove the word `prefer` from any line bootstrap added it to. A **full** rol
 state also removes the packages and restores timesyncd:
 
 ```
-sudo apt purge gpsd chrony && sudo apt install systemd-timesyncd
-sudo rm -f /usr/lib/clock-epoch /usr/lib/clock-epoch.ok
+sudo apt purge gpsd chrony fake-hwclock && sudo apt install systemd-timesyncd
+sudo rm -f /usr/lib/clock-epoch /usr/lib/clock-epoch.ok /etc/default/fake-hwclock
 ```
 
 ## Identity drift on clean or uninstall

@@ -133,6 +133,8 @@ def _fakebin(tmp_path, *, no_sudo=False):
             'for p in /usr/sbin/ip /sbin/ip /usr/bin/ip /bin/ip; do [ -x "$p" ] && exec "$p" "$@"; done\n'
             'exit 1\n')
     w("iw", '[ -n "${FAKE_IW_FAIL:-}" ] && exit 1\nexit 0\n')
+    # The time source installs fake-hwclock; its tool must then exist (the setup checks it).
+    w("fake-hwclock", 'exit 0\n')
     # journal section: tmpfiles ACL fixup is a no-op fake; the journal dir itself is redirected to a
     # temp path via the JOURNAL_DIR seam (set in _run), so nothing touches the real /var/log.
     w("systemd-tmpfiles", 'exit 0\n')
@@ -146,11 +148,13 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
          meminfo=None, swaps=None, swapfile=None, fstab=None, free_kb=None,
          swapon_fail=False, swapoff_fail=False, systemctl_units="", systemctl_fail="",
          systemctl_broken=False, systemctl_disabled="", wifi_iw_fail=False,
-         wifi_iw_absent=False, nm_devs=None, defroute_dev=None,
+         wifi_iw_absent=False, fake_hwclock_absent=False, nm_devs=None, defroute_dev=None,
          chrony_conf=None, gpsd_default=None, lhpc_gps_source=None, runtime_root_env=True):
     fb, apt, um = _fakebin(tmp_path, no_sudo=no_sudo)
     if wifi_iw_absent:
         (fb / "iw").unlink()                           # box without iw: `command -v iw` fails
+    if fake_hwclock_absent:
+        (fb / "fake-hwclock").unlink()                 # the package did not land
     config = tmp_path / "config.txt"
     if config_seed is not None:
         config.write_text(config_seed)
@@ -181,6 +185,7 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
     env["CHRONY_CONF"] = str(conf)
     env["CHRONY_SOURCES_DIR"] = str(ts / "sources.d")
     env["GPSD_DEFAULT"] = str(gpsd)
+    env["FAKE_HWCLOCK_DEFAULT"] = str(ts / "fake-hwclock")
     env["CLOCK_EPOCH"] = str(ts / "clock-epoch")
     env["LHPC_TMPDIR"] = str(ts)
     # The NMEA pre-flight reads <runtime root>/config/local.toml. Always point it at a tmp root:
@@ -1372,6 +1377,23 @@ def test_time_source_adds_prefer_and_changes_nothing_else(tmp_path):
     assert "chrony" in apt and "gpsd" in apt          # they ride the merged transaction
     assert (r.ts / "10-lhpc-gps.conf").read_text().startswith("# Installed by LoRaHAM Pi Control")
     assert "refclock SHM 0 refid GPS" in (r.ts / "10-lhpc-gps.conf").read_text()
+
+
+def test_time_source_keeps_the_last_known_time_forward_only(tmp_path):
+    """F-B1: fake-hwclock rides the time-source transaction, and LHPC's default file makes its
+    boot restore forward-only (FORCE=true; fake-hwclock 0.14's default would step a Pi 5's RTC
+    time BACK to the last save). Without the tool the setup fails loudly."""
+    r, _cfg, apt, _um = _run(tmp_path, _ARGS)
+    assert r.returncode == 0, r.stderr
+    assert "fake-hwclock" in apt.split()
+    lines = (r.ts / "fake-hwclock").read_text().splitlines()
+    assert "FORCE=true" in lines
+
+
+def test_a_missing_fake_hwclock_fails_the_time_source_setup(tmp_path):
+    r, _cfg, _apt, _um = _run(tmp_path, _ARGS, fake_hwclock_absent=True)
+    assert r.returncode != 0
+    assert "fake-hwclock is not installed" in r.stderr
 
 
 def test_time_source_is_idempotent(tmp_path):

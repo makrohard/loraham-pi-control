@@ -37,6 +37,13 @@
 - RF-log decrypt (reticulum): data sent over a Reticulum link — an LXMF message on a direct link,
   split across two frames or not — is labelled link traffic instead of "not addressed to this
   node" (F-R1, RNode live test 2026-09-24).
+- The clock survives a reboot again: the time source now also installs `fake-hwclock` (saved
+  hourly and at shutdown, restored early at boot). Since 0.6.0 chrony replaced
+  systemd-timesyncd and nothing saved the clock, so a box without NTP or GPS started every boot at
+  a frozen date, days behind, and nginx read newer client certificates and the CRL as "not yet
+  valid" (F-B1). LHPC's `/etc/default/fake-hwclock` sets `FORCE=true`, making the restore
+  forward-only: fake-hwclock's default would step a Pi 5's RTC time back to the last save. A box
+  set up before this shows the time source as unsatisfied, with the repair command.
 
 ## 0.9.2
 
