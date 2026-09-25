@@ -216,6 +216,25 @@ def test_a_split_packet_is_two_lines_and_one_decoded_message(tmp_path):
     assert t2["status"] == "ok" and t2["decoded"].startswith("reply ") and "[split seq 10" in t2["decoded"]
 
 
+def test_link_data_is_link_traffic_whole_or_split(tmp_path):
+    """F-R1 (live test 2026-09-24): LXMF over a direct link is link DATA with the plain context
+    NONE. It is link traffic (the destination is the link id, the keys are the link's own), never
+    "not addressed to this node" — whether it fits one frame or needs two."""
+    decode = dec.make_decoder(_config(tmp_path, rnode_framing="yes"), _meshchat(tmp_path))
+    link_id = os.urandom(16)
+    flags = (RNS.Packet.HEADER_1 << 6) | (RNS.Transport.BROADCAST << 4) | (RNS.Destination.LINK << 2) | RNS.Packet.DATA
+    whole = bytes([flags, 0x00]) + link_id + bytes([RNS.Packet.NONE]) + os.urandom(120)
+    (one,) = _framed(whole, 0x10)
+    r = decode("k1", _at(1, one.hex()))
+    assert r["status"] == "undecryptable" and r["kind"] == "link", r
+    big = bytes([flags, 0x00]) + link_id + bytes([RNS.Packet.NONE]) + os.urandom(300)
+    first, second = _framed(big, 0x20)
+    assert decode("k2", _at(2, first.hex()))["kind"] == "fragment"
+    r = decode("k3", _at(3, second.hex()))
+    assert r["status"] == "undecryptable" and r["kind"] == "link", r
+    assert "not addressed" not in r["decoded"]
+
+
 def test_an_orphan_half_is_dropped_by_the_next_packet_or_by_age_and_a_trailer_is_named(tmp_path):
     """The firmware's rules, plus the driver's two guards: a whole packet or a new split
     sequence discards a pending half (reported as dropped), a half older than the stale limit

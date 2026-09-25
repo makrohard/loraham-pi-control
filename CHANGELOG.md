@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.3
+
+- RF-log decrypt (reticulum): data sent over a Reticulum link — an LXMF message on a direct link,
+  split across two frames or not — is labelled link traffic instead of "not addressed to this
+  node" (F-R1, RNode live test 2026-09-24).
+
 ## 0.9.2
 
 - **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step
