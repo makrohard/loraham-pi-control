@@ -63,6 +63,10 @@
   console's per-band Start already could; before, the CLI answered "unrecognized arguments" (F-A2,
   hardware matrix 2026-09-25). A band the hardware does not serve, or the stack cannot run on, is
   refused in the plan, before anything starts.
+- reticulum: ea98db4 (1.5.2) -> 8a7ad40 (master, untagged `1.5.2-72-g8a7ad40`; the package
+  reports 1.5.4, the PyPI release), used by rns. MeshChat's client already pinned rns 1.5.4, so
+  the shared instance and its client now run the same version. No binary contains Reticulum, so
+  none is republished; `lhpc build reticulum` rebuilds rns from the moved checkout.
 
 ## 0.9.2
 
