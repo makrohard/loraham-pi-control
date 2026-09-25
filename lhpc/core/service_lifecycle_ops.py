@@ -980,7 +980,8 @@ class LifecycleOpsMixin:
                                f"'{bl['holder_stack']}' ({bl['holder']})")
             return ActionResult(True, f"Run plan for '{target}': {len(order)} component(s) in order.",
                                 details=details,
-                                next_commands=[f"lhpc stack start {target} --yes"],
+                                next_commands=[f"lhpc stack start {target}"
+                                               + (f" --band {band}" if band else "") + " --yes"],
                                 data={"changes": len(order), "blockers": blockers,
                                       "commands": commands})
 

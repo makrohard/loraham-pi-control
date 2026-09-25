@@ -517,6 +517,53 @@ def test_stack_poststart_is_a_command(tmp_path, monkeypatch, capsys):
     assert "re-run post-start" in capsys.readouterr().out
 
 
+@pytest.mark.contract
+def test_stack_start_takes_a_band(monkeypatch, capsys):
+    # F-A2: the console starts a band-switchable stack on one band; the CLI can too. The band
+    # reaches the service for the plan AND the apply.
+    from lhpc.core.services import ControllerService, ActionResult
+    calls = []
+    def cap(self, op, target, **kw):
+        calls.append((op, target, kw.get("apply"), kw.get("band")))
+        return ActionResult(True, "ok", data={"changes": 1})
+    monkeypatch.setattr(ControllerService, "run_action", cap)
+    assert main(["stack", "start", "daemon", "--band", "433", "--yes"]) == 0
+    assert calls == [("start", "daemon", False, "433"), ("start", "daemon", True, "433")]
+    calls.clear()
+    assert main(["stack", "start", "daemon", "--yes"]) == 0
+    assert calls[-1] == ("start", "daemon", True, "")          # no flag: the saved band, as before
+
+
+@pytest.mark.contract
+def test_stack_start_refuses_a_band_the_box_does_not_serve(tmp_path, monkeypatch, capsys):
+    # A 433-only board: `--band 868` is refused in the PLAN, before anything starts.
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["hardware", "waveshare-433"]) == 0
+    capsys.readouterr()
+    assert main(["stack", "start", "daemon", "--band", "868"]) == 1
+    out = capsys.readouterr().out
+    assert "Cannot start 'daemon' on 868 MHz" in out and "lhpc hardware" in out
+    with pytest.raises(SystemExit) as exc:
+        main(["stack", "start", "daemon", "--band", "915"])  # not a band LHPC knows
+    assert exc.value.code == 2
+
+
+@pytest.mark.contract
+def test_stack_start_plan_repeats_the_band_in_its_next_command(tmp_path, monkeypatch, capsys):
+    # The plan's copyable "Next:" line must keep --band: without it, pasting the line starts the
+    # stack on its SAVED band, not the one the operator asked for.
+    import lhpc.adapters.cli.main as cli
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["hardware", "waveshare-433"]) == 0
+    capsys.readouterr()
+    monkeypatch.setattr(cli, "_confirm", lambda _prompt: False)   # show the plan, apply nothing
+    assert main(["stack", "start", "daemon", "--band", "433"]) == 0
+    assert "lhpc stack start daemon --band 433 --yes" in capsys.readouterr().out
+    assert main(["stack", "start", "daemon"]) == 0
+    out = capsys.readouterr().out
+    assert "lhpc stack start daemon --yes" in out and "--band" not in out
+
+
 def test_stack_poststart_dispatches_run_action(monkeypatch, capsys):
     from lhpc.core.services import ControllerService, ActionResult
     calls = []

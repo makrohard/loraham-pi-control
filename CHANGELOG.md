@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.3
+## 0.10.0
 
 - MeshCom: the post-start callsign step reads the whole `--info` answer and sends `--setcall` only
   when the node reports a different call. Before, a slow node's reply was cut after 0.6 s of
@@ -58,6 +58,11 @@
   `systemctl --user status lhpc-web.service` and the console's log file (`logs/lhpc-web.log`),
   where its output goes. It named `journalctl --user`, which the operator cannot read on the
   image.
+
+- `lhpc stack start <stack> --band 433|868` starts a band-switchable stack on one band, as the
+  console's per-band Start already could; before, the CLI answered "unrecognized arguments" (F-A2,
+  hardware matrix 2026-09-25). A band the hardware does not serve, or the stack cannot run on, is
+  refused in the plan, before anything starts.
 
 ## 0.9.2
 
