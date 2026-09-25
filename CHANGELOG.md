@@ -53,6 +53,7 @@
   enabled". Raspberry Pi OS keeps the journal volatile through its own journald drop-in, which
   wins over the directory, so the claim was never true (R6). `docs/maintenance.md` shows the
   drop-in that makes the journal persistent on a box being debugged.
+- Dashboard: the Webserver box names the console row "LHPC" (it said "LHCP") (C1).
 
 ## 0.9.2
 
