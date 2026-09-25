@@ -135,13 +135,18 @@ no history (that belongs in the changelog).
 1. The fix lands on `dev`, one commit per change, with the version bump and its changelog
    section ([maintenance](docs/maintenance.md#branches-and-releases)).
 2. CI and `testlab.yml` with `release_verify=true` green on the exact `dev` tip to be released.
-3. Fast-forward `main` to it and put the annotated tag on it. No GitHub Release.
+3. Fast-forward `main` to it and put the annotated tag on it. No GitHub Release. If the bot has
+   released since `dev` last equalled `main`, `main` is no longer an ancestor of `dev`: cut the patch
+   as one release commit on top of `main` instead, as a minor's squash does, then CI, fast-forward
+   `main` and tag.
 4. Binaries for any moved pin, built from the tagged commit, then the image tag with the same
    version (steps 8 and 9 above).
 
 ### Bot patch
 
-The bot releases pin moves from `main` on its schedule, only while `dev` equals `main`
+The bot releases pin moves from `main` on its schedule, also while `dev` carries unreleased work,
+and then opens a pull request that brings the release back into `dev`. **Squash-merge that pull
+request**: `dev` keeps a linear history, so a merge commit cannot land
 ([maintenance](docs/maintenance.md#branches-and-releases)). Its stages, holds and recovery are in
 its [README](https://github.com/makrohard/lhpc-release-bot/blob/main/README.md). A maintainer's
 part is reading its summary and closing what it leaves open.
