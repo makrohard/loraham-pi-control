@@ -31,6 +31,9 @@
 - Pages demo: the GPS Monitor under Position shows a simulated receiver with a 3D fix, its
   satellites in the Skyview and its NMEA stream, instead of "loading…" for ever. The demo feeds
   synthetic NMEA through the console's real parser, so the shape matches a real receiver (R1).
+- CI: the Pages demo's Pyodide gate can fail again. Since 0.4.3 its output went through `| tee`
+  without `pipefail`, so the step took tee's exit status, and a probe that failed still passed
+  the gate (found when a deliberately failing probe stayed green).
 
 ## 0.9.2
 
