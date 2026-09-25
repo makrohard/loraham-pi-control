@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.3
+
+- A failed web-console restart during an updater repair now points at
+  `systemctl --user status lhpc-web.service` and the console's log file (`logs/lhpc-web.log`),
+  where its output goes. It named `journalctl --user`, which the operator cannot read on the
+  image.
+
 ## 0.9.2
 
 - **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step

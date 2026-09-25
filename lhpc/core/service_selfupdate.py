@@ -1283,9 +1283,13 @@ class SelfUpdateOpsMixin:
             rst = self._system.runner.run(["systemctl", "--user", "restart", updater_units.WEB_UNIT],
                                           timeout=S)
             if rst.returncode != 0:
+                # The unit appends the console's output to this file (StandardOutput=append:), so
+                # it is where the reason is; the operator's own user journal may not be readable.
+                web_log = self._paths.runtime_root.joinpath(*updater_units.WEB_LOG_REL)
                 return ActionResult(False, "Installed and enabled the units but the web console "
                                     "restart FAILED — the repair is NOT marked complete. Check "
-                                    "`journalctl --user -u lhpc-web.service`.",
+                                    f"`systemctl --user status {updater_units.WEB_UNIT}` and "
+                                    f"`tail -n 50 {web_log}`.",
                                     data={"web_restart_failed": True})
         self._write_root_marker()          # ONLY after every required integration step succeeded
         details = [f"  {k}: {a}" for k, a in actions]
