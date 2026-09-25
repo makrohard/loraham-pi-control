@@ -2794,8 +2794,8 @@ note = "Pins, chip, TCXO and PA settings come from the hardware setup chosen wit
 path = "src/reticulum"
 remote = "https://github.com/markqvist/Reticulum.git"
 branch = "master"
-pin_commit = "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6"
-pin_tag = "1.5.2"
+pin_commit = "8a7ad40d649aae1cd755f060fa8f5619f7000b29"
+pin_tag = "1.5.2-72-g8a7ad40"
 [stack.component.process]
 exec_name = "loraham-rns-node"
 [stack.component.run_env]
