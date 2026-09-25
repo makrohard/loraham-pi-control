@@ -844,11 +844,11 @@ def test_stack_running_pill_offline_localonly_proxied(tmp_path):
     assert p["run"] == "proxied" and p["run_level"] == "ok"
 
 
-def test_dashboard_webservers_always_has_lhcp_console_and_hides_stopped_stacks(tmp_path):
-    # The dashboard Webserver box always leads with the LHCP console row (with its posture pills); a stack
+def test_dashboard_webservers_always_has_lhpc_console_and_hides_stopped_stacks(tmp_path):
+    # The dashboard Webserver box always leads with the LHPC console row (with its posture pills); a stack
     # row appears only when that stack is running — nothing is running here, so only the console row.
     rows = _svc(tmp_path).dashboard_webservers()
-    assert rows and rows[0]["kind"] == "console" and rows[0]["name"] == "LHCP"
+    assert rows and rows[0]["kind"] == "console" and rows[0]["name"] == "LHPC"
     assert rows[0]["posture"] and rows[0]["posture"]["run"] in ("nginx", "lhpc-web")
     assert all(r["kind"] == "console" for r in rows)          # no running web-UI stacks -> no stack rows
 
@@ -871,7 +871,7 @@ def test_dashboard_not_proxied_web_ui_shows_direct_address_and_name_link(tmp_pat
     # A running but NOT-proxied web UI shows its DIRECT address (reached host + endpoint port) BEFORE
     # "not proxied", and each name links to the respective webserver config on the Apps page.
     from lhpc.core.services import ControllerService
-    rows = [{"kind": "console", "name": "LHCP", "port": "8770", "logs_component": None,
+    rows = [{"kind": "console", "name": "LHPC", "port": "8770", "logs_component": None,
              "posture": {"auth": "open", "iface": "loopback", "sec_level": "ok", "scheme": "https",
                          "auth_level": "ok", "iface_level": "ok", "scheme_level": "ok",
                          "run": "lhpc-web", "run_level": "ok"}},

@@ -766,7 +766,7 @@ class WebserverOpsMixin:
 
     def dashboard_webservers(self, served_via_nginx: bool | None = None,
                              fw_status=None) -> list[dict]:
-        """Rows for the dashboard Webserver box: the console (LHCP) ALWAYS, then — for each stack whose
+        """Rows for the dashboard Webserver box: the console (LHPC) ALWAYS, then — for each stack whose
         MAIN component is running/degraded — its web-UI row (http/https) followed by a row per OTHER
         open TCP port (kiss/meshcore/meshtastic; no auth). Structural evidence only — the adapter adds
         the request-scoped reached address. A running-but-not-proxied web UI carries `direct_port`/
@@ -801,7 +801,7 @@ class WebserverOpsMixin:
             return argv_cache
         mon = self.webserver_monitor(served_via_nginx=served_via_nginx,
                                      listeners=snap, fw_status=fw_status).data or {}
-        rows: list[dict] = [{"kind": "console", "name": "LHCP", "posture": mon.get("posture"),
+        rows: list[dict] = [{"kind": "console", "name": "LHPC", "posture": mon.get("posture"),
                              # The port a listener was actually FOUND on — after a saved port move
                              # that is the old one, and it is what a browser still reaches.
                              "port": mon.get("live_port") or mon.get("desired", {}).get("port"),

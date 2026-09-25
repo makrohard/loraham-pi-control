@@ -348,7 +348,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # dash flips to "running" quickly instead of waiting for the slow refresh.
         pending_interactive = any(not s.get("running") and not s.get("blocker")
                                   for r in radios for s in r["interactive"])
-        # Webserver box: LHCP console (always) + each running web-UI stack. Resolve the request-scoped
+        # Webserver box: LHPC console (always) + each running web-UI stack. Resolve the request-scoped
         # reached address + log href here (the service returns structural evidence only).
         webservers = []
         # ONE firewall read for the whole Dashboard: the webserver rows and the firewall box.

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.3
+
+- Dashboard: the Webserver box names the console row "LHPC" (it said "LHCP") (C1).
+
 ## 0.9.2
 
 - **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step
