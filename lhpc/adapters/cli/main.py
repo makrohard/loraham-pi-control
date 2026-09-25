@@ -608,6 +608,12 @@ def build_parser() -> argparse.ArgumentParser:
                                         "(no restart — e.g. re-apply the MeshCom callsign)")):
         sp = stack_sub.add_parser(action, help=ahelp)
         sp.add_argument("stack", help="Stack or component id")
+        if action == "start":
+            # The band a band-switchable stack starts on, as the console's per-band Start does;
+            # the service refuses a band the hardware or the stack cannot serve (band_refusal).
+            from lhpc.core.daemon_control import ALLOWED_BANDS
+            sp.add_argument("--band", default="", choices=ALLOWED_BANDS,
+                            help="Start on this band (band-switchable stacks); default: the saved one")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
 
     # Per-stack settings (callsign/params/daemon params) and the global operator identity.
@@ -1243,7 +1249,8 @@ def _run(argv: list[str] | None = None) -> int:
     if args.command == "stack":
         if args.stack_action in ("start", "stop", "restart", "poststart"):
             return _apply_flow(
-                lambda a: svc.run_action(args.stack_action, args.stack, apply=a), yes=args.yes)
+                lambda a: svc.run_action(args.stack_action, args.stack, apply=a,
+                                         band=getattr(args, "band", "")), yes=args.yes)
         # argparse's --help action calls sys.exit(0), so routing a usage error through
         # it exited 0 and `lhpc stack || handle_error` silently passed. Every sibling
         # (config, logs, build, daemon, ...) exits 2 on a missing argument; match them.

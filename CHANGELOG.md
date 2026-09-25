@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0
+
+- `lhpc stack start <stack> --band 433|868` starts a band-switchable stack on one band, as the
+  console's per-band Start already could; before, the CLI answered "unrecognized arguments" (F-A2,
+  hardware matrix 2026-09-25). A band the hardware does not serve, or the stack cannot run on, is
+  refused in the plan, before anything starts.
+
 ## 0.9.2
 
 - **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step
