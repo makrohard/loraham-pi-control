@@ -27,7 +27,8 @@
     <div class="ws-sub-wrap">
       {# ---- Monitor: the status, read live from gpsd / the owning feed / one sample of an idle
               direct receiver (docs/gps.md, "Monitor"). Rendered by gps.js from /api/gps while open;
-              nothing here is a form. Coordinates are shown on purpose, on this surface only. ---- #}
+              nothing here is a form. Coordinates are shown on purpose, here and in the dashboard System
+              box's GPS row (the same /api/gps, only while that box is open). ---- #}
       <details class="advcfg" id="gps-monitor"{% if request.args.get('open') == 'gps' %} open{% endif %}>
         <summary>Monitor <span class="muted" id="gps-mon-summary"></span></summary>
         <section class="cfgsec" data-gps-source="{{ gps_global.source }}">

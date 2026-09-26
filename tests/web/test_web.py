@@ -701,6 +701,51 @@ def test_dashboard_system_box_collapsed_by_default(web):
     assert any(t["aria-label"] for t in doc.find("table", **{"class": "systab"}))
 
 
+def test_dashboard_system_box_gps_line_is_static_linked_and_between_network_and_autostart(web):
+    # The GPS line: "GPS" links to the GPS Monitor's deep link; the values hold a "…"
+    # placeholder — the server renders NO GPS value and calls no GPS probe (system.js fetches
+    # the Monitor's /api/gps only while the box is open).
+    class NoGpsProbe(ReadOnlyGuard):
+        def __getattr__(self, name):
+            if name.startswith("gps_monitor") or name == "gps_nmea":
+                raise AssertionError(f"dashboard render called {name}")
+            return super().__getattr__(name)
+
+    body = web(guard=NoGpsProbe).get("/").get_data(as_text=True)
+    doc = parse(body)
+    # the same shape as the network line: a muted sysblock paragraph (its separator line),
+    # "GPS" as the link, then the values only
+    row = doc.by_id("sys-gps")
+    assert row.tag == "p" and row["class"] == "muted sysblock"
+    sec = doc.within(row)
+    links = sec.find("a")
+    assert [a.text for a in links] == ["GPS"]
+    assert links[0]["href"] == "/stacks?open=gps#gps-row"   # opens Position + the Monitor
+    assert '>GPS</a>: <span id="sys-gps-val"><span id="sys-gps-state">…</span>' in body
+    assert doc.by_id("sys-gps-lat").text == doc.by_id("sys-gps-lon").text == ""   # no data yet
+    for label in ("Status", "Lat", "Long"):
+        assert label not in row.text
+    # order inside the System box: after the metrics table (and the network line, when shown),
+    # before the Autostart section
+    i_gps = body.index('id="sys-gps"')
+    assert body.index('class="systab"') < i_gps < body.index('class="sysautostart sysblock"')
+    if "network: " in body:
+        assert body.index("network: ") < i_gps
+
+
+def test_dashboard_gps_row_follows_the_network_line_when_it_renders(tmp_path, web, monkeypatch):
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    # the maintainer's card: "network: <ssid> (<addr>)" directly above the GPS row
+    monkeypatch.setattr(svc, "network_view", lambda: {
+        "supported": True, "mode": "client",
+        "active": {"name": "Suche", "address": "192.0.2.7/24"}})
+    body = web(service_factory=lambda: svc).get("/").get_data(as_text=True)
+    assert "network: Suche (192.0.2.7/24)" in body
+    assert (body.index("network: ") < body.index('id="sys-gps"')
+            < body.index('class="sysautostart sysblock"'))
+
+
 @pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
 def test_build_action_redirects_to_live_log(web, csrf):
     c = web()

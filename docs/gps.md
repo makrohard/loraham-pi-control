@@ -9,10 +9,12 @@ the box thinks it is. Per-stack settings only turn GPS **on or off**. The comman
 operator: the GPS Monitor on the console (subject to the console's configured access policy —
 productive serving is HTTPS, the default `local-open-remote-auth` is open on loopback and requires a
 client certificate remotely, and a `no-auth` mode exists as the operator's explicit choice — with
-`Cache-Control: no-store` as on every page) and `lhpc gps --monitor` in the operator's terminal. No
-other LHPC monitor output, page, log line or state file introduced by the Monitor carries them; the
-bridge's rule is unchanged. (A configured fixed position and the generated Sideband configuration
-necessarily hold configured coordinates, and upstream applications keep their own logging policies.)
+`Cache-Control: no-store` as on every page), the GPS row of the dashboard's System box (the same
+`/api/gps` snapshot, fetched only while that box is open), and `lhpc gps --monitor` in the
+operator's terminal. No other LHPC monitor output, page, log line or state file introduced by the
+Monitor carries them; the bridge's rule is unchanged. (A configured fixed position and the generated
+Sideband configuration necessarily hold configured coordinates, and upstream applications keep their
+own logging policies.)
 
 ## Contents
 
