@@ -2,7 +2,9 @@
 
 Run on `candidate/0.10.0-highpower` at `a7eabcf` (0.10.0 with the high-power opt-in, daemon 1.2.0); the
 KISS fix it made necessary (below) was proven with kiss 0.6.3 on `a7eabcf` + the kiss repin (the pinned
-kiss commit differs from the one run only in comments, its changelog and a test name). Box **D** =
+kiss commit differs from the one run only in comments, its changelog and a test name). The matrix and the
+soak ran MeshCom firmware `71f51be`; the release pins `f2b96dff`, proven separately below
+([final firmware delta](#final-firmware-delta)). Box **D** =
 Raspberry Pi 5, 4 GB, Desktop image, LoRaHAM dual board (433 + 868), no GPS receiver (`use_gps off`),
 operator `DJ0CHE`, MeshCom `DJ0CHE-15`. Box **E** = Pi Zero 2 W, Lite image, Uputronics bare SX1278
 (433) + SX1276 (868), upgraded from a candidate controller by moving the checkout (`self-update` refuses
@@ -91,8 +93,8 @@ candidate (`95c020b`), in code this run did not change.
 
 ## Soak (box E)
 
-2 h 06 min on `a7eabcf` (the MeshCom pins are unchanged since): MeshCom on 433 from the release's meshcom
-artifact (built from this candidate, not yet published, installed through the real CLI with only its
+2 h 06 min on `a7eabcf` (MeshCom firmware `71f51be`): MeshCom on 433 from the candidate's meshcom
+artifact (built from that candidate, not yet published, installed through the real CLI with only its
 download served locally), MeshCore on 868 and the console. Peers every 5 min: a T-Deck (MeshCom, 433) and a
 MeshCore node (868).
 
@@ -108,3 +110,23 @@ MeshCore node (868).
 
 The install printed "moved meshcom-qemu to its pin (run scripts)": the binary update moving a stale MeshCom
 checkout, on the Zero.
+
+## Final firmware delta
+
+After the matrix and the soak, the MeshCom firmware pin moved from `71f51be` to `f2b96dff` (the fork's
+`lhpc-speed` after upstream `6cc8b552` and the final speed pull requests). That change touches the message
+and ACK path (`sendMessage`, `SendAckMessage`), so it was proven on its own on box E:
+
+the candidate's meshcom artifact built for `f2b96dff` (not yet published, installed through the real CLI with
+only its download served locally), and a T-Deck on its **stock** MeshCom 4.35p firmware as the peer. The
+witness for both directions is the box's RF log (the stock T-Deck prints nothing with debug off).
+
+| check | result |
+|---|---|
+| boot and callsign | all three components verified; the callsign confirmed after boot |
+| box → T-Deck message | on air once as message 017; the T-Deck's `ack017` received 4.0 s after the transmission |
+| T-Deck → box message | received once as message 693; the box's `ack693` on air 6.3 s later |
+| no duplicate, no wedge | 18 minutes: each message exactly once, no peer retry, 36/36 console probes answered (max 0.27 s) |
+
+The box's own message took 6.5 s from the console to the air and its ACK 6.3 s — slower than in the soak
+(≤ 2.9 s). These are single samples; both acknowledgements were accepted and nothing was retried.
