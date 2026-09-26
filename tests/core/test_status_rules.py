@@ -444,3 +444,39 @@ def test_an_endpoint_address_that_escapes_containment_reads_absent(tmp_path):
     assert not resolved.endswith("../../etc/passwd")   # not the raw relative address
     assert str(tmp_path) in resolved                   # absolute, under the runtime root
     assert not os.path.exists(resolved)                # reads absent
+
+
+# --- stack rollup: a main component that is down while its sidecars run ------------------------
+
+def _stack_snapshot(svc, stack_id, states):
+    from lhpc.core.model import ComponentStatus
+    from lhpc.core.status import Snapshot, StackStatus
+    st = next(s for s in svc.stacks() if s.id == stack_id)
+    snap = Snapshot(runtime_root_exists=True)
+    ss = StackStatus(stack=st)
+    for comp in st.components:
+        ss.components[comp.id] = ComponentStatus(component_id=comp.id,
+                                                 run_state=states.get(comp.id, RunState.STOPPED))
+    snap.stacks.append(ss)
+    return snap
+
+
+def test_rollup_is_degraded_when_the_main_is_down_but_sidecars_run(tmp_path):
+    # e293 (0.10.0 candidate): after `kill -9` of meshcore-node the stack still read "(running)" —
+    # its gps bridge and web UI were up. A stack whose MAIN component is stopped while another
+    # component runs is partially running: degraded, not running.
+    from lhpc.core.services import ControllerService
+    from lhpc.core.status import rollup_states
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    up = RunState.RUNNING
+    killed = {"meshcore-gps": up, "meshcore-webui": up, "meshcore-node": RunState.STOPPED}
+    assert rollup_states(_stack_snapshot(svc, "meshcore", killed))["meshcore"] == "degraded"
+    healthy = {"meshcore-gps": up, "meshcore-webui": up, "meshcore-node": up}
+    assert rollup_states(_stack_snapshot(svc, "meshcore", healthy))["meshcore"] == "running"
+    assert rollup_states(_stack_snapshot(svc, "meshcore", {}))["meshcore"] == "stopped"
+    failed = dict(killed, **{"meshcore-webui": RunState.FAILED})
+    assert rollup_states(_stack_snapshot(svc, "meshcore", failed))["meshcore"] == "failed"
+    # an interactive main is never "running" under lhpc, so it cannot make its stack degraded
+    chat = next(s for s in svc.stacks() if s.id == "chat")
+    assert next(c for c in chat.components if c.id == chat.main).interactive
+    assert rollup_states(_stack_snapshot(svc, "chat", {}))["chat"] == "stopped"
