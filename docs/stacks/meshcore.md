@@ -81,6 +81,9 @@ page's Password section once a repeater mode has minted it. The proxy refuses (4
 every dashboard route that would change upstream configuration, identities, radio settings or
 LHPC-owned state; the list is `proxy_deny_paths` on the node's 8000 endpoint in the manifest.
 Statistics, packets, neighbours, logs, login and a logged-in admin's operational actions pass.
+Two writing routes pass by decision: the plugin manager (`/api/plugins/…`, including installing an
+uploaded wheel) and the sensor configuration (`/api/sensors_config_update`), which on an LHPC box
+answers with an error and changes nothing, because the repeater has no config file to rewrite.
 
 **Plugins** — the dashboard's *Plugins* page needs upstream's plugin manager, a second process
 (`python -m repeater.plugins`) the dashboard reaches over a socket in the repeater's state
