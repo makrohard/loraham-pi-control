@@ -68,7 +68,9 @@ saved on *and* the daemon restarted with it. Saved values are validated against 
 in the daemon Hardware settings plus that saved switch; **live** requests are validated against what
 the running daemon reports in `STATUS` (`CHIPFAMILY=`, `HIGHPOWER=`), because a Hardware setup saved
 after the daemon started is not what is running — an older daemon that reports neither gets only
-2–17 live. A stack profile asking for `POWER=20` without the running permission is refused at start.
+2–17 live. A saved `POWER=20` profile is active only while the band's switch is on (saved off, the stack uses its
+normal power); with the switch on but the running daemon lacking the permission, the stack is refused at
+start until the daemon is restarted.
 The daemon never echoes `POWER`, so a sent 20 is "sent", not "confirmed", and no software here
 measures the output or the duty cycle.
 

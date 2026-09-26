@@ -63,6 +63,9 @@ What the binary channel means in practice:
 - **Ordinary files you add to a source checkout survive an update**; editing upstream files
   blocks it ([ownership records](provenance.md#ownership-records)).
 - **No binary rollback**: going back means installing from source.
+- **Prebuilt binaries serve the latest release only.** The index holds one binary per stack, and
+  it must match this lhpc's pins exactly; an older release (or a candidate) is refused and installs
+  from source, or self-updates first.
 - **meshcom keeps its pinned clone** even on this channel (its run scripts live there), and
   **meshtastic provisions its CLI virtualenv locally** after extraction (it embeds absolute paths,
   so it cannot ship in an artifact). lhpc owns that virtualenv as a whole directory.

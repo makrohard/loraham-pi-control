@@ -2,8 +2,15 @@
 
 ## 0.10.0
 
+**Upgrading with the daemon installed from the binary (the default):** daemon-backed stacks require
+daemon 1.2.0 after this update. If the daemon is still running, stop it first with
+`lhpc stack stop daemon --yes`, then run `lhpc update daemon --yes` and restart the stacks you were
+using. If you already rebooted, update the daemon and restart those stacks; a boot restore that
+already failed is not retried.
+
 **Upgrading with MeshCom installed:** MeshCom does not start until it is updated (its QEMU moves to
-9.2.2): run `lhpc update meshcom --yes`.
+9.2.2). If it is still running, stop it first with `lhpc stack stop meshcom --yes`, then run
+`lhpc update meshcom --yes`.
 
 - +20 dBm on SX127x is a per-band opt-in: `hipower_433` / `hipower_868` (off by default, daemon
   Hardware settings, or `lhpc hardware --high-power <band> on|off`) starts that band's daemon with
@@ -15,13 +22,16 @@
 - Live `POWER` (direct set, profile apply, start preflight) is checked against the chip family and
   permission the running daemon reports (`CHIPFAMILY=`, `HIGHPOWER=` in `STATUS`), not the saved
   board. A live `POWER=0` to a running SX127x was reported "sent" although the daemon refused it.
-- A stack whose profile asks for SX127x `POWER=20` without the permission does not start; the
-  refusal names the saved and running state.
+- A saved `POWER=20` profile is active only while the band's high-power switch is on (saved off, the
+  stack uses its normal power). If the switch is on but the running SX127x daemon lacks the
+  permission, the stack refuses to start until the daemon is restarted; the refusal names both states.
 - The high-power banner (dashboard, daemon settings, `lhpc daemon <band>`) follows the running
   daemon: it stays up until the restart that revokes a switched-off permission.
 - LoRaHAM daemon 1.2.0 (both pins).
 - KISS TNC 0.6.3: it now reads daemon 1.2.0's longer `STATUS` line; before, it queued every
   frame and transmitted none, so Graywolf's APRS stayed silent.
+- Prebuilt binaries serve the latest release only (one binary per stack, matched to the pins): an
+  older release installs from source or self-updates first.
 - `lhpc stack start <stack> --band 433|868` starts a band-switchable stack on one band, as the
   console's per-band Start does; a band the hardware or the stack cannot serve is refused.
 - `lhpc stack start meshcore-cli` is no longer refused while MeshCore runs: the Companion slot the
