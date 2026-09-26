@@ -2127,8 +2127,8 @@ main = "meshcom-qemu"
     # Back to icssw-org once upstream has them. The setup step fetches from this remote (--src),
     # and a repo test keeps the two identical.
     path = "src/MeshCom-Firmware"
-    pin_commit = "f2b96dff113614a7b8de92f9113462c3e69972e8"
-    pin_tag = "v4.35t.09.24-32-gf2b96df"
+    pin_commit = "ba289816bedd6c33d3b804a09feb610dfed2d8a9"
+    pin_tag = "v4.35t.09.24-35-gba28981"
     remote = "https://github.com/makrohard/MeshCom-Firmware.git"
     branch = "lhpc-speed"
 
