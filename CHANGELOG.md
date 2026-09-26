@@ -20,6 +20,8 @@
 - The high-power banner (dashboard, daemon settings, `lhpc daemon <band>`) follows the running
   daemon: it stays up until the restart that revokes a switched-off permission.
 - LoRaHAM daemon 1.2.0 (both pins).
+- KISS TNC 0.6.3: it now reads daemon 1.2.0's longer `STATUS` line; before, it queued every
+  frame and transmitted none, so Graywolf's APRS stayed silent.
 - `lhpc stack start <stack> --band 433|868` starts a band-switchable stack on one band, as the
   console's per-band Start does; a band the hardware or the stack cannot serve is refused.
 - `lhpc stack start meshcore-cli` is no longer refused while MeshCore runs: the Companion slot the
