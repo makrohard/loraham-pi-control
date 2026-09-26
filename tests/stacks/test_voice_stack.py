@@ -201,6 +201,20 @@ def test_plan_omits_the_terminal_command_where_the_gtk_app_runs(tmp_path, monkey
     assert "run it yourself" in "\n".join(res3.details)
 
 
+def test_lite_plan_does_not_claim_to_start_the_gtk_app(tmp_path, monkeypatch, set_call, real_spawn):
+    # e293 (Lite, 0.10.0 candidate): the voice plan printed `[start] loraham-voice (band 433)` and
+    # the apply then skipped it (no GUI toolkit / display). The plan says what the apply does.
+    lite = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
+    set_call(lite)
+    text = "\n".join(lite.start("voice", apply=False).details)
+    assert "[start] loraham-voice " not in text, text
+    assert "[skip] loraham-voice:" in text, text
+    assert "run it yourself" in text, text            # the terminal fallback is still offered
+    desk = _voice_svc(real_spawn, tmp_path / "desk", monkeypatch, desktop=True)
+    set_call(desk)
+    assert "[start] loraham-voice " in "\n".join(desk.start("voice", apply=False).details)
+
+
 @pytest.mark.parametrize("apply", [False, True], ids=["plan", "apply"])
 def test_direct_restart_of_the_fallback_refuses_before_any_stop(tmp_path, monkeypatch, set_call, real_spawn, apply):
     # restart stops BEFORE starting, so the start-side refusal used to arrive only after the
