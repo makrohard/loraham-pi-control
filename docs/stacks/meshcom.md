@@ -60,7 +60,9 @@ appears in a log, marker or result. Policy:
 - **PlatformIO 6.1.19** in a managed venv `build/tools/platformio/.venv`, passed to the build
   scripts by absolute path (`PIO=`), with `PLATFORMIO_CORE_DIR=build/tools/platformio/core`.
 - **qemu-system-xtensa built from source** by `scripts/build-qemu.sh` at the pinned Espressif
-  commit `esp-develop-9.0.0-20240606` into `build/tool-cache/qemu-xtensa/…`: a shallow clone (no
+  tag `esp-develop-9.2.2-20260417` plus a temporary downstream patch (`patches/qemu/` in
+  meshcom-qemu-raspi: the flash-cache fix of espressif/qemu#183, dropped once Espressif ships it)
+  into `build/tool-cache/qemu-xtensa/…`: a shallow clone (no
   `roms/*` submodules), every display/audio back-end disabled (`--disable-sdl/gtk/vnc/opengl/…`),
   `--enable-gcrypt` (the esp32 machine's RSA device aborts without it; a `libgcrypt-config`
   pkg-config shim covers Trixie), `--disable-werror`, a memory-aware `-j = min(nproc,
