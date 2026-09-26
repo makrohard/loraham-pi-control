@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.0
+
+- openhop-repeater: 277f11c -> b846c79 (dev), used by meshcore-node. Brings the repeater's sensor
+  API and per-radio telemetry; the plugin manager is unchanged.
+
 ## 0.9.2
 
 - **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step
