@@ -535,6 +535,37 @@ def test_stack_start_takes_a_band(monkeypatch, capsys):
 
 
 @pytest.mark.contract
+def test_stack_start_of_an_interactive_main_is_success(monkeypatch, capsys):
+    # chat: the daemon is ensured and the TUI's command printed — the expected outcome of an
+    # interactive stack (outcomes.manual_required_only). The CLI shows it as success, like the web
+    # job and like voice, whose interactive part is a sidecar; `ok` itself stays strict.
+    from lhpc.core.outcomes import CompResult, Outcome
+    from lhpc.core.services import ActionResult
+
+    def result(*outcomes):
+        return tuple(CompResult(component=f"c{i}", action="start", outcome=o)
+                     for i, o in enumerate(outcomes))
+
+    def fake(apply_results):
+        def run(self, op, target, **kw):
+            if not kw.get("apply"):
+                return ActionResult(True, "Run plan", data={"changes": 1})
+            return ActionResult(False, f"Run for '{target}': manual start required for c1 — see "
+                                "the dashboard.", results=apply_results)
+        return run
+
+    monkeypatch.setattr(ControllerService, "run_action",
+                        fake(result(Outcome.VERIFIED, Outcome.MANUAL_REQUIRED)))
+    assert main(["stack", "start", "chat", "--yes"]) == 0
+    assert "OK    Run for 'chat': manual start required" in capsys.readouterr().out
+    # a real failure beside the manual step is still a failure
+    monkeypatch.setattr(ControllerService, "run_action",
+                        fake(result(Outcome.FAILED, Outcome.MANUAL_REQUIRED)))
+    assert main(["stack", "start", "chat", "--yes"]) == 1
+    assert "ERR" in capsys.readouterr().out
+
+
+@pytest.mark.contract
 def test_stack_start_refuses_a_band_the_box_does_not_serve(tmp_path, monkeypatch, capsys):
     # A 433-only board: `--band 868` is refused in the PLAN, before anything starts.
     _rt(monkeypatch, tmp_path, capsys)
