@@ -63,6 +63,7 @@
   console's per-band Start already could; before, the CLI answered "unrecognized arguments" (F-A2,
   hardware matrix 2026-09-25). A band the hardware does not serve, or the stack cannot run on, is
   refused in the plan, before anything starts.
+- meshcom-qemu-raspi: 74a3a08 -> 72fad88, repinned after a history rewrite; same tree.
 
 ## 0.9.2
 
