@@ -63,6 +63,8 @@
   console's per-band Start already could; before, the CLI answered "unrecognized arguments" (F-A2,
   hardware matrix 2026-09-25). A band the hardware does not serve, or the stack cannot run on, is
   refused in the plan, before anything starts.
+- openhop-repeater: 277f11c -> b846c79 (dev), used by meshcore-node. Brings the repeater's sensor
+  API and per-radio telemetry; the plugin manager is unchanged.
 
 ## 0.9.2
 
