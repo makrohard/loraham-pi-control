@@ -43,6 +43,8 @@
   `systemctl --user status lhpc-web.service` and `logs/lhpc-web.log`.
 - Dashboard: the console row is named "LHPC".
 - Pages demo: the GPS Monitor shows a simulated receiver (fix, Skyview, NMEA).
+- Dashboard: the System box has a `GPS:` line below `network:` (linked to the GPS Monitor; status,
+  latitude, longitude), read from the Monitor's `/api/gps` only while the box is open.
 - CI: the Pages demo's Pyodide gate fails when its probe fails.
 - Tests never read the host's process table.
 - Reticulum 1.5.4 (upstream master; the pin moves from 1.5.2). lxmd, nomadnet and Sideband install

@@ -117,6 +117,15 @@ try {
            !!cores && cores.childElementCount > 0;             // per-core CPU bars built
   }, { timeout: 30000 });
   console.log("OK: System box live — values, gauge bars, per-core CPU bars, and sparklines");
+  // GPS row in the System box: the simulated receiver's fix, linked to the GPS Monitor.
+  await page.waitForFunction(() => {
+    const v = ((document.getElementById("sys-gps-val") || {}).textContent || "").trim();
+    return /^3D fix -?\d+\.\d{6} -?\d+\.\d{6}$/.test(v);     // values only, space-separated
+  }, { timeout: 30000 });
+  const gpsHref = await page.evaluate(() => {
+    const a = document.querySelector("#sys-gps a"); return a && a.getAttribute("href"); });
+  if (gpsHref !== "/stacks?open=gps#gps-row") throw new Error("GPS row link: " + gpsHref);
+  console.log("OK: System box GPS row shows the simulated fix and links to the GPS Monitor");
   // GPS MONITOR (R1): under Position, the Monitor must leave "loading…" and show the simulated
   // fix; the Skyview button must draw the satellites (the real gps.js cannot run here).
   await page.evaluate(() => {

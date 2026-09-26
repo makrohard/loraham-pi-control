@@ -368,11 +368,37 @@
   }
 
   // --- polling lifecycle ----------------------------------------------------------------------
+  // --- GPS row: the GPS Monitor's OWN /api/gps, riding on this poll (no timer of its own) -----
+  // Every GPS_EVERY-th poll (~4 s): never costlier than the Monitor itself (3 s), because an
+  // idle direct receiver is sampled once per call. Same ownership-token rule as poll() below.
+  var GPS_EVERY = 2, gpsTick = 0, gpsCtl = null;
+  function renderGps(d) {
+    var pos = !!d && num(d.lat) && num(d.lon);
+    set("sys-gps-state", d ? (d.label || d.state || "?") : "request failed");
+    set("sys-gps-lat", pos ? d.lat.toFixed(6) : "—");  // values only, space-separated;
+    set("sys-gps-lon", pos ? d.lon.toFixed(6) : "");   // no position: the state + one "—"
+  }
+  function gpsPoll() {
+    if (!document.getElementById("sys-gps-state")) return;
+    if (gpsCtl || (gpsTick++ % GPS_EVERY) !== 0) return;
+    var ctl = new AbortController();
+    gpsCtl = ctl;
+    fetch("/api/gps", { cache: "no-store", signal: ctl.signal })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (gpsCtl !== ctl) return;                 // a stop() intervened: never render late
+        gpsCtl = null;
+        renderGps(d);
+      })
+      .catch(function () { if (gpsCtl === ctl) { gpsCtl = null; renderGps(null); } });
+  }
   // One request at a time: `inflightCtl` is both the overlap guard and the ownership token.
   // stop() ABORTS the active request (never just forgets it); a completing request touches the
   // slot only while it still owns it, so overlapping generations are impossible by construction.
   function poll() {
-    if (document.hidden || inflightCtl) return;
+    if (document.hidden) return;
+    gpsPoll();
+    if (inflightCtl) return;
     var ctl = new AbortController();
     inflightCtl = ctl;
     fetch("/api/system", { cache: "no-store", signal: ctl.signal })
@@ -451,6 +477,8 @@
     hist = { cpu: [], rx: [], tx: [], temp: [], mem: [], disk: [], disk2: [], swap: [] };
     resetDynamic();
     restoreHist();                                  // graph shapes only; values stay …
+    gpsTick = 0;                                    // a (re)open asks for GPS on its first poll
+    set("sys-gps-state", "…"); set("sys-gps-lat", ""); set("sys-gps-lon", "");
     poll();
     timer = setInterval(poll, POLL_MS);
     // 1 Hz DISPLAY tick — no request and no server work. Polling every second just to move a
@@ -465,6 +493,7 @@
     if (clockTimer !== null) { clearInterval(clockTimer); clockTimer = null; }
     clock.skew = null;                              // a reopen re-anchors on a fresh sample
     if (inflightCtl) { inflightCtl.abort(); inflightCtl = null; }
+    if (gpsCtl) { gpsCtl.abort(); gpsCtl = null; }
     saveHist();                                     // BEFORE the wipe: collapse must not lose it
     prev = null;
     hist = { cpu: [], rx: [], tx: [], temp: [], mem: [], disk: [], disk2: [], swap: [] };

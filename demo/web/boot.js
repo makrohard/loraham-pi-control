@@ -260,7 +260,18 @@ function gpsSky(d) {
   }
   if (!sats.length) el("text", { x: cx, y: cy + 4, "text-anchor": "middle", "font-size": "12", fill: "currentColor" }, "no satellites reported");
 }
-function liveTick() { if (!bridge) return; try { liveDaemon(); liveSystem(); liveGps(); } catch (_) { /* never break the page */ } }
+// Dashboard System box GPS row: replicates system.js renderGps() against the bridge's /api/gps,
+// only while the System box is open (system.js polls nothing while it is collapsed).
+function liveSysGps() {
+  const box = $("sysbox"); if (!box || !box.open || !$("sys-gps-state")) return;
+  const d = ask("/api/gps");
+  const pos = !!d && typeof d.lat === "number" && isFinite(d.lat) && typeof d.lon === "number" && isFinite(d.lon);
+  gpsText("sys-gps-state", d ? (d.label || d.state || "?") : "request failed");
+  const l = $("sys-gps-lat"), o = $("sys-gps-lon");       // values only; no position: state + "—"
+  if (l) l.textContent = pos ? d.lat.toFixed(6) : "—";
+  if (o) o.textContent = pos ? d.lon.toFixed(6) : "";
+}
+function liveTick() { if (!bridge) return; try { liveDaemon(); liveSystem(); liveGps(); liveSysGps(); } catch (_) { /* never break the page */ } }
 
 async function go(method, path, formData) {
   const formJson = formData ? JSON.stringify(Object.fromEntries(formData.entries())) : "";
@@ -309,6 +320,9 @@ document.addEventListener("click", (e) => {
 document.addEventListener("toggle", (e) => {
   if (e.target && (e.target.id === "gps-monitor" || e.target.id === "gps-row")) {
     try { liveGps(); } catch (_) { /* never break the page */ }
+  }
+  if (e.target && e.target.id === "sysbox") {
+    try { liveSysGps(); } catch (_) { /* never break the page */ }
   }
 }, true);
 
