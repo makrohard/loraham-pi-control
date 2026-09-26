@@ -936,7 +936,7 @@ class LifecycleOpsMixin:
         if not apply:
             details = []
             commands = []   # copyable commands the operator must run themselves
-            for _, comp in order:
+            for _stack, comp in order:
                 if comp.id == self.DAEMON_ID:
                     kept, owned = self._daemon_arbitrated_bands(radio)
                     if owned:
@@ -972,6 +972,14 @@ class LifecycleOpsMixin:
                     details.append(f"  [manual] {comp.id} is a system service — start it with:")
                     details.append(f"    {cmd}")
                     commands.append(cmd)
+                elif comp.gui_optional and (
+                        comp.id in self.gui_unavailable_components(_stack)
+                        or (self.needs_display(comp) and not self.display_available())):
+                    # The apply types this component SKIPPED (no GUI toolkit or no display) —
+                    # the same predicate the already-healthy check uses — so the plan must not
+                    # promise to start it.
+                    details.append(f"  [skip] {comp.id}: GUI component — not applicable on this "
+                                   "box (no graphical toolkit or display)")
                 else:
                     details.append(f"  [start] {comp.id} (band {cfg_band or comp.band or '-'})")
             blockers = self.run_blockers(target, band, radio)
