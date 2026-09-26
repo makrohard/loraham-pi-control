@@ -2,67 +2,29 @@
 
 ## 0.10.0
 
-- MeshCom: the post-start callsign step reads the whole `--info` answer and sends `--setcall` only
-  when the node reports a different call. Before, a slow node's reply was cut after 0.6 s of
-  silence and the step sent anyway; each such send made the firmware rewrite all its NVS keys,
-  freezing the node for about a minute on a Zero 2 W, so the next check failed too (R11). An
-  empty or cut reply now means "not ready". A window that ends with the call never confirmed is
-  shown as `unverified` in `lhpc status` (it does not fail the start, as before), and a slow check
-  no longer stretches the ~13 min window.
-- "Restart required" now goes away again when a save brings a setting back to the value the
-  running stack was started with: `lhpc rflog --all off` followed by `on` no longer leaves the
-  running stacks flagged (F-M1, hardware matrix 2026-09-25). The marker records each setting's
-  launch value when it first flags it; a marker written by an older version, or by a change of
-  the global callsign, still waits for the restart.
-- RF-log decrypt (meshtastic): a direct message whose sender's key is not yet in the node's saved
-  database now says so, and points at `lhpc meshtastic --nodes`. meshtasticd writes a newly
-  learned key to disk with a delay, so the old "no public key … in the node database" contradicted
-  the live node list (F-M4, hardware matrix 2026-09-25). The decoder still never contacts the node:
-  its API serves one client at a time.
-- `lhpc stack start chat` prints the command to run chat in a terminal, as voice's terminal
-  variant does; before it only pointed at the dashboard card, which an SSH operator does not have
-  (F-C1). The printed command now stands on a line of its own for both, with the note below it:
-  voice's note was appended to the command, so pasting the line as printed was a shell syntax
-  error (F-C2).
-- The test suite no longer sees the developer machine's processes: a test that reached the real
-  process table was refused "in use by: meshcom-qemu" whenever a MeshCom emulator ran on the box
-  (R12). An autouse fixture gives every test an empty host process and socket table; a test that
-  needs a process injects its own.
-- Pages demo: the GPS Monitor under Position shows a simulated receiver with a 3D fix, its
-  satellites in the Skyview and its NMEA stream, instead of "loading…" for ever. The demo feeds
-  synthetic NMEA through the console's real parser, so the shape matches a real receiver (R1).
-- CI: the Pages demo's Pyodide gate can fail again. Since 0.4.3 its output went through `| tee`
-  without `pipefail`, so the step took tee's exit status, and a probe that failed still passed
-  the gate (found when a deliberately failing probe stayed green).
-- RF-log decrypt (reticulum): data sent over a Reticulum link — an LXMF message on a direct link,
-  split across two frames or not — is labelled link traffic instead of "not addressed to this
-  node" (F-R1, RNode live test 2026-09-24).
-- The clock survives a reboot again: the time source now also installs `fake-hwclock` (saved
-  hourly and at shutdown, restored early at boot). Since 0.6.0 chrony replaced
-  systemd-timesyncd and nothing saved the clock, so a box without NTP or GPS started every boot at
-  a frozen date, days behind, and nginx read newer client certificates and the CRL as "not yet
-  valid" (F-B1). LHPC's `/etc/default/fake-hwclock` sets `FORCE=true`, making the restore
-  forward-only: fake-hwclock's default would step a Pi 5's RTC time back to the last save. A box
-  set up before this shows the time source as unsatisfied, with the repair command.
-- `lhpc stack start meshcore-cli` while MeshCore runs is no longer refused over the Companion slot
-  the MeshCore Web UI holds. Both declare that claim advisory (shown as a conflict, arbitrated at
-  runtime by the Web UI yielding to the CLI), but the start admission ignored the flag (F-M2,
-  hardware matrix 2026-09-25). Non-advisory exclusive claims (ports, the SPI bus, the radio)
-  still block.
-- `bootstrap-deps.sh` no longer creates `/var/log/journal` or claims "persistent journal
-  enabled". Raspberry Pi OS keeps the journal volatile through its own journald drop-in, which
-  wins over the directory, so the claim was never true (R6). `docs/maintenance.md` shows the
-  drop-in that makes the journal persistent on a box being debugged.
-- Dashboard: the Webserver box names the console row "LHPC" (it said "LHCP") (C1).
-- A failed web-console restart during an updater repair now points at
-  `systemctl --user status lhpc-web.service` and the console's log file (`logs/lhpc-web.log`),
-  where its output goes. It named `journalctl --user`, which the operator cannot read on the
-  image.
-
 - `lhpc stack start <stack> --band 433|868` starts a band-switchable stack on one band, as the
-  console's per-band Start already could; before, the CLI answered "unrecognized arguments" (F-A2,
-  hardware matrix 2026-09-25). A band the hardware does not serve, or the stack cannot run on, is
-  refused in the plan, before anything starts.
+  console's per-band Start does; a band the hardware or the stack cannot serve is refused.
+- `lhpc stack start meshcore-cli` is no longer refused while MeshCore runs: the Companion slot the
+  Web UI holds is an advisory claim, arbitrated at runtime.
+- "Restart required" clears again when a setting is saved back to the value the stack runs with.
+- `lhpc stack start chat` prints the terminal command; for chat and voice the command stands on
+  its own line, so it can be pasted as printed.
+- MeshCom: the post-start callsign step sends `--setcall` only when the node reports a different
+  call, and waits for the node's full answer. A call never confirmed shows as `unverified` in
+  `lhpc status`.
+- Time source: also installs `fake-hwclock` (forward-only, `FORCE=true`), so the last known time
+  survives a reboot. A box set up earlier shows the time source unsatisfied, with the repair
+  command.
+- `bootstrap-deps.sh` no longer creates `/var/log/journal`: Raspberry Pi OS keeps the journal
+  volatile. `docs/maintenance.md` shows how to make it persistent.
+- RF-log decrypt: a Meshtastic DM whose sender key is not in the node's saved database says so and
+  points at `lhpc meshtastic --nodes`; Reticulum link data is labelled link traffic.
+- A failed console restart during an updater repair points at
+  `systemctl --user status lhpc-web.service` and `logs/lhpc-web.log`.
+- Dashboard: the console row is named "LHPC".
+- Pages demo: the GPS Monitor shows a simulated receiver (fix, Skyview, NMEA).
+- CI: the Pages demo's Pyodide gate fails when its probe fails.
+- Tests never read the host's process table.
 
 ## 0.9.2
 
