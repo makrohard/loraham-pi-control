@@ -52,6 +52,8 @@ already failed is not retried.
 - A failed console restart during an updater repair points at
   `systemctl --user status lhpc-web.service` and `logs/lhpc-web.log`.
 - Dashboard: the console row is named "LHPC".
+- Dashboard: the System box has a `GPS:` line below `network:` (linked to the GPS Monitor; status,
+  latitude, longitude), read from the Monitor's `/api/gps` only while the box is open.
 - Pages demo: the GPS Monitor shows a simulated receiver (fix, Skyview, NMEA).
 - CI: the Pages demo's Pyodide gate fails when its probe fails.
 - Tests never read the host's process table.

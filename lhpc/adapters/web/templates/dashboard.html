@@ -442,6 +442,12 @@
         {% if network_dash %}
           <p class="muted sysblock">network: {{ network_dash }}</p>
         {% endif %}
+        {# GPS: the same shape as the network line — "GPS" links to the GPS Monitor, then the
+           values only, space-separated ("GPS: 3D fix 48.430769 11.668389"). Static markup like the
+           rest of this box: system.js fetches the Monitor's OWN /api/gps on its existing poll, only
+           while the box is open, never while it is collapsed. Coordinates are shown on purpose
+           (docs/gps.md: a monitor surface, never logged). #}
+        <p class="muted sysblock" id="sys-gps"><a href="{{ url_for('stacks_overview', open='gps') }}#gps-row">GPS</a>: <span id="sys-gps-val"><span id="sys-gps-state">…</span> <span id="sys-gps-lat"></span> <span id="sys-gps-lon"></span></span></p>
         {# Autostart: plain configuration (writes [boot] restore in local.toml) — no privilege
            and no unit change, so unlike the power actions below it always renders. #}
         <section class="sysautostart sysblock">

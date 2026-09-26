@@ -126,3 +126,92 @@ def test_the_clock_advances_without_a_new_request(page):
         "(prev) => { const e = document.getElementById('sys-time-val');"
         " return e && e.textContent !== prev; }", arg=first, timeout=15000)
     assert page.locator("#sys-time-val").inner_text() != first
+
+
+# --- GPS row: the GPS Monitor's /api/gps, riding on the box's own poll ------------------------
+# Payloads carry the keys the row reads from `service.gps_monitor()` (state, label, lat, lon).
+
+def _gps(state, label, lat=None, lon=None):
+    return {"source": "gpsd", "state": state, "label": label, "lat": lat, "lon": lon}
+
+
+def _serve_gps(page, payload):
+    """Answer `/api/gps` with `payload` and count the requests."""
+    seen = {"n": 0}
+
+    def handler(route):
+        seen["n"] += 1
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    page.route("**/api/gps", handler)
+    return seen
+
+
+def _gps_row(page):
+    """The value cell as the operator reads it: values only, space-separated."""
+    return " ".join(page.locator("#sys-gps-val").text_content().split())
+
+
+def _wait_gps_state(page, text):
+    page.wait_for_function(
+        "(t) => { const e = document.getElementById('sys-gps-state'); return e && e.textContent === t; }",
+        arg=text, timeout=15000)
+
+
+def test_gps_row_shows_the_fix_with_the_monitors_precision(page):
+    _serve(page, [_sample(0, net=0)])
+    _serve_gps(page, _gps("3d", "3D fix", 48.123456789, -9.87654321))
+    _open_box(page)
+    _wait_gps_state(page, "3D fix")
+    assert _gps_row(page) == "3D fix 48.123457 -9.876543"
+
+
+def test_gps_row_without_a_fix_shows_the_state_and_no_coordinates(page):
+    _serve(page, [_sample(0, net=0)])
+    _serve_gps(page, _gps("no-fix", "no fix"))
+    _open_box(page)
+    _wait_gps_state(page, "no fix")
+    assert _gps_row(page) == "no fix —"
+
+
+def test_gps_row_without_a_receiver_shows_no_position_source(page):
+    _serve(page, [_sample(0, net=0)])
+    _serve_gps(page, {"source": "off", "state": "off", "label": "no position source",
+                      "lat": None, "lon": None})
+    _open_box(page)
+    _wait_gps_state(page, "no position source")
+    assert _gps_row(page) == "no position source —"
+
+
+def test_gps_row_escapes_what_the_server_sends(page):
+    # textContent, never innerHTML: a label carrying markup renders as text.
+    _serve(page, [_sample(0, net=0)])
+    _serve_gps(page, _gps("x", "<img src=x onerror=alert(1)>"))
+    _open_box(page)
+    _wait_gps_state(page, "<img src=x onerror=alert(1)>")
+    assert page.locator("#sys-gps img").count() == 0
+
+
+def test_a_closed_box_makes_no_request_and_an_open_one_asks_gps_every_second_poll(page):
+    # Closed (the default): nothing at all is fetched, neither /api/system nor /api/gps.
+    sysn = _serve(page, [_sample(0, net=0)])
+    gps = _serve_gps(page, _gps("3d", "3D fix", 1.0, 2.0))
+    page.goto(page.lab_base + "/", wait_until="networkidle")
+    assert not page.locator("#sysbox").evaluate("e => e.open")
+    page.wait_for_timeout(5000)                       # 2.5 poll intervals
+    assert (sysn["i"], gps["n"]) == (0, 0)
+    assert _gps_row(page) == "…"
+    # Open: /api/gps rides on the poll — the first tick, then every second one.
+    page.locator("#sysbox summary").first.click()
+    _wait_gps_state(page, "3D fix")
+    page.wait_for_timeout(6500)
+    polls, asks = sysn["i"], gps["n"]
+    assert polls >= 3 and 1 <= asks <= (polls + 1) // 2, (polls, asks)
+    # Closed again: both stop.
+    page.locator("#sysbox summary").first.click()
+    page.wait_for_function("() => !document.getElementById('sysbox').open", timeout=5000)
+    page.wait_for_timeout(500)
+    frozen = (sysn["i"], gps["n"])
+    page.wait_for_timeout(5000)
+    assert (sysn["i"], gps["n"]) == frozen
+
