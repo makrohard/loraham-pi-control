@@ -1568,11 +1568,11 @@ main = "meshcom-qemu"
     "src/meshcom-loraham-bridge/build",
   ]
   proof_paths = [
-    "build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa",
+    "build/tool-cache/qemu-xtensa/esp_develop_9.2.2_20260417_cache_iommu/qemu/bin/qemu-system-xtensa",
     "src/meshcom-qemu-raspi/.work/MeshCom-Firmware/.pio/build/qemu-headless-extradio-gpsd/flash.bin",
     "src/meshcom-loraham-bridge/build/meshcom-loraham-bridge",
   ]
-  probes = [["build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa", "--version"]]
+  probes = [["build/tool-cache/qemu-xtensa/esp_develop_9.2.2_20260417_cache_iommu/qemu/bin/qemu-system-xtensa", "--version"]]
 
   [[stack.component]]
   id = "meshcom-bridge"
@@ -1792,8 +1792,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "74a3a081fdefbe23eb460d18dd4f71ea0b942466"
-    pin_tag = "74a3a08"
+    pin_commit = "5a845c7616d42581a743febf8489f127e0d03c88"
+    pin_tag = "5a845c7"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1859,7 +1859,7 @@ main = "meshcom-qemu"
   build_steps = [
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/platformio/.venv"] },
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pip", "install", "--disable-pip-version-check", "platformio==6.1.19"], announce = "[install] PlatformIO 6.1.19 into {runtime}/build/tools/platformio/.venv — pip is quiet off-TTY; progress: watch {runtime}/build/tools/platformio/.venv/lib grow" },
-    { argv = ["scripts/build-qemu.sh", "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606", "--link-gate", "{asset}/scripts/meshtastic-link-gate.sh"], announce = "[build] qemu-system-xtensa FROM SOURCE (headless: no SDL/GTK/VNC/OpenGL/audio) at the pinned Espressif commit — clone + configure + compile, slow + silent off-TTY; progress: watch {runtime}/build/tool-cache/qemu-xtensa grow" },
+    { argv = ["scripts/build-qemu.sh", "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.2.2_20260417_cache_iommu", "--link-gate", "{asset}/scripts/meshtastic-link-gate.sh"], announce = "[build] qemu-system-xtensa FROM SOURCE (headless: no SDL/GTK/VNC/OpenGL/audio) at the pinned Espressif commit — clone + configure + compile, slow + silent off-TTY; progress: watch {runtime}/build/tool-cache/qemu-xtensa grow" },
     { argv = ["scripts/setup.sh", "--ref", "{pin:src/MeshCom-Firmware}"], announce = "[clone] MeshCom-Firmware at the manifest pin (the meshcom-firmware component's pin_commit) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
     { argv = ["scripts/apply-overlay.sh"], attributable = true },
     { argv = ["scripts/prepare-openeth.sh"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core" }, announce = "[resolve] ESP32 platform + toolchain — large download, output is quiet; progress: watch {runtime}/build/tools/platformio/core grow" },
@@ -1880,7 +1880,7 @@ main = "meshcom-qemu"
   # PATH/IDF discovery, which cannot find the in-root source build on a fresh install.
   # MUST be a COMPONENT-level key — placed after the [[…param]] sub-tables it would bind to the
   # last param table (TOML), leaving the component with no test ("skipped (no host tests)").
-  test = "scripts/test.sh --qemu {runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa"
+  test = "scripts/test.sh --qemu {runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.2.2_20260417_cache_iommu/qemu/bin/qemu-system-xtensa"
   # The build artifact is the merged firmware flash image for the chosen env, NOT
   # qemu-system-xtensa (the system emulator that run.sh locates separately).
   bin = ".work/MeshCom-Firmware/.pio/build/{env}/flash.bin"
@@ -1997,9 +1997,9 @@ main = "meshcom-qemu"
     # receives the resolved binary via the `qemu` param (default below); it keeps its own
     # --qemu > PATH > IDF_TOOLS_PATH fallbacks for standalone use.
     cmd = "qemu-system-xtensa"
-    check_file = "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa"
+    check_file = "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.2.2_20260417_cache_iommu/qemu/bin/qemu-system-xtensa"
     provisioned = true
-    note = "qemu-system-xtensa (headless, built FROM SOURCE at the pinned Espressif commit esp-develop-9.0.0-20240606) — provisioned INTO the runtime root by `lhpc build` (scripts/build-qemu.sh; link-gated, no SDL/GTK/VNC/OpenGL/audio). Satisfied once the in-root binary exists OR qemu-system-xtensa is on PATH."
+    note = "qemu-system-xtensa (headless, built FROM SOURCE at the pinned Espressif tag esp-develop-9.2.2-20260417 plus the temporary downstream patch in meshcom-qemu-raspi patches/qemu/) — provisioned INTO the runtime root by `lhpc build` (scripts/build-qemu.sh; link-gated, no SDL/GTK/VNC/OpenGL/audio). Satisfied once the in-root binary exists OR qemu-system-xtensa is on PATH."
     [[stack.component.require]]
     # PROVISIONED by the managed setup step (build_steps: a venv at {runtime}/build/tools/platformio),
     # invoked by ABSOLUTE path (PIO=) from prepare-openeth.sh/build.sh — this retires the pipx system
@@ -2035,14 +2035,14 @@ main = "meshcom-qemu"
     arg = "--qemu"
     # The MANAGED in-root binary provisioned by build-qemu.sh (headless source build); the operator can
     # override with a custom build. run.sh still falls back to PATH > IDF_TOOLS_PATH standalone (no --qemu).
-    default = "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa"
+    default = "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.2.2_20260417_cache_iommu/qemu/bin/qemu-system-xtensa"
     label = "qemu-system-xtensa path (managed in-root; override for a custom build)"
     advanced = true
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "74a3a081fdefbe23eb460d18dd4f71ea0b942466"
-    pin_tag = "74a3a08"
+    pin_commit = "5a845c7616d42581a743febf8489f127e0d03c88"
+    pin_tag = "5a845c7"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
