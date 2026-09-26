@@ -36,6 +36,8 @@
   two pull requests that stop the per-message settings save and the no-op `--setcall` save), and
   QEMU is built from Espressif's 9.2.2 tag plus the flash-cache patch. Both are temporary until
   upstream ships them. The meshcom binary is rebuilt for this release.
+- A stack action refused because a build or install is running names the sources it works on
+  (it said `build on ''`).
 
 ## 0.9.2
 

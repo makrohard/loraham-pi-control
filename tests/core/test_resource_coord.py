@@ -170,3 +170,32 @@ def test_daemon_socket_lock_is_band_scoped_like_the_radio_lock(tmp_path):
     # the radio key stays band-scoped, and non-band keys are untouched
     assert "loraham.radio.868" in keys["meshcore"] and "loraham.radio.433" not in keys["meshcore"]
     assert "tcp.port.5000" in keys["meshcore"] and "tcp.port.8001" in keys["kiss"]
+
+
+def test_a_busy_source_operation_names_what_it_is_working_on(tmp_path):
+    # A build holds task admission; a start contending with it must say WHAT is being built.
+    # The message used to read "busy: build on ''" (found live on the Pi 5, 2026-09-26), which
+    # leaves the operator guessing what occupies the box.
+    import threading
+    svc = _svc(tmp_path)
+    svc.bootstrap(apply=True)
+    svc._SELF_LOCK_WAIT_S = 0.3
+    started, release, results = threading.Event(), threading.Event(), {}
+
+    def holder():
+        with svc._source_operation_guard(["src/meshtastic-firmware"], op="build"):
+            started.set()
+            release.wait(2)
+
+    def contender():
+        started.wait(2)
+        try:
+            with svc._lifecycle_guard("start", "kiss", ""):
+                results["mutated"] = True
+        except reslock.ResourceBusy as e:
+            results["msg"] = str(e)
+
+    ta, tb = threading.Thread(target=holder), threading.Thread(target=contender)
+    ta.start(); tb.start(); tb.join(3); release.set(); ta.join(3)
+    assert "mutated" not in results
+    assert "build on 'src/meshtastic-firmware'" in results.get("msg", ""), results
