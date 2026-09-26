@@ -2453,7 +2453,8 @@ main = "meshcore-node"
     # password LHPC minted (ui_password_file above).
     #
     # DENY LIST — the invariant: every dashboard route that MUTATES UPSTREAM CONFIGURATION is
-    # refused at LHPC's perimeter (upstream gets no config path, so a save aims at
+    # refused at LHPC's perimeter, EXCEPT the two allowed by decision below (the plugin manager and
+    # /api/sensors_config_update) (upstream gets no config path, so a save aims at
     # /etc/openhop_repeater/config.yaml, which the rootless unit cannot create — but the
     # in-memory mutation before it would still change the running repeater and vanish on
     # restart). Classified from a full inventory of the exposed methods (153 at the pinned
