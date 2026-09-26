@@ -2,9 +2,8 @@
 
 ## 0.10.0
 
-**Upgrading with MeshCom installed:** MeshCom does not start until its QEMU is updated (it moves
-to 9.2.2). Run `lhpc update meshcom-qemu --source pinned --yes`, then
-`lhpc update meshcom --source binary --yes`.
+**Upgrading with MeshCom installed:** MeshCom does not start until it is updated (its QEMU moves to
+9.2.2): run `lhpc update meshcom --yes`.
 
 - `lhpc stack start <stack> --band 433|868` starts a band-switchable stack on one band, as the
   console's per-band Start does; a band the hardware or the stack cannot serve is refused.
@@ -45,6 +44,8 @@ to 9.2.2). Run `lhpc update meshcom-qemu --source pinned --yes`, then
 - A start plan no longer lists a GUI component the box will skip (no toolkit or no display).
 - `lhpc status` shows a stack as degraded, not running, when its main component is down while
   others still run.
+- `lhpc update meshcom` from the binary moves MeshCom's clean run-script checkout to the new pin itself;
+  it stopped with "… is at <old>, the pin is <new>" until that checkout was updated by hand.
 
 ## 0.9.2
 
