@@ -60,7 +60,7 @@ only signal to act on.
   upstream `dev` in, builds the boards and runs the QEMU proof; green moves the branch forward, red
   opens an issue and moves nothing. It merges rather than rebases, because the bot follows
   `lhpc-speed` at its tip and a rebased branch no longer contains the pinned commit. When upstream
-  contains the fixes, the workflow opens the retire issue
+  contains the fixes, the workflow says so on the retire issue
   ([makrohard/MeshCom-Firmware#1](https://github.com/makrohard/MeshCom-Firmware/issues/1)): pin
   upstream again in the manifest, both the MeshCom-Firmware remote **and** the `--src` of the QEMU
   setup step, point the bot's policy back, delete the workflow and the branch.
