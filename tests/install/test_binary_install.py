@@ -1476,3 +1476,61 @@ def test_binary_install_journal_failure_is_a_typed_refusal(tmp_path, monkeypatch
     assert any("--source pinned" in c for c in res.next_commands)
     assert not list((tmp_path / "state").glob("lhpc-binary-*"))
 
+
+
+def _stale_clone_fixture(tmp_path, monkeypatch, dirty):
+    """meshcom-qemu's checkout present, proven ours, at an OLDER commit than the pin (the
+    0.9.2 -> 0.10.0 upgrade case); `update` is stubbed to record the call and to move it."""
+    from lhpc.core.install import DirtyReport
+    svc = _svc(tmp_path, monkeypatch)
+    comp = next(c for st in svc.stacks() if st.id == "meshcom"
+                for c in st.components if c.id == "meshcom-qemu")
+    svc._paths.resolve_source(comp.source.path).mkdir(parents=True)
+    state = {"commit": "0" * 40, "updated": []}
+
+    class _Rec:
+        @property
+        def resolved_commit(self):
+            return state["commit"]
+
+    class _FakeInstaller:
+        def dirty_report(self, d, path):
+            return DirtyReport(untracked=("notes.txt",)) if dirty else DirtyReport()
+        def _index_key(self):
+            return "source-txn-index"
+        def _recover_scan(self):
+            return None
+        def _pending_journals(self):
+            return []
+
+    def _update(self, target="", apply=False, source="pinned", **kw):
+        state["updated"].append((target, apply, source))
+        state["commit"] = comp.source.pin_commit             # the real update moves it
+        from lhpc.core.services import ActionResult
+        return ActionResult(True, f"Update applied for '{target}'.")
+
+    monkeypatch.setattr(ControllerService, "_installer", lambda self: _FakeInstaller())
+    monkeypatch.setattr(ControllerService, "update", _update)
+    monkeypatch.setattr(source_registry, "verify_identity", lambda *a, **k: (_Rec(), ""))
+    return svc, comp, state
+
+
+def test_a_clean_clone_at_an_older_pin_is_moved_to_the_pin(tmp_path, monkeypatch, stub_pipeline):
+    """Upgrading 0.9.2 -> 0.10.0 left src/meshcom-qemu-raspi at the old pin, and
+    `lhpc update meshcom --source binary` refused ("is at 74a3a081f, the pin is 209afe986") until
+    the operator ran `lhpc update meshcom-qemu --source pinned` by hand (found on e293). A CLEAN
+    checkout of ours is now moved through that same update first."""
+    svc, comp, state = _stale_clone_fixture(tmp_path, monkeypatch, dirty=False)
+    stub_pipeline(svc, download=lambda e, d: (_ for _ in ()).throw(
+        bi.BinaryInstallError("stop after the clone check")))
+    res = svc.binary_install("meshcom", apply=True)
+    assert state["updated"] == [("meshcom-qemu", True, "pinned")], res
+    assert "the pin is" not in res.summary, res.summary        # got past the old refusal
+
+
+def test_a_dirty_clone_at_an_older_pin_is_still_refused_not_moved(tmp_path, monkeypatch, stub_pipeline):
+    svc, comp, state = _stale_clone_fixture(tmp_path, monkeypatch, dirty=True)
+    stub_pipeline(svc, download=lambda e, d: pytest.fail("must refuse BEFORE downloading anything"))
+    res = svc.binary_install("meshcom", apply=True)
+    assert state["updated"] == []                              # never moved
+    assert not res.ok and "the pin is" in res.summary          # the old refusal, unchanged
