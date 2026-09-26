@@ -129,10 +129,11 @@ repositories and recorded there, not here.
   shapes** — the maintainer, and the release bot on its schedule.
   - **The maintainer's patch lands on `dev`** once it is release-ready, and `main` fast-forwards to
     the proven `dev` tip and is tagged there. Work that must not ship yet stays on a topic branch,
-    never on `dev`. `main` stays an ancestor of `dev`, so the release is a fast-forward and no
-    pull request is created.
-  - **The bot keeps the `main`-based lane**, but only while `dev` has not diverged; the guard below
-    defines that refusal.
+    never on `dev`. If the bot has released since `dev` last equalled `main`, `main` is no longer
+    an ancestor of `dev`: the patch is then cut as one release commit on top of `main`, as a
+    minor's squash is, then CI, fast-forward `main` and tag.
+  - **The bot's patch is cut from `main`** on its schedule, also while `dev` carries unreleased
+    work; `dev` never gates, delays or shapes it.
 
   Either way a patch is the tag and its changelog section, with CI and testlab green on the exact
   released SHA; it publishes no GitHub Release, and boxes follow `main`.
@@ -161,14 +162,8 @@ repositories and recorded there, not here.
     chat source are not among them, because the real daemon needs a radio to start. Anything
     that changes behaviour on hardware is proved on the box and recorded in the live-test
     report under `docs/live-tests/`.
-  - **A bot patch requires an undiverged `dev`.** The bot releases only while `dev` has not moved
-    past `main`; afterwards `dev` fast-forwards to the new `main` and the branches are equal again.
-    If `dev` already carries unreleased commits the bot does **not** release: it reports and leaves
-    both branches untouched, and the maintainer's lane — whose patch is on `dev` already — carries
-    the fix instead. There is deliberately no reconciliation machinery: no back-merge pull request,
-    no automated rebase, no force-push repair. A squash cannot restore ancestry (it copies the
-    content without the commit) and a merge commit would break `dev`'s linear history, so the only
-    sound answer is not to diverge in the first place.
+  - **After a bot patch** the bot opens a pull request that brings the release back into `dev`.
+    **Squash-merge it**: `dev` keeps a linear history, so a merge commit cannot land.
 - **Every release is followed by an image.** `loraham-images` is tagged with the same version
   once the binaries a moved pin needs are published, so the published image always carries the
   latest release ([binary channel](provenance.md#the-binary-channel)).
