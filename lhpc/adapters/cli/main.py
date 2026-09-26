@@ -1248,9 +1248,21 @@ def _run(argv: list[str] | None = None) -> int:
 
     if args.command == "stack":
         if args.stack_action in ("start", "stop", "restart", "poststart"):
-            return _apply_flow(
-                lambda a: svc.run_action(args.stack_action, args.stack, apply=a,
-                                         band=getattr(args, "band", "")), yes=args.yes)
+            from dataclasses import replace
+
+            from lhpc.core.outcomes import manual_required_only
+
+            def _run(a):
+                res = svc.run_action(args.stack_action, args.stack, apply=a,
+                                     band=getattr(args, "band", ""))
+                # An interactive MAIN component (chat) whose command was presented is the
+                # expected outcome of a start, not a failure: show it as success, exactly as the
+                # web job does. `ok` stays strict in the core (nothing is verified running).
+                if (a and args.stack_action == "start" and not res.ok
+                        and manual_required_only(res.results)):
+                    return replace(res, ok=True)
+                return res
+            return _apply_flow(_run, yes=args.yes)
         # argparse's --help action calls sys.exit(0), so routing a usage error through
         # it exited 0 and `lhpc stack || handle_error` silently passed. Every sibling
         # (config, logs, build, daemon, ...) exits 2 on a missing argument; match them.
