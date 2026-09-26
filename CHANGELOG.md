@@ -2,6 +2,10 @@
 
 ## 0.10.0
 
+**Upgrading with MeshCom installed:** MeshCom does not start until its QEMU is updated (it moves
+to 9.2.2). Run `lhpc update meshcom-qemu --source pinned --yes`, then
+`lhpc update meshcom --source binary --yes`.
+
 - `lhpc stack start <stack> --band 433|868` starts a band-switchable stack on one band, as the
   console's per-band Start does; a band the hardware or the stack cannot serve is refused.
 - `lhpc stack start meshcore-cli` is no longer refused while MeshCore runs: the Companion slot the
@@ -31,13 +35,16 @@
 - `lhpc status --versions` shows the `rns`/`lxmf` each Reticulum component's venv holds and names
   a package the stack runs in two versions.
 - openhop-repeater: dev b846c79 (sensor API, per-radio telemetry); the plugin manager is unchanged.
-- meshcom-qemu-raspi: 74a3a08 -> 72fad88, repinned after a history rewrite; same tree.
 - MeshCom: the firmware comes from `makrohard/MeshCom-Firmware` `lhpc-speed` (upstream dev plus the
   two pull requests that stop the per-message settings save and the no-op `--setcall` save), and
   QEMU is built from Espressif's 9.2.2 tag plus the flash-cache patch. Both are temporary until
   upstream ships them. The meshcom binary is rebuilt for this release.
 - A stack action refused because a build or install is running names the sources it works on
   (it said `build on ''`).
+- `lhpc stack start chat` ends OK (rc 0) with the printed command, as voice does; it ended ERR.
+- A start plan no longer lists a GUI component the box will skip (no toolkit or no display).
+- `lhpc status` shows a stack as degraded, not running, when its main component is down while
+  others still run.
 
 ## 0.9.2
 
