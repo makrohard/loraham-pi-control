@@ -415,7 +415,8 @@ class MaintenanceOpsMixin:
         sha = out2.stdout.split()[0]
         return (sha, f"frozen: default branch @ {sha[:9]} (no version tags)"), ""
 
-    def _plan_source_groups(self, items, source: str, freeze: bool = False) -> tuple:
+    def _plan_source_groups(self, items, source: str, freeze: bool = False,
+                            exact_pin: bool = False) -> tuple:
         """ONE immutable operation plan for an install/update over `items` [(stack, comp)]:
 
           * known-working is resolved ONCE per affected stack from one complete compatible
@@ -428,7 +429,11 @@ class MaintenanceOpsMixin:
             mutation.
 
         Returns (groups, error): groups = ordered [(path, comp, selector, (expected, label))].
-        `selector` is the per-stack Version choice carried through to adoption."""
+        `selector` is the per-stack Version choice carried through to adoption.
+
+        `exact_pin` (internal, the binary channel's clone_required move): 'pinned' resolves to
+        the manifest `pin_commit` itself, never a known-working entry — the artifact was
+        checked against the manifest pins, so its supporting checkout must be exactly there."""
         from . import known_working, source_registry
         # `source` may be a uniform selector string OR a per-stack resolver `source_of(stack_id)`
         # (the auto-install driver passes the latter for per-stack Version). The SELECTOR is part
@@ -446,6 +451,8 @@ class MaintenanceOpsMixin:
             sel = _sel(st.id)
             if sel != "pinned" or spec.artifact:
                 resolved = ("", "")
+            elif exact_pin:
+                resolved = (spec.pin_commit, "manifest pin (the binary artifact's pin)")
             else:
                 entries = compositions.get(st.id)
                 if entries and comp.id in entries:
@@ -1707,11 +1714,13 @@ class MaintenanceOpsMixin:
 
     @invalidates_snapshot
     def update(self, target: str = "", apply: bool = False,
-               source: str = "pinned", auto_install_ctx=None) -> ActionResult:
+               source: str = "pinned", auto_install_ctx=None,
+               exact_pin: bool = False) -> ActionResult:
         """Refresh the managed source(s) from the remote (version per `source`:
         dev/stable/pinned); a failed `dev` adoption retries once at the known-working (else
         manifest-pin) identity, disclosed. Skips
-        optional libs/firmware unless one is targeted directly.
+        optional libs/firmware unless one is targeted directly. `exact_pin` is internal (the
+        binary channel): 'pinned' means the manifest pin, not known-working.
         """
         if (_r := self._controller_refusal(target)) is not None:
             return _r
@@ -1831,7 +1840,8 @@ class MaintenanceOpsMixin:
                                         "shared-source remote configuration is "
                                         "inconsistent.",
                                         details=[f"  {c}" for c in conflicts])
-                groups, plan_conflicts = self._plan_source_groups(items, source)
+                groups, plan_conflicts = self._plan_source_groups(items, source,
+                                                                  exact_pin=exact_pin)
                 if plan_conflicts:
                     return ActionResult(False, f"Refusing to update '{target or 'all'}': "
                                         "incompatible source resolutions for a shared "

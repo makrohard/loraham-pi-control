@@ -1057,7 +1057,7 @@ def test_binary_install_does_not_self_contend_on_its_own_source_guard(tmp_path, 
     inst_cls = type(svc._installer())
     _real_adopt = inst_cls.adopt_source
 
-    def _spy(self, comp, source="pinned", locked=False):
+    def _spy(self, comp, source="pinned", locked=False, **_kw):
         seen["comp"], seen["locked"] = comp.id, locked
         # Prove the contention is REAL and not hypothetical: at this exact point, an adoption
         # told the lock is free (the old `locked=locked`) is refused by our own guard.
@@ -1476,3 +1476,132 @@ def test_binary_install_journal_failure_is_a_typed_refusal(tmp_path, monkeypatch
     assert any("--source pinned" in c for c in res.next_commands)
     assert not list((tmp_path / "state").glob("lhpc-binary-*"))
 
+
+
+def _stale_clone_fixture(tmp_path, monkeypatch, dirty):
+    """meshcom-qemu's checkout present, proven ours, at an OLDER commit than the pin (the
+    0.9.2 -> 0.10.0 upgrade case); `update` is stubbed to record the call and to move it."""
+    from lhpc.core.install import DirtyReport
+    svc = _svc(tmp_path, monkeypatch)
+    comp = next(c for st in svc.stacks() if st.id == "meshcom"
+                for c in st.components if c.id == "meshcom-qemu")
+    svc._paths.resolve_source(comp.source.path).mkdir(parents=True)
+    state = {"commit": "0" * 40, "updated": []}
+
+    class _Rec:
+        @property
+        def resolved_commit(self):
+            return state["commit"]
+
+    class _FakeInstaller:
+        def dirty_report(self, d, path):
+            return DirtyReport(untracked=("notes.txt",)) if dirty else DirtyReport()
+        def _index_key(self):
+            return "source-txn-index"
+        def _recover_scan(self):
+            return None
+        def _pending_journals(self):
+            return []
+
+    def _update(self, target="", apply=False, source="pinned", **kw):
+        state["updated"].append((target, apply, source))
+        state["commit"] = comp.source.pin_commit             # the real update moves it
+        from lhpc.core.services import ActionResult
+        return ActionResult(True, f"Update applied for '{target}'.")
+
+    monkeypatch.setattr(ControllerService, "_installer", lambda self: _FakeInstaller())
+    monkeypatch.setattr(ControllerService, "update", _update)
+    monkeypatch.setattr(source_registry, "verify_identity", lambda *a, **k: (_Rec(), ""))
+    return svc, comp, state
+
+
+def test_a_clean_clone_at_an_older_pin_is_moved_to_the_pin(tmp_path, monkeypatch, stub_pipeline):
+    """Upgrading 0.9.2 -> 0.10.0 left src/meshcom-qemu-raspi at the old pin, and
+    `lhpc update meshcom --source binary` refused ("is at 74a3a081f, the pin is 209afe986") until
+    the operator ran `lhpc update meshcom-qemu --source pinned` by hand (found on e293). A CLEAN
+    checkout of ours is now moved through that same update first."""
+    svc, comp, state = _stale_clone_fixture(tmp_path, monkeypatch, dirty=False)
+    stub_pipeline(svc, download=lambda e, d: (_ for _ in ()).throw(
+        bi.BinaryInstallError("stop after the clone check")))
+    res = svc.binary_install("meshcom", apply=True)
+    assert state["updated"] == [("meshcom-qemu", True, "pinned")], res
+    assert "the pin is" not in res.summary, res.summary        # got past the old refusal
+
+
+def test_a_dirty_clone_at_an_older_pin_is_still_refused_not_moved(tmp_path, monkeypatch, stub_pipeline):
+    svc, comp, state = _stale_clone_fixture(tmp_path, monkeypatch, dirty=True)
+    stub_pipeline(svc, download=lambda e, d: pytest.fail("must refuse BEFORE downloading anything"))
+    res = svc.binary_install("meshcom", apply=True)
+    assert state["updated"] == []                              # never moved
+    assert not res.ok and "the pin is" in res.summary          # the old refusal, unchanged
+
+
+def _older_known_working(svc, commit="7" * 40):
+    """An operator-confirmed meshcom composition from the PREVIOUS release: same components,
+    paths and remotes as today, every commit an older one — compatible, so the ordinary
+    'pinned' selector resolves to it instead of the manifest pin."""
+    from lhpc.core import known_working
+    st = svc.stack("meshcom")
+    entries = {c.id: {"commit": commit, "selector": "pinned",
+                      "remote": svc._effective_remote(c), "source_rel": c.source.path}
+               for c in st.components if c.source is not None}
+    assert known_working.record(svc._paths, "meshcom", entries, {"confirmed_at": 1.0})[0]
+    assert known_working.compatible_composition(svc._paths, st, svc._effective_remote) == entries
+    return commit
+
+
+def _record_adoption_target(monkeypatch, svc, seen):
+    """The REAL adoption runs up to candidate staging, which records the commit it was told to
+    reach (`expected_pin`, after all selector resolution) and stops there."""
+    inst_cls = type(svc._installer())
+
+    def _stage(self, txn, comp, source, dest, staging, spec, local, action, expected_pin=""):
+        seen.append((comp.id, expected_pin))
+        action.status, action.detail = "failed", "stopped by the test at staging"
+        return None, None
+    monkeypatch.setattr(inst_cls, "_stage_candidate", _stage)
+
+
+def test_a_stale_clone_moves_to_the_manifest_pin_not_an_older_known_working(tmp_path, monkeypatch, stub_pipeline):
+    """The artifact is checked against the MANIFEST pins, so its clone_required checkout must
+    go to `pin_commit`. The ordinary 'pinned' selector prefers a compatible known-working
+    composition: with the previous release confirmed, the move re-adopted THAT commit and the
+    exact-pin check then refused (auditor, b906f3c)."""
+    from lhpc.core.install import DirtyReport
+    svc = _svc(tmp_path, monkeypatch)
+    comp = next(c for c in svc.stack("meshcom").components if c.id == "meshcom-qemu")
+    old = _older_known_working(svc)
+    svc._paths.resolve_source(comp.source.path).mkdir(parents=True)
+
+    class _Rec:
+        resolved_commit = old
+    monkeypatch.setattr(source_registry, "verify_identity", lambda *a, **k: (_Rec(), ""))
+    monkeypatch.setattr(type(svc._installer()), "dirty_report", lambda self, d, p: DirtyReport())
+    seen = []
+    _record_adoption_target(monkeypatch, svc, seen)
+    stub_pipeline(svc, download=lambda e, d: pytest.fail("the staging stop comes first"))
+    svc.binary_install("meshcom", apply=True)
+    assert seen and all(c == comp.source.pin_commit for _cid, c in seen), seen
+
+
+def test_a_missing_clone_is_adopted_at_the_manifest_pin_not_an_older_known_working(tmp_path, monkeypatch, stub_pipeline):
+    svc = _svc(tmp_path, monkeypatch)
+    comp = next(c for c in svc.stack("meshcom").components if c.id == "meshcom-qemu")
+    _older_known_working(svc)
+    assert not svc._paths.resolve_source(comp.source.path).exists()
+    seen = []
+    _record_adoption_target(monkeypatch, svc, seen)
+    stub_pipeline(svc, download=lambda e, d: pytest.fail("the staging stop comes first"))
+    svc.binary_install("meshcom", apply=True)
+    assert seen == [("meshcom-qemu", comp.source.pin_commit)], seen
+
+
+def test_an_ordinary_pinned_update_still_resolves_known_working(tmp_path, monkeypatch):
+    """The fix is private to the binary channel: `lhpc update meshcom-qemu --source pinned`
+    keeps the known-working meaning."""
+    svc = _svc(tmp_path, monkeypatch)
+    old = _older_known_working(svc)
+    seen = []
+    _record_adoption_target(monkeypatch, svc, seen)
+    svc.update("meshcom-qemu", apply=True, source="pinned")
+    assert seen and all(c == old for _cid, c in seen), seen
