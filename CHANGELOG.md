@@ -32,6 +32,10 @@
   a package the stack runs in two versions.
 - openhop-repeater: dev b846c79 (sensor API, per-radio telemetry); the plugin manager is unchanged.
 - meshcom-qemu-raspi: 74a3a08 -> 72fad88, repinned after a history rewrite; same tree.
+- MeshCom: the firmware comes from `makrohard/MeshCom-Firmware` `lhpc-speed` (upstream dev plus the
+  two pull requests that stop the per-message settings save and the no-op `--setcall` save), and
+  QEMU is built from Espressif's 9.2.2 tag plus the flash-cache patch. Both are temporary until
+  upstream ships them. The meshcom binary is rebuilt for this release.
 
 ## 0.9.2
 

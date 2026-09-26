@@ -36,3 +36,22 @@ def test_every_pin_token_names_a_pinned_source():
     assert tokens, "the meshcom-qemu setup step is expected to use {pin:src/MeshCom-Firmware}"
     bad = [f"{w}: {t}" for w, t in tokens if t[len("{pin:"):-1] not in paths]
     assert not bad, bad
+
+
+def test_a_step_fetching_a_pin_from_another_url_names_that_sources_remote():
+    """`setup.sh --src <url> --ref {pin:<path>}` fetches the pinned commit from <url>. The URL must
+    be the remote the manifest pins that path to: a fork pin fetched from upstream (or the other
+    way round) fails, or worse, builds a commit the pin does not name."""
+    data = tomllib.loads(MANIFEST.read_text())
+    remotes = {c["source"]["path"]: c["source"]["remote"] for st in data["stack"]
+               for c in st.get("component", []) if c.get("source", {}).get("pin_commit")}
+    pairs = []
+    for where, argv in _steps():
+        if "--src" in argv and "--ref" in argv:
+            url, ref = argv[argv.index("--src") + 1], argv[argv.index("--ref") + 1]
+            if ref.startswith("{pin:"):
+                pairs.append((where, url, ref[len("{pin:"):-1]))
+    assert pairs, "the meshcom-qemu setup step is expected to fetch the firmware with --src"
+    bad = [f"{w}: --src {u} but {p} is pinned on {remotes.get(p)}" for w, u, p in pairs
+           if u != remotes.get(p)]
+    assert not bad, bad

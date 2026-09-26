@@ -1792,8 +1792,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "5a845c7616d42581a743febf8489f127e0d03c88"
-    pin_tag = "5a845c7"
+    pin_commit = "209afe986de65f9cfc2385ea0841640c80e4dc53"
+    pin_tag = "209afe9"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1860,7 +1860,7 @@ main = "meshcom-qemu"
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/platformio/.venv"] },
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pip", "install", "--disable-pip-version-check", "platformio==6.1.19"], announce = "[install] PlatformIO 6.1.19 into {runtime}/build/tools/platformio/.venv — pip is quiet off-TTY; progress: watch {runtime}/build/tools/platformio/.venv/lib grow" },
     { argv = ["scripts/build-qemu.sh", "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.2.2_20260417_cache_iommu", "--link-gate", "{asset}/scripts/meshtastic-link-gate.sh"], announce = "[build] qemu-system-xtensa FROM SOURCE (headless: no SDL/GTK/VNC/OpenGL/audio) at the pinned Espressif commit — clone + configure + compile, slow + silent off-TTY; progress: watch {runtime}/build/tool-cache/qemu-xtensa grow" },
-    { argv = ["scripts/setup.sh", "--ref", "{pin:src/MeshCom-Firmware}"], announce = "[clone] MeshCom-Firmware at the manifest pin (the meshcom-firmware component's pin_commit) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
+    { argv = ["scripts/setup.sh", "--src", "https://github.com/makrohard/MeshCom-Firmware.git", "--ref", "{pin:src/MeshCom-Firmware}"], announce = "[clone] MeshCom-Firmware at the manifest pin (the meshcom-firmware component's pin_commit) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
     { argv = ["scripts/apply-overlay.sh"], attributable = true },
     { argv = ["scripts/prepare-openeth.sh"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core" }, announce = "[resolve] ESP32 platform + toolchain — large download, output is quiet; progress: watch {runtime}/build/tools/platformio/core grow" },
     { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" }, attributable = true },
@@ -2036,8 +2036,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "5a845c7616d42581a743febf8489f127e0d03c88"
-    pin_tag = "5a845c7"
+    pin_commit = "209afe986de65f9cfc2385ea0841640c80e4dc53"
+    pin_tag = "209afe9"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2084,7 +2084,7 @@ main = "meshcom-qemu"
     # repo at release v4.35p.08.06 (feature verbatim vs the tested fork tip).
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD build surface unchanged.
     #
-    # Cloned BY REF by meshcom-qemu's `setup.sh --ref {pin:src/MeshCom-Firmware}` step: the argv
+    # Fetched BY REF by meshcom-qemu's `setup.sh --src <remote> --ref {pin:src/MeshCom-Firmware}` step: the argv
     # token is resolved to THIS pin_commit at manifest parse time (0.9.2; before that the step
     # carried a hardcoded 674413c and this pin was a label). The QEMU overlay in
     # makrohard/meshcom-qemu-raspi must apply to exactly this commit — moving this pin without
@@ -2093,11 +2093,15 @@ main = "meshcom-qemu"
     # TX_OUTPUT_POWER 17: the daemon accepts 2..17 dBm on SX127x since 1.0.0 and refuses the old 20,
     # which left the bridge unable to configure the radio at all.
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
+    # TEMPORARY FORK: `lhpc-speed` on makrohard/MeshCom-Firmware = upstream dev plus the two
+    # MeshCom pull requests that stop the per-TX settings save and the no-op --setcall save.
+    # Back to icssw-org once upstream has them. The setup step fetches from this remote (--src),
+    # and a repo test keeps the two identical.
     path = "src/MeshCom-Firmware"
-    pin_commit = "80b85a5a2f36e26970ea02fea0d6e09ed68c1d61"
-    pin_tag = "v4.35t.09.20"
-    remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
-    branch = "dev"
+    pin_commit = "71f51bec7041e859b6608d83bb5cc13323d46021"
+    pin_tag = "v4.35t.09.24-28-g71f51be"
+    remote = "https://github.com/makrohard/MeshCom-Firmware.git"
+    branch = "lhpc-speed"
 
 # =====================================================================
 # Stack: meshcore — MeshCore node (openHop Core, daemon-backed, 868)
