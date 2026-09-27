@@ -1386,6 +1386,39 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             out.append(f"  removed the {rel} checkout this switch created")
         return out
 
+    def _note_recorded_selectors(self, res: ActionResult, stack_id: str | None,
+                                 source: str) -> ActionResult:
+        """`install` never changes a source that is already there (adopt_source skips an existing
+        checkout), so `install --source pinned` over a checkout adopted from `dev` answers
+        "Nothing to do" while the record still says `dev`. Say so, and name the command that
+        switches it; the record itself stays as it is, which is true (that is how it was
+        obtained)."""
+        if not res.ok:
+            return res                  # a failure's own remedy comes first; the note can wait
+        from . import source_registry
+        seen, notes, cmds = set(), [], []
+        for st in self.stacks():
+            if stack_id and st.id != stack_id:
+                continue
+            for c in st.components:
+                if c.source is None or c.source.path in seen:
+                    continue
+                seen.add(c.source.path)
+                rec = source_registry.read_record(self._paths, c.source.path)
+                if rec is None or rec.selector == source:
+                    continue
+                at = f" (commit {rec.resolved_commit[:9]})" if rec.resolved_commit else ""
+                notes.append(f"  [note] {c.id}: installed from '{rec.selector}'{at}; install does "
+                             "not change an installed source")
+                cmd = f"lhpc update {st.id} --source {source} --yes"
+                if cmd not in cmds:
+                    cmds.append(cmd)
+        if not notes:
+            return res
+        notes.append("  switch it with: " + " ; ".join(cmds))
+        return ActionResult(res.ok, res.summary, details=[*list(res.details), *notes],
+                            next_commands=[*cmds, *res.next_commands], data=res.data)
+
     @invalidates_snapshot
     def install(self, stack_id: str | None = None, apply: bool = False,
                 source: str = "pinned", auto_install_ctx=None, on_admit=None) -> ActionResult:
@@ -1446,7 +1479,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     res.ok, res.summary,
                     details=[f"  [switch] retire the binary install of '{stack_id}' " "(its files are removed, then the sources are adopted)", *list(res.details)],
                     next_commands=res.next_commands, data=_d)
-            return res
+            return self._note_recorded_selectors(res, stack_id, source)
         from . import source_fs
         # ONE adoption per coherent source GROUP: each shared path is installed exactly once
         # (deterministic first declarer), never opportunistically re-attempted through
@@ -1674,7 +1707,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                                                    [f"lhpc install {stack_id} --source pinned "
                                                     "--yes"]),
                                     data=res.data)
-            return res
+            return self._note_recorded_selectors(res, stack_id, source)
 
     def _plan_result(self, plan: Plan, *, applied: bool, next_apply: str | None) -> ActionResult:
         details = [
