@@ -155,10 +155,15 @@
     var m = document.getElementById(masterId);
     if (!m) return;
     m.addEventListener("change", function () {
+      if (isSelect && m.value === "") return;  // the "Set all versions…" placeholder: no action
       rows().forEach(function (r) {
         var el = cell(r, rowCls);
         if (!el || el.disabled) return;
-        if (isSelect) {
+        if (isSelect && m.value === "default") {
+          // "Each stack's default": back to the option the row was rendered with.
+          var d = Array.prototype.filter.call(el.options, function (o) { return o.defaultSelected; })[0];
+          if (d) el.value = d.value;
+        } else if (isSelect) {
           // A row only offers the channels ITS stack allows: "Binary" is absent where no
           // artifact is published. Assigning a value a <select> does not have would silently
           // blank it, so leave such rows on their own choice instead.
@@ -169,7 +174,10 @@
         }
       });
       if (rowCls === "ai-install") recompute();
-      if (isSelect) syncAllChannels();       // a master channel change may disable rows' tests
+      if (isSelect) {
+        syncAllChannels();                   // a master channel change may disable rows' tests
+        m.value = "";                        // an action, not a state: never claim a channel the rows may not have
+      }
     });
   }
   // Host tests need a SOURCE checkout: a binary install has none, and the server refuses the

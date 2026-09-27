@@ -441,3 +441,49 @@ def test_clear_all_asks_first_and_then_clears_every_log(page, seeded_rf_logs):
     page.wait_for_url("**/logs/loraham-kiss-tnc?job=rf-kiss.log&band=*", timeout=15000)
     assert (seeds.dir / "rf-kiss.log").read_text() == "" and not (seeds.dir / "rf-kiss.log.1").exists()
     assert (seeds.dir / "rf-meshtastic.log").read_text() == "" and run_log.read_text() == "keep\n"
+
+
+def _row_values(page):
+    return page.evaluate(
+        "() => Object.fromEntries([...document.querySelectorAll('tr[data-stack]')].map(r =>"
+        " [r.dataset.stack, r.querySelector('select.ai-version').value]))")
+
+
+def test_the_all_version_select_is_an_action_that_never_claims_a_state(page):
+    """The "All" version select (image test 2026-09-27, C2; audit 4 round 1) is an ACTION: it rests
+    on "Set all versions…", sets every row it can, and returns to the placeholder, so it never
+    claims a channel the rows may not have. "Each stack's default" puts every row back on the
+    channel it was rendered with."""
+    _auto_install_rows(page)
+    master = page.locator("#ai-all-version")
+    assert master.input_value() == ""
+    defaults = _row_values(page)
+    master.select_option("dev")
+    page.wait_for_function(
+        "() => [...document.querySelectorAll('tr[data-stack] select.ai-version')]"
+        ".every(s => s.value === 'dev' || ![...s.options].some(o => o.value === 'dev'))",
+        timeout=10000)
+    assert master.input_value() == ""                     # back on the placeholder after acting
+    master.select_option("default")
+    page.wait_for_function(
+        "d => [...document.querySelectorAll('tr[data-stack]')].every(r =>"
+        " r.querySelector('select.ai-version').value === d[r.dataset.stack])",
+        arg=defaults, timeout=10000)
+    assert master.input_value() == ""
+
+
+def test_each_stacks_default_restores_a_row_changed_by_hand(page):
+    """Audit 4 round 1's path: one row changed by hand away from its rendered default; the master
+    must not claim "all defaults" then, and "Each stack's default" must restore that row."""
+    rows = _auto_install_rows(page)
+    defaults = _row_values(page)
+    sid = rows.evaluate_all(
+        "rs => rs.filter(r => [...r.querySelector('select.ai-version').options].some(o => o.value === 'dev'"
+        " && !o.defaultSelected)).map(r => r.dataset.stack)")[0]
+    page.locator(f'tr[data-stack="{sid}"] select.ai-version').select_option("dev")
+    assert page.locator("#ai-all-version").input_value() == ""
+    assert page.locator("#ai-all-version option:checked").inner_text() != "Each stack's default"
+    page.locator("#ai-all-version").select_option("default")
+    page.wait_for_function(
+        "a => document.querySelector(`tr[data-stack='${a[0]}'] select.ai-version`).value === a[1]",
+        arg=[sid, defaults[sid]], timeout=10000)

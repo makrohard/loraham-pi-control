@@ -80,7 +80,11 @@
           <tr class="ai-allrow"><th>All</th><td class="muted">—</td>
             <td><input type="checkbox" id="ai-all-install" checked></td>
             <td><select id="ai-all-version" aria-label="Version for all stacks">
-              {% for key, label in src_labels %}<option value="{{ key }}"{% if key == 'dev' %} selected{% endif %}>{{ label }}</option>{% endfor %}
+              {# An ACTION, not a state: the rows' defaults differ (binary or pinned), so the master
+                 rests on a placeholder and returns to it after setting the rows. #}
+              <option value="" selected>Set all versions…</option>
+              <option value="default">Each stack's default</option>
+              {% for key, label in src_labels %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
             </select></td>
             <td><input type="checkbox" id="ai-all-tests"></td>
             <td><input type="checkbox" id="ai-all-tx"></td></tr>

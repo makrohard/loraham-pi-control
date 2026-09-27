@@ -372,10 +372,13 @@ def test_starting_card_shown_after_spawn_before_marker(tmp_path, web):
     assert "auto_install.js" in body                                     # polling armed
 
 
-def test_auto_install_page_defaults_to_dev(tmp_path, web):
+def test_auto_install_page_preselects_no_dev(tmp_path, web):
+    # Once the page's default; since the binary channel no stack defaults to the branch tip
+    # (test_default_channel_is_never_the_branch_tip), so neither a row nor the "All" select
+    # may show "Development" as chosen (C2, 2026-09-27).
     c, _ = _client(web, tmp_path)
     body = c.get("/auto-install").data.decode()
-    assert 'value="dev" selected' in body
+    assert 'value="dev" selected' not in body
 
 
 @pytest.mark.needs_session
@@ -1125,3 +1128,17 @@ def test_rows_expose_their_capabilities_for_the_script(tmp_path, monkeypatch, we
     assert len(rows) == len(svc.stacks()), "a row per stack, or the loop below proves nothing"
     for row in rows:
         assert "data-testable=" in row and "data-txcapable=" in row
+
+
+def test_all_version_select_claims_no_channel_by_default(tmp_path, web):
+    # The "All" row's version select showed "Development" as selected while every stack's own
+    # row preselected binary or pinned (image test 2026-09-27, C2). It is an ACTION now (audit 4,
+    # round 1): it rests on the placeholder "Set all versions…" (value "", never submitted), offers
+    # "Each stack's default" as its own option, and preselects no channel.
+    c, _ = _client(web, tmp_path)
+    doc = parse(c.get("/auto-install").data.decode())
+    opts = doc.within(doc.by_id("ai-all-version")).find("option")
+    chosen = [o for o in opts if o.has_attr("selected")]
+    assert [(o["value"], o.text) for o in chosen] == [("", "Set all versions…")]
+    assert [(o["value"], o.text) for o in opts[:2]] == [("", "Set all versions…"), ("default", "Each stack's default")]
+    assert {"binary", "pinned", "dev", "stable"} <= {o["value"] for o in opts}
