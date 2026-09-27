@@ -1250,3 +1250,20 @@ def test_a_stale_daemon_binary_is_refused_on_its_own_spawn_path(tmp_path, monkey
     assert not r.ok
     assert any(why in str(d) for d in r.details), (r.summary, r.details)
     assert spawned == []                                          # never reached the spawn
+
+
+@pytest.mark.parametrize("action", ["enable", "renew", "disable"])
+def test_hmac_cli_preview_refuses_on_binary_install(tmp_path, monkeypatch, capsys, binary_receipt, action):
+    # The CLI's no-`--yes` preview printed "rebuilds the MeshCom firmware … Re-run to apply" for a
+    # binary install that the apply then refused (image test 2026-09-27, C1): the refusal must come
+    # without `--yes` too, and the preview must not offer a command that cannot run.
+    from lhpc.adapters.cli.main import main
+    rt = tmp_path / "rt"
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    assert main(["bootstrap", "--yes"]) == 0
+    binary_receipt(ControllerService(paths=Paths(runtime_root=rt)), "meshcom")
+    capsys.readouterr()
+    assert main(["hmac", action, "meshcom"]) == 1
+    out = capsys.readouterr().out
+    assert "NO mesh password" in out and "Re-run to apply" not in out

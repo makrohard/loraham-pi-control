@@ -1169,6 +1169,11 @@ def _run(argv: list[str] | None = None) -> int:
                  else svc.hmac_apply_recover(sid, run_id))
             print(r.summary)
             return 0 if r.ok else 1
+        # The same refusal the apply gives (hmac_apply_cli), BEFORE the preview: a binary install
+        # cannot run any of these, so the preview must not offer a command that will be refused.
+        if (_blk := svc.hmac_binary_block(sid)):
+            print(_blk + ".")
+            return 1
         if not args.yes:
             print(f"'{args.action}' rebuilds the MeshCom firmware and restarts the link "
                   "(several minutes; the link is down until it finishes).")
