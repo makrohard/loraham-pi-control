@@ -44,6 +44,94 @@ def test_marker_not_set_when_stopped_or_unchanged(tmp_path):
     assert _marker(tmp_path) is None                                 # unchanged value -> no marker
 
 
+def test_restoring_the_launched_value_clears_the_marker(tmp_path):
+    # F-M1: the marker says "saved settings differ from the running stack", so a save that brings
+    # the value back to what the stack was launched with must take it away again.
+    assert _svc(tmp_path).save_config_bundle("chat", values={"file_tx_freq": "434.500"}).ok
+    svc = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})           # launched with 434.500
+    assert svc.save_config_bundle("chat", values={"file_tx_freq": "434.600"}).ok
+    assert _marker(tmp_path)["params"] == ["tx_freq"]
+    assert svc.save_config_bundle("chat", values={"file_tx_freq": "434.600"}).ok
+    assert _marker(tmp_path)["params"] == ["tx_freq"]                # a re-save keeps it
+    res = svc.save_config_bundle("chat", values={"file_tx_freq": "434.500"})
+    assert res.ok
+    assert _marker(tmp_path) is None and svc.restart_required("chat") is None
+    assert "chat" not in svc.restart_required_stacks()
+
+
+def test_restoring_one_of_two_changed_params_keeps_the_other(tmp_path):
+    assert _svc(tmp_path).save_config_bundle(
+        "chat", values={"file_tx_freq": "434.500", "file_rx_freq": "434.500"}).ok
+    svc = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})
+    assert svc.save_config_bundle(
+        "chat", values={"file_tx_freq": "434.600", "file_rx_freq": "434.600"}).ok
+    assert _marker(tmp_path)["params"] == ["rx_freq", "tx_freq"]
+    assert svc.save_config_bundle("chat", values={"file_tx_freq": "434.500"}).ok
+    assert _marker(tmp_path)["params"] == ["rx_freq"]
+
+
+def test_one_save_that_restores_one_param_and_changes_another(tmp_path):
+    assert _svc(tmp_path).save_config_bundle(
+        "chat", values={"file_tx_freq": "434.500", "file_rx_freq": "434.500"}).ok
+    svc = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})
+    assert svc.save_config_bundle("chat", values={"file_tx_freq": "434.600"}).ok
+    assert svc.save_config_bundle(
+        "chat", values={"file_tx_freq": "434.500", "file_rx_freq": "434.700"}).ok
+    m = _marker(tmp_path)
+    assert m["params"] == ["rx_freq"]
+    assert list(m["launched"].values()) == ["434.500"]              # rx's launch value, not tx's
+    assert svc.save_config_bundle("chat", values={"file_rx_freq": "434.500"}).ok
+    assert _marker(tmp_path) is None
+
+
+def test_a_param_without_a_recorded_launch_value_is_never_cleared_by_a_revert(tmp_path):
+    # A marker written before launch values were recorded (or by the identity path) cannot
+    # know what the stack runs with: it stays until a restart, safe-side.
+    assert _svc(tmp_path).save_config_bundle("chat", values={"file_tx_freq": "434.500"}).ok
+    d = tmp_path / "state" / "restart-required"
+    d.mkdir(parents=True)
+    (d / "chat.json").write_text(json.dumps({"version": 1, "stack": "chat", "mode": "restart",
+                                             "params": ["tx_freq"], "band": "",
+                                             "created_at": 1.0}))
+    svc = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})
+    assert svc.save_config_bundle("chat", values={"file_tx_freq": "434.600"}).ok
+    assert svc.save_config_bundle("chat", values={"file_tx_freq": "434.500"}).ok
+    assert _marker(tmp_path)["params"] == ["tx_freq"]
+
+
+def test_a_removed_state_target_is_restored_on_rollback(tmp_path):
+    # The marker's removal is part of the transaction: a later failing target puts it back.
+    from lhpc.core.config import REMOVE
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "config").mkdir(parents=True)
+    marker = tmp_path / "state" / "restart-required" / "s.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text('{"keep": 1}')
+
+    def boom(_paths):
+        raise ValueError("later target fails")
+
+    with pytest.raises(ConfigError, match="rolled back"):
+        apply_config_transaction(paths, [
+            ("state", marker, lambda _p: REMOVE, 0o600),
+            ("stack", tmp_path / "config" / "stacks" / "s.toml", boom, 0o644),
+        ])
+    assert marker.read_text() == '{"keep": 1}'
+    apply_config_transaction(paths, [("state", marker, lambda _p: REMOVE, 0o600)])
+    assert not marker.exists()
+
+
+def test_only_a_state_target_can_be_removed(tmp_path):
+    from lhpc.core.config import REMOVE
+    paths = Paths(runtime_root=tmp_path)
+    target = tmp_path / "config" / "stacks" / "s.toml"
+    target.parent.mkdir(parents=True)
+    target.write_text("x = 1\n")
+    with pytest.raises(ConfigError):
+        apply_config_transaction(paths, [("stack", target, lambda _p: REMOVE, 0o644)])
+    assert target.read_text() == "x = 1\n"
+
+
 def test_marker_write_failure_rolls_back_whole_save(tmp_path):
     # A symlinked marker leaf makes the transaction REFUSE — atomicity means the config
     # change is NOT applied either (never changed-settings-without-warning).
@@ -190,6 +278,28 @@ def test_module_merge_rules(tmp_path):
     unsafe = {"unsafe": True, "stack": "chat", "mode": "restart", "params": ["junk"], "reason": "r"}
     assert _json.loads(rr.merged_payload(unsafe, "chat", ["y"], "", now=1.0))["params"] == ["y"]
     assert _json.loads(rr.merged_payload(None, "chat", [], "", mode="build", now=1.0))["mode"] == "build"
+
+
+def test_module_launched_values_validated_and_merged(tmp_path):
+    import json as _json
+    from lhpc.core import restart_required as rr
+    from lhpc.core.paths import Paths
+    paths = Paths(runtime_root=tmp_path)
+    p = rr.marker_path(paths, "chat"); p.parent.mkdir(parents=True)
+    good = {"version": 1, "stack": "chat", "mode": "restart", "params": ["tx_freq"], "band": "",
+            "created_at": 1.0, "launched": {"|loraham-chat|tx_freq": "434.500"}}
+    p.write_text(_json.dumps(good))
+    assert rr.read_marker(paths, "chat") == good
+    for bad in ([], {"k": 1}, {"": "v"}, {"k\x01": "v"}):
+        p.write_text(_json.dumps({**good, "launched": bad}))
+        assert rr.read_marker(paths, "chat")["unsafe"] is True
+    # The FIRST recorded value is the launch value: a later change never overwrites it.
+    out = _json.loads(rr.merged_payload(good, "chat", ["tx_freq"], "", now=2.0,
+                                        launched={"|loraham-chat|tx_freq": "434.600"}))
+    assert out["launched"] == {"|loraham-chat|tx_freq": "434.500"}
+    # A name added WITHOUT a launch value (the identity path) makes that name untracked.
+    out = _json.loads(rr.merged_payload(good, "chat", ["tx_freq"], "", now=2.0))
+    assert "launched" not in out and out["params"] == ["tx_freq"]
 
 
 def test_module_clear_is_silent_on_a_missing_marker(tmp_path):

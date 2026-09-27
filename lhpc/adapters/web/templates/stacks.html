@@ -9,8 +9,8 @@
   <h2 class="visually-hidden">Stacks</h2>
   <section class="tiles">
     <div class="tile"><div class="n">{{ summary.stacks }}</div><div class="l">Stacks</div></div>
-    <div class="tile"><div class="n">{{ summary.states.get('running', 0) }}</div><div class="l">Running</div></div>
-    <div class="tile"><div class="n">{{ summary.states.get('degraded', 0) + summary.states.get('failed', 0) }}</div><div class="l">Degraded / failed</div></div>
+    <div class="tile"><div class="n">{{ summary.stack_states.get('running', 0) }}</div><div class="l">Running</div></div>
+    <div class="tile"><div class="n">{{ summary.stack_states.get('degraded', 0) + summary.stack_states.get('failed', 0) }}</div><div class="l">Degraded / failed</div></div>
     <div class="tile"><div class="n">{{ observed_conflicts|length }}</div><div class="l">Active conflicts</div></div>
   </section>
 

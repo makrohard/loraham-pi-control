@@ -528,7 +528,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ia.add_argument("--yes", action="store_true", help="Apply without confirmation")
     p_ia.add_argument("--source", choices=("pinned", "dev", "stable", "binary"), default="",
                       help="Channel for every stack (default: each stack's own — binary where "
-                           "published, else dev)")
+                           "published, else pinned)")
     p_ia.add_argument("--tests", action="store_true",
                       help="Run host tests (OFF by default, matching the web Auto-install page)")
     p_ia.add_argument("--tx", action="store_true",
@@ -617,6 +617,12 @@ def build_parser() -> argparse.ArgumentParser:
                                         "(no restart — e.g. re-apply the MeshCom callsign)")):
         sp = stack_sub.add_parser(action, help=ahelp)
         sp.add_argument("stack", help="Stack or component id")
+        if action == "start":
+            # The band a band-switchable stack starts on, as the console's per-band Start does;
+            # the service refuses a band the hardware or the stack cannot serve (band_refusal).
+            from lhpc.core.daemon_control import ALLOWED_BANDS
+            sp.add_argument("--band", default="", choices=ALLOWED_BANDS,
+                            help="Start on this band (band-switchable stacks); default: the saved one")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
 
     # Per-stack settings (callsign/params/daemon params) and the global operator identity.
@@ -772,7 +778,8 @@ def build_parser() -> argparse.ArgumentParser:
             sp.add_argument("--source", choices=("pinned", "dev", "stable", "binary"),
                             default="",
                             help="Version to fetch: prebuilt binary / latest dev / latest "
-                                 "stable / pinned (default: keep the stack's current channel)")
+                                 "stable / pinned (default: pinned; a stack installed from "
+                                 "the binary stays on it)")
             sp.add_argument("--upstream", action="store_true",
                             help="For a fetched package (graywolf): update to the latest "
                                  "upstream release, verified against its own checksums.txt")
@@ -1258,8 +1265,21 @@ def _run(argv: list[str] | None = None) -> int:
 
     if args.command == "stack":
         if args.stack_action in ("start", "stop", "restart", "poststart"):
-            return _apply_flow(
-                lambda a: svc.run_action(args.stack_action, args.stack, apply=a), yes=args.yes)
+            from dataclasses import replace
+
+            from lhpc.core.outcomes import manual_required_only
+
+            def _run(a):
+                res = svc.run_action(args.stack_action, args.stack, apply=a,
+                                     band=getattr(args, "band", ""))
+                # An interactive MAIN component (chat) whose command was presented is the
+                # expected outcome of a start, not a failure: show it as success, exactly as the
+                # web job does. `ok` stays strict in the core (nothing is verified running).
+                if (a and args.stack_action == "start" and not res.ok
+                        and manual_required_only(res.results)):
+                    return replace(res, ok=True)
+                return res
+            return _apply_flow(_run, yes=args.yes)
         # argparse's --help action calls sys.exit(0), so routing a usage error through
         # it exited 0 and `lhpc stack || handle_error` silently passed. Every sibling
         # (config, logs, build, daemon, ...) exits 2 on a missing argument; match them.

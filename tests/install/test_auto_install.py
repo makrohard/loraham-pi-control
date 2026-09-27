@@ -93,7 +93,7 @@ def test_plan_header_names_the_channel_even_without_a_run_wide_source(tmp_path):
     "source: " (live-found on the Zero). With an explicit channel it stays verbatim."""
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     bare = next(d for d in svc.auto_install(source="", apply=False).details if "host tests:" in d)
-    assert "source: per stack (binary where published, else dev)" in bare
+    assert "source: per stack (binary where published, else pinned)" in bare   # default_channel()
     named = next(d for d in svc.auto_install(source="pinned", apply=False).details
                  if "host tests:" in d)
     assert named.endswith("source: pinned")

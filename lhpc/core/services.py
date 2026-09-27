@@ -383,17 +383,19 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 # Lock order #1: task admission, held across the whole source mutation (build/test/
                 # install/update/uninstall/clean). Reentrant, so a source op nested inside an admitted
                 # auto-install reuses the held lock.
-                self._admit(src_stack, op, "")
+                # The target names the sources, so a contender reads WHAT is busy (it said '').
+                target = ", ".join(sorted(source_paths))
+                self._admit(src_stack, op, target)
                 if missing:
                     # Index held across recovery + the source-lock handoff, then released.
-                    with reslock.operation_lock(self._paths, inst._index_key(), op, ""):
+                    with reslock.operation_lock(self._paths, inst._index_key(), op, target):
                         inst._recover_scan()
                         if inst._pending_journals():
                             raise SourceTxnBlocked(
                                 "an unresolved source-transaction journal is present — "
                                 "resolve it before any source operation")
                         for k in missing:
-                            self._acquire_key(src_stack, k, op, "")
+                            self._acquire_key(src_stack, k, op, target)
                 # OUTERMOST non-auto-install source op: with the source locks now held, recheck the
                 # auto-install gate and REFUSE if a run is running/interrupted/UNSAFE. This closes the
                 # window where an `unsafe` auto-install has released its locks but a process may still

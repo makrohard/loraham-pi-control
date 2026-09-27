@@ -298,7 +298,7 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/RadioLib"
-    # `--source pinned` adopts this pin (a known-working composition entry overrides it); a bare install takes the binary channel above where published, else `dev` — docs/cli.md § install.
+    # `--source pinned` adopts this pin (a known-working composition entry overrides it); a bare install takes the binary channel above where published, else `pinned` — docs/cli.md § install.
     pin_commit = "187ef24791c3d844939b2be13a68bd890bd04e4c"
     pin_tag = "7.7.1-57-g187ef247"
     remote = "https://github.com/jgromes/RadioLib"

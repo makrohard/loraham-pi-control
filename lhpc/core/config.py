@@ -1750,6 +1750,12 @@ def recover_config_transaction(paths: Paths) -> str | None:
     return f"recovered a pending config transaction ({len(resolved)} file(s))"
 
 
+# A renderer's answer meaning "this file goes away" (a restart marker whose last reason was
+# undone). Only a `state` target may be removed; its pre-image is journaled like any other, so a
+# rollback or a crash recovery puts it back.
+REMOVE = object()
+
+
 def apply_config_transaction(paths: Paths, targets: list[tuple[str, Path, str, int]]) -> None:
     """Write several config files all-or-recoverable under one lock. Each target is
     (logical-kind, path, content, mode). Steps: recover/\u200bblock any pending journal;
@@ -1800,10 +1806,19 @@ def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path
         # None WITHDRAWS a target: a decision that can only be taken with the authoritative state
         # in hand ("is a restart marker warranted?") belongs inside the transaction, not in the
         # pre-lock build. The journal holds its pre-image either way.
-        rendered = [(p, content(paths) if callable(content) else content, mode)
-                    for _kind, p, content, mode in targets]
-        for p, body, mode in rendered:
+        rendered = [(kind, p, content(paths) if callable(content) else content, mode)
+                    for kind, p, content, mode in targets]
+        for kind, p, body, _mode in rendered:
+            if body is REMOVE and kind != "state":
+                raise ConfigError(f"only a state target can be removed, not {kind} {p}")
+        for _kind, p, body, mode in rendered:
             if body is None:
+                continue
+            if body is REMOVE:
+                try:
+                    runtime_fs.unlink(paths, p)       # descriptor-anchored, no-follow
+                except FileNotFoundError:
+                    pass
                 continue
             _atomic_write(paths, p, body, mode)
     except Exception as failure:

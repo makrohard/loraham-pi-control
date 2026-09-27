@@ -949,10 +949,10 @@ class AutoInstallOpsMixin:
                        f"{', '.join(c.id for c in (w.source or w.build or st.components))}"
                        for st, w in scope]
             # No run-wide `--source` means every row uses its OWN default (binary where published,
-            # else dev) — say so instead of printing an empty value.
+            # else pinned) — say so instead of printing an empty value.
             details.append(f"  host tests: {'on' if tests else 'off'}; "
                            f"TX test: {'ON (real RF!)' if tx else 'off'}; "
-                           f"source: {source or 'per stack (binary where published, else dev)'}")
+                           f"source: {source or 'per stack (binary where published, else pinned)'}")
             # PRE-FLIGHT dep gate: mandatory-missing stacks will be SKIPPED at run time; optional
             # missing deps only warn. Surfaced here so the operator can abort (answer N) and install
             # the copyable commands first, or continue to skip the blocked stacks.
@@ -1018,7 +1018,7 @@ class AutoInstallOpsMixin:
             if res is None:
                 if sel is None:
                     # An UNSET selector means "each stack's own default" (binary where
-                    # published, else dev) — a uniform global "dev" would compile the three
+                    # published, else pinned) — a uniform global "dev" would compile the three
                     # heavy stacks from source on a fresh box.
                     sel = {st.id: {"install": True,
                                    "version": source or self.default_channel(st.id),

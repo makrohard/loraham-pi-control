@@ -517,6 +517,84 @@ def test_stack_poststart_is_a_command(tmp_path, monkeypatch, capsys):
     assert "re-run post-start" in capsys.readouterr().out
 
 
+@pytest.mark.contract
+def test_stack_start_takes_a_band(monkeypatch, capsys):
+    # F-A2: the console starts a band-switchable stack on one band; the CLI can too. The band
+    # reaches the service for the plan AND the apply.
+    from lhpc.core.services import ControllerService, ActionResult
+    calls = []
+    def cap(self, op, target, **kw):
+        calls.append((op, target, kw.get("apply"), kw.get("band")))
+        return ActionResult(True, "ok", data={"changes": 1})
+    monkeypatch.setattr(ControllerService, "run_action", cap)
+    assert main(["stack", "start", "daemon", "--band", "433", "--yes"]) == 0
+    assert calls == [("start", "daemon", False, "433"), ("start", "daemon", True, "433")]
+    calls.clear()
+    assert main(["stack", "start", "daemon", "--yes"]) == 0
+    assert calls[-1] == ("start", "daemon", True, "")          # no flag: the saved band, as before
+
+
+@pytest.mark.contract
+def test_stack_start_of_an_interactive_main_is_success(monkeypatch, capsys):
+    # chat: the daemon is ensured and the TUI's command printed — the expected outcome of an
+    # interactive stack (outcomes.manual_required_only). The CLI shows it as success, like the web
+    # job and like voice, whose interactive part is a sidecar; `ok` itself stays strict.
+    from lhpc.core.outcomes import CompResult, Outcome
+    from lhpc.core.services import ActionResult
+
+    def result(*outcomes):
+        return tuple(CompResult(component=f"c{i}", action="start", outcome=o)
+                     for i, o in enumerate(outcomes))
+
+    def fake(apply_results):
+        def run(self, op, target, **kw):
+            if not kw.get("apply"):
+                return ActionResult(True, "Run plan", data={"changes": 1})
+            return ActionResult(False, f"Run for '{target}': manual start required for c1 — see "
+                                "the dashboard.", results=apply_results)
+        return run
+
+    monkeypatch.setattr(ControllerService, "run_action",
+                        fake(result(Outcome.VERIFIED, Outcome.MANUAL_REQUIRED)))
+    assert main(["stack", "start", "chat", "--yes"]) == 0
+    assert "OK    Run for 'chat': manual start required" in capsys.readouterr().out
+    # a real failure beside the manual step is still a failure
+    monkeypatch.setattr(ControllerService, "run_action",
+                        fake(result(Outcome.FAILED, Outcome.MANUAL_REQUIRED)))
+    assert main(["stack", "start", "chat", "--yes"]) == 1
+    assert "ERR" in capsys.readouterr().out
+
+
+@pytest.mark.contract
+def test_stack_start_refuses_a_band_the_box_does_not_serve(tmp_path, monkeypatch, capsys):
+    # A 433-only board: `--band 868` is refused in the PLAN, before anything starts.
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["hardware", "waveshare-433"]) == 0
+    capsys.readouterr()
+    assert main(["stack", "start", "daemon", "--band", "868"]) == 1
+    out = capsys.readouterr().out
+    assert "Cannot start 'daemon' on 868 MHz" in out and "lhpc hardware" in out
+    with pytest.raises(SystemExit) as exc:
+        main(["stack", "start", "daemon", "--band", "915"])  # not a band LHPC knows
+    assert exc.value.code == 2
+
+
+@pytest.mark.contract
+def test_stack_start_plan_repeats_the_band_in_its_next_command(tmp_path, monkeypatch, capsys):
+    # The plan's copyable "Next:" line must keep --band: without it, pasting the line starts the
+    # stack on its SAVED band, not the one the operator asked for.
+    import lhpc.adapters.cli.main as cli
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["hardware", "waveshare-433"]) == 0
+    capsys.readouterr()
+    monkeypatch.setattr(cli, "_confirm", lambda _prompt: False)   # show the plan, apply nothing
+    assert main(["stack", "start", "daemon", "--band", "433"]) == 0
+    assert "lhpc stack start daemon --band 433 --yes" in capsys.readouterr().out
+    assert main(["stack", "start", "daemon"]) == 0
+    out = capsys.readouterr().out
+    assert "lhpc stack start daemon --yes" in out and "--band" not in out
+
+
 def test_stack_poststart_dispatches_run_action(monkeypatch, capsys):
     from lhpc.core.services import ControllerService, ActionResult
     calls = []
@@ -578,6 +656,23 @@ def test_docs_cli_lists_every_command():
     doc = (repo_paths.REPO / "docs" / "cli.md").read_text()
     missing = [c for c in subs.choices if f"### {c}" not in doc]
     assert not missing, f"docs/cli.md missing sections for: {missing}"
+
+
+def test_update_source_help_names_the_real_default():
+    # K1 (Audit Agent 2, round 7): the help said "default: keep the stack's current channel";
+    # without --source the CLI updates a binary-installed target binary->binary, any other to
+    # `pinned` (the `update` branch of main()).
+    import argparse
+    from lhpc.adapters.cli.main import build_parser
+    subs = [a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction)][0]
+    source = next(a for a in subs.choices["update"]._actions if "--source" in a.option_strings)
+    assert "keep the stack's current channel" not in source.help
+    assert "default: pinned" in source.help and "installed from the binary stays on it" in source.help, \
+        source.help
+    # K1b: auto-install's --source help named "else dev"; default_channel() returns binary where
+    # published, else pinned.
+    auto = next(a for a in subs.choices["auto-install"]._actions if "--source" in a.option_strings)
+    assert "binary where published, else pinned" in auto.help, auto.help
 
 
 # --- auto-install --recover / --status (item R: headless recovery parity) -------------------------

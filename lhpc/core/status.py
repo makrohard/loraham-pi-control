@@ -398,14 +398,20 @@ _SEVERITY = {
 
 
 def summarize(snapshot: Snapshot) -> dict:
-    """Counts for the dashboard overview tiles (presentation-neutral)."""
+    """Counts for the dashboard overview tiles (presentation-neutral). `states` counts
+    components; `stack_states` counts stacks by their rollup (a stack whose main is dead while
+    its sidecars run is degraded), the unit the tiles show beside the stack count."""
     states: dict[str, int] = {}
     components = 0
     for ss in snapshot.stacks:
         for st in ss.components.values():
             components += 1
             states[st.run_state.value] = states.get(st.run_state.value, 0) + 1
-    return {"stacks": len(snapshot.stacks), "components": components, "states": states}
+    stack_states: dict[str, int] = {}
+    for value in rollup_states(snapshot).values():
+        stack_states[value] = stack_states.get(value, 0) + 1
+    return {"stacks": len(snapshot.stacks), "components": components, "states": states,
+            "stack_states": stack_states}
 
 
 def stack_dependencies(stacks) -> dict[str, list[str]]:
@@ -445,6 +451,14 @@ def rollup_states(snapshot: Snapshot) -> dict[str, str]:
                 continue
             if _SEVERITY[st.run_state] > _SEVERITY[worst]:
                 worst = st.run_state
+        # A stack whose MAIN component is stopped while another of its components runs is only
+        # partially running (e.g. the node killed, its GPS bridge and web UI still up): degraded,
+        # not running. An interactive main never runs under lhpc, so it cannot trigger this.
+        main = next((c for c in ss.stack.components if c.id == ss.stack.main), None)
+        main_st = ss.components.get(ss.stack.main)
+        if (worst is RunState.RUNNING and main is not None and not main.interactive
+                and main_st is not None and main_st.run_state is RunState.STOPPED):
+            worst = RunState.DEGRADED
         out[ss.stack.id] = worst.value
     return out
 
