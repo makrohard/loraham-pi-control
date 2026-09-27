@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 # A minimal but REAL `/api/system` payload: the keys are the ones the endpoint actually
 # emits (rx_bytes/tx_bytes, *_kb, free_b/total_b), so these tests break if that machine
 # contract changes — which is exactly what they should be sensitive to.
@@ -46,7 +48,7 @@ def _sample(ts, *, net=None, swap=False, power=False, time_row=False):
         # `epoch` AND `utc` are what anchor the local 1 Hz clock — without both, the row
         # shows the sent string and never ticks.
         d["time"] = {"local": "2026-01-01 13:00:00", "utc": "2026-01-01 12:00:00",
-                     "tz": "CET", "label": "synced", "epoch": 1767268800.0,
+                     "tz": "CET", "label": "NTP", "epoch": 1767268800.0,
                      "daemons": ["chrony"]}
     return d
 
@@ -126,3 +128,148 @@ def test_the_clock_advances_without_a_new_request(page):
         "(prev) => { const e = document.getElementById('sys-time-val');"
         " return e && e.textContent !== prev; }", arg=first, timeout=15000)
     assert page.locator("#sys-time-val").inner_text() != first
+
+
+# --- GPS row: the GPS Monitor's /api/gps, riding on the box's own poll ------------------------
+# Payloads carry the keys the row reads from `service.gps_monitor()` (state, label, lat, lon).
+
+def _gps(state, label, lat=None, lon=None):
+    return {"source": "gpsd", "state": state, "label": label, "lat": lat, "lon": lon}
+
+
+def _serve_gps(page, payload):
+    """Answer `/api/gps` with `payload` and count the requests."""
+    seen = {"n": 0}
+
+    def handler(route):
+        seen["n"] += 1
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
+
+    page.route("**/api/gps", handler)
+    return seen
+
+
+def _gps_row(page):
+    """The GNSS row as the operator reads it: (pill text, pill colour class, coordinates)."""
+    cls = [c for c in (page.locator("#sys-gps-state").get_attribute("class") or "").split()
+           if c.startswith("pill-")]
+    return (page.locator("#sys-gps-state").text_content(), cls[0] if cls else "plain",
+            " ".join(page.locator("#sys-gps-val").text_content().split()))
+
+
+def _wait_gps_state(page, text):
+    page.wait_for_function(
+        "(t) => { const e = document.getElementById('sys-gps-state'); return e && e.textContent === t; }",
+        arg=text, timeout=15000)
+
+
+def test_gps_row_shows_the_fix_with_the_monitors_precision(page):
+    _serve(page, [_sample(0, net=0)])
+    _serve_gps(page, _gps("3d", "3D fix", 48.123456789, -9.87654321))
+    _open_box(page)
+    _wait_gps_state(page, "3D fix")
+    assert _gps_row(page) == ("3D fix", "pill-ok", "48.123457 -9.876543")
+
+
+def test_gps_row_without_a_fix_shows_the_state_and_no_coordinates(page):
+    _serve(page, [_sample(0, net=0)])
+    _serve_gps(page, _gps("no-fix", "no fix"))
+    _open_box(page)
+    _wait_gps_state(page, "no fix")
+    assert _gps_row(page) == ("no fix", "pill-bad", "—")
+
+
+def test_gps_row_without_a_receiver_shows_no_position_source(page):
+    _serve(page, [_sample(0, net=0)])
+    _serve_gps(page, {"source": "off", "state": "off", "label": "no position source",
+                      "lat": None, "lon": None})
+    _open_box(page)
+    _wait_gps_state(page, "off")
+    assert _gps_row(page) == ("off", "plain", "—")
+    assert page.locator("#sys-gps-state").get_attribute("title") == "no position source"
+
+
+@pytest.mark.parametrize("state, label, word, lat, cls", [
+    ("2d", "2D fix", "2D fix", 48.4, "pill-warn"),
+    ("fix", "fix (dimension unknown)", "fix", 48.4, "pill-warn"),
+    ("stale", "stale — no navigation data for a while", "stale", None, "pill-bad"),
+    ("gpsd-no-data", "gpsd device present, no position data yet", "no data", None, "pill-bad"),
+    ("fixed", "fixed position (configured)", "fixed", 48.4, "plain"),
+    ("auto-off", "auto: no gpsd on this box — no position", "no GPS", None, "plain"),
+])
+def test_gnss_pill_colour_for_every_state_class(page, state, label, word, lat, cls):
+    # The approved mapping: green 3D (above), yellow 2D / unknown dimension, red a receiver
+    # without navigation, plain for no GPS and for states that are not a receiver's fix.
+    _serve(page, [_sample(0, net=0)])
+    _serve_gps(page, _gps(state, label, lat, None if lat is None else 11.6))
+    _open_box(page)
+    _wait_gps_state(page, word)
+    assert _gps_row(page)[1] == cls
+    assert page.locator("#sys-gps-state").get_attribute("title") == label   # full label as tooltip
+
+
+def test_gps_row_escapes_what_the_server_sends(page):
+    # textContent, never innerHTML: a label carrying markup renders as text.
+    _serve(page, [_sample(0, net=0)])
+    _serve_gps(page, _gps("<img src=x onerror=alert(1)>", "<img src=x onerror=alert(1)>"))
+    _open_box(page)
+    _wait_gps_state(page, "<img src=x onerror=alert(1)>")
+    assert page.locator("#sys-gps img").count() == 0
+
+
+def test_a_closed_box_makes_no_request_and_an_open_one_asks_gps_every_second_poll(page):
+    # Closed (the default): nothing at all is fetched, neither /api/system nor /api/gps.
+    sysn = _serve(page, [_sample(0, net=0)])
+    gps = _serve_gps(page, _gps("3d", "3D fix", 1.0, 2.0))
+    page.goto(page.lab_base + "/", wait_until="networkidle")
+    assert not page.locator("#sysbox").evaluate("e => e.open")
+    page.wait_for_timeout(5000)                       # 2.5 poll intervals
+    assert (sysn["i"], gps["n"]) == (0, 0)
+    assert _gps_row(page) == ("…", "plain", "")
+    # Open: /api/gps rides on the poll — the first tick, then every second one.
+    page.locator("#sysbox summary").first.click()
+    _wait_gps_state(page, "3D fix")
+    page.wait_for_timeout(6500)
+    polls, asks = sysn["i"], gps["n"]
+    assert polls >= 3 and 1 <= asks <= (polls + 1) // 2, (polls, asks)
+    # Closed again: both stop.
+    page.locator("#sysbox summary").first.click()
+    page.wait_for_function("() => !document.getElementById('sysbox').open", timeout=5000)
+    page.wait_for_timeout(500)
+    frozen = (sysn["i"], gps["n"])
+    page.wait_for_timeout(5000)
+    assert (sysn["i"], gps["n"]) == frozen
+
+
+
+# --- Network row: the Wi-Fi pill's colour bands on integers, exactly as approved --------------
+# The lab box is a Wi-Fi client ("LabNet" on wlan0), so the server renders the Wi-Fi pill; the
+# test drives the REAL system.js with controlled `wifi` samples.
+
+def test_network_row_wifi_pill_bands_and_alignment(page):
+    samples = []
+    for i, dbm in enumerate((-67, -68, -75, -76, None)):
+        s = _sample(i, net=0, time_row=True)
+        if dbm is not None:
+            s["wifi"] = {"wlan0": dbm}
+        samples.append(s)
+    _serve(page, samples)
+    _open_box(page)
+    assert page.locator("#sys-wifi-pill").get_attribute("data-dev") == "wlan0"
+    for text, cls in (("-67 dBm", "pill-ok"), ("-68 dBm", "pill-warn"),
+                      ("-75 dBm", "pill-warn"), ("-76 dBm", "pill-bad")):
+        page.wait_for_function(
+            "(t) => { const p = document.getElementById('sys-wifi-pill'); return p && p.textContent === t; }",
+            arg=text, timeout=15000)
+        classes = page.locator("#sys-wifi-pill").get_attribute("class").split()
+        assert [c for c in classes if c.startswith("pill-")] == [cls], (text, classes)
+    # Time, Network (and GNSS) share one layout: pill column and text column line up.
+    geo = page.evaluate("""() => { const x = (id) => document.getElementById(id).getBoundingClientRect().left;
+        return {tp: x('sys-time-pill'), np: x('sys-wifi-pill'), gp: x('sys-gps-state'),
+                tt: x('sys-time-val'), nt: x('sys-link-val'), gt: x('sys-gps-val')}; }""")
+    assert max(geo["tp"], geo["np"], geo["gp"]) - min(geo["tp"], geo["np"], geo["gp"]) <= 1, geo
+    assert max(geo["tt"], geo["nt"], geo["gt"]) - min(geo["tt"], geo["nt"], geo["gt"]) <= 1, geo
+    # a sample without `wifi` (the link went away) returns the pill to plain "Wi-Fi"
+    page.wait_for_function(
+        "() => { const p = document.getElementById('sys-wifi-pill'); return p.textContent === 'Wi-Fi' && !/pill-(ok|warn|bad)/.test(p.className); }",
+        timeout=15000)

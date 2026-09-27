@@ -70,7 +70,7 @@ def _dash_body(web, tmp_path, monkeypatch, rows):
     return web(service_factory=lambda: _svc(tmp_path)).get("/").get_data(as_text=True)
 
 
-_CONSOLE = {"kind": "console", "name": "LHCP", "port": "8770", "logs_component": None,
+_CONSOLE = {"kind": "console", "name": "LHPC", "port": "8770", "logs_component": None,
             "posture": {"auth": "open", "iface": "loopback", "sec_level": "ok", "scheme": "https",
                         "auth_level": "ok", "iface_level": "ok", "scheme_level": "ok",
                         "run": "lhpc-web", "run_level": "ok"}}

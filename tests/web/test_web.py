@@ -701,6 +701,97 @@ def test_dashboard_system_box_collapsed_by_default(web):
     assert any(t["aria-label"] for t in doc.find("table", **{"class": "systab"}))
 
 
+def test_dashboard_system_box_gnss_row_is_static_linked_and_after_network(web):
+    # The GNSS row: the Time row's layout; "GNSS" links to the GPS Monitor's deep link; the pill
+    # and the coordinates hold placeholders — the server renders NO GPS value and calls no GPS
+    # probe (system.js fetches the Monitor's /api/gps only while the box is open).
+    class NoGpsProbe(ReadOnlyGuard):
+        def __getattr__(self, name):
+            if name.startswith("gps_monitor") or name == "gps_nmea":
+                raise AssertionError(f"dashboard render called {name}")
+            return super().__getattr__(name)
+
+    body = web(guard=NoGpsProbe).get("/").get_data(as_text=True)
+    doc = parse(body)
+    row = doc.by_id("sys-gps")
+    assert row.tag == "tr" and row["class"] == "sysrow sysrow-time"
+    cells = doc.within(row)
+    links = cells.find("a")
+    assert [a.text for a in links] == ["GNSS"] and [th.text for th in cells.find("th")] == ["GNSS"]
+    assert links[0]["href"] == "/stacks?open=gps#gps-row"   # opens Position + the Monitor
+    pill = doc.by_id("sys-gps-state")
+    assert pill["class"] == "pill" and pill.text == "…"      # plain until the first sample
+    assert doc.by_id("sys-gps-lat").text == doc.by_id("sys-gps-lon").text == ""
+    # order: Time, (Network,) GNSS inside the metrics table, then Autostart
+    i_gps = body.index('id="sys-gps"')
+    assert body.index('id="sys-time-row"') < i_gps < body.index("</table>") \
+        < body.index('class="sysautostart sysblock"')
+    if 'id="sys-link-row"' in body:
+        assert body.index('id="sys-link-row"') < i_gps
+
+
+def test_dashboard_gnss_row_follows_the_network_row(tmp_path, web, monkeypatch):
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    # the Network row directly above the GNSS row
+    monkeypatch.setattr(svc, "network_view", lambda: {
+        "supported": True, "mode": "client",
+        "active": {"name": "Suche", "address": "192.0.2.7/24"}})
+    body = web(service_factory=lambda: svc).get("/").get_data(as_text=True)
+    assert "Suche (192.0.2.7/24)" in body
+    assert (body.index('id="sys-link-row"') < body.index('id="sys-gps"')
+            < body.index('class="sysautostart sysblock"'))
+
+
+_CLIENT = {"name": "Suche...", "address": "192.168.178.106/24", "device": "wlan0"}
+
+
+@pytest.mark.parametrize("view, pill, pill_class, text", [
+    # wired uplink wins over Wi-Fi (and over the own AP)
+    ({"supported": True, "mode": "client", "active": _CLIENT,
+      "ethernet": {"name": "Wired", "device": "eth0", "address": "192.168.1.9/24"}},
+     "Eth", "pill pill-ok", "Wired (192.168.1.9/24)"),
+    ({"supported": True, "mode": "client", "active": _CLIENT, "ethernet": {}},
+     "Wi-Fi", "pill", "Suche... (192.168.178.106/24)"),
+    ({"supported": True, "mode": "ap", "ap_ssid": "lhpc-e293", "ethernet": {},
+      "active": {"name": "lhpc-ap", "address": "10.42.0.1/24", "device": "wlan0"}},
+     "AP", "pill pill-ok", "lhpc-e293 (10.42.0.1/24)"),
+    ({"supported": True, "mode": "off", "active": {}, "ethernet": {}},
+     "none", "pill", "no active network"),
+])
+def test_dashboard_network_row_pill_and_text(tmp_path, web, monkeypatch, view, pill, pill_class, text):
+    # The Network row sits in the metrics table in the Time row's layout (label | pill | text),
+    # after Time; exactly one pill. The Wi-Fi pill carries the device system.js reads the signal
+    # for; Eth/AP are fixed green, none is plain.
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(svc, "network_view", lambda: view)
+    body = web(service_factory=lambda: svc).get("/").get_data(as_text=True)
+    doc = parse(body)
+    row = doc.by_id("sys-link-row")
+    assert row.tag == "tr" and row["class"] == "sysrow sysrow-time"
+    cells = doc.within(row)
+    assert [th.text for th in cells.find("th")] == ["Net"]
+    links = cells.find("a")                                  # the label links to the Network panel
+    assert [a.text for a in links] == ["Net"]
+    assert links[0]["href"] == "/stacks?open=network#controller-network"
+    pills = cells.find("span", class_="pill")
+    assert len(pills) == 1 and pills[0].text == pill and pills[0]["class"] == pill_class
+    if pill == "Wi-Fi":
+        assert pills[0]["id"] == "sys-wifi-pill" and pills[0]["data-dev"] == "wlan0"
+    assert doc.by_id("sys-link-val").text == text
+    assert body.index('id="sys-time-row"') < body.index('id="sys-link-row"') < body.index("</table>")
+    assert "network: " not in body                          # the old line is gone
+
+
+def test_dashboard_network_row_absent_without_the_managed_network(tmp_path, web, monkeypatch):
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(svc, "network_view", lambda: {"supported": False})
+    doc = parse(web(service_factory=lambda: svc).get("/").get_data(as_text=True))
+    assert doc.by_id("sys-link-row") is None
+
+
 @pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
 def test_build_action_redirects_to_live_log(web, csrf):
     c = web()
@@ -1244,16 +1335,25 @@ _DAEMON_UP = {100: ["loraham_daemon", "--radio", "433"]}
     ("offline-installed", _DAEMON_UP, {}),
 ], ids=["ready", "occupied", "offline-installed"])
 def test_the_radio_card_log_links_sit_directly_under_the_daemon_control(tmp_path, web, state, cmdlines, socks):
-    """One link block per band card, defined once: the element right after the daemon's own
-    Stop/Start form, in every state the daemon is installed in."""
+    """One link block per band card, defined once, in every state the daemon is installed in.
+    While the daemon serves the band each entry is on its own line in the maintainer's order:
+    the Stop form, then "Radio config", then the log links ("Daemon log", the RF logs); otherwise
+    the links sit right after the daemon's Start form."""
     c = web(system=FakeSystem(cmdlines_data=cmdlines, unix_replies=socks).system)
     doc = parse(c.get("/").get_data(as_text=True))
     col = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
     forms = [f for f in col.find("form") if col.within(f).field_default("target") == "daemon"]
     assert len(forms) == 1, "exactly one daemon control on the card"
     links = col.find("p", class_="links")
-    assert len(links) == 1 and links[0].index == forms[0].end + 1
-    assert col.within(links[0]).find("a", href="/logs/loraham-daemon?band=433")
+    assert len(links) == 1
+    if state in ("ready", "occupied"):
+        heads = [h for h in col.find("h3") if h.text.strip() == "Radio config"]
+        assert len(heads) == 1 and heads[0].index == forms[0].end + 1     # Stop, then Radio config
+        assert links[0].index == heads[0].end + 1                          # then the log links
+    else:
+        assert links[0].index == forms[0].end + 1
+    log = col.within(links[0]).find("a", href="/logs/loraham-daemon?band=433")
+    assert log and log[0].text == "Daemon log"
 
 
 def test_the_radio_card_has_no_log_links_without_a_daemon(web):

@@ -209,6 +209,50 @@ class DemoService(ControllerService):
         from . import daemon_sim
         return "STATUS " + " ".join(f"{k}={v}" for k, v in daemon_sim.status(band).items())
 
+    # --- simulated GPS receiver: make the Monitor under Position LIVE. Synthetic NMEA goes through
+    #     the product's own parser (gps.NmeaSnapshot), so the snapshot has the real shape. A
+    #     browser has no gpsd and no serial port; the real probe would only report "no receiver".
+    def _gps_sim_snapshot(self) -> dict:
+        from lhpc.core import gps as _gps
+
+        from . import gps_sim
+        snap = _gps.NmeaSnapshot()
+        for line in gps_sim.sentences():
+            snap.feed(line)
+        return snap.snapshot()
+
+    def gps_monitor(self) -> dict:
+        from lhpc.core import gps as _gps
+        s = self._gps_sim_snapshot()
+        out = {"source": "nmea", "resolved_source": "nmea", "available": True,
+               "note": "Simulated receiver (demo): a fixed position and sky.", "error": "",
+               "nmea_ok": True, "devices": [], "device": "simulated receiver (demo)"}
+        out.update({k: s[k] for k in ("state", "mode", "lat", "lon", "alt", "alt_kind", "time",
+                                      "time_has_date", "sats_used", "sats_seen", "satellites",
+                                      "nmea")})
+        out["label"] = _gps.monitor_label(out["state"])
+        return out
+
+    def gps_nmea(self) -> list[str]:
+        return list(self._gps_sim_snapshot()["nmea"])
+
+    # --- simulated clock: a box synced by systemd-timesyncd, so the product's own Time-row logic
+    #     shows green "NTP" (a demo seen by new users must not show a fault it does not have). ---
+    def _kernel_time_state(self):
+        return {"synced": True, "maxerror_us": 20_000}
+
+    def _time_daemons(self, fs):
+        return ["systemd-timesyncd"]
+
+    # --- simulated Wi-Fi client: the dashboard's Network row (and its signal pill) and the
+    #     Network panel render the way they do on a box joined to a home network. -------------
+    def network_view(self) -> dict:
+        return {"supported": True, "authorized": True, "mode": "client",
+                "active": {"uuid": "demo-wifi", "name": "demo-wifi", "device": "wlan0",
+                           "address": "192.168.1.50/24"},
+                "ethernet": {}, "stored": [], "preferred": {}, "hostname": "loraham-demo", "outcome": {},
+                "scan": [], "pending": False}
+
     # --- simulated host metrics: make the System box LIVE. Feed synthetic RAW /proc text
     #     through the REAL parsers so the shape can never drift from the product; the browser
     #     derives rates from the growing counters between polls. -----------------------------
@@ -221,6 +265,7 @@ class DemoService(ControllerService):
         out["load"] = ss.parse_loadavg(system_sim.loadavg())
         out["mem"] = ss.parse_meminfo(system_sim.meminfo())
         out["net"] = ss.parse_net_dev(system_sim.net_dev())
+        out["wifi"] = ss.parse_proc_wireless(system_sim.proc_wireless())
         out["temp_mc"] = system_sim.temp_mc()
         out["uptime_s"] = ss.parse_uptime(system_sim.uptime())
         out["disk"] = system_sim.disk()

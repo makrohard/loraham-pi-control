@@ -284,9 +284,7 @@
       var tst = d.time.state;
       // Label comes from the backend, which distinguishes the red cases (no source vs a clock
       // that reads earlier than files this box wrote); the fallback never invents a reason.
-      tpill.textContent = d.time.label || (tst === "green" ? "synced"
-        : tst === "yellow" ? "unverified"
-        : tst === "red" ? "no time source" : "unknown");
+      tpill.textContent = d.time.label || "…";          // the backend names every state
       tpill.className = "pill " + (tst === "green" ? "pill-ok"
         : tst === "yellow" ? "pill-warn"
         : tst === "red" ? "pill-bad" : "");
@@ -322,7 +320,7 @@
         tcmd.hidden = !d.time.hint_cmd;
       }
       // The conflict detail must be visible, not tooltip-only: a touch device has no hover.
-      if (thint && tst !== "green" && d.time.detail && d.time.label === "conflict") {
+      if (thint && tst !== "green" && d.time.detail && d.time.label === "dup") {
         thint.textContent = d.time.detail + " — " + (d.time.hint || "");
         thint.hidden = false;
       }
@@ -368,11 +366,66 @@
   }
 
   // --- polling lifecycle ----------------------------------------------------------------------
+  // --- Wi-Fi pill in the Network row: the signal from this poll's own sample (`wifi`, dBm per
+  // associated interface). Approved bands: green >= -67, yellow -68..-75, red < -75. ---------
+  function renderWifi(d) {
+    var pill = document.getElementById("sys-wifi-pill");
+    if (!pill) return;
+    var dbm = d && d.wifi ? d.wifi[pill.getAttribute("data-dev")] : null;
+    pill.classList.remove("pill-ok", "pill-warn", "pill-bad");
+    if (!num(dbm)) { set("sys-wifi-pill", "Wi-Fi"); return; }   // no sample: plain, as rendered
+    pill.classList.add(dbm >= -67 ? "pill-ok" : (dbm >= -75 ? "pill-warn" : "pill-bad"));
+    set("sys-wifi-pill", dbm + " dBm");
+  }
+  // --- GPS row: the GPS Monitor's OWN /api/gps, riding on this poll (no timer of its own) -----
+  // Every GPS_EVERY-th poll (~4 s): never costlier than the Monitor itself (3 s), because an
+  // idle direct receiver is sampled once per call. Same ownership-token rule as poll() below.
+  var GPS_EVERY = 2, gpsTick = 0, gpsCtl = null;
+  // The pill's colour from the Monitor's state: green a 3D fix, yellow a 2D or unknown-dimension
+  // fix, red a receiver/feed without navigation, plain everything else (no GPS, a configured
+  // position, held, via the feed, several sources, a failed request).
+  var GPS_PILL = { "3d": "pill-ok", "2d": "pill-warn", "fix": "pill-warn", "no-fix": "pill-bad",
+                   "stale": "pill-bad", "gpsd-no-data": "pill-bad", "no-data": "pill-bad" };
+  // Short pill words, so the three rows' texts stay in one column; the Monitor's full label is
+  // the pill's tooltip.
+  var GPS_WORD = { "3d": "3D fix", "2d": "2D fix", "fix": "fix", "no-fix": "no fix",
+                   "stale": "stale", "gpsd-no-data": "no data", "no-data": "no data",
+                   "no-device": "no GPS", "auto-off": "no GPS", "off": "off",
+                   "unavailable": "no gpsd", "fixed": "fixed", "held": "held",
+                   "via-feed": "feed", "ambiguous": "ambiguous" };
+  function renderGps(d) {
+    var pos = !!d && num(d.lat) && num(d.lon);
+    var pill = document.getElementById("sys-gps-state");
+    if (pill) {
+      pill.classList.remove("pill-ok", "pill-warn", "pill-bad");
+      if (d && GPS_PILL[d.state]) pill.classList.add(GPS_PILL[d.state]);
+      pill.title = d ? (d.label || d.state || "") : "request failed";
+    }
+    set("sys-gps-state", d ? (GPS_WORD[d.state] || d.state || "?") : "error");
+    set("sys-gps-lat", pos ? d.lat.toFixed(6) : "—");  // coordinates only, space-separated;
+    set("sys-gps-lon", pos ? d.lon.toFixed(6) : "");   // no position: one "—"
+  }
+  function gpsPoll() {
+    if (!document.getElementById("sys-gps-state")) return;
+    if (gpsCtl || (gpsTick++ % GPS_EVERY) !== 0) return;
+    var ctl = new AbortController();
+    gpsCtl = ctl;
+    fetch("/api/gps", { cache: "no-store", signal: ctl.signal })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (gpsCtl !== ctl) return;                 // a stop() intervened: never render late
+        gpsCtl = null;
+        renderGps(d);
+      })
+      .catch(function () { if (gpsCtl === ctl) { gpsCtl = null; renderGps(null); } });
+  }
   // One request at a time: `inflightCtl` is both the overlap guard and the ownership token.
   // stop() ABORTS the active request (never just forgets it); a completing request touches the
   // slot only while it still owns it, so overlapping generations are impossible by construction.
   function poll() {
-    if (document.hidden || inflightCtl) return;
+    if (document.hidden) return;
+    gpsPoll();
+    if (inflightCtl) return;
     var ctl = new AbortController();
     inflightCtl = ctl;
     fetch("/api/system", { cache: "no-store", signal: ctl.signal })
@@ -382,6 +435,7 @@
         inflightCtl = null;
         if (!d) return;
         apply(d);                                   // reads prev (rates), records new baselines
+        renderWifi(d);
         prev = prev || {};
         prev.ts = d.ts;
       })
@@ -451,6 +505,9 @@
     hist = { cpu: [], rx: [], tx: [], temp: [], mem: [], disk: [], disk2: [], swap: [] };
     resetDynamic();
     restoreHist();                                  // graph shapes only; values stay …
+    gpsTick = 0;                                    // a (re)open asks for GPS on its first poll
+    renderGps(null); set("sys-gps-state", "…"); set("sys-gps-lat", "");   // plain "…" on (re)open
+    renderWifi(null);                               // a (re)open never shows the last session's signal
     poll();
     timer = setInterval(poll, POLL_MS);
     // 1 Hz DISPLAY tick — no request and no server work. Polling every second just to move a
@@ -465,6 +522,7 @@
     if (clockTimer !== null) { clearInterval(clockTimer); clockTimer = null; }
     clock.skew = null;                              // a reopen re-anchors on a fresh sample
     if (inflightCtl) { inflightCtl.abort(); inflightCtl = null; }
+    if (gpsCtl) { gpsCtl.abort(); gpsCtl = null; }
     saveHist();                                     // BEFORE the wipe: collapse must not lose it
     prev = null;
     hist = { cpu: [], rx: [], tx: [], temp: [], mem: [], disk: [], disk2: [], swap: [] };

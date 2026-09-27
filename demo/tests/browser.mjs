@@ -117,6 +117,56 @@ try {
            !!cores && cores.childElementCount > 0;             // per-core CPU bars built
   }, { timeout: 30000 });
   console.log("OK: System box live — values, gauge bars, per-core CPU bars, and sparklines");
+  // Time pill: the demo box is synced (timesyncd), so the product logic shows green "NTP".
+  await page.waitForFunction(() => {
+    const p = document.getElementById("sys-time-pill");
+    return p && p.textContent === "NTP" && p.classList.contains("pill-ok");
+  }, { timeout: 30000 });
+  console.log("OK: Time pill shows green NTP");
+  // GPS row in the System box: the simulated receiver's fix, linked to the GPS Monitor.
+  await page.waitForFunction(() => {
+    const v = ((document.getElementById("sys-gps-val") || {}).textContent || "").trim();
+    const p = document.getElementById("sys-gps-state");
+    return p && p.textContent === "3D fix" && p.classList.contains("pill-ok")
+      && /^-?\d+\.\d{6} -?\d+\.\d{6}$/.test(v);              // the pill + coordinates only
+  }, { timeout: 30000 });
+  const gpsHref = await page.evaluate(() => {
+    const a = document.querySelector("#sys-gps a"); return a && a.getAttribute("href"); });
+  if (gpsHref !== "/stacks?open=gps#gps-row") throw new Error("GPS row link: " + gpsHref);
+  console.log("OK: System box GNSS row shows the simulated 3D fix as a green pill and links to the GPS Monitor");
+  // Wi-Fi pill on the network line: the simulated signal, coloured by the approved bands.
+  await page.waitForFunction(() => {
+    const p = document.getElementById("sys-wifi-pill");
+    return p && /^-\d+ dBm$/.test(p.textContent) && /pill-(ok|warn|bad)/.test(p.className);
+  }, { timeout: 30000 });
+  const netHref = await page.evaluate(() => {
+    const a = document.querySelector("#sys-link-row th a"); return a && a.textContent + " " + a.getAttribute("href"); });
+  if (netHref !== "Net /stacks?open=network#controller-network") throw new Error("Net link: " + netHref);
+  console.log("OK: the Net row shows the Wi-Fi signal pill and links to the Network panel");
+  // GPS MONITOR (R1): under Position, the Monitor must leave "loading…" and show the simulated
+  // fix; the Skyview button must draw the satellites (the real gps.js cannot run here).
+  await page.evaluate(() => {
+    const a = [...document.querySelectorAll('a[href]')].find(
+      (x) => x.getAttribute('href') === '/stacks' || x.textContent.trim() === 'Apps');
+    if (!a) throw new Error("Apps link not found"); a.click();
+  });
+  await page.waitForFunction(() => !!document.getElementById("gps-monitor"), { timeout: 30000 });
+  await page.evaluate(() => {
+    for (const id of ["gps-row", "gps-monitor"]) {
+      const d = document.getElementById(id);
+      if (d && !d.open) (d.querySelector("summary") || d).click();
+    }
+  });
+  await page.waitForFunction(() => {
+    const t = (id) => ((document.getElementById(id) || {}).textContent || "").trim();
+    return !/loading/i.test(t("gps-mon-state")) && /\d/.test(t("gps-mon-lat")) && / of \d/.test(t("gps-mon-sats"));
+  }, { timeout: 30000 });
+  await page.evaluate(() => document.getElementById("gps-sky-btn").click());
+  await page.waitForFunction(() => {
+    const w = document.getElementById("gps-sky-wrap"), svg = document.getElementById("gps-sky");
+    return w && !w.hidden && svg && svg.querySelectorAll("circle").length > 4;   // 4 rings + satellites
+  }, { timeout: 30000 });
+  console.log("OK: GPS Monitor shows the simulated fix and the Skyview draws its satellites");
 
   // persistence across reload: kiss still running -> 433 still READY
   await page.reload({ waitUntil: "domcontentloaded" });

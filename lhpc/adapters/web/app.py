@@ -348,7 +348,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # dash flips to "running" quickly instead of waiting for the slow refresh.
         pending_interactive = any(not s.get("running") and not s.get("blocker")
                                   for r in radios for s in r["interactive"])
-        # Webserver box: LHCP console (always) + each running web-UI stack. Resolve the request-scoped
+        # Webserver box: LHPC console (always) + each running web-UI stack. Resolve the request-scoped
         # reached address + log href here (the service returns structural evidence only).
         webservers = []
         # ONE firewall read for the whole Dashboard: the webserver rows and the firewall box.
@@ -434,7 +434,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # box shows nothing, and the dep panel offers the copybox.
             power_ok={"reboot": service.power_supported("reboot"),
                       "poweroff": service.power_supported("poweroff")},
-            network_dash=_network_dash_safe(service),
+            network_row=_network_row_safe(service),
             autostart=_autostart_dash_safe(service),
             dash_sig=service.dash_signature(restart_required=restart_required))
 
@@ -446,8 +446,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     @app.get("/api/system")
     def system_api():
         # Host metrics for the System box: RAW procfs/sysfs counters + a monotonic ts; the
-        # BROWSER computes rates between its own polls. File reads only — no subprocess, no
-        # network, no server-side history. Polled only while the box is expanded.
+        # BROWSER computes rates between its own polls. File reads only — no network, no
+        # server-side history — with ONE exception: on a chrony box the Time row reads one
+        # `chronyc -n -c tracking`, cached 60 s (service_system._chrony_tracking): the source it
+        # is synced to (NTP or GNSS), or whether it synced earlier. Polled only while the box is
+        # expanded.
         return jsonify(service.system_stats())
 
     @app.get("/api/tasks")
@@ -966,18 +969,29 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                            f"{c.get('failed', 0)} failed, {st.get('skipped', 0)} skipped")
         return out
 
-    def _network_dash_safe(svc):
-        """One line for the dashboard system card — '' on non-AP boxes or any failure."""
+    def _network_row_safe(svc):
+        """The System card's Network row, or None on a box without the managed network (as
+        before). One connection is shown: wired > Wi-Fi client > own AP > none. `kind` picks
+        the pill: `wifi` is filled with the signal by system.js (/api/system `wifi`); `eth`
+        and `ap` are fixed green pills; `none` is a plain one. Fail-safe: never break the
+        dashboard over the network."""
         try:
             nv = svc.network_view()
             if not nv.get("supported"):
-                return ""
+                return None
+            eth, act = nv.get("ethernet") or {}, nv.get("active") or {}
+            if eth:
+                return {"kind": "eth", "pill": "Eth",
+                        "text": f"{eth.get('name', '?')} ({eth.get('address', '?')})"}
             if nv.get("mode") == "client":
-                act = nv.get("active") or {}
-                return f"{act.get('name', '?')} ({act.get('address', '?')})"
-            return "own AP" if nv.get("mode") == "ap" else "no active Wi-Fi"
+                return {"kind": "wifi", "pill": "Wi-Fi", "dev": act.get("device", ""),
+                        "text": f"{act.get('name', '?')} ({act.get('address', '?')})"}
+            if nv.get("mode") == "ap":
+                return {"kind": "ap", "pill": "AP",
+                        "text": f"{nv.get('ap_ssid') or act.get('name', '?')} ({act.get('address', '?')})"}
+            return {"kind": "none", "pill": "none", "text": "no active network"}
         except Exception:
-            return ""                      # fail-safe: never break the dashboard over Wi-Fi
+            return None
 
     def _stacks_context(band="", *, hw_probe=None, only_sid=None, cfg_sid=""):
         """The FULL Apps-page render context (all globals every per-stack body/include needs). Shared

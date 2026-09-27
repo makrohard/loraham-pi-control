@@ -86,6 +86,14 @@ def net_dev() -> str:
             "    lo: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n")
 
 
+def proc_wireless() -> str:
+    """/proc/net/wireless with a wlan0 level wandering about -60..-72 dBm (green/yellow pill)."""
+    level = int(-66 + 6 * math.sin(_elapsed() / 9.0))
+    return ("Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE\n"
+            " face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22\n"
+            f" wlan0: 0000   44.  {level}.  -256        0      0      0      0      0        0\n")
+
+
 def uptime() -> str:
     e = _elapsed()
     up = _UPTIME_BASE + e

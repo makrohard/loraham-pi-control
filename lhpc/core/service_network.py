@@ -137,6 +137,23 @@ class NetworkOpsMixin:
             act["address"] = (out.splitlines() or [""])[0].strip() if rc == 0 else ""
         return act
 
+    def _nm_ethernet(self) -> dict:
+        """The active wired connection as {name, device, address}, or {} (the dashboard's
+        Network row: a wired uplink is shown in preference to Wi-Fi)."""
+        rc, out, _err = self._nmcli(["-t", "-f", "UUID,NAME,TYPE,DEVICE",
+                                     "connection", "show", "--active"])
+        eth: dict = {}
+        if rc == 0:
+            for line in out.splitlines():
+                parts = self._nm_split(line)
+                if len(parts) >= 4 and parts[2] == "802-3-ethernet":
+                    eth = {"name": parts[1], "device": parts[3]}
+                    break
+        if eth:
+            rc, out, _err = self._nmcli(["-g", "IP4.ADDRESS", "device", "show", eth["device"]])
+            eth["address"] = (out.splitlines() or [""])[0].strip() if rc == 0 else ""
+        return eth
+
     # ---- gates -----------------------------------------------------------------------
 
     def network_supported(self) -> bool:
@@ -275,6 +292,11 @@ class NetworkOpsMixin:
         view["mode"] = ("ap" if act.get("name") == self.AP_PROFILE
                         else ("client" if act else "off"))
         view["active"] = act
+        view["ethernet"] = self._nm_ethernet()
+        if view["mode"] == "ap":
+            rc, out, _err = self._nmcli(["-g", "802-11-wireless.ssid", "connection", "show",
+                                         self.AP_PROFILE])
+            view["ap_ssid"] = out.strip() if rc == 0 else ""
         stored = [c for c in self._nm_connections()
                   if c["type"].startswith("802-11-wireless")
                   and c["name"] != self.AP_PROFILE]

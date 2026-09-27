@@ -52,7 +52,7 @@
          page says "no log file yet". dash.js only rewrites the badge, so a static block is safe. #}
       {% set links %}
         <p class="links">
-          <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}">daemon log</a>
+          <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}">Daemon log</a>
           <span class="rfline">RF log: {% for l in r.rflogs %}{% if not loop.first %} · {% endif %}<a class="pill" href="{{ url_for('logs_view', target=l.target, job=l.job, band=r.band) }}">{{ l.label }}</a>{% endfor %}</span>
         </p>
       {% endset %}
@@ -104,18 +104,18 @@
               radio tuning. Run only one at a time on this band.</p>
           {% endif %}
 
-          {# --- radio config (only when the daemon serves this band) --- #}
+          {# --- radio config (only when the daemon serves this band): one entry per line, in this
+                 order — Stop daemon, Radio config, Daemon log (then the RF logs). --- #}
           {% if r.daemon.reachable %}
-            <h3><a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon' }}">Radio config</a>
-              <form method="post" action="{{ url_for('action') }}" class="act">
-                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                <input type="hidden" name="op" value="stop">
-                <input type="hidden" name="target" value="daemon">
-                <input type="hidden" name="band" value="{{ r.band }}">
-                <input type="hidden" name="from" value="dash">
-                <button type="submit">Stop daemon ({{ r.band }})</button>
-              </form>
-            </h3>
+            <form method="post" action="{{ url_for('action') }}" class="act">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="op" value="stop">
+              <input type="hidden" name="target" value="daemon">
+              <input type="hidden" name="band" value="{{ r.band }}">
+              <input type="hidden" name="from" value="dash">
+              <button type="submit">Stop daemon ({{ r.band }})</button>
+            </form>
+            <h3><a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon' }}">Radio config</a></h3>
             {{ links }}
             <details class="monitor" id="monitor-{{ r.band }}" open>
               <summary>RX-TX Monitor</summary>
@@ -321,7 +321,7 @@
     {% endfor %}
   </div>
 
-  {# Webserver box: LHCP console (always), then per RUNNING stack its web-UI line and a line per other
+  {# Webserver box: LHPC console (always), then per RUNNING stack its web-UI line and a line per other
      open TCP port. Web lines: security+running pills. Port lines (no auth): one exposure-coloured
      IP:Port·label pill (green local / yellow LAN / red public) + a per-service logs link. #}
   <div class="card wsbox stackrow-wrap">
@@ -438,10 +438,23 @@
             <td class="sys-val" id="sys-power-val"></td></tr>
           <tr class="sysrow sysrow-time" id="sys-time-row" hidden><th scope="row">Time</th>
             <td class="sys-gauge" colspan="2"><span class="sys-gaugewrap"><span class="pill" id="sys-time-pill">…</span><span class="sys-time-val"><span class="sys-time-line" id="sys-time-val"></span><span class="sys-time-line sys-time-utc" id="sys-time-utc"></span><span class="sys-time-hint" id="sys-time-hint" hidden></span><span class="sys-time-cmd" id="sys-time-cmd" hidden></span></span></span></td></tr>
+          {# Net: the Time row's layout (label | pill | text); "Net" links to the Network panel.
+             One connection: wired > Wi-Fi client > own AP > none. The Wi-Fi pill shows the signal
+             in dBm, filled by system.js
+             from /api/system's `wifi` (a /proc/net/wireless read) only while this box is open;
+             Eth and AP are fixed green pills, none a plain one. #}
+          {% if network_row %}
+          <tr class="sysrow sysrow-time" id="sys-link-row"><th scope="row"><a href="{{ url_for('stacks_overview', open='network') }}#controller-network">Net</a></th>
+            <td class="sys-gauge" colspan="2"><span class="sys-gaugewrap">{% if network_row.kind == 'wifi' %}<span class="pill" id="sys-wifi-pill" data-dev="{{ network_row.dev }}">{{ network_row.pill }}</span>{% else %}<span class="pill{{ ' pill-ok' if network_row.kind in ('eth', 'ap') else '' }}" id="sys-link-pill">{{ network_row.pill }}</span>{% endif %}<span class="sys-time-val"><span class="sys-time-line" id="sys-link-val">{{ network_row.text }}</span></span></span></td></tr>
+          {% endif %}
+          {# GNSS: the same layout; "GNSS" links to the GPS Monitor. The pill is the Monitor's state
+             (green 3D fix, yellow 2D/unknown-dimension fix, red no fix, plain otherwise), the text
+             the coordinates. system.js fetches the Monitor's OWN /api/gps on its existing poll,
+             only while this box is open. Coordinates are shown on purpose (docs/gps.md: a monitor
+             surface, never logged). #}
+          <tr class="sysrow sysrow-time" id="sys-gps"><th scope="row"><a href="{{ url_for('stacks_overview', open='gps') }}#gps-row">GNSS</a></th>
+            <td class="sys-gauge" colspan="2"><span class="sys-gaugewrap"><span class="pill" id="sys-gps-state">…</span><span class="sys-time-val"><span class="sys-time-line" id="sys-gps-val"><span id="sys-gps-lat"></span> <span id="sys-gps-lon"></span></span></span></span></td></tr>
         </table>
-        {% if network_dash %}
-          <p class="muted sysblock">network: {{ network_dash }}</p>
-        {% endif %}
         {# Autostart: plain configuration (writes [boot] restore in local.toml) — no privilege
            and no unit change, so unlike the power actions below it always renders. #}
         <section class="sysautostart sysblock">

@@ -1170,3 +1170,23 @@ def test_finalize_refuses_malformed_record_shape(tmp_path, monkeypatch):
         rec(**bad)
         assert svc.network_finalize(uuid="CL-UUID-2", op_id="tok1", delay=0.0) == 1, bad
         assert order == [] and not svc._net_outcome_path().exists(), bad
+
+
+def test_network_view_reports_the_wired_link_and_the_ap_ssid(tmp_path):
+    # The dashboard's Network row: an active 802-3-ethernet connection (with its address) and,
+    # on the own AP, the AP's SSID (the profile name "lhpc-ap" is not what a phone sees).
+    svc = _svc(tmp_path)
+    _fake_nmcli(svc, {**_std_replies(active="AP-UUID-1:lhpc-ap:802-11-wireless:wlan0\n"
+                                            "ETH-UUID:Wired connection 1:802-3-ethernet:eth0\n"),
+                      "802-11-wireless.ssid connection show lhpc-ap": (0, "lhpc-e293\n", "")})
+    nv = svc.network_view()
+    assert nv["mode"] == "ap" and nv["ap_ssid"] == "lhpc-e293"
+    assert nv["ethernet"] == {"name": "Wired connection 1", "device": "eth0",
+                              "address": "10.42.0.1/24"}      # the fake answers one address
+
+
+def test_network_view_without_a_wired_link(tmp_path):
+    svc = _svc(tmp_path)
+    _fake_nmcli(svc, _std_replies(active="CL-UUID-2:HomeNet:802-11-wireless:wlan0\n"))
+    nv = svc.network_view()
+    assert nv["mode"] == "client" and nv["ethernet"] == {} and "ap_ssid" not in nv

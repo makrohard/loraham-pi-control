@@ -731,6 +731,8 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
    never split mid-value. The row spans both columns because the fixed 11rem value column wrapped
    it onto three ragged lines while the pill left most of the gauge cell empty. */
 .sysrow-time .sys-time-val { display: flex; flex-direction: column; min-width: 0; }
+/* Time, Network and GNSS share this layout: one pill width, so their texts start in one column. */
+.sysrow-time .sys-gaugewrap > .pill { min-width: 4.5rem; text-align: center; }
 .sysrow-time .sys-time-line { font-size: .85rem; white-space: nowrap;
   font-variant-numeric: tabular-nums; }
 .sysrow-time .sys-time-utc { color: var(--muted); }

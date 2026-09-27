@@ -12,7 +12,10 @@ in particular the Power section never synthesizes values its source cannot see.
 from __future__ import annotations
 
 import ctypes
+import ipaddress
+import math
 import os
+import re
 import socket
 import time
 
@@ -74,6 +77,26 @@ def parse_meminfo(text: str) -> dict | None:
         return None
     return {"total_kb": vals["MemTotal"], "available_kb": available,
             "swap_total_kb": vals.get("SwapTotal", 0), "swap_free_kb": vals.get("SwapFree", 0)}
+
+
+def parse_proc_wireless(text: str) -> dict:
+    """{interface: signal level in dBm} from /proc/net/wireless, for interfaces with a real level.
+    The level column comes as "-70." (the dot is the driver's "updated" flag) or "-70"; only the
+    signed integer part is read. A level that is not negative (0 = not associated, or a driver
+    that reports a 0-100 quality scale instead of dBm) or below -120 is not a signal: left out."""
+    out: dict = {}
+    for line in text.splitlines():
+        name, sep, rest = line.partition(":")
+        fields = rest.split()
+        if not sep or len(fields) < 3:
+            continue                       # the two header lines, malformed lines
+        m = re.match(r"-?\d+", fields[2])
+        if m is None:
+            continue
+        level = int(m.group())
+        if -120 <= level < 0:
+            out[name.strip()] = level
+    return out
 
 
 def parse_net_dev(text: str) -> dict | None:
@@ -171,7 +194,12 @@ _HINT_ENABLE_NTP = "sudo timedatectl set-ntp true"
 _HINT_NO_SOURCE = ("nothing is synchronising this clock — enable a time daemon "
                    "(systemd-timesyncd), or install chrony")
 _HINT_RESTORED = "the time was restored, not synchronised — enable a time daemon to correct it"
-_HINT_WAITING = "a time daemon is running and has not completed its first sync yet — no action"
+_HINT_WAITING = "a time daemon is running and has not synced since it started — no action"
+# A chronyd started later than this after boot is treated as restarted (in LHPC only bootstrap-deps.sh
+# restarts it, at install or repair, run by an operator): its RMS offset says nothing about the sync
+# before. At boot it starts ~25 s in (e293, 2026-09-27). Known corner, decided (maintainer,
+# 2026-09-27): a restart within these 300 s, then no time source, reads "fake" until the next sync.
+_CHRONY_BOOT_START_MAX_S = 300.0
 # With a daemon ALREADY running, "enable/install one" is wrong advice whatever else is off: the
 # useful direction is that daemon's own upstream.
 _HINT_CHECK_SOURCE = "{} is running but the clock is not yet within tolerance — wait, or check that daemon's time source"
@@ -329,7 +357,10 @@ def clock_refusal(reason: str, what: str) -> str:
 
 
 class SystemStatsMixin:
-    """Read-only host metrics (`GET /api/system`). File reads only, via the injected System.fs."""
+    """Read-only host metrics (`GET /api/system`). File reads only, via the injected System.fs —
+    with ONE exception: on a chrony box the Time row reads one cached `chronyc -n -c tracking`
+    through the injected runner (`_chrony_tracking`): the source when synced, whether chrony synced
+    earlier when not."""
 
     def system_stats(self) -> dict:
         fs = self._system.fs
@@ -347,6 +378,9 @@ class SystemStatsMixin:
         net = parse_net_dev(fs.read_text("/proc/net/dev", _MAX_READ))
         if net is not None:
             out["net"] = net
+        wifi = parse_proc_wireless(fs.read_text("/proc/net/wireless", _MAX_SMALL))
+        if wifi:
+            out["wifi"] = wifi              # dBm per associated interface (the network line's pill)
 
         disk = self._disk_stats(fs)
         if disk:
@@ -378,10 +412,12 @@ class SystemStatsMixin:
         So nothing here claims correctness: the pin reports SYNC STATE and the text names the
         source.
 
-        YELLOW is a legitimate steady state — a daemon that has not synced yet, or a clock
-        restored from an RTC or fake-hwclock — and is worded as unverified, never as a fault.
-        A box with NO source at all (no daemon, no restore artifact, unsynced) is RED, including
-        a portable one with neither network nor RTC: there is nothing holding that clock up.
+        The pill names what holds the clock: green NTP / GNSS (synced to it), yellow the same
+        name above tolerance, yellow RTC, yellow lost (synced earlier this boot), red fake (only a
+        saved time), red none, red dup (two daemons), red bad (earlier than this box's own
+        files), "…" when the source is not known (also a chronyd restarted mid-boot, not synced
+        since, on a box without an RTC: whether it synced earlier cannot be known). The detail
+        says why, for the tooltip.
         """
         now = time.time()
         lt = time.localtime(now)
@@ -399,7 +435,7 @@ class SystemStatsMixin:
         if kernel is None:
             # Its own state. "We could not read it" is not "the clock is bad" — and the facts we
             # CAN read (zone, RTC presence) are still reported rather than silently dropped.
-            out.update(state="unknown", source="", label="unknown",
+            out.update(state="unknown", source="", label="…",
                        detail="kernel time state unavailable")
             return out
         synced = bool(kernel["synced"])
@@ -421,6 +457,22 @@ class SystemStatsMixin:
         fake_hw = fs.mtime("/etc/fake-hwclock.data")
         if synced_at is not None:
             out["synced_age_s"] = max(0.0, now - synced_at)
+        # chrony replaces timesyncd on an LHPC box, so the marker above never exists there. Its
+        # "RMS offset" is > 0 once chronyd has taken a reference since it started and is never
+        # reset while it runs (chrony's ref time is zeroed when unsynced, so it cannot serve).
+        # It carries no timestamp, so no age. A chronyd restarted mid-boot reads 0 again, so a
+        # late-started chronyd with 0 is "…" below, never "fake".
+        chrony_synced_before, chrony_unknown = False, ""
+        if not synced and synced_at is None and "chrony" in daemons:
+            _name, rms, readable = self._chrony_tracking()
+            chrony_synced_before = readable and rms > 0
+            started = self._chronyd_started_after_boot(fs)
+            if not chrony_synced_before and (not readable or started is None
+                                             or started > _CHRONY_BOOT_START_MAX_S):
+                # Whether chrony synced earlier this boot cannot be known: never "fake".
+                chrony_unknown = ("chrony restarted since boot, not synced since; an earlier sync "
+                                  "is unknown" if readable and started is not None
+                                  else "chrony running, not synced; its sync history could not be read")
 
         # --- who, if anyone, is steering this clock
         if daemons:
@@ -437,69 +489,85 @@ class SystemStatsMixin:
             source = ""
         out["source"] = source
 
+        # The pill (the maintainer's table): green NTP/GNSS = synced to that source; yellow the
+        # source name = synced but above tolerance; yellow RTC = the RTC set it, nothing synced;
+        # yellow lost = synced earlier this boot, source now unreachable; red fake = only a saved
+        # time could have set it; red none = nothing holds it up; red dup = two daemons; red bad
+        # = demonstrably wrong; "…" = source not known, or chrony's earlier sync unknown (restarted
+        # or unreadable). The detail (the tooltip) explains each.
+        saved = fake_hw is not None or last_good is not None
+
         # --- demonstrably wrong beats every other consideration
         # Only meaningful when NOTHING is steering the clock — not merely "not synced yet".
         # A synced clock corrected BACKWARDS legitimately reads earlier than files written before
         # the correction, and so does a restore from a box that ran fast; calling either red
         # punished the very repair we ask for. The same applies while a daemon is present but has
-        # not yet completed its first sync: "chronyd running, not synced yet" is the accurate and
-        # more useful state, and this heuristic was masking it.
-        no_candidate = (not daemons and synced_at is None and not hctosys
-                        and last_good is None and fake_hw is None)
+        # not yet completed its first sync.
+        no_candidate = (not daemons and synced_at is None and not hctosys and not saved)
         floor = max([t for t in (self._runtime_write_floor(fs), float(_NOT_BEFORE)) if t], default=0.0)
         if no_candidate and not synced and now < floor:
-            out.update(state="red", label="implausible",
+            out.update(state="red", label="bad",
                        detail="clock reads earlier than files this box has written",
                        hint=_HINT_NO_SOURCE, hint_cmd=_HINT_ENABLE_NTP)
             return out
 
         if len(daemons) > 1:
             # Two of them fighting over one clock is a configuration conflict, and the operator
-            # cannot see it anywhere else.
-            # No command offered: which of the two to disable is the operator's call, and
-            # "enable NTP" would be actively wrong advice here.
-            out.update(state="yellow", label="conflict",
+            # cannot see it anywhere else. No command offered: which one to disable is the
+            # operator's call, and "enable NTP" would be actively wrong advice here.
+            out.update(state="red", label="dup",
                        detail="two time daemons running (" + ", ".join(daemons) + ")",
                        hint=_HINT_CONFLICT)
             return out
 
-        if synced and maxerror <= _GREEN_MAXERROR_US and source:
-            out.update(state="green", label="synced")
+        if synced:
+            name = self._sync_source_name(daemons, source)
+            if maxerror <= _GREEN_MAXERROR_US:
+                out.update(state="green", label=name or "…",
+                           detail=("synchronised to " + ("GPS" if name == "GNSS" else "an NTP server")
+                                   if name else "synchronised; the source could not be identified"))
+                return out
+            out.update(state="yellow", label=name or "…",
+                       detail="synced, estimated error above tolerance",
+                       hint=_HINT_CHECK_SOURCE.format(source or "the time daemon"))
             return out
 
-        if not synced and no_candidate:
-            out.update(state="red", label="no time source", detail="no time source",
-                       hint=_HINT_NO_SOURCE, hint_cmd=_HINT_ENABLE_NTP)
-            return out
-        if maxerror >= _MAXERROR_CAP_US and not source:
-            out.update(state="red", label="no time source", detail="no time source",
-                       hint=_HINT_NO_SOURCE, hint_cmd=_HINT_ENABLE_NTP)
+        if synced_at is not None or chrony_synced_before:
+            out.update(state="yellow", label="lost",
+                       detail="synced earlier this boot, source now unreachable",
+                       hint="the time source stopped answering — check the network or the daemon")
             return out
 
-        # Plausible, unverified. Say WHY, because the reasons want different reactions.
-        hint, hint_cmd = _HINT_NO_SOURCE, _HINT_ENABLE_NTP
-        if synced_at is not None and not synced:
-            detail = "synced earlier this boot, source now unreachable"
-            hint = "the time source stopped answering — check the network or the daemon"
-            hint_cmd = ""
-        elif source in ("RTC", "fake-hwclock", "timesyncd clock file"):
-            detail = ("RTC restore, never synced this boot" if source == "RTC"
-                      else "saved timestamp restored, never synced this boot")
-            hint = _HINT_RESTORED
-        elif daemons and not synced:
-            detail = "time daemon running, not synced yet"
-            hint, hint_cmd = _HINT_WAITING, ""     # nothing to run; waiting IS the right action
-        elif source:
-            # A REAL daemon is active (synced, but the estimated error is above tolerance, or the
-            # state is otherwise unproven). Telling the operator to enable or install another one
-            # is wrong and would create the very two-daemon conflict flagged above.
-            detail = ("synced, estimated error above tolerance" if synced else "unverified")
-            hint, hint_cmd = _HINT_CHECK_SOURCE.format(source), ""
+        if hctosys and rtc_present:
+            # The RTC set the clock at boot: the source is known even when chrony's history is not.
+            out.update(state="yellow", label="RTC",
+                       detail=("RTC restore; " + chrony_unknown
+                               if chrony_unknown else "RTC restore, never synced this boot"),
+                       hint=_HINT_RESTORED)
+            return out
+
+        if chrony_unknown:
+            out.update(state="unknown", label="…", detail=chrony_unknown, hint=_HINT_WAITING)
+            return out
+
+        if saved:
+            # Only a saved time can have set it: fake-hwclock (a forward-only restore, so the
+            # clock is that time or the build epoch, whichever was later) or timesyncd's clock
+            # file. Which one cannot be read back cheaply, so the detail says no more than that.
+            out.update(state="red", label="fake",
+                       detail="not synced yet; clock from a saved time (fake-hwclock or timesyncd's "
+                              "clock file) or the build epoch", hint=_HINT_RESTORED)
+            if not daemons:
+                out["hint_cmd"] = _HINT_ENABLE_NTP
+            return out
+
+        # Nothing holds this clock up: no daemon has synced it and there is no saved time.
+        if daemons:
+            out.update(state="red", label="none",
+                       detail="time daemon running, not synced yet, no saved time", hint=_HINT_WAITING)
         else:
-            detail = "unverified"
-        out.update(state="yellow", label="unverified", detail=detail, hint=hint)
-        if hint_cmd:
-            out["hint_cmd"] = hint_cmd
+            out.update(state="red", label="none", detail="no time source",
+                       hint=_HINT_NO_SOURCE, hint_cmd=_HINT_ENABLE_NTP)
         return out
 
     def _kernel_time_state(self) -> dict | None:
@@ -513,6 +581,66 @@ class SystemStatsMixin:
     # installs or enables one, not between two dashboard ticks; rescanning ~200 processes every
     # 2 s cost 11.7 ms per poll on a Zero 2W, over half the entire endpoint.
     _TIME_DAEMON_TTL_S = 30.0
+
+    _SYNC_SOURCE_TTL_S = 60.0
+
+    def _sync_source_name(self, daemons: list, source: str) -> str:
+        """"NTP" or "GNSS" for a synchronised clock, "" when it cannot be told. timesyncd, ntpd
+        and ntpsec here only ever sync to NTP servers. chrony may be steered by the GPS refclock,
+        so its selected source is read with ONE `chronyc -n -c tracking` (the only non-file read
+        of the System box's /api/system, cached for 60 s): the reference is an IP address for an
+        NTP server; LHPC's GPS refclock (`refid GPS`) is GNSS; any other refclock is unknown."""
+        if "chrony" not in daemons:
+            return "NTP" if (daemons or source == "NTP") else ""
+        return self._chrony_tracking()[0]
+
+    def _chronyd_started_after_boot(self, fs):
+        """Seconds after boot at which the running chronyd started, from /proc/<pid>/stat field 22
+        and /proc/uptime (file reads only; the pid from the time-daemon scan). None if unknown."""
+        pid = getattr(self, "_chronyd_pid", "")
+        if not pid or fs.read_text("/proc/" + pid + "/comm", _MAX_SMALL).strip() != "chronyd":
+            return None
+        try:
+            stat = fs.read_text("/proc/" + pid + "/stat", 4096)
+            ticks = int(stat[stat.rindex(")") + 2:].split()[19])      # field 22 (starttime)
+            uptime = float(fs.read_text("/proc/uptime", _MAX_SMALL).split()[0])
+            started = ticks / os.sysconf("SC_CLK_TCK")
+        except (ValueError, IndexError, OSError):
+            return None
+        return started if 0 <= started <= uptime else None
+
+    def _chrony_tracking(self) -> tuple:
+        """(source name, RMS offset) from ONE `chronyc -n -c tracking`, cached for
+        `_SYNC_SOURCE_TTL_S`: the name as `_sync_source_name` documents it, and the "RMS offset"
+        field (CSV index 6, seconds; 0.0 until chronyd's first reference). Anything unreadable
+        (chronyc missing or failing, short or non-numeric output) is ("", 0.0, False): no
+        evidence, never an exception. The third value says whether the RMS field was read."""
+        memo = getattr(self, "_sync_source_memo", None)
+        if memo is not None and (time.monotonic() - memo[0]) < self._SYNC_SOURCE_TTL_S:
+            return memo[1]
+        name, rms, readable = "", 0.0, False
+        try:
+            r = self._system.runner.run(["chronyc", "-n", "-c", "tracking"], 2.0)
+            ref = (r.stdout.splitlines() or [""])[0].split(",")
+            if r.returncode == 0 and len(ref) > 1 and ref[1] and ref[1] != "0.0.0.0":
+                try:
+                    ipaddress.ip_address(ref[1])
+                    name = "NTP"
+                except ValueError:
+                    # Only LHPC's own GPS refclock (`refid GPS`) is GNSS; any other refclock
+                    # (PPS, PHC, SOCK, a custom refid) is left unknown ("…"), never guessed.
+                    name = "GNSS" if ref[1] == "GPS" else ""
+            if r.returncode == 0 and len(ref) > 6:
+                try:
+                    value = float(ref[6])
+                    if math.isfinite(value) and value >= 0:
+                        rms, readable = value, True
+                except ValueError:
+                    pass
+        except Exception:
+            name, rms, readable = "", 0.0, False
+        self._sync_source_memo = (time.monotonic(), (name, rms, readable))
+        return name, rms, readable
 
     def _time_daemons(self, fs) -> list:
         """Names of running time daemons, from /proc/<pid>/comm — file reads only, no ps.
@@ -530,6 +658,8 @@ class SystemStatsMixin:
             if not entry.isdigit():
                 continue
             comm = fs.read_text("/proc/" + entry + "/comm", _MAX_SMALL).strip()
+            if comm == "chronyd":
+                self._chronyd_pid = entry                 # for `_chronyd_started_after_boot`
             name = _TIME_DAEMONS.get(comm)
             if name and name not in found:
                 found.append(name)

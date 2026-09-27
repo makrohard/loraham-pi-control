@@ -70,3 +70,23 @@ def test_no_test_module_needs_a_browser(path):
     assert not browsers, (
         f"{path.name} imports {sorted(browsers)}. Browser tests live in testlab/tests/browser, "
         f"which is gated on LHPC_BROWSER=1 and a usable Chromium.")
+
+
+def test_a_process_running_on_the_host_is_invisible_to_the_suite(monkeypatch, tmp_path):
+    """tests/README rule 4: no test may depend on what happens to run on the developer's machine.
+    A process that LOOKS like a running stack (here the MeshCom emulator, `qemu-system-xtensa`,
+    which a developer box may well be running) must not reach a test through the real process
+    table. It did (R12): the GPS monitor test's `lhpc gps --source fixed` was refused "in use
+    by: meshcom-qemu" whenever an emulator ran on the box."""
+    import shutil
+    import subprocess
+
+    from lhpc.adapters.cli.main import main
+    sleep = shutil.which("sleep")
+    assert sleep, "the test needs coreutils sleep"
+    host = subprocess.Popen(["qemu-system-xtensa", "30"], executable=sleep)   # argv[0] only
+    try:
+        assert main(["gps", "--source", "fixed", "--lat", "51.5", "--lon", "-0.1"]) == 0
+    finally:
+        host.kill()
+        host.wait(5)
