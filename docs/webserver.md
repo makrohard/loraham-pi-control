@@ -304,8 +304,9 @@ label. A bundle that reached the wrong hands is a credential to withdraw, not on
 `revoke` it and issue a fresh one. `revoke` (and `reissue`, which revokes the old certificate) reloads
 the proxy, so NEW connections with the old certificate are refused; nginx reloads gracefully, so a
 connection already established may finish. If the reload fails, the command fails (exit 1, a red
-message in the console), the revocation stays recorded, and the console retries the reload on its
-next pass; do not revoke again, run `lhpc webserver apply`. Up to 0.10.0 neither reloaded: on such a box run `lhpc webserver apply` after
+message in the console) and the revocation stays recorded. LHPC normally schedules a retry for the
+console's next pass; if that retry cannot be scheduled, the command says so. Do not revoke again: run
+`lhpc webserver apply`. Up to 0.10.0 neither reloaded: on such a box run `lhpc webserver apply` after
 a revoke or reissue, or without a shell use the console's Webserver → Settings → **Apply** (it asks for
 `enable-remote` while remote access is on).
 
