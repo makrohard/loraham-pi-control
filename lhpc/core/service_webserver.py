@@ -310,7 +310,7 @@ class WebserverOpsMixin:
                 _pki.init_client_ca(self._paths, force=True, validity=validity)
                 _pki.issue_server_cert(self._paths, dns_sans=dns, ip_sans=ips,
                                        days=cfg.server_cert_days, validity=validity)
-                _pki.build_crl(self._paths, validity=validity)
+                _pki.reset_client_state(self._paths, validity=validity)     # new client CA
                 if clock_ok:
                     _pki.clear_provisional(self._paths)   # a verified re-init supersedes a marker
         except ResourceBusy as exc:
@@ -1664,12 +1664,12 @@ class WebserverOpsMixin:
             from . import runtime_fs as _rfs
             from .service_system import clock_verified
 
-            # A rebuild DATES the new CRL from this clock, so an unverified clock must not
-            # trigger one: healing a lockout with a wrong date just makes a differently broken
-            # CRL. Unlike the operator-facing paths there is nobody here to accept the risk, so
-            # this simply waits -- the watchdog calls again on every pass, and a box gets its
-            # clock the moment it joins a WLAN. Retrying a PENDING RELOAD stays allowed: that
-            # re-reads a file already on disk and writes no dates.
+            # A normal rebuild DATES the new CRL from this clock, so under an unverified clock the
+            # rebuild uses the FIXED provisional window instead (the rule PKI issuance already
+            # follows): it cannot be wrong in either direction, it keeps every revocation, and the
+            # watchdog normalises it once the clock is verified. Waiting instead locked out a box
+            # that runs past the CRL's nextUpdate without NTP or GPS -- every client certificate
+            # refused, nothing revoked. Retrying a PENDING RELOAD writes no dates.
             clock_ok, _why = clock_verified(self._system.fs, self._paths.runtime_root)
 
             pending = self._paths.under("state", "crl-reload-pending")
@@ -1702,12 +1702,16 @@ class WebserverOpsMixin:
                 return True                  # acted (retried the reload)
             if not stale:
                 return False
-            if not clock_ok:
-                return False                 # wait for a clock; rewriting now would re-break it
+            if not clock_ok and _pki.crl_is_provisional(self._paths):
+                return False                 # already provisional: a rebuild cannot improve it
             from .reslock import ResourceBusy
             try:
                 with self._pki_lock("crl-refresh"):
-                    _pki.build_crl(self._paths)
+                    if clock_ok:
+                        _pki.build_crl(self._paths)
+                    else:
+                        _pki.mark_provisional(self._paths)          # BEFORE the material
+                        _pki.build_crl(self._paths, validity=_pki.PROVISIONAL_VALIDITY)
             except ResourceBusy:
                 return False                 # an operator holds the PKI; next pass retries
             if not self._nginx_reload_if_active():   # nginx must re-read the fresh CRL

@@ -819,7 +819,11 @@ def test_crl_refresh_only_when_expired(tmp_path, monkeypatch):
     and promotes the DESIRED policy, so a background heal calling it would push an operator's
     saved-but-unapplied settings live (0.7.0)."""
     from lhpc.core import pki as pki_mod
+    from lhpc.core import service_system
     from lhpc.core import webserver as ws_mod
+    # A VERIFIED clock: this is the normal rebuild path (the unverified one is in test_clock_gate).
+    monkeypatch.setattr(service_system, "read_kernel_time_state",
+                        lambda: {"synced": True, "maxerror_us": 1000})
     svc = _svc(tmp_path)
     rebuilt, reloaded, applied = [], [], []
     apply_ok = {"v": True}

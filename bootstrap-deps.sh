@@ -101,7 +101,7 @@ POLKIT_PKG="polkitd"
 # exactly like $POLKIT_PKG above, so it rides the SAME merged transaction the dry-run
 # simulates. NOTE chrony REPLACES systemd-timesyncd (both Provides/Conflicts/Replaces:
 # time-daemon on Trixie) — that is why the opt-out exists.
-TIME_PKGS="chrony gpsd"
+TIME_PKGS="chrony gpsd fake-hwclock"
 
 # PRE-FLIGHT, before the packages are even chosen: gpsd must never claim a receiver that
 # an LHPC `nmea` source reads DIRECTLY. This is not only device contention — gpsd switches
@@ -393,6 +393,7 @@ CHRONY_DROPIN="${CHRONY_DROPIN:-/etc/chrony/conf.d/10-lhpc-gps.conf}"
 CHRONY_CONF="${CHRONY_CONF:-/etc/chrony/chrony.conf}"
 CHRONY_SOURCES_DIR="${CHRONY_SOURCES_DIR:-/etc/chrony/sources.d}"
 GPSD_DEFAULT="${GPSD_DEFAULT:-/etc/default/gpsd}"
+FAKE_HWCLOCK_DEFAULT="${FAKE_HWCLOCK_DEFAULT:-/etc/default/fake-hwclock}"
 CLOCK_EPOCH="${CLOCK_EPOCH:-/usr/lib/clock-epoch}"
 TS_STAMP="${TS_STAMP:-$CLOCK_EPOCH.ok}"
 LHPC_TMPDIR="${LHPC_TMPDIR:-/run}"
@@ -418,6 +419,20 @@ makestep 1.0 -1
 # write back to the RTC where the board has one (Pi 5)
 rtcsync
 LHPC_DROPIN
+
+# 1b. The last known time survives a reboot: fake-hwclock saves it hourly and at shutdown
+#     and restores it early at boot. Its default file is LHPC's (see
+#     fake_hwclock_default_text: FORCE=true makes the restore forward-only).
+install -D -m 0644 /dev/stdin "$FAKE_HWCLOCK_DEFAULT" <<'LHPC_FAKE_HWCLOCK'
+# Installed by LoRaHAM Pi Control.
+# FORCE=true: `fake-hwclock load` only moves the clock FORWARD, never back.
+FORCE=true
+LHPC_FAKE_HWCLOCK
+if ! command -v fake-hwclock >/dev/null 2>&1; then
+  echo "[bootstrap-deps] ERROR: fake-hwclock is not installed, so the clock falls back to" >&2
+  echo "[bootstrap-deps]        the release floor at every reboot: sudo apt install fake-hwclock" >&2
+  TS_FAILED=1
+fi
 
 # 2. `prefer` on every NTP declaration chrony already has, so any of them outranks the
 #    GPS. EDITED, never rewritten: operator options, comments and every other line come
@@ -918,15 +933,6 @@ else
 		echo "[bootstrap-deps]   Wi-Fi power-save NOT applied live and NOT persisted - power-save is UNCHANGED (fix $WIFI_PSAVE_CONF, then re-run)." >&2
 	fi
 fi
-
-# --- persistent journal (crash forensics survive reboots; Storage=auto honours the dir) ------
-JOURNAL_DIR="${JOURNAL_DIR:-/var/log/journal}"
-if [ ! -d "$JOURNAL_DIR" ]; then
-	mkdir -p "$JOURNAL_DIR" || { echo "ERROR: could not create $JOURNAL_DIR — persistent journal NOT enabled." >&2; exit 1; }
-fi
-# ACL fixup is best-effort: the directory alone already makes Storage=auto persistent.
-systemd-tmpfiles --create --prefix="$JOURNAL_DIR" 2>/dev/null || echo "[bootstrap-deps] WARNING: systemd-tmpfiles ACL adjustment failed — the journal is persistent but may carry default permissions." >&2
-echo "[bootstrap-deps] persistent journal enabled (takes effect after the reboot)."
 
 # --- hardware group membership (granted to the resolved operator, never root) ------------
 if usermod -aG spi,gpio "$OP"; then

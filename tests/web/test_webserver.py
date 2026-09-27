@@ -2438,3 +2438,32 @@ def test_server_ca_download_is_public_and_keyless(tmp_path, web):
     r = c.get("/webserver/ca.crt", headers={"X-LHPC-Peer": "remote"})
     assert r.status_code == 200 and r.data == pem
     assert 'filename="lhpc-server-ca.crt"' in r.headers["Content-Disposition"]
+
+
+@pytest.mark.parametrize("how", ["webserver-init", "rotate"])
+def test_replacing_the_client_ca_resets_every_old_client_state(tmp_path, monkeypatch, how):
+    """AUDIT: the confirmed re-init replaced the client CA but kept the old inventory (old labels
+    'active', old revoked serials in the new CA's CRL) and the pending marker (a later rebuild
+    carried old serials back). Both CA-replacing paths now share one reset."""
+    svc = _svc_webserver_corrections(tmp_path); svc.webserver_init()
+    p = svc._paths
+    for label in ("laptop", "phone", "tablet"):
+        svc.webserver_cert_issue(label, "pw")
+    pki.revoke_client_cert(p, "phone")
+    save = pki._save_index
+    monkeypatch.setattr(pki, "_save_index", lambda *a, **k: (_ for _ in ()).throw(OSError("full")))
+    with pytest.raises(pki.PKIError, match="REVOCATION-PENDING"):
+        pki.revoke_client_cert(p, "tablet")
+    monkeypatch.setattr(pki, "_save_index", save)
+    marker = tmp_path / "config/tls/client-ca/revocation-pending.json"
+    assert marker.exists()
+    if how == "webserver-init":
+        assert svc.webserver_init(confirm=True).ok
+    else:
+        pki.rotate_client_ca(p)
+    assert pki.list_client_certs(p) == [] and not marker.exists()
+    pki.build_crl(p)                                     # a normal (carrying) rebuild afterwards
+    from cryptography import x509
+    crl = x509.load_pem_x509_crl((tmp_path / "config/tls/client-ca/crl.pem").read_bytes())
+    assert list(crl) == []
+    assert svc.webserver_cert_issue("laptop", "pw").ok   # an old label is free again

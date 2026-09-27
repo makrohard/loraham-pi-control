@@ -212,21 +212,6 @@ def test_a_future_dated_crl_is_repaired(tmp_path, monkeypatch):
     assert lu <= now, "still dated in the future"
 
 
-def test_an_unverified_clock_leaves_the_crl_untouched(tmp_path, monkeypatch):
-    # No operator is present in the watchdog, so there is nobody to accept the risk. Rebuilding
-    # from a wrong clock would replace one broken CRL with another; waiting costs nothing,
-    # because the watchdog calls again on every pass.
-    _init_pki(tmp_path)
-    now = _dt.datetime.now(_dt.UTC)
-    _stale_crl(tmp_path, last_update=now - _dt.timedelta(days=60),
-               next_update=now - _dt.timedelta(days=30))
-    crl_path = tmp_path / "config" / "tls" / "client-ca" / "crl.pem"
-    before = crl_path.read_bytes()
-    svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
-    assert svc.crl_refresh_if_expired() is False
-    assert crl_path.read_bytes() == before
-
-
 def test_a_pending_marker_does_not_shortcut_an_invalid_crl(tmp_path, monkeypatch):
     # The ordering bug. The pending-reload early return ran BEFORE the CRL was ever loaded, so a
     # marker left by a failed reload retried forever against a file that was itself invalid and
@@ -550,6 +535,10 @@ def test_a_half_finished_setup_does_not_read_as_satisfied(tmp_path, monkeypatch)
     seen.add(deps.CLOCK_EPOCH_PATH)           # the boot floor survives failed re-runs: NOT a witness
     assert svc._time_source_present() is False
     seen.add(deps.TIME_SOURCE_STAMP_PATH)     # the per-run witness, written only after the verdict
+    # A box set up before fake-hwclock joined the time source (F-B1): drop-in and stamp present,
+    # no LHPC fake-hwclock default -> NOT satisfied, so the panel offers the repair command.
+    assert svc._time_source_present() is False
+    seen.add(deps.FAKE_HWCLOCK_DEFAULT_PATH)
     assert svc._time_source_present() is True
 
 
@@ -960,3 +949,134 @@ def test_init_rechecks_the_destructive_precondition_under_the_lock(tmp_path, mon
     ws = svc.config().webserver
     assert (list(ws.dns_sans), list(ws.ip_sans)) == (["winner.lan"], ["10.42.0.1"]), \
         "the refused init rewrote the SAN config"
+
+
+# --- the CRL heal under an unverified clock (lockout without NTP/GPS) -------------------------
+
+def _expired_crl_with_a_revocation(p):
+    """A NORMALISED PKI (the box once had a verified clock) whose CRL has passed nextUpdate, with
+    one revoked client certificate in it."""
+    pki.issue_client_cert(p, "laptop", days=90, passphrase="pw")
+    pki.issue_client_cert(p, "phone", days=90, passphrase="pw")
+    pki.revoke_client_cert(p, "phone")
+    revoked = {r.serial_number for r in _crl_of(p)}
+    now = _dt.datetime.now(_dt.UTC)
+    _stale_crl(p.runtime_root, last_update=now - _dt.timedelta(days=60),   # nextUpdate passed
+               next_update=now - _dt.timedelta(days=30))
+    return revoked
+
+
+def _crl_of(p):
+    from cryptography import x509
+    return x509.load_pem_x509_crl(p.under("config", "tls", "client-ca", "crl.pem").read_bytes())
+
+
+def _reload_ok(monkeypatch):
+    from lhpc.core import webserver as ws_mod
+    monkeypatch.setattr(ws_mod, "reload", lambda system, paths: ("reloaded", ""))
+
+
+def test_an_expired_crl_heals_provisionally_without_a_verified_clock(tmp_path, monkeypatch):
+    """A box that once had NTP, then ran past its CRL's nextUpdate without NTP or GPS: nginx
+    refused every client certificate and the heal WAITED for a clock that never came (the removed
+    test_an_unverified_clock_leaves_the_crl_untouched pinned that waiting). It now rebuilds with
+    the fixed provisional window, keeping every revocation."""
+    p = _init_pki(tmp_path)
+    revoked = _expired_crl_with_a_revocation(p)
+    assert revoked and not pki.provisional_pending(p)
+    svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
+    _reload_ok(monkeypatch)
+    assert svc.crl_refresh_if_expired() is True
+    crl = _crl_of(p)
+    assert pki.crl_is_provisional(p) is True
+    assert {r.serial_number for r in crl} == revoked              # nothing un-revoked
+    assert pki.provisional_pending(p)                              # the watchdog will normalise
+    assert svc.crl_refresh_if_expired() is False                   # no rebuild loop
+
+
+def test_the_verified_clock_heal_is_unchanged(tmp_path, monkeypatch):
+    p = _init_pki(tmp_path)
+    revoked = _expired_crl_with_a_revocation(p)
+    svc = _svc(tmp_path, synced=True, monkeypatch=monkeypatch)
+    _reload_ok(monkeypatch)
+    assert svc.crl_refresh_if_expired() is True
+    assert pki.crl_is_provisional(p) is False and not pki.provisional_pending(p)
+    assert {r.serial_number for r in _crl_of(p)} == revoked
+
+
+def test_a_provisionally_healed_crl_is_normalised_once_the_clock_is_verified(tmp_path, monkeypatch):
+    p = _init_pki(tmp_path)
+    revoked = _expired_crl_with_a_revocation(p)
+    _reload_ok(monkeypatch)
+    assert _svc(tmp_path, synced=False, monkeypatch=monkeypatch).crl_refresh_if_expired() is True
+    svc = _svc(tmp_path, synced=True, monkeypatch=monkeypatch)
+    assert svc.pki_clock_normalise() == "normalised"
+    assert pki.crl_is_provisional(p) is False and not pki.provisional_pending(p)
+    assert {r.serial_number for r in _crl_of(p)} == revoked
+    assert pki.server_cert_is_provisional(p) in (None, False)     # a normal leaf is not re-minted
+
+
+# --- a CRL rebuild never drops a revocation-pending serial ---------------------------------------
+
+def _pending_revocation_in_an_expired_crl(p, monkeypatch):
+    """The supported revocation-pending state: 'phone' was revoked, the CRL was written, the
+    inventory commit failed, so only the CRL (and the marker) revoke it. Then the CRL expires."""
+    pki.issue_client_cert(p, "laptop", days=90, passphrase="pw")
+    pki.issue_client_cert(p, "phone", days=90, passphrase="pw")
+    save = pki._save_index
+    monkeypatch.setattr(pki, "_save_index", lambda *a, **k: (_ for _ in ()).throw(OSError("full")))
+    with pytest.raises(pki.PKIError, match="REVOCATION-PENDING"):
+        pki.revoke_client_cert(p, "phone")
+    monkeypatch.setattr(pki, "_save_index", save)
+    serial = next(c["serial"] for c in pki._load_index(p)["certs"] if c["label"] == "phone")
+    now = _dt.datetime.now(_dt.UTC)
+    pki._build_and_write_crl(p, pki._load_index(p) | {"certs": [
+        {"serial": serial, "state": "revoked"}]}, validity=(now - _dt.timedelta(days=60),
+                                                            now - _dt.timedelta(days=30)))
+    assert {format(r.serial_number, "x") for r in _crl_of(p)} == {serial}
+    return int(serial, 16)
+
+
+@pytest.mark.parametrize("synced", [False, True])
+def test_the_crl_heal_keeps_a_revocation_pending_serial(tmp_path, monkeypatch, synced):
+    """AUDIT: build_crl rebuilt from the inventory alone, which still says 'active' for a
+    revocation-pending cert, so the heal (either clock) silently un-revoked it."""
+    p = _init_pki(tmp_path)
+    serial = _pending_revocation_in_an_expired_crl(p, monkeypatch)
+    _reload_ok(monkeypatch)
+    assert _svc(tmp_path, synced=synced, monkeypatch=monkeypatch).crl_refresh_if_expired() is True
+    assert pki.crl_is_provisional(p) is (not synced)
+    assert serial in {r.serial_number for r in _crl_of(p)}
+
+
+def test_the_normalise_keeps_a_revocation_pending_serial(tmp_path, monkeypatch):
+    p = _init_pki(tmp_path)
+    serial = _pending_revocation_in_an_expired_crl(p, monkeypatch)
+    _reload_ok(monkeypatch)
+    assert _svc(tmp_path, synced=False, monkeypatch=monkeypatch).crl_refresh_if_expired() is True
+    assert _svc(tmp_path, synced=True, monkeypatch=monkeypatch).pki_clock_normalise() == "normalised"
+    assert serial in {r.serial_number for r in _crl_of(p)}
+
+
+def test_revoking_another_cert_keeps_a_revocation_pending_serial(tmp_path, monkeypatch):
+    p = _init_pki(tmp_path)
+    serial = _pending_revocation_in_an_expired_crl(p, monkeypatch)
+    revoked = pki.revoke_client_cert(p, "laptop")
+    assert {r.serial_number for r in _crl_of(p)} == {serial, int(revoked["serial"], 16)}
+
+
+def test_an_unreadable_crl_is_not_rebuilt_from_the_inventory(tmp_path):
+    p = _init_pki(tmp_path)
+    f = p.under("config", "tls", "client-ca", "crl.pem")
+    f.write_text("not a crl\n")
+    with pytest.raises(pki.PKIError, match="unreadable"):
+        pki.build_crl(p)
+    assert f.read_text() == "not a crl\n"
+
+
+def test_a_rotated_client_ca_starts_with_an_empty_crl(tmp_path):
+    p = _init_pki(tmp_path)
+    pki.issue_client_cert(p, "phone", days=90, passphrase="pw")
+    pki.revoke_client_cert(p, "phone")
+    pki.rotate_client_ca(p)
+    assert list(_crl_of(p)) == []                                  # old CA's serials not carried

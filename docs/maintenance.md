@@ -336,8 +336,18 @@ runtime load.
   cannot be provisioned the bootstrap exits 4 after the apt/SPI/group work. It lives on the SD card.
 - **Wi-Fi under sustained build load.** The Zero's brcmfmac firmware drops the interface until a
   reboot when power-save is on; `bootstrap-deps.sh` disables Wi-Fi power-save when the install
-  runs over Wi-Fi and enables a persistent journal so a drop is captured. `lhpc build` is
-  idempotent, so a drop mid-build costs a reconnect, not the build.
+  runs over Wi-Fi. `lhpc build` is idempotent, so a drop mid-build costs a reconnect, not the build.
+- **The journal is volatile.** Raspberry Pi OS ships
+  `/usr/lib/systemd/journald.conf.d/40-rpi-volatile-storage.conf` (`Storage=volatile`), so a
+  reboot loses the previous boot's journal, and LHPC does not change that. To keep it on a box
+  being debugged, add a drop-in that sorts after the Raspberry Pi one; the cap matters because the
+  journal then writes to the SD card:
+  ```sh
+  sudo mkdir -p /etc/systemd/journald.conf.d
+  printf '[Journal]\nStorage=persistent\nSystemMaxUse=200M\n' | sudo tee /etc/systemd/journald.conf.d/90-persistent.conf
+  sudo systemctl restart systemd-journald
+  ```
+  Remove the file and restart journald to go back.
 - **An interrupted `auto-install`** is recovered with `lhpc auto-install --status` / `--recover`
   ([cli.md](cli.md#auto-install)); never hand-edit the `state/auto-install*.json` markers.
 

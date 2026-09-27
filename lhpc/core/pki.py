@@ -401,10 +401,23 @@ def rotate_client_ca(paths: Paths, *, days: int = _CA_DAYS_DEFAULT) -> dict:
     """DESTRUCTIVE: replace the client-auth CA and RESET the client inventory + CRL — every
     previously issued client certificate becomes untrusted (it was signed by the old CA)."""
     summary = _init_ca(paths, _CLIENT_CA, "LHPC Client Auth CA", days=days, force=True)
-    _save_index(paths, _empty_index())
-    # A fresh (empty) CRL under the new CA.
-    build_crl(paths)
+    reset_client_state(paths)
     return summary
+
+
+def reset_client_state(paths: Paths, *, validity=None) -> None:
+    """After the client CA was REPLACED: nothing the old CA signed or revoked means anything
+    under the new one. Empty inventory, no revocation-pending marker (a later carrying rebuild
+    would otherwise bring old serials back), and an empty CRL under the new CA. The one reset
+    shared by `rotate_client_ca` and the confirmed webserver re-init."""
+    _save_index(paths, _empty_index())
+    try:
+        runtime_fs.unlink(paths, _pending_path(paths))
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise PKIError(f"could not remove the old revocation-pending marker ({exc})") from exc
+    build_crl(paths, validity=validity, carry=False)
 
 
 # --------------------------------------------------------------------------- server leaf
@@ -584,14 +597,27 @@ def revoke_client_cert(paths: Paths, label: str) -> dict:
 
 
 def _build_and_write_crl(paths: Paths, index: dict, *, days: int = _CRL_DAYS_DEFAULT,
-                         validity=None) -> None:
+                         validity=None, carry: bool = True) -> None:
     """Build the CRL from `index`'s revoked certs (using `index['crl_number']`) and atomically
     write crl.pem. Raises PKIError/OSError on missing CA or build/write failure. Does NOT
-    persist `index` — the caller commits it only after this succeeds."""
+    persist `index` — the caller commits it only after this succeeds.
+
+    `carry`: the new CRL also revokes every serial the current CRL or the pending marker
+    revokes. A revocation whose inventory commit failed (revocation-pending) lives only there,
+    and a rebuild from the stale inventory alone would silently un-revoke it. A present but
+    unreadable CRL fails closed. Only a caller that has just replaced the client CA (whose
+    old serials mean nothing) passes carry=False."""
     ca_key = _read_key(paths, _ca_paths(paths, _CLIENT_CA)[0])
     ca_cert = _read_cert(paths, _ca_paths(paths, _CLIENT_CA)[1])
     if ca_key is None or ca_cert is None:
         raise PKIError("client-auth CA not initialized")
+    serials = {e["serial"] for e in index["certs"] if e.get("state") == "revoked"}
+    if carry:
+        current = _crl_revoked_serials(paths)
+        if current is None:
+            raise PKIError("the current CRL is unreadable — not rebuilding it from the "
+                           "inventory alone, which could un-revoke a pending revocation")
+        serials |= current | {e["serial"] for e in _load_pending(paths) if e.get("serial")}
     now = _now()
     last_update, next_update = _validity(_dt.timedelta(minutes=1), days, validity)
     builder = (x509.CertificateRevocationListBuilder()
@@ -599,23 +625,23 @@ def _build_and_write_crl(paths: Paths, index: dict, *, days: int = _CRL_DAYS_DEF
                .last_update(last_update)
                .next_update(next_update)
                .add_extension(x509.CRLNumber(int(index["crl_number"])), critical=False))
-    for e in index["certs"]:
-        if e.get("state") == "revoked":
-            revoked = (x509.RevokedCertificateBuilder()
-                       .serial_number(int(e["serial"], 16))
-                       .revocation_date(now - _dt.timedelta(minutes=1))
-                       .build())
-            builder = builder.add_revoked_certificate(revoked)
+    for serial in sorted(serials, key=lambda s: int(s, 16)):
+        revoked = (x509.RevokedCertificateBuilder()
+                   .serial_number(int(serial, 16))
+                   .revocation_date(now - _dt.timedelta(minutes=1))
+                   .build())
+        builder = builder.add_revoked_certificate(revoked)
     crl = builder.sign(ca_key, hashes.SHA256())
     runtime_fs.atomic_write(paths, _p(paths, _CLIENT_CA, "crl.pem"),
                             crl.public_bytes(serialization.Encoding.PEM).decode("ascii"),
                             mode=0o644)
 
 
-def build_crl(paths: Paths, *, days: int = _CRL_DAYS_DEFAULT, validity=None) -> Path:
+def build_crl(paths: Paths, *, days: int = _CRL_DAYS_DEFAULT, validity=None,
+              carry: bool = True) -> Path:
     idx = _load_index(paths)
     idx["crl_number"] = int(idx.get("crl_number", 0)) + 1
-    _build_and_write_crl(paths, idx, days=days, validity=validity)
+    _build_and_write_crl(paths, idx, days=days, validity=validity, carry=carry)
     _save_index(paths, idx)
     return _p(paths, _CLIENT_CA, "crl.pem")
 
