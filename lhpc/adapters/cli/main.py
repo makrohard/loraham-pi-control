@@ -1590,13 +1590,17 @@ def _run(argv: list[str] | None = None) -> int:
                 fn = svc.webserver_cert_issue if cc == "issue" else svc.webserver_cert_reissue
                 res = fn(args.label, pw,
                          getattr(args, "accept_unverified_clock", False))
-                if res.ok:
-                    print(f"OK    {res.summary}")
+                if res.ok or res.data.get("bundle_created"):
+                    # A reissue whose proxy reload failed is a partial failure, but its bundle
+                    # exists: the one-time passphrase must still be shown.
+                    print(f"{'OK ' if res.ok else 'ERR'}   {res.summary}")
                     for line in res.details:
                         print(f"  {line}")
                     print("\n  ONE-TIME bundle passphrase (not stored — record it now):"
                           f"\n    {pw}")
-                    return 0
+                    for cmd in res.next_commands:
+                        print(f"  next: {cmd}")
+                    return 0 if res.ok else 1
                 return _render(res)
             if cc == "revoke":
                 if (args.confirm_label or "").strip() != args.label:

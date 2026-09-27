@@ -1579,7 +1579,12 @@ class WebserverOpsMixin:
             return self._pki_busy(exc)
         except Exception as exc:
             return ActionResult(False, f"reissue failed: {exc}")
-        return ActionResult(True, f"reissued client certificate '{summ['label']}'", data=summ)
+        reloaded, how = self._reload_after_revoke()
+        # A failed reload makes the result a partial failure, but the new bundle EXISTS: the caller
+        # must still show its one-time passphrase (`bundle_created`).
+        return ActionResult(reloaded, f"reissued client certificate '{summ['label']}'; {how}",
+                            data={**summ, "bundle_created": True, "revocation_recorded": True,
+                                  "reload_ok": reloaded})
 
     def webserver_cert_list(self) -> ActionResult:
         from . import pki as _pki
@@ -1601,9 +1606,40 @@ class WebserverOpsMixin:
             return self._pki_busy(exc)
         except Exception as exc:
             return ActionResult(False, f"revoke failed: {exc}")
-        return ActionResult(True, f"revocation RECORDED for '{label}' and CRL regenerated — "
-                            "not proven effective until the proxy reloads and rejects it",
-                            next_commands=["lhpc webserver verify"])
+        reloaded, how = self._reload_after_revoke()
+        if reloaded:
+            return ActionResult(True, f"revoked '{label}'; {how}",
+                                data={"revocation_recorded": True, "reload_ok": True})
+        return ActionResult(False, f"revocation RECORDED for '{label}', but {how}",
+                            next_commands=["lhpc webserver apply"],
+                            data={"revocation_recorded": True, "reload_ok": False})
+
+    def _reload_after_revoke(self) -> tuple[bool, str]:
+        """A revocation is enforced only once nginx re-reads the CRL, so reload the running proxy
+        now. Returns (enforced-or-no-proxy, what happened). A failed reload leaves the reload-pending
+        marker the CRL heal already retries on every watchdog pass (crl_refresh_if_expired); if even
+        that marker cannot be written, it says so, and never raises: the revocation has already
+        committed, and re-running revoke would only answer "no active certificate".
+
+        The wording claims what the call knows: `nginx -s reload` returning 0 means the master
+        accepted the signal; nginx reloads gracefully, so NEW connections with the old certificate
+        are refused, while one already established may finish (LHPC does not probe either)."""
+        from . import runtime_fs as _rfs
+        from . import webserver as _ws
+        status, _msg = _ws.reload(self._system, self._paths)
+        if status == "reloaded":
+            return True, "the proxy was told to reload the new CRL (nginx -s reload succeeded)"
+        if status == "repair_required":
+            return True, "the proxy is not running; it loads the new CRL when it starts"
+        try:
+            _rfs.atomic_write(self._paths, self._paths.under("state", "crl-reload-pending"),
+                              "reload-pending\n", 0o600)
+            retry = "the console retries the reload on its next pass"
+        except Exception as exc:
+            retry = f"NO automatic retry could be scheduled ({exc})"
+        return False, ("the proxy reload FAILED, so the revoked certificate may still be accepted; "
+                       f"{retry}. Do not revoke again: run `lhpc webserver apply` (in the console: "
+                       "Webserver → Settings → Apply)")
 
     def webserver_cert_discard_export(self, label) -> ActionResult:
         # Edits client-index.json, so it races the same load/save cycle as a CRL rebuild.
@@ -1714,7 +1750,9 @@ class WebserverOpsMixin:
                         _pki.build_crl(self._paths, validity=_pki.PROVISIONAL_VALIDITY)
             except ResourceBusy:
                 return False                 # an operator holds the PKI; next pass retries
-            if not self._nginx_reload_if_active():   # nginx must re-read the fresh CRL
+            if self._nginx_reload_if_active():       # nginx must re-read the fresh CRL
+                self._safe_unlink(pending)           # a marker a revoke left is satisfied too
+            else:
                 _rfs.atomic_write(self._paths, pending, "reload-pending\n", 0o600)
             return True
         except Exception:

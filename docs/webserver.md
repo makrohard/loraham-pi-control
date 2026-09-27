@@ -300,8 +300,13 @@ lhpc webserver tls-renew                                 # new server cert, same
 **The passphrase is shown once and is never stored** — copy it when `cert issue` prints it. Lose it
 and the bundle cannot be opened: `reissue` mints a new bundle with a new passphrase for the same
 label. A bundle that reached the wrong hands is a credential to withdraw, not one to re-export —
-`revoke` it and issue a fresh one; the revocation is effective once the proxy has reloaded with the
-new CRL.
+`revoke` it and issue a fresh one. `revoke` (and `reissue`, which revokes the old certificate) reloads
+the proxy, so NEW connections with the old certificate are refused; nginx reloads gracefully, so a
+connection already established may finish. If the reload fails, the command fails (exit 1, a red
+message in the console), the revocation stays recorded, and the console retries the reload on its
+next pass; do not revoke again, run `lhpc webserver apply`. Up to 0.10.0 neither reloaded: on such a box run `lhpc webserver apply` after
+a revoke or reissue, or without a shell use the console's Webserver → Settings → **Apply** (it asks for
+`enable-remote` while remote access is on).
 
 The CRL itself is valid for 30 days. The web console's network watchdog rebuilds it on every pass
 (every 60 s on a box with the Wi-Fi feature, every 300 s otherwise) once its `nextUpdate` has
@@ -339,9 +344,9 @@ trust warning; without the `.p12` any cert-requiring access mode rejects the bro
 `revoke` is transactional: the CRL is written first, then the inventory. If the CRL write fails
 the certificate stays **active**. If the CRL is written but the inventory commit fails, the
 certificate shows as **`revocation-pending`** (a durable marker), never as active and never as a
-clean `revoked`; re-running the revoke reconciles it. Even a committed `revoked` is reported
-**effective** only once the proxy has reloaded with the new CRL and a revoked certificate is
-proven rejected; until then status says so.
+clean `revoked`; re-running the revoke reconciles it. A committed revocation takes effect when the
+proxy reloads the new CRL: `revoke` reloads it and reports whether that worked. LHPC does not probe the
+rejection itself (`webserver verify` checks the configuration and listeners, not revocation).
 
 ## Verifying effective state
 

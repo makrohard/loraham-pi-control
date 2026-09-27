@@ -2049,7 +2049,7 @@ def test_cert_lifecycle(tmp_path):
     assert issued.ok and issued.data["label"] == "tablet"
     assert any(c["label"] == "tablet" for c in svc.webserver_cert_list().data["certs"])
     rev = svc.webserver_cert_revoke("tablet")
-    assert rev.ok and "RECORDED" in rev.summary
+    assert rev.ok and rev.summary.startswith("revoked 'tablet';")
     assert svc.webserver_cert_discard_export("tablet").ok
 
 
@@ -2467,3 +2467,115 @@ def test_replacing_the_client_ca_resets_every_old_client_state(tmp_path, monkeyp
     crl = x509.load_pem_x509_crl((tmp_path / "config/tls/client-ca/crl.pem").read_bytes())
     assert list(crl) == []
     assert svc.webserver_cert_issue("laptop", "pw").ok   # an old label is free again
+
+
+# --- a revocation reloads the proxy (image test 2026-09-27: revoked cert kept getting 200) ---------
+
+def _revoke_with_reload(tmp_path, monkeypatch, status):
+    from lhpc.core import webserver as _ws
+    calls = []
+    monkeypatch.setattr(_ws, "reload", lambda system, paths: calls.append(1) or (status, status))
+    svc = _svc_webserver_corrections(tmp_path); svc.webserver_init(); svc.webserver_cert_issue("laptop", "pw")
+    return svc, svc.webserver_cert_revoke("laptop"), calls
+
+
+def test_revoke_reloads_the_proxy(tmp_path, monkeypatch):
+    svc, r, calls = _revoke_with_reload(tmp_path, monkeypatch, "reloaded")
+    assert r.ok and calls == [1] and "told to reload the new CRL" in r.summary
+    assert not (tmp_path / "state/crl-reload-pending").exists()
+
+
+def test_a_failed_reload_after_revoke_is_said_and_retried_by_the_heal(tmp_path, monkeypatch):
+    svc, r, calls = _revoke_with_reload(tmp_path, monkeypatch, "failed")
+    assert not r.ok and "reload FAILED" in r.summary and "lhpc webserver apply" in r.summary
+    assert r.summary.startswith("revocation RECORDED for 'laptop'")  # a partial failure, not OK
+    assert r.data["revocation_recorded"] is True and r.data["reload_ok"] is False
+    assert "Do not revoke again" in r.summary and "Settings → Apply" in r.summary
+    assert "retries the reload on its next pass" in r.summary
+    assert (tmp_path / "state/crl-reload-pending").exists()
+    from lhpc.core import webserver as _ws
+    monkeypatch.setattr(_ws, "reload", lambda system, paths: ("reloaded", "ok"))
+    assert svc.crl_refresh_if_expired() is True                    # the existing heal retries it
+    assert not (tmp_path / "state/crl-reload-pending").exists()
+
+
+def test_revoke_without_a_running_proxy_leaves_no_marker(tmp_path, monkeypatch):
+    svc, r, calls = _revoke_with_reload(tmp_path, monkeypatch, "repair_required")
+    assert r.ok and "not running" in r.summary        # no proxy: nothing accepts it
+    assert not (tmp_path / "state/crl-reload-pending").exists()
+
+
+def test_reissue_reloads_the_proxy_too(tmp_path, monkeypatch):
+    svc, _r, calls = _revoke_with_reload(tmp_path, monkeypatch, "reloaded")
+    r = svc.webserver_cert_reissue("laptop", "pw-two")
+    assert r.ok and len(calls) == 2 and "told to reload the new CRL" in r.summary
+
+
+def test_the_heal_s_rebuild_also_clears_a_revoke_s_marker(tmp_path, monkeypatch):
+    # A stale CRL is rebuilt and reloaded by the heal; a reload-pending marker a failed revoke left
+    # is satisfied by that reload and must not trigger one more on the next pass.
+    import datetime as _dt
+    from lhpc.core import webserver as _ws
+    svc, r, calls = _revoke_with_reload(tmp_path, monkeypatch, "failed")
+    assert (tmp_path / "state/crl-reload-pending").exists()
+    now = _dt.datetime.now(_dt.UTC)
+    pki.build_crl(svc._paths, validity=(now - _dt.timedelta(days=40), now - _dt.timedelta(days=10)))
+    monkeypatch.setattr(_ws, "reload", lambda system, paths: ("reloaded", "ok"))
+    assert svc.crl_refresh_if_expired() is True                    # stale: rebuilt + reloaded
+    assert not (tmp_path / "state/crl-reload-pending").exists()
+
+
+
+def test_a_marker_that_cannot_be_written_is_a_typed_result_never_a_traceback(tmp_path, monkeypatch):
+    # Audit P1.1 finding 2: the revocation has committed; the reload failed; the retry marker
+    # cannot be written. The caller must get a normal failed result that claims NO automatic retry.
+    from lhpc.core import runtime_fs as _rfs
+    from lhpc.core import webserver as _ws
+    svc = _svc_webserver_corrections(tmp_path); svc.webserver_init(); svc.webserver_cert_issue("laptop", "pw")
+    monkeypatch.setattr(_ws, "reload", lambda system, paths: ("failed", "failed"))
+    real = _rfs.atomic_write
+
+    def _no_marker(paths, path, *a, **k):
+        if str(path).endswith("crl-reload-pending"):
+            raise OSError("read-only file system")
+        return real(paths, path, *a, **k)
+    monkeypatch.setattr(_rfs, "atomic_write", _no_marker)
+    r = svc.webserver_cert_revoke("laptop")
+    assert not r.ok and r.data["revocation_recorded"] is True
+    assert "NO automatic retry could be scheduled" in r.summary and "read-only" in r.summary
+    assert "retries the reload on its next pass" not in r.summary
+    assert not (tmp_path / "state/crl-reload-pending").exists()
+
+
+def test_a_reissue_whose_reload_failed_still_hands_out_its_bundle(tmp_path, monkeypatch):
+    from lhpc.core import webserver as _ws
+    svc = _svc_webserver_corrections(tmp_path); svc.webserver_init(); svc.webserver_cert_issue("laptop", "pw")
+    monkeypatch.setattr(_ws, "reload", lambda system, paths: ("failed", "failed"))
+    r = svc.webserver_cert_reissue("laptop", "pw-two")
+    assert not r.ok and r.data["bundle_created"] is True and "reload FAILED" in r.summary
+
+
+def test_cli_reissue_with_a_failed_reload_exits_1_and_still_shows_the_passphrase(monkeypatch, tmp_path, capsys):
+    # A failed reload is a partial failure (exit 1), but the bundle exists: losing its one-time
+    # passphrase would leave the operator with a bundle nobody can open.
+    from lhpc.core import webserver as _ws
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path)); (tmp_path / "config").mkdir(exist_ok=True)
+    assert main(["webserver", "init"]) == 0
+    assert main(["webserver", "cert", "issue", "laptop"]) == 0
+    monkeypatch.setattr(_ws, "reload", lambda system, paths: ("failed", "failed"))
+    capsys.readouterr()
+    assert main(["webserver", "cert", "reissue", "laptop"]) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("ERR") and "reload FAILED" in out
+    assert "ONE-TIME bundle passphrase" in out
+
+
+def test_cli_revoke_with_a_failed_reload_exits_1(monkeypatch, tmp_path, capsys):
+    from lhpc.core import webserver as _ws
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path)); (tmp_path / "config").mkdir(exist_ok=True)
+    assert main(["webserver", "init"]) == 0
+    assert main(["webserver", "cert", "issue", "laptop"]) == 0
+    monkeypatch.setattr(_ws, "reload", lambda system, paths: ("failed", "failed"))
+    capsys.readouterr()
+    assert main(["webserver", "cert", "revoke", "laptop", "--confirm-label", "laptop"]) == 1
+    assert "revocation RECORDED for 'laptop'" in capsys.readouterr().out
