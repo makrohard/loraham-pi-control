@@ -1282,3 +1282,20 @@ def test_the_daemon_failure_reason_is_the_last_typed_line():
     assert f(["  [ok] daemon-433", "  [fail] 868 CONF socket never came up — the daemon failed"]) == \
         "868 CONF socket never came up — the daemon failed"
     assert f(["  [ok] daemon already serving 433"]) == "daemon readiness/TX gating failed"
+
+
+
+@pytest.mark.parametrize("target", ["daemon", "meshcom"])
+def test_a_daemon_that_is_not_installed_names_that_as_the_reason(tmp_path, monkeypatch, target):
+    # P1.23 (audit P1.4, the note): this fatal return was tagged [skip], which the typed-reason
+    # helper does not read, so the daemon's result (and the boot-restore record built from it)
+    # said "daemon readiness/TX gating failed".
+    from lhpc.core import config as cfgmod
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    cfgmod.save_hardware_setup(svc._paths, "uputronics")
+    svc._invalidate_config()
+    assert svc.set_operator_identity(callsign="XX0XXA").ok        # meshcom's own identity gate
+    assert not svc._source_present(svc.stack("daemon").component("loraham-daemon"))
+    r = svc.start(target, apply=True)
+    dres = [x for x in r.results if x.component == "loraham-daemon"]
+    assert not r.ok and dres and dres[0].summary == "daemon: not installed (lhpc install daemon)"

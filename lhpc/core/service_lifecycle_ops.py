@@ -1915,7 +1915,7 @@ class LifecycleOpsMixin:
         started: set = set()
         if absent:
             if comp.source and not self._source_present(comp):
-                lines.append("  [skip] daemon: not installed (lhpc install daemon)")
+                lines.append("  [BLOCKED] daemon: not installed (lhpc install daemon)")
                 return lines, False, ""
             # The daemon takes this separate path, so the same refusal as the generic start:
             # an installed binary artifact behind the manifest pins is never spawned — it
