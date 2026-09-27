@@ -664,3 +664,40 @@ def test_operator_apply_prints_what_it_did_not_steps_it_already_took(op_svc, mon
         assert "The web console was restarted on the new version." in res.details
     else:
         assert "The web console is not running; it loads the new version when started." in res.details
+
+
+# --- the one-click helper and the reset+clean-failed partial (audit P1.3 round 1, finding 1) -----
+
+def _partial_svc(tmp_path, monkeypatch, op_svc):
+    from lhpc.core.services import ActionResult, ControllerService
+    svc, fake = op_svc(units=True, invocation=True)
+    msg = ("Update aligned to upstream, but some untracked files could NOT be removed "
+           "— delete them manually, then restart the console.")
+    monkeypatch.setattr(ControllerService, "self_update_apply",
+                        lambda self, *, force=False: ActionResult(
+                            False, msg, details=("cannot unlink 'x'",),
+                            data={"cleanup_failed": True, "cleanup_error": "cannot unlink 'x'",
+                                  "message": msg}))
+    pip = next(k for k in fake.commands if k[1:4] == ("-m", "pip", "install"))
+    _write_request(tmp_path, "overwrite")
+    return svc, fake, pip
+
+
+def test_run_service_cleanup_partial_still_syncs_and_refreshes(tmp_path, monkeypatch, op_svc):
+    svc, fake, pip = _partial_svc(tmp_path, monkeypatch, op_svc)
+    refreshed = []
+    monkeypatch.setattr(type(svc), "_refresh_units_post_update",
+                        lambda self: (refreshed.append(1), (True, "ok"))[1])
+    res = svc.self_update_run_service()
+    assert list(pip) in fake.calls and refreshed == [1]            # the checkout DID advance
+    assert not res.ok and res.data.get("cleanup_failed")            # still a truthful partial
+    assert selfupdate.status_view(svc._paths)["last_apply"]["ok"] is False
+
+
+def test_run_service_cleanup_partial_then_a_failed_sync_keeps_both_remedies(tmp_path, monkeypatch, op_svc):
+    # Composition note: a later failure must not drop the "delete the leftovers" remedy.
+    svc, fake, pip = _partial_svc(tmp_path, monkeypatch, op_svc)
+    fake.commands[pip] = CommandResult(returncode=1, stdout="", stderr="boom")
+    res = svc.self_update_run_service()
+    assert not res.ok and res.data.get("venv_sync_failed") and res.data.get("cleanup_failed")
+    assert "pip install -e" in res.summary and "untracked files" in res.summary

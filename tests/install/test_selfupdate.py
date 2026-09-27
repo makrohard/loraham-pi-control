@@ -629,3 +629,53 @@ def test_overwrite_discards_untracked_keeps_ignored(env):
     assert (w / ".venv" / "keep").read_text() == "keep-me"                        # ignored preserved
 
 
+
+
+# --- a forced update whose reset worked but whose `git clean` failed (ultrareview U2) ------------
+
+def _cleanup_partial():
+    from lhpc.core.services import ActionResult
+    msg = ("Update aligned to upstream, but some untracked files could NOT be removed "
+           "— delete them manually, then restart the console.")
+    return ActionResult(False, msg, details=("cannot unlink 'x'", "Restart the web console after cleaning up:",
+                                             "  systemctl --user restart lhpc-web"),
+                        data={"ok": True, "cleanup_failed": True, "message": msg,
+                              "restart": {"note": "", "commands": ["systemctl --user restart lhpc-web"]}})
+
+
+def test_cleanup_partial_still_syncs_the_venv_and_refreshes_units(op_svc, monkeypatch):
+    # The checkout DID advance: skipping the sync and the unit refresh would leave new code on old
+    # dependencies and stale units (boot restore skipped). It stays a reported partial (ok=False).
+    refreshed = []
+    svc, fake, root = _op_inactive(op_svc, monkeypatch, _cleanup_partial())
+    monkeypatch.setattr(type(svc), "_refresh_units_post_update",
+                        lambda self: (refreshed.append(1), (True, "ok"))[1])
+    r = svc.self_update_apply_operator(force=True)
+    assert list(_pip_key(root)) in fake.calls and refreshed == [1]
+    assert not r.ok and r.data.get("cleanup_failed") and r.data.get("update_applied")
+
+
+def test_cleanup_partial_does_not_advise_a_restart_already_done(op_svc, monkeypatch):
+    from lhpc.core.probes.backends import CommandResult as CR
+    from lhpc.core.services import ControllerService
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False: _cleanup_partial())
+    cmds = {
+        ("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service"): CR(0, "", ""),
+        ("systemctl", "--user", "stop", "lhpc-web.service"): CR(0, "", ""),
+        ("systemctl", "--user", "start", "lhpc-web.service"): CR(0, "", ""),
+    }
+    svc, fake = op_svc(cmds, invocation=False)
+    monkeypatch.setattr(type(svc), "_refresh_units_post_update", lambda self: (True, "ok"))
+    r = svc.self_update_apply_operator(force=True)
+    assert not r.ok and "delete them manually" in r.summary and "then restart the console" not in r.summary
+    assert "Restart the web console after cleaning up:" not in r.details
+    assert "The web console was restarted on the new version." in r.details
+    assert "cannot unlink 'x'" in r.details                                    # the evidence stays
+
+
+def test_operator_cleanup_partial_then_a_failed_sync_keeps_both_remedies(op_svc, monkeypatch):
+    from lhpc.core.probes.backends import CommandResult as CR
+    svc, fake, root = _op_inactive(op_svc, monkeypatch, _cleanup_partial(), pip=CR(1, "boom", ""))
+    r = svc.self_update_apply_operator(force=True)
+    assert not r.ok and r.data.get("venv_sync_failed") and r.data.get("cleanup_failed")
+    assert "pip install -e" in r.summary and "untracked files" in r.summary

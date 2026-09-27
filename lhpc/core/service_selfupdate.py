@@ -424,6 +424,20 @@ class SelfUpdateOpsMixin:
         detail = (chk.stdout or chk.stderr or "").strip()[:140]
         return False, f"units still not canonical after repair ({rep.summary[:60]}): {detail}"
 
+    @staticmethod
+    def _source_advanced(res: ActionResult) -> bool:
+        """THE one test both self-update paths (operator `_apply_and_sync` and the one-click helper)
+        use for "the checkout moved, so sync the venv and refresh the units". A forced update whose
+        `reset --hard` succeeded but whose `git clean` failed HAS advanced (`cleanup_failed`, set only
+        after a successful reset in `apply_update`), though its result is a truthful ok=False."""
+        return (res.ok or bool(res.data.get("cleanup_failed"))) and not res.data.get("already")
+
+    # Kept on a later failure's summary, so the manual remedy for the leftovers is not lost.
+    _CLEANUP_NOTE = " Also delete the untracked files the update could not remove."
+
+    def _with_cleanup_note(self, res: ActionResult, summary: str) -> str:
+        return summary + self._CLEANUP_NOTE if res.data.get("cleanup_failed") else summary
+
     def _apply_and_sync(self, force: bool) -> ActionResult:
         """Apply the source update, then — ONLY on a REAL advance — synchronize the editable venv install
         with the SAME `sys.executable -m pip install -e <repo-root>` the managed helper runs, so a
@@ -436,7 +450,7 @@ class SelfUpdateOpsMixin:
 
         from . import selfupdate
         res = self.self_update_apply(force=force)
-        if not (res.ok and not res.data.get("already")):
+        if not self._source_advanced(res):
             return res                                        # no-op / already-current / failed / refused
         res = _dc.replace(res, data={**res.data, "update_applied": True})   # a real source advance
         root = selfupdate.repo_root()
@@ -446,9 +460,10 @@ class SelfUpdateOpsMixin:
             if pip.returncode != 0:
                 detail = selfupdate._summarize_output(pip.stderr or pip.stdout)
                 return _dc.replace(res, ok=False,
-                                   summary="Update applied but the venv sync FAILED — run "
-                                   f"{_sys.executable} -m pip install -e {root} manually."
-                                   + (f" ({detail})" if detail else ""),
+                                   summary=self._with_cleanup_note(
+                                       res, "Update applied but the venv sync FAILED — run "
+                                       f"{_sys.executable} -m pip install -e {root} manually."
+                                       + (f" ({detail})" if detail else "")),
                                    data={**res.data, "venv_sync_failed": True})
 
         # Re-render the managed units. An update whose new version changes a unit TEMPLATE
@@ -466,9 +481,10 @@ class SelfUpdateOpsMixin:
             # units disables boot restore, and the operator has no reason to suspect it.
             res = _dc.replace(
                 res, ok=False, data={**res.data, "reason": "units-refresh-failed"},
-                summary=("Update applied, but the managed systemd units could NOT be "
-                         f"refreshed — {unit_detail}. Boot restore will be skipped until "
-                         "this is repaired: lhpc self-update --repair-integration"))
+                summary=self._with_cleanup_note(
+                    res, "Update applied, but the managed systemd units could NOT be "
+                    f"refreshed — {unit_detail}. Boot restore will be skipped until "
+                    "this is repaired: lhpc self-update --repair-integration"))
         return res
 
     def self_update_apply_operator(self, *, force: bool = False) -> ActionResult:
@@ -533,15 +549,21 @@ class SelfUpdateOpsMixin:
         import dataclasses as _dc
 
         from . import selfupdate
-        if not (res.ok and res.data.get("update_applied")):
+        partial = bool(res.data.get("cleanup_failed"))
+        if not ((res.ok or partial) and res.data.get("update_applied")):
             return res
         instr = res.data.get("restart") or {}
-        done = {instr.get("note", ""), "Restart the web console to load the new version:"}
+        done = {instr.get("note", ""), "Restart the web console to load the new version:",
+                "Restart the web console after cleaning up:"}
         done |= {"  " + c for c in instr.get("commands", ())}
         details = [d for d in res.details if d and d not in done]
         details.append("The web console was restarted on the new version." if restarted else
                        "The web console is not running; it loads the new version when started.")
         summary = "Update applied." if res.summary == selfupdate.APPLIED_RESTART_MESSAGE else res.summary
+        if partial and res.summary == res.data.get("message"):
+            # The restart advice in apply_update's partial message is already done here.
+            summary = ("Update applied, but some untracked files could NOT be removed — delete them "
+                       "manually (no restart needed).")
         return _dc.replace(res, summary=summary, details=tuple(details), next_commands=[])
 
     def _self_update_locked(self, force: bool) -> ActionResult:
@@ -933,7 +955,7 @@ class SelfUpdateOpsMixin:
                                        data={"lock_error": True})
                     raise _StopRun() from None
             res = self.self_update_apply(force=force)
-            if res.ok and not res.data.get("already"):
+            if self._source_advanced(res):                  # incl. the reset+clean-failed partial
                 root = selfupdate.repo_root()
                 if root is not None:
                     pip = self._system.runner.run(
@@ -943,9 +965,11 @@ class SelfUpdateOpsMixin:
                         # First line of pip's diagnostics, stripped of box-drawing/ANSI so the
                         # persisted summary reads cleanly in the GUI flash (never a mid-box tail).
                         detail = selfupdate._summarize_output(pip.stderr or pip.stdout)
-                        res = ActionResult(False, "Update applied, but the venv sync FAILED — run "
-                                           f"{sys.executable} -m pip install -e {root} manually, then "
-                                           f"restart the console." + (f" ({detail})" if detail else ""),
+                        res = ActionResult(False, self._with_cleanup_note(
+                                               res, "Update applied, but the venv sync FAILED — run "
+                                               f"{sys.executable} -m pip install -e {root} manually, "
+                                               "then restart the console."
+                                               + (f" ({detail})" if detail else "")),
                                            data={**dict(res.data), "venv_sync_failed": True})
                     else:
                         # Refresh the managed units with the NEW code. This path applies
@@ -956,10 +980,10 @@ class SelfUpdateOpsMixin:
                         ok_u, det_u = self._refresh_units_post_update()
                         res = ActionResult(
                             bool(res.ok) and ok_u,
-                            res.summary if ok_u else
-                            ("Update applied, but the managed systemd units could NOT be "
-                             f"refreshed — {det_u}. Boot restore will be skipped until "
-                             "repaired: lhpc self-update --repair-integration"),
+                            res.summary if ok_u else self._with_cleanup_note(
+                                res, "Update applied, but the managed systemd units could NOT be "
+                                f"refreshed — {det_u}. Boot restore will be skipped until "
+                                "repaired: lhpc self-update --repair-integration"),
                             data={**dict(res.data), "units_refreshed": ok_u,
                                   "units_refresh_detail": det_u})
         except _StopRun:
