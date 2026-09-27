@@ -288,6 +288,11 @@ out.
 The steps below name `10.42.0.0/24` and `10.42.0.1`, the box's own
 [access point](docs/wifi-access-point.md); on a box without one, skip those two values.
 
+**Check the date first:** certificates are dated from the box's clock, so `timedatectl` must show
+today's date; if it does not, set it with `sudo date -u -s 'YYYY-MM-DD HH:MM' && sudo fake-hwclock save`.
+While it says `System clock synchronized: no` (no network time or GPS yet), tick
+**Accept unverified clock** when you issue the certificate.
+
 1. **Apps → LoRaHAM Pi Control → Webserver (HTTPS / mTLS) → Certificates → Issue client cert**<br>
    Mints the certificate and shows its one-time passphrase — copy it there and then. The same
    section offers copy boxes for fetching the `.p12` and the server CA to your own machine. Lost
