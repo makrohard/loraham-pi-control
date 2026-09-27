@@ -109,7 +109,9 @@ skipped, never a build error.
 RF logging is at the shared RNS LoRa interface; MeshChat traffic therefore appears in the
 Reticulum RF log as raw Reticulum packets — there is no separate MeshChat log.
 
-**MeshChat** is a browser client for the same node: an aiohttp backend on `127.0.0.1:8790` plus a
+**MeshChat** is a browser client for the same node, and optional: `lhpc stack start reticulum` starts the
+node only; start MeshChat with `lhpc stack start meshchat` or its row in the console. It is an aiohttp
+backend on `127.0.0.1:8790` plus a
 prebuilt web frontend, published through the LHPC proxy ([webserver](../webserver.md)). It has no
 authentication of its own, so the proxy is the only public path. It starts through the same
 `loraham-rns-client` guard as NomadNet, and for the same reason — started bare with `rns` absent it
@@ -128,8 +130,14 @@ refuses the write, and the proxy refuses (404) the seven routes that attempt it 
 the Interfaces page lists what lhpc configured, including `LoRa` even when nothing is running.
 
 The frontend is **shipped prebuilt** as package data — upstream gitignores it and there is no npm on
-the box — and the backend is installed from `meshchat-constraints.txt`, an exact closure whose `rns`
-may be a version ahead of the node's; that skew is deliberate and re-checked at each bump.
+the box — and the backend is installed from `meshchat-constraints.txt`, an exact closure re-checked
+at each bump; its `rns` must match the node's.
+
+**Versions.** lxmd, nomadnet and Sideband install RNS from the `src/reticulum` checkout, so they run
+the node's Reticulum; a moved pin marks them for a rebuild. LXMF comes from PyPI (1.1.1) for
+nomadnet, Sideband and MeshChat, while lxmd runs the `src/lxmf` checkout (1.1.0): LXMF's git lags
+PyPI by the LXMPeer sync-backoff fix. `lhpc status --versions` shows each client's `rns`/`lxmf`
+and names a package that differs.
 
 MeshChat carries its own **propagation-node** switch, off by default. It lives in MeshChat's SQLite
 settings and is reachable over its WebSocket, so no proxy rule can cover it; LHPC does not claim
@@ -188,7 +196,7 @@ the radio's own mode, `lora_announce_relay`, read only while transport is on:
 | `internal` *(default)* | your own announces, your clients', and those heard on the radio — **not** the public mesh's; paths to internet nodes still resolve on demand |
 | `gateway` | those too, so radio peers discover internet-side nodes by themselves |
 
-Measured against the pinned Reticulum 1.5.2 the only difference is the unsolicited announces —
+Measured against Reticulum 1.5.2 the only difference is the unsolicited announces —
 on a 3.12 kbps link with a 1 % hourly budget the expensive part, which is why the default keeps
 them off the air.
 

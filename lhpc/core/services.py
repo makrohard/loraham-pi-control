@@ -1020,10 +1020,25 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             next_commands=["lhpc explain <stack>", "lhpc doctor", "lhpc status --versions"],
         )
 
+    def _venv_versions(self, comp) -> dict[str, str]:
+        """`venv_packages` -> the version installed in the component's `.venv`, read from the
+        `.dist-info` directory names ("-" = not installed there)."""
+        lib = self._paths.resolve_source(comp.source.path) / ".venv" / "lib"
+        out = {}
+        for name in comp.venv_packages:
+            norm = name.lower().replace("-", "_")
+            found = sorted({d.name[len(norm) + 1:-len(".dist-info")]
+                            for d in lib.glob("python3*/site-packages/*.dist-info")
+                            if d.name.lower().startswith(norm + "-")})
+            out[name] = "/".join(found) or "-"
+        return out
+
     def status_versions(self) -> ActionResult:
         snap = self.build_snapshot()
         details: list[str] = []
         for ss in snap.stacks:
+            # package -> version -> components, to name a package the stack runs in two versions
+            seen: dict[str, dict[str, list[str]]] = {}
             for comp in ss.stack.components:
                 if comp.source is None:
                     continue
@@ -1039,10 +1054,19 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                         f"pin={pin}"
                     )
                 else:
+                    versions = self._venv_versions(comp) if comp.venv_packages else {}
+                    for name, ver in versions.items():
+                        if ver != "-":
+                            seen.setdefault(name, {}).setdefault(ver, []).append(comp.id)
                     details.append(
                         f"  {comp.id:24s} {st.source_state.value:12s} "
                         f"pin={pin} tag={tag}"
+                        + "".join(f" {n}={v}" for n, v in versions.items())
                     )
+            for name, by_ver in seen.items():
+                if len(by_ver) > 1:
+                    details.append(f"  {ss.stack.id}: {name} differs — " + ", ".join(
+                        f"{v} ({', '.join(ids)})" for v, ids in sorted(by_ver.items())))
         return ActionResult(
             ok=True,
             summary="Source/pin status (local git only; no fetch). "

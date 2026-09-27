@@ -408,6 +408,8 @@ class Component:
     build_requires: tuple[str, ...] = ()  # source component ids whose CHECKOUT this one's
                                           # build consumes (e.g. daemon -> radiolib); enforced
                                           # for update inclusion + uninstall refcounting
+    venv_packages: tuple[str, ...] = ()  # Python distributions whose version installed in the
+                                         # component's `.venv` `lhpc status --versions` shows
     source: SourceSpec | None = None
     # A runtime-root-relative directory this component's BUILD owns outright, for a component
     # that has no `source` to be cleaned through (a fetched package). `clean` removes it; without
