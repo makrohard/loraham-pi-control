@@ -1395,7 +1395,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         obtained)."""
         if not res.ok:
             return res                  # a failure's own remedy comes first; the note can wait
-        from . import source_registry
+        from . import source_fs, source_registry
         seen, notes, cmds = set(), [], []
         for st in self.stacks():
             if stack_id and st.id != stack_id:
@@ -1406,6 +1406,15 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 seen.add(c.source.path)
                 rec = source_registry.read_record(self._paths, c.source.path)
                 if rec is None or rec.selector == source:
+                    continue
+                # A record whose checkout is gone (removed by hand) describes nothing installed:
+                # the plan adopts the source anyway, so there is nothing to explain.
+                try:
+                    present = source_fs.leaf_kind(
+                        self._paths, self._paths.resolve_source(c.source.path)) == "dir"
+                except Exception:
+                    present = False
+                if not present:
                     continue
                 at = f" (commit {rec.resolved_commit[:9]})" if rec.resolved_commit else ""
                 notes.append(f"  [note] {c.id}: installed from '{rec.selector}'{at}; install does "

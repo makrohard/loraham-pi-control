@@ -54,3 +54,14 @@ def test_no_commit_shown_when_none_was_recorded(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     note = [d for d in svc.install("kiss", apply=False, source="pinned").details if "installed from" in d]
     assert note and "commit" not in note[0]
+
+
+def test_no_note_when_the_recorded_checkout_is_gone(tmp_path):
+    # P1.24 (audit P1.8, the note): a valid record whose checkout was removed by hand describes
+    # nothing installed; the plan adopts the source, so neither the note nor the update command.
+    svc = _svc_with_kiss(tmp_path, "dev")
+    (tmp_path / "src" / "loraham-kiss-tnc").rmdir()
+    r = svc.install("kiss", apply=False, source="pinned")
+    assert not any("installed from" in d for d in r.details)
+    assert not any(c.startswith("lhpc update") for c in r.next_commands)
+    assert int(r.data.get("changes", 0)) > 0                        # the adoption is planned
