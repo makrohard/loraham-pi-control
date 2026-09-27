@@ -2139,8 +2139,8 @@ main = "meshcom-qemu"
     # TX_OUTPUT_POWER 17: the daemon accepts 2..17 dBm on SX127x since 1.0.0 and refuses the old 20,
     # which left the bridge unable to configure the radio at all.
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
-    # TEMPORARY FORK: `lhpc-speed` on makrohard/MeshCom-Firmware = upstream dev plus the two
-    # MeshCom pull requests that stop the per-TX settings save and the no-op --setcall save.
+    # TEMPORARY FORK: `lhpc-speed` on makrohard/MeshCom-Firmware carries the two MeshCom
+    # speed fixes that stop the per-TX settings save and the no-op --setcall save.
     # Back to icssw-org once upstream has them. The setup step fetches from this remote (--src),
     # and a repo test keeps the two identical.
     path = "src/MeshCom-Firmware"

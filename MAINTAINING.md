@@ -55,10 +55,10 @@ its upstream has taken the change). Two upstream fixes reach boxes through our o
 upstream merges them. Nobody syncs them by hand: a weekly workflow does, and an issue it opens is the
 only signal to act on.
 
-- **MeshCom firmware.** LHPC builds branch `lhpc-speed` of `makrohard/MeshCom-Firmware`: upstream
-  `dev` plus the speed fixes meant for icssw-org
-  ([#1164](https://github.com/icssw-org/MeshCom-Firmware/pull/1164),
-  [#1165](https://github.com/icssw-org/MeshCom-Firmware/pull/1165)). Its weekly workflow (`lhpc-speed.yml`) merges
+- **MeshCom firmware.** LHPC builds branch `lhpc-speed` of `makrohard/MeshCom-Firmware`, which
+  carries the speed fixes meant for icssw-org
+  ([#1164](https://github.com/icssw-org/MeshCom-Firmware/pull/1164), open (draft);
+  [#1165](https://github.com/icssw-org/MeshCom-Firmware/pull/1165), merged upstream 2026-09-27). Its weekly workflow (`lhpc-speed.yml`) merges
   upstream `dev` in, builds the boards and runs the QEMU proof; green moves the branch forward, red
   opens an issue and moves nothing. It merges rather than rebases, because the bot follows
   `lhpc-speed` at its tip and a rebased branch no longer contains the pinned commit. When upstream
@@ -79,7 +79,6 @@ the last one). What LHPC carries or accepts meanwhile, and what retires it:
 
 | Upstream item | Meanwhile | Retires when |
 |---|---|---|
-| [icssw-org/MeshCom-Firmware#1166](https://github.com/icssw-org/MeshCom-Firmware/pull/1166) (Ethernet net console, `DISABLE_BATTERY`, `DISABLE_BLE`) | not carried; LHPC does not wait on it | upstream takes or closes it |
 | MeshCom `src/loop_functions.cpp`: `extern TinyGPSPlus gps` is declared only for GPS boards | our overlay also declares it under `QEMU_HEADLESS` ([patch](https://github.com/makrohard/meshcom-qemu-raspi/blob/b53b230c54732b39ea2b41f820c0b7b83f5d8914/overlay/patches/meshcom-qemu-headless.patch#L347-L356)); not yet offered upstream | upstream declares it for every build: drop the hunk |
 | [openhop-dev/openhop_core#156](https://github.com/openhop-dev/openhop_core/issues/156) (the login server logs the password) | upstream still logs the decrypted login; LHPC redacts it on the node's logger (its start log, the console's Logs page and the dashboard's log page) and in existing start logs at the next node start; a password that was logged should be changed ([meshcore](docs/stacks/meshcore.md)) | upstream stops logging it: drop `meshcore_host/login_redact.py` and `lhpc/core/log_redact.py` |
 | [openhop-dev/openhop_core#133](https://github.com/openhop-dev/openhop_core/pull/133) (companion radio stats: noise floor) | MeshCore clients read the noise floor as 0 dBm | merged: give `loraham_radio.py` the `get_cached_noise_floor()` it probes |

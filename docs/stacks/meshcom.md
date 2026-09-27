@@ -8,7 +8,7 @@ Start order: daemon → bridge → GPS feed → QEMU.
 | | |
 |---|---|
 | Components | `meshcom-bridge` · `meshcom-gps` (position feed, admitted by the global GPS plan) · `meshcom-gps-relay` (test fixture) · `meshcom-qemu` (main) · `meshcom-firmware` (the PlatformIO image, cloned by ref during the build) |
-| Source / pin | `src/meshcom-qemu-raspi` ← `makrohard/meshcom-qemu-raspi` (run/build/setup scripts + the QEMU overlay) · `src/meshcom-loraham-bridge` ← `makrohard/meshcom-loraham-bridge` · firmware `makrohard/MeshCom-Firmware` branch `lhpc-speed` (temporary: upstream dev plus two MeshCom pull requests, back to `icssw-org/MeshCom-Firmware` once upstream has them) |
+| Source / pin | `src/meshcom-qemu-raspi` ← `makrohard/meshcom-qemu-raspi` (run/build/setup scripts + the QEMU overlay) · `src/meshcom-loraham-bridge` ← `makrohard/meshcom-loraham-bridge` · firmware `makrohard/MeshCom-Firmware` branch `lhpc-speed` (temporary: it carries two MeshCom speed fixes, back to `icssw-org/MeshCom-Firmware` once upstream has them) |
 | Bridge | `build/meshcom-loraham-bridge --bind 127.0.0.1 --port 7000 --backend loraham [--password-file …] --ping-interval-ms 30000 --pong-timeout-ms 90000`; consumes `/tmp/lora433f.sock`; built with cmake (needs `libssl-dev`) |
 | QEMU node | `scripts/run.sh --env qemu-headless-extradio-gpsd --qemu <binary>`; web UI `127.0.0.1:18083`, net-console `127.0.0.1:12323`; readiness window 600 s |
 | Firmware image | `.work/MeshCom-Firmware/.pio/build/qemu-headless-extradio-gpsd/flash.bin`, completion marker `.lhpc-build-complete` beside it |
