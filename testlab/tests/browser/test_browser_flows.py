@@ -487,3 +487,22 @@ def test_each_stacks_default_restores_a_row_changed_by_hand(page):
     page.wait_for_function(
         "a => document.querySelector(`tr[data-stack='${a[0]}'] select.ai-version`).value === a[1]",
         arg=[sid, defaults[sid]], timeout=10000)
+
+
+def test_an_identity_refusal_lands_on_a_visibly_marked_callsign_row(page):
+    """P1.13 (C7): a licensed start refused for a missing callsign redirects to the stack's Settings
+    with `?cfg=<stack>&bad=<field>` (the route and the markup are unit-tested in test_web.py). Here
+    the RENDERED page: that stack's Settings section is open and its callsign row is visibly marked
+    (the field-bad background and the input outline), and the global "Base callsign" row is not
+    marked — the refusal names both, but only the stack's own field is highlighted."""
+    page.goto(page.lab_base + "/stacks?cfg=chat&bad=f_call#stack-settings-chat", wait_until="networkidle")
+    page.wait_for_selector("#stack-settings-chat[open] tr.field-bad input[name='f_call']", timeout=15000)
+    marked = page.evaluate(
+        "() => { const tr = document.querySelector('#stack-settings-chat tr.field-bad');"
+        " const td = tr.querySelector('td'), inp = tr.querySelector('input');"
+        " return {bg: getComputedStyle(td).backgroundColor, outline: getComputedStyle(inp).outlineStyle,"
+        "         rows: document.querySelectorAll('#stack-settings-chat tr.field-bad').length}; }")
+    assert marked["rows"] == 1
+    assert marked["bg"] not in ("rgba(0, 0, 0, 0)", "transparent"), marked
+    assert marked["outline"] == "solid", marked
+    assert page.locator("#operator-callsign tr.field-bad").count() == 0
