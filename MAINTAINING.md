@@ -86,7 +86,6 @@ the last one). What LHPC carries or accepts meanwhile, and what retires it:
 | [LoRaHAM/LoRaHAM_Daemon#10](https://github.com/LoRaHAM/LoRaHAM_Daemon/pull/10) (draft) | LHPC pins `makrohard/LoRaHAM_Daemon` | upstream takes it |
 | [LoRaHAM/LoRaHAM_Voice#1](https://github.com/LoRaHAM/LoRaHAM_Voice/pull/1) (draft, the new daemon socket path) | LHPC pins `makrohard/LoRaHAM_Voice` | upstream takes it |
 | [meshtastic/web#1428](https://github.com/meshtastic/web/pull/1428) (mobile layout) | the console's Meshtastic web client has no phone layout | released upstream: move the web client pin |
-| Meshtastic firmware (native, pin `54e0d8d0`): after every `meshtasticd` (re)start the boot node-info is skipped by the 600 s NodeInfo throttle ([NodeInfoModule.cpp:150-152](https://github.com/meshtastic/firmware/blob/54e0d8d0ab2ff56b3a9ce967e53f79e49af560fb/src/modules/NodeInfoModule.cpp#L150-L152)) | accepted: peers learn the node's key only from a node-info request after 600 s of uptime or the 3-hourly node-info (witnessed on the Pi 5, 2026-09-27; mechanism not established) | upstream sends it at boot |
 
 The other sources the manifest pins (the MeshCom bridge and QEMU scripts, the Reticulum
 interface, the KISS TNC, Voice, and the upstream projects) are watched by the bot. They need a

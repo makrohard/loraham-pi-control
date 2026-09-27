@@ -24,7 +24,7 @@ see the release's run report.
 | P7b | RF log RX lines for Reticulum | — | not run: the PC's Heltec RNode port was busy |
 | P8 | RF log 5 MB rollover | e293 `9062008`, 2026-09-27 | PASS: one roll at frame 14 of 20, every frame once across the rolled and the live file |
 | P9 | SX1262 on 868 | — | documented limit ([backlog](../backlog.md)): no SX1262 on any board here |
-| P10 | Station G2 learns the Pi 5's key from node-info; DMs | Pi 5 `9062008` ↔ G2, 2026-09-27 | PASS after 600 s of uptime (see [meshtastic](../stacks/meshtastic.md#notes)): 3/3 DMs each way acknowledged |
+| P10 | Station G2 learns the Pi 5's key from node-info; DMs | Pi 5 `9062008` ↔ G2, 2026-09-27 | PASS: 3/3 DMs each way acknowledged after the G2 had the Pi 5's node-info (the node's answer to the G2's broadcast at 608 s of uptime) |
 | P11 | Pi 5 868 noise floor | Pi 5 `71c0d39`, 2026-09-27 | closed: −119 dBm median after an antenna and placement change (before −110) |
 | P12 | MeshCom on the release artifacts: speed, node settings across updates, T-Deck DMs, reboots | e293, artifacts built from `0683000a` (QEMU `b53b230c`, firmware `ba289816`), 2026-09-27 | PASS: console → TX median 1.55–1.92 s; settings carried across an update, reset by `clean --purge`; 10/10 cold starts; DMs 4/4 acknowledged both ways; reboot with MeshCom + MeshCore running restored both after the [upgrade note](../../CHANGELOG.md)'s commands |
 | P13 | client CRL expired while no NTP/GPS | Pi 5, `71c0d39` → `15e9d95`, 2026-09-27 | PASS: 0.9.2 locked out (400); the fix healed the CRL provisionally (200), revocations kept; normalised after NTP |

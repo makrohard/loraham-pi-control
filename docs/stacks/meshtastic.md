@@ -99,9 +99,11 @@ lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --
 ## Notes
 
 - A freshly reset node cannot be direct-messaged until node info has been exchanged (modern
-  firmware rejects a channel-encrypted DM with `NO_CHANNEL`). After every (re)start the firmware
-  skips its boot node-info for 600 s, so a peer learns the key from the node's answer to its
-  node-info request after that, or from the 3-hourly node-info. Broadcasts are unaffected.
+  firmware rejects a channel-encrypted DM with `NO_CHANNEL`). Every start's post-start step re-applies
+  the node's owner; when the firmware counts that as an owner change it sends its node-info at once,
+  and its boot node-info check follows about 30 s after start. Both go through the firmware's
+  node-info throttle (10 minutes by default), so a later "Skip send NodeInfo since we sent it <600s
+  ago" line can mean the node-info already went out. Broadcasts are unaffected.
 - A new image (or a deleted `state/meshtasticd`) gives the node a new key but the same node number,
   which on the Pi comes from its Bluetooth MAC (the YAML sets no `MACAddress`). A peer that already
   stored the old public key keeps it and drops node-info carrying the new key, so direct messages
