@@ -102,6 +102,12 @@ lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --
   firmware rejects a channel-encrypted DM with `NO_CHANNEL`). After every (re)start the firmware
   skips its boot node-info for 600 s, so a peer learns the key from the node's answer to its
   node-info request after that, or from the 3-hourly node-info. Broadcasts are unaffected.
+- A new image (or a deleted `state/meshtasticd`) gives the node a new key but the same node number,
+  which on the Pi comes from its Bluetooth MAC (the YAML sets no `MACAddress`). A peer that already
+  stored the old public key keeps it and drops node-info carrying the new key, so direct messages
+  fail both ways (`PKI_UNKNOWN_PUBKEY`, `NO_CHANNEL`) while broadcasts on a still-shared channel are
+  unaffected. On the peer, remove the node (`meshtastic --remove-node '!<node id>'`); it then learns
+  the new key from the next node-info.
 - The `gpiochip` is not hard-coded in the YAML base: the Pi Zero 2W header is `gpiochip0`; a Pi 5
   puts it on another chip — add a per-pin `gpiochip:` only if your kernel needs it.
 - The web TLS certificate is generated into the writable data dir (`state/meshtasticd/ssl`).
