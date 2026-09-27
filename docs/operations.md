@@ -63,6 +63,9 @@ What the binary channel means in practice:
 - **Ordinary files you add to a source checkout survive an update**; editing upstream files
   blocks it ([ownership records](provenance.md#ownership-records)).
 - **No binary rollback**: going back means installing from source.
+- **Prebuilt binaries serve the latest release only.** The index holds one binary per stack, and
+  it must match this lhpc's pins exactly; an older release (or a candidate) is refused and installs
+  from source, or self-updates first.
 - **meshcom keeps its pinned clone** even on this channel (its run scripts live there), and
   **meshtastic provisions its CLI virtualenv locally** after extraction (it embeds absolute paths,
   so it cannot ship in an artifact). lhpc owns that virtualenv as a whole directory.
@@ -90,7 +93,9 @@ What the binary channel means in practice:
 - Read-only status/doctor/page loads never transmit and never initialise a radio.
 - +20 dBm on an SX127x board is off by default and needs the band's high-power switch plus a daemon
   restart ([daemon](stacks/daemon.md#settings)). Nothing measures or enforces its duty-cycle, VSWR or
-  supply limits; it is unvalidated on the LoRaHAM 433 RFM98PW.
+  supply limits. On the LoRaHAM 433 RFM98PW, do not use sustained +20 dBm: this SX127x high-power
+  setting has not been validated for the module's external PA, so the release test matrix performs no
+  +20 dBm TX on this board.
 
 ## Secrets and passwords
 

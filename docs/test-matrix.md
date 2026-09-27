@@ -3,7 +3,8 @@
 Every stack **purged, installed, built, started and verified on the box**, one stack at a time,
 with the install, build and start times recorded and the memory watched during the heavy compiles.
 CI proves the code, the [testlab](testlab.md) proves the console; this matrix proves that a release
-**installs and comes up** from nothing on the reference box.
+**installs and comes up** from nothing on the reference box (the two heavy from-source compiles run on
+the [second box](#bench)).
 
 **When it applies:** a minor release (`0.X.0`) runs it before the tag. A patch release runs the
 live checks its own change calls for instead — the release policy is
@@ -31,6 +32,7 @@ node's info, an HTTP answer, `rnstatus` counters). Log greps are not evidence.
 | | |
 |---|---|
 | Box | `lhpc-e293`, Raspberry Pi Zero 2 W (512 MB, 415 MB usable after zram), Lite image, LAN |
+| Second box | a Raspberry Pi 5 on the same OS release (aarch64, like the Zero 2 W): only the heavy from-source rows 9 and 12. The Zero 2 W never compiles a heavy stack; it proves the shipped artifacts through the binary rows 8 and 11 and builds row 10 (daemon, light) itself |
 | Radio | LoRaHAM daemon serving 433 and 868; record `lhpc hardware` at the start of the run |
 | Channels | `binary` (daemon, meshtastic, meshcom), `pinned` and `dev` — what each resolves to: [provenance](provenance.md#selections). All three are covered, see [Coverage](#coverage) |
 | Console | left running for the light stacks; **stopped for the heavy compiles** (`systemctl --user stop lhpc-web lhpc-nginx`) — why: [maintenance](maintenance.md#running-on-a-pi) |
@@ -84,18 +86,19 @@ sources) is still purged and reinstalled on its own.
 |---|---|---|---|---|---|
 | 1 | `daemon` | binary | refused (no source tree) | both bands | `lhpc status daemon`: READY on 433 and 868; `lhpc daemon 433` answers |
 | 2 | `chat` | pinned | daemon sources | interactive | the printed command runs in a terminal and exits cleanly |
-| 3 | `voice` | pinned | `loraham-voice-cli` (GTK variant skipped on Lite) | interactive | the terminal variant's printed command runs; GTK reported skipped, not failed |
+| 3 | `voice` | pinned | `loraham-voice-cli` (GTK variant skipped on Lite) | interactive | the terminal variant's printed command runs; GTK reported skipped, not failed. On a Desktop image it is the reverse: the GTK voice starts verified and the terminal variant is skipped |
 | 4 | `kiss` | pinned | `loraham-kiss-tnc` | 433 | verified; TCP `127.0.0.1:8001` answers |
 | 5 | `graywolf` | fetched release | — | 433 (needs kiss) | verified; web UI `127.0.0.1:8080` answers; the KISS client is held |
 | 6 | `reticulum` | pinned | rns, nomadnet, lxmd, meshchat (sideband skipped on Lite) | the free band | `rnstatus` lists the LoRa interface with `Mode: Internal`; the ready marker present; MeshChat's UI answers 200 on `127.0.0.1:8790`, and the generated config is `0400`. The stack's own full matrix is the dated report `docs/live-tests/reticulum-test-2026-09-12.md` |
-| 7 | `meshcore` | pinned | node, webui, openhop repeater source | 868, mode chat+repeater | node and repeater verified; web UI `:8788` and dashboard `:8000` answer; `meshcore-cli` listed on the Dashboard |
+| 7 | `meshcore` | pinned | node, webui, openhop repeater source | 868, mode chat+repeater (set `repeater_name` first); the optional web UI started with `lhpc stack start meshcore-webui` | node and repeater verified; web UI `:8788` and dashboard `:8000` answer; `meshcore-cli` listed on the Dashboard |
 | 8 | `meshtastic` | binary | refused (no source tree) | 868 (MeshCore stopped) | verified; `lhpc meshtastic --info` returns the node; `meshtastic-cli` listed |
-| 9 | `meshtastic` | pinned (from source) | meshtasticd | 868 | as row 8; build time and memory recorded |
+| 9 | `meshtastic` | pinned (from source), **on the second box** | meshtasticd | 868 | as row 8; build time and memory recorded |
 | 10 | `daemon` | pinned (from source) | RadioLib + daemon | both bands | as row 1; build time and memory recorded |
 | 11 | `meshcom` | binary | refused (no source tree) | 433 (graywolf/kiss stopped) | verified; web UI `:18083` answers 200 once the node has booted; callsign switches from the placeholder |
-| 12 | `meshcom` | pinned (from source) | QEMU, firmware, bridge | 433 | as row 11 — the longest row by far (build times: [maintenance](maintenance.md#running-on-a-pi)); memory watched throughout |
+| 12 | `meshcom` | pinned (from source), **on the second box** | QEMU, firmware, bridge | 433 | as row 11 — the longest row by far (build times: [maintenance](maintenance.md#running-on-a-pi)); memory watched throughout |
 
-Rows 9–12 are the heavy compiles: console stopped, `vmstat` running, `dmesg` checked after each.
+Rows 9 and 12 are the heavy compiles and run on the second box; row 10 is the light source build on
+the Zero 2 W. For each of the three: console stopped, `vmstat` running, `dmesg` checked after it.
 
 ### Coverage
 
@@ -128,7 +131,8 @@ build, the cross-cutting checks, the from-zero reinstall (with the published bin
 tests. A skipped row is written into the result table as *not re-run* with a footnote naming the
 run that measured it and the waiver's date — that run may live only in this file's git history —
 and the pins column must show the pin is the same. A changed
-pin, a changed toolchain or a changed builder image takes the row out of the fast lane.
+pin, a changed toolchain or a changed builder image takes the row out of the fast lane; rows 9 and 12
+then run on the second box.
 
 ## Cross-cutting checks
 
@@ -150,7 +154,7 @@ After the per-stack rows, with the box holding every stack installed and built:
 After the rows, the controller itself is reinstalled from nothing on the same box, timed, and driven
 the way a new operator would drive it — the happy path only: the defaults install the three heavy
 stacks from the published binaries, the light stacks build from source. The from-source rows above
-already proved and timed every compile, and a Zero 2 W's Wi-Fi can drop under a long compile
+already proved and timed every compile (the heavy ones on the second box), and a Zero 2 W's Wi-Fi can drop under a long compile
 , so no heavy compile is repeated before the host tests:
 
 | step | how | evidence |

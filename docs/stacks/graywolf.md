@@ -77,7 +77,8 @@ directions — a global source turned off, or `use_gps = off`, actively pushes `
 | `off`, or `use_gps = off` | `source=none` |
 
 A beacon decides for itself whether to use GPS (`use_gps` on the beacon) or its own fixed
-latitude/longitude — graywolf's setting, not LHPC's. The model is in [GPS](../gps.md).
+latitude/longitude — graywolf's setting, not LHPC's; a `use_gps` beacon sends nothing while there is
+no fix. The model is in [GPS](../gps.md).
 
 ## Notes
 

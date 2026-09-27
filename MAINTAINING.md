@@ -50,11 +50,43 @@ from that commit → the image tag with the same version. One more surface publi
 repository: the Pages demo, redeployed on every `main` push that touches `lhpc/` or `demo/`
 ([demo/README](demo/README.md#deploy)).
 
-**Temporary** (TEMPORARY-PR: remove after espressif/qemu PR #XXX is taken). `makrohard/qemu`, a
-fork of `espressif/qemu`, exists only to carry the ESP32 cache-model fix for review while its pull
-request to Espressif is open. Nothing in LHPC pins or fetches it. While it exists its branch is kept
-rebased on Espressif's `esp-develop` (see [Regular maintenance](#regular-maintenance)). Delete the
-fork, and this paragraph, once Espressif has taken the change.
+**Temporary forks** (TEMPORARY-PR: remove each item, and this paragraph with the last one, when
+its upstream has taken the change). Two upstream fixes reach boxes through our own copies until
+upstream merges them. Nobody syncs them by hand: a weekly workflow does, and an issue it opens is the
+only signal to act on.
+
+- **MeshCom firmware.** LHPC builds branch `lhpc-speed` of `makrohard/MeshCom-Firmware`: upstream
+  `dev` plus the speed fixes meant for icssw-org
+  ([#1164](https://github.com/icssw-org/MeshCom-Firmware/pull/1164),
+  [#1165](https://github.com/icssw-org/MeshCom-Firmware/pull/1165)). Its weekly workflow (`lhpc-speed.yml`) merges
+  upstream `dev` in, builds the boards and runs the QEMU proof; green moves the branch forward, red
+  opens an issue and moves nothing. It merges rather than rebases, because the bot follows
+  `lhpc-speed` at its tip and a rebased branch no longer contains the pinned commit. When upstream
+  contains the fixes, the workflow says so on the retire issue
+  ([makrohard/MeshCom-Firmware#1](https://github.com/makrohard/MeshCom-Firmware/issues/1)): pin
+  upstream again in the manifest, both the MeshCom-Firmware remote **and** the `--src` of the QEMU
+  setup step, point the bot's policy back, delete the workflow and the branch.
+- **QEMU.** `meshcom-qemu-raspi` builds Espressif's `esp-develop-9.2.2-20260417` tag plus the ESP32
+  cache-model fix, checked in as a patch; the fix is espressif/qemu PR
+  [#183](https://github.com/espressif/qemu/pull/183) (issue [#182](https://github.com/espressif/qemu/issues/182)), and `makrohard/qemu`
+  only carries it for review. A weekly check comments on its tracking issue
+  ([meshcom-qemu-raspi#1](https://github.com/makrohard/meshcom-qemu-raspi/issues/1)) when the pull
+  request or an Espressif release changes; once a release contains the fix, build that plain tag,
+  drop the patch and the check, and delete the `makrohard/qemu` fork.
+
+**Waiting on others** (TEMPORARY-PR: remove a row when its upstream has acted, the section with
+the last one). What LHPC carries or accepts meanwhile, and what retires it:
+
+| Upstream item | Meanwhile | Retires when |
+|---|---|---|
+| [icssw-org/MeshCom-Firmware#1166](https://github.com/icssw-org/MeshCom-Firmware/pull/1166) (Ethernet net console, `DISABLE_BATTERY`, `DISABLE_BLE`) | not carried; LHPC does not wait on it | upstream takes or closes it |
+| MeshCom `src/loop_functions.cpp`: `extern TinyGPSPlus gps` is declared only for GPS boards | our overlay also declares it under `QEMU_HEADLESS` ([patch](https://github.com/makrohard/meshcom-qemu-raspi/blob/b53b230c54732b39ea2b41f820c0b7b83f5d8914/overlay/patches/meshcom-qemu-headless.patch#L347-L356)); not yet offered upstream | upstream declares it for every build: drop the hunk |
+| [openhop-dev/openhop_core#156](https://github.com/openhop-dev/openhop_core/issues/156) (the login server logs the password) | accepted: the repeater log holds the admin password (maintainer, 2026-09-27) | upstream stops logging it |
+| [openhop-dev/openhop_core#133](https://github.com/openhop-dev/openhop_core/pull/133) (companion radio stats: noise floor) | MeshCore clients read the noise floor as 0 dBm | merged: give `loraham_radio.py` the `get_cached_noise_floor()` it probes |
+| [LoRaHAM/LoRaHAM_Daemon#10](https://github.com/LoRaHAM/LoRaHAM_Daemon/pull/10) (draft) | LHPC pins `makrohard/LoRaHAM_Daemon` | upstream takes it |
+| [LoRaHAM/LoRaHAM_Voice#1](https://github.com/LoRaHAM/LoRaHAM_Voice/pull/1) (draft, the new daemon socket path) | LHPC pins `makrohard/LoRaHAM_Voice` | upstream takes it |
+| [meshtastic/web#1428](https://github.com/meshtastic/web/pull/1428) (mobile layout) | the console's Meshtastic web client has no phone layout | released upstream: move the web client pin |
+| Meshtastic firmware (native, pin `54e0d8d0`): after every `meshtasticd` (re)start the boot node-info is skipped by the 600 s NodeInfo throttle ([NodeInfoModule.cpp:150-152](https://github.com/meshtastic/firmware/blob/54e0d8d0ab2ff56b3a9ce967e53f79e49af560fb/src/modules/NodeInfoModule.cpp#L150-L152)) | accepted: peers learn the node's key only from a node-info request after 600 s of uptime or the 3-hourly node-info (witnessed on the Pi 5, 2026-09-27; mechanism not established) | upstream sends it at boot |
 
 The other sources the manifest pins (the MeshCom bridge and QEMU scripts, the Reticulum
 interface, the KISS TNC, Voice, and the upstream projects) are watched by the bot. They need a
@@ -135,13 +167,17 @@ no history (that belongs in the changelog).
 1. The fix lands on `dev`, one commit per change, with the version bump and its changelog
    section ([maintenance](docs/maintenance.md#branches-and-releases)).
 2. CI and `testlab.yml` with `release_verify=true` green on the exact `dev` tip to be released.
-3. Fast-forward `main` to it and put the annotated tag on it. No GitHub Release.
+3. Fast-forward `main` to it and put the annotated tag on it. No GitHub Release. If the bot has
+   released since `dev` last equalled `main`, `main` is no longer an ancestor of `dev`: cut the patch
+   as one release commit on top of `main` instead, then CI, fast-forward `main` and tag.
 4. Binaries for any moved pin, built from the tagged commit, then the image tag with the same
    version (steps 8 and 9 above).
 
 ### Bot patch
 
-The bot releases pin moves from `main` on its schedule, only while `dev` equals `main`
+The bot releases pin moves from `main` on its schedule, also while `dev` carries unreleased work;
+`dev` never gates, delays or shapes a bot release. It then opens a pull request that brings the
+release back into `dev`: **squash-merge it**, `dev` keeps a linear history
 ([maintenance](docs/maintenance.md#branches-and-releases)). Its stages, holds and recovery are in
 its [README](https://github.com/makrohard/lhpc-release-bot/blob/main/README.md). A maintainer's
 part is reading its summary and closing what it leaves open.
@@ -168,8 +204,7 @@ The bot never moves the daemon, the chat source (same repository) or RadioLib.
 | Mondays after 21:30 UTC, when the schedule is enabled | read the bot's run summary; no `attempt` or `auto-freeze` issue left open without a reason | [bot README](https://github.com/makrohard/lhpc-release-bot/blob/main/README.md#when-something-is-left-behind) |
 | the 1st of each month | the images' OS refresh ran and published or said why not | [images](https://github.com/makrohard/loraham-images/blob/main/docs/maintenance.md#monthly-os-refresh-dated-releases) |
 | after ~60 days without repository activity | GitHub disables idle schedules: a manual dispatch re-enables the bot's and the images' | same two links |
-| while espressif/qemu PR #XXX is open (TEMPORARY-PR: remove this row after it is taken) | rebase the `makrohard/qemu` branch onto `esp-develop` whenever that moves, re-run the change's own tests, force-push; a pull request that no longer applies is not reviewed | the pull request |
-| while icssw-org/MeshCom-Firmware PRs #XXX are open (TEMPORARY-PR: remove this row after they are taken) | rebase the `makrohard/MeshCom-Firmware` PR branches onto upstream `dev` whenever that moves, re-run their size builds, force-push | the pull requests |
+| when a fork's weekly workflow opens or comments on an issue (TEMPORARY-PR: remove this row with the forks) | red: fix the carry or the patch for the new upstream, re-run the workflow; retire: undo the fork as its issue lists | the issue; [Temporary forks](#the-repositories) |
 | before each minor | the bot's `watch-only`; the list of held pins and why each is still held | [bot README](https://github.com/makrohard/lhpc-release-bot/blob/main/README.md#freeze-a-pin) |
 | as due | dependency audit findings, Python versions, OS drift, PKI expiry, upstream toolchains | [maintenance](docs/maintenance.md#dependencies-and-platform) |
 | when a new console feature ships | the demo simulates it too, or the demo shows a dead page | [demo/README](demo/README.md) |

@@ -135,9 +135,9 @@ at each bump; its `rns` must match the node's.
 
 **Versions.** lxmd, nomadnet and Sideband install RNS from the `src/reticulum` checkout, so they run
 the node's Reticulum; a moved pin marks them for a rebuild. LXMF comes from PyPI (1.1.1) for
-nomadnet, Sideband and MeshChat, while lxmd runs the `src/lxmf` checkout (1.1.0): LXMF's git lags
-PyPI by the LXMPeer sync-backoff fix. `lhpc status --versions` shows each client's `rns`/`lxmf`
-and names a package that differs.
+nomadnet, Sideband and MeshChat, while lxmd runs the `src/lxmf` checkout (1.1.0): that pinned
+commit lacks the LXMPeer sync-backoff fix that PyPI 1.1.1 (and upstream git since) carries.
+`lhpc status --versions` shows each client's `rns`/`lxmf` and names a package that differs.
 
 MeshChat carries its own **propagation-node** switch, off by default. It lives in MeshChat's SQLite
 settings and is reachable over its WebSocket, so no proxy rule can cover it; LHPC does not claim

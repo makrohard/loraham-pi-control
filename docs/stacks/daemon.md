@@ -40,7 +40,7 @@ or with `lhpc hardware --high-power`, `rf_log` on its log page, the rest in that
 | `tx_433` / `tx_868` | `managed` | TX mode per band. `MANAGED` = bounded CAD/LBT, a busy channel returns `CHANNEL_BUSY`; `DIRECT` = immediate TX, no CAD |
 | `cadmon_433` / `cadmon_868` | `off` | continuous channel-activity monitor |
 | `cadrssi_433` / `cadrssi_868` | `-90` | channel-busy RSSI threshold, dBm (−130…0) |
-| `hipower_433` / `hipower_868` | `off` | the +20 dBm permission per band (daemon 1.2.0 `--high-power`): `on` injects the bare flag at the band's next daemon start, so the daemon admits exactly `POWER=20` on an SX127x board. Strict `off`/`on`. Saving marks the daemon restart-required and restarts nothing; a running daemon keeps the permission it was started with. Inert on an SX1262. The datasheet limits +20 dBm to a transmit duty cycle ≤ 1 %, VSWR ≤ 3:1 and VDD 2.4–3.7 V — nothing measures or enforces that, keep the chip cooled, **warranty void if disregarded**. Unvalidated on the LoRaHAM 433 RFM98PW. Set it on the daemon's Hardware settings (its own control) or with `lhpc hardware --high-power <band> on|off` — `lhpc config daemon <param>` exposes none of the daemon's start options |
+| `hipower_433` / `hipower_868` | `off` | the +20 dBm permission per band (daemon 1.2.0 `--high-power`): `on` injects the bare flag at the band's next daemon start, so the daemon admits exactly `POWER=20` on an SX127x board. Strict `off`/`on`. Saving marks the daemon restart-required and restarts nothing; a running daemon keeps the permission it was started with. Inert on an SX1262. The datasheet limits +20 dBm to a transmit duty cycle ≤ 1 %, VSWR ≤ 3:1 and VDD 2.4–3.7 V — nothing measures or enforces that, keep the chip cooled, **warranty void if disregarded**. On the LoRaHAM 433 RFM98PW, do not use sustained +20 dBm: this SX127x high-power setting has not been validated for the module's external PA, so the release test matrix performs no +20 dBm TX on this board. Set it on the daemon's Hardware settings (its own control) or with `lhpc hardware --high-power <band> on|off` — `lhpc config daemon <param>` exposes none of the daemon's start options |
 | `rf_log` | `on` | RF log: every frame the radio received (RSSI/SNR) or sent (after `transmit()` returned OK — a CAD-refused send writes nothing), raw hex + ASCII, one file per band (`logs/rf-daemon-433.log`, `-868.log`). Stack-level switch, read at the daemon's next start; the daemon has no Settings form, so the switch is on its log page |
 
 A client stack declares the TX mode it needs (`requires_daemon_tx`: MANAGED for kiss, graywolf,
@@ -68,7 +68,9 @@ saved on *and* the daemon restarted with it. Saved values are validated against 
 in the daemon Hardware settings plus that saved switch; **live** requests are validated against what
 the running daemon reports in `STATUS` (`CHIPFAMILY=`, `HIGHPOWER=`), because a Hardware setup saved
 after the daemon started is not what is running — an older daemon that reports neither gets only
-2–17 live. A stack profile asking for `POWER=20` without the running permission is refused at start.
+2–17 live. A saved `POWER=20` profile is active only while the band's switch is on (saved off, the stack uses its
+normal power); with the switch on but the running daemon lacking the permission, the stack is refused at
+start until the daemon is restarted.
 The daemon never echoes `POWER`, so a sent 20 is "sent", not "confirmed", and no software here
 measures the output or the duty cycle.
 

@@ -77,12 +77,12 @@ check. Which profile has run on silicon: [stacks/reticulum.md](stacks/reticulum.
 Each RF stack has been accepted on air against a real vendor peer at near-field range, so nothing
 is proven about range. Still never exercised, and accepted as such:
 
-- MeshCom is proven at packet level (an MHeard entry); message **content** has not been verified
-  end to end.
 - Graywolf's beacon is proven **on demand**; a scheduled beacon has never been observed across a
   slot boundary. No defect is established.
 - MeshCore's repeater is proven forwarding its own traffic only — not between two third-party
-  nodes — and group messaging and telemetry are untested.
+  nodes.
+- The daemon's TX guard delays (433: 10 + 10 ms before TX; 868: 50 ms after TX) are kept: whether
+  they can go cannot be measured within a 1 % duty cycle.
 
 ## Independent review
 

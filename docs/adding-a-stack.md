@@ -199,7 +199,7 @@ lhpc build meshcom           # run each component's build_steps
 lhpc test meshcom            # host tests (RX-safe), optional
 lhpc stack start meshcom     # start in order; verify readiness per component
 lhpc stack stop meshcom      # identity-verified stop (SIGTERM only), endpoints confirmed gone
-lhpc update meshcom --yes    # refresh on the current channel (see cli.md § update); --source pinned for the pin
+lhpc update meshcom --yes    # a binary install stays binary, a source install goes to its pin (cli.md § update)
 ```
 
 The web console exposes the same actions per stack.

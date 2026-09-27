@@ -98,9 +98,9 @@ lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --
 ## Notes
 
 - A freshly reset node cannot be direct-messaged until node info has been exchanged (modern
-  firmware rejects a channel-encrypted DM with `NO_CHANNEL`; the default node-info interval is 3 h) —
-  `lhpc stack poststart meshtastic` re-applies the identity and triggers an immediate node-info
-  broadcast. Broadcasts are unaffected (witnessed in the live tests).
+  firmware rejects a channel-encrypted DM with `NO_CHANNEL`). After every (re)start the firmware
+  skips its boot node-info for 600 s, so a peer learns the key from the node's answer to its
+  node-info request after that, or from the 3-hourly node-info. Broadcasts are unaffected.
 - The `gpiochip` is not hard-coded in the YAML base: the Pi Zero 2W header is `gpiochip0`; a Pi 5
   puts it on another chip — add a per-pin `gpiochip:` only if your kernel needs it.
 - The web TLS certificate is generated into the writable data dir (`state/meshtasticd/ssl`).

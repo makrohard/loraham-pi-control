@@ -1,112 +1,40 @@
-# Release matrix, 0.9.0 — box E (`lhpc-e293`), 2026-09-23
+# Live test, 0.10.0 — proof rows and the from-source rehearsal, 2026-09-26/27
 
-Run on `59602ed` (the 0.9.0 release commit: the openHop plugin manager as part of the MeshCore
-repeater; pins unchanged since v0.8.3). Box **E** = Pi Zero 2 W, Lite image, Uputronics dual
-(433 + 868), **Wi-Fi only**, real u-blox on gpsd. Console left running throughout (`/healthz`
-reported `0.9.0` before the first row).
+Boxes: **e293** = Pi Zero 2 W (`lhpc-e293`, Lite image, Uputronics SX1278 on 433 and SX1276 on 868);
+**Pi 5** = `lhpc-0ae1` (Desktop image, LoRaHAM board: RFM98PW with amplifier on 433, RFM95 on 868).
+Peers: T-Deck (MeshCom), T-Deck Pro (MeshCore), Station G2 (Meshtastic), T-Beam CA2RXU (APRS).
+Every transmission stayed within 1 % duty cycle per band and transmitter; the Pi 5's 433 path never ran above
+normal power.
 
-Evidence rule: the controller's own typed outcome plus the stack's own state. Log greps are not
-evidence. The runner (`~/matrix-0.9.0/run.log`, `rows.md` on the box) drove every row with the
-matrix's six-step loop and recorded the wrapper's times. The box's stack configs (node names,
-callsign) were restored from a backup after every purge, so the rows ran under the operator's
-identities; the MeshCore identity itself is preserved by `clean --purge` by design.
+The full release matrix ([test-matrix.md](../test-matrix.md)) was **not yet run at the time of the release commit**;
+see the release's run report.
 
-**Fast lane, by the maintainer's standing waiver ("no heavy compile jobs on the box", 2026-09-19,
-in force for this run):** rows 9, 10 and 12 — the from-source meshtastic, daemon and MeshCom
-builds — are *not re-run*. Rows 9 and 10 stay inside the fast lane: meshtastic `54e0d8d`, daemon
-`e8e748e` + RadioLib `187ef24` are unchanged since the artifacts were built at v0.7.0 and were
-last compiled in the 0.6.0 run on box B (this file's git history). **Row 12 is outside the fast
-lane's letter**: the MeshCom firmware pin moved at 0.8.3 (`6edc749` → `80b85a5a2`, by the release
-bot, whose lane built and proved the artifact — build 35778131763, release-verify green) and the
-compile was not repeated here because of the waiver; row 11 proves that artifact on the box, and
-the box's MeshCom binary was actually behind the pin before this run (`built_from 6edc749`,
-`pin 80b85a5a2` — the 0.8.3 binary had never been installed on E) and is at the pin afterwards.
+## Proof rows
 
-**Deviations, all recorded here rather than hidden:**
+| row | what | box, head | result |
+|---|---|---|---|
+| P1 | high-power switch in the web console, a real browser over LAN https with a client certificate | e293 `16263c5`, 2026-09-26 | PASS: switch on → restart required; start → `--high-power` on 433 only, `HIGHPOWER=1`; switch off → a live `POWER=20` refused; restart → `HIGHPOWER=0` |
+| P2 | radiated power `POWER=17` vs `20` on e293's bare 433, received by the Pi 5 | e293 `16263c5` TX, Pi 5 RX, 2026-09-27 | +1.0 dB at 20 over 17 (RSSI medians −78 / −77, n = 21 / 20); the chip took `POWER=20`; radiated gain still to be measured |
+| P3 | daemon TX guard delays | — | documented limit ([backlog](../backlog.md)): not measurable within 1 % duty cycle |
+| P4a/P4b | MeshCore group messages both ways, repeater retransmit | e293 `16263c5` ↔ T-Deck Pro, 2026-09-27 | PASS |
+| P4c | MeshCore admin login over the air, then telemetry | e293 `9062008` ↔ T-Deck Pro, 2026-09-27 | PASS: 15-character password → `LOGIN_SUCCESS`; telemetry request → `TELEMETRY_RESPONSE` |
+| P5 | chat + repeater: decode lines for a channel message and a DM | e293 `16263c5` ↔ T-Deck Pro, 2026-09-27 | PASS |
+| P6 | Graywolf scheduled beacon across slot boundaries | Pi 5 `9062008` → T-Beam, 2026-09-27 | PASS: 3/3 beacons, 600.000 s apart, each decoded |
+| P7a | RF log RX lines for kiss/Graywolf | Pi 5 `9062008` ↔ T-Beam, 2026-09-27 | PASS 2/2 |
+| P7b | RF log RX lines for Reticulum | — | not run: the PC's Heltec RNode port was busy |
+| P8 | RF log 5 MB rollover | e293 `9062008`, 2026-09-27 | PASS: one roll at frame 14 of 20, every frame once across the rolled and the live file |
+| P9 | SX1262 on 868 | — | documented limit ([backlog](../backlog.md)): no SX1262 on any board here |
+| P10 | Station G2 learns the Pi 5's key from node-info; DMs | Pi 5 `9062008` ↔ G2, 2026-09-27 | PASS after 600 s of uptime (see [meshtastic](../stacks/meshtastic.md#notes)): 3/3 DMs each way acknowledged |
+| P11 | Pi 5 868 noise floor | Pi 5 `71c0d39`, 2026-09-27 | closed: −119 dBm median after an antenna and placement change (before −110) |
+| P12 | MeshCom on the release artifacts: speed, node settings across updates, T-Deck DMs, reboots | e293, artifacts built from `0683000a` (QEMU `b53b230c`, firmware `ba289816`), 2026-09-27 | PASS: console → TX median 1.55–1.92 s; settings carried across an update, reset by `clean --purge`; 10/10 cold starts; DMs 4/4 acknowledged both ways; reboot with MeshCom + MeshCore running restored both after the [upgrade note](../../CHANGELOG.md)'s commands |
+| P13 | client CRL expired while no NTP/GPS | Pi 5, `71c0d39` → `15e9d95`, 2026-09-27 | PASS: 0.9.2 locked out (400); the fix healed the CRL provisionally (200), revocations kept; normalised after NTP |
 
-1. **From-zero reinstall: not run** (ToDo R3 stays open). Root was available this time, but the
-   box is Wi-Fi-only and `uninstall.sh --purge` drops the preferred-network record and the box's
-   PKI and identities; an unattended run with nobody at the bench could leave the box on its
-   fallback AP with the operator's certificates regenerated. It waits for a bench session with
-   the operator present.
-2. **Host tests for daemon, chat and voice: not run** — their lane compiles the daemon's test
-   binaries, which the waiver excludes. kiss, graywolf, reticulum and meshcore ran; meshtastic
-   and meshcom are refused on the binary channel as designed.
-3. **Bot watch-only before the minor** (the rule in `maintenance.md`): one pin had moved
-   upstream, MeshCom-Firmware `80b85a5a2` → `dc1a012c` (KISS mode v2). The QEMU headless overlay
-   patch of `meshcom-qemu-raspi` does not apply at that tip (`git apply --check` fails on
-   `src/configuration_global.h` and `src/udp_functions.cpp`), so the pin is held and the release
-   says so in its changelog; the overlay needs maintenance before the bot can move it (ToDo R8).
-4. **Web console checks** were run by hand after the runner (its own loop sent the requests with
-   the host name `lhpc`, which the console rightly refuses with 400 — it answers only to the names
-   it serves); the hand run used the box's served address over the same nginx socket.
+## From-source rehearsal (Pi 5)
 
-## Rows
+Run to warm the caches before the final candidate; the pins do not move.
 
-| # | stack | channel | install | build | start | evidence |
-|---|---|---|---|---|---|---|
-| 1 | `daemon` | binary | 6s | *refused* (binary) | 14s | `lhpc status daemon`: running; `lhpc daemon 433` / `868` both `Radio: READY, TX mode: MANAGED`; build *refused* (binary, as designed) |
-| 2 | `chat` | pinned | 3s | 5s | 6s (refused) | typed `[manual] loraham-chat is interactive — the daemon is ensured, then run it yourself in a terminal` — the interactive contract; source `match` after the run |
-| 3 | `voice` | pinned | 5s | 4s | 8s | `loraham-voice-cli` built and started; GTK variant `not-applicable` on Lite; both `match` |
-| 4 | `kiss` | pinned | 5s | 15s | 8s | verified; TCP `127.0.0.1:8001` open; `known-working` recorded |
-| 5 | `graywolf` | pinned | 2s | 8s | 12s | verified; web UI `127.0.0.1:8080` → 200; KISS client held |
-| 6 | `reticulum` | pinned | 141s | 244s | 13s | rns on 868 with the ready marker; nomadnet, lxmd, meshchat built (Sideband skipped on Lite); `known-working` recorded. MeshChat is an *optional* component and is not part of the stack's start plan: started by name afterwards (`lhpc stack start meshchat --yes`, 14 s, verified on its endpoint) its UI `127.0.0.1:8790` → 200 within 8 s |
-| 7 | `meshcore` | pinned | 47s | 430s | 33s | node + webui verified on 868 (webui `:8788` → 200, dashboard `:8000` → 200), openhop repeater source `match`; **exactly one plugin manager running beside the repeater and the same-boot marker present; after the stop no manager and the marker cleared** (the 0.9.0 feature, on the release commit); `known-working` recorded |
-| 8 | `meshtastic` | binary | 107s | *refused* (binary) | 38s | verified on 868 with the box's identity restored from the backup: TCP `:4403` open, `lhpc meshtastic --info` → `Owner: e293` |
-| 9 | `meshtastic` | pinned (from source) | — | *not re-run* | — | maintainer's waiver; pin `54e0d8d` unchanged since the artifact was built at v0.7.0 — row 8 proves that artifact |
-| 10 | `daemon` | pinned (from source) | — | *not re-run* | — | same waiver; pin `e8e748e` (1.1.1) + RadioLib `187ef24` unchanged since v0.7.0 — row 1 proves that artifact |
-| 11 | `meshcom` | binary | 20s | *refused* (binary) | 829s | bridge + gps feed verified at once, the QEMU node's ready endpoint `:12323` and its required post-start after the emulated firmware's boot (the plan's own note: 6–14 min on a Zero 2 W; 0.8.0 measured 360 s); web UI `:18083` → 200 right after; the artifact installed is the 0.8.3 one (labelled `meshcom-firmware built_from 80b85a5a2 = pin`; the firmware inside is upstream 674413c — the QEMU build fetches that hardcoded ref, not the pin; corrected in 0.9.1, open item R8) — before this row the box still ran the v0.7.0 artifact |
-| 12 | `meshcom` | pinned (from source) | — | *not re-run* | — | see the fast-lane note above: the firmware pin moved at 0.8.3 (bot lane proved the artifact); the compile is excluded by the waiver; row 11 proves that artifact |
-
-Memory stayed between 160 and 263 MB available (`free -m`) across the rows; no OOM line in `dmesg`
-after the run. The box was left as found: MeshCore chat+repeater running with its one plugin manager.
-
-## Cross-cutting checks
-
-| check | result |
-|---|---|
-| **auto-install consistency** | every stack purged, then `lhpc auto-install --yes`: 16 min 12 s (972 s); `lhpc status --versions` afterwards: 16 source components `match`, 0 `differs`, 6 `binary`, 1 `missing` (Sideband: skipped on Lite by design), nothing "not built"; daemon, meshtastic and meshcom from the published binaries, the light stacks built from source |
-| **`dev` selector spot-check (kiss)** | `install --source dev` resolved the branch tip and built; kiss started under the daemon; reinstalled on the default channel: `match` (the tip is the pin, `v0.5.1-5-g33c1d22`) |
-| **known-working** | recorded for kiss, reticulum and meshcore after their green starts (`lhpc known-working <stack>`) |
-| **boot restore** | one reboot through the console's own Reboot action with MeshCore (chat+repeater) running: see below |
-| **web console** | by hand with the served address over the console's socket: `/`, `/stacks`, `/auto-install`, `/dependencies`, `/controller/logs`, `/healthz` → 200; every `/stacks/<stack>` → 302 to its anchor and `/stacks/<stack>/body` → 200; `/healthz` reports `0.9.0`, 9 stacks; **0 tracebacks** in the console journal across the run |
-| **pins vs binaries** | daemon `built_from e8e748e = pin`, RadioLib `187ef24 = pin`, meshtastic `54e0d8d = pin`, MeshCom bridge/qemu/firmware `7c86c96` / `b322a88` / `80b85a5a2` = pins |
-| **host tests** | kiss 21 s rc 0 · graywolf 3 s rc 0 (nothing to do) · reticulum 2 s rc 0 (nothing to do) · meshcore 156 s rc 0 · meshtastic / meshcom *refused on the binary channel* (as designed) · daemon / chat / voice *not run* (waiver) |
-| **from-zero reinstall** | **not run** — deviation 1 above (ToDo R3) |
-
-## Boot restore
-
-One reboot through the console's own Reboot action (POST `/power/reboot`, CSRF-checked, over the
-console's socket; logind, no root) at 23:51 UTC with MeshCore chat+repeater running on 868. The box
-came back on its home Wi-Fi at 23:51:43, `lhpc-web` active, `/healthz` → `{"stacks":9,"status":"ok","version":"0.9.0"}`;
-`state/boot-restore.json`: `done`, items `meshcore` **succeeded** and `daemon-reconcile` (868)
-**succeeded**, nothing skipped, no issues. MeshCore came back with its GPS feed, node and web UI
-verified, and the plugin manager's own log shows the marker protocol crossing the boot as designed:
-`Plugin-manager marker from an earlier boot found; replacing it` — then one manager started (pid
-1526, a child of the host, same process group) and the marker now carries the new boot id.
-
-## 0.9.2 patch proof — MeshCom firmware at the pin (2026-09-25, box E)
-
-The 0.9.2 patch is the first real MeshCom firmware change since 0.2.10 (the QEMU build now
-fetches the `meshcom-firmware` pin, `80b85a5` = v4.35t.09.20, with the overlay rebased onto it —
-R8), so its proof is the meshcom binary row on the reference box plus an on-air exchange, run on
-the release commit's content (dev `8e784c6`, amended only by this section) with the artifact the
-publishing build put into the index (`lhpc_commit 8e784c6`, `built_from 74a3a08`,
-`meshcom-firmware 80b85a5`; the packer's checkout-equals-pin check passed).
-
-| step | result | evidence |
-|---|---|---|
-| `lhpc update meshcom --source binary --yes` | **refused** by the `clone_required` gate: "src/meshcom-qemu-raspi is at b322a88, the pin is 74a3a08 — the artifact's run scripts must come from the pinned checkout", with the remedy named | the gate is the point: a box must move the overlay clone before it may run the new artifact |
-| `lhpc update meshcom-qemu --source pinned --yes` | **OK** — `GitHub pinned: match (version 74a3a08)` | provenance pinned-verified |
-| `lhpc update meshcom --source binary --yes` | **OK** — 11.8 MB, sha256-verified, `provenance: meshcom-bridge@7c86c96, meshcom-firmware@80b85a5, meshcom-gps-relay@74a3a08, meshcom-qemu@74a3a08` | `lhpc status`: every meshcom component `src binary`/`match` |
-| `lhpc stack start meshcom --yes` (433 free, MeshCore stopped first — one heavy stack on the Zero) | **verified** — bridge, gps feed, QEMU node ready endpoint `:12323`, required post-start completed; `:18083` → HTTP 200 after ~8 min | start output, curl |
-| node identity | `--info` over the net-console: **`MeshCom 4.35t (build: Sep 24 2026)`**, `Call: <DJ0CHE-15>`, `NODE 39 <EBYTE_E22>` — the 4.35p (Aug 7) build every box ran since 0.2.10 is gone | net-console |
-| T-Deck (MeshCom 4.35p, `DJ0CHE-07`) → box TXT | **PASS** — node MHeard `DJ0CHE-07 … TXT rssi −45 snr 11`, daemon `RX=1`, `rf-meshcom.log` RX carries the payload `LHPC 0.9.2 fw test` | three independent readings |
-| box → T-Deck TXT (`::LHPC 0.9.2 box says hi 2` over the net-console) | **PASS** — `TX … outcome=ok` 23:00:35Z and **6 s later the box heard the T-Deck's rebroadcast of that message** (`DJ0CHE-15,DJ0CHE-07>*:LHPC 0.9.2 box says hi 2`); the T-Deck's MHeard row for `DJ0CHE-15` advanced | the peer's own relay is the outside witness |
-| restore | meshcom stopped, MeshCore chat+repeater running again on 868 | `lhpc status` |
-
-Peer observation, not lhpc's: the T-Deck's USB-CDC serial dropped twice while a serial listener
-held the port during frame arrival (the device re-enumerated; reception is proven by its relay and
-MHeard). Daemon counters were read on the CONF socket (`GET STATS`): `RX=5 TXOK=5 CADTIMEOUT=0`
-at the end — no CAD timeouts on 433.175 this time.
-
+| row | stack | head | build | peak memory | result |
+|---|---|---|---|---|---|
+| 10 | `daemon`, pinned from source | `cc04996a` | 32 s | 942 MiB | PASS: both bands READY |
+| 9 | `meshtastic`, pinned from source | `cc04996a` | 638 s | 1276 MiB | PASS: start verified, `lhpc meshtastic --info` answers |
+| 12 | `meshcom`, pinned from source | `5bd3090e` | 228 s | 1678 MiB | PASS: bridge, GPS and QEMU verified; web UI `:18083` → 200; callsign confirmed after 18.7 s |
