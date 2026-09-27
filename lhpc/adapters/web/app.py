@@ -1811,6 +1811,17 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview", open="daemon", cfg="daemon")
                         + "#stack-settings-daemon")
 
+    @app.post("/hardware/high-power")
+    def hardware_high_power():
+        """The per-band +20 dBm permission switch (daemon 1.2.0 `--high-power`): one key through
+        the ordinary config transaction; saves and marks restart-required, restarts nothing."""
+        if not _csrf_ok():
+            abort(400)
+        result = service.set_high_power(request.form.get("band", ""), request.form.get("value", ""))
+        flash(result.summary, "ok" if result.ok else "warn")
+        return redirect(url_for("stacks_overview", open="daemon", cfg="daemon")
+                        + "#stack-settings-daemon")
+
     @app.post("/hardware/probe")
     def hardware_probe():
         if not _csrf_ok():

@@ -54,16 +54,24 @@ NUMERIC_RANGE = {
 }
 
 
-def numeric_range(name: str, family: str = "") -> tuple[str, str] | None:
+def numeric_range(name: str, family: str = "",
+                  high_power: bool = False) -> tuple[str, str] | None:
     """Bounds for a numeric param, narrowed to the chip family where the chip matters.
 
     Delegates POWER to `daemon_control.int_range` so the input the operator sees and the gate
     that admits the SET cannot drift apart — showing 0..20 beside a gate that refuses 0 is the
-    defect this exists to prevent. `family` "" keeps the union.
+    defect this exists to prevent. `family` "" keeps the union. With the band's high-power
+    switch saved on, the SX127x upper bound shown is 20 (the disjoint extra the switch unlocks);
+    18 and 19 inside that span are still refused by the server gate, which the row's
+    description says.
     """
     if name == "POWER":
         from . import daemon_control
         lo, hi = daemon_control.int_range("POWER", family)
+        if high_power:
+            extra = daemon_control._POWER_EXTRA.get(family, frozenset())
+            if extra:
+                hi = max([hi, *extra])
         return (str(lo), str(hi))
     return NUMERIC_RANGE.get(name)
 # SYNC is free text (hex or decimal byte).
@@ -79,7 +87,8 @@ PARAM_DESC = {
     "LDRO": "Low-data-rate optimize: 0 / 1 / AUTO.",
     "PREAMBLE": "Preamble length, symbols.",
     "SYNC": "LoRa sync word / network id, e.g. 0x12.",
-    "POWER": "TX power, dBm.",
+    "POWER": ("TX power, dBm (the chip's setting). SX127x: 2–17, or exactly 20 with the band's "
+              "high-power switch on — 18 and 19 are refused by the daemon. SX1262: 0–20."),
     "TXMODE": "MANAGED = listen-before-talk; DIRECT = transmit immediately.",
     "TXQUEUE": "Queue outgoing frames instead of dropping when busy: 0 / 1.",
     "CADMONITOR": "Continuous channel-activity monitor: 0 / 1.",
@@ -166,7 +175,7 @@ def _app_owned(stack_id: str, band: str, name: str) -> bool:
 
 
 def stack_view(stack_id: str, band: str, overrides: dict[str, str] | None = None,
-               family: str = "") -> list[dict]:
+               family: str = "", high_power: bool = False) -> list[dict]:
     """Grouped, ordered parameter rows for one stack+band. Every param is editable; `overrides`
     are persisted operator values. Each row: name, group, value (override or default), default,
     app_owned (greyed hint — still applied, but the app overwrites it), desc.
@@ -178,7 +187,7 @@ def stack_view(stack_id: str, band: str, overrides: dict[str, str] | None = None
     for group, names in (("radio", RADIO_PARAMS), ("lbt", LBT_PARAMS)):
         for name in names:
             dv = default_value(stack_id, band, name)
-            num = numeric_range(name, family)
+            num = numeric_range(name, family, high_power)
             rows.append({"name": name, "group": group,
                          "value": overrides.get(name) or dv, "default": dv,
                          "app_owned": _app_owned(stack_id, band, name),
