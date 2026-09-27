@@ -1129,6 +1129,14 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         )
         details.append(f"  systemctl: {hardware.check_systemctl(sys, user=False).detail}")
         details.append(f"  systemctl --user: {hardware.check_systemctl(sys, user=True).detail}")
+        # The clock gate's verdict: every PKI refusal ("the clock is not synchronised …") sends the
+        # operator here, so name the same predicate and its reason. Informational: it never makes
+        # doctor non-OK (commissioning and running stacks do not need a verified clock).
+        from .service_system import clock_verified
+        clock_ok, clock_why = clock_verified(sys.fs, self._paths.runtime_root)
+        details.append("  clock: " + ("verified (certificates may be issued)" if clock_ok else
+                       f"NOT verified — {clock_why}; certificate operations refuse until a time "
+                       "source (NTP or GPS) sets it, or need --accept-unverified-clock"))
         # Controller's OWN system/runtime deps (same source as the /stacks System-dependencies panel).
         # A missing REQUIRED dep makes doctor non-OK (machine-actionable); optional ones never do.
         required_missing = False

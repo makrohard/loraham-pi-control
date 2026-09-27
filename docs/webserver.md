@@ -251,7 +251,8 @@ ERR   refusing to reissue the certificate for 'phone': the clock is not synchron
       or accept the risk with --accept-unverified-clock
 ```
 
-`--accept-unverified-clock` proceeds anyway. It is one-shot — a flag on that one command, never
+`lhpc doctor` prints the same verdict on its `clock:` line (verified, or why not). `--accept-unverified-clock`
+proceeds anyway. It is one-shot — a flag on that one command, never
 remembered — and it is deliberately **not** the same thing as `--confirm-recreate` or
 `--confirm-label`. Those say "yes, destroy this"; this one says "yes, I accept certificates dated
 from a clock I cannot verify". They are different statements.
