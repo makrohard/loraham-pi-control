@@ -25,13 +25,13 @@ daemon in MANAGED mode. It needs a real terminal — there is no headless mode.
 |---|---|---|---|
 | `call` | `CALL` | inherits the global operator base callsign while empty | base 3–6 characters + optional APRS SSID `-1`…`-15` (bare = SSID 0); with neither a local nor a global callsign the start is refused |
 | `tx_freq` | `TX` | `433.775` | MHz |
-| `rx_freq` | `RX` | `433.900` | MHz |
+| `rx_freq` | `RX` | `433.775` | MHz |
 | `dest` | `DEST` | `ALL` | APRS destination |
 | `aprs_path` | `PATH` | `APRS,WIDE1-1` | |
 
-The frequency pair is the app's own default and is the tracker-facing half of the classic
-LoRa-APRS split: chat transmits on 433.775, the channel stock ESP32 trackers listen on, and
-receives on 433.900. `kiss` defaults to 433.775 both ways instead ([kiss](kiss.md)).
+Chat is single-channel on 433.775 both ways, like `kiss` and stock ESP32 trackers
+([kiss](kiss.md)), so two chat boxes and a Graywolf station hear each other. The classic LoRa-APRS
+split (receive on 433.900) is one setting away: `lhpc config chat rx_freq 433.900`.
 
 Radio parameters (the LoRaHAM amateur profile) live in [daemon](daemon.md).
 

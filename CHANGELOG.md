@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Chat receives on 433.775 by default, the channel it transmits on (was 433.900): two chat boxes, a
+  Graywolf station and stock ESP32 trackers now hear each other. The split is one setting away:
+  `lhpc config chat rx_freq 433.900`.
+
 ## 0.10.0
 
 **Upgrading, daemon from the binary (the default):** stop it (`lhpc stack stop daemon --yes`), run

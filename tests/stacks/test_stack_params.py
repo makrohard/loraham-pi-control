@@ -788,3 +788,17 @@ def test_an_invalid_target_start_with_a_conflicting_owner_never_stops_the_owner(
     res = svc.start("kiss", apply=True, stop_owners=True)
     assert not res.ok and "invalid saved configuration" in res.summary, res.summary
     assert stops == []
+
+
+# --- chat frequencies ----------------------------------------------------------
+
+def test_chat_defaults_to_one_channel(tmp_path):
+    # chat receives where it transmits (433.775, like kiss/graywolf and stock trackers), so two
+    # chat boxes on defaults hear each other; the generated lorachat.conf carries both keys.
+    svc = _svc(tmp_path)
+    save_operator_config(svc._paths, "XX0XXA"); svc._invalidate_config()
+    written = [w for w in svc.write_config_files("chat") if w.status == "written"]
+    assert written, "lorachat.conf was not generated"
+    conf = dict(line.split("=", 1) for line in open(written[0].path).read().splitlines() if "=" in line)
+    assert conf["TX"] == "433.775"
+    assert conf["RX"] == "433.775"

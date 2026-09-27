@@ -370,7 +370,9 @@ main = "loraham-chat"
       name = "rx_freq"
       validator = "freq"
       key = "RX"
-      default = "433.900"
+      # Single channel: RX = TX = 433.775, the channel stock ESP32 trackers and LHPC's kiss/graywolf
+      # use both ways; the classic split (RX 433.900) stays available by setting rx_freq.
+      default = "433.775"
       label = "RX frequency MHz"
       [[stack.component.config_file.param]]
       name = "dest"
