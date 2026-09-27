@@ -494,7 +494,7 @@ class SelfUpdateOpsMixin:
             with self._admission_guard("self-update-operator"):
                 if not web_active:
                     # No service to orchestrate — but STILL apply AND sync the venv, under held admission.
-                    return self._apply_and_sync(force)
+                    return self._operator_outcome(self._apply_and_sync(force), restarted=False)
                 stop = self._system.runner.run(["systemctl", "--user", "stop", updater_units.WEB_UNIT], _S)
                 if getattr(stop, "not_found", False) or stop.returncode != 0:
                     return ActionResult(False, "could not stop lhpc-web.service — stop it manually then retry",
@@ -517,12 +517,32 @@ class SelfUpdateOpsMixin:
                                         details=tuple(res.details),
                                         data={**dict(res.data), "web_restart_failed": True,
                                               "update_applied": bool(res.data.get("update_applied"))})
-                return res
+                return self._operator_outcome(res, restarted=True)
         except AdmissionRefused as _adm:
             return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
         except reslock.ResourceBusy:
             return ActionResult(False, "A task is starting right now (admission contended) — retry the "
                                 "update.", data={"contended": True})
+
+    @staticmethod
+    def _operator_outcome(res: ActionResult, *, restarted: bool) -> ActionResult:
+        """The operator flow has already synced the venv and (when the console was running)
+        restarted it, so the request path's advice — "restart the web console", the venv-sync
+        command, the dependencies note — would describe steps already taken. Replace it with what
+        happened; every other line (migrations, firewall) stays. Only a successful real advance."""
+        import dataclasses as _dc
+
+        from . import selfupdate
+        if not (res.ok and res.data.get("update_applied")):
+            return res
+        instr = res.data.get("restart") or {}
+        done = {instr.get("note", ""), "Restart the web console to load the new version:"}
+        done |= {"  " + c for c in instr.get("commands", ())}
+        details = [d for d in res.details if d and d not in done]
+        details.append("The web console was restarted on the new version." if restarted else
+                       "The web console is not running; it loads the new version when started.")
+        summary = "Update applied." if res.summary == selfupdate.APPLIED_RESTART_MESSAGE else res.summary
+        return _dc.replace(res, summary=summary, details=tuple(details), next_commands=[])
 
     def _self_update_locked(self, force: bool) -> ActionResult:
         from . import selfupdate
@@ -1286,9 +1306,13 @@ class SelfUpdateOpsMixin:
             rst = self._system.runner.run(["systemctl", "--user", "restart", updater_units.WEB_UNIT],
                                           timeout=S)
             if rst.returncode != 0:
+                # The unit appends the console's output to this file (StandardOutput=append:), so
+                # it is where the reason is; the operator's own user journal may not be readable.
+                web_log = self._paths.runtime_root.joinpath(*updater_units.WEB_LOG_REL)
                 return ActionResult(False, "Installed and enabled the units but the web console "
                                     "restart FAILED — the repair is NOT marked complete. Check "
-                                    "`journalctl --user -u lhpc-web.service`.",
+                                    f"`systemctl --user status {updater_units.WEB_UNIT}` and "
+                                    f"`tail -n 50 {web_log}`.",
                                     data={"web_restart_failed": True})
         self._write_root_marker()          # ONLY after every required integration step succeeded
         details = [f"  {k}: {a}" for k, a in actions]

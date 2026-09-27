@@ -1537,3 +1537,51 @@ def test_round2_scoping_regressions(tmp_path, monkeypatch):
     assert svc.start("kiss", apply=True).ok is False
     assert not (intents / "kiss.json").exists(), \
         "a PARTIAL start left the stack running — the tombstone must go"
+
+
+def test_a_failed_item_keeps_each_components_reason(tmp_path, monkeypatch):
+    # e293 (P12 reboot row): the restore of meshcore failed with "meshcore-node, meshcore-webui did
+    # not start/verify" and nothing else. The reason ("not built — build it first") was in the
+    # per-component results, which the journal dropped. Now the journal keeps it (additive: ok and
+    # summary unchanged) and the restore's own result prints it, so the log carries it.
+    from lhpc.core.outcomes import CompResult, Outcome
+    svc = _drv(tmp_path, monkeypatch)
+    _write_record(tmp_path, _v1())
+    results = (CompResult(component="meshcore-gps", action="start", outcome=Outcome.VERIFIED,
+                          summary="started"),
+               CompResult(component="meshcore-node", action="start", outcome=Outcome.BLOCKED,
+                          summary="not built — build it first (lhpc build meshcore)"))
+
+    def stub(self, target, apply=False, stop_owners=False, band="", auto_install_ctx=None, *,
+             _before_start_locked=None, _operator=True, position=None, position_note=""):
+        if _before_start_locked is not None:
+            refusal = _before_start_locked()
+            if refusal is not None:
+                return refusal
+        return ActionResult(False, "Run FAILED for 'x': meshcore-node did not start/verify.",
+                            results=results)
+    monkeypatch.setattr(ControllerService, "start", stub)
+    res = svc.boot_restore_run()
+    item = _journal_on_disk(tmp_path)["items"][0]
+    assert item["result"]["ok"] is False
+    assert item["result"]["summary"] == "Run FAILED for 'x': meshcore-node did not start/verify."
+    assert item["result"]["components"] == [
+        {"component": "meshcore-node", "outcome": Outcome.BLOCKED.value,
+         "reason": "not built — build it first (lhpc build meshcore)"}]
+    assert any("meshcore-node" in d and "not built — build it first" in d for d in res.details), res.details
+
+
+def test_a_failed_item_with_a_null_result_does_not_crash_the_summary(tmp_path, monkeypatch):
+    # A damaged or hand-edited journal can hold "result": null (the item's initial value); the
+    # reason lines must skip it, never raise inside the restore run.
+    svc = _drv(tmp_path, monkeypatch)
+    _write_record(tmp_path, _v1())
+    monkeypatch.setattr(ControllerService, "start", _stub_start([], ok=False))
+    real = type(svc)._boot_settle_item
+
+    def settle(self, journal, item, res):
+        real(self, journal, item, res)
+        item["result"] = None
+    monkeypatch.setattr(type(svc), "_boot_settle_item", settle)
+    res = svc.boot_restore_run()
+    assert res.data.get("driver_completed") is True and res.details == []

@@ -221,12 +221,17 @@ def test_self_update_apply_cli_yes(capsys, monkeypatch, no_venv_sync):
     seen = {}
     def fake_apply(self, *, force=False):
         seen["force"] = force
-        return ActionResult(True, "Update applied — restart the web console to load it.",
+        from lhpc.core import selfupdate
+        return ActionResult(True, selfupdate.APPLIED_RESTART_MESSAGE,
                             next_commands=["stop the console (Ctrl-C) and re-run:  lhpc web"])
     monkeypatch.setattr(ControllerService, "self_update_apply", fake_apply)
     assert main(["self-update", "--apply", "--overwrite", "--yes"]) == 0
     out = capsys.readouterr().out
-    assert "Update applied" in out and "lhpc web" in out and seen["force"] is True
+    # The operator flow did the restart/sync itself: it reports that, not the steps (backlog item
+    # "Operator self-update prints steps it already took").
+    assert "Update applied." in out and seen["force"] is True
+    assert "restart the web console" not in out and "lhpc web" not in out, out
+    assert "The web console is not running; it loads the new version when started." in out
 
 
 def test_self_update_overwrite_implies_apply(capsys, monkeypatch, no_venv_sync):

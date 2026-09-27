@@ -197,3 +197,52 @@ def test_active_jobs_live_marker_protects_its_log(tmp_path):
     assert any(j.get("log") == live_log for j in aj)           # recognized as live
     svc.prune_logs()
     assert (logs / live_log).exists()                          # protected from retention
+
+
+def _result_files(tmp_path, names):
+    import os
+    d = tmp_path / "state" / "post"
+    d.mkdir(parents=True, exist_ok=True)
+    for i, n in enumerate(names):                       # oldest first
+        (d / n).write_text("{}")
+        os.utime(d / n, (1_000_000 + i, 1_000_000 + i))
+    return d
+
+
+def test_post_result_sidecars_are_pruned_but_live_ones_kept(tmp_path):
+    """state/post/*.result.json grew without bound: only the .py launchers were pruned (finding:
+    92 helpers + result sidecars, 1.3 MB on e293). A finished launch's sidecar is never read
+    again; a LIVE launch's is, so it survives even when it is among the oldest."""
+    paths = Paths(runtime_root=tmp_path)
+    d = _result_files(tmp_path, ["required-live.result.json", "old1.result.json",
+                                 "old2.result.json", "new1.result.json", "new2.result.json"])
+    (d / "x.py").write_text("")                          # not a result: left to the launcher rule
+    removed = jobs.prune_post_results(paths, 2, frozenset({"required-live.result.json"}))
+    left = sorted(p.name for p in d.iterdir())
+    assert removed == 2, left
+    assert left == ["new1.result.json", "new2.result.json", "required-live.result.json", "x.py"]
+
+
+def test_prune_logs_keeps_the_sidecars_live_launches_read(tmp_path, monkeypatch):
+    from lhpc.core.lifecycle import Lifecycle
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    live_main = Lifecycle.required_result_leaf({"main_launch_id": "L1"})
+    d = _result_files(tmp_path, [live_main, "p1.result.json"]
+                      + [f"dead{i}.result.json" for i in range(svc.LOG_RETENTION + 3)])
+    recs = [{"component": "graywolf", "role": "", "launch_id": "L1"},
+            {"component": "graywolf", "role": "post", "result_path": str(d / "p1.result.json")}]
+    monkeypatch.setattr(Lifecycle, "owned_inventory", lambda self: (recs, [], "ok"))
+    svc.prune_logs()
+    left = {p.name for p in d.iterdir()}
+    assert live_main in left and "p1.result.json" in left          # oldest, but live
+    assert len(left) == svc.LOG_RETENTION + 2                       # the newest N + the two live
+
+
+def test_prune_logs_keeps_every_sidecar_when_the_inventory_is_uncertain(tmp_path, monkeypatch):
+    from lhpc.core.lifecycle import Lifecycle
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    d = _result_files(tmp_path, [f"r{i}.result.json" for i in range(svc.LOG_RETENTION + 5)])
+    monkeypatch.setattr(Lifecycle, "owned_inventory",
+                        lambda self: ([], [{"leaf": "bad.json", "reason": "malformed"}], "ok"))
+    svc.prune_logs()
+    assert len(list(d.iterdir())) == svc.LOG_RETENTION + 5          # a skipped record may be live

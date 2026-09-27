@@ -3730,7 +3730,30 @@ class LifecycleOpsMixin:
                     # never raise, never increment the count (a leaf swapped to a dir or
                     # symlink between stat and unlink lands here safely)
         removed += jobs.prune_ephemeral_launchers(self._paths, self.LOG_RETENTION)
+        live = self._live_post_results()
+        if live is not None:                 # unknown inventory -> keep every sidecar
+            removed += jobs.prune_post_results(self._paths, self.LOG_RETENTION, live)
         return removed
+
+    def _live_post_results(self) -> frozenset | None:
+        """Result sidecars a LIVE launch still reads: the required run's leaf of every recorded
+        main launch and the result file of every recorded post runner. None when the ownership
+        inventory cannot be read — the caller then prunes no sidecar at all (fail-closed)."""
+        from pathlib import Path as _P
+        try:
+            life = self._lifecycle()
+            valid, issues, state = life.owned_inventory()
+        except Exception:
+            return None
+        if state == "unsafe" or issues:          # a skipped record could be a live one
+            return None
+        names = set()
+        for rec in valid:
+            if rec.get("role", "") == "" and rec.get("launch_id"):
+                names.add(life.required_result_leaf({"main_launch_id": rec["launch_id"]}))
+            elif rec.get("role") == "post" and rec.get("result_path"):
+                names.add(_P(str(rec["result_path"])).name)
+        return frozenset(names)
 
     def _track_or_terminate(self, life, log_name: str, pid: int, cid: str, op: str,
                             attempt_id: str = "", ident: dict | None = None) -> str:

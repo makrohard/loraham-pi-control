@@ -9,6 +9,7 @@ from __future__ import annotations
 
 
 import gitrepo
+import pytest
 from lhpc.core import selfupdate
 from lhpc.core import updater_units
 from lhpc.core.paths import Paths
@@ -622,3 +623,44 @@ def test_a_failed_unit_refresh_makes_the_update_visibly_partial(op_svc, monkeypa
     assert "repair-integration" in res.summary              # the command the operator is told to run
 
 
+
+
+_WEB_ACTIVE = {("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service"):
+               CommandResult(0, "", ""),
+               ("systemctl", "--user", "stop", "lhpc-web.service"): CommandResult(0, "", ""),
+               ("systemctl", "--user", "start", "lhpc-web.service"): CommandResult(0, "", "")}
+
+
+@pytest.mark.parametrize("web", ["running", "stopped"])
+def test_operator_apply_prints_what_it_did_not_steps_it_already_took(op_svc, monkeypatch, web):
+    """`lhpc self-update --apply` in an operator shell stops the console, applies, syncs the venv
+    and starts the console again — yet it printed the request path's advice: "Restart the web
+    console to load the new version", the venv-sync command and the dependencies note, all for
+    work it had just done (docs/backlog.md)."""
+    from lhpc.core import selfupdate
+    from lhpc.core.service_base import ActionResult
+    from lhpc.core.services import ControllerService
+
+    svc, _fake = op_svc(_WEB_ACTIVE if web == "running" else _WEB_INACTIVE, invocation=False)
+    instr = selfupdate.restart_instructions(True, "/venv/bin/python -m pip install -e /repo")
+    service_path_result = ActionResult(
+        True, selfupdate.APPLIED_RESTART_MESSAGE,
+        details=(instr["note"], "Restart the web console to load the new version:",
+                 *("  " + c for c in instr["commands"]), "2 default(s) migrated to the new defaults."),
+        next_commands=list(instr["commands"]),
+        data={"restart": instr, "deps_changed": True})
+    monkeypatch.setattr(ControllerService, "self_update_apply",
+                        lambda self, *, force=False: service_path_result)
+    monkeypatch.setattr(ControllerService, "_refresh_units_post_update", lambda self: (True, ""))
+    res = svc.self_update_apply_operator()
+    text = "\n".join((res.summary, *res.details, *res.next_commands))
+    assert res.ok, text
+    assert "Restart the web console" not in text and "pip install" not in text, text
+    assert "Dependencies changed" not in text, text
+    assert res.next_commands == [], text
+    assert res.summary == "Update applied.", text
+    assert "2 default(s) migrated" in text                     # real information stays
+    if web == "running":
+        assert "The web console was restarted on the new version." in res.details
+    else:
+        assert "The web console is not running; it loads the new version when started." in res.details

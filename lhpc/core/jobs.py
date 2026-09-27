@@ -279,7 +279,17 @@ def prune_ephemeral_launchers(paths: Paths, keep: int) -> int:
     return sum(_prune_regular_files(paths, ("state", sub), ".py", keep) for sub in ("jobs", "post"))
 
 
-def _prune_regular_files(paths: Paths, subdir: tuple, suffix: str, keep: int) -> int:
+def prune_post_results(paths: Paths, keep: int, protected: frozenset = frozenset()) -> int:
+    """Keep only the newest `keep` post-start result sidecars (`state/post/*.result.json`: the
+    per-runner `<uid>.result.json` and the required run's `required-<hash>.result.json`), and
+    NEVER one in `protected` — the leaves a live launch still reads for its status. A sidecar of
+    a finished launch is never looked up again (a new launch writes a new leaf), so without this
+    they grew without bound. Same fail-closed rules as the launcher pruning."""
+    return _prune_regular_files(paths, ("state", "post"), ".result.json", keep, protected)
+
+
+def _prune_regular_files(paths: Paths, subdir: tuple, suffix: str, keep: int,
+                         protected: frozenset = frozenset()) -> int:
     try:
         d = paths.under(*subdir)
         entries = runtime_fs.scandir_nofollow(paths, d)
@@ -287,7 +297,7 @@ def _prune_regular_files(paths: Paths, subdir: tuple, suffix: str, keep: int) ->
         return 0
     items = []
     for name, is_link in entries:
-        if is_link or not name.endswith(suffix):
+        if is_link or not name.endswith(suffix) or name in protected:
             continue
         f = d / name
         stt = runtime_fs.stat_leaf_nofollow(paths, f)    # descriptor-safe, no-follow

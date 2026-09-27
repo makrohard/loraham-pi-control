@@ -860,9 +860,12 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, branch: s
                    message="Update aligned to upstream, but some untracked files could NOT be removed "
                            "— delete them manually, then restart the console.")
     else:
-        out["message"] = "Update applied — restart the web console to load it."
+        out["message"] = APPLIED_RESTART_MESSAGE
     return out
 
+
+# The request/service path's summary; the operator flow replaces it (it restarted the console itself).
+APPLIED_RESTART_MESSAGE = "Update applied — restart the web console to load it."
 
 def restart_instructions(deps_changed: bool = False, deps_sync_cmd: str = "") -> dict:
     """How the operator restarts the web console after an update (lhpc never restarts itself).

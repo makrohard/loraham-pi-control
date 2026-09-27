@@ -377,8 +377,10 @@ class BootRestoreOpsMixin:
             bits.append(f"{len(pending)} pending (run truncated — restart the unit to continue)")
         if plan.skipped:
             bits.append(f"{len(plan.skipped)} skipped")
+        why = [f"{i['target']}: {c['component']} {c['outcome']} — {c['reason']}"
+               for i in failed for c in (i.get("result") or {}).get("components", [])]
         return ActionResult(not (failed or pending),
-                            "Boot restore: " + ", ".join(bits) + ".",
+                            "Boot restore: " + ", ".join(bits) + ".", details=why,
                             data={"driver_completed": True})
 
     def _own_start_time(self):
@@ -491,6 +493,13 @@ class BootRestoreOpsMixin:
         ok = bool(res.ok or manual_required_only(getattr(res, "results", ()) or ()))
         item["state"] = "succeeded" if ok else "failed"
         item["result"] = {"ok": ok, "summary": res.summary}
+        if not ok:
+            # The stack summary names only the components ("… did not start/verify"); the WHY
+            # (e.g. "not built — build it first") lives in each component's result. Keep it, or
+            # a failed restore leaves nothing to act on once the evidence is consumed.
+            item["result"]["components"] = [
+                {"component": r.component, "outcome": r.outcome.value, "reason": r.summary}
+                for r in (getattr(res, "results", ()) or ()) if not r.ok]
         item["prune"] = self._boot_prune_evidence(item["evidence_ids"])
         if not boot_restore.write_journal(self._paths, journal):
             item["_integrity"] = "journal unwritable at settle"
