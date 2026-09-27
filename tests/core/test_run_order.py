@@ -1121,3 +1121,31 @@ def test_restart_plan_predicts_exactly_what_its_apply_does_with_dependents(tmp_p
     assert not any("[stop] graywolf" in d for d in svc.run_action("restart", "kiss").details)
     assert any("[stop] graywolf" in d
                for d in svc.run_action("restart", "kiss", cascade=True).details)
+
+
+def test_an_advisory_claim_never_blocks_a_start(tmp_path):
+    """F-M2: meshcore-cli and meshcore-webui claim the node's one Companion slot, ADVISORY on both
+    sides (model.py: shown as a conflict, arbitrated at runtime by the WebUI yielding to the CLI's
+    lock). Admission must not refuse the CLI while the WebUI runs."""
+    from lhpc.core.model import RunState
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    fake = FakeSystem(cmdlines_data={300: ["python", "-m", "uvicorn", "app.main:app"]})
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    webui = svc.build_snapshot().stack("meshcore").components["meshcore-webui"]
+    assert webui.run_state in (RunState.RUNNING, RunState.DEGRADED)       # the premise: it runs
+    assert [b for b in svc.run_blockers("meshcore-cli")
+            if b["resource"] == "meshcore.companion-client"] == []
+
+
+def test_a_non_advisory_exclusive_claim_still_blocks(tmp_path):
+    # The guard beside F-M2: meshtastic and rns both claim the raw SPI bus EXCLUSIVELY and NOT
+    # advisory, so a running meshtasticd still refuses reticulum on it.
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    fake = FakeSystem(cmdlines_data={301: ["meshtasticd"]})
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    assert any(b["resource"] == "spi.bus.0.unlocked" and b["holder"] == "meshtastic"
+               for b in svc.run_blockers("reticulum"))

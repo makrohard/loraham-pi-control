@@ -106,7 +106,9 @@ What a plugin is, and where the boundary lies:
   come on top of the node's memory.
 
 What lhpc guarantees, and what it does not: the manager is stopped gracefully with the stack, and
-a graceful stop takes its plugins down with it. The manager is **not restarted** after a crash
+a graceful stop takes its plugins down with it; a node killed without its shutdown (SIGKILL, the
+out-of-memory killer) still sends its manager that stop, through the kernel. The manager is
+**not restarted** after a crash
 (the repeater keeps running; the banner returns). Because upstream keeps every plugin in its own
 session, a manager or node that died without its graceful shutdown may leave plugins running
 where lhpc cannot see them — lhpc then refuses to start a **replacement** manager in the same

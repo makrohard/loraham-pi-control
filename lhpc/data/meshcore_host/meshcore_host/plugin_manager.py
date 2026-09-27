@@ -31,9 +31,11 @@ The marker protocol (fail-closed; the controller reads the same file through
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -47,6 +49,27 @@ TERM_GRACE_S = 8.0        # upstream's container supervisor: SIGTERM, then this 
 KILL_GRACE_S = 2.0
 WATCH_POLL_S = 0.5        # an LHPC choice (upstream's supervisor polls at 0.2 s)
 REBOOT_HINT = "plugins will not be started again until the box is rebooted"
+
+
+# prctl(PR_SET_PDEATHSIG, SIGTERM) in the child, so the kernel stops the manager when this host dies
+# WITHOUT its graceful shutdown (SIGKILL, the OOM killer): a manager outliving its host was seen on
+# the Zero 2 W. Resolved here, in the parent: the forked child only calls the function pointer.
+_PR_SET_PDEATHSIG = 1
+try:
+    _prctl = ctypes.CDLL(None, use_errno=True).prctl
+except (OSError, AttributeError):          # not Linux: no parent-death signal, the marker still holds
+    _prctl = None
+
+
+def _die_with(parent_pid: int) -> Callable[[], None]:
+    """A preexec_fn: SIGTERM this child when `parent_pid` dies (upstream's SIGTERM path stops
+    its plugins). A parent that died before the prctl took effect: exit before the exec."""
+    def preexec() -> None:
+        if _prctl is not None:
+            _prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+        if os.getppid() != parent_pid:
+            os._exit(1)
+    return preexec
 
 
 def boot_id() -> str:
@@ -137,8 +160,9 @@ class PluginManagerChild:
     """Spawn, watch and stop upstream's plugin manager for one repeater run.
 
     The child stays in THIS process group (no new session): LHPC's stack stop signals the whole
-    group, so the manager receives the SIGTERM even if this host's own cleanup never runs. The
-    plugins the manager starts keep the separate sessions upstream gives them."""
+    group, so the manager receives the SIGTERM even if this host's own cleanup never runs. When
+    this host dies without any stop (SIGKILL, OOM), the parent-death signal sends it the SIGTERM.
+    The plugins the manager starts keep the separate sessions upstream gives them."""
 
     def __init__(self, state_dir: str | Path, *,
                  popen_factory: Callable[..., subprocess.Popen] = subprocess.Popen,
@@ -177,7 +201,8 @@ class PluginManagerChild:
                          self.marker, exc)
             return False
         try:
-            self.proc = self._popen(self.argv, start_new_session=False)
+            self.proc = self._popen(self.argv, start_new_session=False,
+                                    preexec_fn=_die_with(os.getpid()))
         except OSError as exc:
             logger.error("Plugin manager could not be spawned (%s): %s — plugins stay offline for "
                          "this run", self.argv[0], exc)

@@ -2192,7 +2192,7 @@ main = "meshcore-node"
   # stack page's Password section (value + edit command); a lax or malformed file shows a reason.
   ui_user = "admin"
   ui_password_file = "config/secrets/openhop_repeater_admin.txt"
-  ui_password_note = "LHPC mints this password when a repeater mode first starts and hands it to the repeater on every start; the dashboard's own password change is refused at the proxy. To change it, edit that file (16–128 printable ASCII characters, no spaces) and restart the stack."
+  ui_password_note = "LHPC mints this password when a repeater mode first starts and hands it to the repeater on every start; the dashboard's own password change is refused at the proxy. To change it, edit that file (15–128 printable ASCII characters, no spaces; at most 15 for an over-the-air admin login from a MeshCore client) and restart the stack."
   requires_daemon_tx = "MANAGED"
   start_order = 1
   run = ".venv/bin/python -m meshcore_host {runtime}/config/files/meshcore.toml"
@@ -2486,11 +2486,12 @@ main = "meshcore-node"
     # password LHPC minted (ui_password_file above).
     #
     # DENY LIST — the invariant: every dashboard route that MUTATES UPSTREAM CONFIGURATION is
-    # refused at LHPC's perimeter (upstream gets no config path, so a save aims at
+    # refused at LHPC's perimeter, EXCEPT the two allowed by decision below (the plugin manager and
+    # /api/sensors_config_update) (upstream gets no config path, so a save aims at
     # /etc/openhop_repeater/config.yaml, which the rootless unit cannot create — but the
     # in-memory mutation before it would still change the running repeater and vanish on
-    # restart). Classified from a full inventory of the 129 exposed methods at the pinned
-    # openhop_repeater efc5616 (repeater/web/{api,auth,companion,update}_endpoints.py):
+    # restart). Classified from a full inventory of the exposed methods (153 at the pinned
+    # openhop_repeater b846c79, repeater/web/*_endpoints.py):
     #   config/setup/import/export (setup wizard, config import/export, web/mqtt/duty-cycle/advert
     #   rate-limit config, policy editor, transport keys, default region, flood policy),
     #   radio/CAD (update_radio_config, save_cad_settings, cad_* calibration),
@@ -2504,6 +2505,10 @@ main = "meshcore-node"
     # login/verify/refresh, /ws/packets (read-only stream), and the OPERATIONAL actions of a
     # logged-in admin (send advert/text, ping, discovery, ACL, room messages, purge) — the scope
     # here is configuration, identities and LHPC-owned state, not everything a repeater does.
+    # Allowed BY DECISION (0.10.0), although they write: the plugin manager (/api/plugins/*,
+    # including install of an uploaded wheel) and /api/sensors_config_update (rewrites the
+    # sensors section and can set auto_install_packages; with no config file on the box it
+    # currently fails before changing anything).
     # A path denied for writes is denied for reads too (one nginx location per path, no method
     # split): the Policy, transport-key, region and identity pages of the dashboard do not load
     # through the proxy; LHPC owns those settings. Each entry renders as a spelling-tolerant
@@ -2782,8 +2787,8 @@ main = "meshcore-node"
     path = "src/openhop-repeater"
     remote = "https://github.com/openhop-dev/openhop_repeater.git"
     branch = "dev"
-    pin_commit = "277f11c3f9f5a6c740788dc3553515410618c959"
-    pin_tag = "1.1.4-43-g277f11c"
+    pin_commit = "b846c79123c21c08424f5d62cd9dbf2bedfa6e0d"
+    pin_tag = "1.1.4-70-gb846c79"
 
 [[stack]]
 id = "reticulum"

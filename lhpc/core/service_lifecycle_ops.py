@@ -358,9 +358,14 @@ class LifecycleOpsMixin:
         needed_bands = self._operation_bands(target, band, radio, "start")
         # Non-radio exclusive/provider claims (ports, sockets, …) + only the radio
         # band(s) the run really needs.
+        # An ADVISORY claim never blocks (model.Resource.advisory): the conflict is shown, and the
+        # sides arbitrate at runtime — e.g. the MeshCore WebUI yields the node's one Companion slot
+        # to a running meshcore-cli. Advisory on EITHER side is enough, as in interpret_conflicts.
         claims: dict[str, str] = {}
         for _, c in order:
             for r in c.resources:
+                if r.advisory:
+                    continue
                 if (r.mode in (ResourceMode.EXCLUSIVE, ResourceMode.PROVIDER)
                         and not r.key.startswith("loraham.radio.")):
                     claims[r.key] = c.id
@@ -418,7 +423,7 @@ class LifecycleOpsMixin:
                     if _owner_gps and _owner_gps in claims:
                         add(sid, c.id, _owner_gps)
                 for r in c.resources:
-                    if r.mode not in (ResourceMode.EXCLUSIVE, ResourceMode.PROVIDER):
+                    if r.advisory or r.mode not in (ResourceMode.EXCLUSIVE, ResourceMode.PROVIDER):
                         continue
                     if r.key.startswith("loraham.radio."):
                         rb = r.key.rsplit(".", 1)[-1]

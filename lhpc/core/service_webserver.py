@@ -616,7 +616,7 @@ class WebserverOpsMixin:
                 continue
             if not c.ui_password_file:
                 continue
-            # The openHop repeater password has a shape (16–128 printable ASCII, no spaces);
+            # The openHop repeater password has a shape (15–128 printable ASCII, no spaces);
             # anything else that LHPC or an app minted is one non-empty line.
             normalize = (_mci._normalize_password
                          if c.ui_password_file.endswith(_mci.REPEATER_ADMIN_FILENAME) else None)

@@ -132,9 +132,11 @@ def test_the_deny_regex_refuses_spelling_variants_and_sub_paths():
 
 
 def test_repeater_dashboard_proxy_denies_every_config_mutating_route(tmp_path):
-    """Source-derived at openhop_repeater efc5616 (see the manifest comment): every route that
-    mutates upstream configuration, the mesh CLI, identities, OTA and the companion-frame
-    websocket. This guard fails if a manifest edit or a repin drops one."""
+    """Source-derived (see the manifest comment, inventory at openhop_repeater b846c79): every route
+    that mutates upstream configuration, the mesh CLI, identities, OTA and the companion-frame
+    websocket is denied, EXCEPT two allowed by the maintainer's decision (0.10.0): the plugin manager
+    (/api/plugins/*, including a wheel upload) and /api/sensors_config_update. This guard fails if a
+    manifest edit or a repin drops a denied route, or quietly denies a decided exception."""
     svc = _svc(tmp_path)
     required = {
         "/api/setup_wizard", "/api/config_import", "/api/config_export",
@@ -154,6 +156,14 @@ def test_repeater_dashboard_proxy_denies_every_config_mutating_route(tmp_path):
     missing = required - deny
     assert not missing, f"repeater dashboard proxy no longer denies: {sorted(missing)}"
     assert "/api/auth/tokens" in deny                             # a second credential
+    # The decided exceptions: they write, and they stay reachable ON PURPOSE. Denying one of them
+    # (or the whole /api/plugins prefix) would silently break the plugin system or the decision.
+    decided = {"/api/sensors_config_update", "/api/plugins/install",
+               "/api/plugins/catalogue_install", "/api/plugins/update", "/api/plugins/uninstall",
+               "/api/plugins/settings", "/api/plugins/enable", "/api/plugins/disable",
+               "/api/plugins/restart"}
+    assert not (decided & deny), f"a decided exception is denied: {sorted(decided & deny)}"
+    assert not any(d.startswith("/api/plugins") for d in deny), "the plugin manager is denied"
     allowed = {"/api/stats", "/api/logs", "/api/send_advert", "/auth/login", "/ws/packets",
                "/api/needs_setup", "/api/recent_packets"}
     assert not (allowed & deny)

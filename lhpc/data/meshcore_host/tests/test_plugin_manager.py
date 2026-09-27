@@ -455,3 +455,48 @@ role = "chat"
 plugins = "banana"
 ''')
     assert load_config(p).mode == "chat"                    # the repeater table is not read
+
+
+# --- a host that dies without its shutdown takes the manager with it -------------------------------
+
+def test_a_killed_host_takes_its_manager_down(tmp_path):
+    """Seen on the Zero 2 W: the host died without running any handler (SIGKILL or the OOM killer),
+    its manager was reparented to PID 1 and kept running, and the same-boot marker then kept every
+    later manager from starting. The parent-death signal hands the manager the SIGTERM the host
+    could not send. A real host process (the fake resolver only), SIGKILLed after the spawn."""
+    import sys
+    import textwrap
+    import time
+    flag = tmp_path / "manager-got-sigterm"
+    manager = textwrap.dedent(f"""
+        import signal, sys, time
+        def term(*_):
+            open({str(flag)!r}, "w").write("term"); sys.exit(0)
+        signal.signal(signal.SIGTERM, term)
+        time.sleep(30)
+    """)
+    host = textwrap.dedent(f"""
+        import os, signal, sys, time
+        from pathlib import Path
+        from meshcore_host import plugin_manager as pm
+        pm.paths_for = lambda d: (Path(d) / "plugins", Path(d) / "plugin-manager.sock")
+        child = pm.PluginManagerChild({str(tmp_path / "state")!r}, boot_id_fn=lambda: "boot-a")
+        child.argv = [sys.executable, "-c", {manager!r}]
+        assert child.start()
+        print(child.proc.pid, flush=True)
+        time.sleep(1.0)                        # the manager installed its handler
+        os.kill(os.getpid(), signal.SIGKILL)   # no handler, no stop(): the Zero 2 W case
+    """)
+    out = subprocess.run([sys.executable, "-c", host], capture_output=True, text=True, timeout=30)
+    manager_pid = int(out.stdout.split()[-1])
+    deadline = time.monotonic() + 10
+    while not flag.exists() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    alive = True
+    try:
+        os.kill(manager_pid, 0)
+    except ProcessLookupError:
+        alive = False
+    if alive and not flag.exists():
+        os.kill(manager_pid, 9)                # do not leak the orphan from a failing run
+    assert flag.exists(), "the manager outlived its SIGKILLed host"

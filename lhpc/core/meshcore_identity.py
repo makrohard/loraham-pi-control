@@ -21,6 +21,7 @@ truncated file can never be "fixed" by silently rotating the operator's identity
 from __future__ import annotations
 
 import secrets as _secrets
+import string
 import tomllib
 from pathlib import Path
 
@@ -227,25 +228,29 @@ def ensure_identity(paths: Paths, candidates=(), filename: str = IDENTITY_FILENA
     return adopt_identity(paths, candidates, filename) or _store(paths, _mint(), filename)
 
 
-_PASSWORD_LEN = 24          # token_urlsafe(24) -> 32 URL-safe characters
+# 15 characters: a MeshCore client sends a login password in a 15-byte field, so a longer one can
+# never log in over the air (the repeater compares the truncated value). Letters and digits only,
+# so every client keyboard can type it; 62**15 is about 89 bits.
+OTA_LOGIN_MAX = 15          # the longest password a MeshCore over-the-air login carries
+_ALNUM = string.ascii_letters + string.digits
 
 
 def _normalize_password(raw: object) -> str:
     """The stored dashboard password, or "" when the file holds nothing usable: one line of
-    16..128 printable, non-blank ASCII characters."""
+    15..128 printable, non-blank ASCII characters."""
     s = str(raw or "").strip()
-    if not (16 <= len(s) <= 128) or not s.isascii() or not s.isprintable() or " " in s:
+    if not (15 <= len(s) <= 128) or not s.isascii() or not s.isprintable() or " " in s:
         return ""
     return s
 
 
 def ensure_password(paths: Paths, filename: str) -> str:
     """A controller-minted login secret (the openHop dashboard admin password): read the stored
-    one, else mint a random URL-safe token ONCE and persist it 0600 like the identities. Never
+    one, else mint 15 random letters and digits ONCE and persist it 0600 like the identities. Never
     replaces a stored value; a lax or garbled file raises, exactly like a bad key."""
     what = "dashboard password"
     stored = _read_secret(paths, filename, normalize=_normalize_password, what=what)
     if stored:
         return stored
-    return _store(paths, _secrets.token_urlsafe(_PASSWORD_LEN), filename,
-                  normalize=_normalize_password, what=what)
+    minted = "".join(_secrets.choice(_ALNUM) for _ in range(OTA_LOGIN_MAX))
+    return _store(paths, minted, filename, normalize=_normalize_password, what=what)

@@ -180,7 +180,7 @@ def test_the_two_repeater_secrets_are_minted_once_and_kept_0600(tmp_path):
     assert key1 != mi.ensure_identity(paths, ())                  # distinct from the chat node's
     pw1 = mi.ensure_password(paths, mi.REPEATER_ADMIN_FILENAME)
     pw2 = mi.ensure_password(paths, mi.REPEATER_ADMIN_FILENAME)
-    assert pw1 == pw2 and 16 <= len(pw1) <= 128 and " " not in pw1
+    assert pw1 == pw2 and len(pw1) == 15 and pw1.isascii() and pw1.isalnum()   # fits the OTA login
     for fn in (mi.REPEATER_IDENTITY_FILENAME, mi.REPEATER_ADMIN_FILENAME, mi.IDENTITY_FILENAME):
         assert (tmp_path / "config" / "secrets" / fn).stat().st_mode & 0o777 == 0o600
 
@@ -194,6 +194,19 @@ def test_a_lax_or_garbled_password_file_blocks_instead_of_being_replaced(tmp_pat
         mi.ensure_password(paths, mi.REPEATER_ADMIN_FILENAME)
     f.write_text(pw + "\n"); f.chmod(0o644)
     with pytest.raises(mi.MeshCoreIdentityError, match="readable by group/other"):
+        mi.ensure_password(paths, mi.REPEATER_ADMIN_FILENAME)
+
+
+def test_a_stored_password_of_15_to_128_characters_is_kept(tmp_path):
+    # 15 = the longest a MeshCore over-the-air admin login carries; longer stored ones stay valid
+    paths = Paths(runtime_root=tmp_path)
+    mi.ensure_password(paths, mi.REPEATER_ADMIN_FILENAME)
+    f = tmp_path / "config" / "secrets" / mi.REPEATER_ADMIN_FILENAME
+    for pw in ("x" * 15, "y" * 32, "z" * 128):
+        f.write_text(pw + "\n")
+        assert mi.ensure_password(paths, mi.REPEATER_ADMIN_FILENAME) == pw
+    f.write_text("w" * 14 + "\n")
+    with pytest.raises(mi.MeshCoreIdentityError):
         mi.ensure_password(paths, mi.REPEATER_ADMIN_FILENAME)
 
 
@@ -211,7 +224,7 @@ def test_generation_renders_the_repeater_table_from_one_file(tmp_path):
     assert rep["role"] == "chat+repeater" and rep["name"] == "Relay 1"
     assert rep["behaviour"] == "forward"
     assert len(rep["key"]) == 64 and rep["key"] != doc["identity"]["key"]
-    assert 16 <= len(rep["admin_password"]) <= 128
+    assert len(rep["admin_password"]) == 15
     assert rep["state_dir"] == str(tmp_path / "state" / "openhop")
     assert doc["companion"]["name"] == "Chat 1"
 

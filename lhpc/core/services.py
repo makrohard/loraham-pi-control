@@ -2214,7 +2214,9 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         the basis for cross-stack operation locks so a start/stop/restart of one stack
         serializes against another stack claiming the SAME radio/port/socket. Radio claims
         are scoped by `_operation_bands` (band-aware, daemon-radio-aware). Mirrors `run_blockers`
-        so the lock set equals the conflict set. CONSUMER/COOPERATIVE claims take no lock."""
+        so the lock set equals the conflict set, except that ADVISORY claims still lock: they
+        never block a start, but two operations on the same slot still run one after the other.
+        CONSUMER/COOPERATIVE claims take no lock."""
         order = self._run_order(target)
         if not order:
             return []
