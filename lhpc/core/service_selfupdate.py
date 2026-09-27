@@ -432,6 +432,11 @@ class SelfUpdateOpsMixin:
         after a successful reset in `apply_update`), though its result is a truthful ok=False."""
         return (res.ok or bool(res.data.get("cleanup_failed"))) and not res.data.get("already")
 
+    # The one-click helper's unit restarts the console itself (OnSuccess=/OnFailure=lhpc-web.service,
+    # updater_units), so its cleanup-only partial must not ask for a restart that already happened.
+    _ONECLICK_CLEANUP_SUMMARY = ("Update aligned to upstream, but some untracked files could NOT be "
+                                 "removed — delete them manually; the console restarts automatically.")
+
     # Kept on a later failure's summary, so the manual remedy for the leftovers is not lost.
     _CLEANUP_NOTE = " Also delete the untracked files the update could not remove."
 
@@ -980,7 +985,8 @@ class SelfUpdateOpsMixin:
                         ok_u, det_u = self._refresh_units_post_update()
                         res = ActionResult(
                             bool(res.ok) and ok_u,
-                            res.summary if ok_u else self._with_cleanup_note(
+                            (self._ONECLICK_CLEANUP_SUMMARY if res.data.get("cleanup_failed")
+                             else res.summary) if ok_u else self._with_cleanup_note(
                                 res, "Update applied, but the managed systemd units could NOT be "
                                 f"refreshed — {det_u}. Boot restore will be skipped until "
                                 "repaired: lhpc self-update --repair-integration"),

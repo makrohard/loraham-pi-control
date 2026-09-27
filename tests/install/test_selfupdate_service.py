@@ -701,3 +701,15 @@ def test_run_service_cleanup_partial_then_a_failed_sync_keeps_both_remedies(tmp_
     res = svc.self_update_run_service()
     assert not res.ok and res.data.get("venv_sync_failed") and res.data.get("cleanup_failed")
     assert "pip install -e" in res.summary and "untracked files" in res.summary
+
+
+def test_run_service_cleanup_partial_does_not_ask_for_a_restart_systemd_does(tmp_path, monkeypatch, op_svc):
+    # Audit P1.3 round 2 note: the helper unit restarts lhpc-web on success AND failure, so the
+    # inherited "then restart the console" would ask for a restart that already happened.
+    svc, fake, pip = _partial_svc(tmp_path, monkeypatch, op_svc)
+    monkeypatch.setattr(type(svc), "_refresh_units_post_update", lambda self: (True, "ok"))
+    res = svc.self_update_run_service()
+    assert not res.ok and res.data.get("cleanup_failed")
+    assert "delete them manually" in res.summary and "restarts automatically" in res.summary
+    assert "then restart the console" not in res.summary
+    assert "restarts automatically" in selfupdate.status_view(svc._paths)["last_apply"]["summary"]
