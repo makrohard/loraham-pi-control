@@ -124,6 +124,22 @@ class BinaryOpsMixin:
                                 next_commands=[f"lhpc install {stack_id} --yes"],
                                 data={"changes": 1, "channel": "binary"})
 
+        # A clean clone_required checkout of OURS at an OLDER pin (the upgrade case: the new
+        # controller pins a newer run-script commit) is moved through the real source update
+        # first — the step an operator had to run by hand. A dirty, foreign or unproven tree is
+        # left alone and refused below, exactly as before. Top-level calls only: an outer
+        # boundary (`locked`, the auto-install run) keeps the refusal.
+        moved_notes: list[str] = []
+        if not locked:
+            for cid in self._stale_clean_clones(stack_id, spec):
+                r = self.update(cid, apply=True, source="pinned", exact_pin=True)
+                if not r.ok:
+                    return ActionResult(False, f"Binary install of '{stack_id}' blocked: moving "
+                                               f"{cid} to its pin failed: {r.summary}",
+                                        details=list(r.details), next_commands=[src_cmd],
+                                        data={"binary_failed": True})
+                moved_notes.append(f"  moved {cid} to its pin (run scripts)")
+
         # LOCK ORDER (mirrors the source ops): admission, then the covered source paths.
         import contextlib as _ctx
         _stack = _ctx.ExitStack()
@@ -229,7 +245,12 @@ class BinaryOpsMixin:
                     _guard_held = locked or (
                         comp.source is not None
                         and comp.source.path in set(self._binary_source_paths(stack_id)))
-                    act = inst.adopt_source(comp, source="pinned", locked=_guard_held)
+                    # The EXACT manifest pin, not the known-working selector: the artifact
+                    # was checked against the manifest pins, and so must its checkout be.
+                    act = inst.adopt_source(
+                        comp, source="pinned", locked=_guard_held,
+                        pinned_expected=(comp.source.pin_commit,
+                                         "manifest pin (the binary artifact's pin)"))
                     if act.status == "failed":
                         return ActionResult(
                             False,
@@ -238,6 +259,7 @@ class BinaryOpsMixin:
                             f"({act.detail}).",
                             next_commands=[src_cmd], data={"binary_failed": True})
                     clone_notes.append(f"  adopted pinned source for {cid} (run scripts)")
+            clone_notes = moved_notes + clone_notes
 
             baseline, berr = self._binary_registry_baseline(stack_id)
             if berr:
@@ -357,6 +379,31 @@ class BinaryOpsMixin:
                 details=[*clone_notes, "  open auth (binary channel): the published firmware has no mesh " "password" if _auth_restore is not None else f"  {probe_out}" if probe_out else "  installed", "  provenance: " + ", ".join(f"{k}@{v[:9]}" for k, v in sorted(entry.components.items())), f"  artifact sha256 {entry.sha256[:12]}…"],
                 next_commands=[f"lhpc status {stack_id}", f"lhpc stack start {stack_id}"],
                 data={"channel": "binary", "changes": 1})
+
+    def _stale_clean_clones(self, stack_id: str, spec) -> list:
+        """clone_required components whose checkout is present, provably ours, CLEAN and at a
+        commit other than the pin — the ones a binary install may move to the pin itself."""
+        if not spec.clone_required:
+            return []
+        st = self.stack(stack_id)
+        by_id = {c.id: c for c in (st.components if st else ())}
+        inst = self._installer()
+        out = []
+        for cid in spec.clone_required:
+            comp = by_id.get(cid)
+            if comp is None or comp.source is None:
+                continue
+            dest = self._paths.resolve_source(comp.source.path)
+            if not dest.is_dir():
+                continue                            # missing: adopted under the locks, as before
+            rec, _why = source_registry.verify_identity(
+                self._paths, self._system, self.config(), comp, dest, components=(cid,))
+            if rec is None or (rec.resolved_commit or "") == comp.source.pin_commit:
+                continue                            # unproven (refused later) or already at the pin
+            if inst.dirty_report(dest, comp.source.path):
+                continue                            # local changes: refused later, never moved
+            out.append(cid)
+        return out
 
     def _binary_running_components(self, stack_id: str) -> list:
         """Components of `stack_id` that are RUNNING/DEGRADED right now — the gate every binary
