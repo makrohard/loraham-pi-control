@@ -291,7 +291,7 @@ the selected source.
 (Persisted, band-scoped daemon params live under [`config`](#config).)
 
 ### logs
-`lhpc logs <target> [--lines N]` — bounded tail of a component's log.
+`lhpc logs <target> [--lines N]` — bounded tail of a component's log. A run log's older part, cut off at the 8 MiB trigger, is in `logs/start-<comp>[-<band>].prev.log` ([maintenance](maintenance.md), "Run-log cap").
 
 ### rflog
 `lhpc rflog <stack> [--band 433|868] [--lines N] [--clear] [--decrypt [--follow]]` — a stack's

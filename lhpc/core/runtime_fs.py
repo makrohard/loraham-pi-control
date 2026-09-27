@@ -391,6 +391,57 @@ def open_existing_marker(paths: Paths, path: Path) -> OwnedMarker:
 _DEFAULT_READ_MAX = 1 << 23
 
 
+# The start-log cap (M19). A start log is opened O_APPEND by LHPC and held by the component for its
+# whole run; nothing else bounds it.
+START_LOG_MAX_BYTES = 8 * 1024 * 1024
+START_LOG_KEEP_BYTES = 1 * 1024 * 1024
+START_LOG_CAP_LOCK = ("state", "locks", "start-log-cap.lock")
+
+
+def prev_log_name(name: str) -> str:
+    """`start-x.log` -> `start-x.prev.log`: the one older half the cap keeps beside a start log."""
+    return name.removesuffix(".log") + ".prev.log"
+
+
+def cap_start_log(paths: Paths, path: Path, *, max_bytes: int = START_LOG_MAX_BYTES,
+                  keep_bytes: int = START_LOG_KEEP_BYTES) -> str:
+    """Cut one start log that is over its trigger. Returns "absent", "below" (untouched, one fstat),
+    "busy" (another capper holds the lock; nothing done) or "capped": the last `keep_bytes`, from
+    just after their first newline (a window that begins on a line start loses that first line; a
+    last line without a newline is kept; nothing when the window holds no newline), were written to
+    `<name>.prev.log` (atomic, the log's mode kept) and only THEN was the log truncated to 0 in
+    place. The writer holds it O_APPEND, so it goes on at the new end with no hole. Lost by design:
+    lines written between the tail read and the truncate, and all history older than the kept tail.
+    Any failure raises (OSError, or PathContainmentError for an unsafe parent), and the log is then
+    unchanged: a failure before the truncate leaves both files as they were, and a failing truncate
+    itself (after the .prev.log write) leaves the log unchanged, with .prev.log already holding the
+    new tail."""
+    import fcntl
+    with open_lock(paths, paths.under(*START_LOG_CAP_LOCK)) as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return "busy"
+        try:
+            fd = _open_leaf(paths, path, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o644,
+                            create_dirs=False)
+        except FileNotFoundError:
+            return "absent"
+        _require_regular_fd(fd, path)                 # closes fd itself when it refuses
+        try:
+            st = os.fstat(fd)
+            if st.st_size <= max_bytes:
+                return "below"
+            tail = os.pread(fd, keep_bytes, max(0, st.st_size - keep_bytes))
+            nl = tail.find(b"\n")
+            tail = tail[nl + 1:] if nl >= 0 else b""   # from just after the first newline
+            atomic_write_bytes(paths, path.with_name(prev_log_name(path.name)), tail,
+                               _stat.S_IMODE(st.st_mode))
+            os.ftruncate(fd, 0)                        # only after the .prev.log write succeeded
+            return "capped"
+        finally:
+            os.close(fd)
+
 def _open_leaf(paths: Paths, path: Path, flags: int, mode: int, *, create_dirs: bool):
     """Open a runtime leaf relative to its descriptor-anchored parent fd. Returns the open
     fd (the parent fds are closed; the leaf fd stays open)."""

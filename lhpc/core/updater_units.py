@@ -38,6 +38,11 @@ ALL_UNITS = (WEB_UNIT, HELPER_UNIT, PATH_UNIT, NGINX_UNIT, RESTART_UNIT, RESTART
 WEB_LOG_REL = ("logs", "lhpc-web.log")
 HELPER_LOG_REL = ("logs", "lhpc-selfupdate.log")
 BOOT_RESTORE_LOG_REL = ("logs", "lhpc-boot-restore.log")
+# The controller's long-lived logs the console's pass caps like a start log (A1): the four unit logs
+# (every `append:` path of the units here and in deploy/*.service) and nginx's two (`webserver._ERR_LOG`
+# and `_ACC_LOG`; a test keeps both lists in step). A FIXED list: it can never pick up an RF or job log.
+CONTROLLER_LOGS = ("lhpc-web.log", "lhpc-selfupdate.log", "lhpc-boot-restore.log",
+                   "lhpc-nginx-restart.log", "nginx-error.log", "nginx-access.log")
 
 # in-root request-transaction paths (relative to the runtime root)
 REQUEST_REL = ("state", "selfupdate.request")

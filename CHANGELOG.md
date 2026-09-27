@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- The console's pass tries to cut long-lived logs above an 8 MiB trigger (at most the last 1 MiB, from just after its
+  first newline, is kept in `<name>.prev.log`): the run logs (also at a start), the controller's four unit logs and
+  nginx's two; it also tries the Meshtastic trace's 5 MB roll. The pruner no longer deletes a controller log.
+  See docs/maintenance.md, "Run-log cap".
+
 ## 0.11.5
 
 - The demo's install route works again: its `spawn_web_job` takes `accept_pin_mismatch`, as the real service does.

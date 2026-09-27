@@ -18,6 +18,7 @@ Security posture:
 from __future__ import annotations
 
 import ipaddress as _ipaddress
+import logging as _logging
 import secrets as _secrets
 import threading
 import time
@@ -2394,8 +2395,8 @@ def _disk_level_log(svc) -> None:
 
 def network_watch_pass(svc) -> float:
     """ONE pass of the console's network watchdog; returns the seconds to sleep before the next.
-    The two maintenance units (1, 2) each have their own try/except so neither can starve the
-    other or the AP tick; the AP probe and tick (3) rely on the caller's loop-level catch:
+    The maintenance units (1–3) each have their own try/except so none can starve another or the
+    AP tick; the AP probe and tick (4) rely on the caller's loop-level catch:
       1. an Apply the firewall gate deferred is completed;
       2. the client-CA CRL is rebuilt when its nextUpdate has passed — on EVERY box, every pass.
          LIVE-FOUND (box B, 2026-09-13): the heal used to live only inside the AP-box tick and the
@@ -2404,7 +2405,14 @@ def network_watch_pass(svc) -> float:
          certificate error") with nothing revoked — a total remote-console lockout that no tick
          would ever heal. The rebuild is unprivileged and reads one file, so it costs nothing to run
          here; the first pass at console start covers a box restored from an old backup;
-      3. the AP-box tick (only where the Wi-Fi feature exists)."""
+      3. the logs are tried against their trigger: every start log (`cap_start_logs`), the controller's
+         own logs (`cap_controller_logs`) and the Meshtastic trace (`rflog_roll_native_all`); a log
+         another capper holds ("busy") is left unchanged for the next pass. A log is checked once per
+         pass, so between two passes it can grow past its trigger by what its writer emits; there is
+         no hard maximum. Each never raises; a start or controller log whose cap failed
+         ("error: …") is logged here, a failed trace roll is contained; either is retried on the next
+         pass;
+      4. the AP-box tick (only where the Wi-Fi feature exists)."""
     try:                            # an Apply the firewall gate deferred
         svc.webserver_apply_complete_pending()
     except Exception:
@@ -2419,6 +2427,22 @@ def network_watch_pass(svc) -> float:
         pass
     try:                            # the disk-space level: one log line per change
         _disk_level_log(svc)
+    except Exception:
+        pass
+    try:                            # start logs over their cap (the pass runs while stacks do)
+        for name, result in svc.cap_start_logs().items():
+            if result.startswith("error"):
+                _logging.getLogger(__name__).warning("start log %s not capped: %s", name, result)
+    except Exception:
+        pass
+    try:                            # the controller's own logs (units, nginx) over the same cap
+        for name, result in svc.cap_controller_logs().items():
+            if result.startswith("error"):
+                _logging.getLogger(__name__).warning("log %s not capped: %s", name, result)
+    except Exception:
+        pass
+    try:                            # the Meshtastic trace: its writer never rolls it
+        svc.rflog_roll_native_all()
     except Exception:
         pass
     ap_box = svc.network_supported()

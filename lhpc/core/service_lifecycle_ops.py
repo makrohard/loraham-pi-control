@@ -3642,6 +3642,41 @@ class LifecycleOpsMixin:
         finally:
             _adm.close()
 
+    def cap_start_logs(self) -> dict[str, str]:
+        """Try the cap on every start log (M19): the console's periodic pass calls this. EVERY regular,
+        non-symlink `start-*.log` in logs/ is tried, running or not: a log with no writer is simply
+        rotated, and no ownership lookup is needed. A "busy" result (another capper holds the lock)
+        leaves that log unchanged; the next pass tries again. The cap's own `.prev.log` halves and every other
+        log (RF logs, job logs) are left alone. Returns {name: result}; never raises."""
+        out: dict[str, str] = {}
+        try:
+            d = self._paths.under("logs")
+            entries = runtime_fs.scandir_nofollow(self._paths, d)
+        except Exception as exc:
+            return {"logs/": f"error: {type(exc).__name__}"}
+        for name, is_link in entries:
+            if (is_link or not name.startswith("start-") or not name.endswith(".log")
+                    or name.endswith(".prev.log")):
+                continue
+            try:
+                out[name] = runtime_fs.cap_start_log(self._paths, d / name)
+            except Exception as exc:
+                out[name] = f"error: {type(exc).__name__}"
+        return out
+
+    def cap_controller_logs(self) -> dict[str, str]:
+        """Cap the controller's own long-lived logs (`updater_units.CONTROLLER_LOGS`) exactly as a
+        start log: their writers (systemd `append:`, nginx) hold them O_APPEND. A missing one is
+        skipped. Returns {name: result}; never raises."""
+        from .updater_units import CONTROLLER_LOGS
+        out: dict[str, str] = {}
+        for name in CONTROLLER_LOGS:
+            try:
+                out[name] = runtime_fs.cap_start_log(self._paths, self._paths.under("logs", name))
+            except Exception as exc:
+                out[name] = f"error: {type(exc).__name__}"
+        return out
+
     def prune_logs(self) -> int:
         """Delete the oldest runtime logs beyond a bounded count/byte budget, NEVER
         touching a log that belongs to an active job (so live evidence is preserved)
@@ -3650,6 +3685,7 @@ class LifecycleOpsMixin:
         from . import auto_install as ai_mod
         from . import jobresult
         from .paths import PathContainmentError
+        from .updater_units import CONTROLLER_LOGS
         protected = {j.get("log") for j in self.active_jobs() if j.get("log")}
         protected = {f"{n}.log" for n in protected} | set(protected)
         # Housekeeping: drop `done` job-result markers older than the banner expiry (failed/unsafe stay),
@@ -3717,6 +3753,11 @@ class LifecycleOpsMixin:
             # open and the file is meant to outlive every job log): it is neither a deletion
             # candidate nor part of the count/byte budget the job logs share.
             if _rflog.by_job(name) is not None:
+                continue
+            # The controller's own logs are capped in place by the console's pass (A1) and held open by
+            # their writers: deleting one would leave the writer filling an unlinked file. Like RF logs,
+            # they are neither deletion candidates nor part of the budget.
+            if name in CONTROLLER_LOGS:
                 continue
             f = d / name
             # REGULAR FILES ONLY, via a DESCRIPTOR-SAFE stat (a path-based lstat could
@@ -5352,6 +5393,18 @@ class LifecycleOpsMixin:
                 os.close(fd)
             except OSError:
                 pass
+
+    def rflog_roll_native_all(self) -> None:
+        """The console's pass: try the roll on every NATIVE RF log (the Meshtastic trace, whose
+        writer never rolls it). Non-native RF logs are rotated by their own writers and never touched
+        here. A roll that fails is left for the next pass. Never raises."""
+        for e in _rflog.REGISTRY:
+            if e.native:
+                for _band, job in e.jobs:
+                    try:
+                        self._rflog_roll_native(self._rflog_path(job))
+                    except Exception:
+                        pass
 
     def _rflog_roll_at_start(self, comp_id: str) -> None:
         for e in _rflog.REGISTRY:

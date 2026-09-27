@@ -361,13 +361,40 @@ there is information; no external project's suite is a required check. How to ru
 **Job logs.** Build/host-test logs are `logs/build-<comp>.log` (single-step) or
 `logs/build-<comp>-<N>.log` (multi-step); host tests `test-<comp>…`; run logs
 `start-<comp>[-<band>].log`. `lhpc logs <comp>` resolves to the newest matching file, and each
-job announces its exact path at start.
+job announces its exact path at start. A job log is recreated for every run; a run log is appended to by
+every start of its component. When a build or a console job runs, the pruner deletes the oldest of the
+logs it counts while those pass 200 files or 64 MiB. It neither deletes nor counts: the registered RF logs,
+the controller's own logs (below), the log of an active job, the log of a failed, unsafe or incomplete job
+whose result is still shown, and the logs of a live auto-install run or of a live or unsafe HMAC-apply
+run. So `logs/` as a whole can hold more than those figures.
+
+**Run-log cap.** A run log is checked when its component starts and at each console maintenance pass
+(every 60 s on a box with the access point or while a web-server Apply or PKI change is pending,
+otherwise every 300 s). Above 8 MiB it is cut back: its last 1 MiB, from just after the first
+newline in it (a window that begins on a line start loses that first line; a last line without a
+newline is kept; nothing, when that 1 MiB holds no newline), is written to
+`start-<comp>[-<band>].prev.log` (replacing the previous one), and the run log is emptied; the running process keeps writing to it.
+Lines written while the cut runs can be lost, and everything older than the kept part is gone.
+A cut that fails (a full disk, for example) does not empty the run log; at a start LHPC then appends
+one line saying the cut was skipped. A log that another cut is working on at that moment (a lock) is
+left unchanged until the next check.
+Between passes a run log can pass 8 MiB by what is written in one interval, and
+without a running console only the cut at start applies. RF logs (`rf-*.log`) and job logs are not
+cut this way. The cut relies on the process writing through the descriptor LHPC opened (append mode); a
+custom launcher that re-opens its own run log without append mode keeps writing at its old offset, so
+the file grows holes and is cut again at a later check.
+
+**The controller's own logs** are checked the same way at each console pass (not at a start):
+`lhpc-web.log`, `lhpc-selfupdate.log`, `lhpc-boot-restore.log`, `lhpc-nginx-restart.log` (their units
+append to them) and `nginx-error.log`, `nginx-access.log` (nginx appends to them). Their older part is in
+`<name>.prev.log`. The 8 MiB is a trigger checked once per pass, not a hard maximum: between two
+passes a log grows by whatever its writer emits, and with the console stopped nothing cuts them.
 
 ### RF logs
 
 `logs/rf-*.log` is the family of per-stack RF logs — what a stack's radio heard and sent, one
 line per frame, written by the stack's own process at its radio boundary and kept across
-restarts (run logs are overwritten; these are not). The six user-facing logs, their config owner
+restarts. The six user-facing logs, their config owner
 and their writer are the registry in `lhpc/core/rflog.py`, which is the **only** authorization
 for the log page, its rows, its switches and Clear: a job absent from it is never an RF log,
 whatever its name. `rf_log` is a stack-level, band-less switch (`_BANDLESS_STACK_PARAMS`) in
@@ -381,9 +408,10 @@ logs are outside the generic job-log pruning and its count/byte budget (they are
 every job log), and a roll or Clear of one job holds a per-job lock in `state/locks/`, so two
 console workers can never interleave them. The one
 exception is **meshtastic**: its log is meshtasticd's own `TraceFile`, which the node only ever
-appends to, so lhpc rolls it opportunistically — at stack start and when a page read finds it over
-the cap, keeping the last ~5 MB in `.1`. That is not a hard maximum; an unattended node grows the
-trace until the next start, read or Clear.
+appends to, so lhpc checks it — at stack start, when a page read finds it over the cap, and at each
+console pass — and rolls it when over the cap, keeping the last ~5 MB in `.1`; a roll that fails is
+tried again at the next check. That is not a hard maximum: between two passes the
+trace grows by what the node writes, and with the console stopped only a start, a read or Clear rolls it.
 
 **The log page** (`/logs/<writer>?job=<file>`) is one page for every RF log. Each dashboard
 radio card links it under the daemon control: the band's daemon log, then *RF log:* the daemon's

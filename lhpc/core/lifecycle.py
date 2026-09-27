@@ -492,6 +492,8 @@ class Lifecycle:
             return StartLaunch(False, str(log),
                                "a prior post-start runner could not be verified stopped — resolve "
                                "it before starting (" + "; ".join(pre_notes) + ")")
+        # Cap the start log now, while no component process holds it.
+        self._cap_start_log(log)
         try:
             # The default spawn opens the start log via the anchored runtime_fs; a
             # symlinked log leaf/parent raises PathContainmentError, also typed here.
@@ -1352,6 +1354,16 @@ class Lifecycle:
                           "records retained", killed, notes)
         return result(Outcome.STOPPED, "; ".join(notes) if notes else "no owned process", killed)
 
+    def _cap_start_log(self, log: Path) -> None:
+        try:
+            runtime_fs.cap_start_log(self.paths, log)
+        except Exception as exc:                   # never let the cap block a start
+            try:
+                with runtime_fs.open_log_append(self.paths, log) as fh:
+                    fh.write(f"[lhpc] start-log cap skipped for {log.name}: {exc}\n".encode())
+            except Exception:
+                pass
+
     def start_log(self, comp: Component, band: str = "") -> Path | None:
         """The captured process log for `comp`, band-aware. A band-scoped start writes
         `start-<id>-<band>.log`; a band-agnostic one writes `start-<id>.log`. Resolution order:
@@ -1377,7 +1389,8 @@ class Lifecycle:
         except (OSError, PathContainmentError):
             entries = []
         for name, is_symlink in entries:
-            if is_symlink or not name.startswith(prefix) or not name.endswith(".log"):
+            if (is_symlink or not name.startswith(prefix) or not name.endswith(".log")
+                    or name.endswith(".prev.log")):      # the cap's older half, never the live log
                 continue
             p = d / name
             try:
@@ -1407,8 +1420,8 @@ class Lifecycle:
         bases = [f"{k}-{comp_id}" for k in kinds]
         newest, newest_mtime = None, -1.0
         for name, is_symlink in entries:
-            if is_symlink or not name.endswith(".log"):
-                continue
+            if is_symlink or not name.endswith(".log") or name.endswith(".prev.log"):
+                continue                          # (the cap's older half is never the newest job log)
             stem = name[:-4]                      # drop ".log"
             if not any(stem == b or stem.startswith(b + "-") for b in bases):
                 continue
