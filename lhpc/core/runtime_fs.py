@@ -391,6 +391,57 @@ def open_existing_marker(paths: Paths, path: Path) -> OwnedMarker:
 _DEFAULT_READ_MAX = 1 << 23
 
 
+def rewrite_lines_atomic(paths: Paths, path: Path, transform, *, line_limit: int = 1 << 20) -> bool:
+    """Stream an EXISTING regular runtime leaf line by line through `transform(bytes) -> bytes` into
+    a private temp sibling and, only if some line changed, atomically replace the leaf (the same
+    protocol as `atomic_write_bytes`: O_EXCL|O_NOFOLLOW temp via the held parent fd, the original
+    mode on the held fd, fsync, rename via dir fds, parent fsync). Memory is bounded by
+    `line_limit` whatever the file's size: a longer line is handed over in `line_limit` pieces.
+    Unchanged content leaves the leaf untouched (same inode). Returns True when it rewrote."""
+    with _walk_parent(paths, path, create=False) as (parent_fd, name):
+        src = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+        _require_regular_fd(src, path)
+        mode = _stat.S_IMODE(os.fstat(src).st_mode)
+        tmp, fd = None, None
+        for _ in range(64):
+            cand = f".{name}.tmp-{os.getpid()}-{os.urandom(8).hex()}"
+            try:
+                fd = os.open(cand, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             mode, dir_fd=parent_fd)
+                tmp = cand
+                break
+            except FileExistsError:
+                continue
+        if tmp is None:
+            os.close(src)
+            raise OSError(f"could not create a unique temp file for {path}")
+        changed = False
+        try:
+            with os.fdopen(src, "rb") as rd, os.fdopen(fd, "wb") as wr:
+                while True:
+                    line = rd.readline(line_limit)
+                    if not line:
+                        break
+                    out = transform(line)
+                    changed = changed or out != line
+                    wr.write(out)
+                wr.flush()
+                os.fchmod(wr.fileno(), mode)
+                os.fsync(wr.fileno())
+            if not changed:
+                os.unlink(tmp, dir_fd=parent_fd)
+                return False
+            os.rename(tmp, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            os.fsync(parent_fd)
+            return True
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=parent_fd)
+            except OSError:
+                pass
+            raise
+
+
 def _open_leaf(paths: Paths, path: Path, flags: int, mode: int, *, create_dirs: bool):
     """Open a runtime leaf relative to its descriptor-anchored parent fd. Returns the open
     fd (the parent fds are closed; the leaf fd stays open)."""
