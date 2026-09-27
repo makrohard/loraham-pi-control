@@ -32,7 +32,7 @@ and cannot run while the daemon serves that band.
 | `region` | `EU_868` (433: `EU_433`) | LoRa region — required for TX; applied after start (a failed push fails the start) |
 | `node_name` / `node_short` | *(empty)* | the node's own names (39 / 4 UTF-8 bytes), never the operator callsign; the start is refused until both are set ([architecture](../architecture.md#identity-and-callsigns)) |
 | `use_gps` | `on` | use the global position source |
-| `rf_log` | `on` | `logs/rf-meshtastic.log` — meshtasticd's own per-packet JSON trace (`Logging.TraceFile`), not the common line format. Decrypt uses the keys in `state/meshtasticd/prefs/` (`channels.proto`, `config.proto`) — [maintenance](../maintenance.md#rf-logs) |
+| `rf_log` | `on` | `logs/rf-meshtastic.log` — meshtasticd's own per-packet JSON trace (`Logging.TraceFile`), not the common line format. Decrypt uses the keys in `state/meshtasticd/prefs/` (`channels.proto`, `config.proto`, and the peers' public keys from `nodes.proto`). meshtasticd saves `nodes.proto` with a delay (a key learned within a minute of its last save waits for the next one), so a direct message can show `no-key` while `lhpc meshtastic --nodes` already lists the key — [maintenance](../maintenance.md#rf-logs) |
 | `loglevel`, `max_nodes`, `ble`, `mqtt`, `cs`, `irq`, `reset`, `busy`, `ssl_key`, `ssl_cert`, `web_root` | advanced | YAML keys. `cs`/`irq` default 7/16 (868) and 8/25 (433); `reset`/`busy` are omitted when empty — the Uputronics RF95 boards have neither line, and BCM 6/13 are the daemon's LEDs |
 
 Region, node identity, GPS mode and fixed position are device settings applied through the

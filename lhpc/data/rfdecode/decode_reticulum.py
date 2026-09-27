@@ -285,6 +285,11 @@ def make_decoder(configdir: str, meshchat: str, driver: str = ""):
                                                               RNS.Packet.RESOURCE_PRF, RNS.Packet.RESOURCE_ICL,
                                                               RNS.Packet.RESOURCE_RCL, RNS.Packet.KEEPALIVE):
             return _proto.result(key, "undecryptable", "link", dest, "link traffic (never decryptable)")
+        if p.destination_type == RNS.Destination.LINK:
+            # Plain link DATA (context NONE) — e.g. an LXMF message sent over a direct link. Its
+            # destination is the link id and its keys are the link's own: link traffic, never a
+            # packet "not addressed to this node" (F-R1).
+            return _proto.result(key, "undecryptable", "link", dest, "link traffic (never decryptable)")
         if p.destination_type == RNS.Destination.PLAIN:
             # Unencrypted by definition: RNS's own path requests (the sought destination hash in
             # the payload) and any plain-destination packet.

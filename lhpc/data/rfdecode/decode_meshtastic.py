@@ -267,7 +267,13 @@ def make_decoder(prefs: str):
             if own_key is None:
                 return _proto.result(key, "no-key", "direct", peer, "this node has no private key yet")
             if other not in pubkeys:
-                return _proto.result(key, "no-key", "direct", peer, f"no public key for {node(other)} in the node database")
+                # prefs/nodes.proto lags the running node: the firmware saves a newly learned key
+                # at once only if its last save is a minute old, else at its next save (NodeDB.cpp,
+                # "Defer NodeDB saveToDisk"). So say what is known — not in the SAVED database.
+                return _proto.result(key, "no-key", "direct", peer,
+                                     f"no public key for {node(other)} in the node's saved database "
+                                     "(meshtasticd saves a new key with a delay; "
+                                     "`lhpc meshtastic --nodes` shows what it knows now)")
             pt = _pkc_open(own_key, pubkeys[other], pid, sender, ct)
             if pt is None:
                 return _proto.result(key, "no-key", "direct", peer, "the pair's keys did not open it")
