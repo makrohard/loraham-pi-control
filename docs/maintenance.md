@@ -101,26 +101,26 @@ repositories and recorded there, not here.
 
 - **`main` is the latest release.** Every released tip carries a tag; `install.sh` clones it,
   `self-update` fast-forwards deployed boxes along it, the image builder reads it. It only ever
-  fast-forwards and is never rewritten. Two paths advance it, and they are the two release paths
-  below: a **minor** release and a **maintainer patch** both fast-forward it from `dev`; a **bot
-  patch** fast-forwards it from a one-commit branch taken off `main` itself. None is a direct push
-  of unproven work: each lands a commit whose checks are already green.
+  fast-forwards and is never rewritten. The minor, maintainer-patch and bot-patch paths that
+  advance it are defined below. None is a direct push of unproven work: each lands a commit whose
+  checks are already green.
 - **`dev` is the integration branch.** All work lands there, one complete commit per change,
   from a topic branch rebased on `dev` and squash-merged; CI and testlab run on every push; the
   reference box runs it for testing (its self-update identity check reports `unsafe: checkout
   branch 'dev' != 'main'` — expected on a test box, wrong on an operator's box). `dev` is not
-  rewritten during a cycle (contributors branch from it); the release squash below is the one
-  exception, announced by the tag.
-- **A cycle starts with the version bump** (`pyproject.toml`, `lhpc/version.py`, the
-  `CHANGELOG.md` heading), so a `dev` deployment never reports the released number.
+  rewritten during a cycle (contributors branch from it).
+- **During a minor's cycle `dev` carries the last released version**; changes are recorded under a
+  `## Unreleased` changelog heading; the minor's release commit sets `pyproject.toml`,
+  `lhpc/version.py` and the `CHANGELOG.md` heading to the new version.
 - **A minor release (`0.X.0`) is a feature release.** It comes from `dev`: a new capability or a
   changed contract — a CLI verb, a manifest model change, a unit template, a changed refusal, a
   stack added or removed. It runs the full [release test matrix](test-matrix.md) on the box. The
-  cycle's commits are
-  squashed into **one commit named by the version** (subject `<version>`, body = the changelog
-  section), CI runs on that exact SHA, then `main` is fast-forwarded to it and `git tag -a
-  v<version>` goes on it. That squash is the one moment `dev` is rewritten: after the tag `dev`
-  equals `main`, and an open topic branch rebases onto it. A minor release also publishes a
+  cycle's commits stay one commit per feature; **one release commit named by the version**
+  (subject `<version>`, body = the changelog section) goes on top and CI runs on that exact SHA.
+  When `main` is an ancestor of `dev` (no bot release in the cycle), `dev` and `main` are then
+  fast-forwarded to it and `git tag -a v<version>` goes on it; after the tag `dev` equals `main`,
+  and an open topic branch rebases onto it. Otherwise the maintainer decides how, for that
+  release. A minor release also publishes a
   GitHub Release from the tag with the changelog section as its body (title = the version, not a
   pre-release, marked latest), linking the matching `loraham-images` release and the binaries
   index. Before starting one, run the release bot's `watch-only` and bump anything upstream has
@@ -130,8 +130,8 @@ repositories and recorded there, not here.
   - **The maintainer's patch lands on `dev`** once it is release-ready, and `main` fast-forwards to
     the proven `dev` tip and is tagged there. Work that must not ship yet stays on a topic branch,
     never on `dev`. If the bot has released since `dev` last equalled `main`, `main` is no longer
-    an ancestor of `dev`: the patch is then cut as one release commit on top of `main`, as a
-    minor's squash is, then CI, fast-forward `main` and tag.
+    an ancestor of `dev`: the patch is then cut as one release commit on top of `main`, then CI,
+    fast-forward `main` and tag.
   - **The bot's patch is cut from `main`** on its schedule, also while `dev` carries unreleased
     work; `dev` never gates, delays or shapes it.
 

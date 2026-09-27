@@ -45,8 +45,8 @@ this file is the bug.
 | [lhpc-release-bot](https://github.com/makrohard/lhpc-release-bot) | the weekly pin patch: watch upstream, repin, rebuild binaries, prove, release, image | [README](https://github.com/makrohard/lhpc-release-bot/blob/main/README.md) |
 | [LoRaHAM_Daemon](https://github.com/makrohard/LoRaHAM_Daemon) | the radio daemon; its pins are moved by hand, never by the bot | [CONTRIBUTING](https://github.com/makrohard/LoRaHAM_Daemon/blob/main/CONTRIBUTING.md) |
 
-The flow of one release: a controller commit on `main` → the binaries its moved pins need, built
-from that commit → the image tag with the same version. One more surface publishes from this
+The flow of one release: a final controller release commit → the binaries its moved pins need,
+built from that commit → the image tag with the same version. One more surface publishes from this
 repository: the Pages demo, redeployed on every `main` push that touches `lhpc/` or `demo/`
 ([demo/README](demo/README.md#deploy)).
 
@@ -95,10 +95,12 @@ maintainer only when the bot holds or refuses one of them.
 Each rule is defined where the link points.
 
 - `main` is the latest release and only fast-forwards; `dev` is linear integration, one complete
-  commit per change, never rewritten except by a minor's release squash
+  commit per change, not rewritten during a cycle
   ([maintenance](docs/maintenance.md#branches-and-releases)).
-- A cycle starts with the version bump: `pyproject.toml`, `lhpc/version.py`, the `CHANGELOG.md`
-  heading ([maintenance](docs/maintenance.md#branches-and-releases)).
+- During a minor's cycle `dev` carries the last released version; changes are recorded under a
+  `## Unreleased` changelog heading; the minor's release commit sets `pyproject.toml`,
+  `lhpc/version.py` and the `CHANGELOG.md` heading to the new version
+  ([maintenance](docs/maintenance.md#branches-and-releases)).
 - A new capability, a changed contract, default or refusal is a **minor**; pins or a fix is a
   **patch**. Recorded exceptions are listed in the same section
   ([maintenance](docs/maintenance.md#branches-and-releases)).
@@ -137,22 +139,24 @@ no history (that belongs in the changelog).
 1. Run the bot in `watch-only` and move, or deliberately hold, every pin that has moved upstream
    ([maintenance](docs/maintenance.md#branches-and-releases)).
 2. On a release branch from `dev`: make sure the version scalars and the changelog heading carry
-   the new version, and squash the cycle into one commit whose subject is the version and whose
-   body is the changelog section.
+   the new version in ONE release commit on top of the cycle's commits (one commit per feature,
+   no squash), whose subject is the version and whose body is the changelog section.
 3. Local gate green ([CONTRIBUTING](CONTRIBUTING.md#what-should-be-green)); push the branch;
    dispatch CI and `testlab.yml` with `release_verify=true` on it
    ([testlab](docs/testlab.md#running-the-verification-lanes)).
-4. Run the release test matrix on the box and write the result into
-   `docs/live-tests/live-test.md`, amending the release commit ([test matrix](docs/test-matrix.md)).
+4. Run the release test matrix on the box and write the result into the run report; the release
+   commit is not amended (binaries are built from it), and the result goes into
+   `docs/live-tests/live-test.md` in the first docs commit after the tag ([test matrix](docs/test-matrix.md)).
    The [fast lane](docs/test-matrix.md#fast-lane) needs the maintainer's explicit waiver, and every
    skipped row is written down.
-5. CI and testlab green again on the **final** commit.
-6. Push the release commit to `dev` (the one allowed rewrite; the `dev` ruleset blocks it for
-   everyone but the maintainer's bypass), fast-forward `main`, and put an annotated tag `v0.X.0`
-   on it with the same message.
+5. CI and testlab green again on the **final** commit, with the binaries of step 8 published.
+6. When `main` is an ancestor of `dev` (no bot release in the cycle): fast-forward `dev` and
+   `main` to the release commit in one push, and put an annotated tag `v0.X.0` on it with the same
+   message. Otherwise the maintainer decides how, for that release.
 7. Publish the GitHub Release: title = version, body = the changelog section plus links to the
    image release and the binary index, marked latest.
-8. Build every binary whose pin moved from the release commit
+8. Build every binary whose pin moved from the release commit, BEFORE step 4: the matrix's binary
+   rows, testlab and the `main` ruleset's `release-verify` need the published binary
    ([binaries](https://github.com/makrohard/lhpc-binaries/blob/main/README.md#updating-a-binary)).
 9. Tag `loraham-images` `v0.X.0`: changelog entry, a commit named by the version, annotated tag;
    watch both variants to the end

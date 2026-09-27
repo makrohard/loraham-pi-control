@@ -1,7 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.11.0
 
+**Upgrading with MeshCom from the binary (the default):** it does not start until updated (a new
+MeshCom build): stop it (`lhpc stack stop meshcom --yes`), run `lhpc update meshcom --yes`, then
+`lhpc stack start meshcom --yes`. The node gets its own node ID at that first start (below).
+
+- Security: the MeshCore repeater no longer writes the decrypted over-the-air login (its admin or guest password) to
+  a log. Versions 0.2.8 to 0.10.0 wrote it to logs/start-meshcore-node*.log, the console's Logs page and the repeater
+  dashboard's log page; the update redacts existing lines at the node's next start. Change a password that was
+  logged (docs/stacks/meshcore.md).
+- `lhpc webserver cert revoke` and `reissue` reload the proxy, so new connections with a revoked certificate are
+  refused; a failed reload is an error that says what to do.
+- MeshCom: each node gets its own random node ID (peers see the same callsign with a new ID once). Behaviour change:
+  every emulated node's ID changes once, at its first start after the update.
 - Chat receives on 433.775 by default, the channel it transmits on (was 433.900): two chat boxes, a
   Graywolf station and stock ESP32 trackers now hear each other. The split is one setting away:
   `lhpc config chat rx_freq 433.900`.
@@ -10,11 +22,36 @@
   node identities and keys, and its generated config files. A reinstall is a new node; peers must
   forget the old one. `lhpc clean meshcore --purge` now removes the MeshCore repeater plugins too
   (they used to survive it). `uninstall` keeps all of it; chat's message log survives a purge.
+- `lhpc clean --purge` also removes the stack's post-start launchers and results in `state/post/`.
 - Voice terminal client: with two or more listed audio devices (capture-capable or unrestricted PCMs,
   the first 16), the devices set with `lhpc config voice` are used without a prompt when both are
   listed; otherwise it asks, and Enter now takes the offered default (a single listed device is used
   as before; with none the saved names are kept). Audio device names of 63 or more characters no
-  longer run past the device list (LoRaHAM_Voice 9c00022).
+  longer run past the device list (LoRaHAM_Voice 9c00022). On an installed box:
+  `lhpc update voice --yes`, then `lhpc build voice --yes`.
+- `lhpc doctor` shows whether the clock is verified for certificates, why not, and advice that holds for every
+  reason.
+- A self-update whose clean-up of untracked files failed still syncs the venv and refreshes the units; the one-click
+  update no longer asks for a console restart it does itself.
+- Start and boot restore name the daemon's real failure (e.g. a binary behind the manifest, or a daemon that is not
+  installed).
+- `lhpc hmac enable|renew|disable meshcom` on a binary install refuses before the preview, not only with `--yes`.
+- Auto-install: the "All" version select no longer shows "Development" as chosen; it sets every row that offers the
+  chosen version, and "Each stack's default" puts them back.
+- `lhpc install --source <selector>` over an installed source from another selector says so and names
+  `lhpc update <stack> --source <selector> --yes`.
+- A binary install refused by the pin check names `lhpc self-update --apply` first, the source build second; so does
+  the auto-install page's blocked row.
+- Docs: a reflashed Meshtastic node has a new key on the same node number; a peer that stored the old key must
+  remove the node before direct messages work again.
+- Docs: the test matrix records host tests of binary stacks as skipped, lists the voice terminal variant only where
+  the GTK app cannot run, and names which callsign row a refused licensed start marks.
+- Docs: Meshtastic's node-info at start: sent when the firmware counts the re-applied owner as a change, then its
+  own check about 30 s later; a later "Skip send NodeInfo" line is the 10-minute throttle and can mean it already
+  went out.
+- Docs: a failed reload's retry is scheduled normally, and the command says when it could not be.
+- Docs: a minor release keeps one commit per feature under its release commit, which is not amended;
+  the live-test record follows in the first docs commit after the tag.
 
 ## 0.10.0
 

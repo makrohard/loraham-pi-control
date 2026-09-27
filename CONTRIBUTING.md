@@ -7,7 +7,7 @@ that does not may still be taken, but the chances are lower and it will take lon
 
 - **Open your PR against `dev`**, from a topic branch rebased on `dev`; it lands as **one
   commit** (squash-merge).
-- The branch model (when `dev` is rewritten and what to do then):
+- The branch model (how `dev`, `main` and the releases relate):
   [Branches and releases](docs/maintenance.md#branches-and-releases). Release checklists and what
   to do when something breaks: [MAINTAINING](MAINTAINING.md).
 

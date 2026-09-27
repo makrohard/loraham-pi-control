@@ -8,8 +8,9 @@ the [second box](#bench)).
 
 **When it applies:** a minor release (`0.X.0`) runs it before the tag. A patch release runs the
 live checks its own change calls for instead — the release policy is
-[maintenance](maintenance.md#branches-and-releases). Results replace the section in
-`docs/live-tests/live-test.md`.
+[maintenance](maintenance.md#branches-and-releases). Results go into the run report and, in the
+first docs commit after the tag, replace the section in `docs/live-tests/live-test.md` (the release
+commit is not amended: binaries are built from it).
 
 A **pin patch** has no box step ([maintenance](maintenance.md#branches-and-releases)); the
 daemon, RadioLib and the shared chat source move by hand, and this matrix is their proof.

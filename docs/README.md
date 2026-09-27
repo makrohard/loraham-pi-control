@@ -63,7 +63,8 @@ One file per stack. The pinned commit of every managed source is in
 - [Test lab](testlab.md) — real stack processes against simulated hardware, locally or in a
   Codespace; the four verification lanes.
 - [Live tests](live-tests/live-test.md) — the `docs/live-tests/` folder: `live-test.md` is the
-  newest run on the reference box; the dated per-feature reports (`<feature>-test-<date>.md`)
+  newest recorded run on the reference box (a release's record follows its tag in the first docs
+  commit); the dated per-feature reports (`<feature>-test-<date>.md`)
   live beside it.
 - [Test suite](../tests/README.md) — where a test goes, the rules, the markers, how to run.
 - [Test-lab package](../testlab/README.md) — the separate `lhpc-testlab` package and its install.
