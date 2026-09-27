@@ -1743,7 +1743,7 @@ class MaintenanceOpsMixin:
         # A binary-installed stack updates binary→binary: whether the PUBLISHED artifact has
         # caught up with the manifest pins is decided by the install's pin check against the
         # index (the installed receipt lagging the pins says nothing about the publisher).
-        # A lagging artifact is refused there with the source channel as an explicit offer.
+        # A lagging artifact is refused there: self-update first, the source channel second.
         if target and self.on_binary_channel(target):
             if source == self.BINARY_CHANNEL:
                 return self.binary_install(target, apply=apply)

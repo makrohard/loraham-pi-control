@@ -2336,3 +2336,30 @@ def test_binary_row_is_blocked_when_the_start_prerequisites_are_unmet(tmp_path, 
     assert rows["meshtastic"]["status"] == "blocked"
     assert "not startable" in rows["meshtastic"]["detail"]
     assert not r.ok and status["state"] == "completed-with-failures"
+
+
+@pytest.mark.parametrize("pin_mismatch", [True, False])
+def test_a_refused_binary_row_names_the_real_source_command(tmp_path, monkeypatch, pin_mismatch):
+    # P1.15 put `lhpc self-update --apply` first in a pin mismatch's next_commands; the row used
+    # to take next_commands[0] as "install from source with: …".
+    _happy_ops(monkeypatch)
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    cmds = (["lhpc self-update --apply"] if pin_mismatch else []) + [
+        "lhpc install meshtastic --source pinned --yes"]
+    monkeypatch.setattr(ControllerService, "binary_install",
+                        lambda self, sid, apply=False, locked=False:
+                        ActionResult(False, f"Binary install of '{sid}' refused: x",
+                                     next_commands=cmds if sid == "meshtastic" else [],
+                                     data={"binary_failed": True, "pin_mismatch": pin_mismatch}))
+    svc = _svc(tmp_path)
+    scope = svc._auto_install_scope()
+    sel = {st.id: {"install": True, "version": "pinned", "tests": False, "tx": False}
+           for st, _ in scope}
+    sel["meshtastic"]["version"] = "binary"
+    assert svc._auto_install_selection_errors(scope, sel) == []
+    svc.auto_install(apply=True, tests=False, selection=sel, emit=lambda s: None)
+    row = {x["id"]: x for x in svc.auto_install_status()["stacks"]}["meshtastic"]
+    assert row["status"] == "blocked"
+    detail = row["detail"]
+    assert "install from source with: lhpc install meshtastic --source pinned --yes" in detail
+    assert ("update LHPC first (lhpc self-update --apply)" in detail) is pin_mismatch

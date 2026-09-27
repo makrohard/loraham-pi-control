@@ -164,6 +164,11 @@ def index_entry(idx: dict, stack_id: str) -> IndexEntry:
     return entry
 
 
+class BinaryPinMismatch(BinaryInstallError):
+    """The published binary's commits differ from this lhpc's pins (the index serves the latest
+    release only). The caller names the ways out in order: self-update first, source second."""
+
+
 def check_pins(entry: IndexEntry, pins: dict) -> None:
     """THE acceptance gate: the index components map must match the manifest pins for EVERY
     covered component. `built_from` is never consulted (display only)."""
@@ -177,9 +182,9 @@ def check_pins(entry: IndexEntry, pins: dict) -> None:
     if lagging:
         detail = "; ".join(f"{cid}: binary {got[:9]}, pin {want[:9]}"
                            for cid, (got, want) in sorted(lagging.items()))
-        raise BinaryInstallError(
+        raise BinaryPinMismatch(
             f"the published binary was built from different commits than this lhpc pins "
-            f"({detail}) — wait for a rebuilt binary or install from source")
+            f"({detail}); the index serves the latest release's binary")
 
 
 def check_target(entry: IndexEntry, target: str) -> None:

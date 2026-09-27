@@ -91,6 +91,19 @@ class BinaryOpsMixin:
             entry = bi.index_entry(idx, stack_id)
             bi.check_target(entry, self.binary_target())
             bi.check_pins(entry, self._binary_pins(stack_id))
+        except bi.BinaryPinMismatch as exc:
+            # The index serves the latest release only: an older lhpc is the usual cause, and
+            # updating lhpc (about a minute) is the supported way out; a source build is second.
+            return ActionResult(False, f"Binary install of '{stack_id}' refused: {exc.message}",
+                                details=["  1. Update LHPC first, then install again (about a "
+                                         "minute): lhpc self-update --apply",
+                                         f"  2. Or build from source: {src_cmd} (a full local "
+                                         "build, this can take hours on a Pi).",
+                                         f"  Staying on the binary keeps {stack_id} exactly as "
+                                         "it is."],
+                                next_commands=["lhpc self-update --apply", src_cmd],
+                                data={"binary_failed": True, "offer_source": True,
+                                      "pin_mismatch": True})
         except bi.BinaryInstallError as exc:
             return ActionResult(False, f"Binary install of '{stack_id}' refused: {exc.message}",
                                 details=["  Switching to the source channel means a full local "
