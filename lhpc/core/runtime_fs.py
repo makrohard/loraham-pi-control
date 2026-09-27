@@ -402,7 +402,10 @@ def rewrite_lines_atomic(paths: Paths, path: Path, transform, *, line_limit: int
 
     `probe(piece) -> bool`, when given, is a read-only first pass over the same descriptor: no
     temp file is created unless some piece makes it return True (a clean file costs one read and
-    no write). It must be True for every piece `transform` would change."""
+    no write). The contract: for every file that `transform` would change, the probe must return
+    True for at least one piece in that file. On any hit the source is rewound to offset 0 before
+    transforming, so a stateful transform may also change pieces the probe did not flag (the scrub
+    drops the rest of a split secret line)."""
     with _walk_parent(paths, path, create=False) as (parent_fd, name):
         src = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
         _require_regular_fd(src, path)
