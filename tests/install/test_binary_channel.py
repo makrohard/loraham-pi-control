@@ -1250,6 +1250,11 @@ def test_a_stale_daemon_binary_is_refused_on_its_own_spawn_path(tmp_path, monkey
     assert not r.ok
     assert any(why in str(d) for d in r.details), (r.summary, r.details)
     assert spawned == []                                          # never reached the spawn
+    # The daemon's typed result carries the SAME reason, not a generic readiness failure: the
+    # boot-restore record is built from it (P1.4; e293 S6 printed "daemon readiness/TX gating
+    # failed" while the cause was this artifact).
+    dres = [x for x in r.results if x.component == "loraham-daemon"]
+    assert dres and why in dres[0].summary, [(x.component, x.summary) for x in r.results]
 
 
 @pytest.mark.parametrize("action", ["enable", "renew", "disable"])
@@ -1267,3 +1272,13 @@ def test_hmac_cli_preview_refuses_on_binary_install(tmp_path, monkeypatch, capsy
     assert main(["hmac", action, "meshcom"]) == 1
     out = capsys.readouterr().out
     assert "NO mesh password" in out and "Re-run to apply" not in out
+
+
+def test_the_daemon_failure_reason_is_the_last_typed_line():
+    from lhpc.core.services import ControllerService
+    f = ControllerService._daemon_failure_reason
+    assert f(["  [note] radio mode dual", "  [BLOCKED] daemon: not built — build it first"]) == \
+        "daemon: not built — build it first"
+    assert f(["  [ok] daemon-433", "  [fail] 868 CONF socket never came up — the daemon failed"]) == \
+        "868 CONF socket never came up — the daemon failed"
+    assert f(["  [ok] daemon already serving 433"]) == "daemon readiness/TX gating failed"

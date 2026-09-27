@@ -1128,7 +1128,7 @@ class LifecycleOpsMixin:
                 out.extend(dlines)
                 results.append(CompResult(component=comp.id, stack=stack.id, action="start",
                     outcome=(Outcome.VERIFIED if dok else Outcome.FAILED),
-                    summary="daemon ready" if dok else "daemon readiness/TX gating failed"))
+                    summary="daemon ready" if dok else self._daemon_failure_reason(dlines)))
                 daemon_ok = dok and not dgate
                 daemon_gate = dgate
                 continue
@@ -1840,6 +1840,18 @@ class LifecycleOpsMixin:
                 except Exception:
                     pass
         return _cb
+
+    @staticmethod
+    def _daemon_failure_reason(lines) -> str:
+        """The typed reason `_ensure_daemon` printed (its last `[BLOCKED]`/`[fail]` line), so the
+        start result, and the boot-restore record built from it, name the real cause (e.g. a binary
+        artifact behind the manifest) instead of a generic readiness failure."""
+        for line in reversed(lines):
+            text = line.strip()
+            for tag in ("[BLOCKED] ", "[fail] "):
+                if text.startswith(tag) and text[len(tag):]:
+                    return text[len(tag):]
+        return "daemon readiness/TX gating failed"
 
     def _ensure_daemon(self, life, stack, comp, running, radio, start_sid, *,
                        requested_target: str = "", start_scope: str = ""):
