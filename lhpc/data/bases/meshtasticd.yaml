@@ -31,6 +31,7 @@ Lora:
   Module: RF95
   CS: 7
   IRQ: 16      # DIO0
+  RF95_MAX_POWER: 17   # TX cap in dBm on the RF95 (SX127x), applied before the first frame; lhpc param max_power
 
 # 433 MHz
 #  Module: "RF95"

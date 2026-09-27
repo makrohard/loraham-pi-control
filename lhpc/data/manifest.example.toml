@@ -1424,6 +1424,19 @@ main = "meshtastic"
       validator = "path"
       label = "Web UI root (provisioned by the build)"
       advanced = true
+      # TX power CAP (dBm), read by meshtasticd at every radio init BEFORE the first frame: the chip
+      # clamps whatever the node's own `lora.tx_power` asks for to this value. Without it a fresh
+      # node (tx_power unset -> the region maximum) transmits at the RF95's 20 dBm. A lower
+      # tx_power the owner set on the node is kept (LHPC never writes lora.tx_power).
+      [[stack.component.config_file.param]]
+      name = "max_power"
+      key = "RF95_MAX_POWER"
+      section = "Lora"
+      kind = "int"
+      default = "17"
+      min = 1
+      max = 20
+      label = "Max TX power, dBm (caps the node's own setting; 20 needs this raised)"
       [[stack.component.config_file.param]]
       name = "loglevel"
       key = "LogLevel"

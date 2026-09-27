@@ -16,6 +16,8 @@
   enforces the datasheet's limits (duty cycle ≤ 1 %, VSWR ≤ 3:1); warranty void if disregarded. On the
   LoRaHAM 433 RFM98PW, do not use sustained +20 dBm: this setting has not been validated for the
   module's external PA. Radiated power at +20 dBm is still to be measured.
+- Meshtastic transmits at 17 dBm at most by default (a lower setting on the node is kept);
+  `lhpc config meshtastic max_power 20` raises the cap.
 - MeshCom keeps its node settings and message counter across updates and rebuilds (`lhpc clean meshcom
   --purge` resets them); firmware from `makrohard/MeshCom-Firmware` `lhpc-speed` and QEMU 9.2.2 with
   the flash-cache patch until upstream ships them.
