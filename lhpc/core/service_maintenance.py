@@ -2444,6 +2444,9 @@ class MaintenanceOpsMixin:
         # Named explicitly in the manifest (`build_root`) rather than guessed from `bin`.
         build_roots = [c.build_root for c in stack.components
                        if c.build_root and not c.source]
+        # Persistent component state kept outside every checkout (MeshCom's node image = the
+        # node's settings): an update never touches it, "Clean all" does.
+        state_roots = sorted({c.state_root for c in stack.components if c.state_root})
         log_prefixes = tuple({f"install-{sid}"} | {f"{op}-{cid}" for op in ("build", "test",
                              "start", "post") for cid in comp_ids})
         markers = [self._interactive_marker(sid), self._band_marker(sid),
@@ -2460,6 +2463,7 @@ class MaintenanceOpsMixin:
         details += [f"  [cleanup] orphaned ownership record for {p} (source already absent)"
                     for p in orphans]
         details += [f"  [remove] {r} (managed build artifact)" for r in build_roots]
+        details += [f"  [remove] {r} (the stack's own saved state)" for r in state_roots]
         details += [f"  [remove] config/stacks/{n}" for n in cfg_files]
         details += [f"  [remove] logs matching {', '.join(sorted(log_prefixes))}*",
                     "  [remove] state markers, known-working history, ownership records",
@@ -2470,7 +2474,7 @@ class MaintenanceOpsMixin:
                 "and history for this stack.", details=details,
                 next_commands=[f"lhpc clean {sid} --purge --yes"],
                 data={"changes": len(src_remove) + len(orphans) + len(cfg_files)
-                      + len(build_roots) + 1})
+                      + len(build_roots) + len(state_roots) + 1})
         if not purge:
             return ActionResult(False, f"Refusing to clean '{sid}': destructive purge "
                                 "requires the explicit purge confirmation.",
@@ -2567,7 +2571,7 @@ class MaintenanceOpsMixin:
                 # Build trees a source-less component owns (a fetched package): `paths.under`
                 # keeps the removal inside the runtime root.
                 import shutil
-                for rel in build_roots:
+                for rel in (*build_roots, *state_roots):
                     try:
                         shutil.rmtree(self._paths.under(*rel.split("/")))
                         out.append(f"  [removed] {rel}")

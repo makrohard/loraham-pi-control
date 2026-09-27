@@ -268,7 +268,7 @@ def test_managed_qemu_satisfied_by_in_root_artifact(tmp_path):
     # The in-root binary (a {runtime}-substituted check_file) satisfies the qemu start pre-check.
     import os
     qpath = os.path.join(str(tmp_path),
-                         "build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa")
+                         "build/tool-cache/qemu-xtensa/esp_develop_9.2.2_20260417_cache_iommu/qemu/bin/qemu-system-xtensa")
     svc = ControllerService(system=FakeSystem(paths={qpath}).system, paths=Paths(runtime_root=tmp_path))
     comp = next(c for s in svc.stacks() for c in s.components if c.id == "meshcom-qemu")
     assert "qemu-system-xtensa" not in {r.cmd for r in svc._lifecycle().missing_requirements(comp)}

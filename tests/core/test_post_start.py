@@ -451,6 +451,38 @@ def test_schedule_spacing_measured():
         assert gap >= want * 0.9, f"gap {gap:.3f}s is shorter than the {want}s it asked for"
 
 
+def test_no_attempt_starts_after_the_schedule_window():
+    """The schedule is a clock, not a count: an attempt that overruns (a probe waiting on a slow
+    node) eats into the window, and no attempt starts once the window has passed. A required
+    step's run is bounded by the start's outer timeout, so the window must not stretch."""
+    import socket, threading, time as _t
+    port = _free_port()
+    probes = []
+    listening = threading.Event()
+
+    def run():
+        s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("127.0.0.1", port)); s.listen(4); s.settimeout(3.0)
+        listening.set()
+        try:
+            while True:
+                c, _a = s.accept()
+                probes.append(c.recv(64))
+                _t.sleep(0.5)                          # slow, and never a complete value
+                c.sendall(b"...Call: <XX0"); c.close()
+        except OSError:
+            pass
+        s.close()
+
+    t = threading.Thread(target=run, daemon=True); t.start()
+    assert listening.wait(10.0), "listener never came up"
+    _run_launcher([{"kind": "tcp_send", "port": port, "data": "--setcall X\n", "optional": True,
+                    "probe": "--info\n", "probe_value": "Call: <([^>]*)>",
+                    "probe_expect": "XX0XXB", "schedule": [[3, 0.2]]}])
+    t.join(10)
+    assert probes == [b"--info\n"]                    # window 0.4 s ended inside attempt 1
+
+
 def test_result_file_on_exhaustion(tmp_path):
     import json
     root, rp = _sidecar_root(tmp_path)
@@ -537,6 +569,9 @@ def test_meshcom_saved_call_schedules_retrying_setcall():
     script, _ = _meshcom_launcher("XX0XXA")
     assert "setcall XX0XXA" in script and "'repeat': 36" in script
     assert "'label': 'callsign'" in script
+    # The value form: the node's reported call is compared with ours, never a substring.
+    step = [st for st in _rendered_steps(script) if st.get("label") == "callsign"][0]
+    assert step["probe_expect"] == "XX0XXA" and "probe_stop_on" not in step
 
 
 def test_meshcom_ephemeral_overrides_saved_and_leaves_config():
@@ -1075,6 +1110,16 @@ def test_status_shows_not_applied_line_with_reapply_hint(tmp_path):
     assert "callsign NOT applied" in lines[0] and "console never became ready" in lines[0]
     assert "lhpc stack poststart meshcom" in lines[0]
     assert any("NOT applied" in d for d in svc.status("meshcom").details)
+
+
+def test_status_shows_unverified_line_with_reapply_hint(tmp_path):
+    svc = _sidecar_svc(tmp_path, [{"kind": "tcp_send", "label": "callsign",
+                                   "outcome": "unverified", "attempts": 30,
+                                   "elapsed_s": 801.4}])
+    lines = svc._post_start_outcomes("meshcom-qemu")
+    assert len(lines) == 1
+    assert "callsign UNVERIFIED" in lines[0]
+    assert "lhpc stack poststart meshcom" in lines[0]
 
 
 def test_status_outcome_unknown_on_unreadable_sidecar(tmp_path):

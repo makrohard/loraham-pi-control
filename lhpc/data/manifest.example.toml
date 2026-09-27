@@ -1597,11 +1597,11 @@ main = "meshcom-qemu"
     "src/meshcom-loraham-bridge/build",
   ]
   proof_paths = [
-    "build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa",
+    "build/tool-cache/qemu-xtensa/esp_develop_9.2.2_20260417_cache_iommu/qemu/bin/qemu-system-xtensa",
     "src/meshcom-qemu-raspi/.work/MeshCom-Firmware/.pio/build/qemu-headless-extradio-gpsd/flash.bin",
     "src/meshcom-loraham-bridge/build/meshcom-loraham-bridge",
   ]
-  probes = [["build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa", "--version"]]
+  probes = [["build/tool-cache/qemu-xtensa/esp_develop_9.2.2_20260417_cache_iommu/qemu/bin/qemu-system-xtensa", "--version"]]
 
   [[stack.component]]
   id = "meshcom-bridge"
@@ -1821,8 +1821,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "74a3a081fdefbe23eb460d18dd4f71ea0b942466"
-    pin_tag = "74a3a08"
+    pin_commit = "b53b230c54732b39ea2b41f820c0b7b83f5d8914"
+    pin_tag = "b53b230"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1888,8 +1888,8 @@ main = "meshcom-qemu"
   build_steps = [
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/platformio/.venv"] },
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pip", "install", "--disable-pip-version-check", "platformio==6.1.19"], announce = "[install] PlatformIO 6.1.19 into {runtime}/build/tools/platformio/.venv — pip is quiet off-TTY; progress: watch {runtime}/build/tools/platformio/.venv/lib grow" },
-    { argv = ["scripts/build-qemu.sh", "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606", "--link-gate", "{asset}/scripts/meshtastic-link-gate.sh"], announce = "[build] qemu-system-xtensa FROM SOURCE (headless: no SDL/GTK/VNC/OpenGL/audio) at the pinned Espressif commit — clone + configure + compile, slow + silent off-TTY; progress: watch {runtime}/build/tool-cache/qemu-xtensa grow" },
-    { argv = ["scripts/setup.sh", "--ref", "{pin:src/MeshCom-Firmware}"], announce = "[clone] MeshCom-Firmware at the manifest pin (the meshcom-firmware component's pin_commit) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
+    { argv = ["scripts/build-qemu.sh", "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.2.2_20260417_cache_iommu", "--link-gate", "{asset}/scripts/meshtastic-link-gate.sh"], announce = "[build] qemu-system-xtensa FROM SOURCE (headless: no SDL/GTK/VNC/OpenGL/audio) at the pinned Espressif commit — clone + configure + compile, slow + silent off-TTY; progress: watch {runtime}/build/tool-cache/qemu-xtensa grow" },
+    { argv = ["scripts/setup.sh", "--src", "https://github.com/makrohard/MeshCom-Firmware.git", "--ref", "{pin:src/MeshCom-Firmware}"], announce = "[clone] MeshCom-Firmware at the manifest pin (the meshcom-firmware component's pin_commit) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
     { argv = ["scripts/apply-overlay.sh"], attributable = true },
     { argv = ["scripts/prepare-openeth.sh"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core" }, announce = "[resolve] ESP32 platform + toolchain — large download, output is quiet; progress: watch {runtime}/build/tools/platformio/core grow" },
     { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" }, attributable = true },
@@ -1900,7 +1900,11 @@ main = "meshcom-qemu"
   # loaded Zero can be slow even to open them — 600 s so the window never TERM-kills a boot that
   # just needs minutes. The start path prints the component's start_note before polling.
   readiness_timeout = 600.0
-  run = "scripts/run.sh {env} {qemu}"
+  # --node-image: QEMU runs on the node's own flash image, kept under state/ (outside the checkout and every
+  # publish root), so a binary install/update or a rebuild keeps the node's settings and message counter;
+  # run.sh carries them into a new build when its partition table is unchanged (finding R21).
+  run = "scripts/run.sh {env} {qemu} --node-image {runtime}/state/meshcom/node-flash.bin"
+  state_root = "state/meshcom"       # the node image: kept by update/build/uninstall, removed by clean --purge
   # RX-safe host test (verifies the guest serves the MeshCom web UI + net-console and no radio
   # is active). SELF-SUFFICIENT: when no guest is running, test.sh boots the newest built env
   # itself and stops exactly that instance afterwards — so auto-install runs it right after the
@@ -1909,7 +1913,7 @@ main = "meshcom-qemu"
   # PATH/IDF discovery, which cannot find the in-root source build on a fresh install.
   # MUST be a COMPONENT-level key — placed after the [[…param]] sub-tables it would bind to the
   # last param table (TOML), leaving the component with no test ("skipped (no host tests)").
-  test = "scripts/test.sh --qemu {runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa"
+  test = "scripts/test.sh --qemu {runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.2.2_20260417_cache_iommu/qemu/bin/qemu-system-xtensa"
   # The build artifact is the merged firmware flash image for the chosen env, NOT
   # qemu-system-xtensa (the system emulator that run.sh locates separately).
   bin = ".work/MeshCom-Firmware/.pio/build/{env}/flash.bin"
@@ -1936,26 +1940,21 @@ main = "meshcom-qemu"
   # --setcall for an empty / N0CALL callsign (the structured equivalent of the old shell guard).
   post_steps = [
     { kind = "tcp_wait", port = 12323, timeout = 180 },
-    # ACK-AWARE + IDEMPOTENT (17 blind connects starved the node's heap
-    # and killed its web UI): probe `--info` first and SKIP when the callsign is already
-    # set (it persists in NVS across restarts); otherwise send until the firmware ACKs
-    # ("Call:<CALL> ... set") — ONE acknowledged send, never the full blind window.
-    # probe_stop_on matches --info's DISPLAY format `...Call: <N0CALL-1>` (space + angle
-    # brackets); stop_on matches the setcall ACK `Call:N0CALL-1 Short:... set`. They DIFFER —
-    # with the ACK pattern used for the probe too, a persisted callsign was never detected, so
-    # every start re-sent --setcall, the firmware saved + auto-rebooted, and the QEMU guest
-    # wedged in the bootloader (guest reset is not survivable in qemu-xtensa).
-    # ZERO-2W COLD-BOOT WINDOW: a QEMU/TCG cold boot on a Pi Zero 2W brings the
-    # console up only after MINUTES — a fixed window (repeat=21, interval=8 -> 168 s)
-    # would expire with every probe hitting a deaf console, zero sends, and the node ran with the
-    # default callsign. The stepped `schedule` keeps the tight 8 s cadence for the first minute
-    # (fast path on Pi 4/5 and warm boots), eases to 15 s, then a 30 s cap: 36 attempts over a
-    # ~13 min window — well past the slowest observed cold boot, still only ~36 one-line
-    # exchanges (no flooding by construction). The readiness probe still guarantees NO blind
-    # send ever reaches a deaf console, and one acknowledged send still ends the window
-    # immediately. `lhpc stack poststart meshcom` re-runs this against a running stack if the
-    # window ever expires.
-    { kind = "tcp_send", port = 12323, label = "callsign", required = true, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_stop_on = "Call: <{param:mc_callsign}>", stop_on = "Call:{param:mc_callsign}", schedule = [[8, 8], [6, 15], [22, 30]], skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
+    # ACK-AWARE + IDEMPOTENT (17 blind connects starved the node's heap and killed its web UI):
+    # probe `--info` first; `probe_value` captures the node's current call from --info's DISPLAY
+    # format `...Call: <N0CALL-1>` and `probe_expect` is ours. Equal -> no send (the call
+    # persists in NVS). Different -> send until the ACK `Call:N0CALL-1 Short:... set` (stop_on;
+    # a different format from --info). A reply WITHOUT a complete `Call: <…>` (the console is
+    # slow, the reply was cut, the format changed) proves nothing -> no send: every blind
+    # --setcall makes the firmware rewrite all of its NVS keys (~1 min frozen on a Zero 2 W),
+    # which made the next probe time out again (R11). If the window ends with the call never
+    # confirmed, `lhpc status` shows it `unverified` (diagnostic; the start is not failed by it).
+    # ZERO-2W COLD-BOOT WINDOW: a QEMU/TCG cold boot on a Pi Zero 2W brings the console up only
+    # after MINUTES. The stepped `schedule` keeps an 8 s cadence for the first minute (Pi 4/5,
+    # warm boots), then 15 s, then a 30 s cap: a ~13 min window, which is a clock — a slow probe
+    # uses it up and no attempt starts after it. `lhpc stack poststart meshcom` re-runs this
+    # against a running stack if the window ever expires.
+    { kind = "tcp_send", port = 12323, label = "callsign", required = true, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_value = "Call: <([^>]*)>", probe_expect = "{param:mc_callsign}", stop_on = "Call:{param:mc_callsign}", schedule = [[8, 8], [6, 15], [22, 30]], skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
   ]
 
     # PERSISTED per-stack GPS switch — see the same param on the Meshtastic component. The
@@ -2026,9 +2025,9 @@ main = "meshcom-qemu"
     # receives the resolved binary via the `qemu` param (default below); it keeps its own
     # --qemu > PATH > IDF_TOOLS_PATH fallbacks for standalone use.
     cmd = "qemu-system-xtensa"
-    check_file = "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa"
+    check_file = "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.2.2_20260417_cache_iommu/qemu/bin/qemu-system-xtensa"
     provisioned = true
-    note = "qemu-system-xtensa (headless, built FROM SOURCE at the pinned Espressif commit esp-develop-9.0.0-20240606) — provisioned INTO the runtime root by `lhpc build` (scripts/build-qemu.sh; link-gated, no SDL/GTK/VNC/OpenGL/audio). Satisfied once the in-root binary exists OR qemu-system-xtensa is on PATH."
+    note = "qemu-system-xtensa (headless, built FROM SOURCE at the pinned Espressif tag esp-develop-9.2.2-20260417 plus the temporary downstream patch in meshcom-qemu-raspi patches/qemu/) — provisioned INTO the runtime root by `lhpc build` (scripts/build-qemu.sh; link-gated, no SDL/GTK/VNC/OpenGL/audio). Satisfied once the in-root binary exists OR qemu-system-xtensa is on PATH."
     [[stack.component.require]]
     # PROVISIONED by the managed setup step (build_steps: a venv at {runtime}/build/tools/platformio),
     # invoked by ABSOLUTE path (PIO=) from prepare-openeth.sh/build.sh — this retires the pipx system
@@ -2064,14 +2063,14 @@ main = "meshcom-qemu"
     arg = "--qemu"
     # The MANAGED in-root binary provisioned by build-qemu.sh (headless source build); the operator can
     # override with a custom build. run.sh still falls back to PATH > IDF_TOOLS_PATH standalone (no --qemu).
-    default = "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa"
+    default = "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.2.2_20260417_cache_iommu/qemu/bin/qemu-system-xtensa"
     label = "qemu-system-xtensa path (managed in-root; override for a custom build)"
     advanced = true
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "74a3a081fdefbe23eb460d18dd4f71ea0b942466"
-    pin_tag = "74a3a08"
+    pin_commit = "b53b230c54732b39ea2b41f820c0b7b83f5d8914"
+    pin_tag = "b53b230"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2118,7 +2117,7 @@ main = "meshcom-qemu"
     # repo at release v4.35p.08.06 (feature verbatim vs the tested fork tip).
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD build surface unchanged.
     #
-    # Cloned BY REF by meshcom-qemu's `setup.sh --ref {pin:src/MeshCom-Firmware}` step: the argv
+    # Fetched BY REF by meshcom-qemu's `setup.sh --src <remote> --ref {pin:src/MeshCom-Firmware}` step: the argv
     # token is resolved to THIS pin_commit at manifest parse time (0.9.2; before that the step
     # carried a hardcoded 674413c and this pin was a label). The QEMU overlay in
     # makrohard/meshcom-qemu-raspi must apply to exactly this commit — moving this pin without
@@ -2127,11 +2126,15 @@ main = "meshcom-qemu"
     # TX_OUTPUT_POWER 17: the daemon accepts 2..17 dBm on SX127x since 1.0.0 and refuses the old 20,
     # which left the bridge unable to configure the radio at all.
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
+    # TEMPORARY FORK: `lhpc-speed` on makrohard/MeshCom-Firmware = upstream dev plus the two
+    # MeshCom pull requests that stop the per-TX settings save and the no-op --setcall save.
+    # Back to icssw-org once upstream has them. The setup step fetches from this remote (--src),
+    # and a repo test keeps the two identical.
     path = "src/MeshCom-Firmware"
-    pin_commit = "80b85a5a2f36e26970ea02fea0d6e09ed68c1d61"
-    pin_tag = "v4.35t.09.20"
-    remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
-    branch = "dev"
+    pin_commit = "ba289816bedd6c33d3b804a09feb610dfed2d8a9"
+    pin_tag = "v4.35t.09.24-35-gba28981"
+    remote = "https://github.com/makrohard/MeshCom-Firmware.git"
+    branch = "lhpc-speed"
 
 # =====================================================================
 # Stack: meshcore — MeshCore node (openHop Core, daemon-backed, 868)

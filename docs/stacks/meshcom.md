@@ -8,11 +8,11 @@ Start order: daemon → bridge → GPS feed → QEMU.
 | | |
 |---|---|
 | Components | `meshcom-bridge` · `meshcom-gps` (position feed, admitted by the global GPS plan) · `meshcom-gps-relay` (test fixture) · `meshcom-qemu` (main) · `meshcom-firmware` (the PlatformIO image, cloned by ref during the build) |
-| Source / pin | `src/meshcom-qemu-raspi` ← `makrohard/meshcom-qemu-raspi` (run/build/setup scripts + the QEMU overlay) · `src/meshcom-loraham-bridge` ← `makrohard/meshcom-loraham-bridge` · firmware `icssw-org/MeshCom-Firmware` |
+| Source / pin | `src/meshcom-qemu-raspi` ← `makrohard/meshcom-qemu-raspi` (run/build/setup scripts + the QEMU overlay) · `src/meshcom-loraham-bridge` ← `makrohard/meshcom-loraham-bridge` · firmware `makrohard/MeshCom-Firmware` branch `lhpc-speed` (temporary: upstream dev plus two MeshCom pull requests, back to `icssw-org/MeshCom-Firmware` once upstream has them) |
 | Bridge | `build/meshcom-loraham-bridge --bind 127.0.0.1 --port 7000 --backend loraham [--password-file …] --ping-interval-ms 30000 --pong-timeout-ms 90000`; consumes `/tmp/lora433f.sock`; built with cmake (needs `libssl-dev`) |
 | QEMU node | `scripts/run.sh --env qemu-headless-extradio-gpsd --qemu <binary>`; web UI `127.0.0.1:18083`, net-console `127.0.0.1:12323`; readiness window 600 s |
 | Firmware image | `.work/MeshCom-Firmware/.pio/build/qemu-headless-extradio-gpsd/flash.bin`, completion marker `.lhpc-build-complete` beside it |
-| Callsign | `mc_callsign` pushed over the net-console (`--setcall`) after boot: probe `--info` first, skip when already set (it persists in the node's NVS), else re-send on a stepped schedule (~13 min window) until the firmware ACKs. `lhpc stack poststart meshcom` re-runs it |
+| Callsign | `mc_callsign` pushed over the net-console (`--setcall`) after boot: probe `--info` first: skip when the node reports our call (it persists in the node's NVS), send only when it reports a different one, and treat an empty or cut reply as not ready; re-sent on a stepped schedule (~13 min window) until the firmware ACKs. A window that ends with the call never confirmed is shown as `unverified` in `lhpc status`, with `lhpc stack poststart meshcom` as the remedy; like a send that was never acknowledged, it does not fail the start. `lhpc stack poststart meshcom` re-runs it |
 | Secrets | `<runtime>/config/secrets/xr_pw` (0600) — the HMAC password, first line |
 | Resources | `tcp.port.7000` / `.18083` / `.12323` exclusive · `loraham.daemon-socket.433` consumer · `loraham.profile.433` requirement `MANAGED` · `meshcom.uart1.feed` exclusive (one feed on the UART: production or fixture) |
 | Install channel | **binary** by default: an artifact overlaying the QEMU binary, the firmware image and the bridge over the pinned clone (the run scripts stay in the checkout). Its firmware is built with an empty password, so the stack runs open auth and HMAC changes are refused until installed from source. `--source pinned\|dev\|stable` builds everything on the box (about 2 h on a Pi Zero 2W, measured). Policy: [provenance](../provenance.md) |
@@ -60,14 +60,16 @@ appears in a log, marker or result. Policy:
 - **PlatformIO 6.1.19** in a managed venv `build/tools/platformio/.venv`, passed to the build
   scripts by absolute path (`PIO=`), with `PLATFORMIO_CORE_DIR=build/tools/platformio/core`.
 - **qemu-system-xtensa built from source** by `scripts/build-qemu.sh` at the pinned Espressif
-  commit `esp-develop-9.0.0-20240606` into `build/tool-cache/qemu-xtensa/…`: a shallow clone (no
+  tag `esp-develop-9.2.2-20260417` plus a temporary downstream patch (`patches/qemu/` in
+  meshcom-qemu-raspi: the flash-cache fix of espressif/qemu#183, dropped once Espressif ships it)
+  into `build/tool-cache/qemu-xtensa/…`: a shallow clone (no
   `roms/*` submodules), every display/audio back-end disabled (`--disable-sdl/gtk/vnc/opengl/…`),
   `--enable-gcrypt` (the esp32 machine's RSA device aborts without it; a `libgcrypt-config`
   pkg-config shim covers Trixie), `--disable-werror`, a memory-aware `-j = min(nproc,
   floor(MemTotal_GB))`, then the same link gate as meshtasticd and a smoke launch before the
   `.lhpc-qemu-built` marker. Native to the box. The toolchain and the headless library headers
   are declared requires (`lhpc deps`); the runtime needs `libslirp0`.
-- **Firmware**: `scripts/setup.sh --ref {pin:src/MeshCom-Firmware}` clones the firmware at the `meshcom-firmware` pin into `.work/` (the token is the pin — never a literal commit; see the pin-literal guard in `tests/repo`),
+- **Firmware**: `scripts/setup.sh --src <the meshcom-firmware remote> --ref {pin:src/MeshCom-Firmware}` fetches the firmware at the `meshcom-firmware` pin into `.work/` (the token is the pin — never a literal commit; see the pin-literal guard in `tests/repo`),
   `apply-overlay.sh` applies the QEMU overlay (fail-closed `git apply --check`),
   `prepare-openeth.sh` resolves the ESP32 platform, `build.sh --env qemu-headless-extradio-gpsd`
   produces `flash.bin`. Per-step build timeout 28800 s.

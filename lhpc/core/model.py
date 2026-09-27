@@ -413,6 +413,10 @@ class Component:
     # that has no `source` to be cleaned through (a fetched package). `clean` removes it; without
     # it a "Clean all" would leave the artifact behind.
     build_root: str = ""
+    # A runtime-root-relative `state/<name>` directory holding this component's own persistent
+    # state outside every checkout (MeshCom's node image = the node's settings). Updates and
+    # rebuilds never touch it; `clean --purge` removes it.
+    state_root: str = ""
     # GitHub "owner/repo" whose RELEASES this fetched-package component tracks, for the
     # upstream-version check (and the opt-in upstream install). "" = no upstream check.
     release_repo: str = ""

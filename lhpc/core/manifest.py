@@ -41,6 +41,14 @@ from .model import (
 )
 
 
+def _state_root(raw: dict) -> str:
+    """`state_root`: exactly `state/<name>` (one plain segment) or empty — `clean` removes it."""
+    v = str(raw.get("state_root", "") or "")
+    if v and not re.fullmatch(r"state/[a-z0-9][a-z0-9._-]*", v):
+        raise ManifestError(f"{raw.get('id', '?')}: state_root must be 'state/<name>', got {v!r}")
+    return v
+
+
 def _parse_file_config(raw: dict | None) -> FileConfig | None:
     if not raw:
         return None
@@ -817,6 +825,7 @@ def _parse_component(raw: dict) -> Component:
         note=raw.get("note", ""),
         start_note=raw.get("start_note", ""),
         build_root=raw.get("build_root", ""),
+        state_root=_state_root(raw),
         release_repo=raw.get("release_repo", ""),
         ui_user=raw.get("ui_user", ""),
         ui_password_file=raw.get("ui_password_file", ""),
