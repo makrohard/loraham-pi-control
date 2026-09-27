@@ -3,6 +3,9 @@
 Mixin of ControllerService (state/constants on the facade). Adapters import lhpc.core.services only."""
 from __future__ import annotations
 
+import json
+import re
+import stat
 import time
 from pathlib import Path
 from typing import ClassVar
@@ -2476,6 +2479,7 @@ class MaintenanceOpsMixin:
         details += [f"  [remove] {r} (the stack's own saved state)" for r in state_roots]
         details += [f"  [remove] config/stacks/{n}" for n in cfg_files]
         details += [f"  [remove] logs matching {', '.join(sorted(log_prefixes))}*",
+                    "  [remove] its components' post-start launchers + results in state/post",
                     "  [remove] state markers, known-working history, ownership records",
                     "  (config/local.toml, secrets and other stacks are untouched)"]
         if not apply:
@@ -2635,6 +2639,40 @@ class MaintenanceOpsMixin:
                             ok = False
                             out.append(f"  [fail] logs/{name}")
                 out.append(f"  [removed] {removed_logs} log file(s)")
+                # 5) post-start launchers + result sidecars of THIS stack's components (nothing of
+                # it runs, see the refusal above): `<comp>-<pid>-<ns>.py|.result.json` by name
+                # (lifecycle._launch_uid), `required-<hash>.result.json` by its recorded meta.comp.
+                # An unreadable sidecar is kept: without its owner it may belong to another stack.
+                uid_re = re.compile(rf"(?:{'|'.join(map(re.escape, sorted(comp_ids)))})"
+                                    r"-\d+-\d+\.(?:py|result\.json)")
+                removed_post = 0
+                try:
+                    post_dir = self._paths.under("state", "post")
+                    post_entries = runtime_fs.scandir_nofollow(self._paths, post_dir)
+                except (OSError, PathContainmentError):
+                    post_entries = []
+                for name, is_link in post_entries:
+                    if is_link:
+                        continue
+                    stt = runtime_fs.stat_leaf_nofollow(self._paths, post_dir / name)
+                    if stt is None or not stat.S_ISREG(stt.st_mode):
+                        continue                  # regular files only (the pruner's rule, jobs.py)
+                    ours = bool(uid_re.fullmatch(name))
+                    if not ours and re.fullmatch(r"required-[0-9a-f]{16}\.result\.json", name):
+                        try:
+                            meta = json.loads(runtime_fs.read_text_regular(
+                                self._paths, post_dir / name, max_bytes=65536)).get("meta") or {}
+                            ours = meta.get("comp") in comp_ids
+                        except (OSError, PathContainmentError, ValueError, AttributeError):
+                            ours = False
+                    if ours:
+                        try:
+                            runtime_fs.unlink(self._paths, post_dir / name)
+                            removed_post += 1
+                        except (OSError, PathContainmentError):
+                            ok = False
+                            out.append(f"  [fail] state/post/{name}")
+                out.append(f"  [removed] {removed_post} post-start file(s) in state/post")
         except AdmissionRefused as _adm:
             return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except SourceTxnBlocked as blocked:

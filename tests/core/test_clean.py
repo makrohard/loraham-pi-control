@@ -212,3 +212,48 @@ def test_clean_registry_removal_failure_is_incomplete_then_retry_cleans(tmp_path
     assert res2.ok, res2.details
     assert any("orphaned ownership record" in d for d in res2.details)
     assert sreg.read_record(paths, "src/loraham-kiss-tnc") is None
+
+
+def test_clean_removes_the_stacks_post_start_launchers_and_results(tmp_path):
+    # `state/post/` kept a purged stack's post-start launchers and result sidecars (S1 on the
+    # Pi 5, 2026-09-27: 56 files survived the purges, C3). The purge removes exactly this stack's:
+    # `<comp>-<pid>-<ns>.py|.result.json` by name, `required-<hash>.result.json` by its meta.comp.
+    _seed_kiss(tmp_path)
+    post = tmp_path / "state" / "post"
+    post.mkdir(parents=True)
+    mine = ["loraham-kiss-tnc-4242-123456789.py", "loraham-kiss-tnc-4242-123456789.result.json",
+            "loraham-kiss-serial-7-99.py"]
+    other = ["loraham-chat-4242-1.py", "loraham-chat-4242-1.result.json",
+             "loraham-kiss-tnc-extra-1-2.py"]        # a look-alike name that is not <comp>-<pid>-<ns>
+    for n in mine + other:
+        (post / n).write_text("x")
+    (post / "required-00000000000000aa.result.json").write_text(
+        json.dumps({"v": 1, "meta": {"comp": "loraham-kiss-serial", "role": "required"}}))
+    (post / "required-00000000000000bb.result.json").write_text(
+        json.dumps({"v": 1, "meta": {"comp": "loraham-chat", "role": "required"}}))
+    (post / "required-00000000000000cc.result.json").write_text("not json")   # unreadable: kept
+    svc = _bind_identity(_svc(tmp_path), tmp_path / "src" / "loraham-kiss-tnc", _KISS_REMOTE)
+    assert "state/post" in "\n".join(svc.clean("kiss").details)               # the dry run names it
+    res = svc.clean("kiss", apply=True, purge=True)
+    assert res.ok, res.details
+    left = sorted(p.name for p in post.iterdir())
+    assert left == sorted(other + ["required-00000000000000bb.result.json",
+                                   "required-00000000000000cc.result.json"])
+
+
+def test_clean_leaves_a_non_regular_leaf_with_a_post_start_name(tmp_path):
+    # Audit 4, P1.7 round 1: the name-attributed branch must act on REGULAR files only (the pruner's
+    # rule, jobs.py): an exact <comp>-<pid>-<ns> name that is a FIFO is uncertain material and stays.
+    import os
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("no FIFOs on this platform")
+    _seed_kiss(tmp_path)
+    post = tmp_path / "state" / "post"
+    post.mkdir(parents=True)
+    os.mkfifo(post / "loraham-kiss-tnc-4242-123456789.py")
+    (post / "loraham-kiss-tnc-4242-123456790.py").write_text("x")          # an ordinary one: removed
+    svc = _bind_identity(_svc(tmp_path), tmp_path / "src" / "loraham-kiss-tnc", _KISS_REMOTE)
+    res = svc.clean("kiss", apply=True, purge=True)
+    assert res.ok, res.details
+    assert sorted(p.name for p in post.iterdir()) == ["loraham-kiss-tnc-4242-123456789.py"]
+    assert "[removed] 1 post-start file(s) in state/post" in "\n".join(res.details)
