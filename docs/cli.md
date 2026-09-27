@@ -267,8 +267,8 @@ that hardware ([policy](maintenance.md#running-on-a-pi)).
 `lhpc update [<target>] [--source binary|pinned|dev|stable] [--upstream] [--yes]` — update a stack/component to
 the selected source.
 
-- Without `--source` the target KEEPS its current channel: a binary-installed stack updates
-  binary→binary, everything else defaults to `dev`.
+- Without `--source`, a binary-installed target updates binary→binary; any other target updates to
+  `pinned`, the composition this release proved. `--source dev` follows the branch tip.
 - When the published binary lags this lhpc's pins, the update refuses and names the source build as
   the only way forward — cancelling keeps the working binary.
 - Switching channels is an `install`, not an update, and the CLI says so.

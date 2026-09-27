@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.10.0
+
+**Upgrading, daemon from the binary (the default):** stop it (`lhpc stack stop daemon --yes`), run
+`lhpc update daemon --yes`, restart your stacks — daemon-backed stacks need daemon 1.2.0.
+**Upgrading with MeshCom:** it does not start until updated (QEMU 9.2.2): stop it
+(`lhpc stack stop meshcom --yes`), run `lhpc update meshcom --yes`, then
+`lhpc stack start meshcom --yes`.
+**Upgrading with MeshCore:** it is *not built* and neither starts nor restores at boot: run
+`lhpc stack stop meshcore --yes`, `lhpc update meshcore --yes`, `lhpc build meshcore --yes`, then
+`lhpc stack start meshcore --yes`.
+
+- +20 dBm on SX127x, per band, off by default: `lhpc hardware --high-power <band> on|off` or the
+  daemon's Hardware settings, from the band's next daemon start (LoRaHAM daemon 1.2.0). Nothing
+  enforces the datasheet's limits (duty cycle ≤ 1 %, VSWR ≤ 3:1); warranty void if disregarded. On
+  the LoRaHAM 433 RFM98PW, do not use sustained +20 dBm: this setting has not been validated for the
+  module's external PA. Radiated power at +20 dBm is still to be measured.
+- Live `POWER` is checked against what the running daemon reports; a saved `POWER=20` profile
+  applies only while its band's switch is on. KISS TNC 0.6.3 reads daemon 1.2.0's `STATUS`.
+- MeshCom keeps its node settings and message counter across updates and rebuilds (`lhpc clean
+  meshcom --purge` resets them); firmware from `makrohard/MeshCom-Firmware` `lhpc-speed` and QEMU
+  9.2.2 with the flash-cache patch until upstream ships them; `--setcall` only when the call differs.
+- `lhpc update meshcom` from the binary moves MeshCom's run-script checkout to the new pin itself.
+- MeshCore: the repeater's new admin password has 15 characters, so a MeshCore client can log in
+  over the air; the plugin manager stops with its node even when the node is killed;
+  `lhpc stack start meshcore-cli` works while MeshCore runs; openhop-repeater dev b846c79.
+- Reticulum 1.5.4; lxmd, nomadnet and Sideband run the node's RNS (`lhpc build reticulum` after the
+  update); `lhpc status --versions` shows each Reticulum venv's `rns`/`lxmf`.
+- Prebuilt binaries serve the latest release only; an older release installs from source or
+  self-updates first.
+- CLI: `lhpc stack start <stack> --band 433|868`; `lhpc stack start chat` prints its command on its
+  own line and ends OK; `lhpc status` shows a stack whose main component is down as degraded.
+- A start plan no longer lists a GUI component the box will skip; "Restart required" clears when a
+  setting is saved back; a refusal during a build or install names the sources it works on.
+- A box without NTP or GPS no longer locks every browser out when its revocation list expires.
+- `fake-hwclock` keeps the last known time across a reboot; `bootstrap-deps.sh` no longer creates
+  `/var/log/journal`.
+- `lhpc self-update --apply` from a shell says what it did; a failed console restart during an
+  updater repair points at the service status and its log.
+- RF-log decrypt names a Meshtastic DM's unknown sender key; Reticulum link data is labelled.
+- Dashboard: the console row is named "LHPC"; the System box has a GNSS row (linked to the GPS
+  Monitor) and, on AP-managed boxes, a Network row, with coloured pills (GNSS fix; Wi-Fi dBm, Eth, AP).
+- Stacks page: the Running and Degraded / failed tiles count stacks, like the Stacks tile, so a
+  stack whose main component is down counts as degraded.
+
 ## 0.9.2
 
 - **MeshCom firmware: the QEMU build now fetches the pin (R8).** The meshcom-qemu setup step
