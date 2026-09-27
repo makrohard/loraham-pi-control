@@ -391,17 +391,35 @@ def open_existing_marker(paths: Paths, path: Path) -> OwnedMarker:
 _DEFAULT_READ_MAX = 1 << 23
 
 
-def rewrite_lines_atomic(paths: Paths, path: Path, transform, *, line_limit: int = 1 << 20) -> bool:
+def rewrite_lines_atomic(paths: Paths, path: Path, transform, *, line_limit: int = 1 << 20,
+                         probe=None) -> bool:
     """Stream an EXISTING regular runtime leaf line by line through `transform(bytes) -> bytes` into
     a private temp sibling and, only if some line changed, atomically replace the leaf (the same
     protocol as `atomic_write_bytes`: O_EXCL|O_NOFOLLOW temp via the held parent fd, the original
     mode on the held fd, fsync, rename via dir fds, parent fsync). Memory is bounded by
     `line_limit` whatever the file's size: a longer line is handed over in `line_limit` pieces.
-    Unchanged content leaves the leaf untouched (same inode). Returns True when it rewrote."""
+    Unchanged content leaves the leaf untouched (same inode). Returns True when it rewrote.
+
+    `probe(piece) -> bool`, when given, is a read-only first pass over the same descriptor: no
+    temp file is created unless some piece makes it return True (a clean file costs one read and
+    no write). It must be True for every piece `transform` would change."""
     with _walk_parent(paths, path, create=False) as (parent_fd, name):
         src = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
         _require_regular_fd(src, path)
         mode = _stat.S_IMODE(os.fstat(src).st_mode)
+        if probe is not None:
+            try:
+                with os.fdopen(src, "rb", closefd=False) as scan:
+                    hit = False
+                    while not hit and (piece := scan.readline(line_limit)):
+                        hit = bool(probe(piece))
+                if not hit:
+                    os.close(src)
+                    return False
+                os.lseek(src, 0, os.SEEK_SET)
+            except BaseException:
+                os.close(src)
+                raise
         tmp, fd = None, None
         for _ in range(64):
             cand = f".{name}.tmp-{os.getpid()}-{os.urandom(8).hex()}"

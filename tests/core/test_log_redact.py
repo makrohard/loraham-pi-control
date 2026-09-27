@@ -164,3 +164,44 @@ def test_a_secret_line_without_a_final_newline_is_redacted(tmp_path):
              b"first\nINFO RepeaterDaemon: [LoginServer] Plaintext hex: " + FAKE.encode())   # no \n
     log_redact.scrub_component_logs(paths, tmp_path / "logs", "meshcore-node")
     assert p.read_bytes() == b"first\nINFO RepeaterDaemon: [LoginServer] Plaintext hex: <redacted by LHPC>"
+
+
+def _temps_created(monkeypatch):
+    made, real = [], os.open
+
+    def spy(name, flags, *a, **k):
+        if isinstance(name, str) and ".tmp-" in name and flags & os.O_CREAT:
+            made.append(name)
+        return real(name, flags, *a, **k)
+    monkeypatch.setattr(runtime_fs.os, "open", spy)
+    return made
+
+
+def test_a_clean_log_is_read_but_never_copied(tmp_path, monkeypatch):
+    # P1.22 (audit P1.14 round 2, the note): the clean case used to write a full temp copy at every
+    # start and delete it again.
+    paths = Paths(runtime_root=tmp_path)
+    p = _log(tmp_path, "start-meshcore-node.log", b"2026-09-27 INFO RepeaterDaemon: advert sent\n" * 1000)
+    made = _temps_created(monkeypatch)
+    assert log_redact.scrub_component_logs(paths, tmp_path / "logs", "meshcore-node") == []
+    assert made == [] and p.read_bytes().count(b"advert sent") == 1000
+
+
+def test_an_already_scrubbed_log_is_not_copied_again(tmp_path, monkeypatch):
+    # A redacted line still holds the prefix; a plain "prefix present?" scan would copy every time.
+    paths = Paths(runtime_root=tmp_path)
+    p = _log(tmp_path, "start-meshcore-node.log", _body())
+    log_redact.scrub_component_logs(paths, tmp_path / "logs", "meshcore-node")
+    once = p.read_bytes()
+    made = _temps_created(monkeypatch)
+    log_redact.scrub_component_logs(paths, tmp_path / "logs", "meshcore-node")
+    assert made == [] and p.read_bytes() == once
+
+
+def test_a_dirty_log_is_still_rewritten_with_the_probe(tmp_path, monkeypatch):
+    paths = Paths(runtime_root=tmp_path)
+    p = _log(tmp_path, "start-meshcore-node.log", b"x\n" * 500 + _body())
+    made = _temps_created(monkeypatch)
+    log_redact.scrub_component_logs(paths, tmp_path / "logs", "meshcore-node")
+    assert len(made) == 1 and FAKE.encode() not in p.read_bytes()
+    assert p.read_bytes().startswith(b"x\n" * 500)                    # the rewrite read from offset 0

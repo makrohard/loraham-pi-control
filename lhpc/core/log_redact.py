@@ -68,7 +68,10 @@ def scrub(paths: Paths, log: Path, component_id: str) -> str:
         st = runtime_fs.stat_leaf_nofollow(paths, log)
         if st is None or not stat.S_ISREG(st.st_mode):
             return ""
-        runtime_fs.rewrite_lines_atomic(paths, log, _Redactor(raw))
+        # The probe is the rewrite's own test per piece, so an already redacted line (it still
+        # holds the prefix) does not count: a clean or already scrubbed log is read, never copied.
+        runtime_fs.rewrite_lines_atomic(paths, log, _Redactor(raw),
+                                        probe=lambda piece: _redact_line(piece, raw) != piece)
         return ""
     except Exception as exc:                                   # never fail the start
         return f"log redaction skipped for {log.name}: {exc}"
