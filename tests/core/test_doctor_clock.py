@@ -27,6 +27,12 @@ def test_doctor_names_why_the_clock_is_not_verified(tmp_path, monkeypatch, state
     line = _clock_line(tmp_path, monkeypatch, state)
     assert len(line) == 1 and "NOT verified" in line[0] and reason in line[0]
     assert "--accept-unverified-clock" in line[0]
+    # Audit P1.2 note: the suffix must be true for every reason, incl. "kernel state unavailable",
+    # where a time source may already have set the clock and only the verification failed (P1.19
+    # round 1: the advice must name that path, not only the clock and its source).
+    assert "refuse while the clock remains unverified" in line[0]
+    assert "resolve the clock or verification problem" in line[0]
+    assert "until a time source" not in line[0]
 
 
 def test_the_refusal_s_pointer_to_doctor_is_true(tmp_path, monkeypatch):

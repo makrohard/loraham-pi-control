@@ -1135,8 +1135,9 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         from .service_system import clock_verified
         clock_ok, clock_why = clock_verified(sys.fs, self._paths.runtime_root)
         details.append("  clock: " + ("verified (certificates may be issued)" if clock_ok else
-                       f"NOT verified — {clock_why}; certificate operations refuse until a time "
-                       "source (NTP or GPS) sets it, or need --accept-unverified-clock"))
+                       f"NOT verified — {clock_why}; certificate operations refuse while the clock "
+                       "remains unverified; resolve the clock or verification problem, or use "
+                       "--accept-unverified-clock"))
         # Controller's OWN system/runtime deps (same source as the /stacks System-dependencies panel).
         # A missing REQUIRED dep makes doctor non-OK (machine-actionable); optional ones never do.
         required_missing = False
