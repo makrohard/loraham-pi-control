@@ -40,7 +40,7 @@ SF8 and slower (SF11 needs ~1.2 s for 260 ms of audio) |
 | `power` | 17 | 10 | dBm |
 | `ldro` | 2 | 2 | 0 = off, 1 = on, 2 = auto |
 | `codec_mode` | 0 | | Codec2 mode index 0–7 |
-| `audio_capture` / `audio_playback` | `default` | | ALSA devices |
+| `audio_capture` / `audio_playback` | `default` | | ALSA devices. When the terminal client's device list (PCMs that can capture or have no IOID restriction, the first 16) has two or more entries, it uses these without asking if both are in it, otherwise it asks at start and Enter takes the offered default; with a single listed device it uses that one, and with none it keeps the saved names |
 
 One file holds both bands (`lora433_*` / `lora868_*`); `active_band` is written from the band the
 stack is started on. The daemon-side radio parameters live in [daemon](daemon.md).

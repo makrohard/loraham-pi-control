@@ -10,6 +10,11 @@
   node identities and keys, and its generated config files. A reinstall is a new node; peers must
   forget the old one. `lhpc clean meshcore --purge` now removes the MeshCore repeater plugins too
   (they used to survive it). `uninstall` keeps all of it; chat's message log survives a purge.
+- Voice terminal client: with two or more listed audio devices (capture-capable or unrestricted PCMs,
+  the first 16), the devices set with `lhpc config voice` are used without a prompt when both are
+  listed; otherwise it asks, and Enter now takes the offered default (a single listed device is used
+  as before; with none the saved names are kept). Audio device names of 63 or more characters no
+  longer run past the device list (LoRaHAM_Voice 9c00022).
 
 ## 0.10.0
 

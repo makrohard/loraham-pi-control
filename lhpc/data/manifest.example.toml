@@ -460,8 +460,8 @@ main = "loraham-voice"
 
     [stack.component.source]
     path = "src/LoRaHAM_Voice"
-    pin_commit = "8e1af01bf3b64201d60b94323319c59d66acee4d"
-    pin_tag = "8e1af01"
+    pin_commit = "9c000225fac684119e20b8911cb2b496a9ebe037"
+    pin_tag = "9c00022"
     remote = "https://github.com/makrohard/LoRaHAM_Voice.git"
     branch = "main"
     local_dir = "LoRaHAM_Voice"
@@ -646,8 +646,8 @@ main = "loraham-voice"
 
     [stack.component.source]
     path = "src/LoRaHAM_Voice"
-    pin_commit = "8e1af01bf3b64201d60b94323319c59d66acee4d"
-    pin_tag = "8e1af01"
+    pin_commit = "9c000225fac684119e20b8911cb2b496a9ebe037"
+    pin_tag = "9c00022"
     remote = "https://github.com/makrohard/LoRaHAM_Voice.git"
     branch = "main"
     local_dir = "LoRaHAM_Voice"
