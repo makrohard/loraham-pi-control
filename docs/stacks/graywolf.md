@@ -20,7 +20,7 @@ APRS-IS <-> graywolf <-> KISS/TCP 8001 <-> loraham-kiss-tnc <-> framed DATA <-> 
 | Password file | `<runtime>/state/graywolf/graywolf-admin.txt` (0600), user `admin` |
 | Resources | `tcp.port.8080` exclusive · `tcp.port.8001` consumer |
 | Depends on | `loraham-kiss-tnc` + `loraham-daemon`, `requires_daemon_tx = MANAGED` |
-| Install channel | the release fetch above (the stack's Install tab and `lhpc auto-install` do the same). `lhpc clean graywolf --purge` removes `build/tools/graywolf`. *Check upstream* compares the latest `chrissnell/graywolf` release; an opted-in newer version is verified against that release's own `checksums.txt` (`lhpc update graywolf --upstream`). Moving the version: [maintenance](../maintenance.md#moving-a-pin) |
+| Install channel | the release fetch above (the stack's Install tab and `lhpc auto-install` do the same). `lhpc clean graywolf --purge` removes `build/tools/graywolf` and `state/graywolf` (the station's whole configuration, beacons included, and the UI password). *Check upstream* compares the latest `chrissnell/graywolf` release; an opted-in newer version is verified against that release's own `checksums.txt` (`lhpc update graywolf --upstream`). Moving the version: [maintenance](../maintenance.md#moving-a-pin) |
 
 ## Contents
 

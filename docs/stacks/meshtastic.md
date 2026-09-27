@@ -104,8 +104,8 @@ lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --
   and its boot node-info check follows about 30 s after start. Both go through the firmware's
   node-info throttle (10 minutes by default), so a later "Skip send NodeInfo since we sent it <600s
   ago" line can mean the node-info already went out. Broadcasts are unaffected.
-- A new image (or a deleted `state/meshtasticd`) gives the node a new key but the same node number,
-  which on the Pi comes from its Bluetooth MAC (the YAML sets no `MACAddress`). A peer that already
+- A new image, `lhpc clean meshtastic --purge` or a deleted `state/meshtasticd` gives the node a
+  new key but the same node number, which on the Pi comes from its Bluetooth MAC (the YAML sets no `MACAddress`). A peer that already
   stored the old public key keeps it and drops node-info carrying the new key, so direct messages
   fail both ways (`PKI_UNKNOWN_PUBKEY`, `NO_CHANNEL`) while broadcasts on a still-shared channel are
   unaffected. On the peer, remove the node (`meshtastic --remove-node '!<node id>'`); it then learns

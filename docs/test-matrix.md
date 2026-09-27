@@ -46,7 +46,7 @@ skipped because "it worked last release" — the one exception is the [fast lane
 ```bash
 t() { local s=$(date +%s); "$@"; echo "[timer] $* -> $(( $(date +%s) - s )) s"; }
 
-t lhpc clean <stack> --purge --yes            # 1. purge: sources, config, logs, history
+t lhpc clean <stack> --purge --yes            # 1. purge: sources, config, state, identities, logs
 t lhpc install <stack> --source <chan> --yes  # 2. install on the channel under test
 t lhpc build <stack> --yes                    # 3. build (no-op for pure binary / fetched stacks)
 t lhpc stack start <stack> --yes              # 4. start on the band the radio budget allows

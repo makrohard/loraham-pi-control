@@ -279,7 +279,7 @@ the selected source.
 `lhpc uninstall [<target>] [--yes]` — uninstall a stack/component.
 
 ### clean
-`lhpc clean <target> --purge [--yes]` — **destructive**: purge a stack's sources, config, logs and history. `--purge` is required.
+`lhpc clean <target> --purge [--yes]` — **destructive**: a full wipe of the stack: sources, config, generated config files, saved state (`state_root`), its own secrets (`secret_files`: node identities, keys, passwords LHPC minted), logs and history. A reinstall is a new node; peers that knew the old one must forget it. `--purge` is required. `uninstall` keeps settings, state and identities. `config/local.toml`, `config/secrets.toml`, files the stack does not declare (chat's `lorachat.log`) and other stacks stay.
 
 ### known-working
 `lhpc known-working <stack>` — record a running stack's current commits as a known-good composition.

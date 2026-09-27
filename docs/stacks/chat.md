@@ -10,6 +10,7 @@ daemon in MANAGED mode. It needs a real terminal — there is no headless mode.
 | Build | `gcc clients/chat/lorachat_ncurses_113.c -o loraham_chat -lncurses -lpthread` (needs `libncurses-dev`) |
 | Run | `<source>/loraham_chat` from `<runtime>/config/files`, so it reads the seeded config; `lhpc stack start chat` ensures the daemon (433, MANAGED) and prints the command (the Dashboard card shows the same) — you run it, locally or over SSH |
 | Config | `<runtime>/config/files/lorachat.conf` (`KEY=VALUE`); the in-app Ctrl-K menu saves back to it |
+| History | `<runtime>/config/files/lorachat.log`, written by the client; `lhpc clean chat --purge` keeps it (the config goes) |
 | Sockets | `/tmp/lora433.sock`, `/tmp/loraconf433.sock` (hard-coded 433) |
 | Install channel | source only |
 

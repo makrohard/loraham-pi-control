@@ -2400,11 +2400,14 @@ class MaintenanceOpsMixin:
     def clean(self, target: str, apply: bool = False, purge: bool = False) -> ActionResult:
         """DESTRUCTIVE per-stack purge ("Clean all"): removes every LHPC-OWNED trace of the
         stack — sources (still ownership-verified + shared-refcounted; DIRTY allowed here,
-        this is the explicit escape hatch), config/stacks/<sid>*, state markers, known-working
-        store, its components' logs + job logs (never an active job's), and registry records.
+        this is the explicit escape hatch), config/stacks/<sid>*, its generated config files and launcher links,
+        its saved state (`state_root`) and its own secrets (`secret_files`: node identities,
+        so a reinstall is a NEW node), state markers, known-working store, its components'
+        logs + job logs (never an active job's), and registry records.
         Gates: a STACK target only; refused while anything runs; `apply` additionally requires
-        `purge` (CLI double flag; the web adds a typed confirm). local.toml, secrets, and every
-        other stack are untouched. All removal is descriptor-anchored/no-follow."""
+        `purge` (CLI double flag; the web adds a typed confirm). local.toml, secrets.toml,
+        files nobody declared (chat's history) and every other stack are untouched. All
+        removal is descriptor-anchored/no-follow."""
         if (_r := self._controller_refusal(target)) is not None:
             return _r
         from . import known_working, reslock, source_fs, source_registry
@@ -2460,6 +2463,18 @@ class MaintenanceOpsMixin:
         # Persistent component state kept outside every checkout (MeshCom's node image = the
         # node's settings): an update never touches it, "Clean all" does.
         state_roots = sorted({c.state_root for c in stack.components if c.state_root})
+        # The stack's own secrets (identities, keys, passwords LHPC minted for it) and the
+        # config files LHPC generates for it: "purge" is a full wipe (maintainer, 2026-09-27).
+        secret_files = sorted({n for c in stack.components for n in c.secret_files})
+        gen_prefix = "{runtime}/config/files/"
+        gen_files = sorted({c.config_file.path[len(gen_prefix):] for c in stack.components
+                            if c.config_file and c.config_file.path.startswith(gen_prefix)
+                            and "/" not in c.config_file.path[len(gen_prefix):]})
+        # The links a component's pre_steps publish there (voice's launcher links).
+        link_files = sorted({st["dst"][len(gen_prefix):] for c in stack.components
+                             for st in c.pre_steps if st.get("kind") == "symlink"
+                             and str(st.get("dst", "")).startswith(gen_prefix)
+                             and "/" not in st["dst"][len(gen_prefix):]})
         log_prefixes = tuple({f"install-{sid}"} | {f"{op}-{cid}" for op in ("build", "test",
                              "start", "post") for cid in comp_ids})
         markers = [self._interactive_marker(sid), self._band_marker(sid),
@@ -2477,18 +2492,26 @@ class MaintenanceOpsMixin:
                     for p in orphans]
         details += [f"  [remove] {r} (managed build artifact)" for r in build_roots]
         details += [f"  [remove] {r} (the stack's own saved state)" for r in state_roots]
+        details += [f"  [remove] config/secrets/{n} (the stack's own secret)" for n in secret_files]
+        if secret_files or state_roots:
+            details.append("  (identities in these go for good: a reinstall is a new node, and "
+                           "peers must forget the old one)")
+        details += [f"  [remove] config/files/{n} (generated config)" for n in gen_files]
+        details += [f"  [remove] config/files/{n} (launcher link)" for n in link_files]
         details += [f"  [remove] config/stacks/{n}" for n in cfg_files]
         details += [f"  [remove] logs matching {', '.join(sorted(log_prefixes))}*",
                     "  [remove] its components' post-start launchers + results in state/post",
                     "  [remove] state markers, known-working history, ownership records",
-                    "  (config/local.toml, secrets and other stacks are untouched)"]
+                    "  (config/local.toml, config/secrets.toml, files the stack does not declare "
+                    "and other stacks are untouched)"]
         if not apply:
             return ActionResult(
-                True, f"CLEAN plan for '{sid}': DESTRUCTIVE — removes sources, config, logs "
-                "and history for this stack.", details=details,
+                True, f"CLEAN plan for '{sid}': DESTRUCTIVE — removes sources, config, saved "
+                "state, identities, logs and history for this stack.", details=details,
                 next_commands=[f"lhpc clean {sid} --purge --yes"],
                 data={"changes": len(src_remove) + len(orphans) + len(cfg_files)
-                      + len(build_roots) + len(state_roots) + 1})
+                      + len(build_roots) + len(state_roots) + len(secret_files)
+                      + len(gen_files) + len(link_files) + 1})
         if not purge:
             return ActionResult(False, f"Refusing to clean '{sid}': destructive purge "
                                 "requires the explicit purge confirmation.",
@@ -2531,12 +2554,8 @@ class MaintenanceOpsMixin:
                     _br = self.binary_retire(sid, force=True, locked=True)
                     out.append(f"  [binary] {_br.summary}")
                     ok = _br.ok and ok
-                # Preserve the MeshCore identity before a purge removes the source AND the
-                # generated config. `clean` deliberately does NOT touch config/secrets, so
-                # the adopted key survives here and a reinstall restores the same node.
-                _id_err = self.meshcore_identity_guard(list(stack.components))
-                if _id_err:
-                    return ActionResult(False, f"Refusing to clean '{sid}': {_id_err}")
+                # No identity rescue here (update/uninstall do one): a purge removes the
+                # identity with everything else, so a reinstall is a new node.
                 # Recompute the destructive sets from POST-LOCK reality (the dry-run
                 # preview above may predate the locks).
                 consumers = self._source_consumers()
@@ -2582,15 +2601,21 @@ class MaintenanceOpsMixin:
                         ok = False
                 ok = self._retire_candidates_for_paths(removed_paths, out) and ok
                 ok = self._depart_kept_paths(src_keep, comp_ids, out) and ok
-                # Build trees a source-less component owns (a fetched package): `paths.under`
-                # keeps the removal inside the runtime root.
-                import shutil
+                # Build trees a source-less component owns (a fetched package) and saved state:
+                # removed descriptor-anchored (the parent walked no-follow, the tree recursed
+                # relative to held fds). A leaf that is not a real directory is refused.
                 for rel in (*build_roots, *state_roots):
                     try:
-                        shutil.rmtree(self._paths.under(*rel.split("/")))
+                        leaf = self._paths.under(*rel.split("/"))
+                        st = runtime_fs.stat_leaf_nofollow(self._paths, leaf)
+                        if st is None:                # absent — or an unsafe parent, which
+                            source_fs.rmtree_at(self._paths, leaf)   # raises here, not skipped
+                            out.append(f"  [removed] {rel} (already absent)")
+                            continue
+                        if not stat.S_ISDIR(st.st_mode):
+                            raise PathContainmentError(f"not a directory: {rel}")
+                        source_fs.rmtree_at(self._paths, leaf)
                         out.append(f"  [removed] {rel}")
-                    except FileNotFoundError:
-                        out.append(f"  [removed] {rel} (already absent)")
                     except (OSError, PathContainmentError) as exc:
                         out.append(f"  [fail] {rel}: {exc}")
                         ok = False
@@ -2601,7 +2626,25 @@ class MaintenanceOpsMixin:
                         out.append(f"  [fail] {path}: orphaned ownership record could "
                                    "not be removed")
                         ok = False
-                # 2) per-stack config files
+                # 2) the stack's own secrets + generated config, then per-stack config files
+                for rel in ([("secrets", n) for n in secret_files]
+                            + [("files", n) for n in gen_files]):
+                    try:
+                        leaf = self._paths.under("config", *rel)
+                        gone = runtime_fs.stat_leaf_nofollow(self._paths, leaf) is None
+                        runtime_fs.unlink(self._paths, leaf)
+                        out.append(f"  [removed] config/{'/'.join(rel)}"
+                                   + (" (already absent)" if gone else ""))
+                    except (OSError, PathContainmentError) as exc:
+                        out.append(f"  [fail] config/{'/'.join(rel)}: {exc}")
+                        ok = False
+                for name in link_files:
+                    try:
+                        runtime_fs.unlink_link(self._paths, self._paths.under("config", "files", name))
+                        out.append(f"  [removed] config/files/{name}")
+                    except (OSError, PathContainmentError) as exc:
+                        out.append(f"  [fail] config/files/{name}: {exc}")
+                        ok = False
                 for name in cfg_files:
                     try:
                         runtime_fs.unlink(self._paths, cfg_dir / name)

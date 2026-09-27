@@ -271,10 +271,14 @@ def test_clean_purge_refuses_on_a_current_boot_marker_and_leaves_state_alone(tmp
     _own(tmp_path, "openhop-repeater", ("openhop-repeater-src",))
     _boot(monkeypatch, tmp_path, BOOT_A)
     marker = _write_marker(tmp_path, BOOT_A)
+    key = tmp_path / "config" / "secrets" / "meshcore_identity.key"
+    key.parent.mkdir(parents=True, exist_ok=True)
+    key.write_text("k")
     svc = _svc_plain(tmp_path)
     res = svc.clean("meshcore", apply=True, purge=True)
     assert not res.ok and "reboot" in res.summary
     assert marker.exists() and (tmp_path / "src" / "openhop-core").exists()
+    assert key.exists()                          # the purge's new removals wait behind the gate too
     # kiss is never gated by MeshCore's marker
     _mksrc(tmp_path, "loraham-kiss-tnc")
     _own(tmp_path, "loraham-kiss-tnc", ("loraham-kiss-tnc",))
@@ -282,9 +286,10 @@ def test_clean_purge_refuses_on_a_current_boot_marker_and_leaves_state_alone(tmp
     assert "reboot" not in res.summary
 
 
-def test_clean_purge_of_meshcore_keeps_state_openhop_when_it_proceeds(tmp_path, monkeypatch):
-    """`lhpc clean meshcore --purge` removes sources, config, markers and logs — NOT the repeater's
-    application state under state/openhop (the plugins and the marker live there)."""
+def test_clean_purge_of_meshcore_removes_state_openhop_when_it_proceeds(tmp_path, monkeypatch):
+    """`lhpc clean meshcore --purge` is a full wipe (maintainer, 2026-09-27): once the gate lets it
+    proceed (the marker is from an old boot), the repeater's state under state/openhop goes too,
+    plugins and the stale marker included."""
     _mksrc(tmp_path, "openhop-core", "openhop-repeater")
     _own(tmp_path, "openhop-core", ("meshcore-node",))
     _own(tmp_path, "openhop-repeater", ("openhop-repeater-src",))
@@ -294,7 +299,7 @@ def test_clean_purge_of_meshcore_keeps_state_openhop_when_it_proceeds(tmp_path, 
     svc = _svc_plain(tmp_path)
     res = svc.clean("meshcore", apply=True, purge=True)
     assert "reboot" not in res.summary
-    assert marker.exists() and (tmp_path / "state" / "openhop" / "plugins" / "demo").exists()
+    assert not marker.exists() and not (tmp_path / "state" / "openhop").exists()
 
 
 @pytest.mark.parametrize("target", ["meshcore", "meshcore-node", ""])

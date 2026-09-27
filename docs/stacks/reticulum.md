@@ -14,6 +14,7 @@ packet. The driver is [loraham-rns-interface](https://github.com/makrohard/lorah
 | Config | `<runtime>/state/reticulum/config` (0400) from `lhpc/data/bases/reticulum.conf`, regenerated on every start — edit it through lhpc. Read-only even to its owner, so a client that offers to edit interfaces cannot; lhpc rewrites it by renaming a fresh file over it, which needs permission on the directory, not the file |
 | Resources | `loraham.radio.868` + `.433` exclusive · `spi.bus.0` cooperative · `spi.bus.0.unlocked` exclusive · `tcp.port.37428` / `.37429` / `.4242` / `.8790` exclusive |
 | System | `/dev/spidev0.0` (`dtoverlay=spi0-0cs`); `spi` + `gpio` groups; `python3-libgpiod`, `python3-spidev` |
+| State | `state/reticulum` (transport identity, path tables, config), `state/meshchat`, `state/nomadnet`, `state/lxmd`, `state/sideband` (their LXMF identities = the addresses contacts know). Updates and `uninstall` keep them; `lhpc clean reticulum --purge` removes them, so a reinstall gets new addresses |
 | Install channel | source only |
 
 ## Contents

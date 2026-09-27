@@ -51,8 +51,10 @@
           {% if frm %}<input type="hidden" name="from" value="{{ frm }}">{% endif %}
           {% if op == 'clean' %}
             <p class="depnote depnote-bad"><strong>DESTRUCTIVE:</strong> Clean removes this stack's
-              sources, per-stack configuration, logs, known-working history and state. Retained
-              diagnostics are gone. config/local.toml, secrets and other stacks are untouched.
+              sources, per-stack configuration, logs, known-working history and saved state,
+              and its identities and keys: a reinstall is a new node, and peers must forget the
+              old one. Retained diagnostics are gone. Uninstall keeps all of that.
+              config/local.toml, config/secrets.toml and other stacks are untouched.
               Type the stack id <strong>{{ target }}</strong> to confirm:</p>
             <label>confirm
               <input type="text" name="confirm_text" autocomplete="off" placeholder="{{ target }}">

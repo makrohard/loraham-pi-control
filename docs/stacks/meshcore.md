@@ -14,7 +14,7 @@ GPS, persistence, readiness and lifecycle. The node never drives SPI or GPIO its
 | Build | `lhpc build meshcore`: in-tree `.venv` (`--system-site-packages`) → openHop Core → `meshcore_host` (shipped with lhpc) → the repeater's pinned closure (`openhop-repeater-constraints.txt`) and checkout. Web UI: a backend venv from `meshcore-webui-constraints.txt`; the React frontend is prebuilt package data (no npm on the box). Nothing is gui-gated — everything builds headless |
 | Run | `.venv/bin/python -m meshcore_host <runtime>/config/files/meshcore.toml` — the same command in every mode |
 | Config | `<runtime>/config/files/meshcore.toml` (0600 — it carries the private key), rendered from `lhpc/data/bases/meshcore.toml` on every start |
-| Identity | `<runtime>/config/secrets/meshcore_identity.key` (0600), written into the generated config as `[identity] key`; repeater: `openhop_repeater_identity.key` + `openhop_repeater_admin.txt` |
+| Identity | `<runtime>/config/secrets/meshcore_identity.key` (0600), written into the generated config as `[identity] key`; repeater: `openhop_repeater_identity.key` + `openhop_repeater_admin.txt`. Updates and `uninstall` keep them; `lhpc clean meshcore --purge` removes them with the stack's state, so a reinstall is a new node |
 | Endpoints | Companion TCP `:5000` (chat modes; binds loopback while `meshcore_allow` is `127.0.0.1`, else `0.0.0.0`) · repeater dashboard `127.0.0.1:8000` (repeater modes) · Web UI backend `127.0.0.1:8788`, loopback — reached through the LHPC proxy or an [SSH tunnel](../ssh-tunnel.md) |
 | Persistence | chat: `<runtime>/state/meshcore/companion.db` (contacts, channels, routes, prefs, queued messages) · repeater modes: `<runtime>/state/openhop/` (the repeater's own SQLite/RRD; the hosted Companion persists there) · Web UI: `<runtime>/state/meshcore-webui/` (a display cache, never the identity) |
 | Resources | `tcp.port.5000` / `.8000` / `.8788` exclusive · `loraham.daemon-socket.868` consumer · `loraham.profile.868` requirement `MANAGED` · `meshcore.companion-client` exclusive, advisory (webui and cli) |
@@ -115,8 +115,9 @@ What a plugin is, and where the boundary lies:
 * plugins are **not sandboxed**: they run as the same user as the repeater and can reach
   everything that account can — the runtime state and the radio daemon's sockets included. The
   separate session upstream gives each plugin is process management, not a security boundary;
-* plugins are repeater application state: `lhpc clean meshcore --purge` leaves `state/openhop`
-  alone, so they survive it; only the controller's `uninstall.sh --purge` removes them;
+* plugins are repeater application state under `state/openhop`: updates and `lhpc uninstall`
+  keep them; **`lhpc clean meshcore --purge` removes the plugins too** (with the repeater's
+  tables). Until 0.10.0 plugins survived a purge; that rule is gone;
 * on a Zero 2 W run one plugin at a time — a plugin's install (venv + pip) and the plugin itself
   come on top of the node's memory.
 

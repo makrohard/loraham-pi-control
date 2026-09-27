@@ -262,16 +262,17 @@ def test_read_only_operations_create_no_key(tmp_path):
 
 
 @pytest.mark.safety("meshcore-identity")
-def test_clean_purge_adopts_the_key_before_removing_the_source(tmp_path):
-    # `clean` removes the source AND the generated config, so an identity living only in
-    # those is gone unless it is copied out first. It deliberately spares config/secrets.
+def test_clean_purge_removes_the_identity_so_a_reinstall_is_a_new_node(tmp_path):
+    # "Purge is purge" (maintainer, 2026-09-27): the key goes from config/secrets AND from the
+    # generated config, so nothing is left for a reinstall to adopt the old identity from.
     svc = _svc(tmp_path)
-    gen = tmp_path / "config" / "files" / "meshcore.toml"
-    gen.parent.mkdir(parents=True, exist_ok=True)
-    gen.write_text(f'[identity]\nkey = "{KEY}"\n')
+    _generated_with_key(tmp_path, KEY)
+    mi.ensure_identity(svc._paths, svc.meshcore_identity_candidates())
+    assert mi.secret_path(svc._paths).exists()
     res = svc.clean("meshcore", apply=True, purge=True)
-    assert res.ok or "running" not in (res.summary or "")
-    assert mi.secret_path(svc._paths).read_text().strip() == KEY
+    assert res.ok, res.details
+    assert not mi.secret_path(svc._paths).exists()
+    assert mi.adopt_identity(svc._paths, svc.meshcore_identity_candidates()) == ""
 
 
 @pytest.mark.safety("meshcore-identity")
@@ -288,7 +289,7 @@ def test_a_destructive_op_refuses_on_an_invalid_key_rather_than_destroying_it(tm
     gen = tmp_path / "config" / "files" / "meshcore.toml"
     gen.parent.mkdir(parents=True, exist_ok=True)
     gen.write_text('[identity]\nkey = "nope"\n')
-    res = svc.clean("meshcore", apply=True, purge=True)
+    res = svc.uninstall("meshcore", apply=True)
     assert not res.ok
     assert gen.exists(), "the file holding the (broken) identity must still be there"
 

@@ -5,6 +5,11 @@
 - Chat receives on 433.775 by default, the channel it transmits on (was 433.900): two chat boxes, a
   Graywolf station and stock ESP32 trackers now hear each other. The split is one setting away:
   `lhpc config chat rx_freq 433.900`.
+- Behaviour change: `lhpc clean <stack> --purge` is a full wipe. It now also removes the stack's
+  saved state (Graywolf's database, Meshtastic's node data, MeshCore's and Reticulum's stores), its
+  node identities and keys, and its generated config files. A reinstall is a new node; peers must
+  forget the old one. `lhpc clean meshcore --purge` now removes the MeshCore repeater plugins too
+  (they used to survive it). `uninstall` keeps all of it; chat's message log survives a purge.
 
 ## 0.10.0
 

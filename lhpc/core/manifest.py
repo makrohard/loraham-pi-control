@@ -49,6 +49,16 @@ def _state_root(raw: dict) -> str:
     return v
 
 
+def _secret_files(raw: dict) -> tuple[str, ...]:
+    """`secret_files`: bare filenames under config/secrets/ — `clean --purge` removes them."""
+    v = raw.get("secret_files", []) or []
+    if not isinstance(v, list) or not all(
+            isinstance(n, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", n) and n != "secrets.toml"
+            for n in v):
+        raise ManifestError(f"{raw.get('id', '?')}: secret_files must be bare filenames, got {v!r}")
+    return tuple(v)
+
+
 def _parse_file_config(raw: dict | None) -> FileConfig | None:
     if not raw:
         return None
@@ -827,6 +837,7 @@ def _parse_component(raw: dict) -> Component:
         start_note=raw.get("start_note", ""),
         build_root=raw.get("build_root", ""),
         state_root=_state_root(raw),
+        secret_files=_secret_files(raw),
         release_repo=raw.get("release_repo", ""),
         ui_user=raw.get("ui_user", ""),
         ui_password_file=raw.get("ui_password_file", ""),

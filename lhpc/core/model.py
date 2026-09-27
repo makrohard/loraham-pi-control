@@ -419,6 +419,10 @@ class Component:
     # state outside every checkout (MeshCom's node image = the node's settings). Updates and
     # rebuilds never touch it; `clean --purge` removes it.
     state_root: str = ""
+    # BARE filenames under config/secrets/ that belong to this component alone (its node
+    # identity, a web push key, a password LHPC minted for it). `clean --purge` removes them;
+    # update, rebuild and uninstall keep them. Never the operator's config/secrets.toml.
+    secret_files: tuple[str, ...] = ()
     # GitHub "owner/repo" whose RELEASES this fetched-package component tracks, for the
     # upstream-version check (and the opt-in upstream install). "" = no upstream check.
     release_repo: str = ""
