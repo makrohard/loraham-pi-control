@@ -492,10 +492,6 @@ class Lifecycle:
             return StartLaunch(False, str(log),
                                "a prior post-start runner could not be verified stopped — resolve "
                                "it before starting (" + "; ".join(pre_notes) + ")")
-        # A secret an earlier version let into this component's start logs (P1.14: the MeshCore
-        # login) is redacted NOW, while no process holds the log. Best effort: a warning goes into
-        # the log itself and the start goes on.
-        self._scrub_start_logs(comp, log)
         try:
             # The default spawn opens the start log via the anchored runtime_fs; a
             # symlinked log leaf/parent raises PathContainmentError, also typed here.
@@ -1355,17 +1351,6 @@ class Lifecycle:
                           "processes ceased but ownership record removal failed — "
                           "records retained", killed, notes)
         return result(Outcome.STOPPED, "; ".join(notes) if notes else "no owned process", killed)
-
-    def _scrub_start_logs(self, comp: Component, log: Path) -> None:
-        from . import log_redact
-        try:
-            warnings = log_redact.scrub_component_logs(self.paths, self.logs_dir(), comp.id)
-            if warnings:
-                with runtime_fs.open_log_append(self.paths, log) as fh:
-                    for w in warnings:
-                        fh.write(f"[lhpc] {w}\n".encode())
-        except Exception:
-            pass                                   # never let the redaction block a start
 
     def start_log(self, comp: Component, band: str = "") -> Path | None:
         """The captured process log for `comp`, band-aware. A band-scoped start writes

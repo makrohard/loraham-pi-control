@@ -85,17 +85,8 @@ Two writing routes pass by decision: the plugin manager (`/api/plugins/…`, inc
 uploaded wheel) and the sensor configuration (`/api/sensors_config_update`), which on an LHPC box
 answers with an error and changes nothing, because the repeater has no config file to rewrite.
 
-**Login secrets in the logs** — the pinned openhop_core logs every decrypted over-the-air login at
-INFO ("[LoginServer] Plaintext hex: …", and "Password hex: …" for a room server): the admin or guest
-password in hex. Up to 0.10.0 those lines reached `logs/start-meshcore-node*.log` (created with mode 0644, so any local user who can enter the runtime
-root could read it), the console's Logs page for the stack, and the repeater dashboard's log page.
-LHPC now replaces the payload with `<redacted by LHPC>` on the node's logger before any log sees it,
-and redacts lines already in those files at the node's next start (streaming, whatever their size; it needs free
-space for one copy of the log while it rewrites it. If it fails, a `[lhpc] log redaction skipped …` line in the
-log says so: then delete the file by hand). A password that was ever logged
-this way should be **changed**: stop the stack, delete `config/secrets/openhop_repeater_admin.txt`,
-and start a repeater mode again; a new password is minted and shown in the stack page's Password
-section.
+The pinned openhop_core logs each decrypted over-the-air login at INFO
+([openhop-dev/openhop_core#156](https://github.com/openhop-dev/openhop_core/issues/156)).
 
 **Plugins** — the dashboard's *Plugins* page needs upstream's plugin manager, a second process
 (`python -m repeater.plugins`) the dashboard reaches over a socket in the repeater's state

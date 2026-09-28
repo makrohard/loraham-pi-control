@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- MeshCore: LHPC no longer redacts the repeater's login log lines; upstream logs them (openhop-dev/openhop_core#156).
+
 ## 0.11.2
 
 - meshcom-qemu-raspi: b99e6ee33 -> 3c30c07e4 (3c30c07), used by meshcom-gps-relay, meshcom-qemu

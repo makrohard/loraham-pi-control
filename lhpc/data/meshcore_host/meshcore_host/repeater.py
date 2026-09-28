@@ -23,7 +23,6 @@ import logging
 from typing import Optional
 
 from .config import DASHBOARD_PORT, HostConfig, ConfigError
-from . import login_redact
 from .gps_feed import GpsFeed
 from .identity import IdentityError, load_identity_hex
 from .loraham_radio import LoRaHAMRadio
@@ -117,8 +116,6 @@ class _Host:
 
     def __init__(self, cfg: HostConfig):
         self.cfg = cfg
-        # Before upstream exists: the login handler must never log a decrypted login (P1.14).
-        login_redact.protect(login_redact.REPEATER_LOGGER)
         self.conf = build_upstream_config(cfg)
         self.radio = LoRaHAMRadio(
             data_socket=cfg.data_socket, config_socket=cfg.config_socket,
@@ -173,7 +170,6 @@ class _Host:
         return daemon
 
     def _after_initialize(self, daemon) -> None:
-        login_redact.protect_login_helper(daemon)            # the logger upstream really wired
         bridges = list(getattr(daemon, "companion_bridges", {}).values())
         if not self.cfg.companion_on:
             if bridges:
