@@ -2,7 +2,8 @@
 
 **Temporary working document.** It lives on the branch `notes/todo-after-0.11.0` only. It is not part of any
 release, is not merged into `main` or `dev`, and is deleted when its rows have moved into plans, the changelog or
-the docs. State: 2026-09-28, written during the 0.11.0 release run.
+the docs. State: 2026-09-28, written during the 0.11.0 release run; updated the same day (one line removed
+that a re-check refuted, three tasks added).
 
 How to read it: section 1 is the agreed order of work. Sections 2 and 3 are decided work. Section 4 is parked and
 gets decided when the next release is planned. Section 5 comes last, before 1.0.0.
@@ -17,6 +18,7 @@ Every work item runs to its audit point (plan or change written, read by a secon
 | 0 | Fix for the three moved sources (Reticulum, NomadNet, LXMF), **only if needed**: the bot's release of them fails, or NomadNet does not start with its new text-UI library. If needed, it goes before everything below | no |
 | 1 | Release bot's schedule back on, once the 0.11.0 images are built | no |
 | 2 | Reference box: console identity restored from the kept copy, served certificate read back | no |
+| 3 | MeshCom: the firmware source goes back from the temporary fork to upstream, before the next manual release | no (decided 2026-09-28) |
 | 3 | Override for a binary blocked by the pin check (`--accept-pin-mismatch`, with the hint "update LHPC first" in the CLI and the console) | four open points of its plan |
 | 4 | Upstream fixes prepared for Graywolf (three items), through both review gates | variant for one of them |
 | 4 | Log rotation (section 2.1) | limits |
@@ -72,11 +74,12 @@ look, low priority; the maintainer tends to accept the risk.
 | Docs: the matrix record of the 0.11.0 run and the release pre-flight checklist, as the first docs commit after the tag | docs |
 | Rows of the old list that could not be mapped with certainty and are checked by their owners: the known-working label "(dev)" on kiss after a pinned reinstall; the docs sentence on a hand-edited Meshtastic config; the rest of the notes on the revocation fix; the doubled "(staying armed)" in the images' first-boot text; the exact case of the boot-restore reason; the headless build guard for MeshCom upstream | to check |
 | Test rig: the 433 power guard script on the second test box discards the result of its reset | test rig |
+| Changelog: shorter entries; it is not meant to explain | docs |
+| GitHub rulesets: the required checks shall count for every push; later | repository |
 
 ### Minor issues seen in the 0.11.0 run
 | Item |
 |---|
-| The voice terminal client ignores Ctrl-C; quit is the Q key |
 | MeshCore's command-line client prints "no_event_received" although its frames go out |
 | A purge resets Reticulum's `rnode_framing` to "no"; an RNode peer needs "yes" again (documented) |
 | Voice over the air was not tested: neither test box has an audio input |
