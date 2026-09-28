@@ -127,6 +127,25 @@ no history (that belongs in the changelog).
 
 ### Minor release (`0.X.0`)
 
+Before step 1 (each line was missed or found late in a real run):
+- From the box that builds the from-source rows, one PlatformIO package download is not refused
+  with 429: the registry limits downloads per public address. If it refuses, arrange another uplink
+  for those builds before the run.
+- A pin move whose binary is not published yet does not land on `dev` alone; it reaches `dev` with
+  the release commit's push, after the binary is published and the test lab is green on the release
+  commit.
+- Every summary sentence about the release flow in this file and in docs/maintenance.md is read
+  against the steps below before the release commit goes to review.
+- A changelog line about a moved source pin names the commands an installed box needs:
+  `lhpc update <stack> --yes`, then `lhpc build <stack> --yes`.
+- After a purge a Meshtastic node has a new key: remove the peer's old entry before the
+  direct-message rows, and let the peer send one broadcast.
+- One owner per band gives the go for every transmitting step of the matrix.
+- A BLE peer's pairing is proven by one connection with the stored bond, not by the host's list of
+  paired devices.
+- The release bot's schedule is switched off for a manual release only on the maintainer's word; if it was
+  switched off, it is switched on again after the image run has finished.
+
 1. Run the bot in `watch-only` and move, or deliberately hold, every pin that has moved upstream
    ([maintenance](docs/maintenance.md#branches-and-releases)).
 2. On a release branch from `dev`: make sure the version scalars and the changelog heading carry
@@ -158,13 +177,15 @@ no history (that belongs in the changelog).
 ### Maintainer patch (`0.X.Y`)
 
 1. The fix lands on `dev`, one commit per change, with the version bump and its changelog
-   section ([maintenance](docs/maintenance.md#branches-and-releases)).
+   section ([maintenance](docs/maintenance.md#branches-and-releases)); a fix that moves a binary pin
+   lands only after the binary built from that commit is published (step 4).
 2. CI and `testlab.yml` with `release_verify=true` green on the exact `dev` tip to be released.
 3. Fast-forward `main` to it and put the annotated tag on it. No GitHub Release. If the bot has
    released since `dev` last equalled `main`, `main` is no longer an ancestor of `dev`: cut the patch
    as one release commit on top of `main` instead, then CI, fast-forward `main` and tag.
-4. Binaries for any moved pin, built from the tagged commit, then the image tag with the same
-   version (steps 8 and 9 above).
+4. Binaries for any moved pin, built from the tip that step 3 tags, BEFORE step 2's testlab and
+   step 3 (testlab and `release-verify` need the published binary); the
+   image tag with the same version after step 3 (steps 8 and 9 above).
 
 ### Bot patch
 

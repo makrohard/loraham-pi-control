@@ -101,6 +101,13 @@ sources) is still purged and reinstalled on its own.
 Rows 9 and 12 are the heavy compiles and run on the second box; row 10 is the light source build on
 the Zero 2 W. For each of the three: console stopped, `vmstat` running, `dmesg` checked after it.
 
+Row 7's command-line client: the MeshCore node serves one client connection at a time
+([MeshCore](stacks/meshcore.md#command-line-client)). The row's commands are typed in the client
+whose command `lhpc stack start meshcore-cli` prints (the wrapper, which hands the one connection
+over from the web UI and back); the web UI keeps running. A client that prints "no_event_received"
+got no reply within its reply timeout (15 s in meshcore 2.3.14); that alone does not show that the
+frame was not sent: read `logs/rf-meshcore.log`.
+
 ### Coverage
 
 Every stack on every channel it can be installed on — its default channel, the release's pins,
@@ -144,7 +151,7 @@ After the per-stack rows, with the box holding every stack installed and built:
 | **auto-install consistency (CLI path)** | purge every stack, then `lhpc auto-install --yes` — the exact command the image builder runs and README step 9; every log file the run announces (`tail -f …`) must exist afterwards | every stack ends installed on its default channel (binary where published, else `pinned`) and built; `lhpc status --versions` reads `match` for every source component (a `differs` means the default channel did not resolve to the pin); `lhpc status --versions` recorded as-is (what `match`/`differs` mean: [provenance](provenance.md)); the image's `components-*.txt` shows the same lines; nothing reads "not built"; total time recorded |
 | **`dev` selector spot-check** | on one light stack with no binary (kiss): `lhpc clean kiss --purge --yes`, `lhpc install kiss --source dev --yes`, build, start, then reinstall it on the default channel | the install reports the resolved BRANCH TIP and the checkout is at it; `lhpc status --versions` reads `differs` when the tip is ahead of the pin and `match` when the tip IS the pin — both are correct, the check is that the selector resolved to the tip; the stack starts; after the reinstall it reads `match` |
 | **known-working** | after each stack's green start, the stack page must offer to record the composition; confirm it there for every source-built stack whose components the controller can see running (a binary install and the fetched graywolf release have no source composition and show no offer, by design; chat and voice are source-built but their components are interactive, so the controller never sees them running and refuses the confirmation) (the CLI form is `lhpc known-working <stack>`) | the offer is visible and plainly worded (one click, no commit ids to understand); `profiles/known-working/<stack>.json` and `lhpc status --versions` show the run-proven pins (the per-release step in [maintenance](maintenance.md#moving-a-pin)) |
-| **boot restore** | power-cycle once with the release's default running set | `N restored, 0 failed`, console reachable |
+| **boot restore** | start a set of stacks (the release runs nothing by default), then power-cycle once | `N restored, 0 failed` for that set, console reachable |
 | **web console** | Dashboard, Apps rows, Settings of every stack after the run | no traceback in the console log; every row opens |
 | **high-power switch** | on a box whose 433 radio is a bare SX127x module (Uputronics): the rows of the current high-power live test ([live-tests](live-tests/)); on the LoRaHAM board the refusals and the switch state only — the approved plan does not cover +20 dBm TX on its RFM98PW | refusals without the flag, the flag on the switched band only, one frame at 20 with `TXERR` 0, the start gate, revocation by restart |
 | **pins vs binaries** | `lhpc status --versions` on the three binary stacks | the installed binary's components equal the manifest pins |

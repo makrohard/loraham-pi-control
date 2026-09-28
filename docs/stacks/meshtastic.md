@@ -99,11 +99,23 @@ lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --
 ## Notes
 
 - A freshly reset node cannot be direct-messaged until node info has been exchanged (modern
-  firmware rejects a channel-encrypted DM with `NO_CHANNEL`). Every start's post-start step re-applies
-  the node's owner; when the firmware counts that as an owner change it sends its node-info at once,
-  and its boot node-info check follows about 30 s after start. Both go through the firmware's
-  node-info throttle (10 minutes by default), so a later "Skip send NodeInfo since we sent it <600s
-  ago" line can mean the node-info already went out. Broadcasts are unaffected.
+  firmware rejects a channel-encrypted DM with `NO_CHANNEL`; broadcasts are unaffected). Every
+  start's post-start step re-applies the node's owner, and the firmware may log a node-info at that
+  point; its boot node-info check
+  follows about 30 s after start. Both go through the firmware's node-info throttle (10 minutes by
+  default), so a later "Skip send NodeInfo since we sent it <600s ago" line means one was generated,
+  not that it went over the air. A logged node-info is not proof of a transmission. (That line and
+  "Started Tx"/"Completed sending" are DEBUG lines: `lhpc config meshtastic loglevel debug`.)
+  - In our kept-data test, the node's own log recorded a node-info send at start when the 10-minute
+    throttle allowed it; that log does not show whether the transmission was complete or whether a
+    peer received it.
+  - On a fresh node (a new image or `lhpc clean meshtastic --purge`), the node-info logged at start
+    did not reach the peer in our tests. In the one test that logged it in detail, a following
+    configuration step of the start cut its transmission, and the firmware's 10-minute throttle then
+    applied. In that test a broadcast the peer sent after those 10 minutes made the node answer with
+    its node-info, and the peer's firmware dropped it because it still held the old key for that node
+    number: remove the node's entry on the peer (next note). An earlier broadcast was not tested. The
+    record: [live test](../live-tests/live-test.md#notes-from-the-run).
 - A new image, `lhpc clean meshtastic --purge` or a deleted `state/meshtasticd` gives the node a
   new key but the same node number, which on the Pi comes from its Bluetooth MAC (the YAML sets no `MACAddress`). A peer that already
   stored the old public key keeps it and drops node-info carrying the new key, so direct messages

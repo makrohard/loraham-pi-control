@@ -152,8 +152,10 @@ cache); `install.sh` is a fresh installer and refuses an existing checkout — c
 #### 3. Check what will be installed
 
 Read-only pre-flight, deliberately **needs no root**: vet what the script would install before
-granting it privileges (everything else requires `sudo`). What it checks and its exit codes:
-[deps](docs/cli.md#deps).
+granting it privileges (everything else requires `sudo`). The dry run needs package lists that can
+resolve the declared packages. If apt cannot resolve them, it exits 5 and names
+`sudo apt-get update`; stale or incomplete lists are the usual cause. Run that, then retry. (Without
+`apt-get` at all it also exits 5.) What it checks and its exit codes: [deps](docs/cli.md#deps).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/bootstrap-deps.sh -o bootstrap-deps.sh
