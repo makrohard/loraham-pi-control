@@ -15,6 +15,7 @@ import shutil
 import time
 import pytest
 from lhpc.core import stackupdates as su, source_fs, source_registry
+import lhpc.core.install as install_mod
 from lhpc.core.paths import Paths, PathContainmentError
 from lhpc.core.probes.backends import CommandResult as CR, FakeSystem, System, CommandResult
 from lhpc.core.services import ControllerService
@@ -3099,8 +3100,9 @@ def v2_update_env(tmp_path, git, make_repo, installer):
 # the new source; changes to files that belong to UPSTREAM still refuse. Regenerable artifacts
 # are neither carried nor blocking.
 
-def _inject_on_git_copy(monkeypatch, failure):
-    """Make the FIRST `.git` copy fail with `failure(src, dst)`; delegate every other call.
+def _inject_on_git_copy(monkeypatch, failure, fail_first=1):
+    """Make the first `fail_first` `.git` copies fail with `failure(src, dst)` (every one, when
+    `fail_first` is None); delegate every other call.
 
     A real `copytree` has already created and partly filled the destination when a nested
     entry disappears, so the injection leaves a sentinel behind: an implementation that
@@ -3112,7 +3114,7 @@ def _inject_on_git_copy(monkeypatch, failure):
     def wrapper(src, dst, *a, **kw):
         if os.path.basename(str(src)) == ".git":
             calls["git"] += 1
-            if calls["git"] == 1:
+            if fail_first is None or calls["git"] <= fail_first:
                 Path(dst).mkdir(parents=True, exist_ok=True)
                 (Path(dst) / "already-copied").write_text("partial")
                 raise failure(str(src), str(dst))
@@ -3163,14 +3165,73 @@ def test_a_mixed_copy_failure_is_not_retried_into_success(tmp_path, monkeypatch,
     make_repo(repo)
     comp = _comp()
     inst = installer(comp)
-    calls = _inject_on_git_copy(monkeypatch, lambda src, dst: shutil.Error([
-        _enoent(src),
-        (f"{src}/config", "", f"[Errno {errno.EACCES}] Permission denied: '{src}/config'"),
-    ]))
+    monkeypatch.setattr(install_mod, "_sleep", lambda s: None)
+    seen = []
+
+    def failure(src, dst):                    # benign on the first copy, MIXED on the second
+        seen.append(src)
+        if len(seen) == 1:
+            return shutil.Error([_enoent(src)])
+        return shutil.Error([
+            _enoent(src),
+            (f"{src}/config", "", f"[Errno {errno.EACCES}] Permission denied: '{src}/config'"),
+        ])
+    calls = _inject_on_git_copy(monkeypatch, failure, fail_first=2)
 
     assert inst.adopt_source(comp, source="dev").status == "failed"
-    assert calls["git"] == 1                                       # never retried
+    assert calls["git"] == 2                  # the mixed error at the retry is not retried again
     assert not inst.paths.under("src", "app").exists()             # nothing activated
+
+
+def test_a_repack_lasting_two_copies_does_not_fail_the_adoption(tmp_path, monkeypatch, git, make_repo, installer):
+    """A repack can outlast one retry. The first TWO `.git` copies vanish; the backoff copies a
+    third time and the adoption succeeds (0.3.16's single retry failed here)."""
+    repo = tmp_path / "rt" / "local" / "app"
+    make_repo(repo)
+    head = git(repo, "rev-parse", "HEAD")
+    comp = _comp()
+    inst = installer(comp)
+    monkeypatch.setattr(install_mod, "_sleep", lambda s: None)
+    calls = _inject_on_git_copy(
+        monkeypatch, lambda src, dst: shutil.Error([_enoent(src)]), fail_first=2)
+
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    assert calls["git"] == 3
+    dest = inst.paths.under("src", "app")
+    assert git(dest, "rev-parse", "HEAD") == head
+    assert not (dest / ".git" / "already-copied").exists()
+
+
+def test_a_git_copy_that_keeps_vanishing_fails_after_the_budget(tmp_path, monkeypatch, make_repo, installer):
+    """The backoff is bounded: a `.git` that vanishes at every copy fails the adoption after
+    1 + 7 copies, with the active source untouched and nothing activated."""
+    repo = tmp_path / "rt" / "local" / "app"
+    make_repo(repo)
+    comp = _comp()
+    inst = installer(comp)
+    monkeypatch.setattr(install_mod, "_sleep", lambda s: None)
+    calls = _inject_on_git_copy(
+        monkeypatch, lambda src, dst: shutil.Error([_enoent(src)]), fail_first=None)
+
+    action = inst.adopt_source(comp, source="dev")
+    assert action.status == "failed"
+    assert "(active source untouched)" in action.detail
+    assert calls["git"] == 8
+    assert not inst.paths.under("src", "app").exists()
+
+
+def test_the_git_copy_waits_between_attempts(tmp_path, monkeypatch, make_repo, installer):
+    """The waits are the backoff's, in order: two failed copies wait 0.05 s, then 0.1 s."""
+    repo = tmp_path / "rt" / "local" / "app"
+    make_repo(repo)
+    comp = _comp()
+    inst = installer(comp)
+    slept = []
+    monkeypatch.setattr(install_mod, "_sleep", slept.append)
+    _inject_on_git_copy(monkeypatch, lambda src, dst: shutil.Error([_enoent(src)]), fail_first=2)
+
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    assert slept == [0.05, 0.1]
 
 
 def test_an_ignored_file_survives_an_update(tmp_path, git, make_repo, installer):

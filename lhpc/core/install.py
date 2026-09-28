@@ -18,6 +18,7 @@ import errno
 import os
 import re
 import shutil
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -51,6 +52,11 @@ _ADOPT_IGNORE_NAMES = (
 _ADOPT_IGNORE = shutil.ignore_patterns(*_ADOPT_IGNORE_NAMES)
 
 _ENOENT_PREFIX = f"[Errno {errno.ENOENT}]"
+
+# The waits between `.git` copy attempts while git repacks the checkout: 7 retries, 6.35 s at
+# most. A repack measured 0.92 s on a Pi 5; a longer one still fails the adoption, loudly.
+_GIT_COPY_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2)
+_sleep = time.sleep
 
 
 def _every_failure_is_enoent(err: shutil.Error) -> bool:
@@ -801,13 +807,23 @@ class Installer:
                     # A live `.git` can repack mid-copy: git packs loose objects and prunes
                     # their fan-out directories between `copytree`'s listing and its read, so
                     # an entry vanishes. That is the SAME repository in a different physical
-                    # representation, so copy it once more. Everything else escapes: a
-                    # vanishing working-tree file means the source itself is being modified
-                    # under us, and failing is the safe answer.
+                    # representation, so copy it again, with a bounded backoff while the
+                    # repack runs. Everything else escapes: a vanishing working-tree file means
+                    # the source itself is being modified under us, and failing is the safe
+                    # answer; so does a mixed error at any attempt.
                     if entry != ".git" or not _every_failure_is_enoent(err):
                         raise
-                    shutil.rmtree(d, ignore_errors=True)   # `copytree` left a partial copy
-                    shutil.copytree(s, d, ignore=_ADOPT_IGNORE, symlinks=True)
+                    for delay in _GIT_COPY_DELAYS:
+                        shutil.rmtree(d, ignore_errors=True)   # `copytree` left a partial copy
+                        _sleep(delay)
+                        try:
+                            shutil.copytree(s, d, ignore=_ADOPT_IGNORE, symlinks=True)
+                            break
+                        except shutil.Error as again:
+                            if not _every_failure_is_enoent(again):
+                                raise
+                    else:
+                        raise                             # the budget is spent: the first error
             else:
                 shutil.copy2(s, d, follow_symlinks=False)
 

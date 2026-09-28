@@ -3,6 +3,8 @@
 ## Unreleased
 
 - MeshCore: LHPC no longer redacts the repeater's login log lines; upstream logs them (openhop-dev/openhop_core#156).
+- Adopting a local source retries the `.git` copy up to seven times within about 6 s while git is repacking
+  the checkout (it retried once before); a longer repack still fails the adoption, with the active source untouched.
 
 ## 0.11.2
 
