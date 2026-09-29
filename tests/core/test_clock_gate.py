@@ -578,7 +578,11 @@ def test_init_takes_no_clock_override():
 
 
 def test_init_under_an_unverified_clock_succeeds_with_the_provisional_window(tmp_path, monkeypatch):
-    p = _provisional_box(tmp_path, monkeypatch)
+    res = _svc(tmp_path, synced=False, monkeypatch=monkeypatch).webserver_init()
+    assert res.ok, res.summary
+    # the normalisation runs in the console's watchdog only (finding 22): the message says so
+    assert "normalised automatically by the running console, once the clock is verified" in res.summary
+    p = Paths(runtime_root=tmp_path)
     assert pki.provisional_pending(p) and pki.pki_status(p)["provisional"] is True
     for f in (("server-ca", "ca.crt"), ("client-ca", "ca.crt"), ("server", "server.crt")):
         assert _window(_cert(tmp_path, *f)) == pki.PROVISIONAL_VALIDITY, f
@@ -829,6 +833,38 @@ def test_a_multihomed_provisional_box_reissues_provisionally_and_is_not_gated(tm
     assert pki.provisional_pending(p)
 
 
+def test_a_provisional_box_under_a_verified_clock_reissues_dated_from_the_clock(tmp_path, monkeypatch):
+    # C13: the marker is set (commissioned without a verified clock, not yet normalised) but the clock
+    # is verified now. As `init`, the replacement is dated from the clock, not the fixed window, and
+    # its result line does not claim an unverified clock (finding 21).
+    p = _provisional_box(tmp_path, monkeypatch)
+    _lan_ip(monkeypatch, "192.0.2.50")
+    svc = _svc(tmp_path, synced=True, monkeypatch=monkeypatch)
+    res = svc.webserver_expose(["192.0.2.0/24"], confirm=True, replace_certificate=True)
+    assert res.ok, res.summary
+    cert = _cert(tmp_path, "server", "server.crt")
+    assert _window(cert) != pki.PROVISIONAL_VALIDITY
+    now = _dt.datetime.now(_dt.UTC)
+    assert now - _dt.timedelta(days=2) < cert.not_valid_before_utc <= now     # dated from the clock
+    assert "provisional window" not in "\n".join([res.summary, *res.details])   # no window line
+    assert pki.provisional_pending(p)                     # the marker waits for the normalisation
+
+
+def test_the_normalisation_keeps_a_clock_dated_replacement_and_clears_the_marker(tmp_path, monkeypatch):
+    # C13, afterwards: the leaf above is not provisional, so the normalisation does not issue again;
+    # it rebuilds the still-provisional CRL and clears the marker.
+    p = _provisional_box(tmp_path, monkeypatch)
+    _lan_ip(monkeypatch, "192.0.2.50")
+    svc = _svc(tmp_path, synced=True, monkeypatch=monkeypatch)
+    assert svc.webserver_expose(["192.0.2.0/24"], confirm=True, replace_certificate=True).ok
+    serial = _server_cert_serial(tmp_path)
+    monkeypatch.setattr(svc, "_nginx_reload_if_active", lambda: True)
+    assert svc.pki_clock_normalise() == "normalised"
+    assert _server_cert_serial(tmp_path) == serial, "the normalisation issued the leaf again"
+    assert pki.crl_is_provisional(p) is False
+    assert not pki.provisional_pending(p)
+
+
 def test_a_multihomed_commissioned_box_without_the_marker_is_still_gated(tmp_path, monkeypatch):
     p = _init_pki(tmp_path)
     pki.issue_server_cert(p, dns_sans=("box.lan",), ip_sans=(), days=30)
@@ -888,6 +924,8 @@ def test_verify_reports_a_provisional_pki_without_failing_it(tmp_path, monkeypat
     res = svc.webserver_verify()
     assert res.data["checks"]["pki_provisional"] == "yes"
     assert any("provisional" in d for d in res.details)
+    assert any("normalised automatically by the running console, once the clock is verified" in d
+               for d in res.details)                     # the watchdog only (finding 22)
     assert res.data["checks"].get("server_ca") != "failed"
     normal = _svc(tmp_path, monkeypatch=monkeypatch)
     assert normal.pki_clock_normalise() == "normalised"

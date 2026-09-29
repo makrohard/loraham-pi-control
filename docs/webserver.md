@@ -237,10 +237,11 @@ The two CAs keep their provisional window: it is clock-independent by constructi
 the client CA would invalidate every client certificate you had already installed. `lhpc webserver
 verify` and the Certificates panel show `provisional` until normalisation has run.
 
-While the PKI is provisional, enabling exposure on a box whose LAN address is not yet a SAN
-reissues the server certificate with the same provisional window rather than refusing — the box
-must be reachable to be fixed. Exposure on a box whose address is already a SAN changes no
-certificate dates and is never gated.
+While the PKI is provisional and the clock is still unverified, enabling exposure on a box whose LAN
+address is not yet a SAN reissues the server certificate with the same provisional window rather than
+refusing — the box must be reachable to be fixed. Once the clock is verified, that reissue (and the one
+when the box joins a WLAN) is dated from the clock, as `init` does, even before the normalisation has
+run. Exposure on a box whose address is already a SAN changes no certificate dates and is never gated.
 
 Time counts as verified when the kernel says the clock is synchronised, its estimated error is
 within one second, and it is not before 2025 — a fixed date compiled into LHPC. If it is not:

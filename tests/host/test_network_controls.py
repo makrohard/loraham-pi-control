@@ -1032,6 +1032,31 @@ def test_wlan_join_decides_provisional_under_the_pki_lock(tmp_path, monkeypatch)
         "a provisional leaf was minted after normalisation had cleared the marker"
 
 
+
+def test_wlan_join_under_a_verified_clock_dates_the_leaf_while_the_marker_is_set(tmp_path, monkeypatch):
+    """C13: the marker is still set (commissioned without a verified clock, not yet normalised),
+    but the clock is verified by join time. As `init`, the join's reissue is dated from the clock,
+    not the fixed provisional window; the marker stays for the normalisation."""
+    from lhpc.core import config as _config
+    from lhpc.core import pki as pki_mod
+    from lhpc.core import service_system
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(service_system, "read_kernel_time_state",
+                        lambda: {"synced": False, "maxerror_us": 1000})
+    assert svc.webserver_init().ok and pki_mod.provisional_pending(svc._paths)
+    monkeypatch.setattr(service_system, "read_kernel_time_state",
+                        lambda: {"synced": True, "maxerror_us": 1000})
+    _config.save_webserver_config(svc._paths, bind="0.0.0.0", remote_exposed=True,
+                                  allowed_cidrs=["198.51.100.0/24"],
+                                  access_mode="local-open-remote-auth")
+    monkeypatch.setattr(ControllerService, "webserver_apply", lambda self: __import__(
+        "lhpc.core.services", fromlist=["ActionResult"]).ActionResult(True, "applied"))
+    state, _cmd, msg = svc._network_extend_console("192.0.2.0/24", ip="192.0.2.42",
+                                                   extra_dns=["h.local"])
+    assert state == "applied", msg
+    assert pki_mod.server_cert_is_provisional(svc._paths) is False
+    assert pki_mod.provisional_pending(svc._paths)
+
 # --- audit round: parser, preflight, finalize gate, retry stamp -----------------------------------
 
 

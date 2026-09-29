@@ -729,11 +729,11 @@ class NetworkOpsMixin:
             from .service_system import clock_verified
             from .service_webserver import CERT_UNREADABLE, KEY_UNREADABLE
             # Same rule as every other issuing path: an unverified clock may not date a
-            # certificate -- unless the PKI is still PROVISIONAL, in which case the reissue uses
-            # the fixed provisional window (no clock involved) and the marker stays for the
-            # watchdog to normalise. Fail-soft like the rest of this block -- the console
-            # extension itself stands, and the operator keeps the by-name cert warning until the
-            # clock is fixed.
+            # certificate -- unless the clock is unverified AND the PKI is still PROVISIONAL, in
+            # which case the reissue uses the fixed provisional window (no clock involved) and the
+            # marker stays for the watchdog to normalise. A verified clock dates it, as `init`
+            # does. Fail-soft like the rest of this block -- the console extension itself stands,
+            # and the operator keeps the by-name cert warning until the clock is fixed.
             with self._pki_lock("wlan-join-reissue"):
                 # Decide INSIDE the lock, immediately before issuing. Joining a WLAN is exactly
                 # what brings the first NTP sync, so the watchdog may normalise and clear the
@@ -754,7 +754,8 @@ class NetworkOpsMixin:
                     cert_note = KEY_UNREADABLE
                 else:
                     validity = None
-                    if _pki.provisional_pending(self._paths):
+                    if _pki.provisional_pending(self._paths) and not clock_verified(
+                            self._system.fs, self._paths.runtime_root)[0]:
                         validity = _pki.PROVISIONAL_VALIDITY
                     else:
                         ok, _why = clock_verified(self._system.fs, self._paths.runtime_root)

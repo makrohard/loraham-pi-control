@@ -8,6 +8,10 @@
   and `lhpc doctor` (an expired one makes doctor non-OK), and active client certificates are marked from 60 days
   before they expire. An existing 826-day certificate stays until `lhpc webserver tls-renew`, then
   `lhpc webserver apply`.
+- While the PKI is still marked provisional, the server certificate's replacement (`lhpc webserver expose`,
+  the Settings Apply) and the reissue when the box joins a WLAN are dated from the clock once it is verified,
+  as `webserver init` does; before, they kept the fixed provisional window until the console's normalisation
+  ran. Only under an unverified clock do they still take that window.
 
 ## 0.11.4
 

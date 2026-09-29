@@ -276,7 +276,7 @@ class WebserverOpsMixin:
         if ev["checks"].get("pki_provisional") == "yes":
             details.append("  NOTE: the PKI was created without a verified clock (fixed provisional "
                            "validity); the server certificate and CRL are normalised automatically "
-                           "once the clock is verified — see `lhpc doctor`")
+                           "by the running console, once the clock is verified — see `lhpc doctor`")
         for sid in ev["checks"].get("upstream_bypass_stacks", []):
             details.append(f"  WARNING: {sid}'s upstream port is listening on all interfaces — "
                            "reachable directly, bypassing this proxy's authentication.")
@@ -361,7 +361,8 @@ class WebserverOpsMixin:
             return ActionResult(True, "webserver PKI initialized (two CAs + server cert + CRL) "
                                 "under an UNVERIFIED clock: dated with the fixed provisional "
                                 "window, not from this clock; the server certificate and CRL "
-                                "are normalised automatically once time is verified",
+                                "are normalised automatically by the running console, once the "
+                                "clock is verified",
                                 next_commands=["lhpc webserver verify", "lhpc doctor"])
         return ActionResult(True, "webserver PKI initialized (two CAs + server cert + CRL)",
                             next_commands=["lhpc webserver verify"])
@@ -448,7 +449,8 @@ class WebserverOpsMixin:
         exposing will actually reissue the server certificate. Returns (ip, refusal-or-None).
 
             SAN already present            -> no certificate dates change -> no gate
-            SAN missing + provisional PKI  -> reissued with the provisional window -> no gate
+            SAN missing + provisional PKI  -> no gate; the reissue takes the provisional window
+                                              while the clock is unverified, else it is clock-dated
             SAN missing, commissioned PKI  -> ordinary operation -> clock gate as before
 
         The same resolved `ip` MUST be handed to `_expose_add_san_and_reissue`, or the check is a
@@ -1509,6 +1511,7 @@ class WebserverOpsMixin:
         from . import config as _config
         from . import pki as _pki
         from .reslock import ResourceBusy
+        from .service_system import clock_verified
         if not ip:
             return False, ["  SAN: this host's LAN address could not be determined — no SAN added; add "
                            "it by hand to [webserver] ip_sans, then: lhpc webserver tls-renew"]
@@ -1533,7 +1536,10 @@ class WebserverOpsMixin:
                 issue = state == "due" or (state == "absent" and ip not in cfg.ip_sans)
                 validity, key = None, ""
                 if issue:
-                    if _pki.provisional_pending(self._paths):
+                    # As `init`: the fixed window only while the clock is unverified; under a verified
+                    # clock the leaf is dated from it, even while the marker waits for normalisation.
+                    if _pki.provisional_pending(self._paths) and not clock_verified(
+                            self._system.fs, self._paths.runtime_root)[0]:
                         validity = _pki.PROVISIONAL_VALIDITY
                     else:
                         refused = self._clock_gate("reissue the server certificate for the new SAN",

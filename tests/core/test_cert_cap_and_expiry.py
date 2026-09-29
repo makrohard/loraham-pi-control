@@ -7,8 +7,8 @@ issued 825 days plus the one-day backdate: 826 days, over Apple's stated limit.
 
 What is claimed, exactly: every server leaf OUTSIDE the fixed provisional window, on all five issue
 paths, is capped. A leaf IN the provisional window (a PKI made without a verified clock and not yet
-normalised) is NOT capped, whatever the clock says when it is issued; the display marks it as over the
-cap while it is provisional and names the manual way: `lhpc webserver tls-renew` under a verified
+normalised) is NOT capped; since C13 one is issued only while the clock is unverified. The display marks it
+as over the cap while it is provisional and names the manual way: `lhpc webserver tls-renew` under a verified
 clock (which issues outside the window whatever the marker says), then `lhpc webserver apply`.
 """
 
@@ -155,11 +155,11 @@ def test_provisional_validity_is_not_clamped_and_shown_over_the_cap(tmp_path):
             "verified clock, then lhpc webserver apply") in sc["expiry_text"]
 
 
-def test_a_replacement_while_the_pki_is_provisional_stays_in_the_window_under_a_verified_clock(
+def test_a_replacement_while_the_pki_is_provisional_is_capped_under_a_verified_clock(
         tmp_path, monkeypatch):
-    # The window is decided by the marker, not by the clock: a box commissioned without a verified
-    # clock, whose clock is verified now but not yet normalised, gets a replacement in the fixed
-    # provisional window (not capped), shown as provisional and over the cap.
+    # C13: the window is decided by the clock, as `init` does: a box commissioned without a verified
+    # clock, whose clock is verified now but not yet normalised, gets a replacement dated from the
+    # clock and capped, not shown as provisional.
     res = _svc(tmp_path, monkeypatch, synced=False).webserver_init(
         dns_sans=["box.lan"], ip_sans=[], confirm=True)
     assert res.ok, res.summary
@@ -169,12 +169,11 @@ def test_a_replacement_while_the_pki_is_provisional_stays_in_the_window_under_a_
     res = _path_replacement(svc, tmp_path, monkeypatch)
     leaf = _leaf(tmp_path)
     assert leaf.serial_number != serial_before, "the replacement did not issue a new leaf"
-    assert (leaf.not_valid_before_utc, leaf.not_valid_after_utc) == pki.PROVISIONAL_VALIDITY
-    said = "\n".join([res.summary, *res.details])        # the operator's text: no false clock claim
-    assert "(fixed provisional window)" in said and "the clock is unverified" not in said
-    text = pki.pki_status(Paths(runtime_root=tmp_path))["server_cert"]["expiry_text"]
-    assert ("provisional: over the Apple 825-day cap; to replace it: lhpc webserver tls-renew under a "
-            "verified clock, then lhpc webserver apply") in text
+    assert (leaf.not_valid_before_utc, leaf.not_valid_after_utc) != pki.PROVISIONAL_VALIDITY
+    assert _span_s(leaf) == MAX_SPAN_S
+    said = "\n".join([res.summary, *res.details])        # the operator's text: no window named
+    assert "provisional window" not in said
+    assert "provisional" not in pki.pki_status(Paths(runtime_root=tmp_path))["server_cert"]["expiry_text"]
 
 
 def test_tls_renew_under_a_verified_clock_leaves_the_window_while_the_marker_is_set(
