@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.2
+
+- meshcom-qemu-raspi: b99e6ee33 -> 3c30c07e4 (3c30c07), used by meshcom-gps-relay, meshcom-qemu
+- MeshCom-Firmware: ad36784f8 -> 62095658c (v4.35v), used by meshcom-firmware
+
 ## 0.11.1
 
 - reticulum: 8a7ad40d6 -> d5962d14e (1.5.2-91-gd5962d14), used by rns

@@ -1839,8 +1839,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "b99e6ee333cca0f392aca300a7b8bdf3f3299e5e"
-    pin_tag = "b99e6ee"
+    pin_commit = "3c30c07e413309bd3520e26ea2d2d178c596ca4e"
+    pin_tag = "3c30c07"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2085,8 +2085,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "b99e6ee333cca0f392aca300a7b8bdf3f3299e5e"
-    pin_tag = "b99e6ee"
+    pin_commit = "3c30c07e413309bd3520e26ea2d2d178c596ca4e"
+    pin_tag = "3c30c07"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2144,8 +2144,8 @@ main = "meshcom-qemu"
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
     # The setup step fetches from this remote (--src), and a repo test keeps the two identical.
     path = "src/MeshCom-Firmware"
-    pin_commit = "ad36784f8d93d93d9569de9334e089ec3cfed5b5"
-    pin_tag = "v4.35u-12-gad36784"
+    pin_commit = "62095658c2f01e6faef63d526face7571f68d8f5"
+    pin_tag = "v4.35v"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 
