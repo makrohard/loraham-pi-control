@@ -883,6 +883,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_ws_exp.add_argument("--confirm-phrase", default="",
                           help="Type 'enable-remote' to confirm; 'enable-remote-danger' for the "
                                "elevated case (public 0.0.0.0/0 or a no-auth remote mode)")
+    p_ws_exp.add_argument("--replace-certificate", action="store_true",
+                          help="Consent, without a prompt, to replacing the installed server "
+                               "certificate when this host's LAN address is not among its names")
     # Per-stack web-UI reverse proxy exposure (mirrors `expose`'s two-level confirmation).
     p_ws_proxy = ws_sub.add_parser("proxy",
                                    help="Configure a stack's web-UI reverse proxy (intent; run apply)")
@@ -1577,11 +1580,25 @@ def _run(argv: list[str] | None = None) -> int:
             return _render(svc.webserver_configure(**fields))
         if cmd == "expose":
             phrase = (args.confirm_phrase or "").strip()
+            kw = {"access_mode": args.access_mode,
+                  "confirm": phrase in ("enable-remote", "enable-remote-danger"),
+                  "confirm_public": (phrase == "enable-remote-danger"),
+                  "accept_unverified": getattr(args, "accept_unverified_clock", False)}
+            r = svc.webserver_expose(args.cidr, replace_certificate=args.replace_certificate, **kw)
+            if r.data.get("reason") != "certificate-replacement":
+                return _render(r)
+            # The installed certificate would be REPLACED: nothing was written. The consent is bound
+            # to the shown replacement's digest, checked again under the PKI lock.
+            _render(r)
+            if not sys.stdin.isatty():
+                print("\nNot on a terminal: nothing was written. To replace the certificate, run the "
+                      "same command with --replace-certificate.")
+                return 2
+            if not _confirm("\nReplace the server certificate? [y/N] "):
+                print("Aborted.")
+                return 0
             return _render(svc.webserver_expose(
-                args.cidr, access_mode=args.access_mode,
-                confirm=phrase in ("enable-remote", "enable-remote-danger"),
-                confirm_public=(phrase == "enable-remote-danger"),
-                accept_unverified=getattr(args, "accept_unverified_clock", False)))
+                args.cidr, replace_digest=r.data["replacement"]["digest"], **kw))
         if cmd == "proxy":
             phrase = (args.confirm_phrase or "").strip()
             return _render(svc.stack_web_configure(

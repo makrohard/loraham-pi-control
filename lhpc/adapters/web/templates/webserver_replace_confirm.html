@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Replace the server certificate — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  {# The Settings Apply's second step (C04): the Apply would REPLACE the installed server
+     certificate, so NOTHING was saved. The submitted fields ride back as hidden inputs with the
+     replacement's digest; the service checks the digest again under the PKI lock. #}
+  <div class="card">
+    <header><h2>{{ summary }}</h2></header>
+    <div class="body">
+      <pre class="next">{% for d in details %}{{ d }}
+{% endfor %}</pre>
+      <p>Nothing was saved yet — neither these settings nor the certificate. Applying replaces the
+        certificate and keeps its key when one exists; browsers that trust this box's server CA keep trusting it.</p>
+      <form method="post" action="{{ url_for('webserver_configure') }}" class="act">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        {% for k, v in echo %}<input type="hidden" name="{{ k }}" value="{{ v }}">
+        {% endfor %}<input type="hidden" name="replacement_digest" value="{{ digest }}">
+        <button type="submit" class="warnbtn">Apply and replace the certificate</button>
+        <a class="btnlink" href="{{ url_for('stacks_overview') }}#webserver-row">Cancel</a>
+      </form>
+    </div>
+  </div>
+{% endblock %}

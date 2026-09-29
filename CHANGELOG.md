@@ -18,6 +18,12 @@
 - `lhpc webserver verify` also checks that the server certificate was issued by this box's own server CA
   (`server_chain`); a foreign leaf fails with the reason and "run `lhpc webserver tls-renew`, then `lhpc webserver
   apply`". The check reports only; it blocks no apply, update or start.
+- Remote exposure no longer replaces the installed server certificate silently. When the certificate does not name
+  this host's LAN address, `lhpc webserver expose` shows old and new names and asks (off a terminal it writes
+  nothing unless `--replace-certificate` is given), and the console's Settings Apply shows the replacement and
+  saves nothing until it is applied again. A certificate that already names the address is left untouched; a
+  replacement keeps the server key; an unreadable certificate or key is never replaced. A WLAN join reissues
+  only when the certificate lacks one of the join's names, and its outcome names old and new.
 
 ## 0.11.2
 

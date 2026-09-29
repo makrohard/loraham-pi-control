@@ -16,6 +16,39 @@ _RESTART_WATCH_WAIT_S = 15.0
 _RESTART_WATCH_POLL_S = 0.5
 
 
+CERT_UNREADABLE = "installed certificate unreadable; not replaced"
+KEY_UNREADABLE = "server key unreadable; not replaced (the way out: lhpc webserver tls-renew)"
+
+
+def _san_names(dns, ips) -> tuple:
+    """The canonical, sorted name set of a certificate or a target: "DNS:<name>" / "IP:<addr>"."""
+    return tuple(sorted({f"DNS:{d}" for d in dns if d} | {f"IP:{i}" for i in ips if i}))
+
+
+@_dc.dataclass(frozen=True)
+class Replacement:
+    """ONE replacement of the INSTALLED server certificate (C04): the old certificate's fingerprint
+    and names, and the names the new one will carry. `digest` binds an operator's consent to exactly
+    this: another old certificate, another target, or another LAN address gives another digest."""
+    old_fp: str
+    old_names: tuple
+    new_names: tuple
+
+    @property
+    def digest(self) -> str:
+        import hashlib
+        blob = "|".join([self.old_fp, ",".join(self.old_names), ",".join(self.new_names)])
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+    def sentence(self) -> str:
+        return (f"old {', '.join(self.old_names) or '(no names)'} (fp {self.old_fp[:16]}…) "
+                f"→ new {', '.join(self.new_names)}")
+
+    def as_dict(self) -> dict:
+        return {"old_fp": self.old_fp, "old_names": list(self.old_names),
+                "new_names": list(self.new_names), "digest": self.digest}
+
+
 class WebserverOpsMixin:
 
     # ---- webserver (controller-owned component; NOT a managed stack) ----------
@@ -351,6 +384,64 @@ class WebserverOpsMixin:
         what = holder.get("operation") or "another PKI operation"
         return ActionResult(False, f"PKI operation busy — {what} is in progress; retry shortly")
 
+    # ---- the installed certificate's replacement (C04): one state function, one write path ------
+    def _replacement_for(self, ip: str, target_dns, target_ips, *, any_name: bool = False):
+        """(state, Replacement | None, reason) for the INSTALLED `server.crt`:
+            "absent"     no certificate yet: an ordinary first issuance, nothing replaced;
+            "unreadable" `_read_cert` raised: REFUSE, nothing is written;
+            "covered"    no replacement is due (the Replacement still carries the installed names);
+            "due"        a replacement is due; the Replacement names old and new.
+        Due = the installed certificate lacks the LAN address (expose, Settings Apply), or, with
+        `any_name` (the WLAN-join helper), lacks ANY of the target's names."""
+        from . import pki as _pki
+        state, val = _pki.server_cert_names(self._paths)
+        if state == "absent":
+            return "absent", None, ""
+        if state == "unreadable":
+            return "unreadable", None, val
+        dns, ips, fp = val
+        old, new = _san_names(dns, ips), _san_names(target_dns, target_ips)
+        due = bool(set(new) - set(old)) if any_name else bool(ip) and ip not in ips
+        return ("due" if due else "covered"), Replacement(fp, old, new), ""
+
+    def _installed_names(self) -> tuple:
+        """(dns, ips) of the installed certificate, or ((), ()) when it is absent or unreadable."""
+        from . import pki as _pki
+        state, val = _pki.server_cert_names(self._paths)
+        return (tuple(val[0]), tuple(val[1])) if state == "names" else ((), ())
+
+    def _exposure_target(self, cfg, ip: str, submitted=None) -> tuple:
+        """(dns, ips) the certificate must carry. The Settings Apply passes the SUBMITTED lists: the
+        operator's intent, removals kept. CLI expose and the WLAN join carry no name intent, so no name
+        is dropped: config ∪ installed. The LAN address is added either way."""
+        if submitted is not None:
+            dns, ips = submitted
+        else:
+            idns, iips = self._installed_names()
+            dns, ips = (*cfg.dns_sans, *idns), (*cfg.ip_sans, *iips)
+        return (tuple(dict.fromkeys(d for d in dns if d)),
+                tuple(dict.fromkeys(i for i in (*ips, ip) if i)))
+
+    def _reissue_trigger_ips(self, config_ips) -> tuple:
+        """The IP names the exposure's reissue is decided against: the INSTALLED certificate's when it
+        is readable, else (no certificate yet) the configured list, as before."""
+        from . import pki as _pki
+        state, val = _pki.server_cert_names(self._paths)
+        return tuple(val[1]) if state == "names" else tuple(config_ips or ())
+
+    @staticmethod
+    def _replacement_preview(rep: Replacement, what: str) -> ActionResult:
+        """A due replacement without consent: NOTHING was written; the consent is bound to `digest`."""
+        return ActionResult(False, f"{what} REPLACES the server certificate — nothing was saved yet",
+                            details=[f"  {rep.sentence()}"],
+                            data={"reason": "certificate-replacement", "replacement": rep.as_dict()})
+
+    @staticmethod
+    def _unreadable_refusal(why: str) -> ActionResult:
+        return ActionResult(False, f"{CERT_UNREADABLE} — nothing was saved",
+                            details=[f"  {why}", "  the way out: lhpc webserver tls-renew"],
+                            next_commands=["lhpc webserver tls-renew"])
+
     # ---- exposure: gate the certificate, not the exposure ------------------------------------
     def _exposure_reissue_decision(self, target_ip_sans, accept_unverified: bool):
         """Resolve this host's LAN address ONCE and decide, before any config write, whether
@@ -386,12 +477,15 @@ class WebserverOpsMixin:
     def webserver_configure_apply(self, *, bind=None, port=None, scheme=None, access_mode=None,
                                   dns_sans=None, ip_sans=None, allowed_cidrs=None,
                                   confirm=False, confirm_public=False,
-                                  accept_unverified: bool = False) -> ActionResult:
+                                  accept_unverified: bool = False,
+                                  replace_digest: str | None = None) -> ActionResult:
         """Unified controller Settings action (the single 'Apply' button): derive `remote_exposed` from
         `bind`, gate remote exposure with `plan_exposure` (elevated confirm for public/no-auth/http), then
         — only on accept — save ALL fields in ONE write (incl. `remote_exposed` + `allowed_cidrs`), add the
         host IP SAN + reissue the server cert on exposure, and apply (staged validate + reload). On refusal
-        it saves nothing and applies nothing. """
+        it saves nothing and applies nothing. A remote Apply that would REPLACE the installed server
+        certificate saves nothing either until it is sent again with that replacement's
+        `replace_digest` (C04). """
         from . import config as _config
         from . import webserver as _ws
         from .config import WebserverConfig
@@ -424,21 +518,36 @@ class WebserverOpsMixin:
         # Remote exposure adds the host IP SAN and REISSUES the server certificate, so it dates
         # PKI material. The gate has to run before the config write, not before the reissue: a
         # saved exposure whose certificate was refused is a half-applied change.
-        lan_ip = ""
+        lan_ip, state, rep = "", "absent", None
         if remote:
-            lan_ip, refused = self._exposure_reissue_decision(e_ip, accept_unverified)
+            lan_ip, refused = self._exposure_reissue_decision(self._reissue_trigger_ips(e_ip),
+                                                              accept_unverified)
             if refused is not None:
                 return refused
-        try:
-            _config.save_webserver_config(self._paths, bind=e_bind, port=e_port, scheme=e_scheme,
-                                          access_mode=e_access, remote_exposed=remote,
-                                          allowed_cidrs=list(e_cidrs), dns_sans=list(e_dns),
-                                          ip_sans=list(e_ip))
-        except (ValidationError, _config.ConfigError) as exc:
-            return ActionResult(False, f"invalid webserver config: {exc}")
-        self._invalidate_config()
-        san_notes = (self._expose_add_san_and_reissue(lan_ip, accept_unverified)
-                     if remote else [])
+            if lan_ip:
+                state, rep, why = self._replacement_for(lan_ip, e_dns, (*e_ip, lan_ip))
+                if state == "unreadable":
+                    return self._unreadable_refusal(why)
+        fields = {"bind": e_bind, "port": e_port, "scheme": e_scheme, "access_mode": e_access,
+                  "remote_exposed": remote, "allowed_cidrs": list(e_cidrs), "dns_sans": list(e_dns),
+                  "ip_sans": list(e_ip)}
+        if state == "due":
+            if replace_digest != rep.digest:
+                return self._replacement_preview(rep, "Applying")
+            saved, san_notes = self._expose_add_san_and_reissue(
+                lan_ip, accept_unverified, submitted=(e_dns, e_ip), expected_digest=rep.digest,
+                save=fields)
+            if not saved:
+                return ActionResult(False, san_notes[0].strip(), details=san_notes[1:])
+        else:
+            try:
+                _config.save_webserver_config(self._paths, **fields)
+            except (ValidationError, _config.ConfigError) as exc:
+                return ActionResult(False, f"invalid webserver config: {exc}")
+            self._invalidate_config()
+            san_notes = (self._expose_add_san_and_reissue(lan_ip, accept_unverified,
+                                                          submitted=(e_dns, e_ip))[1]
+                         if remote else [])
         ar = self.webserver_apply()
         return ActionResult(ar.ok, ar.summary, details=[*san_notes, *ar.details],
                             next_commands=ar.next_commands, data=ar.data)
@@ -1307,10 +1416,15 @@ class WebserverOpsMixin:
                             next_commands=ar.next_commands, data=ar.data)
 
     def webserver_expose(self, cidrs, *, access_mode=None, confirm=False,
-                         confirm_public=False, accept_unverified: bool = False) -> ActionResult:
+                         confirm_public=False, accept_unverified: bool = False,
+                         replace_certificate: bool = False,
+                         replace_digest: str | None = None) -> ActionResult:
         """Enable remote exposure. Requires >=1 CIDR; a public default route (0.0.0.0/0) or
         a no-auth remote mode needs elevated confirmation. Writes desired config only — the
-        listener is not proven active until verify/apply."""
+        listener is not proven active until verify/apply. When exposing would REPLACE the installed
+        server certificate, nothing is written without consent: `replace_digest` (the shown
+        replacement) or `replace_certificate` (the replacement due at this call's own read; a change
+        before the PKI lock is refused, not re-consented) (C04)."""
         from . import config as _config
         from . import webserver as _ws
         from .config import WebserverConfig
@@ -1330,23 +1444,40 @@ class WebserverOpsMixin:
         if missing:
             return ActionResult(False, "cannot enable remote exposure — unmet requirement(s):",
                                 details=[f"  - {m}" for m in missing])
-        lan_ip, refused = self._exposure_reissue_decision(ws_now.ip_sans, accept_unverified)
+        lan_ip, refused = self._exposure_reissue_decision(self._reissue_trigger_ips(ws_now.ip_sans),
+                                                          accept_unverified)
         if refused is not None:
             return refused
-        try:
-            _config.save_webserver_config(self._paths, bind="0.0.0.0", remote_exposed=True,
-                                          allowed_cidrs=cidrs, access_mode=mode)
-        except (ValidationError, _config.ConfigError) as exc:
-            return ActionResult(False, f"invalid exposure config: {exc}")
-        self._invalidate_config()
-        # The LAN address must reach BOTH the trusted-host allowlist and the server cert's SANs, or a
-        # remote browser gets a 400 (unknown Host) and a certificate name mismatch. Nothing else adds
-        # it — `local_ip()` was known and displayed, but never persisted.
-        #
-        # ORDERING: every step reads FRESHLY-loaded config. `self.config()` is memoized, so a `cfg`
-        # captured before the write above would silently drop any ip_sans another writer persisted in
-        # between, and would reissue the cert from pre-exposure state.
-        san_notes = self._expose_add_san_and_reissue(lan_ip, accept_unverified)
+        state, rep = "absent", None
+        if lan_ip:
+            state, rep, why = self._replacement_for(lan_ip,
+                                                    *self._exposure_target(ws_now, lan_ip))
+            if state == "unreadable":
+                return self._unreadable_refusal(why)
+        fields = {"bind": "0.0.0.0", "remote_exposed": True, "allowed_cidrs": cidrs,
+                  "access_mode": mode}
+        if state == "due":
+            digest = replace_digest or (rep.digest if replace_certificate else None)
+            if digest is None:
+                return self._replacement_preview(rep, "Exposing")
+            saved, san_notes = self._expose_add_san_and_reissue(
+                lan_ip, accept_unverified, expected_digest=digest, save=fields)
+            if not saved:
+                return ActionResult(False, san_notes[0].strip(), details=san_notes[1:])
+        else:
+            try:
+                _config.save_webserver_config(self._paths, **fields)
+            except (ValidationError, _config.ConfigError) as exc:
+                return ActionResult(False, f"invalid exposure config: {exc}")
+            self._invalidate_config()
+            # The LAN address must reach BOTH the trusted-host allowlist and the server cert's SANs, or a
+            # remote browser gets a 400 (unknown Host) and a certificate name mismatch. Nothing else adds
+            # it — `local_ip()` was known and displayed, but never persisted.
+            #
+            # ORDERING: every step reads FRESHLY-loaded config. `self.config()` is memoized, so a `cfg`
+            # captured before the write above would silently drop any ip_sans another writer persisted in
+            # between, and would reissue the cert from pre-exposure state.
+            san_notes = self._expose_add_san_and_reissue(lan_ip, accept_unverified)[1]
         return ActionResult(
             True, "remote exposure enabled (desired) — now APPLY to rebind the listener to "
             f"0.0.0.0:{self.config().webserver.port} and reload nginx (until then it stays on "
@@ -1356,64 +1487,98 @@ class WebserverOpsMixin:
                      "lhpc webserver start-service   # if nginx is not running yet"],
             next_commands=["lhpc webserver apply"])
 
-    def _expose_add_san_and_reissue(self, ip: str, accept_unverified: bool = False) -> list:
-        """Persist this host's LAN IP as an `ip_sans` entry and reissue the server cert from the FINAL
-        persisted config. Returns truthful detail lines; never raises, never fails the exposure.
+    def _expose_add_san_and_reissue(self, ip: str, accept_unverified: bool = False, *,
+                                    submitted=None, expected_digest: str | None = None,
+                                    save: dict | None = None) -> tuple:
+        """The ONE write path for the exposure's certificate step. Returns (saved, detail lines):
+        `saved` says whether `save` (the exposure's own fields) was written; without `save` the caller
+        wrote them already and only the lines matter.
 
         `ip` is the address `_exposure_reissue_decision` resolved and gated on -- it is not
         re-resolved here, so the gate and the reissue cannot disagree about which address.
 
-        The SAN check, the gate and the issuance all happen INSIDE the PKI lock, and the gate is
-        re-run here when a reissue turns out to be needed: the decision up front may have seen the
-        SAN present (no certificate mutation, so no gate), and a concurrent config change can remove
-        it before this runs. If this invocation is going to mint a certificate, it passes the same
-        gate it would have faced up front, or it does not mint. While the PKI is provisional the
-        reissue uses the provisional window and keeps the marker.
+        Under the PKI lock and BEFORE any write, the Replacement is rebuilt from the current state
+        (`_replacement_for`): an unreadable installed certificate is never replaced; a DUE replacement
+        proceeds only when its digest equals `expected_digest` (the operator's consent to exactly that
+        old -> new). The clock gate is re-run here for every issuance, and the server key is read ONCE
+        before the config save: absent -> a fresh key, present -> kept, unreadable -> refused. A due replacement carries `save`, so a refusal leaves the
+        exposure unsaved; covered and absent keep the old order (the caller saved first).
 
-        FAIL-SOFT by contract: the exposure config is already written. `issue_server_cert` raises when
-        the server CA is not initialized — rolling the exposure back over that would leave the operator
-        strictly worse off than a missing SAN, so we keep ok=True and disclose."""
+        FAIL-SOFT after consent: `issue_server_cert` raises when the server CA is not initialized —
+        the exposure stays saved and the lines disclose it."""
         from . import config as _config
         from . import pki as _pki
         from .reslock import ResourceBusy
         if not ip:
-            return ["  SAN: this host's LAN address could not be determined — no SAN added; add it "
-                    "by hand to [webserver] ip_sans, then: lhpc webserver tls-renew"]
+            return False, ["  SAN: this host's LAN address could not be determined — no SAN added; add "
+                           "it by hand to [webserver] ip_sans, then: lhpc webserver tls-renew"]
         try:
             with self._pki_lock("expose-reissue"):
-                cfg = self.config().webserver                # FRESH, and now stable against PKI writers
-                if ip in cfg.ip_sans:
-                    return [f"  SAN: {ip} is already an IP SAN — certificate left untouched"]
-                if _pki.provisional_pending(self._paths):
-                    validity = _pki.PROVISIONAL_VALIDITY
-                else:
-                    validity = None
-                    refused = self._clock_gate("reissue the server certificate for the new SAN",
-                                               accept_unverified)
-                    if refused is not None:
-                        return [f"  SAN: {ip} is not an IP SAN and the certificate was NOT reissued "
-                                f"— {refused.summary}"]
-                try:
-                    _config.save_webserver_config(self._paths, ip_sans=[*cfg.ip_sans, ip])
-                except Exception as exc:
-                    return [f"  SAN: could not persist {ip} as an IP SAN ({exc}) — add it by hand, "
-                            "then: lhpc webserver tls-renew"]
-                self._invalidate_config()
+                self._invalidate_config()                    # FRESH from disk, not the memo: a writer
+                cfg = self.config().webserver                # may keep local.toml's mtime unchanged
+                dns, ips = self._exposure_target(cfg, ip, submitted)
+                state, rep, why = self._replacement_for(ip, dns, ips)
+                if state == "unreadable":
+                    return False, [f"  certificate: {CERT_UNREADABLE} ({why})",
+                                   "  the way out: lhpc webserver tls-renew"]
+                # A consent binds exactly ONE due replacement: with a digest, anything but that same due
+                # replacement (covered, absent, another due) refuses; a due one without a digest refuses.
+                if (expected_digest is not None
+                        and (state != "due" or rep.digest != expected_digest)) or (
+                        state == "due" and expected_digest is None):
+                    return False, ["  certificate: NOT replaced — the installed certificate, the names "
+                                   "or the LAN address changed since the replacement was shown; "
+                                   "nothing was saved by this step. Run it again to see the "
+                                   "replacement now due."]
+                issue = state == "due" or (state == "absent" and ip not in cfg.ip_sans)
+                validity, key = None, ""
+                if issue:
+                    if _pki.provisional_pending(self._paths):
+                        validity = _pki.PROVISIONAL_VALIDITY
+                    else:
+                        refused = self._clock_gate("reissue the server certificate for the new SAN",
+                                                   accept_unverified)
+                        if refused is not None:
+                            return False, [f"  SAN: {ip} is not an IP SAN and the certificate was NOT "
+                                           f"reissued — {refused.summary}"]
+                    key = _pki.server_key_state(self._paths)[0]
+                    if key == "unreadable":
+                        return False, [f"  certificate: {KEY_UNREADABLE}"]
+                if save or (tuple(cfg.dns_sans), tuple(cfg.ip_sans)) != (dns, ips):
+                    try:
+                        _config.save_webserver_config(
+                            self._paths, **{**(save or {}), "dns_sans": list(dns), "ip_sans": list(ips)})
+                    except Exception as exc:
+                        return False, [f"  SAN: could not persist {ip} as an IP SAN ({exc}) — add it "
+                                       "by hand, then: lhpc webserver tls-renew"]
+                    self._invalidate_config()
+                if not issue:
+                    return True, [f"  SAN: {ip} is already "
+                                  f"{'named by the installed certificate' if state == 'covered' else 'an IP SAN'}"
+                                  " — certificate left untouched"]
                 cfg = self.config().webserver                # FRESH again: the cert follows what is on disk
                 try:
                     _pki.issue_server_cert(self._paths, dns_sans=list(cfg.dns_sans),
                                            ip_sans=list(cfg.ip_sans), days=cfg.server_cert_days,
-                                           validity=validity)
+                                           validity=validity, keep_key=(key == "present"))
                 except Exception as exc:
-                    return [f"  SAN: {ip} added to ip_sans, but the certificate was NOT reissued ({exc})",
-                            "       run: lhpc webserver init   # then: lhpc webserver tls-renew"]
+                    return True, [f"  SAN: {ip} added to ip_sans, but the certificate was NOT reissued "
+                                  f"({exc})",
+                                  "       run: lhpc webserver init   # then: lhpc webserver tls-renew"]
+                new = _pki.server_cert_names(self._paths)
         except ResourceBusy:
-            return [f"  SAN: {ip} could not be added — another PKI operation is in progress; "
-                    "run: lhpc webserver tls-renew"]
-        if validity is not None:
-            return [f"  SAN: {ip} added to ip_sans and the server certificate was reissued for it "
-                    "(provisional window — the clock is unverified; normalised automatically later)"]
-        return [f"  SAN: {ip} added to ip_sans and the server certificate was reissued for it"]
+            if save:
+                return False, ["  PKI operation busy — retry shortly; nothing was saved"]
+            return False, [f"  SAN: {ip} could not be added — another PKI operation is in progress; "
+                           "run: lhpc webserver tls-renew"]
+        lines = [f"  SAN: {ip} added to ip_sans and the server certificate was reissued for it"
+                 + (" (provisional window — the clock is unverified; normalised automatically later)"
+                    if validity is not None else "")]
+        if state == "due":
+            new_fp = new[1][2] if new[0] == "names" else "?"
+            lines.append(f"  certificate REPLACED ({'the key kept' if key == 'present' else 'a new key'}): "
+                         f"{rep.sentence()} (fp {new_fp[:16]}…)")
+        return True, lines
 
     def webserver_disable_remote(self) -> ActionResult:
         from . import config as _config

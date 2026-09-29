@@ -720,43 +720,73 @@ class NetworkOpsMixin:
         self._invalidate_config()
         # Reissue the server cert for the new SANs BEFORE the apply serves it. Fail-soft
         # (same contract as _expose_add_san_and_reissue): a missing CA must not undo the
-        # console extension — the operator just keeps the by-name cert warning.
+        # console extension — the operator just keeps the by-name cert warning. It never
+        # fails silently: `cert_note` goes into the outcome's message (C04).
+        cert_note = ""
         try:
+            from . import config as _cfgmod
             from . import pki as _pki
             from .service_system import clock_verified
+            from .service_webserver import CERT_UNREADABLE, KEY_UNREADABLE
             # Same rule as every other issuing path: an unverified clock may not date a
             # certificate -- unless the PKI is still PROVISIONAL, in which case the reissue uses
             # the fixed provisional window (no clock involved) and the marker stays for the
             # watchdog to normalise. Fail-soft like the rest of this block -- the console
             # extension itself stands, and the operator keeps the by-name cert warning until the
             # clock is fixed.
-            fresh = self.config().webserver
             with self._pki_lock("wlan-join-reissue"):
                 # Decide INSIDE the lock, immediately before issuing. Joining a WLAN is exactly
                 # what brings the first NTP sync, so the watchdog may normalise and clear the
                 # marker while this call waits for the lock -- a decision taken earlier would
                 # then mint a provisional leaf with the marker gone, which nothing normalises.
-                validity = None
-                if _pki.provisional_pending(self._paths):
-                    validity = _pki.PROVISIONAL_VALIDITY
+                # The replacement is decided here too: no name missing from the INSTALLED
+                # certificate -> nothing issued; a new name -> an automatic keep-key reissue
+                # (no prompt in a detached helper) that names old and new.
+                self._invalidate_config()            # FRESH from disk under the lock, not the memo
+                fresh = self.config().webserver
+                dns, ips = self._exposure_target(fresh, ip)
+                state, rep, why = self._replacement_for(ip, dns, ips, any_name=True)
+                if state == "unreadable":
+                    cert_note = f"{CERT_UNREADABLE} ({why})"
+                elif state == "covered":
+                    cert_note = "the installed certificate already names this network"
+                elif (key := _pki.server_key_state(self._paths)[0]) == "unreadable":
+                    cert_note = KEY_UNREADABLE
                 else:
-                    ok, _why = clock_verified(self._system.fs, self._paths.runtime_root)
-                    if not ok:
-                        raise RuntimeError("clock unverified")
-                _pki.issue_server_cert(self._paths, dns_sans=list(fresh.dns_sans),
-                                       ip_sans=list(fresh.ip_sans),
-                                       days=fresh.server_cert_days, validity=validity)
-        except Exception:
-            pass
+                    validity = None
+                    if _pki.provisional_pending(self._paths):
+                        validity = _pki.PROVISIONAL_VALIDITY
+                    else:
+                        ok, _why = clock_verified(self._system.fs, self._paths.runtime_root)
+                        if not ok:
+                            raise RuntimeError("clock unverified")
+                    if (tuple(fresh.dns_sans), tuple(fresh.ip_sans)) != (dns, ips):
+                        _cfgmod.save_webserver_config(self._paths, dns_sans=list(dns),
+                                                      ip_sans=list(ips))
+                        self._invalidate_config()
+                    _pki.issue_server_cert(self._paths, dns_sans=list(dns), ip_sans=list(ips),
+                                           days=fresh.server_cert_days, validity=validity,
+                                           keep_key=(key == "present"))
+                    if state == "due":
+                        new = _pki.server_cert_names(self._paths)
+                        new_fp = new[1][2] if new[0] == "names" else "?"
+                        kept = "the key kept" if key == "present" else "a new key"
+                        cert_note = (f"server certificate REPLACED ({kept}): {rep.sentence()} "
+                                     f"(fp {new_fp[:16]}…)")
+        except Exception as exc:
+            cert_note = f"server certificate NOT reissued ({exc})"
+        if cert_note:        # the detached helper's stdout is logs/network-connect.log
+            print(f"network-connect: {cert_note}", flush=True)
+        note = f"; {cert_note}" if cert_note else ""
         res = self.webserver_apply()
         if res.ok:
-            return ("applied", "", f"console allowed from {cidr}")
+            return ("applied", "", f"console allowed from {cidr}{note}")
         # Config IS saved here — "pending" means exactly "saved, apply gate-blocked": the
         # watchdog may legitimately retry the apply. No fabricated fallback command: only
         # the gate's real rendered command, or nothing.
         cmd = next((c for c in (res.next_commands or []) if "firewall-apply" in c), "")
-        return (("pending", cmd, res.summary) if cmd
-                else ("error", "", res.summary))
+        return (("pending", cmd, res.summary + note) if cmd
+                else ("error", "", res.summary + note))
 
     def network_ap_now(self, apply: bool = False) -> ActionResult:
         """Switch back to the box's own AP (operator ruling: client mode needs a way home).

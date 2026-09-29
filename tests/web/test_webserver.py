@@ -2029,7 +2029,7 @@ def test_disable_remote_and_reset_preserve_pki(tmp_path):
     svc = _svc_webserver_service(tmp_path)
     svc.webserver_init(dns_sans=["pi.local"])
     svc.webserver_cert_issue("laptop", "pw")
-    svc.webserver_expose(["192.168.0.0/24"], confirm=True)
+    svc.webserver_expose(["192.168.0.0/24"], confirm=True, replace_certificate=True)
     assert svc.config().webserver.remote_exposed is True
     r = svc.webserver_reset_defaults()
     # Without a running nginx master (FakeSystem has no nginx) cessation cannot be proven, so

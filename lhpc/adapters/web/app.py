@@ -2048,7 +2048,18 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         r = service.webserver_configure_apply(
             **fields, confirm=phrase in ("enable-remote", "enable-remote-danger"),
             confirm_public=(phrase == "enable-remote-danger"),
-            accept_unverified=(f.get("accept_unverified_clock") == "1"))
+            accept_unverified=(f.get("accept_unverified_clock") == "1"),
+            replace_digest=(f.get("replacement_digest") or None))
+        if r.data.get("reason") == "certificate-replacement":
+            # Nothing was saved. The same Apply, sent again with this replacement's digest, proceeds;
+            # any change in between (a field, the LAN address, the installed certificate) shows the
+            # replacement again instead (C04).
+            echo = [(k, f[k]) for k in ("bind", "port", "scheme", "access_mode", "cidrs", "dns_sans",
+                                        "ip_sans", "confirm_phrase", "accept_unverified_clock")
+                    if k in f]
+            return render_template("webserver_replace_confirm.html", version=__version__,
+                                   summary=r.summary, details=r.details, echo=echo,
+                                   digest=r.data["replacement"]["digest"])
         flash(r.summary, "ok" if r.ok else "err")
         for d in r.details:
             flash(d, "warn")

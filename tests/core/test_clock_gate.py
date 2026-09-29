@@ -367,7 +367,8 @@ def test_the_override_lets_exposure_through(tmp_path, monkeypatch):
                           ip_sans=(), days=30)
     svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
     _lan_ip(monkeypatch, "192.168.0.50")
-    res = svc.webserver_expose(["192.168.0.0/24"], confirm=True, accept_unverified=True)
+    res = svc.webserver_expose(["192.168.0.0/24"], confirm=True, accept_unverified=True,
+                               replace_certificate=True)
     assert "--accept-unverified-clock" not in res.summary
     svc._invalidate_config()
     assert svc.config().webserver.remote_exposed
@@ -818,7 +819,7 @@ def test_a_multihomed_provisional_box_reissues_provisionally_and_is_not_gated(tm
     p = _provisional_box(tmp_path, monkeypatch)
     _lan_ip(monkeypatch, "192.168.1.50")
     svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
-    res = svc.webserver_expose(["192.168.1.0/24"], confirm=True)
+    res = svc.webserver_expose(["192.168.1.0/24"], confirm=True, replace_certificate=True)
     assert res.ok and "--accept-unverified-clock" not in res.summary
     cert = _cert(tmp_path, "server", "server.crt")
     ips = {str(i) for i in cert.extensions.get_extension_for_class(
@@ -895,34 +896,67 @@ def test_verify_reports_a_provisional_pki_without_failing_it(tmp_path, monkeypat
 
 # --- the two lock-boundary races the implementation audit found -----------------------------
 
-def test_exposure_revalidates_the_gate_if_the_san_vanishes_before_the_reissue(tmp_path, monkeypatch):
-    # P1 (audit): the decision saw the SAN present -> no certificate mutation -> no gate. A
-    # concurrent config change removes the SAN before the reissue helper reloads config; the
-    # helper would then add it back and mint a certificate past a gate that never ran. The
-    # verdict has to hold through the transaction, so the gate is re-run under the lock.
+def test_exposure_revalidates_under_the_lock_if_the_certificate_changes_before_the_reissue(
+        tmp_path, monkeypatch):
+    # P1 (audit), carried to C04's trigger: the decision reads the INSTALLED certificate, which
+    # names the address -> no certificate mutation -> no gate, no consent asked. A concurrent PKI
+    # writer replaces the certificate without the address before the reissue helper takes the
+    # lock; the helper must not then mint past a gate and a consent that never happened. The
+    # replacement is rebuilt under the lock, and a due one without consent is refused.
     p = _init_pki(tmp_path)
     pki.issue_server_cert(p, dns_sans=("box.lan",), ip_sans=("10.42.0.1",), days=30)
     svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
-    assert svc.webserver_configure(ip_sans=["10.42.0.1"]).ok
     _lan_ip(monkeypatch, "10.42.0.1")
-    real = svc._exposure_reissue_decision
+    real = svc._replacement_for
+    seen = []
 
-    def decision_then_the_san_vanishes(target, accept):
-        out = real(target, accept)
-        assert out[1] is None                                  # SAN present: no gate, correctly
-        assert svc.webserver_configure(ip_sans=["192.0.2.9"]).ok   # ...and now it is gone
-        svc._invalidate_config()
+    def decision_then_the_certificate_changes(ip, dns, ips, **kw):
+        out = real(ip, dns, ips, **kw)
+        if not seen:                                           # the caller's read, before the lock
+            seen.append(out[0])
+            assert out[0] == "covered"                         # SAN present: no gate, correctly
+            pki.issue_server_cert(p, dns_sans=("box.lan",), ip_sans=("192.0.2.9",), days=30)
+            seen.append(_server_cert_serial(tmp_path))         # the concurrent writer's leaf
         return out
-    monkeypatch.setattr(svc, "_exposure_reissue_decision", decision_then_the_san_vanishes)
-    serial = _server_cert_serial(tmp_path)
+    monkeypatch.setattr(svc, "_replacement_for", decision_then_the_certificate_changes)
 
     res = svc.webserver_expose(["10.42.0.0/24"], confirm=True)
 
     assert res.ok                                              # exposure itself is saved, as always
-    assert _server_cert_serial(tmp_path) == serial, "minted past a gate that never ran"
-    assert any("NOT reissued" in d and "not synchronised" in d for d in res.details)
+    assert any("NOT replaced" in d for d in res.details)
+    assert _server_cert_serial(tmp_path) == seen[1], "replaced past a consent that never happened"
     svc._invalidate_config()
     assert "10.42.0.1" not in svc.config().webserver.ip_sans  # nothing half-written either
+
+
+def test_exposure_reruns_the_clock_gate_under_the_lock_when_the_certificate_vanishes(
+        tmp_path, monkeypatch):
+    # The decision up front saw the address in the installed certificate: no issuance, so no gate.
+    # A concurrent writer removes the certificate before the lock; under the lock the state is
+    # "absent" with a config that lacks the address, so this call WOULD issue -- and it must face
+    # the clock gate it never faced up front, or not issue.
+    p = _init_pki(tmp_path)
+    pki.issue_server_cert(p, dns_sans=("box.lan",), ip_sans=("192.0.2.1",), days=30)
+    svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
+    _lan_ip(monkeypatch, "192.0.2.1")
+    crt = tmp_path / "config" / "tls" / "server" / "server.crt"
+    real = svc._replacement_for
+    seen = []
+
+    def decision_then_the_certificate_vanishes(ip, dns, ips, **kw):
+        out = real(ip, dns, ips, **kw)
+        if not seen:                                           # the caller's read, before the lock
+            seen.append(out[0])
+            assert out[0] == "covered"                         # no gate up front, correctly
+            crt.unlink()
+        return out
+    monkeypatch.setattr(svc, "_replacement_for", decision_then_the_certificate_vanishes)
+
+    res = svc.webserver_expose(["192.0.2.0/24"], confirm=True)
+
+    assert res.ok                                              # the exposure itself is saved
+    assert any("NOT reissued" in d and "not synchronised" in d for d in res.details)
+    assert not crt.exists(), "minted past a gate that never ran"
 
 
 def test_init_rechecks_the_destructive_precondition_under_the_lock(tmp_path, monkeypatch):

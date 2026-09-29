@@ -698,6 +698,36 @@ def server_cert_chain_ok(paths: Paths) -> tuple:
     return True, ""
 
 
+def server_cert_names(paths: Paths) -> tuple:
+    """The INSTALLED server certificate's names: ("absent", None) when there is no file,
+    ("names", (dns, ips, fingerprint_hex)) when it reads, ("unreadable", reason) when `_read_cert`
+    raises (malformed or unsafe). The file, not what nginx serves: after a restore the file IS the
+    restored certificate, even before the next reload."""
+    try:
+        cert = _read_cert(paths, _p(paths, _SERVER, "server.crt"))
+    except PKIError as exc:
+        return "unreadable", str(exc)
+    if cert is None:
+        return "absent", None
+    try:
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        dns = tuple(san.get_values_for_type(x509.DNSName))
+        ips = tuple(str(a) for a in san.get_values_for_type(x509.IPAddress))
+    except x509.ExtensionNotFound:
+        dns, ips = (), ()
+    return "names", (dns, ips, cert.fingerprint(hashes.SHA256()).hex())
+
+
+def server_key_state(paths: Paths) -> tuple:
+    """("absent", "") | ("present", "") | ("unreadable", reason) for `server/server.key`, read
+    with the same `_read_key` an issuance with `keep_key=True` uses."""
+    try:
+        key = _read_key(paths, _p(paths, _SERVER, "server.key"))
+    except PKIError as exc:
+        return "unreadable", str(exc)
+    return ("absent", "") if key is None else ("present", "")
+
+
 def cas_are_distinct(paths: Paths) -> bool:
     """True iff both CAs exist with DIFFERENT keys/subjects (the two-trust-domain invariant)."""
     sc = _read_cert(paths, _ca_paths(paths, _SERVER_CA)[1])

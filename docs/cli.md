@@ -329,7 +329,7 @@ lhpc webserver apply                   # validate + activate (reload) the curren
 lhpc webserver start-service           # operator context: generate config + enable/start nginx
 lhpc webserver init [--dns D ...] [--ip I ...] [--confirm-recreate]   # bootstrap PKI (CAs + server cert + CRL)
 lhpc webserver configure [--bind B] [--port P] [--access-mode M] [--dns D ...] [--ip I ...]
-lhpc webserver expose [--cidr C ...] [--access-mode M] [--confirm-phrase P]   # remote exposure (opt-in)
+lhpc webserver expose [--cidr C ...] [--access-mode M] [--confirm-phrase P] [--replace-certificate]   # remote exposure (opt-in)
 lhpc webserver proxy <page> [--mode local|lan|public] [--port P] [--scheme https|http] [--access-mode M] [--cidr C ...] [--confirm-phrase P]
 #   <page> = the stack id (its first web UI), or <stack>-<component> for a stack's further web UIs
 # --auth is an alias for --access-mode on configure / expose / proxy
@@ -348,6 +348,7 @@ lhpc webserver cert discard-export <label>
 - `--port` on `proxy` is optional; `0` or absent = not proxied.
 - `expose` and `proxy` increase exposure and need a confirm phrase — the same escalation rules as the web UI ([access modes](webserver.md#access-modes)).
 - `configure`/`expose`/`proxy` write **intent** only — run `lhpc webserver apply` to activate.
+- `expose` asks before it replaces the installed server certificate (when that certificate does not name this host's LAN address) and shows old and new names; off a terminal it writes nothing unless `--replace-certificate` is given.
 
 ---
 
