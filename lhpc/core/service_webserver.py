@@ -2043,14 +2043,40 @@ class WebserverOpsMixin:
             return ActionResult(False, "nginx config validation failed; previous proven "
                                 f"configuration remains active ({msg})")
         _ws.promote_config(self._paths)
-        state, rmsg = _ws.reload(self._system, self._paths)
+        # A reload cannot move a listener nginx HOLDS between loopback and 0.0.0.0: the old master
+        # fails to bind the new address (six false error lines in its log: five `bind() failed`,
+        # one `still could not bind()`) and keeps the old one. When verify shows such a listener,
+        # AND the last applied snapshot proves it is OUR listener (the console, or the same stack's
+        # proxy, on the same port on the other side), skip the reload: the restart below moves it,
+        # and reports every real bind failure. Any doubt (no master, no listener yet, no snapshot,
+        # another port) reloads as before.
+        applied = _ws.read_applied(self._paths)
+
+        def _flipped(prev: dict, port, remote: bool) -> bool:
+            return (prev.get("port") == int(port)
+                    and _ws._is_loopback_bind(str(prev.get("bind", ""))) == remote)
+
+        def _held_on_wrong_side(evd) -> bool:
+            c, eff = evd["checks"], evd.get("effective", {})
+            if (c.get("remote_listener_matches") != "ok" and eff.get("listener_scope") != "absent"
+                    and _flipped(applied.get("console") or {}, cfg.port, cfg.remote_exposed)):
+                return True
+            want = {p.swc.stack_id: p.swc.remote for p in self._stack_web_proxies()}
+            return any(p["listener_matches"] != "ok" and p["listener_scope"] != "absent"
+                       and _flipped(_ws.applied_proxy(applied, p["stack_id"]), p["port"],
+                                    want.get(p["stack_id"], False))
+                       for p in evd.get("stack_proxies", []))
+
         ev = self._ws_verify(cfg, self._stack_web_proxies())
-        if state == "repair_required":
-            return ActionResult(False, "config valid but the nginx service is not active — "
-                                "repair required (operator context)",
-                                details=[rmsg], data=ev)
-        if state == "failed":
-            return ActionResult(False, f"nginx reload failed: {rmsg}", data=ev)
+        if not (_ws.nginx_master_active(self._paths) and _held_on_wrong_side(ev)):
+            state, rmsg = _ws.reload(self._system, self._paths)
+            ev = self._ws_verify(cfg, self._stack_web_proxies())
+            if state == "repair_required":
+                return ActionResult(False, "config valid but the nginx service is not active — "
+                                    "repair required (operator context)",
+                                    details=[rmsg], data=ev)
+            if state == "failed":
+                return ActionResult(False, f"nginx reload failed: {rmsg}", data=ev)
         # F3: a reload cannot rebind a held listen socket, so a bind change (loopback <-> 0.0.0.0)
         # can leave the OLD listener in place while reload reports success — for the CONSOLE and
         # equally for every STACK-PROXY listener (`webserver proxy <stack> --mode public` flips the

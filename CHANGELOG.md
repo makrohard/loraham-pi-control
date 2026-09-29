@@ -9,6 +9,10 @@
 - A lagging library or firmware image no longer blocks a start; services still do (the maintainer's decision
   after 0.11.5). The daemon's RadioLib and MeshCom's firmware still read "behind" in the update status and still
   stop an install at the pin check.
+- Moving the console or a stack proxy between "this box only" and the network no longer leaves six false error
+  lines in nginx's error log (five `bind() … failed (98: Address already in use)`, one `still could not bind()`)
+  when nginx runs, holds that listener and the last applied state shows it as ours on the same port: `apply` then
+  restarts nginx for that change without trying a reload first. Otherwise it reloads first, as before.
 
 ## 0.11.6
 

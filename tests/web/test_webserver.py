@@ -96,16 +96,60 @@ def _apply_cmds(paths):
     }
 
 
+def _reloaded(fake, paths):
+    return ["nginx", "-s", "reload", "-c", _conf(paths)] in fake.calls
+
+
+def _seed_applied(paths, console_bind="127.0.0.1", proxies=()):
+    """The last Apply's snapshot: OUR listeners as nginx serves them now (C07's proof of ownership)."""
+    webserver.write_evidence(paths, {"applied_snapshot": {
+        "console": {"bind": console_bind, "port": 8443},
+        "proxies": [{"stack_id": sid, "bind": bind, "port": port} for sid, bind, port in proxies]}})
+
+
+class _NoProcFake(FakeSystem):
+    def tcp_listeners(self):
+        raise OSError("/proc/net/tcp unreadable")
+
+
+@pytest.mark.parametrize("case", ["no master", "no listener yet", "unreadable /proc", "no snapshot"])
+def test_apply_keeps_the_reload_when_no_held_listener_is_proven(tmp_path, case):
+    # C07: only a listener the master HOLDS on the wrong side skips the reload; every doubt keeps
+    # today's reload (and today's result for it).
+    svc0 = _svc(tmp_path)
+    svc0.webserver_init(dns_sans=["pi.local"])
+    paths = svc0._paths
+    _seed_exposed(svc0)
+    held = [Listener(family="ipv4", ip="127.0.0.1", port=8443, inode=1)]
+    if case != "no snapshot":
+        _seed_applied(paths)                    # the console WAS ours on loopback:8443
+    if case == "no master":
+        fake = FakeSystem(commands=_apply_cmds(paths), listeners=held)
+    else:
+        _live_master(paths)
+        fake = (FakeSystem(commands=_apply_cmds(paths)) if case == "no listener yet"
+                else _NoProcFake(commands=_apply_cmds(paths)) if case == "unreadable /proc"
+                else FakeSystem(commands=_apply_cmds(paths), listeners=held))
+    r = ControllerService(system=fake.system, paths=paths).webserver_apply()
+    if case == "no master":
+        assert not r.ok and "repair required" in r.summary     # the reload's own answer
+        assert not any(c[:1] == ["systemctl"] for c in fake.calls)
+    else:
+        assert _reloaded(fake, paths)
+
+
 def test_apply_bind_change_restarts_when_reload_leaves_loopback(tmp_path):
     svc0 = _svc(tmp_path)
     svc0.webserver_init(dns_sans=["pi.local"])
     paths = svc0._paths
     _seed_exposed(svc0)
     _live_master(paths)
+    _seed_applied(paths)                        # nginx serves the console on loopback:8443
     fake = _RestartFlipsFake(commands=_apply_cmds(paths))
     r = ControllerService(system=fake.system, paths=paths).webserver_apply()
-    # reload left the master on loopback -> apply restarts the unit and re-verifies exposed
+    # the master holds the console on loopback -> apply restarts the unit and re-verifies exposed
     assert r.ok and "restarted" in r.summary
+    assert not _reloaded(fake, paths)          # a reload could not rebind it: never tried (C07)
     assert ["systemctl", "--user", "restart", "lhpc-nginx.service"] in fake.calls
     assert r.data["effective"]["remote_listener"] is True
 
@@ -150,13 +194,29 @@ def test_apply_stack_proxy_public_transition_restarts_automatically(tmp_path):
     paths = svc0._paths                                          # console stays loopback-desired
     _seed_meshcom_public(paths)
     _live_master(paths)
+    _seed_applied(paths, proxies=[("meshcom", "127.0.0.1", 8444)])   # meshcom was local on :8444
     fake = _StackRestartFlipsFake(commands=_apply_cmds(paths))
     r = ControllerService(system=fake.system, paths=paths).webserver_apply()
     assert r.ok and "restarted" in r.summary, r.summary
     assert ["systemctl", "--user", "restart", "lhpc-nginx.service"] in fake.calls
+    assert not _reloaded(fake, paths)          # the held proxy listener: restart only (C07)
     assert r.data["checks"]["stack_listener_matches"] == "ok"
     mesh = [p for p in r.data["stack_proxies"] if p["stack_id"] == "meshcom"][0]
     assert mesh["listener_scope"] == "exposed" and mesh["listener_matches"] == "ok"
+
+
+def test_apply_reloads_when_a_new_proxy_port_is_held_by_someone_else(tmp_path):
+    # C07's guard: the master runs and :8444 is held on the wrong side, but the last Apply never
+    # served meshcom there, so it is not OUR listener flipping: the reload is still attempted.
+    svc0 = _svc(tmp_path)
+    svc0.webserver_init(dns_sans=["pi.local"])
+    paths = svc0._paths
+    _seed_meshcom_public(paths)
+    _live_master(paths)
+    _seed_applied(paths)                        # the console only; no proxy was ever applied
+    fake = _StackRestartFlipsFake(commands=_apply_cmds(paths))
+    ControllerService(system=fake.system, paths=paths).webserver_apply()
+    assert _reloaded(fake, paths)
 
 
 def test_apply_web_context_without_hatch_units_falls_back_typed(tmp_path, monkeypatch):
@@ -238,6 +298,7 @@ def test_apply_web_context_completes_via_restart_watcher(tmp_path, monkeypatch):
     _seed_meshcom_public(paths)
     _live_master(paths)
     req = _seed_hatch_units(tmp_path, monkeypatch, paths)
+    _seed_applied(paths, proxies=[("meshcom", "127.0.0.1", 8444)])   # meshcom was local on :8444
     monkeypatch.setenv("INVOCATION_ID", "abc123")
     monkeypatch.setattr(SW, "_RESTART_WATCH_WAIT_S", 5.0)
     monkeypatch.setattr(SW, "_RESTART_WATCH_POLL_S", 0.05)
@@ -248,6 +309,7 @@ def test_apply_web_context_completes_via_restart_watcher(tmp_path, monkeypatch):
     assert "restart watcher" in r.summary
     assert not req.exists()                                       # consumed
     assert not any(c[:1] == ["systemctl"] for c in fake.calls)    # no bus, ever
+    assert not _reloaded(fake, paths)                             # the watcher does it (C07)
     mesh = [p for p in r.data["stack_proxies"] if p["stack_id"] == "meshcom"][0]
     assert mesh["listener_matches"] == "ok"
 

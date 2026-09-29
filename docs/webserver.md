@@ -116,12 +116,16 @@ route in. On a box without it these two values do not apply. Command details:
    lhpc webserver apply
    ```
    A bind change (loopback → `0.0.0.0`, console or a stack proxy) cannot take effect through a
-   reload, because nginx cannot rebind a held socket. `apply` verifies the effective listeners
-   and restarts `lhpc-nginx` when needed: directly from an operator shell, or from the console
-   through the managed restart watcher (`lhpc-nginx-restart.path`; the console itself cannot
-   command systemd, it writes a request marker that systemd consumes). `apply` reports success
-   only after the listeners match; if the console does not come back, `systemctl --user restart
-   lhpc-nginx lhpc-web` from an operator shell.
+   reload, because nginx cannot rebind a held socket. `apply` reads the effective listeners
+   first. When nginx's master runs, holds that listener on the old side, and the last applied
+   state shows it as the same console or proxy on the same port, `apply` restarts `lhpc-nginx`
+   without reloading it first (so nginx logs no `bind() … failed` errors for it). Otherwise (no
+   running master, no listener yet, no applied state, another port) it reloads first, as before,
+   and that reload can still log them. The restart runs directly from an operator shell, or from
+   the console through the managed restart watcher (`lhpc-nginx-restart.path`; the console itself
+   cannot command systemd, it writes a request marker that systemd consumes). `apply` reports
+   success only after the listeners match; if the console does not come back, `systemctl --user
+   restart lhpc-nginx lhpc-web` from an operator shell.
 3. **Issue a device certificate** and write its bundle to a file:
    ```
    lhpc webserver cert issue lhpc-laptop                       # prints a ONE-TIME passphrase; record it
