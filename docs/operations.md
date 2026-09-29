@@ -35,7 +35,9 @@ console unit is enabled AND byte-exact canonical — a customized or foreign con
 autonomous restarts — and honours the fail-closed `[boot] restore` switch in `local.toml`
 (strictly boolean; anything else disables restore). An explicit `lhpc stack stop` is the last
 word: the stack stays down across reboots even when the stop could not verify the process gone —
-the next `stack start` makes it restorable again. A failed restore is not retried — the dashboard
+the next `stack start` makes it restorable again. An optional service of a restored stack that was started on its
+own (the MeshCore web UI without its "auto-start with the stack" tick, for example) is started again after its stack;
+one that was stopped stays stopped. A failed restore is not retried — the dashboard
 banner and `lhpc autostart` name the stacks to start manually. The unit's log is
 `logs/lhpc-boot-restore.log` (web: Controller logs → boot-restore).
 

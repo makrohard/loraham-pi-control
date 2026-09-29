@@ -22,7 +22,7 @@ from pathlib import Path
 from . import boot_restore, known_working, runtime_fs, updater_units
 from .boot_restore import Evidence, MarkerView, StackMeta
 from .lifecycle import current_boot_id
-from .outcomes import manual_required_only
+from .outcomes import Outcome, manual_required_only
 from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused
 
@@ -206,7 +206,10 @@ class BootRestoreOpsMixin:
                 stack_id=st.id, main=st.main,
                 interactive_main=bool(getattr(main, "interactive", False)),
                 declared_bands=declared,
-                fixed_band="" if declared else (main.band or ""))
+                fixed_band="" if declared else (main.band or ""),
+                restorable_parts=tuple(c.id for c in st.components
+                                       if c.id != st.main and self.optional_role(c) == "tickable"
+                                       and not getattr(c, "interactive", False)))
         return metas
 
     # ---- journal helpers -----------------------------------------------------------------------
@@ -377,8 +380,14 @@ class BootRestoreOpsMixin:
             bits.append(f"{len(pending)} pending (run truncated — restart the unit to continue)")
         if plan.skipped:
             bits.append(f"{len(plan.skipped)} skipped")
+        parts_left = [(i, p) for i in journal["items"]
+                      for p in (i.get("result") or {}).get("parts", []) if p["outcome"] != "started"]
+        if parts_left:
+            bits.append(f"{len(parts_left)} optional part(s) not started")
         why = [f"{i['target']}: {c['component']} {c['outcome']} — {c['reason']}"
                for i in failed for c in (i.get("result") or {}).get("components", [])]
+        why += [f"{i['target']}: part {p['component']} {p['outcome']} — {p['reason']}"
+                for i, p in parts_left]
         return ActionResult(not (failed or pending),
                             "Boot restore: " + ", ".join(bits) + ".", details=why,
                             data={"driver_completed": True})
@@ -487,12 +496,18 @@ class BootRestoreOpsMixin:
             return None
         return hook
 
-    def _boot_settle_item(self, journal, item, res) -> None:
+    @staticmethod
+    def _boot_start_ok(res) -> bool:
+        return bool(res.ok or manual_required_only(getattr(res, "results", ()) or ()))
+
+    def _boot_settle_item(self, journal, item, res, parts=None) -> None:
         if item["state"] != "attempting":
             return                                   # cancelled by the hook (already durable)
-        ok = bool(res.ok or manual_required_only(getattr(res, "results", ()) or ()))
+        ok = self._boot_start_ok(res)
         item["state"] = "succeeded" if ok else "failed"
         item["result"] = {"ok": ok, "summary": res.summary}
+        if parts is not None:
+            item["result"]["parts"] = parts          # the optional parts; never the item's verdict
         if not ok:
             # The stack summary names only the components ("… did not start/verify"); the WHY
             # (e.g. "not built — build it first") lives in each component's result. Keep it, or
@@ -504,10 +519,40 @@ class BootRestoreOpsMixin:
         if not boot_restore.write_journal(self._paths, journal):
             item["_integrity"] = "journal unwritable at settle"
 
+    @staticmethod
+    def _boot_part_outcome(cid: str, r) -> tuple:
+        """(outcome, reason) of one optional part's start, read from the PART's own typed result, not
+        from `r.ok`: the lifecycle accepts an optional GUI part's display SKIPPED with ok=True (the
+        stack is usable without it), yet that part is not running. No typed result: never "started"."""
+        mine = next((c for c in (getattr(r, "results", ()) or ()) if c.component == cid), None)
+        if mine is None:
+            return "not started", r.summary
+        if mine.outcome in (Outcome.STARTED, Outcome.VERIFIED, Outcome.ALREADY_HEALTHY):
+            return ("started", r.summary) if r.ok else ("failed", r.summary)
+        if mine.outcome == Outcome.MANUAL_REQUIRED:
+            return "manual", mine.summary or r.summary
+        if mine.outcome == Outcome.SKIPPED:
+            return "skipped", mine.summary or r.summary
+        return "failed", mine.summary or r.summary
+
     def _boot_run_stack_item(self, journal, item) -> None:
         res = self.start(item["target"], apply=True, band=item.get("band", ""),
                          _before_start_locked=self._boot_claim_hook(journal, item))
-        self._boot_settle_item(journal, item, res)
+        # The parts the operator started on their own, AFTER the stack and only when it started;
+        # the item stays `attempting` meanwhile, and the ONE settle below records them with the
+        # stack's result. A crash here leaves `attempting`: recovery consumes it, starts nothing.
+        parts = None
+        if item.get("components") and item["state"] == "attempting":
+            if self._boot_start_ok(res):
+                parts = []
+                for cid in item["components"]:
+                    r = self.start(cid, apply=True, band=item.get("band", ""))
+                    outcome, reason = self._boot_part_outcome(cid, r)
+                    parts.append({"component": cid, "outcome": outcome, "reason": reason})
+            else:
+                parts = [{"component": cid, "outcome": "not started",
+                          "reason": "the stack start failed"} for cid in item["components"]]
+        self._boot_settle_item(journal, item, res, parts=parts)
 
     def _boot_run_daemon_item(self, journal, item) -> None:
         recorded = [b for b in item.get("bands", []) if b in ("433", "868")]

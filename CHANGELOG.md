@@ -24,6 +24,10 @@
   saves nothing until it is applied again. A certificate that already names the address is left untouched; a
   replacement keeps the server key; an unreadable certificate or key is never replaced. A WLAN join reissues
   only when the certificate lacks one of the join's names, and its outcome names old and new.
+- Boot restore brings back an optional service that was started on its own before the reboot (the MeshCore web UI,
+  the KISS serial bridge, lxmd, MeshChat, Sideband): it is started after its stack, and only when the stack started.
+  A part that fails does not fail the stack; the restore's log (`logs/lhpc-boot-restore.log`, web: Controller logs →
+  boot-restore) names it with its reason.
 
 ## 0.11.2
 

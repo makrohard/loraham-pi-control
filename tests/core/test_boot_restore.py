@@ -1583,9 +1583,190 @@ def test_a_failed_item_with_a_null_result_does_not_crash_the_summary(tmp_path, m
     monkeypatch.setattr(ControllerService, "start", _stub_start([], ok=False))
     real = type(svc)._boot_settle_item
 
-    def settle(self, journal, item, res):
-        real(self, journal, item, res)
+    def settle(self, journal, item, res, **kw):
+        real(self, journal, item, res, **kw)
         item["result"] = None
     monkeypatch.setattr(type(svc), "_boot_settle_item", settle)
     res = svc.boot_restore_run()
     assert res.data.get("driver_completed") is True and res.details == []
+
+
+# ---- C11: an optional part the operator started on its own comes back after its stack ----------
+_MESHCORE = StackMeta(stack_id="meshcore", main="meshcore-node", interactive_main=False,
+                      declared_bands=(), fixed_band="868", restorable_parts=("meshcore-webui",))
+
+
+def _mc_ev(**over):
+    base = dict(launch_id="M1", stack="meshcore", component="meshcore-node", band="868",
+                launched_at=1000.0, start_scope="stack", requested_target="meshcore")
+    base.update(over)
+    return Evidence(**base)
+
+
+def _webui_ev(launch_id="W1"):
+    return _mc_ev(launch_id=launch_id, component="meshcore-webui", start_scope="component",
+                  requested_target="meshcore-webui")
+
+
+def test_parts_the_plan_names_a_part_started_on_its_own():
+    plan = br.derive_plan([_mc_ev(), _webui_ev()], {"meshcore": _MESHCORE}, {}, "daemon")
+    assert len(plan.items) == 1 and plan.items[0]["components"] == ["meshcore-webui"]
+    assert sorted(plan.items[0]["evidence_ids"]) == ["M1", "W1"]    # consumed with the item
+
+
+def test_parts_a_stopped_part_left_no_record_and_is_not_named():
+    plan = br.derive_plan([_mc_ev()], {"meshcore": _MESHCORE}, {}, "daemon")
+    assert plan.items[0]["components"] == []
+
+
+def test_parts_a_part_alone_never_widens_to_its_stack():
+    plan = br.derive_plan([_webui_ev()], {"meshcore": _MESHCORE}, {}, "daemon")
+    assert not plan.items and plan.skipped[0]["reason"] == "no main-component evidence"
+    node_alone = _mc_ev(start_scope="component", requested_target="meshcore-node")
+    plan = br.derive_plan([node_alone, _webui_ev()], {"meshcore": _MESHCORE}, {}, "daemon")
+    assert not plan.items and "never widened" in plan.skipped[0]["reason"]
+
+
+def test_parts_only_eligible_parts_and_each_once(tmp_path):
+    metas = _svc(tmp_path)._boot_stack_metas()        # the real rule (optional_role), not a list here
+    assert "meshcom-gps-relay" not in metas["meshcom"].restorable_parts
+    relay = Evidence(launch_id="R1", stack="meshcom", component="meshcom-gps-relay", band="433",
+                     launched_at=1000.0, start_scope="component",
+                     requested_target="meshcom-gps-relay")
+    main = Evidence(launch_id="Q1", stack="meshcom", component=metas["meshcom"].main, band="433",
+                    launched_at=1000.0, start_scope="stack", requested_target="meshcom")
+    plan = br.derive_plan([main, relay], metas, {}, "daemon")
+    assert plan.items[0]["components"] == []                        # the fixture is never replayed
+    plan = br.derive_plan([_mc_ev(), _webui_ev("W1"), _webui_ev("W2")], metas, {}, "daemon")
+    assert plan.items[0]["components"] == ["meshcore-webui"]        # two records, one start
+
+
+def test_parts_validate_item_components():
+    item = br.new_item("i1", "stack", target="meshcore", band="868", evidence_ids=("a",))
+    assert br._validate_item(item) == ""
+    older = {k: v for k, v in item.items() if k != "components"}   # a journal from before C11
+    assert br._validate_item(older) == ""
+    assert br._validate_item({**item, "components": ["meshcore-webui"]}) == ""
+    assert br._validate_item({**item, "components": "meshcore-webui"}) == "item components invalid"
+    assert br._validate_item({**item, "components": [""]}) == "item components invalid"
+
+
+def _parts_stub(calls, *, stack_ok=True, part_ok=True, part_result="typed"):
+    """The lifecycle's shape: a part's start carries the part's own typed CompResult."""
+    from lhpc.core.outcomes import CompResult, Outcome
+
+    def stub(self, target, apply=False, stop_owners=False, band="", auto_install_ctx=None, *,
+             _before_start_locked=None, _operator=True, position=None, position_note=""):
+        calls.append({"target": target, "band": band})
+        if _before_start_locked is not None:
+            refusal = _before_start_locked()
+            if refusal is not None:
+                return refusal
+        if target == "meshcore":
+            return ActionResult(stack_ok, f"{target} {'started' if stack_ok else 'did not start'}")
+        if part_result == "skipped":        # an optional GUI part without a display: accepted, ok=True
+            return ActionResult(True, f"Run applied for '{target}'.", results=(CompResult(
+                target, "start", Outcome.SKIPPED, stack="meshcore",
+                summary="needs a graphical session; none is running on this box"),))
+        if part_result == "untyped":        # no typed result for the part at all
+            return ActionResult(True, f"Run applied for '{target}'.")
+        return ActionResult(part_ok, f"{target} {'started' if part_ok else 'did not start: not built'}",
+                            results=(CompResult(target, "start",
+                                                Outcome.VERIFIED if part_ok else Outcome.FAILED,
+                                                stack="meshcore",
+                                                summary="" if part_ok else "not built"),))
+    return stub
+
+
+def _mc_records(tmp_path):
+    _write_record(tmp_path, _v1(stack="meshcore", comp="meshcore-node", band="868"))
+    _write_record(tmp_path, _v1(pid=999998, stack="meshcore", comp="meshcore-webui", band="868",
+                                requested_target="meshcore-webui", start_scope="component"))
+
+
+def test_parts_the_executor_starts_the_part_after_the_stack(tmp_path, monkeypatch):
+    svc = _drv(tmp_path, monkeypatch)
+    _mc_records(tmp_path)
+    calls = []
+    monkeypatch.setattr(ControllerService, "start", _parts_stub(calls))
+    res = svc.boot_restore_run()
+    assert [c["target"] for c in calls] == ["meshcore", "meshcore-webui"]
+    assert calls[1]["band"] == "868"
+    item = _journal_on_disk(tmp_path)["items"][0]
+    assert item["state"] == "succeeded"
+    assert item["result"]["parts"] == [{"component": "meshcore-webui", "outcome": "started",
+                                        "reason": "meshcore-webui started"}]
+    assert res.ok
+
+
+def test_parts_a_failed_stack_starts_no_part(tmp_path, monkeypatch):
+    svc = _drv(tmp_path, monkeypatch)
+    _mc_records(tmp_path)
+    calls = []
+    monkeypatch.setattr(ControllerService, "start", _parts_stub(calls, stack_ok=False))
+    svc.boot_restore_run()
+    assert [c["target"] for c in calls] == ["meshcore"]
+    item = _journal_on_disk(tmp_path)["items"][0]
+    assert item["state"] == "failed"
+    assert item["result"]["parts"] == [{"component": "meshcore-webui", "outcome": "not started",
+                                        "reason": "the stack start failed"}]
+    assert item["result"]["components"] == []       # the stack's OWN failed components only
+
+
+def test_parts_a_failed_part_does_not_fail_the_stack(tmp_path, monkeypatch):
+    svc = _drv(tmp_path, monkeypatch)
+    _mc_records(tmp_path)
+    monkeypatch.setattr(ControllerService, "start", _parts_stub([], part_ok=False))
+    res = svc.boot_restore_run()
+    item = _journal_on_disk(tmp_path)["items"][0]
+    assert item["state"] == "succeeded"
+    assert item["result"]["parts"][0]["outcome"] == "failed"
+    assert "not built" in item["result"]["parts"][0]["reason"]
+    assert "1 optional part(s) not started" in res.summary
+    assert any("part meshcore-webui failed" in d and "not built" in d for d in res.details)
+
+
+@pytest.mark.parametrize("shape,outcome,why", [
+    ("skipped", "skipped", "needs a graphical session"),     # ok=True, yet the part is not running
+    ("untyped", "not started", "Run applied"),               # no typed result: never "started"
+])
+def test_parts_an_accepted_but_not_started_part_is_reported(tmp_path, monkeypatch, shape, outcome,
+                                                            why):
+    # Gate-1 finding: the outcome came from `r.ok`, and the lifecycle returns ok=True for an optional
+    # GUI part SKIPPED for want of a display (Sideband at boot), so it was recorded "started".
+    svc = _drv(tmp_path, monkeypatch)
+    _mc_records(tmp_path)
+    monkeypatch.setattr(ControllerService, "start", _parts_stub([], part_result=shape))
+    res = svc.boot_restore_run()
+    item = _journal_on_disk(tmp_path)["items"][0]
+    assert item["state"] == "succeeded"                                   # the stack is running
+    part = item["result"]["parts"][0]
+    assert part["outcome"] == outcome and why in part["reason"], part
+    assert "1 optional part(s) not started" in res.summary
+    assert any(f"part meshcore-webui {outcome}" in d for d in res.details), res.details
+
+
+def test_parts_all_start_before_the_one_settle_write(tmp_path, monkeypatch):
+    svc = _drv(tmp_path, monkeypatch)
+    _mc_records(tmp_path)
+    events = []
+    stub = _parts_stub(events)
+    monkeypatch.setattr(ControllerService, "start", stub)
+    real_prune, real_write = type(svc)._boot_prune_evidence, br.write_journal
+
+    def prune(self, ids):
+        events.append({"target": "PRUNE"})
+        return real_prune(self, ids)
+
+    def write(paths, journal):
+        items = journal.get("items") or []
+        if items and items[0].get("state") in ("succeeded", "failed"):
+            events.append({"target": "SETTLE-WRITE",
+                           "parts": (items[0].get("result") or {}).get("parts")})
+        return real_write(paths, journal)
+    monkeypatch.setattr(type(svc), "_boot_prune_evidence", prune)
+    monkeypatch.setattr(br, "write_journal", write)
+    svc.boot_restore_run()
+    order = [e["target"] for e in events]
+    assert order[:4] == ["meshcore", "meshcore-webui", "PRUNE", "SETTLE-WRITE"]
+    assert events[3]["parts"][0]["component"] == "meshcore-webui"

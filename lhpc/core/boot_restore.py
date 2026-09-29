@@ -39,9 +39,11 @@ def journal_path(paths: Paths) -> Path:
 
 
 def new_item(item_id: str, kind: str, *, target: str = "", band: str = "",
-             bands: tuple[str, ...] = (), evidence_ids: tuple[str, ...] = ()) -> dict:
+             bands: tuple[str, ...] = (), evidence_ids: tuple[str, ...] = (),
+             components: tuple[str, ...] = ()) -> dict:
     return {"id": item_id, "kind": kind, "target": target, "band": band,
             "bands": list(bands), "evidence_ids": list(evidence_ids),
+            "components": list(components),
             "state": "pending", "result": None, "prune": None}
 
 
@@ -68,6 +70,10 @@ def _validate_item(it) -> str:
     ev = it.get("evidence_ids")
     if not isinstance(ev, list) or not all(isinstance(e, str) and e for e in ev):
         return "item evidence_ids invalid"
+    comps = it.get("components")          # absent in an older journal: valid
+    if comps is not None and (not isinstance(comps, list)
+                              or not all(isinstance(c, str) and c for c in comps)):
+        return "item components invalid"
     prune = it.get("prune")
     if prune is not None:
         # STRICT: recovery trusts `prune["ok"] is True` to skip cleanup, so an arbitrary
@@ -202,6 +208,9 @@ class StackMeta:
     interactive_main: bool
     declared_bands: tuple[str, ...]      # () = band-less/fixed by manifest
     fixed_band: str                      # the manifest band for non-switchable stacks ("" if none)
+    # The stack's optional parts an operator may run on their own and boot restore brings back when
+    # they did (`optional_role == "tickable"`, not interactive): the service fills it.
+    restorable_parts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -310,9 +319,15 @@ def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
             continue
         order_key = mk.last_start_at if (mk.last_start_state == "valid"
                                          and mk.last_start_at > 0) else ev0.launched_at
+        # The stack's eligible parts that ran on their OWN (a component-scoped start of that part
+        # itself): started after the stack, as the operator did. A stopped part left no record.
+        parts = sorted({e.component for e in evs
+                        if e.start_scope == "component" and e.requested_target == e.component
+                        and e.component in meta.restorable_parts and e.component != meta.main})
         orderable.append((order_key, stack_id,
                           new_item(secrets.token_hex(6), "stack", target=stack_id,
-                                   band=band, evidence_ids=tuple(ev_ids))))
+                                   band=band, evidence_ids=tuple(ev_ids),
+                                   components=tuple(parts))))
 
     for _key, _sid, item in sorted(orderable, key=lambda t: (t[0], t[1])):
         plan.items.append(item)
