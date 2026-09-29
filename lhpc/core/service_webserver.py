@@ -227,11 +227,18 @@ class WebserverOpsMixin:
         console-only config and reporting "verified" would be a claim about a config nginx never loads.
         It does NOT advance the applied-policy snapshot: proving the desired config is valid says
         nothing about whether nginx ever loaded it."""
+        from . import pki as _pki
         ev = self._ws_verify(self.config().webserver, self._stack_web_proxies(),
                              probe_console=True)
         failed = [k for k, v in ev["checks"].items() if v == "failed"]
         ok = not failed
         summary = "webserver verified" if ok else f"verification found issues: {', '.join(failed)}"
+        if "server_chain" in failed:
+            # The ACTUAL reason; a way out only where one exists (tls-renew writes, only apply serves).
+            why = ev["checks"].get("server_chain_reason", "")
+            summary += f" — server certificate chain: {why}"
+            if why == _pki.CHAIN_NOT_ISSUED:
+                summary += "; run `lhpc webserver tls-renew`, then `lhpc webserver apply` to serve it"
         details = []
         if ev["checks"].get("pki_provisional") == "yes":
             details.append("  NOTE: the PKI was created without a verified clock (fixed provisional "

@@ -1221,6 +1221,10 @@ def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=(),
     if needs_tls:
         checks["server_ca"] = "ok" if st["server_ca"].get("present") else "failed"
         checks["server_cert"] = "ok" if st["server_cert"].get("present") else "failed"
+        chain_ok, chain_why = pki.server_cert_chain_ok(paths)     # issued by THIS box's server CA?
+        checks["server_chain"] = "ok" if chain_ok else "failed"
+        if not chain_ok:
+            checks["server_chain_reason"] = chain_why
     if client_auth_required(cfg, stack_webs):
         checks["client_ca"] = "ok" if st["client_ca"].get("present") else "failed"
         checks["crl"] = "ok" if st["crl_present"] else "failed"

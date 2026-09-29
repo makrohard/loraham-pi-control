@@ -29,6 +29,7 @@ import json
 from pathlib import Path
 
 from cryptography import x509
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import pkcs12
@@ -674,6 +675,27 @@ def pki_status(paths: Paths) -> dict:
         # Minted under an unverified clock and not yet normalised (fixed provisional window).
         "provisional": provisional_pending(paths),
     }
+
+
+CHAIN_NOT_ISSUED = "not issued by this box's server CA"
+
+
+def server_cert_chain_ok(paths: Paths) -> tuple:
+    """(ok, reason): is the server leaf directly issued by this box's server CA (issuer name AND
+    signature)? Never raises. The reason is one of `CHAIN_NOT_ISSUED`, "server certificate or server
+    CA missing", or "unreadable: <error>"."""
+    try:
+        leaf = _read_cert(paths, _p(paths, _SERVER, "server.crt"))
+        ca = _read_cert(paths, _ca_paths(paths, _SERVER_CA)[1])
+    except PKIError as exc:
+        return False, f"unreadable: {exc}"
+    if leaf is None or ca is None:
+        return False, "server certificate or server CA missing"
+    try:
+        leaf.verify_directly_issued_by(ca)
+    except (ValueError, TypeError, InvalidSignature):
+        return False, CHAIN_NOT_ISSUED
+    return True, ""
 
 
 def cas_are_distinct(paths: Paths) -> bool:

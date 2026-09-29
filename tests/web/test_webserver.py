@@ -2579,3 +2579,107 @@ def test_cli_revoke_with_a_failed_reload_exits_1(monkeypatch, tmp_path, capsys):
     capsys.readouterr()
     assert main(["webserver", "cert", "revoke", "laptop", "--confirm-label", "laptop"]) == 1
     assert "revocation RECORDED for 'laptop'" in capsys.readouterr().out
+
+
+# ---- C05: verify checks that the server leaf was issued by THIS box's server CA ----------------
+def _pki_full(paths):
+    pki.init_server_ca(paths)
+    pki.init_client_ca(paths)
+    pki.issue_server_cert(paths, dns_sans=["pi.local"], ip_sans=[], days=90)
+    pki.build_crl(paths)
+
+
+def _chain_svc(paths):
+    conf_path = str(paths.under(*webserver.NGINX_CONF_STAGED))
+    return ControllerService(system=_fake(conf_path).system, paths=paths)
+
+
+def _put_foreign_leaf(tmp_path, paths):
+    """B's leaf pair over A's: a matching key pair, a foreign issuer (nginx -t would pass)."""
+    other = _paths(tmp_path / "other")
+    _pki_full(other)
+    for name in ("server.crt", "server.key"):
+        paths.under("config", "tls", "server", name).write_bytes(
+            other.under("config", "tls", "server", name).read_bytes())
+
+
+def test_verify_server_chain_ok_for_the_box_own_leaf(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _pki_full(paths)
+    conf_path = str(paths.under(*webserver.NGINX_CONF_STAGED))
+    c = webserver.verify(_fake(conf_path).system, paths, WebserverConfig())["checks"]
+    assert c["server_chain"] == "ok" and "server_chain_reason" not in c
+    monkeypatch.setattr(webserver, "listener_scope", lambda system, port: "loopback")   # the fake has no /proc
+    r = _chain_svc(paths).webserver_verify()                               # the service level: verify OK
+    assert r.ok and r.summary == "webserver verified", r.summary
+    assert r.data["checks"]["server_chain"] == "ok"
+
+
+def test_verify_server_chain_fails_for_a_foreign_leaf_and_names_the_remedy(tmp_path):
+    paths = _paths(tmp_path)
+    _pki_full(paths)
+    _put_foreign_leaf(tmp_path, paths)
+    r = _chain_svc(paths).webserver_verify()
+    c = r.data["checks"]
+    assert c["server_ca"] == "ok" and c["server_cert"] == "ok"            # presence alone passes
+    assert c["server_chain"] == "failed" and c["server_chain_reason"] == pki.CHAIN_NOT_ISSUED
+    assert not r.ok and "server_chain" in r.summary and pki.CHAIN_NOT_ISSUED in r.summary
+    assert "run `lhpc webserver tls-renew`, then `lhpc webserver apply` to serve it" in r.summary
+
+
+def test_verify_server_chain_missing_ca_names_no_command(tmp_path):
+    paths = _paths(tmp_path)
+    _pki_full(paths)
+    paths.under("config", "tls", "server-ca", "ca.crt").unlink()
+    r = _chain_svc(paths).webserver_verify()
+    c = r.data["checks"]
+    assert c["server_chain"] == "failed"
+    assert c["server_chain_reason"] == "server certificate or server CA missing"
+    assert pki.CHAIN_NOT_ISSUED not in r.summary                          # no issuer-mismatch claim
+    assert "tls-renew" not in r.summary and "init" not in r.summary       # no command: none repairs it
+
+
+def test_verify_http_only_has_no_server_chain_check(tmp_path):
+    paths = _paths(tmp_path)
+    conf_path = str(paths.under(*webserver.NGINX_CONF_STAGED))
+    c = webserver.verify(_fake(conf_path).system, paths, WebserverConfig(scheme="http"))["checks"]
+    assert c["tls_required"] == "no" and "server_chain" not in c
+
+
+@pytest.mark.parametrize("exc", [ValueError("issuer"), TypeError("key type"), "invalid-signature"])
+def test_chain_check_maps_each_verify_error_to_not_issued(tmp_path, monkeypatch, exc):
+    from cryptography.exceptions import InvalidSignature
+    err = InvalidSignature() if exc == "invalid-signature" else exc
+
+    class _Cert:
+        def verify_directly_issued_by(self, issuer):
+            raise err
+    monkeypatch.setattr(pki, "_read_cert", lambda paths, path: _Cert())
+    assert pki.server_cert_chain_ok(_paths(tmp_path)) == (False, pki.CHAIN_NOT_ISSUED)
+
+
+def test_chain_check_unreadable_never_raises_and_names_no_remedy(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _pki_full(paths)
+
+    def boom(p, path):
+        raise pki.PKIError("malformed certificate")
+    monkeypatch.setattr(pki, "_read_cert", boom)
+    ok, why = pki.server_cert_chain_ok(paths)
+    assert ok is False and why == "unreadable: malformed certificate"
+    r = _chain_svc(paths).webserver_verify()
+    assert r.data["checks"].get("server_chain_reason") == "unreadable: malformed certificate"
+    assert pki.CHAIN_NOT_ISSUED not in r.summary and "tls-renew" not in r.summary and "init" not in r.summary
+
+
+def test_console_verify_flashes_the_chain_reason_and_the_remedy(tmp_path, web, csrf):
+    paths = _paths(tmp_path)
+    _pki_full(paths)
+    _put_foreign_leaf(tmp_path, paths)
+    svc = _chain_svc(paths)
+    c = web(service_factory=lambda: svc)
+    r = c.post("/webserver/verify", data={"_csrf": csrf(c)})
+    assert r.status_code in (302, 303)
+    shown = c.get(r.headers["Location"]).get_data(as_text=True)
+    assert "not issued by this box&#39;s server CA" in shown or pki.CHAIN_NOT_ISSUED in shown
+    assert "lhpc webserver tls-renew" in shown and "lhpc webserver apply" in shown

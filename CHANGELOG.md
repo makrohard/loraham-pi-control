@@ -15,6 +15,9 @@
 - On the CLI, confirming a stack (`lhpc known-working <stack>`) names each source as "<commit> (selector <selector>)"
   and adds "; the manifest pin" when the commit is the manifest pin, so a `dev`-selected checkout at the pin no longer
   reads as "runs dev".
+- `lhpc webserver verify` also checks that the server certificate was issued by this box's own server CA
+  (`server_chain`); a foreign leaf fails with the reason and "run `lhpc webserver tls-renew`, then `lhpc webserver
+  apply`". The check reports only; it blocks no apply, update or start.
 
 ## 0.11.2
 
