@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ipaddress as _ipaddress
 import secrets as _secrets
+import threading
 import time
 from collections.abc import Callable
 
@@ -556,6 +557,19 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             rows=service.auto_install_rows())
 
     _TX_CONFIRM_TTL_S = 300.0
+    # Single use of an RF confirmation, held in THIS web process (one process, waitress threads): the
+    # session is a signed cookie, so popping the staged record cannot stop the old cookie being sent
+    # again. `_tx_nonce` marks what this process staged; a record from before a restart is refused.
+    # The used set depends on NO clock (a pruning by expiry let a stalled replay or a clock step back
+    # revive a used token): it keeps the newest _TX_USED_MAX tokens and drops the oldest. THE LIMIT: a
+    # used confirmation is remembered until _TX_USED_MAX later ones were consumed, whatever the time;
+    # after that its own 300 s by the wall clock are its only guard, so a clock set back can make it
+    # usable again.
+    _TX_USED_MAX = 256
+    _tx_used: dict = {}                                  # token -> None, oldest first
+    _tx_used_lock = threading.Lock()
+    _tx_nonce = _secrets.token_hex(8)
+    app.extensions["lhpc_tx_used"] = _tx_used             # read by the tests only
 
     def _parse_ai_selection():
         """Build {sid: {install, version, tests, tx}} by iterating the KNOWN stack ids (never split a
@@ -574,26 +588,31 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return sel, canonical
 
     def _stage_tx_confirmation(canonical: str) -> str:
-        """SERVER-SIDE single-use RF confirmation: session-bound token tied to the EXACT selection
-        (canonical string), the CSRF context, and a short expiry. Consumed atomically by the
-        confirming POST — hidden-field values are never trusted on their own."""
+        """An RF confirmation, used once (see THE LIMIT above): a session-bound token tied to the EXACT
+        selection (canonical string), the CSRF context, a short expiry and this web process
+        (`_tx_nonce`). Consumed by the confirming POST — hidden-field values are never trusted on
+        their own."""
         token = _secrets.token_hex(16)
         session["_auto_install_tx_confirm"] = {"token": token, "canonical": canonical,
                                                "csrf": session.get("_csrf", ""),
-                                               "exp": time.time() + _TX_CONFIRM_TTL_S}
+                                               "exp": time.time() + _TX_CONFIRM_TTL_S,
+                                               "nonce": _tx_nonce}
         return token
 
     def _consume_tx_confirmation(token: str, canonical: str) -> str:
-        """Validate + CONSUME the staged confirmation in one step (popped before any spawn —
-        replay-proof). Returns "" when valid, else the typed refusal."""
-        staged = session.pop("_auto_install_tx_confirm", None)          # single-use: always consumed
+        """Validate + CONSUME the staged confirmation before any spawn. Returns "" when valid, else the
+        typed refusal. Single use within this web process: the token is recorded as used in the same
+        locked step that finds it unused, so a replayed cookie or two simultaneous requests start once
+        (a replay: until 256 later confirmations were consumed, see THE LIMIT above)."""
+        now = time.time()
+        staged = session.pop("_auto_install_tx_confirm", None)          # gone from THIS session
         if not isinstance(staged, dict):
             return "no valid RF confirmation is staged — start again from the form"
         try:
             if not (isinstance(staged.get("token"), str) and staged["token"]
                     and isinstance(staged.get("exp"), (int, float))):
                 return "the staged RF confirmation is malformed — start again"
-            if time.time() > staged["exp"]:
+            if now > staged["exp"]:
                 return "the RF confirmation has expired — start again"
             if not (token and _secrets.compare_digest(token, staged["token"])):
                 return "the RF confirmation token does not match — start again"
@@ -603,6 +622,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 return ("the selection changed after confirmation — start again")
         except (TypeError, KeyError):
             return "the staged RF confirmation is malformed — start again"
+        with _tx_used_lock:
+            # Both refusals leave the set unchanged; only a consume that passes records (and drops
+            # the oldest entry once the set is full).
+            if staged.get("nonce") != _tx_nonce:
+                return "the RF confirmation was made before the console restarted — start again"
+            if staged["token"] in _tx_used:
+                return "this RF confirmation was already used — start again from the form"
+            _tx_used[staged["token"]] = None
+            while len(_tx_used) > _TX_USED_MAX:
+                del _tx_used[next(iter(_tx_used))]
         return ""
 
     @app.post("/auto-install/start")

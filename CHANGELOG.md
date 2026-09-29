@@ -28,6 +28,10 @@
   the KISS serial bridge, lxmd, MeshChat, Sideband): it is started after its stack, and only when the stack started.
   A part that fails does not fail the stack; the restore's log (`logs/lhpc-boot-restore.log`, web: Controller logs →
   boot-restore) names it with its reason.
+- The console's RF confirmation for a transmitting auto-install run starts one run: the same confirmation sent again
+  (an old copy of the session cookie, or two requests at once) is refused ("already used") while it is among the last
+  256 confirmations used, and a confirmation made before the console restarted is refused too; the operator confirms
+  again.
 
 ## 0.11.2
 

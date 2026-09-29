@@ -1142,3 +1142,192 @@ def test_all_version_select_claims_no_channel_by_default(tmp_path, web):
     assert [(o["value"], o.text) for o in chosen] == [("", "Set all versions…")]
     assert [(o["value"], o.text) for o in opts[:2]] == [("", "Set all versions…"), ("default", "Each stack's default")]
     assert {"binary", "pinned", "dev", "stable"} <= {o["value"] for o in opts}
+
+
+# ---- C06: an RF confirmation starts ONE run, within THE LIMIT in app.py (the session is a signed cookie) --
+def _confirmed(csrf, c, svc):
+    """Stage a confirmation; return (the confirmed form, the session cookie that carries it)."""
+    ctok, tok2 = _staged(csrf, c, svc)
+    return (_all_form(svc, tok2, source="stable", tx=True, confirm_token=ctok),
+            c.get_cookie("session").value)
+
+
+def test_a_replayed_confirmation_cookie_starts_no_second_run(tmp_path, monkeypatch, web, csrf):
+    c, svc = _client(web, tmp_path)
+    spawned = _no_spawn(monkeypatch, svc)
+    form, staged_cookie = _confirmed(csrf, c, svc)
+    c.post("/auto-install/start", data=form)
+    assert len(spawned) == 1
+    c.set_cookie("session", staged_cookie)             # the SAME staged cookie, sent again
+    r = c.post("/auto-install/start", data=form, follow_redirects=True)
+    assert len(spawned) == 1
+    assert b"already used" in r.data
+
+
+def test_two_simultaneous_uses_of_one_confirmation_start_once(tmp_path, monkeypatch, web, csrf):
+    import threading
+    c, svc = _client(web, tmp_path)
+    spawned = _no_spawn(monkeypatch, svc)
+    form, staged_cookie = _confirmed(csrf, c, svc)
+    clients = [c.application.test_client() for _ in range(2)]   # the SAME app: one process
+    for k in clients:
+        k.set_cookie("session", staged_cookie)
+    gate = threading.Barrier(2)
+
+    def post(k):
+        gate.wait()
+        k.post("/auto-install/start", data=form)
+    threads = [threading.Thread(target=post, args=(k,)) for k in clients]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(spawned) == 1
+
+
+def test_the_used_set_keeps_the_newest_tokens_and_drops_the_oldest(tmp_path, monkeypatch, web, csrf):
+    # The set is bounded without any clock: once full, a passing consume drops the OLDEST entry.
+    c, svc = _client(web, tmp_path)
+    _no_spawn(monkeypatch, svc)
+    used = c.application.extensions["lhpc_tx_used"]
+    for i in range(256):                                # full: 256 older tokens, oldest first
+        used[f"old-{i}"] = None
+    form, _cookie = _confirmed(csrf, c, svc)
+    c.post("/auto-install/start", data=form)
+    assert len(used) == 256
+    assert "old-0" not in used and "old-1" in used      # the oldest dropped, the next kept
+    assert list(used)[-1] == form["confirm_token"]      # the new token recorded last
+
+
+def test_a_confirmation_staged_before_a_restart_is_refused(tmp_path, monkeypatch, web, csrf):
+    c, svc = _client(web, tmp_path)
+    spawned = _no_spawn(monkeypatch, svc)
+    form, _cookie = _confirmed(csrf, c, svc)
+    with c.session_transaction() as sess:              # staged by another web process
+        sess["_auto_install_tx_confirm"] = dict(sess["_auto_install_tx_confirm"], nonce="0" * 16)
+    r = c.post("/auto-install/start", data=form, follow_redirects=True)
+    assert not spawned and b"before the console restarted" in r.data
+
+
+@pytest.mark.parametrize("refusal", ["already-used", "before-restart"])
+def test_a_refused_confirmation_leaves_the_used_set_unchanged(tmp_path, monkeypatch, web, csrf,
+                                                              refusal):
+    import time as _time
+    c, svc = _client(web, tmp_path)
+    _no_spawn(monkeypatch, svc)
+    used = c.application.extensions["lhpc_tx_used"]
+    form, staged_cookie = _confirmed(csrf, c, svc)
+    if refusal == "already-used":
+        c.post("/auto-install/start", data=form)                   # the first, valid use
+        c.set_cookie("session", staged_cookie)                     # the replay is refused
+    else:
+        with c.session_transaction() as sess:                      # staged by another process
+            sess["_auto_install_tx_confirm"] = dict(sess["_auto_install_tx_confirm"],
+                                                    nonce="0" * 16)
+    used["unrelated-expired"] = _time.time() - 1.0                 # a sentinel a prune would drop
+    before = dict(used)
+    r = c.post("/auto-install/start", data=form, follow_redirects=True)
+    assert b"RF confirmation refused" in r.data
+    assert used == before                                          # nothing pruned, nothing recorded
+
+
+# ---- C06 gate 2's lead: a used token stays used across a stall or a clock step, until 256 later ones ---
+def _staged_at(csrf, c, svc, monkeypatch, at):
+    """Stage a confirmation with the clock at `at` (the signed cookie's own timestamp included)."""
+    import time as _time
+    monkeypatch.setattr(_time, "time", lambda: at)
+    return _confirmed(csrf, c, svc)
+
+
+def test_a_used_token_stays_used_after_a_clock_step_back(tmp_path, monkeypatch, web, csrf):
+    # T used (exp E); a later consume at now > E would have pruned T by expiry; the wall clock then steps BACK
+    # below E; the replay of T passes the expiry check and must still find T used.
+    import time as _time
+    real = _time.time
+    c, svc = _client(web, tmp_path)
+    spawned = _no_spawn(monkeypatch, svc)
+    t0 = real()
+    form_t, cookie_t = _staged_at(csrf, c, svc, monkeypatch, t0)
+    c.post("/auto-install/start", data=form_t)                     # B: T used, exp E = t0 + 300
+    e = t0 + 300.0
+    other = c.application.test_client()
+    form_u, _cu = _staged_at(csrf, other, svc, monkeypatch, e + 0.5)
+    monkeypatch.setattr(_time, "time", lambda: e + 1.0)
+    other.post("/auto-install/start", data=form_u)                 # C: another token, now > E
+    assert len(spawned) == 2
+    monkeypatch.setattr(_time, "time", lambda: e - 1.0)           # the clock steps back below E
+    c.set_cookie("session", cookie_t)
+    r = c.post("/auto-install/start", data=form_t, follow_redirects=True)
+    assert len(spawned) == 2, "a used confirmation started a second run after a clock step"
+    assert b"already used" in r.data
+
+
+def _lock_cell(app):
+    """The closure cell holding the RF-confirmation lock (reached through the route's closure)."""
+    import threading
+    lock_type = type(threading.Lock())
+    for outer in app.view_functions["auto_install_start"].__closure__ or ():
+        fn = outer.cell_contents
+        for cell in getattr(fn, "__closure__", None) or ():
+            if isinstance(cell.cell_contents, lock_type):
+                return cell
+    raise AssertionError("lock not found")
+
+
+def test_a_replay_stalled_before_the_lock_is_refused(tmp_path, monkeypatch, web, csrf):
+    # The replay A reads `now` <= E and passes the expiry check, then stalls before the lock; request C (another
+    # token, its now > E) takes the lock first. A then must still find T used.
+    import time as _time
+    real = _time.time
+    c, svc = _client(web, tmp_path)
+    spawned = _no_spawn(monkeypatch, svc)
+    t0 = real()
+    form_t, cookie_t = _staged_at(csrf, c, svc, monkeypatch, t0)
+    c.post("/auto-install/start", data=form_t)                     # B: T used, exp E
+    e = t0 + 300.0
+    other = c.application.test_client()
+    form_u, _cu = _staged_at(csrf, other, svc, monkeypatch, e + 0.5)
+    cell = _lock_cell(c.application)
+    real_lock, fired = cell.cell_contents, []
+
+    class _Stall:
+        """A's lock: before A acquires it, C runs to completion (C's own acquisition passes through)."""
+        def __enter__(self):
+            if not fired:
+                fired.append(1)
+                monkeypatch.setattr(_time, "time", lambda: e + 1.0)
+                other.post("/auto-install/start", data=form_u)    # C, now > E, inside the stall
+            return real_lock.__enter__()
+
+        def __exit__(self, *exc):
+            return real_lock.__exit__(*exc)
+    cell.cell_contents = _Stall()
+    monkeypatch.setattr(_time, "time", lambda: e - 1.0)           # A's now, read before the stall
+    c.set_cookie("session", cookie_t)
+    c.post("/auto-install/start", data=form_t)                     # A: the replay of T
+    cell.cell_contents = real_lock
+    assert fired and len(spawned) == 2, "a stalled replay started a second run"
+
+
+@pytest.mark.parametrize("later", [255, 256])
+def test_the_limit_a_used_token_is_remembered_for_256_later_consumptions_whatever_the_time(
+        tmp_path, monkeypatch, web, csrf, later):
+    # THE LIMIT (gate 2, round 2): the record remembers a used token until 256 LATER tokens were consumed,
+    # however much time passed; after that only the token's own 300 s by the wall clock guard it, so a
+    # clock set back inside them makes it usable again. 255 later consumptions: refused; 256: it passes.
+    import time as _time
+    real = _time.time
+    c, svc = _client(web, tmp_path)
+    spawned = _no_spawn(monkeypatch, svc)
+    t0 = real()
+    form_t, cookie_t = _staged_at(csrf, c, svc, monkeypatch, t0)
+    c.post("/auto-install/start", data=form_t)                     # T used, exp t0 + 300
+    other = c.application.test_client()
+    for _ in range(later):                                         # later ones, all AFTER T's expiry
+        form_u, _cu = _staged_at(csrf, other, svc, monkeypatch, t0 + 400.0)
+        other.post("/auto-install/start", data=form_u)
+    assert len(spawned) == 1 + later
+    monkeypatch.setattr(_time, "time", lambda: t0 + 299.0)        # the clock set back inside T's 300 s
+    c.set_cookie("session", cookie_t)
+    c.post("/auto-install/start", data=form_t)
+    assert len(spawned) == (1 + later) + (1 if later >= 256 else 0)
