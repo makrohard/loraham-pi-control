@@ -29,6 +29,11 @@ class ValidationError(ValueError):
     """A user-supplied value failed validation (rejected, never quoted/escaped)."""
 
 
+def is_hex(value, n: int) -> bool:
+    """A str of exactly `n` lowercase hex digits (a 40-hex commit id, a 64-hex token)."""
+    return isinstance(value, str) and len(value) == n and all(c in "0123456789abcdef" for c in value)
+
+
 def _reject_control(s: str, field: str) -> None:
     if "\x00" in s:
         raise ValidationError(f"{field}: NUL byte not allowed")

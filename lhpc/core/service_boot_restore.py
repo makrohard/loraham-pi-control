@@ -508,6 +508,15 @@ class BootRestoreOpsMixin:
         item["result"] = {"ok": ok, "summary": res.summary}
         if parts is not None:
             item["result"]["parts"] = parts          # the optional parts; never the item's verdict
+        # The daemon's own item is `daemon-reconcile`, which has no target.
+        _target = item.get("target") or (self.DAEMON_STACK_ID
+                                         if item["kind"] == "daemon-reconcile" else "")
+        if ok and _target:
+            # A3 (D): a stack installed over the pin check was started under that exact, still
+            # active acceptance — the journal names it (component ids and the two commits only).
+            _ov = self.binary_active_override(_target)
+            if _ov:
+                item["result"]["override"] = _ov
         if not ok:
             # The stack summary names only the components ("… did not start/verify"); the WHY
             # (e.g. "not built — build it first") lives in each component's result. Keep it, or

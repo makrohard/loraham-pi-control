@@ -506,3 +506,14 @@ def test_an_identity_refusal_lands_on_a_visibly_marked_callsign_row(page):
     assert marked["bg"] not in ("rgba(0, 0, 0, 0)", "transparent"), marked
     assert marked["outline"] == "solid", marked
     assert page.locator("#operator-callsign tr.field-bad").count() == 0
+
+
+def test_the_install_confirm_offers_no_pin_override_before_a_refusal(page):
+    """A3 (E), the stub-free half: the normal install confirmation of a stack carries no
+    `accept_pin_mismatch` control."""
+    page.goto(page.lab_base + "/stacks?open=kiss&inst=kiss", wait_until="networkidle")
+    page.locator('#stack-install-kiss form:has(input[name="op"][value="install"]) button').first.click()
+    page.wait_for_load_state("networkidle")
+    assert page.url.endswith("/action"), "the Install button did not reach the confirm page"
+    assert page.locator('input[name="confirmed"][value="yes"]').count() >= 1, "no confirm form"
+    assert page.locator('input[name="accept_pin_mismatch"]').count() == 0

@@ -124,9 +124,42 @@ class BinaryChannelMixin:
         want = comp.source.pin_commit
         if not got or not want or got == want:
             return ""
+        # The operator accepted exactly this pair at install (`--accept-pin-mismatch`) and the
+        # component is not clone_required now: the one helper decides, nothing here.
+        if _state == "valid" and comp.id in self.binary_active_override(sid, rec):
+            return ""
         return (f"installed binary artifact is behind the manifest (built from {got[:9]}, "
                 f"the manifest pins {want[:9]}) — update it first (lhpc update {sid}, or "
                 f"lhpc install {sid} --source pinned)")
+
+    def binary_active_override(self, stack_id: str, rec=None) -> dict:
+        """{cid: [installed, pin]}: the stack's recorded pin-mismatch acceptance that is still in
+        force (`binary_receipt.active_override`), read with the CURRENT pins and clone_required.
+        Empty when there is none or it is stale. Read by itself (`rec` None) it is also empty for a
+        receipt that is not valid; a caller passing `rec` checks the receipt's state first."""
+        if rec is None:
+            state, rec, _why = self.binary_receipt_state(stack_id)
+            if state != "valid":
+                return {}
+        spec = self.binary_spec(stack_id)
+        if spec is None:
+            return {}
+        return brx.active_override(rec, self._binary_pins(stack_id), spec.clone_required)
+
+    def binary_install_refusal(self, stack_id: str) -> dict | None:
+        """The typed pin refusal of this stack's last FAILED console install job, from its job
+        result only (no index fetch on a GET), while its banner is not dismissed:
+        {"refused": ""|"clone_required"|"consent_stale", "lagging": [(cid, binary, pin)]}."""
+        from . import jobresult
+        log = f"install-{stack_id}.log"
+        rec = jobresult.read_one(self._paths, log)
+        if not rec or rec.get("state") != "failed" or "refusal" not in rec:
+            return None
+        if log in self._task_dismissed_ids():
+            return None
+        ref = rec["refusal"]
+        return {"refused": ref["override_refused"],
+                "lagging": [(c, p[0], p[1]) for c, p in sorted(ref["pin_mismatch"].items())]}
 
     def binary_covers(self, component_id: str) -> bool:
         """True when this component's source/build is currently provided by a binary artifact.

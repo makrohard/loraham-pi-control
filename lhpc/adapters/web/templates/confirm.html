@@ -76,7 +76,15 @@
               <br>Stopping {{ blockers|map(attribute='holder_stack')|unique|join(', ') }} is required to run this stack.</p>
             <input type="hidden" name="stop_owners" value="yes">
           {% endif %}
-          {% if source_choices %}
+          {% if override_consent %}
+            {# A3: this plan passed WITH the operator's override; the apply carries the same
+               consent (the job or the inline update recomputes and compares it). #}
+            <input type="hidden" name="accept_pin_mismatch" value="yes">
+            <input type="hidden" name="consent" value="{{ override_consent }}">
+            <input type="hidden" name="source" value="binary">
+            <p class="depnote depnote-warn"><strong>Installs the published binary over the pin
+              check.</strong> It may not work with this LHPC.</p>
+          {% elif source_choices %}
             <h3>Version to install</h3>
             <label>source
               <select name="source">
@@ -109,6 +117,13 @@
         {% endif %}
       {% else %}
         <p class="depnote depnote-warn">This action cannot proceed (see above).</p>
+        {% if pin_refusal and selfupdate.update_available %}
+          {# A3 way (a), FIRST whenever an update is available: the published binary matches
+             the next LHPC. #}
+          <div class="depnote depnote-warn" id="pin-selfupdate"><strong>Update LHPC first</strong>
+            (about a minute), then {{ op }} again.
+            <a class="btnlink" href="{{ url_for('self_update_apply') }}">Update LHPC &rarr;</a></div>
+        {% endif %}
         {% if offer_source and source_choices %}
           {# A refused BINARY install is the one dead end worth a way out: the operator picks a
              source channel here instead of being sent to the CLI (settled decision: an explicit
@@ -131,6 +146,37 @@
             <span class="muted">Building from source takes hours on a small Pi.</span>
             <br><hr class="sep">
             <button type="submit">Continue from source</button>
+          </form>
+        {% endif %}
+        {% if pin_refusal and pin_refusal.overridable %}
+          {# A3 way (c), only after a real gate-1 refusal of an overridable stack (E): the
+             lagging pairs and ONE checkbox; the re-post carries this refusal's consent token. #}
+          <form method="post" action="/action" id="pin-override">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="op" value="{{ op }}">
+            <input type="hidden" name="target" value="{{ target }}">
+            <input type="hidden" name="source" value="binary">
+            <input type="hidden" name="consent" value="{{ pin_refusal.consent }}">
+            {% if frm %}<input type="hidden" name="from" value="{{ frm }}">{% endif %}
+            <h3>Install the published binary anyway?</h3>
+            <ul>{% for cid, b, p in pin_refusal.lagging %}
+              <li><code>{{ cid }}</code>: built from <code>{{ b[:9] }}</code>, this LHPC pins
+                <code>{{ p[:9] }}</code></li>{% endfor %}</ul>
+            <label><input type="checkbox" name="accept_pin_mismatch" value="yes">
+              I accept that this binary was built from other commits than this LHPC pins; it may
+              not work with this LHPC.</label>
+            <br><hr class="sep">
+            <button type="submit">Review the {{ op }} with this binary</button>
+          </form>
+        {% elif pin_refusal and pin_refusal.refused == 'consent_stale' %}
+          {# The index moved since the confirmation: a fresh dry run shows the new refusal. #}
+          <form method="post" action="/action">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="op" value="{{ op }}">
+            <input type="hidden" name="target" value="{{ target }}">
+            <input type="hidden" name="source" value="binary">
+            {% if frm %}<input type="hidden" name="from" value="{{ frm }}">{% endif %}
+            <button type="submit">{{ op | capitalize }} again</button>
           </form>
         {% endif %}
       {% endif %}

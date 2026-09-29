@@ -17,6 +17,7 @@ import argparse
 import os
 import sys
 
+from lhpc.core import validators
 from lhpc.core.services import ActionResult, ControllerService
 from lhpc.version import __version__
 
@@ -77,6 +78,29 @@ def _unit_plumbing_refusal(flag: str, unit: str, use: str):
     print(f"ERR   {flag} is unit plumbing, meant to run from {unit}; refused because the systemd "
           f"invocation marker (INVOCATION_ID) is absent. Use {use} instead.")
     return 2
+
+
+def _pin_consent_arg(value: str) -> str:
+    """`--accept-pin-mismatch` takes no value (a human) or the 64-hex consent token of a dry run
+    (the console's job); anything else is an error, so a stack name given after the flag is
+    refused, not silently taken as its value."""
+    if value in ("", "yes") or validators.is_hex(value, 64):
+        return value
+    raise argparse.ArgumentTypeError("expects no value, or a consent token")
+
+
+def _pin_consent_run(run, accept: str):
+    """The `run(apply)` for `_apply_flow` of install/update: the dry run's consent token
+    (`data["consent"]`) is what the apply passes, so both bind to the artifact the plan showed.
+    Without the flag nothing is carried."""
+    held = {"token": accept}
+
+    def _run(apply):
+        res = run(apply, held["token"])
+        if not apply and accept and res.ok and res.data.get("consent"):
+            held["token"] = res.data["consent"]
+        return res
+    return _run
 
 
 def _apply_flow(run, yes: bool) -> int:
@@ -531,6 +555,12 @@ def build_parser() -> argparse.ArgumentParser:
                                 "those stacks) | pinned | dev | stable")
     # Internal (web-job only): record a green/red task-banner result under this run's job-result marker,
     # gated on the parent's identity tracking. STRICTLY bound to install-<stack>.log + attempt id.
+    p_install.add_argument("--accept-pin-mismatch", nargs="?", const="yes", default="",
+                           type=_pin_consent_arg, metavar="CONSENT",
+                           help="Binary channel: install the published binary even though it was "
+                                "built from other commits than this LHPC pins (it may not work "
+                                "with this LHPC; refused for a component whose run scripts come "
+                                "from LHPC's own checkout, e.g. MeshCom's emulator)")
     p_install.add_argument("--web-result", default="", help=argparse.SUPPRESS)
     p_install.add_argument("--attempt-id", default="", help=argparse.SUPPRESS)
 
@@ -792,6 +822,12 @@ def build_parser() -> argparse.ArgumentParser:
                             help="Version to fetch: prebuilt binary / latest dev / latest "
                                  "stable / pinned (default: pinned; a stack installed from "
                                  "the binary stays on it)")
+            sp.add_argument("--accept-pin-mismatch", nargs="?", const="yes", default="",
+                            type=_pin_consent_arg, metavar="CONSENT",
+                            help="Binary channel: update to the published binary even though it "
+                                 "was built from other commits than this LHPC pins (it may not "
+                                 "work with this LHPC; refused for a component whose run scripts "
+                                 "come from LHPC's own checkout, e.g. MeshCom's emulator)")
             sp.add_argument("--upstream", action="store_true",
                             help="For a fetched package (graywolf): update to the latest "
                                  "upstream release, verified against its own checksums.txt")
@@ -1042,9 +1078,11 @@ def _run(argv: list[str] | None = None) -> int:
             if _chan == svc.BINARY_CHANNEL and not args.check:
                 # `--check` stays a READ-ONLY preview and must never prompt: it falls through
                 # to the plan render below (which prints the binary plan without applying).
-                rc = _apply_flow(lambda apply: svc.install(args.stack, apply=apply,
-                                                           source=svc.BINARY_CHANNEL),
-                                 yes=args.yes)
+                rc = _apply_flow(_pin_consent_run(
+                    lambda apply, acc: svc.install(args.stack, apply=apply,
+                                                   source=svc.BINARY_CHANNEL,
+                                                   accept_pin_mismatch=acc),
+                    args.accept_pin_mismatch), yes=args.yes)
                 if rc == 0:
                     return 0
                 # THE settled fallback: ask explicitly, never switch silently. Only for a named
@@ -1093,13 +1131,17 @@ def _run(argv: list[str] | None = None) -> int:
             return 3
         _wchan = args.source or (svc.default_channel(args.stack) if args.stack else "pinned")
         # The BUILD dep gate applies to source installs only (see _do_install).
+        res = None                                         # the dep gate carries no pin refusal
         if _wchan != svc.BINARY_CHANNEL and _print_install_dep_gate(svc, args.stack, check=False):
             rc = 1                                         # a blocked dep-gate is a real (never-admitted) failure
         else:
-            rc = _render(svc.install(args.stack, apply=True, source=_wchan,
-                                     on_admit=lambda: jobresult.mark_running(svc._paths, web, aid)))
+            res = svc.install(args.stack, apply=True, source=_wchan,
+                              on_admit=lambda: jobresult.mark_running(svc._paths, web, aid),
+                              accept_pin_mismatch=args.accept_pin_mismatch)
+            rc = _render(res)
         jobresult.terminalize(svc._paths, web, aid, "done" if rc == 0 else "failed",
-                              detail="" if rc == 0 else "install failed")
+                              detail="" if rc == 0 else "install failed",
+                              refusal=jobresult.refusal_from(res))
         return rc
     if args.command == "auto-install":
         import signal as _signal
@@ -1478,8 +1520,10 @@ def _run(argv: list[str] | None = None) -> int:
         # proved. Following the branch tip is the explicit `--source dev`.
         _usrc = args.source or ("binary" if (args.target
                                              and svc.on_binary_channel(args.target)) else "pinned")
-        return _apply_flow(lambda a: svc.update(args.target, apply=a, source=_usrc),
-                           yes=args.yes)
+        return _apply_flow(_pin_consent_run(
+            lambda a, acc: svc.update(args.target, apply=a, source=_usrc,
+                                      accept_pin_mismatch=acc),
+            args.accept_pin_mismatch), yes=args.yes)
     if args.command == "uninstall":
         return _apply_flow(lambda a: svc.uninstall(args.target, apply=a), yes=args.yes)
     if args.command == "clean":

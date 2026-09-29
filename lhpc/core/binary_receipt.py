@@ -64,6 +64,11 @@ class BinaryReceipt:
     owned_dirs: tuple[str, ...] = ()
     installed_at: float = field(default_factory=time.time)
     version: int = RECEIPT_VERSION
+    # The operator's recorded acceptance of a pin mismatch (`--accept-pin-mismatch`):
+    # {"at": epoch, "lhpc_version": str, "mismatch": {cid: [binary, pin]}}, or None. OPTIONAL and
+    # outside `_valid`: a malformed value is dropped (None), so the receipt stays valid and gate 2
+    # refuses the mismatch (fail closed). An older lhpc ignores the extra key.
+    override: dict | None = None
 
 
 def receipt_dir(paths: Paths) -> Path:
@@ -137,6 +142,45 @@ def _valid(d: object, stack_id: str) -> bool:
     return isinstance(at, (int, float)) and not isinstance(at, bool)
 
 
+def _parse_override(raw, components) -> dict | None:
+    """The receipt's `override`, strictly checked; None when absent or malformed."""
+    if not isinstance(raw, dict):
+        return None
+    at, ver, mm = raw.get("at"), raw.get("lhpc_version"), raw.get("mismatch")
+    if not isinstance(at, int) or isinstance(at, bool):
+        return None
+    if not isinstance(ver, str) or len(ver) > 64:
+        return None
+    if not isinstance(mm, dict) or not mm:
+        return None
+    out = {}
+    for cid, pair in mm.items():
+        if not (isinstance(cid, str) and cid in components):
+            return None
+        if not (isinstance(pair, list) and len(pair) == 2 and all(validators.is_hex(x, 40) for x in pair)):
+            return None
+        out[cid] = [pair[0], pair[1]]
+    return {"at": at, "lhpc_version": ver, "mismatch": out}
+
+
+def active_override(rec, pins: dict, clone_required=()) -> dict:
+    """THE one staleness rule: {cid: [installed, pin]} for every recorded pair that is still
+    exactly [installed commit, current pin] with installed != pin, EXCEPT a component that is
+    `clone_required` now (its run scripts come from this lhpc's pinned checkout, so the binary
+    must match; an override recorded before it became clone_required, or written by hand, is
+    never honoured). Gate 2, status, doctor, the console and boot restore all ask this."""
+    ov = getattr(rec, "override", None) if rec is not None else None
+    if not ov:
+        return {}
+    out = {}
+    for cid, (b, p) in ov["mismatch"].items():
+        if cid in clone_required:
+            continue
+        if rec.components.get(cid) == b and pins.get(cid) == p and b != p:
+            out[cid] = [b, p]
+    return out
+
+
 def _from_dict(d: dict) -> BinaryReceipt:
     return BinaryReceipt(
         stack=d["stack"], artifact_sha256=d["artifact_sha256"],
@@ -146,7 +190,8 @@ def _from_dict(d: dict) -> BinaryReceipt:
         proof_paths=tuple(d["proof_paths"]),
         registry_baseline=dict(d["registry_baseline"]), probe=d["probe"],
         owned_dirs=tuple(d.get("owned_dirs", [])),
-        installed_at=float(d["installed_at"]), version=int(d["version"]))
+        installed_at=float(d["installed_at"]), version=int(d["version"]),
+        override=_parse_override(d.get("override"), d["components"]))
 
 
 def write_receipt(paths: Paths, rec: BinaryReceipt) -> bool:
@@ -161,6 +206,8 @@ def write_receipt(paths: Paths, rec: BinaryReceipt) -> bool:
         "registry_baseline": dict(rec.registry_baseline), "probe": rec.probe,
         "owned_dirs": list(rec.owned_dirs), "installed_at": rec.installed_at,
     }
+    if rec.override is not None:
+        payload["override"] = rec.override
     try:
         runtime_fs.mkdir(paths, "state", "binary")
         runtime_fs.write_marker(paths, receipt_path(paths, rec.stack),

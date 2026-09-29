@@ -259,3 +259,16 @@ def test_bind_is_registered_as_a_named_validator():
     assert V.validate_param(p, "192.168.0.0/24") == "192.168.0.0/24"
     with pytest.raises(ValidationError):
         V.validate_param(p, "::1")
+
+
+# --- A3: is_hex, the one check for a 40-hex commit id and a 64-hex consent token -------------------
+@pytest.mark.parametrize("value,n,ok", [
+    ("a" * 40, 40, True), ("0123456789abcdef" * 4, 64, True),
+    ("a" * 39, 40, False), ("a" * 41, 40, False), ("", 40, False),     # length
+    ("A" * 40, 40, False),                                              # case
+    ("g" * 40, 40, False), ("a" * 39 + "\n", 40, False),                # non-hex
+    ("a" * 40 + "\n", 40, False),                                       # a trailing newline
+    (None, 40, False), (b"a" * 40, 40, False), (["a"] * 40, 40, False),  # not a str
+])
+def test_is_hex(value, n, ok):
+    assert V.is_hex(value, n) is ok

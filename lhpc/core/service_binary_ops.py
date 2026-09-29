@@ -25,6 +25,11 @@ from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
 
 
+def _override_command(stack_id: str) -> str:
+    """The one command that installs the published binary over the pin check (option 3)."""
+    return f"lhpc install {stack_id} --source binary --accept-pin-mismatch --yes"
+
+
 class BinaryOpsMixin:
 
     # ---- helpers ----------------------------------------------------------------------------
@@ -71,9 +76,14 @@ class BinaryOpsMixin:
     # ---- install -----------------------------------------------------------------------------
 
     def binary_install(self, stack_id: str, apply: bool = False, *,
-                       locked: bool = False) -> ActionResult:
+                       locked: bool = False, accept_pin_mismatch: str = "") -> ActionResult:
         """Install `stack_id` from its published artifact. Every refusal is typed and offers
         the source channel explicitly (never a silent fallback).
+
+        `accept_pin_mismatch` lifts ONLY the commit comparison of gate 1 (`--accept-pin-mismatch`):
+        "" = not given; "yes" = given bare (a dry run returns the consent token); a 64-hex consent
+        token (the apply, or the console's re-post) must equal the token recomputed from THIS
+        fetch of the index, else the install is refused before any download or write.
 
         The APPLY path holds the same boundary a source install does — task admission plus the
         covered source paths — so a concurrent install/update/uninstall of the same stack cannot
@@ -92,18 +102,11 @@ class BinaryOpsMixin:
             bi.check_target(entry, self.binary_target())
             bi.check_pins(entry, self._binary_pins(stack_id))
         except bi.BinaryPinMismatch as exc:
-            # The index serves the latest release only: an older lhpc is the usual cause, and
-            # updating lhpc (about a minute) is the supported way out; a source build is second.
-            return ActionResult(False, f"Binary install of '{stack_id}' refused: {exc.message}",
-                                details=["  1. Update LHPC first, then install again (about a "
-                                         "minute): lhpc self-update --apply",
-                                         f"  2. Or build from source: {src_cmd} (a full local "
-                                         "build, this can take hours on a Pi).",
-                                         f"  Staying on the binary keeps {stack_id} exactly as "
-                                         "it is."],
-                                next_commands=["lhpc self-update --apply", src_cmd],
-                                data={"binary_failed": True, "offer_source": True,
-                                      "pin_mismatch": True})
+            _refused = self._binary_pin_refusal(stack_id, spec, entry, exc, src_cmd,
+                                                accept_pin_mismatch, apply)
+            if _refused is not None:
+                return _refused
+            override_rec = self._binary_override_record(exc.mismatch)
         except bi.BinaryInstallError as exc:
             return ActionResult(False, f"Binary install of '{stack_id}' refused: {exc.message}",
                                 details=["  Switching to the source channel means a full local "
@@ -112,6 +115,11 @@ class BinaryOpsMixin:
                                          "it is."],
                                 next_commands=[src_cmd],
                                 data={"binary_failed": True, "offer_source": True})
+        else:
+            override_rec = None
+        _ov_data = ({"pin_mismatch": override_rec["mismatch"],
+                     "consent": bi.consent_token(entry.sha256, override_rec["mismatch"])}
+                    if override_rec else {})
         missing = bi.missing_runtime_deps(entry, self._dpkg_installed)
         if missing:
             # lhpc never installs system packages itself — name the exact command.
@@ -133,9 +141,16 @@ class BinaryOpsMixin:
             if spec.clone_required:
                 details.append("  keeps the pinned source clone for: "
                                + ", ".join(spec.clone_required))
+            if override_rec:
+                details.append("  OVER THE PIN CHECK (--accept-pin-mismatch; it may not work "
+                               "with this LHPC): " + "; ".join(
+                                   f"{c}: binary {b[:9]}, pin {p[:9]}"
+                                   for c, (b, p) in sorted(override_rec["mismatch"].items())))
+            # A plan passed over the pin check names the command that repeats that acceptance.
+            nxt = _override_command(stack_id) if override_rec else f"lhpc install {stack_id} --yes"
             return ActionResult(True, f"Binary install plan for '{stack_id}'.", details=details,
-                                next_commands=[f"lhpc install {stack_id} --yes"],
-                                data={"changes": 1, "channel": "binary"})
+                                next_commands=[nxt],
+                                data={"changes": 1, "channel": "binary", **_ov_data})
 
         # A clean clone_required checkout of OURS at an OLDER pin (the upgrade case: the new
         # controller pins a newer run-script commit) is moved through the real source update
@@ -352,7 +367,8 @@ class BinaryOpsMixin:
                 # Directories provisioning owns join the receipt, so retirement removes them.
                 owned_dirs = self._binary_provision(stack_id, spec, files, txn)
                 rec = bi.build_receipt(self._paths, stack_id, entry, files, spec.proof_paths,
-                                       baseline, probe_out, owned_dirs=owned_dirs)
+                                       baseline, probe_out, owned_dirs=owned_dirs,
+                                       override=override_rec)
                 if not brx.write_receipt(self._paths, rec):
                     raise bi.BinaryInstallError("could not write the binary receipt")
                 if brx.receipt_state(self._paths, stack_id)[0] != "valid":
@@ -391,7 +407,64 @@ class BinaryOpsMixin:
                 True, f"Installed '{stack_id}' from the published binary ({size_mb:.1f} MB).",
                 details=[*clone_notes, "  open auth (binary channel): the published firmware has no mesh " "password" if _auth_restore is not None else f"  {probe_out}" if probe_out else "  installed", "  provenance: " + ", ".join(f"{k}@{v[:9]}" for k, v in sorted(entry.components.items())), f"  artifact sha256 {entry.sha256[:12]}…"],
                 next_commands=[f"lhpc status {stack_id}", f"lhpc stack start {stack_id}"],
-                data={"channel": "binary", "changes": 1})
+                data={"channel": "binary", "changes": 1, **_ov_data})
+
+    def _binary_pin_refusal(self, stack_id: str, spec, entry, exc, src_cmd: str,
+                            accept: str, apply: bool):
+        """The gate-1 pin mismatch: the typed refusal, or None when `accept` lifts it. ONE map
+        (`exc.mismatch`) feeds the data, the clone_required rule, the offer and the token."""
+        mm = exc.mismatch
+        pin_map = {cid: [b, p] for cid, (b, p) in sorted(mm.items())}
+        lag_clone = sorted(set(mm) & set(spec.clone_required))
+        token = bi.consent_token(entry.sha256, mm)
+        base = {"binary_failed": True, "offer_source": True, "pin_mismatch": pin_map}
+        ways = [("lhpc self-update --apply",
+                 "  1. Update LHPC first, then install again (about a minute): "
+                 "lhpc self-update --apply"),
+                (src_cmd, f"  2. Or build from source: {src_cmd} (a full local build, this can "
+                          "take hours on a Pi).")]
+        if lag_clone and accept:
+            # B1 = X: its run scripts come from this lhpc's pinned checkout; never overridable.
+            return ActionResult(
+                False,
+                f"Binary install of '{stack_id}' refused even with --accept-pin-mismatch: its run "
+                f"scripts come from LHPC's own pinned checkout ({', '.join(lag_clone)}), so the "
+                "binary must match this LHPC.",
+                details=[w for _c, w in ways], next_commands=[c for c, _w in ways],
+                data={**base, "override_refused": "clone_required"})
+        if accept and not lag_clone:
+            if accept == token:
+                return None                               # the consent matches this artifact
+            if accept == "yes" and not apply:
+                return None                               # a human's dry run: it returns the token
+            now = ", ".join(f"{c} {b[:9]}" for c, (b, _p) in sorted(mm.items()))
+            return ActionResult(
+                False,
+                f"The published binary changed since you confirmed (now: {now}). Nothing was "
+                "installed; review the install again.",
+                next_commands=[_override_command(stack_id)],
+                data={**base, "override_refused": "consent_stale"})
+        details = [w for _c, w in ways]
+        cmds = [c for c, _w in ways]
+        data = dict(base)
+        if not lag_clone:
+            override_cmd = _override_command(stack_id)
+            details.append(f"  3. Or install the current binary anyway: {override_cmd} (it may "
+                           "not work with this LHPC).")
+            cmds.append(override_cmd)
+            data.update(override_command=override_cmd, consent=token)
+        details.append(f"  Staying on the binary keeps {stack_id} exactly as it is.")
+        return ActionResult(False, f"Binary install of '{stack_id}' refused: {exc.message}",
+                            details=details, next_commands=cmds, data=data)
+
+    @staticmethod
+    def _binary_override_record(mismatch: dict) -> dict:
+        """The receipt's `override`: the accepted pairs, when and by which lhpc."""
+        import time as _time
+
+        from ..version import __version__
+        return {"at": int(_time.time()), "lhpc_version": __version__,
+                "mismatch": {cid: [b, p] for cid, (b, p) in sorted(mismatch.items())}}
 
     def _stale_clean_clones(self, stack_id: str, spec) -> list:
         """clone_required components whose checkout is present, provably ours, CLEAN and at a

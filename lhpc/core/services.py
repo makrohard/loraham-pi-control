@@ -956,9 +956,15 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 if saved and live != saved and rollup[ss.stack.id] in ("running", "degraded"):
                     line += f"  (running: {live} — restart to apply)"
                 details.append(line)
+            _ov = self.binary_active_override(ss.stack.id)       # A3: {} unless in force
             for comp in ss.stack.components:
                 st = ss.components[comp.id]
                 details.extend(_render_component(comp, st))
+                if comp.id in _ov:
+                    _b, _p = _ov[comp.id]
+                    details.append(f"    installed over the pin check: built from {_b[:9]}, "
+                                   f"pins {_p[:9]} (it may not work with this LHPC; "
+                                   "lhpc self-update --apply)")
                 # Terminal post-start outcome (e.g. the MeshCom callsign push: confirmed /
                 # NOT applied + the re-apply command). Fail-soft: status must render even
                 # when a result sidecar is unreadable. Shared loop → the line appears in
@@ -1235,6 +1241,13 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 _cmd = f"lhpc install {s.id} --yes"
                 details.append(f"    | run yourself: {_cmd}")
                 _add_cmd(_cmd)
+            elif state == "valid" and (_ov := self.binary_active_override(s.id, _rec)):
+                # A3: a warning (informational), shown while the acceptance is still in force.
+                details.append(f"  {s.id}: WARNING installed over the pin check — " + "; ".join(
+                    f"{c} built from {b[:9]}, pins {p[:9]}" for c, (b, p) in sorted(_ov.items()))
+                    + "; it may not work with this LHPC")
+                details.append("    | run yourself: lhpc self-update --apply")
+                _add_cmd("lhpc self-update --apply")
 
         # Run-state tally from a fresh snapshot.
         snap = self.build_snapshot()
@@ -1453,7 +1466,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     @invalidates_snapshot
     def install(self, stack_id: str | None = None, apply: bool = False,
-                source: str = "pinned", auto_install_ctx=None, on_admit=None) -> ActionResult:
+                source: str = "pinned", auto_install_ctx=None, on_admit=None,
+                accept_pin_mismatch: str = "") -> ActionResult:
         if (_r := self._controller_refusal(stack_id)) is not None:
             return _r
         if stack_id and self.stack(stack_id) is None:
@@ -1463,7 +1477,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             if not stack_id:
                 return ActionResult(False, "The binary channel installs ONE stack at a time.",
                                     next_commands=["lhpc install <stack> --source binary"])
-            return self.binary_install(stack_id, apply=apply)
+            return self.binary_install(stack_id, apply=apply,
+                                       accept_pin_mismatch=accept_pin_mismatch)
         # A SOURCE install over a binary install must not be silently skipped ("destination
         # already exists") — the artifact is retired, but LATER: only once the runtime root,
         # shared-remote coherence and the adoption plan have all validated, and inside the

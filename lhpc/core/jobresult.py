@@ -115,6 +115,40 @@ def _valid(d, log: str) -> bool:
     return not (di is not None and not isinstance(di, dict))
 
 
+_REFUSED = ("", "clone_required", "consent_stale")
+_CID_RE = re.compile(r"[0-9A-Za-z._-]{1,64}")
+_MAX_PAIRS = 16
+
+
+def valid_refusal(v) -> bool:
+    """The optional typed `refusal` of a binary install (`--accept-pin-mismatch`): bounded and
+    structurally checked. A record that fails it is read WITHOUT the field (never trusted)."""
+    if not isinstance(v, dict) or set(v) != {"pin_mismatch", "override_refused"}:
+        return False
+    if v["override_refused"] not in _REFUSED:
+        return False
+    pm = v["pin_mismatch"]
+    if not isinstance(pm, dict) or not pm or len(pm) > _MAX_PAIRS:
+        return False
+    return all(isinstance(k, str) and _CID_RE.fullmatch(k) and isinstance(p, list) and len(p) == 2
+               and all(validators.is_hex(x, 40) for x in p)
+               for k, p in pm.items())
+
+
+def refusal_from(res) -> dict | None:
+    """The typed refusal a binary install's ActionResult carries (a pin mismatch, with how an
+    override was refused), or None: no result, a success, or any other failure."""
+    data = getattr(res, "data", None) if res is not None else None
+    if getattr(res, "ok", True) or not isinstance(data, dict):
+        return None
+    pm = data.get("pin_mismatch")
+    if not isinstance(pm, dict):
+        return None
+    ref = {"pin_mismatch": {k: list(v) for k, v in pm.items()},
+           "override_refused": data.get("override_refused", "")}
+    return ref if valid_refusal(ref) else None
+
+
 def _read_raw(paths, log: str) -> dict | None:
     """Descriptor-safe read of one marker → validated dict, or None (absent/unsafe-leaf/oversized/malformed)."""
     try:
@@ -128,7 +162,11 @@ def _read_raw(paths, log: str) -> dict | None:
         d = json.loads(runtime_fs.read_text_regular(paths, p, max_bytes=_MARKER_MAX))
     except (OSError, PathContainmentError, ValueError):
         return None
-    return d if _valid(d, log) else None
+    if not _valid(d, log):
+        return None
+    if "refusal" in d and not valid_refusal(d["refusal"]):
+        d.pop("refusal")                       # a malformed typed refusal is ignored, never trusted
+    return d
 
 
 def _write(paths, log: str, d: dict) -> bool:
@@ -199,9 +237,11 @@ def _safe_ident(di) -> dict:
             if isinstance(di, dict) and isinstance(di.get(k), int)}
 
 
-def terminalize(paths, log, attempt_id, state, detail="", driver_ident=None) -> bool:
+def terminalize(paths, log, attempt_id, state, detail="", driver_ident=None,
+                refusal=None) -> bool:
     """Terminal write (done/failed/unsafe). `unsafe` stores only SAFE driver identity fields (never
-    session_ident, never fed to session_ceased)."""
+    session_ident, never fed to session_ceased). `refusal` (a failed binary install's typed pin
+    refusal, `refusal_from`) is stored only when it validates."""
     if state not in _TERMINAL:
         return False
 
@@ -209,6 +249,9 @@ def terminalize(paths, log, attempt_id, state, detail="", driver_ident=None) -> 
         nd = {**d, "state": state, "finished_at": _now(),
               "detail": str(detail)[:_MAX_DETAIL], "startup_unverified": False}
         nd.pop("driver_ident", None)
+        nd.pop("refusal", None)
+        if state == "failed" and valid_refusal(refusal):
+            nd["refusal"] = refusal
         if state == "unsafe":
             si = _safe_ident(driver_ident)
             if si:

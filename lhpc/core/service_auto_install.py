@@ -1267,6 +1267,11 @@ class AutoInstallOpsMixin:
                             first = ("update LHPC first (lhpc self-update --apply), or "
                                      if br.data.get("pin_mismatch") else "")
                             r["detail"] = f"{br.summary} — {first}install from source with: {src}"
+                            # Auto-install never overrides; for an overridable stack the row
+                            # names the manual command (the refusal's own `override_command`).
+                            if br.data.get("override_command"):
+                                r["detail"] += ("; or install the published binary anyway by "
+                                                f"hand: {br.data['override_command']}")
                             failed_stacks.add(st.id)
                             emit(f"  [blocked] {st.id}: {r['detail']}")
                             bw()

@@ -520,7 +520,7 @@ def _stub_binary_plan(monkeypatch):
     from lhpc.core.service_base import ActionResult
     seen = {}
 
-    def _plan(self, sid, apply=False, locked=False):
+    def _plan(self, sid, apply=False, locked=False, **_k):
         seen["called"] = (sid, apply)
         return ActionResult(True, f"Binary install plan for {sid!r}.", data={"changes": 1})
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
@@ -571,7 +571,7 @@ def test_refused_binary_plan_offers_the_source_channel(monkeypatch, web, csrf):
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
     monkeypatch.setattr(
         ControllerService, "binary_install",
-        lambda self, sid, apply=False, locked=False: ActionResult(
+        lambda self, sid, apply=False, locked=False, **_k: ActionResult(
             False, "Binary install of 'daemon' refused: could not download the index.",
             data={"binary_failed": True, "offer_source": True}))
     c = web()
@@ -589,7 +589,7 @@ def test_binary_install_apply_is_not_gated_on_build_dependencies(monkeypatch, we
     monkeypatch.setattr(ControllerService, "install_dep_gate",
                         lambda self, target: {"block": [{"install": "sudo apt install -y g++"}], "warn": []})
     monkeypatch.setattr(ControllerService, "spawn_web_job",
-                        lambda self, op, target, source="": (spawned.append((op, target, source)),
+                        lambda self, op, target, source="", **_k: (spawned.append((op, target, source)),
                                                              ("web-install-daemon.log", "admitted", ""))[1])
     c = web()
     r = c.post("/action", data={"_csrf": csrf(c), "op": "install", "target": "daemon",

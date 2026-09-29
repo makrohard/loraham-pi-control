@@ -1,6 +1,6 @@
 {# Per-stack row body on /stacks — the collapsible sections: Install (open) → actions + Dependencies + System dependencies; Info (main component,
    no actions); Settings; Daemon parameters. Requires the `g` group dict. #}
-{% from "_macros.html" import action_btn, stack_actions, cmdbox, secretbox, source_check_btn, freshness_pill, hmac_actions, banner %}
+{% from "_macros.html" import action_btn, stack_actions, cmdbox, secretbox, source_check_btn, freshness_pill, hmac_actions, banner, update_lhpc_first %}
 <div class="stackrow-body">
   <p class="summary">{{ g.stack.summary }}</p>
 
@@ -47,6 +47,33 @@
       {% if g.hmac_enabled is not none and not g.hmac_enabled %}
         <p class="depnote depnote-warn"><span class="ver ver-yellow">HMAC Password disabled</span>
           — the meshcom bridge/firmware run without client authentication.</p>
+      {% endif %}
+      {% if g.pin_override %}
+        {# A3: installed over the pin check, while that exact acceptance is still in force. #}
+        <div class="depnote depnote-warn" id="pin-override-{{ g.stack.id }}"><span class="ver ver-yellow">Installed over the pin check</span> —
+          {% for cid, pair in g.pin_override|dictsort %}<code>{{ cid }}</code> built from <code>{{ pair[0][:9] }}</code>, this LHPC pins <code>{{ pair[1][:9] }}</code>{% if not loop.last %}; {% endif %}{% endfor %}.
+          It may not work with this LHPC. {{ update_lhpc_first(selfupdate.update_available) }}</div>
+      {% endif %}
+      {% if g.pin_refusal %}
+        {# A3: the last console install was refused over the pin check (the job's typed refusal). #}
+        <div class="depnote depnote-warn" id="pin-refusal-{{ g.stack.id }}"><strong>Update LHPC first</strong>
+          {{ update_lhpc_first(selfupdate.update_available) }} —
+          {% if g.pin_refusal.refused == 'consent_stale' %}the published binary changed since you confirmed (now:
+            {% for cid, b, p in g.pin_refusal.lagging %}{{ cid }} {{ b[:9] }}{% if not loop.last %}, {% endif %}{% endfor %}).
+            Nothing was installed; review the install again.
+          {% elif g.pin_refusal.refused == 'clone_required' %}the install was refused: its run scripts come from LHPC's
+            own pinned checkout, so the binary must match this LHPC.
+          {% else %}the install was refused: the published binary was built from other commits than this LHPC pins.
+          {% endif %}
+          {% if g.pin_refusal.refused != 'clone_required' %}
+            <form method="post" action="{{ url_for('action') }}" class="act">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="op" value="install">
+              <input type="hidden" name="target" value="{{ g.stack.id }}">
+              <input type="hidden" name="source" value="binary">
+              <button type="submit">Install again</button>
+            </form>
+          {% endif %}</div>
       {% endif %}
       {% if g.installed and g.has_source %}
         {# Cached verdict for the MAIN component, resolved against its current head. Never green

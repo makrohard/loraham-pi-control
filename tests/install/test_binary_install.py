@@ -723,7 +723,7 @@ def test_install_binary_channel_dispatches(tmp_path, monkeypatch):
     svc = _svc(tmp_path, monkeypatch)
     called = {}
     monkeypatch.setattr(ControllerService, "binary_install",
-                        lambda self, sid, apply=False: called.setdefault("args", (sid, apply)))
+                        lambda self, sid, apply=False, **_k: called.setdefault("args", (sid, apply)))
     svc.install("daemon", apply=True, source="binary")
     assert called["args"] == ("daemon", True)
 
@@ -857,7 +857,7 @@ def test_update_binary_to_binary_when_current(tmp_path, monkeypatch, binary_rece
     binary_receipt(svc)                                 # components == manifest pins
     seen = {}
     monkeypatch.setattr(ControllerService, "binary_install",
-                        lambda self, sid, apply=False: seen.setdefault("args", (sid, apply)))
+                        lambda self, sid, apply=False, **_k: seen.setdefault("args", (sid, apply)))
     # "binary" is what the CLI resolves to for a binary-installed stack with no --source
     svc.update("daemon", apply=True, source="binary")
     assert seen["args"] == ("daemon", True)                  # fast path, no dialog
@@ -872,7 +872,7 @@ def test_update_tries_the_published_binary_even_when_the_receipt_lags(tmp_path, 
     binary_receipt(svc, commits=stale)
     seen = {}
     monkeypatch.setattr(ControllerService, "binary_install",
-                        lambda self, sid, apply=False: seen.setdefault("args", (sid, apply)))
+                        lambda self, sid, apply=False, **_k: seen.setdefault("args", (sid, apply)))
     svc.update("daemon", apply=True, source="binary")
     assert seen["args"] == ("daemon", True)
 
@@ -1162,7 +1162,7 @@ def test_update_source_binary_on_a_source_stack_routes_to_binary_install(tmp_pat
     svc = _svc(tmp_path, monkeypatch)
     seen = {}
 
-    def _plan(self, sid, apply=False, locked=False):
+    def _plan(self, sid, apply=False, locked=False, **_k):
         seen["args"] = (sid, apply)
         return ActionResult(True, "binary plan")
     monkeypatch.setattr(ControllerService, "binary_install", _plan)

@@ -2363,3 +2363,34 @@ def test_a_refused_binary_row_names_the_real_source_command(tmp_path, monkeypatc
     detail = row["detail"]
     assert "install from source with: lhpc install meshtastic --source pinned --yes" in detail
     assert ("update LHPC first (lhpc self-update --apply)" in detail) is pin_mismatch
+
+
+@pytest.mark.parametrize("overridable", [True, False])
+def test_auto_install_pin_mismatch_row_names_the_manual_command(tmp_path, monkeypatch, overridable):
+    """A3: an auto-install pin refusal row. An overridable row's detail ENDS with the manual
+    command the refusal carries (`override_command`); a MeshCom-style refusal (none) leads with
+    "update LHPC first" and names no flag."""
+    _happy_ops(monkeypatch)
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    cmd = "lhpc install meshtastic --source binary --accept-pin-mismatch --yes"
+    data = {"binary_failed": True, "pin_mismatch": {"meshtastic": ["a" * 40, "b" * 40]}}
+    if overridable:
+        data["override_command"] = cmd
+    monkeypatch.setattr(ControllerService, "binary_install",
+                        lambda self, sid, apply=False, locked=False, **_k:
+                        ActionResult(False, f"Binary install of '{sid}' refused: x",
+                                     next_commands=["lhpc self-update --apply",
+                                                    f"lhpc install {sid} --source pinned --yes"],
+                                     data=data))
+    svc = _svc(tmp_path)
+    scope = svc._auto_install_scope()
+    sel = {st.id: {"install": True, "version": "pinned", "tests": False, "tx": False}
+           for st, _ in scope}
+    sel["meshtastic"]["version"] = "binary"
+    svc.auto_install(apply=True, tests=False, selection=sel, emit=lambda s: None)
+    detail = {x["id"]: x for x in svc.auto_install_status()["stacks"]}["meshtastic"]["detail"]
+    assert detail.split(" — ", 1)[1].startswith("update LHPC first (lhpc self-update --apply)")
+    if overridable:
+        assert detail.endswith(f"or install the published binary anyway by hand: {cmd}")
+    else:
+        assert "--accept-pin-mismatch" not in detail

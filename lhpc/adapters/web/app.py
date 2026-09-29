@@ -935,6 +935,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "meshcore_modes": list(_meshcore_mode.MODES),
                 "meshcore_running_mode": (service.meshcore_running_mode()
                                           if stack.id == _meshcore_mode.STACK_ID else ""),
+                # A3: an install over the pin check still in force (the pill and the warning), and
+                # the typed pin refusal of the last failed console install job.
+                "pin_override": service.binary_active_override(stack.id),
+                "pin_refusal": service.binary_install_refusal(stack.id),
                 "installed": installed,
                 "has_source": has_source,
                 "buildable": buildable,
@@ -1469,13 +1473,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview", cfg=sid, bad=bad or None, band=band or None)
                         + "#stack-settings-" + sid)
 
-    def _render_confirm(op: str, target: str, band: str, source: str, frm: str, plan=None):
+    def _render_confirm(op: str, target: str, band: str, source: str, frm: str, plan=None,
+                        consent: str = ""):
         """The confirmation page. For start/restart it is rendered ONLY for a consequential choice
         (a resource conflict that stops another stack's owner, dependents a restart takes down) —
         a routine Start/Restart runs directly (Start means start). Install/update/clean
         keep their confirmation (source selector, typed clean)."""
         if plan is None:
-            plan = service.run_action(op, target, apply=False, source=source, band=band)
+            plan = service.run_action(op, target, apply=False, source=source, band=band,
+                                      accept_pin_mismatch=consent)
         # Split the install/build system-dep gate: MANDATORY missing deps hard-block (missing_deps,
         # suppresses the Apply form); OPTIONAL missing deps only warn (optional_deps, form stays).
         # BUILD dependencies gate the SOURCE channel only — a download needs no toolchain
@@ -1500,7 +1506,24 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             source_choices=(service.allowed_channels(service.stack_of(target) or target)
                             if op in ("install", "update") else None),
             # A refused binary install offers the source channel right on this page.
-            offer_source=bool(plan.data.get("offer_source")))
+            offer_source=bool(plan.data.get("offer_source")),
+            # A3: a gate-1 pin refusal (the lagging pairs, the override when allowed) and, on a
+            # plan that passed WITH the override, the consent the confirm form carries on.
+            pin_refusal=_pin_refusal(plan) if op in ("install", "update") else None,
+            override_consent=(plan.data.get("consent", "") if plan.ok and consent else ""))
+
+    def _pin_refusal(plan):
+        """The confirm page's view of a gate-1 pin refusal, read from the refusal's typed data
+        only (never its text): the lagging pairs, whether the override may be offered (the
+        refusal carries `override_command` exactly then) with its consent token, and how an
+        override was refused."""
+        pm = plan.data.get("pin_mismatch")
+        if plan.ok or not isinstance(pm, dict):
+            return None
+        return {"lagging": [(cid, pair[0], pair[1]) for cid, pair in sorted(pm.items())],
+                "overridable": bool(plan.data.get("override_command")),
+                "consent": plan.data.get("consent", ""),
+                "refused": plan.data.get("override_refused", "")}
 
     @app.post("/action")
     def action():
@@ -1540,6 +1563,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         source = request.form.get("source") or (
             service.default_channel(_sid) if _sid else "pinned")
         stop_owners = request.form.get("stop_owners") == "yes"
+        # A3 (E, server-side): the override is honoured only with the ticked checkbox AND a consent
+        # token of the shape a dry run produced; the service then requires it to equal the token of
+        # its own fresh index entry. Anything else is a plain plan (the refusal again).
+        _consent = request.form.get("consent", "")
+        consent = (_consent if (op in ("install", "update")
+                                and request.form.get("accept_pin_mismatch") == "yes"
+                                and validators.is_hex(_consent, 64)) else "")
         cascade = request.form.get("cascade") == "yes"
         frm = request.form.get("from", "")     # origin page (e.g. "dash") for redirect
         # Refuse to start an app that isn't installed or built yet — send the operator to THIS
@@ -1577,7 +1607,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 return _render_confirm(op, target, band, source, frm, plan=plan)
         elif not confirmed:
             # Stage 1: show the dry-run plan, options and a confirmation form.
-            return _render_confirm(op, target, band, source, frm)
+            return _render_confirm(op, target, band, source, frm, consent=consent)
         # Stage 2: apply.
         # DESTRUCTIVE clean: additionally requires the operator to TYPE the stack id —
         # a mismatch re-renders the confirm with ZERO mutation.
@@ -1601,7 +1631,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 flash("System dependencies missing — install them first: "
                       + "; ".join(d["install"] for d in missing if d["install"]), "warn")
                 return _redirect_for(target)
-            job, admission, reason = service.spawn_web_job(op, target, source=source)
+            job, admission, reason = service.spawn_web_job(op, target, source=source,
+                                                           accept_pin_mismatch=consent)
             if admission == "blocked":
                 flash(reason or f"{op} could not start.", "warn")
                 return _redirect_for(target)
@@ -1629,7 +1660,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                       "in the banner.", "ok")
             return _redirect_for(target)
         result = service.run_action(op, target, apply=True, source=source,
-                                    cascade=cascade, band=band, purge=purge)
+                                    cascade=cascade, band=band, purge=purge,
+                                    accept_pin_mismatch=consent)
+        if op == "update" and not result.ok and _pin_refusal(result):
+            # The inline Update's pin refusal is shown on the confirm page itself, with the same
+            # ways out (self-update first) as the dry run's — not flattened into a flash.
+            return _render_confirm(op, target, band, source, frm, plan=result)
         # On a stop, MANUAL_REQUIRED means "a foreign process is still running, kill it yourself"
         # — a WARNING (`stop` already returns ok=False). Start notes travel in the start job's
         # marker detail (banner hint) since the start became detached.

@@ -3349,7 +3349,8 @@ class LifecycleOpsMixin:
                         "Recover it first")
         return ""
 
-    def spawn_web_job(self, op: str, target: str, source: str = "pinned"):
+    def spawn_web_job(self, op: str, target: str, source: str = "pinned",
+                      accept_pin_mismatch: str = ""):
         """Spawn detached build/test/install job(s) for `target`. Returns `(job_log_name, admission, reason)`
         with `admission ∈ {"admitted","blocked","pending"}` — the web adapter flashes per that and NEVER
         infers "started" from a returned log. PRIMARY-FIRST: the main job's admission is handshaked before
@@ -3454,6 +3455,8 @@ class LifecycleOpsMixin:
                     return None, aid, "could not record the install job (a live attempt exists)"
                 argv = [sys.executable, "-m", "lhpc", "install", target, "--yes", "--source", source,
                         "--web-result", log, "--attempt-id", aid]
+                if accept_pin_mismatch:                  # the confirm page's consent token only
+                    argv.append(f"--accept-pin-mismatch={accept_pin_mismatch}")
                 ln, pid = life.spawn_job(name, argv, runtime)
                 if not ln or not pid:
                     jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
@@ -5733,16 +5736,20 @@ class LifecycleOpsMixin:
 
     def run_action(self, op: str, target: str, apply: bool = False, source: str = "pinned",
                    stop_owners: bool = False, cascade: bool = False,
-                   band: str = "", purge: bool = False) -> ActionResult:
-        """Dispatch a named action to its service method (plan when apply=False)."""
+                   band: str = "", purge: bool = False,
+                   accept_pin_mismatch: str = "") -> ActionResult:
+        """Dispatch a named action to its service method (plan when apply=False).
+        `accept_pin_mismatch` (a consent token) reaches only a binary install/update."""
         # An invalid source selector is a typed failure — NEVER silently rewritten to 'dev'.
         if op in ("install", "update") and source not in self.CHANNEL_CHOICES:
             return ActionResult(False, f"Invalid source '{source}' (choose "
                                 f"{', '.join(self.SOURCE_CHOICES)}).",
                                 next_commands=[f"lhpc {op} {target} --source pinned"])
         ops = {
-            "install": lambda: self.install(target, apply=apply, source=source),
-            "update": lambda: self.update(target, apply=apply, source=source),
+            "install": lambda: self.install(target, apply=apply, source=source,
+                                            accept_pin_mismatch=accept_pin_mismatch),
+            "update": lambda: self.update(target, apply=apply, source=source,
+                                          accept_pin_mismatch=accept_pin_mismatch),
             "uninstall": lambda: self.uninstall(target, apply=apply),
             "start": lambda: self.start(target, apply=apply, stop_owners=stop_owners, band=band),
             "stop": lambda: self.stop(target, apply=apply, cascade=cascade, band=band),

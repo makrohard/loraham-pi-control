@@ -12,7 +12,8 @@ def _svc_with_index(tmp_path, monkeypatch, error):
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
     monkeypatch.setattr(bi, "require_zstd", lambda: None)
     monkeypatch.setattr(bi, "fetch_index", lambda url: {})
-    monkeypatch.setattr(bi, "index_entry", lambda idx, sid: object())
+    monkeypatch.setattr(bi, "index_entry",
+                        lambda idx, sid: type("E", (), {"sha256": "a" * 64})())
     monkeypatch.setattr(bi, "check_target", lambda e, t: None)
 
     def _pins(entry, pins):
@@ -25,11 +26,14 @@ def _svc_with_index(tmp_path, monkeypatch, error):
 def test_a_pin_mismatch_names_self_update_first_then_source(tmp_path, monkeypatch, apply):
     svc = _svc_with_index(tmp_path, monkeypatch, bi.BinaryPinMismatch(
         "the published binary was built from different commits than this lhpc pins (x); "
-        "the index serves the latest release's binary"))
+        "the index serves the latest release's binary",
+        mismatch={"loraham-daemon": ("1" * 40, "2" * 40)}))
     r = svc.binary_install("daemon", apply=apply)
     assert not r.ok and "different commits" in r.summary
-    assert r.next_commands == ["lhpc self-update --apply", "lhpc install daemon --source pinned --yes"]
-    assert r.data.get("pin_mismatch") is True
+    # A3 adds a third way (the override) AFTER the two P1.15 named, in the same order.
+    assert r.next_commands[:2] == ["lhpc self-update --apply",
+                                   "lhpc install daemon --source pinned --yes"]
+    assert r.data.get("pin_mismatch") == {"loraham-daemon": ["1" * 40, "2" * 40]}
     assert r.details[0].strip().startswith("1. Update LHPC first")
     assert r.details[1].strip().startswith("2. Or build from source")
 

@@ -278,7 +278,7 @@ def test_self_update_busy_cli(capsys, monkeypatch):
 def test_update_source_flag_plumbs_through(monkeypatch, capsys):
     from lhpc.core.services import ControllerService, ActionResult
     seen = {}
-    def fake_update(self, target="", apply=False, source="pinned"):
+    def fake_update(self, target="", apply=False, source="pinned", **_k):
         seen["source"], seen["apply"] = source, apply
         return ActionResult(True, "ok", data={"changes": 0})
     monkeypatch.setattr(ControllerService, "update", fake_update)
@@ -925,7 +925,7 @@ def test_install_source_fallback_is_gated_and_confirmed(monkeypatch, capsys):
     calls = []
     monkeypatch.setattr(ControllerService, "default_channel", lambda self, sid: "binary")
     monkeypatch.setattr(ControllerService, "install",
-                        lambda self, sid=None, apply=False, source="pinned": (
+                        lambda self, sid=None, apply=False, source="pinned", **_k: (
                             calls.append((sid, apply, source)),
                             ActionResult(True, "source plan", data={"changes": 1}) if source == "pinned" else
                             ActionResult(False, f"Binary install of '{sid}' refused: no index.",

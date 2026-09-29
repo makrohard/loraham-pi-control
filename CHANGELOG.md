@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- A binary install or update refused by the pin check can be accepted once, knowingly:
+  `--accept-pin-mismatch` on `lhpc install --source binary` and `lhpc update`, and a checkbox on the console's
+  refusal page. The acceptance covers exactly the pairs shown and is honoured at starts and boot restore while it
+  still matches; status, doctor and the console show it until LHPC catches up. A lag in a component whose run
+  scripts come from LHPC's own checkout (MeshCom's emulator) cannot be accepted, and auto-install does not accept;
+  its refused row names the manual command.
+
 ## 0.11.3
 
 - MeshCore: LHPC no longer redacts the repeater's login log lines; upstream logs them (openhop-dev/openhop_core#156).

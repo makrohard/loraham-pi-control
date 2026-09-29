@@ -38,7 +38,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
-from . import runtime_fs
+from . import runtime_fs, validators
 from .paths import PathContainmentError, Paths
 
 INDEX_SCHEMA = 2
@@ -166,12 +166,21 @@ def index_entry(idx: dict, stack_id: str) -> IndexEntry:
 
 class BinaryPinMismatch(BinaryInstallError):
     """The published binary's commits differ from this lhpc's pins (the index serves the latest
-    release only). The caller names the ways out in order: self-update first, source second."""
+    release only). The caller names the ways out in order: self-update first, source second.
+    `mismatch` is THE one map {component id: (binary commit, pin)} every consumer reads — the
+    refusal's data, the override rule, the consent token and the receipt; nothing parses the
+    message."""
+
+    def __init__(self, message: str, *, mismatch: dict):
+        super().__init__(message)
+        self.mismatch = dict(mismatch)
 
 
 def check_pins(entry: IndexEntry, pins: dict) -> None:
     """THE acceptance gate: the index components map must match the manifest pins for EVERY
-    covered component. `built_from` is never consulted (display only)."""
+    covered component. `built_from` is never consulted (display only). A lagging pair whose
+    binary commit or pin is not a full lowercase commit id is a plain refusal, not a mismatch:
+    a malformed index (or pin) is not a version lag, so it can never be offered for override."""
     missing = [cid for cid in pins if cid not in entry.components]
     if missing:
         raise BinaryInstallError(
@@ -179,12 +188,33 @@ def check_pins(entry: IndexEntry, pins: dict) -> None:
             " — it cannot be matched against the manifest pins")
     lagging = {cid: (entry.components[cid], want)
                for cid, want in pins.items() if entry.components[cid] != want}
+    for cid, (got, want) in sorted(lagging.items()):
+        if not validators.is_hex(got, 40):
+            raise BinaryInstallError(
+                f"the published binary records a malformed commit for {cid} — refusing")
+        if not validators.is_hex(want, 40):
+            raise BinaryInstallError(
+                f"this lhpc's manifest pin for {cid} is not a full commit id — refusing")
     if lagging:
         detail = "; ".join(f"{cid}: binary {got[:9]}, pin {want[:9]}"
                            for cid, (got, want) in sorted(lagging.items()))
         raise BinaryPinMismatch(
             f"the published binary was built from different commits than this lhpc pins "
-            f"({detail}); the index serves the latest release's binary")
+            f"({detail}); the index serves the latest release's binary", mismatch=lagging)
+
+
+def canonical_mismatch(mismatch: dict) -> str:
+    """The byte-exact form both processes hash: 2-element lists, sorted keys, no whitespace."""
+    return json.dumps({cid: [b, p] for cid, (b, p) in mismatch.items()},
+                      sort_keys=True, separators=(",", ":"))
+
+
+def consent_token(artifact_sha256: str, mismatch: dict) -> str:
+    """The operator's consent, bound to exactly the artifact and the pairs that were shown. A
+    public value, not a secret: the apply recomputes it from its OWN fresh index entry and
+    requires equality, so a token for another artifact or other pairs is refused."""
+    return hashlib.sha256(("lhpc-pin-override/1\n" + artifact_sha256 + "\n"
+                           + canonical_mismatch(mismatch)).encode()).hexdigest()
 
 
 def check_target(entry: IndexEntry, target: str) -> None:
@@ -610,7 +640,7 @@ def run_probe(paths: Paths, argv) -> str:
 # --- receipt ----------------------------------------------------------------------------------
 
 def build_receipt(paths: Paths, stack_id: str, entry: IndexEntry, files, proof_paths,
-                  registry_baseline: dict, probe: str, owned_dirs=()):
+                  registry_baseline: dict, probe: str, owned_dirs=(), override=None):
     """Build the receipt for a completed transaction. Every listed file gets a hash (the
     receipt validator requires the two sets to match exactly)."""
     from . import binary_receipt as brx
@@ -620,4 +650,4 @@ def build_receipt(paths: Paths, stack_id: str, entry: IndexEntry, files, proof_p
         filename=entry.filename, url=entry.url, components=dict(entry.components),
         provenance=dict(entry.provenance), files=tuple(files), file_hashes=hashes,
         proof_paths=tuple(proof_paths), registry_baseline=dict(registry_baseline),
-        probe=probe, owned_dirs=tuple(owned_dirs))
+        probe=probe, owned_dirs=tuple(owned_dirs), override=override)
