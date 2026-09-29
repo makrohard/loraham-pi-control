@@ -8,6 +8,8 @@
 - The hidden unit commands (`self-update --run-service`, `webserver --run-restart-service`,
   `webserver --firewall-boot-gate`, `autostart --run-service`) are refused when the systemd invocation marker
   (`INVOCATION_ID`) is absent, e.g. when run by hand in a shell; the refusal names the command to use instead.
+- A disk-space warning (bytes and inodes): `lhpc doctor` (critical makes it non-OK), `lhpc status`, a notice
+  on every console page and one log line per change.
 
 ## 0.11.2
 

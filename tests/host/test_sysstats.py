@@ -171,8 +171,10 @@ def _full_fake(tmp_path):
             "/sys/class/hwmon/hwmon0/name": "cpu_thermal\n",
         },
         statvfs_data={
-            "/": {"total_b": 31000000000, "free_b": 21000000000, "dev": 100},
-            str(tmp_path): {"total_b": 31000000000, "free_b": 21000000000, "dev": 100},
+            "/": {"total_b": 31000000000, "free_b": 21000000000, "dev": 100,
+                  "free_inodes": 1800000, "total_inodes": 1900000},
+            str(tmp_path): {"total_b": 31000000000, "free_b": 21000000000, "dev": 100,
+                            "free_inodes": 1800000, "total_inodes": 1900000},
         },
         dirs={"/sys/class/hwmon": ["hwmon0", "hwmon3"]},
     )
@@ -187,7 +189,9 @@ def test_system_stats_full_contract(tmp_path):
     assert d["load"] == [0.42, 0.31, 0.22]
     assert d["mem"]["available_kb"] == 231234
     assert d["net"] == {"rx_bytes": 1334567, "tx_bytes": 7854321}
-    assert d["disk"]["root"] == {"total_b": 31000000000, "free_b": 21000000000}
+    assert d["disk"]["root"] == {"total_b": 31000000000, "free_b": 21000000000,
+                                 "free_inodes": 1800000, "total_inodes": 1900000,
+                                 "level": "ok", "reason": ""}
     assert "runtime" not in d["disk"]           # same st_dev as / -> no duplicate row
     assert d["temp_mc"] == 48312
     assert d["power"] == {"source": "hwmon-alarm", "undervolt_alarm": False}
@@ -210,7 +214,9 @@ def test_system_stats_runtime_disk_on_other_device(tmp_path):
     fake = _full_fake(tmp_path)
     fake.statvfs_data[str(tmp_path)] = {"total_b": 500, "free_b": 400, "dev": 200}
     d = _svc(tmp_path, fake).system_stats()
-    assert d["disk"]["runtime"] == {"path": str(tmp_path), "total_b": 500, "free_b": 400}
+    assert d["disk"]["runtime"] == {"path": str(tmp_path), "total_b": 500, "free_b": 400,
+                                    "free_inodes": 0, "total_inodes": 0,
+                                    "level": "critical", "reason": "bytes"}    # 400 B < 500 MiB
 
 
 def test_system_stats_empty_host_is_fail_soft(tmp_path):

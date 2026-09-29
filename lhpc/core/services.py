@@ -1014,6 +1014,14 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 details.append(f"[controller] {cs['display_name']}  ({upd})")
                 details.append(f"  v{cs['version']} {head}  {ident}  — manage with: "
                                f"{cs['self_update_cmd']}")
+        # Disk space: ONE line, only when the worst filesystem is not ok (the normal status stays
+        # unchanged).
+        if not stack_id:
+            from .service_system import disk_figure, worst_disk_row
+            worst = worst_disk_row(self.disk_health())
+            if worst is not None and worst["level"] != "ok":
+                details.append("")
+                details.append(f"disk: {worst['level'].upper()} ({disk_figure(worst)})")
         # Probing succeeded; status is informational — exit success even when stopped.
         return ActionResult(
             ok=True,
@@ -1138,6 +1146,18 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                        f"NOT verified — {clock_why}; certificate operations refuse while the clock "
                        "remains unverified; resolve the clock or verification problem, or use "
                        "--accept-unverified-clock"))
+        # Disk space: one line per filesystem, from the ONE classifier. `critical` on ANY row makes
+        # doctor non-OK (a nearly full card breaks installs, builds and config writes); `low` is
+        # informational.
+        from .service_system import disk_figure
+        disk_critical = False
+        for row in self.disk_health():
+            inodes = ("" if not row["total_inodes"] else
+                      f", {100 - 100 * row['free_inodes'] // row['total_inodes']} % inodes used")
+            details.append(f"  disk {row['path']}: {row['free_b'] / 1024 ** 3:.1f} GiB free of "
+                           f"{row['total_b'] / 1024 ** 3:.0f} GiB{inodes}: {row['level']}"
+                           + (f" ({disk_figure(row)})" if row["level"] != "ok" else ""))
+            disk_critical = disk_critical or row["level"] == "critical"
         # Controller's OWN system/runtime deps (same source as the /stacks System-dependencies panel).
         # A missing REQUIRED dep makes doctor non-OK (machine-actionable); optional ones never do.
         required_missing = False
@@ -1287,12 +1307,14 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             details.extend(f"  {cmd}" for cmd in install_cmds)
 
         return ActionResult(
-            ok=not required_missing,
+            ok=not (required_missing or disk_critical),
             # The ONLY network access is a bounded ?DEVICES query to the gpsd the operator
             # configured, and only when the source IS gpsd — say so rather than promising
             # "no network" and then opening a socket.
             summary=("doctor: required dependencies missing; bounded checks only "
                      "(no init, no RF; contacts only a configured gpsd)." if required_missing
+                     else "doctor: a filesystem is critically full; bounded checks only "
+                          "(no init, no RF; contacts only a configured gpsd)." if disk_critical
                      else "doctor: bounded checks only "
                           "(no init, no RF; contacts only a configured gpsd)."),
             details=details,

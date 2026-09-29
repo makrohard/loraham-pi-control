@@ -26,7 +26,8 @@ import pytest
 BASE = {
     "cpu": {"cores": 2, "percore": [[10, 0, 5, 100, 0, 0, 0, 0], [10, 0, 5, 100, 0, 0, 0, 0]]},
     "mem": {"total_kb": 512 * 1024, "available_kb": 256 * 1024},
-    "disk": {"root": {"free_b": 4 * 1024 ** 3, "total_b": 8 * 1024 ** 3}},
+    "disk": {"root": {"free_b": 4 * 1024 ** 3, "total_b": 8 * 1024 ** 3, "free_inodes": 90000,
+                      "total_inodes": 100000, "level": "ok", "reason": ""}},
     "load": [0.1, 0.1, 0.1],
     "uptime_s": 100,
     "info": {},
@@ -87,6 +88,29 @@ def _serve(page, samples, *, then_silent=False):
 
     page.route("**/api/system*", handler)
     return state
+
+
+@pytest.mark.parametrize("level, reason, cls, inode_text", [
+    ("low", "bytes", "sys-warn", False),
+    ("critical", "bytes", "sys-crit", False),
+    ("critical", "inodes", "sys-crit", True),
+    ("ok", "", "", False),
+])
+def test_the_disk_row_follows_the_servers_level(page, level, reason, cls, inode_text):
+    # The colour is the server's classifier's `level`; system.js holds no threshold. The disk is
+    # half used in every sample, so the old used-% rule would have given NO class at all.
+    s = _sample(0, net=0)
+    s["disk"]["root"].update({"level": level, "reason": reason, "free_inodes": 4000})
+    _serve(page, [s])
+    _open_box(page)
+    page.wait_for_function(
+        "() => { const e = document.getElementById('sys-disk-val');"
+        " return e && e.textContent.trim() && e.textContent.trim() !== '…'; }", timeout=15000)
+    row_cls = page.locator("#sys-disk-bar").evaluate("e => e.closest('tr').className")
+    for c in ("sys-warn", "sys-crit"):
+        assert (c in row_cls) == (c == cls), (level, row_cls)
+    text = page.locator("#sys-disk-val").inner_text()
+    assert ("% inodes free" in text) == inode_text, text
 
 
 def test_an_omitted_net_sample_does_not_inflate_the_rate(page):

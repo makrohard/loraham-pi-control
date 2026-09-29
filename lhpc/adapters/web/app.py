@@ -252,6 +252,19 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             return {"ws_apply_pending": False}
 
     @app.context_processor
+    def _inject_disk_notice():
+        # The disk-space warning on EVERY page while the worst filesystem is low or critical: the
+        # ONE classifier's level, reason and figure (statvfs only). Fails closed to no notice.
+        try:
+            from lhpc.core.service_system import disk_figure, worst_disk_row
+            worst = worst_disk_row(service.disk_health())
+            if worst is None or worst["level"] == "ok":
+                return {"disk_notice": None}
+            return {"disk_notice": {"level": worst["level"], "figure": disk_figure(worst)}}
+        except Exception:
+            return {"disk_notice": None}
+
+    @app.context_processor
     def _inject_hardware():
         # Read-only current radio-hardware setup for the footer, on EVERY page. Config read only.
         try:
@@ -2285,6 +2298,24 @@ def update_check_interval_s() -> float:
     return float(min(max(raw, UPDATE_CHECK_MIN_HOURS), UPDATE_CHECK_MAX_HOURS)) * 3600.0
 
 
+# The previous disk level per filesystem path, for ONE log line per change. Process-local and
+# module-level: the web loop builds a NEW ControllerService for every pass (`_network_watch_loop`).
+_DISK_LEVELS: dict[str, str] = {}
+
+
+def _disk_level_log(svc) -> None:
+    """Log one line per filesystem when its level CHANGES. At console start an ok level is silent
+    and a low/critical one is logged once; after that, one line per transition, recovery included."""
+    from lhpc.core.service_system import disk_figure
+    for row in svc.disk_health():
+        prev = _DISK_LEVELS.get(row["path"])
+        _DISK_LEVELS[row["path"]] = row["level"]
+        if prev == row["level"] or (prev is None and row["level"] == "ok"):
+            continue
+        print(f"disk {row['path']}: {prev or 'start'} -> {row['level']} ({disk_figure(row)})",
+              flush=True)
+
+
 def network_watch_pass(svc) -> float:
     """ONE pass of the console's network watchdog; returns the seconds to sleep before the next.
     The two maintenance units (1, 2) each have their own try/except so neither can starve the
@@ -2308,6 +2339,10 @@ def network_watch_pass(svc) -> float:
         pass
     try:                            # a PKI minted under an unverified clock, once time arrives
         svc.pki_clock_normalise()
+    except Exception:
+        pass
+    try:                            # the disk-space level: one log line per change
+        _disk_level_log(svc)
     except Exception:
         pass
     ap_box = svc.network_supported()

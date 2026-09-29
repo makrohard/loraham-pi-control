@@ -581,12 +581,16 @@ class RealFileSystem:
             return ""
 
     def statvfs(self, path: str) -> dict | None:
-        """{"total_b","free_b","dev"} or None. free_b is the UNPRIVILEGED-available space
-        (f_bavail × f_frsize); dev identifies the filesystem so callers can drop duplicates."""
+        """{"total_b","free_b","free_inodes","total_inodes","dev"} or None. free_b is the
+        UNPRIVILEGED-available space (f_bavail × f_frsize); free_inodes/total_inodes are f_favail /
+        f_files (total_inodes 0 = a dynamic-inode filesystem); dev identifies the filesystem so
+        callers can drop duplicates."""
         try:
             sv = os.statvfs(path)
             return {"total_b": sv.f_blocks * sv.f_frsize,
                     "free_b": sv.f_bavail * sv.f_frsize,
+                    "free_inodes": sv.f_favail,
+                    "total_inodes": sv.f_files,
                     "dev": os.stat(path).st_dev}
         except OSError:
             return None
@@ -794,7 +798,9 @@ class FakeSystem:
     unix_replies: dict[str, bytes] = field(default_factory=dict)
     unix_errors: dict[str, str] = field(default_factory=dict)
     files: dict[str, str] = field(default_factory=dict)          # path -> text (fs.read_text)
-    statvfs_data: dict[str, dict] = field(default_factory=dict)  # path -> {"total_b","free_b","dev"}
+    # path -> {"total_b","free_b","dev"} plus, optionally, "free_inodes"/"total_inodes" (absent = 0:
+    # no inode test, as on a dynamic-inode filesystem)
+    statvfs_data: dict[str, dict] = field(default_factory=dict)
     dirs: dict[str, list[str]] = field(default_factory=dict)     # path -> entries (fs.listdir)
     mtimes: dict[str, float] = field(default_factory=dict)       # path -> epoch seconds (fs.mtime)
     links: dict[str, str] = field(default_factory=dict)          # path -> target (fs.readlink)

@@ -288,6 +288,14 @@ built from source, so a toolchain change upstream breaks the recipe silently. Bu
 
 ## Running on a Pi
 
+**Disk space.** `lhpc doctor`, `lhpc status`, a notice on every console page and one line in
+`logs/lhpc-web.log` per change warn when a filesystem (`/`, and the runtime root when it is a
+different one) runs short. It is `low` below max(1.5 GiB, 10 %) free or below 10 % free inodes,
+and `critical` below max(500 MiB, 5 %) or below 5 % free inodes; `critical` makes `lhpc doctor`
+non-OK. What to free first: the build trees of stacks installed from binaries, the PlatformIO
+caches, old job logs, and `/var/cache/apt` (`sudo apt-get clean`). For scale: a from-zero reinstall
+on a Raspberry Pi OS Lite box used 4.5 G of a 29 G root filesystem (2026-09-28).
+
 **The test suite.** Give pytest a dedicated basetemp and remove exactly that path afterwards
 : `pytest --basetemp="$HOME/pt-lhpc"` then `rm -rf -- "$HOME/pt-lhpc"` — the default basetemp
 lands on the `/tmp` tmpfs (208 MB on a Zero 2W) and the full suite fills it (ENOSPC). Run under

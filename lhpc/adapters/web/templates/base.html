@@ -27,6 +27,13 @@
         <p class="flash {{ flash_classes(category) }}">{{ msg }}</p>
       {% endfor %}
     {% endwith %}
+    {# Persistent: the disk-space warning while the worst filesystem is low or critical. #}
+    {% if disk_notice %}
+      <p class="depnote {{ 'depnote-bad' if disk_notice.level == 'critical' else 'depnote-warn' }}"
+         id="disk-notice">Disk space {{ 'CRITICAL' if disk_notice.level == 'critical' else 'low' }}:
+        {{ disk_notice.figure }}. <a href="/#sysbox">Dashboard → System</a> (open it) shows the
+        filesystems; free space before installing or building.</p>
+    {% endif %}
     {# Persistent (not a one-off flash): a Webserver Apply the firewall gate deferred stays
        announced on EVERY page until the firewall is applied and verified, with the click path. #}
     {% if ws_apply_pending %}

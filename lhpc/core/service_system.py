@@ -289,6 +289,59 @@ def tz_name_from_link(target: str) -> str:
             return name
     return ""
 
+
+# ---- the disk-space warning: ONE classifier, read by doctor, status, the console and the pass ----
+_GIB = 1024 ** 3
+_MIB = 1024 ** 2
+_LEVEL_RANK = {"ok": 0, "low": 1, "critical": 2}
+
+
+def _byte_level(total_b: int, free_b: int) -> str:
+    """An absolute floor AND a share, whichever is larger (the share is f_bavail / f_blocks)."""
+    if free_b < max(500 * _MIB, 0.05 * total_b):
+        return "critical"
+    if free_b < max(1.5 * _GIB, 0.10 * total_b):
+        return "low"
+    return "ok"
+
+
+def _inode_level(total_inodes: int, free_inodes: int) -> str:
+    if not total_inodes:                          # a dynamic-inode filesystem: no inode test
+        return "ok"
+    share = free_inodes / total_inodes
+    if share < 0.05:
+        return "critical"
+    if share < 0.10:
+        return "low"
+    return "ok"
+
+
+def disk_level(total_b: int, free_b: int, total_inodes: int = 0,
+               free_inodes: int = 0) -> tuple[str, str]:
+    """(level, reason): the WORSE of the byte and the inode level, and the metric that produced it
+    ("bytes" at equal severity; "" at ok)."""
+    b, i = _byte_level(total_b, free_b), _inode_level(total_inodes, free_inodes)
+    if _LEVEL_RANK[i] > _LEVEL_RANK[b]:
+        return i, "inodes"
+    return b, ("" if b == "ok" else "bytes")
+
+
+def worst_disk_row(rows: list[dict]) -> dict | None:
+    """The row with the worst level; at equal level the first in row order (`/` first)."""
+    worst = None
+    for row in rows:
+        if worst is None or _LEVEL_RANK[row["level"]] > _LEVEL_RANK[worst["level"]]:
+            worst = row
+    return worst
+
+
+def disk_figure(row: dict) -> str:
+    """The figure that explains a row's level: free inodes when they set it, else free bytes."""
+    if row.get("reason") == "inodes" and row.get("total_inodes"):
+        return f"{row['path']}: {100 * row['free_inodes'] // row['total_inodes']} % inodes free"
+    return f"{row['path']}: {row['free_b'] / _GIB:.1f} GiB free"
+
+
 # --- the clock gate the PKI uses -------------------------------------------------------------
 # ONE predicate, defined here beside the constants it uses, so nothing downstream has to invent
 # what "verified" means. It answers a narrower question than the Time row: not "is this clock
@@ -702,15 +755,31 @@ class SystemStatsMixin:
         """Root filesystem + the runtime root's filesystem; the runtime entry is omitted when it
         lives on the SAME filesystem as / (st_dev match) so the row is never a duplicate."""
         out: dict = {}
+
+        def row(sv: dict) -> dict:
+            ti, fi = sv.get("total_inodes", 0), sv.get("free_inodes", 0)
+            level, reason = disk_level(sv["total_b"], sv["free_b"], ti, fi)
+            return {"total_b": sv["total_b"], "free_b": sv["free_b"], "free_inodes": fi,
+                    "total_inodes": ti, "level": level, "reason": reason}
         root = fs.statvfs("/")
         if root is not None:
-            out["root"] = {"total_b": root["total_b"], "free_b": root["free_b"]}
+            out["root"] = row(root)
         runtime_path = str(self._paths.runtime_root)
         runtime = fs.statvfs(runtime_path)
         if runtime is not None and (root is None or runtime.get("dev") != root.get("dev")):
-            out["runtime"] = {"path": runtime_path,
-                              "total_b": runtime["total_b"], "free_b": runtime["free_b"]}
+            out["runtime"] = {"path": runtime_path, **row(runtime)}
         return out
+
+    def disk_health(self) -> list[dict]:
+        """The disk rows in order (`/` first, then a distinct runtime filesystem), each with its
+        path, figures, level and reason. Doctor, status, the console and the pass read THIS."""
+        stats = self._disk_stats(self._system.fs)
+        rows = []
+        if "root" in stats:
+            rows.append({"path": "/", **stats["root"]})
+        if "runtime" in stats:
+            rows.append(dict(stats["runtime"]))
+        return rows
 
     def _power_stats(self, fs) -> dict | None:
         """Truthful Pi power state. The ONLY file-readable source on our fleet (verified live on

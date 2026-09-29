@@ -230,12 +230,21 @@
       prev = prev || {};
       prev.net = { rx: d.net.rx_bytes, tx: d.net.tx_bytes, ts: d.ts };
     }
-    // Disk(s): used% bars; the optional runtime row appears only when the server sends it.
+    // Disk(s): used% bars; the optional runtime row appears only when the server sends it. The
+    // colour is the SERVER's level (the one classifier); no threshold lives here, and a row
+    // without a level gets no class.
+    function levelClass(level) {
+      return level === "critical" ? "sys-crit" : (level === "low" ? "sys-warn" : "");
+    }
+    function inodeText(row) {
+      return (row.reason === "inodes" && num(row.total_inodes) && row.total_inodes > 0)
+        ? " · " + Math.floor(100 * row.free_inodes / row.total_inodes) + " % inodes free" : "";
+    }
     if (d.disk && d.disk.root && num(d.disk.root.total_b) && d.disk.root.total_b > 0) {
       var r = d.disk.root, rused = 100 * (1 - r.free_b / r.total_b);
       setBar("sys-disk-bar", rused);
-      set("sys-disk-val", fmtBytes(r.total_b - r.free_b) + " / " + fmtBytes(r.total_b));
-      setLevel(rowOf("sys-disk-bar"), rused >= 90 ? "sys-crit" : (rused >= 80 ? "sys-warn" : ""));
+      set("sys-disk-val", fmtBytes(r.total_b - r.free_b) + " / " + fmtBytes(r.total_b) + inodeText(r));
+      setLevel(rowOf("sys-disk-bar"), levelClass(r.level));
       pushHist(hist.disk, rused);
       drawSpark("sys-disk-spark", [hist.disk], 0, 100);
     }
@@ -244,8 +253,8 @@
       row2.hidden = false;
       var q = d.disk.runtime, qused = 100 * (1 - q.free_b / q.total_b);
       setBar("sys-disk2-bar", qused);
-      set("sys-disk2-val", fmtBytes(q.total_b - q.free_b) + " / " + fmtBytes(q.total_b));
-      setLevel(row2, qused >= 90 ? "sys-crit" : (qused >= 80 ? "sys-warn" : ""));
+      set("sys-disk2-val", fmtBytes(q.total_b - q.free_b) + " / " + fmtBytes(q.total_b) + inodeText(q));
+      setLevel(row2, levelClass(q.level));
       pushHist(hist.disk2, qused);
       drawSpark("sys-disk2-spark", [hist.disk2], 0, 100);
     }
