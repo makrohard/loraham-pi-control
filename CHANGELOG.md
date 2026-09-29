@@ -10,6 +10,8 @@
   (`INVOCATION_ID`) is absent, e.g. when run by hand in a shell; the refusal names the command to use instead.
 - A disk-space warning (bytes and inodes): `lhpc doctor` (critical makes it non-OK), `lhpc status`, a notice
   on every console page and one log line per change.
+- MeshCore: saving a repeater mode without a saved repeater name says where to save the name (Settings → Repeater, or
+  `lhpc config meshcore repeater_name <name>`); the Mode form on the stack says so before the button is pressed.
 
 ## 0.11.2
 

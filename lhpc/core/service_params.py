@@ -2672,8 +2672,9 @@ class ParamsConfigMixin:
             validators.node_name(name or "", field="repeater name")
         except validators.ValidationError as exc:
             return (f"mode '{_mm.normalize(mode)}' needs the repeater's own node name — {exc} "
-                    f"(the console saves both at once; from the CLI set repeater_name first, "
-                    f"then the mode — or keep mode chat)")
+                    f"(set a repeater name: in the console under Settings → Repeater, "
+                    f"'Repeater node name'; from the CLI `lhpc config meshcore repeater_name "
+                    f"<name>` first, then the mode — or keep mode chat)")
         return ""
 
     def _reticulum_internet_save_refusal(self, merged: dict) -> str:

@@ -2287,6 +2287,30 @@ def test_fetched_stack_shows_its_version_and_an_update_when_the_pin_moves(tmp_pa
     assert "Update" in _package_line_buttons(body), "the Package line must offer Update on a pin mismatch"
 
 
+def test_the_settings_card_refusal_does_not_ask_for_two_saves(tmp_path, web, csrf):
+    """C08 round 2: the Settings card saves the name AND the mode in one bundle, so its refusal
+    (the same shared text) must not tell the operator to save the name first."""
+    from lhpc.core.paths import Paths
+    from lhpc.core.services import ControllerService
+    c = web()
+    tok = csrf(c)
+    svc = ControllerService(paths=Paths(runtime_root=tmp_path))
+    form = {"_csrf": tok}
+    for f in svc.config_param_fields("meshcore", ""):
+        if f["flag"]:
+            continue
+        form[f["field"]] = {"mode": "repeater", "repeater_name": ""}.get(f["name"], f["default"])
+    r = c.post("/stacks/meshcore/config", data=form)
+    assert r.status_code in (302, 303)
+    shown = c.get(r.headers["Location"]).get_data(as_text=True)
+    assert "needs the repeater&#39;s own node name" in shown or "needs the repeater's own node name" in shown
+    assert "Settings → Repeater, &#39;Repeater node name&#39;" in shown or \
+        "Settings → Repeater, 'Repeater node name'" in shown
+    assert "save the name first" not in shown and "saves both at once" not in shown
+    svc._invalidate_config()
+    assert svc.meshcore_mode() == "chat"                                     # refused, unchanged
+
+
 def test_the_meshcore_mode_switch_on_the_stack_body_saves_the_same_setting(tmp_path, web, csrf):
     """One route, one key: the stack body's Mode form writes the Settings row's setting through
     the config API (CSRF-enforced, MeshCore-only, refusals reported as flashes, never a start)."""
@@ -2301,6 +2325,16 @@ def test_the_meshcore_mode_switch_on_the_stack_body_saves_the_same_setting(tmp_p
     r = c.post("/stacks/meshcore/mode", data={"_csrf": tok, "mode": "repeater"})
     assert r.status_code in (302, 303) and "#stack-mode-meshcore" in r.headers["Location"]
     assert svc.meshcore_mode() == "chat"
+    # C08: the refusal names where the name is saved (this form has no name field), and the
+    # hint under the Mode select says so before the button is pressed
+    shown = c.get("/stacks?open=meshcore").get_data(as_text=True)
+    assert "Settings → Repeater, &#39;Repeater node name&#39;" in shown or \
+        "Settings → Repeater, 'Repeater node name'" in shown
+    assert "saves both at once" not in shown
+    assert "A repeater mode needs a saved repeater name" in shown
+    refused = svc.save_config("meshcore", {"file_mode": "repeater"})         # the same text, CLI too
+    text = refused.summary + " " + " ".join(refused.details)
+    assert not refused.ok and "`lhpc config meshcore repeater_name <name>`" in text
     assert svc.save_config("meshcore", {"file_repeater_name": "Relay"}).ok
     r = c.post("/stacks/meshcore/mode", data={"_csrf": tok, "mode": "chat+repeater"})
     assert r.status_code in (302, 303)

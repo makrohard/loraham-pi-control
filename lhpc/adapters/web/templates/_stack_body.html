@@ -16,8 +16,9 @@
         </select></label>
       <button type="submit" class="act">Save mode</button>
       <span class="muted">chat: companion node only · chat+repeater: repeater hosting the companion ·
-        repeater: repeater only. Applied by restarting the stack; the repeater's name and behaviour
-        are under <a href="#stack-settings-{{ g.stack.id }}">Settings → Repeater</a>.
+        repeater: repeater only. A repeater mode needs a saved repeater name: set it first under
+        <a href="#stack-settings-{{ g.stack.id }}">Settings → Repeater</a>, with its behaviour.
+        Applied by restarting the stack.
         {% if g.running and g.meshcore_running_mode != g.meshcore_mode %}<strong>Running: {{ g.meshcore_running_mode }} — restart to apply {{ g.meshcore_mode }}.</strong>{% endif %}</span>
     </form>
   {% endif %}
