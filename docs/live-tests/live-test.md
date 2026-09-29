@@ -1,5 +1,7 @@
 # Live test, 0.11.0 — the release matrix, 2026-09-28
 
+The patches since: [0.11.3](patch-0.11.3-2026-09-29.md) (its release rows and its items' rows).
+
 Boxes: **e293** = Pi Zero 2 W (`lhpc-e293`, Lite image, Uputronics SX1278 on 433 and SX1276 on 868);
 **Pi 5** = `lhpc-0ae1` (Desktop image, LoRaHAM board: RFM98PW with amplifier on 433, RFM95 on 868).
 Peers: T-Deck (MeshCom), T-Deck Pro (MeshCore, over BLE), Station G2 (Meshtastic), T-Beam (APRS), Heltec RNode
