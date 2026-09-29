@@ -12,6 +12,9 @@
   on every console page and one log line per change.
 - MeshCore: saving a repeater mode without a saved repeater name says where to save the name (Settings → Repeater, or
   `lhpc config meshcore repeater_name <name>`); the Mode form on the stack says so before the button is pressed.
+- On the CLI, confirming a stack (`lhpc known-working <stack>`) names each source as "<commit> (selector <selector>)"
+  and adds "; the manifest pin" when the commit is the manifest pin, so a `dev`-selected checkout at the pin no longer
+  reads as "runs dev".
 
 ## 0.11.2
 

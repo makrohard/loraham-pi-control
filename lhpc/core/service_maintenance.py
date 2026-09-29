@@ -1710,9 +1710,15 @@ class MaintenanceOpsMixin:
                 h.close()
         if not ok:
             return ActionResult(False, f"Could not record '{stack_id}' as known working: {msg}")
+        # The registry's SELECTOR is the adoption's selector, not proof of how the commit was fetched
+        # (a frozen auto-install may fall back from an unreachable dev and keep the selector). Name
+        # it as the selector, and say when the commit is the manifest pin.
+        pins = {c.id: c.source.pin_commit for c in stack.components if c.source is not None}
         return ActionResult(True, f"Recorded '{stack_id}' as a known-working composition "
                             f"({msg}).",
-                            details=[f"  {cid}: {e['commit'][:12]} ({e['selector'] or '?'})"
+                            details=[f"  {cid}: {e['commit'][:12]} (selector {e['selector'] or '?'}"
+                                     + ("; the manifest pin" if e["commit"] == pins.get(cid) else "")
+                                     + ")"
                                      for cid, e in sorted(cand["entries"].items())])
 
     @invalidates_snapshot

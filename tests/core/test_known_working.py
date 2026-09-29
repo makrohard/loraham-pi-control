@@ -2,6 +2,7 @@
 last-start candidate marker lifecycle, offer/confirm validation, and the 'Known working'
 selector resolution from compositions."""
 
+import pytest
 import json
 import os
 import time
@@ -147,6 +148,22 @@ def test_confirm_records_and_second_confirm_is_noop(tmp_path):
     assert known_working.load(paths, "chat")[0]["entries"]["loraham-chat"]["commit"] == "a" * 40
     res2 = svc.confirm_known_working("chat")
     assert res2.ok and "already recorded" in res2.summary
+
+
+@pytest.mark.parametrize("at_pin", [True, False])
+def test_confirm_names_the_selector_and_whether_it_is_the_pin(tmp_path, at_pin):
+    # C09: "(dev)" after a pinned reinstall read as "runs dev" although the commit was the pin.
+    # This proves the line's FORMAT ("selector <s>" and the pin note), not a provenance: the
+    # registry's selector is the adoption's, which a frozen dev fallback may keep.
+    pin = next(c.source.pin_commit for c in _svc(tmp_path).stack("chat").components
+               if c.id == "loraham-chat")
+    _seed_running_chat(tmp_path, commit=pin if at_pin else "a" * 40)
+    svc = _bind_chat_identity(_svc(tmp_path, cmdlines={555: ["loraham_chat"]}), tmp_path,
+                              commit=pin if at_pin else "a" * 40)
+    res = svc.confirm_known_working("chat")
+    assert res.ok, res.summary
+    want = "(selector dev; the manifest pin)" if at_pin else "(selector dev)"
+    assert any(d.endswith(want) for d in res.details), res.details
 
 
 def test_confirm_refuses_stopped_or_missing_candidate(tmp_path):
