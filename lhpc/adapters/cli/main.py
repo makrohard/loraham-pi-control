@@ -1599,6 +1599,9 @@ def _run(argv: list[str] | None = None) -> int:
             eff = d.get("effective", {})
             print(f"  effective: remote_listener={eff.get('remote_listener')}  "
                   f"last_verified={d.get('last_verified')}")
+            sc = (d.get("pki") or {}).get("server_cert") or {}
+            if sc.get("expiry_text"):
+                print(f"  server certificate: {sc['expiry_text']}")
             for dep in d.get("system_deps", []):
                 extra = "" if dep["status"] == "present" else f"  -> {dep['install']}"
                 print(f"  system dep {dep['name']}: {dep['status']}{extra}")
@@ -1672,8 +1675,9 @@ def _run(argv: list[str] | None = None) -> int:
                 if not certs:
                     print("  (no client certificates)")
                 for c in certs:
+                    mark = f"  {c['expiry_mark']}" if c.get("expiry_mark") else ""
                     print(f"  {c.get('state', '?'):8} {c.get('label', '?'):16} "
-                          f"{c.get('serial', '')[:16]}  exp {c.get('not_after', '')}")
+                          f"{c.get('serial', '')[:16]}  exp {c.get('not_after', '')}{mark}")
                 return 0
             if cc in ("issue", "reissue"):
                 pw = _secrets.token_urlsafe(18)   # one-time; shown once, never persisted/logged

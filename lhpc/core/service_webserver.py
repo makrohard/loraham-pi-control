@@ -1572,7 +1572,7 @@ class WebserverOpsMixin:
             return False, [f"  SAN: {ip} could not be added — another PKI operation is in progress; "
                            "run: lhpc webserver tls-renew"]
         lines = [f"  SAN: {ip} added to ip_sans and the server certificate was reissued for it"
-                 + (" (provisional window — the clock is unverified; normalised automatically later)"
+                 + (" (fixed provisional window)"
                     if validity is not None else "")]
         if state == "due":
             new_fp = new[1][2] if new[0] == "names" else "?"
@@ -1761,7 +1761,7 @@ class WebserverOpsMixin:
     def webserver_cert_list(self) -> ActionResult:
         from . import pki as _pki
         return ActionResult(True, "client certificates",
-                            data={"certs": _pki.list_client_certs(self._paths)})
+                            data={"certs": _pki.client_certs_with_expiry(self._paths)})
 
     def webserver_cert_revoke(self, label, accept_unverified: bool = False) -> ActionResult:
         # Revocation dates the CRL (lastUpdate/nextUpdate/revocationDate) from this clock, so it

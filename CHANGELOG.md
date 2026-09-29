@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- The console's server certificate is issued for at most 825 days as Apple counts them (Apple requires 825 days
+  or fewer); one in the fixed provisional window (a PKI made without a verified clock and not yet normalised) is
+  not capped (over the cap while it is provisional). Its end date shows in the console, `lhpc webserver status`
+  and `lhpc doctor` (an expired one makes doctor non-OK), and active client certificates are marked from 60 days
+  before they expire. An existing 826-day certificate stays until `lhpc webserver tls-renew`, then
+  `lhpc webserver apply`.
+
 ## 0.11.4
 
 - A binary install or update refused by the pin check can be accepted once, knowingly:

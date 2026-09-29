@@ -166,7 +166,10 @@
           client-CA {{ 'present' if mon.pki.client_ca.present else 'absent' }} ·
           server-cert {{ 'present' if mon.pki.server_cert.present else 'absent' }} ·
           CRL {{ 'present' if mon.pki.crl_present else 'absent' }}{% if mon.pki.provisional %} ·
-          <strong>provisional</strong> (created without a verified clock; the server certificate and CRL are renewed automatically once time is verified){% endif %}</li>
+          <strong>provisional</strong> (created without a verified clock){% endif %}</li>
+        {% if mon.pki.server_cert.expiry_text %}
+        <li>Server certificate: <code>{{ mon.pki.server_cert.expiry_text }}</code></li>
+        {% endif %}
       </ul>
       <h3>System dependencies</h3>
       <ul class="kv sysdeps">
@@ -194,7 +197,7 @@
         <p class="setting"><label for="ws-init-confirm">Initialize PKI</label>
           <input id="ws-init-confirm" name="confirm_phrase" autocomplete="off">
           <span class="muted">To RE-create existing CAs (destructive) type <code>recreate</code></span></p>
-          <p class="muted">Needs no clock: if this box's clock is not yet verified, the certificates get a fixed provisional validity (not dates from the clock) and are renewed automatically once time is available.</p>
+          <p class="muted">Needs no clock: if this box's clock is not yet verified, the certificates get a fixed provisional validity (not dates from the clock); such a server certificate is over the Apple 825-day cap while it is provisional.</p>
         <button type="submit">Initialize / recreate PKI</button>
       </form>
       <form method="post" action="{{ url_for('webserver_tls_renew') }}">
@@ -254,7 +257,7 @@
         {% for c in certs %}
         <tr>
           <td>{{ c.label }}</td><td>{{ c.state }}</td>
-          <td><code>{{ c.serial[:16] }}</code></td><td>{{ c.not_after }}</td>
+          <td><code>{{ c.serial[:16] }}</code></td><td>{{ c.not_after }}{% if c.expiry_mark %} <strong>{{ c.expiry_mark }}</strong>{% endif %}</td>
           <td>
             {% if c.state == 'active' %}
               <form method="post" action="{{ url_for('webserver_cert') }}" class="inline">

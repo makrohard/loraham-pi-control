@@ -287,6 +287,23 @@ Server and client certificates default to **825 days** (`server_cert_days` / `cl
 in `config/local.toml [webserver]`); there is **no auto-renewal** — rotate before expiry on a
 long-lived box (`tls-renew`, `cert reissue`).
 
+The **server** certificate is capped at 825 days as Apple counts them (notBefore through notAfter
+inclusive, a day being 86,400 s), whatever `server_cert_days` says: its whole span, the one-day
+backdate included, is at most 825 × 86,400 − 1 s (Apple requires 825 days or fewer). A certificate
+issued before this cap keeps its 826 days until you run `lhpc webserver tls-renew`, then
+`lhpc webserver apply`. A server certificate in the fixed provisional window (a PKI made without a
+verified clock and not yet normalised) is not capped; it is over the cap while it is provisional. To
+replace it: `lhpc webserver tls-renew` under a verified clock, then `lhpc webserver apply` (the
+console's own normalisation is described under "The clock gate" above).
+
+Where the end dates show:
+- the server certificate's end date and days left: the console's Webserver panel,
+  `lhpc webserver status` and `lhpc doctor`; below 30 days they add the renewal commands, and an
+  expired server certificate makes `lhpc doctor` non-OK;
+- client certificates: marked in the console's list and in `lhpc webserver cert list` from 60 days
+  before they expire (active ones only), with a `lhpc doctor` line; reissue with
+  `lhpc webserver cert reissue <label>` and install the new bundle on the device.
+
 ```
 lhpc webserver init --dns pi.local --ip 192.168.0.10     # once; --confirm-recreate to redo
 lhpc webserver cert issue lhpc-laptop                    # one-time .p12 passphrase

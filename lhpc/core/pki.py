@@ -305,6 +305,17 @@ def _new_key():
 _LEAF_BACKDATE = _dt.timedelta(days=1)
 _CA_BACKDATE = _dt.timedelta(minutes=1)
 
+# Apple requires a TLS server certificate's validity to be "825 days or fewer (as expressed in the
+# NotBefore and NotAfter fields of the certificate)" (support.apple.com/en-us/103769). That page
+# states no counting rule; Apple's page on its later 398-day limit gives one
+# (support.apple.com/en-us/102028): RFC 5280 "notBefore through notAfter, inclusive", a day being
+# 86,400 s. Applying it here is our conservative choice: the whole span, backdate included, stays
+# one second under 825 days.
+# `issue_server_cert` clamps every leaf it dates from the clock; one in the fixed provisional window
+# (a PKI made without a verified clock and not yet normalised) is NOT clamped, and the display marks
+# it as over the cap while it is provisional.
+SERVER_LEAF_MAX_SPAN = _dt.timedelta(seconds=825 * 86_400 - 1)
+
 
 def _sign_ca(key, common_name: str, days: int, *, validity=None):
     not_before, not_after = _validity(_CA_BACKDATE, days, validity)
@@ -439,6 +450,11 @@ def issue_server_cert(paths: Paths, *, dns_sans=(), ip_sans=(), days: int,
             raise PKIError("no server key to keep — issue a new certificate instead")
     else:
         key = _new_key()
+    if validity is None:                        # dated from the clock: apply the Apple cap
+        now = _now().replace(microsecond=0)
+        not_before = now - _LEAF_BACKDATE
+        validity = (not_before, min(now + _dt.timedelta(days=days),
+                                    not_before + SERVER_LEAF_MAX_SPAN))
     cert = _sign_leaf(ca_key, ca_cert, key, "lhpc-web", days,
                       eku=ExtendedKeyUsageOID.SERVER_AUTH, san=san, validity=validity)
     if not keep_key:
@@ -657,6 +673,68 @@ def _ca_evidence(paths: Paths, which: str) -> dict:
     return {"present": True, **_summary(cert, which)} if cert else {"present": False}
 
 
+# --------------------------------------------------------------------------- expiry display
+# The ONE days-left computation and its thresholds, for the console, `webserver status`, `cert list`
+# and `doctor`, so their numbers cannot drift apart. Display only: nothing here renews anything.
+SERVER_WARN_DAYS = 30
+CLIENT_WARN_DAYS = 60
+RENEW_HINT = "lhpc webserver tls-renew, then lhpc webserver apply"
+
+
+def expiry_view(not_before, not_after, *, warn_days: int, now=None) -> dict:
+    """{date, days_left, state, over_cap, provisional} for one certificate. `not_before` and
+    `not_after` are aware datetimes or ISO strings. `days_left` counts whole days (a leaf that ends
+    in 29 days and 23 hours has 29). `state`: "expired" once `not_after` has passed, "soon" below
+    `warn_days`, else "ok". `over_cap` compares the whole span with `SERVER_LEAF_MAX_SPAN`."""
+    def _dt_of(v):
+        return v if isinstance(v, _dt.datetime) else _dt.datetime.fromisoformat(v)
+    nb, na = _dt_of(not_before), _dt_of(not_after)
+    now = now or _now()
+    days_left = int((na - now).total_seconds() // 86_400)
+    state = "expired" if na <= now else ("soon" if days_left < warn_days else "ok")
+    return {"date": na.date().isoformat(), "days_left": days_left, "state": state,
+            "over_cap": (na - nb) > SERVER_LEAF_MAX_SPAN,
+            "provisional": _is_provisional_window(nb, na)}
+
+
+def server_expiry_text(v: dict) -> str:
+    """The server leaf's one line, the same in the console, `webserver status` and `doctor`."""
+    if v["state"] == "expired":
+        text = f"EXPIRED on {v['date']}: renew it: {RENEW_HINT}"
+    else:
+        text = f"expires {v['date']} (in {v['days_left']} days)"
+        if v["state"] == "soon" and not v["provisional"]:
+            text += f": renew it: {RENEW_HINT}"
+    if v["provisional"]:
+        text += ("; provisional: over the Apple 825-day cap; to replace it: lhpc webserver tls-renew "
+                 "under a verified clock, then lhpc webserver apply")
+    elif v["over_cap"] and v["state"] != "expired":
+        text += f"; over the Apple 825-day cap: run {RENEW_HINT}"
+    return text
+
+
+def client_expiry_mark(v: dict) -> str:
+    """The client list's mark: "" while more than `CLIENT_WARN_DAYS` are left."""
+    if v["state"] == "expired":
+        return "EXPIRED"
+    return f"expires in {v['days_left']} days" if v["state"] == "soon" else ""
+
+
+def client_certs_with_expiry(paths: Paths) -> list:
+    """`list_client_certs` plus each entry's `expiry` view and, for an ACTIVE certificate, its
+    `expiry_mark`; for display only (the index file is not written from here). An entry without
+    readable dates gets neither."""
+    clients = list_client_certs(paths)
+    for c in clients:
+        try:
+            cv = expiry_view(c["not_before"], c["not_after"], warn_days=CLIENT_WARN_DAYS)
+        except (KeyError, TypeError, ValueError):
+            continue
+        c["expiry"] = cv
+        c["expiry_mark"] = client_expiry_mark(cv) if c.get("state") == "active" else ""
+    return clients
+
+
 def pki_status(paths: Paths) -> dict:
     """READ-ONLY PKI evidence for cached status (never generates anything). Distinct-purpose
     from `verify` — this just reads what exists on disk."""
@@ -665,12 +743,18 @@ def pki_status(paths: Paths) -> dict:
         server = _read_cert(paths, _p(paths, _SERVER, "server.crt"))
     except PKIError:
         server = None
+    server_ev = {"present": False}
+    if server:
+        sv = expiry_view(server.not_valid_before_utc, server.not_valid_after_utc,
+                         warn_days=SERVER_WARN_DAYS)
+        server_ev = {"present": True, **_summary(server, "server"), "expiry": sv,
+                     "expiry_text": server_expiry_text(sv)}
+    clients = client_certs_with_expiry(paths)
     return {
         "server_ca": _ca_evidence(paths, _SERVER_CA),
         "client_ca": _ca_evidence(paths, _CLIENT_CA),
-        "server_cert": ({"present": True, **_summary(server, "server")}
-                        if server else {"present": False}),
-        "clients": list_client_certs(paths),
+        "server_cert": server_ev,
+        "clients": clients,
         "crl_present": _exists(paths, _p(paths, _CLIENT_CA, "crl.pem")),
         # Minted under an unverified clock and not yet normalised (fixed provisional window).
         "provisional": provisional_pending(paths),

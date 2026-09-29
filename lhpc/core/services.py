@@ -1164,6 +1164,27 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                            f"{row['total_b'] / 1024 ** 3:.0f} GiB{inodes}: {row['level']}"
                            + (f" ({disk_figure(row)})" if row["level"] != "ok" else ""))
             disk_critical = disk_critical or row["level"] == "critical"
+        # Certificate expiry, from the ONE helper in pki (the same line as the console and
+        # `webserver status`). An EXPIRED server certificate makes doctor non-OK (nginx then serves
+        # a certificate browsers reject); everything else here is information.
+        cert_expired = False
+        if self._paths.runtime_root_exists:
+            from . import pki as _pki
+            try:
+                pst = _pki.pki_status(self._paths)
+            except (_pki.PKIError, OSError, ValueError) as exc:
+                details.append(f"  certificates: unreadable ({exc})")
+            else:
+                sv = pst["server_cert"].get("expiry")
+                if sv:
+                    flag = "!" if (sv["state"] != "ok" or sv["over_cap"]) else " "
+                    details.append(f" {flag}server certificate: {pst['server_cert']['expiry_text']}")
+                    cert_expired = sv["state"] == "expired"
+                for c in pst["clients"]:
+                    if c.get("expiry_mark"):
+                        details.append(f" !client certificate '{c.get('label', '?')}': "
+                                       f"{c['expiry_mark']}: reissue it: lhpc webserver cert "
+                                       f"reissue {c.get('label', '?')}")
         # Controller's OWN system/runtime deps (same source as the /stacks System-dependencies panel).
         # A missing REQUIRED dep makes doctor non-OK (machine-actionable); optional ones never do.
         required_missing = False
@@ -1320,7 +1341,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             details.extend(f"  {cmd}" for cmd in install_cmds)
 
         return ActionResult(
-            ok=not (required_missing or disk_critical),
+            ok=not (required_missing or disk_critical or cert_expired),
             # The ONLY network access is a bounded ?DEVICES query to the gpsd the operator
             # configured, and only when the source IS gpsd — say so rather than promising
             # "no network" and then opening a socket.
@@ -1328,6 +1349,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                      "(no init, no RF; contacts only a configured gpsd)." if required_missing
                      else "doctor: a filesystem is critically full; bounded checks only "
                           "(no init, no RF; contacts only a configured gpsd)." if disk_critical
+                     else "doctor: the server certificate has expired; bounded checks only "
+                          "(no init, no RF; contacts only a configured gpsd)." if cert_expired
                      else "doctor: bounded checks only "
                           "(no init, no RF; contacts only a configured gpsd)."),
             details=details,
