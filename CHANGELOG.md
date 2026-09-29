@@ -5,6 +5,9 @@
 - MeshCore: LHPC no longer redacts the repeater's login log lines; upstream logs them (openhop-dev/openhop_core#156).
 - Adopting a local source retries the `.git` copy up to seven times within about 6 s while git is repacking
   the checkout (it retried once before); a longer repack still fails the adoption, with the active source untouched.
+- The hidden unit commands (`self-update --run-service`, `webserver --run-restart-service`,
+  `webserver --firewall-boot-gate`, `autostart --run-service`) are refused when the systemd invocation marker
+  (`INVOCATION_ID`) is absent, e.g. when run by hand in a shell; the refusal names the command to use instead.
 
 ## 0.11.2
 

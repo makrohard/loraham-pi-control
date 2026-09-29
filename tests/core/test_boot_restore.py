@@ -888,7 +888,9 @@ def test_cli_autostart_show_and_toggle(tmp_path, monkeypatch, capsys):
 def test_cli_autostart_run_service_rejects_switch(tmp_path, monkeypatch, capsys):
     from lhpc.adapters.cli.main import main
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    monkeypatch.setenv("INVOCATION_ID", "test")            # past the plumbing gate: the argument check
     assert main(["autostart", "off", "--run-service"]) == 2
+    assert "--run-service takes no arguments" in capsys.readouterr().out
 
 
 def test_cli_run_service_disabled_path_exits_zero(tmp_path, monkeypatch, capsys):
@@ -897,6 +899,7 @@ def test_cli_run_service_disabled_path_exits_zero(tmp_path, monkeypatch, capsys)
     from lhpc.adapters.cli.main import main
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("INVOCATION_ID", "test")
     assert main(["autostart", "--run-service"]) == 0
     j = _journal_on_disk(tmp_path)
     assert j["state"] == "disabled"
@@ -910,6 +913,7 @@ def test_cli_run_service_unsafe_journal_exits_nonzero(tmp_path, monkeypatch, cap
     jp = tmp_path / "state" / "boot-restore.json"
     jp.parent.mkdir(parents=True, exist_ok=True)
     jp.write_text("{nope")
+    monkeypatch.setenv("INVOCATION_ID", "test")
     assert main(["autostart", "--run-service"]) == 1
 
 

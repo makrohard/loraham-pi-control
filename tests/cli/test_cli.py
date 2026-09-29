@@ -193,6 +193,7 @@ def test_self_update_run_service_cli_plumbing(capsys, monkeypatch):
         called["ran"] = True
         return ActionResult(True, "Update applied; console back.")
     monkeypatch.setattr(ControllerService, "self_update_run_service", fake_run)
+    monkeypatch.setenv("INVOCATION_ID", "test")            # as systemd sets it in the unit
     assert main(["self-update", "--run-service"]) == 0 and called.get("ran")
     assert "console back" in capsys.readouterr().out
 
@@ -1100,3 +1101,57 @@ def test_rflog_decrypt_follow_prints_each_new_frame_once(tmp_path, monkeypatch, 
     assert main(["rflog", "meshtastic", "--decrypt", "--follow", "--lines", "1"]) == 0
     out = [ln for ln in capsys.readouterr().out.splitlines() if " text " in ln]
     assert [ln[:20] for ln in out] == [f"1970-01-01T00:00:0{i}Z" for i in (1, 2, 3, 4)]   # none lost, none twice
+
+
+# ---- hidden unit plumbing needs the systemd invocation marker --------------------------------
+_PLUMBING = [
+    (["self-update", "--run-service"], "self_update_run_service",
+     "lhpc-selfupdate.service", "lhpc self-update --apply"),
+    (["webserver", "--run-restart-service"], "webserver_run_restart_service",
+     "lhpc-nginx-restart.service", "lhpc webserver apply"),
+    (["autostart", "--run-service"], "boot_restore_run",
+     "lhpc-boot-restore.service", "systemctl --user restart lhpc-boot-restore.service"),
+    (["webserver", "--firewall-boot-gate"], "firewall_boot_gate",
+     "lhpc-nginx.service", "systemctl --user restart lhpc-nginx.service"),
+]
+_IDS = ["self-update", "webserver", "autostart", "firewall-boot-gate"]
+
+
+@pytest.mark.parametrize("argv,method,unit,use", _PLUMBING, ids=_IDS)
+def test_plumbing_flag_refuses_without_invocation_id(argv, method, unit, use, tmp_path, monkeypatch, capsys):
+    """Without the invocation marker (a hand-run in a shell) the flag is refused before any
+    service call, so a request marker stays for its unit to claim."""
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    called = []
+    monkeypatch.setattr(ControllerService, method, lambda self, *a, **k: called.append(1))
+    requests = [tmp_path / "state" / "selfupdate.request", tmp_path / "state" / "nginx-restart.request"]
+    for r in requests:
+        r.parent.mkdir(parents=True, exist_ok=True)
+        r.write_text("request\n")
+    nginx_conf = tmp_path / "config" / "nginx" / "lhpc.conf"          # the ACTIVE nginx config
+    nginx_conf.parent.mkdir(parents=True, exist_ok=True)
+    nginx_conf.write_bytes(b"server { listen 0.0.0.0:8443; }\n")
+
+    assert main(argv) == 2
+    out = capsys.readouterr().out
+    assert "unit plumbing" in out and unit in out and use in out and "INVOCATION_ID" in out
+    assert not called                                          # no service call at all
+    assert all(r.read_text() == "request\n" for r in requests)  # nothing claimed
+    assert nginx_conf.read_bytes() == b"server { listen 0.0.0.0:8443; }\n"  # nginx config untouched
+
+
+@pytest.mark.parametrize("argv,method,unit,use", _PLUMBING, ids=_IDS)
+def test_plumbing_flag_runs_with_invocation_id(argv, method, unit, use, tmp_path, monkeypatch, capsys):
+    """With the marker set, as systemd sets it in the unit, the dispatch is unchanged."""
+    from lhpc.core.services import ActionResult
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    monkeypatch.setenv("INVOCATION_ID", "test")
+    called = []
+
+    def fake(self, *a, **k):
+        called.append(1)
+        return ActionResult(True, "ok", data={"driver_completed": True})
+    monkeypatch.setattr(ControllerService, method, fake)
+    assert main(argv) == 0
+    assert called == [1]

@@ -98,6 +98,11 @@ Pass `--no-service` to skip it. The generated units are byte-identical to the sh
 `deploy/*.service` templates (differing only in `%h` vs the resolved paths); their bytes are
 frozen — see [backlog.md](backlog.md) for why.
 
+The four hidden commands those units run (`self-update --run-service`, `webserver --run-restart-service`,
+`webserver --firewall-boot-gate`, `autostart --run-service`) are unit plumbing: they are refused when the systemd
+invocation marker (`INVOCATION_ID`) is absent, e.g. when run by hand in a shell, and the refusal names the command to
+use instead.
+
 They are **user** units: no root, hardened to be compatible with the runtime root and the
 daemon's shared `/tmp` sockets. To install the console unit by hand:
 

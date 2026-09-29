@@ -14,6 +14,7 @@ apply only after confirmation (or --yes).
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from lhpc.core.services import ActionResult, ControllerService
@@ -65,6 +66,17 @@ def _confirm(prompt: str) -> bool:
     except (EOFError, OSError):
         # Non-interactive / closed stdin -> treat as "no" (safe default).
         return False
+
+
+def _unit_plumbing_refusal(flag: str, unit: str, use: str):
+    """Hidden unit plumbing runs from its systemd unit. It is refused when the systemd invocation
+    marker (`INVOCATION_ID`) is absent, e.g. a hand-run in a shell. The marker is an indicator, not an
+    authentication boundary. Returns the exit code 2 when refused, else None."""
+    if os.environ.get("INVOCATION_ID"):
+        return None
+    print(f"ERR   {flag} is unit plumbing, meant to run from {unit}; refused because the systemd "
+          f"invocation marker (INVOCATION_ID) is absent. Use {use} instead.")
+    return 2
 
 
 def _apply_flow(run, yes: bool) -> int:
@@ -1296,6 +1308,11 @@ def _run(argv: list[str] | None = None) -> int:
         return _cmd_config(svc, args)
     if args.command == "autostart":
         if args.run_service:
+            refused = _unit_plumbing_refusal(
+                "autostart --run-service", "lhpc-boot-restore.service",
+                "`lhpc autostart` (its state) or `systemctl --user restart lhpc-boot-restore.service`")
+            if refused is not None:
+                return refused
             if args.switch is not None:
                 print("ERR   --run-service takes no arguments (unit plumbing).")
                 return 2
@@ -1477,6 +1494,10 @@ def _run(argv: list[str] | None = None) -> int:
     if args.command == "self-update":
         if args.run_service:
             # Unit plumbing (non-interactive) — mode is read from the claimed request marker.
+            refused = _unit_plumbing_refusal("self-update --run-service", "lhpc-selfupdate.service",
+                                             "`lhpc self-update --apply`")
+            if refused is not None:
+                return refused
             return _render(svc.self_update_run_service())
         if args.repair_integration:
             return _render(svc.self_update_repair_integration())
@@ -1503,8 +1524,16 @@ def _run(argv: list[str] | None = None) -> int:
     if args.command == "webserver":
         import secrets as _secrets
         if getattr(args, "run_restart_service", False):
+            refused = _unit_plumbing_refusal("webserver --run-restart-service",
+                                             "lhpc-nginx-restart.service", "`lhpc webserver apply`")
+            if refused is not None:
+                return refused
             return _render(svc.webserver_run_restart_service())
         if getattr(args, "firewall_boot_gate", False):
+            refused = _unit_plumbing_refusal("webserver --firewall-boot-gate", "lhpc-nginx.service",
+                                             "`systemctl --user restart lhpc-nginx.service`")
+            if refused is not None:
+                return refused
             # nginx ExecStartPre hook. Exit 0 when nginx may start (firewall verified, or the
             # config was made safely loopback-only); NON-ZERO fails ExecStartPre so nginx does
             # NOT start when the loopback fallback could not be established (never bind the
