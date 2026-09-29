@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.4
 
 - A binary install or update refused by the pin check can be accepted once, knowingly:
   `--accept-pin-mismatch` on `lhpc install --source binary` and `lhpc update`, and a checkbox on the console's
