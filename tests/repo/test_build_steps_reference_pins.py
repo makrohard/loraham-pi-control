@@ -55,3 +55,14 @@ def test_a_step_fetching_a_pin_from_another_url_names_that_sources_remote():
     bad = [f"{w}: --src {u} but {p} is pinned on {remotes.get(p)}" for w, u, p in pairs
            if u != remotes.get(p)]
     assert not bad, bad
+
+
+def test_no_manifest_source_points_at_a_retired_fork():
+    """The MeshCom firmware came from a temporary fork until upstream took its fixes. No manifest
+    remote and no build step may name that fork again unnoticed."""
+    retired = "makrohard/MeshCom-Firmware"
+    data = tomllib.loads(MANIFEST.read_text())
+    remotes = [f"{st['id']}/{c['id']}" for st in data["stack"] for c in st.get("component", [])
+               if retired in c.get("source", {}).get("remote", "")]
+    argvs = [where for where, argv in _steps() if any(retired in tok for tok in argv)]
+    assert not remotes and not argvs, (remotes, argvs)

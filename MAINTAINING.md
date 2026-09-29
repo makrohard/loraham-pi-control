@@ -51,21 +51,12 @@ repository: the Pages demo, redeployed on every `main` push that touches `lhpc/`
 ([demo/README](demo/README.md#deploy)).
 
 **Temporary forks** (TEMPORARY-PR: remove each item, and this paragraph with the last one, when
-its upstream has taken the change). Two upstream fixes reach boxes through our own copies until
+its upstream has taken the change). Upstream fixes reach boxes through our own copies until
 upstream merges them. Nobody syncs them by hand: a weekly workflow does, and an issue it opens is the
 only signal to act on.
 
-- **MeshCom firmware.** LHPC builds branch `lhpc-speed` of `makrohard/MeshCom-Firmware`, which
-  carries the speed fixes meant for icssw-org
-  ([#1164](https://github.com/icssw-org/MeshCom-Firmware/pull/1164), open (draft);
-  [#1165](https://github.com/icssw-org/MeshCom-Firmware/pull/1165), merged upstream 2026-09-27). Its weekly workflow (`lhpc-speed.yml`) merges
-  upstream `dev` in, builds the boards and runs the QEMU proof; green moves the branch forward, red
-  opens an issue and moves nothing. It merges rather than rebases, because the bot follows
-  `lhpc-speed` at its tip and a rebased branch no longer contains the pinned commit. When upstream
-  contains the fixes, the workflow says so on the retire issue
-  ([makrohard/MeshCom-Firmware#1](https://github.com/makrohard/MeshCom-Firmware/issues/1)): pin
-  upstream again in the manifest, both the MeshCom-Firmware remote **and** the `--src` of the QEMU
-  setup step, point the bot's policy back, delete the workflow and the branch.
+- **MeshCom firmware:** back on upstream icssw-org `dev` since 2026-09-29. The fork `makrohard/MeshCom-Firmware` is
+  retired after the repoint release, once no open upstream PR of ours has its head there.
 - **QEMU.** `meshcom-qemu-raspi` builds Espressif's `esp-develop-9.2.2-20260417` tag plus the ESP32
   cache-model fix, checked in as a patch; the fix is espressif/qemu PR
   [#183](https://github.com/espressif/qemu/pull/183) (issue [#182](https://github.com/espressif/qemu/issues/182)), and `makrohard/qemu`
