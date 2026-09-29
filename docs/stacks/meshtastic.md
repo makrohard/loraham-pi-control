@@ -40,6 +40,10 @@ Region, node identity, GPS mode and fixed position are device settings applied t
 managed CLI after start (post-start steps, re-runnable with `lhpc stack poststart meshtastic`).
 The web port is fixed at 9443 (the endpoint, proxy upstream and exposure audit derive from it).
 
+`<runtime>/config/files/meshtasticd.yaml` is generated: every start of the node rewrites it from LHPC's shipped base
+and the saved settings, so a hand edit of that file is lost at the next start. Change a setting with
+`lhpc config meshtastic <param> <value>` or the stack's Settings in the console; it takes effect at the next start.
+
 ## Native build
 
 `meshtasticd` is built from the pinned checkout with upstream's **`native`** PlatformIO
