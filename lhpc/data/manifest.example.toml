@@ -2856,8 +2856,8 @@ note = "Pins, chip, TCXO and PA settings come from the hardware setup chosen wit
 path = "src/reticulum"
 remote = "https://github.com/markqvist/Reticulum.git"
 branch = "master"
-pin_commit = "8a7ad40d649aae1cd755f060fa8f5619f7000b29"
-pin_tag = "1.5.2-72-g8a7ad40"
+pin_commit = "d5962d14eb4fbf4a34a0b83e6942534a4965dd17"
+pin_tag = "1.5.2-91-gd5962d14"
 [stack.component.process]
 exec_name = "loraham-rns-node"
 [stack.component.run_env]
@@ -3273,8 +3273,8 @@ note = "Interactive ncurses browser (needs a real TTY; no headless mode) — sta
 path = "src/nomadnet"
 remote = "https://github.com/markqvist/NomadNet.git"
 branch = "master"
-pin_commit = "ad10301569a39d4f43b3d21ae9fc392602c937ca"
-pin_tag = "ad10301"
+pin_commit = "cfe23af68dfea725f4d88d95ffe9a4ef0e188941"
+pin_tag = "1.2.0-123-gcfe23af"
 [stack.component.process]
 exec_name = "nomadnet"
 [[stack.component.pre_steps]]
@@ -3319,8 +3319,8 @@ note = "Propagation is OFF by default: enabling it on a duty-limited link is a d
 path = "src/lxmf"
 remote = "https://github.com/markqvist/LXMF.git"
 branch = "master"
-pin_commit = "795fdaa2b0777c13033787d933d1afc94a2377cb"
-pin_tag = "795fdaa"
+pin_commit = "e52016c20fbbd0bb9082a6e6d5177f5f4eeff1c7"
+pin_tag = "1.1.0-12-ge52016c"
 [stack.component.process]
 exec_name = "lxmd"
 [[stack.component.pre_steps]]

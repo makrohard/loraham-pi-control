@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.1
+
+- reticulum: 8a7ad40d6 -> d5962d14e (1.5.2-91-gd5962d14), used by rns
+- nomadnet: ad1030156 -> cfe23af68 (1.2.0-123-gcfe23af), used by nomadnet
+- lxmf: 795fdaa2b -> e52016c20 (1.1.0-12-ge52016c), used by lxmd
+
 ## 0.11.0
 
 **Upgrading with MeshCom from the binary (the default):** it does not start until updated (a new
