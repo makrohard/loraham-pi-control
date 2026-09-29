@@ -32,6 +32,8 @@
   (an old copy of the session cookie, or two requests at once) is refused ("already used") while it is among the last
   256 confirmations used, and a confirmation made before the console restarted is refused too; the operator confirms
   again.
+- Meshtastic: the start sets the node identity last (fixed position, region, GPS mode, then the owner name), so no
+  later LHPC setting can cut the node-info that the owner push sends.
 
 ## 0.11.2
 

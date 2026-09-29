@@ -1218,16 +1218,24 @@ main = "meshtastic"
   # ~2.5-5 h. 4 h could be crossed on the slowest supported board and kill the run just before the
   # link step; 6 h clears the pessimistic case with margin. A Pi 5 finishes far inside it.
   build_timeout = 21600.0
-  # After meshtasticd is listening on the API, set the LoRa region — REQUIRED: a node whose region
-  # is UNSET may not transmit, so a failed region push must fail the start (and trigger the verified
-  # cleanup) instead of leaving a silently mute node. Node identity stays optional (a cosmetic
-  # setting), but its outcome is recorded in the post-start sidecar and shown by `lhpc status`.
-  # Both invoke the MANAGED CLI by absolute path via `paths` — never whatever `meshtastic` happens
-  # to be on PATH.
+  # After meshtasticd is listening on the API: the fixed position, the LoRa region, the GPS mode, and
+  # the node identity LAST. The region is REQUIRED: a node whose region is UNSET may not transmit, so
+  # a failed region push must fail the start (and trigger the verified cleanup) instead of leaving a
+  # silently mute node. The node identity push sends the node-info, and every config save retunes the
+  # radio at once (cutting a packet on air), so no LHPC save may follow it. Every step is required;
+  # its outcome is recorded in the post-start sidecar and shown by `lhpc status`. All invoke the
+  # MANAGED CLI by absolute path via `paths` — never whatever `meshtastic` happens to be on PATH.
   post_steps = [
     { kind = "delay", seconds = 12 },
+    # A station that does not move needs no GPS at all: meshtasticd has native fixed-position
+    # support, which also skips the ~37 s chip probe a synthesized NMEA stream would still
+    # incur. `{gps_fixed_args}` expands to --setlat/--setlon(/--setalt) for `source = fixed` and
+    # to --remove-position otherwise, so the step runs at every start (`skip_if_empty` stays as a
+    # guard should the expansion ever be empty). It comes FIRST: its save
+    # does not re-arm meshtasticd's 7 s reboot, so after every save that does, the next step
+    # follows at once.
+    { kind = "exec", label = "fixed position", required = true, argv = ["meshtastic", "--host", "127.0.0.1", "{gps_fixed_args}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"], skip_if_empty = "{gps_fixed_args}" },
     { kind = "exec", label = "region", required = true, argv = ["meshtastic", "--host", "127.0.0.1", "--set", "lora.region", "{param:region}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
-    { kind = "exec", label = "node identity", required = true, argv = ["meshtastic", "--host", "127.0.0.1", "--set-owner", "{param:node_name}", "--set-owner-short", "{param:node_short}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
     # GPS mode is a DEVICE setting in the node database, NOT the YAML: `GPS: SerialPath:` alone
     # does nothing, because portduino defaults `position.gps_mode` to NOT_PRESENT and the YAML
     # `Config:` section cannot set it (verified on hardware — before this step meshtasticd
@@ -1238,12 +1246,7 @@ main = "meshtastic"
     # silently beacons no position, or one that keeps beaconing after GPS was turned off.
     # `{gps_mode}` is controller-owned, resolved from the ONE global `[gps]` plan.
     { kind = "exec", label = "gps mode", required = true, argv = ["meshtastic", "--host", "127.0.0.1", "--set", "position.gps_mode", "{gps_mode}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
-    # A station that does not move needs no GPS at all: meshtasticd has native fixed-position
-    # support, which also skips the ~37 s chip probe a synthesized NMEA stream would still
-    # incur. `{gps_fixed_args}` expands to --setlat/--setlon(/--setalt) for `source = fixed`,
-    # to --remove-position when a previously fixed node is switched away, and to nothing
-    # otherwise (the step is then skipped rather than run with an empty argv).
-    { kind = "exec", label = "fixed position", required = true, argv = ["meshtastic", "--host", "127.0.0.1", "{gps_fixed_args}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"], skip_if_empty = "{gps_fixed_args}" },
+    { kind = "exec", label = "node identity", required = true, argv = ["meshtastic", "--host", "127.0.0.1", "--set-owner", "{param:node_name}", "--set-owner-short", "{param:node_short}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
   ]
   note = "ONE-TIME setup (free the radio + stop the packaged service auto-starting): `sudo systemctl disable --now meshtasticd`. SPI must be enabled (config.txt: dtparam=spi=on, dtoverlay=spi0-0cs). lhpc runs/stops it WITHOUT root ONLY WHEN you are in the spi+gpio groups — see System dependencies below; grant with the shown command (then log out/in or reboot) if missing. Shares the SPI radio with the LoRaHAM daemon. Region + node name are applied automatically after start (config: Region / Node name)."
 
