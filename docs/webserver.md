@@ -284,6 +284,9 @@ Two independent CAs (private keys never leave `config/tls/`, 0600):
   SAN). `tls-renew` stays under the same CA.
 - **Client-auth CA** signs client/device certificates and the CRL.
 
+To give a second box the same two CAs (so a device certificate works on both): `lhpc secrets backup` on the first
+box, then `lhpc secrets restore <file> --only pki` on the second ([cli](cli.md#secrets)).
+
 Server and client certificates default to **825 days** (`server_cert_days` / `client_cert_days`
 in `config/local.toml [webserver]`); there is **no auto-renewal** — rotate before expiry on a
 long-lived box (`tls-renew`, `cert reissue`).

@@ -58,6 +58,7 @@ def _atomic_write(paths: Paths, path: Path, text: str, mode: int = 0o644) -> Non
 
 
 CONFIG_LOCK_TIMEOUT_S = 15.0
+WEB_SESSION_LOCK_S = 2.0          # the console's start waits at most this for the config lock
 _CONFIG_LOCK_POLL_S = 0.1
 
 
@@ -971,10 +972,19 @@ def web_session_secret(paths: Paths) -> bytes:
     # Persist ONLY on an existing (bootstrapped) runtime root. Never create the runtime root
     # just to store a secret — so constructing the web app against an absent/unbootstrapped
     # root mutates nothing (the console never serves there). Ephemeral fallback otherwise.
+    # The write takes the config lock, bounded (a secrets backup or restore holds it): busy, the
+    # console keeps this run's key and writes nothing; the key is persisted at the next start.
     if paths.runtime_root.exists():
         try:
-            runtime_fs.atomic_write_bytes(paths, p, secret, mode=0o600)
-        except (OSError, PathContainmentError):
+            with config_lock(paths, timeout=WEB_SESSION_LOCK_S):
+                try:
+                    raw = runtime_fs.read_bytes(paths, p)
+                    if len(raw) >= 32:
+                        return raw                 # written meanwhile: use it
+                except (OSError, PathContainmentError):
+                    pass
+                runtime_fs.atomic_write_bytes(paths, p, secret, mode=0o600)
+        except (ConfigLockBusy, OSError, PathContainmentError):
             pass
     return secret
 def _toml_value(kind: str, value: str) -> str:

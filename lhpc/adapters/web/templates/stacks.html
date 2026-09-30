@@ -114,6 +114,15 @@
               {% endfor %}
             </div>
           </details>
+          {# ----- Backup secrets: two copy commands, nothing executed here (A5) ----- #}
+          <details class="advcfg" id="controller-backup-secrets">
+            <summary>Backup secrets</summary>
+            <div class="body">
+              <p class="muted">Commands are not executed by LHPC — run them yourself in a shell on this box.</p>
+              {{ cmdbox('ctrl-secrets-backup', 'lhpc secrets backup') }}
+              {{ cmdbox('ctrl-secrets-restore', 'lhpc secrets restore $HOME/lhpc-secrets-HOSTNAME-YYYYMMDDTHHMMSSZ.tar') }}
+            </div>
+          </details>
           {# ----- Global operator callsign — the OPTIONAL base-callsign fallback ----- #}
           <details class="advcfg" id="operator-callsign">
             <summary>Global operator callsign{% if operator_callsign %} <span class="pill mono">{{ operator_callsign }}</span>{% else %} <span class="pill">not set</span>{% endif %}</summary>

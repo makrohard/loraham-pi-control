@@ -852,6 +852,23 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Record a running stack's current commits as a known-good composition")
     p_kw.add_argument("stack", help="Stack id")
 
+    p_sec = sub.add_parser("secrets", help="Back up or restore the box's certificates, secrets and "
+                                           "stack identities (one plain file)")
+    sec_sub = p_sec.add_subparsers(dest="secrets_cmd")
+    p_sec_b = sec_sub.add_parser("backup", help="Write one 0600 file (in clear) to your home folder, or <file>")
+    p_sec_b.add_argument("file", nargs="?", default=None,
+                         help="The file to create (never over an existing one); default: "
+                              "$HOME/lhpc-secrets-<host>-<UTC time>.tar")
+    p_sec_r = sec_sub.add_parser("restore", help="Check a backup and print what it would change; "
+                                                 "--yes creates, --overwrite overwrites")
+    p_sec_r.add_argument("file", help="A file written by lhpc secrets backup")
+    p_sec_r.add_argument("--only", choices=("pki",), default="",
+                         help="pki: only the two certificate authorities (to share them with another box)")
+    _sec_mode = p_sec_r.add_mutually_exclusive_group()
+    _sec_mode.add_argument("--yes", action="store_true", help="Apply when no target exists on this box")
+    _sec_mode.add_argument("--overwrite", action="store_true",
+                           help="Apply over existing targets (on a terminal you type 'overwrite')")
+
     p_su = sub.add_parser("self-update", help="Check for / apply lhpc's own update")
     p_su.add_argument("--apply", action="store_true",
                       help="Apply the update (fast-forward); restart the console afterwards")
@@ -1212,6 +1229,29 @@ def _run(argv: list[str] | None = None) -> int:
             print("Aborted.")
             return 0
         return _render(_run_apply(source=args.source, tests=tests, tx=args.tx))
+    if args.command == "secrets":
+        if args.secrets_cmd == "backup":
+            return _render(svc.secrets_backup(args.file))
+        if args.secrets_cmd == "restore":
+            only = args.only == "pki"
+            if args.overwrite and sys.stdin.isatty():
+                plan = svc.secrets_restore(args.file, only_pki=only)       # the plan, no target changed
+                if _render(plan) != 0:
+                    return 1
+                try:
+                    word = input("\nType overwrite to replace the targets listed above: ")
+                except (EOFError, OSError):
+                    word = ""
+                if word.strip() != "overwrite":
+                    print("Aborted; no target was changed.")
+                    return 0
+                return _render(svc.secrets_restore(args.file, only_pki=only, choice="overwrite",
+                                                   expected_plan=plan.data["plan"]))
+            choice = "overwrite" if args.overwrite else ("yes" if args.yes else "")
+            return _render(svc.secrets_restore(args.file, only_pki=only, choice=choice))
+        print("usage: lhpc secrets backup [<file>] | lhpc secrets restore <file> [--only pki] "
+              "[--yes | --overwrite]", file=sys.stderr)
+        return 2
     if args.command == "hmac":
         sid = args.stack or svc.hmac_default_stack()
         if not sid or not svc.hmac_applies(sid):

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `lhpc secrets backup` writes one plain file (0600, in clear) with the box's certificates, secrets and stack
+  identities; `lhpc secrets restore` checks it, prints what it would overwrite, and applies it with `--yes` (nothing
+  exists yet) or `--overwrite`, the console stopped; `--only pki` shares the two certificate authorities with another
+  box. The console's LHPC row shows both commands. The bundles' one-time passphrases are not in the file.
+
 ## 0.11.6
 
 - The console's pass tries to cut long-lived logs above an 8 MiB trigger (at most the last 1 MiB, from just after its

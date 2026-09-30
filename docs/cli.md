@@ -24,7 +24,7 @@ the same service layer ([architecture](architecture.md#package-layout)).
 - [stack](#stack) · [build](#build) · [test](#test) · [update](#update) · [uninstall](#uninstall) · [clean](#clean) · [known-working](#known-working)
 - [daemon](#daemon) · [logs](#logs) · [rflog](#rflog)
 - [web](#web) · [webserver](#webserver)
-- [self-update](#self-update) · [help](#help)
+- [secrets](#secrets) · [self-update](#self-update) · [help](#help)
 
 ---
 
@@ -351,6 +351,24 @@ lhpc webserver cert discard-export <label>
 - `expose` asks before it replaces the installed server certificate (when that certificate does not name this host's LAN address) and shows old and new names; off a terminal it writes nothing unless `--replace-certificate` is given.
 
 ---
+
+### secrets
+`lhpc secrets backup [<file>]` · `lhpc secrets restore <file> [--only pki] [--yes | --overwrite]` — one file with the
+box's certificates, secrets and stack identities.
+
+- `backup` writes ONE plain tar, in clear and mode 0600, to your home folder
+  (`lhpc-secrets-<host>-<UTC time>.tar`) or to `<file>`, never over an existing file and never inside the runtime
+  root: `config/tls/`, `config/secrets/`, `config/secrets.toml` and each stack's state folder. Encrypt it before it
+  leaves the box (for example `gpg -c <file>`). A running stack that keeps its state there is refused first.
+- the bundles' one-time passphrases are not in this file; a device whose passphrase is lost gets a new certificate
+  with lhpc webserver cert reissue <label>
+- Applying a restore needs the console stopped (`systemctl --user stop lhpc-web`, then `systemctl --user start lhpc-web`
+  afterwards). `restore` checks the whole file first and prints what it would overwrite, create and leave as it is; without
+  a flag it restores nothing. `--yes` applies only when none of the targets exists here; `--overwrite` replaces them
+  (on a terminal you type `overwrite`).
+- A restore that fails part-way leaves a mixed state (no automatic undo): make a backup of this box first.
+- `--only pki` gives another box just the two certificate authorities (then `lhpc webserver tls-renew` and
+  `lhpc webserver apply`); a full restore on another box would give two boxes the same node identities.
 
 ### self-update
 `lhpc self-update [--apply] [--overwrite] [--repair-integration] [--recover-request] [--yes]` — check for, or apply, lhpc's own update. `--apply` fast-forwards and restarts the console; `--overwrite` resets a diverged/dirty checkout; `--repair-integration` reinstalls the managed console + updater units.
