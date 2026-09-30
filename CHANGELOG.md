@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.11.5
 
+- The demo's install route works again: its `spawn_web_job` takes `accept_pin_mismatch`, as the real service does.
 - The console's server certificate is issued for at most 825 days as Apple counts them (Apple requires 825 days
   or fewer); one in the fixed provisional window (a PKI made without a verified clock and not yet normalised) is
   not capped (over the cap while it is provisional). Its end date shows in the console, `lhpc webserver status`
