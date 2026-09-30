@@ -6,6 +6,9 @@
   identities; `lhpc secrets restore` checks it, prints what it would overwrite, and applies it with `--yes` (nothing
   exists yet) or `--overwrite`, the console stopped; `--only pki` shares the two certificate authorities with another
   box. The console's LHPC row shows both commands. The bundles' one-time passphrases are not in the file.
+- A lagging library or firmware image no longer blocks a start; services still do (the maintainer's decision
+  after 0.11.5). The daemon's RadioLib and MeshCom's firmware still read "behind" in the update status and still
+  stop an install at the pin check.
 
 ## 0.11.6
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 import platform
 
 from . import binary_receipt as brx
+from .model import ComponentKind
 
 # The only target the builder publishes for today; the index entry is checked against this at
 # install time as well (a mismatch is a typed refusal, never a "try it and see").
@@ -113,22 +114,29 @@ class BinaryChannelMixin:
 
     def binary_behind(self, comp) -> str:
         """"" unless `comp` runs from an installed binary artifact whose recorded commit for it,
-        or for another component the artifact covers, differs from its pin without an exact
-        acceptance still in force. Publishing a new artifact never touches an installed copy, and
-        a stale copy would be launched with argv it does not know (the RF-log options were the
-        first such case) — so the start refuses, typed, before spawning anything."""
+        or for another RUNNABLE component the artifact covers, differs from its pin without an
+        exact acceptance still in force (a library's or a firmware image's lag, e.g. RadioLib's,
+        shows in the update status and stops an install, but not a start). Publishing a new
+        artifact never touches an installed copy, and a stale copy would be launched with argv it
+        does not know (the RF-log options were the first such case) — so the start refuses,
+        typed, before spawning anything."""
         if comp.source is None or not self.binary_covers(comp.id):
             return ""
         sid = self.stack_of(comp.id) or comp.id
         _state, rec, _why = self.binary_receipt_state(sid)
         if rec is None:
             return ""
-        # EVERY component the artifact covers, not only the one being started (the daemon's
-        # binary also carries RadioLib): each commit differing from its pin needs an exact
-        # acceptance that is still in force; the one helper decides it, nothing here.
+        # The started component and every other RUNNABLE one the artifact covers: each commit
+        # differing from its pin needs an exact acceptance that is still in force; the one
+        # helper decides it, nothing here. A covered library (the daemon's RadioLib) or firmware
+        # image (MeshCom's) is not runnable, so its lag does not block a start (the maintainer's
+        # decision after 0.11.5).
         active = self.binary_active_override(sid, rec) if _state == "valid" else {}
         pins = self._binary_pins(sid)
-        for cid in [comp.id, *sorted(c for c in pins if c != comp.id)]:
+        stack = self.stack(sid)
+        inert = {c.id for c in (stack.components if stack else ())
+                 if c.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE)}
+        for cid in [comp.id, *sorted(c for c in pins if c != comp.id and c not in inert)]:
             got, want = rec.components.get(cid, ""), pins.get(cid, "")
             if not got or not want or got == want or cid in active:
                 continue

@@ -83,7 +83,7 @@ Four different questions get four different answers, and they are easy to confus
 |---|---|
 | is this checkout the commit it claims? | the ownership record plus its live `HEAD` (`source_registry.verify_identity`) |
 | is this stack installed from an artifact at all? | the receipt's four-state read (`receipt_state`) — cheap, no hashing |
-| is that artifact the right COMMITS? | the receipt's `components` map against the manifest pins — the same comparison the install gate makes. A start refuses a covered component whose installed artifact is behind the manifest (publishing a new artifact never updates an installed copy): `lhpc update <stack>` |
+| is that artifact the right COMMITS? | the receipt's `components` map against the manifest pins — the same comparison the install gate makes. A start refuses while the started component, or another covered service, is behind the manifest without an acceptance in force (publishing a new artifact never updates an installed copy): `lhpc update <stack>`. A covered library or firmware image (the daemon's RadioLib, MeshCom's firmware) never blocks a start; its lag shows in the update status |
 | are the artifact's FILES still as installed? | `verify_files`, which hashes them |
 
 The last one is an integrity check on what was installed, not a statement of provenance, and it

@@ -235,37 +235,89 @@ def test_a_consent_token_is_refused_when_the_mismatch_has_gone(tmp_path, monkeyp
     assert call("daemon", apply=False, source="binary", accept_pin_mismatch="yes").ok
 
 
-def test_a_stale_acceptance_of_a_covered_library_blocks_the_start(tmp_path, monkeypatch,
-                                                                  binary_receipt):
-    """Gate 2's P1: the daemon's artifact also covers RadioLib, which is never started itself.
-    Gate 2 judges EVERY covered component: a lagging library blocks the start unless its exact
-    pair is accepted and still in force; once its pin moves on, the start refuses before the
-    spawn."""
+def test_a_lagging_covered_library_does_not_block_the_start(tmp_path, monkeypatch, binary_receipt):
+    """The daemon's artifact also covers RadioLib, a library that never runs. Its lag, with or
+    without an acceptance, no longer blocks a start (the maintainer's decision after 0.11.5); it
+    still reads "behind" in the update status. The daemon's own lag still blocks."""
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path, monkeypatch)
     cfgmod.save_hardware_setup(svc._paths, "uputronics")
     svc._invalidate_config()
     pins = svc._binary_pins("daemon")
     lib = "radiolib"
+    assert svc.stack("daemon").component(lib).kind.value == "library"
     daemon = svc.stack("daemon").component("loraham-daemon")
     (tmp_path / daemon.source.path).mkdir(parents=True, exist_ok=True)
-    rec = binary_receipt(svc, commits={**pins, lib: A}, probe="loraham_daemon 0.9.0")
-    assert "(radiolib: built from" in svc.binary_behind(daemon)       # no acceptance: refused
-    assert brx.write_receipt(svc._paths, dataclasses.replace(rec, override=_override(lib, A, pins[lib])))
-    svc.invalidate_snapshot()
-    assert svc.binary_behind(daemon) == ""                             # the exact pair: allowed
-    moved = {**pins, lib: C}
-    monkeypatch.setattr(ControllerService, "_binary_pins", lambda self, sid: moved)
-    assert svc.binary_active_override("daemon") == {}
-    why = svc.binary_behind(daemon)
-    assert why.startswith("installed binary artifact is behind the manifest (radiolib: built from")
+    binary_receipt(svc, commits={**pins, lib: A}, probe="loraham_daemon 0.9.0")
+    assert svc.binary_active_override("daemon") == {}                  # no acceptance at all
+    assert svc.binary_behind(daemon) == ""
+    assert "behind the manifest" not in svc.install_blocker(daemon)
+    assert svc.binary_freshness("daemon")["behind"] == [lib]           # still shown as behind
     spawned = []
     monkeypatch.setattr(type(svc._lifecycle()), "start",
                         lambda self, *a, **k: spawned.append(a) or (_ for _ in ()).throw(
                             AssertionError("spawned")))
-    r = svc.start("daemon", apply=True)
-    assert not r.ok and any(why in str(d) for d in r.details), (r.summary, r.details)
-    assert spawned == []                                               # never reached the spawn
+    try:
+        svc.start("daemon", apply=True)
+    except AssertionError:
+        pass
+    assert spawned                                                     # reached the spawn
+    binary_receipt(svc, commits={**pins, daemon.id: A}, probe="loraham_daemon 0.9.0")
+    assert svc.binary_behind(daemon).startswith(
+        "installed binary artifact is behind the manifest (built from")
+
+
+@pytest.mark.parametrize(("lagging", "blocks"), [("meshcom-bridge", True),
+                                                 ("meshcom-firmware", False)])
+def test_only_a_covered_service_blocks_the_start(tmp_path, monkeypatch, binary_receipt,
+                                                 lagging, blocks):
+    """`start meshcom` with one covered component off its pin: a lagging bridge (a service)
+    refuses before any spawn, and QEMU's own gate names it too; a lagging firmware image no
+    longer blocks (the maintainer's decision after 0.11.5): the bridge and QEMU both reach the
+    spawn. Either lag still reads "behind" in the update status."""
+    from lhpc.core import config as cfgmod
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT, StartLaunch
+    svc = _svc(tmp_path, monkeypatch)
+    cfgmod.save_hardware_setup(svc._paths, "uputronics")
+    svc._invalidate_config()
+    assert svc.set_operator_identity(callsign="XX0XXA").ok
+    pins = svc._binary_pins("meshcom")
+    stack = svc.stack("meshcom")
+    for c in stack.components:
+        if c.source is not None:
+            (tmp_path / c.source.path).mkdir(parents=True, exist_ok=True)
+        if c.source is not None and c.build_marker:          # QEMU built from today's inputs
+            marker = svc._lifecycle().source_dir(c) / c.build_marker
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(c))
+            svc.build_inputs_path(c).parent.mkdir(parents=True, exist_ok=True)
+            svc.build_inputs_path(c).write_text(svc.build_inputs_text(c))
+    binary_receipt(svc, "meshcom", commits={**pins, lagging: A})
+    assert stack.component(lagging).kind.value == ("service" if blocks else "firmware")
+    why = svc.binary_behind(stack.component("meshcom-qemu"))
+    if blocks:
+        assert why.startswith(f"installed binary artifact is behind the manifest ({lagging}: built from")
+    else:
+        assert why == ""
+    assert svc.binary_freshness("meshcom")["behind"] == [lagging]      # still shown as behind
+    # Everything outside the gate is stubbed: the daemon is ready, the host has the packages,
+    # a launched bridge is ready; the spawn records the component and QEMU's launch "fails".
+    monkeypatch.setattr(type(svc), "_ensure_daemon", lambda self, *a, **k: ([], True, ""))
+    monkeypatch.setattr(type(svc), "start_blocking_requirements", lambda self, comp: [])
+    monkeypatch.setattr(type(svc), "_ready_endpoints_present", lambda self, comp: (True, []))
+    spawned = []
+    monkeypatch.setattr(type(svc._lifecycle()), "start",
+                        lambda self, stack, comp, *a, **k: spawned.append(comp.id) or StartLaunch(
+                            comp.id != "meshcom-qemu", "", "stubbed spawn"))
+    r = svc.start("meshcom", apply=True)
+    res = {x.component: x for x in r.results}
+    if blocks:
+        assert spawned == []                                           # never reached the spawn
+        assert res[lagging].outcome.value == "blocked"
+        assert res[lagging].summary.startswith("installed binary artifact is behind the manifest")
+    else:
+        assert spawned == ["meshcom-bridge", "meshcom-qemu"]           # both reached the spawn
+        assert res["meshcom-qemu"].summary.startswith("start failed: stubbed spawn")
 
 
 def test_a_bare_flag_does_not_apply_without_the_dry_runs_token(tmp_path, monkeypatch, stub_pipeline):
