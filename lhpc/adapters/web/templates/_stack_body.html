@@ -56,10 +56,10 @@
       {% endif %}
       {% if g.pin_refusal %}
         {# A3: the last console install was refused over the pin check (the job's typed refusal). #}
-        <div class="depnote depnote-warn" id="pin-refusal-{{ g.stack.id }}"><strong>Update LHPC first</strong>
-          {{ update_lhpc_first(selfupdate.update_available) }} —
-          {% if g.pin_refusal.refused == 'consent_stale' %}the published binary changed since you confirmed (now:
-            {% for cid, b, p in g.pin_refusal.lagging %}{{ cid }} {{ b[:9] }}{% if not loop.last %}, {% endif %}{% endfor %}).
+        <div class="depnote depnote-warn" id="pin-refusal-{{ g.stack.id }}">{% if g.pin_refusal.lagging %}<strong>Update LHPC first</strong>
+          {{ update_lhpc_first(selfupdate.update_available) }} —{% endif %}
+          {% if g.pin_refusal.refused == 'consent_stale' %}the published binary or LHPC's pins changed since you confirmed (now:
+            {% for cid, b, p in g.pin_refusal.lagging %}{{ cid }} {{ b[:9] }}{% if not loop.last %}, {% endif %}{% else %}the published binary matches this LHPC's pins{% endfor %}).
             Nothing was installed; review the install again.
           {% elif g.pin_refusal.refused == 'clone_required' %}the install was refused: its run scripts come from LHPC's
             own pinned checkout, so the binary must match this LHPC.

@@ -160,7 +160,7 @@
   {% if g.fetched_ver and g.fetched_ver.installed %}{% if g.fetched_ver.has_update %}<span class="ver ver-yellow" title="the manifest now pins a different version — Update re-fetches">update → {{ g.fetched_ver.pinned }}</span>{% endif %}{% if g.upstream and g.upstream.ahead %}<span class="ver ver-yellow" title="a newer upstream release exists — Update fetches it, verified against upstream's checksums.txt">upstream {{ g.upstream.latest }}</span>{% endif %}{% endif %}
   {% if g.meshcore_mode %}<span class="pill" title="MeshCore mode (saved){% if g.running and g.meshcore_running_mode != g.meshcore_mode %}; the running launch uses {{ g.meshcore_running_mode }} — restart to apply{% endif %}">mode: {{ g.meshcore_mode }}{% if g.running and g.meshcore_running_mode != g.meshcore_mode %} · running {{ g.meshcore_running_mode }}{% endif %}</span>{% endif %}
   {% if g.jobs %}<span class="pill">⏳ {{ g.jobs|length }} job</span>{% endif %}
-  {% if g.pin_override %}<span class="ver ver-yellow" title="installed from a binary built from other commits than this LHPC pins; it may not work with this LHPC — updating LHPC clears it">over pin check</span>{% endif %}
+  {% if g.pin_override %}<span class="ver ver-yellow" title="installed from a binary built from other commits than this LHPC pins; it may not work with this LHPC — it clears when the pins match">over pin check</span>{% endif %}
 </span>
 {% endmacro %}
 
@@ -182,9 +182,9 @@
     >Update</a>{% else %}<a class="update-link"
     href="{{ url_for('stacks_overview', open=g.stack.id, inst=g.stack.id) }}#stack-install-{{ g.stack.id }}"
     >Update</a>{% endif %}{% endif %}
-  {# A3: installed over the pin check — the one-click LHPC update that clears it. #}
+  {# A3: installed over the pin check — the one-click LHPC update (the warning clears when the pins match). #}
   {% if g.pin_override %}<a class="update-link" href="{{ url_for('self_update_apply') }}"
-    title="installed over the pin check — updating LHPC clears it">Update LHPC</a>{% endif %}
+    title="installed over the pin check — it clears when the pins match">Update LHPC</a>{% endif %}
   {% if g.main %}<a class="logslink" href="{{ url_for('logs_view', target=g.main[0].id) }}" aria-label="{{ g.main[0].id }} logs">logs</a>{% endif %}
 </div>
 {% endmacro %}

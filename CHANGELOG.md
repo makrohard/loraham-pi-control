@@ -12,6 +12,12 @@
   the Settings Apply) and the reissue when the box joins a WLAN are dated from the clock once it is verified,
   as `webserver init` does; before, they kept the fixed provisional window until the console's normalisation
   ran. Only under an unverified clock do they still take that window.
+- `--accept-pin-mismatch` (0.11.4), corrected: a start now checks every component the installed binary covers
+  (the daemon's also carries RadioLib), so a library whose pin moved past an accepted pair blocks the start
+  like the daemon itself; a console consent whose mismatch has gone (the published binary now matches the
+  pins) is refused with "review the install again" instead of installing; `lhpc install … --check` keeps the
+  flag. The warning's tooltip says it clears when the pins match, and the stale-consent text says the binary
+  or LHPC's pins changed.
 
 ## 0.11.4
 

@@ -117,6 +117,17 @@ class BinaryOpsMixin:
                                 data={"binary_failed": True, "offer_source": True})
         else:
             override_rec = None
+            if accept_pin_mismatch not in ("", "yes"):
+                # A consent token names an artifact and pairs that were shown; with no mismatch
+                # now, it matches nothing: refuse before any download or write (review again).
+                return ActionResult(
+                    False,
+                    "The published binary or LHPC's pins changed since you confirmed (now: the "
+                    "published binary matches this LHPC's pins). Nothing was installed; review "
+                    "the install again.",
+                    next_commands=[f"lhpc install {stack_id} --source binary --yes"],
+                    data={"binary_failed": True, "pin_mismatch": {},
+                          "override_refused": "consent_stale"})
         _ov_data = ({"pin_mismatch": override_rec["mismatch"],
                      "consent": bi.consent_token(entry.sha256, override_rec["mismatch"])}
                     if override_rec else {})
@@ -440,8 +451,8 @@ class BinaryOpsMixin:
             now = ", ".join(f"{c} {b[:9]}" for c, (b, _p) in sorted(mm.items()))
             return ActionResult(
                 False,
-                f"The published binary changed since you confirmed (now: {now}). Nothing was "
-                "installed; review the install again.",
+                f"The published binary or LHPC's pins changed since you confirmed (now: {now}). "
+                "Nothing was installed; review the install again.",
                 next_commands=[_override_command(stack_id)],
                 data={**base, "override_refused": "consent_stale"})
         details = [w for _c, w in ways]

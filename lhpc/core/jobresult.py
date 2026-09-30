@@ -128,7 +128,9 @@ def valid_refusal(v) -> bool:
     if v["override_refused"] not in _REFUSED:
         return False
     pm = v["pin_mismatch"]
-    if not isinstance(pm, dict) or not pm or len(pm) > _MAX_PAIRS:
+    # Empty only for a stale consent whose mismatch has gone (the binary now matches the pins).
+    if (not isinstance(pm, dict) or len(pm) > _MAX_PAIRS
+            or (not pm and v["override_refused"] != "consent_stale")):
         return False
     return all(isinstance(k, str) and _CID_RE.fullmatch(k) and isinstance(p, list) and len(p) == 2
                and all(validators.is_hex(x, 40) for x in p)

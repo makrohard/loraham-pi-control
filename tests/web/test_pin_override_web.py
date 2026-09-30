@@ -226,6 +226,7 @@ def test_consent_stale_page_says_review_again_without_a_token(web, monkeypatch, 
     assert box is not None
     scope = doc.within(box)
     assert "review the install again" in scope.text and B[:9] in scope.text
+    assert "the published binary or LHPC's pins changed since you confirmed" in scope.text
     assert scope.find("input", name="op", value="install")
     assert not scope.find("input", name="consent") and not scope.find("input", name="accept_pin_mismatch")
 
@@ -262,7 +263,40 @@ def test_the_pill_and_the_stack_page_warning_while_the_override_is_active(web, t
     warn = doc.by_id("pin-override-daemon")
     assert warn is not None and doc.within(warn).find("a", href="/self-update/apply")
     assert doc.find("span", class_="ver-yellow") and "over pin check" in doc.text
+    # the pill and the row link promise no more than the code does (gate 2's P4)
+    html = c.get("/stacks?open=daemon").get_data(as_text=True)
+    assert "it clears when the pins match" in html and "updating LHPC clears it" not in html
     # stale (a normal install wrote the receipt without the override): both are gone
     assert brx.write_receipt(svc._paths, dataclasses.replace(rec, override=None))
     doc = _stack_page(web(), "daemon")
     assert doc.by_id("pin-override-daemon") is None and "over pin check" not in doc.text
+
+
+def test_stack_page_consent_stale_with_no_mismatch_left(web, tmp_path, update_available):
+    """Gate 2's P2 in the console: the job's typed refusal with an EMPTY map (the binary now
+    matches the pins) says so, offers Install again, and does not tell to update LHPC."""
+    from lhpc.core.paths import Paths
+    update_available(True)
+    _failed_install_job(Paths(runtime_root=tmp_path), "daemon", "consent_stale", {})
+    doc = _stack_page(web(), "daemon")
+    box = doc.by_id("pin-refusal-daemon")
+    assert box is not None
+    scope = doc.within(box)
+    assert "the published binary matches this LHPC's pins" in scope.text
+    assert "Update LHPC first" not in scope.text
+    assert scope.find("input", name="op", value="install")
+
+
+def test_confirm_consent_stale_with_no_mismatch_left(web, csrf, published, update_available):
+    """Gate 2's P2 on the confirm page (the inline path): a token whose mismatch has gone (the
+    published binary now matches the pins) is refused with the way to review again, and without
+    the "Update LHPC first" block (nothing lags)."""
+    update_available(True)
+    cid = _daemon_cid()
+    published("daemon", cid, ControllerService()._binary_pins("daemon")[cid])   # at the pin
+    doc = _post(web(), csrf, op="update", target="daemon", source="binary",
+                accept_pin_mismatch="yes", consent="f" * 64)
+    assert "cannot proceed" in doc.text and "review the install again" in doc.text
+    assert "the published binary matches this LHPC's pins" in doc.text
+    assert doc.by_id("pin-selfupdate") is None and doc.by_id("pin-override") is None
+    assert doc.find("button", type="submit")

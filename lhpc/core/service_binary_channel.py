@@ -112,25 +112,31 @@ class BinaryChannelMixin:
         return self.binary_receipt_state(stack_id)[0] == "valid"
 
     def binary_behind(self, comp) -> str:
-        """"" unless `comp` runs from an installed binary artifact whose recorded commit for it
-        is not the manifest pin. Publishing a new artifact never touches an installed copy, and
+        """"" unless `comp` runs from an installed binary artifact whose recorded commit for it,
+        or for another component the artifact covers, differs from its pin without an exact
+        acceptance still in force. Publishing a new artifact never touches an installed copy, and
         a stale copy would be launched with argv it does not know (the RF-log options were the
         first such case) — so the start refuses, typed, before spawning anything."""
         if comp.source is None or not self.binary_covers(comp.id):
             return ""
         sid = self.stack_of(comp.id) or comp.id
         _state, rec, _why = self.binary_receipt_state(sid)
-        got = (rec.components if rec is not None else {}).get(comp.id, "")
-        want = comp.source.pin_commit
-        if not got or not want or got == want:
+        if rec is None:
             return ""
-        # The operator accepted exactly this pair at install (`--accept-pin-mismatch`) and the
-        # component is not clone_required now: the one helper decides, nothing here.
-        if _state == "valid" and comp.id in self.binary_active_override(sid, rec):
-            return ""
-        return (f"installed binary artifact is behind the manifest (built from {got[:9]}, "
-                f"the manifest pins {want[:9]}) — update it first (lhpc update {sid}, or "
-                f"lhpc install {sid} --source pinned)")
+        # EVERY component the artifact covers, not only the one being started (the daemon's
+        # binary also carries RadioLib): each commit differing from its pin needs an exact
+        # acceptance that is still in force; the one helper decides it, nothing here.
+        active = self.binary_active_override(sid, rec) if _state == "valid" else {}
+        pins = self._binary_pins(sid)
+        for cid in [comp.id, *sorted(c for c in pins if c != comp.id)]:
+            got, want = rec.components.get(cid, ""), pins.get(cid, "")
+            if not got or not want or got == want or cid in active:
+                continue
+            which = "" if cid == comp.id else f"{cid}: "
+            return (f"installed binary artifact is behind the manifest ({which}built from "
+                    f"{got[:9]}, the manifest pins {want[:9]}) — update it first (lhpc update "
+                    f"{sid}, or lhpc install {sid} --source pinned)")
+        return ""
 
     def binary_active_override(self, stack_id: str, rec=None) -> dict:
         """{cid: [installed, pin]}: the stack's recorded pin-mismatch acceptance that is still in

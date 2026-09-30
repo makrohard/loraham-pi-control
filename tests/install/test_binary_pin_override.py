@@ -212,6 +212,62 @@ def test_the_flagged_plan_names_the_command_that_repeats_the_acceptance(tmp_path
         "lhpc install daemon --source binary --accept-pin-mismatch --yes"]
 
 
+@pytest.mark.parametrize("op", ["install", "update"])
+def test_a_consent_token_is_refused_when_the_mismatch_has_gone(tmp_path, monkeypatch,
+                                                             stub_pipeline, op):
+    """Gate 2's P2: consent for mismatching artifact A; the index now serves artifact B, which
+    matches the pins. A's token matches nothing now: refused `consent_stale` with an empty map,
+    before any download or write (B was downloaded before)."""
+    svc = _svc(tmp_path, monkeypatch)
+    cid = _daemon_cid(svc)
+    monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "daemon", cid, A, stub_pipeline))
+    token = svc.binary_install("daemon", apply=False, accept_pin_mismatch="yes").data["consent"]
+    stub_pipeline(svc, download=_never_download)                  # B: the entry matches the pins
+    call = (svc.install if op == "install" else svc.update)
+    r = call("daemon", apply=True, source="binary", accept_pin_mismatch=token)
+    assert not r.ok and r.data["override_refused"] == "consent_stale"
+    assert r.data["pin_mismatch"] == {}
+    assert "review the install again" in r.summary
+    assert "The published binary or LHPC's pins changed since you confirmed" in r.summary
+    assert r.next_commands == ["lhpc install daemon --source binary --yes"]
+    assert not (tmp_path / "state" / "binary").exists()
+    # the bare flag (a human's dry run) with nothing to accept stays an ordinary plan
+    assert call("daemon", apply=False, source="binary", accept_pin_mismatch="yes").ok
+
+
+def test_a_stale_acceptance_of_a_covered_library_blocks_the_start(tmp_path, monkeypatch,
+                                                                  binary_receipt):
+    """Gate 2's P1: the daemon's artifact also covers RadioLib, which is never started itself.
+    Gate 2 judges EVERY covered component: a lagging library blocks the start unless its exact
+    pair is accepted and still in force; once its pin moves on, the start refuses before the
+    spawn."""
+    from lhpc.core import config as cfgmod
+    svc = _svc(tmp_path, monkeypatch)
+    cfgmod.save_hardware_setup(svc._paths, "uputronics")
+    svc._invalidate_config()
+    pins = svc._binary_pins("daemon")
+    lib = "radiolib"
+    daemon = svc.stack("daemon").component("loraham-daemon")
+    (tmp_path / daemon.source.path).mkdir(parents=True, exist_ok=True)
+    rec = binary_receipt(svc, commits={**pins, lib: A}, probe="loraham_daemon 0.9.0")
+    assert "(radiolib: built from" in svc.binary_behind(daemon)       # no acceptance: refused
+    assert brx.write_receipt(svc._paths, dataclasses.replace(rec, override=_override(lib, A, pins[lib])))
+    svc.invalidate_snapshot()
+    assert svc.binary_behind(daemon) == ""                             # the exact pair: allowed
+    moved = {**pins, lib: C}
+    monkeypatch.setattr(ControllerService, "_binary_pins", lambda self, sid: moved)
+    assert svc.binary_active_override("daemon") == {}
+    why = svc.binary_behind(daemon)
+    assert why.startswith("installed binary artifact is behind the manifest (radiolib: built from")
+    spawned = []
+    monkeypatch.setattr(type(svc._lifecycle()), "start",
+                        lambda self, *a, **k: spawned.append(a) or (_ for _ in ()).throw(
+                            AssertionError("spawned")))
+    r = svc.start("daemon", apply=True)
+    assert not r.ok and any(why in str(d) for d in r.details), (r.summary, r.details)
+    assert spawned == []                                               # never reached the spawn
+
+
 def test_a_bare_flag_does_not_apply_without_the_dry_runs_token(tmp_path, monkeypatch, stub_pipeline):
     svc = _svc(tmp_path, monkeypatch)
     monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "daemon", _daemon_cid(svc), A,

@@ -1100,7 +1100,8 @@ def _run(argv: list[str] | None = None) -> int:
                 # Read-only preview: render the plan FIRST (so the bootstrap precondition and adoptions
                 # always show), then REPORT the dep gate — it never preempts the plan. Exit nonzero when
                 # the plan itself failed, else when the gate blocks (still "not installable").
-                rc = _render(svc.install(args.stack, apply=False, source=_chan))
+                rc = _render(svc.install(args.stack, apply=False, source=_chan,
+                                         accept_pin_mismatch=args.accept_pin_mismatch))
                 if _chan == svc.BINARY_CHANNEL:
                     return rc                      # no BUILD deps are needed for a download
                 blocked = _print_install_dep_gate(svc, args.stack, check=True)

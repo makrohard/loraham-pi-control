@@ -123,3 +123,14 @@ def test_cli_meshcom_pin_refusal_with_flag_is_refused_typed(box, monkeypatch, ca
     assert seen["r"].data["override_refused"] == "clone_required"
     assert seen["r"].next_commands == ["lhpc self-update --apply",
                                        "lhpc install meshcom --source pinned --yes"]
+
+
+def test_cli_check_keeps_the_flag(box, monkeypatch, capsys):
+    """Gate 2's P3: `--check` (the read-only preview) forwards `--accept-pin-mismatch`: the
+    flagged plan, rc 0 (it used to drop the flag and show the refusal, rc 1)."""
+    cid = next(iter(ControllerService()._binary_pins("daemon")))
+    _published(monkeypatch, "daemon", cid, A)
+    assert cli_main.main(["install", "daemon", "--source", "binary", "--accept-pin-mismatch",
+                          "--check"]) == 0
+    out = capsys.readouterr().out
+    assert "Binary install plan for 'daemon'" in out and "OVER THE PIN CHECK" in out

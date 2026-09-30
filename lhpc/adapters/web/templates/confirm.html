@@ -117,7 +117,7 @@
         {% endif %}
       {% else %}
         <p class="depnote depnote-warn">This action cannot proceed (see above).</p>
-        {% if pin_refusal and selfupdate.update_available %}
+        {% if pin_refusal and pin_refusal.lagging and selfupdate.update_available %}
           {# A3 way (a), FIRST whenever an update is available: the published binary matches
              the next LHPC. #}
           <div class="depnote depnote-warn" id="pin-selfupdate"><strong>Update LHPC first</strong>

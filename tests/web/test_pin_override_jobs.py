@@ -135,3 +135,15 @@ def test_spawn_web_job_puts_the_token_on_the_install_argv(tmp_path, monkeypatch)
     svc.spawn_web_job("install", "daemon", source="binary")
     assert not any(a.startswith("--accept-pin-mismatch") for a in seen["argv"])
 
+
+
+def test_a_stale_consent_with_no_mismatch_left_is_transported_typed():
+    """Gate 2's P2: a stale consent whose mismatch has gone carries an EMPTY map; the job result
+    keeps it (only for `consent_stale`), so the console can show the review-again notice."""
+    ref = {"pin_mismatch": {}, "override_refused": "consent_stale"}
+    assert jobresult.valid_refusal(ref)
+    assert not jobresult.valid_refusal({"pin_mismatch": {}, "override_refused": ""})
+    assert not jobresult.valid_refusal({"pin_mismatch": {}, "override_refused": "clone_required"})
+    res = ActionResult(False, "x", data={"binary_failed": True, "pin_mismatch": {},
+                                         "override_refused": "consent_stale"})
+    assert jobresult.refusal_from(res) == ref
