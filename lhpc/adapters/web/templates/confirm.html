@@ -118,8 +118,8 @@
       {% else %}
         <p class="depnote depnote-warn">This action cannot proceed (see above).</p>
         {% if pin_refusal and pin_refusal.lagging and selfupdate.update_available %}
-          {# A3 way (a), FIRST whenever an update is available: the published binary matches
-             the next LHPC. #}
+          {# A3 way (a): when an LHPC update is available it is offered FIRST; whether the
+             published binary matches the updated pins is not known here. #}
           <div class="depnote depnote-warn" id="pin-selfupdate"><strong>Update LHPC first</strong>
             (about a minute), then {{ op }} again.
             <a class="btnlink" href="{{ url_for('self_update_apply') }}">Update LHPC &rarr;</a></div>

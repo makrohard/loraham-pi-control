@@ -219,13 +219,17 @@ def test_the_helper_at_the_boundaries(days_left, server_state, client_state):
     assert not s["over_cap"] and not s["provisional"]
 
 
-def test_the_helper_at_exactly_the_warning_and_the_end():
+@pytest.mark.parametrize("warn_days", [pki.SERVER_WARN_DAYS, pki.CLIENT_WARN_DAYS])
+def test_the_helper_at_exactly_the_warning_and_the_end(warn_days):
+    """"From 30/60 days" is inclusive: exactly that much left is "soon" (showing that many days);
+    one second more is still "ok"."""
     na = _dt.datetime(2030, 1, 1, tzinfo=_dt.UTC)
     nb = na - 800 * DAY
-    assert pki.expiry_view(nb, na, warn_days=30, now=na - 30 * DAY)["state"] == "ok"
-    assert pki.expiry_view(nb, na, warn_days=30, now=na - 30 * DAY + _dt.timedelta(seconds=1)
-                           )["state"] == "soon"
-    assert pki.expiry_view(nb, na, warn_days=30, now=na)["state"] == "expired"
+    exact = pki.expiry_view(nb, na, warn_days=warn_days, now=na - warn_days * DAY)
+    assert exact["state"] == "soon" and exact["days_left"] == warn_days
+    assert pki.expiry_view(nb, na, warn_days=warn_days,
+                           now=na - warn_days * DAY - _dt.timedelta(seconds=1))["state"] == "ok"
+    assert pki.expiry_view(nb, na, warn_days=warn_days, now=na)["state"] == "expired"
 
 
 @pytest.mark.parametrize("days_left, doctor_ok, words", [

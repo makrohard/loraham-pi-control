@@ -6,6 +6,8 @@
   first newline, is kept in `<name>.prev.log`): the run logs (also at a start), the controller's four unit logs and
   nginx's two; it also tries the Meshtastic trace's 5 MB roll. The pruner no longer deletes a controller log.
   See docs/maintenance.md, "Run-log cap".
+- The certificate end-date marks start at exactly 60 days (client certificates) and 30 days (the server
+  certificate) before the end; before, a certificate with exactly that much time left was still shown as fine.
 
 ## 0.11.5
 
@@ -14,8 +16,8 @@
   or fewer); one in the fixed provisional window (a PKI made without a verified clock and not yet normalised) is
   not capped (over the cap while it is provisional). Its end date shows in the console, `lhpc webserver status`
   and `lhpc doctor` (an expired one makes doctor non-OK), and active client certificates are marked from 60 days
-  before they expire. An existing 826-day certificate stays until `lhpc webserver tls-renew`, then
-  `lhpc webserver apply`.
+  before they expire. Upgrading does not replace an existing 826-day certificate; to replace it by hand:
+  `lhpc webserver tls-renew`, then `lhpc webserver apply`.
 - While the PKI is still marked provisional, the server certificate's replacement (`lhpc webserver expose`,
   the Settings Apply) and the reissue when the box joins a WLAN are dated from the clock once it is verified,
   as `webserver init` does; before, they kept the fixed provisional window until the console's normalisation

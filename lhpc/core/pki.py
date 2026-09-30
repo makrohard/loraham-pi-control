@@ -684,14 +684,16 @@ RENEW_HINT = "lhpc webserver tls-renew, then lhpc webserver apply"
 def expiry_view(not_before, not_after, *, warn_days: int, now=None) -> dict:
     """{date, days_left, state, over_cap, provisional} for one certificate. `not_before` and
     `not_after` are aware datetimes or ISO strings. `days_left` counts whole days (a leaf that ends
-    in 29 days and 23 hours has 29). `state`: "expired" once `not_after` has passed, "soon" below
-    `warn_days`, else "ok". `over_cap` compares the whole span with `SERVER_LEAF_MAX_SPAN`."""
+    in 29 days and 23 hours has 29). `state`: "expired" once `not_after` has passed, "soon" from
+    `warn_days` before it (at most `warn_days` left), else "ok". `over_cap` compares the whole span
+    with `SERVER_LEAF_MAX_SPAN`."""
     def _dt_of(v):
         return v if isinstance(v, _dt.datetime) else _dt.datetime.fromisoformat(v)
     nb, na = _dt_of(not_before), _dt_of(not_after)
     now = now or _now()
     days_left = int((na - now).total_seconds() // 86_400)
-    state = "expired" if na <= now else ("soon" if days_left < warn_days else "ok")
+    state = ("expired" if na <= now
+             else "soon" if na - now <= _dt.timedelta(days=warn_days) else "ok")
     return {"date": na.date().isoformat(), "days_left": days_left, "state": state,
             "over_cap": (na - nb) > SERVER_LEAF_MAX_SPAN,
             "provisional": _is_provisional_window(nb, na)}
