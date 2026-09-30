@@ -111,6 +111,27 @@ def test_trigger_refuses_unsafe_identity(tmp_path, monkeypatch, op_svc):
     assert not (tmp_path / "state" / "selfupdate.request").exists()
 
 
+def test_trigger_preflight_runs_every_gate_and_writes_nothing(tmp_path, monkeypatch, op_svc):
+    """`queue=False` is the console's preflight before its "Restarting" page (C18): the same gates,
+    under the same admission, and no marker — the marker is written after the response was
+    closed."""
+    req = tmp_path / "state" / "selfupdate.request"
+    svc, fake = op_svc(units=True, invocation=True)
+    _seed_available(tmp_path, ok=True, status="ok", reason="ok", checked_at=1)
+    r = svc.self_update_trigger(overwrite=True, queue=False)
+    assert r.ok and r.data == {"preflight": True, "mode": "overwrite"} and not req.exists()
+    r = svc.self_update_repair_and_trigger(overwrite=False, queue=False)
+    assert r.ok and r.data["preflight"] and not req.exists()
+    _write_request(tmp_path, "normal")                               # a request already pending
+    r = svc.self_update_trigger(queue=False)
+    assert not r.ok and r.data.get("already_pending") and req.read_text() == "normal\n"
+    req.unlink()
+    _seed_available(tmp_path, ok=False, status="unsafe", reason="bad", checked_at=1)
+    assert svc.self_update_trigger(queue=False).data.get("identity_unsafe") and not req.exists()
+    svc, fake = op_svc(units=True, invocation=False)                 # a foreground console
+    assert svc.self_update_trigger(queue=False).data.get("not_managed") and not req.exists()
+
+
 def _write_request(tmp_path, mode="normal"):
     (tmp_path / "state").mkdir(parents=True, exist_ok=True)
     (tmp_path / "state" / "selfupdate.request").write_text(mode + "\n")

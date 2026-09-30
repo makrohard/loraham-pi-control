@@ -305,7 +305,7 @@ def test_updating_page_is_static_no_script(monkeypatch, web, csrf):
     # "no script of its own" = nothing beyond the shared scripts every page loads from base.
     from lhpc.core.service_base import ActionResult
     monkeypatch.setattr(ControllerService, "self_update_repair_and_trigger",
-                        lambda self, overwrite=False: ActionResult(True, "updater started"))
+                        lambda self, overwrite=False, **_k: ActionResult(True, "updater started"))
     c = web()
 
     def scripts(resp):
@@ -1233,7 +1233,7 @@ def test_self_update_one_click_confirm_then_trigger(tmp_path, monkeypatch, web, 
                                 "branch": "main"}, {})     # available checkout (cached)
     monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
     triggered = {}
-    def fake_trigger(self, *, overwrite=False):
+    def fake_trigger(self, *, overwrite=False, **_k):
         triggered["overwrite"] = overwrite
         return ActionResult(True, "Updater started.", data={"triggered": True})
     monkeypatch.setattr(ControllerService, "self_update_repair_and_trigger", fake_trigger)
@@ -1412,7 +1412,7 @@ def test_self_update_dirty_confirm_consent_selects_overwrite_unit(tmp_path, monk
     monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: True)
     seen = {}
     monkeypatch.setattr(ControllerService, "self_update_repair_and_trigger",
-                        lambda self, *, overwrite=False: (seen.__setitem__("ow", overwrite),
+                        lambda self, *, overwrite=False, **_k: (seen.__setitem__("ow", overwrite),
                                                           ActionResult(True, "started",
                                                                        data={"triggered": True}))[1])
     c = web()
@@ -1434,7 +1434,7 @@ def test_self_update_stale_overwrite_tick_downgrades_on_clean_tree(tmp_path, mon
     monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
     seen = {}
     monkeypatch.setattr(ControllerService, "self_update_repair_and_trigger",
-                        lambda self, *, overwrite=False: (seen.__setitem__("ow", overwrite),
+                        lambda self, *, overwrite=False, **_k: (seen.__setitem__("ow", overwrite),
                                                           ActionResult(True, "started",
                                                                        data={"triggered": True}))[1])
     c = web()
@@ -1453,7 +1453,7 @@ def test_self_update_diverged_confirm_offers_override(tmp_path, monkeypatch, web
     monkeypatch.setattr(ControllerService, "self_update_ff_blocked", lambda self: True)
     seen = {}
     monkeypatch.setattr(ControllerService, "self_update_repair_and_trigger",
-                        lambda self, *, overwrite=False: (seen.__setitem__("ow", overwrite),
+                        lambda self, *, overwrite=False, **_k: (seen.__setitem__("ow", overwrite),
                                                           ActionResult(True, "started",
                                                                        data={"triggered": True}))[1])
     c = web()
@@ -1511,13 +1511,79 @@ def test_self_update_trigger_failure_flashes_and_stays(tmp_path, monkeypatch, we
                                 "branch": "main"}, {})
     monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
     monkeypatch.setattr(ControllerService, "self_update_repair_and_trigger",
-                        lambda self, *, overwrite=False: ActionResult(
+                        lambda self, *, overwrite=False, **_k: ActionResult(
                             False, "Could not start the updater service (lhpc-selfupdate.service).",
                             data={"trigger_failed": True}))
     c = web()
     tok = csrf(c, "/stacks")
     body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
     assert "Could not start the updater service" in body and "reconnects" not in body
+
+
+def _managed_update_box(tmp_path, monkeypatch):
+    """The real trigger's gates all pass: the managed web unit, canonical units, no job, an
+    available and safe checkout. Returns the request marker's path and the deferred calls."""
+    from lhpc.adapters.web import app as app_mod
+    from lhpc.core.services import ControllerService
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    monkeypatch.setenv("INVOCATION_ID", "x")
+    monkeypatch.setattr(ControllerService, "updater_integration",
+                        lambda self: {"status": "ok", "request": "absent"})
+    monkeypatch.setattr(ControllerService, "active_jobs", lambda self, *a, **k: [])
+    monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
+    monkeypatch.setattr(ControllerService, "self_update_status",
+                        lambda self: {"available": True, "identity": {"status": "ok"}})
+    deferred = []
+    monkeypatch.setattr(app_mod, "_defer", lambda delay, fn: deferred.append((delay, fn)),
+                        raising=False)
+    return tmp_path / "state" / "selfupdate.request", deferred
+
+
+def test_the_restarting_page_is_answered_before_the_update_request_exists(tmp_path, monkeypatch,
+                                                                          web, csrf):
+    """C18: the request marker starts the updater, whose stop kills this console at once; written
+    before the page, it lost the page to nginx's 502 ("Not responding") whenever the stop won.
+    The page is answered first; the marker is written by a call deferred after the response."""
+    req, deferred = _managed_update_box(tmp_path, monkeypatch)
+    c = web()
+    tok = csrf(c, "/stacks")
+    r = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"})
+    body = r.get_data(as_text=True)
+    r.close()                                                        # the WSGI close, as waitress does
+    assert r.status_code == 200 and "The console is stopping to update itself" in body
+    assert not req.exists()                                          # no marker with the page
+    assert [d for d, _fn in deferred] == [1.0]
+    deferred[0][1]()                                                 # the deferred call
+    assert req.read_text() == "normal\n"
+
+
+def test_a_refused_preflight_flashes_and_defers_nothing(tmp_path, monkeypatch, web, csrf):
+    req, deferred = _managed_update_box(tmp_path, monkeypatch)
+    req.write_text("normal\n")                                       # a request already pending
+    c = web()
+    tok = csrf(c, "/stacks")
+    r = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"})
+    body = r.get_data(as_text=True)
+    r.close()
+    assert "already pending" in body and "The console is stopping" not in body
+    assert deferred == [] and req.read_text() == "normal\n"
+
+
+def test_a_refusal_after_the_page_is_logged_and_writes_nothing(tmp_path, monkeypatch, web, csrf,
+                                                               capsys):
+    """A request that appears between the page and the deferred call (a second click elsewhere)
+    is refused there; the page is already shown, so the reason goes to the console's log."""
+    req, deferred = _managed_update_box(tmp_path, monkeypatch)
+    c = web()
+    tok = csrf(c, "/stacks")
+    c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).close()
+    assert len(deferred) == 1
+    req.write_text("overwrite\n")
+    deferred[0][1]()
+    assert req.read_text() == "overwrite\n"
+    assert "WARN one-click update not queued after the Restarting page: An update request is " \
+           "already pending" in capsys.readouterr().err
 
 
 def test_last_apply_outcome_renders_from_cache(tmp_path, web):

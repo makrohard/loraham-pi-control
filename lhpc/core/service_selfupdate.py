@@ -793,13 +793,14 @@ class SelfUpdateOpsMixin:
 
     # ---- web trigger: write the exclusive request marker (NO systemctl, NO bus) ---------------
 
-    def self_update_trigger(self, *, overwrite: bool = False) -> ActionResult:
+    def self_update_trigger(self, *, overwrite: bool = False, queue: bool = True) -> ActionResult:
         """WEB stage-2: admit exactly one update request by EXCLUSIVELY creating the in-root
         request marker (payload `normal`|`overwrite` — a 1-bit selector the helper re-validates).
         A static .path unit consumes it. Refuses unless this process is the MANAGED web unit
         (INVOCATION_ID) with a byte-exact integration, no active job, an available+safe checkout,
         and no pending/in-flight/uninstall evidence — so a foreground console or a tampered unit
-        never writes a request nobody safely consumes."""
+        never writes a request nobody safely consumes. `queue=False` is the preflight: every gate
+        runs the same way, and it returns just before the marker would be written (nothing is)."""
         from . import runtime_fs, updater_units
         if not os.environ.get("INVOCATION_ID"):
             return ActionResult(
@@ -856,6 +857,9 @@ class SelfUpdateOpsMixin:
             if blk:
                 return ActionResult(False, f"Self-update blocked: {blk[0]}.",
                                     data={f"blocked_by_{blk[1]}": True})
+            if not queue:
+                return ActionResult(True, "Update can be queued.", data={"preflight": True,
+                                                                          "mode": mode})
             try:
                 m = runtime_fs.open_marker_excl(self._paths,
                                                 self._paths.under(*updater_units.REQUEST_REL),
@@ -1369,7 +1373,8 @@ class SelfUpdateOpsMixin:
                     f"loginctl enable-linger {user}")
         return f"  linger: enabled for {user} — the console now autostarts at boot"
 
-    def self_update_repair_and_trigger(self, *, overwrite: bool = False) -> ActionResult:
+    def self_update_repair_and_trigger(self, *, overwrite: bool = False,
+                                       queue: bool = True) -> ActionResult:
         """WEB one-click that also MIGRATES a non-canonical same-root deployment (old/`%h` units, no
         `.path`) to the canonical set, then updates — in one click. Compatibility bridge ONLY: it
         needs the user bus, which succeeds only while the console runs the not-yet-hardened unit;
@@ -1392,7 +1397,7 @@ class SelfUpdateOpsMixin:
         integ = self.updater_integration()
         status = integ["status"]
         if status == "ok":
-            return self.self_update_trigger(overwrite=overwrite)         # nothing to migrate
+            return self.self_update_trigger(overwrite=overwrite, queue=queue)   # nothing to migrate
         # Refuse recovery / pending-request / uninstall BEFORE any preflight or write.
         if status == "recovery_required":
             return ActionResult(False, "A previous update needs recovery first — run "
@@ -1428,7 +1433,7 @@ class SelfUpdateOpsMixin:
             return ActionResult(False, "Unit repair did not fully converge — run "
                                 "`lhpc self-update --repair-integration` from a shell.",
                                 data={"repair_incomplete": True})
-        return self.self_update_trigger(overwrite=overwrite)
+        return self.self_update_trigger(overwrite=overwrite, queue=queue)
 
     def _write_root_marker(self) -> None:
         import time as _time

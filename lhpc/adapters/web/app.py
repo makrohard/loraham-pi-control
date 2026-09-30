@@ -20,6 +20,7 @@ from __future__ import annotations
 import ipaddress as _ipaddress
 import logging as _logging
 import secrets as _secrets
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -46,6 +47,19 @@ from lhpc.core.status import rollup_states, stack_dependencies, summarize
 from lhpc.version import __version__
 
 _RUNNING = ("running", "degraded")
+
+# The one-click update's request marker is written this long after the "Restarting" response was
+# closed (the delay covers any rest waitress still flushes): the marker starts the updater, whose
+# Conflicts= stops this console at once, so a marker written before the page lost the page to
+# nginx's 502 when the stop won.
+_UPDATE_QUEUE_DELAY_S = 1.0
+
+
+def _defer(delay: float, fn: Callable[[], None]) -> None:
+    """Run `fn` once, `delay` seconds from now, on a daemon thread (tests replace this)."""
+    t = threading.Timer(delay, fn)
+    t.daemon = True
+    t.start()
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
 
@@ -1322,11 +1336,23 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # no .path) to the canonical set first — all in this one click.
         overwrite = (request.form.get("overwrite") == "yes"
                      and (service.self_update_local_dirty() or service.self_update_ff_blocked()))
-        res = service.self_update_repair_and_trigger(overwrite=overwrite)
+        # Every gate runs NOW (a refusal stays on /stacks); the marker itself is written only
+        # after the response was closed, with a 1 s delay for any remaining flush — see
+        # _UPDATE_QUEUE_DELAY_S.
+        res = service.self_update_repair_and_trigger(overwrite=overwrite, queue=False)
         if not res.ok:
             flash(res.summary, "warn")
             return _render_stacks()
-        return render_template("updating.html", version=__version__)
+
+        def _queue_update() -> None:
+            late = service.self_update_trigger(overwrite=overwrite)
+            if not late.ok:
+                print(f"WARN one-click update not queued after the Restarting page: {late.summary}",
+                      file=sys.stderr, flush=True)
+
+        resp = Response(render_template("updating.html", version=__version__))
+        resp.call_on_close(lambda: _defer(_UPDATE_QUEUE_DELAY_S, _queue_update))
+        return resp
 
     @app.get("/stacks/<stack_id>")
     def stack_detail(stack_id: str):

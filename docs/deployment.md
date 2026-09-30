@@ -52,13 +52,15 @@ Back up `config/`, `profiles/` and the app data under `state/` first
 ([backup & restore](operations.md#backup--restore)).
 
 - **One-click (normal path).** The console **cannot** run `systemctl` — its unit blocks the
-  user D-Bus (`InaccessiblePaths=%t/bus %t/systemd/private`). "Update now" writes an
-  exclusively-created request marker (`state/selfupdate.request`, payload `normal`|`overwrite`);
+  user D-Bus (`InaccessiblePaths=%t/bus %t/systemd/private`). "Update & restart now" checks every
+  gate, answers with the "Restarting" page, and about 1 s after that response was closed (the
+  delay covers any remaining flush) writes an exclusively-created request marker
+  (`state/selfupdate.request`, payload `normal`|`overwrite`);
   the static `lhpc-selfupdate.path` unit starts the sandboxed `lhpc-selfupdate.service`, which
   claims it (rename to `state/selfupdate.inflight` with process identity), applies (exclusive
   lock, live identity check, dirty refusal), syncs the venv, and records the outcome. Console
   stop/restart is declarative (`Conflicts`/`After` + `OnSuccess`/`OnFailure=lhpc-web.service`),
-  not scripted. The browser reconnects on its own.
+  not scripted. The "Restarting" page does not reload itself; its button returns to the console.
 - **Canonical units are the contract.** One-click is offered only when the console is the
   managed unit (`INVOCATION_ID`) and the units are byte-for-byte canonical; a foreign, drop-in or
   masked unit is left for manual resolution. If the integration needs repair, run

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- After "Update & restart now" the console shows its "Restarting" page before it stops; before, a fast restart
+  could stop it first and the browser got the proxy's "Not responding" page instead (the update itself was not
+  affected). Effective from the next update after this version: the page comes from the console being updated.
+
 ## 0.11.7
 
 - `lhpc secrets backup` writes one plain file (0600, in clear) with the box's certificates, secrets and stack

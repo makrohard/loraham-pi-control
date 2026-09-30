@@ -397,14 +397,17 @@ from lhpc.core.probes.backends import FakeSystem  # noqa: E402
 
 
 @pytest.fixture
-def web(tmp_path):
+def web(tmp_path, monkeypatch):
     """A factory: `web()` → a Flask test client over `ControllerService(FakeSystem(...))` rooted
     at `tmp_path`. Keyword arguments: `cmdlines` (FakeSystem's `cmdlines_data`), `commands`
     (FakeSystem's exact-argv results), `manifest` (a manifest path), `paths` (a `Paths`),
     `system` (a ready System), `guard` (a callable wrapping the built service — e.g. a read-only
     guard that fails the test on a mutating call), `service_factory` (bring your own — the other
     arguments are then ignored). The app is reachable as `client.application` for the rare test
-    that flips a Flask config flag."""
+    that flips a Flask config flag. The one-click update's deferred marker write (`app._defer`)
+    never runs here; a test that needs it replaces `_defer` itself."""
+    from lhpc.adapters.web import app as _app_mod
+    monkeypatch.setattr(_app_mod, "_defer", lambda delay, fn: None, raising=False)
     def _make(*, cmdlines=None, commands=None, manifest=None, paths=None, system=None,
               guard=None, service_factory=None):
         if service_factory is None:
