@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.6
 
 - The console's pass tries to cut long-lived logs above an 8 MiB trigger (at most the last 1 MiB, from just after its
   first newline, is kept in `<name>.prev.log`): the run logs (also at a start), the controller's four unit logs and
