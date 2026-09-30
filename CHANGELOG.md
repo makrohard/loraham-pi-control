@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.7
 
 - `lhpc secrets backup` writes one plain file (0600, in clear) with the box's certificates, secrets and stack
   identities; `lhpc secrets restore` checks it, prints what it would overwrite, and applies it with `--yes` (nothing
