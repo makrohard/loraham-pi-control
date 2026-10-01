@@ -938,6 +938,13 @@ def test_route_saves_and_redirects_to_the_panel(tmp_path, web, csrf):
     assert svc.config().stackweb["meshcom"].port == 8444
 
 
+def test_route_refuses_a_non_numeric_port_typed(tmp_path, web, csrf):
+    c, svc = _app(web, tmp_path)
+    r = c.post("/stacks/meshcom/webserver", data={"_csrf": csrf(c), "mode": "local", "port": "84x3"})
+    assert r.status_code == 302                                   # a typed refusal, not a 500
+    assert svc.config().stackweb.get("meshcom") is None
+
+
 def test_route_maps_the_typed_phrase_like_webserver_configure(tmp_path, web, csrf):
     c, svc = _app(web, tmp_path)
     base = {"_csrf": csrf(c), "mode": "public", "port": "8444", "cidrs": "0.0.0.0/0"}

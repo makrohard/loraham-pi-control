@@ -1246,6 +1246,10 @@ class WebserverOpsMixin:
             return ActionResult(False, f"'{page_id}' names no web UI to proxy",
                                 details=["proxied pages: " + (", ".join(self.stack_web_eligible())
                                                               or "none")])
+        try:
+            port = None if port is None else int(port)
+        except ValueError:
+            return ActionResult(False, f"invalid web-UI config: port {port!r} is not a number")
         ws = self.config().webserver
         current = self.config().stackweb.get(page_id) or StackWebConfig(stack_id=page_id)
         used = {c.port for sid, c in self.config().stackweb.items() if sid != page_id and c.enabled}
