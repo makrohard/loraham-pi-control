@@ -2247,6 +2247,7 @@ class MaintenanceOpsMixin:
             return ActionResult(False, f"another uninstall-guard operation is in progress ({busy}) — "
                                 "retry.", data={"guard_contended": True})
 
+    @invalidates_snapshot
     def uninstall(self, target: str, apply: bool = False) -> ActionResult:
         """Remove managed runtime sources for `target`. Refuses if a target
         component is running; never removes a source still referenced by another

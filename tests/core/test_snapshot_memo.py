@@ -80,6 +80,17 @@ def test_mutating_ops_drop_the_memo(tmp_path):
     assert svc.build_snapshot() is not a
 
 
+def test_uninstall_drops_the_memo(tmp_path, monkeypatch):
+    # uninstall's locked recheck caches the PRE-removal state; a later read in the same thread must
+    # reassess, never serve that snapshot with the removed sources still installed.
+    svc = _svc(tmp_path)
+    n = _count_assessments(monkeypatch)
+    assert svc.uninstall("kiss", apply=True).ok
+    n.clear()
+    svc.build_snapshot()
+    assert len(n) == 1
+
+
 def test_nested_public_stop_refreshes_the_outer_readers(tmp_path):
     # The owner-stop window inside start(): after an inner public stop returns, the outer op's next
     # build_snapshot() must recompute (the inner exit-invalidation is what restores the guarantee).
