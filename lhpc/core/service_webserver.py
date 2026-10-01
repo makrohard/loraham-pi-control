@@ -2283,6 +2283,7 @@ class WebserverOpsMixin:
         if not ok:
             return ActionResult(False, f"nginx config invalid — not starting ({msg})")
         _ws.promote_config(self._paths)
+        was_running = _ws.nginx_master_active(self._paths)
         r = self._system.runner.run(
             ["systemctl", "--user", "enable", "--now", "lhpc-nginx.service"], 20.0)
         if getattr(r, "not_found", False) or r.returncode != 0:
@@ -2290,12 +2291,24 @@ class WebserverOpsMixin:
             return ActionResult(False, "could not enable/start lhpc-nginx.service",
                                 details=[detail[-1] if detail else "systemctl failed"],
                                 next_commands=["systemctl --user enable --now lhpc-nginx.service"])
+        if was_running:
+            # `enable --now` neither restarts nor reloads a running unit: restart it so the config
+            # just promoted is the one serving (a restart also rebinds a moved listener).
+            rstate, rmsg = _ws.restart(self._system, self._paths)
+            if rstate != "restarted":
+                return ActionResult(False, f"nginx restart failed: {rmsg}",
+                                    next_commands=["systemctl --user restart lhpc-nginx.service",
+                                                   "lhpc webserver logs"])
         ev = self._ws_verify(cfg, proxies)
-        # Same gate as apply: only a listener-verified start records the applied policy. A start
-        # whose listeners do not match leaves the previous snapshot, so the pill stays conservative.
-        if (ev["checks"].get("remote_listener_matches") == "ok"
+        # Same gate as apply: only a listener-verified start records the applied policy AND
+        # reports success. A start whose listeners do not match leaves the previous snapshot.
+        if not (ev["checks"].get("remote_listener_matches") == "ok"
                 and ev["checks"].get("stack_listener_matches", "ok") == "ok"):
-            self._record_applied(cfg, proxies)
+            scope = ev.get("effective", {}).get("listener_scope", "unknown")
+            return ActionResult(False, f"nginx started but its listeners do not match the "
+                                f"configuration (console listener '{scope}')",
+                                next_commands=["lhpc webserver logs"], data=ev)
+        self._record_applied(cfg, proxies)
         # The console's real URL, from its own scheme/exposure — never a hardcoded https, and never
         # `https://0.0.0.0:8443/`, which is a bind wildcard and not an address anyone can visit.
         urls = _ws.console_urls(cfg)

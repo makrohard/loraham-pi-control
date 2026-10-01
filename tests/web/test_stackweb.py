@@ -1133,13 +1133,20 @@ def test_no_auth_console_with_a_cert_auth_proxy_checks_the_client_ca(tmp_path):
     assert checks["client_ca"] == "failed" and checks["crl"] == "failed"
 
 
-def _start_svc(tmp_path, monkeypatch, listeners=()):
+_LOOPBACK_8443 = ({"family": "ipv4", "ip": "127.0.0.1", "port": 8443, "inode": 1},)
+_EXPOSED_8443 = ({"family": "ipv4", "ip": "0.0.0.0", "port": 8443, "inode": 1},)
+
+
+def _start_svc(tmp_path, monkeypatch, listeners=_LOOPBACK_8443, fake_out=None):
     monkeypatch.delenv("INVOCATION_ID", raising=False)
     staged = str(Paths(runtime_root=tmp_path).under(*webserver.NGINX_CONF_STAGED))
     cmds = {("nginx", "-v"): CR(0, "", "1.0"),
             ("nginx", "-t", "-c", staged): CR(0, "", "ok"),
-            ("systemctl", "--user", "enable", "--now", "lhpc-nginx.service"): CR(0, "", "")}
+            ("systemctl", "--user", "enable", "--now", "lhpc-nginx.service"): CR(0, "", ""),
+            ("systemctl", "--user", "restart", "lhpc-nginx.service"): CR(0, "", "")}
     fake = FakeSystem(commands=cmds, listeners=[Listener(**l) for l in listeners])
+    if fake_out is not None:
+        fake_out.append(fake)
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     return ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
 
@@ -1166,8 +1173,33 @@ def test_start_service_url_is_never_the_bind_wildcard(tmp_path, monkeypatch):
     cfgmod.save_webserver_config(p, scheme="http", access_mode="no-auth",
                                  bind="0.0.0.0", remote_exposed=True,
                                  allowed_cidrs=["192.168.0.0/24"])
-    r = _start_svc(tmp_path, monkeypatch).webserver_start_service()
+    r = _start_svc(tmp_path, monkeypatch, listeners=_EXPOSED_8443).webserver_start_service()
     assert r.ok and "0.0.0.0" not in r.summary
+
+
+def test_start_service_fails_when_no_listener_comes_up(tmp_path, monkeypatch):
+    p = Paths(runtime_root=tmp_path)
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    cfgmod.save_webserver_config(p, scheme="http", access_mode="no-auth")
+    r = _start_svc(tmp_path, monkeypatch, listeners=()).webserver_start_service()
+    assert not r.ok
+    assert r.data["checks"]["remote_listener_matches"] == "failed"
+
+
+def test_start_service_restarts_an_already_running_nginx_onto_the_new_config(tmp_path, monkeypatch):
+    # `enable --now` neither restarts nor reloads a running unit: the promoted config would never
+    # be loaded, yet the console was reported as started at the new URL.
+    import os
+
+    from lhpc.core import runtime_fs
+    p = Paths(runtime_root=tmp_path)
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    cfgmod.save_webserver_config(p, scheme="http", access_mode="no-auth")
+    runtime_fs.write_marker(p, p.under(*webserver.NGINX_PID), str(os.getpid()))   # nginx is up
+    fakes = []
+    r = _start_svc(tmp_path, monkeypatch, fake_out=fakes).webserver_start_service()
+    assert r.ok, r.summary
+    assert ["systemctl", "--user", "restart", "lhpc-nginx.service"] in fakes[0].calls
 
 
 def test_console_urls_use_the_configured_scheme(monkeypatch):

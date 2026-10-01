@@ -1281,7 +1281,7 @@ def test_start_service_enables_and_starts(monkeypatch, tmp_path):
         ("nginx", "-v"): CR(0, "", ""),
         ("nginx", "-t", "-c", _staged_webserver_corrections(paths)): CR(0, "", "ok"),
         ("systemctl", "--user", "enable", "--now", "lhpc-nginx.service"): CR(0, "", ""),
-    })
+    }, listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8443, inode=1)])  # the started console
     svc = ControllerService(system=fake.system, paths=paths)
     r = svc.webserver_start_service()
     assert r.ok and "https://" in r.summary
