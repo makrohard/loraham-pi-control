@@ -676,7 +676,11 @@ class SelfUpdateOpsMixin:
             if not remaining and selfupdate.clear_migration_journal(self._paths):
                 selfupdate.delete_anchor(self._system, hook["txid"])
         elif not res.get("ok") and hook["written"]:          # git failed after prepare -> drop anchor+journal
-            if selfupdate.clear_migration_journal(self._paths):
+            # ...only when HEAD is positively still at from_head (git never moved the ref): a git
+            # killed AFTER the ref moved left HEAD at to_head, and an unreadable HEAD proves nothing,
+            # so either keeps this record for the next run to promote and migrate, or report.
+            if (selfupdate.local_state(self._system).get("head", "") == hook["from"]
+                    and selfupdate.clear_migration_journal(self._paths)):
                 selfupdate.delete_anchor(self._system, hook["txid"])
 
         # FW P1-2 B/C: on a real advance, the firewall scripts + LHPC-owned nginx unit must be

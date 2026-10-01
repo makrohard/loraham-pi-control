@@ -734,6 +734,55 @@ def test_real_apply_created_journal_migrates_genuine_old_default(tmp_path, monke
     assert svc2.stack_config("s")["ropt"] == "NEW"
 
 
+@pytest.mark.parametrize("head_after", ["to", "unreadable", "from"])
+def test_failed_apply_with_head_at_to_head_keeps_the_prepared_record(tmp_path, monkeypatch, head_after):
+    """git killed by its timeout AFTER the ref moved: HEAD is at to_head, so the migration intent
+    and its anchor must survive — the next apply promotes and migrates them. An unreadable HEAD
+    proves nothing either way and keeps them too; only a HEAD positively at from_head (git never
+    moved the ref) drops them."""
+    from lhpc.core import config as cfgmod
+    _o, work, up = gitrepo.repos(tmp_path)
+    svc, _man, _rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
+    from_head = _head(work)
+    (up / "manifest.toml").write_text(_rf_manifest("NEW"))
+    gitrepo.git(up, "add", "manifest.toml")
+    gitrepo.git(up, "commit", "-m", "NEW")
+    gitrepo.git(up, "push", "-q", "origin", "main")
+    cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
+    runner = svc._system.runner
+    real_run = runner.run
+    failed = []
+
+    def merge_times_out(argv, *a, **k):
+        if "merge" in argv and "--ff-only" in argv:
+            if head_after != "from":
+                real_run(argv, *a, **k)                                  # the ref moves, then the kill
+            failed.append(True)
+            return CommandResult(124, "", "timed out")
+        return real_run(argv, *a, **k)
+    monkeypatch.setattr(runner, "run", merge_times_out)
+    if head_after == "unreadable":
+        real_local_state = selfupdate.local_state
+        monkeypatch.setattr(selfupdate, "local_state", lambda system: (
+            {**real_local_state(system), "head": ""} if failed else real_local_state(system)))
+    res = svc.self_update_apply()
+    assert not res.ok and failed
+    anchors = runner.run(["git", "-C", str(work), "for-each-ref", selfupdate._ANCHOR_NS], timeout=5.0)
+    journal = selfupdate.read_migration_journal(svc._paths)[0]
+    if head_after == "from":
+        assert _head(work) == from_head                                  # git never moved the ref
+        assert journal is None and anchors.stdout.strip() == ""          # nothing to recover: dropped
+        return
+    assert _head(work) == gitrepo.git(up, "rev-parse", "HEAD")           # the ref DID move
+    assert journal is not None and anchors.stdout.strip() != ""          # intent + anchor kept
+    monkeypatch.setattr(runner, "run", real_run)
+    if head_after == "unreadable":
+        monkeypatch.setattr(selfupdate, "local_state", real_local_state)
+    res = svc.self_update_apply()
+    assert res.data.get("migrated", 0) >= 1                              # migrated on the next run
+    assert "ropt" not in cfgmod.load_stack_config(svc._paths, "s")
+
+
 # --- both sides of the comparison use the OLD (pre-update) parameter semantics ----------------
 
 def test_typed_schema_change_preserves_override_under_old_semantics(tmp_path, monkeypatch):
