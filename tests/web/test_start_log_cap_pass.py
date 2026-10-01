@@ -8,7 +8,20 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from lhpc.adapters.web.app import network_watch_pass
+
+
+_UNITS = ["apply-complete", "crl-heal", "clock-normalise", "disk", "cap", "cap-controller", "roll-trace"]
+
+
+def _ran_every_unit_once(calls, *, tick):
+    """Every maintenance unit ran exactly once (their order among themselves is not the contract),
+    and on an AP box the start-log cap ran before the AP tick."""
+    assert sorted(calls) == sorted(_UNITS + (["tick"] if tick else [])), calls
+    if tick:
+        assert calls.index("cap") < calls.index("tick"), calls
 
 
 class _Svc:
@@ -68,16 +81,16 @@ class _Svc:
 def test_the_pass_caps_start_logs_on_every_box_before_the_ap_tick():
     non_ap = _Svc(ap_box=False)
     assert network_watch_pass(non_ap) == 300.0
-    assert non_ap.calls == ["apply-complete", "crl-heal", "clock-normalise", "disk", "cap", "cap-controller", "roll-trace"]
+    _ran_every_unit_once(non_ap.calls, tick=False)
     ap = _Svc(ap_box=True)
     assert network_watch_pass(ap) == 60.0
-    assert ap.calls == ["apply-complete", "crl-heal", "clock-normalise", "disk", "cap", "cap-controller", "roll-trace", "tick"]
+    _ran_every_unit_once(ap.calls, tick=True)
 
 
 def test_a_failing_cap_never_breaks_the_pass():
     svc = _Svc(ap_box=True, cap_raises=True)
     assert network_watch_pass(svc) == 60.0
-    assert svc.calls == ["apply-complete", "crl-heal", "clock-normalise", "disk", "cap", "cap-controller", "roll-trace", "tick"]
+    _ran_every_unit_once(svc.calls, tick=True)
 
 
 def test_a_malformed_cap_result_never_breaks_the_pass():
@@ -113,13 +126,13 @@ def test_serving_the_console_never_caps(web, tmp_path):
     assert capped == []
 
 
-def test_one_failing_log_unit_does_not_skip_the_others():
+@pytest.mark.parametrize("bad", ["disk", "cap-controller", "roll-trace"])
+def test_one_failing_log_unit_does_not_skip_the_others(bad):
     # A1: the disk level, the start-log cap, the controller-log cap and the trace roll each have their
-    # own try; any one raising still runs every later unit and the AP tick.
-    for bad in ("disk", "cap-controller", "roll-trace"):
-        svc = _Svc(ap_box=True, raises={bad})
-        assert network_watch_pass(svc) == 60.0
-        assert svc.calls == ["apply-complete", "crl-heal", "clock-normalise", "disk", "cap", "cap-controller", "roll-trace", "tick"], bad
+    # own try; any one raising still runs every other unit and the AP tick.
+    svc = _Svc(ap_box=True, raises={bad})
+    assert network_watch_pass(svc) == 60.0
+    _ran_every_unit_once(svc.calls, tick=True)
 
 
 def test_only_a_controller_log_that_could_not_be_capped_is_logged(caplog):

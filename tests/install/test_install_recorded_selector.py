@@ -39,11 +39,15 @@ def test_the_applied_install_says_it_too(tmp_path):
     assert "lhpc update kiss --source pinned --yes" in r.next_commands
 
 
-def test_install_still_drops_the_memoized_snapshot():
+def test_install_still_drops_the_memoized_snapshot(tmp_path):
     # The helper was first inserted between `@invalidates_snapshot` and `def install`, which moved
-    # the decorator off the public entry.
-    assert hasattr(ControllerService.install, "__wrapped__")
-    assert not hasattr(ControllerService._note_recorded_selectors, "__wrapped__")
+    # the decorator off the public entry: a snapshot memoized before the install was then served
+    # after it.
+    svc = _svc_with_kiss(tmp_path, "dev")
+    before = svc.build_snapshot()
+    assert svc.build_snapshot() is before                          # memoized
+    svc.install("kiss", apply=False, source="pinned")
+    assert svc.build_snapshot() is not before                      # recomputed after the install
 
 
 def test_no_commit_shown_when_none_was_recorded(tmp_path):

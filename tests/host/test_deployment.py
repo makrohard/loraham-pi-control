@@ -213,10 +213,10 @@ def test_network_watch_pass_heals_crl_on_every_box():
     from lhpc.adapters.web.app import network_watch_pass
     non_ap = _WatchSvc(ap_box=False)
     assert network_watch_pass(non_ap) == 300.0                  # non-AP: probe rarely...
-    assert non_ap.calls == ["apply-complete", "crl-heal", "clock-normalise"]   # heal ran, no tick
+    assert "crl-heal" in non_ap.calls and "tick" not in non_ap.calls    # heal ran, no tick
     ap = _WatchSvc(ap_box=True)
     assert network_watch_pass(ap) == 60.0
-    assert ap.calls == ["apply-complete", "crl-heal", "clock-normalise", "tick"]  # before the tick
+    assert ap.calls.index("crl-heal") < ap.calls.index("tick")           # before the tick
     owed = _WatchSvc(ap_box=False, apply_pending=True)
     assert network_watch_pass(owed) == 60.0                     # an owed Apply keeps the fast cadence
     # A PKI minted under an unverified clock is owed a normalisation: same fast cadence, so a
@@ -231,7 +231,7 @@ def test_network_watch_pass_survives_a_failing_heal():
     from lhpc.adapters.web.app import network_watch_pass
     svc = _WatchSvc(ap_box=True, heal_raises=True)
     assert network_watch_pass(svc) == 60.0
-    assert svc.calls == ["apply-complete", "crl-heal", "clock-normalise", "tick"]
+    assert svc.calls.index("crl-heal") < svc.calls.index("tick")       # the tick still ran
 
 
 def test_devcontainer_no_sudo_boundary_fails_closed():

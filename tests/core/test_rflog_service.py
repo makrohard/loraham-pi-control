@@ -253,6 +253,7 @@ def test_clear_refuses_anything_outside_the_registry(tmp_path, target, job):
 def test_clear_all_clears_every_registry_job_and_nothing_else(tmp_path):
     svc = _svc(tmp_path)
     jobs = [j for e in rflog.REGISTRY for _b, j in e.jobs]
+    assert jobs                                     # an empty registry would make this vacuous
     live = [_logs(tmp_path, j, "x\n") for j in jobs]
     prev = [_logs(tmp_path, j + ".1", "old\n") for j in jobs]
     keep = [_logs(tmp_path, n, "keep\n") for n in ("rf-made-up.log", "start-loraham-daemon-433.log")]

@@ -95,20 +95,20 @@ def test_the_manifest_clone_required_list_is_meshcom_qemu_only(tmp_path, monkeyp
     assert listed == ["meshcom-qemu"]
 
 
+@pytest.mark.parametrize("apply", [False, True])
 @pytest.mark.parametrize("op", ["install", "update"])
 def test_override_refused_for_a_lagging_clone_required_component(tmp_path, monkeypatch,
-                                                                 stub_pipeline, op):
+                                                                 stub_pipeline, op, apply):
     svc = _svc(tmp_path, monkeypatch)
     monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "meshcom", "meshcom-qemu", A,
                                                           stub_pipeline, download=_never_download))
     call = (svc.install if op == "install" else svc.update)
-    for apply in (False, True):
-        r = call("meshcom", apply=apply, source="binary", accept_pin_mismatch="yes")
-        assert not r.ok and r.data["override_refused"] == "clone_required"
-        assert "refused even with --accept-pin-mismatch" in r.summary
-        assert r.details[0].strip().startswith("1. Update LHPC first")
-        assert r.next_commands == ["lhpc self-update --apply",
-                                   "lhpc install meshcom --source pinned --yes"]
+    r = call("meshcom", apply=apply, source="binary", accept_pin_mismatch="yes")
+    assert not r.ok and r.data["override_refused"] == "clone_required"
+    assert "refused even with --accept-pin-mismatch" in r.summary
+    assert r.details[0].strip().startswith("1. Update LHPC first")
+    assert r.next_commands == ["lhpc self-update --apply",
+                               "lhpc install meshcom --source pinned --yes"]
     assert not (tmp_path / "state" / "binary" / "meshcom.json").exists()
 
 
@@ -127,10 +127,11 @@ def test_a_stack_whose_lag_is_outside_clone_required_stays_overridable(tmp_path,
 @pytest.mark.parametrize("bad", ["abc123", "A" * 40, "g" * 40])
 @pytest.mark.parametrize("side", ["binary", "pin"])
 @pytest.mark.parametrize("flag", ["", "yes"])
+@pytest.mark.parametrize("apply", [False, True])
 @pytest.mark.parametrize("op", ["install", "update"])
 def test_malformed_commit_refused_before_download_even_with_the_flag(tmp_path, monkeypatch,
                                                                      stub_pipeline, bad, side,
-                                                                     flag, op):
+                                                                     flag, op, apply):
     svc = _svc(tmp_path, monkeypatch)
     cid = _daemon_cid(svc)
     if side == "binary":
@@ -144,11 +145,10 @@ def test_malformed_commit_refused_before_download_even_with_the_flag(tmp_path, m
                             lambda self, sid: {**pins, cid: bad})
         monkeypatch.setattr(bi, "index_entry", lambda idx, sid: fixed)
     call = (svc.install if op == "install" else svc.update)
-    for apply in (False, True):
-        r = call("daemon", apply=apply, source="binary", accept_pin_mismatch=flag)
-        assert not r.ok and ("malformed" in r.summary or "not a full commit id" in r.summary)
-        assert "pin_mismatch" not in r.data and "override_command" not in r.data
-        assert "consent" not in r.data
+    r = call("daemon", apply=apply, source="binary", accept_pin_mismatch=flag)
+    assert not r.ok and ("malformed" in r.summary or "not a full commit id" in r.summary)
+    assert "pin_mismatch" not in r.data and "override_command" not in r.data
+    assert "consent" not in r.data
     assert not (tmp_path / "state" / "binary").exists()
 
 

@@ -43,9 +43,13 @@ def test_the_cap_is_the_owner_s_setting(tmp_path):
     assert _cap_lines(out) == ["RF95_MAX_POWER: 20"]
     p = next(p for p in fc.params if p.name == "max_power")
     assert validate_param(p, "12") == "12"
-    for bad in ("0", "21", "27"):
-        with pytest.raises(ValidationError):
-            validate_param(p, bad)
+
+
+@pytest.mark.parametrize("bad", ["0", "21", "27"])
+def test_a_cap_outside_the_chip_s_range_is_refused(tmp_path, bad):
+    p = next(p for p in _comp(tmp_path).config_file.params if p.name == "max_power")
+    with pytest.raises(ValidationError):
+        validate_param(p, bad)
 
 
 def test_lhpc_never_writes_the_node_s_own_tx_power(tmp_path):

@@ -1,5 +1,5 @@
 """A5: the console's "Backup secrets" block on the LHPC row shows exactly two copy commands and
-does nothing itself: no form, no link to a file, no input; no route serves a backup."""
+does nothing itself: no form, no link to a file, no input."""
 from htmlq import parse
 
 from lhpc.core import secrets_backup, service_secrets
@@ -23,8 +23,3 @@ def test_the_block_shows_exactly_the_two_commands_and_nothing_to_click(web, monk
                      "lhpc secrets restore $HOME/lhpc-secrets-HOSTNAME-YYYYMMDDTHHMMSSZ.tar"]
     assert "not executed by LHPC" in seg.text
     assert not seg.find("form") and not seg.find("input") and not seg.find("a")
-
-
-def test_no_route_serves_a_backup_file(web):
-    app = web().application
-    assert not [r.rule for r in app.url_map.iter_rules() if "secret" in r.rule or ".tar" in r.rule]

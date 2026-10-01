@@ -57,6 +57,13 @@ def _post(c, csrf, **form):
     return parse(c.post("/action", data={"_csrf": csrf(c), **form}).get_data(as_text=True))
 
 
+def _source_form(doc):
+    """The "build from source instead" way: the form that offers a source channel to pick."""
+    forms = [f for f in doc.find("form") if doc.within(f).find("select", name="source")]
+    assert len(forms) == 1, "exactly one source form"
+    return forms[0]
+
+
 def _refusal_token(doc):
     form = doc.by_id("pin-override")
     return doc.within(form).field_default("consent") if form is not None else None
@@ -78,7 +85,7 @@ def test_pin_refusal_renders_the_override_form_with_the_lagging_list_and_checkbo
     assert _daemon_cid() in scope.text and A[:9] in scope.text
     # way (a) self-update FIRST, then (b) the source form, then (c) the override
     sel = doc.by_id("pin-selfupdate")
-    src = next(f for f in doc.find("form") if "Build from source" in doc.within(f).text)
+    src = _source_form(doc)
     assert doc.index(sel) < doc.index(src) < doc.index(form)
 
 
@@ -131,19 +138,24 @@ def test_csrf_is_enforced(web, published):
     assert r.status_code == 400
 
 
-@pytest.mark.parametrize("consent", ["", "not-a-token", "f" * 64])
-def test_a_post_without_or_with_a_wrong_token_is_not_honoured(web, csrf, published, consent):
-    """E: no token (or a malformed one) is a plain plan — the refusal with the checkbox again; a
-    token that is not this artifact's is `consent_stale` — the refusal with the way to review."""
+@pytest.mark.parametrize("consent", ["", "not-a-token"])
+def test_a_post_without_or_with_a_malformed_token_is_refused_with_the_checkbox_again(
+        web, csrf, published, consent):
+    """E: no token (or a malformed one) is a plain plan — the refusal with the checkbox again."""
     published("daemon", _daemon_cid(), A)
     doc = _post(web(), csrf, op="install", target="daemon", source="binary",
                 accept_pin_mismatch="yes", consent=consent)
-    assert "cannot proceed" in doc.text
-    if consent == "f" * 64:
-        assert "review the install again" in doc.text and doc.by_id("pin-override") is None
-        assert doc.find("button", type="submit")
-    else:
-        assert doc.by_id("pin-override") is not None
+    assert "cannot proceed" in doc.text and doc.by_id("pin-override") is not None
+
+
+def test_a_post_with_a_stale_token_is_refused_with_the_way_to_review(web, csrf, published):
+    """E: a token that is not this artifact's is `consent_stale` — the refusal with the way to
+    review, and no checkbox."""
+    published("daemon", _daemon_cid(), A)
+    doc = _post(web(), csrf, op="install", target="daemon", source="binary",
+                accept_pin_mismatch="yes", consent="f" * 64)
+    assert "cannot proceed" in doc.text and "review the install again" in doc.text
+    assert doc.by_id("pin-override") is None and doc.find("button", type="submit")
 
 
 def test_the_token_reaches_the_install_jobs_argv(web, csrf, monkeypatch, published):
@@ -189,8 +201,7 @@ def test_confirm_meshcom_pin_refusal_hint_and_selfupdate_no_checkbox(web, csrf, 
     assert "Update LHPC first" in doc.text
     sel = doc.by_id("pin-selfupdate")
     assert sel is not None and doc.within(sel).find("a", href="/self-update/apply")
-    assert all(doc.index(sel) < doc.index(f) for f in doc.find("form")
-               if "Build from source" in doc.within(f).text)
+    assert doc.index(sel) < doc.index(_source_form(doc))
     assert doc.by_id("pin-override") is None and not doc.find("input", name="accept_pin_mismatch")
     # a posted acceptance is still refused, typed, and still offers no checkbox
     doc = _post(c, csrf, op=op, target="meshcom", source="binary", accept_pin_mismatch="yes",
@@ -262,10 +273,13 @@ def test_the_pill_and_the_stack_page_warning_while_the_override_is_active(web, t
     doc = _stack_page(c, "daemon")
     warn = doc.by_id("pin-override-daemon")
     assert warn is not None and doc.within(warn).find("a", href="/self-update/apply")
-    assert doc.find("span", class_="ver-yellow") and "over pin check" in doc.text
+    pills = [s for s in doc.find("span") if s.text == "over pin check" and s["title"]]
+    links = [a for a in doc.find("a", href="/self-update/apply") if a["title"]]
+    assert pills and links
     # the pill and the row link promise no more than the code does (gate 2's P4)
-    html = c.get("/stacks?open=daemon").get_data(as_text=True)
-    assert "it clears when the pins match" in html and "updating LHPC clears it" not in html
+    titles = [el["title"] for el in pills + links]
+    assert all("it clears when the pins match" in t and "updating LHPC clears it" not in t
+               for t in titles)
     # stale (a normal install wrote the receipt without the override): both are gone
     assert brx.write_receipt(svc._paths, dataclasses.replace(rec, override=None))
     doc = _stack_page(web(), "daemon")

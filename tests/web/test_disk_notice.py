@@ -1,7 +1,6 @@
 """The disk-space notice on every page, and the watchdog's one log line per level change."""
-import re
-
 import pytest
+from htmlq import parse
 
 from lhpc.adapters.web import app as app_mod
 from lhpc.core.probes.backends import FakeSystem
@@ -19,7 +18,7 @@ def _row(level, reason, path="/", free_b=GIB, free_inodes=0, total_inodes=0):
 def test_no_disk_notice_while_ok(monkeypatch, web):
     monkeypatch.setattr(ControllerService, "disk_health", lambda self: [_row("ok", "", free_b=5 * GIB)])
     body = web().get("/", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
-    assert 'id="disk-notice"' not in body
+    assert _notice(body) is None
 
 
 @pytest.mark.parametrize("row, cls, figure", [
@@ -33,8 +32,10 @@ def test_the_disk_notice_shows_level_figure_and_link_on_every_page(monkeypatch, 
     client = web()
     for path in ("/", "/stacks"):
         body = client.get(path, headers={"Host": "127.0.0.1"}).get_data(as_text=True)
-        assert 'id="disk-notice"' in body, path
-        assert cls in body and figure in body and 'href="/#sysbox"' in body, path
+        notice = _notice(body)
+        assert notice is not None, path
+        classes, text, hrefs = notice
+        assert cls in classes and figure in text and "/#sysbox" in hrefs, path
 
 
 def _page(web, tmp_path, root, runtime=None):
@@ -46,9 +47,13 @@ def _page(web, tmp_path, root, runtime=None):
 
 
 def _notice(body):
-    """The notice element's own class and text, or None (other elements use depnote-bad too)."""
-    m = re.search(r'<p class="depnote (depnote-\w+)"\s+id="disk-notice"[^>]*>(.*?)</p>', body, re.S)
-    return (m.group(1), m.group(2)) if m else None
+    """The notice element's own class tokens, text and link targets, or None (other elements use
+    depnote-bad too)."""
+    doc = parse(body)
+    el = doc.by_id("disk-notice")
+    if el is None:
+        return None
+    return el.classes, el.text, [a["href"] for a in doc.within(el).find("a")]
 
 
 @pytest.mark.parametrize("free_b, free_inodes, figure", [
@@ -58,8 +63,8 @@ def _notice(body):
 def test_the_notice_shows_the_worse_metric(web, tmp_path, free_b, free_inodes, figure):
     body = _page(web, tmp_path, {"total_b": 8 * GIB, "free_b": free_b,
                                  "total_inodes": 100000, "free_inodes": free_inodes})
-    cls, text = _notice(body)
-    assert cls == "depnote-bad" and figure in text
+    classes, text, _ = _notice(body)
+    assert "depnote-bad" in classes and figure in text
 
 
 @pytest.mark.parametrize("root, root_figure", [
@@ -68,8 +73,8 @@ def test_the_notice_shows_the_worse_metric(web, tmp_path, free_b, free_inodes, f
 ])
 def test_the_notice_names_the_critical_runtime_filesystem(web, tmp_path, root, root_figure):
     body = _page(web, tmp_path, root, runtime={"total_b": 8 * GIB, "free_b": 100 * MIB})
-    cls, text = _notice(body)
-    assert cls == "depnote-bad" and f"{tmp_path}: 0.1 GiB free" in text and root_figure not in text
+    classes, text, _ = _notice(body)
+    assert "depnote-bad" in classes and f"{tmp_path}: 0.1 GiB free" in text and root_figure not in text
 
 
 def test_the_disk_notice_fails_closed(monkeypatch, web):
@@ -77,7 +82,7 @@ def test_the_disk_notice_fails_closed(monkeypatch, web):
         raise OSError("statvfs")
     monkeypatch.setattr(ControllerService, "disk_health", boom)
     body = web().get("/", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
-    assert 'id="disk-notice"' not in body
+    assert _notice(body) is None
 
 
 class _Svc:

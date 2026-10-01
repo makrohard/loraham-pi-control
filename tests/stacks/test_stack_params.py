@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 
 import pytest
 
@@ -797,7 +798,8 @@ def test_chat_defaults_to_one_channel(tmp_path):
     # chat boxes on defaults hear each other; the generated lorachat.conf carries both keys.
     svc = _svc(tmp_path)
     save_operator_config(svc._paths, "XX0XXA"); svc._invalidate_config()
-    written = [w for w in svc.write_config_files("chat") if w.status == "written"]
+    written = [w for w in svc.write_config_files("chat")
+               if w.status == "written" and Path(w.path).name == "lorachat.conf"]
     assert written, "lorachat.conf was not generated"
     conf = dict(line.split("=", 1) for line in open(written[0].path).read().splitlines() if "=" in line)
     assert conf["TX"] == "433.775"

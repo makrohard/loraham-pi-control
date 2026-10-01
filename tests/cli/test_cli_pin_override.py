@@ -38,32 +38,21 @@ def _published(monkeypatch, stack, cid, commit):
                         lambda *a, **k: pytest.fail("must not download"))
 
 
-def test_cli_install_with_flag_passes_the_dry_run_token_to_the_apply(box, monkeypatch):
+@pytest.mark.parametrize("verb", ["install", "update"])       # the CLI verb is the service method
+def test_cli_with_flag_passes_the_dry_run_token_to_the_apply(box, monkeypatch, verb):
     """The real `_apply_flow`: the dry run (ok, changes >= 1) returns `data["consent"]`, and the
     apply call receives exactly that token."""
     calls = []
 
-    def _install(self, stack=None, apply=False, source="", accept_pin_mismatch="", **kw):
+    def _fake(self, target=None, apply=False, source="", accept_pin_mismatch="", **kw):
         calls.append((apply, accept_pin_mismatch))
         if not apply:
             return ActionResult(True, "plan", data={"changes": 1, "consent": "c" * 64})
         return ActionResult(True, "done", data={"changes": 1})
-    monkeypatch.setattr(ControllerService, "install", _install)
-    assert cli_main.main(["install", "daemon", "--source", "binary",
+    monkeypatch.setattr(ControllerService, verb, _fake)
+    assert cli_main.main([verb, "daemon", "--source", "binary",
                           "--accept-pin-mismatch", "--yes"]) == 0
     assert calls == [(False, "yes"), (True, "c" * 64)]
-
-
-def test_cli_update_with_flag_passes_the_dry_run_token_to_the_apply(box, monkeypatch):
-    calls = []
-
-    def _update(self, target="", apply=False, source="", accept_pin_mismatch="", **kw):
-        calls.append((apply, accept_pin_mismatch))
-        return ActionResult(True, "p", data={"changes": 1, "consent": "d" * 64})
-    monkeypatch.setattr(ControllerService, "update", _update)
-    assert cli_main.main(["update", "daemon", "--source", "binary",
-                          "--accept-pin-mismatch", "--yes"]) == 0
-    assert calls == [(False, "yes"), (True, "d" * 64)]
 
 
 def test_cli_without_the_flag_carries_no_token(box, monkeypatch):

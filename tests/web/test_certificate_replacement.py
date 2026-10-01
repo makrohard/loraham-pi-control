@@ -7,11 +7,11 @@ replacement's digest."""
 from __future__ import annotations
 
 import io
-import re
 
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
+from htmlq import parse
 
 from lhpc.adapters.cli import main as cli_main
 from lhpc.core import config, pki, webserver
@@ -152,8 +152,7 @@ def _post(c, csrf, form):
 
 
 def _digest(r):
-    m = re.search(r'name="replacement_digest" value="([0-9a-f]{64})"', r.get_data(as_text=True))
-    return m.group(1) if m else None
+    return parse(r.get_data(as_text=True)).field_default("replacement_digest")
 
 
 def test_console_first_apply_writes_nothing_and_the_digest_proceeds(tmp_path, monkeypatch, web,

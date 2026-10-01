@@ -197,14 +197,20 @@ def test_a_lax_or_garbled_password_file_blocks_instead_of_being_replaced(tmp_pat
         mi.ensure_password(paths, mi.REPEATER_ADMIN_FILENAME)
 
 
-def test_a_stored_password_of_15_to_128_characters_is_kept(tmp_path):
+@pytest.mark.parametrize("pw", ["x" * 15, "y" * 32, "z" * 128], ids=["15", "32", "128"])
+def test_a_stored_password_of_15_to_128_characters_is_kept(tmp_path, pw):
     # 15 = the longest a MeshCore over-the-air admin login carries; longer stored ones stay valid
     paths = Paths(runtime_root=tmp_path)
     mi.ensure_password(paths, mi.REPEATER_ADMIN_FILENAME)
     f = tmp_path / "config" / "secrets" / mi.REPEATER_ADMIN_FILENAME
-    for pw in ("x" * 15, "y" * 32, "z" * 128):
-        f.write_text(pw + "\n")
-        assert mi.ensure_password(paths, mi.REPEATER_ADMIN_FILENAME) == pw
+    f.write_text(pw + "\n")
+    assert mi.ensure_password(paths, mi.REPEATER_ADMIN_FILENAME) == pw
+
+
+def test_a_stored_password_of_14_characters_is_refused(tmp_path):
+    paths = Paths(runtime_root=tmp_path)
+    mi.ensure_password(paths, mi.REPEATER_ADMIN_FILENAME)
+    f = tmp_path / "config" / "secrets" / mi.REPEATER_ADMIN_FILENAME
     f.write_text("w" * 14 + "\n")
     with pytest.raises(mi.MeshCoreIdentityError):
         mi.ensure_password(paths, mi.REPEATER_ADMIN_FILENAME)

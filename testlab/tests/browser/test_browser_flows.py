@@ -152,26 +152,38 @@ def test_the_all_box_ticks_every_test_box_it_may_and_never_a_disabled_one(page):
     assert not ticked_anyway, f"All ticked a disabled host-test box: {ticked_anyway}"
 
 
-def _armed_poll_delays(page, feed):
-    """The delays taskbanner.js arms, captured by wrapping setTimeout before any page script runs.
-
-    Asserting the ARMED INTERVAL rather than counting intercepted requests: the interval is the
-    decision under test, it is observable as soon as the first poll settles, and it does not depend
-    on how a routed fetch resolves. Only the banner's own two constants are returned; other page
-    scripts poll with setInterval, not setTimeout.
-
-    Waits for the observable rather than sleeping a fixed time — the banner arms its next poll the
-    moment the first one settles, so there is nothing to sit out."""
+def _banner_polls(page, feed):
+    """How many `/api/tasks` requests the banner makes in the 2 s after its first poll settled, and
+    in the 13 s after that — counted at the route, on Playwright's clock (advanced by the test,
+    never slept through). The cadence is what is asserted, not how the script arms it."""
     import json
-    page.add_init_script(
-        "window.__st=[];var o=window.setTimeout;"
-        "window.setTimeout=function(f,ms){window.__st.push(ms);return o.apply(this,arguments);};")
-    page.route("**/api/tasks*", lambda route: route.fulfill(
-        status=200, content_type="application/json", body=json.dumps(feed)))
+    seen = {"n": 0}
+
+    def handler(route):
+        seen["n"] += 1
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(feed))
+
+    def settled():
+        # a round trip from the page: every request issued before it has reached the handler
+        assert page.evaluate("() => fetch('/__settled__').then(r => r.status)") == 204
+
+    page.clock.install()
+    page.route("**/api/tasks*", handler)
+    page.route("**/__settled__", lambda route: route.fulfill(status=204, body=""))
     page.goto(page.lab_base + "/stacks", wait_until="networkidle")
-    page.wait_for_function(
-        "() => (window.__st || []).some(d => d === 2000 || d === 15000)", timeout=15000)
-    return [d for d in page.evaluate("() => window.__st") if d in (2000, 15000)]
+    label = feed["tasks"][0]["label"]
+    # the first poll has rendered, so the next one is armed
+    page.wait_for_function("(t) => document.body.textContent.includes(t)", arg=label,
+                           timeout=15000)
+    settled()
+    first = seen["n"]
+    assert first == 1, seen
+    page.clock.run_for(2000)
+    settled()
+    fast = seen["n"] - first
+    page.clock.run_for(13000)
+    settled()
+    return fast, seen["n"] - first - fast
 
 
 def test_the_banner_polls_slowly_when_nothing_is_running(page):
@@ -182,10 +194,8 @@ def test_the_banner_polls_slowly_when_nothing_is_running(page):
     feed = {"tasks": [{"kind": "job", "op": "start", "state": "failed", "stack": "kiss",
                        "run_id": "r9", "attempt_id": "a9", "label": "start kiss",
                        "admitted": False, "no_dismiss": True}]}
-    delays = _armed_poll_delays(page, feed)
-    assert delays, "the banner armed no poll at all"
-    assert 2000 not in delays, f"terminal-only feed armed the FAST cadence: {delays}"
-    assert 15000 in delays, f"expected the slow cadence, got {delays}"
+    # nothing within the fast interval; exactly one by the slow one
+    assert _banner_polls(page, feed) == (0, 1)
 
 
 def test_the_banner_polls_fast_while_a_job_runs(page):
@@ -193,9 +203,7 @@ def test_the_banner_polls_fast_while_a_job_runs(page):
     feed = {"tasks": [{"kind": "job", "op": "start", "state": "running", "stack": "kiss",
                        "run_id": "r8", "attempt_id": "a8", "label": "start kiss",
                        "admitted": True}]}
-    delays = _armed_poll_delays(page, feed)
-    assert 2000 in delays, f"running feed did not arm the fast cadence: {delays}"
-    assert 15000 not in delays, f"running feed armed the slow cadence too: {delays}"
+    assert _banner_polls(page, feed)[0] == 1
 
 
 def test_a_start_marks_its_stack_and_reloads_the_page_once_when_it_finishes(page):
@@ -377,16 +385,29 @@ def test_a_decoded_answer_in_flight_when_decrypt_goes_off_never_lands_and_a_relo
     assert page.locator("#rf-decrypt").get_attribute("aria-pressed") == "false"
 
 
+def _at(path, **query):
+    """A `wait_for_url` predicate: this path, and these query parameters (`"*"`: present with any
+    value). Parameter order is nobody's contract."""
+    from urllib.parse import parse_qs, urlsplit
+
+    def match(url):
+        parts = urlsplit(url)
+        got = parse_qs(parts.query)
+        return parts.path == path and all(
+            k in got and (v == "*" or got[k] == [v]) for k, v in query.items())
+    return match
+
+
 def test_the_band_row_leads_to_the_stack_row_of_that_band(page, seeded_rf_logs):
     """Two rows of plain links: a band pill reloads the same log on that band, and the stack
     row then offers that band's logs — the daemon's file for it first."""
     page.goto(page.lab_base + "/logs/loraham-kiss-tnc?job=rf-kiss.log", wait_until="networkidle")
     page.locator("nav.rfbands a", has_text="868").click()
-    page.wait_for_url("**/logs/loraham-kiss-tnc?job=rf-kiss.log&band=868", timeout=15000)
+    page.wait_for_url(_at("/logs/loraham-kiss-tnc", job="rf-kiss.log", band="868"), timeout=15000)
     assert page.locator("nav.rfbands a[aria-current=page]").inner_text() == "868"
     assert page.locator("nav.rfswitch a[aria-current=page]").inner_text() == "graywolf"
     page.locator("nav.rfswitch a", has_text="daemon 868").click()
-    page.wait_for_url("**/logs/loraham-daemon?job=rf-daemon-868.log*", timeout=15000)
+    page.wait_for_url(_at("/logs/loraham-daemon", job="rf-daemon-868.log"), timeout=15000)
     assert page.locator("nav.rfbands a[aria-current=page]").inner_text() == "868"
     assert page.locator("nav.rfswitch a[aria-current=page]").inner_text() == "daemon 868"
     assert page.locator("#log-card").get_attribute("data-job") == "rf-daemon-868.log"
@@ -395,19 +416,19 @@ def test_the_band_row_leads_to_the_stack_row_of_that_band(page, seeded_rf_logs):
 def test_the_bottom_forms_switch_one_stack_and_every_stack(page, seeded_rf_logs):
     """The shown stack's switch and every stack's at once, each a form that returns to this
     page; the Logging state reads "mixed" while they disagree. Leaves every switch on."""
-    url = page.lab_base + "/logs/loraham-kiss-tnc?job=rf-kiss.log"
-    page.goto(url, wait_until="networkidle")
+    page.goto(page.lab_base + "/logs/loraham-kiss-tnc?job=rf-kiss.log", wait_until="networkidle")
+    back = _at("/logs/loraham-kiss-tnc", job="rf-kiss.log", band="*")
     assert page.locator("#rflog-all-state").get_attribute("data-state") == "on"
     page.locator("#rf-switch").select_option("off")
     with page.expect_response(lambda r: "/stacks/graywolf/rflog" in r.url, timeout=15000):
         page.locator("#rflog-switch button[type=submit]").click()
-    page.wait_for_url(url + "&band=*", timeout=15000)                     # back here, band carried
+    page.wait_for_url(back, timeout=15000)                                # back here, band carried
     assert page.locator("#rf-switch").input_value() == "off"
     assert page.locator("#rflog-all-state").get_attribute("data-state") == "mixed"
     page.locator("#rf-all").select_option("on")
     with page.expect_response(lambda r: r.url.endswith("/rflog/all"), timeout=15000):
         page.locator("#rflog-all button[type=submit]").click()
-    page.wait_for_url(url + "&band=*", timeout=15000)
+    page.wait_for_url(back, timeout=15000)
     assert page.locator("#rf-switch").input_value() == "on"
     assert page.locator("#rflog-all-state").get_attribute("data-state") == "on"
 
@@ -425,22 +446,21 @@ def test_raw_on_a_phone_hides_the_table_and_shows_the_file(page, seeded_rf_logs)
     assert page.locator("#logbox").is_visible() and seeded_rf_logs.older in page.locator("#logbox").inner_text()
 
 
-def test_clear_all_asks_first_and_then_clears_every_log(page, seeded_rf_logs):
-    """The confirm gates the request: dismissed, nothing is sent and nothing changes; accepted,
-    every registered log is emptied and a run log is not."""
-    seeds = seeded_rf_logs
-    run_log = seeds.dir / "start-loraham-kiss-tnc.log"
-    run_log.write_text("keep\n")
+def test_clear_all_asks_first(page, seeded_rf_logs):
+    """The confirm gates the request: dismissed, nothing is sent; accepted, the form is submitted
+    and the page returns here. What the clear does to the logs is the web suite's
+    (tests/web/test_rflog_web.py)."""
     page.goto(page.lab_base + "/logs/loraham-kiss-tnc?job=rf-kiss.log", wait_until="networkidle")
+    sent = []
+    page.on("request", lambda r: sent.append(r.url) if r.url.endswith("/rflog/clear-all") else None)
     page.once("dialog", lambda d: d.dismiss())
     page.locator("#rflog-clear-all button[type=submit]").click()          # the confirm is synchronous:
-    assert (seeds.dir / "rf-kiss.log").read_text() == seeds.newer + "\n"  # a refused submit sends nothing
+    assert sent == []                                                     # a refused submit sends nothing
     page.once("dialog", lambda d: d.accept())
     with page.expect_response(lambda r: r.url.endswith("/rflog/clear-all"), timeout=15000):
         page.locator("#rflog-clear-all button[type=submit]").click()
-    page.wait_for_url("**/logs/loraham-kiss-tnc?job=rf-kiss.log&band=*", timeout=15000)
-    assert (seeds.dir / "rf-kiss.log").read_text() == "" and not (seeds.dir / "rf-kiss.log.1").exists()
-    assert (seeds.dir / "rf-meshtastic.log").read_text() == "" and run_log.read_text() == "keep\n"
+    page.wait_for_url(_at("/logs/loraham-kiss-tnc", job="rf-kiss.log", band="*"), timeout=15000)
+    assert len(sent) == 1
 
 
 def _row_values(page):

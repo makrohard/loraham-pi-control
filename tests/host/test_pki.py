@@ -197,3 +197,31 @@ def test_pki_status_reports_presence(tmp_path):
     st = pki.pki_status(paths)
     assert st["server_ca"]["present"] and st["client_ca"]["present"]
     assert st["server_cert"]["present"] and len(st["clients"]) == 1
+
+
+# --- the server chain check ---------------------------------------------------
+
+@pytest.mark.parametrize("exc", [ValueError("issuer"), TypeError("key type"), "invalid-signature"])
+def test_chain_check_maps_each_verify_error_to_not_issued(tmp_path, monkeypatch, exc):
+    from cryptography.exceptions import InvalidSignature
+    err = InvalidSignature() if exc == "invalid-signature" else exc
+
+    class _Cert:
+        def verify_directly_issued_by(self, issuer):
+            raise err
+    # `_read_cert` stubbed as the collaborator: each verify error class needs a certificate whose
+    # `verify_directly_issued_by` raises exactly it, which no real pair produces on demand.
+    monkeypatch.setattr(pki, "_read_cert", lambda paths, path: _Cert())
+    assert pki.server_cert_chain_ok(_paths(tmp_path)) == (False, pki.CHAIN_NOT_ISSUED)
+
+
+def test_chain_check_unreadable_never_raises(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _init_both(paths)
+    pki.issue_server_cert(paths, dns_sans=["pi.local"], ip_sans=[], days=90)
+
+    def boom(p, path):
+        raise pki.PKIError("malformed certificate")
+    # `_read_cert` stubbed as the collaborator: the mapping of its typed refusal is under test.
+    monkeypatch.setattr(pki, "_read_cert", boom)
+    assert pki.server_cert_chain_ok(paths) == (False, "unreadable: malformed certificate")

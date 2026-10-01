@@ -4,10 +4,14 @@ generates for it. `uninstall` keeps all of that. Files the stack does not declar
 history), the operator's local.toml/secrets.toml, the controller's own secrets and every other
 stack stay."""
 import re
-from pathlib import Path
+import shlex
+import subprocess
+import sys
 
 import pytest
 
+import repo_paths
+from lhpc.core.manifest import ManifestError, load_manifest
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -127,15 +131,30 @@ def test_every_controller_minted_secret_file_is_declared_by_its_stack(tmp_path):
     assert {mi.IDENTITY_FILENAME, mi.REPEATER_IDENTITY_FILENAME,
             mi.REPEATER_ADMIN_FILENAME} <= decl["meshcore"][0]
     assert service_hmac._XR_PW[-1] in decl["meshcom"][0]
-    script = (Path(__file__).parents[2] / "lhpc" / "data" / "scripts"
-              / "meshcore-webui-run.sh").read_text()
-    assert re.findall(r'\$secrets/([A-Za-z0-9._-]+)', script) == ["meshcore_webui_vapid.pem"]
-    assert "meshcore_webui_vapid.pem" in decl["meshcore"][0]
+
+
+def test_the_webui_launcher_mints_only_secrets_its_stack_declares(tmp_path):
+    """The meshcore-webui launcher writes its VAPID key itself (no `config_file` param names
+    it), so the launcher the manifest runs is driven here: a stand-in venv python runs the
+    key helper with this interpreter and stops where uvicorn would start."""
+    svc = _svc(tmp_path / "box")
+    webui = next(c for st in svc.stacks() for c in st.components if c.id == "meshcore-webui")
+    launcher = webui.run_argv[0].replace("{asset}", str(repo_paths.REPO / "lhpc" / "data"))
+    src, rt = tmp_path / "src", tmp_path / "rt"
+    py = src / "backend" / ".venv" / "bin" / "python"
+    py.parent.mkdir(parents=True)
+    py.write_text(f'#!/bin/sh\n[ "$1" = -m ] && exit 0\nexec {shlex.quote(sys.executable)} "$@"\n')
+    py.chmod(0o755)
+    subprocess.run(["bash", launcher, str(src), str(rt), str(tmp_path / "dist"), "127.0.0.1",
+                    "5000", "127.0.0.1", "8788"], check=True, timeout=60)
+    minted = {p.name for p in (rt / "config" / "secrets").iterdir()}
+    assert minted and minted <= _declared(svc)["meshcore"][0], minted
 
 
 def test_no_state_root_or_secret_is_claimed_by_two_stacks(tmp_path):
     decl = _declared(_svc(tmp_path))
     for kind in (0, 1):
+        assert any(d[kind] for d in decl.values()), kind     # the check below is not vacuous
         seen = {}
         for sid, d in decl.items():
             for n in d[kind]:
@@ -144,12 +163,22 @@ def test_no_state_root_or_secret_is_claimed_by_two_stacks(tmp_path):
     assert "state/loraham" not in {r for d in decl.values() for r in d[1]}
 
 
-@pytest.mark.parametrize("bad", ["../x", "a/b", "", ".hidden", "secrets.toml", 3])
-def test_secret_files_must_be_bare_names(bad):
-    from lhpc.core.manifest import ManifestError, _secret_files
-    with pytest.raises(ManifestError):
-        _secret_files({"id": "x", "secret_files": [bad]})
-    assert _secret_files({"id": "x", "secret_files": ["xr_pw"]}) == ("xr_pw",)
+def _manifest_declaring(tmp_path, value):
+    """A minimal one-component manifest whose `secret_files` is `value` (TOML)."""
+    path = tmp_path / "manifest.toml"
+    path.write_text('[[stack]]\nid = "s"\nname = "s"\nmain = "app"\n'
+                    '[[stack.component]]\nid = "app"\nname = "app"\nkind = "service"\n'
+                    'run = "bin/app"\nreadiness = "manual"\ninteractive = true\n'
+                    f"secret_files = {value}\n")
+    return path
+
+
+@pytest.mark.parametrize("bad", ['"../x"', '"a/b"', '""', '".hidden"', '"secrets.toml"', "3"])
+def test_secret_files_must_be_bare_names(tmp_path, bad):
+    with pytest.raises(ManifestError, match="secret_files"):
+        load_manifest(_manifest_declaring(tmp_path, f"[{bad}]"))
+    stacks = load_manifest(_manifest_declaring(tmp_path, '["webui_vapid.pem"]'))
+    assert stacks[0].component("app").secret_files == ("webui_vapid.pem",)
 
 
 def test_purge_of_a_never_used_stack_says_already_absent(tmp_path):
@@ -212,14 +241,39 @@ def test_no_other_stack_uses_a_state_root_or_secret_a_purge_removes(tmp_path):
     decl = _declared(svc)
     for st in svc.stacks():
         for c in st.components:
-            text = repr(c)
+            tokens = _path_tokens(c)
+            secret_params = {p.secret_file for p in (c.config_file.params if c.config_file else ())}
             for owner, (secrets_, roots) in decl.items():
                 if owner == st.id:
                     continue
                 for r in roots:
-                    assert not re.search(rf"{re.escape(r)}(?![A-Za-z0-9_.-])", text), (c.id, r)
+                    assert not any(re.search(rf"{re.escape(r)}(?![A-Za-z0-9_.-])", t)
+                                   for t in tokens), (c.id, r)
                 for n in secrets_:
-                    assert f"secrets/{n}" not in text and f'"{n}"' not in text, (c.id, n)
+                    assert n not in secret_params, (c.id, n)
+                    assert not any(f"secrets/{n}" in t for t in tokens), (c.id, n)
+
+
+def _strings(v):
+    if isinstance(v, str):
+        return [v]
+    if isinstance(v, dict):
+        return [s for x in v.values() for s in _strings(x)]
+    if isinstance(v, (list, tuple)):
+        return [s for x in v for s in _strings(x)]
+    return []
+
+
+def _path_tokens(c):
+    """Every typed field of a component that can name a file it reads or writes: its argv,
+    environment, working folder, steps, config file, logs, password file, endpoints and the
+    process match."""
+    fc, proc = c.config_file, c.process
+    return _strings([c.run_argv, c.run_cwd, c.run_env, c.test_argv, c.log_paths,
+                     c.ui_password_file, c.pre_steps, c.post_steps, c.build_steps,
+                     [e.address for e in c.endpoints],
+                     [fc.path, fc.base] if fc else [],
+                     [proc.all_args, proc.any_args] if proc else []])
 
 
 def test_purge_refuses_a_regular_file_where_a_launcher_link_belongs(tmp_path):

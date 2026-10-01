@@ -518,9 +518,16 @@ def test_chrony_history_decides_lost_fake_or_unknown(tmp_path, why, kw, state, l
     d = _time_state(tmp_path, _time_fake(tmp_path, **kw), _UNSYNCED)
     assert (d["state"], d["label"]) == (state, label), (why, d)
     assert "synced_age_s" not in d, "chrony gives no timestamp: no invented age"
-    if label == "RTC":   # not "never synced": after a restart that is unknown
-        assert d["detail"] == ("RTC restore; chrony restarted since boot, not synced since; an earlier "
-                               "sync is unknown"), d["detail"]
+
+
+def test_a_restarted_chrony_on_an_rtc_box_does_not_claim_never_synced(tmp_path):
+    # Not "never synced": after a chronyd restart, an earlier sync is unknown.
+    kw = _chrony_box(started_s=26813.5, mtimes=_FAKE, files={"/sys/class/rtc/rtc0/name": "rtc-ds3231\n",
+                                                            "/sys/class/rtc/rtc0/hctosys": "1"})
+    d = _time_state(tmp_path, _time_fake(tmp_path, **kw), _UNSYNCED)
+    assert d["label"] == "RTC", d
+    assert d["detail"] == ("RTC restore; chrony restarted since boot, not synced since; an earlier "
+                           "sync is unknown"), d["detail"]
 
 
 @pytest.mark.parametrize("result", [
@@ -608,7 +615,7 @@ def test_time_unknown_when_the_kernel_state_cannot_be_read(tmp_path):
 
 # --- the adjtimex call must stay a pure QUERY -----------------------------------------------------
 
-def test_kernel_time_state_never_asks_the_kernel_to_change_anything(monkeypatch):
+def test_kernel_time_state_never_asks_the_kernel_to_change_anything(real_kernel_time_state, monkeypatch):
     """`modes = 0` is what makes `ntp_adjtime` a read. Setting any ADJ_* bit would turn this
     diagnostic into a clock adjustment — LHPC never sets, steps or disciplines the clock.
     """
@@ -650,7 +657,7 @@ def _code_only(src: str) -> str:
     (0, 0x0040, False),          # STA_UNSYNC set
     (5, 0, False),               # TIME_ERROR return code
 ])
-def test_kernel_time_state_reads_sync_from_rc_and_status(monkeypatch, rc, status, expect_synced):
+def test_kernel_time_state_reads_sync_from_rc_and_status(real_kernel_time_state, monkeypatch, rc, status, expect_synced):
     from lhpc.core import service_system as ss
 
     class _FakeLibc:
@@ -664,7 +671,7 @@ def test_kernel_time_state_reads_sync_from_rc_and_status(monkeypatch, rc, status
     assert ss.read_kernel_time_state()["synced"] is expect_synced
 
 
-def test_kernel_time_state_is_none_when_anything_goes_wrong(monkeypatch):
+def test_kernel_time_state_is_none_when_anything_goes_wrong(real_kernel_time_state, monkeypatch):
     """No libc, odd ABI, EPERM — all of it means UNKNOWN, never a verdict about the clock."""
     from lhpc.core import service_system as ss
 
@@ -751,7 +758,7 @@ def test_the_chrony_source_read_is_cached_for_a_minute(tmp_path, monkeypatch):
     assert len(fake.calls) == 2, "re-read after 60 s"
 
 
-def test_reading_the_kernel_clock_forks_nothing(monkeypatch):
+def test_reading_the_kernel_clock_forks_nothing(real_kernel_time_state, monkeypatch):
     """BEHAVIOURAL guard, because the textual one above cannot see through a helper.
 
     `ctypes.util.find_library("c")` runs `/sbin/ldconfig -p` — a real subprocess, once per

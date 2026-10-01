@@ -15,15 +15,12 @@ def _svc(tmp_path):
 
 
 def _isolate(monkeypatch, svc, optional_up):
-    """Pin the seam: the restart's preflights are proven elsewhere; here only the stop/start choreography
-    and the optional re-raise are under test."""
+    """Driven through the public, locked `svc.restart` with the real preflights. Stubbed, and why:
+    the two legs (`stop`/`start`) would spawn and kill real processes, and the running-optional
+    probe stands in for a box where the optional is up before the stop and not after the start
+    (the real probe is proven against a snapshot in the last test). Only the choreography and the
+    optional re-raise are under test."""
     T = type(svc)
-    for name in ("_gui_fallback_refusal", "_meshcore_mode_refusal", "_identity_refusal",
-                 "_saved_launch_refusal"):
-        monkeypatch.setattr(T, name, lambda self, *a, **k: None)
-    monkeypatch.setattr(T, "_dep_band_block", lambda self, *a, **k: None)
-    monkeypatch.setattr(T, "_run_order", lambda self, t: [])
-    monkeypatch.setattr(T, "operation_band", lambda self, t, b: b or "868")
     # first call (before the stop leg) = what was up; second call (after the stack start) = what
     # the stack start brought back on its own — nothing, so every captured optional is re-raised
     seq = [list(optional_up), []]
@@ -41,7 +38,7 @@ def _isolate(monkeypatch, svc, optional_up):
 def test_restart_reraises_optional_components_that_were_running(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     calls = _isolate(monkeypatch, svc, ["meshchat"])
-    res = svc._restart_impl_inner("reticulum", apply=True)
+    res = svc.restart("reticulum", apply=True)
     assert res.ok, res.summary
     assert calls == [("stop", "reticulum"), ("start", "reticulum", "868"), ("start", "meshchat", "868")]
     assert "meshchat" in res.summary
@@ -51,7 +48,7 @@ def test_restart_reraises_optional_components_that_were_running(tmp_path, monkey
 def test_restart_without_running_optionals_starts_the_stack_only(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     calls = _isolate(monkeypatch, svc, [])
-    res = svc._restart_impl_inner("reticulum", apply=True)
+    res = svc.restart("reticulum", apply=True)
     assert res.ok
     assert [c[:2] for c in calls] == [("stop", "reticulum"), ("start", "reticulum")]
     assert "Optional" not in res.summary
@@ -62,7 +59,7 @@ def test_an_optional_component_that_does_not_come_back_fails_the_restart(tmp_pat
     _isolate(monkeypatch, svc, ["meshchat"])
     T = type(svc)
     monkeypatch.setattr(T, "start", lambda self, t, **k: ActionResult(t == "reticulum", f"{t}"))
-    res = svc._restart_impl_inner("reticulum", apply=True)
+    res = svc.restart("reticulum", apply=True)
     assert not res.ok
     assert "did not come back: meshchat" in res.summary
     assert any("NOT back" in d for d in res.details)
@@ -71,13 +68,8 @@ def test_an_optional_component_that_does_not_come_back_fails_the_restart(tmp_pat
 def test_the_plan_lists_running_optional_components(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     T = type(svc)
-    monkeypatch.setattr(T, "_gui_fallback_refusal", lambda self, *a, **k: None)
-    monkeypatch.setattr(T, "_meshcore_mode_refusal", lambda self, *a, **k: None)
-    monkeypatch.setattr(T, "operation_band", lambda self, t, b: b or "868")
     monkeypatch.setattr(T, "_running_optional_components", lambda self, t: ["meshchat"])
-    monkeypatch.setattr(T, "_start_impl", lambda self, t, **k: ActionResult(True, "plan", details=["  [run] rns"]))
-    monkeypatch.setattr(T, "_stop_impl", lambda self, t, **k: ActionResult(True, "plan", data={"dependents": [], "other_bands": []}))
-    res = svc._restart_impl_inner("reticulum", apply=False)
+    res = svc.restart("reticulum", apply=False)
     assert res.ok
     assert res.data["optional_restarted"] == ["meshchat"]
     assert any("[optional] meshchat: running — restarted with the stack" in d for d in res.details)
@@ -87,11 +79,12 @@ def test_stack_start_already_brought_it_back_means_no_second_start(tmp_path, mon
     """An optional component the stack start raised itself (a GPS feed in the run order, or one that
     simply came back) is NOT started a second time and NOT reported as restarted."""
     svc = _svc(tmp_path)
+    assert svc.save_config_bundle("meshcore", values={"file_node_name": "TestNode"}, band="868").ok
     calls = _isolate(monkeypatch, svc, ["meshcore-webui"])
     T = type(svc)
     monkeypatch.setattr(T, "_running_optional_components",
                         lambda self, t: ["meshcore-webui"])       # up before AND up after
-    res = svc._restart_impl_inner("meshcore", apply=True)
+    res = svc.restart("meshcore", apply=True)
     assert res.ok
     assert [c[:2] for c in calls] == [("stop", "meshcore"), ("start", "meshcore")]
     assert "Optional" not in res.summary
@@ -102,7 +95,7 @@ def test_main_start_failure_does_not_blame_optionals(tmp_path, monkeypatch):
     _isolate(monkeypatch, svc, ["meshchat"])
     T = type(svc)
     monkeypatch.setattr(T, "start", lambda self, t, **k: ActionResult(False, "rns refused"))
-    res = svc._restart_impl_inner("reticulum", apply=True)
+    res = svc.restart("reticulum", apply=True)
     assert not res.ok
     assert "did not come back" not in res.summary and "rns refused" in res.summary
 

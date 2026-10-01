@@ -19,6 +19,18 @@ _MUTATING = {"start", "stop", "build", "update", "test",
              "uninstall", "daemon_set"}
 
 
+def _autostart(doc):
+    """The dashboard's Autostart block: the section that carries the boot-restore toggle."""
+    secs = [sec for sec in doc.find("section") if doc.within(sec).field_default("restore")]
+    assert len(secs) == 1, "exactly one Autostart block"
+    return secs[0]
+
+
+def _metrics_table(doc):
+    """The System box's metrics table: the one holding the Time row."""
+    return next(t for t in doc.find("table") if doc.within(t).present("sys-time-row"))
+
+
 class ReadOnlyGuard:
     """Delegates read-only calls; fails the test if a mutating method is used."""
 
@@ -39,7 +51,7 @@ def test_dashboard_autostart_section_shows_state_and_last_result(tmp_path, web):
     assert svc.set_boot_restore(True).ok
     def autostart():
         doc = parse(web(service_factory=lambda: svc).get("/").get_data(as_text=True))
-        return doc.within(doc.find("section", class_="sysautostart")[0])
+        return doc.within(_autostart(doc))
 
     sec = autostart()
     assert sec.text.startswith("Autostart stacks on boot: on")
@@ -435,7 +447,7 @@ def test_daemon_feed_endpoint_does_not_read_the_radio(tmp_path, web):
     c = web(system=sysobj)
     j = c.get("/api/daemon/433/feed").get_json()
     assert "feed" in j and j["band"] == "433"
-    assert not any(b"CHANNEL" in s for s in seen)
+    assert seen == []                             # no radio request at all: STATUS, STATS, CHANNEL
     assert c.get("/api/daemon/999/feed").status_code == 404
 
 
@@ -445,8 +457,20 @@ def test_daemon_scan_is_post_and_requires_csrf(tmp_path, web, csrf):
     It takes the radio mutex, enters CAD and can destroy an arriving frame. Encoded as a GET, a
     refresh, prefetch or retry could fire it — which is, in miniature, how a status read came to
     scan the channel in the first place."""
-    c = _daemon_client(web, tmp_path)
-    assert c.get("/api/daemon/433/scan").status_code != 200       # GET must never reach it
+    seen: list[bytes] = []
+
+    class Rec:
+        def request(self, path, payload, timeout, maxb):
+            seen.append(payload)
+            return (b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90\n"
+                    if payload == b"GET STATUS\n" else b"")
+        def send(self, *a): ...
+
+    sysobj = FakeSystem().system
+    sysobj.unix = Rec()
+    c = web(system=sysobj)
+    r = c.get("/api/daemon/433/scan")                  # GET must never reach it: the stray-GET
+    assert r.status_code == 302 and seen == []         # redirect, and not one radio request
     assert c.post("/api/daemon/433/scan", data={}).status_code == 400   # no CSRF -> refused
     r = c.post("/api/daemon/433/scan", data={"_csrf": csrf(c)})
     assert r.status_code == 200
@@ -714,7 +738,7 @@ def test_dashboard_system_box_gnss_row_is_static_linked_and_after_network(web):
     body = web(guard=NoGpsProbe).get("/").get_data(as_text=True)
     doc = parse(body)
     row = doc.by_id("sys-gps")
-    assert row.tag == "tr" and row["class"] == "sysrow sysrow-time"
+    assert row.tag == "tr"
     cells = doc.within(row)
     links = cells.find("a")
     assert [a.text for a in links] == ["GNSS"] and [th.text for th in cells.find("th")] == ["GNSS"]
@@ -722,12 +746,10 @@ def test_dashboard_system_box_gnss_row_is_static_linked_and_after_network(web):
     pill = doc.by_id("sys-gps-state")
     assert pill["class"] == "pill" and pill.text == "…"      # plain until the first sample
     assert doc.by_id("sys-gps-lat").text == doc.by_id("sys-gps-lon").text == ""
-    # order: Time, (Network,) GNSS inside the metrics table, then Autostart
-    i_gps = body.index('id="sys-gps"')
-    assert body.index('id="sys-time-row"') < i_gps < body.index("</table>") \
-        < body.index('class="sysautostart sysblock"')
-    if 'id="sys-link-row"' in body:
-        assert body.index('id="sys-link-row"') < i_gps
+    # order: Time, GNSS inside the metrics table, then Autostart (the Network row's place between
+    # them is the next test's)
+    table = _metrics_table(doc)
+    assert doc.by_id("sys-time-row").index < row.index <= table.end < _autostart(doc).index
 
 
 def test_dashboard_gnss_row_follows_the_network_row(tmp_path, web, monkeypatch):
@@ -737,10 +759,9 @@ def test_dashboard_gnss_row_follows_the_network_row(tmp_path, web, monkeypatch):
     monkeypatch.setattr(svc, "network_view", lambda: {
         "supported": True, "mode": "client",
         "active": {"name": "Suche", "address": "192.0.2.7/24"}})
-    body = web(service_factory=lambda: svc).get("/").get_data(as_text=True)
-    assert "Suche (192.0.2.7/24)" in body
-    assert (body.index('id="sys-link-row"') < body.index('id="sys-gps"')
-            < body.index('class="sysautostart sysblock"'))
+    doc = parse(web(service_factory=lambda: svc).get("/").get_data(as_text=True))
+    assert doc.by_id("sys-link-val").text == "Suche (192.0.2.7/24)"
+    assert doc.by_id("sys-link-row").index < doc.by_id("sys-gps").index < _autostart(doc).index
 
 
 _CLIENT = {"name": "Suche...", "address": "192.168.178.106/24", "device": "wlan0"}
@@ -769,7 +790,7 @@ def test_dashboard_network_row_pill_and_text(tmp_path, web, monkeypatch, view, p
     body = web(service_factory=lambda: svc).get("/").get_data(as_text=True)
     doc = parse(body)
     row = doc.by_id("sys-link-row")
-    assert row.tag == "tr" and row["class"] == "sysrow sysrow-time"
+    assert row.tag == "tr"
     cells = doc.within(row)
     assert [th.text for th in cells.find("th")] == ["Net"]
     links = cells.find("a")                                  # the label links to the Network panel
@@ -780,7 +801,7 @@ def test_dashboard_network_row_pill_and_text(tmp_path, web, monkeypatch, view, p
     if pill == "Wi-Fi":
         assert pills[0]["id"] == "sys-wifi-pill" and pills[0]["data-dev"] == "wlan0"
     assert doc.by_id("sys-link-val").text == text
-    assert body.index('id="sys-time-row"') < body.index('id="sys-link-row"') < body.index("</table>")
+    assert doc.by_id("sys-time-row").index < row.index <= _metrics_table(doc).end
     assert "network: " not in body                          # the old line is gone
 
 
@@ -923,6 +944,40 @@ def _conflict_app(web, tmp_path, cmdlines, socks, mesh_band):
 
 
 _RDY_A5 = b"STATUS RADIO=READY TXMODE=MANAGED\n"
+
+
+def _stack_snapshot(svc, stack_id, states):
+    from lhpc.core.model import ComponentStatus, RunState
+    from lhpc.core.status import Snapshot, StackStatus
+    st = next(s for s in svc.stacks() if s.id == stack_id)
+    snap = Snapshot(runtime_root_exists=True)
+    ss = StackStatus(stack=st)
+    for comp in st.components:
+        ss.components[comp.id] = ComponentStatus(component_id=comp.id,
+                                                 run_state=states.get(comp.id, RunState.STOPPED))
+    snap.stacks.append(ss)
+    return snap
+
+
+def test_the_tiles_count_a_stack_with_a_dead_main_as_degraded(tmp_path, web, monkeypatch):
+    # Agent 4, e293: after `kill -9` of meshcore-node the console tile read "0 Degraded / failed"
+    # because the tiles counted COMPONENT states. They now count stacks by their rollup, the unit
+    # of the Stacks tile beside them (the rollup itself: tests/core/test_status_rules.py).
+    from lhpc.core.model import RunState
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    up = RunState.RUNNING
+    snap = _stack_snapshot(svc, "meshcore",
+                           {"meshcore-gps": up, "meshcore-webui": up, "meshcore-node": RunState.STOPPED})
+    monkeypatch.setattr(ControllerService, "build_snapshot", lambda self, *a, **k: snap)
+    doc = parse(web().get("/stacks").get_data(as_text=True))
+    # a tile is a box holding exactly two boxes: its count, then its label
+    tiles = {}
+    for box in doc.find("div"):
+        inner = doc.within(box).find("div")[1:]
+        if len(inner) == 2 and inner[0].text.isdigit():
+            tiles[inner[1].text] = int(inner[0].text)
+    assert (tiles["Degraded / failed"], tiles["Running"]) == (1, 0)
 
 
 def test_stacks_pages_suppress_false_daemon433_vs_meshtastic868(tmp_path, web):
@@ -1344,8 +1399,8 @@ def test_the_radio_card_log_links_sit_directly_under_the_daemon_control(tmp_path
     col = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
     forms = [f for f in col.find("form") if col.within(f).field_default("target") == "daemon"]
     assert len(forms) == 1, "exactly one daemon control on the card"
-    links = col.find("p", class_="links")
-    assert len(links) == 1
+    links = [p for p in col.find("p") if col.within(p).find("a", href="/logs/loraham-daemon?band=433")]
+    assert len(links) == 1                                                 # the block with the log links
     if state in ("ready", "occupied"):
         heads = [h for h in col.find("h3") if h.text.strip() == "Radio config"]
         assert len(heads) == 1 and heads[0].index == forms[0].end + 1     # Stop, then Radio config
@@ -1359,7 +1414,8 @@ def test_the_radio_card_log_links_sit_directly_under_the_daemon_control(tmp_path
 def test_the_radio_card_has_no_log_links_without_a_daemon(web):
     doc = parse(web().get("/").get_data(as_text=True))
     col = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
-    assert not col.find("p", class_="links") and not col.find("a", href="/logs/loraham-daemon?band=433")
+    assert not col.find("a", href="/logs/loraham-daemon?band=433")
+    assert not [a for a in col.find("a") if (a["href"] or "").startswith("/logs/")]
 
 
 def test_dash_radio_config_link_opens_daemon_settings(tmp_path, web):

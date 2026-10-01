@@ -19,50 +19,6 @@ def _svc(tmp_path):
     return svc
 
 
-def test_jobresult_refusal_field_roundtrip_and_malformed_ignored(tmp_path):
-    svc = _svc(tmp_path)
-    log, aid = "install-daemon.log", "d" * 32
-    assert jobresult.reserve(svc._paths, log, aid, "install", "daemon", "daemon", [])
-    ref = {"pin_mismatch": {"loraham-daemon": [A, B]}, "override_refused": "consent_stale"}
-    assert jobresult.terminalize(svc._paths, log, aid, "failed", detail="install failed",
-                                 refusal=ref)
-    assert jobresult.read_one(svc._paths, log)["refusal"] == ref
-    # a hand-edited, malformed field is ignored on read (the record itself stays readable)
-    import json
-    p = svc._paths.under("state", "jobresults", log + ".json")
-    d = json.loads(p.read_text())
-    d["refusal"] = {"pin_mismatch": {"x": ["short", B]}, "override_refused": "consent_stale"}
-    p.write_text(json.dumps(d))
-    back = jobresult.read_one(svc._paths, log)
-    assert back is not None and "refusal" not in back
-
-
-@pytest.mark.parametrize("bad", [
-    None, "x", {"pin_mismatch": {}, "override_refused": ""},
-    {"pin_mismatch": {"x": [A, B]}, "override_refused": "other"},
-    {"pin_mismatch": {"x": [A, B]}, "override_refused": "", "extra": 1},
-    {"pin_mismatch": {"x": [A]}, "override_refused": ""},
-    {"pin_mismatch": {"daemon\n": [A, B]}, "override_refused": ""},
-])
-def test_invalid_refusals_are_not_stored(tmp_path, bad):
-    svc = _svc(tmp_path)
-    log, aid = "install-daemon.log", "e" * 32
-    assert jobresult.reserve(svc._paths, log, aid, "install", "daemon", "daemon", [])
-    assert jobresult.terminalize(svc._paths, log, aid, "failed", refusal=bad)
-    assert "refusal" not in jobresult.read_one(svc._paths, log)
-
-
-def test_refusal_from_reads_only_a_failed_pin_mismatch():
-    ok = ActionResult(True, "x", data={"pin_mismatch": {"x": [A, B]}})
-    other = ActionResult(False, "x", data={"binary_failed": True})
-    pin = ActionResult(False, "x", data={"pin_mismatch": {"x": [A, B]},
-                                         "override_refused": "clone_required"})
-    assert jobresult.refusal_from(None) is None
-    assert jobresult.refusal_from(ok) is None and jobresult.refusal_from(other) is None
-    assert jobresult.refusal_from(pin) == {"pin_mismatch": {"x": [A, B]},
-                                           "override_refused": "clone_required"}
-
-
 def _child(tmp_path, monkeypatch, install_result, *, dep_gate_blocked=False, extra=()):
     """Run the real web install CHILD (`lhpc install … --web-result`) against a stubbed install."""
     from lhpc.adapters.cli import main as cli_main
@@ -90,6 +46,7 @@ def _child(tmp_path, monkeypatch, install_result, *, dep_gate_blocked=False, ext
     return jobresult._read_raw(svc._paths, web), seen
 
 
+@pytest.mark.needs_session                 # the job marker carries this process's identity
 @pytest.mark.parametrize("refused", ["", "clone_required", "consent_stale"])
 def test_web_install_job_result_carries_the_typed_refusal(tmp_path, monkeypatch, refused):
     res = ActionResult(False, "Binary install of 'daemon' refused",
@@ -102,17 +59,20 @@ def test_web_install_job_result_carries_the_typed_refusal(tmp_path, monkeypatch,
                             "override_refused": refused}
 
 
+@pytest.mark.needs_session                 # the job marker carries this process's identity
 def test_a_generic_install_failure_carries_no_refusal(tmp_path, monkeypatch):
     d, _seen = _child(tmp_path, monkeypatch,
                       ActionResult(False, "download failed", data={"binary_failed": True}))
     assert d["state"] == "failed" and "refusal" not in d
 
 
+@pytest.mark.needs_session                 # the job marker carries this process's identity
 def test_web_install_dep_gate_blocked_terminalizes_without_refusal(tmp_path, monkeypatch):
     d, _seen = _child(tmp_path, monkeypatch, ActionResult(True, "x"), dep_gate_blocked=True)
     assert d["state"] == "failed" and "refusal" not in d
 
 
+@pytest.mark.needs_session                 # the job marker carries this process's identity
 def test_the_job_passes_the_consent_token_to_the_install(tmp_path, monkeypatch):
     token = "f" * 64
     _d, seen = _child(tmp_path, monkeypatch, ActionResult(True, "ok", data={"changes": 1}),

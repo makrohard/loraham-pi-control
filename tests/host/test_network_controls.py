@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import pytest
 
 from lhpc.core import deps as deps_mod
 from lhpc.core import lifecycle as lcmod
@@ -524,12 +525,15 @@ def test_a_stamp_from_a_previous_boot_is_not_honoured(tmp_path, monkeypatch):
     _, calls, ok, msg = _tick_at(tmp_path, monkeypatch, 800.0)
     assert _ups(calls), f"a previous boot's stamp must not defer this boot: {msg}"
 
-    # ...and the normalization itself, which only runs when a stamp is actually WRITTEN. A pass
-    # over an idle AP never calls _net_stamp_nonidle, so the case has to be driven with the AP
-    # busy: the previous boot's attempt fields must not survive into this boot's record, or a
-    # stale attempt_uptime would look current and defer a needed retry for that boot's uptime.
-    svc2 = _svc(tmp_path)
-    svc2._net_retry_path().write_text(json.dumps(
+
+def test_a_busy_pass_normalises_a_previous_boots_stamp(tmp_path, monkeypatch):
+    """The normalization itself, which only runs when a stamp is actually WRITTEN. A pass over an
+    idle AP never calls _net_stamp_nonidle, so the case has to be driven with the AP busy: the
+    previous boot's attempt fields must not survive into this boot's record, or a stale
+    attempt_uptime would look current and defer a needed retry for that boot's uptime."""
+    _tick_at(tmp_path, monkeypatch, 100.0)
+    svc = _svc(tmp_path)
+    svc._net_retry_path().write_text(json.dumps(
         {"boot_id": "an-older-boot", "last_nonidle_uptime": 5000.0,
          "attempt_uptime": 4000.0, "uuid": "CL-UUID-OLD"}))
     _tick_at(tmp_path, monkeypatch, 900.0, station=STATION)
@@ -590,21 +594,6 @@ def test_the_grace_survives_a_change_of_preferred_network(tmp_path, monkeypatch)
     assert not [c for c in calls if "up" in c and "CL-UUID-3" in c]
 
 
-def test_a_permission_denied_probe_defers_like_a_present_station(tmp_path, monkeypatch):
-    """rc 126 joins rc 127 and the exceptions: not provably idle, so defer and stamp. _ap_idle is
-    two-valued and cannot tell a real station from a broken probe; both want the same outcome."""
-    svc = _svc(tmp_path)
-    calls = _fake_nmcli(svc, {**_std_replies(), "connection modify": (0, "", ""),
-                              "connection up": (0, "activated\n", ""),
-                              "station dump": (126, "", "permission denied")})
-    _prefer_homenet(svc, monkeypatch)
-    ok, msg = svc._network_watch_tick()
-    assert ok and "retry deferred" in msg
-    assert not _ups(calls)
-    rec = json.loads(svc._net_retry_path().read_text())
-    assert "last_nonidle_uptime" in rec and "attempt_uptime" not in rec
-
-
 def test_watchdog_defers_retry_while_a_client_is_on_the_ap(tmp_path, monkeypatch):
     # Single radio: the attempt takes the AP down, never under a connected client.
     svc = _svc(tmp_path)
@@ -628,12 +617,14 @@ def test_watchdog_defers_retry_while_a_client_is_on_the_ap(tmp_path, monkeypatch
     assert len(_ups(calls)) == 1
 
 
-def test_watchdog_defers_retry_when_the_station_table_is_unreadable(tmp_path, monkeypatch):
-    # Fail-safe: no iw / a failing iw is not "no client".
+@pytest.mark.parametrize("rc,err", [(127, "iw: not found"), (126, "permission denied")])
+def test_watchdog_defers_retry_when_the_station_table_is_unreadable(tmp_path, monkeypatch, rc, err):
+    # Fail-safe: no iw / a failing iw is not "no client". rc 126 joins rc 127 and the exceptions:
+    # _ap_idle is two-valued and cannot tell a real station from a broken probe; both defer.
     svc = _svc(tmp_path)
     calls = _fake_nmcli(svc, {**_std_replies(), "connection modify": (0, "", ""),
                               "connection up": (0, "activated\n", ""),
-                              "station dump": (127, "", "iw: not found")})
+                              "station dump": (rc, "", err)})
     _prefer_homenet(svc, monkeypatch)
     ok, msg = svc._network_watch_tick()
     assert ok and "retry deferred" in msg

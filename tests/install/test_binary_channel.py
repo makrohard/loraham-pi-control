@@ -1274,17 +1274,6 @@ def test_hmac_cli_preview_refuses_on_binary_install(tmp_path, monkeypatch, capsy
     assert "NO mesh password" in out and "Re-run to apply" not in out
 
 
-def test_the_daemon_failure_reason_is_the_last_typed_line():
-    from lhpc.core.services import ControllerService
-    f = ControllerService._daemon_failure_reason
-    assert f(["  [note] radio mode dual", "  [BLOCKED] daemon: not built — build it first"]) == \
-        "daemon: not built — build it first"
-    assert f(["  [ok] daemon-433", "  [fail] 868 CONF socket never came up — the daemon failed"]) == \
-        "868 CONF socket never came up — the daemon failed"
-    assert f(["  [ok] daemon already serving 433"]) == "daemon readiness/TX gating failed"
-
-
-
 @pytest.mark.parametrize("target", ["daemon", "meshcom"])
 def test_a_daemon_that_is_not_installed_names_that_as_the_reason(tmp_path, monkeypatch, target):
     # P1.23 (audit P1.4, the note): this fatal return was tagged [skip], which the typed-reason

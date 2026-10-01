@@ -451,6 +451,7 @@ def test_schedule_spacing_measured():
         assert gap >= want * 0.9, f"gap {gap:.3f}s is shorter than the {want}s it asked for"
 
 
+@pytest.mark.slow                                      # ~3.5 s of real timed retries
 def test_no_attempt_starts_after_the_schedule_window():
     """The schedule is a clock, not a count: an attempt that overruns (a probe waiting on a slow
     node) eats into the window, and no attempt starts once the window has passed. A required
@@ -1116,7 +1117,7 @@ def test_status_shows_unverified_line_with_reapply_hint(tmp_path):
     svc = _sidecar_svc(tmp_path, [{"kind": "tcp_send", "label": "callsign",
                                    "outcome": "unverified", "attempts": 30,
                                    "elapsed_s": 801.4}])
-    lines = svc._post_start_outcomes("meshcom-qemu")
+    lines = [d for d in svc.status("meshcom").details if "post-start:" in d]
     assert len(lines) == 1
     assert "callsign UNVERIFIED" in lines[0]
     assert "lhpc stack poststart meshcom" in lines[0]

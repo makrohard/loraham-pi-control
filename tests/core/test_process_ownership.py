@@ -699,27 +699,25 @@ def test_identity_tolerates_exec_change_same_starttime():
 
 def test_wait_ceased_honours_the_components_stop_timeout(tmp_path, monkeypatch):
     """A component's `stop_timeout` is the cessation budget on its stop; 0 means the lifecycle
-    default (STOP_WAIT_S). Measured by counting polls against a process that never ceases."""
+    default (STOP_WAIT_S). Measured as the time waited (an injected sleep that only adds up what
+    it is asked to sleep) against a process that never ceases."""
     from lhpc.core.model import Component, ComponentKind
     life = _life(tmp_path)
     monkeypatch.setattr(life, "STOP_POLL_S", 0.01)
     monkeypatch.setattr(life, "STOP_WAIT_S", 0.05)
     monkeypatch.setattr(life, "_original_ceased", lambda rec: False)
-    monkeypatch.setattr("time.sleep", lambda s: None)
-    polls = {"n": 0}
+    slept: list[float] = []
+    monkeypatch.setattr("time.sleep", slept.append)
 
-    def _never(rec):
-        polls["n"] += 1
-        return False
-    monkeypatch.setattr(life, "_original_ceased", _never)
-    assert life._wait_ceased({"pid": 1}) is False
-    default_polls = polls["n"]
-    polls["n"] = 0
-    assert life._wait_ceased({"pid": 1}, 0.3) is False
-    assert polls["n"] > default_polls * 4                   # 0.3 s of polls vs 0.05 s
-    polls["n"] = 0
-    assert life._wait_ceased({"pid": 1}, 0.0) is False
-    assert polls["n"] == default_polls                       # 0 = the default
+    def waited(timeout=None):
+        slept.clear()
+        args = () if timeout is None else (timeout,)
+        assert life._wait_ceased({"pid": 1}, *args) is False
+        return sum(slept)
+    # the budget, give or take the one poll that may cross it
+    assert 0.05 - 1e-9 <= waited() <= 0.05 + 0.01 + 1e-9         # the default
+    assert 0.3 - 1e-9 <= waited(0.3) <= 0.3 + 0.01 + 1e-9         # the component's own budget
+    assert 0.05 - 1e-9 <= waited(0.0) <= 0.05 + 0.01 + 1e-9       # 0 = the default
     # and the stop path passes the component's value through
     comp = Component(id="loraham-daemon", name="d", kind=ComponentKind.SERVICE,
                      readiness="process", stop_timeout=0.3)

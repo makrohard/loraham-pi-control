@@ -159,6 +159,27 @@ def _home_isolation(monkeypatch, tmp_path_factory):
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home-iso")))
 
 
+from lhpc.core import service_system as _service_system  # noqa: E402
+_REAL_KERNEL_TIME_STATE = _service_system.read_kernel_time_state
+
+
+@pytest.fixture(autouse=True)
+def _synced_kernel_clock(monkeypatch):
+    """HERMETIC: the kernel's clock-sync state (`ntp_adjtime`) is host state. Every certificate path
+    is clock-gated, so on an unsynchronised host (a container, a Pi before NTP) about fifty PKI
+    tests failed at the gate for the host's reason, not the code's. Every test sees a synchronised
+    clock; a test about the clock sets its own state (its monkeypatch runs after this one and
+    wins), and a test of the reader itself requests `real_kernel_time_state`."""
+    monkeypatch.setattr(_service_system, "read_kernel_time_state",
+                        lambda: {"synced": True, "maxerror_us": 1000})
+
+
+@pytest.fixture
+def real_kernel_time_state(monkeypatch):
+    """The real `read_kernel_time_state`, for the tests of the reader itself."""
+    monkeypatch.setattr(_service_system, "read_kernel_time_state", _REAL_KERNEL_TIME_STATE)
+
+
 @pytest.fixture(autouse=True)
 def _default_display(request, monkeypatch):
     """A graphical session is part of the working-box BASELINE, like the radios above.

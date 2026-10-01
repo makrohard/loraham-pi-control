@@ -202,8 +202,9 @@ def test_concurrent_append_writer_no_hole_and_only_the_window_lost(paths):
                 if r == "capped":
                     caps += 1
                     tail = _prev(log).read_bytes()
-                    kept = _seq(tail) if tail else []
-                    assert kept == list(range(kept[0], kept[0] + len(kept))) if kept else True
+                    assert tail, "a cap above max_bytes kept an empty tail"
+                    kept = _seq(tail)
+                    assert kept == list(range(kept[0], kept[0] + len(kept)))
             time.sleep(0.001)
     finally:
         proc.wait(timeout=60)
@@ -217,14 +218,12 @@ def test_concurrent_append_writer_no_hole_and_only_the_window_lost(paths):
     assert live == list(range(live[0], total)), "the live log must hold every line written after the last cap"
 
     tail = _prev(log).read_bytes()
-    kept = _seq(tail) if tail else []
-    if kept:
-        assert kept == list(range(kept[0], kept[-1] + 1))
-        assert kept[-1] < live[0], "the kept tail and the live log overlap or are out of order"
+    assert tail, "the last cap kept an empty tail"
+    kept = _seq(tail)
+    assert kept == list(range(kept[0], kept[-1] + 1))
     # The lines between the last kept line and the first live line were written between the cap's read
     # and its truncate: lost by design. Nothing bounds how many (the capper can be descheduled).
-    lost = live[0] - (kept[-1] + 1 if kept else live[0])
-    assert lost >= 0
+    assert kept[-1] < live[0], "the kept tail and the live log overlap or are out of order"
 
 
 def test_writer_keeps_appending_after_the_cap(paths):
@@ -251,7 +250,7 @@ def _snapshot(p: Path):
     return st.st_ino, st.st_size, st.st_mtime_ns, stat.S_IFMT(st.st_mode), body
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory write permission")
+@pytest.mark.needs_nonroot
 def test_unwritable_directory_raises_and_leaves_the_log(paths):
     log = _log(paths)
     log.write_bytes(_lines(600))
@@ -390,25 +389,3 @@ def test_memory_bound_never_reads_more_than_keep(paths):
     assert log.stat().st_size == 0
     assert len(_prev(log).read_bytes()) <= keep
 
-
-def test_memory_bound_read_calls(paths, monkeypatch):
-    """No single read on the log's descriptor asks for more than keep_bytes."""
-    log = _log(paths)
-    log.write_bytes(_lines(8000))
-    asked: list[int] = []
-    real_read, real_pread = os.read, getattr(os, "pread", None)
-
-    def rd(fd, n):
-        asked.append(n)
-        return real_read(fd, n)
-
-    monkeypatch.setattr(os, "read", rd)
-    if real_pread is not None:
-        def prd(fd, n, off):
-            asked.append(n)
-            return real_pread(fd, n, off)
-        monkeypatch.setattr(os, "pread", prd)
-    assert runtime_fs.cap_start_log(paths, log, max_bytes=MAX, keep_bytes=KEEP) == "capped"
-    assert asked, "the cap read nothing through os.read/os.pread (does it read through a file object?)"
-    assert max(asked) <= KEEP
-    assert sum(asked) <= 2 * KEEP

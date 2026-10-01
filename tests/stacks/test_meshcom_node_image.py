@@ -27,7 +27,9 @@ def test_meshcom_boots_its_node_image_under_state(tmp_path):
 def test_the_node_image_is_outside_every_binary_publish_root(tmp_path):
     svc, _comp, argv = _argv(tmp_path)
     node = argv[argv.index("--node-image") + 1][len("/rt/"):]
-    for root in svc.binary_spec("meshcom").publish_roots:
+    roots = svc.binary_spec("meshcom").publish_roots
+    assert roots
+    for root in roots:
         assert not (node == root or node.startswith(root.rstrip("/") + "/")), root
 
 
@@ -58,8 +60,17 @@ def test_uninstall_keeps_the_node_image(tmp_path):
 
 
 @pytest.mark.parametrize("bad", ["state", "state/../x", "config/meshcom", "state/a/b", "/state/x"])
-def test_state_root_must_be_one_state_directory(bad):
-    from lhpc.core.manifest import ManifestError, _state_root
-    with pytest.raises(ManifestError):
-        _state_root({"id": "x", "state_root": bad})
-    assert _state_root({"id": "x", "state_root": "state/meshcom"}) == "state/meshcom"
+def test_state_root_must_be_one_state_directory(bad, tmp_path):
+    from lhpc.core.manifest import ManifestError, load_manifest
+
+    def manifest(state_root):
+        path = tmp_path / "manifest.toml"
+        path.write_text('[[stack]]\nid = "s"\nname = "s"\nmain = "app"\n'
+                        '[[stack.component]]\nid = "app"\nname = "app"\nkind = "service"\n'
+                        'run = "bin/app"\nreadiness = "manual"\ninteractive = true\n'
+                        f'state_root = "{state_root}"\n')
+        return path
+
+    with pytest.raises(ManifestError, match="state_root"):
+        load_manifest(manifest(bad))
+    assert load_manifest(manifest("state/meshcom"))[0].component("app").state_root == "state/meshcom"

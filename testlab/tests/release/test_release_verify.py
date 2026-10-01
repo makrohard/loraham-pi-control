@@ -220,12 +220,9 @@ def _assert_plugin_manager_running(env) -> None:
 def _assert_plugin_manager_gone(env) -> None:
     """A graceful stack stop takes the manager down and the host clears the marker: the ONE
     acceptance criterion of the plugin-manager lifecycle (docs/stacks/meshcore.md)."""
-    import time as _t
     root = env["LHPC_RUNTIME_ROOT"]
-    deadline = _t.monotonic() + 40                            # the node's stop_timeout budget
-    while _t.monotonic() < deadline and (plugin_manager_pids(root)
-                                         or plugin_manager_marker(root).exists()):
-        _t.sleep(0.5)
+    wait_for(lambda: not (plugin_manager_pids(root) or plugin_manager_marker(root).exists()),
+             40, every=0.5)                                   # the node's stop_timeout budget
     assert plugin_manager_pids(root) == [], "plugin manager still running after the stack stop"
     assert not plugin_manager_marker(root).exists(), \
         "plugin-manager marker not cleared: the manager did not stop cleanly"

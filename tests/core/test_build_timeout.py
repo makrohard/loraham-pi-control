@@ -108,6 +108,9 @@ def test_successful_build_stamps_marker_and_is_built_flips(tmp_path, monkeypatch
     monkeypatch.setattr(lifecycle_mod, "run_job",
                         lambda runner, **kw: JobResult(name="b", state=JobState.SUCCEEDED,
                                                        returncode=0, log_path="", tail=[]))
+    # The lifecycle is driven directly: the public svc.build refuses meshcore-node until its build
+    # dependency (the repeater checkout) is installed and owned, which is not this test's subject.
+    # The two arguments are what svc.build hands the lifecycle.
     res = svc._lifecycle().build(comp, marker_extra=svc._consumed_source_lines(comp),
                                  inputs=svc._build_inputs_to_record(comp))
     assert res.ok
@@ -208,8 +211,8 @@ def test_meshcom_successful_build_stamps_marker_only_after_last_step(tmp_path, m
         assert not marker.exists()          # marker must NOT exist during any step (only after the last)
         return JobResult(name="b", state=JobState.SUCCEEDED, returncode=0, log_path="", tail=[])
     monkeypatch.setattr(lifecycle_mod, "run_job", _fake_run_job)
-    res = svc._lifecycle().build(comp, inputs=svc._build_inputs_to_record(comp))
-    assert res.ok and steps_run["n"] == len(comp.build_steps)   # every step ran
+    res = svc.build(comp.id, apply=True)
+    assert res.ok and steps_run["n"] == len(comp.build_steps), res.summary   # every step ran
     assert marker.exists() and svc.is_built(comp)               # stamped only after the last step
 
 

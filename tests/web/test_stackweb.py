@@ -102,7 +102,7 @@ def test_only_non_2xx_3xx_reaches_the_access_log():
     assert conf.count("access_log ") == 1
 
 
-def test_the_fallback_page_says_nothing_console_specific():
+def test_the_fallback_page_says_nothing_console_specific(tmp_path):
     """The page nginx serves on 502/503/504 is ONE file shared by the console block and every
     stack block, so its wording must be true in both. It used to say "The console is restarting"
     with a "Return to the console" link — shown on a stack UI that is wrong twice over: the
@@ -110,17 +110,20 @@ def test_the_fallback_page_says_nothing_console_specific():
     serving it from a real stack block on the box, which no unit test could have shown.
 
     It is also entirely standalone: nginx serves it from disk with no upstream, so it must not
-    reference the console's CSS or any script."""
-    html = webserver._UPDATING_PAGE_HTML
-    lowered = html.lower()
+    reference the console's CSS or any script. Read as `stage_and_validate` writes it."""
+    paths = Paths(runtime_root=tmp_path)
+    staged = paths.under(*webserver.NGINX_CONF_STAGED)
+    fake = FakeSystem(commands={("nginx", "-t", "-c", str(staged)): CR(0, "", "ok")})
+    webserver.stage_and_validate(fake.system, paths, WebserverConfig())
+    doc = parse((tmp_path / "config" / "nginx" / "_lhpc_updating.html").read_text())
+    lowered = doc.text.lower()
     for phrase in ("the console is restarting", "return to the console", "console restarting"):
         assert phrase not in lowered, phrase
-    # No EXTERNAL references: nginx serves this from disk with no upstream, so a stylesheet or
-    # script link would simply fail. (The word "style.css" appears in a comment explaining exactly
-    # that, so match on real references rather than the bare filename.)
-    assert "<script" not in lowered
-    assert "<link" not in lowered
-    assert "/static/" not in lowered
+    # No EXTERNAL references: a stylesheet or script would simply fail without the upstream.
+    assert not doc.find("script") and not doc.find("link")
+    refs = [v for tag in ("a", "img", "iframe", "source") for el in doc.find(tag)
+            for v in (el["href"], el["src"]) if v]
+    assert refs and not any(r.startswith(("/static/", "http:", "https:", "//")) for r in refs)
 
 
 def test_every_stack_block_serves_the_branded_page_instead_of_a_raw_502():

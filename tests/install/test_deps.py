@@ -1010,3 +1010,91 @@ def test_an_artifact_that_predates_the_recorded_inputs_reads_not_built(tmp_path)
     src.mkdir(parents=True, exist_ok=True)
     (src / c.build_marker).write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(c))
     assert svc.is_built(_mesh(_svc(tmp_path))) is False
+
+
+# --- the time-source copybox on the dependency panel --------------------------------------------
+# The other half of the NMEA policy. The standalone bootstrap keeps its own shell pre-flight
+# because it may run before lhpc exists; the running controller does not re-derive any of that,
+# it already knows its effective GPS source. One policy, two boundaries.
+#
+# The first implementation of this feature defined the copybox helper and never wired it to a
+# caller, while the report claimed the surface was closed. These tests exist so that cannot
+# recur silently.
+
+def test_the_copybox_is_refused_on_a_direct_nmea_box():
+    from lhpc.core import deps
+    offer, text = deps.time_source_offer("nmea", "op")
+    assert offer is False
+    assert "apt install" not in text, "an installable command was handed to an NMEA box"
+    assert "UBX" in text and "source to gpsd" in text     # names the reason and the way out
+
+
+@pytest.mark.parametrize("source", ["gpsd", "auto", ""])
+def test_the_copybox_is_offered_for_gpsd_and_auto(source):
+    from lhpc.core import deps
+    offer, text = deps.time_source_offer(source, "op")
+    assert offer is True
+    assert "apt install -y chrony gpsd" in text
+
+
+def test_the_copybox_warns_before_it_installs_not_after():
+    # Ordering is the whole point: gpsd with Debian's USBAUTO claims the receiver the moment it
+    # is installed, and on a u-blox that is irreversible from software. A caution printed after
+    # the apt line would be advice about something that already happened.
+    from lhpc.core import deps
+    text = deps.time_source_install_cmd("op")
+    assert text.index("source = nmea") < text.index("apt install")
+
+
+def test_the_dependency_panel_carries_the_time_source_entry(tmp_path):
+    # The wiring the first round claimed and did not do.
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    groups = {g["title"]: g for g in svc.controller_system_deps()}
+    assert "Time source" in groups
+    dep = groups["Time source"]["deps"][0]
+    assert dep["bootstrap"] is False      # it has its own scaffold; never fold it in twice
+    assert not dep["required"]            # a box with another time daemon is not broken
+    assert "apt install -y chrony gpsd" in dep["install"]
+
+
+def test_an_unreadable_gps_config_refuses_the_copybox():
+    """Uncertainty about receiver ownership fails safe here exactly as it does in the bootstrap
+    pre-flight. The previous version returned "" for a failed read, which is the same value as an
+    ABSENT [gps] section — legitimately `auto` — so it rendered an installable `apt install` for
+    a box whose configuration it had just failed to read. The comment justifying that claimed the
+    standalone script was an independent second guard; it is not, because the copybox runs apt
+    directly rather than invoking the script."""
+    from lhpc.core import deps
+    offer, text = deps.time_source_offer(deps.TIME_SOURCE_SOURCE_UNKNOWN, "op")
+    assert offer is False and "apt install" not in text
+    assert "could not read" in text
+    # and an ABSENT section is still the fresh-image case, still offered
+    assert deps.time_source_offer("", "op")[0] is True
+
+
+def test_a_failed_config_read_reaches_the_panel_as_unknown(tmp_path, monkeypatch):
+    from lhpc.core import deps
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(type(svc), "config",
+                        lambda self: (_ for _ in ()).throw(RuntimeError("unreadable")))
+    assert svc._gps_source_for_offer() == deps.TIME_SOURCE_SOURCE_UNKNOWN
+
+
+def test_a_half_finished_setup_does_not_read_as_satisfied(tmp_path, monkeypatch):
+    """The drop-in is written early. A setup that failed after that — chrony refusing to start,
+    the prefer edit failing — would leave the file behind, and the panel would report the
+    dependency satisfied and hide the copybox offering the repair. Both ends of the setup must be
+    visible before it counts."""
+    from lhpc.core import deps
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    seen = {deps.CHRONY_DROPIN_PATH}          # drop-in only: the half-finished state
+    monkeypatch.setattr(type(svc._system.fs), "exists", lambda self, p: p in seen, raising=False)
+    assert svc._time_source_present() is False
+    seen.add(deps.CLOCK_EPOCH_PATH)           # the boot floor survives failed re-runs: NOT a witness
+    assert svc._time_source_present() is False
+    seen.add(deps.TIME_SOURCE_STAMP_PATH)     # the per-run witness, written only after the verdict
+    # A box set up before fake-hwclock joined the time source (F-B1): drop-in and stamp present,
+    # no LHPC fake-hwclock default -> NOT satisfied, so the panel offers the repair command.
+    assert svc._time_source_present() is False
+    seen.add(deps.FAKE_HWCLOCK_DEFAULT_PATH)
+    assert svc._time_source_present() is True

@@ -178,5 +178,6 @@ def test_every_hw_preset_has_a_family():
     # A preset the catalog can launch but the family map does not know would silently fall back
     # to the union range — the failure would be invisible, so it is asserted here instead.
     from lhpc.core.config import HW_PRESETS, hw_preset_family
+    assert HW_PRESETS
     for preset in HW_PRESETS:
         assert hw_preset_family(preset) in ("sx127x", "sx1262"), preset

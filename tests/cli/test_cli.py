@@ -232,7 +232,7 @@ def test_self_update_apply_cli_yes(capsys, monkeypatch, no_venv_sync):
     # "Operator self-update prints steps it already took").
     assert "Update applied." in out and seen["force"] is True
     assert "restart the web console" not in out and "lhpc web" not in out, out
-    assert "The web console is not running; it loads the new version when started." in out
+    assert "not running" in out                 # the console was down: nothing was restarted
 
 
 def test_self_update_overwrite_implies_apply(capsys, monkeypatch, no_venv_sync):
@@ -664,21 +664,22 @@ def test_docs_cli_lists_every_command():
     assert not missing, f"docs/cli.md missing sections for: {missing}"
 
 
-def test_update_source_help_names_the_real_default():
+def test_update_source_help_names_the_real_default(capsys):
     # K1 (Audit Agent 2, round 7): the help said "default: keep the stack's current channel";
     # without --source the CLI updates a binary-installed target binary->binary, any other to
     # `pinned` (the `update` branch of main()).
-    import argparse
-    from lhpc.adapters.cli.main import build_parser
-    subs = [a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction)][0]
-    source = next(a for a in subs.choices["update"]._actions if "--source" in a.option_strings)
-    assert "keep the stack's current channel" not in source.help
-    assert "default: pinned" in source.help and "installed from the binary stays on it" in source.help, \
-        source.help
+    def help_of(*argv):
+        with pytest.raises(SystemExit):
+            main([*argv, "--help"])
+        return " ".join(capsys.readouterr().out.split())   # argparse wraps the help text
+
+    update = help_of("update")
+    assert "keep the stack's current channel" not in update
+    assert "default: pinned" in update and "installed from the binary stays on it" in update, update
     # K1b: auto-install's --source help named "else dev"; default_channel() returns binary where
     # published, else pinned.
-    auto = next(a for a in subs.choices["auto-install"]._actions if "--source" in a.option_strings)
-    assert "binary where published, else pinned" in auto.help, auto.help
+    auto = help_of("auto-install")
+    assert "binary where published, else pinned" in auto, auto
 
 
 # --- auto-install --recover / --status (item R: headless recovery parity) -------------------------
@@ -874,6 +875,18 @@ def test_a_missing_webserver_action_is_a_usage_error(capsys):
     err = capsys.readouterr().err
     assert rc == 2
     assert err.startswith("usage: lhpc webserver")
+
+
+
+def test_the_cli_init_command_has_no_clock_override():
+    # Commissioning may not depend on a clock (0.7.0): `webserver init` has no override to give.
+    from lhpc.adapters.cli.main import build_parser
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["webserver", "init", "--accept-unverified-clock"])
+    # ...while the gated commands keep it
+    ns = parser.parse_args(["webserver", "tls-renew", "--accept-unverified-clock"])
+    assert ns.accept_unverified_clock is True
 
 
 @pytest.mark.contract

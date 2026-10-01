@@ -10,6 +10,8 @@ paths, is capped. A leaf IN the provisional window (a PKI made without a verifie
 normalised) is NOT capped; since C13 one is issued only while the clock is unverified. The display marks it
 as over the cap while it is provisional and names the manual way: `lhpc webserver tls-renew` under a verified
 clock (which issues outside the window whatever the marker says), then `lhpc webserver apply`.
+
+The console page that shows this line: tests/web/test_certificate_expiry_page.py.
 """
 
 from __future__ import annotations
@@ -243,17 +245,17 @@ def test_status_line_and_doctor_for_the_server_certificate(tmp_path, monkeypatch
     na = _leaf(tmp_path).not_valid_after_utc
     svc = _svc(tmp_path, monkeypatch)
     baseline = svc.doctor()                          # the fake box's verdict with a fresh leaf
+    assert baseline.ok, baseline.summary             # healthy, so the leaf alone decides below
     _at(monkeypatch, na - days_left * DAY - _dt.timedelta(minutes=1))
     line = svc.webserver_monitor().data["pki"]["server_cert"]["expiry_text"]
     assert words in line
     d = svc.doctor()
     assert any(words in x and "server certificate" in x for x in d.details)
     if doctor_ok:
-        assert d.ok is baseline.ok                   # information only
+        assert d.ok is True                          # information only
     else:
         assert d.ok is False
-        if baseline.ok:                              # no other cause outranks it in the summary
-            assert "server certificate has expired" in d.summary
+        assert "server certificate has expired" in d.summary     # no other cause outranks it
 
 
 def test_doctor_verdict_does_not_change_for_near_end_certificates(tmp_path, monkeypatch):
@@ -293,28 +295,3 @@ def test_no_mark_with_more_than_60_days_left(tmp_path, monkeypatch):
     _at(monkeypatch, _dt.datetime.fromisoformat(act["not_after"]) - 61 * DAY
         - _dt.timedelta(minutes=1))
     assert pki.client_certs_with_expiry(p)[0]["expiry_mark"] == ""
-
-
-# --- the console panel -----------------------------------------------------------------------------
-
-def test_the_console_panel_shows_the_line_and_not_the_old_renewal_phrase(web, tmp_path, monkeypatch):
-    p = _init_pki(tmp_path)
-    pki.issue_server_cert(p, dns_sans=("box.lan",), ip_sans=(), days=825)
-    act = pki.issue_client_cert(p, "laptop", days=825, passphrase="pw-for-the-test")
-    _at(monkeypatch, _dt.datetime.fromisoformat(act["not_after"]) - 59 * DAY
-        - _dt.timedelta(minutes=1))
-    body = web().get("/stacks").get_data(as_text=True)
-    line = pki.pki_status(p)["server_cert"]["expiry_text"]
-    assert f"Server certificate: <code>{line}</code>" in body
-    assert "expires in 59 days" in body                            # the client list's mark
-    assert "renewed automatically" not in body                     # the old phrases are replaced
-
-
-def test_the_console_panel_marks_a_provisional_certificate(web, tmp_path, monkeypatch):
-    res = _svc(tmp_path, monkeypatch, synced=False).webserver_init(
-        dns_sans=["box.lan"], ip_sans=[], confirm=True)
-    assert res.ok, res.summary
-    body = web().get("/stacks").get_data(as_text=True)
-    assert ("provisional: over the Apple 825-day cap; to replace it: lhpc webserver tls-renew under a "
-            "verified clock, then lhpc webserver apply") in body
-    assert "renewed automatically" not in body

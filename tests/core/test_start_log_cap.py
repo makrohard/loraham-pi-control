@@ -129,15 +129,14 @@ def test_cap_start_logs_takes_start_logs_only_and_never_raises(tmp_path, monkeyp
 
 def test_lhpc_logs_never_resolves_to_the_prev_half(tmp_path):
     # Found in review: right after a cap the banded .prev.log is NEWER than the emptied live log.
-    import time
-
     from lhpc.core.config import Config
     from lhpc.core.lifecycle import Lifecycle
     from lhpc.core.model import Component, ComponentKind
     from lhpc.core.probes.backends import FakeSystem
     live = _big(tmp_path, "start-loraham-daemon-433.log", n=2)
-    time.sleep(0.01)
-    _big(tmp_path, "start-loraham-daemon-433.prev.log", n=2)
+    prev = _big(tmp_path, "start-loraham-daemon-433.prev.log", n=2)
+    os.utime(live, (1_000_000_000, 1_000_000_000))
+    os.utime(prev, (1_000_000_100, 1_000_000_100))                  # the .prev.log is the NEWER one
     life = Lifecycle(Paths(runtime_root=tmp_path), (), Config(), FakeSystem().system)
     comp = Component(id="loraham-daemon", name="d", kind=ComponentKind.SERVICE, run_argv=("true",))
     assert life.start_log(comp) == live
@@ -184,15 +183,14 @@ def test_a_failing_cap_never_blocks_the_start(tmp_path, monkeypatch):
 def test_band_less_lhpc_logs_never_resolves_to_the_prev_half(tmp_path):
     # The same class as start_log(): `lhpc logs <comp>` without a band takes the newest job log,
     # and `start-<id>-<band>.prev.log` matches its "start-<id>-" rule.
-    import time
-
     from lhpc.core.config import Config
     from lhpc.core.lifecycle import Lifecycle
     from lhpc.core.model import Component, ComponentKind
     from lhpc.core.probes.backends import FakeSystem
     live = _big(tmp_path, "start-loraham-daemon-433.log", n=2)
-    time.sleep(0.01)
-    _big(tmp_path, "start-loraham-daemon-433.prev.log", n=2)
+    prev = _big(tmp_path, "start-loraham-daemon-433.prev.log", n=2)
+    os.utime(live, (1_000_000_000, 1_000_000_000))
+    os.utime(prev, (1_000_000_100, 1_000_000_100))                  # the .prev.log is the NEWER one
     life = Lifecycle(Paths(runtime_root=tmp_path), (), Config(), FakeSystem().system)
     comp = Component(id="loraham-daemon", name="d", kind=ComponentKind.SERVICE, run_argv=("true",))
     path, _tail = life.logs(comp)

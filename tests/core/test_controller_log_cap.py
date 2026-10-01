@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -75,11 +76,14 @@ def test_cap_controller_logs_missing_symlink_and_non_regular(tmp_path, small_cap
 
 
 def test_controller_logs_tuple_matches_the_units():
-    """Every `append:` log of the rendered units (updater_units.py) and of deploy/*.service is in
-    CONTROLLER_LOGS, and every entry is such a log or one of nginx's two: none can be forgotten."""
+    """Every `append:` log of the rendered units (updater_units.render) and of deploy/*.service is
+    in CONTROLLER_LOGS, and every entry is such a log or one of nginx's two: none can be forgotten."""
     root = Path(repo_paths.REPO)
     pat = re.compile(r"append:\S*/logs/([\w.-]+\.log)")
-    units = set(pat.findall((root / "lhpc" / "core" / "updater_units.py").read_text()))
+    canonical = updater_units.deployment_paths("/rt")
+    units = set()
+    for kind in updater_units.ALL_UNITS:
+        units |= set(pat.findall(updater_units.render(kind, *canonical)))
     deploy = set()
     for f in (root / "deploy").glob("*.service"):
         deploy |= set(pat.findall(f.read_text()))
@@ -90,11 +94,10 @@ def test_controller_logs_tuple_matches_the_units():
 
 
 _WRITER = textwrap.dedent("""
-    import os, sys, time
+    import os, sys
     for i in range(int(sys.argv[1])):
         os.write(1, b"w-%08d\\n" % i)
-    sys.stdout.flush()
-    time.sleep(float(sys.argv[2]))
+    sys.stdin.readline()                       # the test says when the cap is done
     os.write(1, b"after-the-cap\\n")
 """)
 
@@ -103,12 +106,17 @@ def test_cap_controller_log_with_a_live_o_append_writer(tmp_path, small_cap):
     svc = _svc(tmp_path)
     live = tmp_path / "logs" / "lhpc-web.log"
     with open(live, "ab") as fh:                                  # the unit's append: descriptor
-        proc = subprocess.Popen([sys.executable, "-c", _WRITER, "1000", "1.0"], stdout=fh)
+        proc = subprocess.Popen([sys.executable, "-c", _WRITER, "1000"], stdout=fh,
+                                stdin=subprocess.PIPE)
     try:
+        deadline = time.monotonic() + 30
         while live.stat().st_size < 11 * 1000:
-            pass
+            assert proc.poll() is None and time.monotonic() < deadline, "the writer never filled the log"
+            time.sleep(0.01)
         assert svc.cap_controller_logs()["lhpc-web.log"] == "capped"
+        proc.stdin.write(b"go\n")
     finally:
+        proc.stdin.close()                                        # EOF also releases the writer
         proc.wait(timeout=30)
     data = live.read_bytes()
     assert data == b"after-the-cap\n"                             # the next write lands at offset 0

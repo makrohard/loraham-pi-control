@@ -1641,14 +1641,24 @@ def test_parts_only_eligible_parts_and_each_once(tmp_path):
     assert plan.items[0]["components"] == ["meshcore-webui"]        # two records, one start
 
 
-def test_parts_validate_item_components():
+@pytest.mark.parametrize("components, accepted", [
+    ([], True), ("absent", True),                    # "absent": a journal from before C11
+    (["meshcore-webui"], True), ("meshcore-webui", False), ([""], False)])
+def test_parts_journal_item_components(tmp_path, components, accepted):
+    paths = _svc(tmp_path)._paths
     item = br.new_item("i1", "stack", target="meshcore", band="868", evidence_ids=("a",))
-    assert br._validate_item(item) == ""
-    older = {k: v for k, v in item.items() if k != "components"}   # a journal from before C11
-    assert br._validate_item(older) == ""
-    assert br._validate_item({**item, "components": ["meshcore-webui"]}) == ""
-    assert br._validate_item({**item, "components": "meshcore-webui"}) == "item components invalid"
-    assert br._validate_item({**item, "components": [""]}) == "item components invalid"
+    if components == "absent":
+        del item["components"]
+    else:
+        item["components"] = components
+    j = br.new_journal(boot_id="B", pid=42, process_start_time=7, items=[item])
+    br.journal_path(paths).parent.mkdir(parents=True, exist_ok=True)
+    br.journal_path(paths).write_text(json.dumps(j))
+    loaded, state = br.load_journal(paths)
+    if accepted:
+        assert (state, loaded) == ("valid", j)
+    else:
+        assert state.startswith("unsafe:") and loaded is None, state
 
 
 def _parts_stub(calls, *, stack_ok=True, part_ok=True, part_result="typed"):

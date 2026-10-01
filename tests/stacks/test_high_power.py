@@ -227,18 +227,19 @@ def test_live_set_twenty_refused_while_restart_is_pending(tmp_path):
     assert not r.ok and "restart" in r.summary
 
 
-def test_live_set_uses_the_running_family_not_the_saved_board(tmp_path):
+@pytest.mark.parametrize("board,saved,running,value,ok", [
     # Saved SX127x (uputronics), running SX1262: a live POWER=0 is legitimate and must pass.
-    svc, _ = _svc(tmp_path, status=_status("SX1262", "0"))
-    assert svc.chip_family_for_band("433") == "sx127x"
-    assert svc.daemon_set("433", "POWER", "0").ok
-    assert svc.daemon_set("433", "POWER", "20").ok
+    ("uputronics", "sx127x", "SX1262", "0", True),
+    ("uputronics", "sx127x", "SX1262", "20", True),
     # Saved SX1262 (waveshare), running SX127x: a live POWER=0 must be refused before it is sent.
-    svc2, fs2 = _svc(tmp_path / "b", "waveshare-433", status=_status("SX127x", "0"))
-    assert svc2.chip_family_for_band("433") == "sx1262"
-    assert not svc2.daemon_set("433", "POWER", "0", apply=True).ok
-    assert fs2.sent == []
-    assert svc2.daemon_set("433", "POWER", "17").ok
+    ("waveshare-433", "sx1262", "SX127x", "0", False),
+    ("waveshare-433", "sx1262", "SX127x", "17", True),
+])
+def test_live_set_uses_the_running_family_not_the_saved_board(tmp_path, board, saved, running, value, ok):
+    svc, fs = _svc(tmp_path, board, status=_status(running, "0"))
+    assert svc.chip_family_for_band("433") == saved
+    assert svc.daemon_set("433", "POWER", value, apply=True).ok is ok
+    assert any(f"POWER={value}".encode() in payload for _p, payload in fs.sent) is ok
 
 
 def test_live_set_against_an_older_daemon_admits_only_the_intersection(tmp_path):
@@ -252,9 +253,9 @@ def test_live_set_against_an_older_daemon_admits_only_the_intersection(tmp_path)
 # --- the start gate ---------------------------------------------------------------------------
 
 def _chat_wants_twenty(svc):
+    assert svc.set_operator_identity(callsign="XX0XXA").ok          # chat refuses to start without one
     assert svc.set_high_power("433", "on").ok
     assert svc.save_daemon_params("chat", "433", {"POWER": "20"}).ok
-    assert svc._daemon_param_applies("chat", "433").get("POWER") == "20"
 
 
 def test_saving_twenty_into_a_profile_needs_the_saved_switch(tmp_path):
@@ -265,22 +266,23 @@ def test_saving_twenty_into_a_profile_needs_the_saved_switch(tmp_path):
     assert not svc.save_daemon_params("chat", "433", {"POWER": "19"}).ok
 
 
+@pytest.mark.contract
+@pytest.mark.safety("RF-TX-opt-in")
 def test_start_preflight_gates_on_an_unavailable_permission(tmp_path):
     svc, fs = _svc(tmp_path, status=_status("SX127x", "0"))
     _chat_wants_twenty(svc)
-    lines, ok, gate = svc._apply_stack_daemon_params("chat", "433")
-    assert not ok
-    assert "POWER=20" in gate and "high-power permission" in gate      # the stack's refusal reason
-    assert any("[fail]" in ln and "POWER=20" in ln and "HIGHPOWER=0" in ln for ln in lines)
+    res = svc.start("chat", apply=True)
+    text = "\n".join((res.summary, *res.details))
+    assert not res.ok, text
+    assert "POWER=20" in text and "high-power permission" in text      # the stack's refusal reason
     assert fs.sent == []                                  # refused BEFORE any RF setter
 
 
 def test_start_preflight_passes_with_the_running_permission(tmp_path):
     svc, fs = _svc(tmp_path, status=_status("SX127x", "1"))
     _chat_wants_twenty(svc)
-    lines, ok, gate = svc._apply_stack_daemon_params("chat", "433")
-    assert ok and gate == "", lines
-    assert any(b"POWER=20" in payload for _p, payload in fs.sent)
+    res = svc.start("chat", apply=True)
+    assert any(b"POWER=20" in payload for _p, payload in fs.sent), "\n".join((res.summary, *res.details))
 
 
 def test_a_refused_permission_does_not_report_the_daemon_as_failed(tmp_path):

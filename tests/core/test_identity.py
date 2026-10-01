@@ -1372,6 +1372,8 @@ def test_the_launch_carries_the_inherited_callsign(tmp_path, monkeypatch):
         seen[comp.id] = dict(cfg)
         return StartLaunch(True, "log", "")
     monkeypatch.setattr(Lifecycle, "start", stub)
+    # Collaborators stubbed: the daemon, readiness and post-start are outside this test (the
+    # callsign reaching graywolf's config).
     monkeypatch.setattr(type(svc), "_ensure_daemon", lambda self, *a, **k: ([], True, ""))
     monkeypatch.setattr(type(svc), "_ready_endpoints_present", lambda self, c: (True, []))
     monkeypatch.setattr(type(svc), "_run_post_start",

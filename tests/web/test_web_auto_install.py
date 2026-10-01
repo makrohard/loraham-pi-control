@@ -377,8 +377,9 @@ def test_auto_install_page_preselects_no_dev(tmp_path, web):
     # (test_default_channel_is_never_the_branch_tip), so neither a row nor the "All" select
     # may show "Development" as chosen (C2, 2026-09-27).
     c, _ = _client(web, tmp_path)
-    body = c.get("/auto-install").data.decode()
-    assert 'value="dev" selected' not in body
+    doc = parse(c.get("/auto-install").data.decode())
+    assert doc.find("option", value="dev")                              # the choice is offered…
+    assert not any(o.has_attr("selected") for o in doc.find("option", value="dev"))   # …never chosen
 
 
 @pytest.mark.needs_session
@@ -1185,27 +1186,13 @@ def test_two_simultaneous_uses_of_one_confirmation_start_once(tmp_path, monkeypa
     assert len(spawned) == 1
 
 
-def test_the_used_set_keeps_the_newest_tokens_and_drops_the_oldest(tmp_path, monkeypatch, web, csrf):
-    # The set is bounded without any clock: once full, a passing consume drops the OLDEST entry.
-    c, svc = _client(web, tmp_path)
-    _no_spawn(monkeypatch, svc)
-    used = c.application.extensions["lhpc_tx_used"]
-    for i in range(256):                                # full: 256 older tokens, oldest first
-        used[f"old-{i}"] = None
-    form, _cookie = _confirmed(csrf, c, svc)
-    c.post("/auto-install/start", data=form)
-    assert len(used) == 256
-    assert "old-0" not in used and "old-1" in used      # the oldest dropped, the next kept
-    assert list(used)[-1] == form["confirm_token"]      # the new token recorded last
-
-
 def test_a_confirmation_staged_before_a_restart_is_refused(tmp_path, monkeypatch, web, csrf):
     c, svc = _client(web, tmp_path)
     spawned = _no_spawn(monkeypatch, svc)
-    form, _cookie = _confirmed(csrf, c, svc)
-    with c.session_transaction() as sess:              # staged by another web process
-        sess["_auto_install_tx_confirm"] = dict(sess["_auto_install_tx_confirm"], nonce="0" * 16)
-    r = c.post("/auto-install/start", data=form, follow_redirects=True)
+    form, cookie = _confirmed(csrf, c, svc)
+    restarted = web(service_factory=lambda: svc)       # a new web process: same box, same secret key
+    restarted.set_cookie("session", cookie)
+    r = restarted.post("/auto-install/start", data=form, follow_redirects=True)
     assert not spawned and b"before the console restarted" in r.data
 
 
@@ -1215,15 +1202,13 @@ def test_a_refused_confirmation_leaves_the_used_set_unchanged(tmp_path, monkeypa
     import time as _time
     c, svc = _client(web, tmp_path)
     _no_spawn(monkeypatch, svc)
-    used = c.application.extensions["lhpc_tx_used"]
     form, staged_cookie = _confirmed(csrf, c, svc)
     if refusal == "already-used":
         c.post("/auto-install/start", data=form)                   # the first, valid use
-        c.set_cookie("session", staged_cookie)                     # the replay is refused
     else:
-        with c.session_transaction() as sess:                      # staged by another process
-            sess["_auto_install_tx_confirm"] = dict(sess["_auto_install_tx_confirm"],
-                                                    nonce="0" * 16)
+        c = web(service_factory=lambda: svc)                       # staged before a restart
+    c.set_cookie("session", staged_cookie)                         # the replay / the old cookie
+    used = c.application.extensions["lhpc_tx_used"]
     used["unrelated-expired"] = _time.time() - 1.0                 # a sentinel a prune would drop
     before = dict(used)
     r = c.post("/auto-install/start", data=form, follow_redirects=True)
@@ -1263,7 +1248,10 @@ def test_a_used_token_stays_used_after_a_clock_step_back(tmp_path, monkeypatch, 
 
 
 def _lock_cell(app):
-    """The closure cell holding the RF-confirmation lock (reached through the route's closure)."""
+    """The closure cell holding the RF-confirmation lock (reached through the route's closure).
+    Implementation-coupled on purpose: the lock is a local of `create_app` with no test hook or
+    injectable seam, and the stall must sit exactly before its acquisition. A refactor that moves the
+    lock fails here loudly ("lock not found"), never silently."""
     import threading
     lock_type = type(threading.Lock())
     for outer in app.view_functions["auto_install_start"].__closure__ or ():

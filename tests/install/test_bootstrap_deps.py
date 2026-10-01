@@ -8,6 +8,7 @@ operator-identity, SPI-mode, idempotency, fail-closed, and dependency-order guar
 import getpass
 import os
 import pathlib
+import stat
 import subprocess
 
 import pytest
@@ -49,8 +50,9 @@ def _fakebin(tmp_path, *, no_sudo=False):
     # Faithful systemctl. `list-unit-files` honours the positional unit filter (the pipeline-free
     # form) and, in the UNFILTERED form, emits the units EARLY then `exec seq`s a huge tail so an
     # early downstream `grep -q` match SIGPIPEs the fake to 141 — reproducing the pipefail inversion
-    # that a one-line fake hid. Disabling a unit not listed FAILS (exit 1) like a clean image.
-    w("systemctl", 'units="${FAKE_SYSTEMCTL_UNITS:-}"\n[ -n "${FAKE_SYSTEMCTL_BROKEN:-}" ] && { echo "Failed to connect to bus: No such file or directory" >&2; exit 1; }\nif [ "$1" = "list-unit-files" ]; then\n  shift\n  pattern=""\n  for a in "$@"; do case "$a" in --*) ;; *) pattern="$a" ;; esac; done\n  if [ -n "$pattern" ]; then\n    for u in $units; do [ "$u" = "$pattern" ] && echo "$u enabled enabled"; done\n    exit 0\n  fi\n  echo "aaa-first-decoy.service enabled enabled"\n  for u in $units; do echo "$u enabled enabled"; done\n  exec seq 1 200000\nfi\nif [ "$1" = "is-enabled" ] || [ "$1" = "is-active" ]; then\n  last=""; for a in "$@"; do case "$a" in --*) ;; *) last="$a" ;; esac; done\n  case " ${FAKE_SYSTEMCTL_DISABLED:-} " in *" $last "*|*" ${last%.service} "*) exit 1 ;; esac\n  case " $units " in *" $last "*|*" $last.service "*) exit 0 ;; esac\n  exit 1\nfi\nif [ "$1" = "disable" ] || [ "$1" = "enable" ] || [ "$1" = "restart" ]; then\n  last=""; for a in "$@"; do last="$a"; done\n  case " ${FAKE_SYSTEMCTL_FAIL:-} " in\n    *" $last "*) echo "Failed to disable unit: $last" >&2; exit 1 ;;\n  esac\n  case " $units " in\n    *" $last.service "*|*" $last "*) exit 0 ;;\n  esac\n  if [ "$1" = "restart" ]; then exit 0; fi\n  echo "Failed to disable unit: Unit file $last.service does not exist." >&2\n  exit 1\nfi\nexit 0\n')
+    # that a one-line fake hid. Enabling, disabling or restarting a unit not listed FAILS (exit 1) like
+    # a clean image, so a restart of a service that was never installed cannot pass unnoticed.
+    w("systemctl", 'units="${FAKE_SYSTEMCTL_UNITS:-}"\n[ -n "${FAKE_SYSTEMCTL_BROKEN:-}" ] && { echo "Failed to connect to bus: No such file or directory" >&2; exit 1; }\nif [ "$1" = "list-unit-files" ]; then\n  shift\n  pattern=""\n  for a in "$@"; do case "$a" in --*) ;; *) pattern="$a" ;; esac; done\n  if [ -n "$pattern" ]; then\n    for u in $units; do [ "$u" = "$pattern" ] && echo "$u enabled enabled"; done\n    exit 0\n  fi\n  echo "aaa-first-decoy.service enabled enabled"\n  for u in $units; do echo "$u enabled enabled"; done\n  exec seq 1 200000\nfi\nif [ "$1" = "is-enabled" ] || [ "$1" = "is-active" ]; then\n  last=""; for a in "$@"; do case "$a" in --*) ;; *) last="$a" ;; esac; done\n  case " ${FAKE_SYSTEMCTL_DISABLED:-} " in *" $last "*|*" ${last%.service} "*) exit 1 ;; esac\n  case " $units " in *" $last "*|*" $last.service "*) exit 0 ;; esac\n  exit 1\nfi\nif [ "$1" = "disable" ] || [ "$1" = "enable" ] || [ "$1" = "restart" ]; then\n  last=""; for a in "$@"; do last="$a"; done\n  case " ${FAKE_SYSTEMCTL_FAIL:-} " in\n    *" $last "*) echo "Failed to disable unit: $last" >&2; exit 1 ;;\n  esac\n  case " $units " in\n    *" $last.service "*|*" $last "*) exit 0 ;;\n  esac\n  echo "Failed to $1 unit: Unit file $last.service does not exist." >&2\n  exit 1\nfi\nexit 0\n')
     w("curl", "exit 0\n")
     w("gpg", "cat >/dev/null 2>&1 || true; exit 0\n")
     # install: keyring dirs stay a no-op; the polkit RULE writes (targets under
@@ -65,14 +67,16 @@ def _fakebin(tmp_path, *, no_sudo=False):
                  'elif printf "%s" "$*" | grep -q "49-lhpc-network"; then\n'
                  f'  echo "install $*" >> "{nw}"\n'
                  '  cat > "${NETWORK_RULE_OUT:-/dev/null}"\n'
-                 # A real install ONLY when the destination is inside this test's tmp tree.
+                 # A real install ONLY when the DESTINATION (the last argument) is inside this test's
+                 # tmp tree -- a source under tmp_path with a system destination stays a no-op.
                  # Everything else stays a no-op, because the script also installs to real system
                  # paths (/boot/firmware, /etc/NetworkManager) that a test must never touch. The
                  # bare `exit 0` this replaces silently discarded the file AND any heredoc feeding
                  # it, so a newly added `install` step looked like it worked and wrote nothing —
                  # which is exactly how the time-source drop-in first "passed".
-                 f'elif printf "%s" "$*" | grep -q "{tmp_path}"; then\n'
-                 '  exec /usr/bin/install "$@"\n'
+                 'else\n'
+                 '  last=""; for a in "$@"; do last="$a"; done\n'
+                 f'  case "$last" in "{tmp_path}"/*) exec /usr/bin/install "$@" ;; esac\n'
                  "fi\nexit 0\n")
     w("wget", "exit 0\n")
     # swap provisioning: fake the mutating tools and log every call. fallocate/dd also create the
@@ -1537,18 +1541,15 @@ def test_nmea_source_skips_the_time_source_before_gpsd_is_installed(tmp_path):
     assert "source = nmea" in r.stdout and "UBX" in r.stdout
 
 
-def test_gpsd_source_and_no_config_both_proceed(tmp_path):
+@pytest.mark.parametrize("source", ["gpsd", None], ids=["configured-gpsd", "fresh-image"])
+def test_gpsd_source_and_no_config_both_proceed(tmp_path, source):
     # `gpsd` is the documented majority choice, and a FRESH IMAGE has no config at all -- which
-    # is precisely the case the auto-on requirement is about. Neither may be skipped. Separate
-    # tmp roots: the harness APPENDS to one apt.log per root, so sharing one would let the first
-    # run satisfy the second run's assertion.
-    for name, source in (("configured-gpsd", "gpsd"), ("fresh-image", None)):
-        root = tmp_path / name
-        root.mkdir()
-        apt = _run(root, _ARGS, lhpc_gps_source=source)[2]
-        assert "chrony" in apt and "gpsd" in apt, f"{name}: time source was skipped"
+    # is precisely the case the auto-on requirement is about. Neither may be skipped.
+    apt = _run(tmp_path, _ARGS, lhpc_gps_source=source)[2]
+    assert "chrony" in apt and "gpsd" in apt, "time source was skipped"
 
 
+@pytest.mark.needs_nonroot   # the premise is a 0o000 config, which root reads anyway
 def test_unreadable_lhpc_config_fails_safe(tmp_path):
     # Uncertainty must fail SAFE, and safe here means NOT installing: a skipped box is one re-run
     # away from the feature, a UBX-locked receiver needs an external tool to recover.
@@ -1584,10 +1585,9 @@ def test_a_restrictive_sources_file_keeps_its_mode_through_the_edit(tmp_path):
     r2 = _run(tmp_path, _ARGS)[0]
     assert r2.returncode == 0, r2.stderr
     # the file the harness seeded is edited in place by the SECOND run's loop
-    import stat as _stat
     still = r2.ts / "sources.d" / "private.sources"
-    if still.exists():
-        assert _stat.S_IMODE(still.stat().st_mode) == 0o600, "the editor widened the permissions"
+    assert still.exists(), "the editor lost the sources file"
+    assert stat.S_IMODE(still.stat().st_mode) == 0o600, "the editor widened the permissions"
 
 
 def test_the_prefer_edit_preserves_mode_and_leaves_no_temp_behind(tmp_path):
@@ -1595,16 +1595,37 @@ def test_the_prefer_edit_preserves_mode_and_leaves_no_temp_behind(tmp_path):
     # then leaves the old file, never a chrony.conf that still parses but has lost its pool and
     # keyfile lines. (Truncate-and-write would be the other way round.) A rename changes the
     # inode, so mode and owner are copied across explicitly -- this pins that.
-    conf = tmp_path / "seed.conf"
+    # Seed the file the run EDITS at 0640; the harness rewrites its content in place (same inode),
+    # so the mode survives into the run.
+    conf = tmp_path / "ts" / "chrony.conf"
+    conf.parent.mkdir()
     conf.write_text(_STOCK_CHRONY_CONF)
     conf.chmod(0o640)
     r = _run(tmp_path, _ARGS, chrony_conf=_STOCK_CHRONY_CONF)[0]
     assert r.returncode == 0, r.stderr
     edited = r.ts / "chrony.conf"
     assert "prefer" in edited.read_text()
+    assert stat.S_IMODE(edited.stat().st_mode) == 0o640, "the edit changed the mode"
     assert not list(r.ts.glob("*.lhpc-new")), "a temp file survived the edit"
     assert not list((r.ts / "sources.d").glob("*.lhpc-new"))
 
+
+def _simulated_pkgs(apt):
+    """The package set of the ONE `apt-get install -s` the dry-run made, read from the fake apt
+    log: the script prints no package list of its own (only the `Inst` lines apt returns, and the
+    fake returns none), so the argv the simulation was given is the record."""
+    sims = [ln.split() for ln in apt.splitlines() if ln.startswith("apt-get install -s ")]
+    assert len(sims) == 1, apt
+    pkgs, skip = set(), False
+    for tok in sims[0][2:]:
+        if skip:
+            skip = False
+        elif tok == "-o":
+            skip = True
+        elif not tok.startswith("-"):
+            pkgs.add(tok)
+    assert pkgs, "the dry-run simulated an empty package set"
+    return pkgs
 
 def test_the_dry_run_reflects_the_nmea_preflight(tmp_path):
     """The dry-run simulates the transaction a box would ACTUALLY get from the time source,
@@ -1621,11 +1642,10 @@ def test_the_dry_run_reflects_the_nmea_preflight(tmp_path):
     nmea_root = tmp_path / "nmea"
     nmea_root.mkdir()
     nmea = _run(nmea_root, _ARGS + ["--dry-run"], lhpc_gps_source="nmea")
-    assert "chrony" in plain[0].stdout or "chrony" in plain[2]
+    assert {"chrony", "gpsd"} <= _simulated_pkgs(plain[2])
     assert "SKIPPED" in nmea[0].stdout and "nmea" in nmea[0].stdout
     # the simulated set must not name them once the pre-flight has spoken
-    sim = [ln for ln in nmea[0].stdout.splitlines() if "DRY_PKGS" in ln or "install -y" in ln]
-    assert not any("chrony" in ln for ln in sim), sim
+    assert not {"chrony", "gpsd"} & _simulated_pkgs(nmea[2])
 
 
 def test_the_documented_command_without_operator_user_still_honours_the_nmea_guard(tmp_path):
@@ -1716,17 +1736,19 @@ def test_the_unprivileged_dry_run_still_simulates_the_time_source(tmp_path):
     suppress. A config that POSITIVELY says nmea still does, so the simulation matches what a
     real run on that box would do.
     """
-    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip", "--dry-run"],
-                              sudo_user=None, runtime_root_env=False)
-    assert "could not determine the operator" not in r.stdout, \
+    r, _cfg, apt, _um = _run(tmp_path, ["--spi-mode", "skip", "--dry-run"],
+                             sudo_user=None, runtime_root_env=False)
+    assert r.returncode == 0, r.stderr
+    assert {"chrony", "gpsd"} <= _simulated_pkgs(apt), \
         "the dry-run suppressed the very packages the closure gate exists to check"
-    assert "time source SKIPPED" not in r.stdout
 
 
 def test_a_dry_run_on_an_nmea_box_still_suppresses_the_time_source(tmp_path):
-    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip", "--dry-run"],
-                              sudo_user=None, lhpc_gps_source="nmea")
+    r, _cfg, apt, _um = _run(tmp_path, ["--spi-mode", "skip", "--dry-run"],
+                             sudo_user=None, lhpc_gps_source="nmea")
+    assert r.returncode == 0, r.stderr
     assert "SKIPPED" in r.stdout and "nmea" in r.stdout
+    assert not {"chrony", "gpsd"} & _simulated_pkgs(apt)
 
 
 def test_an_unestablishable_promise_fails_the_time_source_setup(tmp_path):

@@ -482,21 +482,14 @@ def test_rollup_is_degraded_when_the_main_is_down_but_sidecars_run(tmp_path):
     assert rollup_states(_stack_snapshot(svc, "chat", {}))["chat"] == "stopped"
 
 
-def test_the_tiles_count_a_stack_with_a_dead_main_as_degraded(tmp_path, web, monkeypatch):
+def test_the_summary_counts_a_stack_with_a_dead_main_as_degraded(tmp_path):
     # Agent 4, e293: after `kill -9` of meshcore-node the console tile read "0 Degraded / failed"
     # because the tiles counted COMPONENT states. They now count stacks by their rollup, the unit
-    # of the Stacks tile beside them.
-    import re
-
+    # of the Stacks tile beside them. (The page's tiles: tests/web/test_web.py.)
     from lhpc.core.services import ControllerService
     from lhpc.core.status import summarize
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     up = RunState.RUNNING
     snap = _stack_snapshot(svc, "meshcore",
                            {"meshcore-gps": up, "meshcore-webui": up, "meshcore-node": RunState.STOPPED})
-    monkeypatch.setattr(ControllerService, "build_snapshot", lambda self, *a, **k: snap)
-    html = web().get("/stacks").get_data(as_text=True)
-    tiles = dict((label, int(n)) for n, label in
-                 re.findall(r'<div class="n">(\d+)</div><div class="l">([^<]+)</div>', html))
-    assert (tiles["Degraded / failed"], tiles["Running"]) == (1, 0)
     assert summarize(snap)["stack_states"] == {"degraded": 1}

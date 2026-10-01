@@ -241,27 +241,45 @@ def test_gps_row_escapes_what_the_server_sends(page):
     assert page.locator("#sys-gps img").count() == 0
 
 
+def _settled(page):
+    """A network round trip from the page, answered by the test: every request the page issued
+    before it has reached the route handlers by the time it returns."""
+    page.route("**/__settled__", lambda route: route.fulfill(status=204, body=""))
+    assert page.evaluate("() => fetch('/__settled__').then(r => r.status)") == 204
+
+
 def test_a_closed_box_makes_no_request_and_an_open_one_asks_gps_every_second_poll(page):
-    # Closed (the default): nothing at all is fetched, neither /api/system nor /api/gps.
-    sysn = _serve(page, [_sample(0, net=0)])
+    # The page's timers run on Playwright's clock, which the test advances: the poll cadence is
+    # proven over simulated seconds, not by sleeping through real ones.
+    page.clock.install()
+    # Each answer carries its own uptime, so the footer shows which sample the page has applied.
+    sysn = _serve(page, [dict(_sample(k, net=0), uptime_s=60 * (k + 1)) for k in range(4)])
     gps = _serve_gps(page, _gps("3d", "3D fix", 1.0, 2.0))
     page.goto(page.lab_base + "/", wait_until="networkidle")
+    # Closed (the default): nothing at all is fetched, neither /api/system nor /api/gps.
     assert not page.locator("#sysbox").evaluate("e => e.open")
-    page.wait_for_timeout(5000)                       # 2.5 poll intervals
+    page.clock.run_for(5000)                          # 2.5 poll intervals
+    _settled(page)
     assert (sysn["i"], gps["n"]) == (0, 0)
     assert _gps_row(page) == ("…", "plain", "")
     # Open: /api/gps rides on the poll — the first tick, then every second one.
     page.locator("#sysbox summary").first.click()
     _wait_gps_state(page, "3D fix")
-    page.wait_for_timeout(6500)
+    for k in range(4):
+        if k:
+            page.clock.run_for(2000)                  # one poll interval
+        page.wait_for_function(
+            "(t) => { const e = document.getElementById('sys-info');"
+            " return e && e.textContent.includes(t); }", arg=f"0h {k + 1}m", timeout=15000)
     polls, asks = sysn["i"], gps["n"]
-    assert polls >= 3 and 1 <= asks <= (polls + 1) // 2, (polls, asks)
+    assert polls == 4 and 1 <= asks <= (polls + 1) // 2, (polls, asks)
     # Closed again: both stop.
     page.locator("#sysbox summary").first.click()
     page.wait_for_function("() => !document.getElementById('sysbox').open", timeout=5000)
-    page.wait_for_timeout(500)
+    _settled(page)
     frozen = (sysn["i"], gps["n"])
-    page.wait_for_timeout(5000)
+    page.clock.run_for(5000)
+    _settled(page)
     assert (sysn["i"], gps["n"]) == frozen
 
 

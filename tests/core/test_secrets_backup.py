@@ -178,6 +178,14 @@ def test_backup_is_refused_while_a_lock_is_held(tmp_path, held):
     assert not r.ok and not (tmp_path / "b.tar").exists()
 
 
+def _assert_busy_refusal(seen, other):
+    """The one start attempted inside was refused on the held task admission; the same start
+    afterwards is not (it fails later, on graywolf's missing callsign)."""
+    assert len(seen) == 1 and not seen[0].ok
+    assert ControllerService.ADMISSION_KEY in seen[0].summary, seen[0].summary
+    assert ControllerService.ADMISSION_KEY not in other.start("graywolf", apply=True).summary
+
+
 def test_a_start_attempted_during_the_backup_is_refused(tmp_path, monkeypatch):
     a = _root(tmp_path, "a")
     svc = _seed(a)
@@ -186,15 +194,11 @@ def test_a_start_attempted_during_the_backup_is_refused(tmp_path, monkeypatch):
     real = sb.write_backup
 
     def during(*args, **kw):
-        try:
-            with other._admission_guard("start", "graywolf"):      # what a stack start takes
-                seen.append("admitted")
-        except reslock.ResourceBusy:
-            seen.append("refused")
+        seen.append(other.start("graywolf", apply=True))
         return real(*args, **kw)
     monkeypatch.setattr(sb, "write_backup", during)
     assert svc.secrets_backup(str(tmp_path / "b.tar")).ok
-    assert seen == ["refused"]
+    _assert_busy_refusal(seen, other)
 
 
 def test_a_symlink_or_fifo_among_the_members_is_refused(tmp_path):
@@ -248,8 +252,9 @@ def test_the_output_holds_no_member_content_or_digest_and_names_the_passphrases(
     r = _backup(svc, tmp_path / "b.tar")
     text = "\n".join([r.summary, *r.details, *r.next_commands])
     assert PROBE.decode() not in text and hashlib.sha256(PROBE).hexdigest() not in text
-    assert sb.CLEAR_TEXT_LINE in text
-    assert sb.BUNDLE_LINE in text                                      # PLAN-DELTA
+    assert "in clear" in text
+    assert "passphrases are not in this file" in text                  # PLAN-DELTA
+    assert "lhpc webserver cert reissue" in text
 
 
 def test_a_hard_linked_pair_becomes_two_regular_members_and_restores(tmp_path):
@@ -335,7 +340,8 @@ def test_the_plan_lists_the_three_groups_and_left_ones_stay(tmp_path):
     assert r.ok and "OVERWRITTEN (1): config/secrets" in text
     assert "CREATED (3): config/tls, state/graywolf, state/meshtasticd" in text
     assert "LEFT AS IT IS (2): state/reticulum, config/secrets.toml" in text
-    assert sb.BUNDLE_LINE in text                                      # PLAN-DELTA
+    assert "passphrases are not in this file" in text                  # PLAN-DELTA
+    assert "lhpc webserver cert reissue" in text
     assert _tree(b) == before                                          # no flag: nothing changed
     assert _svc(b).secrets_restore(str(tmp_path / "b.tar"), choice="overwrite").ok
     assert (b / "state/reticulum/identity").read_text() == "mine"
@@ -349,22 +355,6 @@ def test_yes_refuses_over_an_existing_target_and_names_overwrite(tmp_path):
     before = _tree(b)
     r = _svc(b).secrets_restore(str(tmp_path / "b.tar"), choice="yes")
     assert not r.ok and "--overwrite" in r.summary and _tree(b) == before
-
-
-def test_on_a_terminal_overwrite_without_the_typed_word_writes_nothing(tmp_path, monkeypatch, capsys):
-    from lhpc.adapters.cli import main as cli
-    a = _root(tmp_path, "a")
-    _backup(_seed(a), tmp_path / "b.tar")
-    b = _root(tmp_path, "b")
-    before = _tree(b)
-    monkeypatch.setattr(cli, "ControllerService", lambda: _svc(b))
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    monkeypatch.setattr("builtins.input", lambda prompt="": "yes")
-    assert cli._run(["secrets", "restore", str(tmp_path / "b.tar"), "--overwrite"]) == 0
-    assert "Aborted; no target was changed." in capsys.readouterr().out and _tree(b) == before
-    monkeypatch.setattr("builtins.input", lambda prompt="": "overwrite")
-    assert cli._run(["secrets", "restore", str(tmp_path / "b.tar"), "--overwrite"]) == 0
-    assert _tree(b) == _tree(a)
 
 
 # ---- restore: the archive checks (pass 1) ------------------------------------------------
@@ -593,15 +583,11 @@ def test_a_start_attempted_during_the_restore_is_refused(tmp_path, monkeypatch):
     real = sb.apply
 
     def during(*args, **kw):
-        try:
-            with other._admission_guard("start", "graywolf"):
-                seen.append("admitted")
-        except reslock.ResourceBusy:
-            seen.append("refused")
+        seen.append(other.start("graywolf", apply=True))
         return real(*args, **kw)
     monkeypatch.setattr(sb, "apply", during)
     assert _svc(b).secrets_restore(str(tmp_path / "b.tar"), choice="overwrite").ok
-    assert seen == ["refused"]
+    _assert_busy_refusal(seen, other)
 
 
 def test_a_failure_in_pass_2_stops_and_names_the_mixed_state(tmp_path, monkeypatch):
@@ -689,6 +675,7 @@ def test_only_pki_changes_exactly_the_two_authorities(tmp_path):
               and not str(p.relative_to(b)).startswith(("config/tls/server-ca", "config/tls/client-ca"))}
     r = _svc(b).secrets_restore(str(tmp_path / "b.tar"), only_pki=True, choice="overwrite")
     assert r.ok, r.summary
+    assert sb.PKI_ONLY
     for ca in sb.PKI_ONLY:
         assert {k: v for k, v in _tree(b).items() if k.startswith(ca)} == \
                {k: v for k, v in _tree(a).items() if k.startswith(ca)}

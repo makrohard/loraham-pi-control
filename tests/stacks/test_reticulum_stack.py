@@ -13,8 +13,6 @@ These pin the properties an audit flagged as load-bearing:
     path, quotes what ConfigObj needs quoted, and refuses control characters.
 """
 
-import importlib.resources
-
 import pytest
 
 from lhpc.core import reticulum_interfaces as ri
@@ -425,13 +423,17 @@ def test_status_versions_names_a_package_that_differs(tmp_path):
 def test_venv_packages_must_be_a_list_of_distribution_names(bad, tmp_path):
     """A malformed `venv_packages` fails when the manifest loads: a bare string would otherwise
     read as one package per letter, and a non-string would break `status --versions` later."""
-    text = importlib.resources.files("lhpc.data").joinpath("manifest.example.toml").read_text()
-    old = 'venv_packages = ["rns"]\n'
-    assert text.count(old) == 1
-    path = tmp_path / "manifest.toml"
-    path.write_text(text.replace(old, f"venv_packages = {bad}\n"))
+    def manifest(packages):
+        path = tmp_path / "manifest.toml"
+        path.write_text('[[stack]]\nid = "s"\nname = "s"\nmain = "app"\n'
+                        '[[stack.component]]\nid = "app"\nname = "app"\nkind = "service"\n'
+                        'run = "bin/app"\nreadiness = "manual"\ninteractive = true\n'
+                        f"venv_packages = {packages}\n")
+        return path
+
+    assert load_manifest(manifest('["rns"]'))[0].component("app").venv_packages == ("rns",)
     with pytest.raises(ManifestError, match="venv_packages"):
-        load_manifest(path)
+        load_manifest(manifest(bad))
 
 
 def test_an_unsafe_secrets_file_blocks_cleanly(monkeypatch):
@@ -730,18 +732,50 @@ def test_changing_a_consumed_source_invalidates_the_completed_receipt(tmp_path, 
         "transitive-source-lock gap becomes a silent stale-artifact bug"
 
 
-def test_components_without_requires_keep_the_static_marker():
-    """Only marker+build_requires components get receipt lines; everything else keeps
-    the exact static text, so their existing markers stay valid."""
+def _marker_service(tmp_path):
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
 
-    svc = ControllerService()
-    # The clients install RNS from the rns checkout (sideband also copies the driver's
-    # plugin), so they legitimately get receipt lines; meshchat consumes only its own source.
-    assert svc._consumed_source_lines(_comp("meshchat")) == ""
-    for cid in ("lxmd", "nomadnet", "sideband"):
-        assert "consumed rns " in svc._consumed_source_lines(_comp(cid))
-    assert "rns-lora-interface" in svc._consumed_source_lines(_comp("sideband"))
+    paths = Paths(runtime_root=tmp_path)
+    svc = ControllerService(system=FakeSystem().system, paths=paths)
+
+    def built_with(comp, text):
+        marker = paths.resolve_source(comp.source.path) / comp.build_marker
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(text)
+        return svc.is_built(comp)
+    return svc, built_with
+
+
+def test_components_without_requires_keep_the_static_marker(tmp_path):
+    """Only marker+build_requires components get receipt lines; everything else keeps
+    the exact static text, so their existing markers stay valid. Judged through is_built()
+    against a real marker file."""
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+
+    svc, built_with = _marker_service(tmp_path)
+    # meshchat consumes only its own source: the static text (beside its asset sidecar) is built.
+    meshchat = _comp("meshchat")
+    sidecar = svc.build_inputs_path(meshchat)
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    sidecar.write_text(svc.build_inputs_text(meshchat))
+    assert built_with(meshchat, BUILD_MARKER_TEXT)
+
+
+@pytest.mark.parametrize("cid, consumed", [("lxmd", ("lxmd", "rns")),
+                                           ("nomadnet", ("nomadnet", "rns")),
+                                           ("sideband", ("sideband", "rns-lora-interface", "rns"))])
+def test_a_client_is_built_only_with_the_receipt_over_its_sources(tmp_path, cid, consumed):
+    """The clients install RNS from the rns checkout (sideband also copies the driver's plugin):
+    the static text alone reads NOT built, the receipt over exactly those sources does."""
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+
+    _svc, built_with = _marker_service(tmp_path)
+    receipt = "".join(f"consumed {c} unknown\n" for c in consumed)   # no checkout: HEADs unknown
+    comp = _comp(cid)
+    assert not built_with(comp, BUILD_MARKER_TEXT)
+    assert built_with(comp, BUILD_MARKER_TEXT + receipt)
 
 
 # The band-limiting rule used to be pinned by reading the service's source. Its OBSERVABLE
@@ -912,16 +946,20 @@ def test_the_defaults_render_transport_off_and_the_internet_interface_inert():
     assert "enable_transport = No" in asset_path("bases/reticulum.conf").read_text()
 
 
-def test_rnode_framing_is_off_by_default_and_never_rendered_with_a_preamble():
+@pytest.mark.parametrize("values,expect", [({}, "rnode_framing = no"),
+                                           ({"rnode_framing": "yes"}, "rnode_framing = yes")])
+def test_rnode_framing_is_never_rendered_with_a_preamble(values, expect):
     """`rnode_framing` reaches the driver as a plain key in [[LoRa]], off unless the operator
     turns it on. NO `preamble` key is rendered in either state: the driver derives the RNode
     preamble from SF/BW when framing is on (an SX127x receiver hears an RNode only with at
     least the firmware's 18 symbols) and an explicit key would override that — the deafness
     that cost the live check a day."""
-    for values, expect in (({}, "rnode_framing = no"), ({"rnode_framing": "yes"}, "rnode_framing = yes")):
-        lora = _render(values).split("[[LoRa]]", 1)[1].split("[[", 1)[0]
-        assert expect in lora
-        assert "preamble" not in lora
+    lora = _render(values).split("[[LoRa]]", 1)[1].split("[[", 1)[0]
+    assert expect in lora
+    assert "preamble" not in lora
+
+
+def test_rnode_framing_is_off_by_default_and_saved_as_a_file_value():
     by_name = {p.name: p for p in _rns_file_params()[0]}
     assert by_name["rnode_framing"].default == "no" and "preamble" not in by_name
     from lhpc.core.services import ControllerService
@@ -930,18 +968,9 @@ def test_rnode_framing_is_off_by_default_and_never_rendered_with_a_preamble():
     assert svc.file_config_values("reticulum")["rnode_framing"] == "yes"
 
 
-@pytest.mark.parametrize("built_has_framing,switch,refused", [
-    pytest.param(False, "yes", True, id="old-driver-switch-on"),
-    pytest.param(True, "yes", False, id="framing-driver-switch-on"),
-    pytest.param(False, "no", False, id="old-driver-switch-off"),
-])
-def test_rnode_framing_refuses_to_start_on_a_driver_built_before_it(tmp_path, monkeypatch,
-                                                                     built_has_framing, switch, refused):
-    """The upgrade case: a box keeps its known-working composition, whose LoRa driver predates
-    the switch, upgrades LHPC and turns RNode framing on. That driver ignores the unknown key
-    and would start BARE — up, and talking to nobody. The start must refuse before any mutation
-    (a restart's stop leg included) with the update-and-rebuild remedy, judged on what is BUILT
-    into the node's venv, never on what the manifest names. Off, the old driver keeps working."""
+def _framing_restart(tmp_path, monkeypatch, built_has_framing, switch):
+    """Restart reticulum with the framing switch saved over a driver built with or without the
+    framing module. Returns the result and the stop legs reached."""
     from lhpc.core import config as cfgmod
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
@@ -959,14 +988,31 @@ def test_rnode_framing_refuses_to_start_on_a_driver_built_before_it(tmp_path, mo
     reached = []
     monkeypatch.setattr(ControllerService, "stop",
                         lambda self, *a, **k: reached.append(a) or ActionResult(True, "stopped"))
-    r = svc.restart("reticulum", apply=True)
-    if refused:
-        assert not r.ok and r.data.get("reason") == ri.REASON_FRAMING_DRIVER_OLD
-        assert not reached, "refused BEFORE the stop leg — the node was never taken down"
-        assert r.next_commands == ["lhpc update rns-lora-interface", "lhpc build reticulum"]
-    else:
-        assert r.data.get("reason") != ri.REASON_FRAMING_DRIVER_OLD and reached, \
-            "the gate is silent: the restart went on into its stop leg"
+    return svc.restart("reticulum", apply=True), reached
+
+
+def test_rnode_framing_refuses_to_start_on_a_driver_built_before_it(tmp_path, monkeypatch):
+    """The upgrade case: a box keeps its known-working composition, whose LoRa driver predates
+    the switch, upgrades LHPC and turns RNode framing on. That driver ignores the unknown key
+    and would start BARE — up, and talking to nobody. The start must refuse before any mutation
+    (a restart's stop leg included) with the update-and-rebuild remedy, judged on what is BUILT
+    into the node's venv, never on what the manifest names."""
+    r, reached = _framing_restart(tmp_path, monkeypatch, built_has_framing=False, switch="yes")
+    assert not r.ok and r.data.get("reason") == ri.REASON_FRAMING_DRIVER_OLD
+    assert not reached, "refused BEFORE the stop leg — the node was never taken down"
+    assert r.next_commands == ["lhpc update rns-lora-interface", "lhpc build reticulum"]
+
+
+@pytest.mark.parametrize("built_has_framing,switch", [
+    pytest.param(True, "yes", id="framing-driver-switch-on"),
+    pytest.param(False, "no", id="old-driver-switch-off"),
+])
+def test_rnode_framing_gate_is_silent_when_the_driver_can_honour_it(tmp_path, monkeypatch,
+                                                                    built_has_framing, switch):
+    """A driver built with the framing module, or the switch off: the old driver keeps working."""
+    r, reached = _framing_restart(tmp_path, monkeypatch, built_has_framing, switch)
+    assert r.data.get("reason") != ri.REASON_FRAMING_DRIVER_OLD and reached, \
+        "the gate is silent: the restart went on into its stop leg"
 
 
 def test_the_rendered_interface_modes_are_the_intended_trio():

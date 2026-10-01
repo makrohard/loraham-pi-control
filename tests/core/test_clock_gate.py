@@ -125,9 +125,25 @@ def test_the_override_lets_every_path_through(tmp_path, monkeypatch, which):
     _init_pki(tmp_path)
     if which in ("cert_reissue", "cert_revoke"):
         pki.issue_client_cert(Paths(runtime_root=tmp_path), "dev", days=30, passphrase="x" * 12)
+    p = Paths(runtime_root=tmp_path)
+    from lhpc.core import config as _config
+    _config.save_webserver_config(p, dns_sans=["box.lan"])    # a renewal needs one SAN
+    serial_before = _server_cert_serial(tmp_path)
+    dev_before = [c["serial"] for c in pki.list_client_certs(p) if c["label"] == "dev"]
+    _reload_ok(monkeypatch)
     svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
     res = _call(svc, which, accept=True)
-    assert "--accept-unverified-clock" not in res.summary   # it got past the gate
+    assert res.ok, res.summary                              # it got past the gate AND did the work
+    dev = [c for c in pki.list_client_certs(p) if c["label"] == "dev"]
+    if which == "tls_renew":
+        assert _server_cert_serial(tmp_path) not in (None, serial_before)
+    elif which == "cert_issue":
+        assert [c["serial"] for c in dev] == [res.data["serial"]]
+    elif which == "cert_reissue":
+        assert res.data["serial"] not in dev_before
+        assert {c["serial"] for c in dev if c["state"] == "active"} == {res.data["serial"]}
+    else:
+        assert dev_before and all(c["state"] != "active" for c in dev)
 
 
 def test_a_refused_reissue_leaves_the_original_certificate_active(tmp_path, monkeypatch):
@@ -357,8 +373,14 @@ def test_a_loopback_configure_apply_is_not_gated(tmp_path, monkeypatch):
     # be a lockout of its own.
     _init_pki(tmp_path)
     svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
-    res = svc.webserver_configure_apply(port=8443)
-    assert "--accept-unverified-clock" not in res.summary
+    assert svc.config().webserver.port != 9443
+    res = svc.webserver_configure_apply(port=9443)
+    # The gate refuses BEFORE the config write; the save is the postcondition that proves the call
+    # got past it. (The activation that follows needs nginx, which this box does not have.)
+    svc._invalidate_config()
+    assert svc.config().webserver.port == 9443, res.summary
+    from lhpc.core import service_system
+    assert service_system.CLOCK_OVERRIDE_FLAG not in res.summary   # the gate's refusal names it
 
 
 def test_the_override_lets_exposure_through(tmp_path, monkeypatch):
@@ -398,52 +420,6 @@ def test_leaves_are_backdated_a_day_and_the_cas_are_not(tmp_path):
     if ca_nvb.tzinfo is None:
         ca_nvb = ca_nvb.replace(tzinfo=_dt.UTC)
     assert (before - ca_nvb) < _dt.timedelta(minutes=5), "the CA backdate was widened too"
-
-
-# --- the dependency-panel copybox -------------------------------------------------------------
-# The other half of the NMEA policy. The standalone bootstrap keeps its own shell pre-flight
-# because it may run before lhpc exists; the running controller does not re-derive any of that,
-# it already knows its effective GPS source. One policy, two boundaries.
-#
-# The first implementation of this feature defined the copybox helper and never wired it to a
-# caller, while the report claimed the surface was closed. These tests exist so that cannot
-# recur silently.
-
-def test_the_copybox_is_refused_on_a_direct_nmea_box(tmp_path):
-    from lhpc.core import deps
-    offer, text = deps.time_source_offer("nmea", "op")
-    assert offer is False
-    assert "apt install" not in text, "an installable command was handed to an NMEA box"
-    assert "UBX" in text and "source to gpsd" in text     # names the reason and the way out
-
-
-def test_the_copybox_is_offered_for_gpsd_and_auto(tmp_path):
-    from lhpc.core import deps
-    for source in ("gpsd", "auto", ""):
-        offer, text = deps.time_source_offer(source, "op")
-        assert offer is True, source
-        assert "apt install -y chrony gpsd" in text
-
-
-def test_the_copybox_warns_before_it_installs_not_after(tmp_path):
-    # Ordering is the whole point: gpsd with Debian's USBAUTO claims the receiver the moment it
-    # is installed, and on a u-blox that is irreversible from software. A caution printed after
-    # the apt line would be advice about something that already happened.
-    from lhpc.core import deps
-    text = deps.time_source_install_cmd("op")
-    assert text.index("source = nmea") < text.index("apt install")
-
-
-def test_the_dependency_panel_carries_the_time_source_entry(tmp_path):
-    # The wiring the first round claimed and did not do.
-    from lhpc.core.probes.backends import FakeSystem
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    groups = {g["title"]: g for g in svc.controller_system_deps()}
-    assert "Time source" in groups
-    dep = groups["Time source"]["deps"][0]
-    assert dep["bootstrap"] is False      # it has its own scaffold; never fold it in twice
-    assert not dep["required"]            # a box with another time daemon is not broken
-    assert "apt install -y chrony gpsd" in dep["install"]
 
 
 def test_file_timestamps_never_authorise_issuance_or_repair(tmp_path, monkeypatch):
@@ -498,51 +474,6 @@ def test_a_future_dated_crl_is_repaired_despite_future_file_times(tmp_path, monk
     assert crl.read_bytes() != before, "the future-dated CRL was never replaced"
 
 
-def test_an_unreadable_gps_config_refuses_the_copybox(tmp_path):
-    """Uncertainty about receiver ownership fails safe here exactly as it does in the bootstrap
-    pre-flight. The previous version returned "" for a failed read, which is the same value as an
-    ABSENT [gps] section — legitimately `auto` — so it rendered an installable `apt install` for
-    a box whose configuration it had just failed to read. The comment justifying that claimed the
-    standalone script was an independent second guard; it is not, because the copybox runs apt
-    directly rather than invoking the script."""
-    from lhpc.core import deps
-    offer, text = deps.time_source_offer(deps.TIME_SOURCE_SOURCE_UNKNOWN, "op")
-    assert offer is False and "apt install" not in text
-    assert "could not read" in text
-    # and an ABSENT section is still the fresh-image case, still offered
-    assert deps.time_source_offer("", "op")[0] is True
-
-
-def test_a_failed_config_read_reaches_the_panel_as_unknown(tmp_path, monkeypatch):
-    from lhpc.core import deps
-    from lhpc.core.probes.backends import FakeSystem
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    monkeypatch.setattr(type(svc), "config",
-                        lambda self: (_ for _ in ()).throw(RuntimeError("unreadable")))
-    assert svc._gps_source_for_offer() == deps.TIME_SOURCE_SOURCE_UNKNOWN
-
-
-def test_a_half_finished_setup_does_not_read_as_satisfied(tmp_path, monkeypatch):
-    """The drop-in is written early. A setup that failed after that — chrony refusing to start,
-    the prefer edit failing — would leave the file behind, and the panel would report the
-    dependency satisfied and hide the copybox offering the repair. Both ends of the setup must be
-    visible before it counts."""
-    from lhpc.core import deps
-    from lhpc.core.probes.backends import FakeSystem
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    seen = {deps.CHRONY_DROPIN_PATH}          # drop-in only: the half-finished state
-    monkeypatch.setattr(type(svc._system.fs), "exists", lambda self, p: p in seen, raising=False)
-    assert svc._time_source_present() is False
-    seen.add(deps.CLOCK_EPOCH_PATH)           # the boot floor survives failed re-runs: NOT a witness
-    assert svc._time_source_present() is False
-    seen.add(deps.TIME_SOURCE_STAMP_PATH)     # the per-run witness, written only after the verdict
-    # A box set up before fake-hwclock joined the time source (F-B1): drop-in and stamp present,
-    # no LHPC fake-hwclock default -> NOT satisfied, so the panel offers the repair command.
-    assert svc._time_source_present() is False
-    seen.add(deps.FAKE_HWCLOCK_DEFAULT_PATH)
-    assert svc._time_source_present() is True
-
-
 # =============================================================================================
 # 0.7.0 -- commissioning may not depend on a clock
 # ---------------------------------------------------------------------------------------------
@@ -572,11 +503,6 @@ def test_the_marker_lives_inside_the_pki_tree(tmp_path):
     assert pki.provisional_marker_path(p) == _tls(tmp_path, "unverified-clock")
 
 
-def test_init_takes_no_clock_override():
-    import inspect
-    assert "accept_unverified" not in inspect.signature(ControllerService.webserver_init).parameters
-
-
 def test_init_under_an_unverified_clock_succeeds_with_the_provisional_window(tmp_path, monkeypatch):
     res = _svc(tmp_path, synced=False, monkeypatch=monkeypatch).webserver_init()
     assert res.ok, res.summary
@@ -590,14 +516,14 @@ def test_init_under_an_unverified_clock_succeeds_with_the_provisional_window(tmp
     assert pki.server_cert_is_provisional(p) is True and pki.crl_is_provisional(p) is True
 
 
-def test_a_clock_far_ahead_still_yields_material_valid_now(tmp_path, monkeypatch):
-    # The forward-skew case a backdate can never absorb: the window is fixed, so it does not
-    # matter what the clock reads -- material is valid to a correct-clock browser from minute one.
-    p = _provisional_box(tmp_path, monkeypatch)
+def test_provisional_material_is_valid_at_todays_real_time(tmp_path, monkeypatch):
+    # The window is fixed (pinned by the frozen-value test above), so whatever the clock read at
+    # issuance, a correct-clock browser accepts the server certificate from minute one. This
+    # checks the certificate a provisional box serves against today's real time.
+    _provisional_box(tmp_path, monkeypatch)
     now = _dt.datetime.now(_dt.UTC)
     nb, na = _window(_cert(tmp_path, "server", "server.crt"))
     assert nb < now < na
-    assert p  # provisional_box already asserted the marker
 
 
 def test_init_with_a_verified_clock_is_normal_and_unmarked(tmp_path, monkeypatch):
@@ -904,19 +830,6 @@ def test_the_crl_heal_leaves_a_provisional_crl_to_normalisation(tmp_path, monkey
 
 
 # --- the surfaces --------------------------------------------------------------------------
-
-def test_the_cli_init_command_has_no_clock_override():
-    import argparse
-
-    from lhpc.adapters.cli.main import build_parser
-    parser = build_parser()
-    with pytest.raises(SystemExit):
-        parser.parse_args(["webserver", "init", "--accept-unverified-clock"])
-    # ...while the gated commands keep it
-    ns = parser.parse_args(["webserver", "tls-renew", "--accept-unverified-clock"])
-    assert ns.accept_unverified_clock is True
-    assert isinstance(parser, argparse.ArgumentParser)
-
 
 def test_verify_reports_a_provisional_pki_without_failing_it(tmp_path, monkeypatch):
     _provisional_box(tmp_path, monkeypatch)

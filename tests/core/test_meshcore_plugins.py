@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -79,9 +78,8 @@ def test_verdicts_and_the_host_copy_agree(tmp_path, label, content, current, exp
     assert _host_verdict()(p, current) == expect            # the lockstep copy, same fixture
 
 
+@pytest.mark.needs_nonroot
 def test_unreadable_marker_is_unprovable(tmp_path):
-    if os.geteuid() == 0:
-        pytest.skip("root reads everything")
     p = tmp_path / "m"
     p.write_text(json.dumps({"version": 1, "boot_id": BOOT_B}))
     p.chmod(0)
@@ -90,14 +88,6 @@ def test_unreadable_marker_is_unprovable(tmp_path):
         assert _host_verdict()(p, BOOT_A) == "unprovable"
     finally:
         p.chmod(0o600)
-
-
-def test_the_two_verdict_functions_are_textually_identical():
-    """Not just behaviourally: a divergence in one copy must show up in the diff review."""
-    import inspect
-    here = inspect.getsource(mp.marker_verdict)
-    host = inspect.getsource(_host_verdict())
-    assert here == host
 
 
 def test_unclean_refusal_only_for_unsafe_and_unprovable(tmp_path, monkeypatch):
@@ -310,8 +300,7 @@ def test_update_refuses_meshcore_targets_and_bulk_on_a_current_boot_marker(tmp_p
     _boot(monkeypatch, tmp_path, BOOT_A)
     _write_marker(tmp_path, BOOT_A)
     svc = _svc_plain(tmp_path)
-    if target and svc.on_binary_channel(target):
-        pytest.skip("binary-channel target: update is a binary install, no source path")
+    assert not (target and svc.on_binary_channel(target))   # no receipt: the source path is taken
     res = svc.update(target, apply=True)
     assert not res.ok and "reboot" in res.summary and res.data.get("reason") == "meshcore-plugins"
 

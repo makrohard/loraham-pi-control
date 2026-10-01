@@ -219,7 +219,19 @@ def test_a_detached_build_records_its_inputs_before_the_marker(tmp_path):
     blr.run(spec)
     assert marker.read_text() == receipt
     assert side.read_text() == spec["inputs_text"]
-    assert side.stat().st_mtime_ns <= marker.stat().st_mtime_ns   # sidecar first, then the marker
+
+
+def test_an_unwritable_build_input_sidecar_leaves_no_marker(tmp_path):
+    """Sidecar first, then the marker: when the sidecar cannot be written the build must read NOT
+    built (no marker), never built-and-unrecorded."""
+    spec, marker = _marker_spec(tmp_path, steps=[{"argv": ["true"]}])
+    (marker.parent / "bin").write_text("a file where the sidecar's directory should be")
+    spec["inputs_path"] = str(marker.parent / "bin" / ".lhpc-build-inputs")
+    spec["inputs_text"] = "asset meshcore_host " + "0" * 64 + "\n"
+    with pytest.raises(SystemExit) as e:
+        blr.run(spec)
+    assert e.value.code != 0
+    assert not marker.exists(), "the marker was written although the build-input sidecar was not"
 
 
 def test_a_failed_detached_build_leaves_no_marker(tmp_path):

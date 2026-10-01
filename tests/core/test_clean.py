@@ -245,8 +245,6 @@ def test_clean_leaves_a_non_regular_leaf_with_a_post_start_name(tmp_path):
     # Audit 4, P1.7 round 1: the name-attributed branch must act on REGULAR files only (the pruner's
     # rule, jobs.py): an exact <comp>-<pid>-<ns> name that is a FIFO is uncertain material and stays.
     import os
-    if not hasattr(os, "mkfifo"):
-        pytest.skip("no FIFOs on this platform")
     _seed_kiss(tmp_path)
     post = tmp_path / "state" / "post"
     post.mkdir(parents=True)

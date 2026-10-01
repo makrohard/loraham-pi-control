@@ -1,7 +1,10 @@
 """The GPS Monitor's gpsd side: the bounded JSON reader against the fake gpsd, the view for every
 source, the ownership helper's corrected contract, and the NMEA window. No hardware anywhere."""
 
+import contextlib
+import copy
 import json
+import socket
 
 import pytest
 
@@ -40,6 +43,18 @@ def _sat(prn, el=45, az=180, ss=30, used=True):
     return {"PRN": prn, "el": el, "az": az, "ss": ss, "used": used}
 
 
+@contextlib.contextmanager
+def _refusing_port():
+    """A loopback port that refuses every connection: bound here and never listening, so no other
+    process can be serving it (a fixed "unused" port such as 1 is a guess about the host)."""
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", 0))
+        yield s.getsockname()[1]
+    finally:
+        s.close()
+
+
 def _snap(fake_gpsd, *lines, timeout=1.2):
     srv = fake_gpsd(json_lines=[VERSION, *lines])
     return _gps.gpsd_snapshot("127.0.0.1", srv.port, timeout=timeout)
@@ -48,7 +63,8 @@ def _snap(fake_gpsd, *lines, timeout=1.2):
 # --- the four-way contract ---------------------------------------------------------------------
 
 def test_connection_failure_is_unavailable():
-    r = _gps.gpsd_snapshot("127.0.0.1", 1, timeout=0.5)          # nothing listens on port 1
+    with _refusing_port() as port:
+        r = _gps.gpsd_snapshot("127.0.0.1", port, timeout=0.5)
     assert not r["ok"] and r["state"] == "unavailable" and r["error"]
 
 
@@ -211,7 +227,7 @@ def test_off_and_fixed_need_no_socket(tmp_path, monkeypatch):
 
 def test_auto_probes_live_without_touching_config(tmp_path, monkeypatch):
     svc = _svc(tmp_path)                                   # default source: auto
-    cfg_before = svc.config()
+    cfg_before = copy.deepcopy(svc.config())
     monkeypatch.setattr(_gps, "local_gpsd_listening", lambda: False)
     assert svc.gps_monitor()["state"] == "auto-off"
     monkeypatch.setattr(_gps, "local_gpsd_listening", lambda: True)
@@ -220,7 +236,7 @@ def test_auto_probes_live_without_touching_config(tmp_path, monkeypatch):
                                                    "lat": 1.0, "lon": 2.0})
     m = svc.gps_monitor()
     assert m["state"] == "3d" and m["resolved_source"] == "gpsd"
-    assert svc.config() is cfg_before                     # no invalidation, no write
+    assert svc.config() == cfg_before                     # the effective config is unchanged
     assert "[gps]" not in ((tmp_path / "config" / "local.toml").read_text()
                             if (tmp_path / "config" / "local.toml").exists() else "")   # nothing persisted
 
@@ -232,8 +248,8 @@ _EMPTY = {"ok": False, "error": "", "state": "unavailable", "devices": [], "devi
 
 
 def test_gpsd_source_unreachable_is_unavailable_and_never_raises(tmp_path):
-    svc = _svc(tmp_path, source="gpsd", host="127.0.0.1", port=1)
-    m = svc.gps_monitor()
+    with _refusing_port() as port:
+        m = _svc(tmp_path, source="gpsd", host="127.0.0.1", port=port).gps_monitor()
     assert m["state"] == "unavailable" and m["label"] == "gpsd unavailable" and not m["nmea_ok"]
 
 

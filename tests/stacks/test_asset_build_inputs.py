@@ -162,7 +162,8 @@ def test_a_changed_asset_reads_not_built(tmp_path, monkeypatch):
     _stamp_built(svc, c)
     assert svc.is_built(_comp(_svc(tmp_path), "meshcore-node")) is True
     poller = next(data.rglob("loraham_radio.py"))
-    poller.write_text(poller.read_text().replace("GET CHANNEL NOSCAN", "GET CHANNEL"))
+    with poller.open("a") as fh:                                     # any content change counts
+        fh.write("\n")
     assets.clear_digest_cache()
     fresh = _svc(tmp_path)                                           # a new request: no memoised digest
     assert fresh.is_built(_comp(fresh, "meshcore-node")) is False, \

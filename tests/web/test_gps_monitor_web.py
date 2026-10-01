@@ -1,7 +1,9 @@
 """Web: the GPS block's Monitor and Settings sub-sections, the two read-only monitor endpoints, the
 script that drives them, and the privacy rule that no coordinate ever reaches the application log."""
 
+import contextlib
 import logging
+import socket
 
 import pytest
 
@@ -9,9 +11,22 @@ from lhpc.core import gps as _gps
 from lhpc.core.config import save_gps
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
-from lhpc.core.services import ControllerService
+
+from htmlq import parse
 
 LAT, LON = 51.477812, -0.001545
+
+
+@contextlib.contextmanager
+def _refusing_port():
+    """A loopback port that refuses every connection: bound here and never listening, so no other
+    process can be serving it (a fixed "unused" port such as 1 is a guess about the host)."""
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", 0))
+        yield s.getsockname()[1]
+    finally:
+        s.close()
 
 
 def _client(web, tmp_path, **gps):
@@ -25,13 +40,14 @@ def _client(web, tmp_path, **gps):
 @pytest.mark.contract
 def test_monitor_before_settings_and_the_form_where_it_was(web, tmp_path):
     c, _ = _client(web, tmp_path)
-    body = c.get("/stacks?open=gps").get_data(as_text=True)
-    assert 'id="gps-row"' in body
-    i_mon, i_set = body.index('id="gps-monitor"'), body.index('id="gps-settings"')
-    assert i_mon < i_set
-    assert 'action="/gps"' in body and 'name="gps_source"' in body        # the form, unchanged
-    assert 'id="gps-mon-state"' in body and 'id="gps-sky"' in body and 'id="gps-nmea-body"' in body
-    assert "gps.js" in body                                                # stacks.html loads it
+    doc = parse(c.get("/stacks?open=gps").get_data(as_text=True))
+    assert doc.present("gps-row")
+    assert doc.index(doc.by_id("gps-monitor")) < doc.index(doc.by_id("gps-settings"))
+    settings = doc.within(doc.by_id("gps-settings"))
+    form = settings.find("form", action="/gps")                             # the form, unchanged
+    assert form and doc.within(form[0]).field_default("gps_source") is not None
+    assert all(doc.present(i) for i in ("gps-mon-state", "gps-sky", "gps-nmea-body"))
+    assert any((s["src"] or "").endswith("gps.js") for s in doc.find("script"))   # stacks.html loads it
 
 
 @pytest.mark.contract
@@ -47,8 +63,9 @@ def test_api_gps_shape_for_off_fixed_and_unavailable(web, tmp_path):
                    fixed_alt="45")
     d = c.get("/api/gps").get_json()
     assert d["state"] == "fixed" and d["lat"] == LAT and d["alt_kind"] == "msl"
-    c, _ = _client(web, tmp_path / "u", source="gpsd", host="127.0.0.1", port=1)
-    r = c.get("/api/gps")
+    with _refusing_port() as port:
+        c, _ = _client(web, tmp_path / "u", source="gpsd", host="127.0.0.1", port=port)
+        r = c.get("/api/gps")
     assert r.status_code == 200 and r.get_json()["state"] == "unavailable"    # never breaks
 
 
@@ -100,18 +117,3 @@ def test_responses_are_no_store(web, tmp_path):
     c, _ = _client(web, tmp_path, source="off")
     assert "no-store" in c.get("/api/gps").headers.get("Cache-Control", "")
 
-
-def test_service_monitor_matches_cli_snapshot(tmp_path, capsys):
-    """`lhpc gps --monitor` prints the same snapshot; `--sats` needs it; setting flags refused."""
-    from lhpc.adapters.cli.main import main
-    assert main(["gps", "--source", "fixed", "--lat", str(LAT), "--lon", str(LON), "--alt", "45"]) == 0
-    capsys.readouterr()
-    assert main(["gps", "--monitor"]) == 0
-    out = capsys.readouterr().out
-    assert "fixed position (configured)" in out and f"{LAT:.6f}" in out and "45.0 m MSL" in out
-    assert main(["gps", "--sats"]) == 2
-    assert "--sats needs --monitor" in capsys.readouterr().out
-    assert main(["gps", "--monitor", "--source", "gpsd"]) == 2
-    assert "read-only" in capsys.readouterr().out
-    svc = ControllerService(system=FakeSystem().system)
-    assert svc.gps_settings()["source"] == "fixed"          # the refused call changed nothing

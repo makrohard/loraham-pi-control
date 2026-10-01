@@ -11,6 +11,7 @@ import time
 from contextlib import ExitStack
 
 import pytest
+import repo_paths
 
 from lhpc.core import gps as _gps
 from lhpc.core import reslock
@@ -146,15 +147,17 @@ def test_used_is_unknown_for_a_combined_gsa_over_several_constellations():
     assert {s["used"] for s in p.snapshot()["satellites"]} == {None}
 
 
-def test_signed_or_padded_degrees_are_not_a_coordinate():
+@pytest.mark.parametrize("lat, hemi", [("-807.038", "N"), ("+807.038", "S"), (" 807.038", "N"),
+                                       ("4807.0e1", "N")])
+def test_signed_or_padded_degrees_are_not_a_coordinate(lat, hemi):
     """Audit P2: the hemisphere carries the sign; a signed degree prefix is malformed input,
     not a different valid coordinate."""
-    from lhpc.core.gps import _nmea_coord
-    assert _nmea_coord(b"4807.038", b"N", True) is not None
-    assert _nmea_coord(b"-807.038", b"N", True) is None
-    assert _nmea_coord(b"+807.038", b"S", True) is None
-    assert _nmea_coord(b" 807.038", b"N", True) is None
-    assert _nmea_coord(b"4807.0e1", b"N", True) is None
+    p, _ = _parser()
+    p.feed(nmea(f"GPGGA,123519.00,{lat},{hemi},01131.000,E,1,08,0.9,545.4,M,46.9,M,,"))
+    s = p.snapshot()
+    assert s["state"] == "no-fix" and s["lat"] is None
+    p.feed(GGA_3D)                                        # the same sentence, well-formed
+    assert p.snapshot()["lat"] is not None
 
 
 def test_bad_checksum_is_ignored():
@@ -316,6 +319,13 @@ def _fifo_bridge(tmp_path, monitor_ok=True):
     return paths, fifo, out, ready, monitor, stop, t
 
 
+def _until(pred, timeout=5.0):
+    """Poll an observable until it holds or the deadline passes; the caller asserts after."""
+    deadline = time.monotonic() + timeout
+    while not pred() and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+
 def _ask_monitor(path):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
         s.settimeout(2.0)
@@ -336,7 +346,7 @@ def test_monitor_socket_answers_the_feeds_snapshot_and_is_private(tmp_path):
         with open(fifo, "wb", buffering=0) as w:
             for line in (GGA_3D, GSA_3D, GSV_1, GSV_2):
                 w.write(line + b"\r\n")
-            time.sleep(0.5)
+            _until(lambda: len(_ask_monitor(monitor.path)["nmea"]) >= 4)
             got = _ask_monitor(monitor.path)
         assert got["state"] == "3d" and got["sats_seen"] == 7 and len(got["nmea"]) == 4
         assert oct(os.stat(monitor.path).st_mode & 0o777) == "0o600"
@@ -357,7 +367,7 @@ def test_monitor_failure_never_touches_the_feed(tmp_path):
         assert not monitor.enabled
         with open(fifo, "wb", buffering=0) as w:
             w.write(GGA_3D + b"\r\n")
-            time.sleep(0.4)
+            _until(lambda: GGA_3D + b"\r\n" in out.data and ready.state != "starting")
         assert GGA_3D + b"\r\n" in out.data
         assert ready.state in ("connected", "running", "starting", "ready")
         monitor.feed(b"\xff\xfe")                              # the tee never raises
@@ -388,11 +398,11 @@ def test_feed_output_is_byte_identical_with_and_without_a_monitor_client(tmp_pat
     try:
         with open(fifo, "wb", buffering=0) as w:
             w.write(GGA_3D + b"\r\n")
-            time.sleep(0.3)
+            _until(lambda: GGA_3D + b"\r\n" in out.data)
             before = out.data
             _ask_monitor(monitor.path)
             w.write(GSA_3D + b"\r\n")
-            time.sleep(0.3)
+            _until(lambda: GSA_3D + b"\r\n" in out.data)
         assert out.data == before + GSA_3D + b"\r\n"
     finally:
         stop.set()
@@ -714,7 +724,7 @@ else:  # "unpublished": the flock without an owner record (mid-publication / mid
 def _hold_in_child(tmp_path, key, mode, hold):
     import subprocess
     import sys
-    env = dict(os.environ, PYTHONPATH=os.getcwd())
+    env = dict(os.environ, PYTHONPATH=str(repo_paths.REPO))
     p = subprocess.Popen([sys.executable, "-c", _HOLD_SCRIPT, str(tmp_path), key, mode, str(hold)],
                          stdout=subprocess.PIPE, text=True, env=env)
     assert p.stdout.readline().strip() == "held"

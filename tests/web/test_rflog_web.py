@@ -5,6 +5,7 @@ else."""
 from __future__ import annotations
 
 import os
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -23,7 +24,6 @@ def _logs(tmp_path, name, text=""):
 
 def _links(doc, target, job, band=""):
     """The links to one RF log, by their parsed URL (query order is nobody's contract)."""
-    from urllib.parse import parse_qs, urlsplit
     want = {"job": [job], **({"band": [band]} if band else {})}
     return [a for a in doc.find("a") if a["href"] and urlsplit(a["href"]).path == f"/logs/{target}"
             and parse_qs(urlsplit(a["href"]).query) == want]
@@ -215,13 +215,16 @@ def test_clear_all_empties_every_registered_log_and_nothing_else(tmp_path, web, 
 
 def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
     """Under each radio card's daemon control: the daemon's file for that band, then the file of
-    every running stack the registry knows — on its own band only. No file exists yet, and the
-    links still lead to a page that says so."""
+    every running stack the registry knows — on its own band only. No file exists yet: the links
+    still lead to a page (200), and its viewer data reports no file (the page itself carries no
+    structural empty-state marker to assert)."""
     def factory():
         svc = ControllerService(
             system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["meshtasticd"]},
                               unix_replies={"/tmp/loraconf433.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system,
             paths=Paths(runtime_root=tmp_path))
+        # The band marker a start records — seeded through the product's own recorder, since no
+        # public setter exists and a real start needs a radio.
         svc._set_running_band("meshtastic", "868")
         return svc
     c = web(service_factory=factory)
@@ -236,10 +239,17 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
     assert len(_links(col868, "meshtastic", "rf-meshtastic.log", "868")) == 1
     assert not _links(col868, "loraham-kiss-tnc", "rf-kiss.log", "868")    # not running
     r = c.get(_links(col868, "meshtastic", "rf-meshtastic.log", "868")[0]["href"])
-    assert r.status_code == 200 and "(no log file yet)" in r.get_data(as_text=True)
+    assert r.status_code == 200
+    # The empty state as a typed field: the page's viewer data reports no file (the empty path).
+    d = c.get("/api/rflog/meshtastic?job=rf-meshtastic.log").get_json()
+    assert d["path"] == "" and d["records"] == []
 
 
-def test_the_band_follows_from_the_dashboard_through_the_page_and_its_bottom_forms(tmp_path, web, csrf):
+@pytest.mark.parametrize("url,data", [("/stacks/reticulum/rflog", {"value": "on", "from": "logs"}),
+                                      ("/rflog/all", {"value": "on"}), ("/logs/rns/clear", {}),
+                                      ("/rflog/clear-all", {})])
+def test_the_band_follows_from_the_dashboard_through_the_page_and_its_bottom_forms(tmp_path, web, csrf,
+                                                                                   url, data):
     """Reticulum declares both bands and defaults to 868. Running on 433, its RF-log link on the
     433 card, the page it opens, and every bottom action's redirect stay on 433 — the band is
     carried, never re-guessed from the manifest."""
@@ -248,6 +258,8 @@ def test_the_band_follows_from_the_dashboard_through_the_page_and_its_bottom_for
             system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["loraham-rns-node", "--config", "x"]},
                               unix_replies={"/tmp/loraconf433.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system,
             paths=Paths(runtime_root=tmp_path))
+        # The band marker a start records — seeded through the product's own recorder, since no
+        # public setter exists and a real start needs a radio.
         svc._set_running_band("reticulum", "433")
         return svc
     c = web(service_factory=factory)
@@ -257,11 +269,10 @@ def test_the_band_follows_from_the_dashboard_through_the_page_and_its_bottom_for
     doc = parse(c.get(link[0]["href"]).get_data(as_text=True))
     assert [a.text for a in _row(doc, "RF log bands").find("a", **{"aria-current": "page"})] == ["433"]
     assert doc.within(doc.by_id("rflog-switch")).field_default("band") == "433"
-    form = {"_csrf": csrf(c), "job": "rf-reticulum.log", "band": "433"}
-    for url, data in (("/stacks/reticulum/rflog", {"value": "on", "from": "logs"}),
-                      ("/rflog/all", {"value": "on"}), ("/logs/rns/clear", {}), ("/rflog/clear-all", {})):
-        r = c.post(url, data={**form, **data})
-        assert r.status_code == 302 and r.headers["Location"].endswith("/logs/rns?job=rf-reticulum.log&band=433"), url
+    r = c.post(url, data={"_csrf": csrf(c), "job": "rf-reticulum.log", "band": "433", **data})
+    loc = urlsplit(r.headers["Location"])
+    assert r.status_code == 302 and loc.path == "/logs/rns"
+    assert parse_qs(loc.query) == {"job": ["rf-reticulum.log"], "band": ["433"]}
     # Without the arg the page still shows the band the stack RUNS on, not its manifest default.
     doc = parse(c.get("/logs/rns?job=rf-reticulum.log").get_data(as_text=True))
     assert [a.text for a in _row(doc, "RF log bands").find("a", **{"aria-current": "page"})] == ["433"]

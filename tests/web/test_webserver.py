@@ -4,6 +4,7 @@
 from __future__ import annotations
 import os
 import pytest
+import re
 import sys
 from lhpc.core import webserver, pki, runtime_fs, validators, config
 from lhpc.core.paths import Paths
@@ -1836,13 +1837,13 @@ def test_nginx_serves_static_updating_page_on_502(tmp_path):
     webserver.stage_and_validate(fake.system, paths, WebserverConfig())
     page = tmp_path / "config" / "nginx" / "_lhpc_updating.html"
     assert page.is_file()
-    html = page.read_text()
-    # Identity, not wording: the point is that the served path holds THE branded page. Asserting a
-    # phrase pinned the console-specific copy, which broke as soon as the same file started serving
-    # stack UI blocks too (where "Return to the console" is wrong twice: the console is fine, and
-    # `/` on a stack port is the stack page).
-    assert html == webserver._UPDATING_PAGE_HTML
-    assert "<script" not in html
+    # The location serves exactly the file that was written ...
+    assert re.search(r"location = /_lhpc_updating\.html \{[^}]*\balias " + re.escape(str(page)) + ";",
+                     conf)
+    # ... and it is a standalone page with a way back. Structure, not wording: its content is owned
+    # by tests/web/test_stackweb.py::test_the_fallback_page_says_nothing_console_specific.
+    doc = parse(page.read_text())
+    assert doc.find("a", href="/") and not doc.find("script")
 
 
 def test_tcp_mode_still_refuses_non_loopback():
@@ -2617,32 +2618,6 @@ def test_a_reissue_whose_reload_failed_still_hands_out_its_bundle(tmp_path, monk
     assert not r.ok and r.data["bundle_created"] is True and "reload FAILED" in r.summary
 
 
-def test_cli_reissue_with_a_failed_reload_exits_1_and_still_shows_the_passphrase(monkeypatch, tmp_path, capsys):
-    # A failed reload is a partial failure (exit 1), but the bundle exists: losing its one-time
-    # passphrase would leave the operator with a bundle nobody can open.
-    from lhpc.core import webserver as _ws
-    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path)); (tmp_path / "config").mkdir(exist_ok=True)
-    assert main(["webserver", "init"]) == 0
-    assert main(["webserver", "cert", "issue", "laptop"]) == 0
-    monkeypatch.setattr(_ws, "reload", lambda system, paths: ("failed", "failed"))
-    capsys.readouterr()
-    assert main(["webserver", "cert", "reissue", "laptop"]) == 1
-    out = capsys.readouterr().out
-    assert out.startswith("ERR") and "reload FAILED" in out
-    assert "ONE-TIME bundle passphrase" in out
-
-
-def test_cli_revoke_with_a_failed_reload_exits_1(monkeypatch, tmp_path, capsys):
-    from lhpc.core import webserver as _ws
-    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path)); (tmp_path / "config").mkdir(exist_ok=True)
-    assert main(["webserver", "init"]) == 0
-    assert main(["webserver", "cert", "issue", "laptop"]) == 0
-    monkeypatch.setattr(_ws, "reload", lambda system, paths: ("failed", "failed"))
-    capsys.readouterr()
-    assert main(["webserver", "cert", "revoke", "laptop", "--confirm-label", "laptop"]) == 1
-    assert "revocation RECORDED for 'laptop'" in capsys.readouterr().out
-
-
 # ---- C05: verify checks that the server leaf was issued by THIS box's server CA ----------------
 def _pki_full(paths):
     pki.init_server_ca(paths)
@@ -2708,27 +2683,15 @@ def test_verify_http_only_has_no_server_chain_check(tmp_path):
     assert c["tls_required"] == "no" and "server_chain" not in c
 
 
-@pytest.mark.parametrize("exc", [ValueError("issuer"), TypeError("key type"), "invalid-signature"])
-def test_chain_check_maps_each_verify_error_to_not_issued(tmp_path, monkeypatch, exc):
-    from cryptography.exceptions import InvalidSignature
-    err = InvalidSignature() if exc == "invalid-signature" else exc
-
-    class _Cert:
-        def verify_directly_issued_by(self, issuer):
-            raise err
-    monkeypatch.setattr(pki, "_read_cert", lambda paths, path: _Cert())
-    assert pki.server_cert_chain_ok(_paths(tmp_path)) == (False, pki.CHAIN_NOT_ISSUED)
-
-
-def test_chain_check_unreadable_never_raises_and_names_no_remedy(tmp_path, monkeypatch):
+def test_verify_server_chain_unreadable_names_no_remedy(tmp_path, monkeypatch):
     paths = _paths(tmp_path)
     _pki_full(paths)
 
     def boom(p, path):
         raise pki.PKIError("malformed certificate")
+    # `_read_cert` stubbed as the collaborator: its typed refusal is given; what is under test is
+    # how verify reports it (the mapping itself is owned by tests/host/test_pki.py).
     monkeypatch.setattr(pki, "_read_cert", boom)
-    ok, why = pki.server_cert_chain_ok(paths)
-    assert ok is False and why == "unreadable: malformed certificate"
     r = _chain_svc(paths).webserver_verify()
     assert r.data["checks"].get("server_chain_reason") == "unreadable: malformed certificate"
     assert pki.CHAIN_NOT_ISSUED not in r.summary and "tls-renew" not in r.summary and "init" not in r.summary

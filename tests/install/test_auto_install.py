@@ -1547,7 +1547,6 @@ def test_local_advance_after_plan_still_frozen(tmp_path):
 
 # --- M2 round-6: artifact sources frozen for EVERY auto-install selector -----------------------------
 
-@pytest.mark.needs_session
 def _mark_chat_artifact(svc):
     """No shipped component is an artifact source any more (Voice lost the flag in 0.3.10, chat
     in 0.8.1). The freeze/refusal mechanism stays and these tests exercise it on the chat
@@ -1557,6 +1556,7 @@ def _mark_chat_artifact(svc):
     object.__setattr__(chat.source, "artifact", True)
 
 
+@pytest.mark.needs_session
 def test_pinned_auto_install_freezes_artifact_commit(tmp_path, monkeypatch):
     # A `pinned` auto-install plan resolves every ARTIFACT group to a non-empty exact commit and
     # passes it to adoption (artifacts never use known-working entries — the plan-time

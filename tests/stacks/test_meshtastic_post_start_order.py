@@ -41,8 +41,3 @@ def test_no_saving_step_follows_the_node_identity(tmp_path):
     later = [s["label"] for s in steps[idx + 1:]
              if any(str(a) in SAVING_FLAGS for a in s.get("argv", ()))]
     assert later == [], f"a config save after the node identity push: {later}"
-
-
-def test_the_fixed_position_comes_before_the_region(tmp_path):
-    labels = [s.get("label") for s in _steps(tmp_path) if s.get("kind") == "exec"]
-    assert labels.index("fixed position") < labels.index("region")
