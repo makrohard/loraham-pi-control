@@ -1227,18 +1227,18 @@ def test_a_binary_artifact_behind_the_manifest_is_refused_before_start(tmp_path,
 
 
 @pytest.mark.parametrize("target", ["daemon", "meshcom"])
-def test_a_stale_daemon_binary_is_refused_on_its_own_spawn_path(tmp_path, monkeypatch, target, binary_receipt):
+def test_a_stale_daemon_binary_is_refused_on_its_own_spawn_path(short_tmp_path, monkeypatch, target, binary_receipt):
     """The daemon is spawned by `_ensure_daemon`, not by the generic start loop, so the
     behind-manifest refusal has to sit on that path too — for a direct `start daemon` and for a
     dependent stack that asks for the band. A stale artifact must never reach the spawn."""
     from lhpc.core import config as cfgmod
-    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    svc = _svc(short_tmp_path, monkeypatch=monkeypatch)
     cfgmod.save_hardware_setup(svc._paths, "uputronics")
     svc._invalidate_config()
     assert svc.set_operator_identity(callsign="XX0XXA").ok        # meshcom's own identity gate
     spec = svc.binary_spec("daemon")
     daemon = svc.stack("daemon").component("loraham-daemon")
-    (tmp_path / daemon.source.path).mkdir(parents=True, exist_ok=True)
+    (short_tmp_path / daemon.source.path).mkdir(parents=True, exist_ok=True)
     binary_receipt(svc, commits={c: "b" * 40 for c in spec.covers},      # not the manifest pins
                    probe="loraham_daemon 0.9.0")
     why = svc.binary_behind(daemon)
@@ -1275,12 +1275,12 @@ def test_hmac_cli_preview_refuses_on_binary_install(tmp_path, monkeypatch, capsy
 
 
 @pytest.mark.parametrize("target", ["daemon", "meshcom"])
-def test_a_daemon_that_is_not_installed_names_that_as_the_reason(tmp_path, monkeypatch, target):
+def test_a_daemon_that_is_not_installed_names_that_as_the_reason(short_tmp_path, monkeypatch, target):
     # P1.23 (audit P1.4, the note): this fatal return was tagged [skip], which the typed-reason
     # helper does not read, so the daemon's result (and the boot-restore record built from it)
     # said "daemon readiness/TX gating failed".
     from lhpc.core import config as cfgmod
-    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    svc = _svc(short_tmp_path, monkeypatch=monkeypatch)
     cfgmod.save_hardware_setup(svc._paths, "uputronics")
     svc._invalidate_config()
     assert svc.set_operator_identity(callsign="XX0XXA").ok        # meshcom's own identity gate

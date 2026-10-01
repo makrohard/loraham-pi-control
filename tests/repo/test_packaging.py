@@ -2,7 +2,6 @@
 installed wheel, not only from a source checkout. (The full isolated wheel-install smoke test is
 in docs/maintenance.md / the milestone commands.)"""
 
-import os
 import subprocess
 import tomllib
 
@@ -70,6 +69,7 @@ def test_the_meshchat_frontend_is_present_and_looks_built():
     assert (index.parent / "assets").is_dir(), "meshchat-dist/assets missing — index.html is inert"
 
 
+@pytest.mark.needs_git_checkout
 def test_every_file_in_a_shipped_asset_tree_is_tracked_by_git():
     """What a fresh clone gets must equal what the developer sees. `.gitignore` carries generic
     build rules (dist/, build/, *.log, *.key …) that also match paths INSIDE a vendored bundle:
@@ -77,11 +77,6 @@ def test_every_file_in_a_shipped_asset_tree_is_tracked_by_git():
     and the wheel built from the working tree still contained them — so only a box installing
     from a clone would have found the UI incomplete. Compare tracked files against the disk."""
     root = repo_paths.REPO
-    if not (root / ".git").exists():
-        # A source export has nothing to compare; CI runs from actions/checkout and MUST have it.
-        if os.environ.get("CI"):
-            pytest.fail("no .git in this checkout — CI must run from a git checkout for this guard")
-        pytest.skip("not a git checkout")
     for tree in sorted(p for p in (root / "lhpc" / "data").iterdir()
                        if p.is_dir() and p.name.endswith("-dist")):
         rel = tree.relative_to(root)

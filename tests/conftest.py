@@ -28,8 +28,38 @@ def pytest_collection_modifyitems(config, items):
                 reason="host `zstd` binary not installed; the extraction boundary cannot be crossed "
                        "(install it with: sudo apt install -y zstd)"))
 
+def pytest_runtest_setup(item):
+    # A test that needs the repository's own `.git` (it clones the checkout, or reads its history)
+    # has nothing to prove in a source export (`git archive`, a tarball): there it SKIPS, with the
+    # reason. Under CI, which must run from a git checkout, the same absence is a broken checkout
+    # and FAILS. Per test, at setup — a failure raised in a collection hook would abort the session.
+    if item.get_closest_marker("needs_git_checkout"):
+        import repo_paths
+        if not (repo_paths.REPO / ".git").exists():
+            if os.environ.get("CI"):
+                pytest.fail("no .git in this checkout — CI must run from a git checkout "
+                            "(needs_git_checkout)", pytrace=False)
+            pytest.skip("not a git checkout (needs_git_checkout)")
+
+
 from lhpc.core.services import ControllerService
 from lhpc.core.lifecycle import Lifecycle
+
+
+@pytest.fixture
+def short_tmp_path():
+    """A temporary directory with a SHORT path, removed after the test, for a test that binds an
+    AF_UNIX socket under it (or validates a socket path, as the meshcom QEMU config does): a
+    socket path is capped at 107 bytes, and `tmp_path` grows with `--basetemp` and the test's
+    name, so under a long basetemp the same test failed for the path, not the behaviour."""
+    import pathlib
+    import shutil
+    import tempfile
+    d = tempfile.mkdtemp(prefix="lhpc-", dir="/tmp")
+    try:
+        yield pathlib.Path(d)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)

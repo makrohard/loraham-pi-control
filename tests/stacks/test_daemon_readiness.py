@@ -56,13 +56,13 @@ def test_verify_band_up_requires_ready(tmp_path):
     assert _svc(tmp_path, b"STATUS RADIO=READY TXMODE=MANAGED\n")._verify_band_up("433") is True
 
 
-def test_failed_radio_blocks_dependent_launch(tmp_path, set_call):
+def test_failed_radio_blocks_dependent_launch(short_tmp_path, set_call):
     # meshcom depends on the daemon; a reachable-but-FAILED daemon must block the
     # dependent (no false success, no second daemon instance started).
-    d = tmp_path / "src" / "loraham-daemon" / "loraham_daemon"
+    d = short_tmp_path / "src" / "loraham-daemon" / "loraham_daemon"
     d.mkdir(parents=True)
     (d / "loraham_daemon").write_text("#bin")
-    svc = _svc(tmp_path, b"STATUS RADIO=FAILED TXMODE=MANAGED\n")
+    svc = _svc(short_tmp_path, b"STATUS RADIO=FAILED TXMODE=MANAGED\n")
     set_call(svc)
     res = svc.start("meshcom", apply=True)
     assert not res.ok

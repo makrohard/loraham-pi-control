@@ -89,6 +89,7 @@ markers = [
   "requires_zstd: crosses the production extraction boundary (`zstd -dc`), so it needs the host `zstd` binary. Skipped (with reason) where it is absent; the target and CI install it, so it normally runs.",
   "no_default_hardware: opt OUT of the test-baseline hardware setup so the test sees the true fresh-install default (no radio hardware configured).",
   "no_default_display: opt OUT of the test-baseline graphical session, so the test sees the real compositor-socket detection (headless).",
+  "needs_git_checkout: needs the repository's own `.git` (it clones the checkout or reads its history). Skipped, with the reason, in a source export (`git archive`, a tarball); FAILS under CI (`CI` set), which must run from a git checkout. Applied per test by tests/conftest.py's pytest_runtest_setup.",
 ]
 
 

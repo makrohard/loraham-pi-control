@@ -269,7 +269,7 @@ def test_a_lagging_covered_library_does_not_block_the_start(tmp_path, monkeypatc
 
 @pytest.mark.parametrize(("lagging", "blocks"), [("meshcom-bridge", True),
                                                  ("meshcom-firmware", False)])
-def test_only_a_covered_service_blocks_the_start(tmp_path, monkeypatch, binary_receipt,
+def test_only_a_covered_service_blocks_the_start(short_tmp_path, monkeypatch, binary_receipt,
                                                  lagging, blocks):
     """`start meshcom` with one covered component off its pin: a lagging bridge (a service)
     refuses before any spawn, and QEMU's own gate names it too; a lagging firmware image no
@@ -277,7 +277,7 @@ def test_only_a_covered_service_blocks_the_start(tmp_path, monkeypatch, binary_r
     spawn. Either lag still reads "behind" in the update status."""
     from lhpc.core import config as cfgmod
     from lhpc.core.lifecycle import BUILD_MARKER_TEXT, StartLaunch
-    svc = _svc(tmp_path, monkeypatch)
+    svc = _svc(short_tmp_path, monkeypatch)
     cfgmod.save_hardware_setup(svc._paths, "uputronics")
     svc._invalidate_config()
     assert svc.set_operator_identity(callsign="XX0XXA").ok
@@ -285,7 +285,7 @@ def test_only_a_covered_service_blocks_the_start(tmp_path, monkeypatch, binary_r
     stack = svc.stack("meshcom")
     for c in stack.components:
         if c.source is not None:
-            (tmp_path / c.source.path).mkdir(parents=True, exist_ok=True)
+            (short_tmp_path / c.source.path).mkdir(parents=True, exist_ok=True)
         if c.source is not None and c.build_marker:          # QEMU built from today's inputs
             marker = svc._lifecycle().source_dir(c) / c.build_marker
             marker.parent.mkdir(parents=True, exist_ok=True)

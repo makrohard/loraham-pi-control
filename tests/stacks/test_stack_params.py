@@ -233,8 +233,8 @@ def test_direct_unlicensed_component_rejects_empty_node_before_side_effects(tmp_
     assert not res.ok, "a global callsign must not satisfy an unlicensed node identity"
 
 
-def test_direct_valid_identity_reaches_start_seam(tmp_path, monkeypatch):
-    svc = _seam_svc(tmp_path, monkeypatch)
+def test_direct_valid_identity_reaches_start_seam(short_tmp_path, monkeypatch):
+    svc = _seam_svc(short_tmp_path, monkeypatch)
     assert svc.save_config_bundle("meshcom", values={"mc_callsign": "XX0XXA-3"}).ok
     with pytest.raises(LifecycleSeam):                                             # enforcement passed
         svc._start_impl("meshcom-qemu", apply=True)

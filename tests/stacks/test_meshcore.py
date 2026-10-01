@@ -458,8 +458,8 @@ def test_a_valid_fixed_position_never_produces_invalid_toml(tmp_path, lat, lon):
     # TOML number. Written through verbatim it failed config generation with an opaque
     # "generated TOML is invalid" and blocked every MeshCore start.
     svc = _svc(tmp_path)
-    if not svc.set_gps(source="fixed", fixed_lat=lat, fixed_lon=lon).ok:
-        pytest.skip("not accepted as a fixed position")
+    res = svc.set_gps(source="fixed", fixed_lat=lat, fixed_lon=lon)
+    assert res.ok, res.summary                    # every case is a valid position
     pos, note = svc.meshcore_position("meshcore")
     assert pos, note
     writes = svc.write_config_files("meshcore", position=pos)

@@ -14,9 +14,10 @@ from lhpc.core import sdnotify
 
 
 @pytest.fixture()
-def sock(tmp_path, monkeypatch):
-    """A real AF_UNIX SOCK_DGRAM listener at $NOTIFY_SOCKET."""
-    path = str(tmp_path / "notify")
+def sock(short_tmp_path, monkeypatch):
+    """A real AF_UNIX SOCK_DGRAM listener at $NOTIFY_SOCKET, in a short directory (a socket path
+    is capped at 107 bytes; `tmp_path` grows with --basetemp)."""
+    path = str(short_tmp_path / "notify")
     s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
     s.bind(path)
     s.settimeout(2.0)

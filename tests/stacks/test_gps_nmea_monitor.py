@@ -339,8 +339,8 @@ def _ask_monitor(path):
     return json.loads(buf.split(b"\n", 1)[0])
 
 
-def test_monitor_socket_answers_the_feeds_snapshot_and_is_private(tmp_path):
-    paths, fifo, out, ready, monitor, stop, t = _fifo_bridge(tmp_path)
+def test_monitor_socket_answers_the_feeds_snapshot_and_is_private(short_tmp_path):
+    paths, fifo, out, ready, monitor, stop, t = _fifo_bridge(short_tmp_path)
     try:
         assert monitor.enabled
         with open(fifo, "wb", buffering=0) as w:
@@ -352,7 +352,7 @@ def test_monitor_socket_answers_the_feeds_snapshot_and_is_private(tmp_path):
         assert oct(os.stat(monitor.path).st_mode & 0o777) == "0o600"
         assert oct(os.stat(os.path.dirname(monitor.path)).st_mode & 0o777) == "0o700"
         assert GGA_3D + b"\r\n" in out.data                    # the consumer got its bytes
-        marker = (tmp_path / "state" / "gps" / "meshcom" / "readiness.json").read_text()
+        marker = (short_tmp_path / "state" / "gps" / "meshcom" / "readiness.json").read_text()
         assert "4807" not in marker and "lat" not in marker    # no coordinate on disk
     finally:
         stop.set()
@@ -393,8 +393,8 @@ def test_a_parser_exception_carrying_a_coordinate_never_reaches_the_bridge_log(t
     assert err.count("monitor parser error") == 1                 # logged once
 
 
-def test_feed_output_is_byte_identical_with_and_without_a_monitor_client(tmp_path):
-    paths, fifo, out, ready, monitor, stop, t = _fifo_bridge(tmp_path)
+def test_feed_output_is_byte_identical_with_and_without_a_monitor_client(short_tmp_path):
+    paths, fifo, out, ready, monitor, stop, t = _fifo_bridge(short_tmp_path)
     try:
         with open(fifo, "wb", buffering=0) as w:
             w.write(GGA_3D + b"\r\n")
@@ -527,11 +527,11 @@ def test_orphan_feed_is_a_holder_and_broken_monitor_never_falls_through(tmp_path
     assert m["state"] == "held" and "monitor unavailable" in m["note"] and calls == []
 
 
-def test_live_feed_with_working_monitor_is_via_feed(tmp_path, pty_device, monkeypatch):
+def test_live_feed_with_working_monitor_is_via_feed(short_tmp_path, pty_device, monkeypatch):
     _master, dev = pty_device
-    svc = _svc_nmea(tmp_path, dev, monkeypatch)
+    svc = _svc_nmea(short_tmp_path, dev, monkeypatch)
     _snap_with(svc, {"meshcom-gps": RunState.RUNNING})
-    state_dir = tmp_path / "state" / "gps" / "meshcom"
+    state_dir = short_tmp_path / "state" / "gps" / "meshcom"
     state_dir.mkdir(parents=True)
     (state_dir / "readiness.json").write_text(json.dumps(
         {"state": "running", "updated": int(time.time()), "pid": os.getpid()}))

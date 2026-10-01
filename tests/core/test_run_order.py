@@ -192,27 +192,27 @@ def test_run_plan_lists_daemon_then_app(tmp_path):
     assert any("loraham-kiss-tnc" in d for d in res.details)
 
 
-def test_start_log_omits_unconfirmed_boilerplate(tmp_path, set_call):
+def test_start_log_omits_unconfirmed_boilerplate(short_tmp_path, set_call):
     # Radio params aren't echoed by the daemon; the start log stays concise (no verbose
     # "SENT but UNCONFIRMED — a radio param the daemon does not report back …").
     reply = b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n"
     fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})
-    (tmp_path / "x").mkdir()
-    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    (short_tmp_path / "x").mkdir()
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=short_tmp_path))
     set_call(svc)
     text = "\n".join(svc.start("meshcom", apply=True).details)
     assert "UNCONFIRMED" not in text and "does not report back" not in text
     assert "SF=10 sent" in text                          # concise radio-param line instead
 
 
-def test_cli_start_same_sequence_as_web(tmp_path, set_call):
+def test_cli_start_same_sequence_as_web(short_tmp_path, set_call):
     # CLI (`lhpc start` -> run_action "start") and web (op=start -> run_action "start") share the
     # SAME _start_impl, so both perform the identical sequence: ensure the daemon (READY) -> apply
     # this stack's radio params -> start the stack's own components.
     reply = b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n"
     fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})
-    (tmp_path / "x").mkdir()
-    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    (short_tmp_path / "x").mkdir()
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=short_tmp_path))
     set_call(svc)
     text = "\n".join(svc.run_action("start", "meshcom", apply=True).details)   # CLI entry point
     i_daemon = text.index("daemon already serving 433")     # 1) daemon ensured READY

@@ -1846,12 +1846,12 @@ def test_cadidle_numeric_equality_ignores_formatting(tmp_path):
     assert not CS._cadidle_eq(None, "0") and not CS._cadidle_eq("x", "0")
 
 
-def test_failed_tx_gating_blocks_dependent(tmp_path, set_call):
+def test_failed_tx_gating_blocks_dependent(short_tmp_path, set_call):
     # meshcom needs the daemon in MANAGED; a daemon stuck in DIRECT must block it
     # (no false success, no post-start).
-    (tmp_path / "src" / "loraham-daemon" / "loraham_daemon").mkdir(parents=True)
-    (tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon").write_text("#bin")
-    svc = _svc_with_daemon(tmp_path, b"STATUS RADIO=READY TXMODE=DIRECT\n")
+    (short_tmp_path / "src" / "loraham-daemon" / "loraham_daemon").mkdir(parents=True)
+    (short_tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon").write_text("#bin")
+    svc = _svc_with_daemon(short_tmp_path, b"STATUS RADIO=READY TXMODE=DIRECT\n")
     set_call(svc)
     res = svc.start("meshcom", apply=True)
     assert not res.ok

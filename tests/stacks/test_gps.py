@@ -186,18 +186,18 @@ def test_meshcom_feeds_qemus_own_socket_and_does_not_publish_one(tmp_path):
         "we must not invent our own socket under state/"
 
 
-def test_the_meshcom_feed_waits_for_qemu_instead_of_failing(tmp_path):
+def test_the_meshcom_feed_waits_for_qemu_instead_of_failing(short_tmp_path):
     """QEMU boots slowly (minutes under emulation) and can restart. The feed must keep
     retrying rather than exiting, and must not block while the guest is absent."""
     from lhpc.core.gps_bridge import UnixClientOutput
-    out = UnixClientOutput(str(tmp_path / "absent.sock"))
+    out = UnixClientOutput(str(short_tmp_path / "absent.sock"))
     out.publish()                      # no server yet -> must not raise
     assert out.connected is False
     out.write(b"$GPGGA,,,,,,0,,,,,,,,*66\r\n")   # must not raise, must not block
     assert out.written == 0
 
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(str(tmp_path / "absent.sock"))
+    srv.bind(str(short_tmp_path / "absent.sock"))
     srv.listen(1)
     try:
         out._next_try = 0.0            # skip the backoff window for the test
@@ -1044,13 +1044,13 @@ def test_the_feed_relays_sentences_from_a_live_gpsd_and_degrades_when_it_closes(
     assert ready.state in ("source-lost", "connected", "stale"), ready.state
 
 
-def test_a_slow_guest_does_not_cause_a_reconnect_loop(tmp_path):
+def test_a_slow_guest_does_not_cause_a_reconnect_loop(short_tmp_path):
     """Found on a REAL QEMU node: the emulated UART back-pressures constantly, and treating
     `BlockingIOError` as a broken link produced connect/fail/reconnect churn. On a
     non-blocking socket it only means "would block" — the sentence is dropped (the next one
     supersedes it) and the connection is kept."""
     from lhpc.core.gps_bridge import UnixClientOutput
-    sock_path = str(tmp_path / "uart.sock")
+    sock_path = str(short_tmp_path / "uart.sock")
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(sock_path)
     srv.listen(1)
@@ -1128,7 +1128,7 @@ def _run_feed(paths, consumer, stop):
     return run(consumer, paths, stop=stop)
 
 
-def test_the_bridge_serves_meshcore_a_position_feed(tmp_path, fake_gpsd):
+def test_the_bridge_serves_meshcore_a_position_feed(short_tmp_path, fake_gpsd):
     """MeshCore's consumer is the openHop host app: it needs a normalized POSITION
     (line-JSON on a Unix server socket), not a simulated GPS chip. The bridge must
     accept the meshcore consumer, publish the position socket, convert a fixed NMEA
@@ -1143,8 +1143,8 @@ def test_the_bridge_serves_meshcore_a_position_feed(tmp_path, fake_gpsd):
     from lhpc.core.gps import bridge_endpoint_path, bridge_state_dir
     from lhpc.core.gps_bridge import EXIT_OK
     from lhpc.core.paths import Paths
-    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    paths = Paths(runtime_root=tmp_path)
+    (short_tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    paths = Paths(runtime_root=short_tmp_path)
     # 52°31.2000'N 13°24.6000'E with a valid fix, then a no-fix GGA.
     srv = fake_gpsd(sentences=[
         "$GPRMC,000001.00,A,5231.2000,N,01324.6000,E,0.0,0.0,010124,,,A*5C",
@@ -1155,8 +1155,8 @@ def test_the_bridge_serves_meshcore_a_position_feed(tmp_path, fake_gpsd):
     t = threading.Thread(target=lambda: rc.setdefault("v", _run_feed(paths, "meshcore", stop)),
                          daemon=True)
     t.start()
-    state = os.path.join(bridge_state_dir(tmp_path, "meshcore"), "readiness.json")
-    sock_path = bridge_endpoint_path(tmp_path, "meshcore")
+    state = os.path.join(bridge_state_dir(short_tmp_path, "meshcore"), "readiness.json")
+    sock_path = bridge_endpoint_path(short_tmp_path, "meshcore")
     deadline = time.time() + _FEED_UP_S
     while not os.path.exists(sock_path) and time.time() < deadline:
         time.sleep(0.05)
@@ -1185,14 +1185,14 @@ def test_the_bridge_serves_meshcore_a_position_feed(tmp_path, fake_gpsd):
     assert not os.path.exists(state)
 
 
-def test_no_fix_nmea_becomes_an_explicit_no_fix_record(tmp_path):
+def test_no_fix_nmea_becomes_an_explicit_no_fix_record(short_tmp_path):
     """A navigation sentence WITHOUT a usable fix must reach the consumer as
     {"fix": false} — silence would leave the old moving position advertised."""
     import json
     import socket as socket_mod
     import time
     from lhpc.core.gps_bridge import PosJsonServerOutput
-    link = str(tmp_path / "position.sock")
+    link = str(short_tmp_path / "position.sock")
     out = PosJsonServerOutput(link)
     out.publish()
     try:

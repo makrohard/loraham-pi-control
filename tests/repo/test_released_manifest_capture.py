@@ -33,6 +33,7 @@ def _param_keys(text: str) -> set:
     return set(re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=", text, re.M))
 
 
+@pytest.mark.needs_git_checkout
 def test_current_manifest_survives_the_runner_capture_cap():
     """`git show HEAD:manifest` must come back WHOLE through the real runner.
 

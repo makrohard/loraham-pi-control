@@ -96,8 +96,9 @@ All markers are declared in `pyproject.toml`; `--strict-markers` rejects a typo.
 - `-m safety` is every case guarding a named invariant of the
   [safety model](../docs/architecture.md). The two lanes overlap; neither is a subset of the other.
 - `slow` marks the real-venv builds and timed loops.
-- `requires_zstd`, `needs_session`, `needs_nonroot`, `no_default_hardware` and `no_default_display`
-  state an environmental requirement or opt-out.
+- `requires_zstd`, `needs_session`, `needs_nonroot`, `needs_git_checkout`, `no_default_hardware` and
+  `no_default_display` state an environmental requirement or opt-out; `needs_git_checkout` skips in a
+  source export and fails under CI (`CI` set).
 
 ## How to run
 
