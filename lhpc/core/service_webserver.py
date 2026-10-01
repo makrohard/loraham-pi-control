@@ -494,7 +494,10 @@ class WebserverOpsMixin:
         from .validators import ValidationError
         cur = self.config().webserver
         e_bind = cur.bind if bind is None else bind
-        e_port = cur.port if port is None else int(port)
+        try:
+            e_port = cur.port if port is None else int(port)
+        except ValueError:
+            return ActionResult(False, f"invalid webserver config: port {port!r} is not a number")
         e_scheme = cur.scheme if scheme is None else scheme
         e_access = cur.access_mode if access_mode is None else access_mode
         e_cidrs = tuple(cur.allowed_cidrs) if allowed_cidrs is None else tuple(allowed_cidrs)

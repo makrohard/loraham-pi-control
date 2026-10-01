@@ -1605,6 +1605,14 @@ def test_configure_via_post(tmp_path, web, csrf):
     assert svc.config().webserver.access_mode == "auth-everywhere"
 
 
+def test_configure_refuses_a_non_numeric_port_typed(tmp_path, web, csrf):
+    c, svc = _app_svc(web, tmp_path)
+    before = svc.config().webserver.port
+    r = c.post("/webserver/configure", data={"_csrf": csrf(c), "port": "84x3"})
+    assert r.status_code == 302                                   # a typed refusal, not a 500
+    assert svc.config().webserver.port == before
+
+
 @pytest.mark.contract
 @pytest.mark.safety("exposure-fail-closed")
 def test_expose_requires_confirmation(tmp_path, web, csrf):
