@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.11.9
 
 - Docs: one place per fact; shorter; verified against the code.
+- Tests: the house rules kept for everything since the last audit; every lane separated cleanly
+  (needs_git_checkout, short socket paths, named decoder skips).
 
 ## 0.11.8
 
