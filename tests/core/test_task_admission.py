@@ -248,6 +248,12 @@ def test_web_job_spawn_contends_typed(held_admission):
     assert log is None and admission == "blocked"
 
 
+def test_poststart_contends_typed(held_admission, set_call):
+    set_call(held_admission)                                     # past the identity gate
+    r = held_admission.poststart("meshcom", apply=True)          # a typed refusal, never a raise
+    assert not r.ok
+
+
 def test_hmac_cli_contends_typed(held_admission):
     msgs = []
     rc = held_admission.hmac_apply_cli("meshcom", "enable", emit=msgs.append)

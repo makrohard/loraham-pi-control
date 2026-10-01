@@ -1620,11 +1620,15 @@ class LifecycleOpsMixin:
                                 data={"enforce_fields": id_fields},
                                 next_commands=self._identity_config_hints(target,
                                                                           _pid_band))
+        from . import reslock
         try:
             with self._admission_guard("poststart", target), self._config_stable():
                 return self._poststart_impl(target, order, band, require_all=require_all)
         except AdmissionRefused as _adm:
             return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"Cannot re-run post-start for '{target}': {busy}",
+                                next_commands=[f"lhpc status {target}"])
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Cannot re-run post-start for '{target}': {blocked}",
                                 next_commands=[f"lhpc status {target}"])
