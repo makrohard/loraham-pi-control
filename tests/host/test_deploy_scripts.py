@@ -312,6 +312,21 @@ def test_install_rollback_keeps_an_uninstall_remainder(tmp_path):
     assert (root / "state" / "graywolf" / "graywolf.db").read_text() == "APP-DATA"
 
 
+def test_install_rollback_removes_units_written_before_a_render_failure(tmp_path):
+    """A unit render failing part-way rolls back the units already written AND the empty file its
+    redirect created — none is left to block the next install."""
+    home = tmp_path / "home"
+    home.mkdir()
+    root = home / "loraham-pi-control"
+    fb = _fake_bin(tmp_path)
+    _fake_toolchain(fb, fail_render="lhpc-nginx.service")
+    r = _run(INSTALL, ["--target", str(root), "--no-path"], home, fb)
+    assert r.returncode != 0 and "rollback done" in r.stderr, r.stdout + r.stderr
+    ud = home / ".config" / "systemd" / "user"
+    assert ud.is_dir() and list(ud.iterdir()) == []
+    assert not root.exists()
+
+
 def test_app_data_list_is_identical_in_both_scripts_and_in_the_docs():
     """ONE allowlist, in FOUR places: the app data a default uninstall keeps is exactly what
     install.sh accepts, exactly what operations.md tells the operator to back up, and exactly

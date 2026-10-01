@@ -276,15 +276,19 @@ if [ "$WITH_SERVICE" -eq 1 ]; then
 		# CANONICAL units come from the single renderer (byte-exact with what the integrity
 		# proof expects); no heredoc duplication. The web unit blocks the user-systemd bus and
 		# Wants= the .path watcher; the helper is sandboxed + declarative (no systemctl).
-		render_unit() { "${VENV}/bin/python" -m lhpc.core.updater_units render "$1" "$TARGET_DIR" "$CHECKOUT" "$VENV"; }
-		render_unit lhpc-web.service           > "$WEB_UNIT"
-		render_unit lhpc-selfupdate.service    > "$HELPER_UNIT"
-		render_unit lhpc-selfupdate.path       > "$PATH_UNIT"
-		render_unit lhpc-nginx.service         > "$NGINX_UNIT"
-		render_unit lhpc-nginx-restart.service > "$RESTART_UNIT"
-		render_unit lhpc-nginx-restart.path    > "$RESTART_PATH_UNIT"
-		render_unit lhpc-boot-restore.service  > "$BOOT_RESTORE_UNIT"
-		CREATED_UNITS="$WEB_UNIT $HELPER_UNIT $PATH_UNIT $NGINX_UNIT $RESTART_UNIT $RESTART_PATH_UNIT $BOOT_RESTORE_UNIT"
+		# Each unit is recorded BEFORE its redirect creates it, so a render failing part-way rolls
+		# back the units already written and the empty file the failing redirect left.
+		render_unit() {
+			CREATED_UNITS="$CREATED_UNITS $2"
+			"${VENV}/bin/python" -m lhpc.core.updater_units render "$1" "$TARGET_DIR" "$CHECKOUT" "$VENV" > "$2"
+		}
+		render_unit lhpc-web.service           "$WEB_UNIT"
+		render_unit lhpc-selfupdate.service    "$HELPER_UNIT"
+		render_unit lhpc-selfupdate.path       "$PATH_UNIT"
+		render_unit lhpc-nginx.service         "$NGINX_UNIT"
+		render_unit lhpc-nginx-restart.service "$RESTART_UNIT"
+		render_unit lhpc-nginx-restart.path    "$RESTART_PATH_UNIT"
+		render_unit lhpc-boot-restore.service  "$BOOT_RESTORE_UNIT"
 		systemctl --user daemon-reload 2>/dev/null || true
 		# Enable the request watchers + the console (the .paths are also pulled up by the web unit's
 		# Wants=, but enabling them makes them survive a manual `systemctl stop lhpc-web`).
