@@ -746,7 +746,8 @@ class FirewallOpsMixin:
         # irrelevant. `intent_hash` RAISES on a malformed candidate — fail closed.
         previous = {**cand, "proxy_ingress": [
             {"proto": "tcp", "family": family, "addr": addr, "port": int(ws.port),
-             "allow_cidrs": _norm_cidrs(ws.allowed_cidrs, family)},
+             "allow_cidrs": [] if (cand.get("ap") or {}).get("enabled")     # as _fw_proxy_ingress
+             else _norm_cidrs(ws.allowed_cidrs, family)},
             *(cand.get("proxy_ingress") or [])]}
         try:
             want = _fw.intent_hash(previous)

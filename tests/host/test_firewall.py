@@ -2404,12 +2404,16 @@ def test_ap_dhcp_server_rule_is_family_scoped():
     assert "meta nfproto ipv4" in disc and 'iifname "wlan0"' in disc
 
 
-def _narrowing_env(tmp_path, monkeypatch, *, console_bind="0.0.0.0", cidrs="192.168.0.0/24"):
+def _narrowing_env(tmp_path, monkeypatch, *, console_bind="0.0.0.0", cidrs="192.168.0.0/24",
+                   ap=False):
     """A box whose firewall receipt was applied WITH the console exposed, and whose saved config has
     since removed that exposure. Returns (svc, applied_intent_hash)."""
     from lhpc.core import config as cfgmod
     from lhpc.core import firewall as fwm
     svc = _svc(tmp_path)
+    if ap:
+        cfgmod.save_firewall_config(svc._paths, ap_enabled=True, ap_interface="wlan0",
+                                    ap_cidr="10.42.0.0/24")
     cfgmod.save_stackweb_config(svc._paths, "meshtastic", mode="lan", port=8445,
                                 allowed_cidrs=[cidrs])
     cfgmod.save_webserver_config(svc._paths, bind=console_bind, port=8443, remote_exposed=True,
@@ -2445,6 +2449,15 @@ def test_narrowing_allowed_only_when_console_removal_is_the_whole_change(tmp_pat
     _listeners(monkeypatch, ["0.0.0.0"])
     ok, msg, _cmds = svc.firewall_gate_activation({8445})
     assert ok, msg                                              # the real bug: closing the console
+
+
+def test_narrowing_allowed_on_an_ap_managed_box(tmp_path, monkeypatch):
+    """An AP-managed box emits the console ingress UNSCOPED; the reconstruction must do the same,
+    or turning the console back to local-only is refused on every such box."""
+    svc, _applied = _narrowing_env(tmp_path, monkeypatch, ap=True)
+    _listeners(monkeypatch, ["0.0.0.0"])
+    ok, msg, _cmds = svc.firewall_gate_activation({8445})
+    assert ok, msg
 
 
 def test_narrowing_refused_when_anything_else_changed_too(tmp_path, monkeypatch):
