@@ -2089,7 +2089,7 @@ class MaintenanceOpsMixin:
                                 data={"prep_blocked": "auto_install"})
         try:
             hst = self.hmac_apply_status()
-            hmac_bad = bool(hst) and (hst.get("unsafe") or hst.get("phase") in ("running", "interrupted"))
+            hmac_bad = bool(hst) and (hst.get("unsafe") or hst.get("phase") in ("running", "interrupted", "unsafe"))
         except Exception:
             hmac_bad = True
         if hmac_bad:

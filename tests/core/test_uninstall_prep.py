@@ -58,6 +58,15 @@ def test_prep_blocks_on_pending_self_update(tmp_path, monkeypatch):
     assert not r.ok and r.data.get("prep_blocked") == "self_update"
 
 
+def test_prep_blocks_on_hmac_phase_unsafe(tmp_path, monkeypatch):
+    """A persisted HMAC phase "unsafe" (a driver or build step might still run) blocks prep."""
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(ControllerService, "hmac_apply_status",
+                        lambda self: {"run_id": "x", "phase": "unsafe", "steps": [], "derived_unsafe": True})
+    r = svc.controller_uninstall_prep()
+    assert not r.ok and r.data.get("prep_blocked") == "hmac"
+
+
 def test_prep_blocks_on_unknown_state(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     snap = svc.build_snapshot(fresh=True)
