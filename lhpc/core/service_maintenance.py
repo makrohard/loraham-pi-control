@@ -2490,7 +2490,8 @@ class MaintenanceOpsMixin:
                              and str(st.get("dst", "")).startswith(gen_prefix)
                              and "/" not in st["dst"][len(gen_prefix):]})
         log_prefixes = tuple({f"install-{sid}"} | {f"{op}-{cid}" for op in ("build", "test",
-                             "start", "post") for cid in comp_ids})
+                             "start", "post") for cid in comp_ids}
+                             | {f"web-{op}-{t}" for op in ("start", "restart") for t in comp_ids | {sid}})
         markers = [self._interactive_marker(sid), self._band_marker(sid),
                    known_working.candidate_path(self._paths, sid),
                    restart_required.marker_path(self._paths, sid),
@@ -2686,7 +2687,7 @@ class MaintenanceOpsMixin:
                 for name, is_link in entries:
                     if is_link or name in protected:
                         continue
-                    stem = name.removesuffix(".log")
+                    stem = name.removesuffix(".prev.log").removesuffix(".log")   # + the cap's older half
                     if any(stem == p or stem.startswith(p + "-") for p in log_prefixes):
                         try:
                             runtime_fs.unlink(self._paths,

@@ -65,6 +65,10 @@ def _seed_kiss(tmp_path):
     (tmp_path / "logs").mkdir()
     (tmp_path / "logs" / "build-loraham-kiss-tnc.log").write_text("log")
     (tmp_path / "logs" / "start-loraham-kiss-serial.log").write_text("log")
+    (tmp_path / "logs" / "start-loraham-kiss-serial.prev.log").write_text("log")   # the cap's older half
+    (tmp_path / "logs" / "web-start-kiss.log").write_text("log")                   # a web Start's job log
+    (tmp_path / "logs" / "start-loraham-kiss-serial.prev").write_text("not a log")   # bare .prev: kept
+    (tmp_path / "logs" / "web-restart-loraham-kiss-serial.log").write_text("log")
     (tmp_path / "logs" / "start-loraham-chat.log").write_text("other stack")
     known_working.record(paths, "kiss",
                          {"loraham-kiss-tnc": {"commit": "a" * 40, "selector": "pinned",
@@ -154,6 +158,10 @@ def test_clean_removes_exact_set_and_preserves_the_rest(tmp_path):
     assert not (tmp_path / "config" / "stacks" / "kiss@868.toml").exists()
     assert not (tmp_path / "logs" / "build-loraham-kiss-tnc.log").exists()
     assert not (tmp_path / "logs" / "start-loraham-kiss-serial.log").exists()
+    assert not (tmp_path / "logs" / "start-loraham-kiss-serial.prev.log").exists()
+    assert not (tmp_path / "logs" / "web-start-kiss.log").exists()
+    assert (tmp_path / "logs" / "start-loraham-kiss-serial.prev").exists()
+    assert not (tmp_path / "logs" / "web-restart-loraham-kiss-serial.log").exists()
     assert not (tmp_path / "state" / "restart-required" / "kiss.json").exists()
     assert known_working.load(paths, "kiss") == []                        # history gone
     assert source_registry.read_record(paths, "src/loraham-kiss-tnc") is None
