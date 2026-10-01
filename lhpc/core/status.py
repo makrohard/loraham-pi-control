@@ -451,13 +451,13 @@ def rollup_states(snapshot: Snapshot) -> dict[str, str]:
                 continue
             if _SEVERITY[st.run_state] > _SEVERITY[worst]:
                 worst = st.run_state
-        # A stack whose MAIN component is stopped while another of its components runs is only
-        # partially running (e.g. the node killed, its GPS bridge and web UI still up): degraded,
-        # not running. An interactive main never runs under lhpc, so it cannot trigger this.
+        # A stack whose MAIN component is stopped (or not installed) while another of its components
+        # runs is only partially running (e.g. the node killed, its GPS bridge and web UI still up):
+        # degraded, not running. An interactive main never runs under lhpc, so it cannot trigger this.
         main = next((c for c in ss.stack.components if c.id == ss.stack.main), None)
         main_st = ss.components.get(ss.stack.main)
         if (worst is RunState.RUNNING and main is not None and not main.interactive
-                and main_st is not None and main_st.run_state is RunState.STOPPED):
+                and main_st is not None and main_st.run_state in (RunState.STOPPED, RunState.NOT_INSTALLED)):
             worst = RunState.DEGRADED
         out[ss.stack.id] = worst.value
     return out

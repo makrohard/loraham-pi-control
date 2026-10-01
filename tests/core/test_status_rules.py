@@ -471,6 +471,9 @@ def test_rollup_is_degraded_when_the_main_is_down_but_sidecars_run(tmp_path):
     up = RunState.RUNNING
     killed = {"meshcore-gps": up, "meshcore-webui": up, "meshcore-node": RunState.STOPPED}
     assert rollup_states(_stack_snapshot(svc, "meshcore", killed))["meshcore"] == "degraded"
+    # a main whose source is missing reads NOT_INSTALLED, which ranks below RUNNING: still degraded
+    missing = dict(killed, **{"meshcore-node": RunState.NOT_INSTALLED})
+    assert rollup_states(_stack_snapshot(svc, "meshcore", missing))["meshcore"] == "degraded"
     healthy = {"meshcore-gps": up, "meshcore-webui": up, "meshcore-node": up}
     assert rollup_states(_stack_snapshot(svc, "meshcore", healthy))["meshcore"] == "running"
     assert rollup_states(_stack_snapshot(svc, "meshcore", {}))["meshcore"] == "stopped"
