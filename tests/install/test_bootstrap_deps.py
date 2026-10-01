@@ -1168,6 +1168,24 @@ def test_meshtasticd_disabled_when_present_in_a_huge_unit_list(tmp_path):
     assert "no packaged meshtasticd service present" not in r.stdout
 
 
+def test_packaged_unit_disable_failure_keeps_the_deferred_verdicts(tmp_path):
+    # A packaged meshtasticd that will not stop/disable must not abort before the deferred
+    # verdicts: a required-but-failed swap still exits 4 with its message, and the failed
+    # disable is reported too.
+    r, *_ = _run(tmp_path, _swaparg(), meminfo=_meminfo(tmp_path, 460), swapon_fail=True,
+                 systemctl_units="meshtasticd.service", systemctl_fail="meshtasticd")
+    assert r.returncode == 4, r.stderr
+    assert "REQUIRED on this low-memory host" in r.stderr
+    assert "could not stop/disable the OS-packaged meshtasticd" in r.stderr
+    # On its own the failed disable is its own nonzero verdict, never a false "done".
+    (tmp_path / "alone").mkdir()
+    r, *_ = _run(tmp_path / "alone", ["--spi-mode", "soft-cs"],
+                 systemctl_units="meshtasticd.service", systemctl_fail="meshtasticd")
+    assert r.returncode == 9, r.stderr
+    assert "could not stop/disable the OS-packaged meshtasticd" in r.stderr
+    assert _DONE not in r.stdout
+
+
 def test_absent_unit_reads_absent_against_the_huge_list(tmp_path):
     # The "nothing to disable" branch fires ONLY when the unit truly does not exist — the decoy
     # flood must not accidentally match.

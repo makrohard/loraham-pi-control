@@ -884,8 +884,9 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "#             5 --dry-run could not resolve · 6 --dry-run found graphical packages ·",
         "#             7 hardware group grant failed · 8 system nginx.service could not be confirmed"
         " stopped ·",
-        "#             9 systemd unit files could not be inspected (fail-closed — a competing service",
-        "#             may be active) · 10 not running as root (run: sudo bash bootstrap-deps.sh ...).",
+        "#             9 systemd unit files could not be inspected, or a packaged service could not",
+        "#             be disabled (fail-closed — a competing service may be active) ·",
+        "#             10 not running as root (run: sudo bash bootstrap-deps.sh ...).",
         "#             Steps that can legitimately fail on a CLEAN",
         "#             image (no packaged meshtasticd unit) are GUARDED — the script runs under",
         "#             `set -e`, so an unguarded one would abort before this summary.",
@@ -1722,6 +1723,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "fi",
         "")
 
+    out('_DISABLE_FAILED=""')
     for blk in disable_blocks:
         b = _desudo(blk)
         out("# --- disable an OS-packaged service (lhpc manages its own) --------------------------------")
@@ -1739,11 +1741,18 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
             # inspection FAILURE must NOT be read as absent — that would fail OPEN, leaving a
             # pre-existing packaged service active while bootstrap reports success. exit 9 =
             # systemd could not be inspected.
+            # A disable that FAILS (stop timeout, D-Bus error) is deferred like the group/swap
+            # verdicts: under `set -e` it would otherwise exit before they are ever reported.
             out(f"unit_rc=0; unit_present {svc_unit} || unit_rc=$?",
                 'case "$unit_rc" in',
                 "\t0)",
-                "\t\t" + b.replace("\n", "\n\t\t"),
-                f'\t\techo "[bootstrap-deps] disabled the OS-packaged {unit} (lhpc manages its own)." ;;',
+                "\t\tif " + b.replace("\n", "\n\t\t") + "; then",
+                f'\t\t\techo "[bootstrap-deps] disabled the OS-packaged {unit} (lhpc manages its own)."',
+                "\t\telse",
+                f'\t\t\techo "ERROR: could not stop/disable the OS-packaged {unit} — it still competes'
+                ' with the lhpc-managed one. Resolve this and re-run." >&2',
+                "\t\t\t_DISABLE_FAILED=1",
+                "\t\tfi ;;",
                 f'\t1) echo "[bootstrap-deps] no packaged {unit} service present — nothing to disable." ;;',
                 f'\t2) echo "ERROR: could not inspect systemd unit files — cannot confirm a packaged'
                 f' {unit} is stopped. Refusing to continue." >&2; exit 9 ;;',
@@ -1780,6 +1789,11 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "\t# 11: 2-10 are already taken by other refusals in this script, and an exit code that",
         "\t# collides with another cause is worse than no exit code at all.",
         "\texit 11",
+        "fi",
+        # 9: same meaning as the inspection refusal — a packaged service is not confirmed stopped.
+        'if [ -n "$_DISABLE_FAILED" ]; then',
+        '\techo "[bootstrap-deps] a packaged service could not be stopped/disabled (see above)." >&2',
+        "\texit 9",
         "fi",
         'echo "[bootstrap-deps] done. Next: install lhpc (install.sh), then ONE reboot applies '
         'SPI + groups + PATH — see README steps 5-6."')

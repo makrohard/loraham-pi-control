@@ -30,8 +30,9 @@
 # Exit codes: 2 usage · 3 conflicting SPI config · 4 required swap unprovisioned ·
 #             5 --dry-run could not resolve · 6 --dry-run found graphical packages ·
 #             7 hardware group grant failed · 8 system nginx.service could not be confirmed stopped ·
-#             9 systemd unit files could not be inspected (fail-closed — a competing service
-#             may be active) · 10 not running as root (run: sudo bash bootstrap-deps.sh ...).
+#             9 systemd unit files could not be inspected, or a packaged service could not
+#             be disabled (fail-closed — a competing service may be active) ·
+#             10 not running as root (run: sudo bash bootstrap-deps.sh ...).
 #             Steps that can legitimately fail on a CLEAN
 #             image (no packaged meshtasticd unit) are GUARDED — the script runs under
 #             `set -e`, so an unguarded one would abort before this summary.
@@ -980,12 +981,17 @@ NETWORKRULE
 	echo "[bootstrap-deps] network controls: Wi-Fi polkit rule installed for $OP (/etc/polkit-1/rules.d/49-lhpc-network.rules)."
 fi
 
+_DISABLE_FAILED=""
 # --- disable an OS-packaged service (lhpc manages its own) --------------------------------
 unit_rc=0; unit_present meshtasticd.service || unit_rc=$?
 case "$unit_rc" in
 	0)
-		systemctl disable --now meshtasticd
-		echo "[bootstrap-deps] disabled the OS-packaged meshtasticd (lhpc manages its own)." ;;
+		if systemctl disable --now meshtasticd; then
+			echo "[bootstrap-deps] disabled the OS-packaged meshtasticd (lhpc manages its own)."
+		else
+			echo "ERROR: could not stop/disable the OS-packaged meshtasticd — it still competes with the lhpc-managed one. Resolve this and re-run." >&2
+			_DISABLE_FAILED=1
+		fi ;;
 	1) echo "[bootstrap-deps] no packaged meshtasticd service present — nothing to disable." ;;
 	2) echo "ERROR: could not inspect systemd unit files — cannot confirm a packaged meshtasticd is stopped. Refusing to continue." >&2; exit 9 ;;
 esac
@@ -1003,5 +1009,9 @@ if [ -n "$BOOTSTRAP_FAILED" ]; then
 	# 11: 2-10 are already taken by other refusals in this script, and an exit code that
 	# collides with another cause is worse than no exit code at all.
 	exit 11
+fi
+if [ -n "$_DISABLE_FAILED" ]; then
+	echo "[bootstrap-deps] a packaged service could not be stopped/disabled (see above)." >&2
+	exit 9
 fi
 echo "[bootstrap-deps] done. Next: install lhpc (install.sh), then ONE reboot applies SPI + groups + PATH — see README steps 5-6."
