@@ -2,6 +2,11 @@
 
 ## 0.11.10
 
+Upgrade note — boxes with the firewall installed and remote access configured: this release changes the firewall
+helper, so the dashboard reads *Update required*; run
+`sudo bash <runtime root>/config/files/firewall/firewall-apply.sh` and `lhpc webserver apply` after the update,
+before a reboot — otherwise the boot gate keeps the console loopback-only (fail-closed) until you do.
+
 36 small defects found by a full code review of 0.11.9, each with a regression test. The ones an operator could meet:
 
 - Settings "Reset to defaults" no longer turns HMAC authentication off: the HMAC-managed `password_file` is kept
