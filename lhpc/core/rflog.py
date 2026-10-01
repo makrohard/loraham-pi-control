@@ -176,7 +176,7 @@ def _num(text):
         return None
     try:
         return float(text)
-    except ValueError:
+    except (TypeError, ValueError):
         return None
 
 
@@ -210,7 +210,7 @@ def parse_line(line: str) -> dict:
         ts = obj.get("timestamp")
         try:
             iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(ts))) if ts else ""
-        except (ValueError, OverflowError, OSError):
+        except (TypeError, ValueError, OverflowError, OSError):
             iso = ""
 
         def node(v):

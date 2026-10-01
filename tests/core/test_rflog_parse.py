@@ -51,6 +51,10 @@ def test_unknown_lines_are_kept_raw_and_never_raise():
         assert set(r) == {"key", "raw"} or "ts" in r
     assert rflog.parse_line("{\"timestamp\": \"x\"}")["ts"] == ""      # a bad stamp, still a record
     assert rflog.parse_line('{"from": 1, "size": "big"}')["len"] == 0      # a bad size, still a record
+    # non-scalar stamp / signal values: a record with the field blank, never a TypeError
+    assert rflog.parse_line('{"timestamp": [1]}')["ts"] == ""
+    assert rflog.parse_line('{"rssi": {}}')["rssi"] is None
+    assert rflog.parse_line('{"snr": [2]}')["snr"] is None
 
 
 def test_the_key_is_the_line_and_only_the_line():
