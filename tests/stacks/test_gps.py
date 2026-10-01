@@ -1044,6 +1044,36 @@ def test_the_feed_relays_sentences_from_a_live_gpsd_and_degrades_when_it_closes(
     assert ready.state in ("source-lost", "connected", "stale"), ready.state
 
 
+def test_an_unreachable_gpsd_is_reported_as_unreachable_not_as_closed(tmp_path):
+    """A refused connect says so in the readiness detail — it is not a connection that closed."""
+    from lhpc.core.gps_bridge import Readiness, _Output, _pump_gpsd
+    from lhpc.core.paths import Paths
+
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()                                 # nothing listens there any more
+    ready = Readiness(str(tmp_path / "r.json"), Paths(runtime_root=tmp_path))
+    waiting = threading.Event()
+
+    class _Stop(threading.Event):
+        def wait(self, timeout=None):
+            waiting.set()                         # the pump is past BOTH degrade sites
+            return super().wait(timeout)
+
+    stop = _Stop()
+    t = threading.Thread(target=_pump_gpsd,
+                         args=("127.0.0.1", port, _Output("", None), ready, stop), daemon=True)
+    t.start()
+    try:
+        assert waiting.wait(5.0), "the pump never reached its reconnect back-off"
+        assert ready.state == "source-lost"
+        assert ready.detail.startswith("gpsd unreachable"), ready.detail
+    finally:
+        stop.set()
+        t.join(timeout=3.0)
+
+
 def test_a_slow_guest_does_not_cause_a_reconnect_loop(short_tmp_path):
     """Found on a REAL QEMU node: the emulated UART back-pressures constantly, and treating
     `BlockingIOError` as a broken link produced connect/fail/reconnect churn. On a

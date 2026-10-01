@@ -767,9 +767,11 @@ def _pump_gpsd(host: str, port: int, out: _Output, ready: Readiness, stop) -> No
                     ready.tick()
         except (TimeoutError, OSError) as exc:
             ready.degrade("source-lost", f"gpsd unreachable ({type(exc).__name__})")
+        else:
+            if not stop.is_set():
+                ready.degrade("source-lost", "gpsd connection closed")
         if stop.is_set():
             return
-        ready.degrade("source-lost", "gpsd connection closed")
         stop.wait(delay)
         delay = min(delay * 2, _RECONNECT_MAX_S)
 
