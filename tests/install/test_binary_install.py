@@ -1197,6 +1197,26 @@ def test_switch_transaction_is_resolved_even_when_a_later_step_fails(tmp_path, m
     assert brx.receipt_state(svc._paths, "daemon")[0] == "absent"
 
 
+def test_failed_set_aside_removes_what_the_switch_already_adopted(tmp_path, monkeypatch, binary_receipt, stub_adopt):
+    """A later group's set-aside failing mid-switch must undo the checkouts the switch already
+    adopted for earlier groups BEFORE the binary comes back, as every other failed switch does."""
+    svc = _svc(tmp_path, monkeypatch)
+    rec = binary_receipt(svc)
+    seen = stub_adopt(svc)
+    # The daemon checkout is absent (adopted first); RadioLib is marked for replacement and its
+    # set-aside fails. Both collaborators are stubbed: the plan and the transaction's write.
+    monkeypatch.setattr(ControllerService, "switch_source_plan",
+                        lambda self, groups, owned_files=(): ({RADIOLIB_PATH}, []))
+    monkeypatch.setattr(ControllerService, "_preserve_replaced_source",
+                        lambda self, txn, rel: "the switch transaction is not writable")
+    res = svc.install("daemon", apply=True, source="pinned")
+    assert not res.ok
+    assert seen[0][0] == DAEMON_PATH                                   # adopted before the failure
+    assert source_registry.read_record(svc._paths, DAEMON_PATH) is None   # the adopted checkout is gone
+    assert brx.receipt_state(svc._paths, "daemon")[0] == "valid"
+    assert (tmp_path / rec.proof_paths[0]).exists()                     # …and the artifact is back
+
+
 def test_superseded_web_job_puts_the_artifact_back(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch)
     rec = binary_receipt(svc)

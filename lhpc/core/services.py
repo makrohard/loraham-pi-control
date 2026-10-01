@@ -1690,10 +1690,11 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     # Adoption then runs against an absent destination.
                     _err = self._preserve_replaced_source(_switch_txn, path)
                     if _err:
-                        self.binary_recover()
+                        # undo the earlier groups' checkouts, then restore the binary
                         return ActionResult(
                             False, f"Refusing to switch '{stack_id}' to the {source} source "
-                                   f"channel: {_err}")
+                                   f"channel: {_err}",
+                            details=self._resolve_switch(ok=False, created=_switch_created))
                 _pre_absent = False
                 if _retire_binary:
                     try:
