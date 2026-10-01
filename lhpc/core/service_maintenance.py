@@ -922,6 +922,11 @@ class MaintenanceOpsMixin:
         if not st.get("latest"):
             return ActionResult(False, "run the upstream check first",
                                 next_commands=[f"lhpc status {target}"])
+        if not st.get("installed"):
+            # Never claim currency for an unknown install (the check says the same).
+            return ActionResult(False, f"'{target}' installed version unknown (no version stamp) "
+                                       "— refetch/reinstall to record it",
+                                next_commands=[f"lhpc status {target}"])
         if not st.get("ahead"):
             return ActionResult(True, f"'{target}' is already at the latest upstream "
                                       f"release ({st['installed']}).")

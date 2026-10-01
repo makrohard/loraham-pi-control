@@ -320,6 +320,19 @@ def test_check_with_absent_stamp_never_claims_up_to_date(tmp_path, monkeypatch):
     assert "unknown" in res.summary and "up to date" not in res.summary
 
 
+def test_update_with_absent_stamp_refuses_instead_of_claiming_latest(tmp_path):
+    """With no installed-version stamp the update must not report "already at the latest" (ok):
+    the installed version is unknown, so it refuses, dry run and apply alike."""
+    svc = _svc(tmp_path, installed="0.14.12")
+    main = svc.stack("graywolf").main_component
+    (tmp_path / "/".join(main.build_marker.split("/")[:-1])
+     / ".lhpc-graywolf-version").unlink()                       # no stamp...
+    (svc._lifecycle().source_dir(main) / main.build_marker).unlink()   # ...and no marker
+    _cache(svc, "9.9.9")
+    assert not svc.graywolf_upstream_update("graywolf").ok
+    assert not svc.graywolf_upstream_update("graywolf", apply=True).ok
+
+
 def test_check_surfaces_a_cache_write_failure(tmp_path, monkeypatch):
     """AUDIT-FOUND (Medium): a failed cache write must NOT report the observed update as a
     green 'up to date' success — it decides from the observed tag and returns not-ok."""
