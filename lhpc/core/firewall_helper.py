@@ -1349,15 +1349,19 @@ def op_apply(sysx, candidate_path, *, cleanup=False, etc_dir=ETC_DIR, run_dir=RU
             # the previous ruleset, OR tear down a first-install table (no old snapshot to restore).
             # Foreign state is untouched (the load guard refuses a foreign table).
             _durable_unlink(staged)
+            undo = "previous ruleset restored"
             if old_snap:
-                _load_snapshot_live(sysx, old_snap)
+                restored = _load_snapshot_live(sysx, old_snap)
+                if restored != "verified":
+                    undo = f"previous ruleset NOT restored ({restored})"
             else:
                 st, _ = live_table_state(sysx, snap["model"]["comment"])
-                if st == "ours":
-                    sysx.run(["nft", "destroy", "table", TABLE_FAMILY, TABLE_NAME])
+                if st == "ours" and sysx.run(["nft", "destroy", "table",
+                                              TABLE_FAMILY, TABLE_NAME])[0] != 0:
+                    undo = "previous ruleset NOT restored (nft destroy failed)"
             _durable_unlink(p["journal"])
-            write_receipt(sysx, "error", f"apply failed at {verdict}; previous ruleset "
-                          "restored", snap["intent_hash"], snap["model_hash"],
+            write_receipt(sysx, "error", f"apply failed at {verdict}; {undo}",
+                          snap["intent_hash"], snap["model_hash"],
                           list_foreign_tables(sysx) or [], run_dir=run_dir)
             return EXIT_FAIL
         # PROMOTE: atomic rename staged -> canonical, then fsync the directory.

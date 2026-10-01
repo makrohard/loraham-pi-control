@@ -2308,6 +2308,38 @@ def test_failed_first_apply_tears_down_loaded_table(tmp_path):
     assert destroyed                                      # loaded table torn down
 
 
+def test_failed_apply_whose_restore_fails_does_not_claim_the_old_ruleset_is_back(tmp_path):
+    import json as _json
+
+    from lhpc.core import firewall_helper as fh
+    etc, run = str(tmp_path / "etc"), str(tmp_path / "run")
+    _seed_meta(etc)
+    sysx = _FakeSys()
+    c1 = _candidate()
+    p1 = tmp_path / "c1.json"
+    p1.write_text(_json.dumps(c1))
+    sysx.listing = _expected_live_json(c1)
+    assert fh.op_apply(sysx, str(p1), etc_dir=etc, run_dir=run) == fh.EXIT_OK
+    c2 = _candidate()
+    c2["proxy_ingress"][0]["port"] = 9444                 # the c1 listing stays: verify mismatches
+    p2 = tmp_path / "c2.json"
+    p2.write_text(_json.dumps(c2))
+    loads = []
+    orig = sysx.run
+    def restore_fails(argv, **kw):
+        if argv[:2] == ["nft", "-f"]:
+            loads.append(argv)
+            if len(loads) == 2:                           # the restore of the old snapshot
+                return 1, "", "Error: restore failed"
+        return orig(argv, **kw)
+    sysx.run = restore_fails
+    assert fh.op_apply(sysx, str(p2), etc_dir=etc, run_dir=run) == fh.EXIT_FAIL
+    assert len(loads) == 2
+    receipt = _json.loads((tmp_path / "run" / "check.json").read_text())
+    assert receipt["verdict"] == "error"
+    assert "previous ruleset restored" not in receipt["detail"]
+
+
 def test_apply_refuses_owned_table_with_missing_snapshot(tmp_path):
     # AR2-P1: valid metadata + an LHPC-OWNED live table + a MISSING accepted snapshot must REFUSE
     # before any mutation — never enter the first-install teardown path and destroy the live table.
