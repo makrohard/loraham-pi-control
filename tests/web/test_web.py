@@ -574,6 +574,24 @@ def test_install_confirm_defaults_to_the_stacks_default_channel(monkeypatch, web
     assert parse(cf).field_default("source") == "binary"
 
 
+@pytest.mark.parametrize("on_binary,want", [(False, "pinned"), (True, "binary")])
+def test_bare_update_keeps_the_installed_channel_like_the_cli(monkeypatch, web, csrf, on_binary, want):
+    """`lhpc update` without --source: a binary-installed target stays binary, any other goes to
+    `pinned`. A plain Update click must not plan a channel switch to the published binary."""
+    from lhpc.core.service_base import ActionResult
+    seen = []
+    monkeypatch.setattr(ControllerService, "default_channel", lambda self, sid: "binary")
+    monkeypatch.setattr(ControllerService, "on_binary_channel", lambda self, sid: on_binary)
+
+    def _spy(self, op, target, apply=False, source="pinned", **_k):
+        seen.append((op, source))
+        return ActionResult(False, "planned")
+    monkeypatch.setattr(ControllerService, "run_action", _spy)
+    c = web()
+    c.post("/action", data={"_csrf": csrf(c), "op": "update", "target": "daemon"})
+    assert seen and seen[0] == ("update", want)
+
+
 def test_install_confirm_preselects_pinned_where_no_binary_is_published(monkeypatch, web, csrf):
     _stub_binary_plan(monkeypatch)
     c = web()

@@ -1586,9 +1586,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # everywhere else. An INVALID selector is rejected by run_action (never silently
         # rewritten). A binary plan does fetch the index, so an offline box renders a typed refusal
         # that offers the source channel — the honest outcome, not a source build nobody asked for.
+        # An UPDATE keeps the CLI's rule instead: a binary-installed stack stays binary, any other
+        # goes to "pinned" — switching channels is an install, never a plain Update click.
         _sid = service.stack_of(target) or target
-        source = request.form.get("source") or (
-            service.default_channel(_sid) if _sid else "pinned")
+        if op == "update":
+            _dflt = "binary" if (_sid and service.on_binary_channel(_sid)) else "pinned"
+        else:
+            _dflt = service.default_channel(_sid) if _sid else "pinned"
+        source = request.form.get("source") or _dflt
         stop_owners = request.form.get("stop_owners") == "yes"
         # A3 (E, server-side): the override is honoured only with the ticked checkbox AND a consent
         # token of the shape a dry run produced; the service then requires it to equal the token of
