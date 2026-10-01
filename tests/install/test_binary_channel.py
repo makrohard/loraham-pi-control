@@ -902,6 +902,37 @@ def test_interrupted_install_restores_the_mesh_password(tmp_path, monkeypatch):
     assert bi.read_journal(svc._paths)[1] == "absent"
 
 
+@pytest.mark.parametrize("err", ["tar", "containment"])
+def test_any_extraction_error_unwinds_the_transaction(tmp_path, monkeypatch, stub_pipeline, err):
+    """A corrupt stream after the sha check (tarfile) or an escaping path (containment) is a
+    failed install like any other: typed result, journal closed, mesh password back."""
+    import tarfile
+
+    from lhpc.core import binary_install as bi
+    from lhpc.core.paths import PathContainmentError
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert svc.hmac_set_secret("meshcom", "enable").ok
+    before = svc._resolved_param_value("meshcom", "run",
+                                       svc._hmac_component("meshcom").id, "password_file")
+    assert before
+    # meshcom's run scripts need the pinned clone; a real clone needs a remote, so the adoption
+    # is stubbed as a collaborator that succeeds.
+    from lhpc.core.install import Installer
+    monkeypatch.setattr(Installer, "adopt_source",
+                        lambda self, comp, **k: type("A", (), {"status": "done", "detail": ""})())
+    stub_pipeline(svc, download=lambda entry, path: None)
+    def broken(*a, **k):
+        raise (tarfile.ReadError("unexpected end of data") if err == "tar"
+               else PathContainmentError("escapes the runtime root"))
+    monkeypatch.setattr(bi, "validate_and_extract", broken)
+    res = svc.binary_install("meshcom", apply=True)
+    assert not res.ok and res.data.get("binary_failed")
+    assert bi.read_journal(svc._paths)[1] == "absent"
+    svc.invalidate_snapshot()
+    assert svc._resolved_param_value("meshcom", "run",
+                                     svc._hmac_component("meshcom").id, "password_file") == before
+
+
 def test_committed_transaction_keeps_open_auth(tmp_path, monkeypatch):
     """Past the commit point the NEW install is the truth: recovery must NOT put the password
     back (the installed firmware has none)."""

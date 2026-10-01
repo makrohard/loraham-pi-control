@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import secrets
 import shutil
+import tarfile
 import tempfile
 
 from . import binary_install as bi
@@ -391,13 +392,14 @@ class BinaryOpsMixin:
                             self._stale_paths(prev_files, files, owned_dirs))
                 if not bi.commit(self._paths):        # THE commit point
                     raise bi.BinaryInstallError("could not commit the binary transaction")
-            except (bi.BinaryInstallError, OSError) as exc:
+            except (bi.BinaryInstallError, OSError, tarfile.TarError, PathContainmentError) as exc:
                 # A failure AFTER publish (probe, missing proof path, unwritable receipt) must not
                 # leave published files behind: with no receipt nothing would ever remove them, and
                 # a later `--source pinned` install would see a "healthy" directory and skip the
                 # clone. Remove exactly what we put there.
                 # An OSError here (disk full, permissions) is a failed install like any other:
-                # unwind and offer the source channel — never a raw traceback.
+                # unwind and offer the source channel — never a raw traceback. So is a corrupt
+                # stream after the sha check (TarError) or an escaping path (containment).
                 exc = exc if isinstance(exc, bi.BinaryInstallError) else \
                     bi.BinaryInstallError(f"filesystem error during install ({exc})")
                 # UNWIND the open transaction: displaced files return, files this run created are
