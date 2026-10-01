@@ -111,9 +111,10 @@ def test_trigger_refuses_unsafe_identity(tmp_path, monkeypatch, op_svc):
     assert not (tmp_path / "state" / "selfupdate.request").exists()
 
 
-def test_trigger_preflight_runs_every_gate_and_writes_nothing(tmp_path, monkeypatch, op_svc):
-    """`queue=False` is the console's preflight before its "Restarting" page (C18): the same gates,
-    under the same admission, and no marker — the marker is written after the response was
+def test_trigger_preflight_passes_or_refuses_without_a_request_marker(tmp_path, monkeypatch, op_svc):
+    """`queue=False` is the console's preflight before its "Restarting" page (C18): the two ok paths
+    (trigger, repair-and-trigger) and three refusals (a request already pending, an unsafe identity,
+    a foreground console) write no request marker — the marker is written after the response was
     closed."""
     req = tmp_path / "state" / "selfupdate.request"
     svc, fake = op_svc(units=True, invocation=True)

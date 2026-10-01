@@ -30,7 +30,7 @@ _KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
 class LockOpenError(OSError):
     """A lock file could not be opened or created (e.g. an unwritable lock folder or lock file).
     A failure to open the lock does not establish that anyone holds it, so it is not reported as
-    "busy". An OSError, so a caller that caught the raw error still does."""
+    "busy". An OSError, so existing `except OSError` handlers still catch it."""
 
 
 class ResourceBusy(Exception):

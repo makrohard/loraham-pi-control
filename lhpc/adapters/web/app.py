@@ -49,7 +49,7 @@ from lhpc.version import __version__
 _RUNNING = ("running", "degraded")
 
 # The one-click update's request marker is written this long after the "Restarting" response was
-# closed (the delay covers any rest waitress still flushes): the marker starts the updater, whose
+# closed (time for any remaining output to flush): the marker starts the updater, whose
 # Conflicts= stops this console at once, so a marker written before the page lost the page to
 # nginx's 502 when the stop won.
 _UPDATE_QUEUE_DELAY_S = 1.0
