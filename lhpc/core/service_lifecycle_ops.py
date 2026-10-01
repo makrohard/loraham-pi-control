@@ -3501,7 +3501,11 @@ class LifecycleOpsMixin:
                     jobresult.terminalize(self._paths, log, aid, "failed", detail=str(exc)[:200])
                     return None, aid, f"cannot {op} '{c.id}': {exc}"
                 uid = f"{name}-{os.getpid()}-{_time.monotonic_ns()}"
-                launcher = runtime_fs.write_launcher(self._paths, post_dir / f"{uid}.py", script)
+                try:
+                    launcher = runtime_fs.write_launcher(self._paths, post_dir / f"{uid}.py", script)
+                except (OSError, PathContainmentError) as exc:   # after reserve: settle it
+                    jobresult.terminalize(self._paths, log, aid, "failed", detail=str(exc)[:200])
+                    return None, aid, f"cannot {op} '{c.id}': {exc}"
                 ln, pid = life.spawn_job(name, [sys.executable, str(launcher)], src)
                 if not ln or not pid:
                     jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")

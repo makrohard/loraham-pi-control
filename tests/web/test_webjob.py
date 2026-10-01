@@ -192,6 +192,22 @@ def test_spawn_web_job_orphan_primary_blocks(tmp_path, monkeypatch):
     assert log is None and admission == "blocked" and "Recover" in reason
 
 
+def test_spawn_web_job_launcher_write_failure_is_typed_and_settles_the_attempt(tmp_path, monkeypatch):
+    # The launcher is written after the attempt is reserved: a failed write is a typed refusal, and
+    # the reservation turns terminal so the next Build is not "already in progress" forever.
+    from lhpc.core import runtime_fs
+
+    def full_disk(*_a, **_k):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(runtime_fs, "write_launcher", full_disk)
+    svc = _svc(tmp_path)
+    for _ in range(2):
+        log, admission, reason = svc.spawn_web_job("build", "meshcom")
+        assert log is None and admission == "blocked" and "already in progress" not in reason
+    recs = jobresult.read_results(svc._paths)
+    assert recs and all(r["state"] == "failed" for _log, r in recs)
+
+
 def test_spawn_web_job_blocked_by_same_source_derived_unsafe(tmp_path, monkeypatch):
     from lhpc.core import reslock
     svc = _svc(tmp_path)
