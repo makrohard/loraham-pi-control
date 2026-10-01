@@ -1744,6 +1744,13 @@ def _run(argv: list[str] | None = None) -> int:
                     return 1
                 return _render(svc.webserver_cert_revoke(
                     args.label, getattr(args, "accept_unverified_clock", False)))
+            if cc in ("discard-export", "export"):
+                from lhpc.core import validators as _v
+                try:
+                    _v.path_component(args.label, field="cert label")
+                except _v.ValidationError as exc:
+                    print(f"ERR   {exc}")
+                    return 1
             if cc == "discard-export":
                 return _render(svc.webserver_cert_discard_export(args.label))
             if cc == "export":

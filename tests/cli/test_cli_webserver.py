@@ -28,3 +28,13 @@ def test_cli_revoke_with_a_failed_reload_exits_1(monkeypatch, tmp_path, capsys):
     capsys.readouterr()
     assert main(["webserver", "cert", "revoke", "laptop", "--confirm-label", "laptop"]) == 1
     assert "revocation RECORDED for 'laptop'" in capsys.readouterr().out
+
+
+def test_cli_export_and_discard_export_refuse_a_bad_label_without_a_traceback(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    (tmp_path / "config").mkdir(exist_ok=True)
+    assert main(["webserver", "cert", "export", "a/b", str(tmp_path / "out.p12")]) == 1
+    assert capsys.readouterr().out.startswith("ERR")
+    assert main(["webserver", "cert", "discard-export", "a/b"]) == 1
+    assert capsys.readouterr().out.startswith("ERR")
+    assert not (tmp_path / "out.p12").exists()
