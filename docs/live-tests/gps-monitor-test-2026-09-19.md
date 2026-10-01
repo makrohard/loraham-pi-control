@@ -1,5 +1,7 @@
 # GPS Monitor — live proof, 2026-09-19
 
+Release: 0.8.0 (run on a pre-release integration branch; CHANGELOG 0.8.0 cites this record as the Monitor's live proof).
+
 The GPS Monitor (`lhpc gps --monitor`, `/api/gps`, the Monitor section under Position (GPS)),
 run on the reference box against a real receiver through gpsd. Measured values only; a row that
 could not be proven on the available hardware says so and says why, rather than being dropped.

@@ -1,19 +1,15 @@
 # Reaching the box through an SSH tunnel
 
-When SSH (port 22) is the only thing open on the box and you do **not** want to expose the
-console or any stack UI to the network, an SSH tunnel brings each local-only port to your own
-machine. Nothing on the box changes: the console stays on `127.0.0.1:8443`, every stack UI stays on
-its loopback port (meshtasticd excepted — see the notes), and remote exposure stays off. Use SSH
-keys, not passwords:
+An SSH tunnel brings the box's loopback-only ports (console and stack UIs) to your machine
+without exposing anything; remote exposure stays off. Use SSH keys, not passwords:
 
 ```bash
 ssh-copy-id lhpc@<host>        # once; then `ssh lhpc@<host>` needs no password
 ```
 
-`<host>` is the box's hostname (`<hostname>.local` over mDNS on the same network) or its
-address; `lhpc` is the operator user that runs lhpc. The console reachable *without* a tunnel is
-the mTLS path in the [remote exposure runbook](webserver.md#remote-exposure-runbook); a tunnel and
-mTLS coexist.
+`<host>` is the box's hostname (`<hostname>.local` over mDNS on the same network) or address;
+`lhpc` is the operator user. The console *without* a tunnel is the [remote exposure
+runbook](webserver.md#remote-exposure-runbook); both can coexist.
 
 ## Contents
 
@@ -28,19 +24,19 @@ mTLS coexist.
 ssh -N -L 8443:127.0.0.1:8443 lhpc@<host>
 ```
 
-Then open `https://127.0.0.1:8443/` on your machine. The tunnel arrives on the box as a loopback
-client, which the default [access mode](webserver.md#access-modes) serves **without a client
-certificate** — your SSH login is the authentication; under `auth-everywhere` a certificate is
-required on loopback too, tunnel included. The certificate warning is the box's server
-certificate, signed by its own server TLS CA, expected on loopback. `-N` opens no shell; end the
-tunnel with Ctrl+C. Add `-o ServerAliveInterval=30` for a tunnel that lives for hours.
+Open `https://127.0.0.1:8443/`. The tunnel arrives as a loopback client, which the default
+[access mode](webserver.md#access-modes) serves **without a client certificate** (your SSH login
+authenticates); `auth-everywhere` requires one here too. The browser warns because the box's own
+server CA signed the certificate. `-N` opens no shell; Ctrl+C ends the tunnel;
+`-o ServerAliveInterval=30` keeps a long one alive.
 
 ## One tunnel per stack
 
-Almost every stack UI binds to loopback on the box — meshtasticd is the exception, see the notes at
-the end — and the local port on your side is the same number, so the URLs in the console's own
-pages keep working once the tunnel is up. (Once a page is proxied, the console links to its proxy
-port instead; forward that port too, or reach the proxy directly.)
+The local port is the same number as on the box, so the console's own links work through the
+tunnel; a proxied page is linked by its proxy port, so forward that too or use the native port
+below. meshtasticd listens on all interfaces
+([what actually listens](firewall.md#what-actually-listens)); its tunnel rows work whether or not
+the firewall blocks it.
 
 | stack | on the box | tunnel | then, on your machine |
 |---|---|---|---|
@@ -57,12 +53,12 @@ port instead; forward that port too, or reach the proxy directly.)
 | Reticulum TCP interface (another RNS node of yours) | `127.0.0.1:4242` | `ssh -N -L 4242:127.0.0.1:4242 lhpc@<host>` | a `TCPClientInterface` to `127.0.0.1:4242` |
 | MeshChat (an optional component of the reticulum stack, started from its card or with `lhpc stack start meshchat`) | `127.0.0.1:8790` | `ssh -N -L 8790:127.0.0.1:8790 lhpc@<host>` | `http://127.0.0.1:8790/` |
 
-The daemon, chat and voice have no TCP port: chat and the voice terminal are run in an SSH
-session on the box itself (`ssh -t lhpc@<host>` and the command shown on the Dashboard).
+The daemon, chat and voice have no TCP port: run chat and the voice terminal in an SSH session
+on the box (`ssh -t lhpc@<host>` and the command shown on the Dashboard).
 
 ## Everything at once
 
-One tunnel can carry every port; use it when you work with several stacks:
+One tunnel can carry every port:
 
 ```bash
 ssh -N -o ServerAliveInterval=30 \
@@ -73,12 +69,10 @@ ssh -N -o ServerAliveInterval=30 \
   lhpc@<host>
 ```
 
-A port whose stack is not running is simply refused on the box side (`channel … open failed`);
-the other forwards keep working.
+A port whose stack is not running is refused on the box side (`channel … open failed`); the
+other forwards keep working.
 
 ## Notes
 
-- The console's proxies for the stack UIs (the Webserver page) are for the mTLS path; through a
-  tunnel you reach each UI directly on its own port, proxy or not.
-- Only ports bound to `127.0.0.1` need a tunnel; meshtasticd's are the exception
-  ([what actually listens](firewall.md#what-actually-listens)).
+- The stack web-UI proxies are for the mTLS path; through a tunnel you reach each UI on its own
+  port, proxied or not.

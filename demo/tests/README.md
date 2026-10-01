@@ -1,22 +1,28 @@
 # demo tests
 
-Headless boot check: renders the real lhpc routes under Pyodide + the demo provider.
+The two gates the Pages workflow runs before deploying. Run them from `demo/` after assembling
+the bundle ([demo README](../README.md#develop--test-locally)).
+
+## Contents
+
+- [Boot test](#boot-test)
+- [Browser smoke test](#browser-smoke-test)
+
+## Boot test
+
+Headless boot + lifecycle check: renders the real lhpc routes under Pyodide with the demo
+provider. Requires node and the `pyodide` npm package.
 
 ```
-LHPC_WHEEL=/path/to/loraham_pi_control-<ver>-py3-none-any.whl \
-  node tests/boot.mjs
+LHPC_WHEEL="$(ls web/wheels/loraham_pi_control-*.whl)" DEMO_DIR="$PWD" node tests/boot.mjs
 ```
-
-Requires node + the `pyodide` npm package. The Pages workflow builds the wheel and runs
-this as a gate before deploying.
 
 ## Browser smoke test
 
-Assemble the bundle (build both wheels into `web/wheels/`, lhpc static into `web/static/`),
-serve `web/`, then:
+Renders the demo, starts a stack (the simulated 433 daemon goes READY) and checks that it
+persists across a reload. Requires `puppeteer-core` and a Chrome/Chromium (`CHROME` = its path, default `/usr/bin/google-chrome`).
 
 ```
+( cd web && python3 -m http.server 8099 & )
 DEMO_URL=http://127.0.0.1:8099/index.html node tests/browser.mjs
 ```
-
-Requires `puppeteer-core` + a Chrome/Chromium (set `CHROME` to its path).

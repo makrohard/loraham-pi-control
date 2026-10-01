@@ -18,126 +18,122 @@ Operational rules for `lhpc`. Internals and the safety model: [architecture.md](
 
 ## Not a supervisor
 
-`lhpc` does not stay running. Closing the CLI or web server never stops a stack. State is
+`lhpc` does not stay running: closing the CLI or web server never stops a stack, and state is
 reconstructed on every run, never read from a stale PID file
-([architecture.md](architecture.md#probes-and-status)). `lhpc` only stops a process whose full identity still matches an LHPC ownership record; a
-manual or foreign process is never signalled — you get a manual `kill` hint instead
-([safety model](architecture.md#safety-model)).
+([probes](architecture.md#probes-and-status)). `lhpc` only stops a process whose full identity
+still matches an LHPC ownership record; a manual or foreign process is never signalled — you get
+a `kill` hint instead ([safety model](architecture.md#safety-model)).
 
-The one boot-time exception is **boot restore** (Home → System → Autostart, or `lhpc autostart`;
-default on): after a reboot, `lhpc-boot-restore.service` runs the driver once and exits
-([deployment.md](deployment.md)) — it is not a supervisor either. It restores the stacks that were **LHPC-owned and never verifiably stopped** before the reboot — not literally
-"alive at power-off": a stack that crashed shortly before the reboot may be restored too, and
-that is safe because every restored start replays the **saved** configuration through the
-normal gated start path (hardware, band arbitration, callsign, firewall exposure, TX mode
-strictly from saved config) — the same saved configuration every web or CLI start runs. It refuses to act unless the web
-console unit is enabled AND byte-exact canonical — a customized or foreign console unit disables
-autonomous restarts — and honours the fail-closed `[boot] restore` switch in `local.toml`
-(strictly boolean; anything else disables restore). An explicit `lhpc stack stop` is the last
-word: the stack stays down across reboots even when the stop could not verify the process gone —
-the next `stack start` makes it restorable again. An optional service of a restored stack that was started on its
-own (the MeshCore web UI without its "auto-start with the stack" tick, for example) is started again after its stack;
-one that was stopped stays stopped. A failed restore is not retried — the dashboard
-banner and `lhpc autostart` name the stacks to start manually. The unit's log is
-`logs/lhpc-boot-restore.log` (web: Controller logs → boot-restore).
+**Boot restore** (Home → System → Autostart, or `lhpc autostart`; default on):
+`lhpc-boot-restore.service` runs the driver once after a reboot and exits
+([deployment.md](deployment.md)).
+
+- It restores the stacks that were **LHPC-owned and never verifiably stopped** before the reboot —
+  so a stack that crashed shortly before may come back too. Every restored start replays the
+  **saved** configuration through the normal gated start path (hardware, band arbitration,
+  callsign, firewall exposure, TX mode), as a web or CLI start does.
+- It refuses to act unless the web console unit is enabled and byte-exact canonical, and honours
+  `[boot] restore` in `local.toml` (strictly boolean; anything else disables restore).
+- An explicit `lhpc stack stop` is the last word: the stack stays down across reboots even when
+  the stop could not verify the process gone; the next `stack start` makes it restorable again.
+- An optional service that was started on its own (e.g. the MeshCore web UI without its
+  "auto-start with the stack" tick) is started again after its stack; one that was stopped stays
+  stopped.
+- A failed restore is not retried: the dashboard banner and `lhpc autostart` name the stacks to
+  start by hand. Log: `logs/lhpc-boot-restore.log` (web: Controller logs → boot-restore).
 
 ## Install channels
 
-A stack is installed either from **source** (`pinned` / `dev` / `stable` — a git checkout lhpc
-adopts and builds) or, for the three long-compiling stacks (daemon, meshtastic, meshcom), from a
-**binary** artifact. The channel is a per-install choice, not a stored preference: `lhpc status
---versions` shows what a stack currently runs on. Policy (what is accepted and why):
-[provenance.md](provenance.md).
+A stack is installed from **source** (`pinned` / `dev` / `stable`, a git checkout lhpc adopts and
+builds) or, for daemon, meshtastic and meshcom, from a **binary** artifact. The channel is a
+per-install choice; `lhpc status --versions` shows the current one. Policy:
+[provenance.md](provenance.md#the-binary-channel).
 
-What the binary channel means in practice:
+On the binary channel:
 
-- **No source tree**, so `build` and host tests refuse; the bounded TX test still works (it
-  exercises the running stack).
+- **No source tree**: `build` and host tests refuse; the bounded TX test works.
 - **meshcom runs open auth** ([stacks/meshcom.md](stacks/meshcom.md)).
 - **Every binary mutation needs the stack stopped** — install, update, retire, uninstall and
-  clean recheck under the operation locks, so a start slipping in mid-flight cannot be overwritten.
-- **A failed install never costs you the previous one** — any failure restores the previous
-  artifact, receipt and password setting. While the install journal is open — mid-run, or after
-  a power cut — the receipt is not authoritative: `lhpc doctor` names the stack, and the next
-  binary operation recovers it.
-- **Switching to source is transactional too** — a dirty, foreign or wrong-remote checkout
-  refuses the switch with the artifact untouched ([provenance.md](provenance.md)).
-- **Ordinary files you add to a source checkout survive an update**; editing upstream files
-  blocks it ([ownership records](provenance.md#ownership-records)).
+  clean recheck this under the operation locks.
+- **A failed install keeps the previous one** — artifact, receipt and password setting are
+  restored. While the install journal is open (mid-run, or after a power cut) the receipt is not
+  authoritative: `lhpc doctor` names the stack, and the next binary operation recovers it.
+- **Switching to source is transactional** — a dirty, foreign or wrong-remote checkout refuses the
+  switch with the artifact untouched.
 - **No binary rollback**: going back means installing from source.
-- **Prebuilt binaries serve the latest release only.** The index holds one binary per stack, and
-  it must match this lhpc's pins exactly; an older release (or a candidate) is refused and installs
-  from source, or self-updates first.
-- **meshcom keeps its pinned clone** even on this channel (its run scripts live there), and
-  **meshtastic provisions its CLI virtualenv locally** after extraction (it embeds absolute paths,
-  so it cannot ship in an artifact). lhpc owns that virtualenv as a whole directory.
-- **A broken binary install is named by `lhpc doctor`** — if the artifact's files disappear behind
-  lhpc's back, ordinary status still shows a source state, so `doctor` reports the receipt as
-  unsafe or superseded with the command that repairs it. Re-installing *is* the repair; only an
-  unreadable receipt refuses, because then lhpc cannot know what the old install owned.
+- **Only the latest release has binaries**: the index holds one per stack and it must match this
+  lhpc's pins; otherwise install from source, self-update first, or (where allowed) accept the
+  mismatch ([provenance](provenance.md#the-binary-channel)).
+- **meshcom keeps its pinned clone** (its run scripts live there), and **meshtastic provisions its
+  CLI virtualenv locally** after extraction (it embeds absolute paths); lhpc owns that virtualenv
+  as a whole directory.
+- **A broken binary install is named by `lhpc doctor`**: if the artifact's files disappear,
+  ordinary status shows a source state, so `doctor` reports the receipt as unsafe or superseded
+  with the repair command. Re-installing is the repair; only an unreadable receipt refuses,
+  because then lhpc cannot know what the old install owned.
+
+Files you add to a source checkout survive an update; editing upstream files blocks it
+([ownership records](provenance.md#ownership-records)).
 
 ## Fast vs explicit
 
-- Fast & bounded (no build, no mutation, no RF): `status`, `explain`, `doctor`, `logs`,
-  `web` page loads. These do no network I/O, with one bounded exception when the position
-  source is `gpsd` ([gps.md](gps.md)).
+- Fast & bounded (no build, no mutation, no RF): `status`, `explain`, `doctor`, `logs`, `web`
+  page loads. No network I/O, except one bounded gpsd query when the position source is `gpsd`
+  ([gps.md](gps.md)).
 - Explicit & gated ([conventions](cli.md#conventions)): `install`, `build`, `update`,
   `stack start/stop`, `test`, `uninstall`.
 
 ## TX safety
 
 - TX is never auto-enabled; a freshly installed/configured stack is RX-only.
-- TX happens only through an explicit `test --tx` or a stack you start that
-  transmits (e.g. Graywolf's beacons).
-- A `test --tx` shows band, parameters and expected RF effect, warns to use a
-  **dummy load**, and confirms unless `--yes`. It sends one frame per band and
-  verifies `TXOK` incremented.
+- TX happens only through an explicit `test --tx` or a stack you start that transmits (e.g.
+  Graywolf's beacons).
+- `test --tx` shows band, parameters and expected RF effect, warns to use a **dummy load**, and
+  confirms unless `--yes`. It sends one frame per band and verifies `TXOK` incremented.
 - Read-only status/doctor/page loads never transmit and never initialise a radio.
-- +20 dBm on an SX127x board is off by default and needs the band's high-power switch plus a daemon
-  restart ([daemon](stacks/daemon.md#settings)). Nothing measures or enforces its duty-cycle, VSWR or
-  supply limits. On the LoRaHAM 433 RFM98PW, do not use sustained +20 dBm: this SX127x high-power
-  setting has not been validated for the module's external PA, so the release test matrix performs no
-  +20 dBm TX on this board.
+- +20 dBm on an SX127x board is off by default and needs a per-band switch and a daemon restart;
+  its limits, and the LoRaHAM 433 caveat, are in [daemon](stacks/daemon.md#settings).
 
 ## Secrets and passwords
 
-Callsign, passwords, HMAC keys and private keys live only in git-ignored local
-config (`~/loraham-pi-control/config/local.toml`, `config/secrets.toml` mode
-`0600`, and file-based secrets such as the MeshCom `xr_pw` and the web session
-key in `config/secrets/`, mode `0600`); nothing of that ever reaches tracked files or output
-([architecture.md](architecture.md)). No command prints a password: the value never reaches a
-log, a flash message or the API; from a shell on the Pi, read the file itself. The one place a
-stored password is reachable in the console is the stack page's authenticated Password section,
-which masks the value behind a *Show* toggle and a copy button (a file that is not `0600` shows a
-reason instead). A stack password is never changed by a generic Settings save: MeshCom's is
-renewed through the HMAC Password actions ([stacks/meshcom.md](stacks/meshcom.md)); an app's own
-stored password is edited in its file, with the command that section prints. Which file each
-stack uses is in its stack page. Uninstall keeps local config by default.
+Callsign, passwords, HMAC keys and private keys live only in git-ignored local config:
+`config/local.toml`, `config/secrets.toml` (`0600`) and file secrets in `config/secrets/`
+(`0600`, e.g. MeshCom's `xr_pw` and the web session key). None of it reaches tracked files or
+output ([architecture.md](architecture.md)).
+
+- No command prints a password, and none reaches a log, flash message or the API; from a shell on
+  the Pi, read the file itself.
+- In the console, a stored password is reachable only in the stack page's authenticated Password
+  section, masked behind *Show* and a copy button (a file that is not `0600` shows a reason
+  instead).
+- A generic Settings save never changes a stack password: MeshCom's is renewed through the HMAC
+  actions ([stacks/meshcom.md](stacks/meshcom.md)); an app's own password is edited in its file,
+  with the command that section prints. Which file each stack uses is in its stack page.
+- Uninstall keeps local config by default.
 
 ## Backup & restore
 
-All of your settings live under the runtime root (`$LHPC_RUNTIME_ROOT`, default
-`~/loraham-pi-control`). Three things hold operator-authored data worth backing up — all of them kept by a
-default `uninstall.sh` (which also keeps `backups/` and the `.lhpc-root` marker) and reused by a reinstall; everything else (`src/`, `build/`,
-`logs/`, `systemd/` and the controller's own entries under `state/`) is regenerated by
-install/apply and can be discarded. `uninstall.sh` writes the `.lhpc-uninstalling` guard (blocks
-new task admission), refuses on active or unprovable jobs or any UNKNOWN component, stops
-clients before the shared daemon and verifies cessation; if quiescence cannot be proven the
-guard is removed and nothing is deleted. Only byte-exact canonical same-root units are stopped
-and removed.
+Your data lives under the runtime root (`$LHPC_RUNTIME_ROOT`, default `~/loraham-pi-control`).
+Three things are not regenerable; a default `uninstall.sh` keeps them (plus `backups/` and the
+`.lhpc-root` marker) and a reinstall reuses them. Everything else (`src/`, `build/`, `logs/`,
+`systemd/`, the controller's own entries under `state/`) is regenerated by install/apply.
 
-- **`config/`** — every setting: operator identity + per-stack params (`local.toml`,
-  `stacks/*.toml`), secrets (`secrets.toml`, `0600`), and the webserver PKI (`tls/` — CAs, server
-  and client certificates, private keys, CRL).
-- **`profiles/`** — your confirmed known-working compositions (optional but not regenerable).
-- **App data under `state/`** — the stacks' own databases, identities and message stores:
+- **`config/`** — every setting: `local.toml`, `stacks/*.toml`, `secrets.toml` (`0600`),
+  `secrets/`, and the webserver PKI (`tls/` — CAs, certificates, private keys, CRL).
+- **`profiles/`** — your confirmed known-working compositions.
+- **App data under `state/`** — the stacks' databases, identities and message stores:
   `state/graywolf state/meshcore state/openhop state/meshtasticd state/reticulum state/nomadnet
-  state/lxmd state/sideband state/meshchat` (the `APP_DATA` list in `install.sh`/`uninstall.sh`). Never back up
-  `state/` wholesale — its other entries are process ownership, jobs, locks and registries that
-  must not be restored onto a different run.
+  state/lxmd state/sideband state/meshchat` (the `APP_DATA` list in `install.sh`/`uninstall.sh`).
+  Never back up `state/` wholesale — its other entries are process ownership, jobs, locks and
+  registries that must not be restored onto a different run.
 
-Back up with every stack stopped (`lhpc stack stop <stack>`), as the LHPC user; `-p` preserves the
-`0600` modes on secrets and keys, and the app-data directories that do not exist yet are skipped:
+`uninstall.sh` writes the `.lhpc-uninstalling` guard (no new tasks), refuses on active or
+unprovable jobs or any UNKNOWN component, stops clients before the shared daemon and verifies
+they stopped; if it cannot prove that, it removes the guard and deletes nothing. It stops and
+removes only byte-exact canonical units of the same root.
+
+**Full backup.** With every stack stopped (`lhpc stack stop <stack>`), as the LHPC user; `-p`
+keeps the `0600` modes, and missing app-data directories are skipped:
 
 ```bash
 cd ~/loraham-pi-control          # or: cd "$LHPC_RUNTIME_ROOT"
@@ -147,10 +143,10 @@ tar -czpf ~/lhpc-backup-$(date +%F).tgz --ignore-failed-read config profiles \
 chmod 600 ~/lhpc-backup-*.tgz
 ```
 
-> The archive contains your secrets and TLS **private keys** — treat it as sensitive as `config/`
-> itself: keep it `0600` and store it off-device (encrypted) if you sync it anywhere.
+> The archive contains your secrets and TLS **private keys**: keep it `0600` and store it
+> off-device only encrypted.
 
-Restore onto a bootstrapped runtime root, again with the stacks stopped:
+Restore onto a bootstrapped runtime root, stacks stopped:
 
 ```bash
 systemctl --user stop lhpc-nginx.service lhpc-web.service   # if the managed console is running
@@ -160,161 +156,144 @@ lhpc webserver apply                                        # regenerate nginx f
 systemctl --user start lhpc-web.service lhpc-nginx.service
 ```
 
-Sources are not in the backup — re-adopt them with `lhpc install` (or `lhpc auto-install`); the
-restored `config/` and known-working records then drive the rebuild.
+Sources are not in the backup: re-adopt them with `lhpc install` (or `lhpc auto-install`); the
+restored `config/` and known-working records drive the rebuild.
+
+**Secrets only** (`lhpc secrets`, [synopsis](cli.md#secrets)): one plain tar of `config/tls/`,
+`config/secrets/`, `config/secrets.toml` and each stack's declared state folder.
+
+- `backup` writes it mode `0600`, in clear, to `~/lhpc-secrets-<host>-<UTC time>.tar` or `<file>` —
+  never over an existing file, never inside the runtime root — and refuses while a stack that
+  keeps its state there runs. Encrypt it before it leaves the box (e.g. `gpg -c <file>`).
+- The `.p12` bundles' one-time passphrases are not in it; a device whose passphrase is lost gets
+  a new certificate with `lhpc webserver cert reissue <label>`.
+- `restore` needs the console stopped (`systemctl --user stop lhpc-web`, start it afterwards). It
+  checks the whole file and prints what it would overwrite, create and leave; without a flag it
+  changes nothing. `--yes` applies only when no target exists; `--overwrite` replaces them (on a
+  terminal you type `overwrite`).
+- A restore that fails part-way leaves a mixed state with no undo: back up this box first.
+- `--only pki` restores just the two CAs, to share them with another box (then
+  `lhpc webserver tls-renew` and `lhpc webserver apply`); a full restore on another box would give
+  two boxes the same node identities.
 
 ## Operating the console
 
-The console dispatches every action through the same service layer as the `lhpc` verbs
-([architecture](architecture.md#package-layout)). How it is served and exposed:
-[webserver.md](webserver.md). Four areas:
+The console runs every action through the same service layer as the `lhpc` verbs; serving and
+exposure: [webserver.md](webserver.md).
 
-- **Dashboard** — per band: the daemon monitor (live RSSI/stats/CAD), the stacks running on that
-  band, a control to start another, and the System box (live host metrics, Autostart, Reboot / Shut down).
-- **Apps** (`/stacks`) — the controller row, then every stack with Install / Build / Start /
-  Stop / Test / Update / Uninstall / Clean. Interactive (TUI) apps show the command to run
-  yourself ([adding-a-stack](adding-a-stack.md#run--readiness)); services start and stop
-  directly. **Auto-install** installs (or updates), builds and optionally tests every stack in
-  one guided run.
+- **Dashboard** — per band: the daemon monitor (RSSI/stats/CAD), the stacks on that band, a
+  start control; the System box (host metrics, Autostart, Reboot / Shut down).
+- **Apps** (`/stacks`) — the controller row, then every stack with Install / Build / Start / Stop /
+  Test / Update / Uninstall / Clean. Interactive (TUI) apps show the command to run yourself
+  ([adding-a-stack](adding-a-stack.md#run--readiness)). **Auto-install** installs (or updates),
+  builds and optionally tests every stack in one run.
 - **Settings** (per stack, on the Apps page) — the **only** place configuration changes: run
   params, config-file params and, for daemon clients, the daemon radio parameters
-  ([stacks/daemon.md](stacks/daemon.md)). A save is validated as a whole and patches only its
-  own keys; an unsupported structure refuses the save and preserves the file byte-for-byte.
-- **System panels** — Firewall, Webserver, GPS, Hardware, System dependencies, and per-target logs.
+  ([stacks/daemon.md](stacks/daemon.md)). A save is validated as a whole and patches only its own
+  keys; an unsupported file structure refuses the save and leaves the file byte-for-byte.
+- **System panels** — Firewall, Webserver, GPS, Hardware, System dependencies, per-target logs.
 
-Every mutating action needs an **explicit confirm** ([conventions](cli.md#conventions));
-TX-capable ones add an RF/dummy-load warning and clean requires typing the stack id. Daemon live
-settings: [daemon control](architecture.md#daemon-control). The safety model behind this:
-[architecture.md](architecture.md#safety-model).
+Every mutating action needs an **explicit confirm**; TX-capable ones add an RF/dummy-load warning,
+and Clean requires typing the stack id. Daemon live settings:
+[daemon control](architecture.md#daemon-control).
 
-**Start means start.** A Start or Restart from the Dashboard or the Apps page runs the **saved**
-configuration ([config layers](architecture.md#manifest-and-config-layers)). The click freezes the operation band
-(the Apps dropdown, else the running band, else the primary), plans the run (hardware, band
-arbitration, GPS, radio mode, firewall exposure, resource conflicts, identity) and then:
+**Start means start.** Start or Restart runs the **saved** configuration
+([config layers](architecture.md#manifest-and-config-layers)). The click fixes the band (the Apps
+dropdown, else the running band, else the primary), plans the run (hardware, band arbitration,
+GPS, radio mode, firewall exposure, resource conflicts, identity), and then:
 
-- **nothing consequential** → the start runs and you land back where you came from with the
-  result flashed;
-- **a consequential choice** — another running stack owns the radio (*Stop owner(s) & start*) or a
-  restart would take running dependents down with it (*Stop dependents & restart*) → a minimal
-  confirmation page: the plan, the consequence, **Start/Restart** lower right, **Cancel** lower left;
-- **a missing or unusable identity** → nothing runs; you land on the stack's Settings with the
-  offending row highlighted, the refusal flashed. Fix the row, Save, click Start again.
+- **nothing consequential** → the start runs; you return with the result flashed;
+- **a consequential choice** — another running stack owns the radio (*Stop owner(s) & start*) or
+  a restart would take running dependents down (*Stop dependents & restart*) → a confirmation
+  page with the plan and the consequence;
+- **a missing or unusable identity** → nothing runs; the stack's Settings open with the offending
+  row highlighted.
 
-The plan and the apply judge the saved identity alike, so the CLI's dry run
-(`lhpc stack start <id>`) refuses exactly what the web refuses, printing the `lhpc config` remedy.
+The CLI dry run (`lhpc stack start <id>`) refuses exactly what the web refuses, printing the
+`lhpc config` remedy.
 
-**A web Start/Restart is detached.** The page returns at once and the start runs as a tracked
-job, exactly like a web install or build; its log is `logs/web-start-<stack>.log`
-(`web-restart-…` for a restart), reachable from the banner's *view →*. While the job runs the stack's row and its dashboard card carry a yellow *starting…*
-badge; when it ends the page reloads once. The banner turns green with the result or red with
-the refusal — a red banner is dismissed with ✕, an *unsafe* one (the job could not be tracked)
-needs *Recover*. A second Start while one runs is refused ("already in progress"); a pending
-self-update or a contended admission refuses before anything is spawned. The CLI and boot
-restore start synchronously.
+**A web Start/Restart is detached**: the page returns at once and the start runs as a tracked job,
+log `logs/web-start-<stack>.log` (`web-restart-…`), reachable from the banner's *view →*. While it
+runs, the stack's row and dashboard card show *starting…*; when it ends the page reloads once and
+the banner turns green (result) or red (refusal, dismissed with ✕). An *unsafe* banner (the job
+could not be tracked) needs *Recover*. A second Start while one runs is refused; a pending
+self-update or contended admission refuses before anything is spawned. The CLI and boot restore
+start synchronously.
 
-**The RF-log page.** One page for every RF log — band row, stack row, the table's columns
-(time, direction, RSSI/SNR, length, outcome, summary — the TNC2 text or meshtastic's
-`!from → !to` — hex, ascii, decoded), Decrypt, the switches and Clear: [maintenance → RF
-logs](maintenance.md#rf-logs).
+**RF logs** — one page for every stack's RF log: [maintenance → RF logs](maintenance.md#rf-logs).
 
 ## Reboot / Shut down
 
-The dashboard's system card ends with **Reboot…** / **Shut down…** buttons (each behind a
-confirm page). They act through logind (`systemctl reboot|poweroff`) — a graceful teardown, so
-the SD card is safe and running stacks come back via boot restore on the next power-on. The
-buttons render **only** when logind authorizes that action for the operator, probed per button
-(`CanReboot` / `CanPowerOff`), because the rule file
-`/etc/polkit-1/rules.d/49-lhpc-power.rules` lives in a directory the operator process cannot
-read on stock Debian. Installing the rule is [README step 4](../README.md#4-install-dependencies);
-on an existing box the System-dependencies panel (and `lhpc doctor`) shows a paste-ready install
-command. A refusal at apply time is typed and repeats the install command. Apply then records a
-short-lived pending marker that refuses
-new builds and updates until the trigger fires (an unreadable or stale marker is named in that
-refusal and is yours to delete); failures after the authorization land only in
-`logs/power-<kind>.log`.
+The dashboard's system card ends with **Reboot…** / **Shut down…** (each behind a confirm page).
+They act through logind (`systemctl reboot|poweroff`), a graceful teardown; running stacks come
+back via boot restore. A button renders only when logind authorizes that action for the operator
+(`CanReboot` / `CanPowerOff`, probed per button), because the rule file
+`/etc/polkit-1/rules.d/49-lhpc-power.rules` is not readable by the operator on stock Debian.
+Install it: [README step 4](../README.md#4-install-dependencies); on an existing box the
+System-dependencies panel and `lhpc doctor` show the command, as does a refusal at apply time.
+Apply records a short-lived pending marker that refuses new builds and updates until the trigger
+fires (an unreadable or stale marker is named in the refusal; delete it yourself); failures after
+authorization land only in `logs/power-<kind>.log`.
 
 ## Network
 
-The Apps page gains a **Network** panel (scan, join a WLAN, preferred network, back to the AP)
-when the box has an `lhpc-ap` NetworkManager profile and `nmcli` — a capability gate, not an
-image type. Authorization is the polkit rule `/etc/polkit-1/rules.d/49-lhpc-network.rules`
-from `bootstrap-deps.sh` (opt-out `--no-network-controls`). The AP, the panel and the
-console-allowlist step: [wifi-access-point.md](wifi-access-point.md).
-
-A purge (`uninstall.sh --purge` or `lhpc clean --purge`) removes the preferred-network record, so
-the box falls back to its own access point at the next link loss or reboot. Re-declaring a
-preferred WLAN in the Network panel afterwards is mandatory, not optional.
+The **Network** panel: [wifi-access-point.md](wifi-access-point.md#the-network-panel). An uninstall (`uninstall.sh`,
+with or without `--purge`) removes the preferred-network record (`state/network-preferred.json`);
+declare the preferred WLAN again in the Network panel afterwards.
 
 ## Clock
 
-A Pi has no battery-backed clock — only the Pi 5 has an RTC — so an offline box boots with the last
-time it happened to write. Every log line, certificate and receipt after that is wrong until something
-corrects it.
+A Pi has no battery-backed clock (only the Pi 5 has an RTC), so an offline box boots with the last
+time it wrote, and every log line, certificate and receipt is wrong until something corrects it.
+What the PKI does with an unverified clock: [the clock gate](webserver.md#the-clock-gate).
 
-`bootstrap-deps.sh` installs **chrony** to discipline the clock and **gpsd** to feed it the receiver's
-time when there is one, and **fake-hwclock** so the last known time survives a reboot. This is ON by
-default; `--no-time-source` skips it.
+`bootstrap-deps.sh` installs, by default (`--no-time-source` skips it):
 
-**fake-hwclock** saves the time hourly (a systemd timer) and at shutdown, and restores it early at
-boot, before chrony. A box that reaches neither NTP nor GPS therefore starts at most about an hour
-behind (plus the time it was off) instead of at the release's boot floor below. That matters for
-mTLS: client certificates and the CRL issued after the floor would otherwise read as "not yet
-valid" until the clock is synchronised. LHPC writes `/etc/default/fake-hwclock` with `FORCE=true`,
-which makes the restore **forward-only**. Without it, Debian's fake-hwclock sets the clock to the
-saved time even when the clock is later, and on a Pi 5 that would step its RTC time back to the last
-save.
+- **chrony** to discipline the clock. It **replaces systemd-timesyncd** (on Trixie both are
+  `time-daemon` packages), which is why the opt-out exists.
+- **gpsd** to feed it the receiver's time.
+- **fake-hwclock**: saves the time hourly and at shutdown and restores it at boot, before chrony,
+  so a box without NTP or GPS starts at most about an hour behind (plus the time it was off)
+  instead of at the boot floor, where certificates and the CRL issued later read "not yet valid".
+  `/etc/default/fake-hwclock` gets `FORCE=true`: the restore is **forward-only** and never steps a
+  Pi 5's RTC time back.
 
-**chrony replaces systemd-timesyncd.** On Trixie both declare `Provides/Conflicts/Replaces: time-daemon`,
-so installing chrony removes timesyncd. That is the reason the opt-out exists.
+**NTP wins when it is reachable.** Setup adds `prefer` to the NTP declarations in
+`/etc/chrony/chrony.conf` and `/etc/chrony/sources.d/`, so any of them outranks GPS. GPS carries
+the clock only when none is selectable — on an offline box it is then the only source, so its time
+is accepted, not corroborated. This covers the declarations present when bootstrap ran; NTP servers
+from DHCP (`/run/chrony-dhcp/`) and later additions take part in normal selection without that
+guarantee. To make one authoritative, add `prefer` to it or re-run `bootstrap-deps.sh`.
 
-**NTP always wins when it is reachable.** The setup adds `prefer` to the NTP declarations already in
-`/etc/chrony/chrony.conf` and `/etc/chrony/sources.d/`, so any of them outranks the GPS regardless of
-measured error. GPS carries the clock only when none of them is selectable — which, on an offline box,
-is the case it exists for: **GPS is then the only source, so its time is accepted, not corroborated.**
-
-**Scope of that guarantee:** it covers the declarations present when bootstrap ran. NTP servers supplied
-by DHCP (written to `/run/chrony-dhcp/` at lease time with fixed options) and declarations added later
-still take part in normal chrony selection, but carry no guarantee. To make one authoritative, add
-`prefer` to it, or re-run `bootstrap-deps.sh`.
-
-**Which source is in use is not shown in LHPC.** The System panel's Time row reports whether the clock
-is synchronised and how far it may be out, and nothing more. To see the source:
+The System panel's Time row shows only whether the clock is synchronised and its error bound;
+the source in use:
 
 ```
 chronyc sources        # every source, and which one is selected (^*)
 chronyc tracking       # the selected source and the current error estimate
 ```
 
-**If the box also uses GPS for position**, the time source needs `[gps] source = gpsd`. With
-`source = nmea`, LHPC reads the receiver directly and gpsd must not also own it — bootstrap detects that
-and skips the time source rather than take the device. See [gps](gps.md).
+**GPS for position too:** the time source needs `[gps] source = gpsd`. With `source = nmea`, LHPC
+reads the receiver directly, so bootstrap skips the time source rather than give gpsd the device
+([gps](gps.md)).
 
-**A boot floor** is written to `/usr/lib/clock-epoch`: systemd advances a clock below that date at
-startup, so a box that comes up in 1970 is plausible before the first certificate is written. It is a
-floor, not a clock — systemd takes the highest of its own build time, this file and
-`/var/lib/systemd/timesync/clock`. After chrony replaces timesyncd, that last file stops being updated
-and simply becomes a leftover; `/usr/lib/clock-epoch` is the floor LHPC maintains, and fake-hwclock
-(above) supplies the last known time on top of it.
+**Boot floor.** `/usr/lib/clock-epoch` makes systemd advance a clock below that date at startup, so
+a box that comes up in 1970 is plausible before the first certificate is written. systemd takes the
+highest of its build time, this file and `/var/lib/systemd/timesync/clock` (written by timesyncd, so
+stale under chrony). `/usr/lib/clock-epoch.ok` records that the **most recent** setup run
+completed: removed before setup changes anything, written only if everything succeeded. The
+Dependencies panel reads it, so after a failed run it keeps offering the repair command
+(paste-lines there, or re-run `bootstrap-deps.sh`).
 
-Beside it, `/usr/lib/clock-epoch.ok` records that the **most recent** setup run completed: it is
-removed before the setup changes anything and written again only if everything it promised succeeded.
-That is what the console's Dependencies panel reads, so a run that failed halfway keeps offering the
-command that repairs it. The boot floor itself cannot say this — it survives every later failed
-re-run, which is the point of a floor.
-
-**Paste-lines** for an existing box are in the console's dependency panel, or re-run
-`bootstrap-deps.sh`.
-
-**Turning it off again.** `--no-time-source` only skips *future* setup — it does not undo an install.
-To disable time disciplining on a box that already has it:
+**Turning it off.** `--no-time-source` only skips future setup. To disable it on a box that has it:
 
 ```
 sudo rm -f /etc/chrony/conf.d/10-lhpc-gps.conf   # the refclock
 sudo systemctl disable --now gpsd                # stop gpsd owning the receiver
 ```
 
-and remove the word `prefer` from any line bootstrap added it to. A **full** rollback to the previous
-state also removes the packages and restores timesyncd:
+and remove `prefer` from the lines bootstrap added it to. A full rollback also removes the
+packages and restores timesyncd:
 
 ```
 sudo apt purge gpsd chrony fake-hwclock && sudo apt install systemd-timesyncd
@@ -325,5 +304,5 @@ sudo rm -f /usr/lib/clock-epoch /usr/lib/clock-epoch.ok /etc/default/fake-hwcloc
 
 A destructive command re-proves the source's ownership record first and refuses on drift
 ([ownership records](provenance.md#ownership-records)). Inspect the checkout
-(`git -C src/<name> log -1`, `git remote -v`); if it is yours to drop, remove it and its record
-by hand (`rm -rf src/<name> state/source-registry/<name>-*.json`) and reinstall.
+(`git -C src/<name> log -1`, `git remote -v`); if it is yours to drop, remove it and its record by
+hand (`rm -rf src/<name> state/source-registry/<name>-*.json`) and reinstall.

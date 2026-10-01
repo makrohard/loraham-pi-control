@@ -6,12 +6,12 @@ packet. The driver is [loraham-rns-interface](https://github.com/makrohard/lorah
 
 | | |
 |---|---|
-| Components | `rns` (main — owns the radio and the shared instance; runs `loraham-rns-node`) · `rns-lora-interface` (library: the direct-SPI driver, RNS interface and service runner; a build-time dependency) · `nomadnet` (optional, interactive) · `lxmd` (optional; propagation **off** by default) · `sideband` (optional desktop GUI, `--with-gui` only) · `meshchat` (optional browser GUI) |
+| Components | `rns` (main — owns the radio and the shared instance; runs `loraham-rns-node`) · `rns-lora-interface` (library, build-time: the direct-SPI driver, RNS interface and service runner) · `nomadnet` (optional, interactive) · `lxmd` (optional; propagation **off** by default) · `sideband` (optional desktop GUI, `--with-gui` only) · `meshchat` (optional browser GUI) |
 | Source / pin | `src/reticulum` ← `markqvist/Reticulum` · `src/loraham-rns-interface` ← `makrohard/loraham-rns-interface` · `src/nomadnet` · `src/lxmf` · `src/sideband` (installed as `sbapp==1.9.2` from PyPI — a source install drops every `.kv` layout) · `src/meshchat` ← `liamcottle/reticulum-meshchat` |
-| Build | a venv with `--system-site-packages` (the SPI/GPIO bindings come from the `python3-libgpiod` + `python3-spidev` system packages, so the node needs no compiler — what makes it installable on a Pi Zero); Reticulum + the driver; the interface copied to `state/reticulum/interfaces/LoRaSPIInterface.py`; an import probe before the marker |
+| Build | a venv with `--system-site-packages` (SPI/GPIO bindings from the `python3-libgpiod` + `python3-spidev` packages, so the node needs no compiler); Reticulum + the driver; the interface copied to `state/reticulum/interfaces/LoRaSPIInterface.py`; an import probe before the marker |
 | Run | `.venv/bin/loraham-rns-node --config <runtime>/state/reticulum --interface LoRa --ready-file <runtime>/state/reticulum/ready --client-allow <allow-list>` — it exits rather than staying up without a radio |
-| Endpoints | shared instance `127.0.0.1:37428` · instance control `:37429` · client access `:4242` · optional outbound TCP to an internet peer (no listener) · MeshChat `127.0.0.1:8790` (loopback, reached through the LHPC proxy) · readiness = the `ready` file, written only after the node owns the instance **and** the radio is online |
-| Config | `<runtime>/state/reticulum/config` (0400) from `lhpc/data/bases/reticulum.conf`, regenerated on every start — edit it through lhpc. Read-only even to its owner, so a client that offers to edit interfaces cannot; lhpc rewrites it by renaming a fresh file over it, which needs permission on the directory, not the file |
+| Endpoints | shared instance `127.0.0.1:37428` · instance control `:37429` · client access `:4242` · optional outbound TCP to an internet peer (no listener) · MeshChat `127.0.0.1:8790` (via the LHPC proxy) · readiness = the `ready` file, written only after the node owns the instance **and** the radio is online |
+| Config | `<runtime>/state/reticulum/config` (0400) from `lhpc/data/bases/reticulum.conf`, regenerated on every start — change it through lhpc. Read-only even to its owner, so a client that offers to edit interfaces cannot; lhpc replaces it by rename |
 | Resources | `loraham.radio.868` + `.433` exclusive · `spi.bus.0` cooperative · `spi.bus.0.unlocked` exclusive · `tcp.port.37428` / `.37429` / `.4242` / `.8790` exclusive |
 | System | `/dev/spidev0.0` (`dtoverlay=spi0-0cs`); `spi` + `gpio` groups; `python3-libgpiod`, `python3-spidev` |
 | State | `state/reticulum` (transport identity, path tables, config), `state/meshchat`, `state/nomadnet`, `state/lxmd`, `state/sideband` (their LXMF identities = the addresses contacts know). Updates and `uninstall` keep them; `lhpc clean reticulum --purge` removes them, so a reinstall gets new addresses |
@@ -37,11 +37,11 @@ packet. The driver is [loraham-rns-interface](https://github.com/makrohard/lorah
 | `frequency` | 868 500 000 Hz / 434 500 000 Hz | per band — see [Band limits](#band-limits) |
 | `bandwidth` · `spreadingfactor` · `codingrate` | 125 000 Hz · 8 · 5 | BW 62.5–500 kHz, SF 7–12 (SF6 needs implicit-header mode, unsupported), CR 4/5–4/8 |
 | `txpower` | 14 dBm (868) / 10 dBm (433) | the driver refuses anything above the band policy: 14 dBm on 868, 10 dBm on 433 |
-| `rnode_framing` | no | talk to RNode-firmware devices: the driver puts the RNode header byte on every frame, splits packets at 254 bytes and programs the preamble the RNode firmware uses for the SF/BW (18 at SF8/BW125 — an SX127x receiver hears an RNode only with at least that). A framed box and a bare box cannot hear each other. The start refuses, before anything is stopped, while the built driver predates the switch (`lhpc update rns-lora-interface` + `lhpc build reticulum`). In the RF log every frame then starts with the header byte and a split packet is two lines; Decrypt strips and reassembles them |
+| `rnode_framing` | no | talk to RNode-firmware devices: the driver adds the RNode header byte to every frame, splits packets at 254 bytes and programs the RNode preamble for the SF/BW (18 at SF8/BW125; an SX127x hears an RNode only with at least that). A framed box and a bare box cannot hear each other. The start refuses, before anything is stopped, while the built driver predates the switch (`lhpc update rns-lora-interface` + `lhpc build reticulum`). In the RF log a split packet is two lines; Decrypt strips and reassembles them |
 | `airtime_limit_short` / `airtime_limit_long` | 868: 33 % (15 s) / 1 % (1 h) · 433: 33 % / 10 % | advanced — the short window is a burst guard (Reticulum's RNode example value); the long one is the legal duty cycle |
 | `rns_allow` | `127.0.0.1` | client-access allow-list; drives the managed firewall |
 | `enable_transport` | `No` | relay OTHER nodes' traffic between this node's interfaces — see [Internet and transport](#internet-and-transport) |
-| `rf_log` | on | RF log (`logs/rf-reticulum.log`) at the LoRa interface: every packet received (RSSI/SNR) or sent (`ok` on the radio's TX-done; `unconfirmed` when the window elapsed — the airtime was charged and it may have gone out; a duty-dropped packet writes nothing). Raw Reticulum packets, i.e. ciphertext — sizes, timing and signal, not contents. With transport on, relayed packets appear too. Read at the next start. Decrypt uses the LoRa interface's IFAC in `state/reticulum/config` and MeshChat's identity in `state/meshchat/` — [maintenance](../maintenance.md#rf-logs) |
+| `rf_log` | on | `logs/rf-reticulum.log` at the shared LoRa interface (MeshChat's and relayed traffic included; no separate MeshChat log): every packet received (RSSI/SNR) or sent (`ok` on the radio's TX-done; `unconfirmed` when the window elapsed — the airtime was charged and it may have gone out; a duty-dropped packet writes nothing). Raw Reticulum packets: sizes, timing and signal, not contents. Read at the next start; Decrypt: [maintenance](../maintenance.md#rf-logs) |
 | `lora_announce_relay` | `internal` | whether the public mesh's announces may go out over the radio; `gateway` relays them. Advanced, and only read while transport is on |
 | `internet_enabled` | `no` | the optional `[[Internet]]` TCP interface |
 | `internet_host` / `internet_port` | unset | its endpoint; both are required once it is enabled |
@@ -52,9 +52,10 @@ packet. The driver is [loraham-rns-interface](https://github.com/makrohard/lorah
 
 The IFAC passphrase lives only in `<runtime>/config/secrets.toml` (`[reticulum] ifac_netkey`),
 written as RNS's `passphrase`; lhpc refuses to load that file with any group/other permission
-bit (`install -m 0600 /dev/null <runtime>/config/secrets.toml` before editing). Set **both** the network name and the passphrase, or neither — a half-configured IFAC fails the start ("interface … was not registered"); a missing key never becomes an empty key.
-Pins, chip type, TCXO and PA settings are **not** settings: they come from `lhpc hardware`,
-because a wrong PA or TCXO value can damage the module.
+bit (`install -m 0600 /dev/null <runtime>/config/secrets.toml` before editing). Set **both** the
+network name and the passphrase, or neither — a half-configured IFAC fails the start ("interface
+… was not registered"); a missing key never becomes an empty key. Pins, chip type, TCXO and PA
+come from `lhpc hardware`, not settings: a wrong PA or TCXO value can damage the module.
 
 ## Hardware
 
@@ -68,38 +69,32 @@ because a wrong PA or TCXO value can damage the module.
 **SX1262 (Waveshare LoRaWAN Node HAT).** The LF and HF boards are pin-identical (CS 21, IRQ 16,
 RESET 18, BUSY 20, TXEN 6) and both carry an SX1262 — 433 does not imply an SX1268. DIO2 drives the
 RF switch. The profile hints a 1.8 V TCXO on DIO3 and the driver **probes** it: a board without a
-TCXO reports `XOSC_START_ERR` and would sit in `STBY_RC` with `SetTx` accepted but never started,
-so the driver falls back to the crystal and logs one notice. The BUSY line is read through
-libgpiod 2.x, whose `gpiod.line.Value` is not int-convertible — the driver reads its `.value`
-(the SX1262 is the only profile with a BUSY line); a BUSY stuck high for 1 s is a radio error.
+TCXO reports `XOSC_START_ERR`, so the driver falls back to the crystal and logs one notice. A BUSY
+line stuck high for 1 s is a radio error.
 
 ## Position (GPS)
 
 Only Sideband reads position: its location plugin (`lhpc_location.py` from the driver, enabled
 by `enable_sideband_plugins.py` at build) reads `LHPC_LOCATION_CONF` →
 `<runtime>/state/sideband/location.conf`, generated at stack start from the global plan
-(source, gpsd host/port, NMEA device/baud, fixed lat/lon/alt — all controller-owned; `max_age` 30 s is the one advanced setting). A change to `lhpc gps` takes effect on the next start. `rns`, nomadnet and
-lxmd read none, so a start without Sideband brings up no feed. Model: [GPS](../gps.md).
+(controller-owned; `max_age` 30 s is the one advanced setting), so an `lhpc gps` change applies at
+the next start. A start without Sideband brings up no feed. Model: [GPS](../gps.md).
 
 ## Clients
 
 **NomadNet** is an ncurses browser: lhpc shows the command (Dashboard card, `lhpc status
-reticulum`) and you run it in a terminal. The generated command wraps it in
+reticulum`) and you run it in a terminal, wrapped in
 `loraham-rns-client --configdir <state/reticulum> --wait 10 -- .venv/bin/nomadnet …`, a guard that
-proves an authenticated shared instance exists (exit 3 otherwise); `lxmd` and Sideband launch
-through the same guard. Never run `.venv/bin/nomadnet` directly against the owner's config: with
-`rns` absent, Reticulum makes the first process the shared-instance owner, so NomadNet would load
-the LoRa interface and take the radio outside lhpc's arbitration. While it is open your node serves
-its pages and files.
+proves an authenticated shared instance exists (exit 3 otherwise); `lxmd`, Sideband and MeshChat
+launch through the same guard. Never run `.venv/bin/nomadnet` directly against the owner's config:
+with `rns` absent, the first process becomes the shared-instance owner and would take the radio
+outside lhpc's arbitration. While it is open your node serves its pages and files.
 
-**Client access (TCP 4242)** is what an EXTERNAL client attaches to — Sideband on your laptop,
-another RNS node of yours. The bundled MeshChat does not use it: running on the box, it joins the
-node's shared instance directly (`LocalInterface[37428]`), which is why restarting `rns` shows it
-reconnecting there rather than on 4242. It is loopback-only: the
-setting offers no other value and the node refuses a non-loopback bind even from a hand-edited
-config, because the port has no authentication of its own and an allow-list is firewall intent,
-not enforcement. From another machine use an [SSH tunnel](../ssh-tunnel.md); add IFAC keys to
-authenticate the interface itself.
+**Client access (TCP 4242)** is for EXTERNAL clients — Sideband on your laptop, another RNS node
+of yours. MeshChat joins the shared instance directly (`LocalInterface[37428]`) instead. 4242 is
+loopback-only: the setting offers no other value and the node refuses a non-loopback bind even
+from a hand-edited config, because the port has no authentication of its own. From another
+machine use an [SSH tunnel](../ssh-tunnel.md); add IFAC keys to authenticate the interface itself.
 
 **Sideband** is best run off the Pi (~277 MB resident, needs a display), pointed at the
 client-access port. On-box it is installed only where `--with-gui` has run ([cli](../cli.md#deps)) —
@@ -107,48 +102,38 @@ gated by `python3-dev` (`sbapp` pulls `materialyoucolor`, a C++ extension withou
 and `libx11-dev` (the `--with-gui` marker; Kivy vendors its own SDL2); without `--with-gui` it is
 skipped, never a build error.
 
-RF logging is at the shared RNS LoRa interface; MeshChat traffic therefore appears in the
-Reticulum RF log as raw Reticulum packets — there is no separate MeshChat log.
+**MeshChat** is an optional browser client for the same node: `lhpc stack start reticulum` starts
+the node only; start MeshChat with `lhpc stack start meshchat` or its console row. An aiohttp
+backend on `127.0.0.1:8790` plus a prebuilt frontend, with no authentication of its own, published
+through the LHPC proxy ([webserver](../webserver.md#stack-web-ui-proxies)). Its venv is built
+**without** system site-packages, so it cannot import the SPI driver.
 
-**MeshChat** is a browser client for the same node, and optional: `lhpc stack start reticulum` starts the
-node only; start MeshChat with `lhpc stack start meshchat` or its row in the console. It is an aiohttp
-backend on `127.0.0.1:8790` plus a
-prebuilt web frontend, published through the LHPC proxy ([webserver](../webserver.md)). It has no
-authentication of its own, so the proxy is the only public path. It starts through the same
-`loraham-rns-client` guard as NomadNet, and for the same reason — started bare with `rns` absent it
-would take the shared instance and try to load the LoRa interface. Its venv is built **without**
-system site-packages, so even then it could not import the SPI driver.
+MeshChat reads the interface list **once, at startup**: after an interface change, restart it
+(`lhpc stack restart meshchat`), or its Interfaces page shows the old list next to live counters
+(e.g. `Disabled` with `Connected`).
 
-MeshChat reads the interface list **once, at startup**. After an interface change through lhpc,
-restart it (`lhpc stack restart meshchat`) or its Interfaces page keeps showing the previous state
-— including the confusing pairing of a `Disabled` label with live `Connected` counters, because
-the counters come from the running instance while the list does not. Its own banner says as much.
+*Interfaces and transport stay LHPC-owned* (rendered from `bases/reticulum.conf` on every start).
+The `0400` config refuses a MeshChat edit, and the proxy refuses (404) the seven routes that
+attempt it — the component's `proxy_deny_paths`; re-audit that list at every version bump.
+Reading works: the Interfaces page lists what lhpc configured.
 
-*Interfaces and transport stay LHPC-owned.* They are rendered from `bases/reticulum.conf` on every
-start, so a MeshChat edit would look accepted and be reverted at the next start. The `0400` config
-refuses the write, and the proxy refuses (404) the seven routes that attempt it — the component's
-`proxy_deny_paths` in the manifest; re-audit that list at every version bump. Reading still works:
-the Interfaces page lists what lhpc configured, including `LoRa` even when nothing is running.
-
-The frontend is **shipped prebuilt** as package data — upstream gitignores it and there is no npm on
-the box — and the backend is installed from `meshchat-constraints.txt`, an exact closure re-checked
-at each bump; its `rns` must match the node's.
+The frontend is **shipped prebuilt** as package data (no npm on the box); the backend is installed
+from `meshchat-constraints.txt`, an exact closure re-checked at each bump; its `rns` must match the node's.
 
 **Versions.** lxmd, nomadnet and Sideband install RNS from the `src/reticulum` checkout, so they run
 the node's Reticulum; a moved pin marks them for a rebuild. LXMF comes from PyPI (1.1.1) for
 nomadnet, Sideband and MeshChat, while lxmd runs the `src/lxmf` checkout (1.1.0): that pinned
-commit lacks the LXMPeer sync-backoff fix that PyPI 1.1.1 (and upstream git since) carries.
+commit lacks PyPI 1.1.1's LXMPeer sync-backoff fix.
 `lhpc status --versions` shows each client's `rns`/`lxmf` and names a package that differs.
 
-MeshChat carries its own **propagation-node** switch, off by default. It lives in MeshChat's SQLite
-settings and is reachable over its WebSocket, so no proxy rule can cover it; LHPC does not claim
-exclusive ownership. Turning it on while `lxmd` runs gives the node two propagation nodes —
-duplicate storage and announces, wasteful rather than dangerous.
+MeshChat's own **propagation-node** switch (off by default) lives in its SQLite settings and is
+reachable over its WebSocket, so no proxy rule covers it. On while `lxmd` runs, the node has two
+propagation nodes — duplicate storage and announces.
 
 ## Internet and transport
 
-Two switches, both **off** by default, and deliberately independent — an internet link for
-*your own* traffic is a different decision from relaying *other people's*.
+Two independent switches, both **off** by default: an internet link for *your own* traffic, and
+relaying *other people's*.
 
 | state | what it means |
 |---|---|
@@ -168,10 +153,9 @@ lhpc config reticulum internet_enabled yes
 lhpc stack restart rns --yes
 ```
 
-Enabling it without a complete endpoint is refused when you save it — RNS builds
-the interface at start and would fail there, where an unreachable target (which the node tolerates,
-`panic_on_interface_error = No`) looks nothing like a malformed one. Once connected, your
-announces reach the internet-side mesh and theirs reach you.
+Enabling it without a complete endpoint is refused on save (an unreachable target is tolerated,
+`panic_on_interface_error = No`). Once connected, your announces reach the internet-side mesh and
+theirs reach you.
 
 **IFAC on that interface is its own**, never the radio's:
 
@@ -180,31 +164,24 @@ announces reach the internet-side mesh and theirs reach you.
 | a public hub or testnet | **none** — the hub does not have your passphrase, and an IFAC'd link would pass nothing |
 | another node of yours | shared with that peer; legitimately the same value as LoRa if you treat them as one private network |
 
-Set `internet_ifac_netname` **and** `[reticulum] internet_ifac_netkey` in
-`config/secrets.toml`, or neither. Upstream accepts either half on its own — it derives the
-interface's authentication from whatever it is given — so both-or-neither is **LHPC's policy**,
-not an RNS error: it removes a whole class of link that looks configured and is not. What actually
-drops every packet is a MISMATCH, two peers whose pair differs, and the symptom is silent from
-both ends. lhpc refuses to generate the config rather than start a half-configured link, and the
-start is blocked with that message.
+Set `internet_ifac_netname` **and** `[reticulum] internet_ifac_netkey` in `config/secrets.toml`,
+or neither: lhpc refuses to generate a half-configured link and blocks the start (upstream would
+accept either half alone). Two peers whose pair differs drop every packet, silently on both ends.
 
-**Interface modes are LHPC's** — the client door is `gateway`, the internet side `boundary`
-with `recursive_prs` (which keeps the radio discoverable from the internet). The one setting is
-the radio's own mode, `lora_announce_relay`, read only while transport is on:
+**Interface modes are LHPC's** — client access `gateway`, the internet side `boundary` with
+`recursive_prs` (keeps the radio discoverable from the internet). The one setting is the radio's
+mode, `lora_announce_relay`, read only while transport is on:
 
 | `lora_announce_relay` | what goes out over the radio |
 |---|---|
 | `internal` *(default)* | your own announces, your clients', and those heard on the radio — **not** the public mesh's; paths to internet nodes still resolve on demand |
 | `gateway` | those too, so radio peers discover internet-side nodes by themselves |
 
-Measured against Reticulum 1.5.2 the only difference is the unsolicited announces —
-on a 3.12 kbps link with a 1 % hourly budget the expensive part, which is why the default keeps
-them off the air.
+Measured against Reticulum 1.5.2, the only difference is those unsolicited announces — on a
+3.12 kbps link with a 1 % hourly budget, the expensive part.
 
-**What gateway traffic cannot do** is bypass the radio's airtime limiter: `airtime_limit_short`
-and `airtime_limit_long` are enforced and persisted by our own LoRa interface, so relayed traffic
-is queued or dropped at the limit rather than flooding the band. That bounds the airtime you
-donate — it does not decide whether you want to donate it.
+Relayed traffic cannot bypass the airtime limiter: `airtime_limit_short`/`_long` are enforced and
+persisted by the LoRa interface, so it is queued or dropped at the limit.
 
 ## Band limits
 
@@ -214,13 +191,11 @@ donate — it does not decide whether you want to donate it.
 | 433 | 434.500 MHz | **10 mW ERP (10 dBm)**, 10 % duty | none (SRD / LPD433) |
 
 The 433 default stays clear of the LoRaHAM APRS channel (433.775/433.900) and MeshCom (433.175)
-while remaining inside 433.050–434.790 MHz. 10 mW is ERP — it includes antenna gain: 10 dBm into a
-unity-gain whip is just inside; with a gain antenna turn the power down. The stack cannot know your
-antenna.
+inside 433.050–434.790 MHz. 10 mW is ERP, antenna gain included: 10 dBm into a unity-gain whip is
+just inside; with a gain antenna turn the power down.
 
 **Permitted segments** (driver `PERMITTED_SEGMENTS`, BNetzA Vfg. 91/2025 / ERC 70-03). The driver
-knows them and their hourly duty ceilings and refuses anything else; an operator limit may only
-tighten a ceiling, never widen it:
+refuses anything else; an operator limit may only tighten a ceiling:
 
 | segment | hourly duty ceiling |
 |---|---|
@@ -238,9 +213,9 @@ The **whole occupied bandwidth** must fit inside one segment: 869.500 MHz is leg
 not at 500 kHz, which spills outside the 250 kHz-wide 10 % segment. A channel that matches no
 segment is refused, never defaulted.
 
-**Duty cycle.** Airtime is reserved *before* transmitting and written to disk, so a restart or a
-crash loop cannot wipe the hour's accounting. An unconfirmed transmission stays charged. Corrupt
-accounting state blocks transmit but never receive.
+**Duty cycle.** Airtime is reserved *before* transmitting and written to disk, so a restart or
+crash loop cannot wipe the hour's accounting; an unconfirmed transmission stays charged. Corrupt
+accounting state blocks transmit, never receive.
 
 ## Notes
 

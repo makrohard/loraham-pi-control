@@ -1,9 +1,8 @@
 # Adding & maintaining a stack
 
-Everything LHPC manages is declared in **one manifest** (`lhpc/data/manifest.example.toml`,
-shipped as package data). LHPC never hard-codes an app: you add a stack by
-describing it in TOML, and the CLI/web get install / build / test / start / stop / update for
-free. This guide uses the **MeshCom (QEMU)** stack as a worked example.
+Every stack is declared in **one manifest** (`lhpc/data/manifest.example.toml`, shipped as
+package data); the CLI and web derive install / build / test / start / stop / update from it.
+Worked example: the **MeshCom (QEMU)** stack.
 
 ## Contents
 
@@ -16,10 +15,10 @@ free. This guide uses the **MeshCom (QEMU)** stack as a worked example.
 
 ## Mental model
 
-- A **stack** is one runnable app plus its dependency **components**, in a start order.
-- Each stack names a **`main`** component (the app itself); the rest are dependencies.
+- A **stack** is one app plus its dependency **components**, in a start order; its **`main`**
+  component is the app itself.
 - A component with a `source` is adopted into the runtime root at its **pinned commit**, built
-  there, run by LHPC, and verified by **readiness** ([architecture.md](architecture.md)).
+  there, run by LHPC and verified by **readiness** ([architecture.md](architecture.md)).
 
 The MeshCom components, start order and pins: [stacks/meshcom.md](stacks/meshcom.md).
 
@@ -50,10 +49,11 @@ main = "meshcom-qemu"          # the app; the others are its dependencies
 
 ### Source (what gets cloned)
 
-`lhpc install` adopts this into `src/meshcom-loraham-bridge` and verifies the pinned commit. One
-source path is **one checkout with one remote**: every component that declares the same `path`
-shares it, so a remote override ([provenance.md](provenance.md)) is applied to all of them in one
-write, and diverging effective remotes fail destructive operations closed.
+`lhpc install` adopts this into `src/meshcom-loraham-bridge` at the pinned commit. One source path
+is **one checkout with one remote**: every component declaring the same `path` must declare the
+identical source spec (checked at load), and a remote override
+([provenance.md](provenance.md#remote-overrides)) applies to all of them, and diverging effective
+remotes fail destructive operations closed.
 
 ```toml
     [stack.component.source]
@@ -65,23 +65,22 @@ write, and diverging effective remotes fail destructive operations closed.
 
 ### Commands: two forms
 
-Every component executes [**shell-free**](architecture.md#safety-model). Two ways to say a
-command:
+Every component executes [**shell-free**](architecture.md#safety-model):
 
-- **Shorthand** `run` / `build` / `test`: a plain `prog arg arg` line with no shell syntax. At
-  load it is split on whitespace into `run_argv` (with `run_cwd = "{source}"`), a one-step
-  `build_steps`, or `test_argv`. In `run`, `{name}` placeholders become `{param:name}` (`{callsign}` becomes `{operator:callsign}`; `{runtime}`, `{source}` and `{band}` stay as they are); `build`/`test` shorthand is split verbatim.
-- **Structured** `run_argv` / `build_steps` / `test_argv`: required for anything with shell
-  semantics, i.e. any of `&& || | ; $( \` > < ${ &` or a shell word (`cd`, `env`, `export`,
-  `exec`, `sleep`, `mkdir`, `chmod`, `ln`, `rm`, `set`) as a token. There is no shell fallback:
-  such a line is not tokenized, and a component without a structured `run_argv` cannot be
-  started ("no structured run command").
+- **Shorthand** `run` / `build` / `test`: a plain `prog arg arg` line, split on whitespace at
+  load into `run_argv` (with `run_cwd = "{source}"`), a one-step `build_steps`, or `test_argv`.
+  In `run`, `{name}` becomes `{param:name}`, `{callsign}` becomes `{operator:callsign}`, and
+  `{runtime}`, `{source}`, `{band}` stay; `build`/`test` are split verbatim.
+- **Structured** `run_argv` / `build_steps` / `test_argv`: required when the command contains
+  any of `&& || | ; $( \` > < ${ &` or a shell word token (`cd`, `env`, `export`, `exec`,
+  `sleep`, `mkdir`, `chmod`, `ln`, `rm`, `set`). A shorthand with shell syntax fails the
+  manifest load; there is no shell fallback.
 
 ### Build
 
-`lhpc build` runs the typed `build_steps` in the checkout. `bin` is the built artifact LHPC
-checks to decide "is it built"; a long build sets `build_timeout`, and `build_marker` names a
-file written only by a completed build.
+`lhpc build` runs `build_steps` in the checkout. `bin` is the file that decides "is it built";
+a long build sets `build_timeout`; `build_marker` names a file written only by a completed
+build.
 
 ```toml
   build_steps = [
@@ -91,15 +90,11 @@ file written only by a completed build.
   bin = "build/meshcom-loraham-bridge"
 ```
 
-`meshcom-qemu` builds the firmware image; its `run` is a wrapper script (`scripts/run.sh`) that
-launches `qemu-system-xtensa`.
-
 ### Run & readiness
 
-`run_argv` is the argv template (literals + `{param:…}` placeholders). `readiness` says how LHPC
-verifies the start:
+`readiness` says how LHPC verifies the start:
 
-- `process`: the matching process is alive (see `[….process]` `exec_name`);
+- `process`: the `process.exec_name` process is alive;
 - `endpoint`: every `ready = true` endpoint came up (below);
 - `manual`: an interactive TUI the operator runs themselves;
 - `gps-feed`: the feed's own readiness marker (never the endpoint path existing);
@@ -107,11 +102,11 @@ verifies the start:
 - `external-systemd`: a `units`-only component (no `run_argv`): LHPC prints
   `sudo systemctl start <unit>` and probes the unit.
 
-`interactive = true` marks such a TUI: LHPC generates its config and prints the exact launch
-command instead of spawning it. `gui_optional = true` on a stack's MAIN component marks a GUI
-app a headless box may live without; the build/start preflights drop it instead of refusing the
-stack. A non-main interactive component in such a stack (voice's ncurses variant) is that GUI's
-**fallback**: offered only where the GUI cannot run, refused as a direct start target.
+`interactive = true` marks such a TUI: LHPC generates its config and prints the launch command
+instead of spawning it. `gui_optional = true` on a stack's `main` marks a GUI app a headless box
+may lack; build and start drop it instead of refusing the stack. A non-main interactive component
+in such a stack (voice's ncurses variant) is the GUI's **fallback**: offered only where the GUI
+cannot run, refused as a direct start target.
 
 ```toml
   readiness = "endpoint"
@@ -121,15 +116,14 @@ stack. A non-main interactive component in such a stack (voice's ncurses variant
     exec_name = "meshcom-loraham-bridge"   # identity for ownership + stop
 ```
 
-**Slow starters:** a component that imports a big stack before opening its port can exceed the
-default readiness window; give it a longer one with `readiness_timeout` (seconds, 0 = default),
-e.g. `meshcore-node` uses `readiness_timeout = 120.0`. `reads_position = true` marks a
-component that consumes the global position ([GPS](gps.md)).
+**Slow starters** set `readiness_timeout` (seconds, 0 = default, at most 600), e.g.
+`meshcore-node` uses `120.0`. `reads_position = true` marks a component that consumes the
+global position ([GPS](gps.md)).
 
 ### Endpoints
 
-A `ready = true` endpoint gates start/stop verification. `role = "provider"`/`"listener"`
-endpoints also drive the running-vs-degraded status. TCP ready endpoints must be loopback.
+A `ready = true` endpoint gates start/stop verification (TCP ones must be loopback);
+`role = "provider"`/`"listener"` endpoints also drive running-vs-degraded status.
 
 ```toml
     [[stack.component.endpoint]]
@@ -141,21 +135,18 @@ endpoints also drive the running-vs-degraded status. TCP ready endpoints must be
 ```
 
 A `client = true` endpoint with `scheme = "http"` or `"https"` makes the component a proxied web
-**page**: its own port and policy in the console's Webserver panel and in `lhpc webserver
-proxy`, fronted by nginx with the console's TLS/mTLS gate ([webserver](webserver.md)). Optional
-`proxy_deny_paths` lists request paths the proxy refuses, spelling-tolerant: `/api/x` also
-refuses `/api/x/…`, `/api-x` and `/api.x`. A stack's first such component is addressed by the
-stack id, any further one by `<stack>-<component>`; "first" is manifest order with the stack's
-`main` component sorted last, so a dedicated web component keeps the stack id even when the main
-component later grows a dashboard. Page ids must be unique across the manifest (checked at load,
-like component ids). A loopback `address` keeps the raw port off the network; every TCP listener
-also needs `firewall` metadata and a `tcp.port.<n>` claim.
+**page** behind the console's nginx TLS/mTLS gate ([webserver](webserver.md#stack-web-ui-proxies)).
+Optional `proxy_deny_paths` lists request paths the proxy refuses, spelling-tolerant (`/api/x`
+also refuses `/api/x/…`, `/api-x`, `/api.x`). A stack's first page is addressed by the stack id,
+any further one by `<stack>-<component>`; "first" is manifest order with `main` sorted last. Page
+ids must not collide (checked at load). A loopback `address` keeps the raw port off the network;
+every TCP listener also needs `firewall` metadata and a `tcp.port.<n>` claim.
 
 ### Parameters & config files
 
-`param` entries become CLI args (built from the saved values at start —
+`param` entries become CLI args (from the saved values at start,
 [config layers](architecture.md#manifest-and-config-layers)) and web **Settings** fields. A
-`config_file` lets LHPC generate a component's config from a base, updating just the named keys.
+`config_file` generates a component's config from a base, updating only the named keys.
 
 ```toml
     [[stack.component.param]]
@@ -166,8 +157,8 @@ also needs `firewall` metadata and a `tcp.port.<n>` claim.
     label = "Control TCP port (= firmware XR_PORT)"
 ```
 
-**Identity params.** The validator you give the stack's identity param decides both the accepted
-syntax and the enforcement class ([identity rules](architecture.md)):
+**Identity params.** The validator decides the accepted syntax and the enforcement class
+([identity rules](architecture.md#identity-and-callsigns)):
 
 | Validator | Accepts | Class | `default` |
 |---|---|---|---|
@@ -179,9 +170,8 @@ syntax and the enforcement class ([identity rules](architecture.md)):
 
 ### Resources & dependencies
 
-`resource` claims prevent conflicts (two things can't own the same TCP port / radio / daemon
-socket); the mode semantics are in
-[architecture.md](architecture.md#radios-bands-and-resource-claims). `depends_on` +
+`resource` claims stop two components owning the same TCP port, radio or daemon socket (modes:
+[architecture.md](architecture.md#radios-bands-and-resource-claims)). `depends_on` and
 `start_order` sequence the stack.
 
 ```toml
@@ -199,39 +189,34 @@ lhpc build meshcom           # run each component's build_steps
 lhpc test meshcom            # host tests (RX-safe), optional
 lhpc stack start meshcom     # start in order; verify readiness per component
 lhpc stack stop meshcom      # identity-verified stop (SIGTERM only), endpoints confirmed gone
-lhpc update meshcom --yes    # a binary install stays binary, a source install goes to its pin (cli.md § update)
+lhpc update meshcom --yes    # binary stays binary, source goes to its pin
 ```
 
-The web console exposes the same actions per stack.
+The web console has the same actions per stack.
 
 ## Add a new stack
 
-1. Copy an existing `[[stack]]` block that resembles yours (a daemon-backed app, a QEMU app, a
-   socat bridge …) and rename `id` / `name` / `main`.
-2. For each component set: `source` (repo + pinned commit), `build_steps` + `bin`,
-   `run`/`run_argv` + `readiness` (+ `readiness_timeout` if slow), `process.exec_name`, any
-   `endpoint`s (`ready = true` for the one that proves it's up), `param`s, `resource` claims,
-   and `depends_on` / `start_order`.
-3. Declare `requires_daemon_tx` and the `band` ([TX safety](operations.md#tx-safety)).
-4. `lhpc install <id> --check` → `lhpc build <id>` → `lhpc stack start <id>` and watch the typed
+1. Copy a similar `[[stack]]` block and rename `id` / `name` / `main`.
+2. Give each component the sections above, plus `requires_daemon_tx` and `band`
+   ([TX safety](operations.md#tx-safety)).
+3. `lhpc install <id> --check` → `lhpc build <id>` → `lhpc stack start <id>`; read the typed
    outcomes.
 
 ## Maintain an existing stack
 
-- **Bump a version:** the pin bump recipe is in [maintenance](maintenance.md); the binary-channel
-  consequence of a new pin is in [provenance](provenance.md).
-- **Fix a flaky "did not start/verify":** if the app is slow to open its port, raise
-  `readiness_timeout`; if a wrapper backgrounds the real process, make sure `process.exec_name`
-  matches the process that owns the ready endpoint.
+- **Bump a version:** [maintenance.md → Moving a pin](maintenance.md#moving-a-pin).
+- **Flaky "did not start/verify":** raise `readiness_timeout` for a slow port; for a wrapper
+  that backgrounds the real process, set `process.exec_name` to the process owning the ready
+  endpoint.
 - **Add a setting:** add a `param` (CLI) or a `config_file` key (generated config).
 - **Retire a component:** remove it. `lhpc uninstall` removes a source path only when no
-  remaining component declares it (or reaches it through `build_requires`); a checkout shared
-  with another stack is kept, and the departing components are recorded as having left it.
+  remaining component declares it or reaches it through `build_requires`; a shared checkout is
+  kept and records the departing components.
 
 ## Validate your change
 
-The manifest is validated at load: a bad readiness policy, command token, endpoint, duplicate
-page id, or `readiness_timeout` fails fast rather than launching a misconfigured process.
+The manifest is validated at load: a bad readiness policy, command, endpoint, page id or
+`readiness_timeout` fails the load.
 
 ```bash
 python -m compileall -q lhpc

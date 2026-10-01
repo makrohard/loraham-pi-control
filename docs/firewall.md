@@ -1,16 +1,10 @@
 # Firewalling the Pi
 
-`lhpc` gates its **own** console (bind + source CIDR + client certificate). It cannot gate the
-stacks: some open ports on **all interfaces** with no authentication at all. Two answers:
-
-1. **The managed firewall** (this page's focus): `lhpc` renders an nftables ruleset and you
-   apply it with **one sudo command**. It lives in its own `table inet lhpc`, and its dashboard
-   status is honest about what it has and has not verified.
-2. **Do it yourself**: the raw `nft` commands are shown throughout so you can integrate them
-   into an existing firewall instead.
-
-Raspberry Pi OS trixie ships **nftables** (no `ufw`, no extra packages). `lhpc` uses native
-nftables.
+`lhpc` gates its **own** console (bind + source CIDR + client certificate), but some stacks open
+ports on **all interfaces** with no authentication. Either let `lhpc` render an nftables ruleset
+in its own `table inet lhpc` and apply it with **one sudo command** (the managed firewall), or
+lift the raw `nft` rules into your own firewall. Raspberry Pi OS trixie ships nftables; nothing
+else is needed.
 
 ## Contents
 
@@ -47,36 +41,32 @@ nftables.
 ([why](stacks/meshcom.md)); the direct-access checkbox then carries the unauthenticated-exposure
 warning.
 
-**meshtastic 4403/9443 are the reason this feature exists**: reachable from anywhere on your
-network the moment the stack starts, with no upstream option to bind them to loopback. The
-managed firewall blocks them by default; the mTLS-gated proxy page is the sanctioned path to
-the web UI ([stack web-UI proxies](webserver.md)).
+meshtastic 4403/9443 have no upstream option to bind to loopback; the managed firewall blocks
+them by default, and the web UI's sanctioned path is its mTLS-gated
+[proxy page](webserver.md#stack-web-ui-proxies).
 
 ## Strategy: default-deny vs close-what-we-open
 
-**Close-what-we-open** (allow everything, drop the known-bad ports) fails *open*: every future
-listener is exposed until someone notices. **Default-deny** (block everything, allow what is
-wanted) fails *closed*, and `lhpc` can enumerate the wants because every wanted port comes from
-its own configuration. **Secure-default** mode is default-deny; **compatibility** mode is the
-narrower close-what-we-open form, for boxes that already run a custom firewall.
+**Close-what-we-open** (drop the known-bad ports) fails open: every future listener is exposed.
+**Default-deny** fails closed, and `lhpc` knows every wanted port from its own configuration.
+Secure-default mode is default-deny; compatibility mode is close-what-we-open, for boxes with a
+custom firewall.
 
 ## The managed firewall: one command
 
-On the **Apps** page, open the controller row's **Firewall** panel (the Dashboard's Firewall line links there; also `lhpc firewall`). Pick a mode, tick any
-direct-access exceptions, then run the two shown commands — the root script, then the Webserver
-Apply that activates the listeners the firewall was gating:
+On the **Apps** page, open the controller row's **Firewall** panel (the Dashboard's Firewall
+line links there; CLI: `lhpc firewall`). Pick a mode, tick any direct-access exceptions, then run
+the two shown commands — the root script, then the Webserver Apply that activates the listeners
+the firewall was gating:
 
 ```bash
 sudo bash ~/loraham-pi-control/config/files/firewall/firewall-apply.sh
 lhpc webserver apply
 ```
 
-That script (rendered by `lhpc`, executed by you) installs a small **root-owned** helper and
-three systemd units, then applies the ruleset and runs an immediate live check.
-
-**Until you run it, nothing is filtered.** There is no `table inet lhpc`, every listener a stack
-opens is reachable from your network, and both `lhpc firewall` and the dashboard say
-*setup required* rather than green.
+The script (rendered by `lhpc`, run by you) installs a root-owned helper and three systemd
+units, applies the ruleset and runs a live check. **Until you run it, nothing is filtered**, and
+`lhpc firewall` and the dashboard say *setup required*.
 
 To verify on demand:
 
@@ -95,88 +85,74 @@ The dashboard's Firewall line then reads one of:
 
 ## How it protects your existing configuration
 
-`lhpc` **never edits, overwrites, renames or deletes** your `/etc/nftables.conf`, any file under
-`/etc/nftables.d/`, foreign tables/chains, or their service enabled-state. It confines itself to:
+`lhpc` **never edits, overwrites, renames or deletes** `/etc/nftables.conf`, anything under
+`/etc/nftables.d/`, foreign tables/chains, or their service enabled-state. It uses only:
 
-- a dedicated `table inet lhpc` (nftables tables are namespaced: applying, flushing or deleting
-  ours can never modify rules in yours);
-- root-owned artifacts under `/etc/lhpc/` with an explicit ownership record (a random
-  installation ID stored in metadata **and** embedded as the table's comment). Before it ever
-  replaces, rolls back or deletes the live table it reads that comment back; a table it cannot
-  prove is lhpc's is refused (`not-owned`), untouched;
-- its own `lhpc-firewall.service` loader, ordered **after** any existing `nftables.service`
-  (your `flush ruleset`, if you have one, runs first). It never enables or modifies that unit.
+- its own `table inet lhpc` (flushing or deleting it cannot touch your tables);
+- root-owned files under `/etc/lhpc/` with an ownership record: a random installation ID stored
+  in metadata **and** as the table's comment. Before replacing, rolling back or deleting the
+  live table it reads that comment back; a table it cannot prove is its own is refused
+  (`not-owned`) and left alone;
+- its own `lhpc-firewall.service` loader, ordered **after** any `nftables.service` (whose
+  `flush ruleset` therefore runs first), which it never enables or modifies.
 
-One honest interaction remains: **any base chain's `drop` beats another table's `accept`**. In
-secure-default mode our input chain has `policy drop`, so it adds an effective default-deny over
-the whole box: an accept rule in *your* table cannot open a port ours does not allow. If you run
-a custom firewall, prefer **compatibility** mode (no default-drop; only lhpc-owned drops for the
-unwanted stack ports). The apply script lists any foreign tables it detects and names this
-semantic; it changes none of them.
-
-And the converse: an lhpc **allow** never *guarantees* reachability; a later foreign base chain
-may still drop the packet.
+**Any base chain's `drop` beats another table's `accept`.** In secure-default mode the lhpc input
+chain has `policy drop`, so an accept in *your* table cannot open a port lhpc does not allow;
+with a custom firewall prefer compatibility mode. The apply script lists the foreign tables it
+detects and changes none of them. Conversely, an lhpc allow cannot guarantee reachability past a
+foreign drop.
 
 ## Modes
 
-- **Secure-default** (recommended for a dedicated box): `policy drop` input chain in the lhpc
-  table. Automatically allows actual SSH ports, the external console/proxy ingress you exposed,
-  the endpoints you ticked, plus the baseline (loopback, conntrack, ICMP/ICMPv6, DHCPv4 **and**
-  DHCPv6 client replies, mDNS). Everything else is dropped.
-- **Compatibility** (recommended when a foreign firewall exists): no default-drop policy; only
-  lhpc-owned **non-loopback drops for every unselected direct stack listener**. Ticking an
-  endpoint suppresses its drop. Your own rules keep authority.
+- **Secure-default** (a dedicated box): `policy drop` input chain. Allows the actual SSH ports,
+  the console/proxy ingress you exposed, the endpoints you ticked, and the baseline (loopback,
+  conntrack, ICMP/ICMPv6, DHCPv4 `67→68` and, with IPv6, DHCPv6 `547→546` client replies on any
+  interface, mDNS). Everything else is dropped.
+- **Compatibility** (a foreign firewall exists): no default drop; only lhpc-owned non-loopback
+  drops for every unselected direct stack listener. Ticking an endpoint suppresses its drop.
 
-**DHCP client traffic is always allowed in secure-default** (both IPv4 `67→68` and, when IPv6 is
-enabled, DHCPv6 `547→546`), independent of AP mode, so ordinary Ethernet/Wi-Fi lease
-acquisition and renewal never break. **Access-point** server rules (DHCP `68→67`
-interface-scoped, DNS on UDP+TCP 53) are opt-in and require an explicit interface and CIDR.
+**Access-point** server rules (DHCP `68→67` on the AP interface, DNS on UDP+TCP 53) are opt-in and
+need an explicit interface and CIDR.
 
 ## The three status dimensions (and why green is strict)
 
-`lhpc` runs unprivileged, so it cannot read the live nftables ruleset directly. Instead a
-root-owned checker (a ~1-minute timer, plus an immediate run after apply and after boot) compares
-the **live** `table inet lhpc` against the accepted model (a normalized semantic comparison, not
-a copied hash) and writes a receipt to `/run/lhpc-firewall/check.json`. The dashboard reads that
-receipt (verifying it is root-owned and unforgeable) and reports three **independent** things:
+`lhpc` runs unprivileged and cannot read the live ruleset. A root-owned checker (a 60 s timer,
+plus a run after apply and after boot) compares the **live** `table inet lhpc` semantically with
+the accepted model and writes a receipt to `/run/lhpc-firewall/check.json`, which the dashboard
+reads after checking it is root-owned. Three independent dimensions:
 
 - **Config**: your saved firewall intent matches what was applied.
-- **Boot**: the loader + check timer are installed and enabled (survives reboot).
-- **Live**: the checker verified the actual kernel table **this boot**, recently.
+- **Boot**: the loader + check timer are installed and enabled.
+- **Live**: the checker verified the kernel table **this boot**, recently.
 
-**Green requires Live.** Declared-and-persistent is *not* enough: after a reboot or a config
-change the live state is unverified until the next check attests it, and the dashboard says so.
-Freshness uses the boot id plus `CLOCK_BOOTTIME`, so a clock change or a suspend/resume cannot
-fake a fresh result.
+**Green requires Live**: after a reboot or a config change, state is unverified until the next
+check. Freshness uses the boot id plus `CLOCK_BOOTTIME`, so a clock change or suspend cannot fake
+it.
 
-Because a valid current-boot receipt is required before `lhpc` binds a remote listener, exposing
-the console/proxy is gated: if you change the webserver exposure but have not applied the
-firewall, the webserver Apply is refused with *Firewall changes pending* and the exact command to
-run. That refused Apply is remembered and completes automatically once Config and Live are
-verified; a later webserver or proxy edit needs its own Apply. At boot, nginx will not bind a
-remote port until the firewall is verified; on failure it starts **loopback-only** (recover over
-an [SSH tunnel](ssh-tunnel.md)), and you re-apply.
+**Exposure is gated on a valid current-boot receipt.** A webserver or proxy Apply that would
+expose something the firewall has not applied is refused with *Firewall changes pending* and the
+command to run; that refused Apply completes automatically once Config and Live are verified (a
+later edit needs its own Apply). At boot, nginx binds a remote port only once the firewall is
+verified; otherwise it starts **loopback-only** — recover over an [SSH tunnel](ssh-tunnel.md)
+and re-apply.
 
 ## Scenarios
 
-Each is a configuration choice in the Firewall panel that regenerates the ruleset; the equivalent
-raw `nft` is shown for the by-hand path. Exposing the console itself is the
-[remote exposure runbook](webserver.md); this page covers the firewall side only.
+Each is a choice in the Firewall panel that regenerates the ruleset. Exposing the console itself
+is the [remote exposure runbook](webserver.md#remote-exposure-runbook).
 
-**Local only**: the default. Nothing exposed; the console is loopback. Reach it through an
-[SSH tunnel](ssh-tunnel.md).
+**Local only** (default): nothing exposed; use an [SSH tunnel](ssh-tunnel.md).
 
-**Your LAN**: expose the console to a CIDR (the runbook), then apply the firewall. The managed rule mirrors the CIDR (`ip saddr 192.168.0.0/24 tcp dport 8443 accept`) unless the AP rules are enabled; then the ingress rule is unscoped (`meta nfproto ipv4 tcp dport 8443 accept`) and the nginx allow-list keeps the CIDR.
+**Your LAN**: expose the console to a CIDR, then apply the firewall. The rule mirrors the CIDR
+(`ip saddr 192.168.0.0/24 tcp dport 8443 accept`); with the AP rules enabled it is unscoped
+(`meta nfproto ipv4 tcp dport 8443 accept`) and nginx's allow-list keeps the CIDR.
 
-**Public internet**: forward only 8443 at your router; the exposure needs the elevated confirm
-phrase (the runbook). Never forward 4403/9443/8001/5000/7000/8000.
+**Public internet**: forward only 8443 at your router (the exposure needs the elevated confirm
+phrase). Never forward 4403/9443/8001/5000/7000/8000.
 
-**Pi Wi-Fi AP + phone**: enable AP mode with the interface and CIDR (e.g. `wlan0`,
-`10.42.0.0/24`), in the Firewall panel or with
-`lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.42.0.0/24`, then apply. Do it BEFORE
-the radio becomes an AP: without these rules the phone never gets a DHCP lease, and the console
-is then unreachable too. It allows AP DHCP (`68→67` on that interface) and DNS (UDP+TCP 53),
-plus the console. The AP itself, the Network panel and the certificate for the phone:
+**Pi Wi-Fi AP + phone**: enable AP mode with the interface and CIDR in the Firewall panel or with
+`lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.42.0.0/24`, then apply — BEFORE the radio
+becomes an AP, or the phone gets no DHCP lease and cannot reach the console. The AP itself:
 [Wi-Fi](wifi-access-point.md).
 
 ## Reset / undo
@@ -185,22 +161,17 @@ plus the console. The AP itself, the Network panel and the certificate for the p
 sudo bash ~/loraham-pi-control/config/files/firewall/firewall-reset.sh
 ```
 
-Removes **only** lhpc-owned artifacts (the `table inet lhpc`, the three units, the known files
-under `/etc/lhpc/`), and leaves every foreign
-file, table and unit exactly as it was. It removes named lhpc files and then `rmdir`s `/etc/lhpc`,
-which succeeds only if the directory is empty, so any unexpected file left there is preserved,
-never recursively deleted. All ownership and table checks live in the trusted root helper: if the
-installed helper is missing, a symlink, not root-owned, or not executable, the reset **refuses**
-(exit 13) and asks you to reinstall the current helper (re-run `firewall-apply.sh`) first, so a
-live owned table is only ever removed by the proven code path, never stranded. Controller uninstall
-refuses while any firewall residual (helper, candidate, metadata, snapshot, journal, transition record, or a unit)
-remains and points you here first.
+Removes **only** lhpc-owned artifacts (the `table inet lhpc`, the three units, the named files
+under `/etc/lhpc/`, then `rmdir /etc/lhpc`, which keeps any unexpected file). The checks run in
+the installed root helper: if it is missing, a symlink, not root-owned or not executable, the
+reset **refuses** (exit 13) until you re-run `firewall-apply.sh`. Controller uninstall refuses
+while any firewall residual (helper, candidate, metadata, snapshot, journal, transition record
+or unit) remains and points here.
 
 ## Doing it entirely by hand
 
-If you would rather integrate the rules into your own firewall, `lhpc firewall --script` prints
-the apply script (and `--reset-script` the undo) to stdout: read them, lift the `nft` rules you
-want, and manage them yourself. The essential shape of the lhpc table (secure-default) is:
+`lhpc firewall --script` prints the apply script (`--reset-script` the undo); lift the `nft` rules
+you want. The shape of the lhpc table (secure-default):
 
 ```
 table inet lhpc {
@@ -223,39 +194,34 @@ table inet lhpc {
 }
 ```
 
-This is the raw material, yours to place.
-
 ## Scope and deliberate limitations
 
-The managed firewall gates every path that can bind an externally reachable listener: the web
-console, each stack proxy, **and stack starts/restarts**. A start is allowed only when the
-listener's **complete scope** (protocol, address family, bind address, port, band and source
-CIDRs) exactly matches a modeled candidate scope the live receipt vouches for; a saved bind/port/CIDR change not yet applied is refused with *"Firewall changes pending — the listener was NOT started. Apply the firewall first, then start '<target>' again."*; a scope the applied firewall does not model (e.g. a non-default-band listener) is refused with *"The saved listener is not covered by the applied firewall — apply the firewall, then start."* A TCP listener with no firewall metadata
-is treated as exposed and gated (fail-closed), so a newly added listener can never slip out
-unprotected.
+The gate covers the console, each stack proxy **and stack starts/restarts**, whatever the install
+channel. A start is allowed only when the listener's complete scope (protocol, address family,
+bind address, port, band, source CIDRs) matches a modeled scope the live receipt vouches for:
 
-**Install channels change nothing here.** A stack installed from the binary channel is gated
-exactly like a source-built one: the firewall reasons about *listeners*, not about how the
-binary got onto the box (the meshcom bridge's `auth: none` on that channel: the table above).
+- a saved bind/port/CIDR change not yet applied: *"Firewall changes pending — the listener was NOT
+  started. Apply the firewall first, then start '<target>' again."*
+- a scope the applied firewall does not model (e.g. a non-default-band listener): *"The saved
+  listener is not covered by the applied firewall — apply the firewall, then start."*
 
-**Verified across updates.** The installed root helper stamps a revision (a hash of its own
-source) into every receipt; after an lhpc update replaces the helper, the old attestation no
-longer matches, so the dashboard shows *Update required — re-apply the firewall after the update* (never a stale green) until you re-apply. The operator scripts and the lhpc-owned nginx unit that carries the boot gate are
-refreshed with the **new** version's templates by the freshly restarted console *after* the
-update, not by the pre-update process (which still holds the old code in memory). If a
-self-update would advance into a state where remote web could come up ungated (a foreign nginx
-unit while remote access is configured), it stops first and directs you to
-`lhpc self-update --repair-integration`.
+A TCP listener with no firewall metadata is treated as exposed and gated.
 
-A few things are intentionally **out of scope**; they add complexity without materially
-improving safety:
+**Across updates.** Every receipt carries the installed helper's revision (a hash of its
+source); after an update replaces the helper the dashboard shows *Update required* until you
+re-apply. The operator scripts and the `lhpc-nginx` unit that carries the boot gate are
+refreshed from the new templates by the restarted console after the update. A self-update that
+would let remote web come up ungated (a foreign nginx unit while remote access is configured)
+stops first and directs you to `lhpc self-update --repair-integration`.
 
-- **SSH scope is widened, not narrowed.** SSH ports learned without an explicit `ListenAddress` (unit `-p`, `ssh.socket`, live sshd sockets, `[firewall] ssh_ports`) resolve to a wildcard allow; an `sshd -T` `ListenAddress` keeps its exact address and family. This can only ever allow *more* SSH
-  access, never lock you out. Use `[firewall] ssh_ports` to pin specific ports.
-- **Hostname binds** are treated as wildcard rather than resolved to addresses.
-- **DHCP client replies** are accepted on any interface, not scoped per-interface.
-- **Foreign-firewall detection** happens after the first apply (via the root receipt), so the
-  "Compatibility recommended" hint appears once the firewall has run at least once.
+Out of scope:
 
-None of these weakens the core guarantee: no lhpc-managed non-loopback listener comes up without a
-current-boot, live-verified firewall receipt.
+- **SSH scope is widened, not narrowed.** SSH ports without an explicit `ListenAddress` (unit
+  `-p`, `ssh.socket`, live sshd sockets, `[firewall] ssh_ports`) get a wildcard allow; an
+  `sshd -T` `ListenAddress` keeps its address and family. Pin ports with `[firewall] ssh_ports`.
+- **Hostname binds** are treated as wildcard.
+- **DHCP client replies** are accepted on any interface.
+- **Foreign-firewall detection** comes from the root receipt, so the "Compatibility recommended"
+  hint appears only after the first apply.
+
+No lhpc-managed non-loopback listener comes up without a current-boot, live-verified receipt.

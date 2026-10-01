@@ -1,10 +1,8 @@
 # Maintaining LoRaHAM Pi Control
 
-The entry point for anyone, human or agent, who maintains LHPC: which repositories make up a
-release, the house rules, the release checklists, the regular chores, and what to do when
-something breaks. Every step here is one line and a link. The detail lives in the repository that
-owns it, and this file never repeats it: when the two disagree, the linked document is right and
-this file is the bug.
+The entry point for anyone, human or agent, who maintains LHPC: the repositories, house rules,
+release checklists, regular chores and incidents. Each step is one line and a link; when this file
+and a linked document disagree, the linked document is right.
 
 ## Contents
 
@@ -17,23 +15,22 @@ this file is the bug.
 
 ## Before you start
 
-- **Read the current state, not your memory of it.** `git fetch` every repository you will touch
-  and work from `origin/main` / `origin/dev`. The releases API, not a changelog, says what shipped.
-- **Nothing reaches `main`, `dev` or a tag without the maintainer's word.** Work on a topic branch
-  and push only that branch until the maintainer says so. This holds in every repository below;
-  the one standing exception is the release bot's own scheduled patch.
+- **Read the current state.** `git fetch` every repository you will touch and work from
+  `origin/main` / `origin/dev`. The releases API, not a changelog, says what shipped.
+- **Nothing reaches `main`, `dev` or a tag without the maintainer's word**, in every repository
+  below; push only your topic branch. The one exception is the release bot's scheduled patch.
 - **Commits carry no generated trailers**: no `Co-Authored-By`, no tool attribution
   ([CONTRIBUTING](CONTRIBUTING.md#commits)).
 - **The reference box and the radios are shared.** Ask before using them, say when you are done,
-  and leave the box as you found it. Box addresses, credentials and which radios are where are
-  kept in the maintainer's private notes, never in a repository.
-- **The maintainer audits every change before it lands.** An audit reads one report per author
-  (what was done, which behaviour changes, which decisions are needed) and the code on a branch in
-  the maintainer's own GitHub account. Verify every audit finding against the code before acting on
-  it; the audit is there to fix bugs, not to add architecture. **An audit that comes back green is not
-  the maintainer's GO**: only their explicit word merges or releases.
-- **One person or agent runs a release at a time, the bot included.** If someone else is
-  releasing, or a bot run is in progress, wait for its end before pushing to the same repository.
+  and leave the box as you found it. Box addresses, credentials and radio locations stay in the
+  maintainer's private notes, never in a repository.
+- **The maintainer audits every change before it lands**: one report per author (what was done,
+  which behaviour changes, which decisions are needed) and the code on a branch in the maintainer's
+  GitHub account. Verify each audit finding against the code before acting on it; an audit fixes
+  bugs, it does not add architecture. **A green audit is not the maintainer's GO**: only their
+  explicit word merges or releases.
+- **One release at a time, the bot included.** While someone else or a bot run is releasing, don't
+  push to the same repository.
 
 ## The repositories
 
@@ -45,15 +42,14 @@ this file is the bug.
 | [lhpc-release-bot](https://github.com/makrohard/lhpc-release-bot) | the weekly pin patch: watch upstream, repin, rebuild binaries, prove, release, image | [README](https://github.com/makrohard/lhpc-release-bot/blob/main/README.md) |
 | [LoRaHAM_Daemon](https://github.com/makrohard/LoRaHAM_Daemon) | the radio daemon; its pins are moved by hand, never by the bot | [CONTRIBUTING](https://github.com/makrohard/LoRaHAM_Daemon/blob/main/CONTRIBUTING.md) |
 
-The flow of one release: a final controller release commit → the binaries its moved pins need,
-built from that commit → the image tag with the same version. One more surface publishes from this
-repository: the Pages demo, redeployed on every `main` push that touches `lhpc/` or `demo/`
+One release: the controller release commit → the binaries its moved pins need, built from that
+commit → the image tag with the same version. The Pages demo also publishes from this repository,
+on every `main` push that touches `lhpc/`, `demo/` or `pyproject.toml`
 ([demo/README](demo/README.md#deploy)).
 
-**Temporary forks** (TEMPORARY-PR: remove each item, and this paragraph with the last one, when
-its upstream has taken the change). Upstream fixes reach boxes through our own copies until
-upstream merges them. Nobody syncs them by hand: a weekly workflow does, and an issue it opens is the
-only signal to act on.
+**Temporary forks** (TEMPORARY-PR: remove each item, and this paragraph with the last one, when its
+upstream has taken the change) carry upstream fixes until upstream merges them. Nobody syncs them
+by hand: a weekly workflow does, and an issue it opens is the only signal to act on.
 
 - **MeshCom firmware:** back on upstream icssw-org `dev` since 2026-09-29. The fork `makrohard/MeshCom-Firmware` is
   retired after the repoint release, once no open upstream PR of ours has its head there.
@@ -77,43 +73,32 @@ the last one). What LHPC carries or accepts meanwhile, and what retires it:
 | [LoRaHAM/LoRaHAM_Voice#1](https://github.com/LoRaHAM/LoRaHAM_Voice/pull/1) (draft, the new daemon socket path) | LHPC pins `makrohard/LoRaHAM_Voice` | upstream takes it |
 | [meshtastic/web#1428](https://github.com/meshtastic/web/pull/1428) (mobile layout) | the console's Meshtastic web client has no phone layout | released upstream: move the web client pin |
 
-The other sources the manifest pins (the MeshCom bridge and QEMU scripts, the Reticulum
-interface, the KISS TNC, Voice, and the upstream projects) are watched by the bot. They need a
-maintainer only when the bot holds or refuses one of them.
+The bot watches the other pinned sources (the MeshCom bridge and QEMU scripts, the Reticulum
+interface, the KISS TNC, Voice, the upstream projects); they need a maintainer only when the bot
+holds or refuses one.
 
 ## House rules
 
-Each rule is defined where the link points.
-
-- `main` is the latest release and only fast-forwards; `dev` is linear integration, one complete
-  commit per change, not rewritten during a cycle
-  ([maintenance](docs/maintenance.md#branches-and-releases)).
-- During a minor's cycle `dev` carries the last released version; changes are recorded under a
-  `## Unreleased` changelog heading; the minor's release commit sets `pyproject.toml`,
-  `lhpc/version.py` and the `CHANGELOG.md` heading to the new version
-  ([maintenance](docs/maintenance.md#branches-and-releases)).
-- A new capability, a changed contract, default or refusal is a **minor**; pins or a fix is a
-  **patch**. Recorded exceptions are listed in the same section
-  ([maintenance](docs/maintenance.md#branches-and-releases)).
+- Branches, minor versus patch and the recorded exceptions:
+  [branches and releases](docs/maintenance.md#branches-and-releases).
 - The release-verification lane runs on the candidate commit **before** the tag, not after
   ([bot README](https://github.com/makrohard/lhpc-release-bot/blob/main/README.md#running-it-pausing-it-retrying-it)).
 - Every controller release is followed by an image with the **same version**
-  ([images](https://github.com/makrohard/loraham-images/blob/main/docs/maintenance.md#version-numbers)), and every binary a moved pin needs is published **before** that
-  image tag ([maintenance](docs/maintenance.md#moving-a-pin)).
+  ([images](https://github.com/makrohard/loraham-images/blob/main/docs/maintenance.md#version-numbers)),
+  tagged only after every binary a moved pin needs is published ([moving a pin](docs/maintenance.md#moving-a-pin)).
 - A pinned commit is never amended or force-pushed ([maintenance](docs/maintenance.md#moving-a-pin)),
   and every pinned source has a rule in the bot's policy ([bot README](https://github.com/makrohard/lhpc-release-bot/blob/main/README.md#what-it-moves)).
-- A binary or image records what it was **built from**, never only what the manifest says it
-  should be. A label that is not checked against the bytes is not provenance.
+- A binary or image records what it was **built from**, never only what the manifest says; a
+  label not checked against the bytes is not provenance.
 - A build step that fetches a repository by ref names it as `{pin:<source path>}`, resolved from
   that source's pin; a commit literal in a build step fails
   [`tests/repo/test_build_steps_reference_pins.py`](tests/repo/test_build_steps_reference_pins.py).
-- A binary is built from **the commit that gets tagged**: its recorded `lhpc_commit` is the
-  release commit. Anything that changes that commit afterwards, an amend or a squash, means a
-  rebuild, or the artifact points at a commit no branch holds.
+- A binary is built from **the commit that gets tagged** (its `lhpc_commit`); an amend or squash
+  after that means a rebuild, or the artifact points at a commit no branch holds.
 - Evidence is the controller's typed outcome plus the stack's own state; log greps are not
   evidence ([test matrix](docs/test-matrix.md)).
-- Every code change gets a live proof on real hardware wherever one is possible, in addition
-  to CI; a change that only touches tests says so instead.
+- Every code change gets a live proof on real hardware where possible, besides CI; a test-only
+  change says so.
 - Docs state the current contract; history belongs in the changelog
   ([CONTRIBUTING](CONTRIBUTING.md#what-a-good-change-looks-like)).
 - Floating dev tools are never re-pinned
@@ -121,21 +106,19 @@ Each rule is defined where the link points.
 
 ## Releasing
 
-Before any release: every change has its audit, its CI and its live proof, and a **docs pass** over
-everything the release changes has brought the docs up to date — truthful, only what a reader needs,
-no history (that belongs in the changelog).
+Before any release: every change has its audit, CI and live proof, and a **docs pass** has brought
+the docs for everything the release changes up to date (truthful, only what a reader needs, no
+history).
 
 ### Minor release (`0.X.0`)
 
 Before step 1 (each line was missed or found late in a real run):
-- From the box that builds the from-source rows, one PlatformIO package download is not refused
-  with 429: the registry limits downloads per public address. If it refuses, arrange another uplink
-  for those builds before the run.
-- A pin move whose binary is not published yet does not land on `dev` alone; it reaches `dev` with
-  the release commit's push, after the binary is published and the test lab is green on the release
-  commit.
-- Every summary sentence about the release flow in this file and in docs/maintenance.md is read
-  against the steps below before the release commit goes to review.
+- From the box that builds the from-source rows, one PlatformIO package download succeeds (the
+  registry answers 429 per public address when over its limit); if not, arrange another uplink.
+- A pin move whose binary is unpublished does not land on `dev` alone; it arrives with the release
+  commit's push, once the binary is published and testlab is green on the release commit.
+- Every summary sentence about the release flow here and in docs/maintenance.md is checked against
+  the steps below before the release commit goes to review.
 - A changelog line about a moved source pin names the commands an installed box needs:
   `lhpc update <stack> --yes`, then `lhpc build <stack> --yes`.
 - After a purge a Meshtastic node has a new key: remove the peer's old entry before the
@@ -143,31 +126,29 @@ Before step 1 (each line was missed or found late in a real run):
 - One owner per band gives the go for every transmitting step of the matrix.
 - A BLE peer's pairing is proven by one connection with the stored bond, not by the host's list of
   paired devices.
-- The release bot's schedule is switched off for a manual release only on the maintainer's word; if it was
-  switched off, it is switched on again after the image run has finished.
+- The release bot's schedule is switched off for a manual release only on the maintainer's word,
+  and back on after the image run has finished.
 
 1. Run the bot in `watch-only` and move, or deliberately hold, every pin that has moved upstream
    ([maintenance](docs/maintenance.md#branches-and-releases)).
-2. On a release branch from `dev`: make sure the version scalars and the changelog heading carry
-   the new version in ONE release commit on top of the cycle's commits (one commit per feature,
-   no squash), whose subject is the version and whose body is the changelog section.
+2. On a release branch from `dev`: ONE release commit on top of the cycle's commits (not
+   squashed) sets the version and the changelog heading
+   ([branches and releases](docs/maintenance.md#branches-and-releases)).
 3. Local gate green ([CONTRIBUTING](CONTRIBUTING.md#what-should-be-green)); push the branch;
    dispatch CI and `testlab.yml` with `release_verify=true` on it
    ([testlab](docs/testlab.md#running-the-verification-lanes)).
-4. Run the release test matrix on the box and write the result into the run report; the release
-   commit is not amended (binaries are built from it), and the result goes into
-   `docs/live-tests/live-test.md` in the first docs commit after the tag ([test matrix](docs/test-matrix.md)).
-   The [fast lane](docs/test-matrix.md#fast-lane) needs the maintainer's explicit waiver, and every
+4. Run the [release test matrix](docs/test-matrix.md) on the box into the run report. The release
+   commit is not amended (binaries are built from it); the result goes into
+   `docs/live-tests/live-test.md` in the first docs commit after the tag. The
+   [fast lane](docs/test-matrix.md#fast-lane) needs the maintainer's explicit waiver, and every
    skipped row is written down.
 5. CI and testlab green again on the **final** commit, with the binaries of step 8 published.
-6. When `main` is an ancestor of `dev` (no bot release in the cycle): fast-forward `dev` and
-   `main` to the release commit in one push, and put an annotated tag `v0.X.0` on it with the same
-   message. Otherwise the maintainer decides how, for that release.
-7. Publish the GitHub Release: title = version, body = the changelog section plus links to the
-   image release and the binary index, marked latest.
-8. Build every binary whose pin moved from the release commit, BEFORE step 4: the matrix's binary
-   rows, testlab and the `main` ruleset's `release-verify` need the published binary
-   ([binaries](https://github.com/makrohard/lhpc-binaries/blob/main/README.md#updating-a-binary)).
+6. Fast-forward `dev` and `main` to the release commit and tag `v0.X.0` on it
+   ([branches and releases](docs/maintenance.md#branches-and-releases) says when and how).
+7. Publish the GitHub Release (same section: title, body, latest).
+8. Before step 4: build every binary whose pin moved from the release commit (the matrix's binary
+   rows, testlab and `release-verify` need it published;
+   [binaries](https://github.com/makrohard/lhpc-binaries/blob/main/README.md#updating-a-binary)).
 9. Tag `loraham-images` `v0.X.0`: changelog entry, a commit named by the version, annotated tag;
    watch both variants to the end
    ([images](https://github.com/makrohard/loraham-images/blob/main/docs/maintenance.md#routine-release)).
@@ -177,24 +158,19 @@ Before step 1 (each line was missed or found late in a real run):
 ### Maintainer patch (`0.X.Y`)
 
 1. The fix lands on `dev`, one commit per change, with the version bump and its changelog
-   section ([maintenance](docs/maintenance.md#branches-and-releases)); a fix that moves a binary pin
-   lands only after the binary built from that commit is published (step 4).
+   section; a fix that moves a binary pin lands only once that binary is published (step 4).
 2. CI and `testlab.yml` with `release_verify=true` green on the exact `dev` tip to be released.
-3. Fast-forward `main` to it and put the annotated tag on it. No GitHub Release. If the bot has
-   released since `dev` last equalled `main`, `main` is no longer an ancestor of `dev`: cut the patch
-   as one release commit on top of `main` instead, then CI, fast-forward `main` and tag.
-4. Binaries for any moved pin, built from the tip that step 3 tags, BEFORE step 2's testlab and
-   step 3 (testlab and `release-verify` need the published binary); the
-   image tag with the same version after step 3 (steps 8 and 9 above).
+3. Fast-forward `main` to it and tag it; no GitHub Release. If the bot has released in between, cut
+   the patch on top of `main` instead ([branches and releases](docs/maintenance.md#branches-and-releases)).
+4. Before step 2: binaries for any moved pin, built from the tip step 3 tags. After step 3: the
+   image tag with the same version (steps 8 and 9 above).
 
 ### Bot patch
 
-The bot releases pin moves from `main` on its schedule, also while `dev` carries unreleased work;
-`dev` never gates, delays or shapes a bot release. It then opens a pull request that brings the
-release back into `dev`: **squash-merge it**, `dev` keeps a linear history
-([maintenance](docs/maintenance.md#branches-and-releases)). Its stages, holds and recovery are in
-its [README](https://github.com/makrohard/lhpc-release-bot/blob/main/README.md). A maintainer's
-part is reading its summary and closing what it leaves open.
+The bot releases pin moves from `main` and opens a pull request back into `dev`:
+**squash-merge it** ([branches and releases](docs/maintenance.md#branches-and-releases)). Stages,
+holds and recovery: its [README](https://github.com/makrohard/lhpc-release-bot/blob/main/README.md).
+The maintainer reads its summary and closes what it leaves open.
 
 ### Daemon release
 
@@ -206,9 +182,8 @@ The bot never moves the daemon, the chat source (same repository) or RadioLib.
    Its CI RadioLib (`.github/ci/radiolib.lock`) must be the RadioLib the controller pins.
 2. In the controller: move `src/loraham-daemon` and `src/LoRaHAM_Daemon` to the same commit, and
    RadioLib if it moved, in one commit ([maintenance](docs/maintenance.md#moving-a-pin)).
-3. Rebuild the daemon binary from that controller commit, then prove it on the box: the release
-   test matrix is the proof for these pins, since every radio stack runs on the daemon
-   ([test matrix](docs/test-matrix.md)).
+3. Rebuild the daemon binary from that controller commit and prove it with the
+   [release test matrix](docs/test-matrix.md) on the box (every radio stack runs on the daemon).
 4. Release it as a patch or a minor by the usual rule, followed by the image.
 
 ## Regular maintenance
@@ -227,7 +202,7 @@ The bot never moves the daemon, the chat source (same repository) or RadioLib.
 
 | Symptom | First step | Detail |
 |---|---|---|
-| CI red on `dev` or `main` | if it is one of the gates the linked section names as fetching from the network, re-run it; otherwise fix forward on `dev` | [maintenance](docs/maintenance.md#gates-that-still-fetch-at-test-time) |
+| CI red on `dev` or `main` | a gate that fetches at test time: re-run it; otherwise fix forward on `dev` | [maintenance](docs/maintenance.md#gates-that-still-fetch-at-test-time) |
 | a released version is broken in the field | roll forward with a patch `x.y.z+1` and its image; release tags cannot be moved or deleted | [maintenance](docs/maintenance.md#branches-and-releases) |
 | the bot failed or left an issue | `recover` if nothing was released, `finish` if the controller release exists; never edit its record by hand | [bot README](https://github.com/makrohard/lhpc-release-bot/blob/main/README.md#when-something-is-left-behind) |
 | the bot froze a stack, or an upstream breaks us | the freeze holds that pin; fix or hold it by hand, then thaw and close the incident together | [bot README](https://github.com/makrohard/lhpc-release-bot/blob/main/README.md#freeze-a-pin) |

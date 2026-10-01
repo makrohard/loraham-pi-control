@@ -1,10 +1,8 @@
 # Wi-Fi: access point and client
 
-A box has one Wi-Fi radio and it does one job at a time: it is either its **own access point**
-(a phone or laptop joins it and reaches the console at `10.42.0.1`) or a **client** of your
-WLAN. The NetworkManager profile `lhpc-ap` is the managed AP, and the console's **Network**
-panel switches between the two with the AP as the automatic way home. Reaching the console
-once you are on the network is the [remote exposure runbook](webserver.md#remote-exposure-runbook).
+The box's one Wi-Fi radio is either its **own access point** (NetworkManager profile `lhpc-ap`;
+the box is `10.42.0.1`) or a **client** of your WLAN. The console's **Network** panel switches
+between the two, with the AP as the automatic way home.
 
 ## Contents
 
@@ -18,9 +16,9 @@ once you are on the network is the [remote exposure runbook](webserver.md#remote
 
 On the Lite image, first boot creates `lhpc-ap`: `802-11-wireless.mode ap`, band `bg`,
 `ipv4.method shared` (the box is `10.42.0.1/24` and runs DHCP + DNS for its clients), WPA2-PSK,
-`autoconnect yes`. Its SSID defaults to the same `lhpc-<suffix>` as the hostname; the passphrase comes with the image's first
-steps. It is a **recovery** network: it is up after every boot unless a preferred WLAN is
-visible, it returns within seconds of losing a WLAN, and the panel can never delete it.
+`autoconnect yes`. Its SSID defaults to the hostname's `lhpc-<suffix>`; the passphrase comes with
+the image's first steps. It is the **recovery** network: up after every boot unless a preferred
+WLAN is visible, back within seconds of losing a WLAN, and never deletable from the panel.
 
 By hand: `sudo nmcli connection up lhpc-ap` / `down lhpc-ap`. Set the Wi-Fi country first
 (`sudo raspi-config` → *Localisation Options* → *WLAN Country*): an AP does not start without
@@ -28,28 +26,27 @@ one.
 
 ## The Network panel
 
-The panel (Apps page, **Network**) appears wherever `nmcli` exists **and** a Wi-Fi profile
-named `lhpc-ap` exists. That is a capability check, not an image check: a Lite box has it, and
-any other box gains it by [creating the profile](#creating-lhpc-ap-by-hand). Acting on it also
-needs the polkit rule that authorizes the operator for NetworkManager; `bootstrap-deps.sh`
-installs it (opt-out `--no-network-controls`), and the panel shows the install command when it
-is missing.
+The panel (Apps page, **Network**) appears wherever `nmcli` and a Wi-Fi profile `lhpc-ap` exist
+(any box, after [creating the profile](#creating-lhpc-ap-by-hand)). Acting on it needs the polkit
+rule `bootstrap-deps.sh` installs (opt-out `--no-network-controls`); the panel shows the install
+command when it is missing.
 
-- **Join** (SSID typed in + password). **Scan** renders only while the box is not hosting its AP (a radio hosting the AP cannot survey other channels). The join is two-stage (a confirm page: your AP
-  session ends the moment the box joins) and respond-first: a detached helper activates the
-  profile, waits for the lease and writes the outcome the panel shows afterwards. The password
-  goes to NetworkManager through a 0600 secrets file (never argv, logs or state) and is
-  persisted root-owned by NM itself. Profiles are identified by NM UUID; the SSID is
-  display-only.
-- **Allow console from that network** (checkbox, default on): the helper extends the console
-  allow-list to the joined subnet, adds the joined address and names as server-certificate
-  SANs, re-issues the server certificate and applies. With the managed firewall and its AP rules **off**, the joined CIDR changes the ruleset, so the apply is deferred until you run the shown sudo command (over SSH, port 22 is open there); the watchdog then completes it. With the AP rules on it completes at once ([firewall](firewall.md)). A join that would leave the console blocked on the new network
-  is refused *before* the AP drops. With the checkbox off the box is SSH-only there.
+- **Join** (SSID + password). **Scan** shows only while the box is not hosting its AP (the radio
+  cannot survey other channels then). A confirm page comes first, because your AP session ends
+  when the box joins; a detached helper then activates the profile, waits for the lease and
+  records the outcome the panel shows. The password reaches NetworkManager through a 0600 file
+  (never argv, logs or state); NM stores it root-owned. Profiles are identified by NM UUID.
+- **Allow console from that network** (checkbox, default on): the helper adds the joined subnet
+  to the console allow-list and the joined address and names to the server certificate
+  (re-issued; [clock gate](webserver.md#the-clock-gate)), then applies. With the managed
+  firewall's AP rules **off**, the new CIDR changes the ruleset, so the apply waits for the shown
+  sudo command (over SSH; its port is open) and the watchdog then completes it; with the AP rules
+  on it completes at once. A join whose console would be blocked by an unverified firewall is
+  refused *before* the AP drops. With the checkbox off the box is SSH-only there.
 - **AP fallback.** Client profiles are created `autoconnect no`, so after a reboot the box is
   its AP again; a lost WLAN brings the AP back within seconds, a failed join (wrong password,
-  network gone) within about a minute.
-  The box reappears as `https://<hostname>.local:8443` on a joined network and
-  `https://10.42.0.1:8443` on its AP.
+  network gone) within about a minute. The console is `https://<hostname>.local:8443` on a
+  joined network and `https://10.42.0.1:8443` on the AP.
 - **Prefer** (exactly one stored network): its profile gets `autoconnect yes`, priority 10,
   so NM picks it at boot when visible; while the box sits on the AP a watchdog retries it
   every 10 minutes, but only while no client is associated with the AP (`iw` station table),
@@ -71,17 +68,14 @@ sudo nmcli connection modify lhpc-ap \
 sudo nmcli connection up lhpc-ap
 ```
 
-`ipv4.method shared` gives the box `10.42.0.1/24`, the address the console assumes. WPA2 is the
-reliable choice; the Pi's own chip has inconsistent WPA3 AP support. From then on the Network
-panel and its semantics above apply. To remove the AP: `sudo nmcli connection delete lhpc-ap`
-(the panel then disappears).
+`ipv4.method shared` gives the box `10.42.0.1/24`. Use WPA2: the Pi's chip has inconsistent WPA3
+AP support. Remove the AP with `sudo nmcli connection delete lhpc-ap` (the panel disappears).
 
 ## Reaching the console over the AP
 
-The AP only puts the phone on the box's network; exposing the console to it — certificate, SANs,
-allow-list and the firewall's AP rules — is the
-[remote exposure runbook](webserver.md#remote-exposure-runbook). Then browse to
-`https://10.42.0.1:8443` and present the certificate.
+The AP only puts the phone on the box's network. Certificate, SANs, allow-list and the
+firewall's AP rules: the [remote exposure runbook](webserver.md#remote-exposure-runbook); then
+browse to `https://10.42.0.1:8443` and present the certificate.
 
 ## Troubleshooting
 
@@ -89,5 +83,5 @@ allow-list and the firewall's AP rules — is the
 - **Passphrase rejected**: WPA2 needs 8 or more characters.
 - **Phone joins but the page does not load**: the console is not exposed to the AP subnet, or
   the managed firewall lacks the AP rules.
-- **Lost the SSH session while joining or switching**: expected, the radio changed networks.
-  Reconnect on the new network, or use Ethernet.
+- **Lost the SSH session while joining or switching**: expected; reconnect on the new network,
+  or use Ethernet.

@@ -2,38 +2,33 @@
 
 **[The original English README](README.md)**
 
-Die LoRa-Amateurfunk-Stacks auf einem Raspberry Pi von einer Stelle aus installieren,
-konfigurieren und betreiben — über eine CLI und ein lokales WebGUI. `lhpc` installiert jeden
-Stack aus dem Kanal deiner Wahl — festgepinnter Commit, Release oder Entwicklungsstand — oder als
-geprüftes vorgebautes Binary, schreibt die Konfiguration jeder App aus einem einzigen Satz
-Einstellungen, startet und stoppt sie in Abhängigkeitsreihenfolge und vergibt die Funkgeräte so, dass
-sich nie zwei Stacks um ein Band streiten. Läuft rootless, unter der eigenen Benutzerkennung. Neun
-Stacks: der LoRaHAM-Daemon mit Chat, Voice, KISS-TNC und Graywolf (APRS) sowie Meshtastic, MeshCom, MeshCore und
-Reticulum — auf einem Pi Zero 2W oder Pi 5.
+LoRa-Amateurfunk-Stacks auf einem Raspberry Pi installieren, konfigurieren und betreiben — über eine
+CLI und ein lokales WebGUI. `lhpc` installiert jeden Stack aus einem gepinnten Commit, einem Release,
+dem Entwicklungsstand oder als geprüftes vorgebautes Binary, schreibt die Konfiguration jeder App aus
+einem Satz Einstellungen, startet und stoppt sie in Abhängigkeitsreihenfolge und gibt jedes Band
+jeweils nur einem Stack. Läuft rootless, unter der eigenen Benutzerkennung. Neun Stacks: der
+LoRaHAM-Daemon mit Chat, Voice, KISS-TNC und Graywolf (APRS) sowie Meshtastic, MeshCom, MeshCore
+und Reticulum — auf einem Pi Zero 2W oder Pi 5.
 
 - **Du hast einen Pi mit passendem [LoRa-HAT](#hardware)?**
 
-  > **Der einfachste Weg zu einer laufenden Box ist ein fertiges Image.** Es liefert Raspberry Pi
-  > OS mit fertig installiertem und gebautem LHPC samt allen Stacks, und die dortige README führt
-  > in zwölf kurzen Schritten durch die komplette Einrichtung, auf Deutsch und Englisch. Der erste
-  > Start des Images konfiguriert die Box selbst und liest optional eine `lhpc-config.txt` von der
-  > Boot-Partition. Das ist der normale Weg; alles auf dieser Seite ist für den Selbstbau.
+  > **Der normale Weg ist ein fertiges Image:** Raspberry Pi OS mit installiertem und gebautem LHPC
+  > samt allen Stacks; der erste Start konfiguriert die Box und liest optional eine
+  > `lhpc-config.txt` von der Boot-Partition. Diese Seite ist für den Selbstbau.
   >
   > ## → [Fertiges Image holen](https://github.com/makrohard/loraham-images)
 
 - **Kein Pi zur Hand? Zwei Wege ganz ohne Hardware**
 
   > [![Live-Demo](https://img.shields.io/badge/%E2%96%B6%20Live--Demo-im%20Browser-2ea44f)](https://makrohard.github.io/loraham-pi-control/)
-  > — das echte WebGUI direkt im Browser. Nichts zu installieren, **keine Anmeldung**, für alle
-  > nutzbar (simuliert, via Pyodide).
+  > — das echte WebGUI im Browser, simuliert via Pyodide. **Keine Anmeldung.**
   >
   > [![In GitHub Codespaces öffnen](https://github.com/codespaces/badge.svg)](https://codespaces.new/makrohard/loraham-pi-control)
-  > — das vollständige Test-Lab mit echten Stack-Prozessen auf simulierter Hardware. **Erfordert die
-  > Anmeldung mit einem (kostenlosen) GitHub-Konto.** Siehe [`docs/testlab.md`](docs/testlab.md)
-  > (englisch).
+  > — das Test-Lab: echte Stack-Prozesse auf simulierter Hardware. **Braucht ein (kostenloses)
+  > GitHub-Konto.** Siehe [`docs/testlab.md`](docs/testlab.md) (englisch).
 
-> Maßgeblich ist die englische [`README.md`](README.md); diese Übersetzung kann hinterherhinken.
-> Code, Oberflächentexte und die übrigen Dokumente sind auf Englisch.
+> Maßgeblich ist die englische [`README.md`](README.md). Code, Oberflächentexte und die übrigen
+> Dokumente sind auf Englisch.
 
 ## Contents
 
@@ -62,12 +57,11 @@ Für drei Boards ist ein fertiges Hardware-Preset enthalten:
   ([Waveshare](https://www.waveshare.com/wiki/SX1262_XXXM_LoRaWAN/GNSS_HAT)) — Varianten 433M und
   868M.
 
-Andere Boards mit diesen Chips sollten funktionieren — das Preset wählen, dessen Verdrahtung passt
-(`lhpc hardware`, [Katalog](docs/cli.md#hardware)) — validiert sind sie hier aber nicht.
+Andere Boards mit diesen Chips: das Preset wählen, dessen Verdrahtung passt
+([Katalog](docs/cli.md#hardware)); validiert sind sie hier nicht.
 
-Getestet auf **Pi Zero 2W** und **Pi 5**. On air: LoRaHAM Pi HAT (Dual-Modul-Controller),
-Uputronics-Dual-Stack, Waveshare SX1262 433M; datierte Nachweise der Läufe auf dem LoRaHAM Pi HAT
-liegen in `docs/live-tests/` (englisch).
+Getestet auf **Pi Zero 2W** und **Pi 5**. On air: LoRaHAM Pi HAT, Uputronics-Dual-Stack, Waveshare
+SX1262 433M; datierte Protokolle der Läufe auf dem LoRaHAM Pi HAT: `docs/live-tests/` (englisch).
 
 ## Stacks
 
@@ -86,24 +80,19 @@ liegen in `docs/live-tests/` (englisch).
 | `reticulum` | 433 / 868 | nein | Reticulum-Node, steuert das Funkmodul direkt über SPI | [reticulum](docs/stacks/reticulum.md) |
 </details>
 
-⚠️ **Lizenz.** Die `ja`-Stacks sind Amateurfunk und brauchen eine Lizenz; die `nein`-Stacks sind für
-den lizenzfreien ISM-Betrieb gedacht. **Für den rechtmäßigen Betrieb bist du verantwortlich** —
-Band, Sendeleistung und Duty-Cycle unterscheiden sich je nach Land, und das gesendete Rufzeichen ist
-deines. Gesendet wird erst, wenn du Hardware wählst und einen Stack startest.
+⚠️ **Lizenz.** Die `ja`-Stacks brauchen eine Amateurfunklizenz, die `nein`-Stacks sind für den
+lizenzfreien ISM-Betrieb; Band, Leistung, Duty-Cycle und Rufzeichen liegen in **deiner rechtlichen
+Verantwortung**.
 
 Daemon-gestützte Stacks starten den Daemon automatisch; Meshtastic und Reticulum steuern das
-Funkgerät selbst und können sich kein Band mit dem Daemon teilen (`lhpc` blockiert den Konflikt).
-
-**Position (GPS)** ist eine globale Einstellung für alle Stacks, die sie nutzen können — ein gpsd
-auf diesem oder einem anderen Rechner, ein direkt gelesener Empfänger oder eine feste Position.
-Jeder Stack hat zusätzlich seinen eigenen Schalter: `lhpc gps --source gpsd`, dann
-`lhpc config meshtastic use_gps on`. Siehe [GPS](docs/gps.md).
+Funkgerät selbst und können sich kein Band mit dem Daemon teilen (`lhpc` verweigert den Konflikt).
+Position (GPS) ist eine globale Quelle mit einem Schalter pro Stack: [GPS](docs/gps.md) (englisch).
 
 ## Installation
 
 ### Manuelle Installation
 
-Von der frisch geflashten Karte zu laufenden Stacks. Die Schritte laufen der Reihe nach.
+Von der frisch geflashten Karte zu laufenden Stacks, der Reihe nach.
 
 #### 1. Karte vorbereiten
 
@@ -111,6 +100,8 @@ Raspberry Pi Imager: **Modell** wählen, **Raspberry Pi OS Lite (64-bit)**, und 
 **Hostname, Benutzername, WLAN + Land, SSH aktivieren** setzen.
 
 <details><summary><em>Headless-Rettung — falls die Erstboot-Anpassung des Imagers nicht greift (wiederholt beobachtet)</em></summary>
+
+Auf dem Pi, mit Tastatur und Bildschirm:
 
 ```bash
 sudo rfkill unblock wifi
@@ -140,24 +131,22 @@ tmux new -s lhpc                 # alles Weitere in dieser Sitzung ausführen
 #   abkoppeln: Strg-B, dann D
 ```
 
-Auf einem headless betriebenen Pi im WLAN (allen voran dem Zero 2W) setzt die Verbindung unter
-Build-Last aus, und eine nackte SSH-Sitzung reißt dabei ab; tmux hält den Schritt am Laufen. Nach
-einem Abbruch neu verbinden und wieder ankoppeln:
+Im WLAN (allen voran beim Zero 2W) setzt die Verbindung unter Build-Last aus und trennt SSH; tmux
+hält den Schritt am Laufen. Nach einem Abbruch:
 
 ```bash
 ssh <benutzer>@lhpc-zero.local
 tmux attach -t lhpc              # `tmux ls` listet die Sitzungen
 ```
 
-`bootstrap-deps.sh` und `lhpc auto-install` lassen sich beliebig oft wiederholen (sie setzen am
-Cache wieder auf); `install.sh` ist ein Erstinstaller und verweigert ein vorhandenes Checkout — vor
-einem erneuten Lauf prüfen, ob `~/loraham-pi-control/venv/lhpc/bin/lhpc --version` antwortet.
+`bootstrap-deps.sh` und `lhpc auto-install` lassen sich wiederholen (sie setzen wieder auf);
+`install.sh` verweigert ein vorhandenes Checkout — antwortet
+`~/loraham-pi-control/venv/lhpc/bin/lhpc --version`, nicht erneut ausführen.
 
 #### 3. Prüfen, was installiert würde
 
-Reine Vorschau, bewusst **ohne Root**: Erst prüfen, was das Skript installieren will, dann Rechte
-gewähren (alles Weitere verlangt `sudo`). Was geprüft wird und die Exit-Codes:
-[deps](docs/cli.md#deps) (englisch).
+Nur lesend, **ohne Root**. Exit 5 heißt, apt kann die Pakete nicht auflösen: `sudo apt-get update`
+ausführen und wiederholen. Prüfungen und Exit-Codes: [deps](docs/cli.md#deps) (englisch).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/bootstrap-deps.sh -o bootstrap-deps.sh
@@ -170,21 +159,17 @@ bash bootstrap-deps.sh --dry-run
 sudo bash bootstrap-deps.sh --spi-mode soft-cs
 ```
 
-- **Root erforderlich** — genau wie gezeigt ausführen (`sudo bash …`); ohne Root bricht das Skript
-  sofort ab. Selbst ruft es **nie sudo auf** und läuft damit auch unbeaufsichtigt oder ganz ohne sudo.
+- **Root erforderlich** (`sudo bash …`); das Skript selbst ruft nie sudo auf.
 - **`--spi-mode` ist Pflicht** — `soft-cs` (LoRaHAM Pi / Uputronics / Waveshare, inkl. dual) ·
-  `hardware-cs` (Kernel-CE0/CE1) · `skip` ([welcher, und warum](docs/cli.md#deps)).
-- **Optionale Schalter**: [deps](docs/cli.md#deps).
-- **Über apt hinaus** — deaktiviert den Root-`nginx.service`
+  `hardware-cs` (Kernel-CE0/CE1) · `skip`. Welcher, und die optionalen Schalter:
+  [deps](docs/cli.md#deps).
+- **Über apt hinaus** deaktiviert es den Root-`nginx.service`
   ([warum](docs/webserver.md#first-time-bootstrap)) · legt auf Boards mit wenig RAM eine Swapdatei
-  an und schaltet den WLAN-Stromsparmodus ab, wenn die Installation über WLAN läuft (der Rückweg
-  wird als Warnung ausgegeben), beides für die langen Builds
-  ([Running on a Pi](docs/maintenance.md#running-on-a-pi)) · installiert zwei polkit-Regeln (und das Paket `polkitd`), damit die WebGUI-Schaltflächen
-  Neustart/Herunterfahren und sein Netzwerk-Panel autorisiert sind (`--no-power-controls` /
-  `--no-network-controls` lassen sie weg) · installiert `chrony`, `gpsd` und `fake-hwclock`, damit die Box ihre Uhr
-  stellen und die zuletzt bekannte Zeit über einen Neustart retten kann (ein Pi hat keine batteriegepufferte Uhr; GPS wird nur genutzt, wenn keine
-  NTP-Quelle erreichbar ist, und dies ERSETZT `systemd-timesyncd`) (`--no-time-source` lässt es
-  weg) · deaktiviert eine paketierte `meshtasticd.service`, falls vorhanden.
+  an und schaltet bei einer Installation über WLAN den WLAN-Stromsparmodus ab
+  ([Running on a Pi](docs/maintenance.md#running-on-a-pi)) · installiert `polkitd` und zwei
+  polkit-Regeln für Neustart/Herunterfahren und das Netzwerk-Panel des WebGUI · installiert
+  `chrony`, `gpsd` und `fake-hwclock` und ersetzt damit `systemd-timesyncd`
+  ([Uhr](docs/operations.md#clock)) · deaktiviert eine paketierte `meshtasticd.service`.
 
 <details><summary><em>Manuell — nur installieren, was deine Stacks brauchen (bootstrap-deps.sh ist die Referenz; Vorschau mit <code>--dry-run</code>, Neuerzeugung mit <code>lhpc deps --script</code>)</em></summary>
 
@@ -210,9 +195,8 @@ sudo usermod -aG spi,gpio "$USER"                        # → greift mit dem Ne
 ```
 <!-- test:deps-manual:end -->
 
-Für Neustart/Herunterfahren und das Netzwerk-Panel des WebGUI braucht es zusätzlich `polkitd` plus
-zwei polkit-Regeln — `lhpc deps` (oder Apps → LoRaHAM Pi Control → Dependencies) zeigt die genauen
-Befehle.
+Die polkit-Regeln (Neustart/Herunterfahren, Netzwerk-Panel) und die Uhr-Pakete stehen nicht in
+dieser Liste: `lhpc deps` (oder Apps → LoRaHAM Pi Control → Dependencies) gibt ihre Befehle aus.
 </details>
 
 #### 5. lhpc installieren
@@ -239,16 +223,14 @@ export PATH="$HOME/loraham-pi-control/venv/lhpc/bin:$PATH"
 
 #### 6. Neustart
 
-Ein Neustart, der alles auf einmal scharf schaltet: das SPI-Overlay und deine neue
-`spi`-/`gpio`-Mitgliedschaft aus Schritt 4 (gebraucht erst, sobald ein Stack ans Funkgerät geht —
-genau das kommt als Nächstes) sowie den `PATH` mit `lhpc` darauf. Ohne Neustart scheitert der
-nächste Befehl mit `lhpc: command not found`.
+Schaltet das SPI-Overlay, die `spi`-/`gpio`-Mitgliedschaft und den `PATH` mit `lhpc` scharf (ohne
+ihn: `lhpc: command not found`).
 
 ```bash
 sudo reboot
 ```
 
-Danach SSH neu verbinden (und für die folgenden Schritte wieder `tmux new -s lhpc` starten).
+SSH neu verbinden und wieder `tmux new -s lhpc` starten.
 
 #### 7. Konfigurieren
 
@@ -271,87 +253,63 @@ lhpc hardware loraham                     # dein Funk-Setup aus dem Katalog:
 | `waveshare-868` | Waveshare SX1262 (868) | 868 → waveshare-sx1262 |
 <!-- test:hw-table:end -->
 
-Die Uputronics-Chip-Selects folgen der Stapel-Konvention oben (CE0 trägt 433, CE1 trägt 868).
+Uputronics: CE0 trägt 433, CE1 trägt 868 (`uputronics-x` für vertauschte Module).
 </details>
 
-`lhpc hardware` ohne Argument zeigt den Katalog ([hardware](docs/cli.md#hardware)). Welche Stacks
-das Basis-Rufzeichen erben und was Meshtastic/MeshCore stattdessen brauchen:
+`lhpc hardware` ohne Argument zeigt den Katalog. Welche Stacks das Rufzeichen erben:
 [identity](docs/architecture.md#identity-and-callsigns) (englisch).
 
 #### 8. Das WebGUI — und wie du es von woanders erreichst
 
-Die Installation hat sie bereits gestartet: **`https://127.0.0.1:8443/`** — lokaler Zugriff ist
-offen (keine Anmeldung auf Loopback; die Browser-Warnung zur selbstsignierten CA ist erwartbar).
-Falls übersprungen (`--no-service`):
+Die Installation hat es gestartet: **`https://127.0.0.1:8443/`** — keine Anmeldung auf Loopback;
+der Browser warnt wegen der selbstsignierten CA. Nach `--no-service`:
 
 ```bash
 lhpc self-update --repair-integration && lhpc webserver init && lhpc webserver start-service   # Units anlegen, dann nur lokal, ohne Anmeldung
 ```
 
-**Von einem anderen Rechner aus** sind es fünf Schritte, in dieser Reihenfolge. Das Zertifikat kommt
-zuerst: Die Remote-Modi verlangen eins, und stellst du die Richtlinie um, bevor dein eigener Rechner
-es hat, sperrst du dich aus.
+**Von einem anderen Rechner aus** fünf Schritte in dieser Reihenfolge (das Zertifikat zuerst:
+stellst du die Richtlinie um, bevor dein Rechner eins hat, sperrst du dich aus). Mit
+[Access Point](docs/wifi-access-point.md) gehören `10.42.0.0/24` und `10.42.0.1` überall dazu.
+Zuerst das Datum prüfen (`timedatectl`; falls falsch:
+`sudo date -u -s 'YYYY-MM-DD HH:MM' && sudo fake-hwclock save`); solange die Uhr nicht
+synchronisiert ist, das Häkchen **Accept unverified clock** setzen
+([clock gate](docs/webserver.md#the-clock-gate), englisch).
 
-**Zuerst das Datum prüfen:** Zertifikate werden nach der Uhr der Box datiert, also muss `timedatectl`
-das heutige Datum zeigen; sonst stell es mit `sudo date -u -s 'YYYY-MM-DD HH:MM' && sudo fake-hwclock save`.
-Solange dort `System clock synchronized: no` steht (noch keine Netzwerkzeit, kein GPS), setz beim
-Ausstellen des Zertifikats das Häkchen **Accept unverified clock**.
+1. **Apps → LoRaHAM Pi Control → Webserver (HTTPS / mTLS) → Certificates → Issue client cert**
+   — die angezeigte Einmal-Passphrase kopieren.
+2. **… → Stacks WebGUIs** — eine Richtlinie für alle Stack-Oberflächen (Access `lan`, Scheme
+   `https`, Access mode `local-open-remote-auth`, Allowed CIDRs, Confirm `enable-remote`); bleibt leer,
+   bis die Stacks installiert sind (Schritt 9).
+3. **… → LHPC WebGUI** — dieselben Werte, mit **Bind** `0.0.0.0`; zuletzt, denn es ist die Seite,
+   auf der du arbeitest. Die **IP SANs** müssen jede Adresse nennen, die du aufrufst (auf einer
+   AP-Box `10.42.0.1` ergänzen), dann mit `lhpc webserver tls-renew` neu ausstellen: Apply stellt das
+   Zertifikat nur neu aus, wenn die eigene LAN-Adresse der Box darin fehlt, nie für eine andere SAN.
+4. **Die verwaltete Firewall anwenden** auf dem Pi: die zwei Befehle ausführen, die das Panel zeigt
+   ([Firewall](docs/firewall.md#scenarios), englisch).
+5. **Anwenden** (der Knopf, oder `lhpc webserver apply`).
 
-1. **Apps → LoRaHAM Pi Control → Webserver (HTTPS / mTLS) → Certificates → Issue client cert**<br>
-   Stellt das Zertifikat aus und zeigt seine Einmal-Passphrase — sofort kopieren. Derselbe
-   Abschnitt bietet Kopierfelder, um `.p12` und Server-CA auf den eigenen Rechner zu holen.
-   Verlorene oder abhandengekommene Passphrasen, die Befehle und der Import in Browser oder Handy:
-   [Zertifikate](docs/webserver.md#certificates-and-the-two-ca-pki) (englisch).
-
-2. **Apps → LoRaHAM Pi Control → Webserver (HTTPS / mTLS) → Stacks WebGUIs**<br>
-   Eine Richtlinie für alle Stack-Oberflächen ([Details](docs/webserver.md#stack-web-ui-proxies)):
-   Access `lan`, Scheme `https` (http erzwingt no-auth), Access mode `local-open-remote-auth`,
-   Allowed CIDRs — das Netz, aus dem du kommst, z. B. `192.168.1.0/24`, für lan und public
-   Pflicht — und Confirm `enable-remote` (`enable-remote-danger` für einen öffentlichen oder
-   unauthentifizierten Listener). Dieser Teil bleibt leer, bis die Stacks installiert sind
-   (Schritt 9) — dann noch einmal herkommen.
-
-3. **Apps → LoRaHAM Pi Control → Webserver (HTTPS / mTLS) → LHPC WebGUI**<br>
-   Das WebGUI selbst, und zuletzt, denn es ist die Seite, auf der du gerade arbeitest. Dieselben
-   Werte, nur hat sie **Bind** statt Access: `0.0.0.0`, damit sie über Loopback hinaus lauscht.
-
-4. **Die verwaltete Firewall anwenden — auf dem Pi.** Die zwei Befehle ausführen, die das Panel
-   zeigt — das Root-Skript, dann das `lhpc webserver apply`, das die gesperrten Listener aktiviert
-   ([die verwaltete Firewall](docs/firewall.md#the-managed-firewall-one-command), englisch).
-
-5. **Anwenden.** Der **Apply**-Knopf im WebGUI, oder `lhpc webserver apply` auf dem Pi: prüft und
-   aktiviert die Listener ([applying changes](docs/webserver.md#applying-changes-and-recovery)).
-
-Dieselben fünf Schritte aus der Shell, die genauen Pfade, der Import in Browser und Handy,
-öffentliche oder anmeldefreie Freigabe: [Runbook](docs/webserver.md#remote-exposure-runbook)
-(englisch).
-
-*Alternative, wenn du gar nichts freigeben willst:* Ein [SSH-Tunnel](docs/ssh-tunnel.md)
-(englisch) holt das WebGUI und jede Stack-Oberfläche auf deinen Rechner, ohne einen zusätzlichen
-Listener.
+Befehle, Zertifikat-Import, öffentliche oder anmeldefreie Freigabe:
+[Runbook](docs/webserver.md#remote-exposure-runbook) (englisch). Nichts freigeben:
+[SSH-Tunnel](docs/ssh-tunnel.md) (englisch).
 
 #### 9. Stacks per Auto-Install aufsetzen (CLI)
 
-- **Kleine Systeme (Zero 2W / wenig RAM):** die CLI unten nutzen und die Konsole während der
-  Builds stoppen ([Running on a Pi](docs/maintenance.md#running-on-a-pi), englisch).
-- **Pi 5 / Desktop-Klasse:** hier fällt die Last des WebGUI nicht ins Gewicht — nutzen: die
-  **Auto-install**-Seite, danach im Webserver-Panel die fünf Schritte von oben.
+- **Zero 2W / wenig RAM:** die CLI unten, mit gestoppter Konsole während der Builds
+  ([Running on a Pi](docs/maintenance.md#running-on-a-pi), englisch).
+- **Pi 5:** die **Auto-install**-Seite des WebGUI geht ebenso.
 
-Auf dem Pi ausführen (innerhalb der SSH-Sitzung — nicht auf deinem Desktop), und in tmux:
+Auf dem Pi, in tmux:
 
 ```bash
 tmux attach -t lhpc || tmux new -s lhpc   # auf dem Pi: die Sitzung aus Schritt 6, sonst eine neue
 lhpc auto-install --yes
 ```
 
-Die drei lange kompilierenden Stacks (daemon, meshtastic, meshcom) installieren standardmäßig ein
-vorkompiliertes Binary ([Provenienz](docs/provenance.md#the-binary-channel); im Betrieb:
-[Installationskanäle](docs/operations.md#install-channels)); der Rest baut in je wenigen Minuten aus
-dem Quellcode. Der komplette Standardlauf wurde auf einem Pi Zero 2W mit 19 min gemessen, bei
-0.2.10; alles aus Quellen (`--source pinned`) dauert dort ≈ 5 h, die Summe der gemessenen
-Stack-Builds. Host-Tests und `--tx`: [auto-install](docs/cli.md#auto-install). Build-Artefakte
-bleiben erhalten — ein erneuter Lauf setzt am bereits Gebauten auf. Warnungen über fehlende
-optionale Abhängigkeiten sind im Headless-Betrieb normal.
+daemon, meshtastic und meshcom installieren standardmäßig ein vorgebautes Binary
+([Binary-Kanal](docs/provenance.md#the-binary-channel)); der Rest baut aus dem Quellcode. Gemessen
+auf einem Pi Zero 2W: 19 min für den Standardlauf (0.2.10), ≈ 5 h mit `--source pinned`. Ein
+erneuter Lauf setzt am bereits Gebauten auf. Host-Tests und `--tx`: [auto-install](docs/cli.md#auto-install).
 
 <details><summary><em>Stack für Stack statt alles auf einmal</em></summary>
 
@@ -402,38 +360,24 @@ lhpc stack stop <stack>
 ```
 </details>
 
-Nach `lhpc stack start meshcom` bootet der emulierte Node selbst noch minutenlang; was normal
-ist: [meshcom](docs/stacks/meshcom.md#notes) (englisch).
-
-**Fortschritt beobachten.** `lhpc` gibt pro Schritt ein kopierbares
-`[log] <Komponente> -> tail -f <Pfad>` aus. Wie man ein stilles Log beurteilt, die Speichergrenze
-kleiner Boards und das Aufräumen eines abgebrochenen Laufs:
+Der emulierte MeshCom-Node bootet nach seinem Start noch minutenlang
+([meshcom](docs/stacks/meshcom.md#notes), englisch). Jeder Schritt gibt
+`[log] <Komponente> -> tail -f <Pfad>` aus; stiller Build, Speicher, abgebrochener Lauf:
 [Running on a Pi](docs/maintenance.md#running-on-a-pi) (englisch).
 
 #### 10. Stack-Logins — entstehen beim ersten Start eines Stacks
 
-Ein Stack mit eigenem Login legt ihn beim **ersten Start** an, danach zeigt das WebGUI den Wert.
-Einmal starten genügt; einloggen musst du dich noch nicht.
-
-- **Apps → *Stack* → Start**<br>
-  Der Login entsteht während dieses ersten Starts. Zu lesen gibt es noch nichts.
-
-- **Apps → *Stack* → Password**<br>
-  Konto und Passwort, mit Kopierknopf. Den Abschnitt gibt es nur bei Stacks, die einen Login haben,
-  und erst wenn er existiert — MeshCore sagt genau das, solange kein Repeater-Modus lief.
-
-Wo jeder Stack seinen Login ablegt: [graywolf](docs/stacks/graywolf.md), [meshcore](docs/stacks/meshcore.md),
+Ein Stack mit eigenem Login legt ihn beim **ersten Start** an (**Apps → *Stack* → Start**);
+**Apps → *Stack* → Password** zeigt ihn dann mit Kopierknopf. Pro Stack:
+[graywolf](docs/stacks/graywolf.md), [meshcore](docs/stacks/meshcore.md),
 [meshcom](docs/stacks/meshcom.md); die Regel: [secrets and passwords](docs/operations.md#secrets-and-passwords)
 (alle englisch).
 
 ## Stacks konfigurieren & betreiben
 
-**Auf Home starten, auf Apps konfigurieren.** *Home* ist die Übersicht — was läuft, die Funkmodule
-und ihre Bänder, und je ein Link auf das eigene Web-UI jedes laufenden Stacks. *Apps* ist die
-Arbeitsseite: eine Zeile pro Stack mit Einstellungen, Start und Stopp, Logs und dem
-Passwort-Abschnitt. Install, Update, Clean, Strom, WLAN und Self-Update zeigen einen Plan und
-fragen nach; ein normaler Start läuft sofort und fragt nur, wenn er einen anderen Stack stoppen
-müsste; Einstellungen werden beim ersten Klick gespeichert.
+*Home* zeigt, was läuft, die Funkmodule und Links auf das Web-UI jedes Stacks; *Apps* hat eine Zeile
+pro Stack: Einstellungen, Start/Stopp, Logs, Passwort. Die Konsole:
+[operations](docs/operations.md#operating-the-console) (englisch).
 
 <details><summary><em>Dasselbe auf der CLI</em></summary>
 
@@ -444,6 +388,8 @@ lhpc config chat call YOURCALL-10 # eine Option setzen (YOURCALL-10 = dein Rufze
 lhpc config <stack> --band 868 <param> <wert>     # bandabhängiger Wert bei umschaltbaren Stacks
 lhpc stack start|stop|restart <stack>             # zeigt den Plan, fragt nach; --yes überspringt
 lhpc logs <ziel>                   # Komponenten-Log verfolgen
+lhpc rflog <stack> [--band B]      # RF-Log eines Stacks verfolgen (was der Funk hörte und sendete)
+lhpc rflog <stack> --decrypt       # dasselbe, mit den Schlüsseln dieser Box entschlüsselt (verschlüsselte Stacks)
 lhpc doctor                        # Umgebungs-/Abhängigkeits-Checks
 lhpc test <stack> [--tx] --yes     # Host-Tests; --tx sendet
 ```
@@ -455,30 +401,20 @@ Vollständige Referenz: [`docs/cli.md`](docs/cli.md); die HF-Regeln: [TX safety]
 
 ### WLAN-Access-Point
 
-Das WebGUI von einem anderen Rechner erreichen ist
-[Schritt 8](#8-das-webgui--und-wie-du-es-von-woanders-erreichst) — Zertifikat, Richtlinie,
-Firewall, Anwenden. Tiefer: [`docs/webserver.md`](docs/webserver.md),
-[`docs/firewall.md`](docs/firewall.md) und [`docs/ssh-tunnel.md`](docs/ssh-tunnel.md), um alles
-allein über SSH zu erreichen, ohne etwas freizugeben (alle englisch).
-
-Ein Board mit einem `lhpc-ap`-NetworkManager-Profil bekommt das **Netzwerk**-Panel des WebGUI: ein
-WLAN aus dem Browser beitreten, mit dem eigenen Access Point als Rückfallebene, wenn dieses WLAN
-außer Reichweite ist.
-
-Welches Image das Profil mitbringt und wie du es auf einer Desktop-Box oder einer manuellen
-Installation von Hand anlegst: [`docs/wifi-access-point.md`](docs/wifi-access-point.md) (englisch).
+Eine Box mit einem `lhpc-ap`-NetworkManager-Profil bekommt das **Netzwerk**-Panel des WebGUI: ein
+WLAN aus dem Browser beitreten, mit dem eigenen Access Point als Rückfallebene. Das Profil anlegen:
+[`docs/wifi-access-point.md`](docs/wifi-access-point.md) (englisch).
 
 ### Autostart
 
-Die Installation aktiviert das WebGUI beim Booten; Stacks, die vor einem Neustart liefen, werden
-wiederhergestellt ([boot restore](docs/operations.md#not-a-supervisor)). Der Schalter:
-`lhpc autostart on|off` ([CLI](docs/cli.md#autostart)).
+Eine Standardinstallation startet das WebGUI beim Booten, und die Stacks, die vor einem Neustart
+liefen, kommen zurück ([boot restore](docs/operations.md#not-a-supervisor)); Schalter:
+`lhpc autostart on|off`.
 
 ### Aktualisieren
 
-**Apps → LoRaHAM Pi Control (die erste Zeile) → Update → Check for updates → Update now**, oder
-`lhpc self-update --apply` aus einer Operator-Shell. Vorher sichern, die Mechanik und
-`--repair-integration`: [self-update](docs/deployment.md#self-update) (englisch).
+**Apps → LoRaHAM Pi Control → Update → Check for updates → Update now**, oder
+`lhpc self-update --apply`. Sicherung und Mechanik: [self-update](docs/deployment.md#self-update) (englisch).
 
 ## Fehlerbehebung
 
@@ -489,21 +425,10 @@ wiederhergestellt ([boot restore](docs/operations.md#not-a-supervisor)). Der Sch
 | Build wirkt hängend, wird per OOM abgeschossen, oder das Board fällt aus dem Netz | RAM- und WLAN-Druck auf kleinen Boards | [Running on a Pi](docs/maintenance.md#running-on-a-pi) (englisch) |
 | „optionale Abhängigkeiten fehlen" im Headless-Betrieb | GUI-Komponenten absichtlich übersprungen | ignorieren, oder `--with-gui` |
 | WebGUI von einem anderen Rechner nicht erreichbar | nicht freigegeben / Firewall | [Schritt 8](#8-das-webgui--und-wie-du-es-von-woanders-erreichst); [Firewall](docs/firewall.md) |
-| SSH **während der Installation** abgerissen, Lauf gestoppt | Orchestrator bekam SIGHUP; abgekoppelte Build-Schritte laufen ggf. weiter | `lhpc auto-install` erneut ausführen (setzt am Cache auf); tmux nutzen (Schritt 2). **Betrifft nur die Installation** — laufende Stacks hängen an systemd bzw. laufen abgekoppelt und überstehen WLAN-Abbrüche; im Normalbetrieb ist danach nichts neu zu installieren. Auf einem Zero 2W umgeht ein USB-LAN-Adapter das Problem bei der Installation ganz |
-| Quell-Installation meldet „GitHub clone failed" | der Clone — oder ein Schritt danach (Checkout des gepinnten Commits) — hat aufgegeben | der Grund steht am Ende von `logs/adopt-<Komponente>.log` (`[fail] <Schritt>: …`); Installation erneut starten, eine langsame Leitung wird nicht gemerkt |
+| SSH **während der Installation** abgerissen, Lauf gestoppt | der Lauf bekam SIGHUP; abgekoppelte Build-Schritte laufen ggf. weiter | `lhpc auto-install` erneut ausführen (setzt wieder auf); tmux (Schritt 2) oder ein USB-LAN-Adapter. Laufende Stacks überstehen einen Abbruch |
+| Quell-Installation meldet „GitHub clone failed" | der Clone oder der Checkout des gepinnten Commits hat aufgegeben | Grund am Ende von `logs/adopt-<Komponente>.log` (`[fail] <Schritt>: …`); Installation erneut starten |
 | `auto-install` verweigert den Start nach einem abgebrochenen Lauf | übrig gebliebene Lauf-Marker | wiederherstellen: [auto-install](docs/cli.md#auto-install) |
 
 ## Dokumentation
 
-Alle Dokumente sind auf Englisch.
-
-| Gruppe | Doku |
-|---|---|
-| Verstehen | [Architektur](docs/architecture.md) |
-| Betreiben | [CLI](docs/cli.md) · [Betrieb](docs/operations.md) · [GPS](docs/gps.md) · [Wartung](docs/maintenance.md) · [Backlog](docs/backlog.md) |
-| Erreichen | [Deployment](docs/deployment.md) · [Webserver (HTTPS + mTLS)](docs/webserver.md) · [SSH-Tunnel](docs/ssh-tunnel.md) · [WLAN-Access-Point](docs/wifi-access-point.md) · [Firewall](docs/firewall.md) |
-| Stacks | [Stack hinzufügen](docs/adding-a-stack.md) · [daemon](docs/stacks/daemon.md) · [kiss](docs/stacks/kiss.md) · [graywolf](docs/stacks/graywolf.md) · [chat](docs/stacks/chat.md) · [meshcore](docs/stacks/meshcore.md) · [meshcom](docs/stacks/meshcom.md) · [meshtastic](docs/stacks/meshtastic.md) · [reticulum](docs/stacks/reticulum.md) · [voice](docs/stacks/voice.md) |
-| Prüfen | [Test-Matrix](docs/test-matrix.md) · [Test-Lab](docs/testlab.md) |
-| Richtlinien | [Provenienz](docs/provenance.md) |
-
-Gesamtindex: [`docs/README.md`](docs/README.md).
+Alle Dokumente, nach Aufgabe gruppiert (englisch): [`docs/README.md`](docs/README.md).

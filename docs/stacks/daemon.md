@@ -1,19 +1,18 @@
 # Stack: LoRaHAM daemon
 
-The hardware owner behind every daemon-backed stack (kiss, graywolf, chat, voice, meshcom,
-meshcore): one `loraham_daemon` process per served band, 433 and/or 868 MHz, each exposing the
-sockets its clients use. It never transmits on its own.
+The radio owner behind every daemon-backed stack (kiss, graywolf, chat, voice, meshcom, meshcore):
+one `loraham_daemon` process per served band (433/868 MHz). It never transmits on its own.
 
 | | |
 |---|---|
 | Components | `loraham-daemon` (main) · `radiolib` — the RadioLib static library, a build-time dependency (`build_requires`), never started |
 | Source / pin | `src/loraham-daemon` ← `makrohard/LoRaHAM_Daemon` · `src/RadioLib` ← `jgromes/RadioLib` |
-| Run | `loraham_daemon/loraham_daemon --radio <band> --hw <preset> --tx-mode managed\|direct --cad-monitor off\|on --cad-rssi <dBm>` — one process per band; lhpc computes every value at spawn |
+| Run | `loraham_daemon/loraham_daemon --radio <band> --hw <preset> --tx-mode managed\|direct --cad-monitor off\|on --cad-rssi <dBm> [--high-power] --rflog on\|off --rflog-path <runtime>/logs/rf-daemon-<band>.log` — one process per band; lhpc computes every value at spawn |
 | Sockets (per band) | `/tmp/loraconf<band>.sock` (CONF / status), `/tmp/lora<band>f.sock` (framed), `/tmp/lora<band>.sock` (raw) — `LORAHAM_SOCKET_DIR=/tmp` |
 | State | `<runtime>/state/loraham` (mode 0700, `LORAHAM_RUNTIME_DIR`) — the lock files, including `spi0.lock` |
 | Hardware | `/dev/spidev0.0` + GPIO (`/dev/gpiochip0`); the `--hw` preset comes from `lhpc hardware` |
 | Resources | `spi.bus.0` cooperative · `loraham.radio.433` / `.868` provider · `loraham.daemon-socket.433` / `.868` provider |
-| Install channel | **binary** by default (`lhpc install daemon`: a prebuilt that replaces the daemon + RadioLib builds); `--source pinned\|dev\|stable` clones the sources and `lhpc build daemon` runs `loraham_daemon/build.sh` (needs `cmake`, `liblgpio-dev`, `build-essential`). Policy: [provenance](../provenance.md); operator consequences: [operations](../operations.md) |
+| Install channel | **binary** by default (`lhpc install daemon`: a prebuilt replacing the daemon + RadioLib builds); `--source pinned\|dev\|stable` clones the sources and `lhpc build daemon` runs `loraham_daemon/build.sh` (needs `cmake`, `liblgpio-dev`, `build-essential`). Policy: [provenance](../provenance.md#the-binary-channel); operator consequences: [operations](../operations.md#install-channels) |
 
 ## Contents
 
@@ -25,62 +24,53 @@ sockets its clients use. It never transmits on its own.
 
 ## Settings
 
-**Hardware setup** — `lhpc hardware <setup>`, or the daemon stack's *Hardware* section in the
-console. It fixes the served band(s) and the `--hw` preset per band; the catalog and the *Detect*
-probe are in [cli](../cli.md#hardware). Only legit board combinations are offered, and a
-single-radio setup blocks the stacks that need the absent band (`meshcore` needs 868). A fresh
-install is `unset` and the daemon refuses to start until one is chosen.
+**Hardware setup** — `lhpc hardware <setup>` or the console's daemon *Hardware* section sets the
+served band(s) and `--hw` preset ([cli](../cli.md#hardware)). A single-radio setup blocks stacks
+needing the absent band (`meshcore`: 868). A fresh install is `unset`; the daemon refuses to start
+until a setup is chosen.
 
-**Stack params** — kept in `config/stacks/daemon.toml`. `lhpc config daemon` lists none (by design: the
-daemon's radio params are the daemon-parameter panel); `hipower_<band>` is set on the Hardware settings
-or with `lhpc hardware --high-power`, `rf_log` on its log page, the rest in that file:
+**Stack params** — in `config/stacks/daemon.toml`. `lhpc config daemon` exposes none of them:
+`hipower_<band>` is set in the Hardware settings or with `lhpc hardware --high-power <band> on|off`,
+`rf_log` on the daemon's log page, the rest in that file.
 
 | param | default | meaning |
 |---|---|---|
 | `tx_433` / `tx_868` | `managed` | TX mode per band. `MANAGED` = bounded CAD/LBT, a busy channel returns `CHANNEL_BUSY`; `DIRECT` = immediate TX, no CAD |
 | `cadmon_433` / `cadmon_868` | `off` | continuous channel-activity monitor |
 | `cadrssi_433` / `cadrssi_868` | `-90` | channel-busy RSSI threshold, dBm (−130…0) |
-| `hipower_433` / `hipower_868` | `off` | the +20 dBm permission per band (daemon 1.2.0 `--high-power`): `on` injects the bare flag at the band's next daemon start, so the daemon admits exactly `POWER=20` on an SX127x board. Strict `off`/`on`. Saving marks the daemon restart-required and restarts nothing; a running daemon keeps the permission it was started with. Inert on an SX1262. The datasheet limits +20 dBm to a transmit duty cycle ≤ 1 %, VSWR ≤ 3:1 and VDD 2.4–3.7 V — nothing measures or enforces that, keep the chip cooled, **warranty void if disregarded**. On the LoRaHAM 433 RFM98PW, do not use sustained +20 dBm: this SX127x high-power setting has not been validated for the module's external PA, so the release test matrix performs no +20 dBm TX on this board. Set it on the daemon's Hardware settings (its own control) or with `lhpc hardware --high-power <band> on|off` — `lhpc config daemon <param>` exposes none of the daemon's start options |
-| `rf_log` | `on` | RF log: every frame the radio received (RSSI/SNR) or sent (after `transmit()` returned OK — a CAD-refused send writes nothing), raw hex + ASCII, one file per band (`logs/rf-daemon-433.log`, `-868.log`). Stack-level switch, read at the daemon's next start; the daemon has no Settings form, so the switch is on its log page |
+| `hipower_433` / `hipower_868` | `off` | +20 dBm permission per band, strict `off`/`on`: `on` adds `--high-power` at the band's next daemon start, admitting exactly `POWER=20` on SX127x (inert on SX1262). Saving marks the daemon restart-required and restarts nothing; a running daemon keeps the permission it started with. Datasheet limits for +20 dBm: duty cycle ≤ 1 %, VSWR ≤ 3:1, VDD 2.4–3.7 V — nothing measures or enforces them; keep the chip cooled, **warranty void if disregarded**. LoRaHAM 433 RFM98PW: no sustained +20 dBm — unvalidated with the module's external PA; the release test matrix sends no +20 dBm on it |
+| `rf_log` | `on` | RF log, one file per band (`logs/rf-daemon-433.log`, `-868.log`): every frame received (RSSI/SNR) or sent (after `transmit()` returned OK — a CAD-refused send writes nothing), raw hex + ASCII. Switch semantics: [maintenance](../maintenance.md#rf-logs) |
 
-A client stack declares the TX mode it needs (`requires_daemon_tx`: MANAGED for kiss, graywolf,
-chat, meshcom and meshcore; DIRECT for voice), and lhpc applies it live when that stack starts.
-Live changes without a restart: `lhpc daemon <band> --set TXMODE=DIRECT` — a CONF `SET` followed
-by a `GET STATUS` read-back; only whitelisted keys are accepted (TXMODE, TXQUEUE, TXRESULT, CAD*, GETRSSI, the radio params). `lhpc daemon <band> --feed` shows recent RX/TX activity.
+Each client stack's `requires_daemon_tx` (DIRECT for voice, MANAGED for the rest) is applied live
+when it starts. Live change without a restart ([daemon control](../architecture.md#daemon-control)): `lhpc daemon
+<band> --set TXMODE=DIRECT`; accepted keys are TXMODE, TXQUEUE, TXRESULT, CAD*, GETRSSI and the
+radio params. `lhpc daemon <band> --feed` shows recent RX/TX activity.
 
 ## Radio parameters
 
-Every daemon client (chat, kiss, voice, meshcom, meshcore) and the daemon itself carry a per-band
-radio-parameter profile (`lhpc/core/daemon_params.py`). lhpc applies a stack's profile to the
-daemon **once**, after the daemon reports READY and before the stack's components start.
+Each daemon client (chat, kiss, voice, meshcom, meshcore) and the daemon carry a per-band profile
+(`lhpc/core/daemon_params.py`), applied **once** after the daemon reports READY and before the
+stack's components start.
 
 | group | params | ranges |
 |---|---|---|
 | radio | `MODE`, `FREQ`, `SF`, `BW`, `CR`, `CRC`, `LDRO`, `PREAMBLE`, `SYNC`, `POWER` | LORA/FSK · 150–960 MHz · 7–12 · 7.8–500 kHz · 5–8 · 0/1 · AUTO/0/1 · 6–65535 symbols · hex byte · **2–17 dBm on SX127x, 0–20 on SX1262** |
 | listen-before-talk | `TXMODE`, `TXQUEUE`, `CADMONITOR`, `CADRSSI`, `CADWAIT`, `CADIDLE`, `CADTXAFTERTIMEOUT` | MANAGED/DIRECT · 0/1 · 0/1 · −130…0 dBm · 50–5000 ms · 0–2000 ms · 0/1 |
 
-**`POWER` is the one range that depends on the board — and on a permission.** The daemon accepts
-2–17 dBm on the SX127x boards (LoRaHAM, Uputronics) and 0–20 on the SX1262 (Waveshare): below 2 dBm
-the SX127x driver transmits on the RFO pin instead of the antenna's PA_BOOST pin, and RadioLib's
-PA_BOOST API admits 2–17 and exactly 20, so 18 and 19 do not exist on that path. Exactly 20 is the
-datasheet's restricted +20 dBm mode and needs the band's high-power switch (`hipower_<band>`, above)
-saved on *and* the daemon restarted with it. Saved values are validated against the board configured
-in the daemon Hardware settings plus that saved switch; **live** requests are validated against what
-the running daemon reports in `STATUS` (`CHIPFAMILY=`, `HIGHPOWER=`), because a Hardware setup saved
-after the daemon started is not what is running — an older daemon that reports neither gets only
-2–17 live. A saved `POWER=20` profile is active only while the band's switch is on (saved off, the stack uses its
-normal power); with the switch on but the running daemon lacking the permission, the stack is refused at
-start until the daemon is restarted.
-The daemon never echoes `POWER`, so a sent 20 is "sent", not "confirmed", and no software here
-measures the output or the duty cycle.
+**`POWER`** (ranges above): below 2 dBm the SX127x driver uses the RFO pin instead of the
+antenna's PA_BOOST pin, whose RadioLib API admits 2–17 and exactly 20 (no 18/19); 20 needs the
+band's `hipower_<band>` on and the daemon restarted with it. Saved values are validated against
+the board in the Hardware settings plus the saved switch; **live** requests against the running
+daemon's `STATUS` (`CHIPFAMILY=`, `HIGHPOWER=`) — a daemon reporting neither gets only 2–17. A saved
+`POWER=20` applies only while the switch is on (off, the stack's default power is used); with the
+switch on but the running daemon lacking the permission, the stack start is refused.
+The daemon never echoes `POWER`: a sent 20 is "sent", not "confirmed".
 
-The client app re-`SET`s its own radio params and `TXMODE` when it connects, so those rows are
-**app-owned**: lhpc still applies them, the app overwrites them, and the panel greys them.
-`CADWAIT`, `CADIDLE`, `TXQUEUE`, `CADMONITOR`, `CADRSSI` and `CADTXAFTERTIMEOUT` are
-operator-owned and stick. A profile is the app's own default, not a legal ceiling: the licensed
-stacks carry amateur-service settings, while the licence-free ones (meshcore, reticulum) sit
-inside the SRD limits in [reticulum](reticulum.md#band-limits). Defaults, taken from each app's
-source:
+A client app re-`SET`s its own radio params and `TXMODE` on connect, so those rows are
+**app-owned** (applied, then overwritten; greyed in the panel); the LBT timing params (`CADWAIT`,
+`CADIDLE`, `TXQUEUE`, `CADMONITOR`, `CADRSSI`, `CADTXAFTERTIMEOUT`) are operator-owned and stick.
+A profile is the app's default, not a legal ceiling; the licence-free stacks sit inside the SRD
+limits in [reticulum](reticulum.md#band-limits). Defaults:
 
 | stack | 433 | 868 | both bands |
 |---|---|---|---|
@@ -91,9 +81,8 @@ source:
 | meshcore | — | MANAGED, 869.618, SF8, BW62.5, CR8, CRC on, preamble 16, sync 0x12, 14 dBm | — |
 | base LBT (every stack) | | | CADWAIT 1500 ms, CADIDLE 250 ms, TXQUEUE 1, CADMONITOR 0, CADRSSI −90, CADTXAFTERTIMEOUT 0 |
 
-Where they are set: the **Daemon radio parameters** panel under each stack's Settings (it follows
-the band switch; *Save* persists, *Apply* pushes to the running daemon, *Reset* restores the
-defaults), or the CLI — `<stack>` may be `daemon` itself:
+Set them in the **Daemon radio parameters** panel of each stack's Settings (*Save* persists,
+*Apply* pushes live, *Reset* restores defaults) or with the CLI (`<stack>` may be `daemon`):
 
 ```
 lhpc config <stack> --band <433|868> --daemon-param KEY=VALUE [--daemon-param ...]   # persist
@@ -101,13 +90,13 @@ lhpc config <stack> --band <433|868> --apply-daemon                             
 lhpc config <stack> --band <433|868> --reset-daemon
 ```
 
-Every value is validated and canonicalised server-side (`daemon_control.validate_set`). An apply
-is `ok` only when every SET landed; the radio params are applied to the chip but echoed by no
-`GET`, so they report *sent*, not confirmed. `MODE=FSK` switches LoRa off and breaks every stack.
+Values are validated server-side (`daemon_control.validate_set`). An apply is `ok` only when every
+SET landed; radio params are echoed by no `GET`, so they report *sent*, not confirmed. `MODE=FSK`
+switches LoRa off and breaks every stack.
 
 ## Position (GPS)
 
-The daemon reads no position. The stacks that do are listed in [GPS](../gps.md).
+The daemon reads no position; the stacks that do are listed in [GPS](../gps.md).
 
 ## Notes
 
@@ -121,8 +110,8 @@ The daemon reads no position. The stacks that do are listed in [GPS](../gps.md).
 ## Conflicts
 
 - A **direct-SPI radio owner** (meshtastic, reticulum) claims `loraham.radio.<band>` exclusively:
-  it cannot run while the daemon serves that band, and the daemon cannot start on a band such an
-  owner holds. Opposite bands coexist (daemon 433 + reticulum 868).
-- The SPI bus is shared cooperatively through `spi0.lock`; the model and the one non-participant
-  are in [architecture](../architecture.md).
-- Client stacks obey a **one app stack per band** rule — see [kiss](kiss.md).
+  it cannot run while the daemon serves that band, and vice versa. Opposite bands coexist
+  (daemon 433 + reticulum 868).
+- The SPI bus is shared through `spi0.lock`; model and the one non-participant:
+  [architecture](../architecture.md#radios-bands-and-resource-claims).
+- Client stacks obey **one app stack per band** — see [kiss](kiss.md#notes).

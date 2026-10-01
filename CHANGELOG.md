@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Docs: one place per fact; shorter; verified against the code.
+
 ## 0.11.8
 
 - After "Update & restart now" the console shows its "Restarting" page before it stops; before, a fast restart

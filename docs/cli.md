@@ -11,10 +11,10 @@ the same service layer ([architecture](architecture.md#package-layout)).
 ## Conventions
 
 - Mutating commands (`install`, `stack start`, `build`, `test`, `update`, …) print a
-  **dry-run plan** first and apply only after a `[y/N]` confirmation, or immediately with `--yes`.
-- Read-only commands (`list`, `status`, `explain`, `doctor`, `source-check`, `config <stack>`) never change anything.
+  **dry-run plan** and apply only after a `[y/N]` confirmation, or at once with `--yes`.
+- Read-only commands (`list`, `status`, `explain`, `doctor`, `source-check`, `config <stack>`) change nothing.
 - Exit codes: `0` success, `1` a command error (`ERR`), `2` a usage error.
-- Layered help: `lhpc --help`, `lhpc <command> --help`, `lhpc help <topic>`.
+- Help: `lhpc --help`, `lhpc <command> --help`, `lhpc help <topic>`.
 
 ## Commands
 
@@ -29,63 +29,60 @@ the same service layer ([architecture](architecture.md#package-layout)).
 ---
 
 ### list
-`lhpc list` — list the stacks defined in the manifest.
+`lhpc list` — the stacks defined in the manifest.
 
 ### status
-`lhpc status [<stack>] [--versions]` — bounded, read-only stack/component status. `--versions` shows source/pin status instead.
+`lhpc status [<stack>] [--versions]` — bounded, read-only stack/component status; `--versions`
+shows source/pin status instead.
 
 ### explain
-`lhpc explain <stack>` — explain a stack and its components (order, bands, ownership).
+`lhpc explain <stack>` — a stack and its components (order, bands, ownership).
 
 ### doctor
-`lhpc doctor` — bounded health checks. Local except for one bounded query to gpsd when the
-position source is `gpsd` ([gps](gps.md#health-and-what-the-console-shows)).
+`lhpc doctor` — bounded health checks; local except one bounded gpsd query when the position
+source is `gpsd` ([gps](gps.md#health-and-what-the-console-shows)).
 
 ### deps
-`lhpc deps` — list every declared system prerequisite (apt packages, the SPI/`config.txt` overlay,
-`spi`/`gpio` group grants, and disabling the OS-managed `meshtasticd`). These are the sudo/apt-level
-prerequisites only; the Python venv is provisioned by `install.sh` after cloning, so venv `pip
-install` steps are deliberately excluded. LHPC never installs system packages itself — it shows the
-exact copyable command for each missing one (the per-stack **System dependencies** view and the
-**Checks** page in the web console).
-
-`lhpc deps --script` renders them into ONE hardened, executable bootstrap script (standalone
-`apt install` lines merged into a single non-interactive
-`apt-get install -y --no-install-recommends` that runs FIRST, SPI/group sections re-rendered as
-validated operator-safe logic). No third-party apt repository is configured — `meshtasticd` is built
-from a pinned upstream checkout. You run the script yourself:
+`lhpc deps [--script]` — list every declared system prerequisite (apt packages, the
+SPI/`config.txt` overlay, `spi`/`gpio` group grants, disabling the OS-managed `meshtasticd`);
+Python venv packages are `install.sh`'s. LHPC never installs system packages itself: it shows the
+command for each missing one (web: the stack's **System dependencies** view, the **Checks** page).
+`--script` prints them as one executable `bootstrap-deps.sh` (one non-interactive
+`apt-get install -y --no-install-recommends` first, no third-party apt repository) that you run:
 
 ```
 lhpc deps --script > bootstrap-deps.sh
-bash bootstrap-deps.sh --dry-run                      # PRE-FLIGHT: simulate only, change nothing; no root
+bash bootstrap-deps.sh --dry-run                      # pre-flight: simulate only, change nothing; no root
 sudo bash bootstrap-deps.sh --spi-mode soft-cs        # or hardware-cs | skip; --operator-user <name> if root
 sudo bash bootstrap-deps.sh --spi-mode soft-cs --with-gui   # ONLY on a machine with a display
 ```
 
-`--dry-run` simulates the exact default apt transaction and exits 0 only when it resolves cleanly and
-pulls nothing graphical; it exits nonzero when the set is unresolved (5) or would install a
-GUI/display package or an audio server such as PulseAudio (6; ALSA is part of the default set). Run it first on a fresh image.
+`bootstrap-deps.sh` flags:
 
-`--spi-mode` is **required**: `soft-cs` (software CS — LoRaHAM Pi/Uputronics rigs, single-radio AND
-dual Uputronics: daemon + meshtasticd drive CS7/CS8 as GPIOs, the kernel must not claim CE0/CE1),
-`hardware-cs` (SPI on, no overlay — kernel-driven CE0/CE1, only for boards that really use them;
-NOT for Uputronics), or `skip`. It is
-idempotent and fails closed on a conflicting existing `config.txt`. Group grants go to the resolved
-operator (`--operator-user`, else `$SUDO_USER`, else the invoking user) — never root. QEMU + PlatformIO
-are provisioned later by `lhpc build`, not by this script.
+- `--dry-run` — simulate the default apt transaction; exit 0 only if it resolves cleanly and pulls
+  nothing graphical, 5 if unresolved, 6 if it would install a GUI/display package or an audio
+  server such as PulseAudio (ALSA is in the default set). Run it first on a fresh image.
+- `--spi-mode soft-cs|hardware-cs|skip` (**required**) — `soft-cs`: software CS for LoRaHAM
+  Pi/Uputronics rigs, single-radio and dual Uputronics (daemon + meshtasticd drive CS7/CS8 as
+  GPIOs; the kernel must not claim CE0/CE1). `hardware-cs`: SPI on, no overlay, kernel-driven
+  CE0/CE1 — only for boards that use them, not Uputronics. `skip`: no boot-config change.
+  Idempotent; fails closed on a conflicting `config.txt`.
+- `--operator-user <name>` — who gets the group grants when run as root directly (default
+  `$SUDO_USER`, else the invoking user; never root).
+- `--with-gui` — GUI application libraries only, never a desktop.
+- `--with-gps` — compatibility only: gpsd comes with the default time source; installs nothing extra.
+- `--no-time-source` — skip chrony/gpsd/fake-hwclock ([clock](operations.md#clock)).
+- `--no-swapfile` · `--swap-size <MB>` (default 768) · `--keep-wifi-powersave`
+  ([running on a Pi](maintenance.md#running-on-a-pi)).
+- `--no-power-controls` · `--no-network-controls` — skip the polkit rule for Reboot/Shut down,
+  for the Network panel.
 
-Optional flags: `--with-gui` (GUI application libraries only) · `--with-gps` (gpsd, for a
-receiver on this box) · `--no-swapfile` · `--swap-size <MB>` (default 768) · `--operator-user
-<name>` (when running as root directly rather than through `sudo`) · `--keep-wifi-powersave` ·
-`--no-power-controls` · `--no-network-controls` (skip the polkit rule for Reboot/Shut down, for
-the Network panel). Root is required for everything but `--dry-run` and `--help`. What the
-swapfile and the Wi-Fi power-save flags do: [running on a Pi](maintenance.md#running-on-a-pi).
-
-The apt package set is identical on a Pi Zero 2W and a Pi 5. The shipped snapshot of this
-script: [what CI enforces](maintenance.md#what-ci-enforces).
+Root is required for everything but `--dry-run` and `--help`. The package set is identical on a
+Pi Zero 2W and a Pi 5; QEMU and PlatformIO come later with `lhpc build`. The shipped snapshot of
+this script: [what CI enforces](maintenance.md#what-ci-enforces).
 
 ### source-check
-`lhpc source-check [<target>]` — check managed sources for available upstream updates (read-only).
+`lhpc source-check [<target>]` — check managed sources for upstream updates (read-only).
 
 ---
 
@@ -93,32 +90,33 @@ script: [what CI enforces](maintenance.md#what-ci-enforces).
 `lhpc bootstrap [--yes]` — create the runtime root and a starter config.
 
 ### install
-`lhpc install [<stack>] [--check] [--source binary|pinned|dev|stable] [--yes]` — install a stack:
-download the published **binary** artifact, or adopt/verify managed sources into the runtime root.
+`lhpc install [<stack>] [--check] [--source binary|pinned|dev|stable] [--accept-pin-mismatch] [--yes]`
+— download the published **binary** artifact, or adopt/verify managed sources into the runtime
+root. Channels and defaults: [provenance](provenance.md#selections); the binary channel in
+operation: [operations](operations.md#install-channels).
 
-- Without `--source`, a stack uses its default channel ([selections](provenance.md#selections));
-  the all-stacks form stays on that source channel. `dev` is an explicit choice.
-- A failed binary install asks **explicitly** whether to build from source; it never falls back
-  silently.
-- `--check` is a dry run: it shows the plan and reports missing mandatory system dependencies
-  (the apply run refuses until they are installed).
+- Without `--source`, each stack takes its default channel; `dev` is always explicit.
+- A failed binary install asks whether to build from source; it never falls back silently.
+- `--check` — dry run: the plan plus missing mandatory system dependencies (the apply refuses
+  until they are installed). Never prompts or applies.
+- `--accept-pin-mismatch` (binary channel; also on `update`) — install the published binary
+  although it was built from other commits than this lhpc pins; exactly the pairs the plan shows
+  ([provenance](provenance.md#the-binary-channel)).
 
 ### auto-install
 `lhpc auto-install [--source binary|pinned|dev|stable] [--tests] [--tx] [--status]
-[--recover [--confirm-orphan]] [--yes]` — install/update, build and test **all** stacks in one
-guided run.
+[--recover [--confirm-orphan]] [--yes]` — install/update, build and test **all** stacks in one run.
 
-- Host tests are **off by default**; `--tests` runs them, and `--tx` implies `--tests` and
-  transmits one bounded frame per ready band ([TX safety](operations.md#tx-safety)).
-- `--status` prints the run state and any recovery reason, then exits.
-- `--recover` acknowledges a crashed run and clears its leftover state so a new run can start.
-  Add `--confirm-orphan` only when a spawned child's termination could not be proven (inspect and
-  terminate it first).
+- `--tests` runs host tests (off by default); `--tx` implies `--tests` and transmits one bounded
+  frame per ready band ([TX safety](operations.md#tx-safety)).
+- `--status` — print the run state and any recovery reason.
+- `--recover` — acknowledge a crashed run and clear its leftover state. `--confirm-orphan` only
+  when a spawned child's termination could not be proven (inspect and terminate it first).
 
 ---
 
 ### config
-View or set per-stack settings and the global operator identity. Values are validated before saving.
+View or set per-stack settings and the global operator identity; values are validated before saving.
 
 ```
 lhpc config <stack>                    # list settable params (current value, default, * = identity/callsign)
@@ -131,29 +129,22 @@ lhpc config <stack> --reset-daemon     # reset daemon params
 lhpc config operator [--callsign CALL]   # show / set the GLOBAL operator identity
 ```
 
-- `operator` is a reserved subcommand (not a stack id). `--callsign` applies only to it and
-  takes the **base** callsign only (no SSID, no `/P`). A per-stack value overrides it and may
-  carry that stack's SSID or portable form: `lhpc config chat call YOURCALL-10` ·
-  `lhpc config voice callsign YOURCALL/P` · `lhpc config meshcom mc_callsign YOURCALL-99`
-  (`YOURCALL` = your own callsign). Meshtastic's node names: `lhpc config meshtastic node_name
-  "Field Node"` + `node_short FN1`. The rules — inheritance, placeholders, what is checked and
-  what is not: [identity](architecture.md#identity-and-callsigns); the accepted syntax per
-  field: [validators](adding-a-stack.md#parameters--config-files).
-- A start without a required identity is refused — by the dry run already, before anything is
-  queued or stopped — and prints a command template for every missing field (replace the
-  UPPERCASE token with your value). `lhpc config` (like the Settings page) may CLEAR an identity.
-- A `<param>` name shared by several components must be qualified as `<component>.<param>` — the command refuses rather than guessing.
-- `lhpc config` sets one parameter per call; the stack's Settings page saves the whole form in
-  one submission, so a setting whose validation spans several parameters is set here in the
-  order its stack page gives.
-- `--band` selects the band for band-switchable stacks.
-
-Example: `lhpc config chat call YOURCALL-10` (`YOURCALL-10` = your callsign+SSID) then `lhpc stack start chat`.
+- `operator` is reserved (not a stack id); `--callsign` takes the **base** callsign only (no SSID,
+  no `/P`). A per-stack value overrides it and may carry that stack's SSID or portable form:
+  `lhpc config chat call YOURCALL-10` · `lhpc config voice callsign YOURCALL/P` ·
+  `lhpc config meshcom mc_callsign YOURCALL-99`; Meshtastic: `lhpc config meshtastic node_name
+  "Field Node"`, `node_short FN1`. Rules: [identity](architecture.md#identity-and-callsigns);
+  syntax per field: [validators](adding-a-stack.md#parameters--config-files).
+- A start without a required identity is refused by the dry run already, with a command template
+  per missing field (replace the UPPERCASE token). `lhpc config` may clear an identity.
+- A `<param>` shared by several components must be written `<component>.<param>`.
+- One parameter per call: a setting validated across several parameters is set in the order its
+  stack page gives.
+- `--band` — the band, for band-switchable stacks.
 
 ### hardware
-Show or set the **radio hardware setup** — which physical board(s) this box has. This fixes which
-band(s) are served and the daemon `--hw` preset each radio launches with. A fresh install is **not
-configured** ([daemon](stacks/daemon.md#settings)).
+Show or set the **radio hardware setup**: which band(s) are served and the daemon `--hw` preset
+each radio launches with. A fresh install is **not configured** ([daemon](stacks/daemon.md#settings)).
 
 ```
 lhpc hardware                # show the current setup + served band(s) + the catalog
@@ -168,16 +159,14 @@ lhpc hardware waveshare-868  # Waveshare SX1262 (868)
 lhpc hardware --high-power 433 on|off  # allow POWER=20 on an SX127x band; takes effect at that band's next daemon start
 ```
 
-- Which combinations are offered and what a single-radio setup blocks: [daemon](stacks/daemon.md#settings).
-- Also settable in the web console under the loraham daemon stack's **Hardware** settings section,
-  which additionally offers a **Detect** probe (spawns the daemon briefly per candidate board and
-  reports whether the chip responds — the board's LED lights during init).
+Web: the loraham daemon stack's **Hardware** settings, which add a **Detect** probe (starts the
+daemon briefly per candidate board and reports whether the chip responds; the board's LED lights
+during init).
 
 ---
 
 ### gps
-Show or set the **position source shared by every stack** — a global controller setting, like
-`hardware`, not a per-stack parameter.
+Show or set the **position source shared by every stack** ([GPS](gps.md)).
 
 ```
 lhpc gps                                        # show the current source (and what `auto` resolved to)
@@ -192,16 +181,14 @@ lhpc gps --monitor                              # live receiver state (read-only
 lhpc gps --monitor --sats                       # ... plus the satellite table
 ```
 
-`--monitor` takes no setting flag. What each state means, and how a direct receiver is read without
-ever becoming a second reader: [GPS → Monitor](gps.md#monitor).
-
-The model, the refusals and the per-stack `use_gps` switch are in [GPS](gps.md).
+`--port` sets the gpsd port (default 2947). `--monitor` takes no setting flag
+([GPS → Monitor](gps.md#monitor)).
 
 ---
 
 ### autostart
-**Boot auto-restore** — restart the stacks that were running before a reboot (default: **on**).
-What it restores, what it refuses and where its log is: [operations](operations.md#not-a-supervisor).
+**Boot auto-restore** (default **on**; also Home → System → Autostart). What it restores and
+refuses: [operations](operations.md#not-a-supervisor).
 
 ```
 lhpc autostart               # show the switch + the last boot-restore result
@@ -209,21 +196,19 @@ lhpc autostart off           # disable (applies at the NEXT boot)
 lhpc autostart on            # re-enable (the default)
 ```
 
-Also switchable in the web console (Home → System → Autostart).
-
 ---
 
 ### firewall
-Managed **nftables firewall** status and script rendering. `lhpc` renders the ruleset; you apply
-it with one sudo command. See [Firewalling the Pi](firewall.md) for the full model (modes, the
-three status dimensions, and how your existing configuration is preserved).
+Managed **nftables firewall**: `lhpc` renders the ruleset, you apply it with one sudo command.
+Model, modes and the Config/Boot/Live dimensions: [firewall](firewall.md). Web: the controller
+row's **Firewall** panel on the Apps page.
 
 ```
 lhpc firewall                 # status: mode + Config/Boot/Live dimensions + foreign-table note
 lhpc firewall --script        # print the apply script (run it yourself with sudo)
 lhpc firewall --reset-script  # print the reset script (removes only lhpc-owned artifacts)
 
-# policy (same fields as the console's Firewall panel; omitted flag = unchanged)
+# policy (omitted flag = unchanged)
 lhpc firewall --mode secure-default|compatibility
 lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.42.0.0/24   # AP DHCP/DNS rules
 lhpc firewall --ssh-ports "22,2222"        # "" = back to automatic detection
@@ -231,55 +216,49 @@ lhpc firewall --allow-endpoints "id1,id2"  # "" = no direct-access exceptions
 lhpc firewall --recommended                # safe preset; not combinable with the flags above
 ```
 
-- **Config/Boot/Live**: [the three status dimensions](firewall.md#the-three-status-dimensions-and-why-green-is-strict).
-- Also configurable in the web console: the controller row's **Firewall** panel on the Apps
-  page (mode, per-listener
-  direct-access exceptions, AP controls, and the copyable apply/check/reset commands).
-
 ---
 
 ### stack
 `lhpc stack {start|stop|restart} <stack> [--yes]` — start, stop or restart a stack or component.
-`lhpc stack start <stack> --band 433|868` starts a band-switchable stack on that band, as the
-console's per-band Start does; without it the stack starts on its saved band. A band the hardware
-does not serve, or the stack cannot run on, is refused before anything starts.
+`start --band 433|868` starts a band-switchable stack on that band (default: its saved band); a
+band the hardware or the stack cannot serve is refused before anything starts.
 
-`lhpc stack poststart <stack> [--yes]` — re-run a RUNNING stack's post-start steps **without**
-restarting it, with the same readiness-gated senders the start uses (any live retry runner is
-cancelled first). Use it when a post-start setting did not land — e.g. the MeshCom callsign push
-after a slow QEMU cold boot outlived its retry window (`lhpc status <stack>` shows
-"post-start: … NOT applied"); a restart would cost another multi-minute QEMU boot.
+`lhpc stack poststart <stack> [--yes]` — re-run a RUNNING stack's post-start steps without
+restarting it (any live retry runner is cancelled first). Use it when `lhpc status <stack>` shows
+"post-start: … NOT applied", e.g. a MeshCom callsign push that outlived its retry window after a
+slow QEMU boot.
 
 ### build
 `lhpc build <target> [--yes]` — build a stack/component.
 
 ### test
 `lhpc test <target> [--tx] [--yes]` — run host tests, or a bounded TX test with `--tx`
-([TX safety](operations.md#tx-safety)).
-
-An upstream's own suite, where a component declares one (openHop Core does), is a host test like
-any other: `lhpc test <component>`, the button on the stack's install section, or the tests
-checkbox in auto-install. It runs in the environment the build created, against the pinned
-upstream that box installed, so it tells the operator whether the pinned upstream itself works on
-that hardware ([policy](maintenance.md#running-on-a-pi)).
+([TX safety](operations.md#tx-safety)). A component's own upstream suite (openHop Core has one)
+is a host test too; it runs against the pinned upstream in the built environment
+([policy](maintenance.md#running-on-a-pi)).
 
 ### update
-`lhpc update [<target>] [--source binary|pinned|dev|stable] [--upstream] [--yes]` — update a stack/component to
-the selected source.
+`lhpc update [<target>] [--source binary|pinned|dev|stable] [--accept-pin-mismatch] [--upstream] [--yes]`
+— update a stack/component.
 
-- Without `--source`, a binary-installed target updates binary→binary; any other target updates to
-  `pinned`, the composition this release proved. `--source dev` follows the branch tip.
-- When the published binary lags this lhpc's pins, the update refuses and names the source build as
-  the only way forward — cancelling keeps the working binary.
-- Switching channels is an `install`, not an update, and the CLI says so.
-- `--upstream` (fetched packages, i.e. graywolf): move to the latest upstream release, verified
-  against its `checksums.txt`.
+- Without `--source`, a binary-installed target stays binary; any other goes to `pinned`.
+- When the published binary lags this lhpc's pins, the update refuses and names the ways forward
+  (self-update, a source build, `--accept-pin-mismatch` where allowed); cancelling keeps the
+  working binary.
+- Switching channels is an `install`, and the CLI says so.
+- `--upstream` (fetched packages, i.e. graywolf) — the latest upstream release, verified against
+  its `checksums.txt`.
 
 ### uninstall
-`lhpc uninstall [<target>] [--yes]` — uninstall a stack/component.
+`lhpc uninstall [<target>] [--yes]` — uninstall a stack/component; settings, state and identities stay.
 
 ### clean
-`lhpc clean <target> --purge [--yes]` — **destructive**: a full wipe of the stack: sources, config, generated config files, saved state (`state_root`), its own secrets (`secret_files`: node identities, keys, passwords LHPC minted), logs and history. A reinstall is a new node; peers that knew the old one must forget it. `--purge` is required. `uninstall` keeps settings, state and identities. `config/local.toml`, `config/secrets.toml`, files the stack does not declare (chat's `lorachat.log`) and other stacks stay.
+`lhpc clean <target> --purge [--yes]` — **destructive** full wipe of one stack: sources, config,
+generated config files, saved state (`state_root`), its own secrets (`secret_files`: node
+identities, keys, passwords LHPC minted), logs and history. `--purge` is required; the stack must
+be stopped. A reinstall is a new node; peers that knew the old one must forget it.
+`config/local.toml`, `config/secrets.toml`, undeclared files (chat's `lorachat.log`) and other
+stacks stay.
 
 ### known-working
 `lhpc known-working <stack>` — record a running stack's current commits as a known-good composition.
@@ -287,40 +266,47 @@ the selected source.
 ---
 
 ### daemon
-`lhpc daemon <band> [--set KEY=VALUE] [--feed] [--yes]` — monitor a daemon band (433/868), apply a live CONF setting (e.g. `--set TXMODE=DIRECT`), or show recent RX/TX activity (`--feed`).
-(Persisted, band-scoped daemon params live under [`config`](#config).)
+`lhpc daemon <band> [--set KEY=VALUE] [--feed] [--yes]` — monitor a daemon band (433/868), apply a
+live CONF setting (`--set TXMODE=DIRECT`), or show recent RX/TX activity (`--feed`). Persisted
+daemon params: [`config`](#config).
 
 ### logs
-`lhpc logs <target> [--lines N]` — bounded tail of a component's log. A run log's older part, cut off at the 8 MiB trigger, is in `logs/start-<comp>[-<band>].prev.log` ([maintenance](maintenance.md), "Run-log cap").
+`lhpc logs <target> [--lines N]` — bounded tail of a component's log (default 200 lines). The
+older part of a capped run log: `logs/start-<comp>[-<band>].prev.log`
+([maintenance](maintenance.md#running-on-a-pi), "Run-log cap").
 
 ### rflog
-`lhpc rflog <stack> [--band 433|868] [--lines N] [--clear] [--decrypt [--follow]]` — a stack's
-RF log: what its radio heard and sent, one line per frame, kept across restarts. `daemon` needs
-`--band` (one file per band); no other stack takes one. `graywolf` shows the kiss TNC's log — its
-switch is `lhpc config kiss rf_log off`; every other stack's is `lhpc config <stack> rf_log
-on|off`. `--clear` empties the file in place and removes its previous segment. `lhpc rflog --all
-on|off` sets every stack's switch at once and `lhpc rflog --clear-all` clears every RF log; both
-take no stack and no `--band`, and one of them at a time. `--decrypt`
-(meshtastic, meshcore, reticulum only — the others are plaintext already) prints the tail decoded
-with the keys on this box, one frame per line: the time, direction and signal, then the kind, the
-peer and the text, or a `[no-key …]` / `[undecryptable …]` / `[malformed …]` tag. `--follow`
-keeps printing new frames every 2 s until Ctrl-C. Output goes to the terminal only — nothing is
-written; piping it is the operator's choice. Exit 2 on a plaintext stack, 1 when the decoder
-cannot run (the stack is not built, a key store is unreadable). The switch, retention and which
-keys open what: [maintenance → RF logs](maintenance.md#rf-logs).
+`lhpc rflog <stack> [--band 433|868] [--lines N] [--clear] [--decrypt [--follow]]` ·
+`lhpc rflog --all on|off` · `lhpc rflog --clear-all` — a stack's RF log (default 300 lines).
+Model, retention and keys: [maintenance → RF logs](maintenance.md#rf-logs).
+
+- `--band` — `daemon` only (one file per band); required there.
+- `graywolf` shows the kiss TNC's log. Switch: `lhpc config <stack> rf_log on|off` (graywolf:
+  `lhpc config kiss rf_log off`).
+- `--clear` — empty the file in place and remove its previous segment.
+- `--all on|off` / `--clear-all` — every stack's switch / every RF log; no stack, no `--band`, one
+  at a time.
+- `--decrypt` (meshtastic, meshcore, reticulum) — print the tail decoded with this box's keys, to
+  the terminal only; `--follow` keeps printing new frames every 2 s until Ctrl-C. Exit 2 on a
+  plaintext stack, 1 when the decoder cannot run.
 
 ---
 
 ### meshtastic
-`lhpc meshtastic <upstream args>` — a thin **guarded passthrough** to the LHPC-managed Meshtastic CLI, always targeting this box's local node. Every upstream argument works as usual (`lhpc meshtastic --help` shows the full upstream reference); only what LHPC owns is guarded: connection/transport selectors (`--host`/`--tcp`/`--serial`/`--ble`/…) are refused, LHPC-owned local settings (LoRa region, owner name/short incl. `--set-ham`, GPS mode, fixed position) are refused with a pointer to the right command, and factory-reset asks for confirmation (`--yes` skips it). Broad config imports (`--configure`/`--import-config`/`--seturl`/`--ch-set-url`/`--ch-add-url`) run, then LHPC auto-reasserts region/name/GPS via post-start convergence. Targeting a remote node with `--dest` is unrestricted. Node ops need the stack running; `--help`/`--version`/`--support`/`--test` do not. See [Meshtastic → Command line](stacks/meshtastic.md#command-line-lhpc-meshtastic).
+`lhpc meshtastic <upstream args>` — guarded passthrough to the managed Meshtastic CLI against this
+box's node; `--yes` skips the factory-reset confirmation. What is refused and re-asserted:
+[Meshtastic → Command line](stacks/meshtastic.md#command-line-lhpc-meshtastic).
 
 ---
 
 ### web
-`lhpc web [--host H] [--port P] [--socket]` — start the local operator web console. `--socket` serves on the protected Unix socket behind nginx (production).
+`lhpc web [--host H] [--port P] [--socket]` — start the local operator web console (default
+`127.0.0.1:8770`, loopback only). `--socket` serves on the protected Unix socket behind nginx
+(production).
 
 ### webserver
-Production webserver (HTTPS / mTLS) control. Access modes: `local-open-remote-auth | auth-everywhere | no-auth`.
+Production webserver (HTTPS / mTLS) control: [webserver](webserver.md). Access modes:
+`local-open-remote-auth | auth-everywhere | no-auth`.
 
 ```
 lhpc webserver status                  # cached status (read-only)
@@ -336,7 +322,7 @@ lhpc webserver proxy <page> [--mode local|lan|public] [--port P] [--scheme https
 lhpc webserver disable-remote          # bind back to loopback
 lhpc webserver reset-defaults          # reset desired config to safe defaults
 lhpc webserver tls-renew               # renew the HTTPS server certificate
-lhpc webserver logs [--access] [--lines N]
+lhpc webserver logs [--access] [--lines N]   # error log by default, 300 lines
 lhpc webserver cert list
 lhpc webserver cert issue <label>      # issue a cert + one-time .p12 passphrase (shown once)
 lhpc webserver cert reissue <label>    # rotate a cert + new one-time passphrase
@@ -345,69 +331,77 @@ lhpc webserver cert revoke <label> --confirm-label <label>
 lhpc webserver cert discard-export <label>
 ```
 
-- `--port` on `proxy` is optional; `0` or absent = not proxied.
-- `expose` and `proxy` increase exposure and need a confirm phrase — the same escalation rules as the web UI ([access modes](webserver.md#access-modes)).
-- `configure`/`expose`/`proxy` write **intent** only — run `lhpc webserver apply` to activate.
-- `expose` asks before it replaces the installed server certificate (when that certificate does not name this host's LAN address) and shows old and new names; off a terminal it writes nothing unless `--replace-certificate` is given.
+- `configure`/`expose`/`proxy` write intent only; `apply` activates it
+  ([applying changes](webserver.md#applying-changes-and-recovery)).
+- `expose` and `proxy` need `--confirm-phrase` ([access modes](webserver.md#access-modes),
+  [proxies](webserver.md#stack-web-ui-proxies)); `proxy --port 0` or absent = not proxied.
+- `expose --replace-certificate` — consent, without a prompt, to replacing the server certificate
+  when it does not name this host's LAN address; off a terminal `expose` otherwise writes nothing.
+- `--accept-unverified-clock` (`tls-renew`, `expose`, `cert issue|reissue|revoke`) — proceed on an
+  unverified clock, this call only ([the clock gate](webserver.md#the-clock-gate)).
 
 ---
 
 ### secrets
-`lhpc secrets backup [<file>]` · `lhpc secrets restore <file> [--only pki] [--yes | --overwrite]` — one file with the
-box's certificates, secrets and stack identities.
+`lhpc secrets backup [<file>]` · `lhpc secrets restore <file> [--only pki] [--yes | --overwrite]` —
+one file with the box's certificates, secrets and stack identities. What it holds and how a
+restore behaves: [operations → backup](operations.md#backup--restore).
 
-- `backup` writes ONE plain tar, in clear and mode 0600, to your home folder
-  (`lhpc-secrets-<host>-<UTC time>.tar`) or to `<file>`, never over an existing file and never inside the runtime
-  root: `config/tls/`, `config/secrets/`, `config/secrets.toml` and each stack's state folder. Encrypt it before it
-  leaves the box (for example `gpg -c <file>`). A running stack that keeps its state there is refused first.
-- the bundles' one-time passphrases are not in this file; a device whose passphrase is lost gets a new certificate
-  with lhpc webserver cert reissue <label>
-- Applying a restore needs the console stopped (`systemctl --user stop lhpc-web`, then `systemctl --user start lhpc-web`
-  afterwards). `restore` checks the whole file first and prints what it would overwrite, create and leave as it is; without
-  a flag it restores nothing. `--yes` applies only when none of the targets exists here; `--overwrite` replaces them
-  (on a terminal you type `overwrite`).
-- A restore that fails part-way leaves a mixed state (no automatic undo): make a backup of this box first.
-- `--only pki` gives another box just the two certificate authorities (then `lhpc webserver tls-renew` and
-  `lhpc webserver apply`); a full restore on another box would give two boxes the same node identities.
+- `backup` — default file `~/lhpc-secrets-<host>-<UTC time>.tar`.
+- `restore` without a flag prints the plan and changes nothing; `--yes` applies when no target
+  exists; `--overwrite` replaces existing targets; `--only pki` restores just the two CAs.
 
 ### self-update
-`lhpc self-update [--apply] [--overwrite] [--repair-integration] [--recover-request] [--yes]` — check for, or apply, lhpc's own update. `--apply` fast-forwards and restarts the console; `--overwrite` resets a diverged/dirty checkout; `--repair-integration` reinstalls the managed console + updater units.
+`lhpc self-update [--apply] [--overwrite] [--repair-integration] [--recover-request] [--yes]` —
+check for, or apply, lhpc's own update ([deployment → self-update](deployment.md#self-update)).
+
+- `--apply` — fast-forward and restart the console.
+- `--overwrite` — reset a diverged or dirty checkout to upstream.
+- `--repair-integration` — reinstall the managed console and updater units.
+- `--recover-request` — clear a stuck one-click request/in-flight record
+  ([recovery](deployment.md#recovery)).
 
 ### hmac
-`lhpc hmac status|enable|disable|renew|abort|recover [<stack>] [--yes]` — the MeshCom HMAC
-password between bridge and firmware (default stack: meshcom).
+`lhpc hmac status|enable|disable|renew|abort|recover [<stack>] [--confirm-phrase P] [--yes]` — the
+MeshCom HMAC password between bridge and firmware (default stack: meshcom;
+[meshcom](stacks/meshcom.md#settings)).
 
-- `enable`/`disable`/`renew` **rebuild the firmware and restart the link** (several minutes).
-  Without `--yes` they warn and print the confirm hint; with `--yes` they stream each step
-  (secret → firmware → bridge → node). The secret value is never printed.
-- `disable` also requires `--confirm-phrase remove-auth` — it downgrades the link to
-  unauthenticated.
-- Password auth is on by default for a **source** install; on the **binary** channel every
-  change here is refused until you install from source ([meshcom](stacks/meshcom.md)).
-- `abort` cancels a running apply; `recover` clears a blocking `unsafe` state left when a
-  cancelled build could not be proven stopped — automatically once the session is proven gone, or
-  as your explicit acknowledgement after inspecting `ps`.
+- `enable`/`disable`/`renew` rebuild the firmware and restart the link (minutes). Without `--yes`
+  they warn and print the confirm hint; with it they stream each step. The secret is never printed.
+- `disable` also needs `--confirm-phrase remove-auth`.
+- On the **binary** channel every change is refused until you install from source.
+- `abort` — cancel a running apply. `recover` — clear a blocking `unsafe` state left when a
+  cancelled build could not be proven stopped: automatically once the session is proven gone, else
+  as your acknowledgement after inspecting `ps`.
 
 ### _gps-bridge
-Internal service — `lhpc _gps-bridge <meshtastic|meshcom>` — started by the lifecycle when the global position source needs to be presented as a device. Publishes NMEA on a PTY (Meshtastic) or a UNIX socket (MeshCom) under `state/gps/<consumer>/`, with a readiness marker driven by the upstream source. One instance per consumer. Not for direct use.
+Internal — `lhpc _gps-bridge <meshtastic|meshcom>`: started by the lifecycle to present the global
+position source as a device (NMEA on a PTY or a UNIX socket under `state/gps/<consumer>/`).
 
 ### _network-finalize
-Internal driver — `lhpc _network-finalize --uuid <uuid> --op-id <token> [--pwfile <path>] [--allow-console] [--delay <s>]` — spawned detached by the web Network panel's connect flow: activates the Wi-Fi profile (secrets via a 0600 passwd-file, unlinked after activation), waits for the lease, and extends the console allowlist for the joined subnet when asked. Only the helper carrying the pending record's own op-id token may run; the outcome lands in `state/network-outcome.json`. Not for direct use.
+Internal — `lhpc _network-finalize --uuid <uuid> --op-id <token> [--pwfile <path>] [--allow-console] [--delay <s>]`:
+the Network panel's detached join helper; outcome in `state/network-outcome.json`.
 
 ### _hmac-apply
-Internal driver — `lhpc _hmac-apply <stack> <enable|disable|renew> <run_id>` — spawned detached by the web/CLI apply flow to run the steps against a run marker + log. Not for direct use.
+Internal — `lhpc _hmac-apply <stack> <enable|disable|renew> <run_id>`: the detached HMAC apply runner.
 
 ### _stack-start
-Internal detached runner — `lhpc _stack-start <target> --web-result web-<start|restart>-<target>.log --attempt-id <hex> [--band B] [--stop-owners] [--cascade] [--restart]` — spawned by the web console's Start/Restart (`spawn_start_job`). It proves the parent identity-tracked this exact attempt (`webjob_gate`), then runs the ordinary locked `start`/`restart` with a hook that marks the attempt admitted under every lock and before the first mutation (for a restart: before the stop); the result — summary and start notes — lands in the attempt marker the task banner shows. A superseded attempt cancels with zero side effects. Not for direct use.
+Internal — `lhpc _stack-start <target> --web-result web-<start|restart>-<target>.log --attempt-id <hex> [--band B] [--stop-owners] [--cascade] [--restart]`:
+the detached runner behind a web Start/Restart
+([operations](operations.md#operating-the-console)).
 
 ### _controller-uninstall-prep
-Internal quiescence gate — `lhpc _controller-uninstall-prep [--root <dir>]` — invoked by `uninstall.sh` before it removes any controller state. Refuses on active/unprovable build/test/web jobs, unresolved auto-install/HMAC state, or any UNKNOWN component state; otherwise stops the managed stacks (clients before the shared daemon) and verifies cessation. Exit 0 = safe to remove; nonzero = abort teardown. Not for direct use.
+Internal — `lhpc _controller-uninstall-prep [--root <dir>]`: `uninstall.sh`'s quiescence gate; exit
+0 = safe to remove ([operations → backup](operations.md#backup--restore)).
 
 ### _uninstall-guard-claim
-Internal atomic guard claim — `lhpc _uninstall-guard-claim [--root <dir>] --pid <pid> --nonce <n> --start <starttime>` — invoked by `uninstall.sh` to claim the `.lhpc-uninstalling` guard `O_CREAT|O_EXCL|O_NOFOLLOW` (never truncating/following/replacing a pre-existing guard). A live-owner guard is refused; a stale (dead-owner) guard is reclaimed. Not for direct use.
+Internal — `lhpc _uninstall-guard-claim [--root <dir>] --pid <pid> --nonce <n> --start <starttime>`:
+claims the `.lhpc-uninstalling` guard for `uninstall.sh` (a live owner's guard is refused, a dead
+owner's reclaimed).
 
 ### _uninstall-guard-release
-Internal owned-only guard release — `lhpc _uninstall-guard-release [--root <dir>] --nonce <n>` — removes the `.lhpc-uninstalling` guard ONLY if its recorded nonce matches (a foreign/unreadable guard is left in place). Not for direct use.
+Internal — `lhpc _uninstall-guard-release [--root <dir>] --nonce <n>`: removes the guard only if
+its nonce matches.
 
 ### help
-`lhpc help [<topic>]` — detailed help on a topic: `safety`, `resources`, `profiles`.
+`lhpc help [<topic>]` — detailed help: `safety`, `resources`, `profiles`.
