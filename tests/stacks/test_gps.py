@@ -1243,6 +1243,41 @@ def test_no_fix_nmea_becomes_an_explicit_no_fix_record(short_tmp_path):
         out.close()
 
 
+@pytest.mark.parametrize("bad_lat", ["4875.000", "-1207.0", "487", "48nan"])
+def test_a_malformed_coordinate_never_becomes_a_position(short_tmp_path, bad_lat):
+    """A checksum-valid fix whose latitude field is malformed (minutes >= 60, signed, short,
+    non-numeric) is dropped — never a different, plausible position or a `nan` record."""
+    import json
+    import socket as socket_mod
+    import time
+    from functools import reduce
+
+    from lhpc.core.gps_bridge import PosJsonServerOutput
+
+    def gga(lat):
+        body = f"GPGGA,120000.00,{lat},N,01324.6000,E,1,08,0.9,45.0,M,46.9,M,,"
+        return f"${body}*{reduce(lambda c, ch: c ^ ord(ch), body, 0):02X}\r\n".encode()
+
+    link = str(short_tmp_path / "position.sock")
+    out = PosJsonServerOutput(link)
+    out.publish()
+    try:
+        out.write(gga("5231.2000"))               # the last good position ...
+        out.write(gga(bad_lat))                   # ... must survive the malformed one
+        client = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
+        client.settimeout(5.0)
+        client.connect(link)
+        buf = b""
+        deadline = time.time() + 5.0
+        while b"\n" not in buf and time.time() < deadline:
+            buf += client.recv(4096)
+        record = json.loads(buf.split(b"\n")[0])
+        client.close()
+        assert record["fix"] is True and abs(record["lat"] - (52 + 31.2 / 60)) < 1e-6, record
+    finally:
+        out.close()
+
+
 def test_the_position_socket_is_the_one_the_config_names(tmp_path):
     """The generated config must point at exactly the path the bridge creates — a mismatch
     would leave the host app dialing a socket that never appears."""

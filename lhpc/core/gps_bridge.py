@@ -42,6 +42,7 @@ from .gps import (  # noqa: F401 -- the classifier names are re-exported for the
     OUT_PTY,
     NmeaSnapshot,
     _coords_present,
+    _nmea_coord,
     bridge_endpoint_path,
     bridge_state_dir,
     carries_position,
@@ -401,18 +402,9 @@ class PosJsonServerOutput(_Output):
 
     @staticmethod
     def _parse_coord(value: bytes, hemi: bytes, is_lat: bool) -> float | None:
-        """ddmm.mmmm / dddmm.mmmm + hemisphere -> signed decimal degrees."""
-        try:
-            text = value.strip().decode("ascii")
-            head = 2 if is_lat else 3
-            deg = int(text[:head])
-            minutes = float(text[head:])
-        except (ValueError, IndexError):
-            return None
-        result = deg + minutes / 60.0
-        if hemi.strip().upper() in (b"S", b"W"):
-            result = -result
-        return result
+        """ddmm.mmmm / dddmm.mmmm + hemisphere -> signed decimal degrees, validated exactly as
+        the Monitor does (a malformed field is None, never a different plausible position)."""
+        return _nmea_coord(value, hemi, is_lat)
 
     # NMEA field offsets of (lat, N/S, lon, E/W) per navigation sentence kind.
     _COORD_FIELDS: ClassVar[dict] = {b"GGA": 2, b"RMC": 3, b"GLL": 1, b"GNS": 2}
