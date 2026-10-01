@@ -68,6 +68,26 @@ def test_connection_failure_is_unavailable():
     assert not r["ok"] and r["state"] == "unavailable" and r["error"]
 
 
+def test_an_unsupported_address_family_falls_through_to_the_next_address(fake_gpsd, monkeypatch):
+    """`localhost` resolving to ::1 first on a box with IPv6 disabled: the IPv6 socket cannot even
+    be created, and the IPv4 address after it must still be tried."""
+    import errno
+    srv = fake_gpsd(json_lines=[VERSION, DEV_A, _tpv(3)])
+    real_socket = socket.socket
+
+    def _socket(family=-1, *a, **k):
+        if family == socket.AF_INET6:
+            raise OSError(errno.EAFNOSUPPORT, "Address family not supported by protocol")
+        return real_socket(family, *a, **k)
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [
+        (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::1", srv.port, 0, 0)),
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", srv.port))])
+    monkeypatch.setattr(socket, "socket", _socket)
+    r = _gps.gpsd_snapshot("localhost", srv.port, timeout=1.2)
+    assert r["ok"] and r["state"] == "3d", r
+
+
 def test_empty_devices_is_no_device_and_exits_early(fake_gpsd):
     r = _snap(fake_gpsd, DEV_NONE, _tpv(3))
     assert r["ok"] and r["state"] == "no-device" and r["lat"] is None

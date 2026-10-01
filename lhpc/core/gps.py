@@ -929,7 +929,11 @@ def _gpsd_connect(host: str, port: int, deadline: float):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return None, "budget exhausted while connecting"
-        s = socket.socket(family, stype, proto)
+        try:
+            s = socket.socket(family, stype, proto)
+        except OSError as exc:            # e.g. IPv6 disabled while ::1 resolves first
+            last = f"{type(exc).__name__}: {exc}"
+            continue
         s.settimeout(remaining)
         try:
             s.connect(addr)
