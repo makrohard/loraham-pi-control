@@ -109,7 +109,8 @@ def _valid(d, log: str) -> bool:
             return False
     if not (isinstance(d.get("detail", ""), str) and len(d.get("detail", "")) <= _MAX_DETAIL + 40):
         return False
-    if d["state"] in _TERMINAL and not _TS_RE.match(d.get("finished_at", "")):
+    fin = d.get("finished_at", "")
+    if d["state"] in _TERMINAL and not (isinstance(fin, str) and _TS_RE.match(fin)):
         return False        # a terminal record MUST carry a valid completion time
     di = d.get("driver_ident")
     return not (di is not None and not isinstance(di, dict))

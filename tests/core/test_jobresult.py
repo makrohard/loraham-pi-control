@@ -93,6 +93,16 @@ def test_read_results_skips_untrusted(tmp_path):
     assert got == {_LOG}                                   # only the valid one
 
 
+@pytest.mark.parametrize("fin", [0, False, []])
+def test_read_results_skips_a_terminal_marker_with_a_falsy_non_string_finished_at(tmp_path, fin):
+    p = _p(tmp_path)
+    runtime_fs.ensure_dir(p, p.under("state", "jobresults"))
+    assert _reserve(p)                                     # one valid marker
+    (p.under("state", "jobresults") / "a.log.json").write_text(json.dumps(
+        {"op": "build", "state": "done", "log": "a.log", "attempt_id": "abcdef12", "finished_at": fin}))
+    assert {log for log, _ in jobresult.read_results(p)} == {_LOG}   # never raises
+
+
 def test_prune_done_removes_old_done_retains_failed(tmp_path):
     p = _p(tmp_path)
     assert _reserve(p, attempt=_A, log="build-a.log")
