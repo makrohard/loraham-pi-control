@@ -3,6 +3,8 @@ all attempt-id-guarded (parallels the HMAC driver gate)."""
 
 import os
 
+import pytest
+
 from lhpc.core import build_launcher_runtime, jobresult, procident, webjob_gate
 from lhpc.core import jobs
 from lhpc.core.paths import Paths
@@ -467,6 +469,30 @@ def test_spawn_web_job_captures_then_releases_admission_before_publishing(tmp_pa
     log, admission, _ = svc.spawn_web_job("build", "meshcom")
     assert log and admission == "admitted"
     assert seen and all(free and ident for _op, _cid, free, ident in seen), seen
+
+
+def test_spawn_web_job_secondary_raise_releases_its_admission(tmp_path, monkeypatch):
+    # A secondary component job that raises while spawning must release its own task admission: a
+    # leaked hold made this thread's next task "re-entrant", admitted past the uninstall guard.
+    from lhpc.core import updater_units
+    from lhpc.core.lifecycle import Lifecycle
+    svc = _svc(tmp_path)
+    _runner_env(monkeypatch, tmp_path)
+    calls = []
+
+    def spawn(self, name, argv, cwd, env=None):
+        calls.append(name)
+        if len(calls) > 1:
+            raise RuntimeError("secondary spawn failed")
+        return f"{name}.log", os.getpid()
+    monkeypatch.setattr(Lifecycle, "spawn_job", spawn)
+    monkeypatch.setattr(ControllerService, "_track_or_terminate", lambda self, *a, **k: "")
+    monkeypatch.setattr(ControllerService, "_web_admit_handshake", lambda self, log, aid: ("admitted", ""))
+    with pytest.raises(RuntimeError):
+        svc.spawn_web_job("build", "meshcom")
+    assert len(calls) == 2
+    (tmp_path / updater_units.UNINSTALL_GUARD).write_text('{"pid": 1, "nonce": "x"}')
+    assert svc.hmac_apply_start("meshcom", "enable").data.get("admission_blocked")
 
 
 def test_spawn_start_job_second_start_is_a_typed_already_in_progress(tmp_path, monkeypatch):

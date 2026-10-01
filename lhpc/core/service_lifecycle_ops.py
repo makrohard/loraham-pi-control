@@ -3572,7 +3572,8 @@ class LifecycleOpsMixin:
                 except (AdmissionRefused, reslock.ResourceBusy):
                     _sec.close()
                     break
-                _launch(fn, _sec)
+                with _sec:                      # released even if the spawn raises
+                    _launch(fn, _sec)
             self.prune_logs()
             return plog, admission, build_dep_note
 
