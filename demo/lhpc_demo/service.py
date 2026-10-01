@@ -537,6 +537,14 @@ class DemoService(ControllerService):
             return ActionResult(False, f"{sid} is not installed yet.")
         if sid != "daemon" and not d["built"]:
             return ActionResult(False, f"{sid} needs building before it can run.")
+        # Same refusal as start/stop: restarting the STACK for an optional part would report a
+        # restart the dashboard then shows as stopped.
+        raw = str(getattr(target, "id", target) or "")
+        if raw and raw != sid and self.stack(sid) is not None:
+            comp = self.stack(sid).component(raw)
+            if comp is not None and getattr(comp, "optional", False):
+                return ActionResult(False, f"'{raw}' is an optional component — the demo "
+                                    "restarts stacks, not individual optional parts.")
         if sid == "daemon":
             bands = self._daemon_start_bands(k)
             if apply:

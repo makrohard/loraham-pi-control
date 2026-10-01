@@ -39,6 +39,10 @@ try:
     dov = svc.dependency_overview()
     assert dov["mandatory_missing"] == 0 and dov["optional_missing"] == 0
     R["default_state"] = f"{len(ids)} installed, 0 running, {dov['mandatory_missing']} mandatory-missing"
+    # An optional component is refused for RESTART exactly as for start/stop — never a
+    # "Restarted meshcore" that runs the stack while the part asked for stays stopped.
+    assert svc.restart("meshcore-webui", apply=True).ok is False
+    assert not svc.stack_running("meshcore"), "restarting an optional part must not start its stack"
     # FULL STACK: starting graywolf auto-starts its KISS TNC dependency (a partner it reaches
     # RF through, NOT a band rival to stop), and the optional/mutually-exclusive kiss-serial
     # stays stopped — a running stack runs its REQUIRED parts, not spuriously its optional ones.
