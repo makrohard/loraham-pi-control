@@ -367,6 +367,15 @@ def open_marker_excl(paths: Paths, path: Path, text: str, mode: int = 0o600) -> 
             marker.st_dev, marker.st_ino = st.st_dev, st.st_ino
         except BaseException:
             try:
+                # the leaf WE just created: never leave it half-written — but unlink it only while
+                # the visible name is still OUR inode (fstat before the fd is closed)
+                ours = os.fstat(file_fd)
+                seen = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                if (seen.st_ino, seen.st_dev) == (ours.st_ino, ours.st_dev):
+                    os.unlink(name, dir_fd=parent_fd)
+            except OSError:
+                pass
+            try:
                 marker.close()                  # closes file_fd AND the dup'd parent fd
             except NameError:
                 os.close(file_fd)               # dup failed before marker existed

@@ -302,6 +302,50 @@ def test_owned_marker_rewrite_and_remove_refuse_replacement(tmp_path):
         m.close()
 
 
+def test_open_marker_excl_removes_its_leaf_when_the_write_fails(tmp_path, monkeypatch):
+    # A transient ENOSPC must not leave an empty leaf that reads as a malformed marker forever.
+    import errno
+    import os
+
+    import pytest
+
+    from lhpc.core import runtime_fs
+    from lhpc.core.paths import Paths
+    paths = Paths(runtime_root=tmp_path / "rt")
+    p = paths.under("state", "source-txn", "j.json")
+    def enospc(fd, data):
+        raise OSError(errno.ENOSPC, "No space left on device")
+    monkeypatch.setattr(os, "write", enospc)
+    with pytest.raises(OSError):
+        runtime_fs.open_marker_excl(paths, p, "v1")
+    monkeypatch.undo()
+    assert not p.exists()
+    runtime_fs.open_marker_excl(paths, p, "v1").close()     # the next attempt is not blocked
+
+
+def test_open_marker_excl_cleanup_spares_a_leaf_replaced_after_the_failure(tmp_path, monkeypatch):
+    # The failure cleanup unlinks only OUR inode: a leaf another process put under that name
+    # between the failed write and the cleanup survives.
+    import errno
+    import os
+
+    import pytest
+
+    from lhpc.core import runtime_fs
+    from lhpc.core.paths import Paths
+    paths = Paths(runtime_root=tmp_path / "rt")
+    p = paths.under("state", "source-txn", "j.json")
+    def enospc_then_replaced(fd, data):
+        os.unlink(p)                             # someone else swaps the name...
+        p.write_text("theirs")                   # ...for their own file
+        raise OSError(errno.ENOSPC, "No space left on device")
+    monkeypatch.setattr(os, "write", enospc_then_replaced)
+    with pytest.raises(OSError):
+        runtime_fs.open_marker_excl(paths, p, "v1")
+    monkeypatch.undo()
+    assert p.read_text() == "theirs"
+
+
 def test_owned_marker_complete_write_under_partial_os_write(tmp_path, monkeypatch):
     # §3: OwnedMarker writes the COMPLETE payload even when os.write consumes 1 byte at a time.
     import os
