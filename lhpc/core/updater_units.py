@@ -532,6 +532,8 @@ def verify(user_dir: Path, kind: str, root: str, checkout: str, venv: str) -> st
         text = _read_unit(unit_path)
     except FileNotFoundError:
         return MISSING
+    except UnicodeDecodeError:                            # not UTF-8 → not ours to parse
+        return UNREADABLE
     except OSError as exc:
         # ELOOP / symlink leaf (e.g. a mask → /dev/null) is O_NOFOLLOW-rejected → unsafe;
         # other read errors → unreadable.

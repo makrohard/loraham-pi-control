@@ -183,6 +183,14 @@ def test_verify_unsafe_symlinked_dir(tmp_path):
     assert U.verify(ud, U.WEB_UNIT, ROOT, CO, VENV) == U.UNSAFE
 
 
+def test_verify_returns_unreadable_for_undecodable_bytes(tmp_path):
+    ud = tmp_path / ".config" / "systemd" / "user"
+    ud.mkdir(parents=True)
+    (ud / U.WEB_UNIT).write_bytes(b"x\xff\n")
+    assert U.verify(ud, U.WEB_UNIT, ROOT, CO, VENV) == U.UNREADABLE
+    assert U.integration(ud, ROOT)["per_unit"][U.WEB_UNIT] == U.UNREADABLE
+
+
 # --- write_set() -----------------------------------------------------------------------------
 
 def test_write_set_writes_missing_and_restores_modified(tmp_path):
