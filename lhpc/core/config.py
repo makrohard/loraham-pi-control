@@ -1685,6 +1685,11 @@ def _resolve_journal_target(paths: Paths, rec) -> Path:
     kind, rel = rec.get("kind"), rec.get("rel")
     if kind not in _ALLOWED_KINDS:
         raise ConfigError(f"unknown journal target kind {kind!r}")
+    pre, mode = rec.get("pre", ""), rec.get("mode", 0o644)
+    # an absent target journals pre=None; anything else must be a real str / a real int
+    if not ((isinstance(pre, str) or (pre is None and not rec.get("existed")))
+            and type(mode) is int):
+        raise ConfigError("malformed journal target pre-image or mode")
     if (not isinstance(rel, str) or not rel or os.path.isabs(rel)
             or rel != os.path.normpath(rel) or ".." in rel.split("/")):
         raise ConfigError(f"unsafe journal target path {rel!r}")
@@ -1748,7 +1753,7 @@ def recover_config_transaction(paths: Paths) -> str | None:
     for p, rec in resolved:
         try:
             if rec.get("existed"):
-                _atomic_write(paths, p, rec.get("pre") or "", int(rec.get("mode", 0o644)))
+                _atomic_write(paths, p, rec.get("pre", ""), rec.get("mode", 0o644))
             else:
                 runtime_fs.unlink(paths, p)           # descriptor-anchored, no-follow
         except (OSError, PathContainmentError):

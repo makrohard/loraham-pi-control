@@ -666,6 +666,28 @@ def test_dangling_internal_journal_symlink_blocks_not_absent(tmp_path):
     assert not r.ok and any("recovery-required" in d for d in r.details)
 
 
+@pytest.mark.parametrize("bad", [{"mode": "rw"}, {"pre": 5}, {"pre": 0}, {"mode": True},
+                                 {"pre": None}])
+def test_malformed_journal_pre_or_mode_blocks_not_raises(tmp_path, bad):
+    # A journal whose pre-image or mode has the wrong type is malformed: it BLOCKS before
+    # anything is restored, never escapes as ValueError/AttributeError half-way through.
+    import json
+
+    from lhpc.core import config as cfgmod
+    from lhpc.core.paths import Paths
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir()
+    (tmp_path / "config" / "stacks").mkdir(parents=True)
+    (tmp_path / "config" / "local.toml").write_text("CURRENT")
+    good = {"kind": "local", "rel": "config/local.toml", "pre": "P", "existed": True, "mode": 0o644}
+    second = {"kind": "stack", "rel": "config/stacks/x.toml", "pre": "S", "existed": True,
+              "mode": 0o644, **bad}
+    cfgmod._txn_journal(paths).write_text(json.dumps({"version": 1, "targets": [good, second]}))
+    assert cfgmod.recover_config_transaction(paths) == ""            # BLOCK, no exception
+    assert (tmp_path / "config" / "local.toml").read_text() == "CURRENT"   # nothing restored
+    assert cfgmod._txn_journal(paths).exists()                       # journal retained
+
+
 def test_external_journal_symlink_blocks_not_raises(tmp_path):
     # A journal symlink whose target ESCAPES the runtime root makes Paths.under() (via
     # realpath) raise PathContainmentError while locating the journal — recovery must
