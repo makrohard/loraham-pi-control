@@ -27,6 +27,12 @@ from .paths import Paths
 _KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
+class LockOpenError(OSError):
+    """A lock file could not be opened or created (e.g. an unwritable lock folder or lock file).
+    A failure to open the lock does not establish that anyone holds it, so it is not reported as
+    "busy". An OSError, so a caller that caught the raw error still does."""
+
+
 class ResourceBusy(Exception):
     """A conflicting operation already holds the resource lock."""
 
@@ -110,7 +116,10 @@ def operation_lock(paths: Paths, resource_key: str, operation: str,
     """
     key = canonical_key(resource_key)
     lockfile = paths.under("state", "locks", key + ".lock")
-    fh = runtime_fs.open_lock(paths, lockfile)
+    try:
+        fh = runtime_fs.open_lock(paths, lockfile)
+    except OSError as exc:
+        raise LockOpenError(exc.errno, f"lock {key!r}: {exc.strerror or exc}") from exc
     pub = _publish_lock(key)
     owner = json.dumps({
         "resource": key, "operation": operation, "target": target,

@@ -65,13 +65,15 @@ def _rel_parts(paths: Paths, path: Path) -> tuple[str, ...]:
 
 
 @contextmanager
-def _walk_parent(paths: Paths, path: Path, *, create: bool):
+def _walk_parent(paths: Paths, path: Path, *, create: bool, dir_mode: int | None = None):
     """Descriptor-anchored descent to `path`'s PARENT under the runtime root. Yields
     (parent_fd, leaf_name). The runtime root is opened `O_DIRECTORY|O_NOFOLLOW`; each
     intermediate component is opened relative to its parent fd with the same flags (a
     symlink or non-directory component raises `PathContainmentError`). With `create=True`,
     intermediate directories are created one component at a time relative to the held
-    parent fd. Every descriptor is closed on exit."""
+    parent fd; with `dir_mode`, each directory THIS call creates under the root gets exactly that
+    mode, whatever the umask (chmod right after its mkdir, fchmod again on the O_NOFOLLOW
+    descriptor). Every descriptor is closed on exit."""
     parts = _rel_parts(paths, path)
     root = str(paths.runtime_root)
     if create:
@@ -81,11 +83,20 @@ def _walk_parent(paths: Paths, path: Path, *, create: bool):
     fds = [os.open(root, os.O_RDONLY | os.O_DIRECTORY)]
     try:
         for comp in parts[:-1]:
+            made = False
             if create:
                 try:
                     os.mkdir(comp, 0o755, dir_fd=fds[-1])
+                    made = True
                 except FileExistsError:
                     pass
+                if made and dir_mode is not None:
+                    # Before the open: under a umask that masks the owner's own bits (0777) the
+                    # new folder is 0000 and could not even be opened. The name was created by
+                    # this call an instant ago in our walked parent; the O_NOFOLLOW|O_DIRECTORY
+                    # open below still refuses a symlink or a non-directory put in its place (the
+                    # folders under the runtime root are the controller's own).
+                    os.chmod(comp, dir_mode, dir_fd=fds[-1])
             try:
                 fds.append(os.open(comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                                    dir_fd=fds[-1]))
@@ -95,6 +106,8 @@ def _walk_parent(paths: Paths, path: Path, *, create: bool):
                 raise PathContainmentError(
                     f"runtime path component {comp!r} is a symlink or not a "
                     f"directory: {exc}") from exc
+            if made and dir_mode is not None:
+                os.fchmod(fds[-1], dir_mode)
         yield fds[-1], parts[-1]
     finally:
         for fd in reversed(fds):
@@ -442,10 +455,11 @@ def cap_start_log(paths: Paths, path: Path, *, max_bytes: int = START_LOG_MAX_BY
         finally:
             os.close(fd)
 
-def _open_leaf(paths: Paths, path: Path, flags: int, mode: int, *, create_dirs: bool):
+def _open_leaf(paths: Paths, path: Path, flags: int, mode: int, *, create_dirs: bool,
+               dir_mode: int | None = None):
     """Open a runtime leaf relative to its descriptor-anchored parent fd. Returns the open
     fd (the parent fds are closed; the leaf fd stays open)."""
-    with _walk_parent(paths, path, create=create_dirs) as (parent_fd, name):
+    with _walk_parent(paths, path, create=create_dirs, dir_mode=dir_mode) as (parent_fd, name):
         return os.open(name, flags, mode, dir_fd=parent_fd)
 
 
@@ -496,10 +510,18 @@ def open_log_truncate(paths: Paths, path: Path):
 
 def open_lock(paths: Paths, path: Path):
     """Open a runtime lock file for exclusive flock, anchored O_NOFOLLOW+O_NONBLOCK; refuse a
-    non-regular leaf (a FIFO/socket/device lock target is never valid). Caller flocks."""
+    non-regular leaf (a FIFO/socket/device lock target is never valid). Caller flocks.
+    A folder it creates under the runtime root is 0700 and the lock file 0600 whatever the
+    caller's umask: under a strict umask (0277) they came out 0500/0400, and the next lock could
+    not be created. A missing runtime root itself is still made under the umask."""
     fd = _open_leaf(paths, path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600,
-                    create_dirs=True)
+                    create_dirs=True, dir_mode=0o700)
     _require_regular_fd(fd, path)
+    try:
+        os.fchmod(fd, 0o600)
+    except OSError:
+        os.close(fd)
+        raise
     return os.fdopen(fd, "w")
 
 

@@ -5,6 +5,11 @@
 - After "Update & restart now" the console shows its "Restarting" page before it stops; before, a fast restart
   could stop it first and the browser got the proxy's "Not responding" page instead (the update itself was not
   affected). Effective from the next update after this version: the page comes from the console being updated.
+- The controller's lock folders under the runtime root and its lock files are created 0700 and 0600
+  whatever the caller's umask; under a strict umask (0277) on an empty runtime root they came out
+  0500/0400 and the next command failed with a permission error. A lock the secrets commands cannot
+  open (an unwritable lock folder or lock file) is now named as such, instead of "Another operation
+  holds the controller's locks" or a traceback.
 
 ## 0.11.7
 

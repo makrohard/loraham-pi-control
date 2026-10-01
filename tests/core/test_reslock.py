@@ -320,3 +320,30 @@ def test_unknown_owner_still_fails_after_the_bounded_grace(tmp_path, monkeypatch
         proc.terminate(); proc.join(10)
         if proc.is_alive():
             proc.kill(); proc.join()
+
+
+@pytest.mark.needs_nonroot
+@pytest.mark.parametrize("umask", [0o277, 0o777])
+def test_a_fresh_root_under_a_strict_umask_takes_its_locks(tmp_path, umask):
+    """Finding 31: the lock folder and files were created under the caller's umask; under 0277
+    they came out 0500/0400 and the next lock could not be created (PermissionError); under 0777
+    the new folder was 0000 and could not even be opened. The lock layer now makes each folder it
+    creates under the (existing) runtime root 0700 and each lock file 0600, whatever the umask."""
+    import os
+    import stat
+    paths = Paths(runtime_root=tmp_path)
+    old = os.umask(umask)
+    try:
+        with reslock.operation_lock(paths, "first", "op"):
+            pass
+        with reslock.operation_lock(paths, "second", "op"):     # a second file in that folder
+            pass
+        with reslock.operation_lock(paths, "first", "op"):      # and the first one again
+            pass
+    finally:
+        os.umask(old)
+    mode = lambda p: stat.S_IMODE(os.stat(p).st_mode)
+    locks = tmp_path / "state" / "locks"
+    assert mode(tmp_path / "state") == 0o700 and mode(locks) == 0o700
+    files = sorted(p.name for p in locks.glob("*.lock"))
+    assert len(files) == 2 and all(mode(locks / f) == 0o600 for f in files)

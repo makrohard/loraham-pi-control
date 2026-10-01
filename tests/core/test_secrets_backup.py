@@ -926,3 +926,49 @@ def test_a_re_encoded_client_ca_is_the_same_ca(tmp_path):
     ca.write_bytes(ca.read_bytes().replace(b"\n", b"\r\n"))   # the same certificate, other bytes
     r = svc.secrets_restore(str(tmp_path / "b.tar"), only_pki=True, choice="overwrite")
     assert r.ok and not any("previous client CA" in d for d in r.details)
+
+
+@pytest.mark.needs_nonroot
+def test_an_unopenable_controller_lock_is_named_not_reported_busy(tmp_path):
+    """Finding 31: a lock file the restore cannot open (here the controller-runtime lock, 0400)
+    was reported as "Another operation holds the controller's locks" — a false busy."""
+    a = _root(tmp_path, "a")
+    _backup(_seed(a), tmp_path / "b.tar")
+    b = _root(tmp_path, "b")
+    _seed(b)
+    before = _tree(b)
+    lock = b / "state" / "locks" / "controller-runtime"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("")
+    lock.chmod(0o400)
+    try:
+        r = _svc(b).secrets_restore(str(tmp_path / "b.tar"), choice="overwrite")
+    finally:
+        lock.chmod(0o600)
+    assert not r.ok and "lock could not be opened" in r.summary, r.summary
+    assert "Another operation" not in r.summary
+    assert _tree(b) == before
+
+
+@pytest.mark.needs_nonroot
+def test_a_read_only_lock_folder_is_named_not_a_traceback(tmp_path):
+    """Finding 33: with `state/locks/` read-only (0500, no lock files) the task admission, taken
+    BEFORE the runtime lock, could not create its lock file and the PermissionError escaped as a
+    traceback. It is named like any lock that could not be opened, and nothing is written."""
+    a = _root(tmp_path, "a")
+    _backup(_seed(a), tmp_path / "b.tar")
+    b = _root(tmp_path, "b")
+    _seed(b)
+    locks = b / "state" / "locks"
+    for f in locks.glob("*"):
+        f.unlink()
+    before = _tree(b)
+    locks.chmod(0o500)
+    try:
+        r = _svc(b).secrets_restore(str(tmp_path / "b.tar"), choice="overwrite")
+    finally:
+        locks.chmod(0o700)
+    assert not r.ok and "lock could not be opened" in r.summary, r.summary
+    assert "Another operation" not in r.summary
+    assert _tree(b) == before
+

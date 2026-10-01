@@ -89,8 +89,10 @@ class SecretsOpsMixin:
             return ActionResult(False, "The console is running: stop it first, then run the restore "
                                 "again, and start it afterwards.",
                                 next_commands=[_CONSOLE_STOP, _CONSOLE_START])
-        if isinstance(exc, (reslock.ResourceBusy, _config.ConfigLockBusy,
-                            selfupdate.ControllerRuntimeLockError)):
+        if isinstance(exc, (selfupdate.ControllerRuntimeLockError, reslock.LockOpenError)):
+            return ActionResult(False, f"The controller's lock could not be opened ({exc}); "
+                                "nothing was backed up or restored.")
+        if isinstance(exc, (reslock.ResourceBusy, _config.ConfigLockBusy)):
             return ActionResult(False, "Another operation holds the controller's locks; nothing was "
                                 "backed up or restored. Try again shortly.")
         return None
