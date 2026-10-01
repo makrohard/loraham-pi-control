@@ -184,6 +184,21 @@ def test_cleared_on_verified_stop_and_next_start_hint(tmp_path):
     assert svc2.restart_required("chat") is None
 
 
+def test_a_single_band_daemon_stop_keeps_the_marker(tmp_path):
+    # The daemon serves 433 and 868 as two instances; a change pending on 868 must survive a stop of
+    # 433 only (a client releasing its band), since the 868 instance still runs the old config.
+    from lhpc.core import restart_required as rr
+    svc = _svc(tmp_path)
+    assert svc.active_bands() == ("433", "868")
+    d = tmp_path / "state" / "restart-required"
+    d.mkdir(parents=True)
+    (d / "daemon.json").write_text(rr.merged_payload(None, "daemon", ["hipower_868"], "868", now=1.0))
+    assert svc.stop("daemon", apply=True, band="433").ok
+    assert _marker(tmp_path, "daemon") is not None
+    assert svc.stop("daemon", apply=True).ok                         # a whole-daemon stop clears it
+    assert _marker(tmp_path, "daemon") is None
+
+
 def test_unsafe_marker_is_safe_side_tri_state(tmp_path):
     # A PRESENT but unreadable/malformed/symlinked/mismatched marker must NOT look like
     # "no restart required": the read is TRI-STATE and unsafe states surface a safe-side

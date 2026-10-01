@@ -2614,8 +2614,10 @@ class LifecycleOpsMixin:
         # A VERIFIED stack stop retires the last-start candidate (the running state it
         # captured no longer exists, so the confirm-known-working offer must disappear) and
         # clears the restart-required flag (the stale processes are gone; the next start uses
-        # the saved config).
-        if ok and apply and self.stack(target) is not None:
+        # the saved config). A per-band daemon stop that leaves another served band's instance
+        # running is not a stack stop: that instance still runs the old config.
+        _whole = not _daemon_band_stop or {band, *other_bands} >= set(self.active_bands())
+        if ok and apply and self.stack(target) is not None and _whole:
             from . import known_working
             # A candidate-clear failure is reported, never swallowed: a still-present candidate
             # marker keeps the "confirm this stack as working" offer eligible for a stack that
