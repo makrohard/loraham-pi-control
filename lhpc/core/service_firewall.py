@@ -1338,12 +1338,21 @@ def _atomic_write_script(path, text, mode=0o755):
     d = os.path.dirname(path)
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-")
     try:
-        os.write(fd, text.encode("utf-8"))
-        os.fsync(fd)
-        os.fchmod(fd, mode)
-    finally:
-        os.close(fd)
-    os.replace(tmp, path)
+        try:
+            buf = memoryview(text.encode("utf-8"))
+            while buf:                                  # os.write may write short
+                buf = buf[os.write(fd, buf):]
+            os.fsync(fd)
+            os.fchmod(fd, mode)
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)                              # never leave a .tmp-* behind
+        except OSError:
+            pass
+        raise
     try:
         dfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY)
         try:

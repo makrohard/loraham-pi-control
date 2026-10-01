@@ -406,6 +406,35 @@ def _seed_meta(etc, ownership="fixedid01"):
                                  "ownership_id": ownership}), 0o644)
 
 
+def _atomic_writers():
+    from lhpc.core import firewall_helper as fh
+    from lhpc.core import service_firewall as sf
+    return [fh.atomic_write, sf._atomic_write_script]
+
+
+@pytest.mark.parametrize("which", [0, 1], ids=["helper-atomic_write", "service-atomic_write_script"])
+def test_atomic_write_leaves_no_temp_file_when_the_write_fails(tmp_path, monkeypatch, which):
+    import errno
+    import os as _os
+    write = _atomic_writers()[which]
+    def eio(fd):
+        raise OSError(errno.EIO, "I/O error")
+    monkeypatch.setattr(_os, "fsync", eio)
+    with pytest.raises(OSError):
+        write(str(tmp_path / "f"), "data", 0o644)
+    assert sorted(p.name for p in tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("which", [0, 1], ids=["helper-atomic_write", "service-atomic_write_script"])
+def test_atomic_write_writes_the_whole_payload_under_short_writes(tmp_path, monkeypatch, which):
+    import os as _os
+    write = _atomic_writers()[which]
+    real = _os.write
+    monkeypatch.setattr(_os, "write", lambda fd, b: real(fd, b[:1]))
+    write(str(tmp_path / "f"), "payload-" * 10, 0o644)
+    assert (tmp_path / "f").read_text() == "payload-" * 10
+
+
 def _expected_live_json(cand, ownership="fixedid01", **kw):
     import json as _json
     from lhpc.core import firewall_helper as fh

@@ -671,12 +671,21 @@ def atomic_write(path, data, mode=0o644):
     d = os.path.dirname(path)
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-")
     try:
-        os.write(fd, data.encode("utf-8"))
-        os.fsync(fd)
-        os.fchmod(fd, mode)
-    finally:
-        os.close(fd)
-    os.replace(tmp, path)
+        try:
+            buf = memoryview(data.encode("utf-8"))
+            while buf:                                  # os.write may write short
+                buf = buf[os.write(fd, buf):]
+            os.fsync(fd)
+            os.fchmod(fd, mode)
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)                              # never leave a .tmp-* behind
+        except OSError:
+            pass
+        raise
     dfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(dfd)
