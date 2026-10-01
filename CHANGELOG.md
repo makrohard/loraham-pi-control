@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.11.10
+
+36 small defects found by a full code review of 0.11.9, each with a regression test. The ones an operator could meet:
+
+- Settings "Reset to defaults" no longer turns HMAC authentication off: the HMAC-managed `password_file` is kept
+  (it was cleared with the other run parameters, without the disable confirmation).
+- `install.sh`: a failed install no longer removes `config/`, `state/` or `backups/` that existed before the
+  install (the rollback snapshot compared newline-separated names against space-separated ones); units written
+  before a render failure are now rolled back too.
+- A per-band daemon stop keeps the restart-required marker and the known-working candidate of the other band.
+- `lhpc poststart` and the `meshtastic` reconverge give a typed "busy" refusal under lock contention instead of a
+  traceback; a bare web "Update" keeps the stack's installed channel instead of switching it to the binary.
+- The TX test of a client whose band is not served is refused instead of running on another served band.
+- `lhpc webserver start-service` loads the new config into an already running nginx and reports success only
+  when the listener comes up; the firewall gate no longer refuses "console back to local-only" on an AP-managed
+  box; `uninstall --prep` sees a persisted HMAC "unsafe" phase.
+- Daemon integer SETs are ASCII decimal only and sent in canonical form; a failed launcher write settles the
+  web job's reserved attempt; a failed secondary web job releases its admission.
+- No more 500 page or traceback on bad input: non-numeric console/proxy ports and a bad certificate label in
+  `cert export` are typed refusals; a terminal job marker with a non-string `finished_at` is rejected; a non-UTF-8
+  unit file reads as unreadable; a malformed config journal target blocks recovery; non-scalar RF-log fields read
+  as blank.
+- Leftovers removed on failure: the firewall atomic writes' temp files, a marker leaf after a failed write,
+  the atomic-rename probe dirs; a failed binary extraction (tar or containment error) unwinds its transaction; a
+  failed source set-aside mid-switch undoes the checkouts it adopted; the migration record survives a git
+  failure after HEAD moved.
+- `clean` also removes the `.prev.log` halves and the web start/restart logs.
+- Honest reporting: a failed-apply restore that did not succeed says so in the receipt; the status rollup
+  reads degraded when a not-installed main has sidecars up; Graywolf upstream update refuses an unknown
+  installed version; gpsd "unreachable" is not overwritten with "closed"; the next gpsd address is tried when a
+  socket cannot be created; bridge NMEA coordinates are validated as the Monitor's; a demo restart of an
+  optional component is refused like start/stop; a failed packaged-service disable in `bootstrap-deps.sh` goes
+  to the final verdict instead of aborting.
+
 ## 0.11.9
 
 - Docs: one place per fact; shorter; verified against the code.
