@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -264,6 +265,51 @@ def test_install_refuses_foreign_state_entry(tmp_path, leftover):
     r = _run(INSTALL, ["--target", str(root)], home, fb)
     assert r.returncode != 0 and "not a managed stack's app data" in (r.stdout + r.stderr)
     assert not (root / "src").exists()
+
+
+def _fake_toolchain(fakebin: Path, *, clone_fails: bool = False, fail_render: str = "") -> None:
+    """Fakes for a fast install.sh run with no venv and no network: `git clone` fails or makes an
+    empty dir, and `python3.13` hands out a stub venv whose python/pip/lhpc succeed — except
+    `updater_units render <fail_render>`, which fails. Anything else goes to the real Python."""
+    (fakebin / "git").write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "${1:-}" = "clone" ]; then '
+        + ("exit 1" if clone_fails else 'for a in "$@"; do d="$a"; done; mkdir -p "$d"; exit 0')
+        + "; fi\nexit 0\n")
+    venv_py = (
+        "#!/usr/bin/env bash\n"
+        'case "$*" in\n'
+        f'  "-m lhpc.core.updater_units render {fail_render} "*) exit 1 ;;\n'
+        '  "-m lhpc.core.updater_units render "*) echo "[Unit]" ;;\n'
+        '  "-I -") cat >/dev/null ;;\n'
+        "esac\nexit 0\n")
+    (fakebin / "python3.13").write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "${1:-}" = "-m" ] && [ "${2:-}" = "venv" ]; then\n'
+        '  mkdir -p "$3/bin"\n'
+        f"  cat > \"$3/bin/python\" <<'PY'\n{venv_py}PY\n"
+        '  printf "#!/usr/bin/env bash\\nexit 0\\n" > "$3/bin/pip"\n'
+        '  cp "$3/bin/pip" "$3/bin/lhpc"; chmod 755 "$3/bin/"*; exit 0\n'
+        "fi\n"
+        f'exec "{sys.executable}" "$@"\n')
+    for f in ("git", "python3.13"):
+        (fakebin / f).chmod(0o755)
+
+
+def test_install_rollback_keeps_an_uninstall_remainder(tmp_path):
+    """A failure after the snapshot over a several-entry remainder: rollback removes only what
+    this run created — config, profiles, the marker and the stacks' app data stay."""
+    home = tmp_path / "home"
+    home.mkdir()
+    root = home / "loraham-pi-control"
+    _remainder(root)
+    fb = _fake_bin(tmp_path)
+    _fake_toolchain(fb, clone_fails=True)
+    r = _run(INSTALL, ["--target", str(root), "--no-service"], home, fb)
+    assert r.returncode != 0 and "rollback done" in r.stderr, r.stdout + r.stderr
+    assert sorted(p.name for p in root.iterdir()) == [".lhpc-root", "config", "profiles", "state"]
+    assert (root / "config" / "local.toml").is_file()
+    assert (root / "state" / "graywolf" / "graywolf.db").read_text() == "APP-DATA"
 
 
 def test_app_data_list_is_identical_in_both_scripts_and_in_the_docs():

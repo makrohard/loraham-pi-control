@@ -157,8 +157,9 @@ note "target safe: $TARGET_DIR"
 # --------------------------------------------------------------------------- rollback arming
 # Snapshot the pre-existing top-level entries; on ANY failure after this point we remove exactly
 # what we created (all bootstrap-made dirs + units + link), leaving a config-only remainder intact.
+# Space-separated: the rollback matches " $PRE_ENTRIES " on spaces, not on ls -A's newlines.
 [ -e "$TARGET_DIR" ] || TARGET_CREATED=1
-[ ! -d "$TARGET_DIR" ] || PRE_ENTRIES="$(cd "$TARGET_DIR" && ls -A 2>/dev/null || true)"
+[ ! -d "$TARGET_DIR" ] || PRE_ENTRIES="$(cd "$TARGET_DIR" && ls -A 2>/dev/null | tr '\n' ' ' || true)"
 
 rollback() {
 	local ec=$?
