@@ -165,6 +165,7 @@ def conf_socket(band: str) -> str:
 _FREQ_MIN_MHZ = 150.0
 _FREQ_MAX_MHZ = 960.0
 _FREQ_RE = re.compile(r"[0-9]+(?:\.[0-9]+)?")  # ASCII decimal MHz only — \d would match Unicode digits
+_INT_RE = re.compile(r"[+-]?[0-9]+")  # ASCII decimal only — int() also takes "1_0", " 5", Unicode digits
 
 
 def _query(system: System, band: str, command: bytes, prefix: str) -> dict[str, str]:
@@ -322,8 +323,10 @@ def validate_set(key: str, value: str, family: str = "", high_power: bool = Fals
         return None
     if key in _ALLOWED_SET_INT:
         lo, hi = int_range(key, family)
+        if not _INT_RE.fullmatch(value):
+            return f"{key} must be an integer in [{lo}, {hi}]"
         try:
-            n = int(value)
+            n = int(value)                  # past the int-conversion digit limit -> ValueError
         except ValueError:
             return f"{key} must be an integer in [{lo}, {hi}]"
         if lo <= n <= hi:
@@ -506,7 +509,7 @@ def apply_set(system: System, band: str, key: str, value: str) -> tuple[bool, bo
         return False, False, err
     if not is_valid_band(band):
         return False, False, f"invalid band {band!r}"
-    key, value = key.upper(), value.upper()
+    key, value = key.upper(), canonical_value(key, value).upper()   # the validated token, canonical
     sock = conf_socket(band)                     # band already validated above
     try:
         system.unix.send(sock, f"SET {key}={value}\n".encode(), _READ_TIMEOUT)

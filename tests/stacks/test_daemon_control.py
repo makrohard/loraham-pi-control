@@ -58,6 +58,23 @@ def test_apply_set_validates_before_sending():
     assert not ok and "[7, 12]" in detail
 
 
+def test_integer_values_are_ascii_decimal_and_sent_canonical():
+    # int() also takes "1_0", " 10", "10\n" and non-ASCII digits; none of those is a decimal the
+    # daemon parses. A sign or a leading zero is canonicalised, and the socket gets that form.
+    for bad in ("1_0", " 10", "10\n", "\u0661\u0660"):
+        assert dc.validate_set("SF", bad) is not None, bad
+    assert dc.validate_set("SF", "+10") is None
+    assert dc.validate_set("SF", "1" * 5000) == "SF must be an integer in [7, 12]"   # past int()'s digit limit
+    sent = []
+    fs = FakeSystem(unix_replies={dc.conf_socket("433"): b"STATUS SF=10\n"})
+    orig = fs.system.unix.send
+    fs.system.unix.send = lambda path, data, timeout: (sent.append(data), orig(path, data, timeout))[1]
+    ok, _c, _ = dc.apply_set(fs.system, "433", "SF", "010")
+    assert ok and sent == [b"SET SF=10\n"]
+    ok, _c, _ = dc.apply_set(fs.system, "433", "SF", "1_0")
+    assert not ok and sent == [b"SET SF=10\n"]                  # refused before the socket
+
+
 def test_apply_set_confirms_via_readback():
     # The daemon never acks a SET — apply_set sends it, then GETs the field back and
     # confirms the hardware took the value before reporting success.
