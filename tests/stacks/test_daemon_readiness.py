@@ -84,6 +84,20 @@ def test_tx_test_refuses_when_radio_not_ready(tmp_path):
     assert not res.ok and ("READY" in res.summary or any("READY" in d for d in res.details))
 
 
+@pytest.mark.safety("RF-TX-opt-in")
+def test_tx_test_never_moves_a_client_to_another_band(tmp_path, set_call):
+    # meshcom is a 433 stack; with only 868 served, its TX test refuses rather than transmitting on
+    # 868. Only the daemon itself (no band of its own) falls back to the bands it is serving.
+    sys = FakeSystem(unix_replies={"/tmp/loraconf868.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "local.toml").write_text('[radio]\nhardware = "uputronics-868"\n')
+    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
+    set_call(svc)
+    assert svc.active_bands() == ("868",)
+    assert not svc.test("meshcom", tx=True, apply=False).ok
+    assert svc.test("daemon", tx=True, apply=False).ok
+
+
 # --- D: dashboard state is truthful (occupied vs usable) ----------------------
 
 def test_radio_conflict_ignores_a_stack_that_reaches_rf_through_another(tmp_path):

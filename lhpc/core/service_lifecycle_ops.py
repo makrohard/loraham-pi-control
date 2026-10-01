@@ -4047,9 +4047,9 @@ class LifecycleOpsMixin:
             for b in ([c.band] if c.band else []) + list(c.bands):
                 if b and b not in wanted:
                     wanted.append(b)
-        wanted = [b for b in wanted if self.band_active(b)]       # served bands only (radio mode)
-        if not wanted:
-            wanted = list(self.active_bands())
+        # served bands only (radio mode); only a target with no band of its own (the daemon)
+        # falls back to every band it serves — a client is never moved to another band.
+        wanted = [b for b in wanted if self.band_active(b)] if wanted else list(self.active_bands())
         # A TX test drives real RF, so it requires the radio to be READY (not merely a
         # reachable CONF socket): a FAILED/UNINITIALIZED radio must never be TX-tested.
         bands = [b for b in wanted if self.daemon_view(b).ready]
