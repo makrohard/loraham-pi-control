@@ -2856,6 +2856,19 @@ def test_probe_level_renameat2_unsupported_refuses(tmp_path, monkeypatch, make_r
     assert source_registry.read_record(inst.paths, "src/app") is None
 
 
+def test_a_failed_atomic_rename_probe_leaves_no_probe_dir(tmp_path, monkeypatch):
+    paths = Paths(runtime_root=tmp_path / "rt")
+    parent = paths.under("src")
+    parent.mkdir(parents=True)
+    def eperm(parent_fd, old, new):
+        raise OSError(errno.EPERM, "Operation not permitted")
+    monkeypatch.setattr(source_fs, "_rename_noreplace_at", eperm)
+    monkeypatch.setattr(source_fs, "_ATOMIC_OK_DEVS", set())    # no cached positive from another test
+    assert source_fs.require_atomic_rename(paths, parent)       # refused, typed
+    assert source_fs.require_atomic_rename(paths, parent)       # re-probed: failures are not cached
+    assert not list(parent.glob(".lhpc-atomic-probe-*"))
+
+
 def test_a_file_added_during_staging_is_carried(tmp_path, monkeypatch, git, make_repo, installer):
     """The carry inventory is taken INSIDE the activation, so a file created after the initial
     check — while the candidate was still cloning — is still preserved. This is why the

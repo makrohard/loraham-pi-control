@@ -176,6 +176,11 @@ def require_atomic_rename(paths: Paths = None, parent: Path | None = None) -> st
                     os.rmdir(nonce, dir_fd=pfd)
                     return str(exc)
             except OSError as exc:
+                for leftover in (nonce, nonce + "-b"):    # best-effort: never leak a probe dir
+                    try:
+                        os.rmdir(leftover, dir_fd=pfd)
+                    except OSError:
+                        pass
                 return f"atomic-rename probe failed on the source filesystem: {exc}"
             _ATOMIC_OK_DEVS.add(dev)
             return ""
