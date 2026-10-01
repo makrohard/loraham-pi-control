@@ -658,6 +658,16 @@ def test_generic_config_cannot_clear_or_replace_password_file(tmp_path):
     assert not r2.ok and _resolved_pw(svc) == before
 
 
+def test_config_reset_keeps_the_hmac_managed_password_file(tmp_path):
+    # "Reset to defaults" owns the generic Config keys only; clearing password_file would restore open
+    # auth without the disable-confirm gate while the secret stays on disk.
+    svc = _svc(tmp_path)
+    svc.hmac_set_secret("meshcom", "enable")
+    before = _resolved_pw(svc)
+    assert svc.reset_config("meshcom").ok
+    assert _resolved_pw(svc) == before and svc.hmac_status("meshcom") is True
+
+
 def test_hmac_managed_path_still_writes_password_file(tmp_path):
     svc = _svc(tmp_path)
     assert svc.hmac_set_secret("meshcom", "enable").ok and svc.hmac_status("meshcom") is True

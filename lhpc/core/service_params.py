@@ -3335,7 +3335,8 @@ class ParamsConfigMixin:
             return self._unknown_stack(target)
         cfg_band = self._config_band(target, band)
         label = f"'{target}'" + (f" ({cfg_band})" if cfg_band else "")
-        run_names = {p.name for p in self.run_params_for(target)}
+        # The generic Config form's run params: the HMAC-managed password_file is never reset here.
+        run_names = {p.name for c in self.stack(target).components for p in self._form_run_params(c)}
         # A band-switchable stack keeps `autostart_*` and `use_gps` in its BAND-LESS file, so a
         # reset of one band owns that file too; a band-less stack has only the one.
         files = [cfg_band, ""] if cfg_band else [""]
