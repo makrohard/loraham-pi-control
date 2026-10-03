@@ -12,6 +12,13 @@
   a start with a terminal-only part (the Voice terminal variant) counts as successful, and whether a half-finished
   configuration save blocks the next one are now decided from a recorded fact, never from the wording of the
   message you see. The messages themselves are unchanged.
+- A refused update, self-update, build or binary install now says what to do: a command under the
+  CLI's *Next:*, or a *nothing to run here* line naming what has to be fixed on the box. A
+  self-update on a checkout left on a detached HEAD or another branch names the `git … switch
+  main` to run; an update blocked by a `src/.<name>.prev` folder left over from an interrupted
+  update names that folder. The update plan says which version the update fetches instead of
+  "fetch newest". What to run to keep each stack current is one table in
+  [operations](docs/operations.md#keeping-stacks-current).
 
 - Every release is now also installed, built and self-updated on a test box slowed down below a Pi Zero 2 W
   before it ships: an update that would stall or run into a time limit on a slow box turns the release check
