@@ -926,7 +926,8 @@ class MaintenanceOpsMixin:
         restarts the stack if it was running. Refuses when not actually behind upstream."""
         st = self.graywolf_upstream_state(target)
         if not st:
-            return ActionResult(False, f"'{target}' is not an upstream-tracking package")
+            return ActionResult(False, f"'{target}' is not an upstream-tracking package",
+                                next_commands=[f"lhpc update {target} --yes"])
         if not st.get("latest"):
             return ActionResult(False, "run the upstream check first",
                                 next_commands=[f"lhpc status {target}"])
@@ -995,7 +996,11 @@ class MaintenanceOpsMixin:
             runtime_fs.atomic_write(self._paths, marker,
                                     BUILD_MARKER_TEXT + self._consumed_source_lines(main), 0o644)
         except (OSError, PathContainmentError) as exc:
-            return ActionResult(False, f"fetched {version} but could not re-mark built: {exc}")
+            return ActionResult(False, f"fetched {version} but could not re-mark built: {exc}",
+                                details=[f"  the build fetches the pinned release again; run "
+                                         f"`lhpc update {target} --upstream --yes` after it for "
+                                         f"{version}"],
+                                next_commands=[f"lhpc build {target} --yes"])
         notes = [f"  [ok] fetched upstream {version} (verified vs checksums.txt)"]
         restart_ok = True
         # `was_running` was sampled BEFORE a fetch that can run for minutes; an
@@ -1783,7 +1788,10 @@ class MaintenanceOpsMixin:
                 data={"channel": "binary"})
         all_items = self._with_source(target)
         if not all_items:
-            return self._unknown_stack(target) if target else ActionResult(False, "No sources.")
+            return self._unknown_stack(target) if target else ActionResult(
+                False, "No sources.",
+                details=["  nothing to run here — the manifest declares no managed source, so "
+                         "there is nothing to update"])
         # A NAMED component updates exactly itself; a stack (or the empty "all"
         # target) skips its optional libs/firmware — EXCEPT hard build dependencies
         # (`build_requires`, e.g. the daemon's RadioLib), which are updated with their
@@ -1796,7 +1804,10 @@ class MaintenanceOpsMixin:
             items = [(s, c) for s, c in all_items if not c.optional or c.id in required]
         ctx_err = self._auto_install_ctx_error(auto_install_ctx, {c.source.path for _, c in items})
         if ctx_err:
-            return ActionResult(False, f"Refusing to update '{target or 'all'}': {ctx_err}")
+            return ActionResult(False, f"Refusing to update '{target or 'all'}': {ctx_err}",
+                                details=["  nothing to run here — this is an lhpc defect (the "
+                                         "auto-install run's lock context does not match), not a "
+                                         "problem on the box; report it with this message"])
         if not apply:
             # The dry-run is the explicit freshness check (`lhpc update --check`):
             # it is the ONLY place that contacts the remote (git ls-remote). GET web
@@ -1869,21 +1880,34 @@ class MaintenanceOpsMixin:
                     return ActionResult(False, f"Refusing to update '{target or 'all'}': "
                                         "shared-source remote configuration is "
                                         "inconsistent.",
-                                        details=[f"  {c}" for c in conflicts])
+                                        details=[*(f"  {c}" for c in conflicts),
+                                                 "  nothing to run here — the box's operator "
+                                                 "sets one remote for every component of that "
+                                                 "checkout ([remotes] in config/local.toml), "
+                                                 "then retries"])
                 groups, plan_conflicts = self._plan_source_groups(items, source,
                                                                   exact_pin=exact_pin)
                 if plan_conflicts:
                     return ActionResult(False, f"Refusing to update '{target or 'all'}': "
                                         "incompatible source resolutions for a shared "
                                         "checkout.",
-                                        details=[f"  {c}" for c in plan_conflicts])
+                                        details=[*(f"  {c}" for c in plan_conflicts),
+                                                 "  nothing to run here — the stacks sharing "
+                                                 "that checkout ask for different versions; the "
+                                                 "box's operator updates them with one --source "
+                                                 "or re-confirms known-working on each, then "
+                                                 "retries"])
                 # An update REPLACES the source tree, and the MeshCore identity may still
                 # live only in the template inside it. Copy it out now — after every
                 # refusal check, with all locks held, before the first mutation.
                 _id_err = self.meshcore_identity_guard([c for _s, c in items])
                 if _id_err:
                     return ActionResult(False, f"Refusing to update '{target or 'all'}': "
-                                               f"{_id_err}")
+                                               f"{_id_err}",
+                                        details=["  nothing to run here — the MeshCore identity "
+                                                 "could not be copied out of the source; the "
+                                                 "box's operator checks the file named above, "
+                                                 "then retries"])
                 inst = self._installer()
                 out, ok = [], True
                 mutated_paths = []

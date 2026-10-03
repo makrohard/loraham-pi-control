@@ -3182,7 +3182,10 @@ class LifecycleOpsMixin:
         # A caller-supplied run-specific log-base prefix (HMAC apply) is validated BEFORE any path is
         # constructed — a strict controller pattern bound to the FULL 32-hex run id (never marker-time only).
         if log_base_override and not _HMAC_LOG_BASE_RE.match(log_base_override):
-            return ActionResult(False, f"Refusing to build '{target}': invalid log-base prefix")
+            return ActionResult(False, f"Refusing to build '{target}': invalid log-base prefix",
+                                details=["  nothing to run here — this is an lhpc defect (an "
+                                         "internal caller passed a bad log name), not a problem "
+                                         "on the box; report it with this message"])
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
@@ -3319,7 +3322,10 @@ class LifecycleOpsMixin:
         src_paths = sorted({c.source.path for _, c in buildable if c.source})
         ctx_err = self._auto_install_ctx_error(auto_install_ctx, src_paths)
         if ctx_err:
-            return ActionResult(False, f"Refusing to build '{target}': {ctx_err}")
+            return ActionResult(False, f"Refusing to build '{target}': {ctx_err}",
+                                details=["  nothing to run here — this is an lhpc defect (the "
+                                         "auto-install run's lock context does not match), not a "
+                                         "problem on the box; report it with this message"])
         try:
             with self._source_operation_guard(src_paths, op="build"):
                 # A MeshCore build recreates src/openhop-core/.venv — the interpreter an orphaned

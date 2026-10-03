@@ -204,10 +204,12 @@ class BinaryOpsMixin:
             return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
         except reslock.ResourceBusy as _busy:
             _stack.close()
-            return ActionResult(False, f"Binary install of '{stack_id}' blocked: {_busy}")
+            return ActionResult(False, f"Binary install of '{stack_id}' blocked: {_busy}",
+                                next_commands=["lhpc status"])
         except SourceTxnBlocked as _blocked:
             _stack.close()
-            return ActionResult(False, f"Binary install of '{stack_id}' blocked: {_blocked}")
+            return ActionResult(False, f"Binary install of '{stack_id}' blocked: {_blocked}",
+                                next_commands=["lhpc status"])
         with _stack:
             # ---- ONE lock-held boundary. Everything that reads or changes state lives
             # here, in this order: recover an interrupted transaction, read the current
@@ -215,7 +217,11 @@ class BinaryOpsMixin:
             # stopped, THEN open the journal and mutate.
             _rec_ok, _rec_why = self.binary_recover()
             if not _rec_ok:
-                return ActionResult(False, f"Binary install of '{stack_id}' blocked: {_rec_why}")
+                return ActionResult(False, f"Binary install of '{stack_id}' blocked: {_rec_why}",
+                                    details=["  nothing to run here — an earlier binary install left "
+                                             "state under state/binary/ that lhpc could not undo; "
+                                             "the box's operator fixes what is named above, then "
+                                             "the next binary install recovers it"])
             _pstate, _prec, _pwhy = self.binary_receipt_state(stack_id)
             if _pstate == "unsafe" and _prec is None:
                 # UNREADABLE ownership evidence: we cannot know which files the previous
@@ -312,7 +318,10 @@ class BinaryOpsMixin:
 
             baseline, berr = self._binary_registry_baseline(stack_id)
             if berr:
-                return ActionResult(False, f"Binary install of '{stack_id}' blocked: {berr}")
+                return ActionResult(False, f"Binary install of '{stack_id}' blocked: {berr}",
+                                    details=["  nothing to run here — the source ownership record "
+                                             "named above is damaged; the box's operator inspects "
+                                             "and removes it by hand, then retries"])
             txn = secrets.token_hex(8)
             try:
                 runtime_fs.mkdir(self._paths, "state")     # a not-yet-bootstrapped root has none
@@ -320,7 +329,11 @@ class BinaryOpsMixin:
                                           dir=str(self._paths.under("state")))
             except (OSError, PathContainmentError, ValueError) as exc:
                 return ActionResult(False, f"Binary install of '{stack_id}' blocked: cannot create a "
-                                           f"staging directory ({exc})")
+                                           f"staging directory ({exc})",
+                                    details=["  nothing to run here — the runtime root's state/ "
+                                             "folder is not writable (disk full or permissions); "
+                                             "the box's operator frees space or fixes it, then "
+                                             "retries"])
             # AUTHORITATIVE running recheck under the held locks (the source-update pattern):
             # a start that slipped in before the locks must refuse with ZERO mutation — a
             # binary update replaces the executable/firmware the stack is running from.
@@ -820,7 +833,10 @@ class BinaryOpsMixin:
             if _js != "valid" or _j is None or _j.get("stack") != stack_id \
                     or _j.get("txn") != txn:
                 return ActionResult(False, f"Cannot retire the binary install of '{stack_id}': "
-                                           "the open transaction is not this one")
+                                           "the open transaction is not this one",
+                                    details=["  nothing to run here — this is an lhpc defect (a "
+                                             "caller passed another transaction), not a problem "
+                                             "on the box; report it with this message"])
             state, rec, why = brx.receipt_state(self._paths, stack_id)
             return self._retire_body(stack_id, state, rec, why, force=force, locked=locked,
                                      txn=txn)
@@ -887,7 +903,8 @@ class BinaryOpsMixin:
                     False,
                     f"Refusing to retire the binary install of '{stack_id}': installed files "
                     f"changed since installation ({changed}).",
-                    details=["  Remove them by hand, or re-run with the force option."])
+                    details=["  Remove them by hand, or re-run with the force option."],
+                    next_commands=[f"lhpc uninstall {stack_id} --yes"])
         if not locked and (_running := self._binary_running_components(stack_id)):
             return ActionResult(
                 False, f"Refusing to retire the binary install of '{stack_id}': component(s) "
@@ -905,10 +922,15 @@ class BinaryOpsMixin:
             except (bi.BinaryInstallError, OSError, PathContainmentError, ValueError) as exc:
                 return ActionResult(
                     False, f"Cannot retire the binary install of '{stack_id}': its files could "
-                           f"not be moved aside ({exc})")
+                           f"not be moved aside ({exc})",
+                    details=["  nothing to run here — the runtime root is not writable (disk "
+                             "full or permissions); the box's operator fixes it, then retries"])
             if not brx.remove_receipt(self._paths, stack_id):
                 return ActionResult(False, f"Cannot retire the binary install of '{stack_id}': "
-                                           "its receipt could not be removed")
+                                           "its receipt could not be removed",
+                                    details=["  nothing to run here — state/binary/ is not "
+                                             "writable (disk full or permissions); the box's "
+                                             "operator fixes it, then retries"])
             # Prune here too: an emptied publish directory left behind reads as "destination
             # already exists" and the source adoption would SKIP it — a silent no-op install.
             self._prune_empty_dirs(rec.files)
@@ -953,7 +975,10 @@ class BinaryOpsMixin:
                     next_commands=[f"lhpc clean {stack_id} --purge --yes"])
         if not brx.remove_receipt(self._paths, stack_id):
             return ActionResult(False, f"Removed the binary files of '{stack_id}' but could not "
-                                       "remove its receipt — resolve state/binary by hand.")
+                                       "remove its receipt — resolve state/binary by hand.",
+                                details=["  nothing to run here — state/binary/ is not writable "
+                                         "(disk full or permissions); the box's operator fixes "
+                                         "it and removes the receipt by hand"])
         self.invalidate_snapshot()
         return ActionResult(True, f"Retired the binary install of '{stack_id}' "
                                   f"({removed} file(s) removed).")

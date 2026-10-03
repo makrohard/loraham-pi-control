@@ -278,14 +278,23 @@ class SelfUpdateOpsMixin:
                                         "unreadable, corrupt or unsafe. No upstream check was made — "
                                         "recovery needed (inspect state/selfupdate-migrate.json).",
                                         data={"journal_corrupt": True,
-                                              **selfupdate.status_view(self._paths)})
+                                              **selfupdate.status_view(self._paths)},
+                                        details=["  nothing to run here — "
+                                                 "state/selfupdate-migrate.json is damaged; the "
+                                                 "box's operator inspects it and removes it, then "
+                                                 "retries"])
                 if status == "recovery_required":
                     return ActionResult(False, "Self-update check blocked: the checkout is at an "
                                         "unexpected commit for a recorded migration transition. No "
                                         "upstream check was made — recovery required (inspect "
                                         "state/selfupdate-migrate.json).",
                                         data={"recovery_required": True,
-                                              **selfupdate.status_view(self._paths)})
+                                              **selfupdate.status_view(self._paths)},
+                                        details=["  nothing to run here — the checkout is not at "
+                                                 "the commit state/selfupdate-migrate.json "
+                                                 "records (it was moved by hand); the box's "
+                                                 "operator inspects that file and the checkout "
+                                                 "before anything else"])
                 # Embed the LIVE controller-identity verdict into the SAME atomic envelope
                 # write (a separate field could be dropped by a later refresh). GET/status
                 # then renders the cached verdict only.
@@ -297,13 +306,22 @@ class SelfUpdateOpsMixin:
                                 data={**view, "deferred": True})
         except selfupdate.UpdateLockError:
             return ActionResult(False, "Could not check upstream (unsafe runtime state).",
-                                data=selfupdate.status_view(self._paths))
+                                data=selfupdate.status_view(self._paths),
+                                details=["  nothing to run here — the runtime root's state/ "
+                                         "folder is not usable (disk full, permissions or a "
+                                         "damaged lock file); the box's operator fixes it, then "
+                                         "retries"])
         if not view["is_git"]:
             return ActionResult(False, "Self-update is unavailable (lhpc is not a git checkout).",
-                                data=view)
+                                data=view,
+                                details=["  nothing to run here — lhpc is installed without git "
+                                         "(a copied folder or a package); only an install made by "
+                                         "install.sh can self-update — the box's operator "
+                                         "reinstalls it that way"])
         if not view["have_upstream"]:
             return ActionResult(False, f"Could not reach upstream: {view.get('upstream_error', '')}.",
-                                data=view)
+                                data=view,
+                                next_commands=["lhpc self-update"])
         if view["update_available"]:
             msg = (f"Update available — upstream {view['upstream_head_short']}"
                    f" (v{view['upstream_version'] or '?'}).")
@@ -337,7 +355,10 @@ class SelfUpdateOpsMixin:
                 blk = self._self_update_blockers()
                 if blk:
                     return ActionResult(False, f"Self-update blocked: {blk[0]} — resolve it before "
-                                        "self-updating.", data={f"blocked_by_{blk[1]}": True})
+                                        "self-updating.", data={f"blocked_by_{blk[1]}": True},
+                                        details=["  wait for that work to finish (or recover it "
+                                                 "on its page in the console), then retry"],
+                                        next_commands=["lhpc self-update --apply"])
                 # LIVE identity gate (recomputed here, NEVER trusting the cache): only a genuinely
                 # UNSAFE self-hosted checkout blocks apply before any mutation.
                 if self.controller() is not None:
@@ -345,7 +366,14 @@ class SelfUpdateOpsMixin:
                     if idv.get("status") == "unsafe":
                         return ActionResult(False, f"Self-update blocked: unsafe controller identity "
                                             f"({idv['reason']}). No changes were made.",
-                                            data={"identity_unsafe": True, "identity": idv})
+                                            data={"identity_unsafe": True, "identity": idv},
+                                            next_commands=[f"git -C {self._paths.runtime_root}/src/"
+                                                           "loraham-pi-control switch main",
+                                                           "lhpc self-update --apply"],
+                                            details=["  `git switch main` in the checkout fixes "
+                                                     "a detached HEAD or another branch; for any "
+                                                     "other reason above, the box's operator "
+                                                     "restores the layout install.sh made"])
                 # controller-runtime EXCLUSIVE (so the running web server, holding it SHARED, can never
                 # have its source mutated underneath it), THEN the self-update lock. Both non-blocking.
                 with (selfupdate.controller_runtime_lock(self._paths, exclusive=True),
@@ -355,24 +383,34 @@ class SelfUpdateOpsMixin:
             return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
         except reslock.ResourceBusy:
             return ActionResult(False, "A task is starting right now (admission contended) — try the "
-                                "update again shortly.", data={"contended": True})
+                                "update again shortly.", data={"contended": True},
+                                next_commands=["lhpc self-update --apply"])
         except selfupdate.ControllerRuntimeBusy:
             return ActionResult(
                 False, "lhpc-web.service is running — stop it, update, then start it again.",
-                details=["systemctl --user stop lhpc-web",
-                         "lhpc self-update --apply",
-                         "systemctl --user start lhpc-web",
-                         "(or just click 'Update now' in the web console — it does all this)"],
+                details=["(or just click 'Update now' in the web console — it does all this)"],
+                next_commands=["systemctl --user stop lhpc-web",
+                               "lhpc self-update --apply",
+                               "systemctl --user start lhpc-web"],
                 data={"web_running": True})
         except selfupdate.ControllerRuntimeLockError:
             return ActionResult(False, "Could not acquire the controller-runtime lock (unsafe runtime "
-                                "state) — aborting without changes.", data={"lock_error": True})
+                                "state) — aborting without changes.", data={"lock_error": True},
+                                details=["  nothing to run here — the runtime root's state/ "
+                                         "folder is not usable (disk full, permissions or a "
+                                         "damaged lock file); the box's operator fixes it, then "
+                                         "retries"])
         except selfupdate.SelfUpdateBusy:
             return ActionResult(False, "A self-update is already in progress — try again shortly.",
-                                data={"busy": True})
+                                data={"busy": True},
+                                next_commands=["lhpc self-update --apply"])
         except selfupdate.UpdateLockError:
             return ActionResult(False, "Could not acquire the self-update lock (unsafe runtime state) "
-                                "— aborting without changes.", data={"lock_error": True})
+                                "— aborting without changes.", data={"lock_error": True},
+                                details=["  nothing to run here — the runtime root's state/ "
+                                         "folder is not usable (disk full, permissions or a "
+                                         "damaged lock file); the box's operator fixes it, then "
+                                         "retries"])
 
     def _refresh_units_post_update(self):
         """VERIFY the managed units against the NEW checkout, out of process. Returns
@@ -522,7 +560,8 @@ class SelfUpdateOpsMixin:
         if _os.environ.get("INVOCATION_ID"):
             return ActionResult(False, "refusing to stop/start services from a managed unit — run "
                                 "`lhpc self-update --apply` from an interactive operator shell",
-                                data={"reason": "managed-unit"})
+                                data={"reason": "managed-unit"},
+                                next_commands=["lhpc self-update --apply"])
         _S = 30.0
         act = self._system.runner.run(
             ["systemctl", "--user", "is-active", "--quiet", updater_units.WEB_UNIT], _S)
@@ -535,9 +574,9 @@ class SelfUpdateOpsMixin:
                 stop = self._system.runner.run(["systemctl", "--user", "stop", updater_units.WEB_UNIT], _S)
                 if getattr(stop, "not_found", False) or stop.returncode != 0:
                     return ActionResult(False, "could not stop lhpc-web.service — stop it manually then retry",
-                                        details=["systemctl --user stop lhpc-web",
-                                                 "lhpc self-update --apply",
-                                                 "systemctl --user start lhpc-web"],
+                                        next_commands=["systemctl --user stop lhpc-web",
+                                                       "lhpc self-update --apply",
+                                                       "systemctl --user start lhpc-web"],
                                         data={"stop_failed": True})
                 try:
                     res = self._apply_and_sync(force)         # admission still held; venv synced here
@@ -553,13 +592,15 @@ class SelfUpdateOpsMixin:
                                         "with: systemctl --user start lhpc-web.service",
                                         details=tuple(res.details),
                                         data={**dict(res.data), "web_restart_failed": True,
-                                              "update_applied": bool(res.data.get("update_applied"))})
+                                              "update_applied": bool(res.data.get("update_applied"))},
+                                        next_commands=["systemctl --user start lhpc-web.service"])
                 return self._operator_outcome(res, restarted=True)
         except AdmissionRefused as _adm:
             return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
         except reslock.ResourceBusy:
             return ActionResult(False, "A task is starting right now (admission contended) — retry the "
-                                "update.", data={"contended": True})
+                                "update.", data={"contended": True},
+                                next_commands=["lhpc self-update --apply"])
 
     @staticmethod
     def _operator_outcome(res: ActionResult, *, restarted: bool) -> ActionResult:
@@ -597,12 +638,19 @@ class SelfUpdateOpsMixin:
             return ActionResult(False, "Self-update blocked: the migration journal is missing-but-"
                                 "present-unreadable, corrupt or unsafe. No changes were made — recovery "
                                 "needed (inspect / remove state/selfupdate-migrate.json).",
-                                data={"journal_corrupt": True})
+                                data={"journal_corrupt": True},
+                                details=["  nothing to run here — state/selfupdate-migrate.json "
+                                         "is damaged; the box's operator inspects it and removes "
+                                         "it, then retries"])
         if status == "recovery_required":
             return ActionResult(False, "Self-update blocked: the checkout is at an unexpected commit for "
                                 "a recorded migration transition. No changes were made — recovery "
                                 "required (inspect state/selfupdate-migrate.json).",
-                                data={"recovery_required": True})
+                                data={"recovery_required": True},
+                                details=["  nothing to run here — the checkout is not at the "
+                                         "commit state/selfupdate-migrate.json records (it was "
+                                         "moved by hand); the box's operator inspects that file "
+                                         "and the checkout before anything else"])
         completed = env.get("completed") if env else None
         prepared = env.get("prepared") if env else None
 
@@ -626,7 +674,11 @@ class SelfUpdateOpsMixin:
             if anchor is None:                                           # defensive (classifier verified)
                 return ActionResult(False, "Self-update blocked: the recorded migration transition is "
                                     "not authorised by a matching durable anchor. No changes were made "
-                                    "— recovery required.", data={"recovery_required": True})
+                                    "— recovery required.", data={"recovery_required": True},
+                                    details=["  nothing to run here — the migration recorded in "
+                                             "state/selfupdate-migrate.json has no matching "
+                                             "record in the checkout's git; the box's operator "
+                                             "inspects that file before anything else"])
             m, remaining = self._run_migration(anchor["pending"], anchor["from_head"])
             migrated += m
             if remaining:
@@ -676,7 +728,11 @@ class SelfUpdateOpsMixin:
         except selfupdate.JournalPersistError:
             return ActionResult(False, "Refusing to self-update: could not durably record the config-"
                                 "migration intent before changing source. No changes were made.",
-                                data={"journal_write_failed": True})
+                                data={"journal_write_failed": True},
+                                details=["  nothing to run here — the runtime root's state/ "
+                                         "folder is not usable (disk full, permissions or a "
+                                         "damaged lock file); the box's operator fixes it, then "
+                                         "retries"])
 
         # 5. On a REAL advance WITH candidates (hook.written -> a valid anchor + journal exist), promote
         #    the prepared transition to `completed` (keeping the anchor), then migrate. Fully resolved ->
@@ -750,7 +806,8 @@ class SelfUpdateOpsMixin:
             details += [n for n in (migrated_note, pending_note) if n]
             details += list(fw_notes)
             return ActionResult(False, res["message"], data=data,
-                                details=tuple(d for d in details if d))
+                                details=tuple(d for d in details if d),
+                                next_commands=list(instr["commands"]))
         if res.get("already"):                               # nothing to update; may have recovered pending
             details = tuple(n for n in (migrated_note, pending_note) if n)
             return ActionResult(True, res["message"], data=data, details=details)
@@ -858,20 +915,33 @@ class SelfUpdateOpsMixin:
         integ = self.updater_integration()
         if integ["status"] == "recovery_required":
             return ActionResult(False, "A previous update needs recovery first — run "
-                                "`lhpc self-update --recover-request`.", data={"recovery_required": True})
+                                "`lhpc self-update --recover-request`.", data={"recovery_required": True},
+                                next_commands=["lhpc self-update --recover-request"])
         if integ["status"] != "ok":
             return ActionResult(False, "One-click update is unavailable — the web/updater units are "
                                 f"not the canonical managed set ({integ['status']}). Run `lhpc "
                                 "self-update --repair-integration`, or `lhpc self-update --apply`.",
-                                data={"integration": integ["status"]})
+                                data={"integration": integ["status"]},
+                                next_commands=["lhpc self-update --repair-integration",
+                                               "lhpc self-update --apply"])
         st = self.self_update_status()
         if not st.get("available"):
             return ActionResult(False, "Self-update is unavailable — lhpc is not running from a "
-                                "git checkout.", data={"unavailable": True})
+                                "git checkout.", data={"unavailable": True},
+                                details=["  nothing to run here — lhpc is installed without git "
+                                         "(a copied folder or a package); only an install made by "
+                                         "install.sh can self-update — the box's operator "
+                                         "reinstalls it that way"])
         idv = st.get("identity")
         if isinstance(idv, dict) and idv.get("status") == "unsafe":
             return ActionResult(False, "Self-update blocked: unsafe controller identity "
-                                f"({idv.get('reason', '')}).", data={"identity_unsafe": True})
+                                f"({idv.get('reason', '')}).", data={"identity_unsafe": True},
+                                next_commands=[f"git -C {self._paths.runtime_root}/src/"
+                                               "loraham-pi-control switch main",
+                                               "lhpc self-update --apply"],
+                                details=["  `git switch main` in the checkout fixes a detached "
+                                         "HEAD or another branch; for any other reason above, the "
+                                         "box's operator restores the layout install.sh made"])
         mode = "overwrite" if overwrite else "normal"
         import contextlib
 
@@ -886,21 +956,28 @@ class SelfUpdateOpsMixin:
                 self._acquire_key(adm, self.ADMISSION_KEY, "self-update-trigger", "")
             except reslock.ResourceBusy:
                 return ActionResult(False, "A task is starting right now (admission contended) — retry "
-                                    "the update.", data={"contended": True})
+                                    "the update.", data={"contended": True},
+                                    next_commands=["lhpc self-update --apply"])
             except AdmissionRefused as _adm:
                 # The power-pending gate lives INSIDE _acquire_key (one choke point): a
                 # reboot/shutdown in flight must not admit a self-update it would kill.
                 return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
             if self.uninstall_guard_blocks():
                 return ActionResult(False, "A controller uninstall is in progress — cannot self-update.",
-                                    data={"uninstalling": True})
+                                    data={"uninstalling": True},
+                                    next_commands=["lhpc self-update --recover-request"])
             if self.classify_request() != "absent":
                 return ActionResult(False, "An update request is already pending — the console is about "
-                                    "to update.", data={"already_pending": True})
+                                    "to update.", data={"already_pending": True},
+                                    details=["  nothing to run here — the queued update starts by "
+                                             "itself; wait for the console to come back"])
             blk = self._self_update_blockers()
             if blk:
                 return ActionResult(False, f"Self-update blocked: {blk[0]}.",
-                                    data={f"blocked_by_{blk[1]}": True})
+                                    data={f"blocked_by_{blk[1]}": True},
+                                    details=["  wait for that work to finish (or recover it on "
+                                             "its page in the console), then retry"],
+                                    next_commands=["lhpc self-update --apply"])
             if not queue:
                 return ActionResult(True, "Update can be queued.", data={"preflight": True,
                                                                           "mode": mode})
@@ -911,10 +988,16 @@ class SelfUpdateOpsMixin:
                 m.close()
             except FileExistsError:
                 return ActionResult(False, "An update request is already pending — the console is about "
-                                    "to update.", data={"already_pending": True})
+                                    "to update.", data={"already_pending": True},
+                                    details=["  nothing to run here — the queued update starts by "
+                                             "itself; wait for the console to come back"])
             except Exception as exc:                           # containment / fs error
                 return ActionResult(False, f"Could not queue the update request: {exc}",
-                                    data={"trigger_failed": True})
+                                    data={"trigger_failed": True},
+                                    details=["  nothing to run here — the runtime root's state/ "
+                                             "folder is not usable (disk full, permissions or a "
+                                             "damaged lock file); the box's operator fixes it, "
+                                             "then retries"])
         return ActionResult(True, "Update queued — the console will stop, update itself and come "
                             "back automatically.", data={"triggered": True, "mode": mode})
 
@@ -936,7 +1019,9 @@ class SelfUpdateOpsMixin:
                 self._admit_raw(adm, "self-update-helper")
             except reslock.ResourceBusy:
                 return ActionResult(False, "A task is starting right now (admission contended) — the "
-                                    "update helper will retry on the next request.", data={"contended": True})
+                                    "update helper will retry on the next request.", data={"contended": True},
+                                    details=["  nothing to run here — the update helper takes the "
+                                             "next request; click Update again in a moment"])
             return self._self_update_run_service_locked()
 
     def _self_update_run_service_locked(self) -> ActionResult:
@@ -960,10 +1045,12 @@ class SelfUpdateOpsMixin:
         except FileExistsError:
             return ActionResult(False, "A previous update is already in flight — recovery required "
                                 "(`lhpc self-update --recover-request`).",
-                                data={"recovery_required": True})
+                                data={"recovery_required": True},
+                                next_commands=["lhpc self-update --recover-request"])
         except Exception as exc:
             return ActionResult(False, f"Could not claim the update request: {exc}",
-                                data={"claim_failed": True})
+                                data={"claim_failed": True},
+                                next_commands=["lhpc self-update --recover-request"])
         # Read mode, then overwrite the in-flight record with a process-identity claim.
         try:
             mode = runtime_fs.read_text_regular(self._paths, inflight, max_bytes=4096).strip()
@@ -975,7 +1062,8 @@ class SelfUpdateOpsMixin:
             selfupdate.record_last_apply_strict(self._paths, ok=False,
                                                 summary="Update request was malformed — recovery required.")
             return ActionResult(False, "Malformed update request — recovery required.",
-                                data={"malformed": True})
+                                data={"malformed": True},
+                                next_commands=["lhpc self-update --recover-request"])
         force = (mode == "overwrite")
         runtime_fs.write_marker(self._paths, inflight, json.dumps(self._helper_identity(mode)))
         # PROVE this exact helper owns the in-flight record it just wrote (durable PID + /proc start
@@ -987,9 +1075,11 @@ class SelfUpdateOpsMixin:
                 summary="In-flight update ownership could not be proven — recovery required.")
             return ActionResult(False, "In-flight update ownership could not be proven — recovery "
                                 "required (`lhpc self-update --recover-request`).",
-                                data={"ownership_unproven": True})
+                                data={"ownership_unproven": True},
+                                next_commands=["lhpc self-update --recover-request"])
 
-        res = ActionResult(False, "Self-update service did not run.", data={})
+        res = ActionResult(False, "Self-update service did not run.", data={},
+                           next_commands=["lhpc self-update --recover-request"])
         try:
             # Web is stopped (Conflicts+After) so its SHARED lock is released; take EXCLUSIVE with
             # a short bounded retry to cover the stop-completion window, then apply.
@@ -1001,13 +1091,18 @@ class SelfUpdateOpsMixin:
                 except selfupdate.ControllerRuntimeBusy:
                     if _time.monotonic() >= deadline:
                         res = ActionResult(False, "The console did not release the controller-runtime "
-                                           "lock — no changes made.", data={"web_running": True})
+                                           "lock — no changes made.", data={"web_running": True},
+                                           next_commands=["lhpc self-update --apply"])
                         raise _StopRun() from None
                     _time.sleep(0.5)
                 except selfupdate.ControllerRuntimeLockError:
                     res = ActionResult(False, "Could not acquire the controller-runtime lock "
                                        "(unsafe runtime state) — no changes made.",
-                                       data={"lock_error": True})
+                                       data={"lock_error": True},
+                                       details=["  nothing to run here — the runtime root's "
+                                                "state/ folder is not usable (disk full, "
+                                                "permissions or a damaged lock file); the box's "
+                                                "operator fixes it, then retries"])
                     raise _StopRun() from None
             res = self.self_update_apply(force=force)
             if self._source_advanced(res):                  # incl. the reset+clean-failed partial
@@ -1030,7 +1125,9 @@ class SelfUpdateOpsMixin:
                                                f"{sys.executable} -m pip install -e {root} manually, "
                                                "then restart the console."
                                                + (f" ({detail})" if detail else "")),
-                                           data={**dict(res.data), "venv_sync_failed": True})
+                                           data={**dict(res.data), "venv_sync_failed": True},
+                                           next_commands=[f"{sys.executable} -m pip install -e {root}",
+                                                          "systemctl --user restart lhpc-web.service"])
                     else:
                         # Refresh the managed units with the NEW code. This path applies
                         # inline (it does not go through _apply_and_sync), so without this
@@ -1060,12 +1157,14 @@ class SelfUpdateOpsMixin:
         if not selfupdate.record_last_apply_strict(self._paths, ok=bool(res.ok), summary=res.summary):
             return ActionResult(False, "Update outcome could not be recorded durably — recovery "
                                 "required (`lhpc self-update --recover-request`).",
-                                data={**dict(res.data), "record_failed": True})
+                                data={**dict(res.data), "record_failed": True},
+                                next_commands=["lhpc self-update --recover-request"])
         try:
             runtime_fs.unlink(self._paths, inflight)
         except Exception as exc:
             return ActionResult(False, res.summary + f" (in-flight marker cleanup FAILED: {exc} — "
-                                "recovery required)", data={**dict(res.data), "cleanup_failed": True})
+                                "recovery required)", data={**dict(res.data), "cleanup_failed": True},
+                                next_commands=["lhpc self-update --recover-request"])
         return res
 
     def _helper_owns_inflight(self) -> bool:
@@ -1190,12 +1289,21 @@ class SelfUpdateOpsMixin:
             req_res = self._recover_update_state()
         except Exception as exc:
             req_res = ActionResult(False, f"Update-state recovery failed unexpectedly: {exc}",
-                                   data={"request_recovery_error": True})
+                                   data={"request_recovery_error": True},
+                                   details=["  nothing to run here — recovery stopped on the "
+                                            "unexpected error above; the box's operator checks "
+                                            "state/selfupdate.request and "
+                                            "state/selfupdate.inflight by hand and reports the "
+                                            "error"])
         try:
             guard_res = self._recover_uninstall_guard()
         except Exception as exc:
             guard_res = ActionResult(False, f"Uninstall-guard recovery failed unexpectedly: {exc}",
-                                     data={"guard": "error"})
+                                     data={"guard": "error"},
+                                     details=["  nothing to run here — recovery stopped on the "
+                                              "unexpected error above; the box's operator checks "
+                                              "the .lhpc-uninstalling guard in the runtime root "
+                                              "by hand and reports the error"])
         if guard_res is None:
             return req_res                          # no guard: request-only result and wording
         ok = req_res.ok and guard_res.ok
@@ -1222,7 +1330,10 @@ class SelfUpdateOpsMixin:
                     return None
                 except (OSError, PathContainmentError):
                     return ActionResult(False, f"An uninstall guard exists but is unreadable/unsafe "
-                                        f"— NOT removing it ({path}).", data={"guard": "unsafe"})
+                                        f"— NOT removing it ({path}).", data={"guard": "unsafe"},
+                                        details=["  nothing to run here — the box's operator "
+                                                 "makes sure no uninstall runs, then removes the "
+                                                 "guard file named above by hand"])
                 try:
                     rec = json.loads(raw)
                     pid, start = _guard_owner_ints(rec)
@@ -1230,21 +1341,31 @@ class SelfUpdateOpsMixin:
                     return ActionResult(False, f"An uninstall guard exists but its owner record is "
                                         f"malformed — cannot prove the owner ceased; verify no "
                                         f"uninstall is running, then remove {path} by hand.",
-                                        data={"guard": "malformed"})
+                                        data={"guard": "malformed"},
+                                        details=["  nothing to run here — the box's operator does "
+                                                 "the check and the removal named above"])
                 if not _proc_ceased(pid, start):
                     return ActionResult(False, "An uninstall guard is held by a LIVE process (an "
                                         "uninstall may be running) — not removing it.",
-                                        data={"guard": "live"})
+                                        data={"guard": "live"},
+                                        details=["  nothing to run here — an uninstall is "
+                                                 "running; it removes the guard itself when it "
+                                                 "ends — wait for it"])
                 try:
                     runtime_fs.unlink(self._paths, path)
                 except (OSError, PathContainmentError) as exc:
                     return ActionResult(False, f"Could not remove the stale uninstall guard: {exc}",
-                                        data={"guard": "unlink_failed"})
+                                        data={"guard": "unlink_failed"},
+                                        details=["  nothing to run here — the runtime root's "
+                                                 "state/ folder is not usable (disk full, "
+                                                 "permissions or a damaged lock file); the box's "
+                                                 "operator fixes it, then retries"])
                 return ActionResult(True, f"Cleared a stale uninstall guard (pid {pid} proven "
                                     "ceased).", data={"guard": "cleared"})
         except reslock.ResourceBusy as busy:
             return ActionResult(False, f"another uninstall-guard operation is in progress ({busy}) — "
-                                "retry.", data={"guard": "contended"})
+                                "retry.", data={"guard": "contended"},
+                                next_commands=["lhpc self-update --recover-request"])
 
     def _recover_update_state(self) -> ActionResult:
         """The request/in-flight half of recovery."""
@@ -1262,12 +1383,16 @@ class SelfUpdateOpsMixin:
             return ActionResult(False, "The in-flight update record is unreadable/malformed — its "
                                 "helper cannot be proven stopped. Ensure lhpc-selfupdate.service is "
                                 "not active, then remove state/selfupdate.inflight by hand.",
-                                data={"state": "malformed"})
+                                data={"state": "malformed"},
+                                details=["  nothing to run here — the box's operator does the "
+                                         "check and the removal named above"])
         # in_flight: verify the recorded process is gone.
         rec = json.loads(runtime_fs.read_text_regular(self._paths, inflight, max_bytes=4096))
         if not _proc_ceased(rec.get("pid"), rec.get("start_time")):
             return ActionResult(False, "An update is still running (helper process alive) — wait "
-                                "for it to finish before recovering.", data={"state": "running"})
+                                "for it to finish before recovering.", data={"state": "running"},
+                                details=["  nothing to run here — the update finishes by itself; "
+                                         "wait for it, then retry"])
         # Record the interrupted outcome DURABLY *before* removing the evidence — if the strict
         # write fails, keep the in-flight marker so recovery can be retried (never silently clear).
         from . import selfupdate as _su
@@ -1275,7 +1400,8 @@ class SelfUpdateOpsMixin:
                 summary="A previous update was interrupted and did not complete."):
             return ActionResult(False, "Could not record the interrupted outcome durably — the "
                                 "in-flight record is kept; try recovery again.",
-                                data={"record_failed": True})
+                                data={"record_failed": True},
+                                next_commands=["lhpc self-update --recover-request"])
         runtime_fs.unlink(self._paths, inflight)
         return ActionResult(True, "Cleared an interrupted update (helper had stopped); recorded it "
                             "as incomplete.", data={"cleared": "in_flight"})
@@ -1295,15 +1421,20 @@ class SelfUpdateOpsMixin:
         if not _op.isdir(_op.join(checkout, ".git")):
             return ActionResult(False, "Not a self-hosted deployment (no checkout at "
                                 f"{checkout}) — cannot manage web/updater units.",
-                                data={"not_self_hosted": True})
+                                data={"not_self_hosted": True},
+                                details=["  nothing to run here — lhpc runs from a dev checkout "
+                                         "or a copy, not the self-hosted layout install.sh makes; "
+                                         "the web/updater units are managed only there"])
         if self.uninstall_guard_blocks():
             return ActionResult(False, "An uninstall is in progress (.lhpc-uninstalling present) — "
                                 "recover it first (`lhpc self-update --recover-request`).",
-                                data={"uninstalling": True})
+                                data={"uninstalling": True},
+                                next_commands=["lhpc self-update --recover-request"])
         if self.classify_request() != "absent":
             return ActionResult(False, "An update request is pending/in-flight — run "
                                 "`lhpc self-update --recover-request` first.",
-                                data={"request_present": True})
+                                data={"request_present": True},
+                                next_commands=["lhpc self-update --recover-request"])
         ud = self._user_unit_dir()
         # The units log with StandardOutput=append:{root}/logs/... — systemd creates the FILE but not
         # the directory, and a repaired root may predate/have lost it (bootstrap normally makes it).
@@ -1315,13 +1446,18 @@ class SelfUpdateOpsMixin:
         try:
             actions = updater_units.write_set(ud, root)
         except ValueError as exc:
-            return ActionResult(False, str(exc), data={"write_refused": True})
+            return ActionResult(False, str(exc), data={"write_refused": True},
+                                details=["  nothing to run here — the box's operator moves the "
+                                         "unit file(s) named above out of the user unit folder, "
+                                         "then repairs again"])
         S = 20.0
         reload_res = self._system.runner.run(["systemctl", "--user", "daemon-reload"], timeout=S)
         if reload_res.returncode != 0:
             return ActionResult(False, "systemctl --user daemon-reload failed after writing the units "
                                 "— not proceeding (the units are on disk but not activated). Check "
-                                "`systemctl --user status`.", data={"daemon_reload_failed": True})
+                                "`systemctl --user status`.", data={"daemon_reload_failed": True},
+                                next_commands=["systemctl --user status",
+                                               "lhpc self-update --repair-integration"])
         # Authoritative loader check (operator shell HAS the bus): the ACTIVE fragment must be our
         # file AND carry NO drop-ins — a drop-in can override the sandbox / ExecStart /
         # InaccessiblePaths of the vetted unit, so either condition FAILS the repair before we
@@ -1336,11 +1472,15 @@ class SelfUpdateOpsMixin:
             if props.get("FragmentPath") != want:
                 return ActionResult(False, f"After writing units, {kind} still loads a different "
                                     f"fragment ({out.strip()[:120]}). A higher-priority unit or "
-                                    "mask shadows it — resolve manually.", data={"shadowed": kind})
+                                    "mask shadows it — resolve manually.", data={"shadowed": kind},
+                                    next_commands=[f"systemctl --user cat {kind}",
+                                                   "lhpc self-update --repair-integration"])
             if props.get("DropInPaths", "").strip():
                 return ActionResult(False, f"{kind} has an active drop-in override "
                                     f"({props['DropInPaths'].strip()[:120]}) — it can override the "
-                                    "sandbox; remove it, then repair.", data={"dropin": kind})
+                                    "sandbox; remove it, then repair.", data={"dropin": kind},
+                                    next_commands=[f"systemctl --user cat {kind}",
+                                                   "lhpc self-update --repair-integration"])
         # Enable both, and START the watcher now so a request marker is caught even before the web
         # is (re)started under the new unit. Every step's return code is CHECKED and fails the repair
         # truthfully — a partial integration is never reported as success, and the root marker is
@@ -1351,7 +1491,9 @@ class SelfUpdateOpsMixin:
             return ActionResult(False, "Installed the units but could not enable/start the request "
                                 "watcher (lhpc-selfupdate.path) — not proceeding. Check "
                                 "`systemctl --user status lhpc-selfupdate.path`.",
-                                data={"path_watcher_failed": True})
+                                data={"path_watcher_failed": True},
+                                next_commands=["systemctl --user status lhpc-selfupdate.path",
+                                               "lhpc self-update --repair-integration"])
         # Same for the nginx-restart watcher (the web console's bind-change escape hatch). NOTE the
         # deliberate startup-recovery semantics: `--now` with a stale request present fires ONE
         # restart immediately — marker consumed, fresh nginx (rate-limited; chosen, not accidental).
@@ -1361,12 +1503,16 @@ class SelfUpdateOpsMixin:
             return ActionResult(False, "Installed the units but could not enable/start the "
                                 "nginx-restart watcher (lhpc-nginx-restart.path) — not proceeding. "
                                 "Check `systemctl --user status lhpc-nginx-restart.path`.",
-                                data={"restart_watcher_failed": True})
+                                data={"restart_watcher_failed": True},
+                                next_commands=["systemctl --user status lhpc-nginx-restart.path",
+                                               "lhpc self-update --repair-integration"])
         web_en = self._system.runner.run(["systemctl", "--user", "enable", updater_units.WEB_UNIT],
                                          timeout=S)
         if web_en.returncode != 0:
             return ActionResult(False, "Could not enable the web service (lhpc-web.service) — not "
-                                "proceeding.", data={"web_enable_failed": True})
+                                "proceeding.", data={"web_enable_failed": True},
+                                next_commands=["systemctl --user status lhpc-web.service",
+                                               "lhpc self-update --repair-integration"])
         # Boot restore: plain `enable` (NEVER --now — enabling must not trigger a restore run;
         # restoration is additionally gated on [boot] restore + a canonical enabled web unit).
         # Systemd is demonstrably available at this point, so an enable failure is a REPAIR
@@ -1376,7 +1522,9 @@ class SelfUpdateOpsMixin:
         if br_en.returncode != 0:
             return ActionResult(False, "Could not enable the boot-restore unit "
                                 "(lhpc-boot-restore.service) — not proceeding.",
-                                data={"boot_restore_enable_failed": True})
+                                data={"boot_restore_enable_failed": True},
+                                next_commands=["systemctl --user status lhpc-boot-restore.service",
+                                               "lhpc self-update --repair-integration"])
         # The watcher MUST be active now — in BOTH modes (a migration's still-running OLD web does not
         # pull it up via Wants=, and a CLI repair must not silently leave it down) — otherwise a queued
         # request is never consumed. Fail BEFORE writing the root marker / restarting.
@@ -1386,14 +1534,18 @@ class SelfUpdateOpsMixin:
             return ActionResult(False, "The update path watcher (lhpc-selfupdate.path) is not active "
                                 "after enable --now — not proceeding. Check "
                                 "`systemctl --user status lhpc-selfupdate.path`.",
-                                data={"path_watcher_failed": True})
+                                data={"path_watcher_failed": True},
+                                next_commands=["systemctl --user status lhpc-selfupdate.path",
+                                               "lhpc self-update --repair-integration"])
         ract = self._system.runner.run(["systemctl", "--user", "is-active", "--quiet",
                                         updater_units.RESTART_PATH_UNIT], timeout=S)
         if ract.returncode != 0:
             return ActionResult(False, "The nginx-restart watcher (lhpc-nginx-restart.path) is not "
                                 "active after enable --now — not proceeding. Check "
                                 "`systemctl --user status lhpc-nginx-restart.path`.",
-                                data={"restart_watcher_failed": True})
+                                data={"restart_watcher_failed": True},
+                                next_commands=["systemctl --user status lhpc-nginx-restart.path",
+                                               "lhpc self-update --repair-integration"])
         if restart:
             rst = self._system.runner.run(["systemctl", "--user", "restart", updater_units.WEB_UNIT],
                                           timeout=S)
@@ -1405,7 +1557,9 @@ class SelfUpdateOpsMixin:
                                     "restart FAILED — the repair is NOT marked complete. Check "
                                     f"`systemctl --user status {updater_units.WEB_UNIT}` and "
                                     f"`tail -n 50 {web_log}`.",
-                                    data={"web_restart_failed": True})
+                                    data={"web_restart_failed": True},
+                                    next_commands=[f"systemctl --user status {updater_units.WEB_UNIT}",
+                                                   f"tail -n 50 {web_log}"])
         self._write_root_marker()          # ONLY after every required integration step succeeded
         details = [f"  {k}: {a}" for k, a in actions]
         details.append(self._enable_linger(S))
@@ -1460,13 +1614,17 @@ class SelfUpdateOpsMixin:
         # Refuse recovery / pending-request / uninstall BEFORE any preflight or write.
         if status == "recovery_required":
             return ActionResult(False, "A previous update needs recovery first — run "
-                                "`lhpc self-update --recover-request`.", data={"recovery_required": True})
+                                "`lhpc self-update --recover-request`.", data={"recovery_required": True},
+                                next_commands=["lhpc self-update --recover-request"])
         if self.uninstall_guard_blocks():
             return ActionResult(False, "An uninstall is in progress — recover it first.",
-                                data={"uninstalling": True})
+                                data={"uninstalling": True},
+                                next_commands=["lhpc self-update --recover-request"])
         if self.classify_request() != "absent":
             return ActionResult(False, "An update request is already pending — the console is about "
-                                "to update.", data={"request_present": True})
+                                "to update.", data={"request_present": True},
+                                details=["  nothing to run here — the queued update starts by "
+                                         "itself; wait for the console to come back"])
         # Fixable ONLY when every non-OK unit is missing/modified_ours (an ambiguous/foreign/
         # overridden/unsafe/unreadable unit is NOT auto-repairable).
         fixable_set = (updater_units.OK, updater_units.MISSING, updater_units.MODIFIED_OURS)
@@ -1476,7 +1634,11 @@ class SelfUpdateOpsMixin:
             detail = ", ".join(f"{k}: {v}" for k, v in bad.items())
             return ActionResult(False, "The web/updater units are not safely this deployment's "
                                 f"({detail}) — resolve them manually, then update.",
-                                data={"integration": status, "unfixable": bad})
+                                data={"integration": status, "unfixable": bad},
+                                details=["  nothing to run here — the units named above were "
+                                         "changed or replaced outside lhpc; the box's operator "
+                                         "restores or removes them from a shell, then runs the "
+                                         "update again"])
         # Bus preflight — cheap, read-only. A hardened (bus-blocked) console fails here BEFORE any
         # write and gets shell guidance.
         probe = self._system.runner.run(["systemctl", "--user", "show", "-p", "Version"], timeout=20.0)
@@ -1484,14 +1646,16 @@ class SelfUpdateOpsMixin:
             return ActionResult(False, "This console can't install systemd units itself (the user "
                                 "bus is unavailable). From a shell on this machine run "
                                 "`lhpc self-update --repair-integration`, then click Update.",
-                                data={"bus_unavailable": True})
+                                data={"bus_unavailable": True},
+                                next_commands=["lhpc self-update --repair-integration"])
         rep = self.self_update_repair_integration(restart=False)
         if not rep.ok:
             return rep
         if self.updater_integration()["status"] != "ok":                # repair must have converged
             return ActionResult(False, "Unit repair did not fully converge — run "
                                 "`lhpc self-update --repair-integration` from a shell.",
-                                data={"repair_incomplete": True})
+                                data={"repair_incomplete": True},
+                                next_commands=["lhpc self-update --repair-integration"])
         return self.self_update_trigger(overwrite=overwrite, queue=queue)
 
     def _write_root_marker(self) -> None:
