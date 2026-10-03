@@ -213,8 +213,11 @@ A TCP listener with no firewall metadata is treated as exposed and gated.
 
 **Across updates.** Every receipt carries the installed helper's revision (a hash of its
 source); after an update replaces the helper the dashboard shows *Update required* until you
-re-apply. The operator scripts and the `lhpc-nginx` unit that carries the boot gate are
-refreshed from the new templates by the restarted console after the update. A self-update that
+re-apply, and the next boot starts the console loopback-only. Re-apply **before you reboot**: a
+dashboard notice, `lhpc doctor` (non-OK), `lhpc firewall` and the result of the update (when the
+version you update from already carries this check) say so with the commands, and a boot that went
+loopback-only for this reason names it. The operator scripts and the `lhpc-nginx` unit that carries
+the boot gate are refreshed from the new templates by the restarted console after the update. A self-update that
 would let remote web come up ungated (a foreign nginx unit while remote access is configured)
 stops first and directs you to `lhpc self-update --repair-integration`.
 

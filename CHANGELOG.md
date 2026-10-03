@@ -62,6 +62,10 @@
   `[gps] source = nmea` and leaves gpsd off the receiver, as on a default install.
 - Update journals, reservations and request files appear only once fully written, so a check running at
   that moment can no longer mistake a half-written one for a broken one.
+- An update that changes the firewall helper now says so before the reboot: a dashboard notice, `lhpc doctor`
+  and `lhpc firewall` (and, for updates made from this version on, the update result) ask you to re-apply the
+  firewall and `lhpc webserver apply` before you reboot; a boot that kept the console loopback-only for this
+  reason names it and the commands.
 
 ## 0.11.10
 

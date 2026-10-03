@@ -663,6 +663,7 @@ class SelfUpdateOpsMixin:
                 raise selfupdate.JournalPersistError()
             hook.update(written=True, txid=txid)
 
+        helper_rev = self._fw_packaged_helper_rev()
         try:
             res = selfupdate.apply_update(self._system, self._paths, force=force,
                                           before_mutation=_before_mutation)
@@ -699,16 +700,28 @@ class SelfUpdateOpsMixin:
         # regenerated with the NEW templates. This process imported the old modules BEFORE the
         # update, so it must NOT do that here (it would emit the previous version) — instead mark
         # it, and the freshly-restarted (new-code) console reconciles on startup.
-        fw_notes = []
+        fw_notes, data_fw = [], False
         if res.get("ok") and not res.get("already"):
             self._fw_mark_post_update()
             if self._fw_integration_state() != "absent":
                 fw_notes = ["Firewall integration will be refreshed automatically when the "
                             "console restarts under the new version."]
+                # The helper file is read from disk, so this (old) process sees the new one. A
+                # changed helper leaves the installed one stale until re-applied — and the next
+                # boot starts the console loopback-only. Say it now, before that reboot.
+                if self._fw_packaged_helper_rev() != helper_rev:
+                    data_fw = True
+                    fw_notes.append(
+                        "This update changes the firewall helper — re-apply the firewall before you "
+                        "reboot: " + "; ".join(["lhpc firewall --script > /dev/null",
+                                               *self._fw_apply_lines()]) + "."
+                        + (" Until then a reboot starts the console LOOPBACK-ONLY (remote access "
+                           "off)." if self._fw_remote_web_exposed() else ""))
 
         instr = selfupdate.restart_instructions(res.get("deps_changed", False),
                                                 self._controller_deps_sync_cmd())
-        data = {**res, "restart": instr, "migrated": migrated, "pending_migrations": len(remaining)}
+        data = {**res, "restart": instr, "migrated": migrated, "pending_migrations": len(remaining),
+                "firewall_reapply_required": data_fw}
         migrated_note = f"{migrated} default(s) migrated to the new defaults." if migrated else ""
         pending_note = (f"{len(remaining)} config default migration(s) could NOT be completed and will "
                         "be retried on the next self-update.") if remaining else ""
@@ -731,6 +744,7 @@ class SelfUpdateOpsMixin:
                        "Restart the web console after cleaning up:"]
             details += ["  " + c for c in instr["commands"]]
             details += [n for n in (migrated_note, pending_note) if n]
+            details += list(fw_notes)
             return ActionResult(False, res["message"], data=data,
                                 details=tuple(d for d in details if d))
         if res.get("already"):                               # nothing to update; may have recovered pending
@@ -743,6 +757,15 @@ class SelfUpdateOpsMixin:
         details += list(fw_notes)
         return ActionResult(True, res["message"], data=data, details=tuple(details),
                             next_commands=list(instr["commands"]))
+
+    @staticmethod
+    def _fw_packaged_helper_rev() -> str:
+        """The packaged firewall helper's revision as it is on disk now ("" if unreadable)."""
+        from . import firewall as _fw
+        try:
+            return _fw.integration_rev()
+        except (OSError, ValueError):
+            return ""
 
     def _user_unit_dir(self):
         from pathlib import Path
@@ -913,6 +936,7 @@ class SelfUpdateOpsMixin:
     def _self_update_run_service_locked(self) -> ActionResult:
         """The helper body, run UNDER the held task-admission lock (see `self_update_run_service`):
         claim -> prove ownership -> apply -> venv sync -> durable record -> in-flight release."""
+        import dataclasses as _dc
         import sys
         import time as _time
 
@@ -1014,6 +1038,11 @@ class SelfUpdateOpsMixin:
                                   "units_refresh_detail": det_u})
         except _StopRun:
             pass
+        # The record keeps the summary only, and the console shows that after the restart: the
+        # re-apply warning (details carry the commands) must ride in it, on every branch above.
+        if res.data.get("firewall_reapply_required"):
+            res = _dc.replace(res, summary=res.summary + " Re-apply the firewall before you reboot: "
+                              "this update changed the firewall helper.")
         # Record the outcome DURABLY, then release the in-flight record. If the STRICT record does
         # not persist, retain in-flight and report incomplete (one-click blocked until recovery) —
         # never delete the evidence on an unrecorded outcome.

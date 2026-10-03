@@ -335,6 +335,78 @@ def test_service_maps_cleanup_failure_to_partial(tmp_path, monkeypatch):
     assert any("cannot unlink" in d for d in res.details)         # the cleanup error passes through
 
 
+@pytest.mark.parametrize("after, remote", [("NEW", True), ("NEW", False), ("OLD", True)])
+def test_an_update_that_changes_the_firewall_helper_says_reapply_before_reboot(
+        tmp_path, monkeypatch, after, remote):
+    """An advance that replaces the packaged firewall helper leaves the installed one stale, and the
+    next boot starts the console loopback-only: the update result says so, with the commands, while
+    the operator can still act. An unchanged helper adds nothing."""
+    from lhpc.core import config as cfgmod
+    from lhpc.core import firewall as fwm
+    _o, work, up = gitrepo.repos(tmp_path)
+    svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
+    gitrepo.upstream_commit(up)
+    cfgmod.save_webserver_config(svc._paths, bind="0.0.0.0" if remote else "127.0.0.1",
+                                 port=8443, remote_exposed=remote)
+    svc._invalidate_config()
+    revs = iter(["OLD", after])                    # the packaged helper before / after the advance
+    monkeypatch.setattr(fwm, "integration_rev", lambda: next(revs))
+    monkeypatch.setattr(selfupdate, "apply_update", lambda *a, **k: {
+        "ok": True, "message": "updated", "deps_changed": False})
+    # The installed integration lives under /etc/lhpc; stub its presence.
+    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
+    res = svc.self_update_apply()
+    changed = after != "OLD"
+    assert res.ok and res.data["firewall_reapply_required"] is changed
+    notes = [d for d in res.details if "changes the firewall helper" in d]
+    assert bool(notes) is changed
+    if changed:
+        apply_sh = svc._paths.under("config/files/firewall/firewall-apply.sh")
+        assert "before you reboot" in notes[0] and f"sudo bash {apply_sh}" in notes[0]
+        assert "lhpc firewall --script" in notes[0] and "lhpc webserver apply" in notes[0]
+        assert ("LOOPBACK-ONLY" in notes[0]) is remote
+
+
+@pytest.mark.parametrize("path", ["one-click", "cli"])
+def test_a_helper_changing_update_keeps_the_reapply_warning_on_every_path(tmp_path, monkeypatch, path):
+    """The one-click helper records only the SUMMARY (the console shows that after the restart), so
+    the re-apply warning must be in it; the CLI keeps the full line with the commands in details.
+    The packaged helper file really changes on disk during the (faked) advance."""
+    from lhpc.core import firewall as fwm
+    _o, work, up = gitrepo.repos(tmp_path)
+    svc, man, rt = _svc_rf(tmp_path, work, monkeypatch)
+    gitrepo.upstream_commit(up)
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "firewall_helper.py").write_text("# helper OLD\n")
+    monkeypatch.setattr(fwm, "__file__", str(pkg / "firewall.py"))   # helper_source() reads pkg/
+
+    def advance(*a, **k):
+        (pkg / "firewall_helper.py").write_text("# helper NEW\n")
+        return {"ok": True, "message": "Update applied.", "deps_changed": False}
+    monkeypatch.setattr(selfupdate, "apply_update", advance)
+    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
+    monkeypatch.setattr(svc, "_refresh_units_post_update", lambda: (True, "ok"))
+    real_run = svc._system.runner.run
+    monkeypatch.setattr(svc._system.runner, "run", lambda argv, *a, **k: (
+        CommandResult(0 if "pip" in argv else 1, "", "") if argv[0] == "systemctl" or "pip" in argv
+        else real_run(argv, *a, **k)))                     # no real pip install, no systemd
+    if path == "one-click":
+        monkeypatch.setenv("INVOCATION_ID", "x")
+        (rt / "state").mkdir(parents=True, exist_ok=True)
+        (rt / "state" / "selfupdate.request").write_text("normal\n")
+        res = svc.self_update_run_service()
+        recorded = selfupdate.status_view(svc._paths)["last_apply"]
+        assert res.ok and recorded["ok"] is True
+        assert "re-apply the firewall before you reboot" in recorded["summary"].lower()
+    else:
+        monkeypatch.delenv("INVOCATION_ID", raising=False)
+        res = svc.self_update_apply_operator()
+        assert res.ok and res.data["firewall_reapply_required"] is True
+        assert any("changes the firewall helper" in d and "lhpc webserver apply" in d
+                   for d in res.details)
+
+
 # --- the journal is a durable transaction: strictly validated, serialized between processes ---
 
 def _head(work):
