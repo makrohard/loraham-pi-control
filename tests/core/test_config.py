@@ -1866,3 +1866,29 @@ def test_a_journal_path_that_cannot_be_examined_refuses_the_writer(tmp_path, mon
         cfgmod.save_hardware_setup(paths, "loraham")
     assert exc.value.reason == "recovery-required"
     assert local.read_text() == "# untouched\n"
+
+
+@pytest.mark.safety("config-transaction")
+@pytest.mark.parametrize("journal", [None, "recoverable", "{ this is not json"],
+                         ids=["no-journal", "recovered", "blocked"])
+def test_the_locked_transaction_body_stops_on_a_journal_it_cannot_finish(tmp_path, journal):
+    """The locked body runs under a lock its caller already holds (the auto-install boundary), so
+    it finishes a pending journal itself. A journal it cannot finish stops it with
+    recovery-required and is kept; no journal, or a recovered one, lets the write proceed."""
+    paths = _paths(tmp_path)
+    stack = tmp_path / "config" / "stacks" / "daemon.toml"
+    stack.parent.mkdir(parents=True, exist_ok=True)
+    stack.write_text("# old\n")
+    if journal == "recoverable":
+        stack.write_text("# CORRUPT partial write\n")
+        journal = {"version": 1, "targets": [{"kind": "stack", "rel": "config/stacks/daemon.toml",
+                                              "pre": "# old\n", "existed": True, "mode": 0o644}]}
+    jp = _write_journal(tmp_path, journal) if journal else cfgmod._txn_journal(paths)
+    targets = [("stack", stack, 'radio = "868"\n', 0o644)]
+    if isinstance(journal, str):
+        with pytest.raises(ConfigError, match="recovery-required"):
+            cfgmod._apply_config_transaction_locked(paths, targets)
+        assert jp.read_text() == journal and stack.read_text() == "# old\n"
+    else:
+        cfgmod._apply_config_transaction_locked(paths, targets)
+        assert not jp.exists() and stack.read_text() == 'radio = "868"\n'
