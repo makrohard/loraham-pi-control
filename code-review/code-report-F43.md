@@ -1,7 +1,7 @@
 # Code report F43 — a slow-target build proof before every release
 
 Plan: `plans/PLAN-F43.md` v3 (review GREEN WITH NOTES). Base `main` e5187f70 (v0.11.10). Branch
-`claude/intelligent-cerf-sxidoe`, started from `claude/intelligent-cerf-5ynf7b`.
+`cons/F43-r7` (earlier corrections were on other branches).
 
 ## Commits
 
@@ -130,7 +130,7 @@ change it — narrowed to the tracked kinds.
 ## Deviations from the plan
 
 1. **Change 4 not implemented.** `lhpc/core/progress.py` (F42) is not on this base (e5187f70);
-   F42 (`claude/busy-heisenberg-gksfeg`) has not landed. Consequences, all visible: the L1 budget
+   F42 has not landed. Consequences, all visible: the L1 budget
    case skips by name in ordinary CI; in the lane every build lacks the `[progress] longest
    quiet` line and FAILS as "not evidence"; `slow_target.limit("build")` raises
    `LimitUnavailable`, which the lane reports as a failure. Change 4 lands after F42.
@@ -947,3 +947,274 @@ a row C run with it.
 - The disk test runs the whole script twice (cpu build and the 700 MB mem part), ≈20 s and
   700 MB of RAM, in the testlab unit job. Not reduced: `--io-mb` is the only knob asked for.
 - Found and fixed before the commit: three lines over 100 columns in the script.
+
+## Correction 7 (the second real slow-build run and row A part 1)
+
+**Trigger.** The slow-build job's second real run (testlab 37148794385, job 111278122002, on the
+candidate 042716fe) was 8 passed / 2 failed / 1 bootstrap skip, and row A part 1 (30
+`[[measured]]` + 1 `[[calibration]]` entries from a Pi Zero 2 W, the data commit) made three
+more gaps visible. Base: `f43/baseline-rowA` = 0b90fee. Every fix is amended into the commit it
+belongs to; the data commit stays last and unchanged.
+
+### GAP 1 — the `lhpc` label of a candidate (amended into the budget-test commit)
+
+Row A measured a candidate, so its entries say `lhpc = "release/0.11.12-bundle (3d0943a1)"`. The
+old rule (`minor(entry) is None` → "lhpc must name the release") matched only a leading
+`vX.Y.`, so 29 of the 30 entries were malformed and `test_every_baseline_entry_is_well_formed`
+was red on the data commit.
+
+- `lhpc/core/slow_target.py`: `_LHPC_RE` accepts a tag `vX.Y.Z (sha)` or a candidate ref
+  `release/<name> (sha)`, the short SHA (7–40 hex) mandatory in both. A self-update entry may name
+  the update it timed, `<from tag> -> <to tag or ref> (sha)`: the data commit's
+  `selfupdate-helper` entry is `"v0.11.10 -> v0.11.11 (35923b80)"`, which the old prefix rule
+  accepted, and the data stays as it is, so this third form is accepted too (a deviation from the
+  two forms asked for; see the self-review). `minor()` reads the (target) tag's X.Y, or the first
+  X.Y.Z inside a candidate ref's name (`release/0.11.12-bundle` → (0, 11)); a ref without one has
+  no minor, so its entries are only ever FRESH by key, never carried.
+- `tests/data/slow-target-builds.toml` (the schema commit): the header documents the forms.
+- Test `test_the_lhpc_label_takes_a_tag_or_a_candidate_ref`: five well-formed labels, nine
+  rejected ones (no SHA, a non-hex SHA, `release/` alone, `main (...)`, `v0.12 (...)`, empty, an
+  update without SHA or from a non-tag), the minor of each form.
+
+### Coverage: the documented waiver and exclusions are GREEN (same commit)
+
+- `slow_target.PIP_SYNC_SINCE = "0.12.0"` (the first release whose helper prints
+  `[selfupdate] pip sync`; it was "0.11.12" until the 0.11.12 patch was folded into 0.12.0 — then the
+  introducing release is 0.12.0, and `test_the_introducing_release_is_a_changelog_release` caught the stale value on
+  the integration tree; fixed up into the budget-test commit) and `slow_target.waiver(component, op, version)`: L4
+  (`lhpc-selfupdate selfupdate-pip`) needs no measurement on a tree up to and including that
+  release, because the update to it runs the previous release's helper, on the Zero and in the
+  lane alike. Excluded components are still left out by `required()`.
+- `_check_coverage` lists only the genuinely unmeasured pairs, prints each waiver by name
+  (`waived: lhpc-selfupdate selfupdate-pip (L4): no evidence up to the introducing release 0.11.12
+  — measured from the next release on`) and returns the waivers.
+- Tests: the waiver holds at 0.11.11 and 0.11.12 and not at 0.11.13 or 1.0.0; an excluded
+  component is never required and a measured entry of one is harmless; only `b clone` is listed
+  when `a build` is measured and L4 is waived; `PIP_SYNC_SINCE` is a CHANGELOG release section
+  once the tree's version reaches it.
+- On this tree `test_coverage` is still RED, by name, for exactly the 16 pairs row A part 2 is
+  measuring (loraham-daemon, radiolib, loraham-chat, loraham-voice-cli, loraham-kiss-tnc: build +
+  clone + checkout each; graywolf build). It was 17 before; the 17th was L4. Simulated: adding
+  those 16 entries makes coverage GREEN with the one L4 waiver printed. The data is the handler's.
+- The lane's budget case (amended into the lane commit) now applies the same waiver past
+  bootstrap: when the previous tag's helper lacks the line AND `stt.waiver` holds for this
+  version, the L4 pair's missing evidence and missing Zero baseline are dropped, and the job
+  summary still says `**NO EVIDENCE** lhpc-selfupdate selfupdate-pip (L4) …`. Before, the waiver
+  held only in bootstrap, so with row A in the baseline the 0.11.12 lane could never be green on a
+  pair nobody can measure. A previous tag without the line on a version past `PIP_SYNC_SINCE` is
+  not waived (a lost line is a defect). `docs/maintenance.md` says so.
+
+### GAP 2 — the helper on a runtime with canonical units (amended into the lane commit)
+
+The helper applied the update, then exited 1: "the managed systemd units could NOT be refreshed —
+units not canonical: lhpc-boot-restore.service: missing; …". The lane's runtime had no units at
+all; a box has the full set, written by install.sh.
+
+**What I did: the faithful fix, no skip.** `test_slow_build_selfupdate` now lays the runtime out
+as a box and installs the units the way install.sh does:
+
+- the checkout at `<root>/src/loraham-pi-control`, the venv at `<root>/venv/lhpc` (the lab root
+  is initialised first; its `src/` is empty);
+- `_install_units(python, root, env)`: each unit of the installed release's
+  `updater_units.ALL_UNITS`, rendered by that release's own
+  `python -m lhpc.core.updater_units render <kind> <root> <checkout> <venv>` (install.sh's
+  `render_unit`) into `$HOME/.config/systemd/user`;
+- `_box_env(root, home)`: the lab env with its own `$HOME`, so the lane never writes the
+  container user's or a developer's `$HOME/.config/systemd/user`; `XDG_CACHE_HOME` stays the user's
+  (the pip cache).
+
+`systemctl --user` is not needed and not run: the helper is sandboxed and never calls it; after
+the update it only VERIFIES the unit files (`updater_units verify-set`, file reads, in a
+subprocess of the box's venv python). The unit refresh is not stubbed.
+
+The box layout made the helper's controller-identity check apply (before, the checkout outside
+the root read as "not self-hosted", so it was skipped). It demands that `origin` is the approved
+canonical remote; the lane sets `origin` to the manifest's controller remote and serves it from
+the local candidate remote with git's own `url.<local>.insteadOf <canonical>` in that checkout
+only. The identity check itself runs unchanged.
+
+- Tests: `test_the_helper_runtime_has_the_units_its_verification_requires` (the helper's own
+  `verify-set` reports `lhpc-boot-restore.service: missing` on the bare runtime, as in the run, and
+  `ok` after `_install_units`; the units carry the box's `<root>/venv/lhpc/bin/lhpc`);
+  `test_the_lane_never_writes_the_real_home_units`.
+- **Local end-to-end run of the lane's own `test_slow_build_selfupdate`** (working tree, not
+  throttled; `_env_problems` patched out; a local, unpushed tag v0.11.11 at 045724db, deleted
+  afterwards): the helper exited 0 and produced its evidence: `selfupdate-helper` 3.6 s, key
+  `deps:bf671c36…`, and `lhpc-selfupdate selfupdate-pip (L4): no evidence on the introducing
+  release … (v0.11.11 has no pip sync line)`. One local-only workaround: this sandbox reaches PyPI
+  only through a proxy, and the product runner's fixed environment drops the proxy variables, so
+  the driver wrote a pip config into the box `$HOME`. The hosted runner needs no proxy.
+
+### GAP 3 — the throttled container was faster than the Zero (amended into the job commit)
+
+Row A's calibration (Zero): cpu 99.7 s, io 489.8 s, mem 110.1 s. Row C at `--cpus 0.5
+--memory 416m`, no disk throttle: cpu 57.8, io 31.4, mem 12.2. The claim "slowed down below a Pi
+Zero 2 W" was false on every axis.
+
+**The throttle, as named constants in the job's `env`, each with its rationale:**
+
+| constant | value | why |
+|---|---|---|
+| `SLOW_CPUS` | 0.25 | the cpu part is CPU-time bound: 0.5 × 57.8 / 99.7 = 0.29 CPUs is the Zero; 0.25 leaves ~15 % |
+| `SLOW_MEM` / `SLOW_SWAP` | 416m / 1184m | unchanged: what a Zero leaves free; the rest of the 700 MB mem part swaps |
+| `SLOW_WRITE_IOPS` | 120 | the Zero syncs ~134 files/s (65536 / 489.8 s); on a journaled ext4 a synced 4 KiB file costs ~1.2 writes charged to the container (measured), so 120 IOPS ≈ 100 files/s |
+| `SLOW_READ_IOPS` | 1200 | reads pace the mem part's swap-ins (the Zero swaps into zram): measured mem 608 s at 300, 186 s at 1000, 97 s at 2000; 1200 keeps it above 110 s |
+
+- A new step "Resolve the disks to throttle" finds every whole disk behind Docker's storage
+  (`docker info -f '{{.DockerRootDir}}'`: the container's root and its `/tmp` volume) and behind
+  each active swap area (`/proc/swaps`), maps a partition to its disk (`io.max` takes whole
+  disks) and passes `--device-write-iops`/`--device-read-iops` for each. No disk resolved fails
+  the step. `docker run` takes `--cpus/--memory/--memory-swap` from the constants and hands all of
+  them to the lane.
+- The lane's `test_slow_build_env` now also proves the disk throttle: `_io_problems` reads the
+  cgroup's `io.max` and fails unless one disk has `wiops <= SLOW_WRITE_IOPS` and `riops <=
+  SLOW_READ_IOPS` (missing variable, unreadable file, `max` or a looser value all fail). The
+  evidence's `host` names cpus, mem, wiops and riops.
+- The calibration check is unchanged: it compares against the baseline's `[[calibration]]` entry
+  and FAILS when any axis is faster.
+- `CHANGELOG.md`, `docs/testlab.md`: "throttled to a Pi Zero 2 W's CPU, SD card and memory … and
+  each run proves it is no faster than a real Zero on a fixed workload". The claim holds only
+  through the calibration gate, which turns the release check red when it does not.
+- Tests (`tests/repo/test_slow_build_gate.py`): every axis is a named constant, applied by
+  `docker run` and handed to the lane; `SLOW_CPUS <= 0.5 × 57.8 / 99.7` and
+  `SLOW_WRITE_IOPS <= 134`. Lane unit tests: the `io.max` proof, five cases, and the named
+  variables.
+
+**What ran locally (Docker, measured for this correction; x86, 4 cores, cgroup v1, not the arm runner).**
+`calibrate.sh` in a `gcc:14` container (same script, same workload hash), work dir and swap file
+on a journaled ext4 loop disk, throttled as the job throttles:
+
+| run | cpu | io | mem |
+|---|---|---|---|
+| `--cpus 0.5 --memory 416m`, no disk throttle (the old job) | 83.3 | 25.2 | 8.1 |
+| 0.25 / 416m / 120 w / 300 r | 158.0 | 614.6 | 608.3 |
+| mem part alone, 0.25 / 416m / 120 w / 2000 r | — | — | 97.1 |
+| mem part alone, 0.25 / 416m / 120 w / 1000 r | — | — | 185.7 |
+| **0.25 / 416m / 120 w / 1200 r (the job's values)** | **163.0** | **614.6** (carried over from the 300-IOPS run; the first lane run measures it) | **156.1** |
+| the Zero (row A) | 99.7 | 489.8 | 110.1 |
+
+This host's CPU is slower per quota than the runner's (83.3 vs 57.8 at 0.5), so on the runner
+cpu should land near 163 × 57.8 / 83.3 ≈ 113 s, still above 99.7. An unjournaled ext4 (this
+host's root) charges ~4 writes per synced file (2048 files: 68 s at 120 IOPS); a journaled one
+~1.2 (20.5 s). The runner's numbers are not known here.
+
+**What the lane must prove (not run here, not claimed).** The first slow-build run on the
+amended job: `test_slow_build_env` with the IOPS limits in force, `test_slow_build_calibrated`
+at or above the Zero on all three axes on the runner, and the lane's total time (the last run
+took 6 min; at 0.25 CPU and SD-card IOPS expect several times that, inside the 330 min limit).
+If an axis stays faster, tighten that constant; if the runner cannot be throttled enough on an
+axis, the CHANGELOG/doc sentence must say so with the measured factor.
+
+### Found while measuring: the Zero calibrated a different workload (for the handler)
+
+The Zero's `[[calibration]]` is for `workload = sha256:ae7c6013…`: the candidate's
+`calibrate.sh` (042716fe/3d0943a1 still carries the pre-Correction-6 script with
+`mktemp -d "${TMPDIR:-/tmp}/…"`). This branch's script (Correction 6: disk work dir, `--io-mb`,
+`io_mb` hashed) is `workload = sha256:17b2f715…`. `calibration_failures` matches by workload, so
+on this branch the lane's calibration case FAILS "uncalibrated: run the Zero row (no zero2w
+[[calibration]] for sha256:17b2f715…)" until the Zero runs THIS script (from the installed
+checkout, `bash testlab/slowbuild/calibrate.sh`) and its line is committed. Correction 6's
+self-review said the hash change orphaned nothing; the Zero has since recorded the old one. The
+two scripts do the same work (same make, same 256 MB of synced 4 KiB files, same 700 MB touch),
+so the Zero's 99.7/489.8/110.1 are the right yardstick for the tuning above, but the gate must
+compare against a calibration of the same bytes. I did not change the hash rule or the data.
+
+**Consequence, exactly.** The job's JUnit gate requires `test_slow_build_calibrated` PASSED, so every
+slow-build run (the release check) is RED while the tree under test has no `zero2w` calibration of
+this script. **Resolved since:** the Zero ran this script (workload `sha256:17b2f715…`, script blob
+`b4ff9d6f…`, work dir on disk): cpu 98.7, io 492.1, mem 103.2. Its `[[calibration]]` is the third data
+commit on `f43/baseline-rowA` (4638cdd8), not on this branch (whose baseline carries only the
+`ae7c6013…` calibration); it is stacked with this branch in the integration delta, so this branch's
+own lane run would still read "uncalibrated". `calibration_failures` takes the
+`zero2w` entries whose `workload` equals the script's hash, newest by `date` — never by position — so
+the older entry (`ae7c6013…`) no longer applies to this script.
+
+### Commits and patch-ids
+
+`git commit --fixup <sha>` per target, then
+`GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash 045724db…` (repeated for the follow-up
+fixes listed at the end), and this report as a new commit before the data commit. `git show <c> | git patch-id
+--stable`, first 12 hex digits:
+
+| before | after | patch-id before | patch-id after | equal |
+|---|---|---|---|---|
+| 4244114 | e22afab | 655eb46b57f5 | 1b929129d3e7 | amended (header: label forms, host example) |
+| aed5b7f | d61c7ed | 88c6073904e3 | a1f1d2e26cea | amended (GAP 1, coverage) |
+| 24bbd24 | ab4a568 | 92f8151b313b | 92f8151b313b | yes |
+| e6fccb2 | e16bfd9 | ca7fa07c376c | 05882c04af50 | amended (GAP 2, L4 waiver, io proof) |
+| 4a829a7 | 69157c6 | 9812f85dd939 | 80739b76a63b | amended (GAP 3) |
+| d41d002 | eeb7de4 | 7fdef16d78b6 | b8bae5ba7713 | amended (docs, CHANGELOG) |
+| 6a775d0 | 180f592 | 9ed7554ec23c | 9ed7554ec23c | yes |
+| c395552 | 30b43b4 | ec31e4b99b54 | ec31e4b99b54 | yes |
+| d53c2b4 | cac0ab1 | 0f8760b50b61 | 0f8760b50b61 | yes |
+| 7de65df | b3e8c31 | e09b180f27e1 | e09b180f27e1 | yes |
+| 5cdf75a | 481a687 | f9a8ee7603b7 | f9a8ee7603b7 | yes |
+| 47cbfe6 | 59b79b7 | 3047a7355077 | 3047a7355077 | yes |
+| 8b46fb8 | 76dee07 | 9c1cd38debd8 | 9c1cd38debd8 | yes |
+| 0b90fee | (last, after this report) | 45fcff836baf | 45fcff836baf | yes — the data commit, unchanged |
+
+`git diff 0b90fee <head minus this report>` touches only the ten files of the five amendments
+(+401 −49).
+
+### Red before, green after
+
+The final test files run against the pre-correction code (worktree at 0b90fee with only the
+three test modules replaced): **20 failed**, 63 passed —
+`test_every_baseline_entry_is_well_formed`, the label test, the 6 coverage/waiver tests (no
+`stt.waiver`), the 2 lane L4-waiver tests, the 2 helper-unit tests, the 7 io-proof tests, the 2
+throttle tests of the job. After: 82 passed, 1 failed (`test_coverage`, the 16 pairs above).
+Each amended commit checked out on its own (worktree): its slow-target modules pass (10 / 42+1
+bootstrap skip / 83+1 / 91+1 / 91+1).
+
+### Checks
+
+- `tests/install/test_slow_target_budget.py`, `testlab/tests/unit/test_slow_build_lane.py`,
+  `testlab/tests/unit/test_calibrate.py`, `testlab/tests/slowbuild` (opt-in, skipped), `tests/repo`:
+  489 passed, 16 skipped, **2 failed**: `test_coverage` (the 16 unmeasured pairs, until row A part
+  2) and `test_version_consistent.py::test_changelog_leads_with_the_current_version` (the known
+  `## 0.11.12` heading against 0.11.11, Correction 4; red without this correction too).
+- `ruff check lhpc testlab`: all checks passed. Workflow lint: `tests/repo/test_workflow_shell.py`
+  (every run block parses with `bash -n`), PyYAML loads `testlab.yml` (jobs `testlab`,
+  `release-verify`, `slow-build`; the new step and env present); the disk-resolution function run
+  by hand on this host resolves Docker's storage and the swap file to their disk.
+- No full-suite run. Background: the long local Docker calibrations ran past the tool's 10-minute
+  foreground limit and had to run in the background (measurements, not test runs); every test
+  run was in the foreground.
+- Identity: `git log --format='%an %cn%n%B' 045724db..HEAD`: only the owner, no co-author,
+  session or AI-attribution line.
+
+### Adversarial self-review (before the push)
+
+- **The L4 waiver past bootstrap reverses an earlier design** ("only the bootstrap state waives
+  it"). It is needed: row A was taken on the introducing release, so neither row can ever measure
+  L4 there, and without it the 0.11.12 lane is red for good. It is bounded twice (the previous
+  tag lacks the line AND the version is not past `PIP_SYNC_SINCE`) and stays visible in the job
+  summary. A reviewer may prefer it to stay red and be waived by hand.
+- `PIP_SYNC_SINCE` is a release number in code. If 0.11.12 is renumbered, the guard test catches
+  it only once the tree's version reaches the constant; before that it cannot tell.
+- The third label form (`<from> -> <to> (sha)`) goes beyond the two forms asked for; without it
+  the unchanged data commit's self-update entry is malformed.
+- A candidate ref without an X.Y.Z (`release/bundle`) is well-formed but has no minor: its
+  entries never carry to a moved key. Deliberate; noted in `minor()`.
+- GAP 2's `insteadOf` is a harness redirect of the canonical remote to a local one, in the lane's
+  throwaway checkout only; the identity check, the update, the pip sync and the unit verification
+  all run unchanged. The box `$HOME` holds no git or pip config of the lab user: on the runner
+  neither is needed; locally pip needed a proxy config (driver only, not in the lane).
+- GAP 3's numbers come from an x86 VM with cgroup v1, not the arm runner with cgroup v2. Too
+  fast is caught by the calibration gate. Too slow is not caught; it inflates row C, which can
+  only make the budget rule stricter (a false "limit < 2 x measured" or "row C near the budget"),
+  never a false pass. The mem part's swap goes to a throttled disk, where the Zero uses zram: a
+  different mechanism tuned to the same time, so swap-heavy builds in row C may be slower than on
+  the Zero.
+- `_io_problems` is satisfied by ONE throttled disk; with Docker's storage and swap on two disks,
+  it does not prove both. The job throttles every disk it resolved and prints them.
+- A swap area on zram or on a disk `findmnt` cannot map is skipped by the resolution step, not
+  failed; then swap is unthrottled (the mem part comes out faster, and the gate turns red).
+- The lane will take much longer than 6 min; 330 min should hold, not measured.
+- The calibration hash mismatch above is a fourth gap that only data can close; it is handed to
+  the handler, not hidden.
+- Found and fixed before the commit: the CHANGELOG guard failed on the commits before the
+  CHANGELOG section existed (now: a section once the version reaches the release); the waivers
+  were printed only on success (now before the assertion, so a red coverage run names them
+  too); two ruff findings in the new tests; the baseline header's `host` example (now names
+  cpus, mem and both IOPS) and a `~`-style home path in a lane docstring (now `$HOME`).
