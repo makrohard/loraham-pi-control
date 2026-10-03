@@ -1,11 +1,10 @@
-# Gate 1 — CODE review request: Q3 (the best-effort helper), round 2
+# Gate 1 — CODE review request: Q3 (the best-effort helper), round 7
 
-Please judge round 2 of Q3: does each code commit below reach the completion criterion (per adopted
-site: an ordinary error in the side action leaves the main outcome and the original error unchanged
-with one log line; Ctrl-C in the main action still runs the cleanup and propagates), does the
-round-2 fix close every round-1 finding (the notice is one stderr line for any exception text; the
-`_note_staged` claim matches the code), is behaviour otherwise unchanged, do the tests prove what
-they claim (red before, green after), and does every sentence of the plan, the CHANGELOG and the
+Please judge Q3 (round 7): does each code commit below reach the completion criterion (per adopted site:
+an ordinary error in the side action leaves the main outcome and the original error unchanged with one
+log line; Ctrl-C in the main action still runs the cleanup and propagates), do the fixes close every
+earlier finding (the rounds below, newest first), is behaviour otherwise unchanged, do the tests prove
+what they claim (red before, green after), and does every sentence of the plan, the CHANGELOG and the
 report below match the diff. Is anything simpler possible without trading safety?
 
 This file is your whole input: you have no repository access; use no connector, tool or web lookup.
@@ -14,22 +13,121 @@ Answer form:
 
 | commit | verdict (OK / FINDING) | what |
 |---|---|---|
-| e2af0c4 (plan) | | |
-| 3961f2a | | |
-| 1877198 | | |
-| cda4802 | | |
-| af75627 | | |
+| 97341cb (plan) | | |
+| a7a196a | | |
+| b00ab24 | | |
+| 79eeed8 | | |
+| 433fc85 | | |
 
 Final line: GREEN / GREEN WITH NOTES / RED
 
-## Round 1 RED → round 2
+## Round 6 RED → round 7 (prose only)
+
+Round 6 accepted all five commits and found three prose defects, all fixed:
+
+1. "the sites themselves shrink by 8" mixed two numbers. The three site bodies shrink by **9**
+   (S1 −2, S2 −1, S3 −6, from the `git diff -U0` hunks), and the two adopting files net **−8**
+   because `service_binary_ops.py` gains a one-line import. Both are now stated with their meaning.
+2. The measured table said "two sites"; the plan has three. The row now lists all three with
+   their hunks.
+3. "a crash during staging leaves nothing nothing names" now reads "leaves nothing behind that no
+   record names".
+
+The whole packet was re-read once more. The request paragraph at the top no longer speaks of
+round 2, and ragged or over-long prose lines were rewrapped. No code or test changed; every commit
+keeps its patch-id.
+
+## Round 4 RED → round 5 (text only, history)
+
+Round 4 found the code right and two report numbers wrong: "two of them parametrized" (it is three) and
+"`_note_staged` body 13 → 5 lines" (it is 12 → 6, −6). Both are fixed. This time every number the
+report and this file state about the tree was derived again from the tree, each with one command. Base
+`042716f`, code head `433fc85` (the CHANGELOG commit), test file at the branch head.
+
+### Numbers, measured
+
+| figure | command | output |
+|---|---|---|
+| `service_binary_ops.py` lines | `git show 042716f:F \| wc -l`; `git show 433fc85:F \| wc -l` | 988 → 986 |
+| `install.py` lines | same, `lhpc/core/install.py` | 2323 → 2317 |
+| `best_effort.py` lines | `git show 433fc85:lhpc/core/best_effort.py \| wc -l` | 40 (new) |
+| production diff | `git diff --numstat 042716f 433fc85 -- lhpc` | `40 0 best_effort.py`, `5 11 install.py`, `6 8 service_binary_ops.py` → +51 / −19, net +32 |
+| the sites' share | `git diff -U0 042716f 433fc85` hunks of the three sites; numstat of the two adopting files | site bodies S1 −2 (`@@ -421,4 +422,2`), S2 −1 (`@@ -446,4 +445,3`), S3 −6 (`@@ -1301,10 +1301,4`) → −9; the two files net −2 and −6 → −8 (`service_binary_ops.py` gains a one-line import, `@@ -27,0 +28`); the helper's +40 is the growth |
+| `_note_staged` body (lines after the docstring) | `ast`: `end_lineno − first statement after the docstring + 1`, base and head | 12 → 6, −6 |
+| `install.py` lines touched | `git diff -U0 042716f 433fc85 -- lhpc/core/install.py \| grep '^@@'` | `@@ -1301,10 +1301,4 @@` plus two import lines (`@@ -21 +20,0`, `@@ -28,0 +28`) |
+| `binary_install` handlers | `ast` over `433fc85:lhpc/core/service_binary_ops.py`: the `try` with Exception/BaseException handlers | `try` 355–450, handlers at 403 and 441 → cited as 403-450 |
+| test cases | `pytest --collect-only -q tests/core/test_best_effort.py \| tail -1` | `11 tests collected` |
+| test functions | `grep -c '^def test_' tests/core/test_best_effort.py` | 8 |
+| parametrized functions | `grep -c '^@pytest.mark.parametrize' tests/core/test_best_effort.py` | 3 (side-action BaseException, logger BaseException, bare-raise preservation) |
+| test run | `pytest -q tests/core/test_best_effort.py` | `11 passed` |
+
+Figures marked "round 1" or "Correction 1" in the report (suite totals such as `2052 passed`, the
+red-before lines of each commit) are run results recorded at that time. They are kept as history and
+are not derivable from the tree. The plan's line references (725, 442-450) refer to the base `042716f`
+and were checked there: 442 and 725 are the two `except BaseException:` boundaries, and 450 is the
+`raise`.
+
+Round 5 asked: are the two corrected sentences exact, and does every figure in this file match
+its row above?
+
+## Round 3 RED → round 4 (text and comments, history)
+
+Round 3 found the code and the new test right, and four inexact statements. All four are fixed and
+re-measured against the tree at the head (base 042716f):
+
+1. **Counts.** `lhpc/core/best_effort.py` is now 40 lines (`wc -l`; it was 39 when round 3 measured it,
+   and this round's docstring rewrap adds one). Production (`git diff --numstat 042716f 433fc85 --
+   lhpc`): +40/−0 `best_effort.py`, +5/−11 `install.py`, +6/−8 `service_binary_ops.py`, so **+51 / −19,
+   net +32**. The helper is the growth; the three site bodies shrink by 9 and the two adopting files net
+   −8 (one added import). The test table says **11 cases** (8 test functions, three of them
+   parametrized), as `pytest` reports 11 passed.
+2. **Code comment versus the round-3 claim.** The comment on the `__str__` fallback now states both
+   facts: `# __str__ raised an ordinary Exception (a BaseException propagates)`. The claim and the
+   comment agree.
+3. **Module docstring.** "must never replace … neither hides the original error" was too broad. It
+   now reads: an ordinary Exception from the side action never replaces or hides the original
+   error; a BaseException from the side action or the logger propagates.
+4. **House rule.** No committed text names a tool or its branches: the old branch names are
+   replaced by `cons/Q3`, and the base is named `integration/0.12.0`.
+
+Fixups: the docstring and comment into the helper commit (now `a7a196a`), the base name into the plan
+(now `97341cb`). Every other commit keeps its patch-id: `b00ab24`, `79eeed8`, `433fc85` and the report
+commits. The full amended diff below is regenerated for the new range. Round 4 asked: are the
+numbers and the four sentences exact?
+
+## Round 2 RED → round 3 (history)
+
+Round 2 found the adopting sites right ("no redesign warranted") and two smaller things.
+
+1. **"when `__str__` raises → class-only form", unqualified.** The plan, the report and the helper's
+   docstring said this without a qualifier, but the code catches only an ordinary `Exception` from
+   `__str__`. Every occurrence now reads "when its `__str__` raises an ordinary Exception (a
+   BaseException propagates)". That covers the plan (fixed up into `fea808b`), the docstring and the
+   code comment in `lhpc/core/best_effort.py` (fixed up into `8731e9a`), the report, and the copies in
+   this file.
+2. **No direct test for the BaseException-from-`log` contract.** New test
+   `tests/core/test_best_effort.py::test_a_base_exception_from_log_propagates[KeyboardInterrupt|SystemExit]`
+   (in `8731e9a`): a `log` that raises KeyboardInterrupt or SystemExit makes `best_effort` raise that
+   same object (`pytest.raises`, identity checked). The side action's failure is still handled
+   first, because `log` received exactly `"x: RuntimeError: side"` before raising. The test
+   documents and pins the contract; it is not presented as red-before against the shipped code,
+   which already lets a BaseException from `log` through (it catches only `Exception` there). It
+   would turn red against a variant that caught BaseException around `log`.
+   `tests/core/test_best_effort.py`: 11 passed.
+
+Only the plan and helper commits changed. The other commits keep their patch-ids under new ids:
+`1877198`→`29a1f2e`, `cda4802`→`d8f1e2d`, `af75627`→`b2a2077`, and the report commits. The full
+amended diff below is regenerated for the new range. Round 3 asked: are both findings
+closed, and is every sentence exact?
+
+## Round 1 RED → round 2 (history)
 
 Gate 1 round 1: RED — five findings with one root cause, plus one claim.
 
 **Root cause.** `best_effort` built its notice as `f"{what}: {Class}: {exc}"` without flattening the
 exception text, so a message containing `\n` or `\r` (an OSError with a path, subprocess output, a
 multi-line ValueError) broke the "one line on stderr" contract stated in the plan, the helper, both
-adopting commits and the CHANGELOG. Fix, amended into 3961f2a (was 17212ff): the notice is built with
+adopting commits and the CHANGELOG. Fix, amended into a7a196a (was 17212ff): the notice is built with
 `' '.join(str(exc).split())` — every run of whitespace, newlines included, becomes one space, and
 leading or trailing whitespace is dropped; nothing is capped. The docstring states that rule. Test
 `test_a_multi_line_message_is_flattened_to_one_stderr_line` (`tests/core/test_best_effort.py`): an
@@ -44,13 +142,13 @@ path calls `stderr_line` outside `best_effort`, so an error from a closed stderr
 Chosen: make the claim exact, no code move — the simplest code: moving that one write into
 `best_effort` would mean a second `best_effort` around a plain write whose own failure notice goes to
 the same broken stderr, and the base wrote this notice outside its `try` the same way. The
-6-point block below now says exactly that; the plan (S3 change item) says it too. cda4802 (was
+6-point block below now says exactly that; the plan (S3 change item) says it too. 79eeed8 (was
 a6854ad) is unchanged.
 
-**Wording.** Plan (amended into e2af0c4, was b6af7e9): the flatten rule; the `log` rule made exact
+**Wording.** Plan (amended into 97341cb, was b6af7e9): the flatten rule; the `log` rule made exact
 (an ordinary Exception from `log` is ignored, a BaseException propagates — it said "a failing `log`
 is swallowed"); the helper test list names the multi-line case; the S3 False-path notice. CHANGELOG
-(amended into af75627, was 00c43bb): one added sentence, "In these lines an error message that
+(amended into 433fc85, was 00c43bb): one added sentence, "In these lines an error message that
 spans several lines is joined into one." The code report: the commit ids, the helper's line count
 (36 → 38) and production net (+47 → +49), the test count (8 → 9 cases), the flatten rule in the
 contract, the `_note_staged` sentence.
@@ -58,7 +156,7 @@ contract, the `_note_staged` sentence.
 **Commits.** `git commit --fixup` + `GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash 042716f`, then
 one report commit on top. `git patch-id --stable` before → after: changed only for the three amended
 commits (plan 4b4ce80 → 162f673, helper 2a0f257 → 12efd56, CHANGELOG dce76af → 5179039); unchanged
-for 1877198 (c2b7369), cda4802 (b9a9fad), and the three earlier report commits (8a073d9, 6f7e52d,
+for b00ab24 (c2b7369), 79eeed8 (b9a9fad), and the three earlier report commits (8a073d9, 6f7e52d,
 7d14602).
 
 **Runs (foreground, `--basetemp=$HOME/pt-lhpc-q3`, removed after).**
@@ -87,19 +185,18 @@ exception whose `str()` raises still gives `"<what>: <Class>"` (the flattening s
 
 ### Code report (round 1 body, ids and figures updated)
 
-Base `origin/integration/1.0` @ 042716f. Branch `claude/focused-dijkstra-ivqkwl` (round 1); round 2 on
-`claude/friendly-shannon-fh0bca`.
+Base `origin/integration/0.12.0` @ 042716f. Branch `cons/Q3`.
 Python 3.11, pytest 9.1, ruff from `.[dev]` in a scratch venv; `zstd` installed in the container.
 
 ### Commits
 
 | sha | subject | files | tests (red-before vs parent) |
 |---|---|---|---|
-| e2af0c4 | Q3: plan — the best-effort helper | plans/PLAN-Q3.md | — |
-| 3961f2a | Q3: best_effort — one way to run a side action beside a failure | lhpc/core/best_effort.py (new, 38 lines), tests/core/test_best_effort.py | 9 cases; RED yes (`ModuleNotFoundError: lhpc.core.best_effort` at the parent) |
-| 1877198 | Q3: binary install — the traceback and the interrupt unwind run best-effort | lhpc/core/service_binary_ops.py, tests/install/test_binary_channel.py | `test_a_failing_traceback_print_is_one_line_and_changes_no_outcome`, `test_a_failing_unwind_after_ctrl_c_is_one_line_and_the_interrupt_propagates`; RED yes: `2 failed` (no line; every outcome assertion before it held) |
-| cda4802 | Q3: the staging record rewrite runs best-effort | lhpc/core/install.py, tests/install/test_source.py | `test_a_failing_staging_record_rewrite_never_stops_the_install[unexpected]` RED yes (the RuntimeError stops the adoption); `[oserror]`/`[containment]` RED (they now pin the standard line's tail); `[lost]` green both; `test_ctrl_c_in_the_staging_record_rewrite_propagates_and_the_record_is_cleared` green before by design (the narrow catch never swallowed Ctrl-C — it guards against widening the helper). Parent result: `3 failed, 2 passed` |
-| af75627 | Q3: CHANGELOG — best-effort side actions | CHANGELOG.md | — |
+| 97341cb | Q3: plan — the best-effort helper | plans/PLAN-Q3.md | — |
+| a7a196a | Q3: best_effort — one way to run a side action beside a failure | lhpc/core/best_effort.py (new, 40 lines), tests/core/test_best_effort.py | 11 cases (8 test functions, three parametrized); RED yes (`ModuleNotFoundError: lhpc.core.best_effort` at the parent) |
+| b00ab24 | Q3: binary install — the traceback and the interrupt unwind run best-effort | lhpc/core/service_binary_ops.py, tests/install/test_binary_channel.py | `test_a_failing_traceback_print_is_one_line_and_changes_no_outcome`, `test_a_failing_unwind_after_ctrl_c_is_one_line_and_the_interrupt_propagates`; RED yes: `2 failed` (no line; every outcome assertion before it held) |
+| 79eeed8 | Q3: the staging record rewrite runs best-effort | lhpc/core/install.py, tests/install/test_source.py | `test_a_failing_staging_record_rewrite_never_stops_the_install[unexpected]` RED yes (the RuntimeError stops the adoption); `[oserror]`/`[containment]` RED (they now pin the standard line's tail); `[lost]` green both; `test_ctrl_c_in_the_staging_record_rewrite_propagates_and_the_record_is_cleared` green before by design (the narrow catch never swallowed Ctrl-C — it guards against widening the helper). Parent result: `3 failed, 2 passed` |
+| 433fc85 | Q3: CHANGELOG — best-effort side actions | CHANGELOG.md | — |
 
 Red-before commands (each with the parent's version of the one production file checked out over the
 final tests, then restored):
@@ -123,45 +220,49 @@ binary message fallback, the main unwind boundary, the venv `rmtree; raise`, eve
 
 - One plain function plus a one-line `stderr_line`; no class, no registry, no result type, no
   context-manager form (no site needs it).
-- Line counts: `service_binary_ops.py` 988 → 986; `install.py` 2323 → 2317 (`_note_staged` body
-  13 → 5 lines); new `best_effort.py` 38. Production net: +49 / −19 (+30, the helper; the sites
-  themselves shrink by 8). Net code grows by the helper only — the price of one tested contract
-  replacing three hand-written variants; adopting the 30+ listed sites outside FILES is where it pays.
+- Line counts: `service_binary_ops.py` 988 → 986; `install.py` 2323 → 2317 (`_note_staged` body 12 → 6
+  lines, −6); new `best_effort.py` 40. Production net: +51 / −19 (+32): the helper adds 40; the three
+  site bodies shrink by 9 (S1 −2, S2 −1, S3 −6), and the two adopting files net −8 because
+  `service_binary_ops.py` gains a one-line import. Net code grows by the helper only — the price of one
+  tested contract replacing three hand-written variants; adopting the 30+ listed sites outside FILES is
+  where it pays.
 - Dependencies: `service_binary_ops.py` imports +`best_effort`; self.* used unchanged
   (`binary_recover`). `install.py` imports −`sys`, +`best_effort, stderr_line`; self.* unchanged
   (`_staged_clone_payload`). The helper imports only `sys`, `collections.abc`, `typing`.
 
 ### The 6-point block
 
-1. CONTRACTS. `best_effort(fn, *, what, log=stderr_line) -> fn() | None` (`lhpc/core/best_effort.py:18`):
-   catches `Exception` only; returns None then; logs exactly one line `"<what>: <Class>: <msg>"`
-   (`"<what>: <Class>"` if `__str__` raises; the exception text flattened to one line: runs of
-   whitespace, including newlines, become one space, leading or trailing whitespace is dropped); an ordinary Exception from `log` is ignored; a BaseException (from `log` or `fn`) propagates;
-   the caller's handled exception is untouched (bare `raise` re-raises it). `_note_staged`
-   (`install.py:1295`): returns None; the rewrite (payload included) runs inside `best_effort`, so no
-   ordinary Exception from it escapes; the False-path notice is a plain `stderr_line` write outside
-   `best_effort` (as the base wrote it outside its `try`), so an error from stderr there propagates; `OwnedMarker.rewrite`
-   (`runtime_fs.py:310`) returns bool — `False` keeps the existing line. `binary_install`
-   (`service_binary_ops.py:402-450`): the typed `ActionResult` on Exception (data `binary_failed`,
+1. CONTRACTS. `best_effort(fn, *, what, log=stderr_line) -> fn() | None`
+   (`lhpc/core/best_effort.py:18`): catches `Exception` only; returns None then; logs exactly one line
+   `"<what>: <Class>: <msg>"` (`"<what>: <Class>"` if `__str__` raises an ordinary Exception — a
+   BaseException propagates; the exception text flattened to one line: runs of whitespace, including
+   newlines, become one space, leading or trailing whitespace is dropped); an ordinary Exception from
+   `log` is ignored; a BaseException (from `log` or `fn`) propagates; the caller's handled exception is
+   untouched (bare `raise` re-raises it). `_note_staged` (`install.py:1295`): returns None; the rewrite
+   (payload included) runs inside `best_effort`, so no ordinary Exception from it escapes; the
+   False-path notice is a plain `stderr_line` write outside `best_effort` (as the base wrote it outside
+   its `try`), so an error from stderr there propagates; `OwnedMarker.rewrite` (`runtime_fs.py:310`)
+   returns bool — `False` keeps the existing line. `binary_install` (`service_binary_ops.py:403-450`,
+   the two handlers of the `try` at 355): the typed `ActionResult` on Exception (data `binary_failed`,
    `offer_source`, `rolled_back`, `unexpected`) and propagation of the same BaseException object are
    unchanged. No lock order, persisted format or public signature touched.
 2. INVARIANTS + TESTS. Binary install transaction (a failed install never costs the working one;
    Ctrl-C unwinds now): `test_a_failing_diagnostic_never_skips_the_unwind`,
    `test_ctrl_c_inside_the_transaction_unwinds_now`, the two new tests. Source transactions (a crash
-   during staging leaves nothing nothing names; an unproven candidate is never removed):
+   during staging leaves nothing behind that no record names; an unproven candidate is never removed):
    `test_a_staging_record_never_removes_an_unproven_candidate`, `test_a_staging_record_defers_to_its_journal`,
    the extended rewrite test and the new Ctrl-C test. Config as a transaction, uninstall protection:
    not touched; `tests/core/test_config.py`, `tests/core/test_uninstall_prep.py` green.
-3. FAILURE CLASSES. Fakes: `traceback.print_exc`, `binary_recover`, `rewrite` replaced with
-   functions of the real call shape (`binary_recover(self)`, `rewrite(text)`); `rewrite` fakes raise
-   EIO OSError, `PathContainmentError`, RuntimeError, or return False. KeyboardInterrupt through
-   cleanup: S2 test (unwind raises during Ctrl-C → same interrupt object, one line, journal left for
-   the next command which restores), S3 Ctrl-C test (propagates, record cleared). CLI / web /
-   detached job / boot restore: all reach these through the same `binary_install` / `adopt_source`;
-   no adapter change. Stacked conflicts: `install.py` is NOT in the brief's FILES list (only in its
-   ADOPT list) — touched lines 1295-1305 and two import lines only; if Q1 edits `install.py`
-   recovery the conflict is textual at most; commit cda4802 can be dropped independently.
-   `config.py` untouched (no shared line with Q1/Q2).
+3. FAILURE CLASSES. Fakes: `traceback.print_exc`, `binary_recover`, `rewrite` replaced with functions of
+   the real call shape (`binary_recover(self)`, `rewrite(text)`); `rewrite` fakes raise EIO OSError,
+   `PathContainmentError`, RuntimeError, or return False. KeyboardInterrupt through cleanup: S2 test
+   (unwind raises during Ctrl-C → same interrupt object, one line, journal left for the next command
+   which restores), S3 Ctrl-C test (propagates, record cleared). CLI / web / detached job / boot
+   restore: all reach these through the same `binary_install` / `adopt_source`; no adapter change.
+   Stacked conflicts: `install.py` is NOT in the brief's FILES list (only in its ADOPT list) — touched
+   lines 1301-1304 (1301-1310 on the base) and two import lines only; if Q1 edits `install.py` recovery
+   the conflict is textual at most; commit 79eeed8 can be dropped independently. `config.py` untouched
+   (no shared line with Q1/Q2).
 4. TEST RULES. Each new test red before against its parent except the deliberate Ctrl-C guard (stated);
    log lines asserted by count, site name and the exact `: <Class>: <msg>` tail (not startswith-only;
    the helper's own test pins the whole line, its contract); no network; no unchecked returns.
@@ -178,14 +279,14 @@ binary message fallback, the main unwind boundary, the venv `rmtree; raise`, eve
    `ruff check lhpc testlab`: All checks passed. `ruff check tests --select F,E9`: All checks passed.
    No signature changed; grep of tests/ + testlab/ for `_note_staged`, `binary_install(`,
    `best_effort` → only tests/install and tests/core modules, all run above.
-6. ADVERSARIAL SELF-REVIEW. Found and fixed: (a) an error whose `__str__` raises made the helper log
-   nothing — now `"<what>: <Class>"`, tested; (b) ruff UP035 (`collections.abc.Callable`) and an
-   unused `sys` in `install.py`; (c) test assertions loosened from whole-sentence equality to
-   count + site + tail (house rule 2); (d) plan line refs corrected (725, 442-450). Accepted:
-   S3 widens the catch to any Exception — by design (the record is crash evidence only; with no inode
-   recorded, recovery removes a candidate only while it is empty). S3's exception line now reads
-   `… — install continues: OSError: …` instead of `… (msg) — install continues`. The docs name no
-   sentence this makes untrue (architecture.md lists "not every module"); the CHANGELOG line
+6. ADVERSARIAL SELF-REVIEW. Found and fixed: (a) an error whose `__str__` raises an ordinary Exception
+   made the helper log nothing — now `"<what>: <Class>"`, tested; (b) ruff UP035
+   (`collections.abc.Callable`) and an unused `sys` in `install.py`; (c) test assertions loosened from
+   whole-sentence equality to count + site + tail (house rule 2); (d) plan line refs corrected (725,
+   442-450). Accepted: S3 widens the catch to any Exception — by design (the record is crash evidence
+   only; with no inode recorded, recovery removes a candidate only while it is empty). S3's exception
+   line now reads `… — install continues: OSError: …` instead of `… (msg) — install continues`. The docs
+   name no sentence this makes untrue (architecture.md lists "not every module"); the CHANGELOG line
    describes exactly the three operator-visible changes.
 
 ### Deviations
@@ -200,7 +301,7 @@ binary message fallback, the main unwind boundary, the venv `rmtree; raise`, eve
 
 `git diff --abbrev=7 042716f HEAD -- . ':!code-review'` — every change of the branch except the
 review packet itself (this file and the code report, whose text is above). Commits, oldest first:
-e2af0c4 plan, 3961f2a helper, 1877198 binary install, cda4802 staging record, af75627 CHANGELOG.
+97341cb plan, a7a196a helper, b00ab24 binary install, 79eeed8 staging record, 433fc85 CHANGELOG.
 
 ```diff
 diff --git a/CHANGELOG.md b/CHANGELOG.md
@@ -223,13 +324,14 @@ index 2d217a3..eb91240 100644
  - Every release is now also installed, built and self-updated on a test box slowed down below a Pi Zero 2 W
 diff --git a/lhpc/core/best_effort.py b/lhpc/core/best_effort.py
 new file mode 100644
-index 0000000..d60115c
+index 0000000..900a75e
 --- /dev/null
 +++ b/lhpc/core/best_effort.py
-@@ -0,0 +1,38 @@
-+"""Best-effort side actions: a cleanup or diagnostic that runs beside a failure must never replace
-+it. One plain function, so every such site neither hides the original error nor lets Ctrl-C skip
-+the rest of its unwind."""
+@@ -0,0 +1,40 @@
++"""Best-effort side actions: a cleanup or diagnostic that runs beside a failure. An ordinary
++Exception from it never replaces or hides the original error; a BaseException from the side action
++or the logger propagates. One plain function, so no such site lets Ctrl-C skip the rest of its
++unwind."""
 +
 +from __future__ import annotations
 +
@@ -246,19 +348,20 @@ index 0000000..d60115c
 +
 +def best_effort(fn: Callable[[], T], *, what: str,
 +                log: Callable[[str], object] = stderr_line) -> T | None:
-+    """Run the side action `fn` and return its result. An ordinary `Exception` from it is logged
-+    as the one line "<what>: <Class>: <msg>" (without ": <msg>" when its __str__ raises) and None
-+    is returned; the exception text is flattened to one line: runs of whitespace, including
-+    newlines, become one space, and leading or trailing whitespace is dropped. An ordinary
-+    Exception from `log` is ignored (a closed stderr). A `BaseException` (KeyboardInterrupt,
-+    SystemExit) from `fn` or `log` propagates. Called inside an `except` block it leaves the
-+    handled exception untouched: a bare `raise` after it re-raises the original."""
++    """Run the side action `fn` and return its result. An ordinary `Exception` from it is logged as
++    the one line "<what>: <Class>: <msg>" (without ": <msg>" when its __str__ raises an ordinary
++    Exception; a BaseException from it propagates) and None is returned; the exception text is
++    flattened to one line: runs of whitespace, including newlines, become one space, and leading or
++    trailing whitespace is dropped. An ordinary Exception from `log` is ignored (a closed stderr). A
++    `BaseException` (KeyboardInterrupt, SystemExit) from `fn` or `log` propagates. Called inside an
++    `except` block it leaves the handled exception untouched: a bare `raise` after it re-raises the
++    original."""
 +    try:
 +        return fn()
 +    except Exception as exc:
 +        try:
 +            line = f"{what}: {type(exc).__name__}: {' '.join(str(exc).split())}"
-+        except Exception:                    # an error whose __str__ raises
++        except Exception:   # __str__ raised an ordinary Exception (a BaseException propagates)
 +            line = f"{what}: {type(exc).__name__}"
 +        try:
 +            log(line)
@@ -347,20 +450,20 @@ index eeae6ad..d2c3c40 100644
                  shutil.rmtree(tmpdir, ignore_errors=True)
 diff --git a/plans/PLAN-Q3.md b/plans/PLAN-Q3.md
 new file mode 100644
-index 0000000..9f22117
+index 0000000..844d423
 --- /dev/null
 +++ b/plans/PLAN-Q3.md
 @@ -0,0 +1,91 @@
 +# PLAN-Q3 — the best-effort helper
 +
-+Base: `origin/integration/1.0` @ 042716f. One helper, adopted where a side action (cleanup or
++Base: `origin/integration/0.12.0` @ 042716f. One helper, adopted where a side action (cleanup or
 +diagnostic) sits beside a failure today; every other `except Exception` in FILES is listed with keep.
 +
 +## The helper — `lhpc/core/best_effort.py` (new, plain function)
 +
 +`best_effort(fn, *, what, log=stderr_line) -> fn() | None`: runs `fn()`; an ordinary `Exception`
 +from it is logged as the one line `"<what>: <Class>: <msg>"` through `log` and `None` is returned
-+(no `: <msg>` when its `__str__` raises; the exception text is flattened to one line: runs of
++(no `: <msg>` when its `__str__` raises an ordinary Exception (a BaseException propagates); the exception text is flattened to one line: runs of
 +whitespace, including newlines, become one space, and leading or trailing whitespace is dropped);
 +a `BaseException` (KeyboardInterrupt/SystemExit) from `fn` propagates. From `log` (a side action
 +too: a closed stderr) an ordinary Exception is ignored; a BaseException propagates. Called inside
@@ -380,7 +483,7 @@ index 0000000..9f22117
 +| — | `service_binary_ops.py:427-433` message built with `except Exception` fallback | KEEP | a value with a fallback (a raising `__str__`), not a side action; both arms produce the error |
 +| — | `service_binary_ops.py:402` `except Exception as exc` (main unwind boundary) | KEEP | it IS the surrounding operation's contract |
 +| — | `service_binary_ops.py:725` `except BaseException: rmtree(ignore_errors=True); raise` | KEEP | already never raises an Exception; nothing to log |
-+| S3 | `install.py:1295-1309` `_note_staged`: `rec.rewrite(...)` in `except (OSError, PathContainmentError)` + a False return, one stderr line each | REPLACE | B6 best-effort record; today any OTHER Exception (TypeError, ValueError from the payload) stops the install — the CR3-3b corr2 class |
++| S3 | `install.py:1295-1310` `_note_staged`: `rec.rewrite(...)` in `except (OSError, PathContainmentError)` + a False return, one stderr line each | REPLACE | B6 best-effort record; today any OTHER Exception (TypeError, ValueError from the payload) stops the install — the CR3-3b corr2 class |
 +| — | `service_maintenance.py` uninstall prep `:2088 :2105 :2123 :2133` | KEEP | fail-CLOSED decisions (an exception → refusal / `hmac_bad=True`), not side actions; no diagnostic exists there at this base |
 +| — | `service_maintenance.py :363 :656 :1157 :1188 :1224 :1252 :1320 :1328 :1338 :1505` | KEEP | reads whose exception is a decision value (None / refusal / False); adding a log line would change the task panel's output |
 +| — | `service_maintenance.py :2175 :2219 :2228 :2239` uninstall guard | KEEP | typed refusals |
@@ -436,7 +539,7 @@ index 0000000..9f22117
 +## Open questions (with recommendation)
 +
 +1. `install.py` is not in the brief's FILES list but `_note_staged` is in its ADOPT list.
-+   Recommendation: adopt it in its own commit touching only `_note_staged` (lines 1295-1309); Q1
++   Recommendation: adopt it in its own commit touching only `_note_staged` (lines 1295-1310); Q1
 +   may own `install.py` recovery — disjoint lines, so at worst a textual stack conflict the
 +   integrator can resolve by taking both; or drop commit 3.
 +2. `tests/repo/test_version_consistent.py::test_changelog_leads_with_the_current_version` is red on
@@ -444,10 +547,10 @@ index 0000000..9f22117
 +   until the release commit bumps the version. Recommendation: leave it to the release commit.
 diff --git a/tests/core/test_best_effort.py b/tests/core/test_best_effort.py
 new file mode 100644
-index 0000000..26ab3f6
+index 0000000..64ef2ad
 --- /dev/null
 +++ b/tests/core/test_best_effort.py
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,95 @@
 +"""best_effort: a side action beside a failure never replaces it (the helper's own contract; each
 +adopting site proves its outcome in its own module)."""
 +
@@ -509,6 +612,24 @@ index 0000000..26ab3f6
 +    def closed(line):
 +        raise ValueError("I/O operation on closed file")
 +    assert best_effort(boom, what="x", log=closed) is None
++
++
++@pytest.mark.parametrize("exc", [KeyboardInterrupt(), SystemExit(3)])
++def test_a_base_exception_from_log_propagates(exc):
++    # An ordinary Exception from `log` is ignored (above); a BaseException from it is not. The side
++    # action's failure is still handled first: `log` receives its one line before it raises.
++    seen = []
++
++    def boom():
++        raise RuntimeError("side")
++
++    def interrupted(line):
++        seen.append(line)
++        raise exc
++    with pytest.raises(type(exc)) as got:
++        best_effort(boom, what="x", log=interrupted)
++    assert got.value is exc
++    assert seen == ["x: RuntimeError: side"]
 +
 +
 +@pytest.mark.parametrize("original", [ValueError("main"), KeyboardInterrupt()])
