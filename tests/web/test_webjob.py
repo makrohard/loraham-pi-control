@@ -140,7 +140,9 @@ def test_proven_terminated_timeout_step_records_failed(tmp_path, monkeypatch):
         build_launcher_runtime.run(_spec(tmp_path, ["sleep", "5"]))
     except SystemExit:
         pass
-    assert jobresult._read_raw(svc._paths, _LOG)["state"] == "failed"     # proven stop → ordinary failed
+    d = jobresult._read_raw(svc._paths, _LOG)
+    assert d["state"] == "failed"                                         # proven stop → ordinary failed
+    assert "timed out after" in d["detail"]                               # ... named as a timeout
 
 
 def test_handshake_uses_attempt_and_admitted_flag(tmp_path, monkeypatch):

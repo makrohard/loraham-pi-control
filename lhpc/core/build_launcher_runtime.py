@@ -124,8 +124,9 @@ def _resolve_argv(tokens: list) -> list:
 def _run_step(argv: list, cwd: str, env: dict, timeout: float):
     """Run one step in its OWN session; on timeout, terminate the whole tree via the shared
     proctree session-token helper. Output is inherited -> streamed to the job log, not held
-    in memory. Returns `(rc, unverified)` — `unverified=True` ONLY when a timeout's termination
-    was NOT proven (`Termination` not `.ok`: a build/test process may still hold the checkout)."""
+    in memory. Returns `(rc, timed_out, unverified)` — `unverified=True` ONLY when a timeout's
+    termination was NOT proven (`Termination` not `.ok`: a build/test process may still hold the
+    checkout)."""
     # LIVE log streaming: PYTHONUNBUFFERED un-buffers python tools (pip, PlatformIO) —
     # the dominant chunkiness source. Deliberately NO stdbuf/LD_PRELOAD wrapping: this
     # launcher also runs HOST-TEST steps, and an inherited LD_PRELOAD alters the pipe
@@ -146,7 +147,7 @@ def _run_step(argv: list, cwd: str, env: dict, timeout: float):
         pass
     token = proctree.capture_session_token(p.pid)   # FULL ownership token captured at spawn
     try:
-        return p.wait(timeout=timeout), False
+        return p.wait(timeout=timeout), False, False
     except subprocess.TimeoutExpired:
         result = proctree.terminate_session(token, os.getpid())
         try:
@@ -157,7 +158,7 @@ def _run_step(argv: list, cwd: str, env: dict, timeout: float):
             sys.stderr.write("WARNING: step termination {} (surviving processes possible): "
                              "{}\n".format(result.value, " ".join(argv)))
         sys.stderr.write("step timed out after {}s: {}\n".format(timeout, " ".join(argv)))
-        return 124, (not result.ok)
+        return 124, True, (not result.ok)
 
 
 def run(spec: dict) -> None:
@@ -304,7 +305,8 @@ def run(spec: dict) -> None:
                     # what is happening and where to watch progress.
                     print(s["announce"], flush=True)
                 print("+ " + " ".join(argv), flush=True)
-                rc, unverified = _run_step(argv, cwd, {**os.environ, **step_env}, step_timeout)
+                rc, timed_out, unverified = _run_step(argv, cwd, {**os.environ, **step_env},
+                                                      step_timeout)
                 if rc != 0:
                     if unverified:
                         # A timed-out step whose termination was NOT proven: a build/test process may still
@@ -312,6 +314,8 @@ def run(spec: dict) -> None:
                         outcome[0] = "unsafe"
                         detail[0] = ("timed out; cessation UNPROVEN — a process may survive: "
                                      + " ".join(argv))[:200]
+                    elif timed_out:
+                        detail[0] = (f"timed out after {step_timeout:.0f}s: " + " ".join(argv))[:200]
                     else:
                         detail[0] = ("step failed: " + " ".join(argv))[:200]
                     raise SystemExit(rc)
