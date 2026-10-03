@@ -3491,12 +3491,16 @@ class LifecycleOpsMixin:
                     marker_text = (BUILD_MARKER_TEXT + self._consumed_source_lines(c)
                                    if _mark else "")
                     inputs = self._build_inputs_to_record(c) if _mark else None
+                    # The same per-step timeout as lifecycle.build()/host_test() on the CLI path.
+                    step_timeout = ((c.build_timeout or life.BUILD_TIMEOUT_S) if op == "build"
+                                    else (c.test_timeout or life.TEST_TIMEOUT_S))
                     script = commands.render_build_launcher(
                         steps, runtime, src, lock_paths, index_lock=index_lock,
                         result_name=log, attempt_id=aid, op=op, target=c.id, stack=self.stack_of(c.id) or "",
                         marker_path=marker_path, marker_text=marker_text,
                         inputs_path=str(inputs[0]) if inputs else "",
-                        inputs_text=inputs[1] if inputs else "")
+                        inputs_text=inputs[1] if inputs else "",
+                        step_timeout=step_timeout)
                 except commands.CommandError as exc:
                     jobresult.terminalize(self._paths, log, aid, "failed", detail=str(exc)[:200])
                     return None, aid, f"cannot {op} '{c.id}': {exc}"

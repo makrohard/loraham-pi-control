@@ -268,7 +268,8 @@ runtime load.
 - The heavy builds are the from-source QEMU compile (~5 min on a Pi 5, ~68 min on a Zero 2W at
   `-j1`) and the MeshCom firmware (~26 min cold). The per-step build timeout defaults to 900 s;
   the manifest raises it per component (`build_timeout`, up to 28800 s for the Zero's cold QEMU
-  compile). Builds are detached and survive a web-service restart. Output is block-buffered off a
+  compile) — the same on the command line and the web Build/Test buttons (host tests: 600 s,
+  `test_timeout`). Builds are detached and survive a web-service restart. Output is block-buffered off a
   TTY, so a quiet `tail -f` is not a stalled build; judge by CPU and the growing `.pio/build/`:
 
   ```bash

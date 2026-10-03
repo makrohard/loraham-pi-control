@@ -16,9 +16,12 @@ from lhpc.core import commands, reslock
 from lhpc.core.paths import Paths
 
 
-def _spec(tmp_path, *, steps=(), lock_names=(), index="", ):
-    return {"steps": list(steps), "cwd": str(tmp_path), "runtime_root": str(tmp_path / "rt"),
+def _spec(tmp_path, *, steps=(), lock_names=(), index="", step_timeout=None):
+    spec = {"steps": list(steps), "cwd": str(tmp_path), "runtime_root": str(tmp_path / "rt"),
             "lock_names": list(lock_names), "index_lock_name": index}
+    if step_timeout is not None:
+        spec["step_timeout"] = step_timeout
+    return spec
 
 
 def _locks_dir(tmp_path):
@@ -95,6 +98,88 @@ def test_run_malformed_timeout_fails_safe(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as e:
         blr.run(_spec(tmp_path))
     assert e.value.code == 3                                # never unlimited
+
+
+def _record_step_timeouts(monkeypatch):
+    seen = []
+    real = blr._run_step
+    def _rec(argv, cwd, env, timeout):
+        seen.append(timeout)
+        return real(argv, cwd, env, timeout)
+    monkeypatch.setattr(blr, "_run_step", _rec)
+    return seen
+
+
+def test_run_uses_the_spec_step_timeout(tmp_path, monkeypatch):
+    # The web Build/Test launcher gets the component's manifest timeout through the spec, not a flat 1800.
+    monkeypatch.delenv("LHPC_BUILD_STEP_TIMEOUT_S", raising=False)
+    seen = _record_step_timeouts(monkeypatch)
+    t0 = time.monotonic()
+    with pytest.raises(SystemExit):
+        blr.run(_spec(tmp_path, steps=[{"argv": ["sleep", "5"]}], step_timeout=0.3))
+    assert time.monotonic() - t0 < 4
+    assert seen == [0.3]
+
+
+def test_env_step_timeout_overrides_the_spec(tmp_path, monkeypatch):
+    monkeypatch.setenv("LHPC_BUILD_STEP_TIMEOUT_S", "0.2")
+    seen = _record_step_timeouts(monkeypatch)
+    blr.run(_spec(tmp_path, steps=[{"argv": ["true"]}], step_timeout=999))
+    assert seen == [0.2]
+
+
+@pytest.mark.parametrize("bad", [0, -5, float("nan"), float("inf"), float("-inf")])
+def test_run_nonpositive_spec_timeout_fails_safe(tmp_path, monkeypatch, bad):
+    monkeypatch.delenv("LHPC_BUILD_STEP_TIMEOUT_S", raising=False)
+    marker = tmp_path / "ran"
+    with pytest.raises(SystemExit) as e:
+        blr.run(_spec(tmp_path, steps=[{"argv": ["touch", str(marker)]}], step_timeout=bad))
+    assert e.value.code == 3 and not marker.exists()        # never unlimited, no step ran
+
+
+@pytest.mark.parametrize("bad", ["inf", "-inf"])
+def test_env_step_timeout_rejects_inf(tmp_path, monkeypatch, bad):
+    monkeypatch.setenv("LHPC_BUILD_STEP_TIMEOUT_S", bad)
+    marker = tmp_path / "ran"
+    with pytest.raises(SystemExit) as e:
+        blr.run(_spec(tmp_path, steps=[{"argv": ["touch", str(marker)]}]))
+    assert e.value.code == 3 and not marker.exists()        # infinite is unlimited: refused
+
+
+def test_env_step_timeout_rejects_nan(tmp_path, monkeypatch):
+    monkeypatch.setenv("LHPC_BUILD_STEP_TIMEOUT_S", "nan")
+    marker = tmp_path / "ran"
+    with pytest.raises(SystemExit) as e:
+        blr.run(_spec(tmp_path, steps=[{"argv": ["touch", str(marker)]}]))
+    assert e.value.code == 3 and not marker.exists()
+
+
+def _launch_no_env_timeout(launcher):
+    env = {k: v for k, v in os.environ.items() if k != "LHPC_BUILD_STEP_TIMEOUT_S"}
+    return subprocess.run([sys.executable, str(launcher)], capture_output=True, text=True, env=env)
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf"), float("nan")])
+def test_rendered_launcher_nonfinite_spec_timeout_fails_safe(tmp_path, bad):
+    # Through the REAL renderer: TOML allows inf/nan, and a repr()-embedded non-finite float
+    # would be a bare `inf`/`nan` name -> NameError before the runtime's fail-safe check.
+    marker = tmp_path / "ran"
+    launcher = tmp_path / "l.py"
+    launcher.write_text(commands.render_build_launcher(
+        [{"argv": ["touch", str(marker)]}], str(tmp_path), str(tmp_path), [], step_timeout=bad))
+    r = _launch_no_env_timeout(launcher)
+    assert r.returncode == 3 and "invalid step timeout" in r.stderr, r.stderr
+    assert not marker.exists()                              # no step ran
+
+
+@pytest.mark.parametrize("value", [1800, 1234.5])
+def test_rendered_launcher_finite_spec_timeout_reaches_runtime(tmp_path, monkeypatch, value):
+    monkeypatch.delenv("LHPC_BUILD_STEP_TIMEOUT_S", raising=False)
+    seen = _record_step_timeouts(monkeypatch)
+    script = commands.render_build_launcher([{"argv": ["true"]}], str(tmp_path), str(tmp_path),
+                                            [], step_timeout=value)
+    exec(compile(script, "launcher", "exec"), {})
+    assert seen == [float(value)] and isinstance(seen[0], float)
 
 
 def test_run_executes_step_and_releases_locks(tmp_path):

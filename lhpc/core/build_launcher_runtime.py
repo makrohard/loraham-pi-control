@@ -4,7 +4,7 @@ The generated launcher (see `commands._BUILD_RUNNER`) is a THIN wrapper that onl
 immutable spec dict here; ALL security-sensitive behavior lives in this module so it is unit
 tested rather than embedded in a generated string:
 
-* strict positive per-step timeout parsing (a malformed value fails safe, never unlimited);
+* strict positive, finite per-step timeout parsing (a malformed value fails safe, never unlimited);
 * descriptor-safe (no-follow) source-transaction journal preflight;
 * index-lock → journal-check → source-lock handoff, all via no-follow lock opens;
 * bounded `pkg-config`;
@@ -20,6 +20,7 @@ blocked, 1 = pkg-config failure, first failing step's own return code otherwise.
 from __future__ import annotations
 
 import fcntl
+import math
 import os
 import subprocess
 import sys
@@ -31,16 +32,22 @@ _PKGCONFIG_TIMEOUT = 30
 _LOCK_POLL = 0.2
 
 
-def _step_timeout() -> float:
-    """Strict positive per-step timeout from the environment; a malformed value fails SAFE
-    (SystemExit 3) rather than becoming unlimited."""
+def _step_timeout(spec_value=None) -> float:
+    """Strict positive, finite per-step timeout: `LHPC_BUILD_STEP_TIMEOUT_S` when set, else the
+    spec's (the component's manifest build/test timeout, as on the CLI path), else 1800. A
+    malformed, non-positive or non-finite value fails SAFE (SystemExit 3) rather than becoming
+    unlimited."""
+    raw = os.environ.get("LHPC_BUILD_STEP_TIMEOUT_S")
+    if raw is None:
+        raw = 1800 if spec_value is None else spec_value
     try:
-        t = float(os.environ.get("LHPC_BUILD_STEP_TIMEOUT_S", "1800"))
-        if not (t > 0):
+        t = float(raw)
+        if not (math.isfinite(t) and t > 0):
             raise ValueError
         return t
     except (TypeError, ValueError):
-        sys.stderr.write("invalid LHPC_BUILD_STEP_TIMEOUT_S (must be a positive number)\n")
+        sys.stderr.write("invalid step timeout (LHPC_BUILD_STEP_TIMEOUT_S or the spec's "
+                         "step_timeout must be a positive number)\n")
         raise SystemExit(3) from None
 
 
@@ -171,7 +178,7 @@ def run(spec: dict) -> None:
     paths = Paths(runtime_root=Path(spec["runtime_root"]))
     lock_names = sorted(spec.get("lock_names") or [])
     index_name = spec.get("index_lock_name") or ""
-    step_timeout = _step_timeout()
+    step_timeout = _step_timeout(spec.get("step_timeout"))
     tries = _lock_tries()
 
     # ---- WEB-JOB attempt lifecycle (parallels the HMAC driver gate) --------------------------------

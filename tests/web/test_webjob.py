@@ -183,6 +183,31 @@ def test_spawn_web_job_proven_terminated_primary_blocks_no_secondaries(tmp_path,
     assert len(jobresult.read_results(svc._paths)) <= 1
 
 
+@pytest.mark.parametrize("op, target, primary, expected", [
+    ("build", "meshcom", "meshcom-qemu", 28800.0),        # the manifest build_timeout, not a flat 1800
+    ("test", "meshcore", "meshcore-node", 900.0),         # the manifest test_timeout
+])
+def test_spawn_web_job_launcher_carries_the_manifest_timeout(tmp_path, monkeypatch, op, target,
+                                                             primary, expected):
+    import os
+
+    from lhpc.core import commands
+    svc = _svc(tmp_path)
+    _fake_spawn(monkeypatch, os.getpid())
+    monkeypatch.setattr(ControllerService, "_track_or_terminate",
+                        lambda self, life, ln, pid, cid, op, attempt_id="", **k:
+                        f"{op} '{cid}' spawned but its job marker could not be persisted; "
+                        "the process was terminated (not left orphaned).")
+    seen = {}
+    real = commands.render_build_launcher
+    def _rec(*a, **kw):
+        seen[kw.get("target")] = kw.get("step_timeout")
+        return real(*a, **kw)
+    monkeypatch.setattr(commands, "render_build_launcher", _rec)
+    svc.spawn_web_job(op, target)
+    assert seen[primary] == expected
+
+
 def test_spawn_web_job_orphan_primary_blocks(tmp_path, monkeypatch):
     import os
     svc = _svc(tmp_path)
