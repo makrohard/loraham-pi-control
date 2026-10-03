@@ -371,6 +371,130 @@ def test_parent_swap_after_fd_cannot_redirect_clone_outside(tmp_path, git, make_
     assert (moved / ".app.candidate-x" / "MARK").read_text() == "payload"   # landed in held inode
 
 
+def test_recovery_removes_a_clone_killed_before_its_journal(tmp_path, make_repo, installer, monkeypatch):
+    # Power lost while the candidate was still being staged (a clone may take 15 minutes), before
+    # any journal exists: nothing named the partial tree, so it stayed beside the source for good.
+    import signal
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
+    real_copy = Installer._copy_into_candidate
+
+    def copy_then_die(local, cand):           # stubs the copy: the one seam inside the staging
+        real_copy(local, cand)
+        os.kill(os.getpid(), signal.SIGKILL)
+    monkeypatch.setattr(Installer, "_copy_into_candidate", staticmethod(copy_then_die))
+    pid = os.fork()
+    if pid == 0:                              # the box: dies mid-staging, no cleanup runs
+        try:
+            inst.adopt_source(comp, source="dev")
+        finally:
+            os._exit(1)
+    _, status = os.waitpid(pid, 0)
+    assert os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL
+    staged = list(inst.paths.under("src").glob(".app.candidate-*"))
+    assert len(staged) == 1 and (staged[0] / "file.txt").is_file()
+    assert not inst._pending_journals()
+    monkeypatch.undo()
+    msgs = inst.recover_source_activations()
+    assert not staged[0].exists()
+    assert any("removed an interrupted clone" in m for m in msgs), msgs
+    assert list(inst.paths.under("state", "source-txn").iterdir()) == []
+    assert inst.adopt_source(comp, source="dev").status == "done"
+
+
+def _staging_record(inst, staging, ident):
+    dest = inst.paths.under("src", "app")
+    rec = inst._staged_clone_path(dest, staging)
+    rec.parent.mkdir(parents=True, exist_ok=True)
+    rel = lambda p: str(p.relative_to(inst.paths.runtime_root))
+    rec.write_text(json.dumps({"state": "staging", "source_rel": rel(dest),
+                               "candidate_rel": rel(staging), "ident": ident}))
+    return rec
+
+
+def test_a_staging_record_of_a_live_staging_is_left_alone(tmp_path, installer):
+    # The staging process holds the source lock for the whole clone: while it is held, the clone
+    # is alive and neither it nor its record is touched. Once the lock is free, it is removed.
+    from lhpc.core import reslock
+    inst = installer(search_root=tmp_path / "rt")
+    staging = inst.paths.under("src", ".app.candidate-1-2")
+    staging.mkdir(parents=True); (staging / "part").write_text("cloning")
+    rec = _staging_record(inst, staging, _ident_of(staging, ctime=False))
+    with reslock.operation_lock(inst.paths, inst._source_lock_key("src/app"), "update", "x"):
+        inst.recover_source_activations()
+    assert staging.exists() and rec.exists()
+    inst.recover_source_activations()
+    assert not staging.exists() and not rec.exists()
+
+
+@pytest.mark.parametrize("ident", ["other-inode", "unrecorded"])
+def test_a_staging_record_never_removes_an_unproven_candidate(tmp_path, installer, ident):
+    # A leaf that is not the recorded inode, or a non-empty one before any inode was recorded,
+    # is kept, and so is its record.
+    inst = installer(search_root=tmp_path / "rt")
+    staging = inst.paths.under("src", ".app.candidate-1-2")
+    staging.mkdir(parents=True); (staging / "part").write_text("keep")
+    st = os.stat(staging)
+    rec = _staging_record(inst, staging, [st.st_dev, st.st_ino + 1] if ident == "other-inode"
+                          else None)
+    inst.recover_source_activations()
+    assert (staging / "part").read_text() == "keep" and rec.exists()
+
+
+@pytest.mark.parametrize("failure", ["oserror", "containment", "lost"])
+def test_a_failing_staging_record_rewrite_never_stops_the_install(tmp_path, make_repo, installer,
+                                                                  monkeypatch, capsys, failure):
+    # The record is best-effort, like the clone log: when giving it the candidate's [dev, ino]
+    # fails, one line says so and the staging goes on (recovery then sees no recorded inode).
+    from lhpc.core import runtime_fs
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
+
+    real_open = runtime_fs.open_marker_excl
+
+    calls = []
+
+    def failing_rewrite(text):
+        calls.append(text)
+        if failure == "oserror":
+            raise OSError(errno.EIO, "I/O error")
+        if failure == "containment":
+            raise PathContainmentError("swapped")
+        return False
+
+    def open_marker(paths, path, text, *a, **kw):   # only the staging record fails, not the journal
+        marker = real_open(paths, path, text, *a, **kw)
+        if path.name.endswith(".staging"):
+            marker.rewrite = failing_rewrite
+        return marker
+    monkeypatch.setattr(runtime_fs, "open_marker_excl", open_marker)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    lines = [ln for ln in capsys.readouterr().err.splitlines() if "staging record" in ln]
+    # One line per failed rewrite (this path creates the candidate twice: reset, then the copy).
+    assert calls and len(lines) == len(calls), (calls, lines)
+    assert all("install continues" in ln for ln in lines), lines
+    assert list(inst.paths.under("state", "source-txn").iterdir()) == []
+
+
+def test_a_staging_record_defers_to_its_journal(tmp_path, installer):
+    # A crash after the journal was written leaves both: the journal owns the candidate (with its
+    # full identity proof), so the record is cleared and never removes the candidate itself.
+    inst = installer(search_root=tmp_path / "rt")
+    src = inst.paths.under("src"); src.mkdir(parents=True)
+    dest = src / "app"; dest.mkdir(); (dest / "marker").write_text("LIVE")
+    staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "part").write_text("NEW")
+    rec = _staging_record(inst, staging, _ident_of(staging, ctime=False))
+    _journal(inst, dest, src / ".app.prev", staging, "planned")
+    j = json.loads(inst._journal_path(dest).read_text())
+    j["idents"]["candidate"][2] -= 1                 # not provable by the journal: must stay
+    inst._journal_path(dest).write_text(json.dumps(j))
+    inst.recover_source_activations()
+    assert not rec.exists()
+    assert (staging / "part").read_text() == "NEW" and (dest / "marker").read_text() == "LIVE"
+
+
 def test_transaction_renames_survive_parent_swap(tmp_path):
     # A parent-path swap AFTER opening the transaction cannot redirect later renames —
     # they keep hitting the ORIGINAL held inode, never the swapped-in path.

@@ -18,7 +18,9 @@ import errno
 import os
 import re
 import shutil
+import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -539,7 +541,8 @@ class Installer:
         else:
             expected, kw_label = "", ""
         try:
-            with source_fs.ManagedSourceTransaction(self.paths, dest.parent) as txn:
+            with source_fs.ManagedSourceTransaction(self.paths, dest.parent) as txn, \
+                    self._staged_clone_record(dest, staging) as clone_rec:
                 # (1) Journal preflight: only an ABSENT journal may begin a new transaction;
                 # any existing journal must be resolved by recovery first (never overwritten).
                 if source_fs.leaf_kind(self.paths, self._journal_path(dest)) != "absent":
@@ -549,7 +552,8 @@ class Installer:
                     return action
                 # (2-3) Exclusive candidate creation + staging, all through the held FD.
                 desc, handle = self._stage_candidate(txn, comp, source, dest, staging, spec,
-                                                     local, action, expected_pin=expected)
+                                                     local, action, expected_pin=expected,
+                                                     clone_rec=clone_rec)
                 if desc is None:
                     return action          # `_stage_candidate` recorded the typed failure
                 # (4) Candidate provenance gate, on the candidate FD-pinned path (it follows the
@@ -711,7 +715,7 @@ class Installer:
         return "removed"
 
     def _stage_candidate(self, txn, comp, source: str, dest: Path, staging: Path, spec,
-                         local: Path | None, action, expected_pin: str = ""):
+                         local: Path | None, action, expected_pin: str = "", clone_rec=None):
         """Stage the candidate through the held transaction. Returns `(desc, handle)` — a
         description plus the `CandidateHandle` (a retained FD on the candidate dir). On failure
         returns `(None, None)` with a typed failure recorded on `action`. Git/copy write ONLY
@@ -722,6 +726,7 @@ class Installer:
         # candidate FD-pinned path — Git/copy never re-resolve the leaf by name.
         remote = self.config.remotes.get(comp.id) or spec.remote
         handle = txn.create_candidate(staging.name)
+        self._note_staged(clone_rec, dest, staging, handle)
         # Adoption is the auto-install's FIRST long phase and git is silent off-TTY — give the
         # clone a tail-able `logs/adopt-<comp>.log` whose first content says what is happening
         # (quiet-step preamble), with `git clone --progress` streamed below it. BEST-EFFORT:
@@ -757,6 +762,7 @@ class Installer:
                 "recovery-required: staging candidate was substituted (evidence retained)")
             return None, None
         handle = txn.create_candidate(staging.name)
+        self._note_staged(clone_rec, dest, staging, handle)
 
         def _unavailable(why: str) -> str:
             # `dev` NEVER silently uses a different ref: when the configured branch cannot be
@@ -1236,6 +1242,13 @@ class Installer:
         except PathContainmentError as exc:
             return [f"recovery-required: source-txn dir is symlinked/unsafe ({exc}) — retained"]
         out: list[str] = []
+        # Pre-clone records FIRST: a record whose source still has a journal is cleared before that
+        # journal's recovery can remove the journal (the journal, not the record, owns the candidate).
+        for name, is_link in entries:
+            if not is_link and name.endswith(".staging"):
+                msg = self._recover_staged_clone(d / name)
+                if msg:
+                    out.append(msg)
         for name, is_link in entries:
             if is_link:
                 out.append(f"recovery-required: journal {name} is a symlink (retained)")
@@ -1244,6 +1257,119 @@ class Installer:
                 continue
             out.append(self._recover_one(d / name))
         return out
+
+    # -- the pre-clone record --
+    #
+    # A candidate is staged (cloned or copied, up to `_CLONE_TIMEOUT_S`) BEFORE its journal exists,
+    # so a crash in that window left a tree nothing names — and without identity evidence nothing is
+    # deleted. A `<journal stem><candidate name>.staging` leaf names it for that window. It is not
+    # `*.json`, so nothing that blocks on a pending journal ever sees a clone in progress.
+
+    def _staged_clone_path(self, dest: Path, staging: Path) -> Path:
+        return self._txn_dir() / f"{self._journal_path(dest).stem}{staging.name}.staging"
+
+    def _staged_clone_payload(self, dest: Path, staging: Path, ident) -> str:
+        import json
+        return json.dumps({"state": "staging", "source_rel": self._source_rel(dest),
+                           "candidate_rel": self._source_rel(staging), "ident": ident})
+
+    @contextmanager
+    def _staged_clone_record(self, dest: Path, staging: Path):
+        """Hold the record of one staging, written before the candidate exists; yields its
+        `OwnedMarker`, or None when it cannot be written (best-effort, like the clone log: the
+        staging then runs as it did before records existed). Removed on exit — by then a journal
+        owns the candidate, or the candidate is gone or kept as evidence, as before."""
+        from . import runtime_fs
+        try:
+            rec = runtime_fs.open_marker_excl(self.paths, self._staged_clone_path(dest, staging),
+                                              self._staged_clone_payload(dest, staging, None))
+        except (OSError, PathContainmentError):
+            rec = None
+        try:
+            yield rec
+        finally:
+            if rec is not None:
+                rec.remove()
+                rec.close()
+
+    def _note_staged(self, rec, dest: Path, staging: Path, handle) -> None:
+        """Record the candidate's [dev, ino] right after its creation, before anything is written
+        into it. (No ctime: the clone itself changes the directory's.) Best-effort: a failure is
+        one stderr line and the staging goes on; recovery then finds no inode recorded."""
+        if rec is None:
+            return
+        try:
+            ok = rec.rewrite(self._staged_clone_payload(dest, staging,
+                                                        [handle.st_dev, handle.st_ino]))
+        except (OSError, PathContainmentError) as exc:
+            ok, why = False, f" ({exc})"
+        else:
+            why = ""
+        if not ok:
+            sys.stderr.write(f"staging record {rec.name} could not record the candidate{why} — "
+                             "install continues\n")
+
+    def _recover_staged_clone(self, jf: Path) -> str:
+        """Resolve ONE pre-clone record ("" = nothing to report). Its writer held the source-path
+        lock for the whole staging, and a flock dies with its process, so holding that lock here
+        proves the staging dead; a busy lock leaves everything alone. A source with a journal: the
+        journal owns the candidate, so only the record is cleared. Otherwise the named candidate is
+        removed on its recorded [dev, ino] — with none recorded yet, only while it is still an empty
+        directory — and the record is cleared once the candidate is gone. A candidate that cannot be
+        proven is kept, and so is its record."""
+        import json
+
+        from . import reslock, runtime_fs, source_fs
+        try:
+            marker = runtime_fs.open_existing_marker(self.paths, jf)
+        except (OSError, PathContainmentError):
+            return f"staging record {jf.name} unreadable/unsafe (retained)"
+        try:
+            try:
+                j = json.loads(marker.read())
+                dest = self._resolve_rel(j["source_rel"])
+                staging = self._resolve_rel(j["candidate_rel"])
+                ident = j["ident"]
+                if j.get("state") != "staging" or not (ident is None or (
+                        isinstance(ident, list) and len(ident) == 2 and all(
+                            isinstance(x, int) and not isinstance(x, bool) for x in ident))):
+                    raise ValueError("bad state/ident")
+            except (OSError, ValueError, KeyError, TypeError):
+                return f"staging record {jf.name} invalid (retained)"
+            if (str(dest) not in self._managed_source_dests()
+                    or not self._is_candidate_name(dest, staging)
+                    or jf.name != self._staged_clone_path(dest, staging).name):
+                return f"staging record {jf.name} names no managed candidate (retained)"
+            try:
+                with reslock.operation_lock(self.paths,
+                                            self._source_lock_key(self._source_rel(dest)),
+                                            "recover", dest.name):
+                    if source_fs.leaf_kind(self.paths, self._journal_path(dest)) != "absent":
+                        kind = "staging record cleared: its journal owns the candidate"
+                    else:
+                        with source_fs.ManagedSourceTransaction(self.paths, dest.parent) as txn:
+                            if txn.leaf_kind(staging.name) != "absent":
+                                if ident is not None:
+                                    ok, _why = source_fs.remove_bound(txn.fd, staging.name, ident)
+                                else:
+                                    try:
+                                        os.rmdir(staging.name, dir_fd=txn.fd)
+                                        ok = True
+                                    except OSError:
+                                        ok = False
+                                if not ok:
+                                    return (f"interrupted clone {staging.name} kept: not provably "
+                                            "the one its record names (record retained)")
+                                txn.fsync()
+                        kind = "removed an interrupted clone"
+                    return (f"recovered {dest.name}: {kind}" if marker.remove()
+                            else f"staging record {jf.name} could not be removed (retained)")
+            except reslock.ResourceBusy:
+                return ""                               # the staging is alive: left alone
+            except (OSError, PathContainmentError) as exc:
+                return f"staging record {jf.name} not resolvable now ({exc}) (retained)"
+        finally:
+            marker.close()
 
     def _recover_one(self, jf: Path) -> str:
         """Resolve ONE journal under an OWNED marker handle: open the existing regular journal

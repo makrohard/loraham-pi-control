@@ -205,7 +205,8 @@ The guarantees the controller gives, each with where it is implemented and prove
   writes fsync and `os.replace`; config, owned-record, journal and log leaves are opened
   `O_NOFOLLOW`; absolute and `..` paths are rejected. Failures are typed (`PathContainmentError`)
   and caught at every boundary. `tests/core/test_runtime_fs.py`.
-- **Source transactions.** An update clones a candidate beside the destination, archives the
+- **Source transactions.** An update clones a candidate beside the destination (recorded before
+  the clone starts, so recovery removes a clone a crash interrupted), archives the
   prior source to a transaction-owned `.prev`, activates by atomic no-clobber rename, writes the
   ownership record, then removes the `.prev` — journalled at every step. A failed activation never
   destroys the active source; an unresolved or malformed journal blocks all source mutation until

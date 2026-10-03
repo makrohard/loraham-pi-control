@@ -148,6 +148,8 @@ Test lab and demo
 - A secret file named with `@file:` (the MeshCom HMAC password) is used only when it is a regular file of at most
   64 KiB, not a symlink; anything else stops the start or build with a named error instead of being followed, read
   whole, or hanging on a pipe.
+- An install or update interrupted by a power cut or crash while it was still downloading no longer leaves the
+  partial download beside the source for good; the next source operation removes it.
 
 ## 0.11.10
 
