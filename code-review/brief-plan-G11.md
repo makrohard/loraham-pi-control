@@ -13,6 +13,8 @@ is RED before and GREEN after, placed where the maintainer would look for it (th
 docs updated where a sentence becomes untrue (one place per fact); the CHANGELOG line in the operator's words.
 
 ## The findings of this group (verified; file:line on e5187f70ae4e81a1081a835be06f84746222c3b6)
+**Group context / decisions:** CR4-2: verify the tag with `verify-tag` AND bind it to the pin (`rev-parse <tag>^{commit}` == pin); CR4-5: ask systemd for the effective drop-ins instead of scanning fixed dirs.
+
 ### CR4-1
 - where: `lhpc/core/service_selfupdate.py:404` · severity kept S2: masked today by frozen units, but the one check meant for a unit-changing release
 - claim: The one-click helper "refresh[es] the managed units with the NEW code" (l.984-988), and the out-of-process `verify-set` is what "turns a silent boot-restore outage into a visible partial update" (l.389-394).

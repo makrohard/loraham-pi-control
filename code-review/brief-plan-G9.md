@@ -13,6 +13,15 @@ is RED before and GREEN after, placed where the maintainer would look for it (th
 docs updated where a sentence becomes untrue (one place per fact); the CHANGELOG line in the operator's words.
 
 ## The findings of this group (verified; file:line on e5187f70ae4e81a1081a835be06f84746222c3b6)
+**Group context / decisions:** DECIDED CR7-1: the config-journal recovery runs ONCE AT STARTUP (one place — find where the console/CLI starts and which lock it must hold), not in every non-transactional writer; the writers stay as they are.
+
+### CR7-1
+- where: `lhpc/core/config.py:1251 (`_write_local_tables`; same at 1972-2029 `save_stack_config`/`update_stack_config`)` · severity corrected S1->S3 (silent revert of a local.toml save, but only once a journal was left beh
+- claim: architecture.md "config as a transaction … a mid-write failure rolls back"; `set_operator_identity` says patching before recovery "would resurrect rolled-back data or drop restored keys"
+- defect: The non-transactional writers (hardware, gps, boot-restore, webserver, firewall, stackweb, remotes, operator, install, daemon params) take `config_lock` but never call `recover_config_transaction` (only config.py:1788 and service_params.py:1592 do). A save made while a journal is pending is later reverted by the journal's pre-image on the next transaction — the operator's save silently vanishes.
+- how to see it: Leave `state/config-txn.json` with a pre-image of `local.toml`; `save_hardware_setup(P, "loraham")` succeeds and `load_config` shows it; run any `apply_config_transaction` (a Settings save) → hardware is back to `unset`.
+- verifier: CONFIRMED — Only config.py:1788 and service_params.py:1592 call `recover_config_transaction`. `_write_local_tables` (1251) and save/update_stack_config (1972-2029) skip it. Scratch r1.py left a journal with a pre-image of local.toml, ran `save_hardware_setup(P,"loraham")` (load_config showed loraham), then ran one `apply_config_transaction` on a stack file. local.toml was back to the pre-image and the hardware key was gone.
+
 ### CR7-3
 - where: `lhpc/core/commands.py:734-737, 771-774, 835-839 (exit 0 at 926)` · severity kept S2
 - claim: architecture.md "truthful outcomes"; `poststart(require_all=True)`: `.ok` proves every LHPC-owned value was reasserted

@@ -13,6 +13,8 @@ is RED before and GREEN after, placed where the maintainer would look for it (th
 docs updated where a sentence becomes untrue (one place per fact); the CHANGELOG line in the operator's words.
 
 ## The findings of this group (verified; file:line on e5187f70ae4e81a1081a835be06f84746222c3b6)
+**Group context / decisions:** CR5-2 needs a real-nginx reasoning: `nginx -s reload` cannot rebind 0.0.0.0:P to 127.0.0.1:P — the reset must use the restart path C07 introduced in 0.11.7 (service_webserver.py: 'nginx restarted to rebind the listener').
+
 ### CR5-1
 - where: `lhpc/core/pki.py:224 (`_load_index`), :659-662 (`build_crl`), :476/:492 (`issue_client_cert`)` · severity kept S2: active certificates silently stop being revocable (needs a damaged index)
 - claim: `_load_index` is a "fail-safe read … never a crash"; every issued client certificate stays revocable by label (`docs/webserver.md` Revocation).
