@@ -3577,20 +3577,19 @@ class LifecycleOpsMixin:
             runtime_fs.ensure_dir(self._paths, post_dir)
             index_lock = str(reslock.lock_file_path(self._paths, self._installer()._index_key()))
 
-            def _settle_track(log, aid, pid, terr) -> str:
-                """Turn a `_track_or_terminate` outcome into a terminal reservation + a TYPED code the orchestrator
-                trusts: "" tracked-ok; "orphan" (ORPHAN RISK ⇒ blocking `unsafe`); "terminated" (proven-terminated
-                ⇒ ordinary `failed`). Never inferred later from free text."""
-                if not terr:
-                    return ""
-                if "ORPHAN RISK" in terr:
+            def _settle_track(log, aid, pid, tracked):
+                """Turn a `_track_or_terminate` result into a terminal reservation and return its
+                `TrackOutcome`: TERMINATION_UNVERIFIED ⇒ blocking `unsafe`; TERMINATED ⇒ ordinary
+                `failed`; TRACKED ⇒ nothing to settle."""
+                outcome, terr = tracked
+                if outcome is jobs.TrackOutcome.TERMINATION_UNVERIFIED:
                     jobresult.terminalize(self._paths, log, aid, "unsafe",
                                           detail="the job could not be identity-tracked and its stop is "
                                                  "UNPROVEN — inspect processes (ps) then Recover",
                                           driver_ident=procident.proc_identity(pid))
-                    return "orphan"
-                jobresult.terminalize(self._paths, log, aid, "failed", detail=terr[:200])
-                return "terminated"
+                elif outcome is jobs.TrackOutcome.TERMINATED:
+                    jobresult.terminalize(self._paths, log, aid, "failed", detail=terr[:200])
+                return outcome
 
             def _spawn_install():
                 name = f"install-{target}"
@@ -3664,8 +3663,8 @@ class LifecycleOpsMixin:
                 `.job` tracking marker. The child's `verify_tracked` gate passes only once the marker
                 exists, so by the time it takes task admission itself the parent no longer holds the
                 flock (the parent held admission across the handshake, so the child saw
-                it as an external holder). Returns (log, aid, outcome) — outcome "" | "orphan" |
-                "terminated", or the spawn error when log is None."""
+                it as an external holder). Returns (log, aid, outcome) — outcome a `TrackOutcome`,
+                or the spawn error when log is None."""
                 log, aid, spawned = spawn_fn()
                 if log is None:
                     adm_stack.close()
@@ -3700,10 +3699,10 @@ class LifecycleOpsMixin:
             if plog is None:                        # reserve/spawn/render failed
                 self.prune_logs()
                 return None, "blocked", f"blocked — {pout}"
-            if pout == "orphan":                    # PROVEN: tracking failed, cessation UNPROVEN → blocking unsafe
+            if pout is jobs.TrackOutcome.TERMINATION_UNVERIFIED:   # cessation UNPROVEN → blocking unsafe
                 self.prune_logs()
                 return None, "blocked", "blocked — the job could not be tracked; Recover it first"
-            if pout == "terminated":                # PROVEN: driver terminated before it ran → ordinary failed
+            if pout is jobs.TrackOutcome.TERMINATED:   # PROVEN: driver terminated before it ran → ordinary failed
                 self.prune_logs()
                 return None, "blocked", "blocked — the job process was terminated before it ran"
             admission, reason = self._web_admit_handshake(plog, paid)
@@ -3783,10 +3782,10 @@ class LifecycleOpsMixin:
                     return None, "blocked", f"could not start the {op} of '{target}'"
             ident = procident.proc_identity(pid)                   # capture FIRST
             _adm.close()                                           # release admission
-            terr = self._track_or_terminate(life, ln, pid, target, op, attempt_id=aid,
-                                            ident=ident)           # then publish
-            if terr:
-                if "ORPHAN RISK" in terr:
+            tracked, terr = self._track_or_terminate(life, ln, pid, target, op, attempt_id=aid,
+                                                     ident=ident)  # then publish
+            if tracked is not jobs.TrackOutcome.TRACKED:
+                if tracked is jobs.TrackOutcome.TERMINATION_UNVERIFIED:
                     jobresult.terminalize(self._paths, log, aid, "unsafe",
                                           detail="the job could not be identity-tracked and its "
                                                  "stop is UNPROVEN — inspect processes (ps) then "
@@ -3973,11 +3972,13 @@ class LifecycleOpsMixin:
         return frozenset(names)
 
     def _track_or_terminate(self, life, log_name: str, pid: int, cid: str, op: str,
-                            attempt_id: str = "", ident: dict | None = None) -> str:
+                            attempt_id: str = "",
+                            ident: dict | None = None) -> tuple[jobs.TrackOutcome, str]:
         """Persist a job marker; if it cannot be persisted, terminate the (identity-
-        verified) spawned session so it never leaks as an untracked orphan. Returns ""
-        on success, else a visible error describing the outcome (the literal 'ORPHAN RISK'
-        marks the unproven-cessation case). `ident` is the identity the caller captured
+        verified) spawned session so it never leaks as an untracked orphan. Returns
+        `(jobs.TrackOutcome, message)`: TRACKED with "", else TERMINATED or
+        TERMINATION_UNVERIFIED with a visible error for the operator — callers decide on the
+        outcome, never on the message. `ident` is the identity the caller captured
         IMMEDIATELY after the spawn (the web spawners capture it while they still hold task
         admission, release admission, then publish through here — so the child's own admission
         never sees the parent as an external holder)."""
@@ -3986,13 +3987,15 @@ class LifecycleOpsMixin:
         if ident is None:
             ident = procident.proc_identity(pid)
         if jobs.write_job_marker(self._paths, log_name, pid, cid, op, ident=ident, attempt_id=attempt_id):
-            return ""
+            return jobs.TrackOutcome.TRACKED, ""
         killed = life._terminate_unobserved(pid, ident)
         if killed:
-            return (f"{op} '{cid}' spawned but its job marker could not be persisted; "
-                    "the process was terminated (not left orphaned).")
-        return (f"{op} '{cid}' spawned but its job marker could not be persisted AND the "
-                "process could NOT be confirmed stopped — ORPHAN RISK; check `ps` and kill it.")
+            return jobs.TrackOutcome.TERMINATED, (
+                f"{op} '{cid}' spawned but its job marker could not be persisted; "
+                "the process was terminated (not left orphaned).")
+        return jobs.TrackOutcome.TERMINATION_UNVERIFIED, (
+            f"{op} '{cid}' spawned but its job marker could not be persisted AND the "
+            "process could NOT be confirmed stopped — ORPHAN RISK; check `ps` and kill it.")
 
     def active_jobs(self, cleanup: bool = True, *, include_unsafe: bool = False) -> list[dict]:
         """Build/test jobs whose ORIGINAL process is still alive (identity-verified).

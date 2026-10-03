@@ -195,8 +195,9 @@ def test_spawn_web_job_proven_terminated_primary_blocks_no_secondaries(tmp_path,
     _fake_spawn(monkeypatch, os.getpid())
     monkeypatch.setattr(ControllerService, "_track_or_terminate",
                         lambda self, life, ln, pid, cid, op, attempt_id="", **k:
-                        f"{op} '{cid}' spawned but its job marker could not be persisted; "
-                        "the process was terminated (not left orphaned).")
+                        (jobs.TrackOutcome.TERMINATED,
+                         f"{op} '{cid}' spawned but its job marker could not be persisted; "
+                         "the process was terminated (not left orphaned)."))
     log, admission, reason = svc.spawn_web_job("build", "meshcom")
     assert log is None and admission == "blocked" and "terminated" in reason
     # only the primary's (failed) marker exists — no secondary component job spawned
@@ -217,8 +218,9 @@ def test_spawn_web_job_launcher_carries_the_manifest_timeout(tmp_path, monkeypat
     _fake_spawn(monkeypatch, os.getpid())
     monkeypatch.setattr(ControllerService, "_track_or_terminate",
                         lambda self, life, ln, pid, cid, op, attempt_id="", **k:
-                        f"{op} '{cid}' spawned but its job marker could not be persisted; "
-                        "the process was terminated (not left orphaned).")
+                        (jobs.TrackOutcome.TERMINATED,
+                         f"{op} '{cid}' spawned but its job marker could not be persisted; "
+                         "the process was terminated (not left orphaned)."))
     seen = {}
     real = commands.render_build_launcher
     def _rec(*a, **kw):
@@ -229,15 +231,24 @@ def test_spawn_web_job_launcher_carries_the_manifest_timeout(tmp_path, monkeypat
     assert seen[primary] == expected
 
 
-def test_spawn_web_job_orphan_primary_blocks(tmp_path, monkeypatch):
+# The unsafe decision follows the typed tracking outcome, whatever its message says.
+_UNVERIFIED_MESSAGES = pytest.mark.parametrize("message", [
+    "... could NOT be confirmed stopped — ORPHAN RISK; check ps.",
+    "reworded: the stop was not proven",
+], ids=["as-shipped", "reworded"])
+
+
+@_UNVERIFIED_MESSAGES
+def test_spawn_web_job_orphan_primary_blocks(tmp_path, monkeypatch, message):
     import os
     svc = _svc(tmp_path)
     _fake_spawn(monkeypatch, os.getpid())
     monkeypatch.setattr(ControllerService, "_track_or_terminate",
                         lambda self, life, ln, pid, cid, op, attempt_id="", **k:
-                        f"{op} '{cid}' ... could NOT be confirmed stopped — ORPHAN RISK; check ps.")
+                        (jobs.TrackOutcome.TERMINATION_UNVERIFIED, message))
     log, admission, reason = svc.spawn_web_job("build", "meshcom")
     assert log is None and admission == "blocked" and "Recover" in reason
+    assert [rec["state"] for _log, rec in jobresult.read_results(svc._paths)] == ["unsafe"]
 
 
 def test_spawn_web_job_launcher_write_failure_is_typed_and_settles_the_attempt(tmp_path, monkeypatch):
@@ -487,7 +498,7 @@ def test_spawn_start_job_captures_then_releases_admission_before_publishing(tmp_
         seen["free"] = _second_service_can_take_admission(svc)
         seen["ident"] = ident
         seen["op"], seen["cid"], seen["ln"] = op, cid, ln
-        return ""
+        return jobs.TrackOutcome.TRACKED, ""
     monkeypatch.setattr(ControllerService, "_track_or_terminate", publish)
     monkeypatch.setattr(ControllerService, "_web_admit_handshake", lambda self, log, aid: ("admitted", ""))
     log, admission, reason = svc.spawn_start_job("start", "kiss", band="433", stop_owners=True)
@@ -509,7 +520,7 @@ def test_spawn_web_job_captures_then_releases_admission_before_publishing(tmp_pa
 
     def publish(self, life, ln, pid, cid, op, attempt_id="", ident=None):
         seen.append((op, cid, _second_service_can_take_admission(svc), bool(ident)))
-        return ""
+        return jobs.TrackOutcome.TRACKED, ""
     monkeypatch.setattr(ControllerService, "_track_or_terminate", publish)
     monkeypatch.setattr(ControllerService, "_web_admit_handshake", lambda self, log, aid: ("admitted", ""))
     log, admission, _ = svc.spawn_web_job("build", "meshcom")
@@ -532,7 +543,8 @@ def test_spawn_web_job_secondary_raise_releases_its_admission(tmp_path, monkeypa
             raise RuntimeError("secondary spawn failed")
         return f"{name}.log", os.getpid()
     monkeypatch.setattr(Lifecycle, "spawn_job", spawn)
-    monkeypatch.setattr(ControllerService, "_track_or_terminate", lambda self, *a, **k: "")
+    monkeypatch.setattr(ControllerService, "_track_or_terminate",
+                        lambda self, *a, **k: (jobs.TrackOutcome.TRACKED, ""))
     monkeypatch.setattr(ControllerService, "_web_admit_handshake", lambda self, log, aid: ("admitted", ""))
     with pytest.raises(RuntimeError):
         svc.spawn_web_job("build", "meshcom")
@@ -561,24 +573,26 @@ def test_spawn_start_job_second_start_is_a_typed_already_in_progress(tmp_path, m
     spawned = []
     _fake_spawn(monkeypatch, os.getpid())
     monkeypatch.setattr(ControllerService, "_track_or_terminate",
-                        lambda self, *a, **k: spawned.append(1) or "")
+                        lambda self, *a, **k: spawned.append(1) or (jobs.TrackOutcome.TRACKED, ""))
     log, admission, reason = svc.spawn_start_job("start", "kiss")
     assert log is None and admission == "blocked" and "already in progress" in reason
     assert spawned == []
     assert svc.spawn_start_job("stop", "kiss")[1] == "blocked"        # not a detached op
 
 
-def test_spawn_start_job_orphan_and_terminated_are_typed(tmp_path, monkeypatch):
+@_UNVERIFIED_MESSAGES
+def test_spawn_start_job_orphan_and_terminated_are_typed(tmp_path, monkeypatch, message):
     svc = _svc(tmp_path)
     _fake_spawn(monkeypatch, os.getpid())
     monkeypatch.setattr(ControllerService, "_track_or_terminate",
-                        lambda self, *a, **k: "... ORPHAN RISK; check ps.")
+                        lambda self, *a, **k: (jobs.TrackOutcome.TERMINATION_UNVERIFIED, message))
     log, admission, reason = svc.spawn_start_job("start", "kiss")
     assert log is None and admission == "blocked" and "Recover" in reason
     assert jobresult.read_one(svc._paths, _SLOG)["state"] == "unsafe"
     svc2 = _svc(tmp_path / "b")
     monkeypatch.setattr(ControllerService, "_track_or_terminate",
-                        lambda self, *a, **k: "spawned but ... was terminated (not left orphaned).")
+                        lambda self, *a, **k: (jobs.TrackOutcome.TERMINATED,
+                                               "spawned but ... was terminated (not left orphaned)."))
     log, admission, reason = svc2.spawn_start_job("restart", "kiss")
     assert log is None and admission == "blocked" and "terminated" in reason
     assert jobresult.read_one(svc2._paths, "web-restart-kiss.log")["state"] == "failed"
@@ -591,7 +605,8 @@ def test_spawn_start_job_transports_the_restart_cascade_consent(tmp_path, monkey
     argvs = []
     monkeypatch.setattr(Lifecycle, "spawn_job",
                         lambda self, name, argv, cwd, env=None: argvs.append(argv) or (f"{name}.log", os.getpid()))
-    monkeypatch.setattr(ControllerService, "_track_or_terminate", lambda self, *a, **k: "")
+    monkeypatch.setattr(ControllerService, "_track_or_terminate",
+                        lambda self, *a, **k: (jobs.TrackOutcome.TRACKED, ""))
     monkeypatch.setattr(ControllerService, "_web_admit_handshake", lambda self, log, aid: ("admitted", ""))
     assert svc.spawn_start_job("restart", "kiss", cascade=True)[1] == "admitted"
     assert "--cascade" in argvs[-1] and "--restart" in argvs[-1]
@@ -603,7 +618,7 @@ def test_spawn_start_job_refuses_an_unknown_target_before_spawning(tmp_path, mon
     svc = _svc(tmp_path)
     spawned = []
     _fake_spawn(monkeypatch, os.getpid())
-    monkeypatch.setattr(ControllerService, "_track_or_terminate", lambda self, *a, **k: spawned.append(1) or "")
+    monkeypatch.setattr(ControllerService, "_track_or_terminate", lambda self, *a, **k: spawned.append(1) or (jobs.TrackOutcome.TRACKED, ""))
     log, admission, reason = svc.spawn_start_job("start", "bogus")
     assert log is None and admission == "blocked" and "unknown stack or component" in reason
     assert spawned == [] and jobresult.read_one(svc._paths, "web-start-bogus.log") is None

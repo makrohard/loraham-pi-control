@@ -623,7 +623,8 @@ def _spawnable(svc, monkeypatch, spawn_ok=True, track_ok=True):
             return getattr(real_life, name)
     monkeypatch.setattr(svc, "_lifecycle", lambda: FakeLife())
     monkeypatch.setattr(svc, "_track_or_terminate",
-                        lambda life, ln, pid, cid, op: "" if track_ok else "track failed")
+                        lambda life, ln, pid, cid, op: ((jobs.TrackOutcome.TRACKED, "") if track_ok
+                                                        else (jobs.TrackOutcome.TERMINATED, "track failed")))
     return calls
 
 
@@ -794,7 +795,7 @@ def test_child_death_before_claim_is_ackable_while_spawner_lives(tmp_path, monke
         def __getattr__(self, name):     # only spawn_job is faked; everything else stays REAL
             return getattr(real_life, name)
     monkeypatch.setattr(svc, "_lifecycle", lambda: FakeLife())
-    monkeypatch.setattr(svc, "_track_or_terminate", lambda *a, **k: "")
+    monkeypatch.setattr(svc, "_track_or_terminate", lambda *a, **k: (jobs.TrackOutcome.TRACKED, ""))
     ln, err = svc.spawn_auto_install_job(_sel(svc))
     assert ln and err is None
     st, res = ai_mod.read_reservation(svc._paths)
@@ -1191,6 +1192,27 @@ def test_orphan_risk_phase_requires_confirmed_ack(tmp_path, monkeypatch):
     assert ack2.ok
     assert ai_mod.read_reservation(svc._paths)[0] == "absent"
     assert svc._auto_install_gate() == ""                                # later launch possible
+
+
+@pytest.mark.needs_session
+def test_unverified_tracking_is_orphan_risk_whatever_its_message_says(tmp_path, monkeypatch):
+    # The orphan-risk decision follows the typed tracking outcome: an unverified stop whose
+    # message is reworded (no 'ORPHAN RISK' in it) still leaves the confirmed-recovery record.
+    svc = _svc(tmp_path)
+    kids = []
+    _real_child_spawn(svc, monkeypatch, kids)
+    monkeypatch.setattr(svc, "_track_or_terminate",
+                        lambda *a, **k: (jobs.TrackOutcome.TERMINATION_UNVERIFIED,
+                                         "reworded: the stop was not proven"))
+    ln, err = svc.spawn_auto_install_job(_sel(svc))
+    monkeypatch.undo()
+    assert ln is None
+    st, res = ai_mod.read_reservation(svc._paths)
+    assert st == "valid" and res["phase"] == "orphan-risk" and res["pid"] == kids[0].pid
+    assert not svc.auto_install_ack().ok                                 # plain ack refused
+    kids[0].terminate()
+    kids[0].wait(timeout=5)
+    assert svc.auto_install_ack(confirm_orphan=True).ok
 
 
 @pytest.mark.needs_session

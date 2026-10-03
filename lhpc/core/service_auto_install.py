@@ -693,11 +693,11 @@ class AutoInstallOpsMixin:
                              and ai_mod.bind_reservation(self._paths, run_id, pid,
                                                            child_ident, "spawned"))
                     if bound:
-                        err = self._track_or_terminate(life, ln, pid, "all",
-                                                       self.AUTO_INSTALL_OP)
-                        if not err:
+                        tracked, err = self._track_or_terminate(life, ln, pid, "all",
+                                                                self.AUTO_INSTALL_OP)
+                        if tracked is jobs.TrackOutcome.TRACKED:
                             return ln, None
-                        if "ORPHAN RISK" in err:
+                        if tracked is jobs.TrackOutcome.TERMINATION_UNVERIFIED:
                             return None, settle_unproven(
                                 pid, child_ident,
                                 "job tracking failed and cessation is unproven")
