@@ -781,6 +781,64 @@ def test_recovery_of_rolled_back_state_writes_no_record(tmp_path, make_repo, ins
     assert rec.resolved_commit == head and rec.selector == "dev"        # prior record UNTOUCHED
 
 
+def _journal_before_rename(git, tmp_path, inst, state):
+    """The crash window of ONE activation rename: v1 adopted, a v2 candidate staged, a v5 `state`
+    journal written with the idents of that moment (before the rename, as the activation writes
+    them). The caller then performs the rename and "dies". A rename changes the renamed tree's
+    ctime, but a coarse kernel clock can hide that within one tick, so the recorded ctime is set
+    one nanosecond off — exactly what recovery meets after a real rename."""
+    dest = inst.paths.under("src", "app")
+    new_head = _advance_local(git, tmp_path)
+    staging, prev = dest.with_name(".app.candidate-1-2"), dest.with_name(".app.prev")
+    shutil.copytree(tmp_path / "rt" / "local" / "app", staging, symlinks=True)
+    if state == "prior-archived":
+        dest.rename(prev)                                   # the archive step already journalled
+    stale = lambda q: [*_ident_of(q)[:2], _ident_of(q)[2] - 1]
+    rel = lambda q: str(q.relative_to(inst.paths.runtime_root))
+    inst._journal_path(dest).write_text(json.dumps({
+        "version": 5, "state": state, "source_rel": rel(dest), "prev_rel": rel(prev),
+        "candidate_rel": rel(staging), "txn_id": inst._txn_id(rel(staging)),
+        "meta": {"selector": "dev", "resolved_commit": new_head, "remote": "", "strategy": "",
+                 "components": ["app"], "had_prior": True},
+        "idents": {"candidate": stale(staging) if state == "prior-archived" else _ident_of(staging),
+                   "prev": stale(dest) if state == "planned" else _ident_of(prev)}}))
+    return dest, prev, staging, new_head
+
+
+def test_recovery_finishes_an_activation_interrupted_right_after_the_archive_rename(tmp_path, git, make_repo, installer):
+    # Died between `dest -> .prev` and the `prior-archived` journal refresh: the prior's recorded
+    # ctime is stale. Recovery refused it ("could not be proven"), left NO active source and kept a
+    # journal that blocks every source mutation on the box.
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    dest, prev, staging, new_head = _journal_before_rename(git, tmp_path, inst, "planned")
+    dest.rename(prev)
+    msgs = inst.recover_source_activations()
+    assert any(m.startswith("recovered app") for m in msgs), msgs
+    assert (dest / "file.txt").is_file()                              # an active source again
+    assert not inst._journal_path(dest).exists()                       # nothing blocks the box
+
+
+def test_a_prev_substituted_while_dest_is_present_is_never_removed_on_dev_ino(tmp_path, git, make_repo, installer):
+    # The dev+ino-only proof is bound to a `planned` journal with NO dest. With a tree at dest the
+    # archived prior keeps its full proof, so a stale `.prev` is retained, never cleaned away.
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    dest, prev, staging, _ = _journal_before_rename(git, tmp_path, inst, "planned")
+    dest.rename(prev)
+    staging.rename(dest)                                    # a usable tree at dest, same commit
+    j = json.loads(inst._journal_path(dest).read_text())    # ... proven as the active candidate,
+    j["idents"]["candidate"] = _ident_of(dest)              # so only the prior's proof decides
+    inst._journal_path(dest).write_text(json.dumps(j))
+    msgs = inst.recover_source_activations()
+    assert any("recovery-required" in m for m in msgs), msgs
+    assert prev.is_dir() and inst._journal_path(dest).exists()
+
+
 def test_v3_journal_with_invalid_meta_is_retained(tmp_path, make_repo, installer):
     make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()

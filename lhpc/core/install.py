@@ -1322,7 +1322,7 @@ class Installer:
                                             "recover", dest.name):
                     return self._finish_or_rollback(dest, prev, staging, marker,
                                                     meta=meta, txn_id=j["txn_id"],
-                                                    idents=idents)
+                                                    idents=idents, state=j["state"])
             except reslock.ResourceBusy:
                 return f"recovery-required: source {dest.name} is busy (retained)"
         finally:
@@ -1436,7 +1436,7 @@ class Installer:
         return txn.leaf_kind(prev.name) == "absent"
 
     def _finish_or_rollback(self, dest: Path, prev: Path, staging: Path, marker,
-                            meta: dict, txn_id: str, idents: dict) -> str:
+                            meta: dict, txn_id: str, idents: dict, state: str = "") -> str:
         """Resolve one validated journal under ONE held source-parent FD across verification,
         rename, and cleanup. The journal is removed (via the OWNED `marker`, identity re-
         verified) ONLY once the active source is proven USABLE (via the held FD), the archived
@@ -1522,6 +1522,13 @@ class Installer:
         try:
             with source_fs.ManagedSourceTransaction(self.paths, dest.parent) as txn:
                 unproven_carry = False
+                # The archive rename (dest -> .prev) happens BEFORE the journal records the prior's
+                # new ctime. A crash in between leaves a `planned` journal, no dest, and the prior
+                # at `.prev` provable by dev+ino only — for exactly that state and leaf the
+                # recorded ctime is not required. With dest present the full ident stays.
+                if (state == "planned" and idents and idents.get("prev")
+                        and txn.leaf_kind(dest.name) == "absent"):
+                    idents = {**idents, "prev": list(idents["prev"][:2])}
                 if txn.usable(dest.name):
                     # Completed activation: the ownership record must be completed (ONE retry —
                     # this call) and the archived prior PROVEN removed (held FD) before the
