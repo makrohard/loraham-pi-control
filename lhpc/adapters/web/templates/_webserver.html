@@ -167,6 +167,10 @@
           server-cert {{ 'present' if mon.pki.server_cert.present else 'absent' }} ·
           CRL {{ 'present' if mon.pki.crl_present else 'absent' }}{% if mon.pki.provisional %} ·
           <strong>provisional</strong> (created without a verified clock){% endif %}</li>
+        {% if mon.pki.index_problem %}
+        <li><strong>Client-certificate list: repair needed</strong> (issuing and revoking are refused;
+          the CRL is renewed as it is): <code>{{ mon.pki.index_problem }}</code></li>
+        {% endif %}
         {% if mon.pki.server_cert.expiry_text %}
         <li>Server certificate: <code>{{ mon.pki.server_cert.expiry_text }}</code></li>
         {% endif %}

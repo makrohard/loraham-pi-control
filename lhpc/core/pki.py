@@ -68,6 +68,10 @@ class PKIError(Exception):
     """A PKI operation failed — surfaced as a typed diagnostic, never a crash."""
 
 
+class IndexDamaged(PKIError):
+    """client-index.json is present but cannot be used: a writer must not save over it."""
+
+
 # --------------------------------------------------------------------------- paths / layout
 
 def _p(paths: Paths, *parts: str) -> Path:
@@ -218,22 +222,67 @@ def _empty_index() -> dict:
     return {"schema": INDEX_SCHEMA, "certs": [], "crl_number": 0}
 
 
-def _load_index(paths: Paths) -> dict:
-    """Fail-safe read of the client-cert inventory (mirrors the selfupdate cache pattern):
-    absent/unsafe/malformed/wrong-schema -> a fresh empty index, never a crash."""
+# The fields of an inventory entry the writers read, and their types. `serial` must also be hex
+# (the CRL build parses it).
+_ENTRY_FIELDS = (("label", str), ("state", str), ("serial", str))
+
+
+def _entry_problem(i: int, e) -> str | None:
+    if not isinstance(e, dict):
+        return f"entry {i} is not an object"
+    for field, typ in _ENTRY_FIELDS:
+        if not isinstance(e.get(field), typ):
+            return f"entry {i} has no {field} of type {typ.__name__}"
+    try:
+        int(e["serial"], 16)
+    except ValueError:
+        return f"entry {i} has a serial that is not hex"
+    return None
+
+
+def _load_index(paths: Paths, *, strict: bool = False) -> dict:
+    """Read the client-cert inventory. Absent -> a fresh empty index. Present but
+    unsafe/malformed/wrong-schema, or with an entry the writers cannot read -> a fresh empty index
+    for a READER (never a crash), but IndexDamaged for a WRITER (`strict`): saving that empty index
+    over the file would forget every issued certificate, and an active one could then never be
+    revoked."""
+    def unusable(why: str) -> dict:
+        if strict:
+            raise IndexDamaged(f"the client-certificate inventory {_index_path(paths)} is {why} — not "
+                           "overwriting it; restore it from a backup, or recreate the PKI with "
+                           "`lhpc webserver init --confirm-recreate` (every client certificate "
+                           "must then be issued again)")
+        return _empty_index()
     try:
         raw = runtime_fs.read_text_regular(paths, _index_path(paths))
-    except (FileNotFoundError, OSError):
+    except FileNotFoundError:
         return _empty_index()
+    except OSError as exc:
+        return unusable(f"unreadable ({exc})")
     try:
         data = json.loads(raw)
     except ValueError:
-        return _empty_index()
+        return unusable("not valid JSON")
     if (not isinstance(data, dict) or data.get("schema") != INDEX_SCHEMA
             or not isinstance(data.get("certs"), list)):
-        return _empty_index()
+        return unusable("not a schema-1 inventory")
+    for i, e in enumerate(data["certs"]):
+        why = _entry_problem(i, e)
+        if why:
+            return unusable(f"not a usable inventory ({why})")
     data.setdefault("crl_number", 0)
+    if isinstance(data["crl_number"], bool) or not isinstance(data["crl_number"], int):
+        return unusable("not a usable inventory (crl_number is not an integer)")
     return data
+
+
+def index_problem(paths: Paths) -> str | None:
+    """Read-only: why client-index.json needs repair (issue and revoke refuse until then), or None."""
+    try:
+        _load_index(paths, strict=True)
+    except IndexDamaged as exc:
+        return str(exc)
+    return None
 
 
 def _save_index(paths: Paths, idx: dict) -> None:
@@ -473,7 +522,7 @@ def issue_client_cert(paths: Paths, label: str, *, days: int, passphrase: str) -
     ca_cert = _read_cert(paths, _ca_paths(paths, _CLIENT_CA)[1])
     if ca_key is None or ca_cert is None:
         raise PKIError("client-auth CA not initialized")
-    idx = _load_index(paths)
+    idx = _load_index(paths, strict=True)
     if any(e.get("label") == label and e.get("state") == "active" for e in idx["certs"]):
         raise PKIError(f"an active certificate labelled {label!r} already exists "
                        f"(reissue or revoke it first)")
@@ -580,7 +629,7 @@ def revoke_client_cert(paths: Paths, label: str) -> dict:
     the new CRL and the revoked cert is proven rejected — that proof lives in the service.)"""
     import copy
     label = validators.path_component(label, field="cert label")
-    idx = _load_index(paths)
+    idx = _load_index(paths, strict=True)
     if not any(e.get("label") == label and e.get("state") == "active" for e in idx["certs"]):
         raise PKIError(f"no active certificate labelled {label!r}")
     candidate = copy.deepcopy(idx)
@@ -656,7 +705,28 @@ def _build_and_write_crl(paths: Paths, index: dict, *, days: int = _CRL_DAYS_DEF
 
 def build_crl(paths: Paths, *, days: int = _CRL_DAYS_DEFAULT, validity=None,
               carry: bool = True) -> Path:
-    idx = _load_index(paths)
+    """Rebuild crl.pem from the inventory (carrying the current CRL, see _build_and_write_crl).
+
+    While the inventory is damaged, a carrying rebuild re-signs the EXISTING revocation set (the
+    current CRL plus the pending marker) under the next CRL number and leaves the inventory
+    untouched: a CRL that runs out would lock every valid client out, and nothing revoked may come
+    back. Issue and revoke stay refused until the inventory is repaired. With no readable current
+    CRL there is no set to re-sign, so the rebuild refuses."""
+    crl_p = _p(paths, _CLIENT_CA, "crl.pem")
+    try:
+        idx = _load_index(paths, strict=True)
+    except IndexDamaged as damaged:
+        if not carry or not _exists(paths, crl_p):
+            raise
+        try:
+            raw = runtime_fs.read_text_regular(paths, crl_p)
+            number = (x509.load_pem_x509_crl(raw.encode("ascii")).extensions
+                      .get_extension_for_class(x509.CRLNumber).value.crl_number)
+        except (OSError, ValueError, PathContainmentError, x509.ExtensionNotFound):
+            raise damaged from None
+        _build_and_write_crl(paths, {"certs": [], "crl_number": number + 1}, days=days,
+                             validity=validity, carry=True)
+        return crl_p
     idx["crl_number"] = int(idx.get("crl_number", 0)) + 1
     _build_and_write_crl(paths, idx, days=days, validity=validity, carry=carry)
     _save_index(paths, idx)
@@ -758,6 +828,8 @@ def pki_status(paths: Paths) -> dict:
         "server_cert": server_ev,
         "clients": clients,
         "crl_present": _exists(paths, _p(paths, _CLIENT_CA, "crl.pem")),
+        # Set while client-index.json needs repair (issue/revoke refuse; the CRL is re-signed as is).
+        "index_problem": index_problem(paths),
         # Minted under an unverified clock and not yet normalised (fixed provisional window).
         "provisional": provisional_pending(paths),
     }

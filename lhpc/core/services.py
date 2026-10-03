@@ -1186,6 +1186,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                         details.append(f" !client certificate '{c.get('label', '?')}': "
                                        f"{c['expiry_mark']}: reissue it: lhpc webserver cert "
                                        f"reissue {c.get('label', '?')}")
+                if pst.get("index_problem"):
+                    details.append(f" !client-certificate list: repair needed: {pst['index_problem']}")
         # Controller's OWN system/runtime deps (same source as the /stacks System-dependencies panel).
         # A missing REQUIRED dep makes doctor non-OK (machine-actionable); optional ones never do.
         required_missing = False

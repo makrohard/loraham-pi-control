@@ -56,3 +56,13 @@ def test_the_panel_shows_a_provisional_certificate_as_such(web, tmp_path, monkey
     doc = htmlq.parse(web().get("/stacks").get_data(as_text=True))
     assert sc["expiry_text"] in doc.text
     assert "renewed automatically" not in doc.text
+
+
+def test_the_panel_says_a_damaged_client_list_needs_repair(web, tmp_path):
+    p = _init_pki(tmp_path)
+    assert "repair needed" not in htmlq.parse(web().get("/stacks").get_data(as_text=True)).text
+    (tmp_path / "config/tls/client-ca/client-index.json").write_bytes(b'{"schema": 1, "certs": [null]}')
+    text = htmlq.parse(web().get("/stacks").get_data(as_text=True)).text
+    assert "Client-certificate list: repair needed" in text
+    assert "client-index.json" in text and "restore it from a backup" in text
+    assert pki.pki_status(p)["index_problem"]

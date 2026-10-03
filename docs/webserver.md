@@ -267,7 +267,12 @@ it: a trust warning) and the **`.p12`** (without it, cert-requiring modes reject
 
 `revoke` writes the CRL first, then the inventory. A failed CRL write leaves the certificate
 **active**; a failed inventory commit after it shows **`revocation-pending`** (never active);
-re-running the revoke reconciles it.
+re-running the revoke reconciles it. A damaged inventory (`config/tls/client-ca/client-index.json`
+present but unreadable, not valid, or with an entry that lacks a text label, state or hex serial) is
+never overwritten: issue and revoke refuse until it is restored from a backup or the PKI is recreated
+(`lhpc webserver init --confirm-recreate`), and the console and `lhpc doctor` say it needs repair.
+Meanwhile the CRL refresh re-signs the current CRL's revocations unchanged, so no valid client is
+locked out and nothing revoked comes back; with no readable current CRL it refuses.
 
 `revoke` and `reissue` reload nginx: NEW connections with the old certificate are refused; one
 already established may finish. If the reload fails, the command fails (exit 1, red in the

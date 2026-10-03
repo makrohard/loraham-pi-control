@@ -186,6 +186,123 @@ def test_rotate_client_ca_resets_inventory(tmp_path):
     assert pki.list_client_certs(paths) == []      # old certs untrusted -> inventory reset
 
 
+@pytest.mark.parametrize("damage", [b"", b"{not json", b'{"schema": 99, "certs": []}'])
+def test_a_damaged_index_is_never_overwritten(tmp_path, damage):
+    # Saving the empty index a damaged one reads as would forget every issued certificate: an
+    # ACTIVE one could then never be revoked. Both writers refuse instead; the bytes stay. (The
+    # CRL refresh re-signs the existing CRL instead: test_a_damaged_index_keeps_the_crl_alive.)
+    paths = _paths(tmp_path)
+    _init_both(paths)
+    pki.issue_client_cert(paths, "phone", days=90, passphrase="p")
+    index = tmp_path / "config/tls/client-ca/client-index.json"
+    good = index.read_bytes()
+    index.write_bytes(damage)
+    with pytest.raises(pki.PKIError, match="client-index.json"):
+        pki.issue_client_cert(paths, "tablet", days=90, passphrase="p")
+    with pytest.raises(pki.PKIError, match="client-index.json"):
+        pki.revoke_client_cert(paths, "phone")
+    assert index.read_bytes() == damage
+    index.write_bytes(good)                        # restored: the certificate is still revocable
+    assert pki.revoke_client_cert(paths, "phone")["state"] == "revoked"
+
+
+@pytest.mark.parametrize("damage", [
+    b'{"schema": 1, "certs": [null]}',
+    b'{"schema": 1, "certs": ["phone"]}',
+    "label=5", "state=null", "serial=17", "serial=not-hex", "crl_number=x"])
+def test_a_schema_1_index_with_a_bad_entry_is_refused_by_both_writers(tmp_path, damage):
+    # schema == 1 and a list of certs is not enough: an entry the writers cannot read made them
+    # raise AttributeError/TypeError (or act on a wrong-typed field) instead of the typed refusal.
+    paths = _paths(tmp_path)
+    _init_both(paths)
+    pki.build_crl(paths)
+    pki.issue_client_cert(paths, "phone", days=90, passphrase="p")
+    index = tmp_path / "config/tls/client-ca/client-index.json"
+    crl = tmp_path / "config/tls/client-ca/crl.pem"
+    if isinstance(damage, str):
+        field, value = damage.split("=")
+        import json
+        value = {"null": None, "5": 5, "17": 17}.get(value, value)
+        data = json.loads(index.read_text())
+        if field == "crl_number":
+            data["crl_number"] = value
+        else:
+            data["certs"][0][field] = value
+        damage = json.dumps(data).encode()
+    index.write_bytes(damage)
+    crl_before = crl.read_bytes()
+    with pytest.raises(pki.PKIError, match="client-index.json"):
+        pki.issue_client_cert(paths, "tablet", days=90, passphrase="p")
+    with pytest.raises(pki.PKIError, match="client-index.json"):
+        pki.revoke_client_cert(paths, "phone")
+    assert index.read_bytes() == damage                     # nothing is written
+    assert crl.read_bytes() == crl_before
+    assert not (tmp_path / "config/tls/exports/tablet.p12").exists()
+    assert pki.list_client_certs(paths) == []               # a reader stays fail-safe
+
+
+def _crl(tmp_path):
+    return x509.load_pem_x509_crl((tmp_path / "config/tls/client-ca/crl.pem").read_bytes())
+
+
+def test_a_damaged_index_keeps_the_crl_alive(tmp_path):
+    # Maintainer policy (CR5-1): while the inventory is damaged the CRL refresh re-signs the
+    # EXISTING revocation set — no valid client is locked out when the CRL would expire, nothing
+    # revoked comes back — and leaves the inventory alone. Issue and revoke stay refused.
+    paths = _paths(tmp_path)
+    _init_both(paths)
+    pki.issue_client_cert(paths, "phone", days=90, passphrase="p")
+    pki.issue_client_cert(paths, "old-tablet", days=90, passphrase="p")
+    pki.issue_client_cert(paths, "old-laptop", days=90, passphrase="p")
+    pki.revoke_client_cert(paths, "old-tablet")
+    pki.revoke_client_cert(paths, "old-laptop")
+    old = _crl(tmp_path)
+    old_serials = {r.serial_number for r in old}
+    assert len(old_serials) == 2
+    index = tmp_path / "config/tls/client-ca/client-index.json"
+    index.write_bytes(b"{not json")
+    pki.build_crl(paths)
+    new = _crl(tmp_path)
+    assert {r.serial_number for r in new} == old_serials        # the same set, nothing un-revoked
+    ca = x509.load_pem_x509_certificate((tmp_path / "config/tls/client-ca/ca.crt").read_bytes())
+    assert new.is_signature_valid(ca.public_key()) and new.issuer == old.issuer
+    num = lambda c: c.extensions.get_extension_for_class(x509.CRLNumber).value.crl_number
+    assert num(new) == num(old) + 1
+    assert index.read_bytes() == b"{not json"                   # the inventory is not touched
+    with pytest.raises(pki.PKIError, match="client-index.json"):
+        pki.revoke_client_cert(paths, "phone")
+
+
+def test_a_damaged_index_without_a_crl_refuses_the_refresh(tmp_path):
+    # No current CRL: there is no existing set to re-sign, and an empty one could un-revoke what only
+    # the damaged inventory records.
+    paths = _paths(tmp_path)
+    _init_both(paths)
+    (tmp_path / "config/tls/client-ca/crl.pem").unlink(missing_ok=True)
+    (tmp_path / "config/tls/client-ca/client-index.json").write_bytes(b"{not json")
+    with pytest.raises(pki.PKIError, match="client-index.json"):
+        pki.build_crl(paths)
+    assert not (tmp_path / "config/tls/client-ca/crl.pem").exists()
+
+
+def test_status_says_a_damaged_index_needs_repair(tmp_path):
+    paths = _paths(tmp_path)
+    _init_both(paths)
+    assert pki.pki_status(paths)["index_problem"] is None
+    (tmp_path / "config/tls/client-ca/client-index.json").write_bytes(b'{"schema": 1, "certs": [null]}')
+    problem = pki.pki_status(paths)["index_problem"]
+    assert "client-index.json" in problem and "restore it from a backup" in problem
+
+
+def test_an_absent_index_still_starts_fresh(tmp_path):
+    paths = _paths(tmp_path)
+    _init_both(paths)
+    (tmp_path / "config/tls/client-ca/client-index.json").unlink(missing_ok=True)
+    pki.build_crl(paths)
+    assert pki.list_client_certs(paths) == []
+    assert (tmp_path / "config/tls/client-ca/client-index.json").exists()
+
+
 # --- read-only status --------------------------------------------------------
 
 def test_pki_status_reports_presence(tmp_path):
@@ -225,3 +342,16 @@ def test_chain_check_unreadable_never_raises(tmp_path, monkeypatch):
     # `_read_cert` stubbed as the collaborator: the mapping of its typed refusal is under test.
     monkeypatch.setattr(pki, "_read_cert", boom)
     assert pki.server_cert_chain_ok(paths) == (False, "unreadable: malformed certificate")
+
+
+def test_doctor_says_a_damaged_index_needs_repair(tmp_path):
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    paths = _paths(tmp_path)
+    _init_both(paths)
+    pki.build_crl(paths)
+    svc = ControllerService(system=FakeSystem().system, paths=paths)
+    assert not any("client-certificate list" in d for d in svc.doctor().details)
+    (tmp_path / "config/tls/client-ca/client-index.json").write_bytes(b"{not json")
+    line = [d for d in svc.doctor().details if "client-certificate list" in d]
+    assert line and "repair needed" in line[0] and "client-index.json" in line[0]

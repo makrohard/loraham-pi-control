@@ -19,6 +19,9 @@
   started a probe daemon on the chip they were using.
 - "Apply live" of a stack's daemon radio parameters, and its TX test, are refused (naming the stack) on a band
   another running stack uses; before, e.g. MeshCom's profile could retune the band KISS was running on.
+- A damaged client-certificate list is no longer replaced by an empty one: the CRL refresh renews the existing
+  revocations unchanged, the console and `lhpc doctor` say the list needs repair, and issuing and revoking
+  refuse and name the file, so every issued certificate stays revocable.
 
 ## 0.11.10
 
