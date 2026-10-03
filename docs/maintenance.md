@@ -37,7 +37,8 @@ What CI enforces, branches and releases, the pin-bump recipe, and the gotchas on
 `.github/workflows/testlab.yml`, on the same events: the `testlab` job runs the lab lanes on an
 aarch64 runner; `release-verify` installs, builds, starts and identity-proves every stack a pin
 release may move, on pushes to `main` and on dispatch with `release_verify=true` only
-([testlab.md](testlab.md#running-the-verification-lanes)).
+([testlab.md](testlab.md#running-the-verification-lanes)); `slow-build`, on the same triggers,
+is the slow-target build row below.
 
 No external project's own test suite runs in CI.
 
@@ -141,6 +142,30 @@ repositories.
     does not cover the daemon, RadioLib or the shared chat source (the real daemon needs a radio).
     Anything that changes behaviour on hardware is proved on the box and recorded under
     `docs/live-tests/`.
+- **Every release has one slow-target build row:** the `slow-build` job (row C,
+  [testlab.md](testlab.md#running-the-verification-lanes)) runs on the release SHA of every
+  release, minor, patch and bot alike, and is green with `test_slow_build_calibrated` and
+  `test_slow_build_budget` PASSED (a skip is not a pass); its artifact is the evidence. A pin moved
+  by a patch or bot release needs no Zero row: it is budgeted against the last Zero entry of that
+  (component, op), carried from this or the previous minor, and a fresh row A becomes required only
+  when row C measures the new pin above limit/4 (= 50 % of the budget) or that (component, op) has
+  no Zero entry at all. A minor runs rows 6, 7, 8, the self-update and `calibrate.sh` on the Zero 2 W
+  before the tag and commits the numbers ([test matrix](test-matrix.md#slow-target-baseline)),
+  which refreshes the baselines and the calibration. Bootstrap: while
+  `tests/data/slow-target-builds.toml` holds no measured entry at all (before the first row A),
+  `test_coverage`, `test_slow_build_calibrated` and `test_slow_build_budget` SKIP with a
+  "bootstrap: no row A yet" reason naming every unmeasured operation, and the `slow-build` gate
+  accepts those skips only then; every row-C case must still pass. The first committed entry ends
+  it: from then on every unmeasured operation is red. L4 (`selfupdate-pip`) has **no evidence on
+  the release that introduces its `[selfupdate] pip sync` line — measured from the next release
+  on**: that release's self-update runs the previous tag's helper, which cannot print the line,
+  in row C and in row A alike. The lane detects it (the previous tag's
+  `lhpc/core/service_selfupdate.py` lacks the line), still times the whole helper (L3), and names
+  the gap in the job summary (and the bootstrap skip reason). The gap is waived, by name, up to
+  and including that release (`lhpc.core.slow_target.PIP_SYNC_SINCE`, 0.12.0): the coverage
+  test reports the L4 pair as waived, not missing, and the lane's budget case waives its missing
+  evidence and Zero baseline when the previous tag lacks the line too. From the next release on
+  both require it.
 - **Every release is followed by an image.** `loraham-images` is tagged with the same version once
   the binaries a moved pin needs are published ([binary channel](provenance.md#the-binary-channel)).
 - **The release bot** runs the pin patch (watch, repin, binaries, proof, release, image) and opens
