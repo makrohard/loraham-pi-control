@@ -2,6 +2,10 @@
 
 ## 0.12.0
 
+- The dashboard's radio columns ask the daemon for updates only while the page is shown: nothing while the tab
+  is in the background (one refresh when you come back), never a second request while the first is still
+  unanswered, and after a failed update the next try waits 15 s instead of 3 s.
+
 - Every release is now also installed, built and self-updated on a test box slowed down below a Pi Zero 2 W
   before it ships: an update that would stall or run into a time limit on a slow box turns the release check
   red instead of reaching yours.
@@ -1038,6 +1042,7 @@ on a Zero 2 W).
 - Test hygiene
 
 ## 0.1.5
+
 - Hardware setups: `lhpc hardware` selects the radio rig (LoRaHAM / Uputronics dual / Waveshare); daemon v112 multi-hardware, per-band arbitration
 - Built-from-source runtime: headless QEMU and server-only meshtasticd compiled from pinned sources into the runtime root
 - Headless by default: GUI stacks and their packages are opt-in (`--with-gui`)
@@ -1050,6 +1055,7 @@ on a Zero 2 W).
 - Audit + stabilization pass; known-good pins refreshed to the run-proven set (Zero 2W + Pi 5 acceptance runs)
 
 ## 0.1.4
+
 - Make web-GUI, meshcom and meshtastic GUI remote exposable With TLS and certificate-auth
 - CLI consistency — `lhpc config` (per-stack settings, callsign, daemon params, operator identity), `stack restart`, `webserver proxy`, `cert export`; every next-step hint points at a real command
 - per-component update availability indicator
@@ -1058,6 +1064,7 @@ on a Zero 2 W).
 - Cleanup: slimmed, behaviour-focused test suite; removed dead code (no functional change)
 
 ## 0.1.3
+
 - self-hosting
 - auto-install
 - stack lifecycle

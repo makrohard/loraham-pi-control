@@ -15,9 +15,11 @@
     }
   }
 
+  // Resolves to whether the poll succeeded: an HTTP or network error, an unreadable body or a throw
+  // while rendering is a failure, which the caller answers with the slow interval.
   function poll(band) {
-    fetch("/api/daemon/" + encodeURIComponent(band))
-      .then(function (r) { return r.ok ? r.json() : null; })
+    return fetch("/api/daemon/" + encodeURIComponent(band))
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(function (d) {
         if (!d) return;
         var badge = document.getElementById("rd-badge-" + band);
@@ -62,13 +64,43 @@
           if (feed.textContent !== next) feed.textContent = next;
         }
       })
-      .catch(function () { /* transient; retry on next tick */ });
+      .then(function () { return true; }, function () { return false; });
   }
 
+  // The discipline of taskbanner.js, per band: no timer while the page is hidden, never a second
+  // request while one is still out (a slow daemon answer is not overlapped), and after a failure a
+  // fixed slow interval instead of the normal one. Visible again: one immediate refresh.
+  var POLL_MS = 3000, ERROR_MS = 15000;
   cols.forEach(function (col) {
     var band = col.getAttribute("data-radio-band");
-    poll(band);
-    setInterval(function () { poll(band); }, 3000);
+    var timer = null, polling = false;
+
+    function clearTimer() {
+      if (timer !== null) { clearTimeout(timer); timer = null; }
+    }
+
+    function schedule(ms) {
+      clearTimer();
+      if (document.hidden) return;
+      timer = setTimeout(tick, ms);
+    }
+
+    function tick() {
+      clearTimer();
+      if (polling) return;
+      polling = true;
+      poll(band).then(function (ok) {
+        polling = false;
+        schedule(ok ? POLL_MS : ERROR_MS);
+      });
+    }
+
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) { clearTimer(); return; }
+      tick();
+    });
+
+    tick();
   });
 
   // Auto-refresh the dashboard ONLY when its structural state changes (a stack
