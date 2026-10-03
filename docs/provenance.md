@@ -44,7 +44,9 @@ to touch. Update, uninstall and clean re-prove the record first and refuse when 
 **New files: OK.** Files you or the stack add to a managed checkout (logs, generated settings, a
 scratch script, Git-ignored or not) are copied into the new source at the same path on update;
 the old checkout is discarded only once each is proven there. A path the new upstream version
-also ships is a refusal naming the file, never a merge or overwrite.
+also ships is a refusal naming the file, never a merge or overwrite. A Git repository of your own
+inside a checkout (a folder with its own `.git`) is not carried: the update refuses naming it; move it
+out of the checkout.
 
 Not preserved and never blocking: anything under `build/`, `.pio/`, `.venv/`, `.work/`, `.run/`,
 `__pycache__/` or `node_modules/`, and a component's declared built binary. LHPC recreates

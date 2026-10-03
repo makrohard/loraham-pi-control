@@ -3354,6 +3354,27 @@ def test_a_carry_failure_restores_the_prior_and_refuses(tmp_path, monkeypatch, v
     assert not inst._journal_path(dest).exists()                        # transaction resolved
 
 
+@pytest.mark.safety("source-additions-preserved")
+def test_a_nested_git_repository_refuses_by_name(tmp_path, git, v2_update_env):
+    """`git ls-files --others` does not descend into an untracked repository of the operator's
+    own: it lists `lib/foo/` as ONE entry. That is not a file LHPC can carry, so the update
+    refuses naming the folder — never the misleading "local file could not be read" of an
+    empty path — and the old checkout, nested repository included, stays in place."""
+    comp, inst, dest, _head = v2_update_env
+    nested = dest / "lib" / "foo"
+    nested.mkdir(parents=True)
+    git(nested, "init", "-q")
+    (nested / "mine.txt").write_text("operator's own repo")
+
+    action = inst.adopt_source(comp, force=True, source="dev")
+    assert action.status == "failed"
+    assert "lib/foo/" in action.detail and "nested Git repository" in action.detail
+    assert (dest / "file.txt").read_text() == "hello\n"                 # prior restored
+    assert (nested / "mine.txt").read_text() == "operator's own repo"   # local data intact
+    assert not dest.with_name(".app.prev").exists()
+    assert not inst._journal_path(dest).exists()
+
+
 def test_regenerable_artifacts_neither_block_nor_are_carried(tmp_path, v2_update_env):
     """Build output is LHPC's to regenerate, not the operator's data: it must not block an
     update, and it need not survive one. Same exclusion the dirty report uses."""

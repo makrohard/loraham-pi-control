@@ -33,6 +33,8 @@
 - An override anywhere systemd reads one (`systemctl --user set-property`, `service.d/`, `lhpc-.service.d/`,
   `~/.config/systemd/user.control`, `/run`) now marks the managed units overridden, so one-click update and boot
   restore stay off until it is removed.
+- An update no longer fails with a puzzling "local file could not be read" when a checkout holds a Git
+  repository of your own: it refuses naming that folder (move it out of the checkout).
 
 ## 0.11.10
 

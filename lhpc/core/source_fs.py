@@ -556,6 +556,11 @@ def carry_extras(src_fd: int, dst_fd: int, rels) -> str:
     for rel in rels:
         if rel.startswith("/") or ".." in rel.split("/") or not rel.strip():
             return f"{rel!r}: refusing an unsafe relative path"
+        if rel.endswith("/"):
+            # git lists an untracked repository of the operator's own as ONE `dir/` entry and
+            # never descends into it: LHPC carries files, not repositories.
+            return (f"{rel}: a nested Git repository — LHPC carries files, not repositories; "
+                    "move it out of the checkout")
         *parts, leaf = rel.split("/")
         qfd = _open_chain(src_fd, tuple(parts))
         if qfd < 0:

@@ -935,7 +935,8 @@ class Installer:
         too: a stack's own log or settings file is usually ignored, and it is exactly what has
         to survive. It also lists every file INDIVIDUALLY (`git status --ignored` collapses an
         ignored directory to `logs/`), never reports FIFOs/sockets/devices, and skips empty
-        directories — we carry files, not empty trees.
+        directories — we carry files, not empty trees. The one collapsed entry is an untracked
+        nested Git repository (`lib/foo/`), which `carry_extras` refuses by name.
 
         Regenerable artifacts are filtered by the SAME predicate `dirty_report` uses, so
         `build/`, `.run/` and a component's declared `bin` stay disposable in both."""
