@@ -91,8 +91,11 @@ after 60 s). Running fakes poll the scenario file and follow within a second.
 - `lhpc-testlab check` reports the fakes and per-stack readiness through the production gates;
   `lhpc-testlab status` shows scenario, simulated boot and recent lab events.
 
-The dashboard's **Reboot** is simulated: owned stacks stop, the boot identity advances and the
-admission gate clears, but the console stays up (the event log says so).
+The dashboard's **Reboot** is simulated: owned process groups are killed (their ownership records
+kept, as after a power cut), the boot identity advances and the production boot restore runs (its
+journal: `state/boot-restore.json`); its one gate that reads the host's systemd user units counts
+as passed, because the lab's console is not a user unit. The console stays up (the event log says
+so).
 
 ## Running the verification lanes
 

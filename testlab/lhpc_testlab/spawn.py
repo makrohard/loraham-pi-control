@@ -1,7 +1,7 @@
 """The spawn guard: Lifecycle spawns are the one path that bypasses the command runner
 (detached Popen), so lab mode wraps it. A power trigger (`sh -c '… systemctl --no-block
 reboot'`) is replaced by the detached `_power` helper, which performs a FAITHFUL
-simulated reboot (stop owned stacks, advance the boot identity, restart the fakes) — the
+simulated reboot (kill the owned stacks, advance the boot identity, run boot restore) — the
 host never reboots, but the admission gate and boot-bound records behave exactly as on a
 real box. Any other denied host mutator refuses (None = spawn failure, the callers'
 existing error path). Everything else — stack starts, network/HMAC helpers — spawns for

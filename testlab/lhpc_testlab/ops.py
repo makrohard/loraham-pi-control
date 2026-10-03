@@ -11,8 +11,8 @@ import signal
 import sys
 import time
 
-from lhpc.core import runtime_fs
-from lhpc.core.service_base import ActionResult
+from lhpc.core import reslock, runtime_fs
+from lhpc.core.service_base import ActionResult, AdmissionRefused
 
 from . import (
     active,
@@ -277,12 +277,27 @@ def inject(svc, band: str, preset: str) -> ActionResult:
 
 
 def power(svc, kind: str) -> int:
-    """Faithful simulated reboot/poweroff (hidden helper `lhpc-testlab _power`). A real
-    reboot KILLS running stacks (it does NOT operator-stop them, so boot-restore may
-    bring them back) and advances the boot id; then previously-running, non-operator-
-    stopped stacks are restored. poweroff advances the boot id and leaves them down."""
+    """Faithful simulated reboot/poweroff (hidden helper `lhpc-testlab _power`). A reboot is a
+    power cut and a boot: every owned process group still proven by its record is KILLED (the
+    records stay, as a power cut leaves them — no operator-stop tombstone), the boot id advances,
+    and the PRODUCTION boot restore runs (`boot_restore_run`; its journal is
+    `state/boot-restore.json`). poweroff stops running stacks without the tombstone, advances the
+    boot id and leaves them down."""
     if not is_active(svc):
         return 1
+    if kind == "reboot":
+        killed = _kill_owned_groups(svc)
+        supervisor.advance_boot(svc._paths, reason=f"simulated {kind}")
+        _respawn_gpsd(svc, [])
+        # The driver's one host-file gate reads $HOME/.config/systemd/user for an enabled, canonical
+        # lhpc-web.service. The lab's console is not a user unit (it is up by construction), so
+        # that gate alone is answered here; every other gate and step is the production driver's.
+        svc._web_integration_proven = lambda: (True, "")
+        _wait_for_admission(svc)
+        res = svc.boot_restore_run()
+        scenarios.log_event(svc._paths, f"simulated {kind}: killed {killed} owned process "
+                            f"group(s); {res.summary} (host untouched)")
+        return 0
     running = []
     for s in svc.stacks():
         try:
@@ -290,7 +305,7 @@ def power(svc, kind: str) -> int:
                 running.append(s.id)
         except Exception:
             pass
-    # Terminate WITHOUT the operator-stop tombstone (_operator=False) — a reboot is not
+    # Terminate WITHOUT the operator-stop tombstone (_operator=False) — a power-off is not
     # an explicit stop, so it must not mark the stack "stay stopped".
     for sid in running:
         try:
@@ -299,17 +314,43 @@ def power(svc, kind: str) -> int:
             pass
     supervisor.advance_boot(svc._paths, reason=f"simulated {kind}")
     _respawn_gpsd(svc, [])
-    restored = 0
-    if kind == "reboot":
-        for sid in running:                        # boot restoration
-            try:
-                if svc.start(sid, apply=True).ok:
-                    restored += 1
-            except Exception:
-                pass
     scenarios.log_event(svc._paths, f"simulated {kind}: stopped {len(running)}, "
-                        f"restored {restored} (host untouched)")
+                        "restored 0 (host untouched)")
     return 0
+
+
+def _wait_for_admission(svc, timeout: float = 30.0) -> None:
+    """On a box the boot-restore unit runs after every process of the old boot is gone; here the
+    console request that triggered the reboot may still hold its task admission for a moment.
+    Wait (bounded) until admission can be taken; past the bound the driver reports the busy
+    admission itself."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with svc._admission_guard("boot-restore", "controller"):
+                return
+        except (reslock.ResourceBusy, AdmissionRefused):
+            time.sleep(0.5)
+
+
+def _kill_owned_groups(svc) -> int:
+    """What a power cut does to the stacks: SIGKILL every owned process group whose record still
+    proves it (`verify_owned`: this boot, start time, session leader — a reused pid is never
+    signalled), then wait for proven cessation. The records stay: boot restore reads them."""
+    life = svc._lifecycle()
+    valid, _issues, _dir_state = life.owned_inventory()
+    killed = []
+    for rec in valid:
+        if not life.verify_owned(rec)[0]:
+            continue
+        try:
+            os.killpg(rec["pgid"], signal.SIGKILL)
+        except OSError:
+            continue
+        killed.append(rec)
+    for rec in killed:
+        life._wait_ceased(rec)
+    return len(killed)
 
 
 def _clear_runtime_state(svc) -> None:

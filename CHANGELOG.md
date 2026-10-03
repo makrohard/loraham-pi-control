@@ -5,6 +5,7 @@
   whole, or hanging on a pipe.
 - An install or update interrupted by a power cut or crash while it was still downloading no longer leaves the
   partial download beside the source for good; the next source operation removes it.
+- Test lab: the simulated Reboot now kills the running stacks and runs the real boot restore.
 
 ## 0.11.10
 
