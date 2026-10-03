@@ -839,16 +839,11 @@ class BinaryOpsMixin:
 
     def _receipt_leaf_present(self, rel: str) -> bool:
         """Anything at a receipt path, readable or not, counts as present; so does a path that
-        cannot even be resolved inside the runtime root (never "gone" on uncertainty). Only a
-        missing leaf or parent (ENOENT, ENOTDIR) is absent: `os.path.lexists` would also read
-        EIO or EACCES as absent."""
+        cannot even be resolved inside the runtime root (never "gone" on uncertainty)."""
         try:
-            os.lstat(self._paths.under(*rel.split("/")))
-        except (FileNotFoundError, NotADirectoryError):
-            return False
-        except (OSError, ValueError, PathContainmentError):
+            return runtime_fs.probe_exists(self._paths.under(*rel.split("/")))[0] != "absent"
+        except (ValueError, PathContainmentError):
             return True
-        return True
 
     def _retire_body(self, stack_id: str, state: str, rec, why: str, *, force: bool,
                      locked: bool, txn: str) -> ActionResult:
