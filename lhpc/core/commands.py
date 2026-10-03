@@ -721,10 +721,24 @@ def _main_ok():
     return (starttime == BINDING["main_starttime"] and session == BINDING["main_sid"]
             and pgrp == BINDING["main_pgid"])
 
+def _main_gone_stop(rest):
+    # The bound main is gone: no further step runs. The outcome is judged by EVERY step left, not
+    # by the one that noticed: each REQUIRED step that never ran is recorded as main-gone and the
+    # runner exits 1; only an all-optional remainder stops quietly with 0.
+    req = [r for r in rest if r["kind"] != "delay" and not r.get("optional", True)]
+    for r in req:
+        _lbl = r.get("label", "exec" if r["kind"] == "exec" else "%s:%s" % (r["host"], r["port"]))
+        entry = {"kind": r["kind"], "label": _lbl, "outcome": "main-gone", "attempts": 0,
+                 "elapsed_s": 0.0, "skipped": True}
+        if r["kind"] != "exec":
+            entry.update(host=r["host"], port=r["port"])
+        _record(entry)
+    sys.exit(1 if req else 0)
+
 if GATED and not _armed():
     sys.exit(0)                            # detached runner never armed -> no side effects at all
 
-for s in STEPS:
+for _si, s in enumerate(STEPS):
     k = s["kind"]
     try:
         if k == "delay":
@@ -734,7 +748,9 @@ for s in STEPS:
             if not _main_ok():
                 _record({"kind": "exec", "label": s.get("label", "exec"), "outcome": "main-gone",
                          "rc": None, "attempts": 0, "elapsed_s": 0.0})
-                break                   # bound main gone/replaced/zombie -> no further side effects
+                if not s.get("optional", True):
+                    sys.exit(1)         # a required step that never ran is not a success
+                _main_gone_stop(STEPS[_si + 1:])   # no further side effects; a required rest fails
             try:
                 # stdout stays DEVNULL (the volume source); ONLY stderr is captured, re-emitted
                 # verbatim to OUR stderr (the post-start log keeps full fidelity) and stored as a
@@ -771,7 +787,9 @@ for s in STEPS:
             if not _main_ok():
                 _record({"kind": "tcp_wait", "label": _lbl, "host": s["host"], "port": s["port"],
                          "outcome": "main-gone", "attempts": 0, "elapsed_s": 0.0})
-                break                   # bound main already gone -> do not even wait
+                if not s.get("optional", True):
+                    sys.exit(1)
+                _main_gone_stop(STEPS[_si + 1:])   # bound main already gone -> do not even wait
             end = time.time() + s["timeout"]
             ok = False
             tries = 0
@@ -836,7 +854,11 @@ for s in STEPS:
                     sys.stderr.write("tcp_send %s:%s: bound main gone/replaced -> stop (no send)\\n"
                                      % (s["host"], s["port"]))
                     _done("main-gone", i)
-                    sys.exit(0)          # exit WITHOUT sending — never hit a restarted main
+                    # exit WITHOUT sending — never hit a restarted main; a required send failed,
+                    # and so does an optional one with a required step still to come
+                    if not s.get("optional", True):
+                        sys.exit(1)
+                    _main_gone_stop(STEPS[_si + 1:])
                 acked = False
                 try:
                     if probing:

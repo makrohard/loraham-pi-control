@@ -5,6 +5,8 @@
 - Settings "Reset to defaults" on a running stack now shows RESTART REQUIRED, like a save; a reset of one band is refused whole when the stack's band-less file is broken or GPS is in use (it cleared the band's settings and still said "not modified").
 - A Settings save no longer undoes a hardware, GPS, callsign or remote change made after a crash left an
   unfinished config save behind: the next `lhpc` command (or the console's start) finishes it first.
+- A start whose main program dies during a required post-start step (e.g. MeshCom's callsign push) is reported
+  failed instead of verified; the step had been skipped and the runner still exited 0.
 
 ## 0.11.10
 

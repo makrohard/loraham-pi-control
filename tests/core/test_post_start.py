@@ -281,7 +281,7 @@ def _free_port():
     return p
 
 
-def _run_launcher(steps, timeout=25, result_path="", runtime="/rt"):
+def _run_launcher(steps, timeout=25, result_path="", runtime="/rt", binding=None):
     # A sidecar path is now validated against the RUNTIME ROOT at render time and walked
     # descriptor-anchored by the runner, so a caller that wants one must name the root the
     # result lives under (see _sidecar_root).
@@ -292,7 +292,7 @@ def _run_launcher(steps, timeout=25, result_path="", runtime="/rt"):
     class _Op:
         callsign = "N0CALL"
     script = commands.render_post_launcher(steps, _C(), {}, _Op(), runtime, "/src", "",
-                                           result_path=result_path)
+                                           result_path=result_path, binding=binding)
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
         f.write(script); path = f.name
     try:
@@ -717,6 +717,48 @@ def test_bound_runner_skips_send_when_main_gone():
     dead = {"main_launch_id": "x", "main_pid": 2 ** 31 - 1, "main_starttime": 1,
             "main_pgid": 1, "main_sid": 1}
     assert _run_bound(dead, _free_port()) == b""
+
+
+@pytest.mark.parametrize("step", [
+    {"kind": "exec", "argv": ["true"]},
+    {"kind": "tcp_wait", "port": 9, "timeout": 1},
+    {"kind": "tcp_send", "port": 9, "data": "P\n"},
+], ids=lambda s: s["kind"])
+@pytest.mark.parametrize("optional", [False, True], ids=["required", "optional"])
+def test_bound_runner_main_gone_fails_a_required_step_only(step, optional):
+    # A REQUIRED step whose bound main is gone did not run: the runner must not exit 0, or the start
+    # reads "required post-start completed". An optional (detached) step still stops quietly.
+    dead = {"main_launch_id": "x", "main_pid": 2 ** 31 - 1, "main_starttime": 1,
+            "main_pgid": 1, "main_sid": 1}
+    rc = _run_launcher([{**step, "optional": optional}], binding=dead)
+    assert (rc == 0) is optional
+
+
+@pytest.mark.parametrize("first", [
+    {"kind": "exec", "argv": ["true"]},
+    {"kind": "tcp_wait", "port": 9, "timeout": 1},
+    {"kind": "tcp_send", "port": 9, "data": "P\n"},
+], ids=lambda s: s["kind"])
+@pytest.mark.parametrize("required_rest", [True, False], ids=["required-rest", "optional-rest"])
+def test_bound_runner_main_gone_judges_every_remaining_step(tmp_path, first, required_rest):
+    # An OPTIONAL step that meets a dead main must not end the run as a success while a REQUIRED
+    # step after it never ran: the outcome is judged by everything left, and the sidecar names
+    # the required step that was skipped. An all-optional remainder still stops with 0.
+    import json
+    dead = {"main_launch_id": "x", "main_pid": 2 ** 31 - 1, "main_starttime": 1,
+            "main_pgid": 1, "main_sid": 1}
+    root, rp = _sidecar_root(tmp_path)
+    steps = [{**first, "optional": True},
+             {"kind": "tcp_send", "port": 9, "data": "C\n", "label": "callsign",
+              "optional": not required_rest}]
+    rc = _run_launcher(steps, binding=dead, result_path=str(rp), runtime=str(root))
+    recs = json.loads(rp.read_text())["steps"]
+    skipped = [r for r in recs if r.get("label") == "callsign"]
+    if required_rest:
+        assert rc == 1
+        assert skipped and skipped[0]["outcome"] == "main-gone" and skipped[0]["kind"] == "tcp_send"
+    else:
+        assert rc == 0 and not skipped
 
 
 def _main_leader(life, port):
