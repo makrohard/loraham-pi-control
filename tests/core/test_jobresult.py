@@ -24,6 +24,14 @@ def _reserve(paths, attempt=_A, log=_LOG):
                              ["src:/home/x/meshcom"])
 
 
+def test_deeply_nested_marker_is_ignored(tmp_path):
+    p = _p(tmp_path)
+    assert _reserve(p)
+    jobresult._path(p, _LOG).write_text("[" * 3000)        # RecursionError inside json.loads
+    assert jobresult._read_raw(p, _LOG) is None
+    assert jobresult.read_results(p) == []
+
+
 def test_reserve_then_advance_roundtrip(tmp_path):
     p = _p(tmp_path)
     assert _reserve(p)

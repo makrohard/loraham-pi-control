@@ -266,7 +266,6 @@ class StatusProber:
 
         Read-only and failure-tolerant: this runs on every status GET.
         """
-        import json
         import time
         from pathlib import Path as _Path
 
@@ -278,7 +277,8 @@ class StatusProber:
             return True, "not a GPS feed"
         marker = _Path(bridge_state_dir(self._paths.runtime_root, consumer)) / "readiness.json"
         try:
-            got = json.loads(runtime_fs.read_text_regular(self._paths, marker, max_bytes=4096))
+            got = runtime_fs.loads_json(runtime_fs.read_text_regular(self._paths, marker,
+                                                                    max_bytes=4096))
         except (OSError, ValueError, runtime_fs.PathContainmentError):
             return False, "no readiness marker"
         if not isinstance(got, dict):

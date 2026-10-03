@@ -689,6 +689,15 @@ def test_read_bytes_refuses_non_regular_leaf(tmp_path, make_bad):
         runtime_fs.read_bytes(paths, bad)
 
 
+def test_loads_json_turns_every_malformed_input_into_value_error():
+    # json.loads raises RecursionError on a deeply nested document and TypeError on a non-text
+    # value; the state readers catch ValueError, so either escaped as a traceback or a web 500.
+    assert runtime_fs.loads_json('{"k": [1]}') == {"k": [1]}
+    for bad in ("[" * 3000, None, "{"):
+        with pytest.raises(ValueError):
+            runtime_fs.loads_json(bad)
+
+
 def test_read_text_regular_refuses_fifo(tmp_path):
     paths = Paths(runtime_root=tmp_path)
     _fifo(tmp_path, "pipe")

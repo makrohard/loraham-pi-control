@@ -483,8 +483,8 @@ def read_marker(paths: Paths):
     except (OSError, PathContainmentError, ValueError) as exc:
         return "unsafe", {"reason": f"auto-install run marker unreadable ({exc})"}
     try:
-        d = json.loads(raw)
-    except json.JSONDecodeError:
+        d = runtime_fs.loads_json(raw)
+    except ValueError:
         return "unsafe", {"reason": "auto-install run marker malformed (not JSON)"}
     if not valid_marker(d):
         return "unsafe", {"reason": "auto-install run marker malformed (schema)"}

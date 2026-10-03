@@ -164,7 +164,7 @@ def _read_raw(paths, log: str) -> dict | None:
     if stt is None or not _stat.S_ISREG(stt.st_mode) or stt.st_size > _MARKER_MAX:
         return None
     try:
-        d = json.loads(runtime_fs.read_text_regular(paths, p, max_bytes=_MARKER_MAX))
+        d = runtime_fs.loads_json(runtime_fs.read_text_regular(paths, p, max_bytes=_MARKER_MAX))
     except (OSError, PathContainmentError, ValueError):
         return None
     if not _valid(d, log):

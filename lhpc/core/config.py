@@ -760,8 +760,8 @@ def _parse_firewall(merged: dict, diagnostics: list) -> FirewallConfig:
     extra = raw.get("extra_allow", ())
     if isinstance(extra, str) and extra.strip():        # flat-scalar JSON round-trip
         try:
-            import json as _json
-            extra = _json.loads(extra)
+            from .runtime_fs import loads_json
+            extra = loads_json(extra)
         except ValueError:
             extra = ()
     extra = tuple(e for e in extra if isinstance(e, dict)) if isinstance(extra, (list, tuple)) else ()
@@ -1810,7 +1810,7 @@ def recover_config_transaction(paths: Paths) -> str | None:
     if not os.path.lexists(jp):
         return None
     try:
-        journal = json.loads(runtime_fs.read_text(paths, jp))   # no-follow read
+        journal = runtime_fs.loads_json(runtime_fs.read_text(paths, jp))   # no-follow read
     except (OSError, ValueError, PathContainmentError):
         return ""                       # exists but unreadable/symlinked/malformed -> BLOCK
     if (not isinstance(journal, dict) or journal.get("version") != _JOURNAL_VERSION

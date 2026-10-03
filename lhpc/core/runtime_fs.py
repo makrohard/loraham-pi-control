@@ -22,6 +22,7 @@ not be routed here.
 
 from __future__ import annotations
 
+import json
 import os
 import stat as _stat
 from contextlib import contextmanager
@@ -557,6 +558,16 @@ def read_bytes(paths: Paths, path: Path, *, max_bytes: int = _DEFAULT_READ_MAX) 
 def read_text(paths: Paths, path: Path, *, max_bytes: int = _DEFAULT_READ_MAX) -> str:
     """No-follow, regular-file-only, bounded text read (see `read_bytes`)."""
     return read_bytes(paths, path, max_bytes=max_bytes).decode("utf-8")
+
+
+def loads_json(text):
+    """`json.loads` for state the controller reads back: EVERY malformed input — a document nested
+    past the interpreter's recursion limit and a non-text value included — raises ValueError, the
+    error each state reader already turns into its typed refusal."""
+    try:
+        return json.loads(text)
+    except (RecursionError, TypeError) as exc:
+        raise ValueError(f"malformed JSON ({type(exc).__name__})") from None
 
 
 def read_text_regular(paths: Paths, path: Path, *, max_bytes: int = 1 << 20) -> str:

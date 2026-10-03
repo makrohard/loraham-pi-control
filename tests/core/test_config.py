@@ -28,6 +28,21 @@ def test_defaults_loaded(tmp_path):
     assert cfg.get("install", "adopt_search_root") == ""
 
 
+def test_deeply_nested_extra_allow_is_ignored(tmp_path):
+    # a hand-edited local.toml must never crash config load (the TOML layer already holds this)
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "local.toml").write_text('[firewall]\nextra_allow = "' + "[" * 3000 + '"\n')
+    assert load_config(_paths(tmp_path)).firewall.extra_allow == ()
+
+
+def test_deeply_nested_config_journal_blocks(tmp_path):
+    from lhpc.core import config as cfgmod
+    paths = _paths(tmp_path)
+    (tmp_path / "state").mkdir()
+    cfgmod._txn_journal(paths).write_text("[" * 3000)
+    assert cfgmod.recover_config_transaction(paths) == ""             # BLOCK, no exception
+
+
 def test_operator_absent_by_default(tmp_path):
     cfg = load_config(_paths(tmp_path))
     assert not cfg.operator.configured

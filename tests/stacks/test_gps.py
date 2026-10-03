@@ -800,6 +800,19 @@ def test_feed_health_follows_the_source_not_the_endpoint(tmp_path, state, health
     assert ok is healthy, note
 
 
+def test_a_deeply_nested_marker_is_not_healthy(tmp_path):
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.status import StatusProber
+    svc = _svc(tmp_path)
+    comp = _feed_comp(svc, "meshtastic", "meshtastic-gps")
+    _write_marker(tmp_path, "meshtastic", "connected")
+    (tmp_path / "state" / "gps" / "meshtastic" / "readiness.json").write_text("[" * 3000)
+    assert svc._gps_feed_ready(comp)[0] is False                      # the start gate
+    prober = StatusProber(FakeSystem().system, Paths(runtime_root=tmp_path))
+    assert prober._gps_feed_ready(comp)[0] is False                   # the status probe
+
+
 def test_an_absent_marker_is_not_healthy(tmp_path):
     """A feed that never wrote a marker has not reached its source; treating "no news" as
     good is exactly how an unreachable gpsd counted as a successful dependency."""

@@ -52,6 +52,14 @@ def _make_repo(path, remote=""):
 
 # ---- integration tests that need the running stack are deferred in auto-install ------------------
 
+def test_deeply_nested_run_marker_reads_unsafe(tmp_path):
+    from lhpc.core.paths import Paths
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir()
+    paths.under(*ai_mod.MARKER).write_text("[" * 3000)        # RecursionError inside json.loads
+    assert ai_mod.read_marker(paths)[0] == "unsafe"
+
+
 def test_running_required_host_test_is_deferred_in_auto_install_but_runs_explicitly(tmp_path, monkeypatch):
     """A component with `test_requires_running` (generic mechanism; no packaged stack uses it
     today — meshcom's test.sh is self-sufficient) is DEFERRED in an auto-install sweep (never a false

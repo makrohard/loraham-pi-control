@@ -132,8 +132,6 @@ class LifecycleOpsMixin:
         Read from the marker rather than probed: whether a POSITION is flowing is something
         only the feed knows, and the endpoint path exists from the instant it is created.
         """
-        import json
-
         from .gps import bridge_state_dir, consumer_for_component
         # DERIVED from the ONE feed mapping, never a private copy — see gps.FEED_COMPONENTS.
         consumer = consumer_for_component(comp.id)
@@ -142,7 +140,7 @@ class LifecycleOpsMixin:
         marker = Path(bridge_state_dir(self._paths.runtime_root, consumer)) / "readiness.json"
         try:
             raw = runtime_fs.read_text_regular(self._paths, marker, max_bytes=4096)
-            got = json.loads(raw)
+            got = runtime_fs.loads_json(raw)
         except (OSError, ValueError, PathContainmentError):
             return {}
         if not isinstance(got, dict):

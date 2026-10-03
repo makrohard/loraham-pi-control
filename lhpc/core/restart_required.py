@@ -51,7 +51,7 @@ def read_marker(paths: Paths, stack_id: str) -> dict | None:
         return _unsafe(f"restart-required marker is present but unreadable/unsafe "
                        f"({exc}) — treat as restart required; resolve the marker")
     try:
-        d = json.loads(raw)
+        d = runtime_fs.loads_json(raw)
     except (ValueError, TypeError):
         return _unsafe("restart-required marker is malformed — treat as restart "
                        "required; resolve the marker")

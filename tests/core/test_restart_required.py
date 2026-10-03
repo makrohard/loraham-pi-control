@@ -348,6 +348,15 @@ def test_cli_status_reports_restart_required(tmp_path):
 
 # ---- the marker module itself (path, tri-state read, merge, clear) ------------------------------
 
+def test_deeply_nested_marker_reads_unsafe(tmp_path):
+    from lhpc.core import restart_required as rr
+    from lhpc.core.paths import Paths
+    paths = Paths(runtime_root=tmp_path)
+    p = rr.marker_path(paths, "chat"); p.parent.mkdir(parents=True)
+    p.write_text("[" * 3000)                              # RecursionError inside json.loads
+    assert rr.read_marker(paths, "chat")["unsafe"] is True
+
+
 def test_module_read_is_tri_state(tmp_path):
     import json as _json
     import os as _os
