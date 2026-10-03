@@ -70,8 +70,9 @@ class FirewallOpsMixin:
                     "allow_cidrs": [], "deny": True, "auth": _auth, "loopback": False}
         if meta.bind_param:
             # A bind-address listener (kiss --kiss-host, bridge --bind): exposure from the
-            # RESOLVED bind; the source allow-list (if any) narrows it.
-            family, addr = _classify_bind(bind)
+            # RESOLVED bind; the source allow-list (if any) narrows it. A `::` socket of these
+            # listeners also accepts IPv4 (bindv6only=0), unlike nginx's ipv6only `listen [::]`.
+            family, addr = ("dual", "*") if (bind or "").strip() == "::" else _classify_bind(bind)
             return {"id": eid, "proto": "tcp", "family": family, "addr": addr, "port": port,
                     "allow_cidrs": cidrs, "deny": False, "auth": _auth, "loopback": _is_loopback(bind)}
         if meta.allow_param:

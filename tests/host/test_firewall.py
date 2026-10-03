@@ -2083,6 +2083,24 @@ def test_endpoint_id_stable_across_port_change(tmp_path):
     assert kiss_ids[0]["port"] == 9001                              # resolved port still tracked
 
 
+def test_bind_param_listener_on_all_v6_addresses_is_dual(tmp_path):
+    # kiss/the MeshCom bridge bound `::` also accept IPv4 (bindv6only=0): an unticked one must be
+    # dropped for BOTH families, not by an IPv6-only rule that leaves its IPv4 side open.
+    from lhpc.core import config as _cfg, firewall_helper as fh
+    svc = _svc(tmp_path)
+    _cfg.save_stack_config(svc._paths, "kiss", {"kiss_host": "::", "kiss_port": "9001"},
+                           svc._config_band("kiss", ""))
+    _cfg.save_firewall_config(svc._paths, mode="compatibility")   # unticked = an explicit drop
+    svc._invalidate_config()
+    cand = svc.firewall_candidate()
+    ep = next(e for e in cand["endpoints"] if e["id"] == "loraham-kiss-tnc.tcp-8001")
+    assert (ep["family"], ep["addr"]) == ("dual", "*")
+    m = fh.resolve_model(cand, ownership_id="x",
+                         ssh_scopes=[{"proto": "tcp", "family": "dual", "addr": "*", "port": 22}])
+    kiss = [fh._rule_spec(r)[0] for r in m["rules"] if "dport 9001" in fh._rule_spec(r)[0]]
+    assert kiss and not any("nfproto" in r for r in kiss), kiss
+
+
 def test_proxy_ingress_family_follows_bind_not_dual(tmp_path):
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)
