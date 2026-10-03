@@ -20,9 +20,9 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # the whole suite with branch coverage runs 15-19 min per lane on the hosted runners (measured
-    # on this release's CI); 20 min timed the 3.12 lane out twice on its last step
-    timeout-minutes: 30
+    # the whole suite with branch coverage runs 20-30 min per lane on the hosted runners (0.11.11's
+    # CI: 29:49 on one lane); 30 min cut two lanes at 98 % on a slow runner, so the limit is twice that
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
