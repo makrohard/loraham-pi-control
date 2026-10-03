@@ -196,6 +196,14 @@ def evaluate(runner, dest: str, spec, source: str,
     # Signature verification anchors to the MANIFEST pin's tag/commit only — an
     # operator-confirmed composition commit has no configured signed ref.
     tag = "" if expected_commit else (getattr(spec, "pin_tag", "") if spec else "")
+    if tag:
+        # A tag's signature covers the pin only when the tag points AT the pin. A tag on another
+        # commit, or a `pin_tag` that is no tag object (a `git describe` string, which git
+        # resolves even under refs/tags/, or a lightweight tag), falls back to the pin commit's
+        # own signature. `^{tag}` admits only a tag object.
+        r = runner.run(["git", "-C", dest, "rev-parse", "--verify", "-q",
+                        f"refs/tags/{tag}^{{tag}}^{{commit}}"], timeout=10)
+        tag = f"refs/tags/{tag}" if r.returncode == 0 and r.stdout.strip() == pin else ""
     signed, why = verify_signature(runner, dest, tag or pin, trusted_fingerprints,
                                    is_tag=bool(tag))
     if signed:

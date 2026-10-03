@@ -4,6 +4,8 @@ good signature from a configured trusted signer."""
 
 from dataclasses import dataclass
 
+import pytest
+
 from lhpc.core import provenance as pv
 from lhpc.core.probes.backends import CommandResult
 
@@ -84,6 +86,54 @@ def test_signed_never_claimed_without_configured_signers():
     # signers not configured -> we never even claim signature verification.
     r = pv.evaluate(_Runner(head=PIN, verify=good), "/d", _Spec(pin_commit=PIN), "pinned")
     assert r.status == pv.PINNED_VERIFIED and not r.signed
+
+
+class _Repo:
+    """A stub git: HEAD is the pin, `tags` maps an annotated tag's name -> commit, `signed` names
+    what carries a trusted signature ("tag:<name>" for a tag object, a commit id for a commit). Like
+    real git, a `git describe` string resolves to its commit even under refs/tags/ unless the
+    revision demands a tag object (`^{tag}`)."""
+
+    def __init__(self, tags, signed):
+        self.tags, self.signed, self.calls = tags, signed, []
+
+    def run(self, argv, timeout=None, cwd=None, env=None):
+        self.calls.append(list(argv))
+        sub, ref = argv[3], argv[-1]
+        if sub == "rev-parse":
+            if ref == "HEAD":
+                return CommandResult(0, PIN, "")
+            name = ref.removeprefix("refs/tags/").removesuffix("^{commit}")
+            if name.endswith("^{tag}"):
+                name = name.removesuffix("^{tag}")
+            elif "-g" in name:
+                return CommandResult(0, PIN, "")                 # describe-string resolution
+            return (CommandResult(0, self.tags[name], "") if name in self.tags
+                    else CommandResult(128, "", "fatal: Needed a single revision"))
+        name = ref.removeprefix("refs/tags/")
+        ok = ((sub == "verify-tag" and name in self.tags and f"tag:{name}" in self.signed)
+              or (sub == "verify-commit" and ref in self.signed))
+        return (CommandResult(0, "", f"[GNUPG:] VALIDSIG {FPR} 2020-01-01 0 4 0 1 8 00 {FPR}\n")
+                if ok else CommandResult(1, "", "error: no signature found"))
+
+
+OTHER = "1111111111111111111111111111111111111111"
+
+
+@pytest.mark.parametrize("pin_tag,tags,signed,want,verb", [
+    # a trusted-signed tag on ANOTHER commit says nothing about the pin
+    ("v1", {"v1": OTHER}, {"tag:v1"}, pv.SIGNATURE_UNAVAILABLE, "verify-commit"),
+    # the tag points at the pin: its signature covers the pin
+    ("v1", {"v1": PIN}, {"tag:v1"}, pv.SIGNATURE_VERIFIED, "verify-tag"),
+    # a `git describe` string is no tag: the signed pin commit itself is what counts
+    ("7.7.1-57-g187ef247", {}, {PIN}, pv.SIGNATURE_VERIFIED, "verify-commit"),
+])
+def test_signature_is_bound_to_the_pin(pin_tag, tags, signed, want, verb):
+    repo = _Repo(tags, signed)
+    r = pv.evaluate(repo, "/d", _Spec(pin_commit=PIN, pin_tag=pin_tag), "pinned",
+                    trusted_fingerprints=[FPR])
+    assert r.status == want, r.detail
+    assert [c[3] for c in repo.calls if c[3].startswith("verify-")] == [verb]
 
 
 def test_verify_signature_requires_trusted_list():

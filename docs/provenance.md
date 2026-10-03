@@ -101,7 +101,9 @@ which compiles exactly the pin. Operating a binary install:
 
 ## Signed commits/tags
 
-Optional. lhpc runs `git verify-commit --raw` / `git verify-tag --raw` and parses the GPG status.
+Optional. lhpc runs `git verify-tag --raw` on the `pin_tag` when it is an annotated tag on the pinned
+commit, else `git verify-commit --raw` on the pinned commit, and parses the GPG status; a
+signature on anything but the pin never counts.
 A signature counts **only** when git exits 0 **and** a `VALIDSIG` fingerprint matches a
 configured trusted signer (full GPG fingerprints). Without configured signers the status stays
 `pinned-verified`.
