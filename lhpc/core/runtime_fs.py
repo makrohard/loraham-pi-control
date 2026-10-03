@@ -28,6 +28,7 @@ import os
 import stat as _stat
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Literal
 
 from .paths import PathContainmentError, Paths
 
@@ -45,6 +46,7 @@ __all__ = [
     "open_log_append",
     "open_log_truncate",
     "open_marker_excl",
+    "probe_exists",
     "read_bytes",
     "read_text",
     "rename_leaf",
@@ -728,6 +730,22 @@ def guard_state(paths: Paths, path: Path) -> str:
                 return "unsafe"          # permission/other — cannot prove absent
     except (OSError, PathContainmentError):
         return "unsafe"                  # escaped/swapped/unreadable parent — cannot prove absent
+
+
+def probe_exists(path) -> tuple[Literal["present", "absent", "unknown"], str]:
+    """THE existence probe for a safety decision (delete, overwrite, retire, "nothing to
+    recover"): `(state, why)`. No-follow `os.lstat`, so a dangling or escaping symlink is
+    present. Only ENOENT, or ENOTDIR on a parent, is "absent"; any other error (EIO, EACCES,
+    ELOOP, a NUL byte) is "unknown" with the error in `why` — not proven absent, so the caller
+    refuses or keeps. `os.path.lexists`/`exists`/`isfile` read every such error as absence.
+    Unlike `guard_state` it takes any path and reads a missing parent as absent."""
+    try:
+        os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return "absent", ""
+    except (OSError, ValueError) as exc:
+        return "unknown", str(exc)
+    return "present", ""
 
 
 def publish_symlink(paths: Paths, path: Path, target: str) -> None:
