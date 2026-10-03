@@ -24,6 +24,8 @@
   refuse and name the file, so every issued certificate stays revocable.
 - `lhpc webserver reset-defaults` restarts nginx when a reload cannot move an exposed console back to loopback (the
   console and the stack proxies stayed reachable); from the console it tells you to run Apply.
+- A symlinked or non-folder `config/tls/server` (or `client-ca`) reads as an unreadable certificate (way out:
+  `lhpc webserver tls-renew`) instead of an error in Monitor, verify, expose and Apply.
 
 ## 0.11.10
 

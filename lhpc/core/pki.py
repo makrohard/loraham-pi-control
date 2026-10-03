@@ -170,7 +170,7 @@ def _read_cert(paths: Paths, path: Path):
         raw = runtime_fs.read_text_regular(paths, path)
     except FileNotFoundError:
         return None
-    except OSError as exc:
+    except (OSError, PathContainmentError) as exc:
         raise PKIError(f"unsafe/unreadable certificate {path}: {exc}") from exc
     try:
         return x509.load_pem_x509_certificate(raw.encode("ascii"))
@@ -183,7 +183,7 @@ def _read_key(paths: Paths, path: Path):
         raw = runtime_fs.read_text_regular(paths, path)
     except FileNotFoundError:
         return None
-    except OSError as exc:
+    except (OSError, PathContainmentError) as exc:
         raise PKIError(f"unsafe/unreadable key {path}: {exc}") from exc
     try:
         return serialization.load_pem_private_key(raw.encode("ascii"), password=None)
@@ -257,7 +257,7 @@ def _load_index(paths: Paths, *, strict: bool = False) -> dict:
         raw = runtime_fs.read_text_regular(paths, _index_path(paths))
     except FileNotFoundError:
         return _empty_index()
-    except OSError as exc:
+    except (OSError, PathContainmentError) as exc:
         return unusable(f"unreadable ({exc})")
     try:
         data = json.loads(raw)
@@ -303,7 +303,7 @@ def _pending_path(paths: Paths) -> Path:
 def _load_pending(paths: Paths) -> list:
     try:
         raw = runtime_fs.read_text_regular(paths, _pending_path(paths))
-    except (FileNotFoundError, OSError):
+    except (OSError, PathContainmentError):
         return []
     try:
         data = json.loads(raw)

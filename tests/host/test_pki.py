@@ -316,6 +316,30 @@ def test_pki_status_reports_presence(tmp_path):
     assert st["server_cert"]["present"] and len(st["clients"]) == 1
 
 
+@pytest.mark.parametrize("sub", ["server", "client-ca"])
+def test_a_symlinked_tls_dir_reads_as_unreadable(tmp_path, sub):
+    # The descriptor-anchored reader refuses a symlinked parent with PathContainmentError (a
+    # ValueError, not an OSError); it must become the typed "unreadable" answer, never escape.
+    paths = _paths(tmp_path)
+    _init_both(paths)
+    pki.issue_server_cert(paths, dns_sans=["pi.local"], ip_sans=[], days=90)
+    pki.issue_client_cert(paths, "laptop", days=90, passphrase="p")
+    d = tmp_path / "config" / "tls" / sub
+    d.rename(tmp_path / "elsewhere")
+    d.symlink_to(tmp_path / "elsewhere")             # same files, reached through a symlink
+    st = pki.pki_status(paths)
+    if sub == "server":
+        assert pki.server_cert_names(paths)[0] == "unreadable"
+        assert pki.server_key_state(paths)[0] == "unreadable"
+        assert pki.server_cert_chain_ok(paths)[0] is False
+        assert st["server_cert"]["present"] is False
+    else:
+        assert st["client_ca"] == {"present": False, "error": "unreadable"}
+        assert st["clients"] == []
+        with pytest.raises(pki.PKIError):
+            pki.build_crl(paths)
+
+
 # --- the server chain check ---------------------------------------------------
 
 @pytest.mark.parametrize("exc", [ValueError("issuer"), TypeError("key type"), "invalid-signature"])
