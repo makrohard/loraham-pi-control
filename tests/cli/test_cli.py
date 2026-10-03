@@ -868,6 +868,22 @@ def test_firewall_cli_status_and_script_paths_unchanged(tmp_path, monkeypatch, c
     assert "#!/usr/bin/env bash" not in out
 
 
+def test_firewall_cli_status_prints_the_reapply_notice(tmp_path, monkeypatch, capsys):
+    """After an update that replaced the firewall helper, `lhpc firewall` says to re-apply before
+    the reboot and lists the notice's commands (incl. the re-render step) under Apply."""
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    assert main(["bootstrap", "--yes"]) == 0
+    capsys.readouterr()
+    note = {"why": "w", "text": "Re-apply the firewall before you reboot.", "remote": True,
+            "commands": ["lhpc firewall --script > /dev/null", "sudo bash x/firewall-apply.sh",
+                         "lhpc webserver apply"]}
+    monkeypatch.setattr(ControllerService, "firewall_reapply_notice", lambda self, st=None: note)
+    assert main(["firewall"]) == 0
+    out = capsys.readouterr().out
+    assert note["text"] in out
+    assert out.split("Apply:\n", 1)[1].split("\n")[:3] == [f"  {c}" for c in note["commands"]]
+
+
 def test_a_missing_stack_action_is_a_usage_error(capsys):
     """`lhpc stack` routed its usage error through argparse's --help action, which
     calls sys.exit(0) — so a missing action exited 0 and `lhpc stack || fail` passed

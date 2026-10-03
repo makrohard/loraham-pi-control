@@ -439,11 +439,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             security_pill = service.security_pill(webservers)
         except Exception:
             firewall, security_pill = None, {"level": "warn", "label": "unknown", "title": ""}
+        try:
+            fw_reapply = service.firewall_reapply_notice(firewall) if firewall else None
+        except Exception:
+            fw_reapply = None
         restart_required = service.restart_required_stacks()      # read once: box + signature
         return render_template(
             "dashboard.html", version=__version__, runtime_root=_runtime_root(),
             radios=radios, pending_interactive=pending_interactive, webservers=webservers,
-            firewall=firewall, security_pill=security_pill,
+            firewall=firewall, security_pill=security_pill, fw_reapply=fw_reapply,
             # The host the browser used to reach the console — a proxied web-UI link points here on
             # the proxy's port, so it is correct however the operator got here (LAN IP / hostname).
             req_host=_url_host(request.host or ""),

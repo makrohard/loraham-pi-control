@@ -1299,6 +1299,18 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             details.append("    stacks will NOT come back after a reboot until this is repaired:")
             details.append("      lhpc self-update --repair-integration")
 
+        # An update that replaced the firewall helper leaves the installed one stale: the next boot
+        # starts the console loopback-only until it is re-applied. Say it before that reboot.
+        try:
+            fw_note = self.firewall_reapply_notice()
+        except Exception:                       # never let a diagnostic break doctor
+            fw_note = None
+        if fw_note:
+            details.append("")
+            details.append("  ! FIREWALL RE-APPLY REQUIRED — " + fw_note["text"])
+            details.append("    run, before you reboot:")
+            details.extend(f"      {c}" for c in fw_note["commands"])
+
         # GPS: a malformed [gps] has already disabled position (fail closed), and stale
         # per-stack values are inert but misleading. Both are quiet failures otherwise —
         # the operator believes a stack is reporting position when it is not.
@@ -1345,7 +1357,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             details.extend(f"  {cmd}" for cmd in install_cmds)
 
         return ActionResult(
-            ok=not (required_missing or disk_critical or cert_expired),
+            ok=not (required_missing or disk_critical or cert_expired or fw_note),
             # The ONLY network access is a bounded ?DEVICES query to the gpsd the operator
             # configured, and only when the source IS gpsd — say so rather than promising
             # "no network" and then opening a socket.
@@ -1355,6 +1367,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                           "(no init, no RF; contacts only a configured gpsd)." if disk_critical
                      else "doctor: the server certificate has expired; bounded checks only "
                           "(no init, no RF; contacts only a configured gpsd)." if cert_expired
+                     else "doctor: the firewall must be re-applied after an update; bounded "
+                          "checks only (no init, no RF; contacts only a configured gpsd)." if fw_note
                      else "doctor: bounded checks only "
                           "(no init, no RF; contacts only a configured gpsd)."),
             details=details,

@@ -1535,7 +1535,10 @@ def _run(argv: list[str] | None = None) -> int:
             if not _os.path.exists(paths["firewall-apply.sh"]):
                 print("\nThe apply script has not been rendered yet — create it with:"
                       "\n  lhpc firewall --script | less        # writes it and shows what it does")
-            print("\nApply:\n  " + "\n  ".join(svc._fw_apply_lines()))
+            note = svc.firewall_reapply_notice(st)
+            if note:
+                print(f"\n{note['text']}")
+            print("\nApply:\n  " + "\n  ".join(note["commands"] if note else svc._fw_apply_lines()))
         if svc.webserver_apply_pending():
             # The Webserver Apply the firewall gate deferred (the console's Firewall panel shows the
             # same box). Only the RUNNING console's watchdog completes it, so say so — and keep

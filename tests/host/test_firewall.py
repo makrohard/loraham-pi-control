@@ -1818,6 +1818,107 @@ def test_boot_gate_refusal_names_the_failing_dimension(tmp_path, monkeypatch):
     assert "integration partial" in svc.firewall_boot_gate().summary
 
 
+def _svc_stale_helper(tmp_path, monkeypatch, *, remote, rev="STALE-REV"):
+    """A service whose (real) firewall_status reads a fresh verified receipt for the current intent,
+    stamped with installed-helper revision `rev`; the console remote-exposed or not."""
+    import time as _t
+    from lhpc.core import config as cfgmod
+    svc = _svc(tmp_path)
+    cfgmod.save_webserver_config(svc._paths, bind="0.0.0.0" if remote else "127.0.0.1",
+                                 port=8443, remote_exposed=remote)
+    svc._invalidate_config()
+    rp = tmp_path / "check.json"
+    monkeypatch.setattr(svc, "_fw_read_receipt", lambda path=None: _read_plain(rp))
+    monkeypatch.setattr(svc, "_fw_integration_present", lambda: True)
+    monkeypatch.setattr(svc, "_fw_units_enabled", lambda: True)
+    monkeypatch.setattr(svc, "_fw_boot_id", lambda: "boot-x")
+    _write_receipt(str(rp), intent_hash=fw.intent_hash(svc.firewall_candidate()),
+                   boottime=_t.clock_gettime(_t.CLOCK_BOOTTIME), boot_id="boot-x",
+                   **({"integration_rev": rev} if rev else {}))
+    return svc
+
+
+@pytest.mark.parametrize("remote", [True, False])
+def test_reapply_notice_only_for_a_stale_helper(tmp_path, monkeypatch, remote):
+    """An update that replaced the packaged helper leaves Live unverified, and the next boot starts
+    the console loopback-only. The notice must say "before you reboot", name the loopback-only
+    consequence exactly when remote web is configured, and give the commands that fix it."""
+    import os as _os
+    svc = _svc_stale_helper(tmp_path, monkeypatch, remote=remote)
+    assert svc.firewall_status()["reason"] == "update-required"
+    note = svc.firewall_reapply_notice()
+    assert note is not None and note["remote"] is remote
+    assert "before you reboot" in note["text"]
+    assert ("LOOPBACK-ONLY" in note["text"]) is remote
+    apply_sh = svc._paths.under("config/files/firewall/firewall-apply.sh")
+    assert note["commands"][0] == f"sudo bash {apply_sh}"
+    assert note["commands"][-1] == "lhpc webserver apply"
+    # Before the restarted console reconciled, the script on disk embeds the OLD helper: re-render
+    # it with the new code first.
+    _os.makedirs(svc._paths.under("state"), exist_ok=True)
+    svc._fw_mark_post_update()
+    note = svc.firewall_reapply_notice()
+    assert note["commands"][:2] == ["lhpc firewall --script > /dev/null", f"sudo bash {apply_sh}"]
+
+
+def test_no_reapply_notice_when_the_helper_is_current(tmp_path, monkeypatch):
+    svc = _svc_stale_helper(tmp_path, monkeypatch, remote=True, rev=None)
+    assert svc.firewall_status()["live_ok"]
+    assert svc.firewall_reapply_notice() is None
+
+
+def test_boot_gate_fallback_names_the_helper_update(tmp_path, monkeypatch):
+    """The loopback fallback a stale helper causes says WHY and WHAT to run — the generic
+    "live rules unverified" sent the operator hunting."""
+    from lhpc.core import firewall as fwm
+    svc = _svc_stale_helper(tmp_path, monkeypatch, remote=True)
+    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
+    monkeypatch.setattr(fwm, "BOOT_GATE_WAIT_S", 0)
+    promoted = {}
+    monkeypatch.setattr("lhpc.core.webserver.stage_and_validate",
+                        lambda system, paths, cfg, proxies: (
+                            promoted.__setitem__("bind", cfg.bind) or (True, "", "staged")))
+    monkeypatch.setattr("lhpc.core.webserver.promote_config", lambda paths: None)
+    r = svc.firewall_boot_gate()
+    assert r.ok and "LOOPBACK-ONLY" in r.summary and promoted["bind"] == "127.0.0.1"
+    assert "firewall helper changed" in r.summary
+    apply_sh = svc._paths.under("config/files/firewall/firewall-apply.sh")
+    assert f"sudo bash {apply_sh}" in r.next_commands
+    assert r.next_commands[-1] == "lhpc webserver apply"
+
+
+def test_boot_gate_fallback_survives_a_failing_notice(tmp_path, monkeypatch):
+    """The notice only words the fallback: if building it fails, the loopback-only config is
+    already promoted and nginx must still start (exit 0), as before."""
+    from lhpc.core import firewall as fwm
+    svc = _svc_stale_helper(tmp_path, monkeypatch, remote=True)
+    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
+    monkeypatch.setattr(fwm, "BOOT_GATE_WAIT_S", 0)
+    monkeypatch.setattr("lhpc.core.webserver.stage_and_validate", lambda *a, **k: (True, "", "s"))
+    monkeypatch.setattr("lhpc.core.webserver.promote_config", lambda paths: None)
+
+    def boom(st=None):
+        raise RuntimeError("x")
+    monkeypatch.setattr(svc, "firewall_reapply_notice", boom)
+    r = svc.firewall_boot_gate()
+    assert r.ok and "LOOPBACK-ONLY" in r.summary and "update-required" in r.summary
+
+
+@pytest.mark.parametrize("stale", [True, False])
+def test_doctor_is_not_ok_while_the_firewall_needs_a_reapply(tmp_path, monkeypatch, stale):
+    svc = _svc_stale_helper(tmp_path, monkeypatch, remote=True,
+                            rev="STALE-REV" if stale else None)
+    # Stub the host dependency probe: this FakeSystem has none of the controller's packages, which
+    # would make doctor non-OK on its own and hide the verdict under test.
+    monkeypatch.setattr(svc, "controller_system_deps", lambda: [])
+    r = svc.doctor()
+    flagged = [d for d in r.details if "FIREWALL RE-APPLY REQUIRED" in d]
+    apply_sh = str(svc._paths.under("config/files/firewall/firewall-apply.sh"))
+    assert r.ok is not stale
+    assert bool(flagged) is stale
+    assert any(f"sudo bash {apply_sh}" in d for d in r.details) is stale
+
+
 def test_boot_gate_allows_when_verified(tmp_path, monkeypatch):
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)

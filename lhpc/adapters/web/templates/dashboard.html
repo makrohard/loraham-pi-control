@@ -39,6 +39,13 @@
       {% endfor %}
     </div>
   {% endif %}
+  {% if fw_reapply %}
+    {# Before the reboot, not after it: a stale firewall helper makes the next boot start the
+       console loopback-only (fail-closed). #}
+    <p class="depnote depnote-warn" id="fw-reapply-notice">{{ fw_reapply.text }} Run:
+      {% for c in fw_reapply.commands %}<code>{{ c }}</code>{% if not loop.last %} · {% endif %}{% endfor %}
+      — <a href="{{ url_for('stacks_overview', open='firewall') ~ '#firewall-row' }}">Firewall panel</a></p>
+  {% endif %}
   {% if not hardware_configured %}
     {% call banner('warn', url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon', 'Configure') %}
       No radio hardware is configured — pick your board (one or two radios) before the daemon can start.

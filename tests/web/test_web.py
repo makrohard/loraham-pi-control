@@ -2236,6 +2236,23 @@ def test_dashboard_wsbox_collapsed_with_firewall_line(web):
     assert fw and fw[0].text == "Firewall"
 
 
+def test_dashboard_asks_for_a_firewall_reapply_before_the_reboot(monkeypatch, web):
+    # A stale firewall helper after an update makes the next boot start the console loopback-only;
+    # the dashboard says so, with the commands, while there is still time to act.
+    note = {"why": "w", "text": "Re-apply the firewall before you reboot.", "remote": True,
+            "commands": ["sudo bash /rt/config/files/firewall/firewall-apply.sh",
+                         "lhpc webserver apply"]}
+    monkeypatch.setattr(ControllerService, "firewall_reapply_notice", lambda self, st=None: note)
+    client = web(guard=ReadOnlyGuard)
+    doc = parse(client.get("/", headers={"Host": "127.0.0.1"}).get_data(as_text=True))
+    el = doc.by_id("fw-reapply-notice")
+    assert el is not None and "before you reboot" in el.text
+    assert [c.text for c in doc.within(el).find("code")] == note["commands"]
+    monkeypatch.setattr(ControllerService, "firewall_reapply_notice", lambda self, st=None: None)
+    doc = parse(client.get("/", headers={"Host": "127.0.0.1"}).get_data(as_text=True))
+    assert doc.by_id("fw-reapply-notice") is None
+
+
 @pytest.mark.contract
 @pytest.mark.safety("firewall-fail-closed")
 def test_firewall_settings_section_present(web):

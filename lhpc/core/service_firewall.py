@@ -701,6 +701,27 @@ class FirewallOpsMixin:
         return [f"sudo bash {base}", "sudo systemctl start lhpc-firewall-check.service",
                 "lhpc webserver apply"]
 
+    def firewall_reapply_notice(self, st=None):
+        """The one "re-apply the firewall before you reboot" notice, or None. It applies exactly
+        when the status reads `update-required`: an LHPC update replaced the packaged helper and the
+        installed one is still the old build, so Live is not green and the next boot's gate starts
+        nginx loopback-only. Read by `lhpc doctor`, `lhpc firewall`, the dashboard and the boot
+        gate. `st` reuses a status the caller already read. GET-safe: no writes."""
+        if st is None:
+            st = self.firewall_status()
+        if st.get("reason") != "update-required":
+            return None
+        remote = self._fw_remote_web_exposed()
+        why = "the firewall helper changed in an LHPC update and has not been re-applied"
+        text = (f"{why[0].upper()}{why[1:]} — re-apply the firewall before you reboot"
+                + ("; until then a reboot starts the console LOOPBACK-ONLY (remote access off)."
+                   if remote else "."))
+        # Until the restarted console has reconciled, the apply script on disk still embeds the
+        # OLD helper — re-render it with this (new) code first, or the re-apply changes nothing.
+        stale = self._marker_present(_FW_POSTUPDATE_MARKER)
+        cmds = (["lhpc firewall --script > /dev/null"] if stale else []) + self._fw_apply_lines()
+        return {"why": why, "text": text, "remote": remote, "commands": cmds}
+
     def _narrowing_is_console_removal_only(self) -> bool:
         """True only when the ONE firewall-relevant change is REMOVING the console's remote
         ingress, proven against the root-owned receipt.
@@ -805,6 +826,14 @@ class FirewallOpsMixin:
             # receipt, changed intent, half-installed integration) cost a live debugging session:
             # the operator saw "not verified" while `lhpc firewall` in their own shell said the
             # opposite, and nothing pointed at the difference.
+            try:                                   # wording only: never let it fail the gate
+                note = self.firewall_reapply_notice(st) if state == "present" else None
+            except Exception:
+                note = None
+            if note:
+                return ActionResult(True, f"firewall not verified this boot ({note['why']}) — nginx "
+                                    "started LOOPBACK-ONLY; re-apply the firewall, then the webserver",
+                                    next_commands=note["commands"])
             why = (f"integration {state}" if state != "present"
                    else "; ".join(w for w in (
                        ("" if st.get("config_ok") else "saved intent differs from the applied "
