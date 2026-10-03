@@ -2,6 +2,9 @@
 
 ## 0.12.0
 
+- The systemd units LHPC installs are now pinned in the test suite: no release can change one by
+  accident, because a changed unit would make boot restore refuse on every box that already has the old one.
+
 - Every step that writes a journal, receipt or marker the next run recovers from (settings saves, boot restore,
   binary installs, source installs and updates, self-update, the firewall apply) is now tested against a full
   disk, an I/O error and Ctrl-C at that exact step: recovery must leave a clean state and the same command must
