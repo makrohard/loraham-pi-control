@@ -402,6 +402,23 @@ def test_rename_leaf_no_replace_refuses_symlink_source(tmp_path):
         runtime_fs.rename_leaf(p, src, dst, replace=False)
 
 
+def test_link_leaf_keeps_a_second_name_and_refuses_a_symlink_source(tmp_path):
+    p = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir()
+    src = p.under("state", "live"); dst = p.under("state", "live.prev")
+    src.write_text("OLD")
+    runtime_fs.link_leaf(p, src, dst)
+    assert os.stat(src).st_ino == os.stat(dst).st_ino and dst.read_text() == "OLD"
+    with pytest.raises(FileExistsError):
+        runtime_fs.link_leaf(p, src, dst)
+    (tmp_path / "outside").write_text("x")
+    link = p.under("state", "link")
+    os.symlink(tmp_path / "outside", link)
+    with pytest.raises(PathContainmentError):
+        runtime_fs.link_leaf(p, link, p.under("state", "link.prev"))
+    assert not p.under("state", "link.prev").exists()
+
+
 def test_rename_leaf_no_replace_fallback_matches_renameat2(tmp_path, monkeypatch):
     """The link+unlink fallback (renameat2 unavailable) has identical fail-closed semantics."""
     monkeypatch.setattr(runtime_fs, "_renameat2_noreplace", lambda *a, **k: False)

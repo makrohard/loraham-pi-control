@@ -36,6 +36,7 @@ __all__ = [
     "atomic_write_bytes",
     "chmod",
     "ensure_dir",
+    "link_leaf",
     "mkdir",
     "open_existing_marker",
     "open_lock",
@@ -833,6 +834,20 @@ def rename_leaf(paths: Paths, src: Path, dst: Path, *, replace: bool = True) -> 
             os.fsync(parent_fd)
         except OSError:
             pass
+
+
+def link_leaf(paths: Paths, src: Path, dst: Path) -> None:
+    """Hard-link a runtime leaf to a sibling name in the SAME contained directory
+    (descriptor-anchored, never through a symlink leaf). Keeps a second name for the same
+    inode, so it needs no new data blocks. Raises FileNotFoundError if the source is absent and
+    FileExistsError if the destination exists."""
+    if src.parent != dst.parent:
+        raise ValueError("link_leaf requires src and dst in the same directory")
+    with _walk_parent(paths, src, create=False) as (parent_fd, src_name):
+        if _is_symlink_leaf(parent_fd, src_name):
+            raise PathContainmentError(f"refusing to link a symlink leaf: {src}")
+        os.link(src_name, dst.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd,
+                follow_symlinks=False)
 
 
 def chmod(paths: Paths, path: Path, mode: int, *, create_dir: bool = False) -> None:

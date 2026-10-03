@@ -37,6 +37,9 @@
   repository of your own: it refuses naming that folder (move it out of the checkout).
 - Retiring a binary install no longer deletes a file you put in place of an installed one when it cannot
   be hashed (a symlink, an unreadable or very large file): it refuses as for any changed file.
+- `tls-renew` on a full disk no longer leaves a new server key beside the old certificate (nginx would
+  refuse the pair at its next restart): both are written before either goes live, and the failure is
+  reported instead of raised.
 
 ## 0.11.10
 

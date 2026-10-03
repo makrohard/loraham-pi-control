@@ -506,9 +506,55 @@ def issue_server_cert(paths: Paths, *, dns_sans=(), ip_sans=(), days: int,
                                     not_before + SERVER_LEAF_MAX_SPAN))
     cert = _sign_leaf(ca_key, ca_cert, key, "lhpc-web", days,
                       eku=ExtendedKeyUsageOID.SERVER_AUTH, san=san, validity=validity)
-    if not keep_key:
-        _write_key(paths, key_p, key)
-    _write_cert(paths, _p(paths, _SERVER, "server.crt"), cert)
+    crt_p = _p(paths, _SERVER, "server.crt")
+    try:
+        if keep_key:
+            _write_cert(paths, crt_p, cert)
+        else:
+            # A fresh key and its certificate must go live TOGETHER (nginx refuses a mismatched
+            # pair): both are STAGED first — the writes that can fail on a full disk — then
+            # published by two same-directory renames, which need no new data blocks. The live
+            # pair is first hard-linked to `.prev` names (no new data blocks either), so a failed
+            # certificate rename can put the old KEY back; the old certificate never moved.
+            staged = (key_p.with_name("server.key.new"), crt_p.with_name("server.crt.new"))
+            prev = (key_p.with_name("server.key.prev"), crt_p.with_name("server.crt.prev"))
+            keep_prev = False                   # True only while `.prev` holds the sole old key
+            try:
+                _write_key(paths, staged[0], key)
+                _write_cert(paths, staged[1], cert)
+                had_old = []
+                for live, kept in zip((key_p, crt_p), prev, strict=True):
+                    runtime_fs.unlink(paths, kept)          # a stale leaf from a crashed run
+                    try:
+                        runtime_fs.link_leaf(paths, live, kept)
+                        had_old.append(True)
+                    except FileNotFoundError:   # the first issue: no old pair to keep
+                        had_old.append(False)
+                runtime_fs.rename_leaf(paths, staged[0], key_p)
+                try:
+                    runtime_fs.rename_leaf(paths, staged[1], crt_p)
+                except BaseException as exc:    # an interrupt too: never leave the mismatch
+                    keep_prev = had_old[0]
+                    try:
+                        if had_old[0]:
+                            runtime_fs.rename_leaf(paths, prev[0], key_p)
+                        else:
+                            runtime_fs.unlink(paths, key_p)
+                    except (OSError, PathContainmentError) as undo:
+                        note = f"; it is kept as {prev[0].name}" if had_old[0] else ""
+                        raise PKIError(f"server certificate could not be published ({exc}) and "
+                                       f"the old key could not be restored ({undo}){note}") \
+                            from exc
+                    keep_prev = False
+                    raise
+            finally:
+                for leaf in staged + (() if keep_prev else prev):
+                    try:
+                        runtime_fs.unlink(paths, leaf)
+                    except (OSError, PathContainmentError):
+                        pass
+    except (OSError, PathContainmentError) as exc:
+        raise PKIError(f"server key/certificate could not be written: {exc}") from exc
     return _summary(cert, "server")
 
 

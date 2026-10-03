@@ -340,6 +340,91 @@ def test_a_symlinked_tls_dir_reads_as_unreadable(tmp_path, sub):
             pki.build_crl(paths)
 
 
+def _pair_matches(tmp_path) -> bool:
+    from cryptography.hazmat.primitives import serialization
+    d = tmp_path / "config" / "tls" / "server"
+    key = serialization.load_pem_private_key((d / "server.key").read_bytes(), password=None)
+    crt = x509.load_pem_x509_certificate((d / "server.crt").read_bytes())
+    return key.public_key().public_numbers() == crt.public_key().public_numbers()
+
+
+def test_a_failed_certificate_write_keeps_the_old_pair(tmp_path, monkeypatch):
+    """A renewal with a fresh key writes two files. If the certificate cannot be written (disk
+    full), the box must keep a MATCHING key and certificate — nginx refuses a mismatched pair at
+    the next restart — and the failure is a typed PKIError the service reports, not an OSError."""
+    import errno
+
+    from lhpc.core import runtime_fs
+    paths = _paths(tmp_path)
+    _init_both(paths)
+    pki.issue_server_cert(paths, dns_sans=["pi.local"], ip_sans=[], days=90)
+    real = runtime_fs.atomic_write
+
+    def full_on_cert(p, path, text, mode=0o644):
+        if path.name.startswith("server.crt"):
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(p, path, text, mode)
+    monkeypatch.setattr(runtime_fs, "atomic_write", full_on_cert)
+    with pytest.raises(pki.PKIError):
+        pki.issue_server_cert(paths, dns_sans=["pi.local"], ip_sans=[], days=90)
+    monkeypatch.undo()
+    assert _pair_matches(tmp_path)
+    assert sorted(p.name for p in (tmp_path / "config" / "tls" / "server").iterdir()) == \
+        ["server.crt", "server.key"]                         # no staged leftovers
+    pki.issue_server_cert(paths, dns_sans=["pi.local"], ip_sans=[], days=90)   # next renewal works
+    assert _pair_matches(tmp_path)
+
+
+
+def test_a_failed_certificate_publish_restores_the_old_key(tmp_path, monkeypatch):
+    """Both files are staged; then the key is published and the certificate rename fails (EIO).
+    The old KEY must come back so the published pair still matches, the failure is a PKIError
+    naming it, and neither the staged nor the kept-back leaves are left behind."""
+    import errno
+
+    from lhpc.core import runtime_fs
+    paths = _paths(tmp_path)
+    _init_both(paths)
+    pki.issue_server_cert(paths, dns_sans=["pi.local"], ip_sans=[], days=90)
+    d = tmp_path / "config" / "tls" / "server"
+    old = {n: (d / n).read_bytes() for n in ("server.key", "server.crt")}
+    real = runtime_fs.rename_leaf
+
+    def eio_on_cert(p, src, dst, **kw):
+        if dst.name == "server.crt":
+            raise OSError(errno.EIO, "Input/output error")
+        return real(p, src, dst, **kw)
+    monkeypatch.setattr(runtime_fs, "rename_leaf", eio_on_cert)
+    with pytest.raises(pki.PKIError, match="Input/output error"):
+        pki.issue_server_cert(paths, dns_sans=["pi.local"], ip_sans=[], days=90)
+    monkeypatch.undo()
+    assert _pair_matches(tmp_path)
+    assert {n: (d / n).read_bytes() for n in old} == old    # the OLD pair, not a new one
+    assert sorted(p.name for p in d.iterdir()) == ["server.crt", "server.key"]
+    pki.issue_server_cert(paths, dns_sans=["pi.local"], ip_sans=[], days=90)   # next renewal works
+    assert _pair_matches(tmp_path)
+    assert sorted(p.name for p in d.iterdir()) == ["server.crt", "server.key"]
+
+
+def test_a_failed_first_certificate_publish_leaves_no_half_pair(tmp_path, monkeypatch):
+    """The FIRST issue has no old pair to keep: a failed certificate rename removes the new key
+    again rather than leaving a key without a certificate."""
+    import errno
+
+    from lhpc.core import runtime_fs
+    paths = _paths(tmp_path)
+    _init_both(paths)
+    real = runtime_fs.rename_leaf
+
+    def eio_on_cert(p, src, dst, **kw):
+        if dst.name == "server.crt":
+            raise OSError(errno.EIO, "Input/output error")
+        return real(p, src, dst, **kw)
+    monkeypatch.setattr(runtime_fs, "rename_leaf", eio_on_cert)
+    with pytest.raises(pki.PKIError, match="Input/output error"):
+        pki.issue_server_cert(paths, dns_sans=["pi.local"], ip_sans=[], days=90)
+    assert list((tmp_path / "config" / "tls" / "server").iterdir()) == []
+
 # --- the server chain check ---------------------------------------------------
 
 @pytest.mark.parametrize("exc", [ValueError("issuer"), TypeError("key type"), "invalid-signature"])
