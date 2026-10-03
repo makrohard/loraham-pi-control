@@ -1478,6 +1478,33 @@ def test_post_clone_failure_names_the_step_and_reason_in_the_log(tmp_path, insta
     assert "fatal: interrupted" in body
 
 
+@pytest.mark.parametrize("checkout_rc", [0, 124])
+def test_adoption_log_times_every_git_step(tmp_path, installer, checkout_rc):
+    """`[git] <what> <n> s` after the clone and after every later step, failed or not: the
+    slow-target budget reads clone and checkout times from these lines."""
+    import re
+
+    class _Runner:
+        def run(self, argv, timeout=None, cwd=None, env=None):
+            if "checkout" in argv:
+                return CommandResult(checkout_rc, "", "", timed_out=bool(checkout_rc))
+            return CommandResult(0, "a" * 40 + "\n", "")
+    log = tmp_path / "adopt.log"
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    fake = FakeSystem()
+    inst = installer(system=System(runner=_Runner(), procfs=fake, fs=fake, unix=fake))
+    with log.open("w") as fh:
+        ok = inst._clone(SourceSpec(path="src/x", remote="https://github.com/x/y.git"),
+                         dest, "pinned", remote="https://github.com/x/y.git",
+                         expected_pin="a" * 40, log_fh=fh)
+    assert ok is (checkout_rc == 0)
+    body = log.read_text()
+    assert re.search(r"^\[git\] clone \d+\.\d s$", body, re.M), body
+    assert re.search(r"^\[git\] checkout aaaaaaaaaaaa \d+\.\d s$", body, re.M), body
+    assert bool(re.search(r"^\[git\] rev-parse \d+\.\d s$", body, re.M)) is ok, body
+
+
 def test_run_action_rejects_invalid_source(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     r = svc.run_action("install", "daemon", source="evil")

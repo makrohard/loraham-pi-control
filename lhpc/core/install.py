@@ -2041,12 +2041,25 @@ class Installer:
         run = self.system.runner.run
         run_streaming = getattr(self.system.runner, "run_streaming", None)
 
+        def took(what: str, t0: float) -> None:
+            # `[git] <what> <n> s` on every return: the slow-target budget reads clone and
+            # checkout times from this line (docs/test-matrix.md#slow-target-baseline).
+            if log_fh is None:
+                return
+            try:
+                log_fh.write(f"\n[git] {what} {time.monotonic() - t0:.1f} s\n")
+                log_fh.flush()
+            except (OSError, ValueError):
+                pass
+
         def step(argv, timeout, what: str):
             """A post-clone git step (checkout/rev-parse/describe). Records WHY it failed in the
             adoption log: the caller can only report "clone failed", which reads as a network
             fault even when the clone finished and a LATER step timed out (a switch
             failed after 'Resolving deltas: 100%')."""
+            t0 = time.monotonic()
             res = run(argv, timeout)
+            took(what, t0)
             if res.returncode != 0 and log_fh is not None:
                 why = (f"timed out after {timeout:.0f}s" if getattr(res, "timed_out", False)
                        else f"exit {res.returncode}")
@@ -2063,10 +2076,12 @@ class Installer:
             # it: git is silent off-TTY, so a multi-minute clone over slow Wi-Fi otherwise looks
             # hung with its output buffered invisibly until completion. checkout/rev-parse/
             # describe stay on the buffered run() — their stdout is parsed.
+            t0 = time.monotonic()
             if log_fh is not None and run_streaming is not None:
                 res = run_streaming([*argv[:2], "--progress", *argv[2:]], timeout, log_fh)
             else:
                 res = run(argv, timeout)
+            took("clone", t0)
             if res.returncode != 0 and log_fh is not None and getattr(res, "timed_out", False):
                 # git's own output is already in the log; a KILLED clone would otherwise just
                 # stop mid-progress with no reason given.
