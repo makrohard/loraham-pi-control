@@ -79,8 +79,9 @@ Every component executes [**shell-free**](architecture.md#safety-model):
 ### Build
 
 `lhpc build` runs `build_steps` in the checkout. `bin` is the file that decides "is it built";
-a long build sets `build_timeout`; `build_marker` names a file written only by a completed
-build.
+a build step is stopped when it stalls (10 minutes with no CPU, output or disk/network activity) or
+at a 24-hour runaway guard; `build_timeout` raises that guard for a build that needs longer;
+`build_marker` names a file written only by a completed build.
 
 ```toml
   build_steps = [

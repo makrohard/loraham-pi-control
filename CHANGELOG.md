@@ -1,71 +1,144 @@
 # Changelog
 
-## Unreleased
+## 0.11.11
 
-- Settings "Reset to defaults" on a running stack now shows RESTART REQUIRED, like a save; a reset of one band is refused whole when the stack's band-less file is broken or GPS is in use (it cleared the band's settings and still said "not modified").
-- A Settings save no longer undoes a hardware, GPS, callsign or remote change made after a crash left an
-  unfinished config save behind: the next `lhpc` command (or the console's start) finishes it first.
-- A start whose main program dies during a required post-start step (e.g. MeshCom's callsign push) is reported
-  failed instead of verified; the step had been skipped and the runner still exited 0.
-- Meshtastic: a Reset or Busy pin set for an exotic board reaches the generated `meshtasticd.yaml`; the shipped
-  template has no such line under `Lora:`, and the value was dropped while the save reported success.
-- Reticulum: a value with a `"` or `\` (an IFAC passphrase, say) reaches `reticulum.conf` unchanged; it was escaped,
-  and Reticulum read the escapes as part of the value (a different passphrase than the one set).
-- The copy-paste command of an interactive program (MeshCore CLI, Meshtastic CLI, chat, Voice CLI, NomadNet)
-  carries the saved Settings and the band it runs on; it showed the defaults.
+Upgrade note — boxes with the firewall installed: this release changes the firewall helper again, so the dashboard
+reads *Update required* after the update; run `sudo bash <runtime root>/config/files/firewall/firewall-apply.sh`
+(and `lhpc webserver apply` if remote access is configured) before a reboot. From this release on, the console,
+`lhpc doctor` and `lhpc firewall` say so themselves before the reboot.
+
+Fixes from the full code review of 0.11.10, each with a regression test. The ones an operator could meet:
+
+Updates and builds
+
+- A build on a slow Pi is no longer killed after 15 or 30 minutes while it is still compiling: a step is stopped
+  only after 10 minutes with no CPU, output or disk/network activity (*stalled*), or by a 24-hour runaway guard,
+  and says which. A web *Build* follows the same rule as `lhpc build`; a web *Test* gets the component's test
+  limit, as `lhpc test` does. A timed-out web job says *timed out after Ns* instead of *step failed*.
+- The MeshCore CLI's dependencies are pinned by a constraints file, and it reads *built* only after a complete
+  build. After the update it reads *not built* until you build it once (`lhpc build meshcore-cli --yes`).
 - A build, host test or other command whose program leaves a detached background process holding its output no
   longer hangs until that process exits; the run returns and its log is marked unverified.
-- Hardware "Detect" is refused, naming the stack, while Meshtastic or Reticulum drives that band's radio; it
-  started a probe daemon on the chip they were using.
-- "Apply live" of a stack's daemon radio parameters, and its TX test, are refused (naming the stack) on a band
-  another running stack uses; before, e.g. MeshCom's profile could retune the band KISS was running on.
+- An update no longer fails with a puzzling "local file could not be read" when a checkout holds a Git repository
+  of your own: it refuses naming that folder (move it out of the checkout).
+- `lhpc update <component>` without `--source` picks the same channel as the console (binary while its stack is
+  installed from the binary).
+- Web jobs: a build, test, install, start or restart that fails between recording and launching its job is marked
+  failed instead of staying "starting"; when even that cannot be written it shows as unsafe until Recover.
+- Binary install: any unexpected error during the install is rolled back like an ordinary failure (the previous
+  install and mesh password come back), with the error kept in the log.
+- Retiring a binary install no longer deletes a file you put in place of an installed one when it cannot be hashed
+  (a symlink, an unreadable or very large file): it refuses as for any changed file.
+- Uninstall: a stopped HMAC apply whose build is proven gone no longer blocks uninstall; when it does block, the
+  message names `lhpc hmac recover <stack>`.
+
+Self-update, recovery and boot restore
+
+- The one-click update now really checks the systemd units against the new version; it reported them refreshed
+  without checking, so a release that changed a unit could have stopped boot restore unnoticed.
+- An override of LHPC's units wherever an operator or admin can place one (`systemctl --user set-property`,
+  `service.d/`, `lhpc-.service.d/`, `~/.config/systemd/user.control`, `/etc/systemd/user`, `/run`) now marks them
+  *overridden*, so one-click update and boot restore stay off until it is removed; a drop-in the distribution
+  ships for every service (under `/usr/lib` or `/usr/share`) does not count.
+- `signature-verified` now means the signature covers the pinned commit: a `pin_tag` counts only when it points at
+  the pin; otherwise (another commit, or a `git describe` string) the pin commit's own signature is checked.
+- A source update interrupted by a crash or power loss right after one of its renames is finished by recovery
+  instead of blocking every source change on the box, and it no longer leaves its staged copy on the SD card.
+- An update interrupted after the old source was archived, and completed by the next source operation, no longer
+  leaves the archived copy behind; before, every later update of that source failed with "activation failed —
+  active source untouched" until the `.prev` folder was removed by hand.
+- Update journals, reservations and request files appear only once fully written, so a check running at that
+  moment can no longer mistake a half-written one for a broken one.
+- Boot restore starts nothing when the folder of operator stop notes cannot be read, instead of ignoring every
+  stop note; the evidence is kept for the next boot.
+
+Firewall, web console and certificates
+
+- An update that changes the firewall helper now says so before the reboot: a dashboard notice, `lhpc doctor` and
+  `lhpc firewall` (and, for updates made from this version on, the update result) ask you to re-apply the firewall
+  and `lhpc webserver apply` before you reboot; a boot that kept the console loopback-only for this reason names
+  it and the commands.
+- After an `sshd` `ListenAddress` change, SSH stays reachable on every address sshd still listens on until sshd is
+  restarted (secure-default dropped new sessions on the other addresses).
+- A KISS TNC or MeshCom bridge bound to `::` is now blocked for IPv4 too when it is not ticked for direct access
+  (compatibility mode left its IPv4 side open).
+- When saving the firewall settings fails, the firewall apply script is put back to the saved settings, so the
+  command the console shows can no longer apply the selection that was not saved.
+- Firewall: a failed first install whose table state cannot be read no longer reports "previous ruleset restored".
 - A damaged client-certificate list is no longer replaced by an empty one: the CRL refresh renews the existing
-  revocations unchanged, the console and `lhpc doctor` say the list needs repair, and issuing and revoking
-  refuse and name the file, so every issued certificate stays revocable.
+  revocations unchanged, the console and `lhpc doctor` say the list needs repair, and issuing and revoking refuse
+  and name the file, so every issued certificate stays revocable.
 - `lhpc webserver reset-defaults` restarts nginx when a reload cannot move an exposed console back to loopback (the
   console and the stack proxies stayed reachable); from the console it tells you to run Apply.
 - A symlinked or non-folder `config/tls/server` (or `client-ca`) reads as an unreadable certificate (way out:
   `lhpc webserver tls-renew`) instead of an error in Monitor, verify, expose and Apply.
-- The one-click update now really checks the systemd units against the new version; it reported them refreshed
-  without checking, so a release that changed a unit could have stopped boot restore unnoticed.
-- `signature-verified` now means the signature covers the pinned commit: a `pin_tag` counts only when it points at
-  the pin; otherwise (another commit, or a `git describe` string) the pin commit's own signature is checked.
-- An override anywhere systemd reads one (`systemctl --user set-property`, `service.d/`, `lhpc-.service.d/`,
-  `~/.config/systemd/user.control`, `/run`) now marks the managed units overridden, so one-click update and boot
-  restore stay off until it is removed.
-- An update no longer fails with a puzzling "local file could not be read" when a checkout holds a Git
-  repository of your own: it refuses naming that folder (move it out of the checkout).
-- Retiring a binary install no longer deletes a file you put in place of an installed one when it cannot
-  be hashed (a symlink, an unreadable or very large file): it refuses as for any changed file.
-- `tls-renew` on a full disk no longer leaves a new server key beside the old certificate (nginx would
-  refuse the pair at its next restart): both are written before either goes live, and the failure is
-  reported instead of raised.
-- Boot restore starts nothing when the folder of operator stop notes cannot be read, instead of
-  ignoring every stop note; the evidence is kept for the next boot.
-- A Wi-Fi join that the helper refuses before activating (another network action running at that moment,
-  a stale request) no longer leaves the Wi-Fi password file on disk; an abandoned join's password file is
-  removed when its pending record expires.
-- A Wi-Fi join to a new network that fails before it starts no longer leaves a stray stored network on
-  the Network panel; "Back to AP" no longer says "nothing was changed" when it had already cleared the
-  preferred network.
-- When saving the firewall settings fails, the firewall apply script is put back to the saved settings, so
-  the command the console shows can no longer apply the selection that was not saved.
-- A node name that happens to read like an internal template word (e.g. `__ROOT__`) reaches the node
-  unchanged instead of breaking the post-start step.
-- Two simultaneous console saves can no longer combine plain http with client-certificate access (which
-  the next read silently turned into no authentication): the check reads the settings under the lock.
-- The dashboard's daemon readiness no longer reads a garbled or oversized daemon status reply as "ready":
-  it uses the same strict reader as the daemon settings.
-- `bootstrap-deps.sh` no longer glues the SPI line onto the last line of a `config.txt` that does not end in
-  a newline (which disabled SPI and broke your last setting).
+- `tls-renew` on a full disk no longer leaves a new server key beside the old certificate (nginx would refuse the
+  pair at its next restart): both are staged before either goes live, the old key comes back if the new
+  certificate cannot be put in place, and the failure is reported instead of raised.
+- Two simultaneous console saves can no longer combine plain http with client-certificate access (which the next
+  read silently turned into no authentication): the check reads the settings under the lock.
+- Every action that changes the box (Graywolf upstream update, binary install/retire, config and parameter saves,
+  GPS, high power, RF-log switches, boot restore and the rest) refreshes the status view immediately.
+- RF log: a malformed line (non-numeric or huge values, deep nesting) is shown as a raw line and never breaks the
+  view.
+- A Wi-Fi join that the helper refuses before activating (another network action running at that moment, a stale
+  request) no longer leaves the Wi-Fi password file on disk; an abandoned join's password file is removed when its
+  pending record expires.
+- A Wi-Fi join to a new network that fails before it starts no longer leaves a stray stored network on the Network
+  panel; "Back to AP" no longer says "nothing was changed" when it had already cleared the preferred network.
+
+Settings and config
+
+- Settings *Reset to defaults* on a running stack now shows *Restart required*, as a save does. Resetting one band
+  is now refused as a whole when the stack's shared settings file is broken or GPS is in use; before, it cleared
+  that band's settings and still said *not modified*.
+- A Settings save no longer undoes a hardware, GPS, callsign or remote change made after a crash left an unfinished
+  config save behind: the next `lhpc` command (or the console's start) finishes it first.
+- A corrupt state file (nested too deeply, or not UTF-8 text) is reported as unreadable instead of a traceback or a
+  500 page; a non-UTF-8 secret file refuses the launch or build with a clear message.
+- Meshtastic: a Reset or Busy pin set for an exotic board reaches the generated `meshtasticd.yaml`; the shipped
+  template has no such line under `Lora:`, and the value was dropped while the save reported success.
+- Reticulum: a value with a `"` or `\` (an IFAC passphrase, say) reaches `reticulum.conf` unchanged; it was
+  escaped, and Reticulum read the escapes as part of the value (a different passphrase than the one set).
+- The copy-paste command of an interactive program (MeshCore CLI, Meshtastic CLI, chat, Voice CLI, NomadNet)
+  carries the saved Settings and the band it runs on; it showed the defaults.
+- A node name that happens to read like an internal template word (e.g. `__ROOT__`) reaches the node unchanged
+  instead of breaking the post-start step.
+- `bootstrap-deps.sh` no longer glues the SPI line onto the last line of a `config.txt` that does not end in a
+  newline (which disabled SPI and broke your last setting).
 - `sudo bash bootstrap-deps.sh` on a box installed with `install.sh --target <elsewhere>` finds that install's
   `[gps] source = nmea` and leaves gpsd off the receiver, as on a default install.
-- Update journals, reservations and request files appear only once fully written, so a check running at
-  that moment can no longer mistake a half-written one for a broken one.
-- An update that changes the firewall helper now says so before the reboot: a dashboard notice, `lhpc doctor`
-  and `lhpc firewall` (and, for updates made from this version on, the update result) ask you to re-apply the
-  firewall and `lhpc webserver apply` before you reboot; a boot that kept the console loopback-only for this
-  reason names it and the commands.
+
+Starts, radios and bands
+
+- A restart that the firewall gate, an ambiguous saved value, a running conflicting stack, the GPS check or the
+  radio mode would refuse is now refused before anything is stopped and says the running stack was left up; it
+  previously left the stack down. The start and restart dry runs and the web Start/Restart plans show these
+  refusals, and an unusable MeshCore position, instead of an ok plan.
+- A start whose main program dies during a required post-start step (e.g. MeshCom's callsign push) is reported
+  failed instead of verified; the step had been skipped and the runner still exited 0.
+- A daemon setting the daemon refuses (`ERR …`) is now shown as failed, with the daemon's reason, in the console,
+  `lhpc daemon --set`, Apply and the start log. Radio parameters were reported "sent" even when the daemon
+  rejected them.
+- "Apply live" of a stack's daemon radio parameters, and its TX test, are refused (naming the stack) on a band
+  another running stack uses; before, e.g. MeshCom's profile could retune the band KISS was running on.
+- Hardware "Detect" is refused, naming the stack, while Meshtastic or Reticulum drives that band's radio; it
+  started a probe daemon on the chip they were using.
+- Stopping the daemon on one band no longer refuses as busy while a stack that only runs on the other band is
+  starting.
+- Stopping one daemon band clears "restart required" and the known-working offer only when no daemon process is
+  left running.
+- The dashboard's daemon readiness no longer reads a garbled or oversized daemon status reply as "ready": it uses
+  the same strict reader as the daemon settings.
+- The dashboard no longer offers a band-switchable stack (Graywolf, KISS, Reticulum, …) in the "Start a stack" list
+  of its other band while it runs; that start was always refused.
+
+Test lab and demo
+
+- Test lab: `check` also requires the fake APRS-IS sink and never mistakes a reused process id for a fake; the
+  lab's nginx control never signals an unrelated process.
+- Demo: Meshtastic and MeshCore need a node name, and taking a band from a running stack asks first, as on a real
+  box.
 
 ## 0.11.10
 
