@@ -205,3 +205,185 @@ jobs:
           path: releaseevidence/**
           if-no-files-found: warn
           retention-days: 14
+
+  slow-build:
+    # Row C of the slow-target build proof (docs/maintenance.md, plans/PLAN-F43.md): every
+    # operation on the update path, run and timed under the PRODUCTION limits inside a container
+    # throttled to a Pi Zero 2 W, then judged against tests/data/slow-target-builds.toml.
+    # The same triggers as release-verify, so every release candidate, bot ones included.
+    # test_slow_build_calibrated turns this job red while the container is faster than the Zero
+    # on ANY part (cpu, io, mem) of the fixed calibration workload: then tighten that part's
+    # throttle below; a throttle only ever gets tighter.
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.release_verify }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 330
+    env:
+      # The throttle. Measured: the Zero's calibration (row A, 2026-10-03) is cpu 99.7 s,
+      # io 489.8 s, mem 110.1 s; this container at --cpus 0.5, --memory 416m and no disk
+      # throttle took cpu 57.8, io 31.4, mem 12.2 (testlab run 37148794385): faster on all three.
+      # CPU — the cpu part is CPU-time bound and scales with the quota: 0.5 x 57.8 / 99.7 =
+      # 0.29 CPUs matches the Zero; 0.25 leaves ~15 %.
+      SLOW_CPUS: "0.25"
+      # Memory — what a Zero 2 W leaves free; the rest of the 700 MB mem part swaps (the Zero
+      # swaps into zram). --memory-swap is memory + 768 MiB swap.
+      SLOW_MEM: "416m"
+      SLOW_SWAP: "1184m"
+      # Disk — on every disk behind Docker's storage and swap. The io part is 65536 fsync'd
+      # 4 KiB files: 489.8 s on the Zero's SD card, ~134 synced files/s. On a journaled ext4
+      # each synced file costs ~1.2 writes charged to the container (measured), so 120 write
+      # IOPS gives ~100 files/s, ~650 s. Reads also pace the mem part, whose swap-ins hit
+      # the disk (the Zero swaps into zram instead): measured 608 s at 300 read IOPS, 186 s at
+      # 1000, 97 s at 2000; 1200 keeps it above the Zero's 110 s. These are local measurements
+      # (x86, cgroup v1, Correction 7 of code-review/code-report-F43.md); the calibration case
+      # of every run is the proof on the runner.
+      SLOW_WRITE_IOPS: "120"
+      SLOW_READ_IOPS: "1200"
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history and tags: the self-update case updates from the PREVIOUS release tag.
+          fetch-depth: 0
+
+      - name: Build the lab image from THIS commit's Dockerfile
+        run: |
+          IMG=lhpc-testlab:ci
+          docker build -t "$IMG" -f .devcontainer/Dockerfile .devcontainer
+          echo "IMG=$IMG" >> "$GITHUB_ENV"
+
+      # io.max takes whole disks. REQUIRED: the disk behind the container's writable layer
+      # (Docker's storage, or containerd's with its image store), where the calibration work dir
+      # under the lab user's home lives, and the disk behind Docker's storage, which holds the
+      # /tmp volume. Each resolves, or the job STOPS here, before any measurement. An active swap
+      # area's disk is throttled too, or skipped with a notice. The lane re-checks io.max for the
+      # writable layer's disk (SLOW_IO_ROOT_DISK) and the work dir's, and records nothing unless
+      # each is throttled.
+      - name: Resolve the disks to throttle
+        run: |
+          # The whole disk behind a path or block device, as /dev/NAME; non-zero, naming the
+          # path, when it cannot be resolved.
+          disk_of() {
+            local mm d
+            if [ -b "$1" ]; then mm=$(lsblk -dno MAJ:MIN "$1" 2>/dev/null | tr -d ' ')
+            else mm=$(findmnt -n -o MAJ:MIN --target "$1" 2>/dev/null | head -1 | tr -d ' '); fi
+            if [ -z "$mm" ] || [ ! -e "/sys/dev/block/$mm" ]; then
+              echo "disk_of: backing device of $1 could not be resolved (MAJ:MIN ${mm:-none})" >&2
+              return 1
+            fi
+            d=$(readlink -f "/sys/dev/block/$mm")
+            [ -e "$d/partition" ] && d=$(dirname "$d")
+            echo "/dev/$(basename "$d")"
+          }
+          cat /proc/swaps
+          lsblk
+          storage=$(docker info -f '{{.DockerRootDir}}')
+          layer=$storage
+          if [ "$(docker info -f '{{.Driver}}')" = overlayfs ]; then layer=/var/lib/containerd; fi
+          disks=
+          for path in "$layer" "$storage"; do
+            d=$(disk_of "$path") && test -b "$d" || {
+              echo "::error::STOP: backing device of $path could not be resolved — the throttle cannot be applied"
+              exit 1
+            }
+            [ "$path" = "$layer" ] && root=$d
+            disks="$disks $d"
+          done
+          while read -r swap _; do
+            if d=$(disk_of "$swap") && test -b "$d"; then disks="$disks $d"
+            else echo "::notice::swap $swap: its disk could not be resolved — not throttled"; fi
+          done < <(tail -n +2 /proc/swaps)
+          disks=$(printf '%s\n' $disks | sort -u | xargs)
+          flags=
+          for d in $disks; do
+            flags="$flags --device-write-iops $d:$SLOW_WRITE_IOPS --device-read-iops $d:$SLOW_READ_IOPS"
+          done
+          echo "throttled disks: $disks (writable layer: $root)"
+          echo "SLOW_IO_FLAGS=$flags" >> "$GITHUB_ENV"
+          echo "SLOW_IO_ROOT_DISK=$(lsblk -dno MAJ:MIN "$root" | tr -d ' ')" >> "$GITHUB_ENV"
+
+      # A heredoc lane script, as in release-verify. The container gets the throttle; the lane
+      # itself checks that cpu.max, memory.max and io.max are in force and fails if they are not.
+      - name: Slow-target build
+        run: |
+          mkdir -p slowevidence
+          cat > lane.sh <<'LANE'
+          set -e
+          cd /tmp/repo
+          export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build
+          python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
+          . /tmp/repo/.github/scripts/retry.sh
+          retry 3 pip install -q -e .
+          retry 3 pip install -q -e ./testlab
+          retry 3 pip install -q pytest
+          # No -x: the budget case needs every measurement the run could make.
+          LHPC_SLOW_BUILD=1 LHPC_SLOW_BUILD_OUT=/out \
+            python -m pytest testlab/tests/slowbuild -q -rs \
+              --junitxml=/out/junit-slow-build.xml
+          LANE
+          # shellcheck disable=SC2086  # SLOW_IO_FLAGS is a word list by design
+          docker run --rm --user root \
+            --cpus="$SLOW_CPUS" --memory="$SLOW_MEM" --memory-swap="$SLOW_SWAP" $SLOW_IO_FLAGS \
+            -e SLOW_CPUS -e SLOW_MEM -e SLOW_WRITE_IOPS -e SLOW_READ_IOPS -e SLOW_IO_ROOT_DISK \
+            -e LHPC_SLOW_BUILD_RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -v "$PWD":/repo:ro -v lhpc_slow_tmp:/tmp -v "$PWD/slowevidence":/out \
+            "$IMG" bash -lc '
+              set -e
+              cp -r /repo /tmp/repo && chown -R lhpclab /tmp/repo && chmod a+w /out
+              install -m 0755 /repo/lane.sh /tmp/lane.sh
+              su lhpclab -c "SLOW_CPUS=$SLOW_CPUS SLOW_MEM=$SLOW_MEM SLOW_WRITE_IOPS=$SLOW_WRITE_IOPS SLOW_READ_IOPS=$SLOW_READ_IOPS SLOW_IO_ROOT_DISK=$SLOW_IO_ROOT_DISK LHPC_SLOW_BUILD_RUN_URL=$LHPC_SLOW_BUILD_RUN_URL /tmp/lane.sh"
+            '
+          test -s slowevidence/junit-slow-build.xml \
+            || { echo "::error::the lane produced no JUnit — it did not run"; exit 1; }
+          # A skip is not a pass: env, every stack and the self-update case must have run and
+          # passed. Calibrated and budget too, except in the bootstrap state (the baseline holds
+          # no measured entry yet), where each may skip with its named bootstrap reason only.
+          python3 - slowevidence/junit-slow-build.xml tests/data/slow-target-builds.toml <<'PY'
+          import sys
+          import tomllib
+          import xml.etree.ElementTree as ET
+          cases = {c.get("name"): c for c in ET.parse(sys.argv[1]).iter("testcase")}
+          with open(sys.argv[2], "rb") as f:
+              boot = not tomllib.load(f).get("measured")
+          def state(name):
+              if name not in cases:
+                  return "missing", ""
+              for tag in ("failure", "error", "skipped"):
+                  el = cases[name].find(tag)
+                  if el is not None:
+                      return tag, el.get("message") or ""
+              return "passed", ""
+          rowc = sorted(n for n in cases if n.startswith("test_slow_build_stack["))
+          need = ["test_slow_build_env", *rowc, "test_slow_build_selfupdate",
+                  "test_slow_build_calibrated", "test_slow_build_budget"]
+          bad = [] if rowc else ["test_slow_build_stack[*] (missing)"]
+          for n in need:
+              st, msg = state(n)
+              if st == "passed" or (boot and st == "skipped" and "bootstrap: no row A yet" in msg
+                                    and n in ("test_slow_build_calibrated",
+                                              "test_slow_build_budget")):
+                  continue
+              bad.append(f"{n} ({st})")
+          if bad:
+              print("::error::not passed (missing, skipped or failed): " + ", ".join(bad))
+              sys.exit(1)
+          if boot:
+              print("::warning::bootstrap: no row A yet — the Zero baseline is unmeasured; "
+                    "row C judged this run only")
+          PY
+
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f slowevidence/slow-build-summary.md ]; then
+            cat slowevidence/slow-build-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the slow-build evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: slow-build-evidence
+          path: slowevidence/**
+          if-no-files-found: warn
+          retention-days: 90
