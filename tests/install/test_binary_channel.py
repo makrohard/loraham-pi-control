@@ -5,8 +5,10 @@ availability, a valid receipt decides "is it on binary now", and SOURCE_CHOICES 
 so the git planners can never see "binary"."""
 
 
+import errno
 import pytest
 import json
+import os
 from lhpc.core import binary_receipt as brx, runtime_fs, source_registry
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -289,6 +291,52 @@ def test_retire_still_refuses_a_modified_file(tmp_path, monkeypatch, binary_rece
     svc.invalidate_snapshot()
     res = svc.binary_retire("daemon")
     assert not res.ok and "changed since installation" in res.summary
+
+
+@pytest.mark.parametrize("unhashable", ["symlink", "over-bound"])
+def test_retire_refuses_a_file_it_cannot_hash(tmp_path, monkeypatch, binary_receipt, unhashable):
+    """A receipt file the hash cannot read (a symlink in its place, a file over the hash bound,
+    equally a mode-000 file) is NOT "gone": it is operator content in that place, so retire
+    refuses as for a modified file and leaves it there."""
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    rec = binary_receipt(svc)
+    assert brx.write_receipt(svc._paths, rec)
+    victim = tmp_path / rec.files[0]
+    victim.unlink()
+    if unhashable == "symlink":
+        (tmp_path / "elsewhere").write_bytes(b"operator data")
+        victim.symlink_to(tmp_path / "elsewhere")
+    else:
+        # The 512 MiB bound itself is the seam: a file that size is no fixture.
+        monkeypatch.setattr(brx, "_MAX_HASH_BYTES", 4)
+        victim.write_bytes(b"operator data")
+    svc.invalidate_snapshot()
+    res = svc.binary_retire("daemon")
+    assert not res.ok and "changed since installation" in res.summary
+    assert os.path.lexists(victim)                               # left in place
+
+
+def test_retire_refuses_a_file_whose_lstat_fails(tmp_path, monkeypatch, binary_receipt):
+    """A receipt leaf whose `lstat` fails with anything but ENOENT/ENOTDIR (here EIO) is not
+    known to be gone: retire refuses and the leaf stays."""
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    rec = binary_receipt(svc)
+    assert brx.write_receipt(svc._paths, rec)
+    victim = tmp_path / rec.files[0]
+    victim.write_bytes(b"operator data")                        # hash mismatch, still there
+    real_lstat = os.lstat
+
+    def lstat(path, *a, **kw):
+        if os.fspath(path) == str(victim):
+            raise OSError(errno.EIO, "Input/output error", str(victim))
+        return real_lstat(path, *a, **kw)
+
+    monkeypatch.setattr(os, "lstat", lstat)
+    svc.invalidate_snapshot()
+    res = svc.binary_retire("daemon")
+    monkeypatch.setattr(os, "lstat", real_lstat)
+    assert not res.ok and "changed since installation" in res.summary
+    assert victim.read_bytes() == b"operator data"               # preserved
 
 
 def test_retire_removes_an_owned_directory(tmp_path, monkeypatch, binary_receipt):

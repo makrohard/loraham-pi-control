@@ -829,6 +829,19 @@ class BinaryOpsMixin:
         state, rec, why = self.binary_receipt_state(stack_id)
         return self._retire_body(stack_id, state, rec, why, force=force, locked=locked, txn="")
 
+    def _receipt_leaf_present(self, rel: str) -> bool:
+        """Anything at a receipt path, readable or not, counts as present; so does a path that
+        cannot even be resolved inside the runtime root (never "gone" on uncertainty). Only a
+        missing leaf or parent (ENOENT, ENOTDIR) is absent: `os.path.lexists` would also read
+        EIO or EACCES as absent."""
+        try:
+            os.lstat(self._paths.under(*rel.split("/")))
+        except (FileNotFoundError, NotADirectoryError):
+            return False
+        except (OSError, ValueError, PathContainmentError):
+            return True
+        return True
+
     def _retire_body(self, stack_id: str, state: str, rec, why: str, *, force: bool,
                      locked: bool, txn: str) -> ActionResult:
         """The retirement itself, once the receipt state is established (see `binary_retire`)."""
@@ -855,8 +868,9 @@ class BinaryOpsMixin:
             _ok, bad = brx.verify_files(self._paths, rec)
             # A file that is simply GONE is nothing to protect — removing the rest and the
             # receipt is the honest outcome. Only a MODIFIED file stops us: that is operator
-            # content we must not delete.
-            bad = [b for b in bad if b.get("actual")]
+            # content we must not delete. "Gone" means absent: an unhashable leaf (unreadable,
+            # over the hash bound, a symlink) also has no hash, and it is still there.
+            bad = [b for b in bad if self._receipt_leaf_present(b["path"])]
             if bad:
                 changed = ", ".join(b["path"] for b in bad[:3])
                 return ActionResult(

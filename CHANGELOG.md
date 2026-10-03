@@ -35,6 +35,8 @@
   restore stay off until it is removed.
 - An update no longer fails with a puzzling "local file could not be read" when a checkout holds a Git
   repository of your own: it refuses naming that folder (move it out of the checkout).
+- Retiring a binary install no longer deletes a file you put in place of an installed one when it cannot
+  be hashed (a symlink, an unreadable or very large file): it refuses as for any changed file.
 
 ## 0.11.10
 
