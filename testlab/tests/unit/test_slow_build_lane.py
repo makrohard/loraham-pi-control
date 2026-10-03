@@ -251,24 +251,140 @@ def test_the_lane_never_writes_the_real_home_units(tmp_path):
 
 # ---- the disk throttle is part of the throttled box (Correction 7, GAP 3) -------------------
 
+ROOT, WORK = "8:0", "259:0"
+REQUIRED = {"the container's writable layer": ROOT, "the calibration work dir": WORK}
+
+
 @pytest.mark.parametrize("io_max, ok", [
-    ("8:0 rbps=max wbps=max riops=300 wiops=120\n", True),
-    ("8:0 rbps=max wbps=max riops=200 wiops=100\n", True),        # tighter is fine
-    ("8:0 rbps=max wbps=max riops=max wiops=120\n", False),       # reads unthrottled
-    ("8:0 rbps=max wbps=max riops=300 wiops=500\n", False),       # looser than the job's
+    ("8:0 rbps=max wbps=max riops=300 wiops=120\n259:0 riops=300 wiops=120\n", True),
+    ("8:0 rbps=max wbps=max riops=200 wiops=100\n259:0 riops=1 wiops=1\n", True),  # tighter
+    ("8:0 rbps=max wbps=max riops=max wiops=120\n259:0 riops=300 wiops=120\n", False),  # reads
+    ("8:0 rbps=max wbps=max riops=300 wiops=500\n259:0 riops=300 wiops=120\n", False),  # loose
     ("", False),                                                  # no throttle at all
 ])
 def test_the_lane_proves_the_disk_throttle(tmp_path, monkeypatch, io_max, ok):
     monkeypatch.setenv("SLOW_WRITE_IOPS", "120")
     monkeypatch.setenv("SLOW_READ_IOPS", "300")
     (tmp_path / "io.max").write_text(io_max)
-    assert (lane._io_problems(tmp_path) == []) is ok
+    assert (lane._io_problems(tmp_path, REQUIRED) == []) is ok
+
+
+@pytest.mark.parametrize("io_max, bad", [
+    ("7:0 riops=300 wiops=120\n", [ROOT, WORK]),             # only an unrelated disk is tight
+    ("8:0 riops=300 wiops=120\n7:0 riops=1 wiops=1\n", [WORK]),    # one of the two required
+    ("8:0 riops=300 wiops=120\n259:0 riops=max wiops=max\n", [WORK]),
+])
+def test_each_required_disk_must_be_throttled(tmp_path, monkeypatch, io_max, bad):
+    """Correction 8, finding 1: one tight line anywhere is not the throttle — every required
+    disk needs its own, and the problem names the disk that has none."""
+    monkeypatch.setenv("SLOW_WRITE_IOPS", "120")
+    monkeypatch.setenv("SLOW_READ_IOPS", "300")
+    (tmp_path / "io.max").write_text(io_max)
+    problems = lane._io_problems(tmp_path, REQUIRED)
+    assert [mm for mm in (ROOT, WORK) if any(f"disk {mm}," in p for p in problems)] == bad
+    assert len(problems) == len(bad), problems
+    assert lane._io_problems(tmp_path, {})[0].startswith("no disk is required")
+
+
+def _fake_sys(tmp_path, monkeypatch, dev: int, disk: str | None, partition: bool):
+    """A /sys/dev/block holding `dev` (a partition of `disk` when `partition`)."""
+    sysb = tmp_path / "sys"
+    sysb.mkdir()
+    if disk is not None:
+        node = tmp_path / "devices" / "vda"
+        node.mkdir(parents=True)
+        (node / "dev").write_text(f"{disk}\n")
+        if partition:
+            node = node / "vda1"
+            node.mkdir()
+            (node / "partition").write_text("1\n")
+            (node / "dev").write_text(f"{lane.os.major(dev)}:{lane.os.minor(dev)}\n")
+        (sysb / f"{lane.os.major(dev)}:{lane.os.minor(dev)}").symlink_to(node)
+    monkeypatch.setattr(lane, "SYS_BLOCK", sysb)
+
+
+@pytest.mark.parametrize("partition", [False, True])
+def test_disk_of_resolves_the_whole_disk_like_the_job(tmp_path, monkeypatch, partition):
+    dev = tmp_path.stat().st_dev
+    if not lane.os.major(dev):
+        pytest.skip("tmp_path is on a device-less filesystem here")
+    _fake_sys(tmp_path, monkeypatch, dev, "254:0", partition)
+    assert lane._disk_of(tmp_path / "not" / "yet") == "254:0"   # the nearest existing parent
+
+
+def _box(tmp_path, monkeypatch, root_disk, work_disk, io_max, layer=False):
+    monkeypatch.setenv("SLOW_CPUS", "0.25")
+    monkeypatch.setenv("SLOW_WRITE_IOPS", "120")
+    monkeypatch.setenv("SLOW_READ_IOPS", "300")
+    for k in [k for k in lane.os.environ if k.startswith("LHPC_BUILD_")]:
+        monkeypatch.delenv(k)
+    if root_disk is None:
+        monkeypatch.delenv("SLOW_IO_ROOT_DISK", raising=False)
+    else:
+        monkeypatch.setenv("SLOW_IO_ROOT_DISK", root_disk)
+    work = tmp_path / "home" / ".cache" / "lhpc-calib"
+    (tmp_path / "home").mkdir()
+    monkeypatch.setattr(lane, "CALIB_WORK", work)
+    monkeypatch.setattr(lane, "_disk_of", lambda p: work_disk if p == work else None)
+    monkeypatch.setattr(lane, "_on_writable_layer", lambda p: layer)
+    cg = tmp_path / "cg"
+    cg.mkdir()
+    (cg / "cpu.max").write_text("25000 100000\n")
+    (cg / "memory.max").write_text(f"{416 * 2**20}\n")
+    (cg / "io.max").write_text(io_max)
+    real = lane.Path
+    monkeypatch.setattr(lane, "Path", lambda *a: cg if a == ("/sys/fs/cgroup",) else real(*a))
+
+
+TIGHT = "8:0 riops=300 wiops=120\n259:0 riops=300 wiops=120\n"
+
+
+def test_the_box_with_both_required_disks_throttled_is_the_throttled_box(tmp_path, monkeypatch):
+    _box(tmp_path, monkeypatch, ROOT, WORK, TIGHT)
+    assert lane._env_problems() == []
+
+
+def test_a_work_dir_on_the_writable_layer_is_the_layer_disk(tmp_path, monkeypatch):
+    """The CI case: $HOME is on the container's overlay root, which has no block device inside
+    the container — the work dir then needs the disk the job named behind Docker's storage."""
+    _box(tmp_path, monkeypatch, ROOT, None, "8:0 riops=300 wiops=120\n", layer=True)
+    assert lane._env_problems() == []
+    (tmp_path / "cg" / "io.max").write_text("259:0 riops=300 wiops=120\n")
+    problems = lane._env_problems()
+    assert len(problems) == 2 and all("disk 8:0," in p for p in problems), problems
+
+
+@pytest.mark.parametrize("root_disk, work_disk, want", [
+    (None, WORK, "SLOW_IO_ROOT_DISK=None"),
+    ("sda", WORK, "SLOW_IO_ROOT_DISK='sda'"),
+    (ROOT, None, "STOP: backing device of"),
+])
+def test_an_unresolvable_required_disk_records_nothing(tmp_path, monkeypatch, root_disk,
+                                                       work_disk, want):
+    """Correction 8, finding 2: a required disk that cannot be resolved is a problem — the lane
+    measures nothing as evidence — never a disk silently left out of the check."""
+    _box(tmp_path, monkeypatch, root_disk, work_disk, TIGHT)
+    problems = lane._env_problems()
+    assert any(p.startswith(want) for p in problems), problems
+    monkeypatch.setattr(lane, "EVIDENCE", {})
+    monkeypatch.setattr(lane, "_write", lambda: pytest.fail("evidence written"))
+    with pytest.raises(AssertionError, match="not evidence"):
+        lane._record("meshcore-cli", "build", 12.0)
+    assert lane.EVIDENCE == {}
+
+
+def test_the_calibration_work_dir_is_the_one_the_throttle_check_names(step):
+    seen = []
+    step[0] = _done(stdout="cpu=1.0 io=1.0 mem=1.0 workload=sha256:" + "0" * 64 + "\n")
+    lane.subprocess.run = lambda cmd, **k: seen.append(cmd) or step[0]
+    lane._calibrate()
+    assert seen[0][-2:] == ["--work-dir", str(lane.CALIB_WORK)]
 
 
 def test_the_disk_throttle_must_be_named(tmp_path, monkeypatch):
     monkeypatch.delenv("SLOW_WRITE_IOPS", raising=False)
     (tmp_path / "io.max").write_text("8:0 riops=1 wiops=1\n")
-    assert lane._io_problems(tmp_path)[0].startswith("SLOW_WRITE_IOPS=None")
+    assert lane._io_problems(tmp_path, REQUIRED)[0].startswith("SLOW_WRITE_IOPS=None")
     monkeypatch.setenv("SLOW_WRITE_IOPS", "1")
     monkeypatch.setenv("SLOW_READ_IOPS", "1")
-    assert lane._io_problems(tmp_path / "nowhere")[0].startswith("io.max is unreadable")
+    assert lane._io_problems(tmp_path / "nowhere", REQUIRED)[0].startswith("io.max is unreadable")

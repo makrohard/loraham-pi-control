@@ -62,6 +62,10 @@ EVIDENCE: dict[tuple[str, str], dict] = {}
 CALIBRATION: list[dict] = []
 FETCHED: dict[str, str] = {}
 INTRODUCING: list[str] = []      # the previous tag, when its helper has no pip sync line
+# calibrate.sh's work dir in the lane (its own default outside an install): named here so the
+# disk throttle is proved on the disk that backs it (`_required_disks`).
+CALIB_WORK = Path.home() / ".cache" / "lhpc-calib"
+SYS_BLOCK = Path("/sys/dev/block")
 
 _SECS = r"(\d+(?:\.\d+)?) s"
 # The timing lines print one decimal (`.1f`): a step faster than 50 ms reads `0.0 s`. That is
@@ -238,7 +242,8 @@ def _helper(lhpc: Path, env: dict) -> tuple[float, str]:
 
 
 def _calibrate() -> str:
-    r = subprocess.run(["bash", str(REPO / "testlab" / "slowbuild" / "calibrate.sh")],
+    r = subprocess.run(["bash", str(REPO / "testlab" / "slowbuild" / "calibrate.sh"),
+                        "--work-dir", str(CALIB_WORK)],
                        capture_output=True, text=True, timeout=HARNESS_S, check=False)
     return _judged("calibrate.sh", r)
 
@@ -265,16 +270,69 @@ def _env_problems() -> list[str]:
         out.append(f"cpu.max {quota} {period}: the CPU throttle to {cpus} CPUs is not in force")
     if mem == "max" or int(mem) > 416 * 2**20:
         out.append(f"memory.max {mem}: the 416 MiB memory cap is not in force")
-    out += _io_problems(cg)
+    required, unresolved = _required_disks()
+    out += unresolved + _io_problems(cg, required)
     if not os.cpu_count():
         out.append("nproc unreadable")
     return out
 
 
-def _io_problems(cg: Path) -> list[str]:
+def _disk_of(path: Path) -> str | None:
+    """The whole disk behind `path` (or its nearest existing parent) as MAJ:MIN, resolved as the
+    job's `disk_of()` does: the filesystem's device, a partition's parent disk. None when it
+    cannot be resolved — an overlay or other device-less filesystem, no sysfs entry."""
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    try:
+        dev = path.stat().st_dev
+        node = (SYS_BLOCK / f"{os.major(dev)}:{os.minor(dev)}").resolve(strict=True)
+        if (node / "partition").exists():
+            node = node.parent
+        mm = (node / "dev").read_text().strip()
+    except OSError:
+        return None
+    return mm if os.major(dev) and re.fullmatch(r"\d+:\d+", mm) else None
+
+
+def _on_writable_layer(path: Path) -> bool:
+    """`path` is on the container's root filesystem, its writable layer."""
+    return path.stat().st_dev == Path("/").stat().st_dev
+
+
+def _required_disks() -> tuple[dict[str, str], list[str]]:
+    """The disks that MUST be throttled, {what: MAJ:MIN}, and why any of them is unknown.
+
+    The container's writable layer has no block device inside the container (overlay): the job
+    resolves the disk behind Docker's storage and names it in SLOW_IO_ROOT_DISK. The calibration
+    work dir resolves here; on the writable layer it is that same disk. Unknown is a problem,
+    never a skip."""
+    found, problems = {}, []
+    root = os.environ.get("SLOW_IO_ROOT_DISK", "")
+    layer = bool(re.fullmatch(r"\d+:\d+", root))
+    if layer:
+        found["the container's writable layer"] = root
+    else:
+        problems.append(f"SLOW_IO_ROOT_DISK={root or None!r}: the disk behind the container's "
+                        "writable layer is not named — the throttle cannot be proved")
+    work = f"the calibration work dir ({CALIB_WORK})"
+    near = next(p for p in (CALIB_WORK, *CALIB_WORK.parents) if p.exists())
+    if layer and _on_writable_layer(near):
+        found[work] = root
+    elif mm := _disk_of(CALIB_WORK):
+        found[work] = mm
+    else:
+        problems.append(f"STOP: backing device of {near} (the calibration work dir {CALIB_WORK}) "
+                        "could not be resolved — the throttle cannot be applied")
+    return found, problems
+
+
+def _io_problems(cg: Path, required: dict[str, str]) -> list[str]:
     """The disk throttle (SLOW_WRITE_IOPS / SLOW_READ_IOPS, the job's `--device-*-iops`) must be
-    in force on at least one disk of this cgroup's io.max: without it the io part of the
-    calibration — and every IO-bound step — runs at the runner's SSD speed."""
+    in force in this cgroup's io.max on EACH required disk (`_required_disks`): one unthrottled
+    disk runs the io part of the calibration — or any IO-bound step — at the runner's SSD
+    speed. A tight line for some other disk proves nothing."""
+    if not required:
+        return ["no disk is required to be throttled — the disk throttle cannot be proved"]
     want = {}
     for key, var in (("wiops", "SLOW_WRITE_IOPS"), ("riops", "SLOW_READ_IOPS")):
         try:
@@ -285,12 +343,15 @@ def _io_problems(cg: Path) -> list[str]:
         lines = (cg / "io.max").read_text().splitlines()
     except OSError as exc:
         return [f"io.max is unreadable — the disk throttle cannot be proved: {exc}"]
+    tight = set()
     for line in lines:
-        kv = dict(f.split("=", 1) for f in line.split()[1:] if "=" in f)
+        disk, *fields = line.split() or [""]
+        kv = dict(f.split("=", 1) for f in fields if "=" in f)
         if all(kv.get(k, "max") != "max" and int(kv[k]) <= v for k, v in want.items()):
-            return []
-    return [f"io.max {lines!r}: no disk is throttled to wiops<={want['wiops']} "
-            f"riops<={want['riops']}"]
+            tight.add(disk)
+    return [f"io.max {lines!r}: {what}, disk {mm}, is not throttled to "
+            f"wiops<={want['wiops']} riops<={want['riops']}"
+            for what, mm in required.items() if mm not in tight]
 
 
 def test_slow_build_env():

@@ -252,33 +252,55 @@ jobs:
           docker build -t "$IMG" -f .devcontainer/Dockerfile .devcontainer
           echo "IMG=$IMG" >> "$GITHUB_ENV"
 
-      # io.max takes whole disks: every disk behind Docker's storage (the container's root and
-      # its /tmp volume) and behind each active swap area gets the IOPS limits. No disk found is
-      # a failure, never an unthrottled run.
+      # io.max takes whole disks. REQUIRED: the disk behind the container's writable layer
+      # (Docker's storage, or containerd's with its image store), where the calibration work dir
+      # under the lab user's home lives, and the disk behind Docker's storage, which holds the
+      # /tmp volume. Each resolves, or the job STOPS here, before any measurement. An active swap
+      # area's disk is throttled too, or skipped with a notice. The lane re-checks io.max for the
+      # writable layer's disk (SLOW_IO_ROOT_DISK) and the work dir's, and records nothing unless
+      # each is throttled.
       - name: Resolve the disks to throttle
         run: |
+          # The whole disk behind a path or block device, as /dev/NAME; non-zero, naming the
+          # path, when it cannot be resolved.
           disk_of() {
             local mm d
-            if [ -b "$1" ]; then mm=$(lsblk -dno MAJ:MIN "$1" | tr -d ' ')
-            else mm=$(findmnt -n -o MAJ:MIN --target "$1" | head -1 | tr -d ' '); fi
-            [ -n "$mm" ] && [ -e "/sys/dev/block/$mm" ] || return 0
+            if [ -b "$1" ]; then mm=$(lsblk -dno MAJ:MIN "$1" 2>/dev/null | tr -d ' ')
+            else mm=$(findmnt -n -o MAJ:MIN --target "$1" 2>/dev/null | head -1 | tr -d ' '); fi
+            if [ -z "$mm" ] || [ ! -e "/sys/dev/block/$mm" ]; then
+              echo "disk_of: backing device of $1 could not be resolved (MAJ:MIN ${mm:-none})" >&2
+              return 1
+            fi
             d=$(readlink -f "/sys/dev/block/$mm")
             [ -e "$d/partition" ] && d=$(dirname "$d")
             echo "/dev/$(basename "$d")"
           }
           cat /proc/swaps
           lsblk
-          disks=$( { disk_of "$(docker info -f '{{.DockerRootDir}}')"
-                     tail -n +2 /proc/swaps | while read -r swap _; do disk_of "$swap"; done
-                   } | sort -u)
-          [ -n "$disks" ] || { echo "::error::no disk behind Docker's storage resolved"; exit 1; }
+          storage=$(docker info -f '{{.DockerRootDir}}')
+          layer=$storage
+          if [ "$(docker info -f '{{.Driver}}')" = overlayfs ]; then layer=/var/lib/containerd; fi
+          disks=
+          for path in "$layer" "$storage"; do
+            d=$(disk_of "$path") && test -b "$d" || {
+              echo "::error::STOP: backing device of $path could not be resolved — the throttle cannot be applied"
+              exit 1
+            }
+            [ "$path" = "$layer" ] && root=$d
+            disks="$disks $d"
+          done
+          while read -r swap _; do
+            if d=$(disk_of "$swap") && test -b "$d"; then disks="$disks $d"
+            else echo "::notice::swap $swap: its disk could not be resolved — not throttled"; fi
+          done < <(tail -n +2 /proc/swaps)
+          disks=$(printf '%s\n' $disks | sort -u | xargs)
           flags=
           for d in $disks; do
-            test -b "$d" || { echo "::error::$d is not a block device"; exit 1; }
             flags="$flags --device-write-iops $d:$SLOW_WRITE_IOPS --device-read-iops $d:$SLOW_READ_IOPS"
           done
-          echo "throttled disks: $disks"
+          echo "throttled disks: $disks (writable layer: $root)"
           echo "SLOW_IO_FLAGS=$flags" >> "$GITHUB_ENV"
+          echo "SLOW_IO_ROOT_DISK=$(lsblk -dno MAJ:MIN "$root" | tr -d ' ')" >> "$GITHUB_ENV"
 
       # A heredoc lane script, as in release-verify. The container gets the throttle; the lane
       # itself checks that cpu.max, memory.max and io.max are in force and fails if they are not.
@@ -302,14 +324,14 @@ jobs:
           # shellcheck disable=SC2086  # SLOW_IO_FLAGS is a word list by design
           docker run --rm --user root \
             --cpus="$SLOW_CPUS" --memory="$SLOW_MEM" --memory-swap="$SLOW_SWAP" $SLOW_IO_FLAGS \
-            -e SLOW_CPUS -e SLOW_MEM -e SLOW_WRITE_IOPS -e SLOW_READ_IOPS \
+            -e SLOW_CPUS -e SLOW_MEM -e SLOW_WRITE_IOPS -e SLOW_READ_IOPS -e SLOW_IO_ROOT_DISK \
             -e LHPC_SLOW_BUILD_RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             -v "$PWD":/repo:ro -v lhpc_slow_tmp:/tmp -v "$PWD/slowevidence":/out \
             "$IMG" bash -lc '
               set -e
               cp -r /repo /tmp/repo && chown -R lhpclab /tmp/repo && chmod a+w /out
               install -m 0755 /repo/lane.sh /tmp/lane.sh
-              su lhpclab -c "SLOW_CPUS=$SLOW_CPUS SLOW_MEM=$SLOW_MEM SLOW_WRITE_IOPS=$SLOW_WRITE_IOPS SLOW_READ_IOPS=$SLOW_READ_IOPS LHPC_SLOW_BUILD_RUN_URL=$LHPC_SLOW_BUILD_RUN_URL /tmp/lane.sh"
+              su lhpclab -c "SLOW_CPUS=$SLOW_CPUS SLOW_MEM=$SLOW_MEM SLOW_WRITE_IOPS=$SLOW_WRITE_IOPS SLOW_READ_IOPS=$SLOW_READ_IOPS SLOW_IO_ROOT_DISK=$SLOW_IO_ROOT_DISK LHPC_SLOW_BUILD_RUN_URL=$LHPC_SLOW_BUILD_RUN_URL /tmp/lane.sh"
             '
           test -s slowevidence/junit-slow-build.xml \
             || { echo "::error::the lane produced no JUnit — it did not run"; exit 1; }

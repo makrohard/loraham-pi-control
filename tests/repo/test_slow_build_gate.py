@@ -12,6 +12,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
 import repo_paths
 
 WORKFLOW = repo_paths.REPO / ".github" / "workflows" / "testlab.yml"
@@ -113,10 +115,13 @@ def test_the_throttle_is_named_and_reaches_the_container_and_the_lane():
     run = text[text.index("docker run --rm --user root"):text.index("test -s slowevidence")]
     for flag in ('--cpus="$SLOW_CPUS"', '--memory="$SLOW_MEM"', '--memory-swap="$SLOW_SWAP"',
                  "$SLOW_IO_FLAGS", "-e SLOW_CPUS -e SLOW_MEM -e SLOW_WRITE_IOPS -e SLOW_READ_IOPS",
-                 "SLOW_WRITE_IOPS=$SLOW_WRITE_IOPS SLOW_READ_IOPS=$SLOW_READ_IOPS"):
+                 "-e SLOW_IO_ROOT_DISK",
+                 "SLOW_WRITE_IOPS=$SLOW_WRITE_IOPS SLOW_READ_IOPS=$SLOW_READ_IOPS",
+                 "SLOW_IO_ROOT_DISK=$SLOW_IO_ROOT_DISK"):
         assert flag in run, flag
     assert '--device-write-iops $d:$SLOW_WRITE_IOPS --device-read-iops $d:$SLOW_READ_IOPS' in text
     assert 'echo "SLOW_IO_FLAGS=$flags" >> "$GITHUB_ENV"' in text
+    assert 'echo "SLOW_IO_ROOT_DISK=' in text
 
 
 def test_the_cpu_quota_is_below_the_zero_breakeven():
@@ -125,3 +130,74 @@ def test_the_cpu_quota_is_below_the_zero_breakeven():
     quota above it is a container faster than the Zero by construction."""
     assert 0 < float(_job_env()["SLOW_CPUS"]) <= 0.5 * 57.8 / 99.7
     assert int(_job_env()["SLOW_WRITE_IOPS"]) <= 134    # the Zero's 65536 synced files / 489.8 s
+
+
+# ---- the disks to throttle (Correction 8): a required disk resolves, or nothing is measured ----
+
+def _resolve_step() -> str:
+    text = WORKFLOW.read_text()
+    m = re.search(r"^( *)- name: Resolve the disks to throttle\n\1  run: \|\n(.*?)\n\n",
+                  text, re.M | re.S)
+    assert m, "the slow-build job's disk-resolving step is gone from testlab.yml"
+    return textwrap.dedent(m.group(2))
+
+
+def _resolve(tmp_path: Path, storage: str, driver: str = "overlay2"):
+    """The step, as the runner runs it (`bash -e`), with a stub `docker` naming `storage`."""
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "docker").write_text(
+        "#!/bin/sh\ncase $* in *DockerRootDir*) echo " + storage + " ;; "
+        "*Driver*) echo " + driver + " ;; *) exit 9 ;; esac\n")
+    (stub / "docker").chmod(0o755)
+    env_file = tmp_path / "github_env"
+    env_file.write_text("")
+    env = {"PATH": f"{stub}:/usr/bin:/bin:/usr/sbin:/sbin", "GITHUB_ENV": str(env_file),
+           "SLOW_WRITE_IOPS": "120", "SLOW_READ_IOPS": "1200"}
+    r = subprocess.run(["bash", "-e", "-c", _resolve_step()], env=env, capture_output=True,
+                       text=True, check=False)
+    return r, env_file.read_text()
+
+
+def _tools():
+    if not all(Path(p).exists() for p in ("/usr/bin/findmnt", "/usr/bin/lsblk", "/proc/swaps")):
+        pytest.skip("findmnt / lsblk / /proc/swaps are not available here")
+
+
+@pytest.mark.parametrize("storage", ["no/such/storage", "/proc"])   # missing; no block device
+def test_an_unresolvable_required_disk_stops_the_job_before_any_measurement(tmp_path, storage):
+    """Correction 8, finding 2: Docker's storage on no resolvable disk was skipped (`return 0`)
+    and the job ran unthrottled on the other disks. Now it stops, naming the path, and hands the
+    measuring step no throttle to run with."""
+    _tools()
+    storage = str(tmp_path / storage)
+    r, env = _resolve(tmp_path, storage)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert (f"::error::STOP: backing device of {storage} could not be "
+            "resolved — the throttle cannot be applied") in r.stdout, r.stdout
+    assert "SLOW_IO_FLAGS" not in env and "SLOW_IO_ROOT_DISK" not in env
+
+
+def test_disk_of_fails_loudly_on_an_unresolvable_path(tmp_path):
+    _tools()
+    fn = re.search(r"^disk_of\(\) \{\n.*?^\}\n", _resolve_step(), re.M | re.S)
+    assert fn, "disk_of() is gone from the step"
+    r = subprocess.run(["bash", "-c", fn.group(0) + 'disk_of "$1"', "-", str(tmp_path / "x")],
+                       capture_output=True, text=True, check=False)
+    assert r.returncode == 1 and r.stdout == "", r.stdout
+    assert f"backing device of {tmp_path}/x could not be resolved" in r.stderr, r.stderr
+
+
+def test_a_resolvable_storage_disk_is_throttled_and_named_to_the_lane(tmp_path):
+    _tools()
+    probe = subprocess.run(["findmnt", "-n", "-o", "MAJ:MIN", "--target", str(tmp_path)],
+                           capture_output=True, text=True, check=False).stdout.split()
+    if not probe or not Path(f"/sys/dev/block/{probe[0]}").exists():
+        pytest.skip("the test's own disk does not resolve here")
+    r, env = _resolve(tmp_path, str(tmp_path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    flags = re.search(r"^SLOW_IO_FLAGS=(.*)$", env, re.M).group(1)
+    root = re.search(r"^SLOW_IO_ROOT_DISK=(\d+:\d+)$", env, re.M)
+    assert root, env
+    disk = re.search(r"--device-write-iops (/dev/\S+):120 --device-read-iops \1:1200", flags)
+    assert disk, flags
