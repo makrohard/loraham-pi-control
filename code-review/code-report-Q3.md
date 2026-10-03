@@ -8,10 +8,10 @@ Python 3.11, pytest 9.1, ruff from `.[dev]` in a scratch venv; `zstd` installed 
 | sha | subject | files | tests (red-before vs parent) |
 |---|---|---|---|
 | b6af7e9 | Q3: plan — the best-effort helper | plans/PLAN-Q3.md | — |
-| e07c8f1 | Q3: best_effort — one way to run a side action beside a failure | lhpc/core/best_effort.py (new, 36 lines), tests/core/test_best_effort.py | 8 cases; RED yes (`ModuleNotFoundError: lhpc.core.best_effort` at the parent) |
-| acc8986 | Q3: binary install — the traceback and the interrupt unwind run best-effort | lhpc/core/service_binary_ops.py, tests/install/test_binary_channel.py | `test_a_failing_traceback_print_is_one_line_and_changes_no_outcome`, `test_a_failing_unwind_after_ctrl_c_is_one_line_and_the_interrupt_propagates`; RED yes: `2 failed` (no line; every outcome assertion before it held) |
-| acbec15 | Q3: the staging record rewrite runs best-effort | lhpc/core/install.py, tests/install/test_source.py | `test_a_failing_staging_record_rewrite_never_stops_the_install[unexpected]` RED yes (the RuntimeError stops the adoption); `[oserror]`/`[containment]` RED (they now pin the standard line's tail); `[lost]` green both; `test_ctrl_c_in_the_staging_record_rewrite_propagates_and_the_record_is_cleared` green before by design (the narrow catch never swallowed Ctrl-C — it guards against widening the helper). Parent result: `3 failed, 2 passed` |
-| 20a042f | Q3: CHANGELOG — best-effort side actions | CHANGELOG.md | — |
+| 17212ff | Q3: best_effort — one way to run a side action beside a failure | lhpc/core/best_effort.py (new, 36 lines), tests/core/test_best_effort.py | 8 cases; RED yes (`ModuleNotFoundError: lhpc.core.best_effort` at the parent) |
+| e4f5800 | Q3: binary install — the traceback and the interrupt unwind run best-effort | lhpc/core/service_binary_ops.py, tests/install/test_binary_channel.py | `test_a_failing_traceback_print_is_one_line_and_changes_no_outcome`, `test_a_failing_unwind_after_ctrl_c_is_one_line_and_the_interrupt_propagates`; RED yes: `2 failed` (no line; every outcome assertion before it held) |
+| a6854ad | Q3: the staging record rewrite runs best-effort | lhpc/core/install.py, tests/install/test_source.py | `test_a_failing_staging_record_rewrite_never_stops_the_install[unexpected]` RED yes (the RuntimeError stops the adoption); `[oserror]`/`[containment]` RED (they now pin the standard line's tail); `[lost]` green both; `test_ctrl_c_in_the_staging_record_rewrite_propagates_and_the_record_is_cleared` green before by design (the narrow catch never swallowed Ctrl-C — it guards against widening the helper). Parent result: `3 failed, 2 passed` |
+| 00c43bb | Q3: CHANGELOG — best-effort side actions | CHANGELOG.md | — |
 
 Red-before commands (each with the parent's version of the one production file checked out over the
 final tests, then restored):
@@ -69,7 +69,7 @@ binary message fallback, the main unwind boundary, the venv `rmtree; raise`, eve
    detached job / boot restore: all reach these through the same `binary_install` / `adopt_source`;
    no adapter change. Stacked conflicts: `install.py` is NOT in the brief's FILES list (only in its
    ADOPT list) — touched lines 1295-1305 and two import lines only; if Q1 edits `install.py`
-   recovery the conflict is textual at most; commit acbec15 can be dropped independently.
+   recovery the conflict is textual at most; commit a6854ad can be dropped independently.
    `config.py` untouched (no shared line with Q1/Q2).
 4. TEST RULES. Each new test red before against its parent except the deliberate Ctrl-C guard (stated);
    log lines asserted by count, site name and the exact `: <Class>: <msg>` tail (not startswith-only;
