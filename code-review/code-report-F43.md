@@ -675,3 +675,172 @@ no attribute 'quiet_line'`, `CommandResult.__init__() got an unexpected keyword 
   was requested explicitly; flagged for the maintainer.
 - Identity: `git log --format='%an %cn%n%B' 045724db..HEAD` shows only the owner as author and
   committer and no co-author or session line.
+
+## Correction 5 (two lane defects from the first slow-build run)
+
+**Trigger.** The slow-build job's first real run on the 0.11.12 candidate (testlab run
+37145791526, job 111269336657) was RED: 7 failed, 3 passed, 1 bootstrap skip, in 6:01. Both
+causes were in the lane's own code (commit 8c7f131). Both were checked against the code before
+anything was changed.
+
+**Defect 1: a checkout faster than the log's resolution aborted the stack.** The adoption log
+writes `[git] <what> {s:.1f} s` (`lhpc/core/install.py:2050`), so a checkout under 50 ms reads
+`[git] checkout <ref> 0.0 s`. `_adoption` passed that to `_record`. `_record` stored
+`seconds = 0.0`, and `stt.entry_errors` rejected the entry with "seconds must be a positive
+number". The stack's case then stopped at its first checkout, so no build ran for kiss, chat,
+voice, meshcore or reticulum. Every one of those operations then failed the budget case again
+with "no row C evidence for …".
+- Fix (`testlab/tests/slowbuild/test_slow_build.py`): new constants `LOG_RESOLUTION_S = 0.1` and
+  `BELOW_RESOLUTION = "below log resolution"`. In `_record`, when the rounded duration is below
+  the floor, the entry gets `seconds = 0.1` and `note = "below log resolution"`. The validator
+  needs no change, because 0.1 is a positive number, and it still rejects 0.0 for every op. The
+  product's `.1f` format is unchanged. The floor can never give a false PASS: it is never smaller
+  than the true duration it stands for.
+- Tests (`testlab/tests/unit/test_slow_build_lane.py`):
+  `test_a_checkout_below_log_resolution_is_evidence_at_the_floor` feeds an adoption log with
+  `[git] clone 12.3 s` and `[git] checkout v1.2.3 0.0 s` through `_adoption`. The result is one
+  checkout entry at 0.1 with the note, accepted by `entry_errors`, and the clone entry is
+  recorded as well, at 12.3 and without a note.
+  `test_the_validator_still_rejects_a_zero` shows that `entry_errors` accepts the floor entry
+  and rejects `seconds = 0.0` for checkout, clone and build.
+
+**Defect 2: the self-update helper was refused by the unit-plumbing guard.** `_helper` ran
+`lhpc self-update --run-service` with the lab environment. `lab_env` removes `INVOCATION_ID` on
+purpose, and `_unit_plumbing_refusal` (`lhpc/adapters/cli/main.py`, guard since 0.11.10) returns
+rc 2 when that variable is missing. So the helper failed on every tree, and selfupdate-helper and
+selfupdate-pip never got evidence.
+- Fix: `_helper` now runs the service entry the way its systemd unit does,
+  `env={**env, "INVOCATION_ID": "slow-build-lane"}`, and its docstring says why. Only the helper
+  subprocess gets the marker. Every other `lhpc` call of the lane keeps `lab_env`'s environment,
+  which has no marker.
+- Test: `test_the_helper_runs_past_the_unit_plumbing_guard` runs `_helper` on a stub `lhpc`. The
+  stub calls the real `lhpc.adapters.cli.main._unit_plumbing_refusal` and prints the helper's
+  `[selfupdate] pip sync 4.2 s` line only when the guard lets it through. The test runs with
+  `INVOCATION_ID` removed from the caller's environment and expects the lane to read `4.2`.
+
+**Red before** (the same three tests, with `test_slow_build.py` reset to the pre-correction
+version): 3 failed, 27 passed.
+- floor test: `AssertionError: ['seconds must be a positive number']`, the same error as in the
+  CI log.
+- helper test: `the self-update helper failed (rc 2) — not evidence: ERR   --run-service is unit
+  plumbing, … refused because the systemd invocation marker (INVOCATION_ID) is absent`, the same
+  error as in the CI log.
+- validator test: fails only because the constant `BELOW_RESOLUTION` does not exist yet. This
+  test guards against an overly wide fix; it is not a red-before proof of a defect.
+
+After the fix: 30 passed.
+
+**Not touched.** `LANE_OPS`, the `L4_INTRODUCING` waiver and `_waived` are unchanged. The local
+run below gives no reason to change them.
+
+**The local lane run: what ran and what did not.** The cloud container has no Docker daemon and
+no cgroup-v2 `cpu.max` or `memory.max`. Starting a daemon would have needed a background job, so
+the throttled container of the CI job could not run here. What ran instead is the lane module
+itself, `python -m pytest testlab/tests/slowbuild -v`, with `LHPC_SLOW_BUILD=1` and the
+`lhpc_testlab` provider, against the real lane components: real `lhpc install` and `lhpc build`
+of every lane stack, real adoption logs, the real self-update from the previous tag, and the real
+`calibrate.sh`. One local pytest plugin replaces `_env_problems` with "no problems".
+**Nothing this run measured is evidence**: the box is not throttled, it is x86_64 and not
+aarch64, and the entries say `cpus=?`.
+
+Environment set-up on this box (local only, nothing committed):
+- the apt packages of `.devcontainer/Dockerfile`;
+- the agent proxy's CA in the system trust store and in a pip config, so the product's own pip
+  steps can reach PyPI;
+- `python3` set to 3.12 so that Ubuntu's `python3-libgpiod` and `python3-spidev` are importable
+  (this box's default `python3` is 3.11, the lab image's is 3.13);
+- a link `python3-libgpiod.list` to `python3-libgpiod:amd64.list` in `/var/lib/dpkg/info`. On
+  Ubuntu 24.04 that package is `Multi-Arch: same`, so its receipt carries the architecture. See
+  the note below.
+
+Result: **7 passed, 1 skipped, 3 failed** (3:54).
+- Passed: env (lifted), stacks kiss, chat, voice, meshcore and reticulum, and selfupdate.
+- Skipped: calibrated, with the bootstrap reason (no Zero calibration yet).
+- Failed: graywolf, meshtastic and budget.
+- Defect 1 in the real run: the real adoption logs contained ten different refs with
+  `[git] checkout <ref> 0.0 s`. Each was recorded at 0.1 with the note, and the stacks went on
+  to build. The evidence file holds 36 `[[measured]]` entries.
+- Defect 2 in the real run: the helper got past the guard, updated a clone of v0.11.10 (the
+  previous tag reachable from this branch) to the candidate, and recorded selfupdate-helper.
+  v0.11.10 has no pip sync line, so L4 took the `L4_INTRODUCING` path, as it will on the
+  0.11.12 candidate (v0.11.11 has no pip sync line either: `git show
+  v0.11.11:lhpc/core/service_selfupdate.py` has no match).
+- `test_slow_build_stack[graywolf]`: the upstream release check gets HTTP 403 from the GitHub
+  API through this container's proxy ("network/API error"), so deb-fetch did not run.
+- `test_slow_build_stack[meshtastic]`: this is an x86 box, so there is no aarch64 binary channel
+  and no CLI venv.
+- `test_slow_build_budget`: exactly 2 failures, `no row C evidence for graywolf deb-fetch` and
+  `no row C evidence for meshtastic-cli-venv cli-venv`. These are the two operations the
+  environment blocked. Every other "no row C evidence" of the CI run is gone, and every
+  "no Zero baseline" is waived as bootstrap.
+
+**Not proven here:** a GREEN lane. That needs the CI job (aarch64, throttled, with GitHub API
+access). The graywolf deb-fetch and the Meshtastic CLI venv have not run anywhere in this round.
+
+**Note for the maintainer (outside F43, not verified on the target OS).** The reticulum
+requirement checks `check_file = "/var/lib/dpkg/info/python3-libgpiod.list"`. On Ubuntu 24.04
+the package is `Multi-Arch: same`, and its receipt is `python3-libgpiod:amd64.list`, so the
+check refuses the install there even though the package is installed. Whether Debian trixie or
+Raspberry Pi OS name it the same way was not checked here. The lab image and the release-verify
+runs pass reticulum.
+
+**Commits.** The two fixes are amended into the lane commit: `git commit --fixup 8c7f1318`, then
+`GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash 045724db`. This report is a new commit on
+top. Patch-ids (`git show <c> | git patch-id --stable`, first 12 hex digits):
+
+| before | after | patch-id before | patch-id after | equal |
+|---|---|---|---|---|
+| 4244114 | 4244114 | 655eb46b57f5 | 655eb46b57f5 | yes |
+| aed5b7f | aed5b7f | 88c6073904e3 | 88c6073904e3 | yes |
+| 24bbd24 | 24bbd24 | 92f8151b313b | 92f8151b313b | yes |
+| 8c7f131 | e6fccb2 | 899dd3cbf3fb | ca7fa07c376c | amended (this correction) |
+| cd7de3e | 4a829a7 | 9812f85dd939 | 9812f85dd939 | yes |
+| 36631a5 | d41d002 | 7fdef16d78b6 | 7fdef16d78b6 | yes |
+| a3019c4 | 6a775d0 | 9ed7554ec23c | 9ed7554ec23c | yes |
+| c1bbc29 | c395552 | ec31e4b99b54 | ec31e4b99b54 | yes |
+| f15bcc2 | 7474eb8 | 1a57aff0edb4 | 1a57aff0edb4 | yes |
+| 2e15657 | eee681c | e09b180f27e1 | e09b180f27e1 | yes |
+| ba323bb | b541243 | f9a8ee7603b7 | f9a8ee7603b7 | yes |
+
+`git diff ba323bb b541243` (the head before this report commit) touches only
+`testlab/tests/slowbuild/test_slow_build.py` (+11 −2) and
+`testlab/tests/unit/test_slow_build_lane.py` (+53).
+
+**Checks.**
+- `testlab/tests/unit/test_slow_build_lane.py`: 30 passed on the head, and 29 passed at e6fccb2
+  itself. At that commit the module has no quiet-line test yet; it was run from a worktree,
+  with `lhpc` imported from the head.
+- `tests/repo`: 442 passed, **1 failed**. The failure is
+  `test_version_consistent.py::test_changelog_leads_with_the_current_version`, the known
+  `## 0.11.12` heading against version 0.11.11 (Correction 4). It fails the same way without
+  this correction.
+- Touched signatures: none. `_record`, `_helper` and `_adoption` keep their signatures. A grep of
+  `tests/` and `testlab/` finds them only in the lane and its unit module; the other `_record`
+  matches are unrelated helpers.
+- `ruff check lhpc testlab` and `ruff check tests --select F,E9`: all checks passed (after one
+  PIE807 fix in the new test: `list` instead of `lambda: []`).
+- No full-suite run and no background job.
+- Identity: `git log --format='%an %cn%n%B' 045724db..HEAD` shows only the owner as author and
+  committer, and no co-author, session or AI-attribution line.
+
+**Adversarial self-review (before the push).**
+- The floor applies to every op in `_record`, not only checkout. Clone, checkout and cli-venv
+  are read from `.1f` log lines and can read 0.0 for the same reason. The ops timed with
+  `time.monotonic()` cannot realistically be under 50 ms. In every case 0.1 is at least the
+  true duration, so it can never move a budget toward PASS. The validator is unchanged, and zero
+  stays rejected for every op (test).
+- The `note` key is not in the format comment of `tests/data/slow-target-builds.toml`. That file
+  belongs to commit 4244114, and the comment was left alone so the other patch-ids stay the
+  same. `entry_errors` and the budget rule ignore unknown keys, so an entry with `note` is valid
+  when it is copied into the baseline. The maintainer may want one comment line there.
+- `slow-build-summary.md` prints E with `.0f` (code from before this correction), so a floor
+  entry shows `E=0 s`. This is cosmetic only: the evidence file holds 0.1 and the note.
+- `INVOCATION_ID` goes only to the helper subprocess. `lab_env` still removes it for every other
+  step, so the lane does not hide the guard anywhere else. The value `slow-build-lane` cannot be
+  mistaken for a real systemd invocation id in a log.
+- The helper unit test calls the real guard function, not the full CLI dispatch. The local lane
+  run covers the dispatch: `lhpc self-update --run-service` ran past the guard and updated the
+  clone.
+- Found and fixed: one ruff PIE807 in the new test.
+- Found and not changed: the Multi-Arch receipt name of python3-libgpiod on Ubuntu (the note
+  above). It is outside this correction and not verified on the target OS.
