@@ -47,7 +47,7 @@ binary message fallback, the main unwind boundary, the venv `rmtree; raise`, eve
 
 1. CONTRACTS. `best_effort(fn, *, what, log=stderr_line) -> fn() | None` (`lhpc/core/best_effort.py:18`):
    catches `Exception` only; returns None then; logs exactly one line `"<what>: <Class>: <msg>"`
-   (`"<what>: <Class>"` if `__str__` raises); a raising `log` is ignored; `BaseException` passes;
+   (`"<what>: <Class>"` if `__str__` raises); an ordinary Exception from `log` is ignored; a BaseException (from `log` or `fn`) propagates;
    the caller's handled exception is untouched (bare `raise` re-raises it). `_note_staged`
    (`install.py:1295`): returns None, never raises an ordinary Exception; `OwnedMarker.rewrite`
    (`runtime_fs.py:310`) returns bool — `False` keeps the existing line. `binary_install`

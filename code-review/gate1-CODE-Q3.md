@@ -31,8 +31,8 @@ diagnostic) sits beside a failure today; every other `except Exception` in FILES
 
 `best_effort(fn, *, what, log=stderr_line) -> fn() | None`: runs `fn()`; an ordinary `Exception`
 from it is logged as the one line `"<what>: <Class>: <msg>"` through `log` and `None` is returned
-(no `: <msg>` when its `__str__` raises); a `BaseException` (KeyboardInterrupt/SystemExit) from `fn` propagates. A failing `log` is swallowed
-(the log is a side action too: closed stderr). Called inside an `except` block it leaves the handled
+(no `: <msg>` when its `__str__` raises); a `BaseException` (KeyboardInterrupt/SystemExit) from `fn` propagates. From `log` (a side action too: a closed
+stderr), an ordinary Exception is ignored; a BaseException propagates. Called inside an `except` block it leaves the handled
 exception untouched, so a bare `raise` after it re-raises the original.
 No context-manager form: no adopted site needs one (guardrail: no abstraction without a user).
 Test: `tests/core/test_best_effort.py` (result, the exact line, BaseException passes, a raising
@@ -165,7 +165,7 @@ binary message fallback, the main unwind boundary, the venv `rmtree; raise`, eve
 
 1. CONTRACTS. `best_effort(fn, *, what, log=stderr_line) -> fn() | None` (`lhpc/core/best_effort.py:18`):
    catches `Exception` only; returns None then; logs exactly one line `"<what>: <Class>: <msg>"`
-   (`"<what>: <Class>"` if `__str__` raises); a raising `log` is ignored; `BaseException` passes;
+   (`"<what>: <Class>"` if `__str__` raises); an ordinary Exception from `log` is ignored; a BaseException (from `log` or `fn`) propagates;
    the caller's handled exception is untouched (bare `raise` re-raises it). `_note_staged`
    (`install.py:1295`): returns None, never raises an ordinary Exception; `OwnedMarker.rewrite`
    (`runtime_fs.py:310`) returns bool — `False` keeps the existing line. `binary_install`
