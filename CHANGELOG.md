@@ -13,6 +13,8 @@
   and Reticulum read the escapes as part of the value (a different passphrase than the one set).
 - The copy-paste command of an interactive program (MeshCore CLI, Meshtastic CLI, chat, Voice CLI, NomadNet)
   carries the saved Settings and the band it runs on; it showed the defaults.
+- A build, host test or other command whose program leaves a detached background process holding its output no
+  longer hangs until that process exits; the run returns and its log is marked unverified.
 
 ## 0.11.10
 

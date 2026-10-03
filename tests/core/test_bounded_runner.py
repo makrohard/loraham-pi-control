@@ -289,3 +289,42 @@ def test_a_step_cannot_outlive_its_ceiling_by_a_wait_slice(tmp_path, controlled)
         r = RealCommandRunner().run_streaming(["sleep", "1.8"], timeout=1.5, log_fh=fh,
                                               sample_s=1.0, **kw)
     assert r.timed_out and r.returncode == 124 and r.stop_reason == "budget"
+
+
+# A child whose descendant leaves the session (setsid) still holding stdout, prints that
+# descendant's pid and exits at once. The escapee outlives the call by design; it is killed after.
+_ESCAPEE = ["sh", "-c", "setsid sleep 8 & echo $!; echo hi"]
+
+
+def _kill(pid_text):
+    import os
+    try:
+        os.kill(int(pid_text.split()[0]), 9)
+    except (ValueError, IndexError, OSError):
+        pass
+
+
+def test_run_returns_while_an_escaped_descendant_holds_stdout():
+    # Closing the pipe used to wait for the drain thread's buffer lock, i.e. for the escapee to
+    # exit: the bounded joins did not bound the call.
+    t0 = time.time()
+    r = RealCommandRunner().run(_ESCAPEE, timeout=20)
+    try:
+        assert time.time() - t0 < 6.0
+        assert r.returncode == 0 and r.stdout.split()[1:] == ["hi"]
+    finally:
+        _kill(r.stdout)
+
+
+def test_streaming_run_returns_and_flags_unverified_output(tmp_path):
+    log = tmp_path / "job.log"
+    t0 = time.time()
+    with open(log, "wb") as fh:
+        r = RealCommandRunner().run_streaming(_ESCAPEE, timeout=20, log_fh=fh,
+                                              should_cancel=lambda: False)
+    try:
+        assert time.time() - t0 < 6.0
+        assert r.returncode == 0 and r.output_unverified          # the pipe never reached EOF
+        assert log.read_text().split()[1:] == ["hi"]
+    finally:
+        _kill(log.read_text())

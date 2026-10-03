@@ -212,15 +212,40 @@ for _k in ("HOME", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRE
 _MAX_CAPTURE_BYTES = 1024 * 1024
 
 
-def _bounded_drain(stream, sink: bytearray) -> None:
-    """Read a subprocess pipe to EOF, retaining only the last _MAX_CAPTURE_BYTES in `sink`."""
+_DRAIN_POLL_MS = 100
+
+
+def _drain_fd(stream, emit, stop) -> bool:
+    """Read a subprocess pipe to EOF on its raw fd, handing each chunk to `emit`. Polled, so the
+    `stop` event ends it within _DRAIN_POLL_MS: an escaped descendant holding the write end open
+    can never wedge the caller. The fd is read with `os.read`, never through the BufferedReader —
+    closing that from another thread waits on its lock while a reader blocks inside it. Returns
+    True at EOF, False when stopped or on a torn pipe."""
+    import select
     try:
-        for chunk in iter(lambda: stream.read(8192), b""):
-            sink.extend(chunk)
-            if len(sink) > _MAX_CAPTURE_BYTES:
-                del sink[:len(sink) - _MAX_CAPTURE_BYTES]
+        fd = stream.fileno()
+        poller = select.poll()
+        poller.register(fd, select.POLLIN | select.POLLHUP | select.POLLERR)
+        while not stop.is_set():
+            if not poller.poll(_DRAIN_POLL_MS):
+                continue
+            chunk = os.read(fd, 8192)
+            if not chunk:
+                return True
+            emit(chunk)
     except (OSError, ValueError):
         pass
+    return False
+
+
+def _bounded_drain(stream, sink: bytearray, stop) -> None:
+    """Read a subprocess pipe to EOF (or until `stop`), retaining only the last
+    _MAX_CAPTURE_BYTES in `sink`."""
+    def keep(chunk: bytes) -> None:
+        sink.extend(chunk)
+        if len(sink) > _MAX_CAPTURE_BYTES:
+            del sink[:len(sink) - _MAX_CAPTURE_BYTES]
+    _drain_fd(stream, keep, stop)
 
 
 class RealCommandRunner:
@@ -249,7 +274,8 @@ class RealCommandRunner:
         # (the useful TAIL), so a runaway build/test can never exhaust memory. Draining
         # continuously also prevents a full-pipe write deadlock.
         out, err = bytearray(), bytearray()
-        threads = [threading.Thread(target=_bounded_drain, args=(s, buf), daemon=True)
+        stop = threading.Event()
+        threads = [threading.Thread(target=_bounded_drain, args=(s, buf, stop), daemon=True)
                    for s, buf in ((proc.stdout, out), (proc.stderr, err))]
         for t in threads:
             t.start()
@@ -270,6 +296,11 @@ class RealCommandRunner:
                 pass
         for t in threads:
             t.join(timeout=2)
+        # An escaped descendant may still hold a pipe open (no EOF): stop the drains, which return
+        # within one poll, so closing below never waits on it.
+        stop.set()
+        for t in threads:
+            t.join(timeout=1)
         for stream in (proc.stdout, proc.stderr):
             try:
                 stream.close()
@@ -405,7 +436,8 @@ class RealCommandRunner:
             self._ionice_idle(proc.pid)
         from .. import proctree
         token = proctree.capture_session_token(proc.pid)
-        drained = threading.Event()
+        drained = threading.Event()             # set only once the pipe reached EOF
+        stop = threading.Event()
         # The log handle is TEXT-mode in production (`runtime_fs.open_log_truncate`), but the redactor
         # yields BYTES — write to the underlying binary buffer (a binary handle, as in tests, has no
         # `.buffer` and is used directly). Keeping it byte-oriented means redaction happens pre-decode.
@@ -425,15 +457,12 @@ class RealCommandRunner:
                 write_failed[0] = True
 
         def _drain():
-            try:
-                for chunk in iter(lambda: proc.stdout.read(8192), b""):
-                    drained_bytes[0] += len(chunk)
-                    _emit(redactor.feed(chunk) if redactor is not None else chunk)
+            def _chunk(c):
+                drained_bytes[0] += len(c)
+                _emit(redactor.feed(c) if redactor is not None else c)
+            if _drain_fd(proc.stdout, _chunk, stop):
                 if redactor is not None:
                     _emit(redactor.flush())
-            except (OSError, ValueError):                # a torn/closed pipe — final backstop
-                pass
-            finally:
                 drained.set()
 
         dt = threading.Thread(target=_drain, daemon=True)
@@ -463,14 +492,17 @@ class RealCommandRunner:
         # returns. Join FIRST (do NOT close the pipe under it — that would abort the drain mid-flush).
         dt.join(timeout=3)
         if dt.is_alive():
-            # An escaped descendant still holds the write end open (no EOF): force it so the drain can't
-            # wedge us. The redactor carry is deliberately NOT flushed (it may hold an unmasked partial) —
-            # this is the `output_unverified` case, surfaced as an unsafe scope; never a raw leak.
-            try:
-                proc.stdout.close()
-            except OSError:
-                pass
+            # An escaped descendant still holds the write end open (no EOF): stop the drain (it returns
+            # within one poll) so it can't wedge us. The redactor carry is deliberately NOT flushed (it
+            # may hold an unmasked partial) — this is the `output_unverified` case, surfaced as an
+            # unsafe scope; never a raw leak.
+            stop.set()
             dt.join(timeout=2)
+            if not dt.is_alive():
+                try:
+                    proc.stdout.close()
+                except OSError:
+                    pass
         output_unverified = dt.is_alive() or not drained.is_set()
         rc = (124 if timed_out else
               (proc.returncode if proc.returncode is not None else -1))
