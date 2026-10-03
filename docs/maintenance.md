@@ -151,7 +151,12 @@ repositories.
   when row C measures the new pin above limit/4 (= 50 % of the budget) or that (component, op) has
   no Zero entry at all. A minor runs rows 6, 7, 8, the self-update and `calibrate.sh` on the Zero 2 W
   before the tag and commits the numbers ([test matrix](test-matrix.md#slow-target-baseline)),
-  which refreshes the baselines and the calibration. Bootstrap: while
+  which refreshes the baselines and the calibration. Run from the installed checkout
+  `<runtime root>/src/loraham-pi-control` while `<runtime root>/state` exists, `calibrate.sh` works
+  in `<runtime root>/state/lhpc-calib` on the SD card (any other checkout, or no `state` dir:
+  `$HOME/.cache/lhpc-calib`; `--work-dir DIR` overrides both). It needs 256 MB + 64 MB free there, never works in `/tmp`, a
+  ~200 MB tmpfs on the Zero, and refuses a tmpfs work dir, one with too little free space and an
+  existing one. Bootstrap: while
   `tests/data/slow-target-builds.toml` holds no measured entry at all (before the first row A),
   `test_coverage`, `test_slow_build_calibrated` and `test_slow_build_budget` SKIP with a
   "bootstrap: no row A yet" reason naming every unmeasured operation, and the `slow-build` gate

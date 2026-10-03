@@ -108,7 +108,7 @@ that runs it on the Zero.
 | `selfupdate-helper` | a one-click update from the previous release: `systemctl --user show lhpc-selfupdate.service -p ExecMainStartTimestamp -p ExecMainExitTimestamp`, the difference |
 | `selfupdate-pip` | the `[selfupdate] pip sync <n> s` line of that run in `logs/lhpc-selfupdate.log`; which release has it: see [maintenance](maintenance.md#branches-and-releases), the slow-target build row |
 | `deb-fetch` | `t bash lhpc/data/scripts/graywolf-fetch.sh /tmp/gw <latest> --from-upstream` |
-| calibration | `bash testlab/slowbuild/calibrate.sh` prints `cpu= io= mem= workload=`: one `[[calibration]]` entry |
+| calibration | `bash testlab/slowbuild/calibrate.sh` (from the installed checkout `<runtime root>/src/loraham-pi-control` with `<runtime root>/state` present, so its work dir is `<runtime root>/state/lhpc-calib` on the SD card; otherwise `$HOME/.cache/lhpc-calib`) prints `cpu= io= mem= workload=`: one `[[calibration]]` entry |
 
 `key` is `pin:<the component's manifest pin_commit>` (the `cli-venv` entry: meshtastic's),
 `deb:<version fetched>`, or for both self-update entries the output of
