@@ -401,7 +401,17 @@ class SelfUpdateOpsMixin:
         # ambiguous or overridden set is someone else's file — leave it, and do not
         # blame the update for it.
         try:
-            if not self.updater_integration().get("fixable"):
+            integ = self.updater_integration()
+            ours = integ.get("fixable")
+            helper = (integ.get("request") == "in_flight" and self._helper_owns_inflight()
+                      and not self.uninstall_guard_blocks())
+            if helper:
+                # The one-click helper's OWN in-flight record (proven this process's) is not a
+                # recovery condition: judge the units on their own verdicts. The helper only
+                # verifies: its sandbox cannot write units, and the repair refuses on that record.
+                ours = all(v in (updater_units.OK, updater_units.MISSING,
+                                 updater_units.MODIFIED_OURS) for v in integ["per_unit"].values())
+            if not ours:
                 return True, "units not this deployment's — left untouched"
         except Exception as exc:
             return True, f"integration state unavailable ({type(exc).__name__}) — units left untouched"
@@ -411,7 +421,7 @@ class SelfUpdateOpsMixin:
         if not _op_exists(py):
             py = _sys.executable
         try:
-            rep = self.self_update_repair_integration(restart=False)
+            rep = None if helper else self.self_update_repair_integration(restart=False)
         except Exception as exc:
             return False, f"unit refresh raised {type(exc).__name__}: {exc}"[:160]
         try:
@@ -422,6 +432,8 @@ class SelfUpdateOpsMixin:
         if chk.returncode == 0:
             return True, "units canonical"
         detail = (chk.stdout or chk.stderr or "").strip()[:140]
+        if rep is None:
+            return False, f"units not canonical: {detail}"
         return False, f"units still not canonical after repair ({rep.summary[:60]}): {detail}"
 
     @staticmethod

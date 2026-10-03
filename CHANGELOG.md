@@ -26,6 +26,8 @@
   console and the stack proxies stayed reachable); from the console it tells you to run Apply.
 - A symlinked or non-folder `config/tls/server` (or `client-ca`) reads as an unreadable certificate (way out:
   `lhpc webserver tls-renew`) instead of an error in Monitor, verify, expose and Apply.
+- The one-click update now really checks the systemd units against the new version; it reported them refreshed
+  without checking, so a release that changed a unit could have stopped boot restore unnoticed.
 
 ## 0.11.10
 

@@ -627,6 +627,34 @@ def test_the_unit_refresh_runs_out_of_process(op_svc, monkeypatch):
         f"the refresh must ask a FRESH interpreter to verify the unit set, got {argv}")
 
 
+def test_the_one_click_helper_verifies_the_units_it_refreshed(tmp_path, op_svc, monkeypatch):
+    """The helper holds its OWN in-flight record for the whole run. It read as "recovery required",
+    so the refresh skipped as "units not this deployment's" and reported them refreshed without
+    ever running the out-of-process verifier."""
+    from lhpc.core.probes.backends import CommandResult as CR
+    from lhpc.core.service_base import ActionResult
+    from lhpc.core.services import ControllerService
+
+    svc, _fake = op_svc(units=True, invocation=True)
+    _write_request(tmp_path, "normal")
+    monkeypatch.setattr(ControllerService, "self_update_apply",
+                        lambda self, *, force=False: ActionResult(True, "applied", data={}))
+    repaired = []
+    monkeypatch.setattr(ControllerService, "self_update_repair_integration",
+                        lambda self, *, restart=True: (repaired.append(restart),
+                                                       ActionResult(False, "refused"))[1])
+    seen = []
+    # Production runs the verifier without the injected System on purpose (a FRESH interpreter);
+    # the spy executes nothing and answers as a verifier that finds the units stale.
+    monkeypatch.setattr("subprocess.run", lambda argv, *a, **k: (
+        seen.append([str(x) for x in argv]), CR(1, "lhpc-web.service: modified_ours", ""))[1])
+    res = svc.self_update_run_service()
+    assert any("verify-set" in a for argv in seen for a in argv), seen
+    assert res.ok is False and res.data.get("units_refreshed") is False
+    assert "repair-integration" in res.summary
+    assert repaired == [], "the helper's sandbox cannot write units: it verifies, it does not repair"
+
+
 def test_a_failed_unit_refresh_makes_the_update_visibly_partial(op_svc, monkeypatch):
     """A failed refresh was stored only in ActionResult.data while ok stayed True, and the CLI
     renderer never shows that data — the operator saw a clean success."""
