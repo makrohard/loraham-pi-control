@@ -5,6 +5,9 @@
 - The dashboard's radio columns ask the daemon for updates only while the page is shown: nothing while the tab
   is in the background (one refresh when you come back), never a second request while the first is still
   unanswered, and after a failed update the next try waits 15 s instead of 3 s.
+- No change in behaviour, the same checks in the same order: the rule for when this box's clock may date
+  certificates (the clock gate behind `--accept-unverified-clock` and `lhpc doctor`'s `clock:` line) now lives in
+  one place, `lhpc/core/clock.py`.
 
 - Every release is now also installed, built and self-updated on a test box slowed down below a Pi Zero 2 W
   before it ships: an update that would stall or run into a time limit on a slow box turns the release check

@@ -44,6 +44,7 @@ lhpc/
     gps.py               # the one GPS resolver: plan, consumers, feed-marker rules
     restart_required.py  # the durable restart-required marker
     power.py             # reboot/shutdown controls and their pending marker
+    clock.py             # clock policy: when the clock may date certificates (gate, floor, refusal)
     install.py           # adopt/verify/update sources (git, pinned); source_fs.py the transaction
     runtime_fs.py        # descriptor-anchored path containment, atomic writes
     reslock.py           # named non-blocking operation locks
@@ -84,9 +85,9 @@ and results are identical.
 
 Service mixins orchestrate — locks, admission, authoritative rechecks, transaction order.
 Reusable interpretation and policy go in plain core modules as functions with explicit inputs
-(`resources.py`, `gps.py`, `jobs.py`, `restart_required.py`, `power.py`). Prefer a plain function
-over another mixin, and keep safety-critical ordering local to the coordinator even when that
-leaves it long.
+(`resources.py`, `gps.py`, `jobs.py`, `restart_required.py`, `power.py`, `clock.py`). Prefer a
+plain function over another mixin, and keep safety-critical ordering local to the coordinator even
+when that leaves it long.
 
 ## Manifest and config layers
 
