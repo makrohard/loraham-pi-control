@@ -27,6 +27,10 @@ from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
 from .snapshot_memo import invalidates_snapshot
 
+# Each step of the managed meshtastic CLI venv on a binary install (L5 of the slow-target
+# budget, tests/install/test_slow_target_budget.py): a pip install on the Zero's default channel.
+CLI_VENV_TIMEOUT_S = 900.0
+
 
 def _override_command(stack_id: str) -> str:
     """The one command that installs the published binary over the pin check (option 3)."""
@@ -702,7 +706,7 @@ class BinaryOpsMixin:
             for step in steps:
                 argv = _cmds.build_step_argv(step, self._system.runner,
                                              str(self._paths.runtime_root), src)
-                res = self._system.runner.run(argv, timeout=900.0, cwd=src)
+                res = self._system.runner.run(argv, timeout=CLI_VENV_TIMEOUT_S, cwd=src)
                 if getattr(res, "returncode", 1) != 0:
                     raise bi.BinaryInstallError(
                         "the managed meshtastic CLI could not be provisioned "

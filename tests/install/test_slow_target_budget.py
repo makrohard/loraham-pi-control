@@ -148,6 +148,11 @@ def _check_budget(op, measured, required, read=stt.limit) -> None:
                               f"slowest measured {op} ({worst:.0f} s)")
 
 
+def test_every_op_has_a_limit():
+    """An op with no limit mapped is never budgeted at all."""
+    assert set(stt.LIMITS) == set(stt.OPS), f"unmapped: {set(stt.OPS) - set(stt.LIMITS)}"
+
+
 def test_the_limits_are_the_products():
     """Read from the product: a literal here would stay green after the product changed."""
     from lhpc.core.install import Installer
@@ -156,6 +161,9 @@ def test_the_limits_are_the_products():
     assert stt.limit("checkout") == Installer._CHECKOUT_TIMEOUT_S
     assert stt.limit("selfupdate-pip") == ControllerService._PIP_SYNC_TIMEOUT_S
     assert stt.limit("selfupdate-helper") > 0
+    from lhpc.core import service_binary_ops, service_maintenance
+    assert stt.limit("cli-venv") == service_binary_ops.CLI_VENV_TIMEOUT_S
+    assert stt.limit("deb-fetch") <= service_maintenance.UPSTREAM_FETCH_TIMEOUT_S
 
 
 # ---- (c) keys ------------------------------------------------------------------------------
