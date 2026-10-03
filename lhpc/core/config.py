@@ -24,6 +24,7 @@ import re
 import tomllib
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+from enum import Enum
 from pathlib import Path
 
 from .assets import asset_path
@@ -1789,10 +1790,18 @@ def _resolve_journal_target(paths: Paths, rec) -> Path:
     return p
 
 
-def recover_config_transaction(paths: Paths) -> str | None:
-    """Recover a pending config journal. Returns a message if it restored cleanly,
-    None if there was NO journal, or "" if recovery is required but could not complete
-    (journal retained — caller must block). A journal that EXISTS but is malformed,
+class ConfigRecovery(str, Enum):
+    """The verdict of `recover_config_transaction`; callers decide on it, never on the note."""
+    UNNECESSARY = "unnecessary"     # no journal
+    RECOVERED = "recovered"         # the journal was rolled back and removed
+    BLOCKED = "blocked"             # a journal is pending and could not be finished — kept
+
+
+def recover_config_transaction(paths: Paths) -> tuple[ConfigRecovery, str]:
+    """Recover a pending config journal. Returns `(ConfigRecovery, note)`: RECOVERED with a note
+    if it restored cleanly, UNNECESSARY if there was NO journal, or BLOCKED if recovery is
+    required but could not complete (journal retained — caller must block); the note is "" for
+    the latter two. A journal that EXISTS but is malformed,
     unreadable, wrong-schema, duplicate, or names a non-allowlisted target is NEVER
     treated as absent — it blocks (fail-closed)."""
     from . import runtime_fs
@@ -1802,30 +1811,30 @@ def recover_config_transaction(paths: Paths) -> str | None:
         # The journal's OWN location escapes the runtime root (e.g. a journal symlink
         # whose target leaves the root): a pending journal that cannot be safely located
         # is recovery-required, never absent and never an uncaught containment exception.
-        return ""
+        return ConfigRecovery.BLOCKED, ""
     # Presence is decided WITHOUT following the leaf: ANY directory entry at the journal
     # path -- a regular file, OR a symlink (including a dangling or escaping one) -- is a
     # pending journal that must be recovered/blocked. `Path.exists()` follows the link and
     # would report a dangling-symlink journal as absent; `os.path.lexists` does not.
     if not os.path.lexists(jp):
-        return None
+        return ConfigRecovery.UNNECESSARY, ""
     try:
         journal = runtime_fs.loads_json(runtime_fs.read_text(paths, jp))   # no-follow read
     except (OSError, ValueError, PathContainmentError):
-        return ""                       # exists but unreadable/symlinked/malformed -> BLOCK
+        return ConfigRecovery.BLOCKED, ""  # exists but unreadable/symlinked/malformed -> BLOCK
     if (not isinstance(journal, dict) or journal.get("version") != _JOURNAL_VERSION
             or not isinstance(journal.get("targets"), list) or not journal["targets"]):
-        return ""                       # wrong schema -> BLOCK
+        return ConfigRecovery.BLOCKED, ""  # wrong schema -> BLOCK
     resolved, seen = [], set()
     try:
         for rec in journal["targets"]:
             p = _resolve_journal_target(paths, rec)
             if str(p) in seen:
-                return ""               # duplicate target -> BLOCK
+                return ConfigRecovery.BLOCKED, ""  # duplicate target -> BLOCK
             seen.add(str(p))
             resolved.append((p, rec))
     except ConfigError:
-        return ""                       # unknown/escaping/symlink target -> BLOCK
+        return ConfigRecovery.BLOCKED, ""  # unknown/escaping/symlink target -> BLOCK
     for p, rec in resolved:
         try:
             if rec.get("existed"):
@@ -1833,12 +1842,13 @@ def recover_config_transaction(paths: Paths) -> str | None:
             else:
                 runtime_fs.unlink(paths, p)           # descriptor-anchored, no-follow
         except (OSError, PathContainmentError):
-            return ""                   # recovery FAILED -> keep journal, BLOCK
+            return ConfigRecovery.BLOCKED, ""  # recovery FAILED -> keep journal, BLOCK
     try:
         runtime_fs.unlink(paths, jp)
     except (OSError, PathContainmentError):
-        return ""                       # journal could not be removed -> recovery-required
-    return f"recovered a pending config transaction ({len(resolved)} file(s))"
+        return ConfigRecovery.BLOCKED, ""  # journal could not be removed -> recovery-required
+    return (ConfigRecovery.RECOVERED,
+            f"recovered a pending config transaction ({len(resolved)} file(s))")
 
 
 def _finish_pending_journal(paths: Paths) -> str | None:
@@ -1858,12 +1868,12 @@ def _finish_pending_journal(paths: Paths) -> str | None:
     except OSError as exc:              # EACCES/EIO/...: presence unknown -> never "absent"
         raise ConfigRecoveryRequired(f"{refusal} (journal unreadable: {exc})") from exc
     try:
-        note = recover_config_transaction(paths)
+        outcome, note = recover_config_transaction(paths)
     except ConfigLockBusy:
         raise                           # already the typed refusal (a busy lock / recovery-required)
     except Exception as exc:            # a recovery that RAISES could not finish it either
         raise ConfigRecoveryRequired(f"{refusal} ({exc})") from exc
-    if not note:
+    if outcome is not ConfigRecovery.RECOVERED:     # the lstat saw a journal: it must be finished
         raise ConfigRecoveryRequired(refusal)
     return note
 

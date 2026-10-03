@@ -1599,7 +1599,7 @@ class ParamsConfigMixin:
                 # transaction may have left local.toml partially written — reading/patching
                 # it before recovery would resurrect rolled-back data or drop restored keys.
                 # Everything below reads the RECOVERED state.
-                if _config.recover_config_transaction(self._paths) == "":
+                if _config.recover_config_transaction(self._paths)[0] is _config.ConfigRecovery.BLOCKED:
                     return ActionResult(False, "a pending configuration transaction could "
                                         "not be recovered — nothing was changed "
                                         "(journal retained; see lhpc doctor)")
