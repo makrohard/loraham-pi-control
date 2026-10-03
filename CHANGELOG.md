@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.12
+
+- Every release is now also installed, built and self-updated on a test box throttled to a Pi Zero 2 W's CPU,
+  SD card and memory before it ships, and each run proves it is no faster than a real Zero on a fixed workload:
+  an update that would stall or run into a time limit on a slow box turns the release check red instead of
+  reaching yours.
+
 ## 0.11.11
 
 Upgrade note — boxes with the firewall installed: this release changes the firewall helper again, so the dashboard
