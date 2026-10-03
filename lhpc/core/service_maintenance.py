@@ -24,6 +24,10 @@ from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
 from .snapshot_memo import invalidates_snapshot
 
+# The upstream `.deb` fetch when the component declares no build_timeout (L6 of the slow-target
+# budget, tests/install/test_slow_target_budget.py).
+UPSTREAM_FETCH_TIMEOUT_S = 900.0
+
 # ---- upstream release tracking: pure helpers -------------------------------------------------
 
 def _version_key(v: str):
@@ -971,7 +975,8 @@ class MaintenanceOpsMixin:
         dest = str(self._paths.under(*(main.build_root or "build/tools/graywolf").split("/")))
         script = str(asset_path("scripts/graywolf-fetch.sh"))
         r = self._system.runner.run(["bash", script, dest, version, "--from-upstream"],
-                                    getattr(main, "build_timeout", 900.0) or 900.0)
+                                    getattr(main, "build_timeout", UPSTREAM_FETCH_TIMEOUT_S)
+                                    or UPSTREAM_FETCH_TIMEOUT_S)
         if getattr(r, "returncode", 1) != 0:
             return ActionResult(False, f"upstream fetch failed for '{target}' ({version}) — "
                                        "the install was left unchanged",

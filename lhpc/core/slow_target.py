@@ -54,6 +54,22 @@ def _l4_pip():
     return float(ControllerService._PIP_SYNC_TIMEOUT_S)
 
 
+def _l5_cli_venv():
+    from .service_binary_ops import CLI_VENV_TIMEOUT_S
+    return float(CLI_VENV_TIMEOUT_S)
+
+
+def _l6_fetch():
+    """What the upstream fetch actually gets: the component's build_timeout when it declares
+    one, else the default — the smallest over every fetched release."""
+    from .manifest import default_manifest_path, load_manifest
+    from .service_maintenance import UPSTREAM_FETCH_TIMEOUT_S
+    vals = [float(getattr(c, "build_timeout", 0) or UPSTREAM_FETCH_TIMEOUT_S)
+            for st in load_manifest(default_manifest_path()) for c in st.components
+            if getattr(c, "release_repo", "")]
+    return min(vals, default=float(UPSTREAM_FETCH_TIMEOUT_S))
+
+
 def _l7a_clone():
     from .install import Installer
     return float(Installer._CLONE_TIMEOUT_S)
@@ -70,6 +86,8 @@ LIMITS = {
     "build": ("L1 build stall", _l1_stall),
     "selfupdate-helper": ("L3 self-update helper TimeoutStartSec", _l3_helper),
     "selfupdate-pip": ("L4 self-update pip sync", _l4_pip),
+    "cli-venv": ("L5 managed Meshtastic CLI venv", _l5_cli_venv),
+    "deb-fetch": ("L6 upstream .deb fetch", _l6_fetch),
     "clone": ("L7a clone", _l7a_clone),
     "checkout": ("L7b checkout", _l7b_checkout),
 }
