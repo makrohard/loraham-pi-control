@@ -101,6 +101,19 @@ def test_lite_voice_start_ok_does_not_depend_on_the_sidecar_wording(tmp_path, mo
     assert res.ok is True, outcomes(res)
 
 
+def test_lite_voice_start_blocks_when_the_sidecar_command_is_not_presented(tmp_path, monkeypatch, set_call, real_spawn):
+    # The other half of the rule above: a non-main interactive result counts as the outcome only
+    # when its copy-paste command was presented. With no command, the same MANUAL_REQUIRED blocks.
+    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
+    _config_written(monkeypatch, svc)
+    set_call(svc)
+    monkeypatch.setattr(svc, "manual_start_command", lambda comp: "")
+    res = svc.start("voice", apply=True)
+    cli = next(r for r in res.results if r.component == "loraham-voice-cli")
+    assert cli.outcome == Outcome.MANUAL_REQUIRED
+    assert res.ok is False, outcomes(res)
+
+
 def test_voice_cli_command_is_printed_on_a_line_of_its_own(tmp_path, monkeypatch, set_call, real_spawn):
     # F-C2: the note was appended to the command, so pasting the printed line gave
     # "syntax error near unexpected token `('". The command line must parse as printed.
