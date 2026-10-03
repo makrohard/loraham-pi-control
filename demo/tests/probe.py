@@ -12,9 +12,10 @@ try:
     from lhpc_demo.app import build_app
     app, svc = build_app()
     c = app.test_client()
-    # the demo's real boot seed: a configured box (radio board + callsign), as visitors see it
-    from lhpc_demo.bridge import _seed
-    _seed(svc)
+    # the radio-board half of the demo's boot seed (bridge._seed): a configured dual-radio box,
+    # as visitors see it. Its identity half comes after the identity gate below is checked —
+    # with a node name already saved, that gate could never refuse.
+    svc.set_hardware_setup("loraham")
     # S1: the real routes render under Pyodide
     for p in ("/", "/stacks", "/healthz"):
         R[p] = c.get(p).status_code
