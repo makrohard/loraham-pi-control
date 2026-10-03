@@ -27,6 +27,12 @@ What CI enforces, branches and releases, the pin-bump recipe, and the gotchas on
     coverage in the log, a `coverage.xml` artifact per Python version and the total in the job
     summary
   - `bandit -q -r lhpc -lll` (high severity) and `pip-audit . --strict`, also after a test failure
+- `guards`, on Python 3.13, names the two suite guards that also run inside `test`:
+  - a fake that `monkeypatch.setattr` puts over an LHPC function or method is checked at every call
+    against the real signature (`tests/conftest.py`, `tests/repo/test_fake_signatures.py`);
+  - the ten systemd unit templates render to the hashes in `tests/data/unit-templates.sha256`, frozen
+    until the [staged unit migration](backlog.md#two-stage-unit-template-migration) exists
+    (`tests/repo/test_unit_templates_frozen.py`).
 - `pin-validation`: every pinned source has a rule in the release bot's policy, and every pin is
   an ancestor of its live branch with its referenced scripts present
 - `meshcore-host`: LHPC's own tests for `lhpc/data/meshcore_host` (not collected by `pytest -q`)
