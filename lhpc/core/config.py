@@ -1526,15 +1526,19 @@ def save_webserver_config(paths: Paths, *, bind=None, port=None, access_mode=Non
         if scheme not in WEBSERVER_SCHEMES:
             raise ConfigError(f"invalid scheme {scheme!r}")
         patch["scheme"] = scheme
-    # FAIL CLOSED on the impossible combination, rather than writing a config whose access mode nginx
-    # would silently ignore. Resolve against the CURRENT persisted values, not just this patch: saving
-    # scheme=http alone must still be refused when the stored access_mode requires a client cert.
-    _reject_http_with_cert_auth(paths, patch, "webserver")
     path = paths.runtime_root / "config" / "local.toml"
+
+    def _write():
+        # FAIL CLOSED on the impossible combination, rather than writing a config whose access mode
+        # nginx would silently ignore. Resolve against the CURRENT persisted values, read UNDER the
+        # lock: saving scheme=http alone must still be refused when the stored access_mode — even
+        # one another writer committed a moment ago — requires a client cert.
+        _reject_http_with_cert_auth(paths, patch, "webserver")
+        return _write_local_tables(paths, path, {"webserver": patch})
     if not hold_lock:
-        return _write_local_tables(paths, path, {"webserver": patch})
+        return _write()
     with config_lock(paths):
-        return _write_local_tables(paths, path, {"webserver": patch})
+        return _write()
 
 
 def save_firewall_config(paths: Paths, *, mode=None, allow_endpoints=None, ssh_ports=None,
@@ -1639,13 +1643,17 @@ def save_stackweb_config(paths: Paths, stack_id: str, *, mode=None, port=None, s
     `<stack_id>_<field>`). Validated before any write; `None` = leave unchanged. INTENT only —
     activation is `webserver apply`. `hold_lock=False` skips the internal config_lock — the
     CALLER already holds it (same contract as `save_webserver_config`)."""
-    table = _stackweb_table_patch(paths, stack_id, mode=mode, port=port, scheme=scheme,
-                                  access_mode=access_mode, allowed_cidrs=allowed_cidrs)
     path = paths.runtime_root / "config" / "local.toml"
+
+    def _write():
+        # Built (and the http/cert check run) on the config read UNDER the lock.
+        table = _stackweb_table_patch(paths, stack_id, mode=mode, port=port, scheme=scheme,
+                                      access_mode=access_mode, allowed_cidrs=allowed_cidrs)
+        return _write_local_tables(paths, path, {"stackweb": table})
     if not hold_lock:
-        return _write_local_tables(paths, path, {"stackweb": table})
+        return _write()
     with config_lock(paths):
-        return _write_local_tables(paths, path, {"stackweb": table})
+        return _write()
 
 
 def save_stackweb_configs(paths: Paths, updates: dict, hold_lock=True) -> Path:

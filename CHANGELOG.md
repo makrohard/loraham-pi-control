@@ -52,6 +52,8 @@
   the command the console shows can no longer apply the selection that was not saved.
 - A node name that happens to read like an internal template word (e.g. `__ROOT__`) reaches the node
   unchanged instead of breaking the post-start step.
+- Two simultaneous console saves can no longer combine plain http with client-certificate access (which
+  the next read silently turned into no authentication): the check reads the settings under the lock.
 
 ## 0.11.10
 

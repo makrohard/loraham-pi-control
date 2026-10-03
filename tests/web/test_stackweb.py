@@ -455,6 +455,41 @@ def test_saving_http_alone_is_refused_against_the_stored_cert_mode(tmp_path):
         save_stackweb_config(p, "meshcom", scheme="http")
 
 
+@pytest.mark.parametrize("target", ["console", "stackweb"])
+def test_http_cert_check_reads_the_config_under_the_lock(tmp_path, monkeypatch, target):
+    """Two writers: a web Apply sets a certificate mode while a CLI save sets scheme=http. The
+    second must judge the combination against what the first COMMITTED — the check runs on the
+    config read under the lock, so http plus a cert mode can never land on disk. The interleave
+    is driven at the lock seam: the other writer commits just before ours acquires the lock."""
+    import contextlib
+    p = _paths_stackweb_config(tmp_path)
+    if target == "console":
+        cfgmod.save_webserver_config(p, access_mode="no-auth")
+        other = lambda: cfgmod.save_webserver_config(p, access_mode="auth-everywhere")  # noqa: E731
+        ours = lambda: cfgmod.save_webserver_config(p, scheme="http")                   # noqa: E731
+        stored = lambda: load_config(p).webserver                                        # noqa: E731
+    else:
+        save_stackweb_config(p, "meshcom", port=8444, scheme="https", access_mode="no-auth")
+        other = lambda: save_stackweb_config(p, "meshcom", access_mode="auth-everywhere")  # noqa: E731
+        ours = lambda: save_stackweb_config(p, "meshcom", scheme="http")                   # noqa: E731
+        stored = lambda: load_config(p).stackweb["meshcom"]                                # noqa: E731
+    real_lock, fired = cfgmod.config_lock, []
+
+    @contextlib.contextmanager
+    def racing_lock(paths, *a, **k):
+        if not fired:
+            fired.append(True)
+            other()                                  # commits under the real lock first
+        with real_lock(paths, *a, **k):
+            yield
+    monkeypatch.setattr(cfgmod, "config_lock", racing_lock)
+    with pytest.raises(ConfigError, match="cannot do client-certificate"):
+        ours()
+    assert fired
+    st = stored()
+    assert (st.scheme, st.access_mode) == ("https", "auth-everywhere")
+
+
 def test_saving_http_with_no_auth_is_allowed(tmp_path):
     p = _paths_stackweb_config(tmp_path)
     save_stackweb_config(p, "meshcom", port=8444, scheme="http", access_mode="no-auth")
