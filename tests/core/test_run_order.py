@@ -785,6 +785,20 @@ def _keys(svc, op, target, band="", radio=""):
     return svc._lifecycle_lock_keys(op, target, band=band, radio=radio)
 
 
+def test_per_band_daemon_stop_locks_only_dependents_that_can_run_on_that_band(tmp_path):
+    # Stopped dependents stay locked (none may start mid-cascade), but a 433-only client is no
+    # part of an 868 stop: locking it made the stop refuse "busy" whenever one was starting.
+    keys = _svc(tmp_path)._lifecycle_lock_keys("stop", "daemon", band="868", cascade=True)
+    assert {"lifecycle.meshcore", "lifecycle.kiss"} <= set(keys)
+    assert not {"lifecycle.chat", "lifecycle.meshcom", "claim.loraham.radio.433"} & set(keys)
+    # a whole-daemon stop, and an 868 stop whose process also serves 433, still lock them
+    assert "lifecycle.chat" in _svc(tmp_path)._lifecycle_lock_keys("stop", "daemon", cascade=True)
+    both = ControllerService(system=FakeSystem(
+        cmdlines_data={100: ["loraham_daemon", "--radio", "both"]}).system,
+        paths=Paths(runtime_root=tmp_path))
+    assert "lifecycle.chat" in both._lifecycle_lock_keys("stop", "daemon", band="868", cascade=True)
+
+
 def test_voice_868_stop_locks_only_868(tmp_path):
     svc = _svc(tmp_path); svc._set_running_band("voice", "868")
     keys = _keys(svc, "stop", "voice")

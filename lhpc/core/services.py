@@ -2453,18 +2453,29 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 if holder:
                     add(holder, False, "", "", "")   # holder is a running peer; its own bands apply
         if cascade and op in ("stop", "restart"):      # a restart's stop leg cascades too
-            for dep in self._dependents_of(target):
-                add(dep, False, "", "", "stop")
+            # A PER-BAND daemon stop cascades only to the band(s) its stop leg takes down (dual-band
+            # collateral included) — the same scope `_stop_impl` gives `stop_dependents`.
+            sid = self.stack_of(target) or target
+            stk = self.stack(sid)
+            per_band = (stk is not None and stk.main == self.DAEMON_ID and band in ("433", "868"))
+            stopped = self._operation_bands(target, band, "", "stop") if per_band else None
+            for dep in self._dependents_of(target, stopped):
+                add(dep, False, band if per_band else "", "", "stop")
         return sorted(keys, key=reslock.canonical_key)
 
-    def _dependents_of(self, target: str) -> list[str]:
-        """Stack ids of RUNNING stacks that depend on `target` (for cascade stop)."""
+    def _dependents_of(self, target: str, bands=None) -> list[str]:
+        """Stack ids of the stacks that depend on `target`, running or not: a cascade locks the
+        stopped ones too, so none starts mid-cascade. With `bands`, a dependent that can run on
+        none of them is left out."""
         order_ids = {c.id for _, c in (self._run_order(target) or [])}
         out = set()
         for s in self.stacks():
-            for c in s.components:
-                if any(d in order_ids for d in (c.depends_on or ())):
-                    out.add(s.id)
+            if not any(d in order_ids for c in s.components for d in (c.depends_on or ())):
+                continue
+            can = {b for c in s.components for b in (c.bands or (c.band,)) if b}
+            if bands and can and not (can & set(bands)):
+                continue
+            out.add(s.id)
         return sorted(out)
 
     def _held_counts(self) -> dict:
