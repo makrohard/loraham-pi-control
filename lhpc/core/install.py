@@ -1576,6 +1576,11 @@ class Installer:
                             return (f"recovery-required for {dest.name}: archived prior "
                                     "could not be removed or was substituted (journal + "
                                     "prior retained)")
+                    # This transaction's own candidate never became the active tree: remove it on
+                    # its FULL v5 identity, or it stays on disk for good. An unprovable leaf stays.
+                    cand_ident = idents.get("candidate") if idents else None
+                    if cand_ident is not None and txn.leaf_kind(staging.name) != "absent":
+                        source_fs.remove_bound(txn.fd, staging.name, cand_ident)
                     return _cleared("active source intact")
                 if txn.leaf_kind(staging.name) != "absent" and txn.leaf_kind(dest.name) == "absent":
                     # PROMOTION IS CARRY-BLIND. The interruption may have landed anywhere between

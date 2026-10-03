@@ -837,6 +837,27 @@ def test_recovery_clears_an_activation_interrupted_right_after_promotion(tmp_pat
     assert (dest / "file.txt").read_text() == "v2\n" and _rec(inst).resolved_commit == new_head
 
 
+@pytest.mark.parametrize("ours", [True, False])
+def test_recovery_of_an_untouched_dest_removes_its_own_staged_candidate(tmp_path, git, make_repo, installer, ours):
+    # Died after the journal, before the archive: dest is intact and recovery clears the journal —
+    # but left the staged clone (a whole source tree) on the SD card for good. Only a candidate
+    # still proven by its full recorded identity is removed.
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    dest, _, staging, _ = _journal_before_rename(git, tmp_path, inst, "planned")
+    if not ours:
+        j = json.loads(inst._journal_path(dest).read_text())
+        j["idents"]["candidate"][2] -= 1                    # touched since: not provably ours
+        inst._journal_path(dest).write_text(json.dumps(j))
+    msgs = inst.recover_source_activations()
+    assert any("active source intact" in m for m in msgs), msgs
+    assert not inst._journal_path(dest).exists()
+    assert (dest / "file.txt").read_text() == "hello\n"         # the active source untouched
+    assert staging.exists() is (not ours)
+
+
 def test_a_prev_substituted_while_dest_is_present_is_never_removed_on_dev_ino(tmp_path, git, make_repo, installer):
     # The dev+ino-only proof is bound to a `planned` journal with NO dest. With a tree at dest the
     # archived prior keeps its full proof, so a stale `.prev` is retained, never cleaned away.
