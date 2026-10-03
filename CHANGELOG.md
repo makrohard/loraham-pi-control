@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.0
+
+- Whether a job, an HMAC apply or an auto-install whose stop could not be proven is treated as unsafe, whether
+  a start with a terminal-only part (the Voice terminal variant) counts as successful, and whether a half-finished
+  configuration save blocks the next one are now decided from a recorded fact, never from the wording of the
+  message you see. The messages themselves are unchanged.
+
 ## 0.11.12
 
 - Every release is now also installed, built and self-updated on a test box slowed down below a Pi Zero 2 W
