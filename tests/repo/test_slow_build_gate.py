@@ -6,6 +6,7 @@ and runs it over synthetic JUnit files and baselines.
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -142,18 +143,31 @@ def _resolve_step() -> str:
     return textwrap.dedent(m.group(2))
 
 
-def _resolve(tmp_path: Path, storage: str, driver: str = "overlay2"):
-    """The step, as the runner runs it (`bash -e`), with a stub `docker` naming `storage`."""
+def _mountinfo(upper: str | None) -> str:
+    """The lab container's root line in /proc/self/mountinfo: an overlay with `upper`, or (None)
+    a root that is not an overlay."""
+    if upper is None:
+        return "1313 1134 254:1 / / rw,relatime - ext4 /dev/vda1 rw\n"
+    return (f"1313 1134 0:104 / / rw,relatime - overlay overlay rw,lowerdir=/l1:/l2,"
+            f"upperdir={upper},workdir=/w\n")
+
+
+def _resolve(tmp_path: Path, storage: str, upper: str | None):
+    """The step, as the runner runs it (`bash -e`), with a stub `docker` naming `storage` and
+    reporting the container root `_mountinfo(upper)`, and a pass-through `sudo`."""
     stub = tmp_path / "bin"
     stub.mkdir()
+    (tmp_path / "mountinfo").write_text(_mountinfo(upper))
     (stub / "docker").write_text(
-        "#!/bin/sh\ncase $* in *DockerRootDir*) echo " + storage + " ;; "
-        "*Driver*) echo " + driver + " ;; *) exit 9 ;; esac\n")
-    (stub / "docker").chmod(0o755)
+        "#!/bin/sh\ncase $1 in info) case $* in *DockerRootDir*) echo " + storage + " ;; "
+        "*) exit 9 ;; esac ;; run) cat " + str(tmp_path / "mountinfo") + " ;; *) exit 9 ;; esac\n")
+    (stub / "sudo").write_text('#!/bin/sh\n[ "$1" = -n ] && shift\nexec "$@"\n')
+    for f in ("docker", "sudo"):
+        (stub / f).chmod(0o755)
     env_file = tmp_path / "github_env"
     env_file.write_text("")
     env = {"PATH": f"{stub}:/usr/bin:/bin:/usr/sbin:/sbin", "GITHUB_ENV": str(env_file),
-           "SLOW_WRITE_IOPS": "120", "SLOW_READ_IOPS": "1200"}
+           "IMG": "lhpc-testlab:ci", "SLOW_WRITE_IOPS": "120", "SLOW_READ_IOPS": "1200"}
     r = subprocess.run(["bash", "-e", "-c", _resolve_step()], env=env, capture_output=True,
                        text=True, check=False)
     return r, env_file.read_text()
@@ -164,6 +178,22 @@ def _tools():
         pytest.skip("findmnt / lsblk / /proc/swaps are not available here")
 
 
+def _major_minor(path: Path) -> str | None:
+    """The MAJ:MIN of `path`'s filesystem when it is a block device here, else None."""
+    probe = subprocess.run(["findmnt", "-n", "-o", "MAJ:MIN", "--target", str(path)],
+                           capture_output=True, text=True, check=False).stdout.split()
+    return probe[0] if probe and Path(f"/sys/dev/block/{probe[0]}").exists() else None
+
+
+def _on_disk(tmp_path: Path) -> Path:
+    """A directory whose filesystem is a block device here: the test's own, the root's or /boot's
+    (a tmpfs or btrfs has an anonymous MAJ:MIN)."""
+    for d in (tmp_path, Path("/"), Path("/boot")):
+        if _major_minor(d):
+            return d
+    pytest.skip("no directory on a block device here")
+
+
 @pytest.mark.parametrize("storage", ["no/such/storage", "/proc"])   # missing; no block device
 def test_an_unresolvable_required_disk_stops_the_job_before_any_measurement(tmp_path, storage):
     """Correction 8, finding 2: Docker's storage on no resolvable disk was skipped (`return 0`)
@@ -171,7 +201,7 @@ def test_an_unresolvable_required_disk_stops_the_job_before_any_measurement(tmp_
     measuring step no throttle to run with."""
     _tools()
     storage = str(tmp_path / storage)
-    r, env = _resolve(tmp_path, storage)
+    r, env = _resolve(tmp_path, storage, str(_on_disk(tmp_path)))
     assert r.returncode == 1, r.stdout + r.stderr
     assert (f"::error::STOP: backing device of {storage} could not be "
             "resolved — the throttle cannot be applied") in r.stdout, r.stdout
@@ -190,14 +220,49 @@ def test_disk_of_fails_loudly_on_an_unresolvable_path(tmp_path):
 
 def test_a_resolvable_storage_disk_is_throttled_and_named_to_the_lane(tmp_path):
     _tools()
-    probe = subprocess.run(["findmnt", "-n", "-o", "MAJ:MIN", "--target", str(tmp_path)],
-                           capture_output=True, text=True, check=False).stdout.split()
-    if not probe or not Path(f"/sys/dev/block/{probe[0]}").exists():
-        pytest.skip("the test's own disk does not resolve here")
-    r, env = _resolve(tmp_path, str(tmp_path))
+    disk = _on_disk(tmp_path)
+    r, env = _resolve(tmp_path, str(disk), str(disk))
     assert r.returncode == 0, r.stdout + r.stderr
     flags = re.search(r"^SLOW_IO_FLAGS=(.*)$", env, re.M).group(1)
     root = re.search(r"^SLOW_IO_ROOT_DISK=(\d+:\d+)$", env, re.M)
     assert root, env
     disk = re.search(r"--device-write-iops (/dev/\S+):120 --device-read-iops \1:1200", flags)
     assert disk, flags
+
+
+def test_the_writable_layer_is_the_upperdir_the_container_reports(tmp_path):
+    """Correction 9: the writable layer's disk is measured from a lab container's own root mount
+    (the overlay's upperdir), never derived from the storage driver's name. A reported upperdir
+    on no resolvable disk stops the job, although Docker's storage resolves; one that resolves is
+    the disk named to the lane."""
+    _tools()
+    disk = _on_disk(tmp_path)
+    upper = str(tmp_path / "no" / "such" / "upper")
+    r, env = _resolve(tmp_path, str(disk), upper)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert (f"::error::STOP: backing device of {upper} could not be resolved — the throttle "
+            "cannot be applied") in r.stdout, r.stdout
+    assert "SLOW_IO_FLAGS" not in env and "SLOW_IO_ROOT_DISK" not in env
+
+
+def test_the_lane_is_named_the_disk_of_the_reported_upperdir(tmp_path):
+    _tools()
+    disk = _on_disk(tmp_path)
+    r, env = _resolve(tmp_path, str(disk), str(disk))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f"writable layer (measured): {disk}" in r.stdout, r.stdout
+    whole = Path(os.path.realpath(f"/sys/dev/block/{_major_minor(disk)}"))
+    whole = whole.parent if (whole / "partition").exists() else whole
+    named = re.search(r"^SLOW_IO_ROOT_DISK=(.*)$", env, re.M).group(1)
+    assert named == (whole / "dev").read_text().strip(), (named, whole)
+
+
+def test_a_container_root_that_is_not_an_overlay_stops_the_job(tmp_path):
+    """No upperdir, no measurement: the job stops instead of guessing the layer's disk."""
+    _tools()
+    disk = _on_disk(tmp_path)
+    r, env = _resolve(tmp_path, str(disk), None)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert ("::error::STOP: the lab container's root is not an overlay with an upperdir — its "
+            "writable layer's disk cannot be measured") in r.stdout, r.stdout
+    assert "SLOW_IO_FLAGS" not in env and "SLOW_IO_ROOT_DISK" not in env

@@ -303,7 +303,8 @@ def _required_disks() -> tuple[dict[str, str], list[str]]:
     """The disks that MUST be throttled, {what: MAJ:MIN}, and why any of them is unknown.
 
     The container's writable layer has no block device inside the container (overlay): the job
-    resolves the disk behind Docker's storage and names it in SLOW_IO_ROOT_DISK. The calibration
+    measures it outside (the overlay upperdir a lab container reports for its root) and names its
+    disk in SLOW_IO_ROOT_DISK. The calibration
     work dir resolves here; on the writable layer it is that same disk. Unknown is a problem,
     never a skip."""
     found, problems = {}, []

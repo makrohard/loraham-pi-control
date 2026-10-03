@@ -252,13 +252,15 @@ jobs:
           docker build -t "$IMG" -f .devcontainer/Dockerfile .devcontainer
           echo "IMG=$IMG" >> "$GITHUB_ENV"
 
-      # io.max takes whole disks. REQUIRED: the disk behind the container's writable layer
-      # (Docker's storage, or containerd's with its image store), where the calibration work dir
-      # under the lab user's home lives, and the disk behind Docker's storage, which holds the
-      # /tmp volume. Each resolves, or the job STOPS here, before any measurement. An active swap
-      # area's disk is throttled too, or skipped with a notice. The lane re-checks io.max for the
-      # writable layer's disk (SLOW_IO_ROOT_DISK) and the work dir's, and records nothing unless
-      # each is throttled.
+      # io.max takes whole disks. REQUIRED: the disk behind the container's writable layer,
+      # where the calibration work dir under the lab user's home lives, and the disk behind
+      # Docker's storage, which holds the /tmp volume. The writable layer is measured, not
+      # assumed: a container from the lab image reports its root mount, and the overlay's
+      # upperdir (a host path) is where a container's writes land; a root that is not an overlay
+      # stops the job. Each disk resolves (as root: Docker's directories are root-only), or the
+      # job STOPS here, before any measurement. An active swap area's disk is throttled too, or
+      # skipped with a notice. The lane re-checks io.max for the writable layer's disk
+      # (SLOW_IO_ROOT_DISK) and the work dir's, and records nothing unless each is throttled.
       - name: Resolve the disks to throttle
         run: |
           # The whole disk behind a path or block device, as /dev/NAME; non-zero, naming the
@@ -266,7 +268,7 @@ jobs:
           disk_of() {
             local mm d
             if [ -b "$1" ]; then mm=$(lsblk -dno MAJ:MIN "$1" 2>/dev/null | tr -d ' ')
-            else mm=$(findmnt -n -o MAJ:MIN --target "$1" 2>/dev/null | head -1 | tr -d ' '); fi
+            else mm=$(sudo -n findmnt -n -o MAJ:MIN --target "$1" 2>/dev/null | head -1 | tr -d ' '); fi
             if [ -z "$mm" ] || [ ! -e "/sys/dev/block/$mm" ]; then
               echo "disk_of: backing device of $1 could not be resolved (MAJ:MIN ${mm:-none})" >&2
               return 1
@@ -278,8 +280,13 @@ jobs:
           cat /proc/swaps
           lsblk
           storage=$(docker info -f '{{.DockerRootDir}}')
-          layer=$storage
-          if [ "$(docker info -f '{{.Driver}}')" = overlayfs ]; then layer=/var/lib/containerd; fi
+          layer=$(docker run --rm "$IMG" cat /proc/self/mountinfo \
+            | awk '$5 == "/"' | sed -n 's/.* - overlay .*[ ,]upperdir=\([^,]*\).*/\1/p')
+          if [ -z "$layer" ]; then
+            echo "::error::STOP: the lab container's root is not an overlay with an upperdir — its writable layer's disk cannot be measured"
+            exit 1
+          fi
+          echo "writable layer (measured): $layer"
           disks=
           for path in "$layer" "$storage"; do
             d=$(disk_of "$path") && test -b "$d" || {
