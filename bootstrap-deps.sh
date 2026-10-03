@@ -666,7 +666,11 @@ fi
 # The read-only CONFLICT check ran UP FRONT (before any mutation, item P); here we only APPEND
 # the idempotent lines for the chosen mode. CONFIG_TXT was set in the pre-flight above.
 add_cfg() {  # append $1 iff absent (idempotent)
-	if ! grep -qxF "$1" "$CONFIG_TXT" 2>/dev/null; then printf "%s\n" "$1" | tee -a "$CONFIG_TXT" >/dev/null; fi
+	if ! grep -qxF "$1" "$CONFIG_TXT" 2>/dev/null; then
+		# an unterminated last line first gets its newline: never glue $1 onto it
+		if [ -s "$CONFIG_TXT" ] && [ -n "$(tail -c1 "$CONFIG_TXT")" ]; then printf "\n" | tee -a "$CONFIG_TXT" >/dev/null; fi
+		printf "%s\n" "$1" | tee -a "$CONFIG_TXT" >/dev/null
+	fi
 }
 case "$SPI_MODE" in
 	soft-cs)

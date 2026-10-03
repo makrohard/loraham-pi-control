@@ -56,6 +56,8 @@
   the next read silently turned into no authentication): the check reads the settings under the lock.
 - The dashboard's daemon readiness no longer reads a garbled or oversized daemon status reply as "ready":
   it uses the same strict reader as the daemon settings.
+- `bootstrap-deps.sh` no longer glues the SPI line onto the last line of a `config.txt` that does not end in
+  a newline (which disabled SPI and broke your last setting).
 
 ## 0.11.10
 

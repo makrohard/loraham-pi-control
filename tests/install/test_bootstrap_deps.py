@@ -351,6 +351,16 @@ def test_soft_cs_is_idempotent(tmp_path):
     assert txt.count("dtparam=spi=on") == 1 and txt.count("dtoverlay=spi0-0cs") == 1
 
 
+def test_spi_line_never_glues_onto_an_unterminated_last_line(tmp_path):
+    # A config.txt whose last line has no newline: appending must not turn the operator's last
+    # directive (here the USB-gadget overlay a headless box may need to stay reachable) into
+    # `dtoverlay=dwc2dtparam=spi=on` — both would be lost.
+    r, cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "hardware-cs", "--operator-user", _USER],
+                             config_seed="dtoverlay=dwc2")
+    assert r.returncode == 0, r.stderr
+    assert cfg.read_text() == "dtoverlay=dwc2\ndtparam=spi=on\n"
+
+
 def test_conflicting_soft_cs_fails_closed(tmp_path):
     # SPI already enabled WITHOUT the soft-CS overlay (hardware-CS layout) -> refuse to add it.
     # the conflict is caught in the UP-FRONT pre-flight, so NOTHING is mutated (the old code
