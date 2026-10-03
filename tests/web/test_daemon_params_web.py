@@ -163,6 +163,8 @@ def _echo_svc(tmp_path):
     # A daemon that echoes STATUS and CHANNEL correctly, so every confirmable param read-backs OK.
     class _Echo:
         def request(self, path, payload, timeout, max_bytes):
+            if payload.startswith(b"SET "):
+                return b"OK\n"
             if payload.strip().startswith(b"GET CHANNEL"):
                 return b"CHANNEL MODE=LORA\n"
             return (b"STATUS RADIO=READY TXMODE=MANAGED TXQUEUE=1 CADMONITOR=0 CADRSSI=-90 "
@@ -202,6 +204,16 @@ def test_apply_live_reports_confirmed_vs_sent_unconfirmed(tmp_path):
     d = svc.apply_daemon_params("daemon", "433").data
     assert "SF" in d["sent_unconfirmed"] and "SF" not in d["confirmed"]
     assert "CADIDLE" in d["confirmed"]
+
+
+def test_apply_live_counts_a_refused_set_as_failed(tmp_path):
+    # The daemon refuses SF with ERR: Apply counts it failed, never "sent".
+    sock = "/tmp/loraconf433.sock"
+    svc = ControllerService(system=FakeSystem(
+        unix_replies={sock: b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n"},
+        set_replies={sock: b"ERR INVALID\n"}).system, paths=Paths(runtime_root=tmp_path))
+    r = svc.apply_daemon_params("daemon", "433")
+    assert not r.ok and "SF" in r.data["failed"] and "SF" not in r.data["sent_unconfirmed"]
 
 
 def test_apply_live_failure_flashes_warning(web, csrf):

@@ -429,7 +429,7 @@ def live_power_error(value: str, running_family: str, live_high_power: bool | No
     Rule: the RUNNING `CHIPFAMILY` decides the live numeric set; the saved hardware family decides
     only what may be persisted for the next launch (`validate_set`). Otherwise a Hardware setup
     saved after the daemon started lets a live `POWER=0` reach a running SX127x (which refuses it
-    while the unconfirmable SET is reported "sent"), or refuses a legitimate `POWER=0` on a
+    with `ERR`), or refuses a legitimate `POWER=0` on a
     running SX1262.
 
       * running SX1262           -> 0..20; the permission is irrelevant
@@ -492,17 +492,40 @@ def is_confirmable(key: str) -> bool:
     return key.upper() in _VERIFY
 
 
-def apply_set(system: System, band: str, key: str, value: str) -> tuple[bool, bool, str]:
-    """Apply one validated SET to the CONF socket and CONFIRM via read-back.
+def _ack(raw: bytes) -> tuple[str, str]:
+    """Classify the daemon's one reply line to a SET on its RAW first line (a trailing CR
+    allowed): exactly `OK` -> ("OK", ""); `ERR` alone or `ERR <WHY>` -> ("ERR", why); no line
+    -> ("", ""); any other line -> ("INVALID", ""), an invalid reply. The token is never
+    sanitised before it is classified (`O\\x00K` is not OK, `ERROR …` / `ERRINVALID` are not
+    ERR); only the ERR reason shown to the operator is (capped at `_MAX_LINE`, printable ASCII)."""
+    line = raw.split(b"\n", 1)[0]
+    if line.endswith(b"\r"):
+        line = line[:-1]
+    if line == b"OK":
+        return "OK", ""
+    if line == b"ERR" or line.startswith(b"ERR "):
+        why = line[4:_MAX_LINE].decode("ascii", "replace")
+        return "ERR", "".join(c for c in why if 32 <= ord(c) < 127).strip()
+    return ("INVALID" if line else ""), ""
 
-    The daemon acks every command line ("OK" / "ERR ..."), but does not ECHO every radio
-    param back in GET STATUS/CHANNEL. Confirmation therefore means read-back, not the ack:
-    send the SET, then GET the field that reports it back and check the hardware actually
-    took the value before reporting success. Returns (ok, confirmed, detail):
-      * read-back matches                     -> (True,  True,  "… confirmed")
-      * key the daemon never reports back     -> (True,  False, "… SENT but UNCONFIRMED …")
-      * read-back mismatch / not reported     -> (False, False, "NOT applied — daemon reports …")
-      * invalid band / rejected / unreachable -> (False, False, …)
+
+def apply_set(system: System, band: str, key: str, value: str) -> tuple[bool, bool, str]:
+    """Apply one validated SET to the CONF socket, read its ack, and CONFIRM via read-back.
+
+    The daemon answers every command line with exactly one "OK" or "ERR <WHY>", but does not
+    ECHO every radio param back in GET STATUS/CHANNEL. So: send the SET and read that one reply
+    line (bounded, 1 s); only an "OK" goes on — to the read-back for a key the daemon reports
+    back, which then decides. Returns (ok, confirmed, detail):
+      * OK, read-back matches                 -> (True,  True,  "… confirmed")
+      * OK, key the daemon never reports back -> (True,  False, "… SENT but UNCONFIRMED …")
+      * OK, read-back mismatch / not reported -> (False, False, "NOT applied — daemon reports …")
+      * ERR <WHY>                             -> (False, False, "… refused by the daemon (ERR …)")
+      * timeout / empty                       -> (False, False, "… SET unconfirmed — no valid OK …")
+      * any other line (not exactly OK/ERR)   -> (False, False, "… SET unconfirmed — invalid reply …")
+      * transport error                       -> (False, False, "… SET not confirmed — <error>")
+      * invalid band / rejected value         -> (False, False, …)
+    No read-back follows anything but an OK: a GET could show a value that was already there.
+    A timeout or transport error does not prove the SET went out, so it is never called "sent".
     A caller must NEVER present a (True, False, …) result as 'applied' — only 'sent'."""
     err = validate_set(key, value)
     if err:
@@ -512,13 +535,23 @@ def apply_set(system: System, band: str, key: str, value: str) -> tuple[bool, bo
     key, value = key.upper(), canonical_value(key, value).upper()   # the validated token, canonical
     sock = conf_socket(band)                     # band already validated above
     try:
-        system.unix.send(sock, f"SET {key}={value}\n".encode(), _READ_TIMEOUT)
+        ack, why = _ack(system.unix.request(sock, f"SET {key}={value}\n".encode(), _READ_TIMEOUT,
+                                            _MAX))
+    except TimeoutError:                          # before OSError: a timeout is "no ack", not an error
+        ack, why = "", ""
     except OSError as exc:
-        return False, False, f"CONF socket unreachable: {exc}"
+        return False, False, f"{key}={value}: SET not confirmed — {type(exc).__name__}: {exc}"
+    if ack == "ERR":
+        return False, False, f"{key}={value} refused by the daemon ({f'ERR {why}'.strip()})"
+    if ack == "INVALID":                          # a line that is neither OK nor ERR
+        return False, False, f"{key}={value}: SET unconfirmed — invalid reply (no valid OK)"
+    if ack != "OK":                               # timeout or empty
+        return False, False, (f"{key}={value}: SET unconfirmed — no valid OK within "
+                              f"{_READ_TIMEOUT:g} s")
     if key not in _VERIFY:
-        return True, False, (f"{key}={value} SENT but UNCONFIRMED — a radio param the daemon "
-                             "does not report back, so it cannot be verified over the socket "
-                             "(check the daemon log)")
+        return True, False, (f"{key}={value} SENT but UNCONFIRMED — accepted (OK), but a radio "
+                             "param the daemon does not report back, so it cannot be verified "
+                             "over the socket (check the daemon log)")
     cmd, field = _VERIFY[key]
     prefix = cmd.split()[1].decode("ascii")     # b"GET STATUS\n" -> "STATUS"
     try:

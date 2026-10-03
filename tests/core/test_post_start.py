@@ -1796,6 +1796,8 @@ def test_tx_mode_succeeds_when_readback_matches(tmp_path):
                 self.mode = payload.split(b"=", 1)[1].strip()
         def request(self, path, payload, timeout, max_bytes):
             self._maybe_set(payload)
+            if payload.startswith(b"SET "):
+                return b"OK\n"                      # the daemon acks every SET
             return b"STATUS RADIO=READY TXMODE=" + self.mode + b"\n"
         def send(self, path, payload, timeout):
             self._maybe_set(payload)
@@ -1829,6 +1831,8 @@ def test_cadidle_succeeds_when_readback_matches(tmp_path):
                 self.idle = payload.split(b"=", 1)[1].strip()
         def request(self, path, payload, timeout, max_bytes):
             self._maybe_set(payload)
+            if payload.startswith(b"SET "):
+                return b"OK\n"                      # the daemon acks every SET
             return b"STATUS RADIO=READY TXMODE=MANAGED CADIDLE=" + self.idle + b"\n"
         def send(self, path, payload, timeout):
             self._maybe_set(payload)

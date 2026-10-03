@@ -175,8 +175,9 @@ start.
 
 ## Daemon control
 
-Live settings go to the per-band CONF socket. The daemon answers only `GET`, so `lhpc` sends the
-`SET` and confirms by reading back `GET STATUS`. Only whitelisted keys are allowed (the list:
+Live settings go to the per-band CONF socket. The daemon answers every line with one `OK` or
+`ERR <reason>`; `lhpc` reads that reply to each `SET` (an `ERR`, or no `OK` within 1 s, is a failure)
+and confirms a key the daemon reports back by reading back `GET STATUS`. Only whitelisted keys are allowed (the list:
 [stacks/daemon.md](stacks/daemon.md#radio-parameters)); nothing transmits by itself.
 
 ## Safety model

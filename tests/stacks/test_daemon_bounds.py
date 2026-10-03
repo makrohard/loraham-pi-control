@@ -86,6 +86,8 @@ class _StoreThenOversize:
     """SET stores the value; the GET read-back returns an OVERSIZED line so the
     bounded parser rejects it -> apply_set must NOT confirm."""
     def request(self, path, payload, timeout, max_bytes):
+        if payload.startswith(b"SET "):
+            return b"OK\n"                          # acked, so the read-back is what is tested
         return b"STATUS " + b"X=1 " * 5000 + b"\n"
     def send(self, path, payload, timeout):
         pass

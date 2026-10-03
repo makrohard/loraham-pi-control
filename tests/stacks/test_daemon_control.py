@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from lhpc.core import daemon_control as dc
 from lhpc.core.probes.backends import FakeSystem
 
@@ -65,19 +67,17 @@ def test_integer_values_are_ascii_decimal_and_sent_canonical():
         assert dc.validate_set("SF", bad) is not None, bad
     assert dc.validate_set("SF", "+10") is None
     assert dc.validate_set("SF", "1" * 5000) == "SF must be an integer in [7, 12]"   # past int()'s digit limit
-    sent = []
     fs = FakeSystem(unix_replies={dc.conf_socket("433"): b"STATUS SF=10\n"})
-    orig = fs.system.unix.send
-    fs.system.unix.send = lambda path, data, timeout: (sent.append(data), orig(path, data, timeout))[1]
+    sent = lambda: [p for _, p in fs.sent]                         # noqa: E731
     ok, _c, _ = dc.apply_set(fs.system, "433", "SF", "010")
-    assert ok and sent == [b"SET SF=10\n"]
+    assert ok and sent() == [b"SET SF=10\n"]
     ok, _c, _ = dc.apply_set(fs.system, "433", "SF", "1_0")
-    assert not ok and sent == [b"SET SF=10\n"]                  # refused before the socket
+    assert not ok and sent() == [b"SET SF=10\n"]                # refused before the socket
 
 
 def test_apply_set_confirms_via_readback():
-    # The daemon never acks a SET — apply_set sends it, then GETs the field back and
-    # confirms the hardware took the value before reporting success.
+    # The daemon acks a SET with OK; confirmation is the read-back — apply_set GETs the field
+    # back and confirms the hardware took the value before reporting success.
     fake = FakeSystem(unix_replies={dc.conf_socket("433"): b"STATUS TXMODE=DIRECT CADWAIT=1500\n"})
     ok, confirmed, detail = dc.apply_set(fake.system, "433", "TXMODE", "DIRECT")
     assert ok and confirmed and "confirmed" in detail
@@ -102,7 +102,95 @@ def test_apply_set_radio_param_cannot_be_confirmed():
 def test_apply_set_unreachable_socket():
     err = FakeSystem(unix_errors={dc.conf_socket("868"): "no socket"}).system
     ok, confirmed, detail = dc.apply_set(err, "868", "TXMODE", "DIRECT")
-    assert not ok and not confirmed and "unreachable" in detail
+    assert not ok and not confirmed and "not confirmed" in detail and "no socket" in detail
+
+
+class _AckStub:
+    """A unix client with the base interface (`request` + `send`): a SET gets `ack` (raising it
+    when it is an exception), every GET the `status` line. `send` is a no-op, so a client that
+    fires the SET and never reads the ack sees no refusal."""
+
+    def __init__(self, ack, status=b"STATUS RADIO=READY TXMODE=MANAGED\n"):
+        self.ack, self.status = ack, status
+
+    def request(self, path, payload, timeout, max_bytes):
+        if payload.startswith(b"SET "):
+            if isinstance(self.ack, BaseException):
+                raise self.ack
+            return self.ack
+        return self.status
+
+    def send(self, path, payload, timeout):
+        pass
+
+
+def _stub_system(ack, status=b"STATUS RADIO=READY TXMODE=MANAGED\n"):
+    sys = FakeSystem().system
+    sys.unix = _AckStub(ack, status)
+    return sys
+
+
+@pytest.mark.safety("daemon-set-truthful")
+def test_a_daemon_err_reply_fails_apply_set():
+    # The daemon answers a SET it refuses with ERR <WHY>. A radio param has no read-back, so the
+    # ERR is the only evidence: dropping it reported "SENT" for a value the daemon rejected.
+    ok, confirmed, detail = dc.apply_set(_stub_system(b"ERR INVALID\n"), "433", "SF", "12")
+    assert not ok and not confirmed and "ERR INVALID" in detail
+
+
+@pytest.mark.safety("daemon-set-truthful")
+def test_a_daemon_err_ack_makes_apply_set_fail():
+    sock = dc.conf_socket("433")
+    fake = FakeSystem(unix_replies={sock: b"STATUS TXMODE=DIRECT\n"},
+                      set_replies={sock: b"ERR INVALID\n"})
+    ok, confirmed, detail = dc.apply_set(fake.system, "433", "SF", "12")
+    assert ok is False and confirmed is False and "ERR INVALID" in detail
+    ok, _c, detail = dc.apply_set(fake.system, "433", "TXMODE", "DIRECT")
+    assert not ok and "ERR INVALID" in detail                     # no read-back after an ERR
+
+
+@pytest.mark.safety("daemon-set-truthful")
+def test_a_set_without_an_ok_is_never_reported_sent():
+    # A timeout, an empty reply or a line that is neither OK nor ERR is no ack: never "sent".
+    for ack in (TimeoutError("timed out"), b"", b"TX=1\n"):
+        ok, confirmed, detail = dc.apply_set(_stub_system(ack), "433", "SF", "12")
+        assert not ok and not confirmed and "unconfirmed" in detail and "SENT" not in detail, ack
+
+
+@pytest.mark.safety("daemon-set-truthful")
+def test_a_malformed_reply_is_classified_on_the_raw_line():
+    # The token is classified before any sanitising: a NUL inside "OK" is not OK, and an "ERR"
+    # prefix without a space is not a refusal either -- both are invalid replies, never "sent".
+    status = b"STATUS RADIO=READY TXMODE=DIRECT\n"
+    for ack in (b"O\x00K\n", b"OK \n", b"ERROR INVALID\n", b"ERRINVALID\n"):
+        for key, value in (("SF", "12"), ("TXMODE", "DIRECT")):
+            ok, confirmed, detail = dc.apply_set(_stub_system(ack, status), "433", key, value)
+            assert not ok and not confirmed, (ack, key)
+            assert "invalid reply" in detail and "refused" not in detail, (ack, key)
+
+
+@pytest.mark.safety("daemon-set-truthful")
+def test_a_well_formed_reply_keeps_its_meaning():
+    # "ERR <WHY>" is a refusal with its (sanitised) reason; a CRLF line ending is still OK.
+    ok, confirmed, detail = dc.apply_set(_stub_system(b"ERR INVALID\r\n"), "433", "SF", "12")
+    assert not ok and not confirmed and "refused by the daemon (ERR INVALID)" in detail
+    ok, _c, detail = dc.apply_set(_stub_system(b"ERR BAD\x07 VALUE\n"), "433", "SF", "12")
+    assert not ok and "(ERR BAD VALUE)" in detail
+    ok, confirmed, detail = dc.apply_set(_stub_system(b"OK\r\n"), "433", "SF", "12")
+    assert ok and not confirmed and "SENT but UNCONFIRMED" in detail
+    status = b"STATUS RADIO=READY TXMODE=DIRECT\n"
+    ok, confirmed, _d = dc.apply_set(_stub_system(b"OK\r\n", status), "433", "TXMODE", "DIRECT")
+    assert ok and confirmed
+
+
+@pytest.mark.safety("daemon-set-truthful")
+def test_confirmable_key_without_valid_ack_is_not_applied():
+    # STATUS already shows the requested value (it was there before): without a valid OK the
+    # read-back proves nothing, so it must not run and the SET is not applied.
+    status = b"STATUS RADIO=READY TXMODE=DIRECT\n"
+    for ack in (TimeoutError("timed out"), b"", b"TX=1\n"):
+        ok, confirmed, detail = dc.apply_set(_stub_system(ack, status), "433", "TXMODE", "DIRECT")
+        assert not ok and not confirmed and "unconfirmed" in detail, ack
 
 
 class _Recorder:
@@ -119,7 +207,7 @@ class _Recorder:
 
     def request(self, path, payload, timeout, maxb):
         self.sent.append(payload)
-        return self.replies.get(payload, b"")
+        return self.replies.get(payload, b"OK\n" if payload.startswith(b"SET ") else b"")
 
     def send(self, *a): ...
 

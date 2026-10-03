@@ -828,6 +828,7 @@ class FakeSystem:
     char_devices: set[str] = field(default_factory=set)
     unix_replies: dict[str, bytes] = field(default_factory=dict)
     unix_errors: dict[str, str] = field(default_factory=dict)
+    set_replies: dict[str, bytes] = field(default_factory=dict)  # path -> the ack to a SET (default OK)
     files: dict[str, str] = field(default_factory=dict)          # path -> text (fs.read_text)
     # path -> {"total_b","free_b","dev"} plus, optionally, "free_inodes"/"total_inodes" (absent = 0:
     # no inode test, as on a dynamic-inode filesystem)
@@ -908,6 +909,9 @@ class FakeSystem:
     ) -> bytes:
         if path in self.unix_errors:
             raise OSError(self.unix_errors[path])
+        if payload.startswith(b"SET "):         # a CONF SET: recorded like send(), acked like the daemon
+            self.sent.append((path, payload))
+            return self.set_replies.get(path, b"OK\n")[:max_bytes]
         return self.unix_replies.get(path, b"")[:max_bytes]
 
     def send(self, path: str, payload: bytes, timeout: float) -> None:
