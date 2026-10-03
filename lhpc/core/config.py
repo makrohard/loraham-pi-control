@@ -1192,14 +1192,18 @@ def _yaml_value(kind: str, value: str) -> str:
 
 
 def update_yaml(text: str, params, values, subst) -> str:
-    """Update declared `section.key` entries in a 2-space-indented YAML file,
+    """Update declared `section.key` entries in a block-indented YAML file,
     preserving everything else. Updates the FIRST occurrence of each key in its
     section (uncommenting a `#  key: …` line if that is the first occurrence), so
     the active value is set while commented alternative blocks are left untouched.
     Blank non-flag values leave the base as-is — UNLESS the param is `omit_if_empty`
     (OPTIONAL-ABSENT), in which case an active key line inherited from the base is
     REMOVED so the key is omitted from the generated file entirely (never an empty
-    value). Commented example lines for the key are left commented (already inactive)."""
+    value). Commented example lines for the key are left commented (already inactive).
+    A declared key the section has no line for at all is inserted after the section's last
+    active line, as `update_ini`/`update_toml` append it: it must never silently vanish. It takes
+    the indent of the section's own child keys (else the file's step), and the section ends at
+    the next active top-level line, so the key never lands under another parent."""
     want = {}
     remove = set()
     for p in params:
@@ -1213,6 +1217,22 @@ def update_yaml(text: str, params, values, subst) -> str:
     out: list[str] = []
     section = ""
     done = set()
+    last_active = 0                       # index in `out` just past the section's last active line
+    child_indent = 0                      # the section's own child-key indent (0: none seen yet)
+    # The file's indent step, for a section with no active child key to copy it from.
+    step = min((len(ln) - len(ln.lstrip()) for ln in lines
+                if ln.strip() and not ln.lstrip().startswith(("#", "-")) and ":" in ln
+                and ln[0] == " "), default=2)
+
+    def flush(sec: str) -> None:
+        """Insert the declared keys this (named) section never had, at its children's indent."""
+        if not sec:
+            return
+        pad = " " * (child_indent or step)
+        add = [f"{pad}{k}: {v}" for (s, k), v in want.items() if s == sec and (s, k) not in done]
+        out[last_active:last_active] = add
+        done.update((sec, k) for (s, k) in want if s == sec)
+
     for line in lines:
         bare = line.strip()
         if not bare or bare.startswith("---"):
@@ -1221,9 +1241,17 @@ def update_yaml(text: str, params, values, subst) -> str:
         # Section header: an UNcommented top-level `Key:` with no inline value.
         if (not bare.startswith("#") and bare.endswith(":")
                 and (len(line) - len(line.lstrip())) == 0 and ":" not in bare[:-1]):
+            flush(section)
             section = bare[:-1].strip()
             out.append(line)
+            last_active = len(out)
+            child_indent = 0
             continue
+        # Any other ACTIVE top-level line (`Enabled: true`) ends the section: its missing keys go
+        # in before it, never under a parent the section does not own.
+        if not bare.startswith("#") and line[0] not in (" ", "\t"):
+            flush(section)
+            section = ""
         # Analyse a possibly-commented key line, preserving the key's own indent.
         analysed = line
         if bare.startswith("#"):
@@ -1232,10 +1260,14 @@ def update_yaml(text: str, params, values, subst) -> str:
         a = analysed.strip()
         if not a or a.startswith("#") or ":" not in a:
             out.append(line)
+            if not bare.startswith("#"):
+                last_active = len(out)        # e.g. a `- item` of the section's last key
             continue
         indent = len(analysed) - len(analysed.lstrip())
         key = a.split(":", 1)[0].strip()
         sec = "" if indent == 0 else section
+        if sec and not bare.startswith("#") and not a.startswith("-"):
+            child_indent = min(child_indent or indent, indent)
         # OMIT an ACTIVE (uncommented) line for an optional-absent unset param — drop it entirely.
         # (A commented `#  key:` example is already inactive; leave it commented.)
         if (sec, key) in remove and not bare.startswith("#"):
@@ -1243,8 +1275,12 @@ def update_yaml(text: str, params, values, subst) -> str:
         if (sec, key) in want and (sec, key) not in done:
             out.append(f"{' ' * indent}{key}: {want[(sec, key)]}")
             done.add((sec, key))
+            last_active = len(out)
             continue
         out.append(line)
+        if not bare.startswith("#"):
+            last_active = len(out)
+    flush(section)
     return "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
 

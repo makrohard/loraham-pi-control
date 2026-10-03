@@ -17,6 +17,8 @@ Two field-verified defects, both covered here:
 
 from pathlib import Path
 
+import pytest
+
 from lhpc.core.config import update_yaml
 from lhpc.core.model import FileParam
 from lhpc.core.paths import Paths
@@ -124,6 +126,60 @@ def test_meshtastic_exotic_board_can_still_set_reset(tmp_path):
     fc = _meshtastic_comp(_svc(tmp_path)[0]).config_file
     out = update_yaml(STALE_BASE, fc.params, {"reset": "18", "busy": "20"}, lambda s: s)
     assert "Reset: 18" in out and "Busy: 20" in out
+
+
+def test_exotic_board_reset_and_busy_reach_the_shipped_base(tmp_path):
+    # The shipped base has NO Reset/Busy line under `Lora:` (its commented examples sit under
+    # other sections), so a saved value must be ADDED to that block, never silently dropped.
+    from lhpc.core.assets import asset_text
+    fc = _meshtastic_comp(_svc(tmp_path)[0]).config_file
+    out = update_yaml(asset_text("bases/meshtasticd.yaml"), fc.params,
+                      {"reset": "18", "busy": "20"}, lambda s: s)
+    lora = out.split("\nLora:\n", 1)[1].split("\nInterfaces:\n", 1)[0]
+    active = [ln for ln in lora.splitlines() if ln.startswith("  ") and not ln.lstrip().startswith("#")]
+    assert "  Reset: 18" in active and "  Busy: 20" in active
+    everywhere = [ln.strip() for ln in out.splitlines() if not ln.lstrip().startswith("#")]
+    assert everywhere.count("Reset: 18") == 1 and everywhere.count("Busy: 20") == 1
+
+
+def test_an_added_key_never_splits_a_list_that_ends_its_section(tmp_path):
+    # The insertion point is after the section's LAST active line, list items included: placed
+    # between `Pins:` and its items it would detach them from their key.
+    fc = _meshtastic_comp(_svc(tmp_path)[0]).config_file
+    base = "Lora:\n  Module: RF95\n  Pins:\n    - 1\n    - 2\n# note\nLogging:\n  LogLevel: info\n"
+    out = update_yaml(base, fc.params, {"reset": "18"}, lambda s: s)
+    lines = out.splitlines()
+    assert lines[:5] == ["Lora:", "  Module: RF95", "  Pins:", "    - 1", "    - 2"]
+    assert "  Reset: 18" in lines[5:lines.index("Logging:")]
+
+
+def test_an_added_key_takes_its_sections_four_space_indent(tmp_path):
+    # The inserted key copies the section's OWN child indent: at a hard-coded 2 spaces under
+    # 4-space siblings it would be a YAML indentation error.
+    yaml = pytest.importorskip("yaml")
+    fc = _meshtastic_comp(_svc(tmp_path)[0]).config_file
+    base = "Lora:\n    Module: RF95\n    CS: 7\nLogging:\n    LogLevel: info\n"
+    out = update_yaml(base, fc.params, {"reset": "18"}, lambda s: s)
+    assert "    Reset: 18" in out.splitlines()
+    doc = yaml.safe_load(out)                    # parses at all: no mixed indent in `Lora:`
+    assert set(doc) == {"Lora", "Logging"} and doc["Logging"] == {"LogLevel": "info"}
+    assert doc["Lora"]["Module"] == "RF95" and doc["Lora"]["Reset"] == 18
+    assert all(ln.startswith("    ") for ln in out.split("Lora:\n", 1)[1].split("Logging:", 1)[0]
+               .splitlines())
+
+
+def test_an_added_key_stays_inside_a_section_a_top_level_scalar_follows(tmp_path):
+    # The section ends at the next active top-level line: a missing key goes in BEFORE
+    # `Enabled: true`, never after it (where it would hang under no parent / the wrong one).
+    yaml = pytest.importorskip("yaml")
+    fc = _meshtastic_comp(_svc(tmp_path)[0]).config_file
+    base = "Lora:\n  Module: RF95\nEnabled: true\n# trailing note\n"
+    out = update_yaml(base, fc.params, {"reset": "18"}, lambda s: s)
+    lines = out.splitlines()
+    assert lines.index("  Reset: 18") < lines.index("Enabled: true")
+    doc = yaml.safe_load(out)
+    assert set(doc) == {"Lora", "Enabled"} and doc["Enabled"] is True
+    assert doc["Lora"]["Module"] == "RF95" and doc["Lora"]["Reset"] == 18
 
 
 def test_generated_868_from_shipped_base_has_no_reset_busy(tmp_path):
