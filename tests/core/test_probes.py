@@ -139,14 +139,18 @@ def test_daemon_status_empty_response():
     assert not ds.reachable and "empty" in ds.evidence["error"]
 
 
-def test_daemon_status_oversize_is_bounded_and_parsed_or_safe():
-    # An oversize first line (no newline within the cap) must not hang or crash;
-    # it is read up to the cap and parsed defensively.
-    huge = b"STATUS RADIO=READY " + b"PAD=x " * 5000 + b"\n"
-    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": huge})
+@pytest.mark.parametrize("reply", [
+    b"STATUS RADIO=READY " + b"PAD=x " * 5000 + b"\n",                       # reaches the read cap
+    b"STATUS RADIO=READY " + b" ".join(b"K%d=1" % i for i in range(100)) + b"\n",  # over-tokenized
+], ids=["read-cap", "over-tokenized"])
+def test_daemon_status_rejects_a_capped_or_overtokenized_reply(reply):
+    """The status probe uses the ONE bounded CONF parser: a reply that reached the 4 KiB read
+    cap, or carries more tokens than a daemon ever sends, is garbled or hostile — never a
+    "ready" radio, only degraded evidence (no exception)."""
+    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})
     ds = probe_daemon_status(fake.system, "/tmp/loraconf433.sock")
-    # We only require: no exception, reachable parse, and RADIO captured.
-    assert ds.reachable and ds.radio == "READY"
+    assert not ds.reachable and not ds.ready and ds.radio == ""
+    assert "malformed" in ds.evidence["error"]
 
 
 _PROPS = "ActiveState,SubState,LoadState,UnitFileState"

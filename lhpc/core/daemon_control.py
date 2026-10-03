@@ -169,11 +169,18 @@ _INT_RE = re.compile(r"[+-]?[0-9]+")  # ASCII decimal only — int() also takes 
 
 
 def _query(system: System, band: str, command: bytes, prefix: str) -> dict[str, str]:
-    """Read one bounded status line from the daemon CONF socket and parse `KEY=VALUE`
-    tokens. Fail-closed (return {}) on an oversized, over-long, over-tokenized, or
-    malformed response — a hostile/garbled daemon socket can never make us parse an
+    """Read one bounded status line from the daemon CONF socket and parse it with
+    `parse_conf_reply` — a hostile/garbled daemon socket can never make us parse an
     unbounded reply or hang."""
-    raw = system.unix.request(conf_socket(band), command, _READ_TIMEOUT, _MAX)
+    return parse_conf_reply(
+        system.unix.request(conf_socket(band), command, _READ_TIMEOUT, _MAX), prefix)
+
+
+def parse_conf_reply(raw: bytes, prefix: str) -> dict[str, str]:
+    """THE bounded CONF parser (every read of a daemon CONF reply goes through it): the
+    `KEY=VALUE` tokens of the first line after the exact `prefix` token. Fail-closed (return
+    {}) on a reply that reached the `_MAX` read cap, or an over-long, over-tokenized or
+    malformed one."""
     if len(raw) >= _MAX:                    # hit the read cap -> oversized, untrusted
         return {}
     first = raw.split(b"\n", 1)[0]

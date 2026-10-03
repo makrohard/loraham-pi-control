@@ -6,7 +6,8 @@ Two probes:
     111a CONF socket.
 
 The readiness probe is strictly read-only: it sends only `GET STATUS\n` (never a
-`SET`), enforces a short timeout and a hard response-size limit, and converts any
+`SET`), enforces a short timeout and a hard response-size limit, parses the reply with
+the one bounded CONF parser (`daemon_control.parse_conf_reply`), and converts any
 malformed/absent/oversize response into degraded/unknown evidence — never an
 exception and never a false "healthy".
 
@@ -21,11 +22,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..daemon_control import _MAX as _MAX_BYTES
+from ..daemon_control import parse_conf_reply
 from .backends import System
 
 _STATUS_REQUEST = b"GET STATUS\n"
 _READ_TIMEOUT_S = 1.0
-_MAX_BYTES = 4096
 
 
 @dataclass
@@ -67,13 +69,12 @@ def probe_daemon_status(system: System, path: str) -> DaemonStatus:
         ev["error"] = "empty response"
         return DaemonStatus(reachable=False, ready=False, evidence=ev)
 
-    line = raw.split(b"\n", 1)[0].decode("ascii", "replace").strip()
-    if not line.startswith("STATUS"):
-        ev["error"] = "malformed response (no STATUS prefix)"
-        ev["sample"] = line[:80]
+    fields = parse_conf_reply(raw, "STATUS")
+    if not fields:
+        ev["error"] = "malformed or oversize response"
+        ev["sample"] = raw.split(b"\n", 1)[0][:80].decode("ascii", "replace")
         return DaemonStatus(reachable=False, ready=False, evidence=ev)
 
-    fields = _parse_status_fields(line)
     radio = fields.get("RADIO", "")
     tx_mode = fields.get("TXMODE", "")
     ev["radio"] = radio or "?"
@@ -87,12 +88,3 @@ def probe_daemon_status(system: System, path: str) -> DaemonStatus:
         fields=fields,
         evidence=ev,
     )
-
-
-def _parse_status_fields(line: str) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for token in line.split()[1:]:  # drop the leading "STATUS"
-        key, sep, value = token.partition("=")
-        if sep:
-            out[key] = value
-    return out

@@ -54,6 +54,8 @@
   unchanged instead of breaking the post-start step.
 - Two simultaneous console saves can no longer combine plain http with client-certificate access (which
   the next read silently turned into no authentication): the check reads the settings under the lock.
+- The dashboard's daemon readiness no longer reads a garbled or oversized daemon status reply as "ready":
+  it uses the same strict reader as the daemon settings.
 
 ## 0.11.10
 
