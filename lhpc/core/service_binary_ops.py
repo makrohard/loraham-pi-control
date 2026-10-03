@@ -18,6 +18,7 @@ import secrets
 import shutil
 import tarfile
 import tempfile
+import traceback
 
 from . import binary_install as bi
 from . import binary_receipt as brx
@@ -342,19 +343,17 @@ class BinaryOpsMixin:
                 shutil.rmtree(tmpdir, ignore_errors=True)
                 return ActionResult(False, f"Binary install of '{stack_id}' blocked: {exc.message}",
                                     next_commands=[src_cmd], data={"binary_failed": True})
-            if auth_journal:
-                # The published firmware has no mesh password: the bridge must not be launched
-                # with --password-file. Journaled above, so this is undoable either way.
-                _r = self.save_config_bundle(
-                    stack_id, values={"password_file": ""},
-                    _allow_managed_params=frozenset({"password_file"}))
-                if not _r.ok:
-                    self.binary_recover()
-                    return ActionResult(
-                        False, f"Binary install of '{stack_id}' blocked: could not switch the "
-                               f"mesh password off ({_r.summary})")
-                _auth_restore = auth_journal["previous"]
             try:
+                if auth_journal:
+                    # The published firmware has no mesh password: the bridge must not be launched
+                    # with --password-file. Journaled above, so this is undoable either way.
+                    _r = self.save_config_bundle(
+                        stack_id, values={"password_file": ""},
+                        _allow_managed_params=frozenset({"password_file"}))
+                    if not _r.ok:
+                        raise bi.BinaryInstallError(
+                            f"could not switch the mesh password off ({_r.summary})")
+                    _auth_restore = auth_journal["previous"]
                 tar_path = os.path.join(tmpdir, entry.filename)
                 stage = os.path.join(tmpdir, "stage")
                 os.makedirs(stage, exist_ok=True)
@@ -392,7 +391,7 @@ class BinaryOpsMixin:
                             self._stale_paths(prev_files, files, owned_dirs))
                 if not bi.commit(self._paths):        # THE commit point
                     raise bi.BinaryInstallError("could not commit the binary transaction")
-            except (bi.BinaryInstallError, OSError, tarfile.TarError, PathContainmentError) as exc:
+            except Exception as exc:
                 # A failure AFTER publish (probe, missing proof path, unwritable receipt) must not
                 # leave published files behind: with no receipt nothing would ever remove them, and
                 # a later `--source pinned` install would see a "healthy" directory and skip the
@@ -400,18 +399,47 @@ class BinaryOpsMixin:
                 # An OSError here (disk full, permissions) is a failed install like any other:
                 # unwind and offer the source channel — never a raw traceback. So is a corrupt
                 # stream after the sha check (TarError) or an escaping path (containment).
-                exc = exc if isinstance(exc, bi.BinaryInstallError) else \
-                    bi.BinaryInstallError(f"filesystem error during install ({exc})")
-                # UNWIND the open transaction: displaced files return, files this run created are
-                # removed, the previous receipt and auth are restored. A failed update never
-                # costs the operator their working install.
+                # Anything else is a programming error: unwind like any other failure, then keep
+                # its traceback on stderr (the CLI terminal or the web unit's journal).
+                # UNWIND the open transaction FIRST: displaced files return, files this run
+                # created are removed, the previous receipt and auth are restored. A failed update
+                # never costs the operator their working install — not even when the diagnostic
+                # below fails (closed stderr, a raising __repr__/__str__).
                 _rb_ok, _rb_why = self.binary_recover()
+                _unexpected = {}
+                if not isinstance(exc, (bi.BinaryInstallError, OSError, tarfile.TarError,
+                                        PathContainmentError)):
+                    _name = type(exc).__name__
+                    try:
+                        traceback.print_exc()
+                    except Exception:
+                        pass
+                    _unexpected = {"unexpected": _name}
+                    _orig, exc = exc, bi.BinaryInstallError(f"unexpected {_name}")
+                    exc.__cause__ = _orig
+                elif not isinstance(exc, bi.BinaryInstallError):
+                    _orig = exc
+                    try:
+                        exc = bi.BinaryInstallError(f"filesystem error during install ({exc})")
+                    except Exception:
+                        exc = bi.BinaryInstallError(
+                            f"filesystem error during install ({type(_orig).__name__})")
+                    exc.__cause__ = _orig
                 _detail = ([] if _rb_ok else
                            [f"  the previous install could NOT be fully restored: {_rb_why}"])
                 return ActionResult(False, f"Binary install of '{stack_id}' failed: {exc.message}",
                                     details=_detail, next_commands=[src_cmd],
                                     data={"binary_failed": True, "offer_source": True,
-                                          "rolled_back": _rb_ok})
+                                          "rolled_back": _rb_ok, **_unexpected})
+            except BaseException:
+                # Ctrl-C / SystemExit inside the transaction: unwind NOW (a half-switched install
+                # must not wait for the next command), then let the original propagate unchanged.
+                # A failing unwind leaves the journal open for that next command to recover.
+                try:
+                    self.binary_recover()
+                except Exception:
+                    pass
+                raise
             finally:
                 shutil.rmtree(tmpdir, ignore_errors=True)
 

@@ -902,10 +902,11 @@ def test_interrupted_install_restores_the_mesh_password(tmp_path, monkeypatch):
     assert bi.read_journal(svc._paths)[1] == "absent"
 
 
-@pytest.mark.parametrize("err", ["tar", "containment"])
+@pytest.mark.parametrize("err", ["tar", "containment", "value"])
 def test_any_extraction_error_unwinds_the_transaction(tmp_path, monkeypatch, stub_pipeline, err):
-    """A corrupt stream after the sha check (tarfile) or an escaping path (containment) is a
-    failed install like any other: typed result, journal closed, mesh password back."""
+    """A corrupt stream after the sha check (tarfile), an escaping path (containment) or any
+    other error is a failed install like any other: typed result, journal closed, mesh password
+    back."""
     import tarfile
 
     from lhpc.core import binary_install as bi
@@ -923,12 +924,196 @@ def test_any_extraction_error_unwinds_the_transaction(tmp_path, monkeypatch, stu
     stub_pipeline(svc, download=lambda entry, path: None)
     def broken(*a, **k):
         raise (tarfile.ReadError("unexpected end of data") if err == "tar"
-               else PathContainmentError("escapes the runtime root"))
+               else PathContainmentError("escapes the runtime root") if err == "containment"
+               else ValueError("bad member header"))
     monkeypatch.setattr(bi, "validate_and_extract", broken)
     res = svc.binary_install("meshcom", apply=True)
     assert not res.ok and res.data.get("binary_failed")
     assert bi.read_journal(svc._paths)[1] == "absent"
     svc.invalidate_snapshot()
+    assert svc._resolved_param_value("meshcom", "run",
+                                     svc._hmac_component("meshcom").id, "password_file") == before
+
+
+def test_unexpected_error_after_publish_unwinds_everything(tmp_path, monkeypatch, stub_pipeline):
+    """A programming error past publish (here: the receipt builder) is unwound like a typed
+    failure: published files gone, previous receipt state unchanged, mesh password back."""
+    import os
+
+    from lhpc.core import binary_install as bi
+    from lhpc.core.install import Installer
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert svc.hmac_set_secret("meshcom", "enable").ok
+    before = svc._resolved_param_value("meshcom", "run",
+                                       svc._hmac_component("meshcom").id, "password_file")
+    receipt_before = svc.binary_receipt_state("meshcom")[0]
+    monkeypatch.setattr(Installer, "adopt_source",
+                        lambda self, comp, **k: type("A", (), {"status": "done", "detail": ""})())
+    stub_pipeline(svc, download=lambda entry, path: None)
+    spec = svc.binary_spec("meshcom")
+    files = sorted({*spec.proof_paths, *(next(iter(a)) for a in spec.probes)})
+    new = [f for f in files if not (tmp_path / f).exists()]
+    assert new                                            # at least one file this run creates
+
+    def stage(tar, stage_dir, roots):
+        for rel in files:
+            os.makedirs(os.path.dirname(os.path.join(stage_dir, rel)), exist_ok=True)
+            with open(os.path.join(stage_dir, rel), "w") as fh:
+                fh.write("staged")
+        return files
+    monkeypatch.setattr(bi, "validate_and_extract", stage)
+    monkeypatch.setattr(bi, "run_probe", lambda paths, argv: "ok")
+    monkeypatch.setattr(ControllerService, "_binary_provision", lambda self, *a: [])
+
+    def broken(*a, **k):
+        raise KeyError("components")
+    monkeypatch.setattr(bi, "build_receipt", broken)
+    res = svc.binary_install("meshcom", apply=True)
+    assert not res.ok and res.data.get("binary_failed") and "KeyError" in res.data["unexpected"]
+    assert bi.read_journal(svc._paths)[1] == "absent"
+    assert not any((tmp_path / f).exists() for f in new)
+    svc.invalidate_snapshot()
+    assert svc.binary_receipt_state("meshcom")[0] == receipt_before
+    assert svc._resolved_param_value("meshcom", "run",
+                                     svc._hmac_component("meshcom").id, "password_file") == before
+
+
+@pytest.mark.parametrize("hostile", ["stderr", "repr"])
+def test_a_failing_diagnostic_never_skips_the_unwind(tmp_path, monkeypatch, stub_pipeline,
+                                                     hostile):
+    """The diagnostic of an unexpected error runs AFTER the unwind and cannot raise: a broken
+    stderr or an exception whose __repr__/__str__ raises still restores the journal, the files
+    and the mesh password, and the typed failure is returned."""
+    import os
+    import sys
+
+    from lhpc.core import binary_install as bi
+    from lhpc.core.install import Installer
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert svc.hmac_set_secret("meshcom", "enable").ok
+    before = svc._resolved_param_value("meshcom", "run",
+                                       svc._hmac_component("meshcom").id, "password_file")
+    receipt_before = svc.binary_receipt_state("meshcom")[0]
+    monkeypatch.setattr(Installer, "adopt_source",
+                        lambda self, comp, **k: type("A", (), {"status": "done", "detail": ""})())
+    stub_pipeline(svc, download=lambda entry, path: None)
+    spec = svc.binary_spec("meshcom")
+    files = sorted({*spec.proof_paths, *(next(iter(a)) for a in spec.probes)})
+    new = [f for f in files if not (tmp_path / f).exists()]
+    assert new
+
+    def stage(tar, stage_dir, roots):
+        for rel in files:
+            os.makedirs(os.path.dirname(os.path.join(stage_dir, rel)), exist_ok=True)
+            with open(os.path.join(stage_dir, rel), "w") as fh:
+                fh.write("staged")
+        return files
+    monkeypatch.setattr(bi, "validate_and_extract", stage)
+    monkeypatch.setattr(bi, "run_probe", lambda paths, argv: "ok")
+    monkeypatch.setattr(ControllerService, "_binary_provision", lambda self, *a: [])
+
+    class Hostile(Exception):
+        def __repr__(self):
+            raise RuntimeError("hostile __repr__")
+
+        def __str__(self):
+            raise RuntimeError("hostile __str__")
+
+    class ClosedStderr:
+        def write(self, *a, **k):
+            raise ValueError("I/O operation on closed file")
+
+        def flush(self):
+            raise ValueError("I/O operation on closed file")
+
+    def broken(*a, **k):
+        raise (KeyError("components") if hostile == "stderr" else Hostile())
+    monkeypatch.setattr(bi, "build_receipt", broken)
+    if hostile == "stderr":
+        monkeypatch.setattr(sys, "stderr", ClosedStderr())
+    res = svc.binary_install("meshcom", apply=True)
+    assert not res.ok and res.data.get("binary_failed") and res.data.get("rolled_back")
+    assert res.data["unexpected"] == ("KeyError" if hostile == "stderr" else "Hostile")
+    assert bi.read_journal(svc._paths)[1] == "absent"
+    assert not any((tmp_path / f).exists() for f in new)
+    svc.invalidate_snapshot()
+    assert svc.binary_receipt_state("meshcom")[0] == receipt_before
+    assert svc._resolved_param_value("meshcom", "run",
+                                     svc._hmac_component("meshcom").id, "password_file") == before
+
+
+def test_failed_password_switch_unwinds_through_the_common_path(tmp_path, monkeypatch,
+                                                                stub_pipeline):
+    from lhpc.core import binary_install as bi
+    from lhpc.core.install import Installer
+    from lhpc.core.service_base import ActionResult
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert svc.hmac_set_secret("meshcom", "enable").ok
+    before = svc._resolved_param_value("meshcom", "run",
+                                       svc._hmac_component("meshcom").id, "password_file")
+    monkeypatch.setattr(Installer, "adopt_source",
+                        lambda self, comp, **k: type("A", (), {"status": "done", "detail": ""})())
+    stub_pipeline(svc)
+    real_save = ControllerService.save_config_bundle
+
+    def save(self, sid, values=None, **k):
+        if values == {"password_file": ""}:                # only the switch-off is refused
+            return ActionResult(False, "config write refused")
+        return real_save(self, sid, values=values, **k)
+    monkeypatch.setattr(ControllerService, "save_config_bundle", save)
+    res = svc.binary_install("meshcom", apply=True)
+    assert not res.ok and res.data.get("binary_failed") and res.data.get("rolled_back")
+    assert "DOWNLOAD-REACHED" not in res.summary
+    assert bi.read_journal(svc._paths)[1] == "absent"
+    svc.invalidate_snapshot()
+    assert svc._resolved_param_value("meshcom", "run",
+                                     svc._hmac_component("meshcom").id, "password_file") == before
+
+@pytest.mark.parametrize("where", ["after_switch", "after_publish"])
+def test_ctrl_c_inside_the_transaction_unwinds_now(tmp_path, monkeypatch, stub_pipeline, where):
+    """A KeyboardInterrupt between open_txn and commit (the step after the mesh-password switch,
+    or a step after publish) unwinds NOW, not at the next command: journal closed, published
+    files gone, previous receipt state and mesh password back. The interrupt itself propagates
+    unchanged."""
+    import os
+
+    from lhpc.core import binary_install as bi
+    from lhpc.core.install import Installer
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert svc.hmac_set_secret("meshcom", "enable").ok
+    before = svc._resolved_param_value("meshcom", "run",
+                                       svc._hmac_component("meshcom").id, "password_file")
+    receipt_before = svc.binary_receipt_state("meshcom")[0]
+    monkeypatch.setattr(Installer, "adopt_source",
+                        lambda self, comp, **k: type("A", (), {"status": "done", "detail": ""})())
+    spec = svc.binary_spec("meshcom")
+    files = sorted({*spec.proof_paths, *(next(iter(a)) for a in spec.probes)})
+    new = [f for f in files if not (tmp_path / f).exists()]
+    assert new
+
+    def interrupt(*a, **k):
+        raise KeyboardInterrupt
+    if where == "after_switch":
+        stub_pipeline(svc, download=interrupt)
+    else:
+        stub_pipeline(svc, download=lambda entry, path: None)
+
+        def stage(tar, stage_dir, roots):
+            for rel in files:
+                os.makedirs(os.path.dirname(os.path.join(stage_dir, rel)), exist_ok=True)
+                with open(os.path.join(stage_dir, rel), "w") as fh:
+                    fh.write("staged")
+            return files
+        monkeypatch.setattr(bi, "validate_and_extract", stage)
+        monkeypatch.setattr(bi, "run_probe", lambda paths, argv: "ok")
+        monkeypatch.setattr(ControllerService, "_binary_provision", lambda self, *a: [])
+        monkeypatch.setattr(bi, "build_receipt", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        svc.binary_install("meshcom", apply=True)
+    assert bi.read_journal(svc._paths)[1] == "absent"
+    assert not any((tmp_path / f).exists() for f in new)
+    svc.invalidate_snapshot()
+    assert svc.binary_receipt_state("meshcom")[0] == receipt_before
     assert svc._resolved_param_value("meshcom", "run",
                                      svc._hmac_component("meshcom").id, "password_file") == before
 
