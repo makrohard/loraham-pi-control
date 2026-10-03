@@ -245,6 +245,49 @@ def test_connect_spawn_failure_cleans_record_and_secret(tmp_path, monkeypatch):
     assert not list((tmp_path / "state").glob("network-psk-*"))
 
 
+@pytest.mark.parametrize("known", [False, True])
+def test_failed_join_deletes_only_the_profile_it_created(tmp_path, monkeypatch, known):
+    """A join to a NEW network creates its NM profile first. When the join then fails before the
+    helper runs, that profile goes again — no stray "stored network" behind a "nothing was
+    changed" reply. A network the operator had already stored is never deleted."""
+    svc = _svc(tmp_path)
+    calls = _fake_nmcli(svc, {**_std_replies(),
+        "connection add": (0, "Connection 'N' "
+                              "(33333333-4444-5555-6666-777777777777) successfully added.\n",
+                           ""),
+        "connection delete": (0, "", "")})
+    monkeypatch.setattr(lcmod.Lifecycle, "_real_spawn",
+                        lambda self, argv, log, cwd=None, env=None:
+                        (_ for _ in ()).throw(OSError("no fds")))
+    monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-1")
+    res = (svc.network_connect(uuid="CL-UUID-2", psk="pw", apply=True) if known
+           else svc.network_connect(ssid="N", psk="pw", apply=True))
+    assert not res.ok and "could not be spawned" in res.summary
+    deletes = [c for c in calls if "connection delete" in " ".join(c)]
+    if known:
+        assert deletes == []
+    else:
+        assert [c[-1] for c in deletes] == ["33333333-4444-5555-6666-777777777777"]
+
+
+def test_ap_now_spawn_failure_does_not_claim_nothing_changed(tmp_path, monkeypatch):
+    """The preferred flag is cleared before the helper is spawned (so the watchdog cannot pull
+    the box back); a spawn failure must say so rather than claim nothing changed."""
+    svc = _svc(tmp_path)
+    _fake_nmcli(svc, {**_std_replies(
+        conns=AP_ROW + "CL-UUID-2:HomeNet:802-11-wireless:yes:10\n",
+        active="CL-UUID-2:HomeNet:802-11-wireless:wlan0\n"),
+        "connection modify": (0, "", "")})
+    svc._net_preferred_path().write_text(json.dumps({"uuid": "CL-UUID-2", "ssid": "HomeNet"}))
+    monkeypatch.setattr(lcmod.Lifecycle, "_real_spawn",
+                        lambda self, argv, log, cwd=None, env=None:
+                        (_ for _ in ()).throw(OSError("no fds")))
+    monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-1")
+    res = svc.network_ap_now(apply=True)
+    assert not res.ok and not svc._net_preferred_path().exists()
+    assert "nothing was changed" not in res.summary and "preferred" in res.summary
+
+
 # --- finalize helper ------------------------------------------------------------------------------
 
 

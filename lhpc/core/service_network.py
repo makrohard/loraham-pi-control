@@ -445,6 +445,7 @@ class NetworkOpsMixin:
         if err:
             return ActionResult(False, f"Cannot join '{label}': {err}")
         with stack:
+            created = False
             if not uuid:
                 if not ssid:
                     return ActionResult(False, "Cannot join: no network given")
@@ -460,10 +461,20 @@ class NetworkOpsMixin:
                     return ActionResult(False, f"Cannot create the Wi-Fi profile: "
                                                f"{(cerr or out).strip()[:200]}")
                 uuid = m.group(1)
+                created = True
             else:
                 if not any(c["uuid"] == uuid for c in self._nm_connections()):
                     return ActionResult(False, "Cannot join: no stored network with that "
                                                "id — rescan and pick again")
+
+            def _fail(msg: str) -> ActionResult:
+                # A profile THIS call created goes again on any later failure: no stray stored
+                # network behind the refusal. A profile the operator had stored stays.
+                if created and self._nmcli(["connection", "delete", uuid])[0] != 0:
+                    msg += (" — but the Wi-Fi profile it created could not be removed: forget "
+                            "it on the Network panel")
+                return ActionResult(False, msg)
+
             op_id = secrets.token_hex(16)
             pwfile = None
             if psk:
@@ -475,16 +486,15 @@ class NetworkOpsMixin:
                                             f"802-11-wireless-security.psk:{psk}\n",
                                             0o600)
                 except (OSError, PathContainmentError) as exc:
-                    return ActionResult(False, f"Cannot join: secret handoff failed "
-                                               f"({exc})")
+                    return _fail(f"Cannot join: secret handoff failed ({exc})")
             try:
                 up0 = float((self._system.fs.read_text("/proc/uptime", 128) or "")
                             .split()[0])
             except (OSError, ValueError, IndexError):
                 if pwfile is not None:
                     self._safe_unlink(pwfile)
-                return ActionResult(False, "Cannot join: /proc/uptime is unreadable — "
-                                           "the pending guard cannot be timed")
+                return _fail("Cannot join: /proc/uptime is unreadable — "
+                             "the pending guard cannot be timed")
             marker = self._net_pending_path()
             try:
                 runtime_fs.atomic_write(self._paths, marker, json.dumps(
@@ -495,8 +505,7 @@ class NetworkOpsMixin:
             except (OSError, PathContainmentError) as exc:
                 if pwfile is not None:
                     self._safe_unlink(pwfile)
-                return ActionResult(False, f"Cannot join: could not record the pending "
-                                           f"operation ({exc})")
+                return _fail(f"Cannot join: could not record the pending operation ({exc})")
             import sys
             argv = [sys.executable, "-m", "lhpc", "_network-finalize",
                     "--uuid", uuid, "--op-id", op_id, "--delay", "1.5"]
@@ -514,9 +523,8 @@ class NetworkOpsMixin:
                 self._safe_unlink(marker)
                 if pwfile is not None:
                     self._safe_unlink(pwfile)
-                return ActionResult(False, f"Cannot join: the connect helper could not "
-                                           f"be spawned ({spawn_err or 'no pid'}) — "
-                                           "nothing was changed")
+                return _fail(f"Cannot join: the connect helper could not be spawned "
+                             f"({spawn_err or 'no pid'}) — nothing was changed")
             self._net_view_invalidate()
             return ActionResult(True,
                                 f"Joining '{label}' — this box's AP goes down NOW; find "
@@ -866,8 +874,9 @@ class NetworkOpsMixin:
                 pid = None
             if pid is None:
                 self._safe_unlink(self._net_pending_path())
-                return ActionResult(False, "Cannot switch: the helper could not be "
-                                           "spawned — nothing was changed")
+                return ActionResult(False, "Cannot switch: the helper could not be spawned "
+                                           "— the box stays on its current network; the "
+                                           "preferred-network flag was already cleared")
             self._net_view_invalidate()
             return ActionResult(True, "Switching to AP mode NOW — reconnect your device "
                                       f"to '{socket.gethostname()}' and open "

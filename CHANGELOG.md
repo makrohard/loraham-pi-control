@@ -45,6 +45,9 @@
 - A Wi-Fi join that the helper refuses before activating (another network action running at that moment,
   a stale request) no longer leaves the Wi-Fi password file on disk; an abandoned join's password file is
   removed when its pending record expires.
+- A Wi-Fi join to a new network that fails before it starts no longer leaves a stray stored network on
+  the Network panel; "Back to AP" no longer says "nothing was changed" when it had already cleared the
+  preferred network.
 
 ## 0.11.10
 
