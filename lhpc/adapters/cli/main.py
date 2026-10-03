@@ -1556,11 +1556,9 @@ def _run(argv: list[str] | None = None) -> int:
         if getattr(args, "upstream", False):
             return _apply_flow(lambda a: svc.graywolf_upstream_update(args.target, apply=a),
                                yes=args.yes)
-        # An unspecified selector follows the default channel: a binary-installed stack updates
-        # binary→binary, everything else updates to `pinned` — the composition this release
-        # proved. Following the branch tip is the explicit `--source dev`.
-        _usrc = args.source or ("binary" if (args.target
-                                             and svc.on_binary_channel(args.target)) else "pinned")
+        # An unspecified selector follows the core's update default (binary while the target's
+        # stack is binary-installed, else `pinned`). Following the branch tip is `--source dev`.
+        _usrc = args.source or svc.update_default_channel(args.target or "")
         return _apply_flow(_pin_consent_run(
             lambda a, acc: svc.update(args.target, apply=a, source=_usrc,
                                       accept_pin_mismatch=acc),

@@ -592,6 +592,19 @@ def test_bare_update_keeps_the_installed_channel_like_the_cli(monkeypatch, web, 
     assert seen and seen[0] == ("update", want)
 
 
+def test_bare_update_of_a_component_uses_the_stack_channel(monkeypatch, web, csrf):
+    from lhpc.core.service_base import ActionResult
+    seen = []
+    monkeypatch.setattr(ControllerService, "on_binary_channel", lambda self, sid: sid == "daemon")
+
+    def _spy(self, op, target, apply=False, source="pinned", **_k):
+        seen.append((op, target, source))
+        return ActionResult(False, "planned")
+    monkeypatch.setattr(ControllerService, "run_action", _spy)
+    c = web()
+    c.post("/action", data={"_csrf": csrf(c), "op": "update", "target": "loraham-daemon"})
+    assert seen and seen[0] == ("update", "loraham-daemon", "binary")
+
 def test_install_confirm_preselects_pinned_where_no_binary_is_published(monkeypatch, web, csrf):
     _stub_binary_plan(monkeypatch)
     c = web()

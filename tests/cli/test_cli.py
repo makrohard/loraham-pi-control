@@ -286,6 +286,19 @@ def test_update_source_flag_plumbs_through(monkeypatch, capsys):
     assert seen["source"] == "stable"
 
 
+def test_bare_update_of_a_component_uses_the_stack_channel(monkeypatch, capsys):
+    """A bare update of a component follows its STACK's channel: binary while the stack is
+    binary-installed (loraham-daemon belongs to the daemon stack)."""
+    from lhpc.core.services import ControllerService, ActionResult
+    seen = {}
+    def fake_update(self, target="", apply=False, source="pinned", **_k):
+        seen["source"] = source
+        return ActionResult(True, "ok", data={"changes": 0})
+    monkeypatch.setattr(ControllerService, "update", fake_update)
+    monkeypatch.setattr(ControllerService, "on_binary_channel", lambda self, sid: sid == "daemon")
+    assert main(["update", "loraham-daemon", "--yes"]) == 0
+    assert seen["source"] == "binary"
+
 def test_clean_requires_purge_and_yes(monkeypatch, capsys):
     from lhpc.core.services import ControllerService, ActionResult
     calls = {}

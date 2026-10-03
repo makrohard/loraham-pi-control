@@ -77,6 +77,13 @@ class BinaryChannelMixin:
         ok, _why = self.binary_available(stack_id)
         return self.BINARY_CHANNEL if ok else "pinned"
 
+    def update_default_channel(self, target: str) -> str:
+        """The channel a bare `update` uses, for a stack or a component: `binary` while the
+        target's STACK is binary-installed, else `pinned`. Switching channels is an install,
+        never a plain Update. One rule for the CLI and the web."""
+        sid = self.stack_of(target) or target
+        return self.BINARY_CHANNEL if sid and self.on_binary_channel(sid) else "pinned"
+
     def channel_error(self, stack_id: str, channel: str) -> str:
         """"" when `channel` is usable for this stack, else the typed refusal reason."""
         if channel in self.SOURCE_CHOICES:
