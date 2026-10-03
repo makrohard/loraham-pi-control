@@ -1625,3 +1625,32 @@ def test_an_ordinary_pinned_update_still_resolves_known_working(tmp_path, monkey
     _record_adoption_target(monkeypatch, svc, seen)
     svc.update("meshcom-qemu", apply=True, source="pinned")
     assert seen and all(c == old for _cid, c in seen), seen
+
+
+def test_cli_venv_provisioning_times_every_step(tmp_path, monkeypatch, capsys):
+    """`[venv] <n> s` on stderr per provisioning step of the managed meshtastic CLI venv, each
+    run under CLI_VENV_TIMEOUT_S: the slow-target budget's L5 quantity and limit."""
+    import re
+
+    from lhpc.core import service_binary_ops as sbo
+    from lhpc.core.probes.backends import CommandResult, FakeSystem, System
+    from lhpc.core.services import ControllerService
+
+    calls = []
+    cli = tmp_path / "build" / "tools" / "meshtastic-cli" / ".venv" / "bin" / "meshtastic"
+
+    class _Runner:
+        def run(self, argv, timeout=None, cwd=None, env=None):
+            calls.append(timeout)
+            cli.parent.mkdir(parents=True, exist_ok=True)
+            cli.write_text("")
+            return CommandResult(0, "", "")
+    fake = FakeSystem()
+    svc = ControllerService(system=System(runner=_Runner(), procfs=fake, fs=fake, unix=fake),
+                            paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(bi, "displace_dir", lambda *a: True)
+    monkeypatch.setattr(bi, "run_probe", lambda *a, **k: "")
+    assert svc._binary_provision("meshtastic", None, [], "txnT") == ["build/tools/meshtastic-cli"]
+    assert calls and set(calls) == {sbo.CLI_VENV_TIMEOUT_S}
+    err = capsys.readouterr().err
+    assert len(re.findall(r"^\[venv\] \d+\.\d s$", err, re.M)) == len(calls), err
