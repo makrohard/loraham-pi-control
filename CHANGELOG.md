@@ -60,6 +60,8 @@
   a newline (which disabled SPI and broke your last setting).
 - `sudo bash bootstrap-deps.sh` on a box installed with `install.sh --target <elsewhere>` finds that install's
   `[gps] source = nmea` and leaves gpsd off the receiver, as on a default install.
+- Update journals, reservations and request files appear only once fully written, so a check running at
+  that moment can no longer mistake a half-written one for a broken one.
 
 ## 0.11.10
 

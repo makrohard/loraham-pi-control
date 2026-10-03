@@ -195,6 +195,19 @@ def atomic_write_bytes(paths: Paths, path: Path, data: bytes, mode: int = 0o600)
             raise
 
 
+def _create_temp_leaf(parent_fd: int, name: str, mode: int, path) -> tuple[str, int]:
+    """A private `.<name>.new-*` leaf beside `name` under the held parent fd, created
+    `O_CREAT|O_EXCL|O_NOFOLLOW` (never an existing one): (temp name, write fd)."""
+    for _ in range(64):
+        cand = f".{name}.new-{os.getpid()}-{os.urandom(8).hex()}"
+        try:
+            return cand, os.open(cand, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 mode, dir_fd=parent_fd)
+        except FileExistsError:
+            continue
+    raise OSError(f"could not create a unique temp file for {path}")
+
+
 def create_exclusive_bytes(paths: Paths, path: Path, data: bytes, mode: int = 0o600) -> None:
     """Create a contained runtime leaf that must NOT already exist, descriptor-anchored.
 
@@ -213,18 +226,7 @@ def create_exclusive_bytes(paths: Paths, path: Path, data: bytes, mode: int = 0o
     window in which the racing loser reads an EMPTY file and mistakes it for a corrupt one.
     """
     with _walk_parent(paths, path, create=True) as (parent_fd, name):
-        tmp, fd = None, None
-        for _ in range(64):
-            cand = f".{name}.new-{os.getpid()}-{os.urandom(8).hex()}"
-            try:
-                fd = os.open(cand, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                             mode, dir_fd=parent_fd)
-                tmp = cand
-                break
-            except FileExistsError:
-                continue
-        if tmp is None:
-            raise OSError(f"could not create a unique temp file for {path}")
+        tmp, fd = _create_temp_leaf(parent_fd, name, mode, path)
         try:
             with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
@@ -348,39 +350,41 @@ class OwnedMarker:
 
 
 def open_marker_excl(paths: Paths, path: Path, text: str, mode: int = 0o600) -> OwnedMarker:
-    """Create a NEW marker EXCLUSIVELY (`O_CREAT|O_EXCL|O_NOFOLLOW`) under a descriptor-walked
-    parent, RETAINING both the journal file fd and a dup of the parent dir fd. Raises
-    `FileExistsError` if ANY leaf already exists (regular/symlink/special/stale) — never
-    overwritten. fsyncs the file AND the parent dir (durable creation). Returns an
-    `OwnedMarker`; the caller MUST `close()` it."""
+    """Create a NEW marker EXCLUSIVELY under a descriptor-walked parent, RETAINING both the
+    journal file fd and a dup of the parent dir fd. Raises `FileExistsError` if ANY leaf
+    already exists (regular/symlink/special/stale) — never overwritten. fsyncs the file AND
+    the parent dir (durable creation). Returns an `OwnedMarker`; the caller MUST `close()` it.
+
+    The payload is written and fsynced in a private temp leaf and PUBLISHED by a no-replace
+    rename (hardlink fallback; EEXIST rather than clobbering): the name never shows an empty
+    or partial marker, and a failure never has to remove anything by that name."""
     data = text.encode("utf-8")
     with _walk_parent(paths, path, create=True) as (parent_fd, name):
-        file_fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode,
-                          dir_fd=parent_fd)
+        tmp, file_fd = _create_temp_leaf(parent_fd, name, mode, path)
         try:
-            # os.dup can itself fail under fd exhaustion (EMFILE/ENFILE); build the marker
-            # INSIDE the try so file_fd is always closed on any failure (and
-            # its re-review: the dup must be guarded too, not just the write).
-            marker = OwnedMarker(name, os.dup(parent_fd), file_fd, 0, 0)
-            marker._write_all(data)             # COMPLETE write (loops over partial writes)
-            os.fsync(file_fd)
-            st = os.fstat(file_fd)
-            marker.st_dev, marker.st_ino = st.st_dev, st.st_ino
-        except BaseException:
             try:
-                # the leaf WE just created: never leave it half-written — but unlink it only while
-                # the visible name is still OUR inode (fstat before the fd is closed)
-                ours = os.fstat(file_fd)
-                seen = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-                if (seen.st_ino, seen.st_dev) == (ours.st_ino, ours.st_dev):
-                    os.unlink(name, dir_fd=parent_fd)
+                # os.dup can itself fail under fd exhaustion (EMFILE/ENFILE); build the marker
+                # INSIDE the try so file_fd is always closed on any failure.
+                marker = OwnedMarker(name, os.dup(parent_fd), file_fd, 0, 0)
+                marker._write_all(data)         # COMPLETE write (loops over partial writes)
+                os.fsync(file_fd)
+                st = os.fstat(file_fd)
+                marker.st_dev, marker.st_ino = st.st_dev, st.st_ino
+                # Exclusive publish (EEXIST if ANY leaf holds the name): a no-replace rename,
+                # else — renameat2 unavailable — a hardlink, as `rename_leaf(replace=False)`.
+                if not _renameat2_noreplace(parent_fd, tmp, name):
+                    os.link(tmp, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            except BaseException:
+                try:
+                    marker.close()              # closes file_fd AND the dup'd parent fd
+                except NameError:
+                    os.close(file_fd)           # dup failed before marker existed
+                raise
+        finally:
+            try:
+                os.unlink(tmp, dir_fd=parent_fd)
             except OSError:
                 pass
-            try:
-                marker.close()                  # closes file_fd AND the dup'd parent fd
-            except NameError:
-                os.close(file_fd)               # dup failed before marker existed
-            raise
         try:
             os.fsync(parent_fd)                 # the new dir entry is durable
         except OSError:

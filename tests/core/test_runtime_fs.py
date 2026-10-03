@@ -336,7 +336,8 @@ def test_open_marker_excl_cleanup_spares_a_leaf_replaced_after_the_failure(tmp_p
     paths = Paths(runtime_root=tmp_path / "rt")
     p = paths.under("state", "source-txn", "j.json")
     def enospc_then_replaced(fd, data):
-        os.unlink(p)                             # someone else swaps the name...
+        if p.exists():
+            os.unlink(p)                         # someone else swaps the name...
         p.write_text("theirs")                   # ...for their own file
         raise OSError(errno.ENOSPC, "No space left on device")
     monkeypatch.setattr(os, "write", enospc_then_replaced)
@@ -344,6 +345,40 @@ def test_open_marker_excl_cleanup_spares_a_leaf_replaced_after_the_failure(tmp_p
         runtime_fs.open_marker_excl(paths, p, "v1")
     monkeypatch.undo()
     assert p.read_text() == "theirs"
+
+
+@pytest.mark.parametrize("publish", ["renameat2", "link-fallback"])
+def test_open_marker_excl_never_shows_a_half_written_leaf(tmp_path, monkeypatch, publish):
+    # A reader (recovery scanning journals, a path unit watching a request) must never find the
+    # marker empty or partial: the name appears only once the whole payload is durable — and so
+    # a failed write leaves nothing under the name to clean up. Both publish paths stay exclusive.
+    import os
+
+    from lhpc.core import runtime_fs
+    from lhpc.core.paths import Paths
+    if publish == "link-fallback":       # a libc/kernel without renameat2: the seam is its probe
+        monkeypatch.setattr(runtime_fs, "_renameat2_noreplace", lambda fd, src, dst: False)
+    paths = Paths(runtime_root=tmp_path / "rt")
+    p = paths.under("state", "source-txn", "j.json")
+    seen = []
+    real_write = os.write
+
+    def watching_write(fd, data):
+        seen.append(p.exists())
+        return real_write(fd, data)
+    monkeypatch.setattr(os, "write", watching_write)
+    m = runtime_fs.open_marker_excl(paths, p, "v1")
+    monkeypatch.setattr(os, "write", real_write)
+    try:
+        assert seen and not any(seen)                         # invisible while being written
+        assert p.read_text() == "v1"
+        with pytest.raises(FileExistsError):                  # exclusive: never overwrites
+            runtime_fs.open_marker_excl(paths, p, "x")
+        assert p.read_text() == "v1"
+        assert sorted(os.listdir(p.parent)) == ["j.json"]     # no temp leaf left behind
+        assert m.rewrite("v2") and p.read_text() == "v2"      # the handle owns the visible leaf
+    finally:
+        assert m.remove()
 
 
 def test_owned_marker_complete_write_under_partial_os_write(tmp_path, monkeypatch):
