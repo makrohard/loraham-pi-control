@@ -290,6 +290,21 @@ def test_service_probe_guards(tmp_path):
     assert "not built" in svc.probe_hardware("433", "loraham").message
 
 
+@pytest.mark.safety("radio-band-exclusive")
+def test_probe_refused_while_a_direct_radio_stack_owns_the_band(tmp_path):
+    # meshtasticd drives the 868 chip itself (an exclusive `loraham.radio.868` claim) and holds no
+    # daemon instance lock: Detect must refuse with the holder named, never spawn a probe daemon.
+    fake = FakeSystem(cmdlines_data={200: ["meshtasticd"]})
+    binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
+    binp.parent.mkdir(parents=True)
+    binp.write_text("#!/bin/sh\n")
+    os.chmod(binp, 0o755)
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    pr = svc.probe_hardware("868", "loraham")
+    assert pr.busy and not pr.present and "meshtastic" in pr.message
+    assert not any("--hw" in argv for argv in fake.calls)          # no probe daemon spawned
+
+
 # ---- M5: dashboard states -----------------------------------------------------------------------
 
 def _body_class(html):

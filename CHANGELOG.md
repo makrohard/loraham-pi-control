@@ -15,6 +15,8 @@
   carries the saved Settings and the band it runs on; it showed the defaults.
 - A build, host test or other command whose program leaves a detached background process holding its output no
   longer hangs until that process exits; the run returns and its log is marked unverified.
+- Hardware "Detect" is refused, naming the stack, while Meshtastic or Reticulum drives that band's radio; it
+  started a probe daemon on the chip they were using.
 
 ## 0.11.10
 

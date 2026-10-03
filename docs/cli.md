@@ -161,7 +161,8 @@ lhpc hardware --high-power 433 on|off  # allow POWER=20 on an SX127x band; takes
 
 Web: the loraham daemon stack's **Hardware** settings, which add a **Detect** probe (starts the
 daemon briefly per candidate board and reports whether the chip responds; the board's LED lights
-during init).
+during init). Detect is refused, naming the stack, while a stack that drives the radio itself
+(Meshtastic, Reticulum) runs on that band.
 
 ---
 

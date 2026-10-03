@@ -558,8 +558,11 @@ class LifecycleOpsMixin:
         """Bounded, safe hardware probe for the daemon Hardware page: spawn the daemon for
         (band, hw_preset) and report present / absent (+ the daemon's chip diagnostic) / busy. Guards:
         valid band, known preset, daemon BUILT. Reuses the real runtime lock dir so an already-running
-        daemon on the band reports BUSY, never gets its radio stolen."""
+        daemon on the band reports BUSY, never gets its radio stolen. A direct-radio stack (meshtastic,
+        reticulum) holds no daemon lock, so the probe takes the band's start locks like a daemon start
+        and refuses, naming the stack, while one owns the band."""
         from . import config as _config
+        from . import reslock
         from .probes import hardware as hwprobe
         if band not in self.RADIO_BANDS:
             return hwprobe.ProbeResult(False, False, f"invalid band {band!r}")
@@ -575,8 +578,19 @@ class LifecycleOpsMixin:
         src = life.source_dir(comp)
         binary = str(src / comp.bin) if comp.bin else str(src / "loraham_daemon" / "loraham_daemon")
         runtime_dir = str(self._paths.runtime_root / "state" / "loraham")
-        return hwprobe.probe_radio(self._system, binary, str(src), band, hw_preset,
-                                   runtime_dir=runtime_dir, label=_config.hw_preset_label(hw_preset))
+        try:
+            with self._keys_guard("hardware-probe", "daemon",
+                                  ["lifecycle.daemon", f"claim.loraham.radio.{band}"]):
+                owner = self._direct_radio_owners({band}).get(band)
+                if owner:
+                    return hwprobe.ProbeResult(
+                        False, True, f"{band} MHz is in use by {self.stack_of(owner) or owner} — "
+                                     "stop it before detecting")
+                return hwprobe.probe_radio(self._system, binary, str(src), band, hw_preset,
+                                           runtime_dir=runtime_dir,
+                                           label=_config.hw_preset_label(hw_preset))
+        except reslock.ResourceBusy as busy:
+            return hwprobe.ProbeResult(False, True, f"{band} MHz is busy ({busy}); try again")
 
     def radio_mode_block(self, target: str) -> str:
         """A reason string when the active radio mode excludes EVERY band this stack can use, else "".
