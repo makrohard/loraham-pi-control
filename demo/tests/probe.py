@@ -39,6 +39,16 @@ try:
     dov = svc.dependency_overview()
     assert dov["mandatory_missing"] == 0 and dov["optional_missing"] == 0
     R["default_state"] = f"{len(ids)} installed, 0 running, {dov['mandatory_missing']} mandatory-missing"
+    # The PRODUCTION identity gate: without a node name (Meshtastic and MeshCore never inherit the
+    # callsign) the start is refused with the fields the web sends the visitor to; the demo's own
+    # boot seed configures the box so every stack starts.
+    _plan = svc.run_action("start", "meshtastic", apply=False)
+    assert _plan.ok is False and _plan.data.get("enforce_fields"), _plan.summary
+    assert svc.start("meshtastic", apply=True).ok is False and not svc.stack_running("meshtastic")
+    assert svc.restart("meshtastic", apply=True).ok is False and not svc.stack_running("meshtastic")
+    from lhpc_demo.bridge import _seed_identities
+    _seed_identities(svc)                                # the boot seed's identities (bridge._seed)
+    R["identity_gate"] = "meshtastic refused without a node name"
     # An optional component is refused for RESTART exactly as for start/stop — never a
     # "Restarted meshcore" that runs the stack while the part asked for stays stopped.
     assert svc.restart("meshcore-webui", apply=True).ok is False
@@ -161,6 +171,12 @@ try:
         seg4 = html[i4:(html.find('data-radio-band=', i4 + 10) if i4 >= 0 else 0)]
         assert "graywolf" not in seg4.lower(), "graywolf must NOT render under 433"
     R["band_select"] = "graywolf 868: kiss follows/moves to 868; dashboard places both under 868"
+    # the demo's boot seed configures every identity the gate asks for: every stack can start
+    from lhpc_demo.bridge import _seed
+    _seed(svc)
+    _refused = [i for i in ids if not svc.run_action("start", i, apply=False).ok]
+    assert not _refused, _refused
+    R["identity_seed"] = "after the demo seed every stack's start plan passes the identity gate"
     R["lifecycle"] = "ok"
     R["render_with_state"] = c.get("/stacks").status_code
 except Exception:

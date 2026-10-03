@@ -16,17 +16,31 @@ _client = None
 
 
 def _seed(svc) -> None:
-    """Present a CONFIGURED box: a radio board + callsign, so the dashboard shows a set-up
-    station instead of first-run 'configure your hardware' prompts. Non-fatal."""
+    """Present a CONFIGURED box: a radio board and the identities below, so the dashboard shows
+    a set-up station every stack can start on, instead of first-run prompts. Non-fatal."""
     try:
         svc.set_hardware_setup("loraham")
     except Exception:
         pass
+    _seed_identities(svc)
+
+
+def _seed_identities(svc) -> None:
+    """A callsign, and the node names Meshtastic and MeshCore require (they never inherit the
+    callsign): what the start's identity gate asks for. Non-fatal."""
     try:
         from lhpc.core.config import save_operator_config
         save_operator_config(svc._paths, "DL0DEM")
     except Exception:
         pass
+    for stack, values, bands in (("meshtastic", {"node_name": "LHPC Demo", "node_short": "DEMO"},
+                                  ("433", "868")),
+                                 ("meshcore", {"file_node_name": "lhpc-demo"}, ("",))):
+        for band in bands:
+            try:
+                svc.save_config_bundle(stack, values=values, band=band)
+            except Exception:
+                pass
 
 
 def boot(state_json: str = "") -> str:

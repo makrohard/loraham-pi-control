@@ -455,6 +455,11 @@ class DemoService(ControllerService):
         # preview reasons about the SAME radio Apply will use (persist only on apply). Starting
         # graywolf on 868 must not touch 433 — plan or apply.
         req_band = str((k or {}).get("band") or "")
+        # The production identity gate on the saved configuration: no resolvable callsign or
+        # node name refuses the start, and the web sends the visitor to the Settings row.
+        if (refused := self._identity_refusal(sid, self._launch_band_hint(sid, req_band),
+                                              "start")) is not None:
+            return refused
         band = req_band if req_band in self._bandswitchable(sid) else self._band(sid)
         if apply and band in ("433", "868"):
             d["band"] = band
@@ -556,6 +561,9 @@ class DemoService(ControllerService):
         # start: refuse if a dependency is absent, unbuilt, or won't start (the audit's
         # "restart graywolf while KISS is missing"). Honour the band selector too (dry run + apply).
         req_band = str((k or {}).get("band") or "")
+        if (refused := self._identity_refusal(sid, self._launch_band_hint(sid, req_band),
+                                              "restart")) is not None:
+            return refused
         band = req_band if req_band in self._bandswitchable(sid) else self._band(sid)
         if apply and band in ("433", "868"):
             d["band"] = band
