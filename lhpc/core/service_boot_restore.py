@@ -25,6 +25,7 @@ from .lifecycle import current_boot_id
 from .outcomes import Outcome, manual_required_only
 from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused
+from .snapshot_memo import invalidates_snapshot
 
 
 class BootRestoreOpsMixin:
@@ -264,6 +265,7 @@ class BootRestoreOpsMixin:
 
     # ---- the driver -----------------------------------------------------------------------------
 
+    @invalidates_snapshot
     def boot_restore_run(self) -> ActionResult:
         """The unit body. `data["driver_completed"]` gates the service exit code: True whenever
         every terminal result was durably recorded (even with failed items — the RemainAfterExit

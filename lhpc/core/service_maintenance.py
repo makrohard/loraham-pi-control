@@ -912,6 +912,7 @@ class MaintenanceOpsMixin:
         return ActionResult(True, f"upstream latest is {tag}; {inst_txt}{avail}",
                             next_commands=[f"lhpc status {target}"])
 
+    @invalidates_snapshot
     def graywolf_upstream_update(self, target: str, apply: bool = False) -> ActionResult:
         """One-click update to the latest upstream release, verified against that release's own
         checksums.txt (see graywolf-fetch.sh --from-upstream). Fetches, re-marks built, and
@@ -1602,6 +1603,7 @@ class MaintenanceOpsMixin:
         return {"hash": cand["hash"], "started_at": cand.get("started_at", 0),
                 "band": cand.get("band", ""), "components": sorted(cand["entries"])}
 
+    @invalidates_snapshot
     def confirm_known_working(self, stack_id: str) -> ActionResult:
         """OPERATOR ACTION: record the last-start candidate composition as known-working
         (dedupe, keep the newest three). For a MANUAL-ONLY stack (no lhpc-startable

@@ -244,3 +244,31 @@ def test_a_restart_plan_assesses_the_snapshot_once(tmp_path, monkeypatch, set_ca
     plan = svc.restart("kiss", apply=False)
     assert plan.ok and "dependents" in plan.data
     assert len(n) <= 2, f"restart plan assessed {len(n)}×"          # one memoized (+ one fresh recheck)
+
+
+_KNOWN_MUTATORS = (
+    # decorated before 0.11.10's follow-ups
+    "apply_daemon_params", "auto_install", "auto_install_abort", "auto_install_ack", "build",
+    "clean", "hmac_apply_start", "hmac_set_secret", "install", "poststart", "restart",
+    "save_config", "save_config_bundle", "start", "stop", "test", "uninstall", "update",
+    # the known undecorated mutators (build marker, receipts/files, config/params, markers)
+    "graywolf_upstream_update", "binary_install", "binary_retire", "reset_config",
+    "save_stack_config", "save_daemon_params", "reset_daemon_params", "daemon_set",
+    "save_component_remote", "confirm_known_working", "boot_restore_run", "set_high_power",
+    "set_gps", "set_rflog", "set_rflog_all",
+)
+
+
+@pytest.mark.parametrize("name", _KNOWN_MUTATORS)
+def test_known_mutators_are_decorated(name):
+    """The KNOWN mutating entries carry the `invalidates_snapshot` marker. Not a completeness
+    guarantee: a new public mutator that is neither decorated nor listed here still passes."""
+    assert getattr(getattr(ControllerService, name), "invalidates_snapshot", False) is True
+
+
+def test_graywolf_upstream_update_drops_the_memo(tmp_path):
+    # It re-marks the build and replaces the installed tree; a later read must reassess.
+    svc = _svc(tmp_path)
+    a = svc.build_snapshot()
+    svc.graywolf_upstream_update("graywolf", apply=False)
+    assert svc.build_snapshot() is not a

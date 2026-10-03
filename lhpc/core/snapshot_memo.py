@@ -30,4 +30,5 @@ def invalidates_snapshot(fn):
             return fn(self, *args, **kwargs)
         finally:
             self.invalidate_snapshot()
+    _wrap.invalidates_snapshot = True        # the marker tests check (`__wrapped__` is any wraps)
     return _wrap

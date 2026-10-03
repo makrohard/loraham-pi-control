@@ -198,6 +198,7 @@ class ParamsConfigMixin:
                 "saved_family": saved_family, "reachable": view.reachable,
                 "warn": bool(fam == "sx127x" and live is True), "mismatch": mismatch}
 
+    @invalidates_snapshot
     def set_high_power(self, band: str, value: str) -> ActionResult:
         """Save the band's high-power switch (`hipower_<band>` = `off`/`on`) through the ordinary
         `save_config_bundle()` transaction, which writes the value and the restart-required marker
@@ -2350,6 +2351,7 @@ class ParamsConfigMixin:
                            else "no data from the device in the sampling window")
         return got
 
+    @invalidates_snapshot
     def set_gps(self, **fields) -> ActionResult:
         """Show or set the GLOBAL position source (`[gps]` in local.toml).
 
@@ -2436,6 +2438,7 @@ class ParamsConfigMixin:
                 details.append(f"  note: could not check whether gpsd owns {v['device']} ({detail})")
         return ActionResult(True, f"position source set to {v['source']}", details=details)
 
+    @invalidates_snapshot
     def save_stack_config(self, target: str, values: dict, band: str = "") -> ActionResult:
         """Validate and persist a stack/band's run + file configuration via the CANONICAL bundle
         path (`save_config_bundle`). `values` keys are the same canonical API keys the Config/Start
@@ -2522,6 +2525,7 @@ class ParamsConfigMixin:
         (for the dashboard + CLI status + dash signature)."""
         return [s.id for s in self.stacks() if self.restart_required(s.id) is not None]
 
+    @invalidates_snapshot
     def save_component_remote(self, component_id: str, url: str) -> ActionResult:
         """Override (or clear, if url is blank) a component's GitHub remote. A shared source
         path is ONE checkout with ONE remote: the change is applied ATOMICALLY to EVERY
@@ -3334,6 +3338,7 @@ class ParamsConfigMixin:
             target = target / p
         runtime_fs.atomic_write(self._paths, target, text, 0o644)
 
+    @invalidates_snapshot
     def reset_config(self, target: str, band: str = "") -> ActionResult:
         """Reset a stack/band's NORMAL Config-page settings (run params, file config, autostart)
         to defaults. Owns ONLY those keys — daemon-profile `dp_*` overrides, another band's
@@ -3466,6 +3471,7 @@ class ParamsConfigMixin:
                 out.append(raw)
         return out[-lines:]
 
+    @invalidates_snapshot
     def daemon_set(self, band: str, key: str, value: str, apply: bool = False) -> ActionResult:
         # Validate the band at the service boundary too (not only in web routes): a
         # direct CLI/service caller must never reach a constructed arbitrary socket path.

@@ -25,6 +25,7 @@ from . import binary_receipt as brx
 from . import reslock, runtime_fs, source_registry
 from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
+from .snapshot_memo import invalidates_snapshot
 
 
 def _override_command(stack_id: str) -> str:
@@ -77,6 +78,7 @@ class BinaryOpsMixin:
 
     # ---- install -----------------------------------------------------------------------------
 
+    @invalidates_snapshot
     def binary_install(self, stack_id: str, apply: bool = False, *,
                        locked: bool = False, accept_pin_mismatch: str = "") -> ActionResult:
         """Install `stack_id` from its published artifact. Every refusal is typed and offers
@@ -790,6 +792,7 @@ class BinaryOpsMixin:
 
     # ---- retire (switch back to source) --------------------------------------------------
 
+    @invalidates_snapshot
     def binary_retire(self, stack_id: str, *, force: bool = False,
                       locked: bool = False, txn: str = "") -> ActionResult:
         """Remove a binary install's files + receipt so a source install can proceed on a

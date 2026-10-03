@@ -2090,6 +2090,7 @@ class LifecycleOpsMixin:
                                                  self.chip_family_for_band(b),
                                                  self.high_power_for_band(b))}
 
+    @invalidates_snapshot
     def save_daemon_params(self, target: str, band: str, values: dict) -> ActionResult:
         """Persist operator overrides for a stack's daemon params (band-scoped). Semantics:
           * a param NOT present in `values` is left UNCHANGED (direct callers patch a subset);
@@ -2188,6 +2189,7 @@ class LifecycleOpsMixin:
         return ActionResult(False, f"PARTIAL: applied {len(applied)}/{n}, {len(failed)} FAILED on "
                             f"{b} MHz (saved profile unchanged)", details=details, data=data)
 
+    @invalidates_snapshot
     def reset_daemon_params(self, target: str, band: str) -> ActionResult:
         """Clear all daemon-param overrides for a stack+band (back to source defaults)."""
         from . import daemon_params
@@ -5621,6 +5623,7 @@ class LifecycleOpsMixin:
         values = {self._rflog_switch_value(e) for e in self._rflog_entries()}
         return values.pop() if len(values) == 1 else "mixed"
 
+    @invalidates_snapshot
     def set_rflog_all(self, value) -> ActionResult:
         """Save the switch on every config owner the manifest installs, one owner at a time
         through the same one-key bundle path as `set_rflog` (so every owner's restart marker
@@ -5645,6 +5648,7 @@ class LifecycleOpsMixin:
         return ActionResult(ok, "Every RF log cleared." if ok else "Not every RF log was cleared.",
                             [f"{job}: {'cleared' if r.ok else r.summary}" for job, r in results])
 
+    @invalidates_snapshot
     def set_rflog(self, stack_id: str, value) -> ActionResult:
         """Save the switch on the CONFIG OWNER through the one-key bundle path (values merge; no
         band — the param is band-less). Graywolf's page deliberately writes the kiss store."""
