@@ -31,3 +31,6 @@ and continue with the next; never improvise a different design.
    rules it out (a test name or a grep result), (d) one thing you re-read after writing it and what you found.
 3. Deviations from the plan (or "none").
 4. The full pytest/ruff summary lines.
+
+## Commit identity (the maintainer's rule — a direct violation otherwise)
+Before your first commit run `git config user.name makrohard` and `git config user.email <the author e-mail of the makrohard commits in this repository: git log -1 --format=%ae --author=makrohard origin/main>`, and commit with that identity; no Co-Authored-By, Claude-Session or any AI-attribution line in any message. After each commit check `git log -1 --format='%an %cn%n%B'` shows makrohard twice and no such line; fix it with `git commit --amend --reset-author --no-edit` before you push.
