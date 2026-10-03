@@ -1409,6 +1409,8 @@ class WebserverOpsMixin:
                         for sid, c in candidates.items()}, hold_lock=False)
                 except (ValidationError, _config.ConfigError) as exc:
                     return ActionResult(False, f"invalid web-UI config: {exc}")
+        except _config.ConfigRecoveryRequired as exc:
+            return ActionResult(False, f"web-UI config not saved — {exc}")
         except _config.ConfigLockBusy as exc:
             return ActionResult(False, f"configuration is busy — try again shortly ({exc})")
         self._invalidate_config()

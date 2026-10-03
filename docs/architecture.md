@@ -218,10 +218,12 @@ The guarantees the controller gives, each with where it is implemented and prove
 - **Locking.** Start, stop, restart, build, update, uninstall and clean take named non-blocking
   locks; a contended operation refuses immediately, naming the holder. `core/reslock.py`.
 - **Config as a transaction.** A Settings save or reset validates the whole submission before any write;
-  files are journalled and atomically replaced, and a mid-write failure rolls back. A malformed
-  `local.toml` is preserved, never overwritten; a present-but-malformed per-stack file is a typed
-  error (CLI: clean failure, web: 409, no echo of the bad value) — only an *absent* file means
-  "use defaults". `tests/core/test_config.py`, `tests/stacks/test_stack_params.py`.
+  files are journalled and atomically replaced, and a mid-write failure rolls back; a journal a
+  crashed process left behind is finished under the config lock before ANY writer runs (the
+  non-transactional hardware, GPS, operator and remote saves included), or the lock is refused;
+  each `lhpc` process also finishes it eagerly at start. A malformed `local.toml` is preserved, never overwritten; a present-but-malformed
+  per-stack file is a typed error (CLI: clean failure, web: 409, no echo of the bad value) — only
+  an *absent* file means "use defaults". `tests/core/test_config.py`, `tests/stacks/test_stack_params.py`.
 - **Truthful outcomes.** Every component yields one typed `Outcome`; `ActionResult.ok` derives
   entirely from those. `start` fails unless every required component verified ready (a daemon
   start verifies each band's CONF socket); a stop counts as verified only when the process ceased

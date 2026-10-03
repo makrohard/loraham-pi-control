@@ -1651,6 +1651,10 @@ class ParamsConfigMixin:
                         self.restart_marker_payload(
                             sid, ["callsign (inherited global)"], run_band), 0o600))
                 _config._apply_config_transaction_locked(self._paths, targets)
+        except _config.ConfigRecoveryRequired:
+            return ActionResult(False, "a pending configuration transaction could "
+                                "not be recovered — nothing was changed "
+                                "(journal retained; see lhpc doctor)")
         except _config.ConfigLockBusy as exc:
             return ActionResult(False, f"configuration is busy — try again shortly ({exc})")
         except (OSError, _config.ConfigError) as exc:

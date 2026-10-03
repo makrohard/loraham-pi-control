@@ -2,6 +2,7 @@
 
 
 from __future__ import annotations
+import errno
 import json
 import tomllib
 import pytest
@@ -1736,3 +1737,87 @@ def test_config_param_groups_mark_the_fixture_relay_group_optional_with_a_rule(t
     groups = {g["name"]: g for g in svc.config_param_groups("meshcom", "")}
     assert groups["MeshCom GPS relay (fixture)"]["rule_before"] is True
     assert groups["MeshCom GPS relay (fixture)"]["optional"] is True
+
+
+@pytest.mark.safety("config-transaction")
+def test_a_non_transactional_save_finishes_a_pending_journal_before_it_writes(tmp_path):
+    """The invariant lives in `config_lock`, which every writer passes — not in a startup hook a
+    busy lock, an OSError or a long-running console skips. A crashed transaction's journal is
+    finished BEFORE the hardware save writes, so a later transaction never replays the journal's
+    pre-image over it."""
+    paths = _paths(tmp_path)
+    local = tmp_path / "config" / "local.toml"
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text("# before the crash\n")
+    journal = _write_journal(tmp_path, {"version": 1, "targets": [
+        {"kind": "local", "rel": "config/local.toml", "pre": local.read_text(),
+         "existed": True, "mode": 0o600}]})
+
+    cfgmod.save_hardware_setup(paths, "loraham")
+    assert not journal.exists()                               # finished before the write
+
+    stack = tmp_path / "config" / "stacks" / "daemon.toml"
+    cfgmod.apply_config_transaction(paths, [("stack", stack, 'radio = "868"\n', 0o644)])
+    assert load_config(paths).radio.hardware == "loraham"     # the save survived
+
+
+@pytest.mark.safety("config-transaction")
+def test_a_non_transactional_save_refuses_a_journal_it_cannot_finish(tmp_path):
+    paths = _paths(tmp_path)
+    local = tmp_path / "config" / "local.toml"
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text("# untouched\n")
+    journal = _write_journal(tmp_path, "{ this is not json")
+    with pytest.raises(cfgmod.ConfigRecoveryRequired) as exc:
+        cfgmod.save_hardware_setup(paths, "loraham")
+    assert exc.value.reason == "recovery-required"
+    assert isinstance(exc.value, ConfigLockBusy)              # every busy handler refuses it
+    assert journal.exists() and local.read_text() == "# untouched\n"
+
+
+@pytest.mark.safety("config-transaction")
+@pytest.mark.parametrize("raised", [OSError("disk gone"), PathContainmentError("escapes")])
+def test_a_recovery_that_raises_refuses_the_writer_with_the_typed_refusal(tmp_path, monkeypatch, raised):
+    """A recovery that RAISES (an OSError, a containment error) is a journal that could not be
+    finished: the writer gets the typed `ConfigRecoveryRequired`, never the raw exception, and
+    the journal is kept."""
+    paths = _paths(tmp_path)
+    local = tmp_path / "config" / "local.toml"
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text("# untouched\n")
+    journal = _write_journal(tmp_path, {"version": 1, "targets": [
+        {"kind": "local", "rel": "config/local.toml", "pre": "# pre\n",
+         "existed": True, "mode": 0o600}]})
+
+    def boom(_paths):
+        raise raised
+    monkeypatch.setattr(cfgmod, "recover_config_transaction", boom)
+    with pytest.raises(cfgmod.ConfigRecoveryRequired) as exc:
+        cfgmod.save_hardware_setup(paths, "loraham")
+    assert exc.value.reason == "recovery-required"
+    assert exc.value.__cause__ is raised
+    assert journal.exists() and local.read_text() == "# untouched\n"
+
+
+@pytest.mark.safety("config-transaction")
+@pytest.mark.parametrize("err", [errno.EIO, errno.EACCES], ids=["EIO", "EACCES"])
+def test_a_journal_path_that_cannot_be_examined_refuses_the_writer(tmp_path, monkeypatch, err):
+    """Only ENOENT/ENOTDIR mean "no journal". An lstat of the journal path that fails otherwise
+    cannot tell whether a crashed transaction left one, so the writer is refused with the typed
+    `ConfigRecoveryRequired` and nothing is written — never treated as absent."""
+    paths = _paths(tmp_path)
+    local = tmp_path / "config" / "local.toml"
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text("# untouched\n")
+    jp = str(cfgmod._txn_journal(paths))
+    real_lstat = os.lstat
+
+    def lstat(path, *a, **kw):
+        if os.fspath(path) == jp:
+            raise OSError(err, os.strerror(err), jp)
+        return real_lstat(path, *a, **kw)
+    monkeypatch.setattr(os, "lstat", lstat)
+    with pytest.raises(cfgmod.ConfigRecoveryRequired) as exc:
+        cfgmod.save_hardware_setup(paths, "loraham")
+    assert exc.value.reason == "recovery-required"
+    assert local.read_text() == "# untouched\n"

@@ -48,6 +48,15 @@ class ConfigLockBusy(ConfigError):
     a long-running operation holds it; the mutation should be retried shortly."""
 
 
+class ConfigRecoveryRequired(ConfigLockBusy):
+    """The config lock was taken, but a pending config journal could not be finished, so the
+    lock is refused: no write may land before a stale pre-image could be replayed over it. A
+    `ConfigLockBusy` so every handler of a lock it cannot take refuses the mutation."""
+
+    def __init__(self, message: str = ""):
+        super().__init__(message, reason="recovery-required")
+
+
 def _atomic_write(paths: Paths, path: Path, text: str, mode: int = 0o644) -> None:
     """Atomically write a RUNTIME-OWNED config leaf THROUGH the safe runtime FS
     (`runtime_fs.atomic_write`): containment, no-follow leaf, parent fsync. Runtime-state
@@ -64,7 +73,21 @@ _CONFIG_LOCK_POLL_S = 0.1
 
 @contextmanager
 def config_lock(paths: Paths, timeout: float = CONFIG_LOCK_TIMEOUT_S):
-    """Serialize config mutations within a runtime root (a single exclusive flock).
+    """Serialize config mutations within a runtime root (a single exclusive flock), and finish a
+    pending config journal FIRST — under the lock, before the holder reads or writes anything.
+    Every config writer passes here, the non-transactional ones (hardware, GPS, operator,
+    remotes, …) included, so none of them can write before a crashed transaction's journal is
+    finished; a journal that cannot be finished refuses the lock (`ConfigRecoveryRequired`).
+    No journal: one `lstat`, nothing else."""
+    with _config_flock(paths, timeout):
+        _finish_pending_journal(paths)
+        yield
+
+
+@contextmanager
+def _config_flock(paths: Paths, timeout: float = CONFIG_LOCK_TIMEOUT_S):
+    """The bare exclusive config flock (no journal recovery) — only `config_lock` and the startup
+    cleanup use it; everyone else takes `config_lock`.
     The lock file is opened with O_NOFOLLOW so a symlinked `.lock` leaf is refused,
     and its path is containment-checked; if the lock cannot be acquired safely the
     mutation is blocked (the exception propagates), never silently bypassed.
@@ -1763,6 +1786,47 @@ def recover_config_transaction(paths: Paths) -> str | None:
     except (OSError, PathContainmentError):
         return ""                       # journal could not be removed -> recovery-required
     return f"recovered a pending config transaction ({len(resolved)} file(s))"
+
+
+def _finish_pending_journal(paths: Paths) -> str | None:
+    """Recover a pending config journal — the CALLER holds the config flock. Returns the recovery
+    note, or None with no journal; raises `ConfigRecoveryRequired` when one is pending but cannot
+    be finished (journal retained) — a recovery that raises included, never the raw exception.
+    Only ENOENT/ENOTDIR on the journal path mean "no journal": an lstat that fails otherwise
+    (EACCES, EIO) cannot tell, so it refuses too."""
+    refusal = ("recovery-required: a pending config journal could not be recovered; resolve it "
+               "before saving config again")
+    try:
+        os.lstat(_txn_journal(paths))   # no-follow: a dangling/escaping symlink leaf is pending too
+    except (FileNotFoundError, NotADirectoryError):
+        return None                     # ENOENT/ENOTDIR: the ONLY answers that mean "no journal"
+    except PathContainmentError:
+        pass                            # cannot be safely located: recovery-required, never absent
+    except OSError as exc:              # EACCES/EIO/...: presence unknown -> never "absent"
+        raise ConfigRecoveryRequired(f"{refusal} (journal unreadable: {exc})") from exc
+    try:
+        note = recover_config_transaction(paths)
+    except ConfigLockBusy:
+        raise                           # already the typed refusal (a busy lock / recovery-required)
+    except Exception as exc:            # a recovery that RAISES could not finish it either
+        raise ConfigRecoveryRequired(f"{refusal} ({exc})") from exc
+    if not note:
+        raise ConfigRecoveryRequired(refusal)
+    return note
+
+
+def recover_config_journal_at_startup(paths: Paths) -> str | None:
+    """EAGER CLEANUP when an `lhpc` process starts: finish a config journal a crashed process left
+    behind and report it. Not the invariant — `config_lock` finishes a pending journal before any
+    writer runs. No journal: no lock, nothing created. A busy lock or a journal that cannot be
+    finished is left for `config_lock`, which recovers it or refuses."""
+    try:
+        if not os.path.lexists(_txn_journal(paths)):
+            return None
+        with _config_flock(paths, timeout=WEB_SESSION_LOCK_S):    # never stall a start for long
+            return _finish_pending_journal(paths)
+    except (ConfigLockBusy, OSError, PathContainmentError):
+        return None
 
 
 # A renderer's answer meaning "this file goes away" (a restart marker whose last reason was

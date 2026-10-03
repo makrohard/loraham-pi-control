@@ -1181,3 +1181,32 @@ def test_plumbing_flag_runs_with_invocation_id(argv, method, unit, use, tmp_path
     monkeypatch.setattr(ControllerService, method, fake)
     assert main(argv) == 0
     assert called == [1]
+
+
+@pytest.mark.safety("config-transaction")
+def test_a_pending_config_journal_is_cleaned_up_when_lhpc_starts(capsys):
+    """EAGER CLEANUP, not the invariant (that is `config_lock`, tests/core/test_config.py): a
+    journal a crashed process left behind is finished and reported when the next `lhpc` process
+    starts; with the config lock busy the start goes on and leaves it for `config_lock`."""
+    import json
+
+    from lhpc.core import config
+    from lhpc.core.paths import resolve_paths
+    paths = resolve_paths()
+    local = paths.runtime_root / "config" / "local.toml"
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text("# before the crash\n")
+    journal = paths.runtime_root / "state" / "config-txn.json"
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    body = json.dumps({"version": 1, "targets": [
+        {"kind": "local", "rel": "config/local.toml", "pre": local.read_text(),
+         "existed": True, "mode": 0o600}]})
+    journal.write_text(body)
+
+    with config._config_flock(paths):                       # held elsewhere: start is not stalled
+        assert config.recover_config_journal_at_startup(paths) is None
+    assert journal.exists()
+
+    assert main(["list"]) == 0
+    assert not journal.exists()
+    assert "recovered a pending config transaction" in capsys.readouterr().err

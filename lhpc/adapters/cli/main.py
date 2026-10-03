@@ -1018,7 +1018,19 @@ def _cmd_meshtastic(passthrough: list[str]) -> int:
     )
 
 
+def _recover_config_journal() -> None:
+    """Every `lhpc` process starts in `_run` — each command, the console (`lhpc web --socket`), the
+    boot-restore and self-update units — so a config journal a crashed process left behind is
+    finished here, once, before anything writes config."""
+    from lhpc.core import config as _config
+    from lhpc.core.paths import resolve_paths
+    note = _config.recover_config_journal_at_startup(resolve_paths())
+    if note:
+        sys.stderr.write(f"note: {note}\n")
+
+
 def _run(argv: list[str] | None = None) -> int:
+    _recover_config_journal()
     # `meshtastic` forwards arbitrary upstream argv (including --help/--version and its own flags),
     # so it is intercepted BEFORE the main parser — which would otherwise claim --help or reject
     # unknown upstream options. Everything after `meshtastic` is passed through untouched.

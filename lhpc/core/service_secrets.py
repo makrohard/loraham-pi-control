@@ -92,6 +92,8 @@ class SecretsOpsMixin:
         if isinstance(exc, (selfupdate.ControllerRuntimeLockError, reslock.LockOpenError)):
             return ActionResult(False, f"The controller's lock could not be opened ({exc}); "
                                 "nothing was backed up or restored.")
+        if isinstance(exc, _config.ConfigRecoveryRequired):
+            return ActionResult(False, f"{exc}; nothing was backed up or restored.")
         if isinstance(exc, (reslock.ResourceBusy, _config.ConfigLockBusy)):
             return ActionResult(False, "Another operation holds the controller's locks; nothing was "
                                 "backed up or restored. Try again shortly.")
