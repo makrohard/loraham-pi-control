@@ -674,7 +674,7 @@ no attribute 'quiet_line'`, `CommandResult.__init__() got an unexpected keyword 
 - Found: the CHANGELOG heading makes one `tests/repo` test red (above). Not changed, as the heading
   was requested explicitly; flagged for the maintainer.
 - Identity: `git log --format='%an %cn%n%B' 045724db..HEAD` shows only the owner as author and
-  committer and no co-author or session line.
+  committer and no co-author or attribution trailer.
 
 ## Correction 5 (two lane defects from the first slow-build run)
 
@@ -745,7 +745,7 @@ aarch64, and the entries say `cpus=?`.
 
 Environment set-up on this box (local only, nothing committed):
 - the apt packages of `.devcontainer/Dockerfile`;
-- the agent proxy's CA in the system trust store and in a pip config, so the product's own pip
+- the outbound proxy's CA in the system trust store and in a pip config, so the product's own pip
   steps can reach PyPI;
 - `python3` set to 3.12 so that Ubuntu's `python3-libgpiod` and `python3-spidev` are importable
   (this box's default `python3` is 3.11, the lab image's is 3.13);
@@ -821,7 +821,7 @@ top. Patch-ids (`git show <c> | git patch-id --stable`, first 12 hex digits):
   PIE807 fix in the new test: `list` instead of `lambda: []`).
 - No full-suite run and no background job.
 - Identity: `git log --format='%an %cn%n%B' 045724db..HEAD` shows only the owner as author and
-  committer, and no co-author, session or AI-attribution line.
+  committer, and no co-author or AI-attribution line.
 
 **Adversarial self-review (before the push).**
 - The floor applies to every op in `_record`, not only checkout. Clone, checkout and cli-venv
@@ -918,7 +918,7 @@ top. Patch-ids (`git show <c> | git patch-id --stable`, first 12 hex digits):
   old script ran past the foreground limit and was moved to the background by the tool; it was
   stopped, and the red-before was re-run in the foreground on the two fast cases above.)
 - Identity: `git log --format='%an %cn%n%B' 045724db..HEAD` shows only the owner as author and
-  committer, and no co-author, session or AI-attribution line.
+  committer, and no co-author or AI-attribution line.
 
 **Live proof needed (not run here, not claimed).** Row A on the Zero with the amended script, and
 a row C run with it.
@@ -1180,8 +1180,8 @@ bootstrap skip / 83+1 / 91+1 / 91+1).
 - No full-suite run. Background: the long local Docker calibrations ran past the tool's 10-minute
   foreground limit and had to run in the background (measurements, not test runs); every test
   run was in the foreground.
-- Identity: `git log --format='%an %cn%n%B' 045724db..HEAD`: only the owner, no co-author,
-  session or AI-attribution line.
+- Identity: `git log --format='%an %cn%n%B' 045724db..HEAD`: only the owner, no co-author
+  or AI-attribution line.
 
 ### Adversarial self-review (before the push)
 
@@ -1218,3 +1218,187 @@ bootstrap skip / 83+1 / 91+1 / 91+1).
   were printed only on success (now before the assertion, so a red coverage run names them
   too); two ruff findings in the new tests; the baseline header's `host` example (now names
   cpus, mem and both IOPS) and a `~`-style home path in a lane docstring (now `$HOME`).
+
+## Correction 8 (gate 1 on Correction 7: three findings)
+
+Gate 1 judged Correction 7 RED with three findings (GAP 1 and the `PIP_SYNC_SINCE` fixup OK). Each
+fix is amended into the commit it belongs to; the docs path of the calibration work dir is
+corrected too. Branch `cons/F43-r8`, from `cons/F43-r7` = 16c09c1.
+
+### Finding 1 — the throttle check passed on ANY tight `io.max` line (lane commit 5e4a4c6 → 8cfd974)
+
+`_io_problems(cg)` returned `[]` as soon as one line of `io.max` met the IOPS limits, whatever
+disk it named. Now the lane names the disks that MUST be throttled and fails unless EACH has its
+own tight line:
+
+- `_required_disks()` returns `{what: MAJ:MIN}` and the problems of resolving them:
+  - **the container's writable layer** — from inside the container the root is an overlay with no
+    block device, so the job resolves the disk behind it on the host (as `disk_of()` does) and
+    hands it over as `SLOW_IO_ROOT_DISK`; missing or malformed is a problem;
+  - **the calibration work dir** `CALIB_WORK` (`$HOME/.cache/lhpc-calib`, now passed to
+    `calibrate.sh` as `--work-dir`, the script's own default outside an install, so the check and
+    the script name the same dir). On the writable layer it is that disk; otherwise
+    `_disk_of()` resolves it the way the job's `disk_of()` does (the filesystem's device via
+    `/sys/dev/block/MAJ:MIN`, a partition's parent disk). Unresolvable is a problem:
+    `STOP: backing device of <path> (the calibration work dir …) could not be resolved — the
+    throttle cannot be applied`.
+- `_io_problems(cg, required)` collects the disks with a tight line and reports each required one
+  without, naming it: `io.max [...]: the calibration work dir, disk 259:0, is not throttled to
+  wiops<=120 riops<=1200`. An empty `required` is a problem too.
+- `_env_problems()` = cpu, memory, the resolution problems and the io problems; `_record()`
+  refuses to record while it is non-empty (unchanged).
+
+### Finding 2 — `disk_of()` failed open (job commit 3e5d3cd → 24eb667)
+
+`disk_of()` returned 0 with no output for an unresolvable path, and the caller only checked that
+the disk list was non-empty: storage unresolved + swap resolved ran unthrottled on the storage
+disk. Now:
+
+- `disk_of()` returns 1 and names the path on stderr (`disk_of: backing device of <path> could not
+  be resolved (MAJ:MIN …)`).
+- The REQUIRED paths are the writable layer's storage (`DockerRootDir`, or `/var/lib/containerd`
+  when `docker info` reports the containerd image store, driver `overlayfs`) and `DockerRootDir`
+  (the `/tmp` volume). Each must resolve to a block device or the step prints
+  `::error::STOP: backing device of <path> could not be resolved — the throttle cannot be applied`
+  and exits 1, before `SLOW_IO_FLAGS` / `SLOW_IO_ROOT_DISK` are written, so the measuring step
+  never runs.
+- A swap area whose disk does not resolve is skipped with `::notice::swap <dev>: its disk could
+  not be resolved — not throttled`.
+- `SLOW_IO_ROOT_DISK` (MAJ:MIN of the writable layer's disk) goes to `$GITHUB_ENV`, into the
+  container (`-e`) and through `su` to the lane.
+
+### Finding 3 — `PIP_SYNC_SINCE` in the docs (docs commit 4a9c743 → c4ebbcb)
+
+`docs/maintenance.md`: `(lhpc.core.slow_target.PIP_SYNC_SINCE, 0.11.12)` → `0.12.0`, matching the
+code. `git grep -n '0\.11\.12'` over the tree: the CHANGELOG heading (left as instructed), the
+baseline data's `lhpc` labels and evidence names (row A's candidate, data), test fixtures of label
+forms, and earlier sections of this report (history). None is a sentence about the introducing
+release.
+
+### Docs — the calibration work dir (calibrate.sh commit 4ab52a2 → c8e886c)
+
+`docs/maintenance.md` and `docs/test-matrix.md` now say what `calibrate.sh` does: run from the
+installed checkout `<runtime root>/src/loraham-pi-control` while `<runtime root>/state` exists, its
+work dir is `<runtime root>/state/lhpc-calib` (any other checkout, or no `state` dir:
+`$HOME/.cache/lhpc-calib`; `--work-dir` overrides both); it refuses tmpfs, too little free space and an existing dir.
+`docs/testlab.md` (docs commit) describes the required disks and the per-disk `io.max` check.
+`calibrate.sh` itself is unchanged, so the workload hash of the data commit's calibration stands.
+
+### Commits and patch-ids
+
+`git commit --fixup <sha>` per target (a second fixup for the job commit: a de-duplicated disk
+list in the step's log line), then `GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash
+045724db`; this report as a new commit before the data commit. `git show <c> | git patch-id
+--stable`, first 12 hex digits:
+
+| before | after | patch-id before | patch-id after | equal |
+|---|---|---|---|---|
+| fc89dac | fc89dac | ec4aeb2a606a | ec4aeb2a606a | yes |
+| 05ccfd1 | 05ccfd1 | 4937203f55e4 | 4937203f55e4 | yes |
+| fbda823 | fbda823 | 92f8151b313b | 92f8151b313b | yes |
+| 5e4a4c6 | 8cfd974 | 05882c04af50 | dc1b48fb781d | amended (finding 1) |
+| 3e5d3cd | 24eb667 | 80739b76a63b | 52a03cc52c76 | amended (finding 2) |
+| 4a9c743 | c4ebbcb | b8bae5ba7713 | 7bcf0556845f | amended (finding 3, testlab.md) |
+| f289aa6 | bd5e7d4 | 9ed7554ec23c | 9ed7554ec23c | yes |
+| 55286ca | 6eac242 | ec31e4b99b54 | ec31e4b99b54 | yes |
+| 4ab52a2 | c8e886c | 0f8760b50b61 | 82c9ad03beb3 | amended (docs: the work dir) |
+| 9d9e82b | 2fbdae9 | e09b180f27e1 | e09b180f27e1 | yes |
+| ccb4a83 | a864c35 | f9a8ee7603b7 | f9a8ee7603b7 | yes |
+| 128d781 | 4dd45a6 | 3047a7355077 | 3047a7355077 | yes |
+| 441c5e3 | b9705de | 9c1cd38debd8 | 9c1cd38debd8 | yes |
+| 527ee5f | bbb85a3 | c12c357d52e2 | c171e967de57 | text (one report line: a version example) |
+| 16c09c1 | (last, after this report) | 45fcff836baf | 45fcff836baf | yes — the data commit, unchanged |
+
+`git diff --shortstat 16c09c1 <head minus this report and the data commit> -- . ':!code-review' ':!tests/data'`:
+7 files, +320 −41, only the four amendments.
+
+Second read, two text items (fixed up into the calibrate.sh commit and this report): the docs
+sentences on the work dir now carry the script's second condition (`<runtime root>/state` must
+exist, else `$HOME/.cache/lhpc-calib`); the packet states that the throttle constants are
+unchanged since Correction 7 (`SLOW_CPUS` "0.25", `SLOW_MEM` "416m", `SLOW_SWAP` "1184m",
+`SLOW_WRITE_IOPS` "120", `SLOW_READ_IOPS` "1200", identical at 16c09c1) and which lane-unit cases
+skip where the tmp dir is tmpfs (lane 2: device-less tmp; calibrate 4).
+
+### Red before, green after
+
+The final test modules `testlab/tests/unit/test_slow_build_lane.py` and
+`tests/repo/test_slow_build_gate.py` run in a worktree at 16c09c1 (the Correction 7 code):
+**22 failed**, 40 passed — the 11 new lane cases (per-disk throttle 3, `_disk_of` 2, the
+throttled box 1, the writable-layer case 1, unresolvable → nothing recorded 3, the work dir 1),
+the 6 earlier io cases (new signature), and in the gate module the 4 new step tests (STOP on a
+missing path and on `/proc`, `disk_of` exits 1, a resolvable disk is throttled and named) plus
+the extended flag test. With the amended code: 62 passed.
+
+The semantic red-before of finding 1, the old function itself: the Correction 7 lane's
+`_io_problems(cg)` on an `io.max` holding only `7:0 riops=1200 wiops=120` returns `[]`; the new
+one with both required disks on 254:0 returns two problems naming `disk 254:0`. Of finding 2:
+the Correction 7 `disk_of /proc` and `disk_of /no/such` both exit 0 with empty output.
+
+Each amended commit checked out on its own (worktree): at 8cfd974 the lane unit module and the
+workflow lint pass (59 passed; the gate module does not exist yet there); at 24eb667 the lane
+unit, gate and workflow-lint modules pass (71 passed).
+
+### Proof on this host (what ran, what could not)
+
+- The job's `Resolve the disks to throttle` step, extracted from `testlab.yml` and run with
+  `bash -e` and a stub `docker` naming the storage dir: storage `/` → `throttled disks: /dev/vda
+  (writable layer: /dev/vda)`, `SLOW_IO_FLAGS= --device-write-iops /dev/vda:120
+  --device-read-iops /dev/vda:1200`, `SLOW_IO_ROOT_DISK=254:0`, rc 0; storage `/proc` → `disk_of:
+  backing device of /proc could not be resolved (MAJ:MIN 0:22)` and the STOP error, rc 1,
+  `$GITHUB_ENV` empty; a missing path → the same with `MAJ:MIN none`, rc 1.
+- The lane's `_disk_of` on real paths: `/` → `254:0`, `/tmp` → `254:0`, `/proc` → `None`;
+  `_required_disks()` without `SLOW_IO_ROOT_DISK` → the work dir on 254:0 plus the
+  "not named" problem; with `SLOW_IO_ROOT_DISK=254:0` → both, no problem.
+- NOT run: the job's container step on a real cgroup. This host's Docker daemon is not running
+  (`docker info`: no socket), and starting it would be a background job; the host is cgroup v1
+  (`/sys/fs/cgroup` holds `blkio`, `cpu`, …, no `io.max`), so the new `_io_problems` on the real
+  `/sys/fs/cgroup` reports `io.max is unreadable`, as it must. The maintainer's lane run on the
+  arm runner (cgroup v2) is the proof of `SLOW_IO_ROOT_DISK` matching the `io.max` line Docker
+  writes for `--device-*-iops`.
+
+### Checks
+
+- `testlab/tests/unit/test_slow_build_lane.py`, `testlab/tests/unit/test_calibrate.py`,
+  `testlab/tests/slowbuild` (opt-in, skipped), `tests/repo`, `tests/install/test_slow_target_budget.py`:
+  504 passed, 16 skipped, **2 failed**, both red on 16c09c1 too: `test_coverage` (the 16 pairs of
+  row A part 2) and `test_changelog_leads_with_the_current_version` (the `## 0.11.12` heading
+  against 0.11.11).
+- `tests/install/test_bootstrap_deps.py` (reads docs/maintenance.md): 92 failed, 35 passed, 1
+  skipped, identical on 16c09c1 — this host runs the suite as root ("no non-root operator").
+- `ruff check lhpc testlab`: all checks passed; `ruff check tests --select F,E9` (the CI rule for
+  tests): all checks passed. Workflow lint: `tests/repo/test_workflow_shell.py` 10 passed; PyYAML
+  loads `testlab.yml` (jobs `testlab`, `release-verify`, `slow-build`; the step present).
+- No full suite, no background job. Identity: owner only, no co-author or attribution line.
+
+### Adversarial self-review (before the push)
+
+- **The writable layer's disk comes from the host, not from inside.** The lane cannot see it (the
+  overlay has no device), so it trusts `SLOW_IO_ROOT_DISK`. A wrong value would make it check a
+  disk that is not the layer's; the value comes from the same `disk_of()` that builds the
+  `--device-*-iops` flags, so the flag and the check name the same disk.
+- **containerd image store.** With Docker's containerd store the writable layer lives under
+  containerd's root, not `DockerRootDir`; the step picks `/var/lib/containerd` when `docker info`
+  reports driver `overlayfs`. A containerd root elsewhere would resolve the wrong path — it fails
+  closed only if that path does not resolve; noted for the lane run.
+- **`/tmp` volume not re-checked in the lane.** Its disk (`DockerRootDir`'s) is required and
+  throttled by the job; the lane re-checks only the two the finding names. On the runner it is the
+  same disk as the layer's.
+- **`_on_writable_layer` compares `st_dev` with `/`.** A work dir on another mount resolves
+  through sysfs instead; a device-less one (tmpfs, btrfs subvolume) is a STOP problem, never a
+  pass.
+- **`calibrate.sh` now gets `--work-dir`.** Same path as its default in the lane; the workload
+  hash covers the script, `calib-src/` and the io size, not the arguments, so the data commit's
+  calibration still matches.
+- **The shell tests depend on the host** (`findmnt`, `lsblk`, `/proc/swaps`); they skip, naming
+  why, where those are missing, and the positive one skips where the test's own disk does not
+  resolve. The swap-notice branch is not exercised here (no swap on this host).
+- Found and fixed before the commit: the step's log line listed a disk twice when the layer and
+  the storage share it (now de-duplicated, a second fixup into the job commit); the STOP problem
+  of the lane named only the nearest existing parent (now also the work dir); the overlay case
+  needed its own seam (`_on_writable_layer`) to be testable on a host whose tmp is on `/`.
+
+House rule, this correction: four earlier prose lines of this report that named a tool's proxy or
+an attribution trailer by a word on the house list are reworded (lines of Corrections 4–7, wording
+only). What the word grep still finds is not attribution: `SessionSampler` (an F42 class name, line
+568 of this report) and a comment naming a tool's working directory in
+`lhpc/core/probes/backends.py` that is on the base 045724db, not in this series.
