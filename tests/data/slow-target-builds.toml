@@ -379,3 +379,185 @@ cpu_s = 99.7
 io_s = 489.8
 mem_s = 110.1
 date = 2026-10-03
+
+[[measured]]
+component = "loraham-daemon"
+op = "clone"
+seconds = 3.0
+key = "pin:1f1baf26372328a25c229c43cbb0f9a6721c24fe"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "release/0.11.12-bundle (3d0943a1)"
+date = 2026-10-03
+evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+
+[[measured]]
+component = "loraham-daemon"
+op = "checkout"
+seconds = 0.1
+key = "pin:1f1baf26372328a25c229c43cbb0f9a6721c24fe"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "release/0.11.12-bundle (3d0943a1)"
+date = 2026-10-03
+evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+
+[[measured]]
+component = "loraham-daemon"
+op = "build"
+seconds = 252
+quiet_s = 11.5
+key = "pin:1f1baf26372328a25c229c43cbb0f9a6721c24fe"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "release/0.11.12-bundle (3d0943a1)"
+date = 2026-10-03
+evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+
+[[measured]]
+component = "radiolib"
+op = "clone"
+seconds = 43.9
+key = "pin:187ef24791c3d844939b2be13a68bd890bd04e4c"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "release/0.11.12-bundle (3d0943a1)"
+date = 2026-10-03
+evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+
+[[measured]]
+component = "radiolib"
+op = "checkout"
+seconds = 0.4
+key = "pin:187ef24791c3d844939b2be13a68bd890bd04e4c"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "release/0.11.12-bundle (3d0943a1)"
+date = 2026-10-03
+evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+
+[[measured]]
+component = "radiolib"
+op = "build"
+seconds = 66
+quiet_s = 13.3
+key = "pin:187ef24791c3d844939b2be13a68bd890bd04e4c"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "release/0.11.12-bundle (3d0943a1)"
+date = 2026-10-03
+evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+
+[[measured]]
+component = "loraham-chat"
+op = "clone"
+seconds = 3.0
+key = "pin:1f1baf26372328a25c229c43cbb0f9a6721c24fe"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "release/0.11.12-bundle (3d0943a1)"
+date = 2026-10-03
+evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+
+[[measured]]
+component = "loraham-chat"
+op = "checkout"
+seconds = 0.1
+key = "pin:1f1baf26372328a25c229c43cbb0f9a6721c24fe"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "release/0.11.12-bundle (3d0943a1)"
+date = 2026-10-03
+evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+
+[[measured]]
+component = "loraham-chat"
+op = "build"
+seconds = 2
+quiet_s = 1.8
+key = "pin:1f1baf26372328a25c229c43cbb0f9a6721c24fe"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "release/0.11.12-bundle (3d0943a1)"
+date = 2026-10-03
+evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+
+[[measured]]
+component = "loraham-voice-cli"
+op = "clone"
+seconds = 1.3
+key = "pin:9c000225fac684119e20b8911cb2b496a9ebe037"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "release/0.11.12-bundle (3d0943a1)"
+date = 2026-10-03
+evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+
+[[measured]]
+component = "loraham-voice-cli"
+op = "checkout"
+seconds = 0.1
+key = "pin:9c000225fac684119e20b8911cb2b496a9ebe037"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "release/0.11.12-bundle (3d0943a1)"
+date = 2026-10-03
+evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records); checkout 0.0 s in the log: below log resolution"
+
+[[measured]]
+component = "loraham-voice-cli"
+op = "build"
+seconds = 2
+quiet_s = 2.0
+key = "pin:9c000225fac684119e20b8911cb2b496a9ebe037"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "release/0.11.12-bundle (3d0943a1)"
+date = 2026-10-03
+evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+
+[[measured]]
+component = "loraham-kiss-tnc"
+op = "clone"
+seconds = 1.3
+key = "pin:e0d9adac2c2ddbd53c88b205965bbbcea898fa6b"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "release/0.11.12-bundle (3d0943a1)"
+date = 2026-10-03
+evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+
+[[measured]]
+component = "loraham-kiss-tnc"
+op = "checkout"
+seconds = 0.1
+key = "pin:e0d9adac2c2ddbd53c88b205965bbbcea898fa6b"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "release/0.11.12-bundle (3d0943a1)"
+date = 2026-10-03
+evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records); checkout 0.0 s in the log: below log resolution"
+
+[[measured]]
+component = "loraham-kiss-tnc"
+op = "build"
+seconds = 13
+quiet_s = 12.8
+key = "pin:e0d9adac2c2ddbd53c88b205965bbbcea898fa6b"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "release/0.11.12-bundle (3d0943a1)"
+date = 2026-10-03
+evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+
+[[measured]]
+component = "graywolf"
+op = "build"
+seconds = 3
+quiet_s = 3.2
+key = "deb:0.14.13"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "release/0.11.12-bundle (3d0943a1)"
+date = 2026-10-03
+evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records); wall 3 s from second-resolution file times; longest quiet 3.2 s from the log"
