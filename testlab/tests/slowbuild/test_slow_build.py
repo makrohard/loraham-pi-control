@@ -23,6 +23,7 @@ Run in this order, without `-x`: the budget case needs every measurement the run
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import re
 import subprocess
@@ -36,7 +37,7 @@ from lhpc_testlab.release import on_binary
 from lhpc_testlab.testing import LabServer, lab_env, run_lhpc
 
 from lhpc.core import slow_target as stt
-from lhpc.core.manifest import default_manifest_path, load_manifest
+from lhpc.core.manifest import default_manifest_path, load_controller, load_manifest
 from lhpc.version import __version__
 
 pytestmark = pytest.mark.slow
@@ -141,7 +142,10 @@ def _record(component: str, op: str, seconds: float, quiet_s: float | None = Non
     if quiet_s is not None:
         entry["quiet_s"] = round(quiet_s, 1)
     entry.update({"key": key, "source": "throttled-ci",
-                  "host": f"gha ubuntu-24.04-arm cpus={os.environ.get('SLOW_CPUS', '?')} mem=416m",
+                  "host": (f"gha ubuntu-24.04-arm cpus={os.environ.get('SLOW_CPUS', '?')} "
+                           f"mem={os.environ.get('SLOW_MEM', '?')} "
+                           f"wiops={os.environ.get('SLOW_WRITE_IOPS', '?')} "
+                           f"riops={os.environ.get('SLOW_READ_IOPS', '?')}"),
                   "lhpc": f"v{__version__} ({_git('-C', str(REPO), 'rev-parse', '--short', 'HEAD')})",
                   "date": dt.datetime.now(dt.UTC).date(),
                   "evidence": os.environ.get("LHPC_SLOW_BUILD_RUN_URL", "local run")})
@@ -261,9 +265,32 @@ def _env_problems() -> list[str]:
         out.append(f"cpu.max {quota} {period}: the CPU throttle to {cpus} CPUs is not in force")
     if mem == "max" or int(mem) > 416 * 2**20:
         out.append(f"memory.max {mem}: the 416 MiB memory cap is not in force")
+    out += _io_problems(cg)
     if not os.cpu_count():
         out.append("nproc unreadable")
     return out
+
+
+def _io_problems(cg: Path) -> list[str]:
+    """The disk throttle (SLOW_WRITE_IOPS / SLOW_READ_IOPS, the job's `--device-*-iops`) must be
+    in force on at least one disk of this cgroup's io.max: without it the io part of the
+    calibration — and every IO-bound step — runs at the runner's SSD speed."""
+    want = {}
+    for key, var in (("wiops", "SLOW_WRITE_IOPS"), ("riops", "SLOW_READ_IOPS")):
+        try:
+            want[key] = int(os.environ.get(var, ""))
+        except ValueError:
+            return [f"{var}={os.environ.get(var)!r}: the lane needs the disk throttle"]
+    try:
+        lines = (cg / "io.max").read_text().splitlines()
+    except OSError as exc:
+        return [f"io.max is unreadable — the disk throttle cannot be proved: {exc}"]
+    for line in lines:
+        kv = dict(f.split("=", 1) for f in line.split()[1:] if "=" in f)
+        if all(kv.get(k, "max") != "max" and int(kv[k]) <= v for k, v in want.items()):
+            return []
+    return [f"io.max {lines!r}: no disk is throttled to wiops<={want['wiops']} "
+            f"riops<={want['riops']}"]
 
 
 def test_slow_build_env():
@@ -289,26 +316,67 @@ def test_slow_build_stack(env, svc, stack, tmp_path):
         _cli_venv(r)
 
 
+def _box_env(root: Path, home: Path) -> dict:
+    """The lab env of `root` with its own $HOME, where the box's user units live: the lane never
+    writes the container user's (or a developer's) $HOME/.config/systemd/user. The pip cache stays
+    the user's, as on a box that installed before."""
+    cache = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    home.mkdir(parents=True, exist_ok=True)
+    return {**lab_env(root), "HOME": str(home), "XDG_CACHE_HOME": cache}
+
+
+def _install_units(python: Path, root: Path, env: dict) -> list[str]:
+    """The managed systemd units of a box, installed the way install.sh installs them: each unit
+    of the installed release's `updater_units.ALL_UNITS`, rendered by that release's own
+    `python -m lhpc.core.updater_units render <kind> <root> <checkout> <venv>` into
+    $HOME/.config/systemd/user. No `systemctl --user` (the container has no user manager): the
+    helper never calls it either — it is sandboxed and, after the update, only VERIFIES these
+    files (`updater_units verify-set`, file reads), which is what the lane must exercise."""
+    def py(*args: str) -> str:
+        return subprocess.run([str(python), *args], env=env, capture_output=True, text=True,
+                              check=True, timeout=600).stdout
+    kinds, (r, checkout, venv) = json.loads(py(
+        "-c", "import json, sys; from lhpc.core import updater_units as u; "
+        "print(json.dumps([u.ALL_UNITS, u.deployment_paths(sys.argv[1])]))", str(root)))
+    unit_dir = Path(env["HOME"]) / ".config" / "systemd" / "user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    for kind in kinds:
+        (unit_dir / kind).write_text(py("-m", "lhpc.core.updater_units", "render", kind, r,
+                                        checkout, venv))
+    return kinds
+
+
 def test_slow_build_selfupdate(tmp_path):
     """L3 + L4: a one-click self-update from the previous release tag to this commit — the
     helper body (`lhpc self-update --run-service`) timed whole, its pip sync from its own line.
-    The throttle (cpus <= 1) is already tighter than the unit's CPUQuota=150%. On the release
-    that introduces the pip sync line the previous tag's helper cannot print it: L4 then has no
-    evidence, by name (L4_INTRODUCING), and the budget case says so."""
+    The runtime is laid out as a box: the checkout at <root>/src/loraham-pi-control, the venv at
+    <root>/venv/lhpc and the release's canonical units in $HOME (`_install_units`), so the
+    helper's own post-update unit verification runs as on a box instead of failing on units no
+    box lacks. The throttle (cpus <= 1) is already tighter than the unit's CPUQuota=150%. On the
+    release that introduces the pip sync line the previous tag's helper cannot print it: L4 then
+    has no evidence, by name (L4_INTRODUCING), and the budget case says so."""
     cand = _git("-C", str(REPO), "rev-parse", "HEAD")
     prev = _git("-C", str(REPO), "describe", "--tags", "--abbrev=0", "--match", "v*", f"{cand}^")
-    remote, co, venv = tmp_path / "remote.git", tmp_path / "loraham-pi-control", tmp_path / "venv"
+    root = tmp_path / "runtime"
+    LabServer(root).init_and_reset()
+    env = _box_env(root, tmp_path / "home")
+    remote = tmp_path / "remote.git"
+    co, venv = root / "src" / "loraham-pi-control", root / "venv" / "lhpc"
     _git("clone", "--quiet", "--bare", str(REPO), str(remote))
     _git("-C", str(remote), "update-ref", "refs/heads/main", cand)
     _git("clone", "--quiet", "--branch", "main", str(remote), str(co))
     _git("-C", str(co), "reset", "--quiet", "--hard", prev)
+    # A box's origin is the approved canonical remote, which the helper's controller-identity
+    # check demands of an in-root checkout; the lane serves it from the local candidate remote
+    # (git's own `insteadOf`, set in this checkout only), so `origin` reads as on a box.
+    canonical = load_controller(co / "lhpc" / "data" / "manifest.example.toml").remote
+    _git("-C", str(co), "remote", "set-url", "origin", canonical)
+    _git("-C", str(co), "config", f"url.{remote}.insteadOf", canonical)
     subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, timeout=600)
     pip = [str(venv / "bin" / "python"), "-m", "pip", "install", "-q"]
     for target in (co, co / "testlab"):          # release-1 and its own lab provider
         subprocess.run([*pip, "-e", str(target)], check=True, timeout=HARNESS_S)
-    root = tmp_path / "runtime"
-    LabServer(root).init_and_reset()
-    env = lab_env(root)
+    _install_units(venv / "bin" / "python", root, env)
     (root / "state" / "selfupdate.request").write_text("normal\n")
     seconds, out = _helper(venv / "bin" / "lhpc", env)
     assert _git("-C", str(co), "rev-parse", "HEAD") == cand, f"{prev} was not updated to {cand}"
@@ -340,21 +408,22 @@ def test_slow_build_calibrated():
 
 
 def _waived(fails: list[str], measured, intro: bool) -> tuple[list[str], str]:
-    """(the failures that stand, the bootstrap skip reason or ""). Bootstrap (no [[measured]]
-    entry yet): only the missing Zero baseline is waived, by name, and on the release that
-    introduces the pip sync line the missing L4 evidence; the evidence and the
-    twice-the-measurement rule still judge this run's own numbers. Past bootstrap nothing is."""
-    l4 = f"no row C evidence for {stt.SELFUPDATE_COMPONENT} selfupdate-pip"
+    """(the failures that stand, the bootstrap skip reason or ""). On the release that introduces
+    the pip sync line (`intro`: the previous tag's helper has none AND `stt.waiver` holds for this
+    version) nobody can measure L4, here or on the Zero: its missing evidence and its missing Zero
+    baseline are waived, by name, in and past bootstrap — the same waiver the coverage test
+    applies. Bootstrap (no [[measured]] entry yet): every missing Zero baseline is waived too, by
+    name. The evidence and the twice-the-measurement rule still judge this run's own numbers."""
+    l4 = f"{stt.SELFUPDATE_COMPONENT} selfupdate-pip"
+    if intro:
+        fails = [f for f in fails if not f.startswith((f"no row C evidence for {l4}",
+                                                       f"no Zero baseline for {l4}"))]
     unmeasured = [f.removeprefix("no Zero baseline for ").removesuffix(": run row A")
                   for f in fails if f.startswith("no Zero baseline for ")]
     boot = stt.bootstrap_reason(measured, unmeasured)
     if boot:
-        fails = [f for f in fails if not f.startswith("no Zero baseline for ")
-                 and not (intro and f.startswith(l4))]
+        fails = [f for f in fails if not f.startswith("no Zero baseline for ")]
         boot += f"; {L4_INTRODUCING}" if intro else ""
-    elif intro:
-        fails = [f"{f} — {L4_INTRODUCING}, which only the bootstrap state waives"
-                 if f.startswith(l4) else f for f in fails]
     return fails, boot
 
 
@@ -377,7 +446,8 @@ def test_slow_build_budget():
         lines.append(line)
     # The release introducing the pip sync line has no L4 evidence (docs/maintenance.md).
     l4 = f"no row C evidence for {stt.SELFUPDATE_COMPONENT} selfupdate-pip"
-    intro = bool(INTRODUCING) and any(f.startswith(l4) for f in fails)
+    intro = (bool(INTRODUCING) and any(f.startswith(l4) for f in fails)
+             and bool(stt.waiver(stt.SELFUPDATE_COMPONENT, "selfupdate-pip", __version__)))
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "slow-build-summary.md").write_text(
         "### slow-build: E (row C) vs Z (Zero baseline)\n\n"

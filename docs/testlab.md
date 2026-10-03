@@ -105,7 +105,8 @@ pytest -q                                      # default lane (lab lanes skip)
 LHPC_ACCEPTANCE=1 pytest testlab/tests/acceptance -q   # real server + real executable
 LHPC_BROWSER=1 pytest testlab/tests/browser -q     # headless Chromium (pip install -e ./testlab[browser])
 LHPC_RELEASE_VERIFY=1 pytest testlab/tests/release -q -x  # release lane: every stack installed, built, started
-LHPC_SLOW_BUILD=1 SLOW_CPUS=0.5 pytest testlab/tests/slowbuild -q  # slow-build lane: only inside the throttled container
+LHPC_SLOW_BUILD=1 SLOW_CPUS=0.25 SLOW_MEM=416m SLOW_WRITE_IOPS=120 SLOW_READ_IOPS=1200 \
+  pytest testlab/tests/slowbuild -q             # slow-build lane: only inside the throttled container
 ```
 
 **From a worktree, prefix these with `PYTHONPATH=$PWD`** (or re-run
@@ -144,16 +145,19 @@ subprocesses import `lhpc` from the editable install, i.e. whichever checkout wa
   - In CI it is the `release-verify` job ([when it runs](maintenance.md#what-ci-enforces)). It
     uploads `junit-release.xml`, the recorded versions and the lab's own logs.
 - **slow-build** is row C of the [slow-target build row](maintenance.md#branches-and-releases):
-  the CI job `slow-build` runs it inside a container throttled below a Pi Zero 2 W
-  (`--cpus=$SLOW_CPUS --memory=416m --memory-swap=1184m`). Under the production limits it times
+  the CI job `slow-build` runs it inside a container throttled to a Pi Zero 2 W's CPU, disk and
+  memory (`--cpus=$SLOW_CPUS --memory=$SLOW_MEM --memory-swap=$SLOW_SWAP` and
+  `--device-write-iops`/`--device-read-iops` on every disk behind Docker's storage and swap;
+  the numbers and their measured rationale are the job's `env`). Under the production limits it times
   each lane stack's install (clone, checkout, the Meshtastic CLI venv), every component's build
   (wall time and longest quiet gap), the graywolf upstream fetch and a self-update from the
   previous release tag, then checks them with `lhpc.core.slow_target` against
   `tests/data/slow-target-builds.toml`.
   - `test_slow_build_env` fails unless the throttle is in force and no `LHPC_BUILD_*` override is
     set; nothing is recorded otherwise. `test_slow_build_calibrated` runs
-    `testlab/slowbuild/calibrate.sh` and fails while the container is faster than the Zero on the
-    same workload (then lower `SLOW_CPUS`; it never goes up). `test_slow_build_budget` names every
+    `testlab/slowbuild/calibrate.sh` and fails while the container is faster than the Zero on any
+    part (cpu, io, mem) of the same workload (then tighten that part's throttle; a throttle never
+    loosens). `test_slow_build_budget` names every
     operation over budget or without evidence.
   - The job fails unless those three cases, every stack case and the self-update case PASSED
     (a skip is not a pass; the one exception is the

@@ -1,5 +1,5 @@
 # The slow-target BASELINE (plans/PLAN-F43.md §7, §8): what the update path's operations take on
-# the real slow target (Pi Zero 2 W `lhpc-e293`, row A) and in the throttled CI container (row C).
+# the real slow target (a Pi Zero 2 W, row A) and in the throttled CI container (row C).
 # `tests/install/test_slow_target_budget.py` checks every limit on the update path against it, and
 # the `slow-build` lane checks a release's fresh evidence against it (docs/maintenance.md).
 #
@@ -21,8 +21,13 @@
 #   quiet_s = 140                # op = "build" only: longest gap without progress (L1)
 #   key = "pin:<manifest pin>"   # pin:<pin> | deb:<version fetched> | deps:<sha256>; never an LHPC SHA
 #   source = "zero2w"            # or "throttled-ci"
-#   host = "lhpc-e293"           # or "gha ubuntu-24.04-arm cpus=0.5 mem=416m"
-#   lhpc = "v0.12.0 (6ff1937)"   # provenance and the entry's minor; not part of the key
+#   host = "zero2w-ref"          # or "gha ubuntu-24.04-arm cpus=0.25 mem=416m wiops=120 riops=1200"
+#   lhpc = "v0.12.0 (6ff1937)"   # provenance and the entry's minor; not part of the key. Two
+#                                #   forms, the short SHA mandatory in both: a release tag
+#                                #   "vX.Y.Z (sha7)", or a candidate ref "release/<name> (sha7)"
+#                                #   (row A on a candidate before its tag; minor = the first
+#                                #   X.Y.Z in <name>). A self-update entry names the update it
+#                                #   timed: "<from tag> -> <to tag or ref> (sha7)".
 #   date = 2026-10-10
 #   evidence = "docs/live-tests/live-test.md#rows"   # or the Actions run URL
 #

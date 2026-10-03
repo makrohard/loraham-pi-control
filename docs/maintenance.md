@@ -164,8 +164,11 @@ repositories.
   on**: that release's self-update runs the previous tag's helper, which cannot print the line,
   in row C and in row A alike. The lane detects it (the previous tag's
   `lhpc/core/service_selfupdate.py` lacks the line), still times the whole helper (L3), and names
-  the gap in the bootstrap skip reason and the job summary; the gap is waived only in the
-  bootstrap state, so the first row A is taken on the release after the introducing one.
+  the gap in the job summary (and the bootstrap skip reason). The gap is waived, by name, up to
+  and including that release (`lhpc.core.slow_target.PIP_SYNC_SINCE`, 0.11.12): the coverage
+  test reports the L4 pair as waived, not missing, and the lane's budget case waives its missing
+  evidence and Zero baseline when the previous tag lacks the line too. From the next release on
+  both require it.
 - **Every release is followed by an image.** `loraham-images` is tagged with the same version once
   the binaries a moved pin needs are published ([binary channel](provenance.md#the-binary-channel)).
 - **The release bot** runs the pin patch (watch, repin, binaries, proof, release, image) and opens

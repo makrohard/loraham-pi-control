@@ -23,6 +23,18 @@ SELFUPDATE_COMPONENT = "lhpc-selfupdate"
 CLI_VENV_COMPONENT = "meshtastic-cli-venv"
 _KEY_RE = re.compile(r"(pin|deb|deps):\S+")
 _MINOR_RE = re.compile(r"v?(\d+)\.(\d+)\.")
+# `lhpc`: the LHPC tree an entry was measured on, the short SHA mandatory: a release tag
+# `vX.Y.Z (sha7)`, or a release candidate's ref `release/<name> (sha7)` (row A measures the
+# candidate before its tag exists). A self-update entry names the update it timed,
+# `<from tag> -> <to tag or ref> (sha7)`. The minor is the (target) tag's X.Y, or the first X.Y.Z
+# in a candidate ref's name.
+_REL = r"(?:v\d+\.\d+\.\d+\S*|release/\S+)"
+_LHPC_RE = re.compile(rf"(?:v\d+\.\d+\.\d+\S* -> )?{_REL} \([0-9a-f]{{7,40}}\)")
+_REF_MINOR_RE = re.compile(r"(\d+)\.(\d+)\.\d")
+# The first release whose self-update helper prints `[selfupdate] pip sync <n> s` (L4). An update
+# TO it runs the previous release's helper, which cannot print the line, on the Zero and in the
+# lane alike: L4 is measurable from the next release on (docs/maintenance.md).
+PIP_SYNC_SINCE = "0.12.0"
 
 
 class LimitUnavailable(Exception):
@@ -223,8 +235,9 @@ def entry_errors(entry: dict) -> list[str]:
         errs.append("key must be pin:<..>, deb:<..> or deps:<..>")
     if entry.get("source") not in SOURCES:
         errs.append(f"source must be one of {SOURCES}")
-    if minor(entry) is None:
-        errs.append("lhpc must name the release, e.g. 'v0.12.0 (6ff1937)'")
+    if not _LHPC_RE.fullmatch(str(entry.get("lhpc", ""))):
+        errs.append("lhpc must name the release tag or candidate ref and its short SHA, e.g. "
+                    "'v0.12.0 (6ff1937)' or 'release/0.12.0-bundle (6ff1937)'")
     if not isinstance(entry.get("date"), _dt.date):
         errs.append("date must be a TOML date")
     for f in ("host", "evidence"):
@@ -234,13 +247,35 @@ def entry_errors(entry: dict) -> list[str]:
 
 
 def minor(entry: dict):
-    m = _MINOR_RE.match(str(entry.get("lhpc", "")))
+    """The minor of the entry's `lhpc` label (an update's: its target's): the tag's X.Y, or the
+    first X.Y.Z in a candidate ref's name; None when it names none (such an entry is only ever
+    FRESH, never carried)."""
+    label = str(entry.get("lhpc", "")).split(" -> ")[-1]
+    m = (_MINOR_RE.match(label) if label.startswith("v")
+         else _REF_MINOR_RE.search(label.split(" ", 1)[0]) if label.startswith("release/")
+         else None)
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
 def version_minor(version: str):
     m = _MINOR_RE.match(version + ".")
     return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _release(version: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in re.findall(r"\d+", version)[:3])
+
+
+def waiver(component: str, op: str, version: str) -> str:
+    """Why (component, op) needs no measurement on a tree at `version`, or "". The one waiver:
+    L4 (`selfupdate-pip`) up to and including the release that introduces its timing line
+    (PIP_SYNC_SINCE) — nobody can measure it there. Excluded components never reach here:
+    `required` leaves them out."""
+    if (component, op) == (SELFUPDATE_COMPONENT, "selfupdate-pip") and \
+            _release(version) <= _release(PIP_SYNC_SINCE):
+        return (f"{component} {op} (L4): no evidence up to the introducing release "
+                f"{PIP_SYNC_SINCE} — measured from the next release on")
+    return ""
 
 
 # ---- the rule (§8) -------------------------------------------------------------------------

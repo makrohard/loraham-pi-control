@@ -91,3 +91,37 @@ def test_a_failed_or_missing_row_c_case_is_refused(tmp_path):
 def test_a_fully_passed_run_is_accepted(tmp_path):
     r = _run(tmp_path, _row_c() + _judging(), MEASURED)
     assert r.returncode == 0 and "::warning::" not in r.stdout, r.stdout + r.stderr
+
+
+# ---- the throttle (Correction 7): at least as slow as the Zero on every axis -----------------
+
+def _job_env() -> dict[str, str]:
+    text = WORKFLOW.read_text()
+    job = text[text.index("\n  slow-build:\n"):]
+    block = re.search(r"^    env:\n(.*?)^    steps:", job, re.MULTILINE | re.DOTALL)
+    assert block, "the slow-build job has no env block"
+    return dict(re.findall(r'^      (SLOW_\w+): "([^"]*)"', block.group(1), re.MULTILINE))
+
+
+def test_the_throttle_is_named_and_reaches_the_container_and_the_lane():
+    """Every axis is a named constant, applied by `docker run` and handed to the lane, whose
+    `test_slow_build_env` proves each one is in force (cpu.max, memory.max, io.max)."""
+    env = _job_env()
+    assert set(env) == {"SLOW_CPUS", "SLOW_MEM", "SLOW_SWAP", "SLOW_WRITE_IOPS",
+                        "SLOW_READ_IOPS"}, env
+    text = WORKFLOW.read_text()
+    run = text[text.index("docker run --rm --user root"):text.index("test -s slowevidence")]
+    for flag in ('--cpus="$SLOW_CPUS"', '--memory="$SLOW_MEM"', '--memory-swap="$SLOW_SWAP"',
+                 "$SLOW_IO_FLAGS", "-e SLOW_CPUS -e SLOW_MEM -e SLOW_WRITE_IOPS -e SLOW_READ_IOPS",
+                 "SLOW_WRITE_IOPS=$SLOW_WRITE_IOPS SLOW_READ_IOPS=$SLOW_READ_IOPS"):
+        assert flag in run, flag
+    assert '--device-write-iops $d:$SLOW_WRITE_IOPS --device-read-iops $d:$SLOW_READ_IOPS' in text
+    assert 'echo "SLOW_IO_FLAGS=$flags" >> "$GITHUB_ENV"' in text
+
+
+def test_the_cpu_quota_is_below_the_zero_breakeven():
+    """Row C at 0.5 CPUs took 57.8 s on the cpu part, the Zero 99.7 s (testlab run 37148794385,
+    row A 2026-10-03); the part is CPU-time bound, so the Zero's quota is 0.5 x 57.8 / 99.7. A
+    quota above it is a container faster than the Zero by construction."""
+    assert 0 < float(_job_env()["SLOW_CPUS"]) <= 0.5 * 57.8 / 99.7
+    assert int(_job_env()["SLOW_WRITE_IOPS"]) <= 134    # the Zero's 65536 synced files / 489.8 s

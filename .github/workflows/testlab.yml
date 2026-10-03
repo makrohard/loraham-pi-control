@@ -209,15 +209,35 @@ jobs:
   slow-build:
     # Row C of the slow-target build proof (docs/maintenance.md, plans/PLAN-F43.md): every
     # operation on the update path, run and timed under the PRODUCTION limits inside a container
-    # throttled below a Pi Zero 2 W, then judged against tests/data/slow-target-builds.toml.
+    # throttled to a Pi Zero 2 W, then judged against tests/data/slow-target-builds.toml.
     # The same triggers as release-verify, so every release candidate, bot ones included.
-    # SLOW_CPUS starts at 0.5 and only ever goes DOWN: test_slow_build_calibrated turns this job
-    # red while the container is faster than the Zero on the fixed calibration workload.
+    # test_slow_build_calibrated turns this job red while the container is faster than the Zero
+    # on ANY part (cpu, io, mem) of the fixed calibration workload: then tighten that part's
+    # throttle below; a throttle only ever gets tighter.
     if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.release_verify }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 330
     env:
-      SLOW_CPUS: "0.5"
+      # The throttle. Measured: the Zero's calibration (row A, 2026-10-03) is cpu 99.7 s,
+      # io 489.8 s, mem 110.1 s; this container at --cpus 0.5, --memory 416m and no disk
+      # throttle took cpu 57.8, io 31.4, mem 12.2 (testlab run 37148794385): faster on all three.
+      # CPU — the cpu part is CPU-time bound and scales with the quota: 0.5 x 57.8 / 99.7 =
+      # 0.29 CPUs matches the Zero; 0.25 leaves ~15 %.
+      SLOW_CPUS: "0.25"
+      # Memory — what a Zero 2 W leaves free; the rest of the 700 MB mem part swaps (the Zero
+      # swaps into zram). --memory-swap is memory + 768 MiB swap.
+      SLOW_MEM: "416m"
+      SLOW_SWAP: "1184m"
+      # Disk — on every disk behind Docker's storage and swap. The io part is 65536 fsync'd
+      # 4 KiB files: 489.8 s on the Zero's SD card, ~134 synced files/s. On a journaled ext4
+      # each synced file costs ~1.2 writes charged to the container (measured), so 120 write
+      # IOPS gives ~100 files/s, ~650 s. Reads also pace the mem part, whose swap-ins hit
+      # the disk (the Zero swaps into zram instead): measured 608 s at 300 read IOPS, 186 s at
+      # 1000, 97 s at 2000; 1200 keeps it above the Zero's 110 s. These are local measurements
+      # (x86, cgroup v1, Correction 7 of code-review/code-report-F43.md); the calibration case
+      # of every run is the proof on the runner.
+      SLOW_WRITE_IOPS: "120"
+      SLOW_READ_IOPS: "1200"
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -232,8 +252,36 @@ jobs:
           docker build -t "$IMG" -f .devcontainer/Dockerfile .devcontainer
           echo "IMG=$IMG" >> "$GITHUB_ENV"
 
+      # io.max takes whole disks: every disk behind Docker's storage (the container's root and
+      # its /tmp volume) and behind each active swap area gets the IOPS limits. No disk found is
+      # a failure, never an unthrottled run.
+      - name: Resolve the disks to throttle
+        run: |
+          disk_of() {
+            local mm d
+            if [ -b "$1" ]; then mm=$(lsblk -dno MAJ:MIN "$1" | tr -d ' ')
+            else mm=$(findmnt -n -o MAJ:MIN --target "$1" | head -1 | tr -d ' '); fi
+            [ -n "$mm" ] && [ -e "/sys/dev/block/$mm" ] || return 0
+            d=$(readlink -f "/sys/dev/block/$mm")
+            [ -e "$d/partition" ] && d=$(dirname "$d")
+            echo "/dev/$(basename "$d")"
+          }
+          cat /proc/swaps
+          lsblk
+          disks=$( { disk_of "$(docker info -f '{{.DockerRootDir}}')"
+                     tail -n +2 /proc/swaps | while read -r swap _; do disk_of "$swap"; done
+                   } | sort -u)
+          [ -n "$disks" ] || { echo "::error::no disk behind Docker's storage resolved"; exit 1; }
+          flags=
+          for d in $disks; do
+            test -b "$d" || { echo "::error::$d is not a block device"; exit 1; }
+            flags="$flags --device-write-iops $d:$SLOW_WRITE_IOPS --device-read-iops $d:$SLOW_READ_IOPS"
+          done
+          echo "throttled disks: $disks"
+          echo "SLOW_IO_FLAGS=$flags" >> "$GITHUB_ENV"
+
       # A heredoc lane script, as in release-verify. The container gets the throttle; the lane
-      # itself checks that cpu.max and memory.max are in force and fails if they are not.
+      # itself checks that cpu.max, memory.max and io.max are in force and fails if they are not.
       - name: Slow-target build
         run: |
           mkdir -p slowevidence
@@ -251,16 +299,17 @@ jobs:
             python -m pytest testlab/tests/slowbuild -q -rs \
               --junitxml=/out/junit-slow-build.xml
           LANE
+          # shellcheck disable=SC2086  # SLOW_IO_FLAGS is a word list by design
           docker run --rm --user root \
-            --cpus="$SLOW_CPUS" --memory=416m --memory-swap=1184m \
-            -e SLOW_CPUS \
+            --cpus="$SLOW_CPUS" --memory="$SLOW_MEM" --memory-swap="$SLOW_SWAP" $SLOW_IO_FLAGS \
+            -e SLOW_CPUS -e SLOW_MEM -e SLOW_WRITE_IOPS -e SLOW_READ_IOPS \
             -e LHPC_SLOW_BUILD_RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             -v "$PWD":/repo:ro -v lhpc_slow_tmp:/tmp -v "$PWD/slowevidence":/out \
             "$IMG" bash -lc '
               set -e
               cp -r /repo /tmp/repo && chown -R lhpclab /tmp/repo && chmod a+w /out
               install -m 0755 /repo/lane.sh /tmp/lane.sh
-              su lhpclab -c "SLOW_CPUS=$SLOW_CPUS LHPC_SLOW_BUILD_RUN_URL=$LHPC_SLOW_BUILD_RUN_URL /tmp/lane.sh"
+              su lhpclab -c "SLOW_CPUS=$SLOW_CPUS SLOW_MEM=$SLOW_MEM SLOW_WRITE_IOPS=$SLOW_WRITE_IOPS SLOW_READ_IOPS=$SLOW_READ_IOPS LHPC_SLOW_BUILD_RUN_URL=$LHPC_SLOW_BUILD_RUN_URL /tmp/lane.sh"
             '
           test -s slowevidence/junit-slow-build.xml \
             || { echo "::error::the lane produced no JUnit — it did not run"; exit 1; }

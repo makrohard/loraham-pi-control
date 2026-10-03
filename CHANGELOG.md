@@ -33,9 +33,10 @@ reads *Update required* after the update; run `sudo bash <runtime root>/config/f
   to the source channel, auto-install update) reads it as changed. Before, the `.git` was ignored and the tree
   read as clean.
 
-- Every release is now also installed, built and self-updated on a test box slowed down below a Pi Zero 2 W
-  before it ships: an update that would stall or run into a time limit on a slow box turns the release check
-  red instead of reaching yours.
+- Every release is now also installed, built and self-updated on a test box throttled to a Pi Zero 2 W's CPU,
+  SD card and memory before it ships, and each run proves it is no faster than a real Zero on a fixed workload:
+  an update that would stall or run into a time limit on a slow box turns the release check red instead of
+  reaching yours.
 
 ## 0.11.11
 

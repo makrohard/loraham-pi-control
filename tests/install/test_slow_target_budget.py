@@ -58,6 +58,26 @@ def test_every_calibration_entry_is_well_formed():
         assert isinstance(c.get("date"), dt.date), c
 
 
+def test_the_lhpc_label_takes_a_tag_or_a_candidate_ref():
+    """Row A measures a release candidate before its tag exists: `release/<name> (sha7)` is true
+    provenance and well-formed, as is a tag `vX.Y.Z (sha7)` and a self-update's
+    `<from> -> <to> (sha7)`; the short SHA is mandatory in every form."""
+    def label_errors(label):
+        return [e for e in stt.entry_errors(_entry(lhpc=label)) if e.startswith("lhpc")]
+    for good in ("v0.12.0 (6ff1937)", "release/0.11.12-bundle (3d0943a1)",
+                 "v0.11.12 (3d0943a1c2b4)", "v0.11.10 -> v0.11.11 (35923b80)",
+                 "v0.11.11 -> release/0.11.12-bundle (3d0943a1)"):
+        assert label_errors(good) == [], good
+    for bad in ("release/0.11.12-bundle", "v0.12.0", "release/0.11.12-bundle (zzzzzzz)",
+                "release/ (3d0943a)", "main (3d0943a)", "v0.12 (6ff1937)", "",
+                "v0.11.10 -> v0.11.11", "main -> v0.11.11 (35923b80)"):
+        assert label_errors(bad), bad
+    assert stt.minor(_entry(lhpc="release/0.11.12-bundle (3d0943a1)")) == (0, 11)
+    assert stt.minor(_entry(lhpc="v0.12.0 (6ff1937)")) == (0, 12)
+    assert stt.minor(_entry(lhpc="release/bundle (3d0943a1)")) is None
+    assert stt.minor(_entry(lhpc="v0.10.9 -> v0.11.0 (35923b80)")) == (0, 11)
+
+
 def test_every_excluded_component_exists_and_says_why():
     known = {c.id for st in STACKS for c in st.components}
     assert set(EXCLUDED) <= known, f"excluded but not in the manifest: {set(EXCLUDED) - known}"
@@ -72,9 +92,15 @@ def test_coverage_names_every_kind_of_operation():
     assert ops == set(stt.OPS), f"ops never required: {set(stt.OPS) - ops}"
 
 
-def _check_coverage(measured, required) -> None:
+def _check_coverage(measured, required, version=__version__) -> list[str]:
+    """Green when every required pair is measured or waived (stt.waiver); returns the waivers,
+    printed by name. Excluded components are not required at all."""
     have = {(e["component"], e["op"]) for e in measured}
-    missing = [f"{c} {o}" for c, o in required if (c, o) not in have]
+    open_ = [(c, o) for c, o in required if (c, o) not in have]
+    waived = [w for w in (stt.waiver(c, o, version) for c, o in open_) if w]
+    missing = [f"{c} {o}" for c, o in open_ if not stt.waiver(c, o, version)]
+    for w in waived:
+        print(f"waived: {w}")
     boot = stt.bootstrap_reason(measured, missing)
     if boot:
         pytest.skip(boot)
@@ -82,6 +108,7 @@ def _check_coverage(measured, required) -> None:
         f"no entry in {BASELINE_FILE.name} for {len(missing)} operation(s): run row A "
         "(docs/test-matrix.md) and record them, or exclude the component with a reason:\n"
         + "\n".join(missing))
+    return waived
 
 
 def test_coverage():
@@ -102,6 +129,46 @@ def test_coverage_enforces_once_one_entry_is_measured():
         _check_coverage([_entry(component="a", op="build")], [("a", "build"), ("b", "clone")])
     assert "b clone" in str(red.value) and "a build" not in str(red.value)
     _check_coverage([_entry(component="a", op="build")], [("a", "build")])
+
+
+PIP = (stt.SELFUPDATE_COMPONENT, "selfupdate-pip")
+
+
+def test_coverage_waives_l4_up_to_the_introducing_release_and_names_it():
+    """Row A on the introducing release ran the previous release's helper: no pip sync line, on
+    the Zero or anywhere. That gap is GREEN there and before, by name; never past it."""
+    measured = [_entry(component="a", op="build")]
+    for version in (stt.PIP_SYNC_SINCE, "0.11.11"):
+        waived = _check_coverage(measured, [("a", "build"), PIP], version=version)
+        assert waived and waived[0].startswith("lhpc-selfupdate selfupdate-pip (L4)")
+    nxt = stt.PIP_SYNC_SINCE.rsplit(".", 1)
+    for version in (f"{nxt[0]}.{int(nxt[1]) + 1}", "1.0.0"):
+        with pytest.raises(AssertionError, match="lhpc-selfupdate selfupdate-pip"):
+            _check_coverage(measured, [("a", "build"), PIP], version=version)
+
+
+def test_coverage_lists_only_the_genuinely_unmeasured():
+    """An excluded component is never required; a waived pair is not listed; a measured
+    entry of an excluded component (a shared tree adopted on the Zero) is harmless."""
+    excluded = set(EXCLUDED)
+    assert not [c for c, _ in REQUIRED if c in excluded]
+    measured = [_entry(component="a", op="build"), _entry(component=next(iter(excluded)),
+                                                            op="clone")]
+    with pytest.raises(AssertionError) as red:
+        _check_coverage(measured, [("a", "build"), ("b", "clone"), PIP],
+                        version=stt.PIP_SYNC_SINCE)
+    assert [ln.strip() for ln in str(red.value).splitlines()[1:]
+            if ln.startswith("  ")] == ["b clone"]
+
+
+def test_the_introducing_release_is_a_changelog_release():
+    """PIP_SYNC_SINCE names a CHANGELOG release section once this tree has reached it: a
+    renumbered release cannot leave it pointing at nothing (and so waiving L4 for ever, or
+    never). A tree still below it (the series before its release section) cannot tell yet."""
+    changelog = (repo_paths.REPO / "CHANGELOG.md").read_text()
+    reached = stt._release(__version__) >= stt._release(stt.PIP_SYNC_SINCE)
+    assert f"\n## {stt.PIP_SYNC_SINCE}\n" in changelog or not reached
+    assert reached or stt.waiver(*PIP, __version__)
 
 
 # ---- (b) budget ----------------------------------------------------------------------------

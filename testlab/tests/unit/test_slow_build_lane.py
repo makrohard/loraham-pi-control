@@ -131,10 +131,32 @@ def test_missing_l4_evidence_fails_when_not_the_introducing_release():
     assert fails == [L4] and lane.L4_INTRODUCING not in boot
 
 
-def test_past_bootstrap_the_introducing_release_still_fails_l4():
-    fails, boot = lane._waived([L4], [{"op": "build"}], intro=True)
-    assert boot == "" and len(fails) == 1
-    assert fails[0].startswith(L4) and lane.L4_INTRODUCING in fails[0]
+NO_Z_L4 = NO_Z     # the L4 pair's missing Zero baseline
+
+
+def test_past_bootstrap_the_introducing_release_waives_l4_only():
+    """Row A on the introducing release ran the previous tag's helper too: no L4 on the Zero
+    either. Past bootstrap the L4 pair is waived (named in the summary as NO EVIDENCE), every
+    other failure stands."""
+    other_z = "no Zero baseline for kiss build: run row A"
+    fails, boot = lane._waived([L4, NO_Z_L4, OTHER, other_z], [{"op": "build"}], intro=True)
+    assert boot == "" and fails == [OTHER, other_z]
+
+
+def test_the_l4_waiver_needs_the_version_rule_too(monkeypatch, tmp_path):
+    """A previous tag without the line is not enough: past PIP_SYNC_SINCE the L4 failures stand
+    (a lost line is a defect, not the introducing release)."""
+    monkeypatch.setattr(lane, "OUT", tmp_path)
+    monkeypatch.setattr(lane, "INTRODUCING", ["v9.9.9"])
+    monkeypatch.setattr(lane, "EVIDENCE", {})
+    monkeypatch.setattr(lane, "LANE_OPS", [(lane.stt.SELFUPDATE_COMPONENT, "selfupdate-pip")])
+    monkeypatch.setattr(lane, "BASELINE", {"measured": [{"op": "build"}]})
+    monkeypatch.setattr(lane, "__version__", "99.0.0")
+    with pytest.raises(AssertionError, match="no row C evidence for lhpc-selfupdate"):
+        lane.test_slow_build_budget()
+    monkeypatch.setattr(lane, "__version__", lane.stt.PIP_SYNC_SINCE)
+    lane.test_slow_build_budget()
+    assert "**NO EVIDENCE**" in (tmp_path / "slow-build-summary.md").read_text()
 
 
 # ---- a step faster than the log's resolution (testlab run 37145791526) ----------------------
@@ -188,3 +210,65 @@ def test_the_helper_runs_past_the_unit_plumbing_guard(tmp_path):
     env = {k: v for k, v in lane.os.environ.items() if k != "INVOCATION_ID"}
     _, out = lane._helper(fake, env)
     assert lane._PIP_SYNC.findall(out) == ["4.2"]
+
+
+# ---- the helper's runtime carries a box's canonical units (testlab run 37148794385) ---------
+
+def _verify_set(root, env):
+    """The helper's own post-update unit check, as it runs it (service_selfupdate)."""
+    import sys
+    return subprocess.run([sys.executable, "-m", "lhpc.core.updater_units", "verify-set",
+                           str(root)], env=env, capture_output=True, text=True, timeout=60,
+                          check=False)
+
+
+def test_the_helper_runtime_has_the_units_its_verification_requires(tmp_path):
+    """Run 37148794385: the helper applied the update, then exited 1 — "units not canonical:
+    lhpc-boot-restore.service: missing; …" — because the lane's runtime had no units at all. The
+    lane now installs them as install.sh does, into the runtime's own $HOME, and the helper's
+    verification passes on them."""
+    import sys
+    root = tmp_path / "runtime"
+    (root / "src").mkdir(parents=True)
+    env = lane._box_env(root, tmp_path / "home")
+    assert env["HOME"] == str(tmp_path / "home") and env["LHPC_RUNTIME_ROOT"] == str(root)
+    before = _verify_set(root, env)
+    assert before.returncode == 1 and "lhpc-boot-restore.service: missing" in before.stdout
+    kinds = lane._install_units(Path(sys.executable), root, env)
+    from lhpc.core import updater_units
+    assert tuple(kinds) == updater_units.ALL_UNITS
+    after = _verify_set(root, env)
+    assert (after.returncode, after.stdout) == (0, "ok\n"), after.stdout + after.stderr
+    unit = (tmp_path / "home" / ".config/systemd/user" / updater_units.HELPER_UNIT).read_text()
+    assert f"{root}/venv/lhpc/bin/lhpc " in unit      # the box layout the lane runs the helper in
+
+
+def test_the_lane_never_writes_the_real_home_units(tmp_path):
+    env = lane._box_env(tmp_path / "runtime", tmp_path / "home")
+    assert env["HOME"] != str(Path.home())
+    assert env["XDG_CACHE_HOME"]                       # the pip cache stays the user's
+
+
+# ---- the disk throttle is part of the throttled box (Correction 7, GAP 3) -------------------
+
+@pytest.mark.parametrize("io_max, ok", [
+    ("8:0 rbps=max wbps=max riops=300 wiops=120\n", True),
+    ("8:0 rbps=max wbps=max riops=200 wiops=100\n", True),        # tighter is fine
+    ("8:0 rbps=max wbps=max riops=max wiops=120\n", False),       # reads unthrottled
+    ("8:0 rbps=max wbps=max riops=300 wiops=500\n", False),       # looser than the job's
+    ("", False),                                                  # no throttle at all
+])
+def test_the_lane_proves_the_disk_throttle(tmp_path, monkeypatch, io_max, ok):
+    monkeypatch.setenv("SLOW_WRITE_IOPS", "120")
+    monkeypatch.setenv("SLOW_READ_IOPS", "300")
+    (tmp_path / "io.max").write_text(io_max)
+    assert (lane._io_problems(tmp_path) == []) is ok
+
+
+def test_the_disk_throttle_must_be_named(tmp_path, monkeypatch):
+    monkeypatch.delenv("SLOW_WRITE_IOPS", raising=False)
+    (tmp_path / "io.max").write_text("8:0 riops=1 wiops=1\n")
+    assert lane._io_problems(tmp_path)[0].startswith("SLOW_WRITE_IOPS=None")
+    monkeypatch.setenv("SLOW_WRITE_IOPS", "1")
+    monkeypatch.setenv("SLOW_READ_IOPS", "1")
+    assert lane._io_problems(tmp_path / "nowhere")[0].startswith("io.max is unreadable")
