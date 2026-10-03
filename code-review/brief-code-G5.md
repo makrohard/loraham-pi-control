@@ -1,0 +1,30 @@
+# CLOUD BRIEF · CODE fix group G5 (the daemon's SET acknowledgement is read: CR1-3) (one Claude Code cloud session)
+
+You implement an AUDITED PLAN exactly; you do not redesign. Base: origin/main = e5187f70ae4e81a1081a835be06f84746222c3b6
+(v0.11.10). Read, in this order: `code-review/PLAN-G5.md` and `code-review/PLAN-G5-DELTA.md` (the DELTA REPLACES the ACK state machine, the timeout wording, the two tests and decides Q1–Q5; the daemon's reply contract: exactly one line `OK` or `ERR <WHY>` per command, connection stays open, same for daemon 1.1.0–1.2.0), both on the
+branch `code-review/brief` (`git show origin/code-review/brief:code-review/<file>`), then `docs/architecture.md`,
+`tests/README.md`, `docs/maintenance.md`.
+
+## Output
+The commits the plan's §5 names (subjects `CR1-3: <what>`), each green on its own
+(`python -m pytest -q -p no:cacheprovider` on the touched test modules + `tests/repo`; `ruff check lhpc testlab` and
+`ruff check tests --select F,E9`), then ONE report commit adding `code-review/code-report-G5.md`. `git push`
+once at the end. Never touch `main`, `dev` or `code-review/brief`; no pull request; no Co-Authored-By or
+AI-attribution line in any commit (the author is re-set downstream; still write none).
+
+## Rules (the maintainer's)
+The simplest change that implements the plan; the plan's file:line are at e5187f70; match the surrounding code's
+idiom and comment density; no behaviour beyond the plan; every regression test RED before its commit (prove it by
+running the new test against the parent commit once) and GREEN after; preservation tests marked as such in the
+report; docs changed exactly as the plan says (one place per fact); the CHANGELOG lines in the operator's words,
+under "## Unreleased" is NOT used in this repo — put them where the plan says. If the plan cannot be implemented as
+written (a line moved, a claim wrong), STOP that commit, write what you found into the report under "Deviations",
+and continue with the next; never improvise a different design.
+
+## The report (`code-review/code-report-G5.md`) — with a SELF-AUDIT PROOF section
+1. Per commit: sha, files, the tests (module::name) with red-before yes/no/preservation and the exact command + result.
+2. SELF-AUDIT PROOF, per change: (a) the guarantee the plan states, (b) the code line(s) that now enforce it, (c) what
+   else the change could break (callers, the test lane, image builds, the start path's parameter apply, the console live apply, FakeSystem and the testlab fake daemon, a slow daemon) and the check that
+   rules it out (a test name or a grep result), (d) one thing you re-read after writing it and what you found.
+3. Deviations from the plan (or "none").
+4. The full pytest/ruff summary lines.
