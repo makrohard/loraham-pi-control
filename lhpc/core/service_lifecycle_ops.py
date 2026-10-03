@@ -553,6 +553,7 @@ class LifecycleOpsMixin:
         return ("no radio hardware configured — choose your board in the daemon Hardware settings "
                 "before starting a radio stack")
 
+    @invalidates_snapshot
     def probe_hardware(self, band: str, hw_preset: str):
         """Bounded, safe hardware probe for the daemon Hardware page: spawn the daemon for
         (band, hw_preset) and report present / absent (+ the daemon's chip diagnostic) / busy. Guards:
@@ -3492,6 +3493,7 @@ class LifecycleOpsMixin:
                         "Recover it first")
         return ""
 
+    @invalidates_snapshot
     def spawn_web_job(self, op: str, target: str, source: str = "pinned",
                       accept_pin_mismatch: str = ""):
         """Spawn detached build/test/install job(s) for `target`. Returns `(job_log_name, admission, reason)`
@@ -3724,6 +3726,7 @@ class LifecycleOpsMixin:
         finally:
             _adm_stack.close()   # released long ago on the normal path; belt for the early returns
 
+    @invalidates_snapshot
     def spawn_start_job(self, op: str, target: str, band: str = "", stop_owners: bool = False,
                         cascade: bool = False):
         """Spawn a DETACHED web start/restart (the hidden `lhpc _stack-start` verb) and return
@@ -3798,6 +3801,7 @@ class LifecycleOpsMixin:
         finally:
             _adm.close()
 
+    @invalidates_snapshot
     def cap_start_logs(self) -> dict[str, str]:
         """Try the cap on every start log (M19): the console's periodic pass calls this. EVERY regular,
         non-symlink `start-*.log` in logs/ is tried, running or not: a log with no writer is simply
@@ -3820,6 +3824,7 @@ class LifecycleOpsMixin:
                 out[name] = f"error: {type(exc).__name__}"
         return out
 
+    @invalidates_snapshot
     def cap_controller_logs(self) -> dict[str, str]:
         """Cap the controller's own long-lived logs (`updater_units.CONTROLLER_LOGS`) exactly as a
         start log: their writers (systemd `append:`, nginx) hold them O_APPEND. A missing one is
@@ -4419,6 +4424,7 @@ class LifecycleOpsMixin:
         except (OSError, ValueError):       # missing/unreadable/symlinked -> not active
             return None
 
+    @invalidates_snapshot
     def dismiss_interactive(self, stack_id: str) -> None:
         self._safe_unlink(self._interactive_marker(stack_id))
 
@@ -5569,6 +5575,7 @@ class LifecycleOpsMixin:
             except OSError:
                 pass
 
+    @invalidates_snapshot
     def rflog_roll_native_all(self) -> None:
         """The console's pass: try the roll on every NATIVE RF log (the Meshtastic trace, whose
         writer never rolls it). Non-native RF logs are rotated by their own writers and never touched
@@ -5697,6 +5704,7 @@ class LifecycleOpsMixin:
                             else "RF logging: not every stack was saved.",
                             [f"{owner}: {'saved' if r.ok else r.summary}" for owner, r in results])
 
+    @invalidates_snapshot
     def rflog_clear_all(self) -> ActionResult:
         """Clear every registered RF log the manifest installs, one job at a time through
         `rflog_clear` (the same lock and the same refusals). Run logs are never in the loop."""
@@ -5718,6 +5726,7 @@ class LifecycleOpsMixin:
             return ActionResult(False, "RF log: the switch is 'on' or 'off'.")
         return self.save_config_bundle(e.owner, values={e.key: v})
 
+    @invalidates_snapshot
     def rflog_clear(self, target: str, job) -> ActionResult:
         """Clear ONE RF log: truncate the live file in place (the writer keeps its descriptor —
         same inode, it simply continues) and remove its previous segment. Only a registered job
@@ -5964,6 +5973,7 @@ class LifecycleOpsMixin:
                     out.append(c.start_note)
         return out
 
+    @invalidates_snapshot
     def run_action(self, op: str, target: str, apply: bool = False, source: str = "pinned",
                    stop_owners: bool = False, cascade: bool = False,
                    band: str = "", purge: bool = False,

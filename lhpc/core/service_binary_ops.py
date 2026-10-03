@@ -545,6 +545,7 @@ class BinaryOpsMixin:
         return sorted(cid for ss in snap.stacks for cid, cs in ss.components.items()
                       if cid in ids and cs.run_state in up)
 
+    @invalidates_snapshot
     def binary_recover(self) -> tuple[bool, str]:
         """THE authoritative recovery for an open/interrupted binary transaction — files,
         receipt AND auth in one operation. Called under the locks before any new binary work

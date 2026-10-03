@@ -551,6 +551,7 @@ class HmacOpsMixin:
                 return 1
             time.sleep(0.1)
 
+    @invalidates_snapshot
     def hmac_apply_cli(self, stack_id: str, action: str, emit, confirm: bool = False) -> int:
         """FOREGROUND apply for the CLI: same step runner as the detached driver, streaming to
         stdout. Participates in the SAME single-flight admission + job-identity marker as detached runs
@@ -698,6 +699,7 @@ class HmacOpsMixin:
             return self._hmac_downgrade_unsafe(st, "auto-cleared: the build session was proven stopped.")
         return False
 
+    @invalidates_snapshot
     def hmac_apply_abort(self, stack_id: str, run_id: str) -> ActionResult:
         """REQUEST-ONLY abort: validate the EXACT live run + the driver job identity, then SIGTERM the
         DRIVER PID only (never killpg — the build is a separate session). Writes NO terminal marker — the
@@ -730,6 +732,7 @@ class HmacOpsMixin:
             return ActionResult(False, f"Could not signal the apply driver (pid {pid}): {exc}")
         return ActionResult(True, "Abort requested — the driver is stopping the run.")
 
+    @invalidates_snapshot
     def hmac_apply_recover(self, stack_id: str, run_id: str) -> ActionResult:
         """Clear an UNSAFE block. STALE-run protection is in the SERVICE (under the single-flight lock):
         `run_id` must equal the CURRENT marker's. `session-unverified` clears only when the stored session

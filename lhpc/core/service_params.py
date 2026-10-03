@@ -1571,6 +1571,7 @@ class ParamsConfigMixin:
         except validators.ValidationError:
             return True
 
+    @invalidates_snapshot
     def set_operator_identity(self, callsign: str | None = None) -> ActionResult:
         """THE ONE authoritative global-identity mutation. Under a single exclusive config
         critical section (`config_lock` — the same file starts hold SHARED via
@@ -1680,6 +1681,7 @@ class ParamsConfigMixin:
             return False, cfg.reason or "invalid [boot] config"
         return bool(cfg.restore), "" if cfg.restore else "disabled by [boot] restore"
 
+    @invalidates_snapshot
     def set_boot_restore(self, enabled: bool) -> ActionResult:
         """Persist the boot auto-restore switch (applies at the NEXT boot)."""
         from .config import ConfigError, save_boot_restore
@@ -1693,6 +1695,7 @@ class ParamsConfigMixin:
         state = "ON" if enabled else "OFF"
         return ActionResult(True, f"Boot auto-restore switched {state} — applies at the next boot.")
 
+    @invalidates_snapshot
     def set_hardware_setup(self, setup_id: str | None = None) -> ActionResult:
         """Set the radio HARDWARE setup (`[radio].hardware` in local.toml) — e.g. 'loraham',
         'uputronics', 'waveshare-433'. No arg reports the current setup + served bands. 'unset' means
@@ -1791,6 +1794,7 @@ class ParamsConfigMixin:
                               "set it again with `lhpc gps --lat <n> --lon <n>`")
         return {}, ""                                  # deliberately off
 
+    @invalidates_snapshot
     def meshcore_identity_guard(self, comps) -> str:
         """Rescue the MeshCore identity before an operation replaces or removes its source.
 
@@ -3015,6 +3019,7 @@ class ParamsConfigMixin:
                 "identity_hint": identity_hint, "identity_note": identity_note,
                 "min": getattr(p, "min", None), "max": getattr(p, "max", None)}
 
+    @invalidates_snapshot
     def write_config_files(self, target: str, band: str = "",
                            overrides: dict | None = None,
                            position: dict | None = None) -> list[ConfigWrite]:

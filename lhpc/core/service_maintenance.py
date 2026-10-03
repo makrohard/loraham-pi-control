@@ -150,6 +150,7 @@ class MaintenanceOpsMixin:
                 return _with_source([c]), None
         return [], f"Unknown stack or component '{target}'."
 
+    @invalidates_snapshot
     def source_check(self, target: str = "") -> ActionResult:
         """NETWORK (explicit): probe each component's remote and refresh the cached freshness
         marker. The ONLY writer of `state/stackupdates.json`, and never reached from a GET route
@@ -673,6 +674,7 @@ class MaintenanceOpsMixin:
         self._safe_unlink(p)                  # same boot, expired: the bounded trigger is dead
         return None
 
+    @invalidates_snapshot
     def power_action(self, kind: str, apply: bool = False) -> ActionResult:
         """The dashboard's Reboot / Shut down, through logind (`systemctl <kind>`), gracefully.
         Dry-run renders the confirm-page plan; apply runs a SYNCHRONOUS CanReboot/CanPowerOff
@@ -844,6 +846,7 @@ class MaintenanceOpsMixin:
                               and _version_key(latest) > _version_key(installed)),
                 "checked_at": cached.get("checked_at"), "error": cached.get("error", "")}
 
+    @invalidates_snapshot
     def graywolf_upstream_check(self, target: str) -> ActionResult:
         """NETWORK (explicit POST): query the GitHub releases API for the latest tag of the
         fetched package's `release_repo` and cache it. Never reached from a GET route."""
@@ -1291,6 +1294,7 @@ class MaintenanceOpsMixin:
         except (OSError, PathContainmentError):
             return False
 
+    @invalidates_snapshot
     def task_dismiss(self, kind: str, run_id: str, attempt_id: str = "") -> bool:
         """Dismiss a FAILED (never unsafe/running) terminal banner. Durable; returns success only on a
         confirmed write/unlink."""
@@ -1333,6 +1337,7 @@ class MaintenanceOpsMixin:
             return self._task_dismiss_add(run_id)
         return False
 
+    @invalidates_snapshot
     def task_recover(self, kind: str, run_id: str, attempt_id: str) -> bool:
         """Explicit-ack recovery of an UNSAFE build/test/install job (kind=job) → non-blocking failed.
         hmac/auto-install keep their own recover flows. Durable-confirmed."""
@@ -1364,6 +1369,7 @@ class MaintenanceOpsMixin:
         except (OSError, ValueError):
             return False
 
+    @invalidates_snapshot
     def dismiss_welcome_note(self) -> bool:
         return self._safe_marker_write(self._welcome_note_marker(), "1")
 
@@ -1387,6 +1393,7 @@ class MaintenanceOpsMixin:
         except (OSError, ValueError):
             return False                       # missing/unreadable/symlinked -> show the note
 
+    @invalidates_snapshot
     def dismiss_dep_note(self, summary) -> bool:
         return self._safe_marker_write(self._dep_note_marker(), self.dep_note_signature(summary))
 
@@ -2045,6 +2052,7 @@ class MaintenanceOpsMixin:
                 ok = False
         return ok
 
+    @invalidates_snapshot
     def controller_uninstall_prep(self) -> ActionResult:
         """INTERNAL op invoked by uninstall.sh BEFORE it removes any controller code/state. Held under
         the ONE task-admission lock so a NEW task start CONTENDS (fails its own locked admission) while
@@ -2173,6 +2181,7 @@ class MaintenanceOpsMixin:
         return ActionResult(True, "Quiescent: all managed stacks stopped and verified — safe to remove "
                             "controller state.", details=tuple(details), data={"quiescent": True})
 
+    @invalidates_snapshot
     def controller_uninstall_guard_claim(self, pid: str, nonce: str, start_time: str) -> ActionResult:
         """Atomically CLAIM the uninstall guard for uninstall.sh — created O_CREAT|O_EXCL|O_NOFOLLOW via
         `open_marker_excl`, so a pre-existing guard of ANY kind (regular / symlink / special / stale) is
@@ -2231,6 +2240,7 @@ class MaintenanceOpsMixin:
             return ActionResult(False, f"another uninstall-guard operation is in progress ({busy}) — "
                                 "retry.", data={"guard_contended": True})
 
+    @invalidates_snapshot
     def controller_uninstall_guard_release(self, nonce: str) -> ActionResult:
         """Remove the uninstall guard ONLY if it is the one this invocation owns (its recorded `nonce`
         matches). Strict no-follow, regular-only, bounded read + nonce compare, then a descriptor-safe

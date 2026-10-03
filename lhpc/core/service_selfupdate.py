@@ -10,6 +10,7 @@ from os.path import join as _op_join
 
 from .paths import PathContainmentError
 from .service_base import ActionResult, _proc_ceased, _proc_start_time, _StopRun
+from .snapshot_memo import invalidates_snapshot
 
 
 class SelfUpdateOpsMixin:
@@ -259,6 +260,7 @@ class SelfUpdateOpsMixin:
         except Exception:
             return False
 
+    @invalidates_snapshot
     def self_update_check(self) -> ActionResult:
         """Explicit upstream freshness check (NETWORK: `git fetch`) — refreshes the cached marker so
         the footer/pages reflect it. Serialized with apply through the self-update lock: if an apply is
@@ -312,6 +314,7 @@ class SelfUpdateOpsMixin:
             return ActionResult(True, msg, data=view)
         return ActionResult(True, "Up to date.", data=view)
 
+    @invalidates_snapshot
     def self_update_apply(self, *, force: bool = False) -> ActionResult:
         """Apply the update as ONE serialized, fail-closed transaction (the interprocess self-update
         lock covers candidate capture, journal persistence, fetch/ref resolution, merge/reset/clean,
@@ -504,6 +507,7 @@ class SelfUpdateOpsMixin:
                     "this is repaired: lhpc self-update --repair-integration"))
         return res
 
+    @invalidates_snapshot
     def self_update_apply_operator(self, *, force: bool = False) -> ActionResult:
         """OPERATOR-CONTEXT `lhpc self-update --apply`: WARN-then-DO under a CONTINUOUSLY-held task
         admission lock. If the managed web console is running it holds the controller-runtime lock
@@ -832,6 +836,7 @@ class SelfUpdateOpsMixin:
 
     # ---- web trigger: write the exclusive request marker (NO systemctl, NO bus) ---------------
 
+    @invalidates_snapshot
     def self_update_trigger(self, *, overwrite: bool = False, queue: bool = True) -> ActionResult:
         """WEB stage-2: admit exactly one update request by EXCLUSIVELY creating the in-root
         request marker (payload `normal`|`overwrite` — a 1-bit selector the helper re-validates).
@@ -915,6 +920,7 @@ class SelfUpdateOpsMixin:
 
     # ---- the helper (unit ExecStart): claim -> apply -> sync -> record -> release -------------
 
+    @invalidates_snapshot
     def self_update_run_service(self) -> ActionResult:
         """PLUMBING, run ONLY by lhpc-selfupdate.service. Holds task ADMISSION across the COMPLETE
         transaction (claim -> apply -> venv sync -> durable record -> in-flight release) so no task can
@@ -1163,6 +1169,7 @@ class SelfUpdateOpsMixin:
             return "malformed"
         return "absent"
 
+    @invalidates_snapshot
     def self_update_recover_request(self) -> ActionResult:
         """OPERATOR: one invocation inspects BOTH recoverable states — the update request/in-flight
         record AND the uninstall guard — never returning early after handling only one; a partial
@@ -1270,6 +1277,7 @@ class SelfUpdateOpsMixin:
 
     # ---- integration repair (operator shell, HAS bus) ----------------------------------------
 
+    @invalidates_snapshot
     def self_update_repair_integration(self, *, restart: bool = True) -> ActionResult:
         """OPERATOR / migration: install/restore the COMPLETE canonical unit set (`updater_units.ALL_UNITS`) for this runtime root, then daemon-reload, verify the active fragments, enable both request watchers (`--now`), the web unit and the boot-restore unit. With `restart=True` (CLI default) also restart the console; with
         `restart=False` (the web self-repair bridge) leave the running console alone so the update
@@ -1418,6 +1426,7 @@ class SelfUpdateOpsMixin:
                     f"loginctl enable-linger {user}")
         return f"  linger: enabled for {user} — the console now autostarts at boot"
 
+    @invalidates_snapshot
     def self_update_repair_and_trigger(self, *, overwrite: bool = False,
                                        queue: bool = True) -> ActionResult:
         """WEB one-click that also MIGRATES a non-canonical same-root deployment (old/`%h` units, no

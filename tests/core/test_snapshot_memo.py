@@ -5,12 +5,14 @@ read contracts a render relies on (firewall status, listeners, stack configs, so
 
 from __future__ import annotations
 
+import inspect
+import os
 import threading
 
 import pytest
 
 from lhpc.adapters.web.app import create_app
-from lhpc.core import status as statusmod
+from lhpc.core import reslock, status as statusmod
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult as CR, FakeSystem
 from lhpc.core.services import ControllerService
@@ -272,3 +274,546 @@ def test_graywolf_upstream_update_drops_the_memo(tmp_path):
     a = svc.build_snapshot()
     svc.graywolf_upstream_update("graywolf", apply=False)
     assert svc.build_snapshot() is not a
+
+
+def test_every_public_service_entry_is_classified():
+    """The COMPLETE universe: every public `ControllerService` name except a plain constant is
+    either `@invalidates_snapshot` or listed in `snapshot_memo.SNAPSHOT_NEUTRAL` with a reason —
+    never both, never neither, and no listed name is gone. A new public entry of any shape fails
+    here until someone decides which it is. Introspection only: no service is built."""
+    from lhpc.core.snapshot_memo import SNAPSHOT_NEUTRAL
+    universe = {n for n in dir(ControllerService) if not n.startswith("_")
+                and not isinstance(inspect.getattr_static(ControllerService, n), (int, float, str, tuple))}
+    marked = {n for n in universe
+              if getattr(inspect.getattr_static(ControllerService, n), "invalidates_snapshot", False) is True}
+    neutral = set(SNAPSHOT_NEUTRAL)
+    assert not universe - marked - neutral, f"unclassified: {sorted(universe - marked - neutral)}"
+    assert not marked & neutral, f"decorated AND listed neutral: {sorted(marked & neutral)}"
+    assert not neutral - universe, f"listed neutral but no longer public: {sorted(neutral - universe)}"
+    assert all(isinstance(r, str) and r.strip() for r in SNAPSHOT_NEUTRAL.values())
+
+
+def test_set_hardware_setup_drops_the_memo(tmp_path):
+    # The setup decides the served bands the snapshot reports; a later read must reassess.
+    svc = _svc(tmp_path)
+    a = svc.build_snapshot()
+    assert svc.set_hardware_setup("loraham").ok
+    assert svc.build_snapshot() is not a
+
+
+# ---- the neutral entries: what they write, and that no snapshot input observes it ----------
+#
+# Each neutral entry is DRIVEN on a live runtime root (meshtastic installed and running with
+# its RF trace over the roll cap, a direct-NMEA receiver configured on a pty) and every write
+# it makes is traced — files, directories, modes, renames, truncations, the receiver's tty mode,
+# signals and every command (System runner or a real subprocess). A "read-only" entry that
+# writes anything fails, and a neutral writer must write EXACTLY its SNAPSHOT_NEUTRAL_WRITERS
+# paths. Then a fresh snapshot is traced on that state — also while the claim and roll locks are
+# held — and fails the day it reads one of those paths, the receiver's tty mode, or runs a
+# command that names one.
+
+_RECEIVER = "termios:gps-receiver"
+# The writers on a read path or inside a decorated op (their SNAPSHOT_NEUTRAL reasons). Pinned
+# here so no entry moves into this category, out of the traced ones, without a visible edit.
+_READ_PATH_WRITERS = frozenset({
+    "active_jobs", "build_snapshot", "clear_daemon_feed", "clear_stale_interactive",
+    "daemon_channel_scan", "firewall_gate_activation", "firewall_gate_stack_start",
+    "invalidate_snapshot", "mark_interactive", "network_view", "prune_logs", "refresh_gps_auto",
+    "rflog_decode", "web_session_secret",
+})
+_TMP = __import__("re").compile(r"\..+\.tmp-\d+-[0-9a-f]+")     # runtime_fs's atomic temp names
+_READ_ONLY_COMMANDS = (("systemctl", "show"), ("systemctl", "is-system-running"),
+                       ("systemctl", "--user", "is-system-running"), ("systemctl", "is-active"),
+                       ("systemctl", "is-enabled"))
+_READ_ONLY_GIT = {"rev-parse", "status", "rev-list", "describe", "log", "show", "ls-files"}
+
+
+def _read_only_command(argv):
+    argv = [str(a) for a in argv]
+    if any(tuple(argv[:len(p)]) == p for p in _READ_ONLY_COMMANDS):
+        return True
+    if argv[:2] == ["git", "-C"] and len(argv) > 3:
+        return argv[3] in _READ_ONLY_GIT or argv[3:5] == ["config", "--get"]
+    return False
+
+
+@pytest.fixture
+def receiver():
+    master, slave = os.openpty()
+    yield os.ttyname(slave)
+    os.close(master)
+    os.close(slave)
+
+
+def _live(tmp_path, dev, monkeypatch):
+    """A runtime root in the state the neutral writers act on: meshtastic installed (its binary)
+    and running (process, both listeners and its `state/meshtasticd/` tree; GPS use off, so it
+    does not hold the receiver), its native RF trace over the roll cap, and a direct-NMEA
+    receiver configured on a pty, free of gpsd. Returns (svc, root, fake)."""
+    from lhpc.core import config as cfgmod, gps as _gps, rflog
+    from lhpc.core.probes.backends import Listener
+    monkeypatch.setattr(rflog, "MAX_BYTES", 4096)           # the cap, small: same code path
+    monkeypatch.setattr(_gps, "gpsd_owns_device", lambda d, h, po, timeout=3.0: (False, "free"))
+    root = tmp_path.resolve()
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    binary = root / "build" / "tools" / "meshtasticd" / "meshtasticd"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    (root / "state" / "meshtasticd" / "ssl").mkdir(parents=True)   # the running node's own state
+    paths = Paths(runtime_root=root)
+    cfgmod.save_stack_config(paths, "meshtastic", {"use_gps": "off"})
+    cfgmod.save_gps(paths, source="nmea", device=dev, nmea_baud=9600)
+    (root / "logs").mkdir()
+    (root / "logs" / "rf-meshtastic.log").write_bytes(b'{"x":1}\n' * 1024)       # 8 KiB > cap
+    fake = FakeSystem(cmdlines_data={4242: [str(binary), "-c", f"{root}/config/files/meshtasticd.yaml",
+                                            "-d", f"{root}/state/meshtasticd"]})
+    svc = ControllerService(system=fake.system, paths=paths)
+    for inode, ep in enumerate(svc.stack("meshtastic").main_component.endpoints, start=11):
+        host, port = ep.address.rsplit(":", 1)              # its own listeners, owned by the node
+        fake.listeners.append(Listener("ipv4", host, int(port), inode))
+        fake.owners[inode] = 4242
+    svc._MONITOR_SAMPLE_S = 0.3
+    return svc, str(root), fake
+
+
+def _fd_path(fd):
+    try:
+        return os.readlink(f"/proc/self/fd/{fd if isinstance(fd, int) else fd.fileno()}")
+    except (OSError, AttributeError, TypeError):
+        return None
+
+
+def _trace_writes(fn, root, dev, fake, monkeypatch):
+    """Run `fn` and return (every write it made, its exception or None). A write is a path
+    relative to `root` (or absolute outside it), `_RECEIVER` for the receiver's tty mode, or
+    `exec:`/`kill:` for a command that is not a known read or a signal other than 0 (kill,
+    killpg)."""
+    import builtins
+    import io
+    import subprocess
+    import termios
+    out = set()
+    flags_w = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
+
+    def note(p, dir_fd=None):
+        try:
+            p = os.fsdecode(os.fspath(p))
+        except TypeError:
+            return
+        if dir_fd is not None and not os.path.isabs(p):
+            p = os.path.join(_fd_path(dir_fd) or "", p)
+        p = os.path.normpath(p)
+        if p == root or p.startswith(root + os.sep):
+            p = os.path.relpath(p, root)
+        if not _TMP.fullmatch(os.path.basename(p)):         # the rename's target is recorded
+            out.add(p)
+
+    def w_open(f):
+        def g(p, flags, *a, **k):
+            if flags & flags_w:
+                note(p, k.get("dir_fd"))
+            return f(p, flags, *a, **k)
+        return g
+
+    def w_io(f):
+        def g(p, mode="r", *a, **k):
+            if not isinstance(p, int) and any(c in mode for c in "wax+"):
+                note(p)
+            return f(p, mode, *a, **k)
+        return g
+
+    def w_paths(*keys):             # the dir_fd keyword of each path argument; None: not written
+        def w(f):
+            def g(*a, **k):
+                for i, key in enumerate(keys):
+                    if key and i < len(a) and not isinstance(a[i], int):
+                        note(a[i], k.get(key))
+                return f(*a, **k)
+            return g
+        return w
+
+    def w_mkdir(f):                 # only a directory that is really created
+        def g(p, *a, **k):
+            r = f(p, *a, **k)
+            note(p, k.get("dir_fd"))
+            return r
+        return g
+
+    def w_mode(f, st):              # only a mode that really changes
+        def g(p, mode, *a, **k):
+            try:
+                before = st(p).st_mode
+            except (OSError, TypeError):
+                before = None
+            r = f(p, mode, *a, **k)
+            if before is None or st(p).st_mode != before:
+                note(_fd_path(p) if isinstance(p, int) else p, k.get("dir_fd"))
+            return r
+        return g
+
+    def w_fd(f):
+        def g(fd, *a, **k):
+            note(_fd_path(fd))
+            return f(fd, *a, **k)
+        return g
+
+    def w_kill(f):
+        def g(pid, sig):
+            if sig != 0:
+                out.add(f"kill:{f.__name__}:{pid}:{sig}")
+            return f(pid, sig)
+        return g
+
+    def w_popen(f):
+        def g(self, args, *a, **k):
+            out.add("exec:" + (args if isinstance(args, str) else " ".join(map(str, args))))
+            return f(self, args, *a, **k)
+        return g
+
+    def w_tcset(f):
+        def g(fd, when, attrs):
+            p = _fd_path(fd)
+            out.add(_RECEIVER if p == dev else f"termios:{p}")
+            return f(fd, when, attrs)
+        return g
+
+    n0 = len(fake.calls)
+    err = None
+    with monkeypatch.context() as m:
+        m.setattr(os, "open", w_open(os.open))
+        m.setattr(io, "open", w_io(io.open))
+        m.setattr(builtins, "open", io.open)
+        m.setattr(os, "mkdir", w_mkdir(os.mkdir))
+        for name in ("rmdir", "unlink", "remove", "truncate", "utime", "chown", "mkfifo", "mknod"):
+            m.setattr(os, name, w_paths("dir_fd")(getattr(os, name)))
+        for name in ("rename", "replace"):
+            m.setattr(os, name, w_paths("src_dir_fd", "dst_dir_fd")(getattr(os, name)))
+        for name in ("symlink", "link"):
+            m.setattr(os, name, w_paths(None, "dst_dir_fd")(getattr(os, name)))
+        m.setattr(os, "chmod", w_mode(os.chmod, os.stat))
+        m.setattr(os, "fchmod", w_mode(os.fchmod, os.fstat))
+        m.setattr(os, "ftruncate", w_fd(os.ftruncate))
+        m.setattr(os, "kill", w_kill(os.kill))
+        m.setattr(os, "killpg", w_kill(os.killpg))
+        m.setattr(subprocess.Popen, "__init__", w_popen(subprocess.Popen.__init__))
+        m.setattr(termios, "tcsetattr", w_tcset(termios.tcsetattr))
+        try:
+            fn()
+        except Exception as exc:                            # writes before it still count
+            err = exc
+    out |= {"exec:" + " ".join(c) for c in fake.calls[n0:] if not _read_only_command(c)}
+    return out, err
+
+
+def _matches(token, glob):
+    import fnmatch
+    return token == glob.rstrip("/") if glob.endswith("/") else fnmatch.fnmatchcase(token, glob)
+
+
+def _drive_args(svc):
+    """A value per required parameter name of a neutral entry (the live fixture's meshtastic)."""
+    from lhpc.core.services import ActionResult
+    stack = svc.stack("meshtastic")
+    comp = stack.main_component
+    return {
+        "target": "meshtastic", "stack_id": "meshtastic", "sid": "meshtastic",
+        "comp_id": "meshtastic", "component_id": "meshtastic", "surface": "meshtastic",
+        "band": "868", "op": "start", "job": "rf-meshtastic.log", "name": "region",
+        "comp": comp, "c": comp, "stack": stack, "req": comp.requires[0],
+        "run_id": "x", "index": 0, "offset": 0, "channel": "0", "label": "x", "page_id": "x",
+        "page": (svc.web_pages() or [None])[0], "summary": {}, "selection": {}, "scopes": [],
+        "prospective_ports": [], "stack_ids": ["meshtastic"], "values": {}, "rec": {},
+        "listeners": [], "port": 4403, "records": [], "scope": {"addr": comp.endpoints[0].address.rsplit(":", 1)[0]},
+        "groups": [], "params": {}, "result": ActionResult(True, "x"),
+    }
+
+
+# The neutral writers' own calls: the arguments that reach the write (the native RF job).
+_DRIVE_KW = {"log_tail": {"job": "rf-meshtastic.log"}, "rflog_records": {"lines": 50},
+             "rflog_tail": {"lines": 50}}
+
+
+def _drive(svc, name):
+    """Call one neutral entry with a value for each required parameter; None if not callable."""
+    fn = getattr(svc, name)
+    if not callable(fn):
+        return None
+    args = _drive_args(svc)
+    kw = {}
+    for p in inspect.signature(fn).parameters.values():
+        if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) or p.default is not p.empty:
+            continue
+        assert p.name in args, f"{name}: no drive value for parameter {p.name!r} (add one)"
+        kw[p.name] = args[p.name]
+    kw.update(_DRIVE_KW.get(name, {}))
+    return lambda: fn(**kw)
+
+
+def test_the_neutral_categories_are_pinned():
+    # Every NEUTRAL reason is "read-only", a "neutral writer: …" (with its paths), or one of the
+    # pinned read-path writers. Relabelling a writer to any other prose fails here.
+    from lhpc.core.snapshot_memo import SNAPSHOT_NEUTRAL, SNAPSHOT_NEUTRAL_WRITERS
+    other = {n for n, r in SNAPSHOT_NEUTRAL.items()
+             if r != "read-only" and not r.startswith("neutral writer")}
+    assert other == _READ_PATH_WRITERS
+    assert not _READ_PATH_WRITERS & set(SNAPSHOT_NEUTRAL_WRITERS)
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc/self/fd")
+def test_every_traced_write_is_classified(tmp_path, receiver, monkeypatch):
+    """Ties the classification to what the entries DO: each neutral entry (except the pinned
+    read-path writers) runs on its own live runtime root under the write trace. A "read-only"
+    entry that writes anything fails; a neutral writer must write exactly its listed paths —
+    every write matches one of them and each of them is written. Fails on an entry relabelled
+    read-only and dropped from SNAPSHOT_NEUTRAL_WRITERS (the original defect's shape), on a
+    writer whose writes grew or shrank, on a new public read whose call takes a parameter
+    nobody can drive yet, and on an entry that raises: one that fails before it writes would
+    pass the write check vacuously."""
+    from lhpc.core.snapshot_memo import SNAPSHOT_NEUTRAL, SNAPSHOT_NEUTRAL_WRITERS
+    wrong, raised, driven = [], [], set()
+    for name in sorted(set(SNAPSHOT_NEUTRAL) - _READ_PATH_WRITERS):
+        svc, root, fake = _live(tmp_path / name, receiver, monkeypatch)
+        call = _drive(svc, name)
+        if call is None:
+            assert SNAPSHOT_NEUTRAL[name] == "read-only", name   # a property: nothing to call
+            continue
+        writes, err = _trace_writes(call, root, receiver, fake, monkeypatch)
+        if err is not None:
+            raised.append((name, repr(err)))
+        driven.add(name)
+        globs = SNAPSHOT_NEUTRAL_WRITERS.get(name, ())
+        unlisted = sorted(w for w in writes if not any(_matches(w, g) for g in globs))
+        unwritten = [g for g in globs if not any(_matches(w, g) for w in writes)]
+        if unlisted or unwritten:
+            wrong.append((name, SNAPSHOT_NEUTRAL[name], unlisted, unwritten))
+    assert set(SNAPSHOT_NEUTRAL_WRITERS) <= driven
+    assert not raised, f"(entry, exception) — a raising entry proves nothing: {raised}"
+    assert not wrong, f"(entry, label, writes not listed, listed paths not written): {wrong}"
+
+
+def test_every_neutral_writer_names_its_written_paths():
+    # A neutral entry that writes is listed in SNAPSHOT_NEUTRAL_WRITERS with what it writes
+    # (the traces check it), and its SNAPSHOT_NEUTRAL reason says so — both directions.
+    from lhpc.core.snapshot_memo import SNAPSHOT_NEUTRAL, SNAPSHOT_NEUTRAL_WRITERS
+    assert set(SNAPSHOT_NEUTRAL_WRITERS) <= set(SNAPSHOT_NEUTRAL)
+    said = {n for n, r in SNAPSHOT_NEUTRAL.items() if r.startswith("neutral writer")}
+    assert said == set(SNAPSHOT_NEUTRAL_WRITERS)
+    for name, globs in SNAPSHOT_NEUTRAL_WRITERS.items():
+        assert globs, f"{name} names no written path"
+        for g in globs:
+            assert g == _RECEIVER or (g.strip() and not g.startswith("/")
+                                      and ".." not in g.split("/")), (name, g)
+
+
+def _snapshot_inputs(svc, root, dev, fake, monkeypatch):
+    """Everything one fresh `build_snapshot()` reads that a neutral writer could write, as
+    (kind, relative path or `_RECEIVER`): the os-level opens/stats/listings (dir_fd-relative opens
+    resolved through /proc), every path handed to the System's fs and unix backends (the
+    prober's own reads), every path named in a command it runs (runner or subprocess), and any
+    tty-mode read (tcgetattr/ioctl) or command naming the receiver."""
+    import builtins
+    import fcntl
+    import io
+    import subprocess
+    import termios
+
+    from lhpc.core.probes.backends import System
+    seen = set()
+
+    def note(kind, p, dir_fd=None):
+        try:
+            p = os.fsdecode(os.fspath(p))
+        except TypeError:
+            return
+        if dir_fd is not None and not os.path.isabs(p):
+            p = os.path.join(_fd_path(dir_fd) or "", p)
+        p = os.path.normpath(p)
+        if p == root or p.startswith(root + os.sep):
+            seen.add((kind, os.path.relpath(p, root)))
+
+    def note_argv(argv):
+        for arg in map(str, [argv] if isinstance(argv, str) else argv):
+            if arg == dev:
+                seen.add(("run", _RECEIVER))
+            elif os.path.isabs(arg):
+                note("run", arg)
+
+    def traced(kind, fn):
+        def _f(p=".", *a, **k):
+            note(kind, p, k.get("dir_fd"))
+            return fn(p, *a, **k)
+        return _f
+
+    def tty(fn):
+        def _f(fd, *a, **k):
+            if _fd_path(fd) == dev:
+                seen.add(("termios", _RECEIVER))
+            return fn(fd, *a, **k)
+        return _f
+
+    class _Backend:
+        def __init__(self, inner, kind):
+            self._inner, self._kind = inner, kind
+
+        def __getattr__(self, name):
+            fn = getattr(self._inner, name)
+            if not callable(fn):
+                return fn
+            kind = "list" if name == "listdir" else self._kind
+            return lambda *a, **k: (a and note(kind, a[0]), fn(*a, **k))[1]
+
+    class _Runner:
+        def run(self, argv, *a, **k):
+            note_argv(argv)
+            return fake.run(argv, *a, **k)
+
+    def popen(f):
+        def g(self, args, *a, **k):
+            note_argv(args)
+            return f(self, args, *a, **k)
+        return g
+
+    svc._system = System(runner=_Runner(), procfs=fake, fs=_Backend(fake, "fs"),
+                         unix=_Backend(fake, "unix"))
+    with monkeypatch.context() as m:
+        for name in ("open", "stat", "lstat", "access"):
+            m.setattr(os, name, traced(name, getattr(os, name)))
+        for name in ("listdir", "scandir"):
+            m.setattr(os, name, traced("list", getattr(os, name)))
+        m.setattr(io, "open", traced("open", io.open))
+        m.setattr(builtins, "open", io.open)
+        m.setattr(subprocess.Popen, "__init__", popen(subprocess.Popen.__init__))
+        m.setattr(termios, "tcgetattr", tty(termios.tcgetattr))
+        m.setattr(fcntl, "ioctl", tty(fcntl.ioctl))
+        snap = svc.build_snapshot(fresh=True)
+    svc._system = fake.system
+    return seen, snap
+
+
+def _observed(seen):
+    """(neutral writer, what it writes, input) for each snapshot input that observes a neutral
+    write: the path itself, a listing of the directory it is written into, or the receiver."""
+    import fnmatch
+
+    from lhpc.core.snapshot_memo import SNAPSHOT_NEUTRAL_WRITERS
+    hits = []
+    for name, globs in SNAPSHOT_NEUTRAL_WRITERS.items():
+        for g in globs:
+            pat = g.rstrip("/")
+            for kind, p in seen:
+                if fnmatch.fnmatchcase(p, pat) or (kind == "list" and p == os.path.dirname(pat)):
+                    hits.append((name, g, kind, p))
+    return hits
+
+
+# The neutral writers, each called so that it reaches its write on the live fixture.
+_WRITER_CALLS = {
+    "gps_monitor": lambda svc: svc.gps_monitor(),
+    "log_tail": lambda svc: svc.log_tail("meshtastic", 50, job="rf-meshtastic.log"),
+    "rflog_records": lambda svc: svc.rflog_records("meshtastic", "rf-meshtastic.log", 50),
+    "rflog_tail": lambda svc: svc.rflog_tail("meshtastic", "", 50),
+}
+
+
+def _stack_state(snap, sid):
+    return {c: st.run_state.value for ss in snap.stacks if ss.stack.id == sid
+            for c, st in ss.components.items()}
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc/self/fd")
+def test_no_neutral_writer_path_is_a_snapshot_input(tmp_path, receiver, monkeypatch):
+    """The neutral writers stay undecorated ONLY because no snapshot input observes what they
+    write. On the live fixture the writers run for real (the lock files, the owner record, the
+    roll, the receiver's tty mode), then a fresh snapshot is traced: after they ran, and again
+    INSIDE each of them while the receiver claim / the roll lock is held. The snapshot assesses
+    meshtastic as running (so its per-stack probes run), and the trace covers the os level, the
+    System backends, every command it runs and any tty-mode read. Fails the day one of their
+    paths, a listing of their directories or the receiver's tty mode becomes a snapshot input,
+    or a command the snapshot runs names one of them."""
+    from lhpc.core import rflog
+    svc, root, fake = _live(tmp_path, receiver, monkeypatch)
+    for call in _WRITER_CALLS.values():
+        call(svc)
+    locks = sorted(os.listdir(os.path.join(root, "state", "locks")))
+    assert any(n.startswith("claim.gps.") and n.endswith(".lock") for n in locks), locks
+    assert "rflog-rf-meshtastic.log.lock" in locks
+    assert os.path.getsize(os.path.join(root, "logs", "rf-meshtastic.log.1")) > 0
+    seen, snap = _snapshot_inputs(svc, root, receiver, fake, monkeypatch)
+    assert _stack_state(snap, "meshtastic")["meshtastic"] == "running"
+    assert seen, "the trace saw nothing: it is not tracing"
+    assert not _observed(seen), f"a neutral writer's path is a snapshot input: {_observed(seen)}"
+
+    held = []                                    # the same trace, taken while each lock is held
+
+    def inside(owner, name):
+        orig = getattr(owner, name)
+
+        def _f(self, *a, **k):
+            held.append((name, sorted(os.listdir(os.path.join(root, "state", "locks"))),
+                         _snapshot_inputs(svc, root, receiver, fake, monkeypatch)[0]))
+            return orig(self, *a, **k)
+        monkeypatch.setattr(owner, name, _f)
+    inside(ControllerService, "_gps_read_device")
+    inside(ControllerService, "_rflog_roll_native_locked")
+    (tmp_path / "logs" / "rf-meshtastic.log").write_bytes(b'{"x":1}\n' * (2 * rflog.MAX_BYTES // 8))
+    _WRITER_CALLS["gps_monitor"](svc)
+    _WRITER_CALLS["log_tail"](svc)
+    assert [h[0] for h in held] == ["_gps_read_device", "_rflog_roll_native_locked"]
+    assert any(n.endswith(".owner") for n in held[0][1]), held[0][1]   # the claim really held
+    for name, _locks, seen in held:
+        assert seen and not _observed(seen), (name, _observed(seen))
+
+
+def _open_receiver(svc):
+    fd = os.open(svc.gps_settings()["device"], os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
+    try:
+        import termios
+        termios.tcgetattr(fd)
+    finally:
+        os.close(fd)
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc/self/fd")
+@pytest.mark.parametrize("read, writer", [
+    (lambda svc: reslock.read_owner(svc._paths, "claim.gps.serial.dev.188:0"), "gps_monitor"),
+    (lambda svc: svc._system.fs.exists(str(svc._paths.under("logs", "rf-meshtastic.log.1"))),
+     "log_tail"),
+    (lambda svc: svc._system.fs.listdir(str(svc._paths.under("state", "locks")), 50), "gps_monitor"),
+    (_open_receiver, "gps_monitor"),
+    (lambda svc: svc._system.runner.run(["stty", "-F", svc.gps_settings()["device"]], 1.0),
+     "gps_monitor"),
+    (lambda svc: svc._system.runner.run(["tail", str(svc._paths.under("logs", "rf-meshtastic.log"))],
+                                        1.0), "log_tail"),
+])
+def test_the_snapshot_input_trace_catches_a_neutral_writer_path(tmp_path, receiver, monkeypatch,
+                                                               read, writer):
+    # The guard above is not vacuous: a snapshot that starts reading a neutral writer's path —
+    # through runtime_fs, the prober's fs backend, a listing of its directory, the receiver's tty
+    # mode, or a command naming one of them — is caught and attributed to that writer.
+    svc, root, fake = _live(tmp_path, receiver, monkeypatch)
+    orig = ControllerService._overlay_gui_unavailable
+    monkeypatch.setattr(ControllerService, "_overlay_gui_unavailable",
+                        lambda self, snap: (read(self), orig(self, snap))[1])
+    seen, _snap = _snapshot_inputs(svc, root, receiver, fake, monkeypatch)
+    assert writer in {h[0] for h in _observed(seen)}
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc/self/fd")
+@pytest.mark.parametrize("label, writes", [
+    ("read-only", None),                                          # relabelled, map entry dropped
+    ("neutral writer: x", ("state/locks/", "state/locks/claim.gps.*.lock")),   # paths shrank
+])
+def test_the_write_trace_catches_a_mislabelled_writer(tmp_path, receiver, monkeypatch, label, writes):
+    # The classification check is not vacuous: gps_monitor relabelled read-only (and dropped
+    # from the writers map), or listed with fewer paths than it writes, is reported.
+    from lhpc.core import snapshot_memo
+    monkeypatch.setitem(snapshot_memo.SNAPSHOT_NEUTRAL, "gps_monitor", label)
+    if writes is None:
+        monkeypatch.delitem(snapshot_memo.SNAPSHOT_NEUTRAL_WRITERS, "gps_monitor", raising=False)
+    else:
+        monkeypatch.setitem(snapshot_memo.SNAPSHOT_NEUTRAL_WRITERS, "gps_monitor", writes)
+    svc, root, fake = _live(tmp_path, receiver, monkeypatch)
+    w, _err = _trace_writes(_drive(svc, "gps_monitor"), root, receiver, fake, monkeypatch)
+    globs = snapshot_memo.SNAPSHOT_NEUTRAL_WRITERS.get("gps_monitor", ())
+    assert [x for x in w if not any(_matches(x, g) for g in globs)]

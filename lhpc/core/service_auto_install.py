@@ -582,6 +582,7 @@ class AutoInstallOpsMixin:
             return ActionResult(False, f"Could not signal the driver: {exc}")
         return ActionResult(True, "Abort requested — the driver is stopping the run.")
 
+    @invalidates_snapshot
     def spawn_auto_install_job(self, selection: dict) -> tuple:
         """Spawn the detached auto-install driver (`python -u -m lhpc auto-install --yes --run-id …`) with
         an identity-tracked job marker; the per-stack `selection` is carried via the plan file, not

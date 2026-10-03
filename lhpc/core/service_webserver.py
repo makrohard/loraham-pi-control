@@ -8,6 +8,7 @@ import dataclasses as _dc
 
 from .paths import PathContainmentError
 from .service_base import ActionResult
+from .snapshot_memo import invalidates_snapshot
 
 # nginx-restart escape-hatch wait bounds (module-level so tests can shrink them): how long the web
 # branch of `webserver apply` waits for the path-unit watcher to claim the request and for a fresh
@@ -236,6 +237,7 @@ class WebserverOpsMixin:
         except OSError:
             pass
 
+    @invalidates_snapshot
     def webserver_apply_complete_pending(self):
         """Watchdog completion of a gate-deferred Apply: once the firewall is verified against the
         CURRENT intent, run the apply the operator already confirmed. Returns that ActionResult,
@@ -253,6 +255,7 @@ class WebserverOpsMixin:
             return None
         return self.webserver_apply()
 
+    @invalidates_snapshot
     def webserver_verify(self) -> ActionResult:
         """Explicit verification: assemble + persist the effective-evidence checklist.
 
@@ -282,6 +285,7 @@ class WebserverOpsMixin:
                            "reachable directly, bypassing this proxy's authentication.")
         return ActionResult(ok, summary, details=details, data=ev)
 
+    @invalidates_snapshot
     def webserver_init(self, *, dns_sans=None, ip_sans=None, confirm=False) -> ActionResult:
         """First-time bootstrap (correction #2): create BOTH CAs, the server leaf, and an
         initial (empty) CRL. Remote exposure stays disabled until explicitly enabled + proven.
@@ -465,6 +469,7 @@ class WebserverOpsMixin:
         return ip, self._clock_gate("expose this box remotely (it reissues the server "
                                     "certificate)", accept_unverified)
 
+    @invalidates_snapshot
     def webserver_configure(self, **fields) -> ActionResult:
         from . import config as _config
         from .validators import ValidationError
@@ -476,6 +481,7 @@ class WebserverOpsMixin:
         return ActionResult(True, "webserver configuration saved (desired; run verify/apply)",
                             next_commands=["lhpc webserver verify"])
 
+    @invalidates_snapshot
     def webserver_configure_apply(self, *, bind=None, port=None, scheme=None, access_mode=None,
                                   dns_sans=None, ip_sans=None, allowed_cidrs=None,
                                   confirm=False, confirm_public=False,
@@ -1232,6 +1238,7 @@ class WebserverOpsMixin:
             details += [f"  {u}" for u in _ws.stack_ui_urls(saved)]
         return details
 
+    @invalidates_snapshot
     def stack_web_configure(self, page_id: str, *, mode=None, port=None, scheme=None,
                             access_mode=None, cidrs=None, confirm=False,
                             confirm_public=False) -> ActionResult:
@@ -1277,6 +1284,7 @@ class WebserverOpsMixin:
         return ActionResult(True, f"web UI proxy for '{page_id}' saved (desired; run apply)",
                             details=details, next_commands=["lhpc webserver apply"])
 
+    @invalidates_snapshot
     def stack_web_configure_apply(self, page_id: str, **kwargs) -> ActionResult:
         """Unified per-page Settings action (the single 'Apply' button): save this proxy's policy (with
         its two-level typed confirmation) then apply (staged validate + reload). Save-only failures (incl.
@@ -1334,6 +1342,7 @@ class WebserverOpsMixin:
                 "modes": STACKWEB_MODES, "current": self._stack_webs_common(),
                 "access_modes": WEBSERVER_ACCESS_MODES, "schemes": WEBSERVER_SCHEMES}
 
+    @invalidates_snapshot
     def stack_webs_configure_apply(self, *, mode, scheme, access_mode, cidrs,
                                    confirm=False, confirm_public=False) -> ActionResult:
         """Apply ONE common web-UI proxy policy to EVERY eligible stack — the 'Stacks WebGUIs'
@@ -1426,6 +1435,7 @@ class WebserverOpsMixin:
                             details=[*details, *ar.details],
                             next_commands=ar.next_commands, data=ar.data)
 
+    @invalidates_snapshot
     def webserver_expose(self, cidrs, *, access_mode=None, confirm=False,
                          confirm_public=False, accept_unverified: bool = False,
                          replace_certificate: bool = False,
@@ -1595,6 +1605,7 @@ class WebserverOpsMixin:
                          f"{rep.sentence()} (fp {new_fp[:16]}…)")
         return True, lines
 
+    @invalidates_snapshot
     def webserver_disable_remote(self) -> ActionResult:
         from . import config as _config
         _config.save_webserver_config(self._paths, bind="127.0.0.1", remote_exposed=False)
@@ -1603,6 +1614,7 @@ class WebserverOpsMixin:
                             "verify to prove the remote listener has ceased",
                             next_commands=["lhpc webserver verify"])
 
+    @invalidates_snapshot
     def webserver_reset_defaults(self) -> ActionResult:
         """Reset to safe defaults AND prove remote exposure has ceased. Writes DESIRED defaults
         (loopback:8443, local unauthenticated, remote off, CIDRs cleared), stages + VALIDATES a
@@ -1739,6 +1751,7 @@ class WebserverOpsMixin:
             return None
         return ActionResult(False, clock_refusal(reason, what))
 
+    @invalidates_snapshot
     def webserver_tls_renew(self, accept_unverified: bool = False) -> ActionResult:
         refused = self._clock_gate("renew the server certificate", accept_unverified)
         if refused is not None:
@@ -1757,6 +1770,7 @@ class WebserverOpsMixin:
         return ActionResult(True, f"server certificate renewed (serial {summ['serial']})",
                             data=summ)
 
+    @invalidates_snapshot
     def webserver_cert_issue(self, label, passphrase, accept_unverified: bool = False) -> ActionResult:
         refused = self._clock_gate(f"issue a certificate for '{label}'", accept_unverified)
         if refused is not None:
@@ -1777,6 +1791,7 @@ class WebserverOpsMixin:
                                      f"sha256: {summ['export_sha256']}",
                                      f"expires: {summ['not_after']}"], data=summ)
 
+    @invalidates_snapshot
     def webserver_cert_reissue(self, label, passphrase, accept_unverified: bool = False) -> ActionResult:
         # THE case the placement exists for: reissue REVOKES the old certificate before issuing
         # its replacement, so a refusal any later leaves the operator with neither.
@@ -1806,6 +1821,7 @@ class WebserverOpsMixin:
         return ActionResult(True, "client certificates",
                             data={"certs": _pki.client_certs_with_expiry(self._paths)})
 
+    @invalidates_snapshot
     def webserver_cert_revoke(self, label, accept_unverified: bool = False) -> ActionResult:
         # Revocation dates the CRL (lastUpdate/nextUpdate/revocationDate) from this clock, so it
         # mutates the PKI just as much as issuance does.
@@ -1856,6 +1872,7 @@ class WebserverOpsMixin:
                        f"{retry}. Do not revoke again: run `lhpc webserver apply` (in the console: "
                        "Webserver → Settings → Apply)")
 
+    @invalidates_snapshot
     def webserver_cert_discard_export(self, label) -> ActionResult:
         # Edits client-index.json, so it races the same load/save cycle as a CRL rebuild.
         from . import pki as _pki
@@ -1894,6 +1911,7 @@ class WebserverOpsMixin:
         return _dc.replace(res, details=[gate_msg, *res.details],
                            next_commands=[*res.next_commands, *(gate_cmds or [])])
 
+    @invalidates_snapshot
     def crl_refresh_if_expired(self) -> bool:
         """Rebuild the client-CA CRL when it is stale — nextUpdate in the past, OR lastUpdate in
         the FUTURE (minted while the clock was wrong; nginx rejects it the moment the clock is
@@ -1993,6 +2011,7 @@ class WebserverOpsMixin:
         except Exception:
             return False
 
+    @invalidates_snapshot
     def pki_clock_normalise(self) -> str:
         """Watchdog: once the clock is verified, replace the provisional server leaf and CRL with
         normally-dated ones. Returns 'noop' (nothing pending), 'waiting' (clock still unverified),
@@ -2036,6 +2055,7 @@ class WebserverOpsMixin:
         except Exception:
             return "waiting"
 
+    @invalidates_snapshot
     def webserver_apply(self) -> ActionResult:
         """Activate the DESIRED config: render + validate the nginx config FIRST (never
         activate an invalid one), then reload an already-running LHPC-owned nginx master, then
@@ -2234,6 +2254,7 @@ class WebserverOpsMixin:
             "error log (logs/nginx-error.log) / journal.",
             next_commands=["lhpc webserver logs"], data=ev or {})
 
+    @invalidates_snapshot
     def webserver_run_restart_service(self) -> ActionResult:
         """`lhpc-nginx-restart.service` ExecStart body: CLAIM the restart request (atomic
         no-overwrite rename request -> inflight; absent request = stray start -> typed no-op) and
@@ -2271,6 +2292,7 @@ class WebserverOpsMixin:
         return ActionResult(True, "nginx-restart request consumed — systemd now starts a fresh "
                             "lhpc-nginx (declarative OnSuccess=).", data={"consumed": True})
 
+    @invalidates_snapshot
     def webserver_start_service(self) -> ActionResult:
         """OPERATOR-CONTEXT bootstrap (correction 1): generate + validate + promote the nginx
         config, then ENABLE + START the rootless nginx user unit via `systemctl --user`. This is

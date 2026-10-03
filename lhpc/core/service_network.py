@@ -42,6 +42,7 @@ from typing import ClassVar
 from . import runtime_fs
 from .paths import PathContainmentError
 from .service_base import ActionResult
+from .snapshot_memo import invalidates_snapshot
 
 
 class NetworkOpsMixin:
@@ -323,6 +324,7 @@ class NetworkOpsMixin:
     def _net_view_invalidate(self) -> None:
         self._net_view_cache = None
 
+    @invalidates_snapshot
     def network_scan(self) -> ActionResult:
         """POST-triggered rescan. Results land in a short-lived cache the panel renders."""
         if not (self.network_supported() and self._network_authorized()):
@@ -377,6 +379,7 @@ class NetworkOpsMixin:
 
     # ---- connect ---------------------------------------------------------------------
 
+    @invalidates_snapshot
     def network_connect(self, *, ssid: str = "", uuid: str = "", psk: str = "",
                         allow_console: bool = True, apply: bool = False) -> ActionResult:
         """Join a WLAN: new (ssid [+psk]) or a stored profile (uuid). Respond-first: the
@@ -540,6 +543,7 @@ class NetworkOpsMixin:
         if isinstance(op_id, str) and re.fullmatch(r"[A-Za-z0-9]+", op_id):
             self._safe_unlink(self._paths.under("state", f"network-psk-{op_id}"))
 
+    @invalidates_snapshot
     def network_finalize(self, *, uuid: str, op_id: str, pwfile: str = "",
                          allow_console: bool = False, delay: float = 1.5) -> int:
         """Runs DETACHED after the connect response: activation + lease + console CIDR.
@@ -814,6 +818,7 @@ class NetworkOpsMixin:
         return (("pending", cmd, res.summary + note) if cmd
                 else ("error", "", res.summary + note))
 
+    @invalidates_snapshot
     def network_ap_now(self, apply: bool = False) -> ActionResult:
         """Switch back to the box's own AP (operator ruling: client mode needs a way home).
         Clears the preferred flag first — otherwise the watchdog would re-join the WLAN
@@ -884,6 +889,7 @@ class NetworkOpsMixin:
 
     # ---- prefer / forget / retry -----------------------------------------------------
 
+    @invalidates_snapshot
     def network_prefer(self, uuid: str, on: bool) -> ActionResult:
         if not (self.network_supported() and self._network_authorized()):
             return ActionResult(False, "network controls are not available on this box")
@@ -950,6 +956,7 @@ class NetworkOpsMixin:
                 problems.append(f"{c['name']}: {err.strip()[:120]}")
         return problems
 
+    @invalidates_snapshot
     def network_forget(self, uuid: str) -> ActionResult:
         if not (self.network_supported() and self._network_authorized()):
             return ActionResult(False, "network controls are not available on this box")
@@ -1030,6 +1037,7 @@ class NetworkOpsMixin:
         except (OSError, PathContainmentError):
             pass
 
+    @invalidates_snapshot
     def network_retry_now(self) -> ActionResult:
         ok, msg = self._network_watch_tick(force=True)
         return ActionResult(ok, msg or "nothing to retry")

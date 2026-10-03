@@ -16,6 +16,7 @@ import stat
 
 from . import firewall as _fw
 from .service_base import ActionResult
+from .snapshot_memo import invalidates_snapshot
 
 # Marker a self-update writes (old process) so the freshly-restarted (new-code) process reconciles
 # the firewall integration — see `_fw_mark_post_update` / `firewall_post_update_reconcile`.
@@ -897,6 +898,7 @@ class FirewallOpsMixin:
                 data={"firewall_integration_incomplete": True}, next_commands=[cmd])
         return None                                        # interactive + owned-stale -> migrate post-advance
 
+    @invalidates_snapshot
     def firewall_update_after_advance(self) -> list:
         """After a successful self-update advance: (B) regenerate the firewall operator scripts to
         match the new helper, and (C) bring the LHPC-owned nginx unit current on disk (interactive
@@ -950,6 +952,7 @@ class FirewallOpsMixin:
         except Exception:
             pass
 
+    @invalidates_snapshot
     def firewall_post_update_reconcile(self) -> list:
         """Run at web-console STARTUP in the freshly-restarted (new-code) process. If a self-update
         left the post-update marker, regenerate the firewall scripts + migrate the LHPC-owned nginx
@@ -1123,6 +1126,7 @@ class FirewallOpsMixin:
             "webserver_apply_cmd": "lhpc webserver apply",
         }
 
+    @invalidates_snapshot
     def firewall_configure(self, *, mode=None, allow_endpoints=None, ssh_ports=None,
                            ap_enabled=None, ap_interface=None, ap_cidr=None,
                            recommended=False) -> ActionResult:
@@ -1212,6 +1216,7 @@ class FirewallOpsMixin:
                        f"  {self.firewall_settings_view()['apply_cmd']}"]
         return ActionResult(True, "firewall settings saved", details=details)
 
+    @invalidates_snapshot
     def firewall_render(self) -> ActionResult:
         """Regenerate the operator scripts from current config. Never silent on failure."""
         try:
@@ -1231,6 +1236,7 @@ class FirewallOpsMixin:
         return {name: os.path.join(base, name)
                 for name in ("firewall-apply.sh", "firewall-reset.sh", "firewall-cleanup.sh")}
 
+    @invalidates_snapshot
     def firewall_scripts(self, candidate=None) -> dict:
         """Render the three operator scripts into the runtime config dir (never executed by
         lhpc). WRITES files — call only from a mutation (configure/render), never a GET. Each

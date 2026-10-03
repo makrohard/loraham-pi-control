@@ -1377,6 +1377,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     # ---- install / bootstrap ---------------------------------------------
 
+    @invalidates_snapshot
     def bootstrap(self, apply: bool = False) -> ActionResult:
         from .install import PlanAction
         inst = self._installer()

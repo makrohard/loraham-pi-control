@@ -247,7 +247,15 @@ The guarantees the controller gives, each with where it is implemented and prove
 - **Evidence once per request.** A page render reads each piece of evidence once (status
   snapshot, per-(stack, band) config, consumed-source SHAs, firewall status, listeners, git state
   per distinct checkout) through a thread-local request memo dropped at every request start and
-  around every mutation; rechecks under operation locks use `build_snapshot(fresh=True)`.
+  around every mutation; rechecks under operation locks use `build_snapshot(fresh=True)`. Every
+  public `ControllerService` entry that writes anything is `@invalidates_snapshot`; the rest are
+  listed with a reason in `snapshot_memo.SNAPSHOT_NEUTRAL`
+  (`tests/core/test_snapshot_memo.py::test_every_public_service_entry_is_classified`). The
+  neutral writers whose writes no snapshot input observes (lock files, the native RF-log roll,
+  the GPS receiver's tty mode) name them in `SNAPSHOT_NEUTRAL_WRITERS`. Every neutral entry is
+  driven under a write trace on a live runtime root: a "read-only" one that writes fails, a
+  writer must write exactly its listed paths (`test_every_traced_write_is_classified`); a trace
+  of a fresh snapshot on that state proves none is read (`test_no_neutral_writer_path_is_a_snapshot_input`).
 - **Detached web jobs** (install, build, test, start, restart). The console reserves an attempt
   marker (`state/jobresults/<log>.json`), spawns the child under task admission, captures its
   process identity, releases its own admission, and only then publishes the `.job` tracking

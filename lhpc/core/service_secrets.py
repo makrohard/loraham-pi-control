@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from .service_base import ActionResult
+from .snapshot_memo import invalidates_snapshot
 
 _CONSOLE_STOP = "systemctl --user stop lhpc-web"
 _CONSOLE_START = "systemctl --user start lhpc-web"
@@ -101,6 +102,7 @@ class SecretsOpsMixin:
 
     # ---- backup ----------------------------------------------------------------------------
 
+    @invalidates_snapshot
     def secrets_backup(self, dest: str | None = None) -> ActionResult:
         """Write ONE plain tar of config/tls, config/secrets, config/secrets.toml and every declared
         state root (their modes, no timestamps or ownership) to `dest` or to $HOME, never over an
@@ -252,6 +254,7 @@ class SecretsOpsMixin:
                   f"  Note: {sb.BUNDLE_LINE}."]
         return plan, lines
 
+    @invalidates_snapshot
     def secrets_restore(self, file: str, *, only_pki: bool = False, choice: str = "",
                         expected_plan: dict | None = None) -> ActionResult:
         """Check the backup (pass 1, on a private snapshot), print the plan; with `choice` "yes"
