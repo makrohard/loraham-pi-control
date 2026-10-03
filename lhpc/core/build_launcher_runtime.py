@@ -155,7 +155,9 @@ def _run_step(argv: list, cwd: str, env: dict, timeout: float, stall_s: float | 
     watch = progress.Watch(stall_s, timeout, sample_s, sampler=sampler)
     while True:
         try:
-            return p.wait(timeout=min(1.0, sample_s, watch.remaining())), "", False   # never past the ceiling
+            rc = p.wait(timeout=min(1.0, sample_s, watch.remaining()))   # never past the ceiling
+            _print_quiet(watch, stall_s)
+            return rc, "", False
         except subprocess.TimeoutExpired:
             reason = watch.check()
             if reason:
@@ -170,7 +172,15 @@ def _run_step(argv: list, cwd: str, env: dict, timeout: float, stall_s: float | 
                          "{}\n".format(result.value, " ".join(argv)))
     sys.stderr.write("step timed out {}: {}\n".format(_stop_words(reason, stall_s, timeout),
                                                       " ".join(argv)))
+    _print_quiet(watch, stall_s)
     return 124, reason, (not result.ok)
+
+
+def _print_quiet(watch, stall_s) -> None:
+    """A Build step's output ends with its longest quiet period (`Watch.longest_quiet`); a Test step
+    (no stall rule) prints none."""
+    if stall_s is not None:
+        print(progress.quiet_line(watch.longest_quiet()), flush=True)
 
 
 def _stop_words(reason: str, stall_s, timeout: float) -> str:

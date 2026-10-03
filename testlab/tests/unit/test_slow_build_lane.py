@@ -13,6 +13,10 @@ from pathlib import Path
 
 import pytest
 
+from lhpc.core.jobs import run_job
+from lhpc.core.paths import Paths
+from lhpc.core.probes.backends import CommandResult
+
 _LANE = Path(__file__).resolve().parents[1] / "slowbuild" / "test_slow_build.py"
 _spec = importlib.util.spec_from_file_location("slow_build_lane", _LANE)
 lane = importlib.util.module_from_spec(_spec)
@@ -92,6 +96,21 @@ def test_a_clean_step_passes_and_returns_both_streams():
     out = lane._judged("step", _done(stdout="[progress] longest quiet 12.0 s\n",
                                      stderr="0 failed, 3 passed [failures: none]\n"))
     assert "[progress] longest quiet 12.0 s" in out and "0 failed" in out
+
+
+def test_the_lane_records_the_quiet_line_a_build_step_log_ends_with(step, tmp_path, monkeypatch):
+    # The log as `run_job` writes it for a build step whose Watch saw a 41.5 s quiet period.
+    class _Streaming:
+        def run_streaming(self, argv, timeout, log_fh, **kw):
+            log_fh.write("compiling\n")
+            return CommandResult(returncode=0, stdout="", stderr="", longest_quiet_s=41.5)
+
+    run_job(_Streaming(), name="build-meshcore-cli", argv=["make"], cwd=None,
+            logs_dir=tmp_path / "logs", paths=Paths(runtime_root=tmp_path), stall_s=600.0)
+    seen = []
+    monkeypatch.setattr(lane, "_record", lambda *a, **k: seen.append((a, k)))
+    lane._build({"LHPC_RUNTIME_ROOT": str(tmp_path)}, "meshcore-cli")
+    assert seen and seen[0][1] == {"quiet_s": 41.5}
 
 
 # ---- the budget case's waivers (bootstrap; L4 on the introducing release) -------------------
