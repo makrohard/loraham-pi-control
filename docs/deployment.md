@@ -57,7 +57,8 @@ Back up `config/`, `profiles/` and the app data under `state/` first
   button returns to the console.
 - **Canonical units are the contract.** One-click is offered only when the console is the managed
   unit (`INVOCATION_ID`) and the units are byte-for-byte canonical; a foreign, drop-in or masked
-  unit is left for manual resolution. To repair the integration, run
+  unit is left for manual resolution (a drop-in anywhere systemd reads one counts, including
+  `systemctl --user set-property` overrides and the `service.d/` / `lhpc-.service.d/` folders). To repair the integration, run
   `lhpc self-update --repair-integration` from a shell — it restores the exact canonical set on an
   existing or `--no-service` deployment (the console's *Repair & update* does the same while its
   unit still has bus access).

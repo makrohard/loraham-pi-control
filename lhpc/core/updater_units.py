@@ -55,8 +55,6 @@ UNINSTALL_GUARD = ".lhpc-uninstalling"
 ROOT_MARKER = ".lhpc-root"
 
 _MAX_UNIT_BYTES = 64 * 1024
-# user-unit drop-in search dirs (a `<unit>.d/` in ANY of these overrides the fragment)
-_DROPIN_DIRS = ("/usr/lib/systemd/user", "/etc/systemd/user")   # ~/.config/systemd/user added per call
 
 
 # --------------------------------------------------------------------------- canonical render
@@ -451,11 +449,43 @@ def _dir_is_symlink(p: Path) -> bool:
         return False
 
 
+# the system-wide user-unit dirs an OPERATOR writes (admin config, runtime); a tuple so the tests
+# point it at tmp_path and never read the host's
+_SYSTEM_ROOTS = (Path("/etc/systemd/user"), Path("/run/systemd/user"))
+
+
+def _search_dirs(user_dir: Path) -> tuple:
+    """The operator-writable part of systemd.unit(5)'s user unit search path as (dirs that outrank
+    `user_dir`, dirs below it). `user_dir` is ~/.config/systemd/user; the per-user dirs derive from
+    it, the runtime ones from $XDG_RUNTIME_DIR, the system ones are `_SYSTEM_ROOTS`. The vendor
+    dirs (/usr/lib, /usr/local/lib, the XDG data dirs) are not searched: a distro-shipped type-wide
+    drop-in applies to every service alike and is not an operator override. File reads only: the
+    console has no bus to ask systemd."""
+    home = user_dir.parents[2]
+    rt = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "systemd"
+    above = [user_dir.parent / "user.control", rt / "user.control", rt / "transient",
+             rt / "generator.early"]
+    below = [*_SYSTEM_ROOTS, rt / "user", rt / "generator", home / ".local/share/systemd/user",
+             rt / "generator.late"]
+    return above, below
+
+
+def _dropin_names(name: str) -> list:
+    """Every drop-in dir name systemd reads for `name`: `lhpc-web.service.d`, the prefix
+    `lhpc-.service.d` and the type-wide `service.d`."""
+    stem, _, kind = name.rpartition(".")
+    parts = stem.split("-")
+    return [f"{name}.d", *(f"{'-'.join(parts[:i])}-.{kind}.d" for i in range(1, len(parts))),
+            f"{kind}.d"]
+
+
 def _has_dropin(user_dir: Path, name: str) -> bool:
-    """A `<name>.d/` drop-in dir in the user unit dir or any system search dir → the loaded
-    fragment is NOT solely our file."""
-    for base in (user_dir, *(Path(d) for d in _DROPIN_DIRS)):
-        d = base / f"{name}.d"
+    """A drop-in dir systemd reads for `name` in any dir of the user search path, or a same-named
+    fragment in a dir that outranks `user_dir` → the loaded unit is NOT solely our file."""
+    above, below = _search_dirs(user_dir)
+    if any(os.path.lexists(str(base / name)) for base in above):
+        return True                                          # our fragment is shadowed
+    for d in (base / dn for base in (*above, user_dir, *below) for dn in _dropin_names(name)):
         try:
             if _stat.S_ISLNK(os.lstat(str(d)).st_mode):
                 return True                                  # a symlinked drop-in dir is unsafe too

@@ -189,6 +189,44 @@ def _home_isolation(monkeypatch, tmp_path_factory):
     monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home-iso")))
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_systemd_roots(monkeypatch, tmp_path_factory):
+    """HERMETIC: the unit drop-in search (`updater_units._has_dropin`, reached by every
+    unit-integrity / self-update status path) reads the system and runtime systemd dirs —
+    /etc/systemd/user, /run/systemd/user and $XDG_RUNTIME_DIR/systemd/{user.control,transient,
+    user,generator*} — next to the per-user ones under HOME (isolated above). A host's own drop-in
+    (a distro's or an admin's type-wide `service.d/`) then read every canonical unit as overridden.
+    Point them all at an empty per-test directory; a test that plants one there reads the roots
+    back from `updater_units._SYSTEM_ROOTS` / $XDG_RUNTIME_DIR, or sets its own (its monkeypatch
+    runs after this one and wins).
+
+    The environment reaches a child interpreter, the module tuple does not: the post-update
+    `python -m lhpc.core.updater_units verify-set` (a real NEW interpreter, by design) read the
+    host's /etc/systemd/user again. That one argv is run as `python -c` with the same roots set
+    before `_main` — still a new interpreter running the same verify-set."""
+    import subprocess as _sp
+
+    from lhpc.core import updater_units as _uu
+    base = tmp_path_factory.mktemp("systemd-iso")
+    roots = (base / "etc/systemd/user", base / "run-system/systemd/user")
+    monkeypatch.setattr(_uu, "_SYSTEM_ROOTS", roots)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(base / "run"))
+    monkeypatch.setenv("XDG_DATA_DIRS", str(base / "usr/share"))
+    monkeypatch.setenv("XDG_CONFIG_DIRS", str(base / "etc/xdg"))
+    boot = ("import sys\nfrom pathlib import Path\nfrom lhpc.core import updater_units as U\n"
+            f"U._SYSTEM_ROOTS = tuple(Path(p) for p in {[str(r) for r in roots]!r})\n"
+            "raise SystemExit(U._main(sys.argv))\n")
+    real_run = _sp.run
+
+    def run(argv, *a, **k):
+        av = list(argv) if isinstance(argv, (list, tuple)) else None
+        if av is not None and [str(x) for x in av[1:3]] == ["-m", "lhpc.core.updater_units"]:
+            argv = [av[0], "-c", boot, *av[3:]]
+        return real_run(argv, *a, **k)
+
+    monkeypatch.setattr(_sp, "run", run)
+
+
 from lhpc.core import service_system as _service_system  # noqa: E402
 _REAL_KERNEL_TIME_STATE = _service_system.read_kernel_time_state
 

@@ -30,6 +30,9 @@
   without checking, so a release that changed a unit could have stopped boot restore unnoticed.
 - `signature-verified` now means the signature covers the pinned commit: a `pin_tag` counts only when it points at
   the pin; otherwise (another commit, or a `git describe` string) the pin commit's own signature is checked.
+- An override anywhere systemd reads one (`systemctl --user set-property`, `service.d/`, `lhpc-.service.d/`,
+  `~/.config/systemd/user.control`, `/run`) now marks the managed units overridden, so one-click update and boot
+  restore stay off until it is removed.
 
 ## 0.11.10
 

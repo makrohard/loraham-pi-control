@@ -169,6 +169,66 @@ def test_verify_overridden_by_dropin(tmp_path):
     assert U.integration(ud, ROOT)["status"] == "overridden"
 
 
+@pytest.mark.parametrize("where", [
+    ".config/systemd/user.control/lhpc-web.service.d/x.conf",   # systemctl --user set-property
+    "run/systemd/transient/lhpc-web.service.d/x.conf",          # set-property --runtime
+    "run/systemd/user/lhpc-web.service.d/x.conf",
+    ".local/share/systemd/user/lhpc-web.service.d/x.conf",
+    ".config/systemd/user/service.d/x.conf",                    # every service
+    ".config/systemd/user/lhpc-.service.d/x.conf",              # every lhpc-*.service
+    ".config/systemd/user.control/lhpc-web.service",            # a fragment that outranks ours
+])
+def test_an_override_anywhere_systemd_reads_marks_the_unit_overridden(tmp_path, monkeypatch, where):
+    ud = _canon(tmp_path)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    assert U.integration(ud, ROOT)["status"] == "ok"               # precondition: canonical
+    f = tmp_path / where
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("[Service]\nProtectHome=no\n")
+    assert U.integration(ud, ROOT)["status"] == "overridden"
+
+
+def test_a_vendor_type_wide_dropin_is_not_an_operator_override(tmp_path, monkeypatch):
+    ud = _canon(tmp_path)
+    monkeypatch.setenv("XDG_DATA_DIRS", str(tmp_path / "usr/share"))
+    for vendor in ("usr/lib/systemd/user", "usr/share/systemd/user"):   # /usr/lib, $XDG_DATA_DIRS
+        f = tmp_path / vendor / "service.d/10-timeout-abort.conf"        # as Fedora ships it
+        f.parent.mkdir(parents=True)
+        f.write_text("[Service]\nTimeoutStopFailureMode=abort\n")
+    assert U.integration(ud, ROOT)["status"] == "ok"
+    f = ud / "service.d/10-timeout-abort.conf"                           # the same, by the operator
+    f.parent.mkdir()
+    f.write_text("[Service]\nTimeoutStopFailureMode=abort\n")
+    assert U.integration(ud, ROOT)["status"] == "overridden"
+
+
+@pytest.mark.parametrize("where", [
+    "system:0/lhpc-web.service.d/x.conf",        # /etc/systemd/user (an admin's drop-in)
+    "system:1/lhpc-web.service.d/x.conf",        # /run/systemd/user
+    "system:0/service.d/x.conf",                 # an admin's type-wide drop-in
+    "rt:generator/lhpc-web.service.d/x.conf",
+    "rt:generator.early/lhpc-web.service.d/x.conf",
+    "rt:generator.late/lhpc-web.service.d/x.conf",
+    "rt:generator.early/lhpc-web.service",       # a generated fragment that outranks ours
+])
+def test_the_system_roots_and_generator_dirs_are_searched(tmp_path, monkeypatch, where):
+    """The search reads `_SYSTEM_ROOTS` and the generator dirs (the conftest points both at
+    temporary dirs): an operator drop-in there is FOUND, and with nothing there the unit is ok."""
+    ud = _canon(tmp_path)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    for base in (*U._SYSTEM_ROOTS, tmp_path / "run/systemd/generator",
+                 tmp_path / "run/systemd/generator.early", tmp_path / "run/systemd/generator.late"):
+        base.mkdir(parents=True)                                     # present, but empty
+    assert U.integration(ud, ROOT)["status"] == "ok"                 # nothing under them
+    kind, _, rest = where.partition(":")
+    sub, _, rel = rest.partition("/")
+    base = U._SYSTEM_ROOTS[int(sub)] if kind == "system" else tmp_path / "run/systemd" / sub
+    f = base / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("[Service]\nProtectHome=no\n")
+    assert U.integration(ud, ROOT)["status"] == "overridden"
+
+
 def test_verify_unsafe_symlinked_unit(tmp_path):
     ud = tmp_path / ".config" / "systemd" / "user"; ud.mkdir(parents=True)
     (ud / U.WEB_UNIT).symlink_to("/dev/null")            # a mask
