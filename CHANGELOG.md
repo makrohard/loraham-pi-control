@@ -17,6 +17,15 @@
   print the details of an unexpected error, or cannot undo itself after Ctrl-C, now says so in one line instead of
   staying silent (after Ctrl-C the next command finishes the undo, as before). In these lines an error message that
   spans several lines is joined into one.
+- A disk or permission error on a file LHPC must not lose no longer reads as "the file is gone": retiring a
+  binary install keeps its record while a file or folder cannot be checked, a switch to the source channel does
+  not take over a folder it cannot fully read, an update or uninstall treats a checkout whose `.git` cannot be
+  checked as changed, and boot restore and the config journal treat an unreadable record as one that needs
+  attention instead of an absent one.
+- A source checkout whose `.git` is a symlink that does not resolve (dangling, or a loop) is now treated as
+  present and the tree is not reported clean: every local-change check (update, uninstall, binary install, switch
+  to the source channel, auto-install update) reads it as changed. Before, the `.git` was ignored and the tree
+  read as clean.
 
 - Every release is now also installed, built and self-updated on a test box slowed down below a Pi Zero 2 W
   before it ships: an update that would stall or run into a time limit on a slow box turns the release check
