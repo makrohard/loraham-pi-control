@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Test-lab fake APRS-IS server: 127.0.0.1:14580, accepts the APRS-IS login, sends a
 server banner, and drains everything sent. Nothing leaves the box. Run detached by
-`lhpc-testlab reset`."""
+`lhpc-testlab reset`, which passes the pid file it writes once it serves (`lhpc-testlab check`
+reads it)."""
+import os
 import socket
 import sys
 
@@ -14,6 +16,9 @@ def main() -> int:
     except OSError:
         return 0                                   # already bound — fine
     srv.listen(4)
+    if len(sys.argv) > 1:                          # only the SERVING sink names itself
+        with open(sys.argv[1], "w") as fh:
+            fh.write(f"{os.getpid()}\n")
     conns = []
     import select
     while True:

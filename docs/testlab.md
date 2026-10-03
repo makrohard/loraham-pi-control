@@ -88,7 +88,8 @@ after 60 s). Running fakes poll the scenario file and follow within a second.
 - `lhpc-testlab inject <433|868> <preset>` queues an RX frame the fake daemon delivers to the
   real chain (watch it arrive in graywolf).
 - `lhpc-testlab reset` returns to the deterministic healthy baseline.
-- `lhpc-testlab check` reports the fakes and per-stack readiness through the production gates;
+- `lhpc-testlab check` reports the fakes (gpsd, the APRS-IS sink; a fake that is down fails it)
+  and per-stack readiness through the production gates;
   `lhpc-testlab status` shows scenario, simulated boot and recent lab events.
 
 The dashboard's **Reboot** is simulated: owned stacks stop, the boot identity advances and the

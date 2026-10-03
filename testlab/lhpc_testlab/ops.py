@@ -91,17 +91,21 @@ def status(svc) -> ActionResult:
 
 
 def check(svc) -> ActionResult:
-    """Honest health gate: ok requires the fakes alive AND every INSTALLED stack ready.
+    """Honest health gate: ok requires the fakes (gpsd, the APRS-IS sink) alive AND every
+    INSTALLED stack ready.
     An uninstalled stack is reported as 'not installed' (not a failure); an installed
     stack with an unmet requirement is a PROBLEM that fails the check — a reported
     missing requirement must never coexist with 'passed'."""
     if not is_active(svc):
         return _refusal(svc)
     problems: list[str] = []
-    data = {"gpsd": bool(_gpsd_pid(svc)), "not_installed": [], "not_ready": []}
+    data = {"gpsd": bool(_gpsd_pid(svc)), "aprs_sink": bool(_aprs_sink_pid(svc)),
+            "not_installed": [], "not_ready": []}
     details = [f"  scenario: {scenarios.effective_state(svc._paths)['_name']}"]
     if not data["gpsd"]:
         problems.append("fake gpsd is not running (run `lhpc-testlab reset`)")
+    if not data["aprs_sink"]:          # graywolf's forced iGate needs it
+        problems.append("fake APRS-IS sink is not running (run `lhpc-testlab reset`)")
     for s in svc.stacks():
         installed = svc.is_installed(s.id)
         if not installed:
@@ -361,14 +365,27 @@ def _testlab_entry() -> list:
     return [sys.executable, "-m", "lhpc_testlab"]
 
 
-def _gpsd_pid(svc) -> int:
-    from . import gpsd
+def _fake_pid(svc, path, needle: str) -> int:
+    """The pid a fake's pid file names, if that process is alive AND is the fake (`needle`: a
+    part of its spawn argv), else 0."""
     try:
-        pid = int(runtime_fs.read_text_regular(
-            svc._paths, gpsd.pid_path(svc._paths), max_bytes=32).strip())
+        pid = int(runtime_fs.read_text_regular(svc._paths, path, max_bytes=32).strip())
     except (OSError, ValueError):
         return 0
-    return pid if supervisor.pid_alive(pid, "lhpc_testlab _gpsd") else 0     # its spawn argv
+    return pid if supervisor.pid_alive(pid, needle) else 0
+
+
+def _gpsd_pid(svc) -> int:
+    from . import gpsd
+    return _fake_pid(svc, gpsd.pid_path(svc._paths), "lhpc_testlab _gpsd")
+
+
+def _aprs_sink_pid(svc) -> int:
+    return _fake_pid(svc, _aprs_sink_pid_path(svc), "aprs_sink.py")
+
+
+def _aprs_sink_pid_path(svc):
+    return svc._paths.under("state", "testlab", "aprs-sink.pid")
 
 
 def _respawn_gpsd(svc, details: list) -> None:
@@ -412,7 +429,7 @@ def _prepare_aprs_sink(svc, details: list) -> None:
     """Start the local APRS-IS sink on 127.0.0.1:14580 — Graywolf's iGate is forced to it by
     the manifest overlay, so the lab never reaches the live APRS network."""
     pid = svc._lifecycle()._spawn(
-        [sys.executable, str(data_path("aprs_sink.py"))],
+        [sys.executable, str(data_path("aprs_sink.py")), str(_aprs_sink_pid_path(svc))],
         svc._paths.under("logs", "testlab-aprs-sink.log"))
     details.append(f"  aprs-is sink: {'up' if pid else 'SPAWN FAILED'} "
                    "(graywolf stays off the live network)")

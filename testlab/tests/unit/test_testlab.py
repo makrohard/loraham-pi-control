@@ -590,6 +590,26 @@ def test_check_does_not_take_a_reused_pid_for_the_fake_gpsd(tmp_path, monkeypatc
         fake.wait()
 
 
+def test_check_fails_when_the_aprs_is_sink_is_down(tmp_path, monkeypatch, unrelated_pid):
+    """Graywolf's forced iGate needs the fake APRS-IS sink; a check that ignored it passed with
+    the sink dead (start.sh does not respawn the fakes after a Codespace restart)."""
+    paths = make_lab_root(tmp_path, monkeypatch)
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    svc = ControllerService(paths=paths)
+    r = ops.check(svc)
+    assert not r.ok and r.data["aprs_sink"] is False                    # never started
+    pid_file = tmp_path / "state" / "testlab" / "aprs-sink.pid"
+    pid_file.write_text(f"{unrelated_pid.pid}\n")
+    assert ops.check(svc).data["aprs_sink"] is False                    # a reused pid
+    sink = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "aprs_sink.py"])
+    try:                                                                 # spawned as reset does
+        pid_file.write_text(f"{sink.pid}\n")
+        assert ops.check(svc).data["aprs_sink"] is True
+    finally:
+        sink.kill()
+        sink.wait()
+
+
 def test_reset_clears_accumulated_state(tmp_path, monkeypatch):
     """The wipe list of a reset: simulated NM profiles, unit state and the TX log do not
     survive it."""
