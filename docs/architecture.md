@@ -214,7 +214,8 @@ The guarantees the controller gives, each with where it is implemented and prove
   tree, a checkout's dirty/carry inventory (`.git`), the boot-restore markers and journal, and
   the config journal recovery. In each, only
   ENOENT/ENOTDIR read as absent, any other error refuses or keeps
-  (`tests/core/test_existence_probe.py`).
+  (`tests/core/test_existence_probe.py`); the stdlib-only firewall helper applies the same rule
+  inline to its journal (`tests/host/test_firewall.py`).
 - **Source transactions.** An update clones a candidate beside the destination (recorded before
   the clone starts, so recovery removes a clone a crash interrupted), archives the
   prior source to a transaction-owned `.prev`, activates by atomic no-clobber rename, writes the
