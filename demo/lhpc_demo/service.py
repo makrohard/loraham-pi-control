@@ -386,7 +386,7 @@ class DemoService(ControllerService):
                 out.append(dep)
         return out
 
-    def _require_and_start_deps(self, sid, apply, band=""):
+    def _require_and_start_deps(self, sid, apply, band="", stop_owners=False):
         """SHARED by start + restart: the dependency chain must be SATISFIABLE — return an
         error ActionResult if a dependency is absent, unbuilt, or (on apply) fails to start —
         else start (or MOVE onto `band`) each dependency that needs it. Returns
@@ -403,7 +403,8 @@ class DemoService(ControllerService):
         if apply:
             for dep in self._deps_needing_start(sid, band):
                 dep_band = band if band in self._bandswitchable(dep) else ""
-                r = self.start(dep, apply=True, band=dep_band)   # start re-persists the band -> moves it
+                r = self.start(dep, apply=True, band=dep_band,   # start re-persists the band -> moves it
+                               stop_owners=stop_owners)
                 if not r.ok:
                     for s in started:              # roll back this call's partial starts
                         self._d(s)["running"] = False
@@ -411,6 +412,17 @@ class DemoService(ControllerService):
                                         f"'{dep}' failed to start ({r.summary})."), []
                 started.append(dep)
         return None, started
+
+    def _band_takeover(self, sid, band, apply, k):
+        """The product's stop-owners contract for a start/restart onto `band`: (refusal or None,
+        plan data). Without `stop_owners` an apply never takes the band from a running owner; the
+        plan names the owners as `blockers`, so the web asks first."""
+        owners = self._band_owners(sid, band)
+        if apply and owners and not (k or {}).get("stop_owners"):
+            return ActionResult(False, f"Cannot run '{sid}': {', '.join(owners)} must be stopped "
+                                "first.", next_commands=[f"lhpc stack stop {o}" for o in owners]), {}
+        return None, ({"blockers": [{"resource": f"loraham.radio.{band}", "holder_stack": o,
+                                     "holder": o} for o in owners]} if owners else {})
 
     def _cascade_targets(self, sid) -> list:
         """SHARED by stop/uninstall/clean — the RUNNING stacks taken down when `sid` goes
@@ -461,13 +473,17 @@ class DemoService(ControllerService):
                                               "start")) is not None:
             return refused
         band = req_band if req_band in self._bandswitchable(sid) else self._band(sid)
+        refused, plan_data = self._band_takeover(sid, band, apply, k)   # before ANY mutation
+        if refused is not None:
+            return refused
         if apply and band in ("433", "868"):
             d["band"] = band
         # Full-stack: the dependency chain (graywolf needs the KISS TNC, etc.) must be
         # SATISFIABLE — refuse the parent if a required provider is absent, unbuilt, or fails to
         # start; a band-switchable provider follows the parent onto its band (moved if running
         # on the wrong one).
-        err, started_deps = self._require_and_start_deps(sid, apply, band)
+        err, started_deps = self._require_and_start_deps(sid, apply, band,
+                                                         bool((k or {}).get("stop_owners")))
         if err:
             return err
         pending = started_deps if apply else self._deps_needing_start(sid, band)
@@ -488,7 +504,8 @@ class DemoService(ControllerService):
             note += (f" (stopped {who} on band {band})" if apply
                      else f" (will stop {who} on band {band} — one stack per band)")
         verb = "Started" if apply else "Would start"
-        return ActionResult(True, f"{verb} {sid} (simulated).{note}")
+        return ActionResult(True, f"{verb} {sid} (simulated).{note}",
+                            data={} if apply else plan_data)
 
     def _running_on_bands(self, bands) -> list:
         """Running non-daemon stacks whose band is in `bands` (they use that radio)."""
@@ -565,9 +582,13 @@ class DemoService(ControllerService):
                                               "restart")) is not None:
             return refused
         band = req_band if req_band in self._bandswitchable(sid) else self._band(sid)
+        refused, plan_data = self._band_takeover(sid, band, apply, k)   # before ANY mutation
+        if refused is not None:
+            return refused
         if apply and band in ("433", "868"):
             d["band"] = band
-        err, started_deps = self._require_and_start_deps(sid, apply, band)
+        err, started_deps = self._require_and_start_deps(sid, apply, band,
+                                                         bool((k or {}).get("stop_owners")))
         if err:
             return err
         pending = started_deps if apply else self._deps_needing_start(sid, band)
@@ -578,7 +599,8 @@ class DemoService(ControllerService):
         note = (f" (also started {', '.join(pending)})" if (apply and pending)
                 else (f" (will also start {', '.join(pending)})" if pending else ""))
         return ActionResult(True, f"Restarted {sid} (simulated).{note}" if apply
-                            else f"Would restart {sid} (simulated).{note}")
+                            else f"Would restart {sid} (simulated).{note}",
+                            data={} if apply else plan_data)
 
     def spawn_web_job(self, op: str, target: str, source: str = "pinned",
                       accept_pin_mismatch: str = ""):

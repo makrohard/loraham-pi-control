@@ -65,10 +65,16 @@ try:
     # stopping one part does NOT tear down the shared TNC (kiss survives graywolf's stop)
     assert svc.stop("graywolf", apply=True).ok and svc.stack_running("kiss")
     assert svc.start("graywolf", apply=True).ok
-    # one stack per radio band: starting meshcom (433) stops a running graywolf (433)
-    assert svc.start("meshcom", apply=True).ok
+    # one stack per radio band, as the product: the meshcom (433) plan names the running 433
+    # owners as blockers (the web asks first), an unconfirmed start takes nothing, and only the
+    # confirmed one (stop_owners) stops graywolf
+    _plan = svc.start("meshcom")
+    assert _plan.ok and {b["holder_stack"] for b in _plan.data["blockers"]} == {"graywolf", "kiss"}
+    assert svc.start("meshcom", apply=True).ok is False
+    assert svc.stack_running("graywolf") and not svc.stack_running("meshcom")
+    assert svc.start("meshcom", apply=True, stop_owners=True).ok
     assert svc.stack_running("meshcom") and svc.stack_running("graywolf") is False
-    R["band_conflict"] = "meshcom start stopped graywolf on 433"
+    R["band_conflict"] = "meshcom start refused while graywolf holds 433; confirmed start stops it"
     # simulated daemon: a running 433 stack brings the 433 daemon up (READY) with live stats;
     # 868 has no running stack so its daemon stays offline (per-band).
     dv = svc.daemon_view("433")
@@ -177,6 +183,17 @@ try:
     _refused = [i for i in ids if not svc.run_action("start", i, apply=False).ok]
     assert not _refused, _refused
     R["identity_seed"] = "after the demo seed every stack's start plan passes the identity gate"
+    # ROUTE: an unconfirmed web start of meshcom shows the takeover confirm (its stop_owners
+    # choice) and leaves graywolf on 433; the confirmed choice takes the band
+    svc.seed_all_installed()
+    svc._set_dbands(set())
+    assert svc.start("graywolf", apply=True, band="433").ok
+    _page = _action(op="start", target="meshcom").get_data(as_text=True)
+    assert 'name="stop_owners"' in _page, "route: the takeover must be confirmed first"
+    assert svc.stack_running("graywolf") and not svc.stack_running("meshcom")
+    _action(op="start", target="meshcom", confirmed="yes", stop_owners="yes")
+    assert svc.stack_running("meshcom") and not svc.stack_running("graywolf")
+    R["route_takeover"] = "web start of meshcom asks before stopping graywolf on 433"
     R["lifecycle"] = "ok"
     R["render_with_state"] = c.get("/stacks").status_code
 except Exception:
