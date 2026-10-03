@@ -153,6 +153,7 @@ class Watch:
         self.stall_s, self.ceiling_s, self._sample_s = stall_s, ceiling_s, sample_s
         self._clock, self._sampler = clock, sampler
         self._start = self._last_sample = self._last_progress = clock()
+        self._quiet = 0.0
 
     def check(self) -> str | None:
         now = self._clock()
@@ -164,9 +165,23 @@ class Watch:
         if self._sampler.sample():
             self._last_progress = now
             return None
+        self._quiet = max(self._quiet, now - self._last_progress)
         return "stalled" if now - self._last_progress >= self.stall_s else None
+
+    def longest_quiet(self) -> float:
+        """The longest quiet period so far: the largest `now - last progress` the stall rule compared
+        at a sample without progress, or the quiet tail up to now. Its margin to `stall_s` is the
+        slow-target budget's L1 quantity, at the sampling resolution; without a sampler nothing is
+        observed after the start, so it is the whole runtime."""
+        return max(self._quiet, self._clock() - self._last_progress)
 
     def remaining(self) -> float:
         """Seconds left to the ceiling (never negative): a runner caps each wait slice with it, so a
         step can never outlive its ceiling by a wait slice."""
         return max(0.0, self._start + self.ceiling_s - self._clock())
+
+
+def quiet_line(seconds: float) -> str:
+    """The last line of a build step's log (`Watch.longest_quiet`); the slow-build lane and row A
+    read it."""
+    return f"[progress] longest quiet {seconds:.1f} s"
