@@ -89,3 +89,5 @@ Each finding: the reviewer's row, then the verifier's row (verdict, severity, ev
 - how to see it: Call `restart("meshcore-webui", apply=True)` on a stopped meshcore: the result is ok and the stack is running, but the component the operator asked for is not.
 - verifier: CONFIRMED — demo/lhpc_demo/service.py:533-565 has no optional-component guard, unlike :438-445 and :495-502. Scratch: `start("meshcore-webui")` is refused, but `restart("meshcore-webui", apply=True)` returns ok with "Restarted meshcore", the stack runs, and the snapshot still shows meshcore-webui as STOPPED.
 
+## Adversarial self-review before the push (mandatory)
+When everything is green, re-read your whole diff once more AS A HOSTILE REVIEWER who will be paid per finding: for every hunk ask what input, timing, caller or platform breaks it; what the old code handled that the new code does not; which test only passes because of the fake; which claim in your report you have not actually run. Fix what you find, re-run the gates, and list in the report what this pass found and changed (or 'nothing').

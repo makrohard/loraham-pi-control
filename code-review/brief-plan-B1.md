@@ -106,3 +106,6 @@ Before your first commit run `git config user.name makrohard` and `git config us
 
 ## The plan-review packet (you build it too)
 As a second file in the same commit add `plans/gate1-PLAN-B1.md`: a header for an independent reviewer with NO repository access ("This file is your whole input"; one paragraph per group in product terms — what the defects are and what the plan changes; the reviewer judges per change OK / FINDING on: simplest correct change, could it break a working path, are the tests real (red before), anything missing or riskier than necessary; final GREEN / GREEN WITH NOTES / RED), then the whole plan. No home paths (write $HOME), no e-mail, IPs, call signs, no 'threat/bypass/forge' wording.
+
+## Adversarial self-review before the push (mandatory)
+When everything is green, re-read your whole diff once more AS A HOSTILE REVIEWER who will be paid per finding: for every hunk ask what input, timing, caller or platform breaks it; what the old code handled that the new code does not; which test only passes because of the fake; which claim in your report you have not actually run. Fix what you find, re-run the gates, and list in the report what this pass found and changed (or 'nothing').

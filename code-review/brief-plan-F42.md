@@ -15,3 +15,6 @@ A Raspberry Pi that needs 35 minutes for one `pip install .` step (source builds
 
 ## Commit identity (the maintainer's rule)
 Before your first commit run `git config user.name makrohard` and `git config user.email <the author e-mail of the makrohard commits: git log -1 --format=%ae --author=makrohard origin/main>`; no Co-Authored-By/Claude-Session/AI-attribution line; check `git log -1 --format='%an %cn%n%B'` before the push.
+
+## Adversarial self-review before the push (mandatory)
+When everything is green, re-read your whole diff once more AS A HOSTILE REVIEWER who will be paid per finding: for every hunk ask what input, timing, caller or platform breaks it; what the old code handled that the new code does not; which test only passes because of the fake; which claim in your report you have not actually run. Fix what you find, re-run the gates, and list in the report what this pass found and changed (or 'nothing').

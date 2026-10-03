@@ -43,3 +43,6 @@ ids `CR1-1`, `CR1-2`, …; severity S1 = safety or data loss, S2 = wrong behavio
 robustness (a path that fails only under an unusual condition). Severity S1 findings first.
 Then "Checked and fine" (≤ 15 lines) and "Not read / not understood" (be honest; an unread file is listed here).
 No addresses, call signs, node ids, home paths or secrets anywhere. Keep it short: facts, file:line, no narrative.
+
+## Adversarial self-review before the push (mandatory)
+When everything is green, re-read your whole diff once more AS A HOSTILE REVIEWER who will be paid per finding: for every hunk ask what input, timing, caller or platform breaks it; what the old code handled that the new code does not; which test only passes because of the fake; which claim in your report you have not actually run. Fix what you find, re-run the gates, and list in the report what this pass found and changed (or 'nothing').

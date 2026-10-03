@@ -138,3 +138,5 @@ Each finding: the reviewer's row, then the verifier's row (verdict, severity, ev
 - how to see it: `lhpc webserver cert export 'a/b' out.p12` → traceback ending in `ValidationError: cert label: path separator not allowed`. The same happens for `lhpc webserver cert discard-export 'a/b'`. Reproduced.
 - verifier: CONFIRMED — Ran `main(["webserver","cert","export","a/b",<out>])` and `discard-export a/b`: both print a traceback ending in `ValidationError: cert label: path separator not allowed`. `main()` catches only ConfigError (cli/main.py:995), and `pki.read_export`/`discard_export` validate at pki.py:543/554.
 
+## Adversarial self-review before the push (mandatory)
+When everything is green, re-read your whole diff once more AS A HOSTILE REVIEWER who will be paid per finding: for every hunk ask what input, timing, caller or platform breaks it; what the old code handled that the new code does not; which test only passes because of the fake; which claim in your report you have not actually run. Fix what you find, re-run the gates, and list in the report what this pass found and changed (or 'nothing').

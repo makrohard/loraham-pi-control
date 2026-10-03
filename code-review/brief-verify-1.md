@@ -70,3 +70,6 @@ Each row: id | file:line | severity | the claim | the defect | how to see it | t
 | U-3 | lhpc/core/lifecycle.py:1509-1522 | nit | — | `_prefer_run_socket`/`raw_socket`/`conf_socket` duplicate `daemon_control`'s identical helpers. | — | high |
 | U-4 | lhpc/core/daemon_control.py:492-531 | nit | `apply_set()` = validate + SET + read-back-confirm. | Zero callers in the repository; the live apply path uses `validate_set`/`canonical_value`/`is_confirmable` and `self._apply_daemon_param`. CONFLICTS with CR1-3/CR1-8, which locate the live SET in `apply_set` (:512). To be resolved by verification. | — | high (grep) |
 | U-5 | lhpc/core/service_lifecycle_ops.py:1899 (+ ~11 sites) | nit | `daemon_control.ALLOWED_BANDS` is the single source of truth. | The literal `("433", "868")` is repeated at ~12 sites. | — | high |
+
+## Adversarial self-review before the push (mandatory)
+When everything is green, re-read your whole diff once more AS A HOSTILE REVIEWER who will be paid per finding: for every hunk ask what input, timing, caller or platform breaks it; what the old code handled that the new code does not; which test only passes because of the fake; which claim in your report you have not actually run. Fix what you find, re-run the gates, and list in the report what this pass found and changed (or 'nothing').

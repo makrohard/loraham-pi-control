@@ -1,7 +1,7 @@
-# CLOUD BRIEF · PLAN for fix batch B3 = groups GL2 + GN of loraham-pi-control (one Claude Code cloud session, read-only on the code)
+# CLOUD BRIEF · PLAN + CODE for fix batch B3 = groups GL2 + GN of loraham-pi-control (one Claude Code cloud session, read-only on the code)
 
 You write the PLAN for a group of verified defects; you change no code. Output = ONE commit on this routine's branch
-adding `plans/PLAN-B3.md`. Never touch `main` or `dev`, no pull request. (Attribution lines are stripped
+adding `plans/PLAN-B3.md` (the complete plan per the format below, with your own audit pass written into it); (2) one commit per finding implementing exactly that plan (subjects `<id>: <what>`; red-before regression test per fix, proven; a finding whose simplest fix needs > ~30 lines or a new mechanism is SKIPPED and said so); (3) one report commit `code-review/code-report-B3.md` with the SELF-AUDIT PROOF section (per change: guarantee, red-before test + command, what else could break and how checked) and `code-review/gate1-CODE-B3.md` = a review packet for a reviewer WITHOUT repository access (header: product-terms summary; your plan; your report; the FULL diff of the fix commits in a ```diff block; no home paths/e-mail/IPs/call signs; no 'threat/bypass/forge' wording; the reviewer judges per change OK / FINDING and GREEN / GREEN WITH NOTES / RED). Never touch `main` or `dev`, no pull request. (Attribution lines are stripped
 downstream; the file is copied out.) Base: origin/main = e5187f70ae4e81a1081a835be06f84746222c3b6 (v0.11.10). Read `docs/architecture.md` (the safety
 invariants), `docs/README.md`, `tests/README.md` (the house rules of the tests) and `docs/maintenance.md` (how a patch
 is cut) first.
@@ -160,7 +160,7 @@ docs updated where a sentence becomes untrue (one place per fact); the CHANGELOG
 ## Commit identity (the maintainer's rule — a direct violation otherwise)
 Before your first commit run `git config user.name makrohard` and `git config user.email <the author e-mail of the makrohard commits in this repository: git log -1 --format=%ae --author=makrohard origin/main>`, and commit with that identity; no Co-Authored-By, Claude-Session or any AI-attribution line in any message. After each commit check `git log -1 --format='%an %cn%n%B'` shows makrohard twice and no such line; fix it with `git commit --amend --reset-author --no-edit` before you push.
 
-## The plan-review packet (you build it too)
+## (the separate plan-review packet is NOT needed for this batch — the code packet carries the plan)
 As a second file in the same commit add `plans/gate1-PLAN-B3.md`: a header for an independent reviewer with NO repository access ("This file is your whole input"; one paragraph per group in product terms — what the defects are and what the plan changes; the reviewer judges per change OK / FINDING on: simplest correct change, could it break a working path, are the tests real (red before), anything missing or riskier than necessary; final GREEN / GREEN WITH NOTES / RED), then the whole plan. No home paths (write $HOME), no e-mail, IPs, call signs, no 'threat/bypass/forge' wording.
 
 ## Adversarial self-review before the push (mandatory)

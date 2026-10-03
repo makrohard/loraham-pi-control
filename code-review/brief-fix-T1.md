@@ -124,3 +124,5 @@ Each finding: the reviewer's row, then the verifier's row (verdict, severity, ev
 - how to see it: `a = svc.build_snapshot(); svc.uninstall("kiss"); svc.build_snapshot() is a` → True (False for `clean`).
 - verifier: PARTLY — uninstall (service_maintenance.py:2245) lacks @invalidates_snapshot. Scratch g3/test_r16d.py: the cache is still set after uninstall(apply=True), but cleared after clean. The finding's repro line is wrong: `build_snapshot() is a` gives False, because the fresh locked recheck replaces the cache. What stays cached is that pre-removal recheck snapshot. confirm_known_working and power_action were not checked.
 
+## Adversarial self-review before the push (mandatory)
+When everything is green, re-read your whole diff once more AS A HOSTILE REVIEWER who will be paid per finding: for every hunk ask what input, timing, caller or platform breaks it; what the old code handled that the new code does not; which test only passes because of the fake; which claim in your report you have not actually run. Fix what you find, re-run the gates, and list in the report what this pass found and changed (or 'nothing').

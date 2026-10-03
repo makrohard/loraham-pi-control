@@ -34,3 +34,6 @@ Before your first commit run `git config user.name makrohard` and `git config us
 
 ## The gate-1 review packet (you build it too)
 As the LAST file of your report commit add `code-review/gate1-CODE-G5.md`: a header for an independent reviewer with NO repository access ("This file is your whole input"; one paragraph: what the defects were and what each commit changes, in product terms — no 'threat/bypass/forge' wording), the list of your commits (`<sha> <subject>`), your report (the self-audit section included), then the FULL diff of your fix commits (`git diff <base>..<last fix commit>`) in a ```diff block; replace any home path by `$HOME`; no e-mail addresses, IPs, call signs. The reviewer answers per commit OK / FINDING and GREEN / GREEN WITH NOTES / RED — write that request into the header.
+
+## Adversarial self-review before the push (mandatory)
+When everything is green, re-read your whole diff once more AS A HOSTILE REVIEWER who will be paid per finding: for every hunk ask what input, timing, caller or platform breaks it; what the old code handled that the new code does not; which test only passes because of the fake; which claim in your report you have not actually run. Fix what you find, re-run the gates, and list in the report what this pass found and changed (or 'nothing').

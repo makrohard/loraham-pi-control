@@ -1,17 +1,14 @@
-# CLOUD BRIEF · CODE fix group F39/F40 (one Claude Code cloud session)
+# CLOUD BRIEF · CODE fix batch B1 (groups G9 + G13 + G4) (one Claude Code cloud session)
 
 You implement an AUDITED PLAN exactly; you do not redesign. Base: origin/main = e5187f70ae4e81a1081a835be06f84746222c3b6
-(v0.11.10). Read, in this order: `code-review/PLAN-F39-F40.md` and `code-review/PLAN-F39-F40-DELTA.md` (DELTA 1 and 2
-REPLACE the corresponding plan text: non-finite validation; test classification; commit order B → A → C), both on the
+(v0.11.10). Read, in this order: `code-review/PLAN-G5.md` and `code-review/PLAN-G5-DELTA.md` (the DELTA REPLACES the ACK state machine, the timeout wording, the two tests and decides Q1–Q5; the daemon's reply contract: exactly one line `OK` or `ERR <WHY>` per command, connection stays open, same for daemon 1.1.0–1.2.0), both on the
 branch `code-review/brief` (`git show origin/code-review/brief:code-review/<file>`), then `docs/architecture.md`,
 `tests/README.md`, `docs/maintenance.md`.
 
 ## Output
-Exactly THREE commits on this routine's branch, in the plan's order and with the plan's subjects
-(1 `F39: meshcore-cli declares build_timeout 1800 and a build marker`, 2 `F40: web Build/Test honours the manifest
-build_timeout/test_timeout`, 3 `F40: a timed-out web job records "timed out after Ns"`), each green on its own
+The commits the plan's §5 names (one per finding, subjects `<id>: <what>`, in the plan's order), each green on its own
 (`python -m pytest -q -p no:cacheprovider` on the touched test modules + `tests/repo`; `ruff check lhpc testlab` and
-`ruff check tests --select F,E9`), then ONE report commit adding `code-review/code-report-F39-F40.md`. `git push`
+`ruff check tests --select F,E9`), then ONE report commit adding `code-review/code-report-B1.md`. `git push`
 once at the end. Never touch `main`, `dev` or `code-review/brief`; no pull request; no Co-Authored-By or
 AI-attribution line in any commit (the author is re-set downstream; still write none).
 
@@ -24,10 +21,10 @@ under "## Unreleased" is NOT used in this repo — put them where the plan says.
 written (a line moved, a claim wrong), STOP that commit, write what you found into the report under "Deviations",
 and continue with the next; never improvise a different design.
 
-## The report (`code-review/code-report-F39-F40.md`) — with a SELF-AUDIT PROOF section
+## The report (`code-review/code-report-B1.md`) — with a SELF-AUDIT PROOF section
 1. Per commit: sha, files, the tests (module::name) with red-before yes/no/preservation and the exact command + result.
 2. SELF-AUDIT PROOF, per change: (a) the guarantee the plan states, (b) the code line(s) that now enforce it, (c) what
-   else the change could break (callers, the test lane, image builds, other components' timeouts) and the check that
+   else the change could break (callers, the test lane, image builds, the start path's parameter apply, the console live apply, FakeSystem and the testlab fake daemon, a slow daemon) and the check that
    rules it out (a test name or a grep result), (d) one thing you re-read after writing it and what you found.
 3. Deviations from the plan (or "none").
 4. The full pytest/ruff summary lines.
@@ -36,7 +33,7 @@ and continue with the next; never improvise a different design.
 Before your first commit run `git config user.name makrohard` and `git config user.email <the author e-mail of the makrohard commits in this repository: git log -1 --format=%ae --author=makrohard origin/main>`, and commit with that identity; no Co-Authored-By, Claude-Session or any AI-attribution line in any message. After each commit check `git log -1 --format='%an %cn%n%B'` shows makrohard twice and no such line; fix it with `git commit --amend --reset-author --no-edit` before you push.
 
 ## The gate-1 review packet (you build it too)
-As the LAST file of your report commit add `code-review/gate1-CODE-F39-F40.md`: a header for an independent reviewer with NO repository access ("This file is your whole input"; one paragraph: what the defects were and what each commit changes, in product terms — no 'threat/bypass/forge' wording), the list of your commits (`<sha> <subject>`), your report (the self-audit section included), then the FULL diff of your fix commits (`git diff <base>..<last fix commit>`) in a ```diff block; replace any home path by `$HOME`; no e-mail addresses, IPs, call signs. The reviewer answers per commit OK / FINDING and GREEN / GREEN WITH NOTES / RED — write that request into the header.
+As the LAST file of your report commit add `code-review/gate1-CODE-B1.md`: a header for an independent reviewer with NO repository access ("This file is your whole input"; one paragraph: what the defects were and what each commit changes, in product terms — no 'threat/bypass/forge' wording), the list of your commits (`<sha> <subject>`), your report (the self-audit section included), then the FULL diff of your fix commits (`git diff <base>..<last fix commit>`) in a ```diff block; replace any home path by `$HOME`; no e-mail addresses, IPs, call signs. The reviewer answers per commit OK / FINDING and GREEN / GREEN WITH NOTES / RED — write that request into the header.
 
 ## Adversarial self-review before the push (mandatory)
 When everything is green, re-read your whole diff once more AS A HOSTILE REVIEWER who will be paid per finding: for every hunk ask what input, timing, caller or platform breaks it; what the old code handled that the new code does not; which test only passes because of the fake; which claim in your report you have not actually run. Fix what you find, re-run the gates, and list in the report what this pass found and changed (or 'nothing').
