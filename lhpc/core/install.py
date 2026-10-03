@@ -18,7 +18,6 @@ import errno
 import os
 import re
 import shutil
-import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -26,6 +25,7 @@ from pathlib import Path
 
 from . import provenance
 from .assets import asset_text
+from .best_effort import best_effort, stderr_line
 from .config import Config
 from .model import Component, Stack
 from .paths import PathContainmentError, Paths
@@ -1298,16 +1298,10 @@ class Installer:
         one stderr line and the staging goes on; recovery then finds no inode recorded."""
         if rec is None:
             return
-        try:
-            ok = rec.rewrite(self._staged_clone_payload(dest, staging,
-                                                        [handle.st_dev, handle.st_ino]))
-        except (OSError, PathContainmentError) as exc:
-            ok, why = False, f" ({exc})"
-        else:
-            why = ""
-        if not ok:
-            sys.stderr.write(f"staging record {rec.name} could not record the candidate{why} — "
-                             "install continues\n")
+        what = f"staging record {rec.name} could not record the candidate — install continues"
+        if best_effort(lambda: rec.rewrite(self._staged_clone_payload(
+                dest, staging, [handle.st_dev, handle.st_ino])), what=what) is False:
+            stderr_line(what)
 
     def _recover_staged_clone(self, jf: Path) -> str:
         """Resolve ONE pre-clone record ("" = nothing to report). Its writer held the source-path
