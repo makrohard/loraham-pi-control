@@ -821,6 +821,22 @@ def test_recovery_finishes_an_activation_interrupted_right_after_the_archive_ren
     assert not inst._journal_path(dest).exists()                       # nothing blocks the box
 
 
+def test_recovery_clears_an_activation_interrupted_right_after_promotion(tmp_path, git, make_repo, installer):
+    # Died between `staging -> dest` and the `activated` journal refresh: the new tree is active,
+    # but the candidate's recorded ctime is stale, so `.prev` and the journal stayed for ever and
+    # blocked every source mutation on the box.
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    dest, prev, staging, new_head = _journal_before_rename(git, tmp_path, inst, "prior-archived")
+    staging.rename(dest)
+    msgs = inst.recover_source_activations()
+    assert any(m.startswith("recovered app") for m in msgs), msgs
+    assert not prev.exists() and not inst._journal_path(dest).exists()
+    assert (dest / "file.txt").read_text() == "v2\n" and _rec(inst).resolved_commit == new_head
+
+
 def test_a_prev_substituted_while_dest_is_present_is_never_removed_on_dev_ino(tmp_path, git, make_repo, installer):
     # The dev+ino-only proof is bound to a `planned` journal with NO dest. With a tree at dest the
     # archived prior keeps its full proof, so a stale `.prev` is retained, never cleaned away.

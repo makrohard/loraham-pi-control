@@ -1529,6 +1529,12 @@ class Installer:
                 if (state == "planned" and idents and idents.get("prev")
                         and txn.leaf_kind(dest.name) == "absent"):
                     idents = {**idents, "prev": list(idents["prev"][:2])}
+                # Likewise the promotion (staging -> dest) before the `activated` refresh: with no
+                # staging leaf left, the candidate can only be at dest, reached through that rename.
+                # A candidate still at `staging` keeps its full proof (promotion, rollback-delete).
+                if (state == "prior-archived" and idents and idents.get("candidate")
+                        and txn.leaf_kind(staging.name) == "absent"):
+                    idents = {**idents, "candidate": list(idents["candidate"][:2])}
                 if txn.usable(dest.name):
                     # Completed activation: the ownership record must be completed (ONE retry —
                     # this call) and the archived prior PROVEN removed (held FD) before the
