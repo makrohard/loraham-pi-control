@@ -19,6 +19,14 @@ import re
 import socket
 import time
 
+from .clock import (  # noqa: F401  CLOCK_OVERRIDE_FLAG, clock_refusal: re-exported
+    CLOCK_OVERRIDE_FLAG,
+    GREEN_MAXERROR_US,
+    PKI_NOT_BEFORE,
+    clock_refusal,
+    verdict,
+)
+
 # Byte bounds for the procfs/sysfs reads. /proc/stat grows with core count; everything else is
 # tiny. 64 KiB matches the established bounded-read size (RealProcFs.cmdlines).
 _MAX_READ = 64 * 1024
@@ -175,16 +183,6 @@ def parse_dt_model(text: str) -> str:
 _STA_UNSYNC = 0x0040          # kernel: clock is not synchronised
 _TIME_ERROR = 5               # ntp_adjtime() return code when unsynchronised
 _MAXERROR_CAP_US = 16_000_000  # kernel clamps maxerror here; the "nothing is steering it" ceiling
-_GREEN_MAXERROR_US = 1_000_000    # <= 1 s of estimated error to call the state green
-
-# Nothing lhpc writes can predate the commit that introduced this check. A realtime clock reading
-# before this is not merely unsynchronised, it is demonstrably wrong.
-# The earliest date this software can plausibly run. PUBLIC and purpose-named because two
-# things share it: the clock gate below, and provisional PKI issuance (pki.py), which uses it as
-# the fixed notBefore of material minted while the clock is unverified. One constant, on purpose.
-PKI_NOT_BEFORE = 1_735_689_600   # 2025-01-01T00:00:00Z
-_NOT_BEFORE = PKI_NOT_BEFORE
-
 # Operator guidance, shown only when the pin is not green. TEXT ONLY — lhpc never runs any of it.
 # The COMMAND is kept separate from the prose so the element carrying it can be select-all
 # copyable: the previous single string ended in "(or install chrony)", which pastes into a shell
@@ -342,71 +340,11 @@ def disk_figure(row: dict) -> str:
     return f"{row['path']}: {row['free_b'] / _GIB:.1f} GiB free"
 
 
-# --- the clock gate the PKI uses -------------------------------------------------------------
-# ONE predicate, defined here beside the constants it uses, so nothing downstream has to invent
-# what "verified" means. It answers a narrower question than the Time row: not "is this clock
-# good enough to show the operator", but "may this clock date material that outlives the boot".
-#
-# What it CANNOT do, stated so nothing claims otherwise: prove the time is CORRECT. LHPC reads
-# the kernel's synchronisation evidence, not a trusted date. A source that is synchronised and
-# wrong passes this gate, and a rolled-back GPS receiver is exactly such a source. The property
-# actually enforced is "unverified or unsynchronised time may not mutate the PKI".
-# NOTE: clock_verified() deliberately uses NO filesystem timestamps. See its docstring.
+# The clock gate: `clock.verdict` fed this box's kernel probe and realtime clock. `fs` and
+# `runtime_root` are unused (file timestamps are not evidence; see `clock.verdict`).
 def clock_verified(fs, runtime_root, now: float | None = None) -> tuple[bool, str]:
-    """(ok, reason). `reason` is operator-facing and names what failed, never just "bad clock".
-
-    Three conditions, all from evidence that already exists:
-      1. the kernel says synchronised (not STA_UNSYNC, and ntp_adjtime did not return TIME_ERROR);
-      2. maxerror is inside _GREEN_MAXERROR_US -- the same bound the Time row calls green;
-      3. the clock is at or above _NOT_BEFORE -- a STABLE compile-time lower bound.
-
-    **File mtimes are deliberately NOT an input, and this is the correction that matters.** An
-    earlier version took the newest mtime among the runtime and PKI paths as a floor, reasoning
-    that the clock cannot legitimately read earlier than something this box has written. That is
-    circular: those timestamps were produced by the same possibly-wrong clock. A CRL minted while
-    the clock was a year fast has a file mtime a year in the future, so the floor then rejects the
-    CORRECTED time -- and CRL repair, which needs a verified clock, refuses to replace the very
-    file that is locking the operator out. The box stays locked out until the erroneous future
-    date, and no operator override helps because the watchdog is unattended.
-
-    A floor is only useful if it is independent of the thing being checked. `_NOT_BEFORE` is;
-    mtimes are not. They remain fine as DIAGNOSTICS -- the Time row still uses its write floor to
-    label an obviously implausible clock -- but they must not authorise issuance or repair.
-
-    _CLOCK_EPOCH_FLOOR from the GPS time source is deliberately NOT an input: this must hold on a
-    box that never re-ran bootstrap and has no such floor.
-    """
-    kernel = read_kernel_time_state()
-    if kernel is None:
-        return False, "kernel time state unavailable — cannot tell whether the clock is synchronised"
-    if not kernel["synced"]:
-        return False, "the clock is not synchronised (no time source has set it yet)"
-    maxerror = int(kernel["maxerror_us"])
-    if maxerror > _GREEN_MAXERROR_US:
-        return False, (f"the clock's estimated error is {maxerror / 1_000_000:.1f} s, above the "
-                       f"{_GREEN_MAXERROR_US / 1_000_000:.0f} s this needs")
-    stamp = time.time() if now is None else now
-    if stamp < float(_NOT_BEFORE):
-        return False, ("the clock reads "
-                       f"{time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime(stamp))}, before the "
-                       "earliest date this software can plausibly run")
-    return True, ""
-
-
-# The operator's way past it. ONE-SHOT and NON-PERSISTENT by construction: it is a parameter on
-# the call, never a stored setting, so it cannot leak into the next operation. It is also
-# separate from every destructive confirmation in the codebase -- "yes, replace my certificates"
-# and "yes, I accept that this box's clock is unverified" are different statements, and treating
-# one as the other is how an operator ends up with certificates dated to 1970 they never agreed
-# to. The flag is named for what it accepts, not for what it bypasses.
-CLOCK_OVERRIDE_FLAG = "--accept-unverified-clock"
-
-
-def clock_refusal(reason: str, what: str) -> str:
-    """The refusal text. Names the clock as the cause, what was NOT done, and the exact way to
-    proceed anyway -- a refusal the operator cannot act on is a dead end, not a safeguard."""
-    return (f"refusing to {what}: {reason}. Nothing was changed. "
-            f"Fix the clock (see `lhpc doctor`), or accept the risk with {CLOCK_OVERRIDE_FLAG}.")
+    """(ok, reason) of `clock.verdict` for this box's kernel clock state, now (or at `now`)."""
+    return verdict(read_kernel_time_state(), now)
 
 
 class SystemStatsMixin:
@@ -557,7 +495,7 @@ class SystemStatsMixin:
         # punished the very repair we ask for. The same applies while a daemon is present but has
         # not yet completed its first sync.
         no_candidate = (not daemons and synced_at is None and not hctosys and not saved)
-        floor = max([t for t in (self._runtime_write_floor(fs), float(_NOT_BEFORE)) if t], default=0.0)
+        floor = max([t for t in (self._runtime_write_floor(fs), float(PKI_NOT_BEFORE)) if t], default=0.0)
         if no_candidate and not synced and now < floor:
             out.update(state="red", label="bad",
                        detail="clock reads earlier than files this box has written",
@@ -575,7 +513,7 @@ class SystemStatsMixin:
 
         if synced:
             name = self._sync_source_name(daemons, source)
-            if maxerror <= _GREEN_MAXERROR_US:
+            if maxerror <= GREEN_MAXERROR_US:
                 out.update(state="green", label=name or "…",
                            detail=("synchronised to " + ("GPS" if name == "GNSS" else "an NTP server")
                                    if name else "synchronised; the source could not be identified"))

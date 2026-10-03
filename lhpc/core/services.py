@@ -1148,12 +1148,13 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         # The clock gate's verdict: every PKI refusal ("the clock is not synchronised …") sends the
         # operator here, so name the same predicate and its reason. Informational: it never makes
         # doctor non-OK (commissioning and running stacks do not need a verified clock).
+        from .clock import CLOCK_OVERRIDE_FLAG
         from .service_system import clock_verified
         clock_ok, clock_why = clock_verified(sys.fs, self._paths.runtime_root)
         details.append("  clock: " + ("verified (certificates may be issued)" if clock_ok else
                        f"NOT verified — {clock_why}; certificate operations refuse while the clock "
                        "remains unverified; resolve the clock or verification problem, or use "
-                       "--accept-unverified-clock"))
+                       f"{CLOCK_OVERRIDE_FLAG}"))
         # Disk space: one line per filesystem, from the ONE classifier. `critical` on ANY row makes
         # doctor non-OK (a nearly full card breaks installs, builds and config writes); `low` is
         # informational.

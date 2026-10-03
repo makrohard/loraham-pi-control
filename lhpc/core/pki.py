@@ -36,8 +36,8 @@ from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from . import runtime_fs, validators
+from .clock import PKI_NOT_BEFORE
 from .paths import PathContainmentError, Paths
-from .service_system import PKI_NOT_BEFORE
 
 _TLS = ("config", "tls")
 _SERVER_CA, _CLIENT_CA, _SERVER, _EXPORTS = "server-ca", "client-ca", "server", "exports"
