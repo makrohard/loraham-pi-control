@@ -229,6 +229,46 @@ def test_the_system_roots_and_generator_dirs_are_searched(tmp_path, monkeypatch,
     assert U.integration(ud, ROOT)["status"] == "overridden"
 
 
+def test_a_prefix_dropin_overrides_only_the_units_it_matches(tmp_path):
+    # systemd applies `lhpc-nginx-.service.d` to lhpc-nginx-restart.service, but not to
+    # lhpc-web.service, nor to lhpc-nginx.service (its name has no "lhpc-nginx-" prefix).
+    ud = _canon(tmp_path)
+    d = ud / "lhpc-nginx-.service.d"
+    d.mkdir()
+    (d / "x.conf").write_text("[Service]\nExecStart=\n")
+    assert U.verify(ud, U.RESTART_UNIT, ROOT, CO, VENV) == U.OVERRIDDEN
+    assert U.verify(ud, U.WEB_UNIT, ROOT, CO, VENV) == U.OK
+    assert U.verify(ud, U.NGINX_UNIT, ROOT, CO, VENV) == U.OK
+
+
+def test_an_empty_dropin_dir_is_not_an_override(tmp_path, monkeypatch):
+    # Only a `.conf` inside a drop-in dir changes the unit; an empty dir, or one holding
+    # anything else, does not — wherever it is on the search path.
+    ud = _canon(tmp_path)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    for base in (ud, ud.parent / "user.control", tmp_path / "run/systemd/user.control",
+                 tmp_path / "run/systemd/user", U._SYSTEM_ROOTS[0]):
+        for name in ("lhpc-web.service.d", "lhpc-.service.d", "service.d"):
+            (base / name).mkdir(parents=True)
+        (base / "service.d" / "README").write_text("not a drop-in\n")
+    assert U.integration(ud, ROOT)["status"] == "ok"
+
+
+@pytest.mark.parametrize("where", [
+    "run/systemd/user.control/lhpc-web.service.d/x.conf",   # set-property --runtime
+    "run/systemd/user.control/lhpc-.service.d/x.conf",
+    "run/systemd/user.control/lhpc-web.service",            # a runtime fragment that outranks ours
+])
+def test_the_runtime_user_control_dir_is_searched(tmp_path, monkeypatch, where):
+    ud = _canon(tmp_path)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    assert U.integration(ud, ROOT)["status"] == "ok"
+    f = tmp_path / where
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("[Service]\nProtectHome=no\n")
+    assert U.integration(ud, ROOT)["status"] == "overridden"
+
+
 def test_verify_unsafe_symlinked_unit(tmp_path):
     ud = tmp_path / ".config" / "systemd" / "user"; ud.mkdir(parents=True)
     (ud / U.WEB_UNIT).symlink_to("/dev/null")            # a mask
