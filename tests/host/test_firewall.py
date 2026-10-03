@@ -2429,6 +2429,71 @@ def test_failed_apply_whose_restore_fails_does_not_claim_the_old_ruleset_is_back
     assert "previous ruleset restored" not in receipt["detail"]
 
 
+def test_failed_restore_is_never_verified_until_live_matches_and_apply_retries(tmp_path):
+    # Guard: the recovery record is the canonical snapshot, which a failed apply never promotes.
+    import json as _json
+
+    from lhpc.core import firewall_helper as fh
+    etc, run = str(tmp_path / "etc"), str(tmp_path / "run")
+    _seed_meta(etc)
+    sysx = _FakeSys()
+    c1 = _candidate()
+    p1 = tmp_path / "c1.json"
+    p1.write_text(_json.dumps(c1))
+    sysx.listing = _expected_live_json(c1)
+    assert fh.op_apply(sysx, str(p1), etc_dir=etc, run_dir=run) == fh.EXIT_OK
+    c2 = _candidate()
+    c2["proxy_ingress"][0]["port"] = 9444
+    p2 = tmp_path / "c2.json"
+    p2.write_text(_json.dumps(c2))
+    loads = []
+    orig = sysx.run
+    def restore_fails(argv, **kw):
+        if argv[:2] == ["nft", "-f"]:
+            loads.append(argv)
+            if len(loads) == 2:                           # the restore: live stays the new ruleset
+                sysx.listing = _expected_live_json(c2)
+                return 1, "", "Error: restore failed"
+        return orig(argv, **kw)
+    sysx.run = restore_fails
+    assert fh.op_apply(sysx, str(p2), etc_dir=etc, run_dir=run) == fh.EXIT_FAIL
+    receipt = tmp_path / "run" / "check.json"
+    assert fh.op_check(sysx, etc_dir=etc, run_dir=run) == fh.EXIT_FAIL
+    assert _json.loads(receipt.read_text())["verdict"] == "mismatch"
+    sysx.listing = _expected_live_json(c1)
+    assert fh.op_check(sysx, etc_dir=etc, run_dir=run) == fh.EXIT_OK
+    assert _json.loads(receipt.read_text())["verdict"] == "verified"
+    assert fh.op_apply(sysx, str(p1), etc_dir=etc, run_dir=run) == fh.EXIT_OK
+
+
+def test_failed_first_install_whose_table_state_is_unreadable_does_not_claim_restored(tmp_path):
+    import json as _json
+
+    from lhpc.core import firewall_helper as fh
+    etc, run = str(tmp_path / "etc"), str(tmp_path / "run")
+    _seed_meta(etc)
+    cand = _candidate()
+    other = _candidate()
+    other["proxy_ingress"][0]["port"] = 9444
+    sysx = _FakeSys()
+    sysx.listing = _expected_live_json(other)             # no snapshot; verify mismatches
+    reads = []
+    orig = sysx.run
+    def unreadable_after_verify(argv, **kw):
+        if argv[:4] == ["nft", "-j", "list", "table"] and sysx._loaded:
+            reads.append(argv)
+            if len(reads) == 2:                           # the post-failure table state
+                return 1, "", "Error: Operation not permitted"
+        return orig(argv, **kw)
+    sysx.run = unreadable_after_verify
+    p = tmp_path / "c.json"
+    p.write_text(_json.dumps(cand))
+    assert fh.op_apply(sysx, str(p), etc_dir=etc, run_dir=run) == fh.EXIT_FAIL
+    assert len(reads) == 2
+    detail = _json.loads((tmp_path / "run" / "check.json").read_text())["detail"]
+    assert "restored" not in detail.replace("NOT restored", "")
+
+
 def test_apply_refuses_owned_table_with_missing_snapshot(tmp_path):
     # AR2-P1: valid metadata + an LHPC-OWNED live table + a MISSING accepted snapshot must REFUSE
     # before any mutation — never enter the first-install teardown path and destroy the live table.

@@ -1355,10 +1355,11 @@ def op_apply(sysx, candidate_path, *, cleanup=False, etc_dir=ETC_DIR, run_dir=RU
                 if restored != "verified":
                     undo = f"previous ruleset NOT restored ({restored})"
             else:
+                # "restored" only when the table is provably gone: absent, or destroyed by us.
                 st, _ = live_table_state(sysx, snap["model"]["comment"])
-                if st == "ours" and sysx.run(["nft", "destroy", "table",
-                                              TABLE_FAMILY, TABLE_NAME])[0] != 0:
-                    undo = "previous ruleset NOT restored (nft destroy failed)"
+                if st != "absent" and not (st == "ours" and sysx.run(
+                        ["nft", "destroy", "table", TABLE_FAMILY, TABLE_NAME])[0] == 0):
+                    undo = f"previous ruleset NOT restored ({st})"
             _durable_unlink(p["journal"])
             write_receipt(sysx, "error", f"apply failed at {verdict}; {undo}",
                           snap["intent_hash"], snap["model_hash"],
