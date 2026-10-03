@@ -27,6 +27,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .assets import asset_path
+from .daemon_control import ALLOWED_BANDS
 from .paths import PathContainmentError, Paths
 
 # Tracked defaults shipped with the controller (package data, wheel-safe).
@@ -411,7 +412,7 @@ class RadioConfig:
     @property
     def active_bands(self) -> tuple:
         # SERVED bands, ascending. Empty () when unconfigured.
-        return tuple(b for b in ("433", "868") if b in self._preset_map)
+        return tuple(b for b in ALLOWED_BANDS if b in self._preset_map)
 
     def hw_preset(self, band: str) -> str:
         # Daemon `--hw` wire preset for a served band, or "" if this setup does not serve it.

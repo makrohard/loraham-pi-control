@@ -23,6 +23,7 @@ from . import resources as resources_mod
 from . import restart_required as _rr
 from . import reticulum_interfaces as _ri
 from . import rflog as _rflog
+from .daemon_control import ALLOWED_BANDS
 from .lifecycle import GUI_MISSING_HINT
 from .model import ComponentKind, ResourceMode, RunState
 from .outcomes import CompResult, Outcome, applied_ok
@@ -89,7 +90,7 @@ class LifecycleOpsMixin:
                         eff = self._live_bands(ss.stack.id, c.band)
                     else:
                         eb = self._effective_band(ss.stack.id, c.band)
-                        eff = {eb} if eb in ("433", "868") else set()
+                        eff = {eb} if eb in ALLOWED_BANDS else set()
                 else:
                     eff = {c.band} if c.band else set()
                 running.append(limited(c, eff))
@@ -1771,7 +1772,7 @@ class LifecycleOpsMixin:
             elif radio == "868":
                 bands.add("868")
             else:
-                bands |= {"433", "868"}       # missing / unknown -> conservative
+                bands |= set(ALLOWED_BANDS)       # missing / unknown -> conservative
         return bands
 
     def _daemon_pids_for_band(self, band: str) -> list[int]:
@@ -1788,7 +1789,7 @@ class LifecycleOpsMixin:
                     radio = argv[i + 1]
                 elif tok.startswith("--radio="):
                     radio = tok.split("=", 1)[1]
-            if radio == band or radio not in ("433", "868"):
+            if radio == band or radio not in ALLOWED_BANDS:
                 out.append(pid)              # unknown mode -> conservatively serves the band
         return out
 
@@ -1799,7 +1800,7 @@ class LifecycleOpsMixin:
         result. `meshtastic-<band>` and `daemon-<band>` are the same physical radio, so a running
         meshtastic on 868 makes 868 owned; a serve-all daemon start uses this to serve only free bands
         instead of colliding (which would fail-closed and take the working band down too)."""
-        want = {b for b in bands if b in ("433", "868")}
+        want = {b for b in bands if b in ALLOWED_BANDS}
         if not want:
             return {}
         owners: dict[str, str] = {}
@@ -1831,7 +1832,7 @@ class LifecycleOpsMixin:
         that band, so a genuine conflict is surfaced by the normal blocker path, not silently skipped.
         Only a serve-all start (empty `radio`) is arbitrated to the free bands."""
         base = self._daemon_serve_bands(radio)
-        if radio in ("433", "868"):
+        if radio in ALLOWED_BANDS:
             return list(base), {}
         owners = self._direct_radio_owners(base)
         kept = [b for b in base if b not in owners]
@@ -1914,7 +1915,7 @@ class LifecycleOpsMixin:
             return lines, False, ""
         # Note when a single radio mode narrows an all-bands request (only when nothing was arbitrated
         # away — the skip line already explains a band-owned narrowing).
-        if (radio or "") == "" and not owned and set(needed) != {"433", "868"}:
+        if (radio or "") == "" and not owned and set(needed) != set(ALLOWED_BANDS):
             lines.append(f"  [note] radio mode {self.radio_mode()}: daemon serves {'+'.join(needed)}")
         for b in not_ready:
             ok_all = False
@@ -2334,7 +2335,7 @@ class LifecycleOpsMixin:
         if not any(self.DAEMON_ID in (c.depends_on or ()) for c in stk.components):
             return daemon_sid, []
         release = []
-        for b in sorted(bb for bb in active_bands if bb in ("433", "868")):
+        for b in sorted(bb for bb in active_bands if bb in ALLOWED_BANDS):
             others = [d for d in self.stop_dependents(daemon_sid, bands={b}) if d != sid]
             if not others and self.daemon_view(b).reachable:
                 release.append(b)
@@ -2446,7 +2447,7 @@ class LifecycleOpsMixin:
             cascade = True
         # Bands ACTUALLY being stopped — from the authoritative topology resolver (per-band daemon
         # stop includes its dual-band collateral; separate per-band instances are unaffected).
-        _daemon_band_stop = bool(target_is_daemon and band in ("433", "868"))
+        _daemon_band_stop = bool(target_is_daemon and band in ALLOWED_BANDS)
         stopped_bands = self._operation_bands(target, band, "", "stop") if _daemon_band_stop else None
         other_bands = sorted((stopped_bands or set()) - {band}) if _daemon_band_stop else []
         # Fail closed: a PER-BAND daemon stop must not guess the band of a running band-switchable
@@ -2487,7 +2488,7 @@ class LifecycleOpsMixin:
                 _dsid = next((s.id for s in self.stacks() if s.main == self.DAEMON_ID), None)
                 if _dsid:
                     for _b in sorted(b for b in self._operation_bands(target, band, "", "stop")
-                                     if b in ("433", "868")):
+                                     if b in ALLOWED_BANDS):
                         _others = [d for d in self.stop_dependents(_dsid, bands={_b})
                                    if d != _psid and d not in _deps_rel]
                         if not _others and self.daemon_view(_b).reachable:
@@ -2574,7 +2575,7 @@ class LifecycleOpsMixin:
             # The daemon is multi-instance (one process per band). A per-band stop
             # signals ONLY the owned instance(s) serving that band. Record-driven +
             # identity-verified inside Lifecycle.stop, which returns a typed result.
-            if comp.id == self.DAEMON_ID and band in ("433", "868"):
+            if comp.id == self.DAEMON_ID and band in ALLOWED_BANDS:
                 cr = life.stop(comp, band=band)
             else:
                 cr = life.stop(comp)
@@ -2646,7 +2647,7 @@ class LifecycleOpsMixin:
         # per-band stop clears that band (+ its dual-band collateral), a whole-daemon stop clears
         # every served band. (A client that releases a daemon band recurses here as a daemon stop.)
         if target_is_daemon and own_ok:
-            for _b in ({band, *other_bands} if band in ("433", "868")
+            for _b in ({band, *other_bands} if band in ALLOWED_BANDS
                        else set(self.active_bands())):
                 self.clear_daemon_feed(_b)
         # ok only when every result (dependents + own + daemon release) is a verified stop.
@@ -4481,7 +4482,7 @@ class LifecycleOpsMixin:
         onto the same radio. Unknown is not the default band; unknown is all of them.
         """
         eb = self._effective_band(stack_id, "")
-        if eb in ("433", "868"):
+        if eb in ALLOWED_BANDS:
             return {eb}
         allowed = self.stack_bands(stack_id)
         if len(allowed) > 1:

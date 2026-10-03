@@ -21,6 +21,7 @@ from pathlib import Path
 
 from . import boot_restore, known_working, runtime_fs, updater_units
 from .boot_restore import Evidence, MarkerView, StackMeta
+from .daemon_control import ALLOWED_BANDS
 from .lifecycle import current_boot_id
 from .outcomes import Outcome, manual_required_only
 from .paths import PathContainmentError
@@ -73,7 +74,7 @@ class BootRestoreOpsMixin:
         try:
             if os.path.lexists(marker):
                 raw = runtime_fs.read_text(self._paths, marker, max_bytes=64).strip()
-                if raw in ("433", "868"):
+                if raw in ALLOWED_BANDS:
                     rb_state, rb = "valid", raw
                 else:
                     rb_state = "unsafe"
@@ -576,7 +577,7 @@ class BootRestoreOpsMixin:
         self._boot_settle_item(journal, item, res, parts=parts)
 
     def _boot_run_daemon_item(self, journal, item) -> None:
-        recorded = [b for b in item.get("bands", []) if b in ("433", "868")]
+        recorded = [b for b in item.get("bands", []) if b in ALLOWED_BANDS]
         kept, _owners = self._daemon_arbitrated_bands("")
         served = set(self._daemon_claimed_bands())
         residual = [b for b in recorded if b in kept and b not in served]

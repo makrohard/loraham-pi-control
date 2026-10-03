@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import runtime_fs
+from .daemon_control import ALLOWED_BANDS
 from .paths import PathContainmentError, Paths
 
 JOURNAL_VERSION = 1
@@ -31,7 +32,6 @@ ITEM_KINDS = ("stack", "daemon-reconcile")
 # `running` is the only non-terminal run state. `truncated` is a PROJECTION (a `running` journal
 # whose recorded driver is provably dead/foreign), never stored.
 RUN_STATES = ("running", "done", "failed", "disabled", "no-plan", "unsafe")
-_BANDS = ("433", "868")
 
 
 def journal_path(paths: Paths) -> Path:
@@ -65,7 +65,7 @@ def _validate_item(it) -> str:
     if not isinstance(it.get("target"), str) or not isinstance(it.get("band"), str):
         return "item target/band wrong type"
     bands = it.get("bands")
-    if not isinstance(bands, list) or not all(b in _BANDS for b in bands):
+    if not isinstance(bands, list) or not all(b in ALLOWED_BANDS for b in bands):
         return "item bands invalid"
     ev = it.get("evidence_ids")
     if not isinstance(ev, list) or not all(isinstance(e, str) and e for e in ev):
@@ -281,7 +281,7 @@ def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
                                  "evidence_ids": ev_ids})
             continue
         if stack_id == daemon_stack_id:
-            ok_bands = {e.band for e in evs if e.band in _BANDS}
+            ok_bands = {e.band for e in evs if e.band in ALLOWED_BANDS}
             daemon_bands |= ok_bands
             daemon_evidence.extend(ev_ids)
             continue

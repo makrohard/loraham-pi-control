@@ -17,6 +17,8 @@ from __future__ import annotations
 import ipaddress
 import re
 
+from .daemon_control import ALLOWED_BANDS
+
 MAX_LEN = 256
 
 # Characters that must never appear in a value that may be substituted into a
@@ -262,12 +264,11 @@ def bind(value, *, field: str = "bind") -> str:
     return text
 
 
-_BANDS = ("433", "868")
 
 
 def band(value, *, field: str = "band", allow_both: bool = True) -> str:
     s = str(value).strip()
-    allowed = _BANDS + (("both",) if allow_both else ())
+    allowed = ALLOWED_BANDS + (("both",) if allow_both else ())
     if s not in allowed:
         raise ValidationError(f"{field}: invalid band {s!r} (allowed: {', '.join(allowed)})")
     return s

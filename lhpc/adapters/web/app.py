@@ -42,6 +42,7 @@ from lhpc.core import config as _config
 from lhpc.core import meshcore_mode as _meshcore_mode
 from lhpc.core import rflog as _rflog
 from lhpc.core import validators
+from lhpc.core.daemon_control import ALLOWED_BANDS
 from lhpc.core.services import ControllerService
 from lhpc.core.status import rollup_states, stack_dependencies, summarize
 from lhpc.version import __version__
@@ -1402,7 +1403,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # contract it must be READ-ONLY — and it now genuinely is: the channel fields come from
         # the PASSIVE read, which never puts the radio into CAD. It used to call `GET CHANNEL`,
         # whose CAD scan destroyed frames in flight and cost ~46 % of reception at SF12/BW125.
-        if band not in ("433", "868"):
+        if band not in ALLOWED_BANDS:
             abort(404)
         view = service.daemon_view(band)
         channel = service.daemon_channel(band) if view.reachable else {}
@@ -1416,7 +1417,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # The "RX/TX activity" window polls ONLY this. It used to poll /api/daemon/<band> and
         # throw away everything except `feed`, dragging a full CAD scan behind a text log every
         # 3 s. Nothing here touches the radio.
-        if band not in ("433", "868"):
+        if band not in ALLOWED_BANDS:
             abort(404)
         return jsonify(band=band, feed=service.daemon_feed(band, 40))
 
@@ -1429,7 +1430,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # it as a nominally-safe GET would let a refresh, prefetch or retry fire it, which is in
         # miniature how a status read came to scan the channel in the first place. No confirm
         # page: the button click is sufficient operator intent.
-        if band not in ("433", "868"):
+        if band not in ALLOWED_BANDS:
             abort(404)
         if not _csrf_ok():
             abort(400)
@@ -1442,7 +1443,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # READ-ONLY live poll of the CONF socket for the "View Socket" monitor: one bounded,
         # sanitised status line per request (band validated -> never an arbitrary socket path;
         # fail-closed to '' when unreachable). The window/polling live entirely in the browser.
-        if band not in ("433", "868"):
+        if band not in ALLOWED_BANDS:
             abort(404)
         line = service.daemon_socket_line(band)
         return jsonify(band=band, line=line, reachable=bool(line))
@@ -1451,7 +1452,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     def radio_set(band: str):
         # Apply a LIVE daemon setting (runtime) — a two-step plan + confirm, like install/update/clean.. First POST shows the plan; a confirmed POST
         # applies. The key is whitelisted by the service; nothing transmits.
-        if band not in ("433", "868"):
+        if band not in ALLOWED_BANDS:
             abort(404)
         if not _csrf_ok():
             abort(400)

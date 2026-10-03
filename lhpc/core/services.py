@@ -33,6 +33,7 @@ from .config import (
     load_config,
     load_stack_config,
 )
+from .daemon_control import ALLOWED_BANDS
 from .gps import USE_GPS_PARAM
 from .install import Installer, Plan
 from .lifecycle import GUI_MISSING_HINT, Lifecycle
@@ -783,7 +784,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                         seen.add(toks[i + 1])
                     elif t.startswith("--radio="):
                         seen.add(t.split("=", 1)[1])
-            bands |= (seen & {"433", "868"}) or {"433", "868"}
+            bands |= (seen & set(ALLOWED_BANDS)) or set(ALLOWED_BANDS)
         return bands
 
     @staticmethod
@@ -2268,7 +2269,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         None when no single value applies."""
         if not any(c.id == self.DAEMON_ID for _, c in order):
             return None, None
-        if band in ("433", "868"):
+        if band in ALLOWED_BANDS:
             bands = {band}
         else:
             bands = {c.band for _, c in order if self.DAEMON_ID in c.depends_on and c.band}
@@ -2310,7 +2311,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     | self._operation_bands(target, band, radio, "start"))
         if is_daemon:
             if op == "stop":
-                if band in ("433", "868"):
+                if band in ALLOWED_BANDS:
                     bands = {band}
                     other = "868" if band == "433" else "433"
                     # dual-band collateral: the SAME process also serves the other band -> lock
@@ -2335,7 +2336,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         # Client.
         if op == "stop":
             eb = self._effective_band(sid, "")        # ACTUAL running band (marker/interactive)
-            if eb in ("433", "868"):
+            if eb in ALLOWED_BANDS:
                 return {eb}
         # A LIVE multi-band owner with NO band evidence must claim EVERY band it could be
         # on. Falling back to the declared primary here meant a node actually running on
@@ -2734,7 +2735,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             self._invalidate_config()
         return migrated, remaining
 
-    RADIO_BANDS = ("433", "868")   # the FULL band universe — detection/read/manage (never narrowed)
+    RADIO_BANDS = ALLOWED_BANDS   # the FULL band universe — detection/read/manage (never narrowed)
 
     def hardware_setup(self) -> str:
         """The configured radio HARDWARE setup id ('unset' | 'loraham' | 'uputronics' | …)."""
@@ -2773,7 +2774,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         process per band). A single active band -> [that band]; anything else (empty, a dual-band value,
         or the excluded band) -> the active band(s). radio_mode='both' therefore serves TWO processes."""
         active = list(self.active_bands())
-        return [radio] if radio in ("433", "868") and radio in active else active
+        return [radio] if radio in ALLOWED_BANDS and radio in active else active
 
     # -- CALL/node identity enforcement (plan and apply, on the saved configuration) ----
 
