@@ -2647,6 +2647,15 @@ class LifecycleOpsMixin:
             return _bref            # plan and apply take the SAME decision on an explicit band
         from . import reslock
         if not apply:
+            # The apply's preflight, in its order and on its band: identity, saved launch values,
+            # MeshCore position.
+            _rband = self.operation_band(target, band)
+            if (_pf_err := self._identity_refusal(target, _rband, "restart")) is not None:
+                return _pf_err
+            if (_pf_err := self._saved_launch_refusal(target, _rband, "restart")) is not None:
+                return _pf_err
+            if (_pf_err := self._position_refusal(target, "restart")[0]) is not None:
+                return _pf_err
             return self._restart_impl(target, apply=False, stop_owners=stop_owners, band=band,
                                       cascade=cascade)
         # A non-daemon restart with NO explicit band restarts on the band it is ACTUALLY running on
@@ -2694,11 +2703,10 @@ class LifecycleOpsMixin:
                             # and handed to the nested start, so a restart queries gpsd exactly
                             # once and a refusal leaves the running node up rather than stopping
                             # it and only then discovering there is no position.
-                            _position, _pos_note = self.meshcore_position(target)
-                            if _position is None:
-                                return ActionResult(
-                                    False, f"Cannot restart '{target}': {_pos_note}",
-                                    next_commands=[f"lhpc status {target}"])
+                            _pf_err, _position, _pos_note = self._position_refusal(target,
+                                                                                   "restart")
+                            if _pf_err is not None:
+                                return _pf_err
                             # PRE-MUTATION HOOK: every lock held, nothing stopped yet. A refusal
                             # cancels the restart with the running stack untouched.
                             if _before_restart_locked is not None:
@@ -2956,6 +2964,42 @@ class LifecycleOpsMixin:
             # to eliminate, and the preflight then materialized the inherited global over a deliberate
             # local callsign. It also split the dry-run plan from the applied band.)
             band = self.operation_band(target, band)
+        # PREFLIGHT, plan and apply alike, BEFORE the stop: every refusal the start that follows
+        # would take — never stop a running target and only then discover that the start is
+        # refused. On apply `band` is already the operation band; on the plan an explicit band
+        # is still raw, so it is resolved here the way the apply resolved it.
+        _rband = self.operation_band(target, band)
+        if (_r := self._start_static_refusal(target, "restart")) is not None:
+            return _r
+        if (_pf_err := self._identity_refusal(target, _rband, "restart")) is not None:
+            return _pf_err
+        if (_pf_err := self._saved_launch_refusal(target, _rband, "restart")) is not None:
+            return _pf_err
+        # The dependency band rule: a chain member of another stack live on a different band.
+        # `stop_owners` cannot clear that state: owner-stop acts on resource-conflict HOLDERS, and
+        # chain members are exempt from that set precisely because they are in the run order.
+        _pre_order = self._run_order(target)
+        if _pre_order:
+            _bb = self._dep_band_block(target, _pre_order,
+                                       _rband or self._config_band(target, _rband))
+            if _bb is not None:
+                return _bb
+            # The firewall gate (no apply-script write on the plan), an ambiguous saved value and
+            # — on apply without `stop_owners` — the running holders of a needed resource, except
+            # those this restart's own stop takes down: the target stack's optional components
+            # and the dependents its stop cascades.
+            radio = (self._daemon_needs(_pre_order, _rband)[0] or "")
+            _check = apply and not stop_owners
+            _ex = set()
+            if _check:
+                _ex = {target} if self.stack(target) else set()
+                if self._restart_stops_dependents(target, cascade):
+                    _ex |= set(self._stop_impl(target, apply=False, cascade=cascade,
+                                               band=_rband).data.get("dependents") or [])
+            if (_r := self._start_preflight_refusal(target, _pre_order, _rband, radio, "restart",
+                                                    check_blockers=_check, render=apply,
+                                                    exclude_holders=_ex)) is not None:
+                return _r
         if not apply:
             # THE COMBINED restart plan: the start plan (preflight, blockers, identity — a refusal
             # there IS the restart's refusal) plus the stop plan's consequential collateral
@@ -2979,9 +3023,7 @@ class LifecycleOpsMixin:
             # (the confirmed web choice; a daemon always cascades) stops them first; a plain one
             # (the CLI, an unconfirmed web click) leaves them running across the restart — the
             # same decision the apply takes, never a `[stop]` the stop leg will not perform.
-            _sid = self.stack_of(target)
-            _daemon = bool(_sid and self.stack(_sid) and self.stack(_sid).main == self.DAEMON_ID)
-            _will_stop = cascade or _daemon
+            _will_stop = self._restart_stops_dependents(target, cascade)
             _opt = self._running_optional_components(target) if self.stack(target) else []
             data["optional_restarted"] = list(_opt)
             details = [*[(f"  [stop] {d}" if _will_stop else
@@ -2992,24 +3034,6 @@ class LifecycleOpsMixin:
             return ActionResult(res.ok, f"Restart plan for '{target}': stop then run.",
                                 details=details, data=data,
                                 next_commands=[f"lhpc stack restart {target} --yes"])
-        # Defensive: an internal/direct apply=True call must validate BEFORE its stop() — never stop
-        # a running target and only then discover the saved identity or configuration is unusable.
-        if (_pf_err := self._identity_refusal(target, band, "restart")) is not None:
-            return _pf_err
-        if (_pf_err := self._saved_launch_refusal(target, band, "restart")) is not None:
-            return _pf_err
-        # The dependency band rule must also refuse BEFORE the stop: the later start refuses it
-        # anyway (a chain member of another stack live on a different band), and by then the
-        # target is already down — restart degrades to stop-only, breaking this method's
-        # "never stopped only to be rejected by the later start" promise. `stop_owners` cannot
-        # clear the state either: owner-stop acts on resource-conflict HOLDERS, and chain
-        # members are exempt from that set precisely because they are in the run order.
-        _pre_order = self._run_order(target)
-        if _pre_order:
-            _bb = self._dep_band_block(target, _pre_order,
-                                       band or self._config_band(target, band))
-            if _bb is not None:
-                return _bb
         # OPTIONAL components that are UP inside the stack (MeshChat beside rns, an optional
         # client started by name) come back after the restart: a stack start raises only the
         # run order, so before 0.9.2 `lhpc stack restart reticulum` left a running MeshChat
@@ -3054,6 +3078,13 @@ class LifecycleOpsMixin:
         return ActionResult(ok, summary, details=details,
                             results=tuple(stopped.results) + tuple(results),
                             next_commands=res.next_commands)
+
+    def _restart_stops_dependents(self, target: str, cascade: bool) -> bool:
+        """Whether a restart's stop leg takes the running dependents down: a cascading restart
+        (the confirmed web choice) does, and a daemon restart always does."""
+        _sid = self.stack_of(target)
+        _daemon = bool(_sid and self.stack(_sid) and self.stack(_sid).main == self.DAEMON_ID)
+        return cascade or _daemon
 
     def _running_optional_components(self, target: str) -> list[str]:
         """Ids of the stack's OPTIONAL service components currently running/degraded that a stack

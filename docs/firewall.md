@@ -205,6 +205,10 @@ bind address, port, band, source CIDRs) matches a modeled scope the live receipt
 - a scope the applied firewall does not model (e.g. a non-default-band listener): *"The saved
   listener is not covered by the applied firewall — apply the firewall, then start."*
 
+A restart refused by the gate says *restart was not performed; the running stack was left up* with
+the same reason; the dry run (`lhpc stack start <id>` / `lhpc stack restart <id>` without `--yes`)
+shows the same refusal.
+
 A TCP listener with no firewall metadata is treated as exposed and gated.
 
 **Across updates.** Every receipt carries the installed helper's revision (a hash of its

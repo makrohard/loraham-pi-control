@@ -1123,6 +1123,132 @@ def test_restart_plan_predicts_exactly_what_its_apply_does_with_dependents(tmp_p
                for d in svc.run_action("restart", "kiss", cascade=True).details)
 
 
+# ---- restart preflights the start's refusals BEFORE its stop (CR1-2) -------------------------
+
+def _blockers_until_a_stop(monkeypatch, stopped, holders):
+    """`run_blockers` reporting `holders` while nothing has been stopped yet, none afterwards."""
+    monkeypatch.setattr(ControllerService, "run_blockers",
+                        lambda self, t, band="", radio="": [] if stopped else [
+                            {"resource": "loraham.radio.433", "holder": h, "holder_stack": s}
+                            for h, s in holders])
+
+
+def test_restart_refuses_run_blockers_before_its_stop(tmp_path, monkeypatch, set_call):
+    # The blocker refusal came from the nested start, after the stop: the restart left kiss down.
+    svc = _kiss_with_graywolf_running(set_call, tmp_path, monkeypatch)
+    stopped = _spy_life_stops(monkeypatch)
+    assert svc.stack_of("meshtastic") == "meshtastic"
+    _blockers_until_a_stop(monkeypatch, stopped, [("meshtastic", "meshtastic")])
+    res = svc.restart("kiss", apply=True)
+    assert res.ok is False and "must be stopped first" in res.summary
+    assert not res.results and stopped == []
+    # with the owners' consent the restart proceeds to its stop
+    res = svc.restart("kiss", apply=True, stop_owners=True)
+    assert "must be stopped first" not in res.summary
+    assert "loraham-kiss-tnc" in stopped
+
+
+def test_restart_plan_does_not_refuse_for_a_resource_holder_its_apply_refuses(
+        tmp_path, monkeypatch, set_call):
+    # CHARACTERIZATION of the policy (plan v3): blockers refuse a restart only on apply without
+    # `stop_owners`. The dry run, like the start plan, lists them for the owner-confirm flow
+    # (web *Stop owner(s) & restart*) instead of refusing.
+    svc = _kiss_with_graywolf_running(set_call, tmp_path, monkeypatch)
+    stopped = _spy_life_stops(monkeypatch)
+    _blockers_until_a_stop(monkeypatch, stopped, [("meshtastic", "meshtastic")])
+    plan = svc.restart("kiss", apply=False)
+    assert plan.ok is True and "must be stopped first" not in plan.summary
+    assert [b["holder_stack"] for b in plan.data["blockers"]] == ["meshtastic"]
+    assert stopped == []
+    applied = svc.restart("kiss", apply=True)
+    assert applied.ok is False and "meshtastic must be stopped first" in applied.summary
+    assert not applied.results and stopped == []
+
+
+def test_restart_refuses_an_ambiguous_saved_value_before_its_stop(tmp_path, monkeypatch, set_call):
+    # The ambiguity was judged only by the nested start, after the stop: the restart stopped kiss
+    # and only then refused. It is now refused with the stack left up, plan and apply alike.
+    svc = _kiss_with_graywolf_running(set_call, tmp_path, monkeypatch)
+    stopped = _spy_life_stops(monkeypatch)
+    msg = ("run parameter 'x' is ambiguous — declared by more than one component and stored "
+           "only as a flat value; set a component-scoped value for 'loraham-kiss-tnc'")
+    seen = []
+    monkeypatch.setattr(ControllerService, "_config_ambiguity",
+                        lambda self, t, order, band="": seen.append(list(stopped)) or msg)
+    res = svc.restart("kiss", apply=True)
+    assert res.ok is False and res.summary == f"Cannot restart 'kiss': {msg}"
+    assert seen and seen[0] == []                               # judged before any stop
+    assert not res.results and stopped == []
+    assert svc.restart("kiss", apply=False).summary == res.summary
+
+
+def test_restart_preflight_ignores_holders_its_own_stop_releases(tmp_path, monkeypatch, set_call):
+    # A running optional component of kiss itself and a dependent the stop cascades are down
+    # after the stop leg: they must not refuse the restart before it. A dependent the restart
+    # leaves running still does.
+    svc = _kiss_with_graywolf_running(set_call, tmp_path, monkeypatch)
+    stopped = _spy_life_stops(monkeypatch)
+    assert svc.stack_of("loraham-kiss-serial") == "kiss"
+    assert svc.stack_of("graywolf") == "graywolf"
+    assert svc._stop_impl("kiss", apply=False, cascade=True).data["dependents"] == ["graywolf"]
+    _blockers_until_a_stop(monkeypatch, stopped,
+                           [("loraham-kiss-serial", "kiss"), ("graywolf", "graywolf")])
+    calls = []
+    real = ControllerService._stop_impl
+    monkeypatch.setattr(ControllerService, "_stop_impl",
+                        lambda self, t, apply=False, cascade=False, band="", **kw:
+                        calls.append((apply, band)) or real(self, t, apply=apply,
+                                                            cascade=cascade, band=band, **kw))
+    res = svc.restart("kiss", apply=True, cascade=True)
+    assert "must be stopped first" not in res.summary
+    assert "graywolf" in stopped
+    planned = [b for a, b in calls if not a]
+    applied = [b for a, b in calls if a]
+    assert planned and applied and planned[0] == applied[0]   # the exclusion judged the stop's band
+    stopped.clear()
+    res = svc.restart("kiss", apply=True)
+    assert res.ok is False
+    assert res.next_commands == ["lhpc stack stop graywolf"]   # own-stack holder excluded
+    assert not res.results and stopped == []
+
+
+@pytest.mark.parametrize("seam, value, needle", [
+    ("gps_block", ("the global position source is invalid (x) — fix it or set it to off",
+                   ["lhpc gps"]), "position source is invalid"),
+    ("radio_mode_block", "requires the 433 MHz radio — radio mode is 868-only; change it in "
+                         "the daemon Hardware settings", "requires the 433 MHz radio"),
+])
+def test_restart_refuses_gps_and_radio_mode_before_its_stop(tmp_path, monkeypatch, set_call,
+                                                            seam, value, needle):
+    # GPS and radio mode were checked only by the nested start, after the stop: the restart
+    # stopped kiss and then reported "Restarted 'kiss'. Cannot start …".
+    svc = _kiss_with_graywolf_running(set_call, tmp_path, monkeypatch)
+    stopped = _spy_life_stops(monkeypatch)
+    monkeypatch.setattr(ControllerService, seam, lambda self, t: value)
+    res = svc.restart("kiss", apply=True)
+    assert res.ok is False and res.summary.startswith("Cannot restart 'kiss':")
+    assert needle in res.summary
+    assert not res.results and stopped == []
+    assert svc.restart("kiss", apply=False).summary == res.summary
+
+
+@pytest.mark.parametrize("band", ["433", ""])
+def test_restart_plan_and_apply_preflight_one_band(tmp_path, monkeypatch, set_call, band):
+    svc = _kiss_with_graywolf_running(set_call, tmp_path, monkeypatch)
+    _spy_life_stops(monkeypatch)
+    assert svc.stack_bands("kiss")                          # band-switchable
+    seen = []
+    real = ControllerService._start_preflight_refusal
+    def spy(self, target, order, b, radio, op, **kw):
+        if op == "restart":
+            seen.append(b)
+        return real(self, target, order, b, radio, op, **kw)
+    monkeypatch.setattr(ControllerService, "_start_preflight_refusal", spy)
+    svc.restart("kiss", apply=False, band=band)
+    svc.restart("kiss", apply=True, band=band)
+    assert len(seen) == 2 and seen[0] == seen[1] == svc.operation_band("kiss", band)
+
+
 def test_an_advisory_claim_never_blocks_a_start(tmp_path):
     """F-M2: meshcore-cli and meshcore-webui claim the node's one Companion slot, ADVISORY on both
     sides (model.py: shown as a conflict, arbitrated at runtime by the WebUI yielding to the CLI's

@@ -1459,6 +1459,49 @@ def test_start_plan_of_a_running_stack_is_not_refused_by_the_gate(tmp_path, monk
     assert applied.results and {r.outcome.value for r in applied.results} == {"already_healthy"}
 
 
+def _stub_life_stops(monkeypatch):
+    """Record component stops instead of performing them."""
+    from lhpc.core.lifecycle import Lifecycle
+    from lhpc.core.outcomes import CompResult, Outcome
+    stops = []
+    monkeypatch.setattr(Lifecycle, "stop",
+                        lambda self, comp, band="": stops.append(comp.id) or CompResult(
+                            comp.id, "stop", Outcome.STOPPED, "", "stopped (stub)"))
+    return stops
+
+
+def test_restart_with_a_pending_firewall_gate_leaves_the_running_stack_up(tmp_path, monkeypatch):
+    # CR1-2: the gate refused the nested start AFTER the restart's stop — kiss was left down.
+    from lhpc.core.model import RunState
+    svc = _running_kiss(tmp_path)
+    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
+    monkeypatch.setattr(svc, "firewall_status",
+                        lambda: {"config_ok": True, "live_ok": False})
+    stops = _stub_life_stops(monkeypatch)
+    res = svc.restart("kiss", apply=True)
+    assert res.ok is False and res.data.get("firewall_gate") == "pending"
+    assert "Firewall changes pending" in res.summary
+    assert "restart was not performed; the running stack was left up" in res.summary
+    assert "NOT started" not in res.summary
+    assert not res.results and stops == []
+    svc._invalidate_config()
+    kiss = svc.build_snapshot().stack("kiss").components["loraham-kiss-tnc"]
+    assert kiss.run_state == RunState.RUNNING
+
+
+def test_restart_plan_refuses_a_pending_firewall_gate(tmp_path, monkeypatch):
+    svc = _running_kiss(tmp_path)
+    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
+    monkeypatch.setattr(svc, "firewall_status",
+                        lambda: {"config_ok": True, "live_ok": False})
+    script = tmp_path / "config" / "files" / "firewall" / "firewall-apply.sh"
+    plan = svc.restart("kiss", apply=False)
+    assert plan.ok is False and plan.data.get("firewall_gate") == "pending"
+    assert not script.exists()
+    _stub_life_stops(monkeypatch)
+    assert svc.restart("kiss", apply=True).summary == plan.summary
+
+
 def test_fw_scope_modeled_matches_full_scope(tmp_path):
     # P1-1 unit: exact match on proto/family/addr/port/band with CIDRs covered; a port move,
     # CIDR widening, wrong band, or unmapped scope is NOT represented; a modeled DROP covers any.
