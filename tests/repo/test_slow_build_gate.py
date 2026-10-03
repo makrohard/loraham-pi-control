@@ -152,12 +152,14 @@ def _mountinfo(upper: str | None) -> str:
             f"upperdir={upper},workdir=/w\n")
 
 
-def _resolve(tmp_path: Path, storage: str, upper: str | None, vanish: bool = False):
+def _resolve(tmp_path: Path, storage: str, upper: str | None, vanish: bool = False,
+             run_d_rc: int = 0):
     """The step, as the runner runs it (`bash -e`), with a stub `docker` naming `storage` and
     reporting the container root `_mountinfo(upper)`, and a pass-through `sudo`. With `vanish`,
     the upperdir is deleted when its container goes, as Docker deletes it: at the exit of a
     `run --rm`, or at `rm -f` of a detached container. Every docker call is logged to
-    `tmp_path/docker.log`."""
+    `tmp_path/docker.log`. `run_d_rc` is the exit status of `run -d`, which prints its id
+    either way."""
     stub = tmp_path / "bin"
     stub.mkdir()
     (tmp_path / "mountinfo").write_text(_mountinfo(upper))
@@ -166,7 +168,7 @@ def _resolve(tmp_path: Path, storage: str, upper: str | None, vanish: bool = Fal
     (stub / "docker").write_text(
         f'#!/bin/sh\necho "$*" >> {log}\ncase $1 in\n'
         f"info) case $* in *DockerRootDir*) echo {storage} ;; *) exit 9 ;; esac ;;\n"
-        f'run) case " $* " in *" -d "*) echo cid0 ;; *) cat {mountinfo}; {gone} ;; esac ;;\n'
+        f'run) case " $* " in *" -d "*) echo cid0; exit {run_d_rc} ;; *) cat {mountinfo}; {gone} ;; esac ;;\n'
         f'exec) [ "$2" = cid0 ] || exit 9; cat {mountinfo} ;;\n'
         f'rm) [ "$2 $3" = "-f cid0" ] || exit 9; {gone} ;;\n'
         "*) exit 9 ;;\nesac\n")
@@ -296,3 +298,17 @@ def test_the_upperdir_is_resolved_while_its_container_lives(tmp_path):
     log = (tmp_path / "docker.log").read_text().splitlines()
     assert log[1].startswith("run -d ") and log[-1] == "rm -f cid0", log
     assert not upper.exists()       # the stub deleted it with its container, as Docker does
+
+
+def test_a_probe_container_that_fails_to_start_is_still_removed(tmp_path):
+    """Correction 11: `docker run -d` can create a container, print its id and exit non-zero.
+    The trap exists before the call and the id is kept, so the job stops naming the failure and
+    the container is removed."""
+    _tools()
+    disk = _on_disk(tmp_path)
+    r, env = _resolve(tmp_path, str(disk), str(disk), run_d_rc=125)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "::error::STOP: the probe container did not start (docker run rc 125)" in r.stdout, r.stdout
+    assert "SLOW_IO_FLAGS" not in env and "SLOW_IO_ROOT_DISK" not in env
+    log = (tmp_path / "docker.log").read_text().splitlines()
+    assert log[-1] == "rm -f cid0", log

@@ -286,8 +286,14 @@ jobs:
           # The upperdir exists only while its container does (`--rm` deletes it at exit, and
           # findmnt resolves no missing path), so a container is kept alive until every
           # required disk has resolved, and removed on every way out of the step.
-          cid=$(docker run -d "$IMG" sleep 300)
-          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          # The trap exists before the container: `docker run -d` can print an id and still fail.
+          cid= rc=0
+          trap '[ -z "$cid" ] || docker rm -f "$cid" >/dev/null 2>&1; true' EXIT
+          cid=$(docker run -d "$IMG" sleep 300) || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::STOP: the probe container did not start (docker run rc $rc)"
+            exit 1
+          fi
           layer=$(docker exec "$cid" cat /proc/self/mountinfo \
             | awk '$5 == "/"' | sed -n 's/.* - overlay .*[ ,]upperdir=\([^,]*\).*/\1/p')
           if [ -z "$layer" ]; then
