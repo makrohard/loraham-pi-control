@@ -2221,7 +2221,7 @@ main = "meshcore-node"
   # early — `build_marker` is written ONLY after the LAST step succeeds and gates `is_built`.
   bin = ".venv/bin/python"
   build_marker = ".venv/.lhpc-build-complete"
-  # venv + pip installs overran the 600 s default on a Pi Zero 2W for the MeshCore host already;
+  # venv + pip installs overran the 900 s default on a Pi Zero 2W for the MeshCore host already;
   # give the build the same room.
   build_timeout = 1800.0
   test_timeout = 900.0
@@ -2736,6 +2736,9 @@ main = "meshcore-node"
   ]
   # `pip install .` places the meshcli console script in the venv — that IS the build artifact.
   bin = ".venv/bin/meshcli"
+  # Same slow venv+pip build as its siblings; the marker (not `bin`) gates `is_built`.
+  build_marker = ".venv/.lhpc-build-complete"
+  build_timeout = 1800.0
 
     # Same single Companion client slot as meshcore-webui: running both evicts each other, so
     # this EXCLUSIVE claim makes it an observed conflict on the Apps page (banner + card).

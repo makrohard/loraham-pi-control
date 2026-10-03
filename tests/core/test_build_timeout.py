@@ -138,6 +138,20 @@ def test_rebuild_removes_stale_marker_before_running(tmp_path, monkeypatch):
     assert not svc.is_built(comp)
 
 
+def test_meshcore_cli_declares_build_budget_and_marker(tmp_path):
+    # meshcore-cli's unpinned `pip install .` is the same slow venv build as its siblings: it gets
+    # their per-step budget, not the 900 s default. And `.venv/bin/meshcli` appears after pip but
+    # before the last step, so the marker, not `bin`, decides "built".
+    svc = _svc(tmp_path)
+    comp = next(c for s in svc.stacks() for c in s.components if c.id == "meshcore-cli")
+    assert comp.build_timeout >= 1800.0
+    assert comp.build_marker == ".venv/.lhpc-build-complete"
+    src = svc._lifecycle().source_dir(comp)
+    (src / ".venv" / "bin").mkdir(parents=True, exist_ok=True)
+    (src / ".venv" / "bin" / "meshcli").write_text("#!/bin/sh\n")   # pip finished, compileall not
+    assert not svc.is_built(comp)
+
+
 # --- runner PATH includes ~/.local/bin (pipx tools findable under the service) --------------------
 
 def test_runner_path_appends_local_bin(monkeypatch):
