@@ -3491,8 +3491,9 @@ class LifecycleOpsMixin:
                     marker_text = (BUILD_MARKER_TEXT + self._consumed_source_lines(c)
                                    if _mark else "")
                     inputs = self._build_inputs_to_record(c) if _mark else None
-                    # The same per-step timeout as lifecycle.build()/host_test() on the CLI path.
-                    step_timeout = ((c.build_timeout or life.BUILD_TIMEOUT_S) if op == "build"
+                    # The same limits as lifecycle.build()/host_test() on the CLI path: a Build passes
+                    # the raw manifest value (0 = none) to progress.build_limits in the launcher.
+                    step_timeout = (c.build_timeout if op == "build"
                                     else (c.test_timeout or life.TEST_TIMEOUT_S))
                     script = commands.render_build_launcher(
                         steps, runtime, src, lock_paths, index_lock=index_lock,

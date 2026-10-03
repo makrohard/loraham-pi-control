@@ -5,6 +5,8 @@ immutable spec dict here; ALL security-sensitive behavior lives in this module s
 tested rather than embedded in a generated string:
 
 * strict positive, finite per-step timeout parsing (a malformed value fails safe, never unlimited);
+  a Build step ends on a stall or at its ceiling (`progress.build_limits`, the CLI's rule), a Test
+  step at its plain timeout;
 * descriptor-safe (no-follow) source-transaction journal preflight;
 * index-lock → journal-check → source-lock handoff, all via no-follow lock opens;
 * bounded `pkg-config`;
@@ -26,7 +28,7 @@ import subprocess
 import sys
 import time
 
-from . import proctree
+from . import proctree, progress
 
 _PKGCONFIG_TIMEOUT = 30
 _LOCK_POLL = 0.2
@@ -121,10 +123,12 @@ def _resolve_argv(tokens: list) -> list:
     return argv
 
 
-def _run_step(argv: list, cwd: str, env: dict, timeout: float):
-    """Run one step in its OWN session; on timeout, terminate the whole tree via the shared
-    proctree session-token helper. Output is inherited -> streamed to the job log, not held
-    in memory. Returns `(rc, timed_out, unverified)` — `unverified=True` ONLY when a timeout's
+def _run_step(argv: list, cwd: str, env: dict, timeout: float, stall_s: float | None = None,
+              sample_s: float = progress.SAMPLE_S):
+    """Run one step in its OWN session; on a stall (`stall_s`, Build only) or past `timeout`,
+    terminate the whole tree via the shared proctree session-token helper. Output is inherited ->
+    streamed to the job log (our stdout), not held in memory. Returns `(rc, reason, unverified)` —
+    `reason` is "stalled"/"budget" for a stopped step, else ""; `unverified=True` ONLY when that
     termination was NOT proven (`Termination` not `.ok`: a build/test process may still hold the
     checkout)."""
     # LIVE log streaming: PYTHONUNBUFFERED un-buffers python tools (pip, PlatformIO) —
@@ -146,19 +150,37 @@ def _run_step(argv: list, cwd: str, env: dict, timeout: float):
     except Exception:
         pass
     token = proctree.capture_session_token(p.pid)   # FULL ownership token captured at spawn
-    try:
-        return p.wait(timeout=timeout), False, False
-    except subprocess.TimeoutExpired:
-        result = proctree.terminate_session(token, os.getpid())
+    sampler = (progress.SessionSampler(token.sid, os.getpid(), lambda: os.fstat(1).st_size)
+               if stall_s is not None and token is not None else None)
+    watch = progress.Watch(stall_s, timeout, sample_s, sampler=sampler)
+    while True:
         try:
-            p.wait(timeout=2)
+            return p.wait(timeout=min(1.0, sample_s, watch.remaining())), "", False   # never past the ceiling
         except subprocess.TimeoutExpired:
-            pass
-        if not result.ok:                # UNVERIFIED or INCOMPLETE -> surface, don't hide
-            sys.stderr.write("WARNING: step termination {} (surviving processes possible): "
-                             "{}\n".format(result.value, " ".join(argv)))
-        sys.stderr.write("step timed out after {}s: {}\n".format(timeout, " ".join(argv)))
-        return 124, True, (not result.ok)
+            reason = watch.check()
+            if reason:
+                break
+    result = proctree.terminate_session(token, os.getpid())
+    try:
+        p.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+    if not result.ok:                    # UNVERIFIED or INCOMPLETE -> surface, don't hide
+        sys.stderr.write("WARNING: step termination {} (surviving processes possible): "
+                         "{}\n".format(result.value, " ".join(argv)))
+    sys.stderr.write("step timed out {}: {}\n".format(_stop_words(reason, stall_s, timeout),
+                                                      " ".join(argv)))
+    return 124, reason, (not result.ok)
+
+
+def _stop_words(reason: str, stall_s, timeout: float) -> str:
+    """Which limit ended a step, with the effective values: a Build names the stall or the guard,
+    a Test (no stall rule) keeps "after Ns"."""
+    if stall_s is None:
+        return f"after {timeout:.0f}s"
+    if reason == "stalled":
+        return f"(stalled, no activity for {progress.span(stall_s)})"
+    return f"(runaway guard {progress.span(timeout)})"
 
 
 def run(spec: dict) -> None:
@@ -179,13 +201,26 @@ def run(spec: dict) -> None:
     paths = Paths(runtime_root=Path(spec["runtime_root"]))
     lock_names = sorted(spec.get("lock_names") or [])
     index_name = spec.get("index_lock_name") or ""
-    step_timeout = _step_timeout(spec.get("step_timeout"))
+    op, target = spec.get("op") or "", spec.get("target") or ""
+    # A Build gets the CLI's limits, read here at exec time from the unit's env; a Test keeps its plain
+    # timeout. A malformed value fails safe (exit 3), never unlimited. `sample_s` is set by tests only.
+    stall_s = None
+    if op == "build":
+        try:
+            stall_s, step_timeout = progress.build_limits(spec.get("step_timeout"), os.environ)
+            sample_s = progress.parse(spec.get("sample_s", progress.SAMPLE_S))
+        except ValueError as exc:
+            sys.stderr.write(f"invalid build time limit ({exc}): LHPC_BUILD_STALL_S, "
+                             "LHPC_BUILD_STEP_TIMEOUT_S and the spec's step_timeout must be "
+                             "positive numbers\n")
+            raise SystemExit(3) from None
+    else:
+        step_timeout, sample_s = _step_timeout(spec.get("step_timeout")), progress.SAMPLE_S
     tries = _lock_tries()
 
     # ---- WEB-JOB attempt lifecycle (parallels the HMAC driver gate) --------------------------------
     result_name = spec.get("result_name") or ""
     attempt_id = spec.get("attempt_id") or ""
-    op, target = spec.get("op") or "", spec.get("target") or ""
     web = bool(result_name)
     if web:
         from . import jobresult, webjob_gate
@@ -305,17 +340,18 @@ def run(spec: dict) -> None:
                     # what is happening and where to watch progress.
                     print(s["announce"], flush=True)
                 print("+ " + " ".join(argv), flush=True)
-                rc, timed_out, unverified = _run_step(argv, cwd, {**os.environ, **step_env},
-                                                      step_timeout)
+                rc, reason, unverified = _run_step(argv, cwd, {**os.environ, **step_env},
+                                                   step_timeout, stall_s, sample_s)
                 if rc != 0:
+                    words = _stop_words(reason, stall_s, step_timeout)
                     if unverified:
                         # A timed-out step whose termination was NOT proven: a build/test process may still
                         # hold the checkout -> UNSAFE (retains the same-source block; requires Recover).
                         outcome[0] = "unsafe"
-                        detail[0] = ("timed out; cessation UNPROVEN — a process may survive: "
+                        detail[0] = (f"timed out {words}; cessation UNPROVEN — a process may survive: "
                                      + " ".join(argv))[:200]
-                    elif timed_out:
-                        detail[0] = (f"timed out after {step_timeout:.0f}s: " + " ".join(argv))[:200]
+                    elif reason:
+                        detail[0] = (f"timed out {words}: " + " ".join(argv))[:200]
                     else:
                         detail[0] = ("step failed: " + " ".join(argv))[:200]
                     raise SystemExit(rc)

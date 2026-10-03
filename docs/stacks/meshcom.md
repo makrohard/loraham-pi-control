@@ -66,8 +66,7 @@ never by editing the file ([operations](../operations.md#secrets-and-passwords))
   fetches the firmware at the `meshcom-firmware` pin into `.work/` (always the `{pin:…}` token,
   never a literal commit — `tests/repo/test_build_steps_reference_pins.py`); `apply-overlay.sh`
   applies the QEMU overlay (fail-closed `git apply --check`), `prepare-openeth.sh` resolves the
-  ESP32 platform, `build.sh --env qemu-headless-extradio-gpsd` produces `flash.bin`. Per-step
-  build timeout 28800 s.
+  ESP32 platform, `build.sh --env qemu-headless-extradio-gpsd` produces `flash.bin`.
 
 ## Position (GPS)
 

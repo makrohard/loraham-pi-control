@@ -921,7 +921,6 @@ main = "graywolf"
   # compares the latest tag here to the fetched version; an operator can then opt in to installing
   # it, verified against that release's own checksums.txt (see graywolf-fetch.sh --from-upstream).
   release_repo = "chrissnell/graywolf"
-  build_timeout = 900.0
   # graywolf generates its own web-UI password on first start; the provisioning step stores it
   # under state/. The stack page's Password section shows the stored value (authenticated page,
   # copy button) and the command to edit the file; it never enters a log, a marker or a flash.
@@ -1212,12 +1211,6 @@ main = "meshtastic"
     { name = "meshtastic-cli", value = "2.7.11", command = "pip", token = "meshtastic=={value}" },
     { name = "meshtastic-decoder-crypto", value = "3.23.0", command = "pip", token = "pycryptodomex=={value}" },
   ]
-  # A native C++ firmware build on a Zero 2W is long; the platform/library resolve alone can run
-  # for many minutes over slow Wi-Fi. Ceiling set from LIVE measurement (not a guess): a Pi Zero 2W
-  # (512 MB, one-job compile) builds up to ~900 objects at ~3-6 objects/min, so a cold build runs
-  # ~2.5-5 h. 4 h could be crossed on the slowest supported board and kill the run just before the
-  # link step; 6 h clears the pessimistic case with margin. A Pi 5 finishes far inside it.
-  build_timeout = 21600.0
   # After meshtasticd is listening on the API: the fixed position, the LoRa region, the GPS mode, and
   # the node identity LAST. The region is REQUIRED: a node whose region is UNSET may not transmit, so
   # a failed region push must fail the start (and trigger the verified cleanup) instead of leaving a
@@ -1936,11 +1929,6 @@ main = "meshcom-qemu"
   # The build artifact is the merged firmware flash image for the chosen env, NOT
   # qemu-system-xtensa (the system emulator that run.sh locates separately).
   bin = ".work/MeshCom-Firmware/.pio/build/{env}/flash.bin"
-  # Per-STEP budget. The heaviest step is now the from-source QEMU compile: on a Pi Zero 2W (2 cores
-  # usable at -j1 under memory pressure) a full QEMU build can run for hours, so this is sized for the
-  # Zero's first cold QEMU build with margin. The `pio` firmware build (~26 min cold on a Zero, field-
-  # measured) sits comfortably inside it. A slow step is never silently TERM-killed mid-build.
-  build_timeout = 28800.0
   # Host-test budget: the emulated node needs ~5-6 min to BOOT on a Zero 2W before test.sh can even
   # see its boot marker (external boot window: 600 s), so the 600 s outer default would kill the
   # test mid-boot. 900 s = the external window plus start/diagnostics margin.
@@ -2221,9 +2209,6 @@ main = "meshcore-node"
   # early — `build_marker` is written ONLY after the LAST step succeeds and gates `is_built`.
   bin = ".venv/bin/python"
   build_marker = ".venv/.lhpc-build-complete"
-  # venv + pip installs overran the 900 s default on a Pi Zero 2W for the MeshCore host already;
-  # give the build the same room.
-  build_timeout = 1800.0
   test_timeout = 900.0
   # The MeshCore implementation is upstream openhop_core, pinned below, built PRISTINE: LHPC
   # carries no patch against it. The noise-floor fix that used to be applied here is upstream as
@@ -2623,7 +2608,6 @@ main = "meshcore-node"
   ]
   bin = "backend/.venv/bin/python"
   build_marker = "backend/.venv/.lhpc-build-complete"
-  build_timeout = 1800.0
   test_argv = ["backend/.venv/bin/python", "-c", "import app.main; print('meshcore-webui backend import OK')"]
   test_timeout = 120.0
   # Backend startup runs alembic migrations then connects to the Companion node; give it room.
@@ -2740,7 +2724,6 @@ main = "meshcore-node"
   bin = ".venv/bin/meshcli"
   # Same slow venv+pip build as its siblings; the marker (not `bin`) gates `is_built`.
   build_marker = ".venv/.lhpc-build-complete"
-  build_timeout = 1800.0
 
     # Same single Companion client slot as meshcore-webui: running both evicts each other, so
     # this EXCLUSIVE claim makes it an observed conflict on the Apps page (banner + card).
@@ -2851,7 +2834,6 @@ venv_packages = ["rns"]
 readiness = "endpoint"
 readiness_timeout = 60.0
 build_marker = ".venv/.lhpc-build-complete"
-build_timeout = 1800.0
 bin = ".venv/bin/loraham-rns-node"
 run = ".venv/bin/loraham-rns-node --config {runtime}/state/reticulum --interface LoRa --ready-file {runtime}/state/reticulum/ready {rns_allow}"
 note = "Pins, chip, TCXO and PA settings come from the hardware setup chosen with `lhpc hardware` — they are deliberately not editable per stack, because a wrong PA or TCXO value can damage the module."
@@ -3264,7 +3246,6 @@ venv_packages = ["rns", "lxmf"]
 start_order = 2
 readiness = "manual"
 build_marker = ".venv/.lhpc-build-complete"
-build_timeout = 900.0
 bin = ".venv/bin/nomadnet"
 # Launched through `loraham-rns-client`: pointed at the OWNER's config (which it must
 # be — RNS derives the shared-instance RPC key from the identity there) a client
@@ -3310,7 +3291,6 @@ venv_packages = ["rns", "lxmf"]
 start_order = 2
 readiness = "process"
 build_marker = ".venv/.lhpc-build-complete"
-build_timeout = 900.0
 bin = ".venv/bin/lxmd"
 # Launched through `loraham-rns-client`: pointed at the OWNER's config (which it must
 # be — RNS derives the shared-instance RPC key from the identity there) a client
@@ -3363,7 +3343,6 @@ venv_packages = ["rns", "lxmf"]
 start_order = 3
 readiness = "process"
 build_marker = ".venv/.lhpc-build-complete"
-build_timeout = 3600.0
 bin = ".venv/bin/sideband"
 # Launched through `loraham-rns-client`: pointed at the OWNER's config (which it must
 # be — RNS derives the shared-instance RPC key from the identity there) a client
@@ -3573,7 +3552,6 @@ note = "Sideband is provisioned into its own in-root venv by the build. It needs
   # `.venv/bin/python` exists as soon as the venv is created, long before pip and the UI copy
   # have finished — without a marker a half-built tree reads as a completed build.
   build_marker = ".venv/.lhpc-build-complete"
-  build_timeout = 1800.0
   readiness = "endpoint"
   readiness_timeout = 90.0
   # Launched through `loraham-rns-client`, for the same reason nomadnet, lxmd and Sideband are:

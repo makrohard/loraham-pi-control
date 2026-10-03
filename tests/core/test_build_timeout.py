@@ -84,6 +84,14 @@ def test_host_test_uses_manifest_test_timeout(tmp_path, monkeypatch):
     assert seen["timeout"] == 900.0
 
 
+def test_no_shipped_build_timeout_sits_below_the_guard(tmp_path):
+    # Under max(manifest, 24 h) a smaller value is inert and only misleads a reader (Q1).
+    svc = _svc(tmp_path)
+    low = {c.id: c.build_timeout for s in svc.stacks() for c in s.components
+           if 0 < c.build_timeout <= progress.BUILD_CEILING_S}
+    assert low == {}
+
+
 def test_default_build_ceiling_is_the_runaway_guard(tmp_path, monkeypatch):
     # A component WITHOUT a manifest value gets the same 24 h guard and stall rule.
     monkeypatch.delenv("LHPC_BUILD_STEP_TIMEOUT_S", raising=False)
@@ -200,12 +208,12 @@ def test_rebuild_removes_stale_marker_before_running(tmp_path, monkeypatch):
 
 
 def test_meshcore_cli_declares_build_budget_and_marker(tmp_path):
-    # meshcore-cli's unpinned `pip install .` is the same slow venv build as its siblings: it gets
-    # their per-step budget, not the 900 s default. And `.venv/bin/meshcli` appears after pip but
+    # meshcore-cli's `pip install .` is the same slow venv build as its siblings: it gets their limits
+    # (the stall rule and the 24 h guard, F42). And `.venv/bin/meshcli` appears after pip but
     # before the last step, so the marker, not `bin`, decides "built".
     svc = _svc(tmp_path)
     comp = next(c for s in svc.stacks() for c in s.components if c.id == "meshcore-cli")
-    assert comp.build_timeout >= 1800.0
+    assert progress.build_limits(comp.build_timeout, {}) == (600.0, 86400.0)
     assert comp.build_marker == ".venv/.lhpc-build-complete"
     src = svc._lifecycle().source_dir(comp)
     (src / ".venv" / "bin").mkdir(parents=True, exist_ok=True)

@@ -136,10 +136,12 @@ def test_meshcom_qemu_builds_the_emulator_from_source_with_the_link_gate(tmp_pat
 
 
 def test_meshcom_qemu_step_budget_covers_a_from_source_build(tmp_path):
-    # The from-source QEMU compile is the heaviest step; the per-step budget must clear the cold Zero
-    # firmware build (~1560 s) AND leave room for a multi-hour QEMU build.
+    # The from-source QEMU compile is the heaviest step; it is never ended for being slow (F42): the
+    # manifest declares no value of its own, so only a stall or the 24 h runaway guard ends a step.
+    from lhpc.core import progress
     c = _meshcom_qemu(_svc(tmp_path))
-    assert c.build_timeout >= 3600.0 and c.build_timeout >= 7200.0
+    assert c.build_timeout == 0.0
+    assert progress.build_limits(c.build_timeout, {})[1] >= 7200.0
 
 
 def test_meshcom_qemu_declares_the_source_build_toolchain_deps(tmp_path):

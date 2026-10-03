@@ -103,9 +103,9 @@ def test_run_malformed_timeout_fails_safe(tmp_path, monkeypatch):
 def _record_step_timeouts(monkeypatch):
     seen = []
     real = blr._run_step
-    def _rec(argv, cwd, env, timeout):
+    def _rec(argv, cwd, env, timeout, *a):
         seen.append(timeout)
-        return real(argv, cwd, env, timeout)
+        return real(argv, cwd, env, timeout, *a)
     monkeypatch.setattr(blr, "_run_step", _rec)
     return seen
 
@@ -458,3 +458,67 @@ def test_build_launcher_step_timeout_kills_child_group(tmp_path):
             break
         time.sleep(0.1)
     assert _dead_or_zombie(child)                          # step's child killed with the group
+
+
+# ---- F42: a web Build ends on a stall, not on the clock --------------------------------------------
+
+_BUSY_3S = "import time\nt = time.time()\nwhile time.time() - t < 3: pass"
+
+
+def _build_spec(tmp_path, argv, **kw):
+    return {**_spec(tmp_path, steps=[{"argv": argv}]), "op": "build", **kw}
+
+
+@pytest.mark.slow
+def test_web_build_outlives_spec_step_timeout(tmp_path, monkeypatch):
+    # The spec's 1 s (the manifest value) is below the 24 h guard, so it no longer ends a step that
+    # keeps computing for 3 s; only a stall (1 s here) would.
+    monkeypatch.delenv("LHPC_BUILD_STEP_TIMEOUT_S", raising=False)
+    monkeypatch.setenv("LHPC_BUILD_STALL_S", "1")
+    blr.run(_build_spec(tmp_path, [sys.executable, "-c", _BUSY_3S], step_timeout="1", sample_s=0.2))
+
+
+@pytest.mark.parametrize("bad", ["0", "nan", "inf", "x"])
+def test_web_build_rejects_bad_stall(tmp_path, monkeypatch, bad):
+    monkeypatch.setenv("LHPC_BUILD_STALL_S", bad)
+    marker = tmp_path / "ran"
+    with pytest.raises(SystemExit) as e:
+        blr.run(_build_spec(tmp_path, ["touch", str(marker)]))
+    assert e.value.code == 3 and not marker.exists()        # never unlimited, no step ran
+
+
+@pytest.mark.parametrize("bad", ["-5", "nan", "inf", "x"])
+def test_web_build_rejects_bad_spec_step_timeout(tmp_path, monkeypatch, bad):
+    # DELTA 1: the spec's (manifest) value goes through the same check as the env.
+    monkeypatch.delenv("LHPC_BUILD_STEP_TIMEOUT_S", raising=False)
+    marker = tmp_path / "ran"
+    with pytest.raises(SystemExit) as e:
+        blr.run(_build_spec(tmp_path, ["touch", str(marker)], step_timeout=bad))
+    assert e.value.code == 3 and not marker.exists()
+
+
+def test_web_build_limits_follow_build_limits(tmp_path, monkeypatch):
+    # The launcher's limits are progress.build_limits' answer — the CLI's rule, not a copy.
+    seen = []
+    real = blr._run_step
+    def _rec(argv, cwd, env, timeout, stall_s=None, sample_s=None):
+        seen.append((timeout, stall_s))
+        return real(argv, cwd, env, timeout, stall_s, sample_s)
+    monkeypatch.setattr(blr, "_run_step", _rec)
+    monkeypatch.delenv("LHPC_BUILD_STEP_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("LHPC_BUILD_STALL_S", raising=False)
+    blr.run(_build_spec(tmp_path, ["true"], step_timeout="1800.0"))
+    blr.run(_build_spec(tmp_path, ["true"], step_timeout="0.0"))      # the manifest declares none
+    monkeypatch.setenv("LHPC_BUILD_STEP_TIMEOUT_S", "2")
+    monkeypatch.setenv("LHPC_BUILD_STALL_S", "60")
+    blr.run(_build_spec(tmp_path, ["true"], step_timeout="1800.0"))
+    assert seen == [(86400.0, 600.0), (86400.0, 600.0), (2.0, 60.0)]
+
+
+@pytest.mark.slow
+def test_web_step_cannot_outlive_its_ceiling_by_a_wait_slice(tmp_path):
+    # Ceiling 1.5 s, sample 1 s: a 1.8 s step ends at the ceiling — each wait is capped by the time
+    # REMAINING to the ceiling, not by the whole ceiling.
+    rc, reason, _unverified = blr._run_step(["sleep", "1.8"], str(tmp_path), dict(os.environ),
+                                            1.5, None, 1.0)
+    assert (rc, reason) == (124, "budget")

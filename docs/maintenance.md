@@ -266,11 +266,15 @@ tests skip; don't run as root or the `needs_nonroot` tests skip
 runtime load.
 
 - The heavy builds are the from-source QEMU compile (~5 min on a Pi 5, ~68 min on a Zero 2W at
-  `-j1`) and the MeshCom firmware (~26 min cold). The per-step build timeout defaults to 900 s;
-  the manifest raises it per component (`build_timeout`, up to 28800 s for the Zero's cold QEMU
-  compile) — the same on the command line and the web Build/Test buttons (host tests: 600 s,
-  `test_timeout`). Builds are detached and survive a web-service restart. Output is block-buffered off a
-  TTY, so a quiet `tail -f` is not a stalled build; judge by CPU and the growing `.pio/build/`:
+  `-j1`) and the MeshCom firmware (~26 min cold). A build step is not ended for being slow. LHPC
+  ends it when its processes show no CPU time, no output and no disk/network I/O for 10 minutes
+  (`LHPC_BUILD_STALL_S`, a policy value: a wait that would have recovered later is ended too). It
+  also ends a step after 24 h. That limit is a runaway guard for a step that loops forever, not a
+  performance limit: no supported build comes near it. `LHPC_BUILD_STEP_TIMEOUT_S` replaces that
+  guard when set. The same holds on the command line and the web Build button (host tests keep a
+  plain timeout: 600 s, `test_timeout`). Builds are detached and survive a web-service restart.
+  Output is block-buffered off a TTY, so a quiet `tail -f` is not a stalled build; judge by CPU and
+  the growing `.pio/build/`:
 
   ```bash
   ps -eo pcpu,etime,cmd --sort=-pcpu | head -3          # is a compiler actually running?

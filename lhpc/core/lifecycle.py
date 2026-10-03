@@ -328,10 +328,6 @@ class Lifecycle:
 
     # -- build / start / stop / logs --------------------------------------
 
-    BUILD_TIMEOUT_S = 900.0     # default per-STEP build timeout; hardware-realistic for a modest Pi.
-                                # A known-slow component (e.g. a venv + many pip installs) overrides it
-                                # with a manifest `build_timeout`.
-
     def _invalidate_build_marker(self, marker: Path) -> str | None:
         """Remove a stale completion marker FAIL-CLOSED before a rebuild. Returns None on success (a
         MISSING marker is the only ignored condition — it is already "not built"), else an error string.

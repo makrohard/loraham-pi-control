@@ -142,7 +142,25 @@ def test_proven_terminated_timeout_step_records_failed(tmp_path, monkeypatch):
         pass
     d = jobresult._read_raw(svc._paths, _LOG)
     assert d["state"] == "failed"                                         # proven stop → ordinary failed
-    assert "timed out after" in d["detail"]                               # ... named as a timeout
+    # ... named as a timeout, with the limit that fired and its effective value (the env's 0.3 s)
+    assert d["detail"].startswith("timed out (runaway guard 0.3 s): sleep 5"), d["detail"]
+
+
+def test_web_build_stalled_detail(tmp_path, monkeypatch):
+    # F42: a Build step whose session shows no activity is ended as STALLED, and the attempt record
+    # says so with the effective stall window (1 s here, not the default 10 min).
+    monkeypatch.setenv("LHPC_WEBJOB_GATE_TIMEOUT_S", "0.3")
+    monkeypatch.delenv("LHPC_BUILD_STEP_TIMEOUT_S", raising=False)
+    monkeypatch.setenv("LHPC_BUILD_STALL_S", "1")
+    svc = _svc(tmp_path)
+    _job_marker(svc)
+    jobresult.reserve(svc._paths, _LOG, _A, "build", "meshcom-qemu", "meshcom", [])
+    with pytest.raises(SystemExit) as e:
+        build_launcher_runtime.run({**_spec(tmp_path, ["sleep", "30"]), "sample_s": 0.2})
+    assert e.value.code == 124
+    d = jobresult._read_raw(svc._paths, _LOG)
+    assert d["state"] == "failed"
+    assert d["detail"].startswith("timed out (stalled, no activity for 1 s): sleep 30"), d["detail"]
 
 
 def test_handshake_uses_attempt_and_admitted_flag(tmp_path, monkeypatch):
@@ -186,7 +204,8 @@ def test_spawn_web_job_proven_terminated_primary_blocks_no_secondaries(tmp_path,
 
 
 @pytest.mark.parametrize("op, target, primary, expected", [
-    ("build", "meshcom", "meshcom-qemu", 28800.0),        # the manifest build_timeout, not a flat 1800
+    ("build", "meshcom", "meshcom-qemu", 0.0),            # the raw manifest value (0 = none): the
+                                                          # launcher applies progress.build_limits
     ("test", "meshcore", "meshcore-node", 900.0),         # the manifest test_timeout
 ])
 def test_spawn_web_job_launcher_carries_the_manifest_timeout(tmp_path, monkeypatch, op, target,
