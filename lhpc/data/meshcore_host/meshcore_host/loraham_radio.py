@@ -122,9 +122,9 @@ def resolve_socket_path(configured: str) -> str:
     exists there, else the configured path — mirrors the daemon's other clients.
 
     LOCKSTEP: this policy also lives in lhpc/core/daemon_control.py
-    (_prefer_run_socket) and lhpc/core/lifecycle.py. It must stay runtime-resolved
-    here (the daemon can restart under either namespace while this app runs), so a
-    daemon socket-dir change must be applied to all three sites."""
+    (_prefer_run_socket). It must stay runtime-resolved here (the daemon can restart
+    under either namespace while this app runs), so a daemon socket-dir change must
+    be applied to both sites."""
     if not configured:
         return configured
     run = os.path.join("/run/loraham", os.path.basename(configured))
