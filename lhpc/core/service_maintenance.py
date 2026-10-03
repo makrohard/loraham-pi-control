@@ -2092,14 +2092,26 @@ class MaintenanceOpsMixin:
         if ai_block:
             return ActionResult(False, f"An auto-install run is unresolved — {ai_block}.",
                                 data={"prep_blocked": "auto_install"})
+        sid = ""
         try:
             hst = self.hmac_apply_status()
+            if (hst and not hst.get("unsafe") and hst.get("phase") == "unsafe"
+                    and isinstance(hst.get("sid"), str) and hst["sid"]):
+                # A provably ceased session-unverified block clears here as at the other gates,
+                # under the same lock; the decision below is on the RE-READ phase only.
+                from . import reslock
+                sid = hst["sid"]
+                with reslock.operation_lock(self._paths, "hmac-apply", sid, ""):
+                    self._hmac_try_auto_clear(self.hmac_apply_status() or {})
+                hst = self.hmac_apply_status()
             hmac_bad = bool(hst) and (hst.get("unsafe") or hst.get("phase") in ("running", "interrupted", "unsafe"))
         except Exception:
             hmac_bad = True
         if hmac_bad:
             return ActionResult(False, "HMAC apply state is running or unresolved/unsafe — resolve it "
-                                "before uninstalling.", data={"prep_blocked": "hmac"})
+                                "before uninstalling.", data={"prep_blocked": "hmac"},
+                                details=["  inspect processes (ps) first"] if sid else [],
+                                next_commands=[f"lhpc hmac recover {sid}"] if sid else [])
         # 4) INITIAL fresh snapshot (an exception is fail-closed); an UNKNOWN component blocks
         try:
             snap = self.build_snapshot(fresh=True)

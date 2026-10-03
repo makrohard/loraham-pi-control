@@ -62,7 +62,37 @@ def test_prep_blocks_on_hmac_phase_unsafe(tmp_path, monkeypatch):
     """A persisted HMAC phase "unsafe" (a driver or build step might still run) blocks prep."""
     svc = _svc(tmp_path)
     monkeypatch.setattr(ControllerService, "hmac_apply_status",
-                        lambda self: {"run_id": "x", "phase": "unsafe", "steps": [], "derived_unsafe": True})
+                        lambda self: {"run_id": "x", "sid": "meshcom", "phase": "unsafe", "steps": [],
+                                      "derived_unsafe": True})
+    r = svc.controller_uninstall_prep()
+    assert not r.ok and r.data.get("prep_blocked") == "hmac"
+    assert "lhpc hmac recover" in r.next_commands[0]
+
+
+def _hmac_unsafe(monkeypatch, clears):
+    """`hmac_apply_status` reads a mutable marker; the auto-clear stub returns True and, when
+    `clears`, durably downgrades the phase to `failed` (else it leaves it `unsafe`)."""
+    state = {"run_id": "x", "sid": "meshcom", "phase": "unsafe", "steps": [],
+             "unsafe_scope": "session-unverified"}
+    monkeypatch.setattr(ControllerService, "hmac_apply_status", lambda self: dict(state))
+
+    def auto_clear(self, st):
+        if clears:
+            state["phase"] = "failed"
+        return True
+    monkeypatch.setattr(ControllerService, "_hmac_try_auto_clear", auto_clear)
+
+
+def test_prep_auto_clears_a_ceased_session_block(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    _hmac_unsafe(monkeypatch, clears=True)
+    r = svc.controller_uninstall_prep()
+    assert r.data.get("prep_blocked") != "hmac"
+
+
+def test_prep_blocks_when_auto_clear_leaves_it_unsafe(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    _hmac_unsafe(monkeypatch, clears=False)
     r = svc.controller_uninstall_prep()
     assert not r.ok and r.data.get("prep_blocked") == "hmac"
 
