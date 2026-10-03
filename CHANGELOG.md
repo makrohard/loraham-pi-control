@@ -145,6 +145,9 @@ Test lab and demo
   lab's nginx control never signals an unrelated process.
 - Demo: Meshtastic and MeshCore need a node name, and taking a band from a running stack asks first, as on a real
   box.
+- A secret file named with `@file:` (the MeshCom HMAC password) is used only when it is a regular file of at most
+  64 KiB, not a symlink; anything else stops the start or build with a named error instead of being followed, read
+  whole, or hanging on a pipe.
 
 ## 0.11.10
 

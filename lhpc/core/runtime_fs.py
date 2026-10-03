@@ -505,6 +505,22 @@ def _read_fd_bounded(fd: int, max_bytes: int, path) -> bytes:
     return b"".join(chunks)
 
 
+def read_secret_text(path, *, max_bytes: int = 64 * 1024) -> str:
+    """Read an `@file:` secret: the same no-follow, regular-file-only, bounded read as `read_bytes`
+    (a FIFO cannot block the open), then strict UTF-8 — but on a plain path, because a secret need
+    not sit under the runtime root. Every refusal is an OSError (FileNotFoundError when absent)."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    _require_regular_fd(fd, path)       # closes fd + raises on non-regular
+    try:
+        data = _read_fd_bounded(fd, max_bytes, path)
+    finally:
+        os.close(fd)
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise OSError(f"secret file {path} is not UTF-8 text") from None
+
+
 def open_log_append(paths: Paths, path: Path):
     """Open a runtime log for append with O_NOFOLLOW+O_NONBLOCK (anchored); refuse a non-regular leaf."""
     fd = _open_leaf(paths, path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK,

@@ -191,6 +191,46 @@ def test_at_file_secret_present_is_read(tmp_path):
     assert env["XR_PW"] == "s3cret"
 
 
+@pytest.mark.parametrize("form", ["@file:", "@file?:"])
+@pytest.mark.parametrize("leaf", ["symlink", "oversize"])
+def test_a_secret_that_is_not_a_bounded_regular_file_is_a_command_error(tmp_path, form, leaf):
+    # A secret may sit outside the runtime root: it was read through a symlink and whole,
+    # whatever its size. Either now refuses the launch/build by name.
+    secret = tmp_path / "s.pw"
+    if leaf == "symlink":
+        (tmp_path / "real.pw").write_text("s3cret\n")
+        secret.symlink_to(tmp_path / "real.pw")
+    else:
+        secret.write_text("s3cret\n" + "x" * (1 << 20))
+    with pytest.raises(commands.CommandError):
+        commands.build_env(((("XR_PW", f"{form}{secret}"),)), str(tmp_path), str(tmp_path))
+
+
+@pytest.mark.parametrize("form", ["@file:", "@file?:"])
+def test_a_fifo_secret_is_refused_without_blocking(tmp_path, form):
+    # Opening a FIFO for reading waits for a writer: the start or build hung for good.
+    import os
+    import threading
+    secret = tmp_path / "s.pw"
+    os.mkfifo(secret)
+    raised = []
+
+    def resolve():
+        try:
+            commands.build_env(((("XR_PW", f"{form}{secret}"),)), str(tmp_path), str(tmp_path))
+        except commands.CommandError as exc:
+            raised.append(exc)
+
+    t = threading.Thread(target=resolve, daemon=True)
+    t.start()
+    t.join(5)
+    blocked = t.is_alive()
+    if blocked:                                   # release the reader so the thread ends
+        os.close(os.open(secret, os.O_WRONLY | os.O_NONBLOCK))
+        t.join(5)
+    assert not blocked and raised
+
+
 def test_invalid_env_name_rejected(tmp_path):
     from lhpc.core import commands
     with pytest.raises(commands.CommandError):
