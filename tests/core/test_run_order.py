@@ -72,6 +72,25 @@ def test_radio_overview_maps_stacks_to_bands(tmp_path):
     assert by_band["433"]["interactive"] == [] and by_band["868"]["interactive"] == []
 
 
+
+def test_a_stack_running_on_one_band_is_not_offered_on_the_other(tmp_path, monkeypatch):
+    """A multi-band stack runs on one band at a time, and a start on its other band is refused
+    while it is up — so that other column must not offer it in its start dropdown. Stopped, it
+    is offered on every band it may use."""
+    from lhpc.core.model import RunState
+    svc = _svc(tmp_path)
+    stopped = {r["band"]: r for r in svc.radio_overview()}
+    assert all("graywolf" in {s["id"] for s in stopped[b]["startable"]} for b in ("433", "868"))
+    snap = svc.build_snapshot()
+    snap.stack("graywolf").components["graywolf"].run_state = RunState.RUNNING
+    monkeypatch.setattr(svc, "build_snapshot", lambda *a, **k: snap)
+    monkeypatch.setattr(svc, "running_band",
+                        lambda sid, default="": "868" if sid == "graywolf" else default)
+    cards = {r["band"]: r for r in svc.radio_overview()}
+    assert "graywolf" in {s["id"] for s in cards["868"]["running"]}
+    assert "graywolf" not in {s["id"] for s in cards["433"]["running"]}
+    assert "graywolf" not in {s["id"] for s in cards["433"]["startable"]}
+
 def test_interactive_run_shows_block_then_dismiss(tmp_path):
     # Chat's box shows only while its daemon band is USABLE (see the daemon-down test below), so fake a
     # READY daemon on 433 for the marked interactive app to show its command block.

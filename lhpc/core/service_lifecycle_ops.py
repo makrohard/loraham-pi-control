@@ -5280,8 +5280,10 @@ class LifecycleOpsMixin:
                 # was actually on 868. Scope it to the band it is really on: the start
                 # marker, else the launch band, else its DECLARED primary — never "all
                 # bands it could use".
+                up_elsewhere = False
                 if running_up and multi:
                     running_up = self.runs_on_band(s.id, band)
+                    up_elsewhere = not running_up
                 comps = []
                 for c in s.components:
                     # A running component whose post-start runner is still applying settings reads
@@ -5361,6 +5363,8 @@ class LifecycleOpsMixin:
                     if self.running_band(s.id, min(sbands)) != band:
                         continue
                     is_up = True
+                elif up_elsewhere:
+                    continue          # running on its other band -> not startable here
                 elif multi:
                     is_up = False     # not running -> startable on every allowed band
                 else:

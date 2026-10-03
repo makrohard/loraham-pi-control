@@ -110,6 +110,8 @@ before a reboot — otherwise the boot gate keeps the console loopback-only (fai
 - An update interrupted after the old source was archived, and completed by the next source operation, no longer
   leaves the archived copy behind; before, every later update of that source failed with "activation failed —
   active source untouched" until the `.prev` folder was removed by hand.
+- The dashboard no longer offers a band-switchable stack (Graywolf, KISS, Reticulum, …) in the "Start a stack" list
+  of its other band while it runs; that start was always refused.
 
 ## 0.11.9
 

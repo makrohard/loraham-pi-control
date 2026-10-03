@@ -12,6 +12,9 @@ try:
     from lhpc_demo.app import build_app
     app, svc = build_app()
     c = app.test_client()
+    # the demo's real boot seed: a configured box (radio board + callsign), as visitors see it
+    from lhpc_demo.bridge import _seed
+    _seed(svc)
     # S1: the real routes render under Pyodide
     for p in ("/", "/stacks", "/healthz"):
         R[p] = c.get(p).status_code
@@ -173,9 +176,9 @@ try:
     i4 = html.find('data-radio-band="433"')
     seg8 = html[i8:(html.find('data-radio-band=', i8 + 10) if i8 >= 0 else 0)]
     assert i8 >= 0 and "graywolf" in seg8.lower(), "graywolf must render under the 868 card"
-    if i4 >= 0:
-        seg4 = html[i4:(html.find('data-radio-band=', i4 + 10) if i4 >= 0 else 0)]
-        assert "graywolf" not in seg4.lower(), "graywolf must NOT render under 433"
+    assert i4 >= 0, "the seeded dual-radio box must render a 433 card"
+    seg4 = html[i4:html.find('data-radio-band=', i4 + 10)]
+    assert "graywolf" not in seg4.lower(), "graywolf must NOT render under 433"
     R["band_select"] = "graywolf 868: kiss follows/moves to 868; dashboard places both under 868"
     # the demo's boot seed configures every identity the gate asks for: every stack can start
     from lhpc_demo.bridge import _seed
