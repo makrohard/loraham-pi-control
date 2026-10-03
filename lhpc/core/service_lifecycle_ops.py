@@ -4930,7 +4930,15 @@ class LifecycleOpsMixin:
         op = self.config().operator
         runtime = str(self._paths.runtime_root)
         src = str(self._paths.resolve_source(comp.source.path)) if comp.source else runtime
-        cmd = commands.display_command(comp, op, runtime, src)
+        # The saved values a start would use, resolved as `_saved_launch_refusal` does: the band
+        # the stack runs (or was presented) on, its stored config and the inherited identity.
+        sid = self.stack_of(comp.id) or comp.id
+        hint = self._launch_band_hint(sid, "")
+        band = self._config_band(sid, hint)
+        params = dict(self.stack_config(comp.id, band))
+        run_over, _file_over = self._materialize_inherited_identity(sid, hint)
+        params.update(self._overrides_for_comp(sid, "run", run_over, comp.id))
+        cmd = commands.display_command(comp, op, runtime, src, band, params)
         if not cmd:
             return "(no run command)"
         cwd = (commands._paths_subst(comp.run_cwd, runtime, src, "")

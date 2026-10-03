@@ -261,12 +261,15 @@ def build_step_argv(step: dict, runner, runtime: str, source: str) -> list[str]:
     return out
 
 
-def display_command(comp, op, runtime: str, source: str, band: str = "") -> str:
+def display_command(comp, op, runtime: str, source: str, band: str = "",
+                    params: dict | None = None) -> str:
     """Human-readable, shell-quoted rendering of the structured run command — for
-    manual wrappers and the dashboard ONLY. Never executed."""
+    manual wrappers and the dashboard ONLY. Never executed. `params` are the saved
+    values a start would use (None = manifest defaults); one a start would refuse
+    renders no command."""
     try:
-        argv = expand_argv(comp.run_argv, comp, None, op, runtime, source, band)
-    except CommandError:
+        argv = expand_argv(comp.run_argv, comp, params, op, runtime, source, band)
+    except (CommandError, validators.ValidationError):
         return ""
     return " ".join(shlex.quote(a) for a in argv)
 

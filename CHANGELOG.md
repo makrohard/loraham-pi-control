@@ -11,6 +11,8 @@
   template has no such line under `Lora:`, and the value was dropped while the save reported success.
 - Reticulum: a value with a `"` or `\` (an IFAC passphrase, say) reaches `reticulum.conf` unchanged; it was escaped,
   and Reticulum read the escapes as part of the value (a different passphrase than the one set).
+- The copy-paste command of an interactive program (MeshCore CLI, Meshtastic CLI, chat, Voice CLI, NomadNet)
+  carries the saved Settings and the band it runs on; it showed the defaults.
 
 ## 0.11.10
 

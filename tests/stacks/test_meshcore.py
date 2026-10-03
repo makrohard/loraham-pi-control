@@ -672,3 +672,14 @@ def test_meshcore_cli_builds_against_its_constraints_closure(tmp_path):
     assert MESHCORE_CLI_RESOLVED <= set(pins), MESHCORE_CLI_RESOLVED - set(pins)
     # One cached dbus-fast wheel serves both MeshCore venvs.
     assert pins["dbus-fast"] == _pins("meshcore-webui-constraints.txt")["dbus-fast"]
+
+
+def test_manual_command_carries_saved_settings(tmp_path):
+    # The copy-paste command of an interactive component comes from the SAME spec as a start: the
+    # saved Settings, not the manifest defaults (it printed `-p 5000` and no `-D` after a save).
+    svc = _svc(tmp_path)
+    assert svc.save_config_bundle("meshcore", values={"port": "5005", "debug": "true"}).ok
+    cmd = svc.manual_start_command(svc.stack("meshcore").component("meshcore-cli"))
+    cmd = cmd.split("&&", 1)[1].split(";", 1)[0].split()      # the meshcli argv itself
+    assert cmd[cmd.index("-p") + 1] == "5005"
+    assert "-D" in cmd
