@@ -22,6 +22,7 @@ not be routed here.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import stat as _stat
@@ -556,8 +557,13 @@ def read_bytes(paths: Paths, path: Path, *, max_bytes: int = _DEFAULT_READ_MAX) 
 
 
 def read_text(paths: Paths, path: Path, *, max_bytes: int = _DEFAULT_READ_MAX) -> str:
-    """No-follow, regular-file-only, bounded text read (see `read_bytes`)."""
-    return read_bytes(paths, path, max_bytes=max_bytes).decode("utf-8")
+    """No-follow, regular-file-only, bounded text read (see `read_bytes`). A leaf that is not
+    UTF-8 text is a read error (OSError, EILSEQ) like any other unreadable leaf."""
+    try:
+        return read_bytes(paths, path, max_bytes=max_bytes).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise OSError(errno.EILSEQ, f"not UTF-8 text ({exc.reason} at byte {exc.start})",
+                      str(path)) from None
 
 
 def loads_json(text):

@@ -43,6 +43,16 @@ def test_deeply_nested_config_journal_blocks(tmp_path):
     assert cfgmod.recover_config_transaction(paths) == ""             # BLOCK, no exception
 
 
+def test_non_utf8_pre_image_is_a_typed_refusal(tmp_path):
+    # the config transaction journals each target's pre-image; a non-UTF-8 one escaped as
+    # UnicodeDecodeError instead of a typed, nothing-written refusal
+    svc = ControllerService(paths=_paths(tmp_path))
+    p = tmp_path / "config" / "stacks" / "chat.toml"; p.parent.mkdir(parents=True)
+    p.write_bytes(b"# \xff\n")
+    res = svc.save_config_bundle("chat", values={"file_tx_freq": "434.500"})
+    assert res.ok is False and p.read_bytes() == b"# \xff\n"
+
+
 def test_operator_absent_by_default(tmp_path):
     cfg = load_config(_paths(tmp_path))
     assert not cfg.operator.configured

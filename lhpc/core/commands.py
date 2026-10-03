@@ -148,7 +148,7 @@ def build_env(env_items, runtime: str, source: str, band: str = "") -> dict:
                 env[key] = lines[0].strip() if lines else ""
             except FileNotFoundError:
                 env[key] = ""                    # optional secret: absent -> disabled
-            except OSError as exc:
+            except (OSError, ValueError) as exc:     # ValueError: not UTF-8 text
                 raise CommandError(
                     f"optional secret file for {key} is unreadable: {exc}") from exc
             continue
@@ -156,7 +156,7 @@ def build_env(env_items, runtime: str, source: str, band: str = "") -> dict:
             path = _paths_subst(v[len("@file:"):], runtime, source, band)
             try:
                 first = Path(path).read_text(encoding="utf-8").splitlines()
-            except OSError as exc:
+            except (OSError, ValueError) as exc:     # ValueError: not UTF-8 text
                 raise CommandError(f"secret file for {key} is missing/unreadable: {exc}") from exc
             line = first[0].strip() if first else ""
             if not line:

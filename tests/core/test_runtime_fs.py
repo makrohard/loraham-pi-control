@@ -698,6 +698,16 @@ def test_loads_json_turns_every_malformed_input_into_value_error():
             runtime_fs.loads_json(bad)
 
 
+def test_read_text_of_non_utf8_is_an_oserror(tmp_path):
+    # read_text's callers handle OSError (its documented error); a strict-UTF-8 decode failure
+    # escaped them as UnicodeDecodeError (a CLI traceback, a web 500, a crashed boot restore).
+    paths = Paths(runtime_root=tmp_path)
+    p = tmp_path / "config" / "x.yaml"; p.parent.mkdir()
+    p.write_bytes(b"key: \xff\n")
+    with pytest.raises(OSError):
+        runtime_fs.read_text(paths, p)
+
+
 def test_read_text_regular_refuses_fifo(tmp_path):
     paths = Paths(runtime_root=tmp_path)
     _fifo(tmp_path, "pipe")

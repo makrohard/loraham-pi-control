@@ -176,6 +176,14 @@ def test_at_file_secret_empty_blocks(tmp_path):
         commands.build_env(((("XR_PW", f"@file:{tmp_path}/blank.pw"),)), str(tmp_path), str(tmp_path))
 
 
+@pytest.mark.parametrize("form", ["@file:", "@file?:"])
+def test_non_utf8_secret_file_is_a_command_error(tmp_path, form):
+    from lhpc.core import commands
+    (tmp_path / "bad.pw").write_bytes(b"\xffsecret\n")
+    with pytest.raises(commands.CommandError):
+        commands.build_env(((("XR_PW", f"{form}{tmp_path}/bad.pw"),)), str(tmp_path), str(tmp_path))
+
+
 def test_at_file_secret_present_is_read(tmp_path):
     from lhpc.core import commands
     (tmp_path / "ok.pw").write_text("s3cret\nignored\n")
