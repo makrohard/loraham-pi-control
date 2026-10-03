@@ -539,13 +539,14 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
         for _i, _tok in enumerate(_av):
             if _tok in ("--setlat", "--setlon", "--setalt") and _i + 1 < len(_av):
                 pos_values.append(str(_av[_i + 1]))
-    return (_POST_RUNNER.replace("__POS_VALUES__", repr(sorted(set(pos_values))))
-            .replace("__STEPS__", repr(resolved))
-            .replace("__BINDING__", repr(binding))
-            .replace("__GATED__", repr(bool(gated)))
-            .replace("__META__", repr(dict(meta or {})))
-            .replace("__ROOT__", repr(root_s))
-            .replace("__RESULT_REL__", repr(rel_parts)))
+    # ONE pass over the template: an inserted value (a node name may read "__ROOT__") is never
+    # scanned again, so it can never be taken for a later marker.
+    fills = {"POS_VALUES": repr(sorted(set(pos_values))), "STEPS": repr(resolved),
+             "BINDING": repr(binding), "GATED": repr(bool(gated)),
+             "META": repr(dict(meta or {})), "ROOT": repr(root_s),
+             "RESULT_REL": repr(rel_parts)}
+    return re.sub(r"__(POS_VALUES|STEPS|BINDING|GATED|META|ROOT|RESULT_REL)__",
+                  lambda m: fills[m.group(1)], _POST_RUNNER)
 
 
 def _post_data(template: str, comp, params, op, runtime, source, band) -> str:

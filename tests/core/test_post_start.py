@@ -545,6 +545,28 @@ def _meshcom_launcher(mc_callsign, saved=None):
                                          "/rt", "/src", "433"), svc
 
 
+@pytest.mark.parametrize("name", ["__ROOT__", "__GATED__", "__META__", "__RESULT_REL__"])
+def test_an_operator_value_equal_to_a_template_marker_stays_literal(tmp_path, name):
+    """A node name is free printable text, so it may spell one of the launcher template's own
+    markers. It must reach the child as exactly that text — never be substituted (a launcher that
+    fails to compile, or an owner name of `False`)."""
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core import commands
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    comp = svc.stack("meshtastic").component("meshtastic")
+    cfg = {**svc.stack_config("meshtastic"), "node_name": name, "node_short": "AB"}
+    script = commands.render_post_launcher(
+        comp.post_steps, comp, cfg, svc.config().operator, str(tmp_path), "/src", "433",
+        gated=True, meta={"stack": "meshtastic"},
+        result_path=str(tmp_path / "state" / "post" / "r.json"))
+    compile(script, "launcher", "exec")
+    argvs = [st["argv"] for st in _rendered_steps(script) if st.get("kind") == "exec"]
+    owner = next(a for a in argvs if "--set-owner" in a)
+    assert owner[owner.index("--set-owner") + 1] == name
+
+
 def test_meshcom_n0call_refuses_to_render_the_required_setcall():
     """Same contract for the N0CALL placeholder: never silently satisfied, never sent."""
     from lhpc.core.commands import CommandError

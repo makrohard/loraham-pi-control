@@ -50,6 +50,8 @@
   preferred network.
 - When saving the firewall settings fails, the firewall apply script is put back to the saved settings, so
   the command the console shows can no longer apply the selection that was not saved.
+- A node name that happens to read like an internal template word (e.g. `__ROOT__`) reaches the node
+  unchanged instead of breaking the post-start step.
 
 ## 0.11.10
 
