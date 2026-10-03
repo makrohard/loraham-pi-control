@@ -323,7 +323,8 @@ def test_retire_refuses_a_file_whose_lstat_fails(tmp_path, monkeypatch, binary_r
     rec = binary_receipt(svc)
     assert brx.write_receipt(svc._paths, rec)
     victim = tmp_path / rec.files[0]
-    victim.write_bytes(b"operator data")                        # hash mismatch, still there
+    victim.write_bytes(b"operator data")                        # still there
+    monkeypatch.setattr(brx, "_MAX_HASH_BYTES", 4)               # unhashable: only lstat decides
     real_lstat = os.lstat
 
     def lstat(path, *a, **kw):
