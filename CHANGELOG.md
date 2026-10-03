@@ -9,6 +9,8 @@
   failed instead of verified; the step had been skipped and the runner still exited 0.
 - Meshtastic: a Reset or Busy pin set for an exotic board reaches the generated `meshtasticd.yaml`; the shipped
   template has no such line under `Lora:`, and the value was dropped while the save reported success.
+- Reticulum: a value with a `"` or `\` (an IFAC passphrase, say) reaches `reticulum.conf` unchanged; it was escaped,
+  and Reticulum read the escapes as part of the value (a different passphrase than the one set).
 
 ## 0.11.10
 

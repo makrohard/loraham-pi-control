@@ -1039,14 +1039,22 @@ def _ini_scalar(raw: str) -> str:
     """Render a value the way ConfigObj will read it back.
 
     Rejects control characters outright: a newline in a generated config does
-    not corrupt one value, it invents a new key.
+    not corrupt one value, it invents a new key. ConfigObj takes a quoted value
+    VERBATIM (no escape processing), so a value is wrapped in a quote it does not
+    contain, never escaped; one that no quoting can carry is refused.
     """
     if any(ch in raw for ch in _INI_UNSAFE):
         raise ValueError("control characters are not allowed in a config value")
     if raw == "":
         return '""'
     if raw != raw.strip() or any(ch in raw for ch in "#,'\"") :
-        return '"' + raw.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        for q in ('"', "'"):
+            if q not in raw:
+                return q + raw + q
+        for q in ('"""', "'''"):
+            if q not in raw and not raw.endswith(q[0]):
+                return q + raw + q
+        raise ValueError("this value mixes ' and \" in a way no config quoting can carry")
     return raw
 
 

@@ -213,6 +213,26 @@ def test_values_needing_quotes_are_quoted():
     assert 'ifac_netname = "has # hash"' in out
 
 
+@pytest.mark.parametrize("value, line", [
+    ('pa"ss', "ifac_netname = 'pa\"ss'"),
+    ('x", y', "ifac_netname = 'x\", y'"),
+    ("a\\b, c", 'ifac_netname = "a\\b, c"'),
+    ("it's \"q\"", "ifac_netname = '''it's \"q\"'''"),
+])
+def test_quoted_values_are_never_escaped(value, line):
+    # ConfigObj reads a quoted value VERBATIM (no escape processing): an escaped `\"` came back
+    # as `\"` — a different IFAC passphrase than the one configured — and `x", y` as a list.
+    out = update_ini(BASE, [_P("n", "ifac_netname", "interfaces/LoRa")],
+                     {"n": value}, lambda x: x)
+    assert line in [ln.strip() for ln in out.splitlines()]
+
+
+def test_a_value_no_quoting_can_carry_is_refused():
+    with pytest.raises(ValueError):
+        update_ini(BASE, [_P("n", "ifac_netname", "interfaces/LoRa")],
+                   {"n": "a\"\"\"b'''c"}, lambda x: x)
+
+
 @pytest.mark.parametrize("evil", ["a\nb = c", "a\x00b", "tail\r"])
 def test_control_characters_are_refused(evil):
     # A newline in a value does not corrupt one setting, it invents another.
