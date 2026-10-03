@@ -203,6 +203,17 @@ def test_run_service_syncs_the_venv_after_a_real_advance(tmp_path, monkeypatch, 
     assert selfupdate.status_view(svc._paths)["last_apply"]["ok"] is True
 
 
+def test_run_service_times_the_venv_sync(tmp_path, monkeypatch, op_svc, capsys):
+    """`[selfupdate] pip sync <n> s` on stderr, which the unit appends to its log: the
+    slow-target budget's L4 quantity. Also when the sync fails."""
+    import re
+    svc, fake, pip = _advancing_svc(tmp_path, monkeypatch, op_svc)
+    fake.commands[pip] = CommandResult(returncode=1, stdout="", stderr="boom")
+    svc.self_update_run_service()
+    err = capsys.readouterr().err
+    assert len(re.findall(r"^\[selfupdate\] pip sync \d+\.\d s$", err, re.M)) == 1, err
+
+
 def test_run_service_venv_sync_failure_fails_the_update(tmp_path, monkeypatch, op_svc):
     # pip FAILS -> the whole update is reported FAILED and recorded red
     svc, fake, pip = _advancing_svc(tmp_path, monkeypatch, op_svc)

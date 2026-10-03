@@ -1013,9 +1013,14 @@ class SelfUpdateOpsMixin:
             if self._source_advanced(res):                  # incl. the reset+clean-failed partial
                 root = selfupdate.repo_root()
                 if root is not None:
+                    t0 = _time.monotonic()
                     pip = self._system.runner.run(
                         [sys.executable, "-m", "pip", "install", "-e", str(root)],
                         timeout=self._PIP_SYNC_TIMEOUT_S)
+                    # The slow-target budget's L4 quantity; the unit appends stderr to
+                    # logs/lhpc-selfupdate.log (docs/test-matrix.md#slow-target-baseline).
+                    print(f"[selfupdate] pip sync {_time.monotonic() - t0:.1f} s",
+                          file=sys.stderr, flush=True)
                     if pip.returncode != 0:                     # P2: a failed sync FAILS the update
                         # First line of pip's diagnostics, stripped of box-drawing/ANSI so the
                         # persisted summary reads cleanly in the GUI flash (never a mid-box tail).
