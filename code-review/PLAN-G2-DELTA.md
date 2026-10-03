@@ -1,0 +1,5 @@
+# PLAN-G2 · DELTA 1 (handler, 2026-10-03 09:20Z) — from the gate-1 plan review (VERDICT-PLAN-G2 c08b1f0c, GREEN WITH NOTES)
+
+1. **CR2-3 regression test (the one required change):** the test must prove that the CONFIG READ (`merge_stack_values`, the `use_gps` value the reset acts on) happens under the config lock, not only that `gps_liveness_blockers()` runs under it. Build the race: a fake that changes the stored `use_gps` between the old pre-lock read point and the lock acquisition; assert the reset acts on the value read under the lock (or is refused), and assert by the lock's call order that the read is inside. Red before (today the read precedes the lock).
+2. Notes to honour in the code: CR2-2's marker params = only the entries the reset actually changes (dp_*/manual scalars untouched); the `_stack_config_cached` freshness self-check item is verified before the merge and named in the self-audit proof.
+3. Out of G2 (tracked separately, not expanded): apply hints; the scoped `password_file`; the rollback-failure "not modified" wording.
