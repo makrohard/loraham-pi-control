@@ -1256,6 +1256,50 @@ def test_reset_config_gates_use_gps_on_running_consumers(tmp_path, monkeypatch):
     assert "use_gps" not in cfgmod.load_stack_config(svc._paths, "reticulum", "")
 
 
+def test_reset_config_rechecks_use_gps_under_the_config_lock(tmp_path, monkeypatch):
+    # The use_gps value a reset acts on is the one read UNDER the config lock: a save that
+    # commits `use_gps = "off"` while the reset waits for the lock is seen, and with GPS in use
+    # the reset is refused instead of turning GPS back on under the running consumer.
+    from contextlib import contextmanager
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    p = cfgmod._stack_config_path(svc._paths, "reticulum", "")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('use_gps = "on"\n')                    # the default: no GPS change yet
+    events: list = []
+    real_lock, real_load = cfgmod.config_lock, cfgmod._load_runtime_toml
+
+    @contextmanager
+    def racing_lock(paths, *a, **kw):
+        if "lock" not in events:
+            p.write_text('use_gps = "off"\n')            # the concurrent save, committed first
+        with real_lock(paths, *a, **kw):
+            events.append("lock")
+            try:
+                yield
+            finally:
+                events.append("unlock")
+
+    def recording_load(paths, path, *a, **kw):
+        data = real_load(paths, path, *a, **kw)
+        if path == p:
+            events.append(("read", data.get("use_gps")))
+        return data
+
+    def blockers(self, ids, snap=None, require_enabled=False):
+        events.append("gate")
+        return ["reticulum-node"]
+    monkeypatch.setattr(cfgmod, "config_lock", racing_lock)
+    monkeypatch.setattr(cfgmod, "_load_runtime_toml", recording_load)
+    monkeypatch.setattr(ControllerService, "gps_liveness_blockers", blockers)
+    r = svc.reset_config("reticulum")
+    assert not r.ok and "use_gps" in r.summary and "reticulum-node" in r.summary
+    assert cfgmod.load_stack_config(svc._paths, "reticulum", "")["use_gps"] == "off"   # untouched
+    gate = events.index("gate")
+    lock = max(i for i, e in enumerate(events[:gate]) if e == "lock")
+    assert "unlock" not in events[lock:gate]                       # the gate ran in the lock
+    assert ("read", "off") in events[lock:gate]                    # on the value read in it
+
+
 def test_reset_config_preserves_daemon_profile_and_unrelated(tmp_path):
     # reset_config owns ONLY normal Config-page keys (run/file/autostart). Daemon-profile dp_*
     # overrides and unrelated manual scalars are PRESERVED (removed via the locked safe merge).

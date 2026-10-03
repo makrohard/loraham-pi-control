@@ -3340,6 +3340,7 @@ class ParamsConfigMixin:
         # reset of one band owns that file too; a band-less stack has only the one.
         files = [cfg_band, ""] if cfg_band else [""]
         cleared: list = []
+        _gps_busy: dict = {}
 
         def _normal(stored) -> list:
             return [k for k in stored
@@ -3352,23 +3353,20 @@ class ParamsConfigMixin:
             normal = _normal(merged)
             if not normal:
                 return None
+            # Resetting use_gps IS a GPS change: the same liveness gate as a Settings save —
+            # a running consumer or feed derived its claims and config from the current value.
+            # Judged here, in the lock, so a start cannot complete between the check and the write.
+            if ("use_gps" in normal and str(merged["use_gps"]).strip().lower()
+                    != use_gps_default(self.stacks(), target)):
+                blockers = self.gps_liveness_blockers([target], snap=self._gps_fresh_snapshot())
+                if blockers:
+                    _gps_busy["v"] = blockers
+                    raise ConfigError(f"use_gps in use by {', '.join(blockers)}")   # rolls back
             for k in normal:
                 merged.pop(k)
             cleared.extend(normal)
             return render_stack_config(target, merged)
         try:
-            for b in files:
-                stored = load_stack_config(self._paths, target, b)
-                # Resetting use_gps IS a GPS change: the same liveness gate as a Settings save —
-                # a running consumer or feed derived its claims and config from the current value.
-                if ("use_gps" in _normal(stored) and str(stored["use_gps"]).strip().lower()
-                        != use_gps_default(self.stacks(), target)):
-                    blockers = self.gps_liveness_blockers([target], snap=self._gps_fresh_snapshot())
-                    if blockers:
-                        return ActionResult(False, f"Config reset blocked for {label}: cannot change "
-                                            f"use_gps while {', '.join(blockers)} "
-                                            f"{'is' if len(blockers) == 1 else 'are'} running "
-                                            f"(lhpc stack stop {target})")
             # ONE transaction for both files: both are reset, or neither is.
             apply_config_transaction(self._paths, [
                 ("stack", _stack_config_path(self._paths, target, b),
@@ -3376,6 +3374,11 @@ class ParamsConfigMixin:
             if cleared:
                 self._invalidate_config()
         except (ConfigError, PathContainmentError, validators.ValidationError, OSError) as exc:
+            if (blockers := _gps_busy.get("v")):
+                return ActionResult(False, f"Config reset blocked for {label}: cannot change "
+                                    f"use_gps while {', '.join(blockers)} "
+                                    f"{'is' if len(blockers) == 1 else 'are'} running "
+                                    f"(lhpc stack stop {target})")
             return ActionResult(False, f"Config reset blocked for {label}: unsafe/malformed "
                                 f"config (refused, not modified): {exc}")
         return ActionResult(True,
