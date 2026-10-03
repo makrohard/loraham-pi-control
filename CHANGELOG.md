@@ -58,6 +58,8 @@
   it uses the same strict reader as the daemon settings.
 - `bootstrap-deps.sh` no longer glues the SPI line onto the last line of a `config.txt` that does not end in
   a newline (which disabled SPI and broke your last setting).
+- `sudo bash bootstrap-deps.sh` on a box installed with `install.sh --target <elsewhere>` finds that install's
+  `[gps] source = nmea` and leaves gpsd off the receiver, as on a default install.
 
 ## 0.11.10
 

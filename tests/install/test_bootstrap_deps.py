@@ -150,8 +150,16 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
          swapon_fail=False, swapoff_fail=False, systemctl_units="", systemctl_fail="",
          systemctl_broken=False, systemctl_disabled="", wifi_iw_fail=False,
          wifi_iw_absent=False, fake_hwclock_absent=False, nm_devs=None, defroute_dev=None,
-         chrony_conf=None, gpsd_default=None, lhpc_gps_source=None, runtime_root_env=True):
+         chrony_conf=None, gpsd_default=None, lhpc_gps_source=None, runtime_root_env=True,
+         operator_home=None):
     fb, apt, um = _fakebin(tmp_path, no_sudo=no_sudo)
+    if operator_home is not None:
+        # The operator's home from `getent passwd` — a tmp dir, never a real user's home.
+        g = fb / "getent"
+        g.write_text('#!/usr/bin/env bash\nif [ "$1" = passwd ] && [ -n "${2:-}" ]; then\n'
+                     f'\techo "$2:x:1000:1000::{operator_home}:/bin/bash"; exit 0\nfi\n'
+                     'exec /usr/bin/getent "$@"\n')
+        g.chmod(0o755)
     if wifi_iw_absent:
         (fb / "iw").unlink()                           # box without iw: `command -v iw` fails
     if fake_hwclock_absent:
@@ -1687,6 +1695,31 @@ def test_the_documented_command_without_operator_user_still_honours_the_nmea_gua
     else SUDO_USER.
     """
     r, _cfg, apt, _um = _run(tmp_path, ["--spi-mode", "skip"], lhpc_gps_source="nmea")
+    assert r.returncode == 0, r.stderr
+    assert "SKIPPED" in r.stdout and "nmea" in r.stdout
+    assert "chrony" not in apt and "gpsd" not in apt
+
+
+@pytest.mark.parametrize("record", ["web-unit", "path-link"])
+def test_nmea_guard_finds_a_non_default_target_without_the_env(tmp_path, record):
+    """`sudo` drops LHPC_RUNTIME_ROOT, and a box installed with `install.sh --target <elsewhere>`
+    has no config under ~/loraham-pi-control. The pre-flight must still find that root — from the
+    operator's web unit, else the `lhpc` link on their PATH — and keep gpsd off a receiver the
+    `nmea` source reads directly."""
+    from lhpc.core import updater_units
+    home, alt = tmp_path / "home", tmp_path / "alt-root"
+    (alt / "config").mkdir(parents=True)
+    (alt / "config" / "local.toml").write_text('[gps]\nsource = "nmea"\n')
+    if record == "web-unit":
+        unit = home / ".config" / "systemd" / "user" / "lhpc-web.service"
+        unit.parent.mkdir(parents=True)
+        unit.write_text(updater_units.render("lhpc-web.service", str(alt),
+                                             f"{alt}/src/loraham-pi-control", f"{alt}/venv/lhpc"))
+    else:
+        (home / ".local" / "bin").mkdir(parents=True)
+        (home / ".local" / "bin" / "lhpc").symlink_to(alt / "venv" / "lhpc" / "bin" / "lhpc")
+    r, _cfg, apt, _um = _run(tmp_path, ["--spi-mode", "skip"], runtime_root_env=False,
+                             operator_home=home)
     assert r.returncode == 0, r.stderr
     assert "SKIPPED" in r.stdout and "nmea" in r.stdout
     assert "chrony" not in apt and "gpsd" not in apt

@@ -129,7 +129,16 @@ if [ -z "$NO_TIME_SOURCE" ]; then
 		TS_HOME="$(getent passwd "$TS_USER" 2>/dev/null | cut -d: -f6 || true)"
 	fi
 	TS_ROOT="${LHPC_RUNTIME_ROOT:-}"
-	if [ -z "$TS_ROOT" ] && [ -n "$TS_HOME" ]; then TS_ROOT="$TS_HOME/loraham-pi-control"; fi
+	if [ -z "$TS_ROOT" ] && [ -n "$TS_HOME" ]; then
+		# sudo's env_reset drops LHPC_RUNTIME_ROOT; `install.sh --target` records the root in the
+		# operator's web unit and in the `lhpc` link on their PATH. The first one with a config wins.
+		TS_UNIT_ROOT="$(sed -n 's/^Environment=LHPC_RUNTIME_ROOT=//p' "$TS_HOME/.config/systemd/user/lhpc-web.service" 2>/dev/null | head -n 1 || true)"
+		TS_LINK="$(readlink "$TS_HOME/.local/bin/lhpc" 2>/dev/null || true)"
+		for TS_CAND in "$TS_UNIT_ROOT" "${TS_LINK%/venv/lhpc/bin/lhpc}" "$TS_HOME/loraham-pi-control"; do
+			if [ -n "$TS_CAND" ] && [ -e "$TS_CAND/config/local.toml" ]; then TS_ROOT="$TS_CAND"; break; fi
+		done
+		[ -n "$TS_ROOT" ] || TS_ROOT="$TS_HOME/loraham-pi-control"
+	fi
 	# A DRY RUN mutates nothing, so there is no receiver to lose and no reason to
 	# suppress anything: the simulation must show the DEFAULT package set, which is the
 	# whole point of the closure gate for two newly-default packages. Only a config that
