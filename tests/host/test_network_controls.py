@@ -5,6 +5,7 @@ watchdog tick, and the web flow (hidden-unless-supported + dedicated confirm).""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import pytest
@@ -330,6 +331,38 @@ def test_finalize_wrong_token_touches_nothing(tmp_path, monkeypatch):
     assert rc == 1
     assert svc._net_pending_path().exists()               # not its record — kept
     assert not svc._net_outcome_path().exists()           # and no outcome written
+
+
+@pytest.mark.parametrize("refusal", ["lock-busy", "other-uuid", "stale", "other-boot"])
+def test_finalize_drops_the_secret_on_every_refusal(tmp_path, monkeypatch, refusal):
+    """The plaintext passphrase file must not outlive the helper: every early refusal removes
+    the canonical secrets file of its op_id, not only the activation path. Lock contention is a
+    real race — the watchdog tick, prefer/forget and ap_now all take the network-op lock briefly."""
+    from lhpc.core import reslock
+    svc, order, pw = _finalize_svc(tmp_path)
+    pw.write_text("802-11-wireless-security.psk:s3c\n")
+    monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-1")
+    _pend(svc, op_id="tok1", pwfile=str(pw),
+          uuid="OTHER-UUID" if refusal == "other-uuid" else "CL-UUID-2",
+          uptime0=-200.0 if refusal == "stale" else 100.0,
+          boot="boot-0" if refusal == "other-boot" else "boot-1")
+    with reslock.operation_lock(svc._paths, svc.NETWORK_OP_KEY, "watch-tick", "") \
+            if refusal == "lock-busy" else contextlib.nullcontext():
+        rc = svc.network_finalize(uuid="CL-UUID-2", op_id="tok1", delay=0.0)
+    assert rc == 1 and order == []                             # nothing activated...
+    assert not pw.exists()                                     # ...and no secret left behind
+
+
+def test_pruning_an_abandoned_record_drops_its_secret(tmp_path, monkeypatch):
+    """A helper killed before its cleanup leaves record and secret; the TTL prune that recovers
+    the record removes the secret with it."""
+    svc = _svc(tmp_path, uptime="500.0 900.0\n")
+    pw = tmp_path / "state" / "network-psk-tok1"
+    pw.write_text("802-11-wireless-security.psk:s3c\n")
+    _pend(svc, op_id="tok1", uptime0=100.0, pwfile=str(pw))    # age 400 s > TTL
+    monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-1")
+    assert svc._net_pending_blocked() is None
+    assert not svc._net_pending_path().exists() and not pw.exists()
 
 
 def test_helper_budget_strictly_below_record_ttl():

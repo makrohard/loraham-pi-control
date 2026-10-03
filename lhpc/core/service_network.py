@@ -13,7 +13,8 @@ brcmfmac.
 Identity is the NM profile UUID everywhere (SSIDs/names are not unique); the SSID is
 display-only. The PSK never appears in argv/logs/state/responses: profiles are created
 WITHOUT the secret and activated via `nmcli connection up <uuid> passwd-file <file>`
-(0600, unlinked AFTER nmcli returns — nmcli reads it during activation); with
+(0600, unlinked AFTER nmcli returns — nmcli reads it during activation — and on every other
+exit of the helper, or when an abandoned pending record is pruned); with
 psk-flags=0 NM persists the supplied system secret into its own root-owned keyfile.
 
 Serialization: one `controller-network-op` reslock + a durable pending record carrying a
@@ -236,6 +237,7 @@ class NetworkOpsMixin:
                     "be read — refusing", "network-pending")
         if bid != cur:
             self._safe_unlink(p)
+            self._net_drop_secret(op_id)
             return None
         try:
             now_up = float((self._system.fs.read_text("/proc/uptime", 128) or "")
@@ -245,6 +247,7 @@ class NetworkOpsMixin:
                     "refusing", "network-pending")
         if now_up - up0 >= self.NET_PENDING_TTL_S:
             self._safe_unlink(p)              # abandoned/crashed helper — TTL recovery
+            self._net_drop_secret(op_id)
             return None
         if token and token == op_id:
             return None                       # the operation's OWN helper resumes
@@ -523,11 +526,25 @@ class NetworkOpsMixin:
 
     # ---- the detached finalize helper (CLI plumbing `lhpc _network-finalize`) --------
 
+    def _net_drop_secret(self, op_id) -> None:
+        """Best-effort removal of the canonical passphrase file of `op_id` (idempotent). Only a
+        plain token names a file: nothing else under `state/` is reachable through it."""
+        if isinstance(op_id, str) and re.fullmatch(r"[A-Za-z0-9]+", op_id):
+            self._safe_unlink(self._paths.under("state", f"network-psk-{op_id}"))
+
     def network_finalize(self, *, uuid: str, op_id: str, pwfile: str = "",
                          allow_console: bool = False, delay: float = 1.5) -> int:
         """Runs DETACHED after the connect response: activation + lease + console CIDR.
         Hard-bounded strictly below NET_PENDING_TTL_S; removes the pending record in
-        `finally` (the TTL recovers crashes only). Exit code is for the log."""
+        `finally` (the TTL recovers crashes only). Exit code is for the log. Whatever the
+        exit — a refusal before the activation included — the passphrase file of this op_id
+        is gone afterwards."""
+        try:
+            return self._network_finalize(uuid=uuid, op_id=op_id, delay=delay)
+        finally:
+            self._net_drop_secret(op_id)
+
+    def _network_finalize(self, *, uuid: str, op_id: str, delay: float) -> int:
         time.sleep(max(0.0, delay))
         deadline = time.monotonic() + self.NET_HELPER_BUDGET_S
         marker = self._net_pending_path()

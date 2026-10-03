@@ -42,6 +42,9 @@
   reported instead of raised.
 - Boot restore starts nothing when the folder of operator stop notes cannot be read, instead of
   ignoring every stop note; the evidence is kept for the next boot.
+- A Wi-Fi join that the helper refuses before activating (another network action running at that moment,
+  a stale request) no longer leaves the Wi-Fi password file on disk; an abandoned join's password file is
+  removed when its pending record expires.
 
 ## 0.11.10
 
