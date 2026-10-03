@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -175,15 +176,16 @@ def _num(text):
     if text in (None, "", "-"):
         return None
     try:
-        return float(text)
-    except (TypeError, ValueError):
+        v = float(text)
+    except (TypeError, ValueError, OverflowError):
         return None
+    return v if math.isfinite(v) else None
 
 
 def _int(v) -> int:
     try:
         return int(v or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -197,13 +199,13 @@ def parse_line(line: str) -> dict:
     if m:
         g = m.groupdict()
         rec.update({"ts": g["ts"], "dir": g["dir"], "rssi": _num(g["rssi"]), "snr": _num(g["snr"]),
-                    "len": int(g["len"]), "outcome": g["outcome"] or "", "band": g["band"] or "",
+                    "len": _int(g["len"]), "outcome": g["outcome"] or "", "band": g["band"] or "",
                     "summary": g["tnc2"] or "", "hex": g["hex"], "ascii": g["ascii"]})
         return rec
     if raw.startswith("{"):
         try:
             obj = json.loads(raw)
-        except ValueError:
+        except (ValueError, RecursionError):
             return rec
         if not isinstance(obj, dict):
             return rec
@@ -216,7 +218,7 @@ def parse_line(line: str) -> dict:
         def node(v):
             try:
                 v = int(v)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 return ""
             return "^all" if v == 0xFFFFFFFF else ("local" if v == 0 else f"!{v:08x}")
         rec.update({"ts": iso, "dir": "RX" if "rssi" in obj else "TX",

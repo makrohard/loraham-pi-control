@@ -5,6 +5,9 @@ ever dropped: a line the parser does not know is still a record with its raw tex
 from __future__ import annotations
 
 import hashlib
+import json
+
+import pytest
 
 from lhpc.core import rflog
 
@@ -61,3 +64,21 @@ def test_the_key_is_the_line_and_only_the_line():
     assert rflog.parse_line(DAEMON)["key"] == rflog.parse_line(DAEMON + "\n")["key"]
     assert rflog.parse_line(DAEMON)["key"] != rflog.parse_line(DAEMON + " ")["key"]
     assert [r["raw"] for r in rflog.parse_lines([DAEMON, "x"])] == [DAEMON, "x"]
+
+
+_BIG = "1" + "0" * 399                              # a 400-digit integer
+_HOSTILE = ("NaN", "Infinity", "1e400", _BIG, "[1]", "{}")
+
+
+@pytest.mark.parametrize("line", [
+    *(f'{{"{field}": {value}}}' for field in ("timestamp", "rssi", "snr", "size", "from", "to")
+      for value in _HOSTILE),
+    f'2026-09-12T16:03:44.129Z RX rssi={_BIG} snr=-{_BIG}.5 len=52 hex=00 ascii="."',
+    f'2026-09-12T16:03:44.129Z RX rssi=-71.00 snr=9.75 len={"9" * 5000} hex=00 ascii="."',
+    '{"rssi": 1' + "0" * 5000 + "}",                # over the decoder's digit limit: kept raw
+    '{"a": ' + "[" * 2000 + "]" * 2000 + "}",       # nested past the recursion limit
+], ids=lambda line: line[:48])
+def test_parse_line_never_raises_and_is_strict_json(line):
+    r = rflog.parse_line(line)
+    assert r["raw"] == line
+    json.dumps(r, allow_nan=False)
