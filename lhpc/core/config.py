@@ -1815,9 +1815,13 @@ def recover_config_transaction(paths: Paths) -> tuple[ConfigRecovery, str]:
     # Presence is decided WITHOUT following the leaf: ANY directory entry at the journal
     # path -- a regular file, OR a symlink (including a dangling or escaping one) -- is a
     # pending journal that must be recovered/blocked. `Path.exists()` follows the link and
-    # would report a dangling-symlink journal as absent; `os.path.lexists` does not.
-    if not os.path.lexists(jp):
+    # would report a dangling-symlink journal as absent; `probe_exists` does not, nor EIO. An
+    # unexaminable journal is never absent: it blocks, like any journal that cannot be finished.
+    state = runtime_fs.probe_exists(jp)[0]
+    if state == "absent":
         return ConfigRecovery.UNNECESSARY, ""
+    if state != "present":
+        return ConfigRecovery.BLOCKED, ""
     try:
         journal = runtime_fs.loads_json(runtime_fs.read_text(paths, jp))   # no-follow read
     except (OSError, ValueError, PathContainmentError):

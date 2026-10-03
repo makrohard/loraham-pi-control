@@ -205,7 +205,16 @@ The guarantees the controller gives, each with where it is implemented and prove
   `O_DIRECTORY|O_NOFOLLOW`, so a symlink swapped in mid-operation cannot redirect a write; atomic
   writes fsync and `os.replace`; config, owned-record, journal and log leaves are opened
   `O_NOFOLLOW`; absolute and `..` paths are rejected. Failures are typed (`PathContainmentError`)
-  and caught at every boundary. `tests/core/test_runtime_fs.py`.
+  and caught at every boundary. `tests/core/test_runtime_fs.py`. A checkout's `.git` that is a
+  symlink which does not resolve (dangling, a loop) is treated as present and the tree is not
+  reported clean (before 0.12.0 it was ignored); it is never handed to git, which would walk up
+  to an enclosing repository. These presence decisions use
+  `runtime_fs.probe_exists`, or `probe_stat` where the kind (directory, symlink) decides: binary
+  retire's check of each receipt file and owned folder, the binary->source switch's listing of a
+  tree, a checkout's dirty/carry inventory (`.git`), the boot-restore markers and journal, and
+  the config journal recovery. In each, only
+  ENOENT/ENOTDIR read as absent, any other error refuses or keeps
+  (`tests/core/test_existence_probe.py`).
 - **Source transactions.** An update clones a candidate beside the destination (recorded before
   the clone starts, so recovery removes a clone a crash interrupted), archives the
   prior source to a transaction-owned `.prev`, activates by atomic no-clobber rename, writes the
