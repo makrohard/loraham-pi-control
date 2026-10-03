@@ -35,6 +35,20 @@ from .snapshot_memo import invalidates_snapshot
 _HMAC_LOG_BASE_RE = _re.compile(r"^hmac-apply-[0-9a-f]{32}$")
 
 
+def _daemon_presence(cmdlines) -> str:
+    """"none" | "some" | "indeterminate" from ONE process-table snapshot. An empty table is
+    indeterminate (`cmdlines()` returns {} when /proc cannot be listed; a readable /proc always
+    holds the caller). Any argv token whose basename is `loraham_daemon` is some daemon, whatever
+    its `--radio` and whatever argv[0] is (a wrapper)."""
+    import posixpath
+    if not cmdlines:
+        return "indeterminate"
+    if any(posixpath.basename(tok) == "loraham_daemon"
+           for argv in cmdlines.values() for tok in argv):
+        return "some"
+    return "none"
+
+
 class LifecycleOpsMixin:
 
     def _band_limited_running(self, snap, conservative: bool = False):
@@ -2600,9 +2614,10 @@ class LifecycleOpsMixin:
         # A VERIFIED stack stop retires the last-start candidate (the running state it
         # captured no longer exists, so the confirm-known-working offer must disappear) and
         # clears the restart-required flag (the stale processes are gone; the next start uses
-        # the saved config). A per-band daemon stop that leaves another served band's instance
-        # running is not a stack stop: that instance still runs the old config.
-        _whole = not _daemon_band_stop or {band, *other_bands} >= set(self.active_bands())
+        # the saved config). A per-band daemon stop counts only when the process table, read
+        # after the stop, shows no daemon: another instance still runs the old config, and an
+        # unreadable table proves nothing.
+        _whole = not _daemon_band_stop or _daemon_presence(self._system.procfs.cmdlines()) == "none"
         if ok and apply and self.stack(target) is not None and _whole:
             from . import known_working
             # A candidate-clear failure is reported, never swallowed: a still-present candidate

@@ -206,19 +206,85 @@ def test_cleared_on_verified_stop_and_next_start_hint(tmp_path):
     assert svc2.restart_required("chat") is None
 
 
-def test_a_single_band_daemon_stop_keeps_the_marker(tmp_path):
-    # The daemon serves 433 and 868 as two instances; a change pending on 868 must survive a stop of
-    # 433 only (a client releasing its band), since the 868 instance still runs the old config.
+def _seed_daemon_pending(tmp_path):
+    """A change pending on 868 (restart marker) and a known-working candidate for the daemon."""
+    from lhpc.core import known_working
     from lhpc.core import restart_required as rr
-    svc = _svc(tmp_path)
-    assert svc.active_bands() == ("433", "868")
     d = tmp_path / "state" / "restart-required"
     d.mkdir(parents=True)
     (d / "daemon.json").write_text(rr.merged_payload(None, "daemon", ["hipower_868"], "868", now=1.0))
+    assert known_working.write_candidate(
+        Paths(runtime_root=tmp_path), "daemon",
+        {"loraham-daemon": {"commit": "a" * 40, "selector": "pinned", "remote": "r",
+                            "source_rel": "src/x"}}, "433")
+
+
+def _candidate(tmp_path):
+    from lhpc.core import known_working
+    return known_working.read_candidate(Paths(runtime_root=tmp_path), "daemon")
+
+
+class _StoppedLife:
+    """The stop leg reports every component stopped (the observed process table is the test's)."""
+    def stop(self, comp, band=None):
+        from lhpc.core.outcomes import CompResult, Outcome
+        return CompResult(component=comp.id, action="stop", outcome=Outcome.STOPPED,
+                          summary="scripted")
+
+
+def test_a_single_band_daemon_stop_keeps_the_marker_when_the_process_view_is_indeterminate(tmp_path):
+    # The daemon serves 433 and 868 as two instances; a stop of 433 only (a client releasing its
+    # band) proves nothing about 868 when the process table cannot be read ({}).
+    svc = _svc(tmp_path)
+    assert svc.active_bands() == ("433", "868")
+    _seed_daemon_pending(tmp_path)
     assert svc.stop("daemon", apply=True, band="433").ok
-    assert _marker(tmp_path, "daemon") is not None
+    assert _marker(tmp_path, "daemon") is not None and _candidate(tmp_path) is not None
     assert svc.stop("daemon", apply=True).ok                         # a whole-daemon stop clears it
-    assert _marker(tmp_path, "daemon") is None
+    assert _marker(tmp_path, "daemon") is None and _candidate(tmp_path) is None
+
+
+def test_a_single_band_daemon_stop_clears_when_no_instance_remains(tmp_path):
+    svc = _svc(tmp_path, cmdlines={1: ["init"]})
+    _seed_daemon_pending(tmp_path)
+    assert svc.stop("daemon", apply=True, band="433").ok
+    assert _marker(tmp_path, "daemon") is None and _candidate(tmp_path) is None
+
+
+def test_a_single_band_daemon_stop_keeps_while_another_instance_runs(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, cmdlines={1: ["init"],
+                                   7: ["/opt/lhpc/bin/loraham_daemon", "--radio", "868"]})
+    monkeypatch.setattr(type(svc), "_lifecycle", lambda self: _StoppedLife())
+    _seed_daemon_pending(tmp_path)
+    assert svc.stop("daemon", apply=True, band="433").ok
+    assert _marker(tmp_path, "daemon") is not None and _candidate(tmp_path) is not None
+
+
+_ODD_DAEMONS = (
+    ["/opt/lhpc/bin/loraham_daemon", "--radio", "915"],
+    ["/opt/lhpc/bin/loraham_daemon", "--radio"],
+    ["/opt/lhpc/bin/loraham_daemon", "--radio="],
+    ["/opt/lhpc/bin/loraham_daemon"],
+    ["stdbuf", "-oL", "/opt/lhpc/bin/loraham_daemon", "--radio", "868"],
+)
+
+
+@pytest.mark.parametrize("argv", _ODD_DAEMONS, ids=lambda a: " ".join(a))
+def test_a_single_band_daemon_stop_keeps_while_a_daemon_with_unknown_or_malformed_radio_runs(
+        tmp_path, monkeypatch, argv):
+    svc = _svc(tmp_path, cmdlines={1: ["init"], 7: argv})
+    monkeypatch.setattr(type(svc), "_lifecycle", lambda self: _StoppedLife())
+    _seed_daemon_pending(tmp_path)
+    assert svc.stop("daemon", apply=True, band="433").ok
+    assert _marker(tmp_path, "daemon") is not None and _candidate(tmp_path) is not None
+
+
+def test_daemon_presence_is_tri_state():
+    from lhpc.core.service_lifecycle_ops import _daemon_presence
+    assert _daemon_presence({}) == "indeterminate"
+    assert _daemon_presence({1: ["init"]}) == "none"
+    for argv in _ODD_DAEMONS:
+        assert _daemon_presence({1: ["init"], 7: argv}) == "some"
 
 
 def test_unsafe_marker_is_safe_side_tri_state(tmp_path):
