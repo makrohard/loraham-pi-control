@@ -80,7 +80,9 @@ def run_job(
     likewise typed — never a silently-successful job with a missing log.
 
     `stall_s` (build steps only) adds the stall rule to the `timeout` ceiling (`progress`); it is
-    handed to the runner only when given, so host tests and other callers keep a plain timeout."""
+    handed to the runner only when given, so host tests and other callers keep a plain timeout.
+    A build step's log then ends with its `[progress] longest quiet <n> s` line (the runner's
+    `longest_quiet_s`), whatever the outcome; the tail does not carry it."""
     from . import runtime_fs
     from .paths import PathContainmentError
     # A job name is controller-derived, but guard the leaf so a planted symlinked log
@@ -170,6 +172,15 @@ def run_job(
             except OSError:
                 pass
             output = (output + "\n" + marker) if output else marker
+        quiet = getattr(result, "longest_quiet_s", None)
+        if stall_s is not None and quiet is not None:
+            # Best-effort, like the announce line: a missing line makes the step no slow-target
+            # evidence, never a passing one.
+            try:
+                log_fh.write("\n" + progress.quiet_line(quiet) + "\n")
+                log_fh.flush()
+            except OSError:
+                pass
     finally:
         try:
             log_fh.close()

@@ -46,6 +46,8 @@ class CommandResult:
     # Why a timed-out run was stopped: "stalled" (no activity for stall_s) or "budget" (the ceiling);
     # "" when it was not timed out. `timed_out` stays True for both.
     stop_reason: str = ""
+    # The step's `progress.Watch.longest_quiet()` at its end (run_streaming only); None elsewhere.
+    longest_quiet_s: float | None = None
 
     @property
     def may_still_be_running(self) -> bool:
@@ -400,7 +402,8 @@ class RealCommandRunner:
             timed_out = bool(reason)
             rc = 124 if timed_out else (proc.returncode if proc.returncode is not None else -1)
             return CommandResult(returncode=rc, stdout="", stderr="", timed_out=timed_out,
-                                 termination=termination, stop_reason=reason)
+                                 termination=termination, stop_reason=reason,
+                                 longest_quiet_s=watch.longest_quiet())
         return self._run_controlled(argv, timeout, log_fh, cwd, env, redactor, should_cancel,
                                     low_priority, stall_s, sample_s)
 
@@ -511,7 +514,8 @@ class RealCommandRunner:
         return CommandResult(returncode=rc, stdout="", stderr="", timed_out=timed_out,
                              cancelled=cancelled, termination=termination,
                              output_unverified=output_unverified, session_ident=ident,
-                             log_write_failed=write_failed[0], stop_reason=reason)
+                             log_write_failed=write_failed[0], stop_reason=reason,
+                             longest_quiet_s=watch.longest_quiet())
 
 
 class RealProcFs:
