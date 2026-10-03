@@ -18,6 +18,7 @@ import errno
 import os
 import re
 import shutil
+import stat
 import sys
 import time
 from contextlib import contextmanager
@@ -158,6 +159,25 @@ class Plan:
     @property
     def ok(self) -> bool:
         return all(a.status != "failed" for a in self.actions)
+
+
+def _git_marker_anomaly(dest: Path) -> str | None:
+    """The `.git` of a checkout for the dirty/carry inventory: None = absent (not a checkout),
+    "" = present and reachable, else the anomaly. A `.git` that cannot be examined, or a symlink
+    that does not resolve (dangling, a loop), is never "absent" and never handed to git: git
+    would walk up to an enclosing repository and report on that one."""
+    from . import runtime_fs
+    state, why, st = runtime_fs.probe_stat(dest / ".git")
+    if state == "absent":
+        return None
+    if state == "present" and stat.S_ISLNK(st.st_mode):
+        state, why, _st = runtime_fs.probe_stat(dest / ".git", follow=True)
+        if state == "absent":
+            return ".git is a dangling symlink"
+        if state == "unknown":
+            return f".git is a symlink that cannot be followed ({why})"
+        return ""
+    return f"cannot examine .git ({why})" if state == "unknown" else ""
 
 
 class Installer:
@@ -886,8 +906,11 @@ class Installer:
         not a git checkout reports clean here (ownership verification handles unknown trees).
         A FAILED git status reports the failure as a tracked entry — fail toward dirty, never
         silently clean."""
-        if not (dest / ".git").exists():
+        anomaly = _git_marker_anomaly(dest)
+        if anomaly is None:
             return DirtyReport()
+        if anomaly:
+            return DirtyReport(tracked=(f"({anomaly} — treating as dirty)",))
         # NUL-SAFE, ENTRY-EXACT status: `-z` terminates every path with NUL (no quoting, so
         # newline/quote-containing names parse exactly), and `--untracked-files=all`
         # enumerates every INDIVIDUAL untracked file — git never collapses a directory, so
@@ -946,8 +969,11 @@ class Installer:
 
         Regenerable artifacts are filtered by the SAME predicate `dirty_report` uses, so
         `build/`, `.run/` and a component's declared `bin` stay disposable in both."""
-        if not (dest / ".git").exists():
+        anomaly = _git_marker_anomaly(dest)
+        if anomaly is None:
             return ()
+        if anomaly:
+            return None
         r = self.system.runner.run(["git", "-C", str(dest), "ls-files", "-z", "--others"], 10.0)
         if r.returncode != 0:
             return None
