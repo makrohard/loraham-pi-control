@@ -1601,6 +1601,27 @@ def test_configure_validate_before_write_leaves_config_and_scripts_intact(tmp_pa
     assert open(apply_path).read() == before                  # scripts unchanged
 
 
+@pytest.mark.parametrize("err", ["config-error", "os-error"])
+def test_configure_save_failure_keeps_the_saved_scripts(tmp_path, monkeypatch, err):
+    """The scripts are rendered from the prospective config before the config is saved. When the
+    save then fails, the operator's apply script must not carry the selection that was NOT saved
+    (running the shown command would apply it): it is re-rendered from the saved config, and an
+    OSError is a typed refusal, not a traceback."""
+    from lhpc.core import config as _cfg
+    svc = _svc(tmp_path)
+    assert svc.firewall_configure(mode="compatibility").ok
+    apply_path = svc._fw_script_paths()["firewall-apply.sh"]
+    before = open(apply_path).read()
+
+    def boom(*a, **k):
+        raise (_cfg.ConfigError("rejected") if err == "config-error" else OSError("disk full"))
+    monkeypatch.setattr(_cfg, "save_firewall_config", boom)
+    r = svc.firewall_configure(mode="secure-default")
+    assert not r.ok
+    assert svc.config().firewall.mode == "compatibility"      # config unchanged
+    assert open(apply_path).read() == before                  # scripts match the saved config
+
+
 def test_fw_update_preflight_gates_nginx_unit(tmp_path, monkeypatch):
     # P1-2C: before self-update advances, abort when the firewall is installed, remote web is
     # exposed, and the boot-gated nginx unit cannot be brought current this run.

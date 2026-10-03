@@ -48,6 +48,8 @@
 - A Wi-Fi join to a new network that fails before it starts no longer leaves a stray stored network on
   the Network panel; "Back to AP" no longer says "nothing was changed" when it had already cleared the
   preferred network.
+- When saving the firewall settings fails, the firewall apply script is put back to the saved settings, so
+  the command the console shows can no longer apply the selection that was not saved.
 
 ## 0.11.10
 

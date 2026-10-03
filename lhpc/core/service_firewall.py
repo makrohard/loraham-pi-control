@@ -1162,7 +1162,16 @@ class FirewallOpsMixin:
                         self._paths, mode=mode, allow_endpoints=allow_endpoints,
                         ssh_ports=ssh_ports, ap_enabled=ap_enabled, ap_interface=ap_interface,
                         ap_cidr=ap_cidr, extra_allow=extra_allow, hold_lock=False)
-                except _cfg.ConfigError as exc:
+                except (_cfg.ConfigError, OSError) as exc:
+                    # The scripts already hold the PROSPECTIVE candidate: put back the ones of
+                    # the SAVED config, so the shown apply command never applies an unsaved intent.
+                    try:
+                        self.firewall_scripts(candidate=self.firewall_candidate(fwcfg=cur))
+                    except OSError:
+                        return ActionResult(False, f"firewall config rejected: {exc} — the "
+                                            "firewall scripts may hold the unsaved settings; "
+                                            "re-render them before applying",
+                                            next_commands=["lhpc firewall --script"])
                     return ActionResult(False, f"firewall config rejected: {exc}")
         except _cfg.ConfigLockBusy as exc:
             return ActionResult(False, f"firewall settings not saved — {exc}")
