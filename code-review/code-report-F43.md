@@ -844,3 +844,106 @@ top. Patch-ids (`git show <c> | git patch-id --stable`, first 12 hex digits):
 - Found and fixed: one ruff PIE807 in the new test.
 - Found and not changed: the Multi-Arch receipt name of python3-libgpiod on Ubuntu (the note
   above). It is outside this correction and not verified on the target OS.
+
+## Correction 6 (calibrate.sh's work dir on the Zero)
+
+**Trigger.** The first real row A on a Pi Zero 2 W: `bash testlab/slowbuild/calibrate.sh` died
+after 105 s with `OSError: [Errno 28] No space left on device`. Line 16 created the work dir
+with `mktemp -d "${TMPDIR:-/tmp}/lhpc-calib.XXXXXX"`; on the Zero `/tmp` is a 208 MB tmpfs and
+the io part writes 256 MB. Even where it fits, io on tmpfs times RAM, not the SD card.
+
+**Fix (`testlab/slowbuild/calibrate.sh`).**
+- The work dir defaults to `<runtime root>/state/lhpc-calib` when the script is the checkout
+  inside an LHPC install (`<root>/src/loraham-pi-control` with `<root>/state` present), else
+  `$HOME/.cache/lhpc-calib`. `TMPDIR` is not consulted. `--work-dir DIR` overrides it.
+- The script creates the dir (`mkdir -p` of the parent, then `mkdir`) and removes it at exit.
+  A dir that already exists is refused ("already exists (an interrupted run?): remove it") and
+  never touched, so the script can only remove a dir it created.
+- Before any timed part: `stat -f -c %T` of the work dir; tmpfs or ramfs is refused with one
+  line naming the dir and the type. Then `df -Pk`: less than the io size + 64 MB free is refused
+  with both numbers. Every refusal is exit 1 and removes the created dir.
+- `--io-mb N` (default 256, unchanged) sets the io size; `io_mb=<N>` is part of the `workload`
+  hash, so a calibration taken at a test size never matches the real workload.
+
+**Docs.** `docs/maintenance.md` (the slow-target build row) names the work dir
+`$HOME/loraham-pi-control/state/lhpc-calib` on the SD card, its 256 MB + 64 MB need, and the two
+refusals. The calibration row of `docs/test-matrix.md` (row A's recording table) says to run the
+script from the installed checkout, so the work dir is `state/lhpc-calib`.
+
+**Tests (`testlab/tests/unit/test_calibrate.py`, new, 6 cases).** A work dir under `/dev/shm`
+(tmpfs) is refused with the message and removed; `--io-mb 2**30` on a disk dir is refused with
+"… MB free, the io part needs … MB + 64 MB"; a disk dir with `--io-mb 1` and `2` runs, prints the
+`cpu= io= mem= workload=` line, removes the dir, and the two hashes differ; an existing dir is
+refused and its content kept; the default dir is `<root>/state/lhpc-calib` in a fake install and
+`$HOME/.cache/lhpc-calib` outside one, with `TMPDIR=/dev/shm` set (both via the early free-space
+refusal, which names the dir).
+
+**Red before.** The tmpfs case and the existing-dir case against the old script: 2 failed (the
+old script ignored its arguments, wrote 256 MB under `/tmp` and exited 0 with
+`cpu=7.4 io=28.5 mem=4.0 workload=…`). After the fix: 6 passed (≈22 s), on the head and on the
+amended commit itself (worktree).
+
+**Commits.** Amended into the calibrate.sh commit: `git commit --fixup 7474eb84`, then
+`GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash 045724db`. This report is a new commit on
+top. Patch-ids (`git show <c> | git patch-id --stable`, first 12 hex digits):
+
+| before | after | patch-id before | patch-id after | equal |
+|---|---|---|---|---|
+| 4244114 | 4244114 | 655eb46b57f5 | 655eb46b57f5 | yes |
+| aed5b7f | aed5b7f | 88c6073904e3 | 88c6073904e3 | yes |
+| 24bbd24 | 24bbd24 | 92f8151b313b | 92f8151b313b | yes |
+| e6fccb2 | e6fccb2 | ca7fa07c376c | ca7fa07c376c | yes |
+| 4a829a7 | 4a829a7 | 9812f85dd939 | 9812f85dd939 | yes |
+| d41d002 | d41d002 | 7fdef16d78b6 | 7fdef16d78b6 | yes |
+| 6a775d0 | 6a775d0 | 9ed7554ec23c | 9ed7554ec23c | yes |
+| c395552 | c395552 | ec31e4b99b54 | ec31e4b99b54 | yes |
+| 7474eb8 | d53c2b4 | 1a57aff0edb4 | 0f8760b50b61 | amended (this correction) |
+| eee681c | 7de65df | e09b180f27e1 | e09b180f27e1 | yes |
+| b541243 | 5cdf75a | f9a8ee7603b7 | f9a8ee7603b7 | yes |
+| ee24bda | 47cbfe6 | 3047a7355077 | 3047a7355077 | yes |
+
+`git diff ee24bda 47cbfe6` touches only `testlab/slowbuild/calibrate.sh` (+60 −8),
+`testlab/tests/unit/test_calibrate.py` (+96), `docs/maintenance.md` (+4 −1) and
+`docs/test-matrix.md` (+1 −1).
+
+**Checks.**
+- `testlab/tests/unit/test_calibrate.py`: 6 passed.
+- `tests/repo` + `testlab/tests/unit/test_slow_build_lane.py` + the new module: 443 passed,
+  5 skipped, **1 failed**: `test_version_consistent.py::test_changelog_leads_with_the_current_version`,
+  the known `## 0.11.12` heading against version 0.11.11 (Correction 4); it fails the same way
+  without this correction.
+- `ruff check lhpc testlab`: all checks passed. `bash -n calibrate.sh`: ok. The repository does
+  not use shellcheck (no config, no CI step), and it is not installed here.
+- No full-suite run and no background job. (One pytest run of the red-before check against the
+  old script ran past the foreground limit and was moved to the background by the tool; it was
+  stopped, and the red-before was re-run in the foreground on the two fast cases above.)
+- Identity: `git log --format='%an %cn%n%B' 045724db..HEAD` shows only the owner as author and
+  committer, and no co-author, session or AI-attribution line.
+
+**Live proof needed (not run here, not claimed).** Row A on the Zero with the amended script, and
+a row C run with it.
+
+**Adversarial self-review (before the push).**
+- Row C moves: the lane calls the script without arguments from `/tmp/repo`, which is not an
+  install, so its io part now runs in `$HOME/.cache/lhpc-calib` on the container's overlay file
+  system instead of the `/tmp` Docker volume. Both are on the runner's disk; overlay adds
+  copy-up/metadata cost, so if anything the container reads slower, which is the conservative
+  side for "the container must be at least as slow as the Zero". The lane was not changed (it
+  belongs to e6fccb2, whose patch-id is kept). The maintainer may prefer the lane to pass
+  `--work-dir /tmp/lhpc-calib` to keep the old volume.
+- The workload hash changed for the default run (the script changed, and `io_mb=256` is now
+  hashed). No `[[calibration]]` entry is recorded yet, so nothing is orphaned.
+- Free space is checked, inodes are not: the io part needs 65 536 inodes. An ext4 SD card has
+  far more; a nearly full one could still fail with ENOSPC on inodes. Not handled, noted.
+- The 64 MB margin covers directory blocks for 65 536 entries and the cpu part's objects; it
+  is not derived from a measurement.
+- A run killed with SIGKILL (or power loss) leaves the work dir; the next run refuses it and
+  says to remove it. Deliberate: the script never removes a dir it did not create.
+- The install detection is by location (`<root>/src/loraham-pi-control` with `<root>/state`),
+  not by `LHPC_RUNTIME_ROOT`; on the Zero the documented recipe runs the installed checkout, so
+  the two agree. A dev checkout with a separate root falls back to `$HOME/.cache`, still disk.
+- The tmpfs test skips where `/dev/shm` is not tmpfs, and the disk tests skip where pytest's tmp
+  dir is tmpfs; on such a box the module proves less. The CI runners and this box have both.
+- The disk test runs the whole script twice (cpu build and the 700 MB mem part), ≈20 s and
+  700 MB of RAM, in the testlab unit job. Not reduced: `--io-mb` is the only knob asked for.
+- Found and fixed before the commit: three lines over 100 columns in the script.
