@@ -1,442 +1,233 @@
-# Gate 1 — code review request, F43, Correction 4
+# Gate 1 — code review request, F43, Correction 5
 
-**Request.** Judge ONLY one commit, 2e15657 "F43: every build step's log ends with its longest
-quiet period". It re-implements an earlier commit (fa22a22) on top of F42's stall machinery
-(`lhpc/core/progress.py`: `Watch`, `SessionSampler`, `build_limits`). Judge four things:
-(1) the longest quiet period comes from F42's `progress.Watch` alone — no second sampler, no
-second stall rule, and the stall verdict, `stall_s`, `sample_s` and the ceiling behave exactly as
-before; (2) the `[progress] longest quiet <n> s` line is printed at the end of every build step by
-the same runner paths F42 uses — `run_job` over `run_streaming` (CLI `lhpc build`, auto-install)
-and the web launcher's `_run_step`, whose `(rc, reason, unverified)` return is unchanged — and by
-no Test step; (3) the value is right: the largest `now - last progress` at a sample without
-progress, or the quiet tail at the end; (4) the tests prove (1)–(3) and the slow-build lane's
-reader still parses the line. The nine other commits of the branch are unchanged cherry-picks and
-are not under review.
+**Request.** Judge ONLY one commit, e6fccb2 "F43: the slow-build lane — row C measured under the
+production limits". It is the earlier lane commit 8c7f131 with two fixes amended in. The rest of
+that commit is the version already judged. The diff below is exactly the amendment. Judge four
+things:
+
+1. **The floor for fast steps.** A timing line printed as `0.0 s`, below the log's one-decimal
+   resolution, now becomes one evidence entry at the floor `0.1 s` with
+   `note = "below log resolution"`. Check that the stack's measurement goes on after it, that
+   the validator still rejects a zero for every op, and that the floor cannot turn a slow
+   operation into a PASS.
+2. **The self-update helper.** The lane's helper step now runs
+   `lhpc self-update --run-service` with `INVOCATION_ID` set, the way its systemd unit runs it.
+   Check that only that subprocess gets the marker.
+3. **The tests.** Check that the three new tests prove 1 and 2 and would have caught both
+   defects.
+4. **Nothing else changed.** Check that nothing else in the lane changed: the list of measured
+   operations (`LANE_OPS`), the L4 waiver and the budget case.
+
+The ten other commits of the branch keep their patch-ids and are not under review.
 
 Answer in the form `| commit | verdict (OK / FINDING) | what |`, then give one final line: GREEN /
 GREEN WITH NOTES / RED. A finding names the line in the diff and what goes wrong.
 
 This file is your whole input: you have no repository access; use no connector, tool or web lookup.
 
-## Context from the base (unchanged code the commit builds on)
+## Why the commit was amended
 
-`progress.Watch` on the base, as the commit finds it:
+The first real run of the CI job `slow-build` failed for two reasons, both in the lane's own code.
+
+1. **Fast checkouts aborted every source stack.** The product's adoption log writes
+   `[git] checkout <ref> 0.0 s` for a checkout under 50 ms. The lane stored `seconds = 0.0`, and
+   the entry validator rejected it with "seconds must be a positive number". The stack's case
+   stopped at its first checkout, so no build was measured for five stacks. The budget case then
+   failed with "no row C evidence for …" for each of them.
+2. **The self-update helper was always refused.** It ran without `INVOCATION_ID`, so the
+   product's unit-plumbing guard refused it with rc 2 on every tree. The two self-update
+   operations never got evidence.
+
+## Context (unchanged code the amendment relies on)
+
+The product's timing line (`lhpc/core/install.py`, unchanged; it is the operator's log):
 
 ```python
-class Watch:
-    """`check()` -> None, "stalled" or "budget". Samples only when `sample_s` has elapsed; the stall
-    decision is taken right after a sample. With `sampler=None` (or `stall_s=None`) only the ceiling
-    applies."""
-
-    def __init__(self, stall_s, ceiling_s: float, sample_s: float = SAMPLE_S,
-                 clock=time.monotonic, sampler=None):
-        self.stall_s, self.ceiling_s, self._sample_s = stall_s, ceiling_s, sample_s
-        self._clock, self._sampler = clock, sampler
-        self._start = self._last_sample = self._last_progress = clock()
-
-    def check(self) -> str | None:
-        now = self._clock()
-        if now - self._start >= self.ceiling_s:
-            return "budget"
-        if self.stall_s is None or self._sampler is None or now - self._last_sample < self._sample_s:
-            return None
-        self._last_sample = now
-        if self._sampler.sample():
-            self._last_progress = now
-            return None
-        return "stalled" if now - self._last_progress >= self.stall_s else None
+                log_fh.write(f"\n[git] {what} {time.monotonic() - t0:.1f} s\n")
 ```
 
-A sampler's `sample()` returns True for progress and also when the sample could not be taken
-(unknown counts as alive). `lifecycle.build` is the only caller that passes `stall_s` to `run_job`
-(every build step, CLI and auto-install); host tests pass none. The web launcher calls
-`_run_step(..., stall_s, sample_s)` with `stall_s` set for a Build and None for a Test. The
-slow-build lane reads the line with
-`re.compile(r"^\[progress\] longest quiet (\d+(?:\.\d+)?) s\s*$", re.MULTILINE)` from the build
-logs and records the largest value as `quiet_s`.
+The guard (`lhpc/adapters/cli/main.py`, unchanged):
 
-## Test evidence
+```python
+def _unit_plumbing_refusal(flag: str, unit: str, use: str):
+    """Hidden unit plumbing runs from its systemd unit. It is refused when the systemd invocation
+    marker (`INVOCATION_ID`) is absent, e.g. a hand-run in a shell. The marker is an indicator, not an
+    authentication boundary. Returns the exit code 2 when refused, else None."""
+    if os.environ.get("INVOCATION_ID"):
+        return None
+    print(f"ERR   {flag} is unit plumbing, meant to run from {unit}; refused because the systemd "
+          f"invocation marker (INVOCATION_ID) is absent. Use {use} instead.")
+    return 2
+```
 
-Red before (the commit's `lhpc/` changes reverted, its tests kept): the new core test module 12
-failed, 1 passed (the Test-run negative case); the lane module's new test failed. Causes: no
-`Watch.longest_quiet`, no `progress.quiet_line`, no `CommandResult.longest_quiet_s`. After the
-commit: 13 passed and 27 passed; the F42 modules (`test_progress.py`, `test_jobs.py`,
-`test_build_launcher_runtime.py`, `test_bounded_runner.py`, `test_build_timeout.py`) pass unchanged.
+The lab environment every other lane step uses (`testlab/lhpc_testlab/testing.py`, unchanged):
 
-## The commit
+```python
+def lab_env(root: Path) -> dict:
+    env = dict(os.environ)
+    env["LHPC_RUNTIME_ROOT"] = str(root)
+    env["LHPC_TESTLAB"] = "1"
+    env["LHPC_SYSTEM_PROVIDER"] = "lhpc_testlab.provider:build"
+    env["LHPC_BOOT_ID_FILE"] = str(root / "state" / "testlab" / "host" / "boot_id")
+    env["LHPC_FW_PATH_PREFIX"] = str(root / "state" / "testlab" / "host")
+    env.pop("INVOCATION_ID", None)
+    return env
+```
+
+The entry validator (`lhpc/core/slow_target.py`, unchanged; the seconds rule):
+
+```python
+    sec = entry.get("seconds")
+    if isinstance(sec, bool) or not isinstance(sec, (int, float)) or sec <= 0:
+        errs.append("seconds must be a positive number")
+```
+
+It does not check for unknown keys, so `note` passes. The budget rule compares `seconds` with the
+limit and with twice the Zero measurement, and ignores `note`.
+
+The lane's reader of the adoption log (in the commit, unchanged by the amendment):
+
+```python
+def _adoption(env: dict, component: str) -> None:
+    for cid in stt.tree_components(STACKS, component):
+        log = _logs(env) / f"adopt-{cid}.log"
+        text = log.read_text(errors="replace") if log.is_file() else ""
+        clone = _CLONE.findall(text)
+        if not clone:
+            continue
+        _reject(log.name, text)
+        checkout = _CHECKOUT.findall(text)
+        assert checkout, f"{log.name} has no `[git] checkout <ref> <n> s` line — not evidence"
+        _record(component, "clone", max(map(float, clone)))
+        _record(component, "checkout", max(map(float, checkout)))
+        return
+```
+
+`_record` is also called for build (a `time.monotonic()` duration plus `quiet_s`), deb-fetch,
+cli-venv (from `[venv] <n> s` lines), selfupdate-helper (a `time.monotonic()` duration) and
+selfupdate-pip (from `[selfupdate] pip sync <n> s`). After the env check and the entry key, it
+asserts `not stt.entry_errors(entry)`.
+
+## The amendment (8c7f131 → e6fccb2)
 
 ```diff
-commit 2e15657
-
-F43: every build step's log ends with its longest quiet period
-
-Plan §5 change 4, on F42's stall machinery. The L1 quantity of the slow-target budget is the
-largest `now - last progress` over a step: the difference F42's progress.Watch already compares
-with stall_s at every sample. Watch.longest_quiet() reports it: the largest such value at a
-sample without progress, or the quiet tail up to now (without a sampler: the whole runtime).
-progress.quiet_line() renders `[progress] longest quiet <n> s`. No second sampler and no change
-to the stall decision, stall_s or the ceiling.
-
-The line is printed by the runner paths F42 uses. run_streaming (fast and controlled path)
-returns the Watch's value as CommandResult.longest_quiet_s; run_job writes the line at the end
-of the log of every step it runs with stall_s (every lifecycle build step: CLI `lhpc build` and
-auto-install), whatever the outcome, log only, never the tail. The web launcher's _run_step
-prints it after every Build step, stopped or not, and none after a Test step; its
-(rc, reason, unverified) return is unchanged.
-
-tests/core/test_longest_quiet.py: the value from a Watch driven by a fake clock and sampler
-(quiet gap, quiet tail, continuous progress, no sampler, stall verdicts unchanged), the line in
-the lane's own pattern, the job log on success, failure and timeout, none without stall_s,
-both run_streaming paths, the web launcher for Build, a stopped Build step and Test.
-testlab/tests/unit/test_slow_build_lane.py: the lane's build reader records quiet_s from a log
-written by run_job. Against the previous commit 12 of the 13 new core tests and the lane test fail.
-
-
-diff --git a/lhpc/core/build_launcher_runtime.py b/lhpc/core/build_launcher_runtime.py
-index 706ea3d..49ed150 100644
---- a/lhpc/core/build_launcher_runtime.py
-+++ b/lhpc/core/build_launcher_runtime.py
-@@ -155,7 +155,9 @@ def _run_step(argv: list, cwd: str, env: dict, timeout: float, stall_s: float |
-     watch = progress.Watch(stall_s, timeout, sample_s, sampler=sampler)
-     while True:
-         try:
--            return p.wait(timeout=min(1.0, sample_s, watch.remaining())), "", False   # never past the ceiling
-+            rc = p.wait(timeout=min(1.0, sample_s, watch.remaining()))   # never past the ceiling
-+            _print_quiet(watch, stall_s)
-+            return rc, "", False
-         except subprocess.TimeoutExpired:
-             reason = watch.check()
-             if reason:
-@@ -170,9 +172,17 @@ def _run_step(argv: list, cwd: str, env: dict, timeout: float, stall_s: float |
-                          "{}\n".format(result.value, " ".join(argv)))
-     sys.stderr.write("step timed out {}: {}\n".format(_stop_words(reason, stall_s, timeout),
-                                                       " ".join(argv)))
-+    _print_quiet(watch, stall_s)
-     return 124, reason, (not result.ok)
+diff --git a/testlab/tests/slowbuild/test_slow_build.py b/testlab/tests/slowbuild/test_slow_build.py
+index 7f83626..117bf46 100644
+--- a/testlab/tests/slowbuild/test_slow_build.py
++++ b/testlab/tests/slowbuild/test_slow_build.py
+@@ -63,6 +63,10 @@ FETCHED: dict[str, str] = {}
+ INTRODUCING: list[str] = []      # the previous tag, when its helper has no pip sync line
+ 
+ _SECS = r"(\d+(?:\.\d+)?) s"
++# The timing lines print one decimal (`.1f`): a step faster than 50 ms reads `0.0 s`. That is
++# valid evidence of a fast step, recorded at this floor with a note, never as zero.
++LOG_RESOLUTION_S = 0.1
++BELOW_RESOLUTION = "below log resolution"
+ # Rejection markers, wherever a step prints them: `[stalled]`, `[timeout]`, `[fail]` and their
+ # longer forms (`[failed]`, the job log's `[TIMED OUT after …]`).
+ _BAD = re.compile(r"^[ \t]*\[(?:stalled|timeout|timed out|fail|failed)\b[^\]\n]*\]",
+@@ -132,6 +136,8 @@ def _record(component: str, op: str, seconds: float, quiet_s: float | None = Non
+     key = stt.current_key(component, op, STACKS, PYPROJECT, fetched=FETCHED.get(component, ""))
+     assert key, f"no entry key for {component} {op} on this tree"
+     entry = {"component": component, "op": op, "seconds": round(seconds, 1)}
++    if entry["seconds"] < LOG_RESOLUTION_S:
++        entry.update(seconds=LOG_RESOLUTION_S, note=BELOW_RESOLUTION)
+     if quiet_s is not None:
+         entry["quiet_s"] = round(quiet_s, 1)
+     entry.update({"key": key, "source": "throttled-ci",
+@@ -216,9 +222,12 @@ def _cli_venv(r) -> None:
  
  
-+def _print_quiet(watch, stall_s) -> None:
-+    """A Build step's output ends with its longest quiet period (`Watch.longest_quiet`); a Test step
-+    (no stall rule) prints none."""
-+    if stall_s is not None:
-+        print(progress.quiet_line(watch.longest_quiet()), flush=True)
-+
-+
- def _stop_words(reason: str, stall_s, timeout: float) -> str:
-     """Which limit ended a step, with the effective values: a Build names the stall or the guard,
-     a Test (no stall rule) keeps "after Ns"."""
-diff --git a/lhpc/core/jobs.py b/lhpc/core/jobs.py
-index 5d27d80..c79244b 100644
---- a/lhpc/core/jobs.py
-+++ b/lhpc/core/jobs.py
-@@ -80,7 +80,9 @@ def run_job(
-     likewise typed — never a silently-successful job with a missing log.
- 
-     `stall_s` (build steps only) adds the stall rule to the `timeout` ceiling (`progress`); it is
--    handed to the runner only when given, so host tests and other callers keep a plain timeout."""
-+    handed to the runner only when given, so host tests and other callers keep a plain timeout.
-+    A build step's log then ends with its `[progress] longest quiet <n> s` line (the runner's
-+    `longest_quiet_s`), whatever the outcome; the tail does not carry it."""
-     from . import runtime_fs
-     from .paths import PathContainmentError
-     # A job name is controller-derived, but guard the leaf so a planted symlinked log
-@@ -170,6 +172,15 @@ def run_job(
-             except OSError:
-                 pass
-             output = (output + "\n" + marker) if output else marker
-+        quiet = getattr(result, "longest_quiet_s", None)
-+        if stall_s is not None and quiet is not None:
-+            # Best-effort, like the announce line: a missing line makes the step no slow-target
-+            # evidence, never a passing one.
-+            try:
-+                log_fh.write("\n" + progress.quiet_line(quiet) + "\n")
-+                log_fh.flush()
-+            except OSError:
-+                pass
-     finally:
-         try:
-             log_fh.close()
-diff --git a/lhpc/core/probes/backends.py b/lhpc/core/probes/backends.py
-index d9f00be..578d152 100644
---- a/lhpc/core/probes/backends.py
-+++ b/lhpc/core/probes/backends.py
-@@ -46,6 +46,8 @@ class CommandResult:
-     # Why a timed-out run was stopped: "stalled" (no activity for stall_s) or "budget" (the ceiling);
-     # "" when it was not timed out. `timed_out` stays True for both.
-     stop_reason: str = ""
-+    # The step's `progress.Watch.longest_quiet()` at its end (run_streaming only); None elsewhere.
-+    longest_quiet_s: float | None = None
- 
-     @property
-     def may_still_be_running(self) -> bool:
-@@ -400,7 +402,8 @@ class RealCommandRunner:
-             timed_out = bool(reason)
-             rc = 124 if timed_out else (proc.returncode if proc.returncode is not None else -1)
-             return CommandResult(returncode=rc, stdout="", stderr="", timed_out=timed_out,
--                                 termination=termination, stop_reason=reason)
-+                                 termination=termination, stop_reason=reason,
-+                                 longest_quiet_s=watch.longest_quiet())
-         return self._run_controlled(argv, timeout, log_fh, cwd, env, redactor, should_cancel,
-                                     low_priority, stall_s, sample_s)
- 
-@@ -511,7 +514,8 @@ class RealCommandRunner:
-         return CommandResult(returncode=rc, stdout="", stderr="", timed_out=timed_out,
-                              cancelled=cancelled, termination=termination,
-                              output_unverified=output_unverified, session_ident=ident,
--                             log_write_failed=write_failed[0], stop_reason=reason)
-+                             log_write_failed=write_failed[0], stop_reason=reason,
-+                             longest_quiet_s=watch.longest_quiet())
- 
- 
- class RealProcFs:
-diff --git a/lhpc/core/progress.py b/lhpc/core/progress.py
-index 282a005..427513f 100644
---- a/lhpc/core/progress.py
-+++ b/lhpc/core/progress.py
-@@ -153,6 +153,7 @@ class Watch:
-         self.stall_s, self.ceiling_s, self._sample_s = stall_s, ceiling_s, sample_s
-         self._clock, self._sampler = clock, sampler
-         self._start = self._last_sample = self._last_progress = clock()
-+        self._quiet = 0.0
- 
-     def check(self) -> str | None:
-         now = self._clock()
-@@ -164,9 +165,23 @@ class Watch:
-         if self._sampler.sample():
-             self._last_progress = now
-             return None
-+        self._quiet = max(self._quiet, now - self._last_progress)
-         return "stalled" if now - self._last_progress >= self.stall_s else None
- 
-+    def longest_quiet(self) -> float:
-+        """The longest quiet period so far: the largest `now - last progress` the stall rule compared
-+        at a sample without progress, or the quiet tail up to now. Its margin to `stall_s` is the
-+        slow-target budget's L1 quantity, at the sampling resolution; without a sampler nothing is
-+        observed after the start, so it is the whole runtime."""
-+        return max(self._quiet, self._clock() - self._last_progress)
-+
-     def remaining(self) -> float:
-         """Seconds left to the ceiling (never negative): a runner caps each wait slice with it, so a
-         step can never outlive its ceiling by a wait slice."""
-         return max(0.0, self._start + self.ceiling_s - self._clock())
-+
-+
-+def quiet_line(seconds: float) -> str:
-+    """The last line of a build step's log (`Watch.longest_quiet`); the slow-build lane and row A
-+    read it."""
-+    return f"[progress] longest quiet {seconds:.1f} s"
+ def _helper(lhpc: Path, env: dict) -> tuple[float, str]:
+-    """The self-update helper body, timed whole: (seconds, stdout + stderr)."""
++    """The self-update helper body, timed whole: (seconds, stdout + stderr). It runs the way
++    its systemd unit runs it: `--run-service` is unit plumbing, refused (rc 2) without the
++    systemd invocation marker `INVOCATION_ID`."""
+     t0 = time.monotonic()
+-    r = subprocess.run([str(lhpc), "self-update", "--run-service"], env=env,
++    r = subprocess.run([str(lhpc), "self-update", "--run-service"],
++                       env={**env, "INVOCATION_ID": "slow-build-lane"},
+                        capture_output=True, text=True, timeout=HARNESS_S, check=False)
+     seconds = time.monotonic() - t0
+     return seconds, _judged("the self-update helper", r)
 diff --git a/testlab/tests/unit/test_slow_build_lane.py b/testlab/tests/unit/test_slow_build_lane.py
-index c89dac5..30df735 100644
+index 30df735..afc6d75 100644
 --- a/testlab/tests/unit/test_slow_build_lane.py
 +++ b/testlab/tests/unit/test_slow_build_lane.py
-@@ -13,6 +13,10 @@ from pathlib import Path
- 
- import pytest
- 
-+from lhpc.core.jobs import run_job
-+from lhpc.core.paths import Paths
-+from lhpc.core.probes.backends import CommandResult
-+
- _LANE = Path(__file__).resolve().parents[1] / "slowbuild" / "test_slow_build.py"
- _spec = importlib.util.spec_from_file_location("slow_build_lane", _LANE)
- lane = importlib.util.module_from_spec(_spec)
-@@ -94,6 +98,21 @@ def test_a_clean_step_passes_and_returns_both_streams():
-     assert "[progress] longest quiet 12.0 s" in out and "0 failed" in out
- 
- 
-+def test_the_lane_records_the_quiet_line_a_build_step_log_ends_with(step, tmp_path, monkeypatch):
-+    # The log as `run_job` writes it for a build step whose Watch saw a 41.5 s quiet period.
-+    class _Streaming:
-+        def run_streaming(self, argv, timeout, log_fh, **kw):
-+            log_fh.write("compiling\n")
-+            return CommandResult(returncode=0, stdout="", stderr="", longest_quiet_s=41.5)
-+
-+    run_job(_Streaming(), name="build-meshcore-cli", argv=["make"], cwd=None,
-+            logs_dir=tmp_path / "logs", paths=Paths(runtime_root=tmp_path), stall_s=600.0)
-+    seen = []
-+    monkeypatch.setattr(lane, "_record", lambda *a, **k: seen.append((a, k)))
-+    lane._build({"LHPC_RUNTIME_ROOT": str(tmp_path)}, "meshcore-cli")
-+    assert seen and seen[0][1] == {"quiet_s": 41.5}
+@@ -135,3 +135,56 @@ def test_past_bootstrap_the_introducing_release_still_fails_l4():
+     fails, boot = lane._waived([L4], [{"op": "build"}], intro=True)
+     assert boot == "" and len(fails) == 1
+     assert fails[0].startswith(L4) and lane.L4_INTRODUCING in fails[0]
 +
 +
- # ---- the budget case's waivers (bootstrap; L4 on the introducing release) -------------------
- 
- L4 = "no row C evidence for lhpc-selfupdate selfupdate-pip: the slow-build run did not measure it"
-diff --git a/tests/core/test_longest_quiet.py b/tests/core/test_longest_quiet.py
-new file mode 100644
-index 0000000..e6d0940
---- /dev/null
-+++ b/tests/core/test_longest_quiet.py
-@@ -0,0 +1,171 @@
-+"""Every build step's log ends with its longest quiet period (plans/PLAN-F43.md §5 change 4): the
-+L1 quantity the slow-target budget holds against the stall limit, read by the slow-build lane and
-+by row A from `[progress] longest quiet <n> s`.
++# ---- a step faster than the log's resolution (testlab run 37145791526) ----------------------
 +
-+The quantity comes from F42's `progress.Watch` — the stall rule's own `now - last progress` — and
-+is printed by the runner paths F42 uses: `run_job` over `run_streaming` (CLI `lhpc build`,
-+auto-install) and the web launcher's `_run_step`. These tests drive the Watch with a fake clock
-+and sampler, as tests/core/test_progress.py does."""
-+from __future__ import annotations
-+
-+import re
-+import sys
-+from pathlib import Path
-+
-+from lhpc.core import build_launcher_runtime as blr
-+from lhpc.core import progress
-+from lhpc.core.jobs import run_job
-+from lhpc.core.paths import Paths
-+from lhpc.core.probes.backends import CommandResult, RealCommandRunner
-+
-+# The slow-build lane's own pattern (testlab/tests/slowbuild/test_slow_build.py `_QUIET`).
-+LANE_QUIET = re.compile(r"^\[progress\] longest quiet (\d+(?:\.\d+)?) s\s*$", re.MULTILINE)
++def test_a_checkout_below_log_resolution_is_evidence_at_the_floor(tmp_path, monkeypatch):
++    """`[git] checkout <ref> 0.0 s` (a sub-50 ms checkout, `.1f`) is a fast step, not a broken
++    one: one entry at the floor with its note, and the stack's measurement goes on."""
++    monkeypatch.setattr(lane, "_env_problems", list)
++    monkeypatch.setattr(lane, "_write", lambda: None)
++    monkeypatch.setattr(lane, "EVIDENCE", {})
++    component = next(c for c, o in lane.LANE_OPS if o == "clone")
++    adopter = lane.stt.tree_components(lane.STACKS, component)[0]
++    (tmp_path / "logs").mkdir()
++    (tmp_path / "logs" / f"adopt-{adopter}.log").write_text(
++        "[git] clone 12.3 s\n[git] checkout v1.2.3 0.0 s\n")
++    lane._adoption({"LHPC_RUNTIME_ROOT": str(tmp_path)}, component)
++    checkout = lane.EVIDENCE[(component, "checkout")]
++    assert checkout["seconds"] == lane.LOG_RESOLUTION_S == 0.1
++    assert checkout["note"] == lane.BELOW_RESOLUTION == "below log resolution"
++    assert lane.stt.entry_errors(checkout) == []
++    clone = lane.EVIDENCE[(component, "clone")]
++    assert clone["seconds"] == 12.3 and "note" not in clone
 +
 +
-+class _Clock:
-+    def __init__(self):
-+        self.t = 0.0
-+
-+    def __call__(self):
-+        return self.t
-+
-+
-+class _Seq:
-+    """A sampler answering a fixed sequence of progress / no-progress samples."""
-+
-+    def __init__(self, answers):
-+        self._answers = iter(answers)
-+
-+    def sample(self):
-+        return next(self._answers)
++def test_the_validator_still_rejects_a_zero():
++    floor = {"component": "c", "op": "checkout", "key": "pin:abc", "source": "throttled-ci",
++             "host": "h", "lhpc": "v0.11.12 (abc1234)", "date": lane.dt.date(2026, 10, 3),
++             "evidence": "e", "note": lane.BELOW_RESOLUTION}
++    assert lane.stt.entry_errors({**floor, "seconds": lane.LOG_RESOLUTION_S}) == []
++    for op in ("checkout", "clone", "build"):
++        assert "seconds must be a positive number" in lane.stt.entry_errors(
++            {**floor, "op": op, "seconds": 0.0})
 +
 +
-+def _drive(samples, end, stall_s=600):
-+    """A Watch sampled every 15 s with `samples` (progress True/False), read at `end`."""
-+    clock = _Clock()
-+    w = progress.Watch(stall_s=stall_s, ceiling_s=10 ** 9, sample_s=15, clock=clock,
-+                       sampler=_Seq(samples))
-+    verdicts = []
-+    for i in range(len(samples)):
-+        clock.t = 15.0 * (i + 1)
-+        verdicts.append(w.check())
-+    clock.t = end
-+    return w, verdicts
++# ---- the self-update helper runs as its systemd unit does -----------------------------------
 +
-+
-+# ---- the quantity, from the Watch's own samples --------------------------------------------
-+
-+def test_longest_quiet_is_the_largest_now_minus_last_progress_at_a_quiet_sample():
-+    # progress at 15, quiet at 30 and 45, progress at 60, quiet at 75; read at 80
-+    w, _ = _drive([True, False, False, True, False], end=80.0)
-+    assert w.longest_quiet() == 30.0                     # 45 - 15: the stall rule's own difference
-+
-+
-+def test_the_quiet_tail_before_the_end_counts():
-+    w, _ = _drive([True], end=100.0)
-+    assert w.longest_quiet() == 85.0
-+
-+
-+def test_continuous_progress_reads_at_most_one_sample_interval():
-+    w, _ = _drive([True, True, True], end=52.0)
-+    assert w.longest_quiet() == 7.0
-+
-+
-+def test_a_step_without_a_sampler_reads_its_whole_runtime():
-+    clock = _Clock()
-+    clock.t = 10.0
-+    w = progress.Watch(stall_s=None, ceiling_s=10 ** 9, clock=clock)
-+    clock.t = 250.5
-+    assert w.check() is None and w.longest_quiet() == 240.5
-+
-+
-+def test_the_accessor_leaves_the_stall_rule_unchanged():
-+    # quiet from the start: stalled at the first sample with now - last progress >= stall_s
-+    w, verdicts = _drive([False] * 4, end=60.0, stall_s=60)
-+    assert verdicts == [None, None, None, "stalled"]
-+    assert w.longest_quiet() == 60.0
-+
-+
-+def test_the_line_is_what_the_lane_reads():
-+    m = LANE_QUIET.search(progress.quiet_line(240.46))
-+    assert m and m.group(0) == "[progress] longest quiet 240.5 s"
-+
-+
-+# ---- CLI path: run_job over run_streaming ends a build step's log with it ------------------
-+
-+class _Streaming:
-+    """A streaming runner whose step ended with a known longest quiet period."""
-+
-+    def __init__(self, rc=0, timed_out=False, quiet=37.0):
-+        self.rc, self.timed_out, self.quiet = rc, timed_out, quiet
-+
-+    def run_streaming(self, argv, timeout, log_fh, **kw):
-+        log_fh.write("compiling\n")
-+        return CommandResult(returncode=self.rc, stdout="", stderr="", timed_out=self.timed_out,
-+                             stop_reason="stalled" if self.timed_out else "",
-+                             longest_quiet_s=self.quiet)
-+
-+
-+def _job(tmp_path, runner, name="build-x", **kw):
-+    return run_job(runner, name=name, argv=["make"], cwd=None, logs_dir=tmp_path / "logs",
-+                   paths=Paths(runtime_root=tmp_path), **kw)
-+
-+
-+def test_a_build_step_log_ends_with_its_longest_quiet_line(tmp_path):
-+    for runner in (_Streaming(), _Streaming(rc=2), _Streaming(rc=124, timed_out=True)):
-+        res = _job(tmp_path, runner, stall_s=600.0)
-+        lines = Path(res.log_path).read_text().rstrip("\n").splitlines()
-+        assert lines[-1] == "[progress] longest quiet 37.0 s", lines
-+        assert not any(LANE_QUIET.search(t) for t in res.tail)      # log only, never the tail
-+
-+
-+def test_a_job_without_the_stall_rule_writes_no_line(tmp_path):
-+    res = _job(tmp_path, _Streaming())                  # a host test: no stall_s
-+    assert not LANE_QUIET.search(Path(res.log_path).read_text())
-+
-+
-+def test_run_streaming_reports_its_watch(tmp_path, monkeypatch):
-+    # Both runner paths (fast fd redirect and the controlled pipe) hand back the Watch's value.
-+    monkeypatch.setattr(progress.Watch, "longest_quiet", lambda self: 12.5)
-+    for kw in ({}, {"should_cancel": lambda: False}):
-+        with open(tmp_path / "out.log", "w") as fh:
-+            res = RealCommandRunner().run_streaming([sys.executable, "-c", "pass"], timeout=30,
-+                                                   log_fh=fh, stall_s=60, **kw)
-+        assert res.returncode == 0 and res.longest_quiet_s == 12.5, kw
-+
-+
-+def test_the_cli_build_log_carries_the_watch_value(tmp_path, monkeypatch):
-+    monkeypatch.setattr(progress.Watch, "longest_quiet", lambda self: 12.5)
-+    res = _job(tmp_path, RealCommandRunner(), stall_s=60.0)
-+    assert Path(res.log_path).read_text().rstrip("\n").splitlines()[-1] == \
-+        "[progress] longest quiet 12.5 s"
-+
-+
-+# ---- web path: the detached build launcher prints it after every Build step ----------------
-+
-+def _spec(tmp_path, op):
-+    Paths(runtime_root=tmp_path / "rt").under("state", "locks").mkdir(parents=True)
-+    return {"steps": [{"argv": ["true"], "env": {}}, {"argv": ["true"], "env": {}}],
-+            "cwd": str(tmp_path), "runtime_root": str(tmp_path / "rt"), "lock_names": [],
-+            "index_lock_name": "", "op": op}
-+
-+
-+def test_the_web_launcher_prints_it_after_every_build_step(tmp_path, capfd, monkeypatch):
-+    monkeypatch.setattr(progress.Watch, "longest_quiet", lambda self: 12.5)
-+    blr.run(_spec(tmp_path, "build"))
-+    out = capfd.readouterr().out
-+    assert LANE_QUIET.findall(out) == ["12.5", "12.5"]
-+    assert out.rstrip("\n").splitlines()[-1] == "[progress] longest quiet 12.5 s"
-+
-+
-+def test_the_web_launcher_prints_it_for_a_stopped_build_step(tmp_path, capfd, monkeypatch):
-+    monkeypatch.setattr(progress.Watch, "longest_quiet", lambda self: 3.0)
-+    rc, reason, unverified = blr._run_step([sys.executable, "-c", "import time; time.sleep(30)"],
-+                                           str(tmp_path), {}, 0.5, stall_s=600.0, sample_s=0.1)
-+    assert (rc, reason) == (124, "budget")
-+    assert LANE_QUIET.findall(capfd.readouterr().out) == ["3.0"]
-+
-+
-+def test_the_web_launcher_prints_none_for_a_test_run(tmp_path, capfd):
-+    blr.run(_spec(tmp_path, "test"))
-+    assert not LANE_QUIET.search(capfd.readouterr().out)
++def test_the_helper_runs_past_the_unit_plumbing_guard(tmp_path):
++    """`lhpc self-update --run-service` refuses (rc 2) without INVOCATION_ID; the lane's helper
++    step must run it as systemd does and get the helper's own evidence line."""
++    import sys
++    fake = tmp_path / "lhpc"
++    fake.write_text(
++        f"#!{sys.executable}\n"
++        "import sys\n"
++        "from lhpc.adapters.cli.main import _unit_plumbing_refusal\n"
++        "rc = _unit_plumbing_refusal('--run-service', 'lhpc-selfupdate.service', 'x')\n"
++        "if rc is None:\n"
++        f"    print('{lane._PIP_SYNC_MARK} 4.2 s')\n"
++        "sys.exit(rc or 0)\n")
++    fake.chmod(0o755)
++    env = {k: v for k, v in lane.os.environ.items() if k != "INVOCATION_ID"}
++    _, out = lane._helper(fake, env)
++    assert lane._PIP_SYNC.findall(out) == ["4.2"]
 ```
+
+## What the author ran
+
+- **Red before.** The three new tests against the lane module without the amendment: 3 failed.
+  - floor test: `['seconds must be a positive number']`.
+  - helper test: `failed (rc 2) … refused because the systemd invocation marker (INVOCATION_ID)
+    is absent`.
+  - validator test: the constant did not exist yet.
+
+  After the amendment: 30 passed.
+- **The lane end to end.** The real lane module, outside the throttled container, which was not
+  available. Only the env check was lifted, so none of it is evidence. Every source stack's real
+  install and build ran. Ten real `[git] checkout <ref> 0.0 s` lines were each recorded at 0.1
+  with the note, and those stacks went on to build. The real self-update helper ran past the
+  guard and updated the previous tag's clone to the candidate.
+- **Result:** 7 passed and 1 bootstrap skip. Three cases failed, only for the environment: no
+  GitHub API through the proxy (graywolf deb-fetch), an x86 box with no aarch64 binary channel
+  (the Meshtastic CLI venv), and the budget case naming exactly those two operations.
+- **Not claimed:** a green CI lane run.
