@@ -166,8 +166,9 @@ def test_meshcom_starts_on_the_prebuilt_image(chain):
 
 @pytest.mark.slow
 def test_simulated_reboot_restores_running_stacks(chain):
-    """With kiss running, a simulated reboot advances the boot id AND brings
-    the previously-running stacks back (no operator-stop tombstone)."""
+    """With kiss running, a simulated reboot kills it, advances the boot id, and the
+    production boot restore brings the previously-running stacks back (its journal says so;
+    no operator-stop tombstone)."""
     # Verify kiss by its REAL endpoint (the KISS/TCP listener on 8001), not by lhpc's
     # status string: proof-based /proc ownership is unreliable under nested-qemu (a running
     # stack can read as "stopped"), so a functional probe is the faithful check on every
@@ -183,6 +184,11 @@ def test_simulated_reboot_restores_running_stacks(chain):
     run_lab(chain.env, "_power", "--kind", "reboot", check=True, timeout=300)
     after = (chain.root / "state" / "testlab" / "host" / "boot_id").read_text().strip()
     assert after != before                                   # boot advanced
+    # The PRODUCTION boot restore ran on the new boot and brought kiss back.
+    journal = json.loads((chain.root / "state" / "boot-restore.json").read_text())
+    assert journal["boot_id"] == after
+    kiss = [i for i in journal["items"] if i.get("target") == "kiss"]
+    assert kiss and kiss[0]["state"] == "succeeded", journal
     # reboot must not OPERATOR-stop kiss — a reboot is not an explicit stop, so it writes
     # no per-stack tombstone for kiss (boot-restore may then bring it back). Check kiss
     # specifically: the stop-intent/ dir may hold other stacks' tombstones (e.g. meshcore,

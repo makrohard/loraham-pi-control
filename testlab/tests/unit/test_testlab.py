@@ -642,6 +642,58 @@ def test_power_reboot_does_not_tombstone(tmp_path, monkeypatch):
     assert not (tmp_path / "state" / "stop-intent").exists()
 
 
+@pytest.mark.parametrize("admission", ["free", "held-by-the-console"])
+def test_simulated_reboot_kills_owned_groups_and_runs_boot_restore(tmp_path, monkeypatch,
+                                                                    admission):
+    """A reboot is a power cut, then a boot: the owned process group dies of SIGKILL with its
+    ownership record kept, and the PRODUCTION boot restore consumes that record into its journal
+    under the new boot id. (It stopped and restarted the stacks by hand, so boot restore never ran
+    in the lab.) The console request that triggered the reboot may still hold its admission for a
+    moment; the restore then runs once it is released, as the unit does after a real boot."""
+    import signal
+    import time
+
+    from lhpc.core import procident
+    paths = make_lab_root(tmp_path, monkeypatch)
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    monkeypatch.setenv("LHPC_BOOT_ID_FILE", str(supervisor.boot_file(paths)))   # as lab_env sets it
+    boot1 = supervisor.ensure_boot_identity(paths)
+    proc = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    try:
+        ident = procident.proc_identity(proc.pid)
+        launch_id = f"loraham-kiss-tnc__x__{proc.pid}__{'0' * 32}"
+        owned = tmp_path / "state" / "owned"
+        owned.mkdir(parents=True)
+        (owned / f"{launch_id}.json").write_text(json.dumps({   # what a stack start records
+            **ident, "version": 1, "launch_id": launch_id, "stack": "kiss",
+            "component": "loraham-kiss-tnc", "requested_target": "kiss", "start_scope": "stack",
+            "band": "", "pid": proc.pid, "role": "", "launched_at": 1, "boot_id": boot1}))
+        holder = 0
+        if admission != "free":
+            r, w = os.pipe()
+            holder = os.fork()
+            if holder == 0:                       # the console request, still admitted
+                try:
+                    with ControllerService(paths=paths)._admission_guard("power", "reboot"):
+                        os.write(w, b"held")
+                        time.sleep(2)
+                finally:
+                    os._exit(0)
+            assert os.read(r, 4) == b"held"
+        assert ops.power(ControllerService(paths=paths), "reboot") == 0
+        assert proc.wait(timeout=10) == -signal.SIGKILL
+        if holder:
+            assert os.waitpid(holder, 0)[1] == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    journal = json.loads((tmp_path / "state" / "boot-restore.json").read_text())
+    assert journal["boot_id"] == supervisor.boot_file(paths).read_text().strip() != boot1
+    item = next(i for i in journal["items"] if i.get("target") == "kiss")
+    assert item["state"] in ("succeeded", "failed") and item["evidence_ids"] == [launch_id]
+
+
 def _populate_stub(paths, *, installed=(), binary=(), fail_install=()):
     """A ControllerService stand-in for populate(): records install/build calls and lets a
     test choose which stacks are pre-installed, binary-backed, or fail to install. A real
