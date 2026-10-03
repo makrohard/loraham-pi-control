@@ -91,6 +91,30 @@ its own.
 
 Rows 9, 10 and 12: console stopped, `vmstat` running, `dmesg` checked after.
 
+### Slow-target baseline
+
+Row A of the [slow-target build row](maintenance.md#branches-and-releases): rows 6, 7 and 8, a
+one-click self-update and `calibrate.sh` record their numbers as entries of
+`tests/data/slow-target-builds.toml` (schema in its header; `source = "zero2w"`,
+`host = "lhpc-e293"`), committed before the tag. Any other entry
+`tests/install/test_slow_target_budget.py` names as missing is recorded the same way from the row
+that runs it on the Zero.
+
+| op | from |
+|---|---|
+| `build` | per component, `t lhpc build <component> --yes` (`seconds`) and the `[progress] longest quiet <n> s` line of `logs/build-<component>*.log` (`quiet_s`) |
+| `clone`, `checkout` | the `[git] clone <n> s` and `[git] checkout <ref> <n> s` lines of `logs/adopt-<component>.log` (or of the component sharing its source tree) after step 2 |
+| `cli-venv` | row 8: the largest `[venv] <n> s` line `lhpc install meshtastic` prints |
+| `selfupdate-helper` | a one-click update from the previous release: `systemctl --user show lhpc-selfupdate.service -p ExecMainStartTimestamp -p ExecMainExitTimestamp`, the difference |
+| `selfupdate-pip` | the `[selfupdate] pip sync <n> s` line of that run in `logs/lhpc-selfupdate.log`; which release has it: see [maintenance](maintenance.md#branches-and-releases), the slow-target build row |
+| `deb-fetch` | `t bash lhpc/data/scripts/graywolf-fetch.sh /tmp/gw <latest> --from-upstream` |
+| calibration | `bash testlab/slowbuild/calibrate.sh` prints `cpu= io= mem= workload=`: one `[[calibration]]` entry |
+
+`key` is `pin:<the component's manifest pin_commit>` (the `cli-venv` entry: meshtastic's),
+`deb:<version fetched>`, or for both self-update entries the output of
+`python3 -c 'from lhpc.core import slow_target as s; print(s.deps_key(open("pyproject.toml").read()))'`.
+Only a run that exited 0 with no `[stalled]`, `[timeout]` or `[fail]` line counts.
+
 Row 7's client commands are typed in the client whose command `lhpc stack start meshcore-cli`
 prints ([one connection at a time](stacks/meshcore.md#command-line-client)); the web UI keeps
 running. "no_event_received" means no reply within the client's timeout (15 s in meshcore
