@@ -572,6 +572,24 @@ def test_check_fails_when_installed_stack_not_ready(tmp_path, monkeypatch):
     assert not set(r.data["not_installed"]) & set(r.data["not_ready"])
 
 
+def test_check_does_not_take_a_reused_pid_for_the_fake_gpsd(tmp_path, monkeypatch, unrelated_pid):
+    paths = make_lab_root(tmp_path, monkeypatch)
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    (tmp_path / "state" / "testlab" / "gpsd.pid").write_text(f"{unrelated_pid.pid}\n")
+    svc = ControllerService(paths=paths)
+    assert ops.check(svc).data["gpsd"] is False          # a live pid, but not the fake gpsd
+    # ... while a process spawned the way reset spawns the fake (`<python> -m lhpc_testlab _gpsd`;
+    # here a sleeper carrying that argv tail) is recognised
+    fake = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)",
+                             "-m", "lhpc_testlab", "_gpsd"])
+    try:
+        (tmp_path / "state" / "testlab" / "gpsd.pid").write_text(f"{fake.pid}\n")
+        assert ops.check(svc).data["gpsd"] is True
+    finally:
+        fake.kill()
+        fake.wait()
+
+
 def test_reset_clears_accumulated_state(tmp_path, monkeypatch):
     """The wipe list of a reset: simulated NM profiles, unit state and the TX log do not
     survive it."""

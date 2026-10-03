@@ -366,10 +366,9 @@ def _gpsd_pid(svc) -> int:
     try:
         pid = int(runtime_fs.read_text_regular(
             svc._paths, gpsd.pid_path(svc._paths), max_bytes=32).strip())
-        os.kill(pid, 0)
-        return pid
     except (OSError, ValueError):
         return 0
+    return pid if supervisor.pid_alive(pid, "lhpc_testlab _gpsd") else 0     # its spawn argv
 
 
 def _respawn_gpsd(svc, details: list) -> None:
