@@ -1474,7 +1474,7 @@ class Lifecycle:
         cwd = cwd if (cwd and os.path.isdir(cwd)) else None   # absent source -> run from cwd, log the failure
         try:
             pid = self._spawn(argv, log, cwd=cwd, env=full_env)
-        except OSError:
+        except (OSError, PathContainmentError):
             return None, None
         return log.name, pid
 

@@ -537,9 +537,23 @@ def test_spawn_web_job_secondary_raise_releases_its_admission(tmp_path, monkeypa
     with pytest.raises(RuntimeError):
         svc.spawn_web_job("build", "meshcom")
     assert len(calls) == 2
+    assert jobresult.read_one(svc._paths, calls[1] + ".log")["state"] == "failed"   # settled
     (tmp_path / updater_units.UNINSTALL_GUARD).write_text('{"pid": 1, "nonce": "x"}')
     assert svc.hmac_apply_start("meshcom", "enable").data.get("admission_blocked")
 
+
+def test_spawn_start_job_raise_before_spawn_settles_the_attempt(tmp_path, monkeypatch):
+    from lhpc.core.lifecycle import Lifecycle
+    svc = _svc(tmp_path)
+    boom = RuntimeError("spawn raised")
+
+    def spawn(self, name, argv, cwd, env=None):
+        raise boom
+    monkeypatch.setattr(Lifecycle, "spawn_job", spawn)
+    with pytest.raises(RuntimeError) as excinfo:
+        svc.spawn_start_job("start", "kiss")
+    assert excinfo.value is boom
+    assert jobresult.read_one(svc._paths, _SLOG)["state"] == "failed"
 
 def test_spawn_start_job_second_start_is_a_typed_already_in_progress(tmp_path, monkeypatch):
     svc = _svc(tmp_path)

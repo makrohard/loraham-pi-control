@@ -236,3 +236,69 @@ def test_refusal_from_reads_only_a_failed_pin_mismatch():
     assert jobresult.refusal_from(ok) is None and jobresult.refusal_from(other) is None
     assert jobresult.refusal_from(pin) == {"pin_mismatch": {"x": [_SHA_A, _SHA_B]},
                                            "override_refused": "clone_required"}
+
+
+@pytest.mark.parametrize("settle", ["raises", "refused", "ok"])
+def test_settle_on_raise_reraises_the_original_when_settlement_fails(tmp_path, monkeypatch, capsys,
+                                                                     settle):
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    p = _p(tmp_path)
+    assert _reserve(p)
+    if settle == "raises":
+        def _raise(*a, **k):
+            raise OSError("disk")
+        monkeypatch.setattr(jobresult, "terminalize", _raise)
+    elif settle == "refused":
+        monkeypatch.setattr(jobresult, "terminalize", lambda *a, **k: False)
+    boom = RuntimeError("x")
+    with pytest.raises(RuntimeError) as excinfo:
+        with jobresult.settle_on_raise(p, _LOG, _A):
+            raise boom
+    assert excinfo.value is boom and boom.__context__ is None
+    rec = jobresult.read_one(p, _LOG)
+    if settle == "ok":
+        assert rec["state"] == "failed"
+        return
+    assert _LOG in capsys.readouterr().err
+    if settle == "refused":                     # the fallback: still starting, projected unsafe
+        assert rec["state"] == "starting"
+        svc = ControllerService(system=FakeSystem().system, paths=p)
+        assert svc._project_job(rec, _LOG)[0] == "unsafe"
+
+
+class _ReprRaises(Exception):
+    def __repr__(self):
+        raise RuntimeError("repr")
+
+
+class _BrokenStream:
+    def __init__(self, exc):
+        self.exc = exc
+
+    def write(self, s):
+        raise self.exc
+
+    def flush(self):
+        raise self.exc
+
+
+@pytest.mark.parametrize("variant", ["repr-raises", "stderr-oserror", "stderr-valueerror"])
+def test_settle_on_raise_reraises_the_original_when_the_diagnostic_fails(tmp_path, monkeypatch,
+                                                                         variant):
+    import sys
+    p = _p(tmp_path)
+    assert _reserve(p)
+    if variant == "repr-raises":
+        def _raise(*a, **k):
+            raise _ReprRaises()
+        monkeypatch.setattr(jobresult, "terminalize", _raise)
+    else:
+        monkeypatch.setattr(jobresult, "terminalize", lambda *a, **k: False)
+        monkeypatch.setattr(sys, "stderr", _BrokenStream(
+            OSError("EIO") if variant == "stderr-oserror" else ValueError("closed file")))
+    boom = RuntimeError("x")
+    with pytest.raises(RuntimeError) as excinfo:
+        with jobresult.settle_on_raise(p, _LOG, _A):
+            raise boom
+    assert excinfo.value is boom and boom.__context__ is None

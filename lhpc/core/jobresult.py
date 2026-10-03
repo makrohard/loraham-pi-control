@@ -7,7 +7,8 @@ is COMPARE-BEFORE-REPLACE on `attempt_id` and NEVER creates an absent marker, so
 never resurrect a dismissed/newer attempt. Reads are descriptor-safe (no-follow, regular-only,
 byte-bounded) and STRUCTURALLY validated here; manifest-aware checks (target belongs to a stack) live
 in the service projection. No secret ever enters a marker. Every function is best-effort and NEVER
-raises (a GET must not 500)."""
+raises (a GET must not 500) — except `settle_on_raise`, which deliberately re-raises its block's
+exception after settling the attempt."""
 
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ import fcntl
 import json
 import re
 import stat as _stat
+import sys
 import time
 
 from . import runtime_fs, validators
@@ -262,6 +264,30 @@ def terminalize(paths, log, attempt_id, state, detail="", driver_ident=None,
         return nd
     return _mutate(paths, log, attempt_id, _f)
 
+
+
+@contextlib.contextmanager
+def settle_on_raise(paths, log, attempt_id):
+    """Between `reserve` and a spawned child: an `Exception` from the block makes one best-effort
+    `failed` write, then escapes as the SAME object, unchained. The attempt is terminal whenever
+    storage works; when it does not, it stays `starting` (reads unsafe until Recover) and the
+    failure is logged to stderr if stderr works. Nothing in the handler can replace the original."""
+    try:
+        yield
+    except Exception as exc:
+        why = "write refused"
+        try:
+            ok = terminalize(paths, log, attempt_id, "failed",
+                             detail=f"internal error: {type(exc).__name__}")
+        except Exception as t_exc:              # never replaces exc; no repr (it may raise)
+            ok, why = False, type(t_exc).__name__
+        if not ok:
+            try:
+                print(f"lhpc: attempt {log} not settled ({why}); reads unsafe until Recover",
+                      file=sys.stderr)
+            except Exception:                   # a closed or broken stderr must not raise
+                pass
+        raise                                   # exc itself, unchained
 
 def recover(paths, log, attempt_id) -> bool:
     """Explicit-ack recovery of an `unsafe` attempt → non-blocking `failed`; drop driver identity."""

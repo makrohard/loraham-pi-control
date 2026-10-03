@@ -379,3 +379,13 @@ def test_logs_resolves_newest_post_and_adopt_logs(tmp_path):
     os.utime(other, (t + 100, t + 100))
     path3, _ = life.logs(comp)
     assert path3 == str(post)
+
+
+def test_spawn_job_refuses_an_uncontained_start_log_without_raising(tmp_path):
+    from lhpc.core.paths import PathContainmentError
+
+    def spawn(argv, log, cwd=None, env=None):
+        raise PathContainmentError("log escaped the runtime root")
+    life = Lifecycle(Paths(runtime_root=tmp_path), (), Config(values={}), FakeSystem().system,
+                     spawn=spawn)
+    assert life.spawn_job("web-start-x", ["true"], str(tmp_path)) == (None, None)

@@ -3540,14 +3540,15 @@ class LifecycleOpsMixin:
                 if not jobresult.reserve(self._paths, log, aid, "install", target,
                                          self.stack_of(target) or "", src_keys):
                     return None, aid, "could not record the install job (a live attempt exists)"
-                argv = [sys.executable, "-m", "lhpc", "install", target, "--yes", "--source", source,
-                        "--web-result", log, "--attempt-id", aid]
-                if accept_pin_mismatch:                  # the confirm page's consent token only
-                    argv.append(f"--accept-pin-mismatch={accept_pin_mismatch}")
-                ln, pid = life.spawn_job(name, argv, runtime)
-                if not ln or not pid:
-                    jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
-                    return None, aid, f"could not start install for '{target}'"
+                with jobresult.settle_on_raise(self._paths, log, aid):
+                    argv = [sys.executable, "-m", "lhpc", "install", target, "--yes", "--source", source,
+                            "--web-result", log, "--attempt-id", aid]
+                    if accept_pin_mismatch:              # the confirm page's consent token only
+                        argv.append(f"--accept-pin-mismatch={accept_pin_mismatch}")
+                    ln, pid = life.spawn_job(name, argv, runtime)
+                    if not ln or not pid:
+                        jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
+                        return None, aid, f"could not start install for '{target}'"
                 return log, aid, (ln, pid, target)
 
             def _spawn_build(c, steps, name):
@@ -3558,44 +3559,45 @@ class LifecycleOpsMixin:
                 if not jobresult.reserve(self._paths, log, aid, op, c.id,
                                          self.stack_of(c.id) or "", ckeys):
                     return None, aid, f"could not record the {op} job for '{c.id}' (a live attempt exists)"
-                try:
-                    # The detached job must complete the SAME contract as lifecycle.build():
-                    # invalidate the marker before step one, write the receipt only after
-                    # every step passes. The receipt SHAs are computed here at spawn; the
-                    # launcher holds the source locks for its whole lifetime, so the
-                    # consumed sources cannot move between spawn and completion.
-                    from .lifecycle import BUILD_MARKER_TEXT
-                    # BUILD only: a detached TEST run goes through this same spawn and
-                    # must never invalidate or rewrite the build completion marker.
-                    _mark = bool(c.build_marker) and op == "build"
-                    marker_path = str(life.source_dir(c) / c.build_marker) if _mark else ""
-                    marker_text = (BUILD_MARKER_TEXT + self._consumed_source_lines(c)
-                                   if _mark else "")
-                    inputs = self._build_inputs_to_record(c) if _mark else None
-                    # The same limits as lifecycle.build()/host_test() on the CLI path: a Build passes
-                    # the raw manifest value (0 = none) to progress.build_limits in the launcher.
-                    step_timeout = (c.build_timeout if op == "build"
-                                    else (c.test_timeout or life.TEST_TIMEOUT_S))
-                    script = commands.render_build_launcher(
-                        steps, runtime, src, lock_paths, index_lock=index_lock,
-                        result_name=log, attempt_id=aid, op=op, target=c.id, stack=self.stack_of(c.id) or "",
-                        marker_path=marker_path, marker_text=marker_text,
-                        inputs_path=str(inputs[0]) if inputs else "",
-                        inputs_text=inputs[1] if inputs else "",
-                        step_timeout=step_timeout)
-                except commands.CommandError as exc:
-                    jobresult.terminalize(self._paths, log, aid, "failed", detail=str(exc)[:200])
-                    return None, aid, f"cannot {op} '{c.id}': {exc}"
-                uid = f"{name}-{os.getpid()}-{_time.monotonic_ns()}"
-                try:
-                    launcher = runtime_fs.write_launcher(self._paths, post_dir / f"{uid}.py", script)
-                except (OSError, PathContainmentError) as exc:   # after reserve: settle it
-                    jobresult.terminalize(self._paths, log, aid, "failed", detail=str(exc)[:200])
-                    return None, aid, f"cannot {op} '{c.id}': {exc}"
-                ln, pid = life.spawn_job(name, [sys.executable, str(launcher)], src)
-                if not ln or not pid:
-                    jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
-                    return None, aid, f"could not start {op} for '{c.id}'"
+                with jobresult.settle_on_raise(self._paths, log, aid):
+                    try:
+                        # The detached job must complete the SAME contract as lifecycle.build():
+                        # invalidate the marker before step one, write the receipt only after
+                        # every step passes. The receipt SHAs are computed here at spawn; the
+                        # launcher holds the source locks for its whole lifetime, so the
+                        # consumed sources cannot move between spawn and completion.
+                        from .lifecycle import BUILD_MARKER_TEXT
+                        # BUILD only: a detached TEST run goes through this same spawn and
+                        # must never invalidate or rewrite the build completion marker.
+                        _mark = bool(c.build_marker) and op == "build"
+                        marker_path = str(life.source_dir(c) / c.build_marker) if _mark else ""
+                        marker_text = (BUILD_MARKER_TEXT + self._consumed_source_lines(c)
+                                       if _mark else "")
+                        inputs = self._build_inputs_to_record(c) if _mark else None
+                        # The same limits as lifecycle.build()/host_test() on the CLI path: a Build passes
+                        # the raw manifest value (0 = none) to progress.build_limits in the launcher.
+                        step_timeout = (c.build_timeout if op == "build"
+                                        else (c.test_timeout or life.TEST_TIMEOUT_S))
+                        script = commands.render_build_launcher(
+                            steps, runtime, src, lock_paths, index_lock=index_lock,
+                            result_name=log, attempt_id=aid, op=op, target=c.id, stack=self.stack_of(c.id) or "",
+                            marker_path=marker_path, marker_text=marker_text,
+                            inputs_path=str(inputs[0]) if inputs else "",
+                            inputs_text=inputs[1] if inputs else "",
+                            step_timeout=step_timeout)
+                    except commands.CommandError as exc:
+                        jobresult.terminalize(self._paths, log, aid, "failed", detail=str(exc)[:200])
+                        return None, aid, f"cannot {op} '{c.id}': {exc}"
+                    uid = f"{name}-{os.getpid()}-{_time.monotonic_ns()}"
+                    try:
+                        launcher = runtime_fs.write_launcher(self._paths, post_dir / f"{uid}.py", script)
+                    except (OSError, PathContainmentError) as exc:   # after reserve: settle it
+                        jobresult.terminalize(self._paths, log, aid, "failed", detail=str(exc)[:200])
+                        return None, aid, f"cannot {op} '{c.id}': {exc}"
+                    ln, pid = life.spawn_job(name, [sys.executable, str(launcher)], src)
+                    if not ln or not pid:
+                        jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
+                        return None, aid, f"could not start {op} for '{c.id}'"
                 return log, aid, (ln, pid, c.id)
 
             def _launch(spawn_fn, adm_stack):
@@ -3705,20 +3707,21 @@ class LifecycleOpsMixin:
                 return None, "blocked", (f"a {op} of '{target}' is already in progress — or its "
                                          "previous attempt is still open in the task banner "
                                          "(Recover or dismiss it first)")
-            argv = [sys.executable, "-m", "lhpc", "_stack-start", target,
-                    "--web-result", log, "--attempt-id", aid]
-            if band:
-                argv += ["--band", band]
-            if stop_owners:
-                argv.append("--stop-owners")
-            if cascade and op == "restart":          # the confirmed "Stop dependents & restart"
-                argv.append("--cascade")
-            if op == "restart":
-                argv.append("--restart")
-            ln, pid = life.spawn_job(name, argv, str(self._paths.runtime_root))
-            if not ln or not pid:
-                jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
-                return None, "blocked", f"could not start the {op} of '{target}'"
+            with jobresult.settle_on_raise(self._paths, log, aid):
+                argv = [sys.executable, "-m", "lhpc", "_stack-start", target,
+                        "--web-result", log, "--attempt-id", aid]
+                if band:
+                    argv += ["--band", band]
+                if stop_owners:
+                    argv.append("--stop-owners")
+                if cascade and op == "restart":          # the confirmed "Stop dependents & restart"
+                    argv.append("--cascade")
+                if op == "restart":
+                    argv.append("--restart")
+                ln, pid = life.spawn_job(name, argv, str(self._paths.runtime_root))
+                if not ln or not pid:
+                    jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
+                    return None, "blocked", f"could not start the {op} of '{target}'"
             ident = procident.proc_identity(pid)                   # capture FIRST
             _adm.close()                                           # release admission
             terr = self._track_or_terminate(life, ln, pid, target, op, attempt_id=aid,
