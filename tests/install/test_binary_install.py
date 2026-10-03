@@ -1570,13 +1570,19 @@ def _older_known_working(svc, commit="7" * 40):
     return commit
 
 
-def _record_adoption_target(monkeypatch, svc, seen):
+def _record_adoption_target(monkeypatch, svc, seen, recs=None):
     """The REAL adoption runs up to candidate staging, which records the commit it was told to
-    reach (`expected_pin`, after all selector resolution) and stops there."""
+    reach (`expected_pin`, after all selector resolution) and stops there. `recs`, when given,
+    receives `(dest, staging, clone_rec, the record's payload at staging time)`. The signature
+    mirrors the real `_stage_candidate` (no `**kw`), so a change to it still fails here."""
     inst_cls = type(svc._installer())
 
-    def _stage(self, txn, comp, source, dest, staging, spec, local, action, expected_pin=""):
+    def _stage(self, txn, comp, source, dest, staging, spec, local, action, expected_pin="",
+               clone_rec=None):
         seen.append((comp.id, expected_pin))
+        if recs is not None:
+            leaf = self._staged_clone_path(dest, staging)
+            recs.append((dest, staging, clone_rec, leaf.read_text() if leaf.exists() else None))
         action.status, action.detail = "failed", "stopped by the test at staging"
         return None, None
     monkeypatch.setattr(inst_cls, "_stage_candidate", _stage)
@@ -1609,11 +1615,19 @@ def test_a_missing_clone_is_adopted_at_the_manifest_pin_not_an_older_known_worki
     comp = next(c for c in svc.stack("meshcom").components if c.id == "meshcom-qemu")
     _older_known_working(svc)
     assert not svc._paths.resolve_source(comp.source.path).exists()
-    seen = []
-    _record_adoption_target(monkeypatch, svc, seen)
+    seen, recs = [], []
+    _record_adoption_target(monkeypatch, svc, seen, recs)
     stub_pipeline(svc, download=lambda e, d: pytest.fail("the staging stop comes first"))
     svc.binary_install("meshcom", apply=True)
     assert seen == [("meshcom-qemu", comp.source.pin_commit)], seen
+    # The staging gets the pre-clone record the real path holds for it (CR3-3b): the
+    # `<journal stem><candidate>.staging` leaf, written before the candidate exists.
+    [(dest, staging, rec, payload)] = recs
+    inst = svc._installer()
+    assert rec is not None and rec.name == inst._staged_clone_path(dest, staging).name
+    assert json.loads(payload) == {"state": "staging", "source_rel": inst._source_rel(dest),
+                                   "candidate_rel": inst._source_rel(staging), "ident": None}
+    assert not inst._staged_clone_path(dest, staging).exists()      # removed when staging ends
 
 
 def test_an_ordinary_pinned_update_still_resolves_known_working(tmp_path, monkeypatch):
