@@ -1167,6 +1167,98 @@ def test_ctrl_c_inside_the_transaction_unwinds_now(tmp_path, monkeypatch, stub_p
                                      svc._hmac_component("meshcom").id, "password_file") == before
 
 
+def _fail_past_publish(svc, tmp_path, monkeypatch, stub_pipeline, receipt_step):
+    """Stage meshcom's proof and probe files, publish them, and let `receipt_step` replace the
+    receipt builder (the first step past publish). Returns the files this run creates."""
+    import os
+
+    from lhpc.core import binary_install as bi
+    from lhpc.core.install import Installer
+    monkeypatch.setattr(Installer, "adopt_source",
+                        lambda self, comp, **k: type("A", (), {"status": "done", "detail": ""})())
+    stub_pipeline(svc, download=lambda entry, path: None)
+    spec = svc.binary_spec("meshcom")
+    files = sorted({*spec.proof_paths, *(next(iter(a)) for a in spec.probes)})
+
+    def stage(tar, stage_dir, roots):
+        for rel in files:
+            os.makedirs(os.path.dirname(os.path.join(stage_dir, rel)), exist_ok=True)
+            with open(os.path.join(stage_dir, rel), "w") as fh:
+                fh.write("staged")
+        return files
+    monkeypatch.setattr(bi, "validate_and_extract", stage)
+    monkeypatch.setattr(bi, "run_probe", lambda paths, argv: "ok")
+    monkeypatch.setattr(ControllerService, "_binary_provision", lambda self, *a: [])
+    monkeypatch.setattr(bi, "build_receipt", receipt_step)
+    new = [f for f in files if not (tmp_path / f).exists()]
+    assert new
+    return new
+
+
+def test_a_failing_traceback_print_is_one_line_and_changes_no_outcome(tmp_path, monkeypatch,
+                                                                      stub_pipeline, capsys):
+    """The traceback of an unexpected error is a diagnostic beside the failure: when printing it
+    fails, one line says so and the typed, rolled-back failure is returned unchanged."""
+    import traceback
+
+    from lhpc.core import binary_install as bi
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+
+    def broken(*a, **k):
+        raise KeyError("components")
+
+    def print_exc(*a, **k):
+        raise RuntimeError("no terminal")
+    new = _fail_past_publish(svc, tmp_path, monkeypatch, stub_pipeline, broken)
+    monkeypatch.setattr(traceback, "print_exc", print_exc)
+    res = svc.binary_install("meshcom", apply=True)
+    assert not res.ok and res.data.get("binary_failed") and res.data.get("rolled_back")
+    assert res.data["unexpected"] == "KeyError"
+    assert bi.read_journal(svc._paths)[1] == "absent"
+    assert not any((tmp_path / f).exists() for f in new)
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == 1 and "binary install of 'meshcom'" in lines[0], lines
+    assert lines[0].endswith(": RuntimeError: no terminal"), lines
+
+
+def test_a_failing_unwind_after_ctrl_c_is_one_line_and_the_interrupt_propagates(
+        tmp_path, monkeypatch, stub_pipeline, capsys):
+    """Ctrl-C past publish runs the unwind; when the unwind itself raises, one line says so and
+    the operator's interrupt — the same object — propagates; the journal stays open for the next
+    command, which restores the previous install."""
+    from lhpc.core import binary_install as bi
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    receipt_before = svc.binary_receipt_state("meshcom")[0]
+    ctrl_c = KeyboardInterrupt()
+    interrupted = []
+    real_recover = ControllerService.binary_recover
+
+    def interrupt(*a, **k):
+        interrupted.append(True)
+        raise ctrl_c
+
+    def recover(self):
+        if interrupted:                       # only the unwind after the Ctrl-C fails
+            raise OSError(5, "I/O error")
+        return real_recover(self)
+    new = _fail_past_publish(svc, tmp_path, monkeypatch, stub_pipeline, interrupt)
+    monkeypatch.setattr(ControllerService, "binary_recover", recover)
+    with pytest.raises(KeyboardInterrupt) as got:
+        svc.binary_install("meshcom", apply=True)
+    assert got.value is ctrl_c
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == 1 and "binary install of 'meshcom'" in lines[0], lines
+    assert lines[0].endswith(": OSError: [Errno 5] I/O error"), lines
+    assert bi.read_journal(svc._paths)[1] != "absent"          # left for the next command
+    monkeypatch.setattr(ControllerService, "binary_recover", real_recover)
+    ok, why = svc.binary_recover()
+    assert ok, why
+    assert bi.read_journal(svc._paths)[1] == "absent"
+    assert not any((tmp_path / f).exists() for f in new)
+    svc.invalidate_snapshot()
+    assert svc.binary_receipt_state("meshcom")[0] == receipt_before
+
+
 def test_committed_transaction_keeps_open_auth(tmp_path, monkeypatch):
     """Past the commit point the NEW install is the truth: recovery must NOT put the password
     back (the installed firmware has none)."""

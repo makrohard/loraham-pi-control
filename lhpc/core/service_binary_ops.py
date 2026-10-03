@@ -25,6 +25,7 @@ import traceback
 from . import binary_install as bi
 from . import binary_receipt as brx
 from . import reslock, runtime_fs, source_registry
+from .best_effort import best_effort
 from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
 from .snapshot_memo import invalidates_snapshot
@@ -418,10 +419,8 @@ class BinaryOpsMixin:
                 if not isinstance(exc, (bi.BinaryInstallError, OSError, tarfile.TarError,
                                         PathContainmentError)):
                     _name = type(exc).__name__
-                    try:
-                        traceback.print_exc()
-                    except Exception:
-                        pass
+                    best_effort(traceback.print_exc,
+                                what=f"binary install of '{stack_id}': printing the traceback failed")
                     _unexpected = {"unexpected": _name}
                     _orig, exc = exc, bi.BinaryInstallError(f"unexpected {_name}")
                     exc.__cause__ = _orig
@@ -443,10 +442,9 @@ class BinaryOpsMixin:
                 # Ctrl-C / SystemExit inside the transaction: unwind NOW (a half-switched install
                 # must not wait for the next command), then let the original propagate unchanged.
                 # A failing unwind leaves the journal open for that next command to recover.
-                try:
-                    self.binary_recover()
-                except Exception:
-                    pass
+                best_effort(self.binary_recover,
+                            what=f"binary install of '{stack_id}': the unwind after the interrupt "
+                                 "failed — the next command recovers it")
                 raise
             finally:
                 shutil.rmtree(tmpdir, ignore_errors=True)
