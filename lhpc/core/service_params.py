@@ -30,7 +30,6 @@ from .config import (
     render_local_tables,
     render_stack_config,
     update_ini,
-    update_stack_config,
     update_toml,
     update_yaml,
 )
@@ -3341,16 +3340,28 @@ class ParamsConfigMixin:
         # reset of one band owns that file too; a band-less stack has only the one.
         files = [cfg_band, ""] if cfg_band else [""]
         cleared: list = []
+
+        def _normal(stored) -> list:
+            return [k for k in stored
+                    if k in run_names or k.startswith(("file_", "autostart_", "__r__", "__f__"))]
+
+        def _render_reset(pth, b):
+            # Rendered INSIDE the transaction lock from the LATEST file: clear ONLY the
+            # normal-owned keys; dp_* + unrelated stay. Nothing to clear -> the file is not written.
+            merged = merge_stack_values(pth, target, b, {})
+            normal = _normal(merged)
+            if not normal:
+                return None
+            for k in normal:
+                merged.pop(k)
+            cleared.extend(normal)
+            return render_stack_config(target, merged)
         try:
             for b in files:
                 stored = load_stack_config(self._paths, target, b)
-                normal = [k for k in stored
-                          if k in run_names or k.startswith(("file_", "autostart_", "__r__", "__f__"))]
-                if not normal:
-                    continue
                 # Resetting use_gps IS a GPS change: the same liveness gate as a Settings save —
                 # a running consumer or feed derived its claims and config from the current value.
-                if ("use_gps" in normal and str(stored["use_gps"]).strip().lower()
+                if ("use_gps" in _normal(stored) and str(stored["use_gps"]).strip().lower()
                         != use_gps_default(self.stacks(), target)):
                     blockers = self.gps_liveness_blockers([target], snap=self._gps_fresh_snapshot())
                     if blockers:
@@ -3358,9 +3369,10 @@ class ParamsConfigMixin:
                                             f"use_gps while {', '.join(blockers)} "
                                             f"{'is' if len(blockers) == 1 else 'are'} running "
                                             f"(lhpc stack stop {target})")
-                # Clear ONLY the normal-owned keys under the config lock; dp_* + unrelated stay.
-                update_stack_config(self._paths, target, dict.fromkeys(normal, ""), b)
-                cleared += normal
+            # ONE transaction for both files: both are reset, or neither is.
+            apply_config_transaction(self._paths, [
+                ("stack", _stack_config_path(self._paths, target, b),
+                 lambda pth, b=b: _render_reset(pth, b), 0o644) for b in files])
             if cleared:
                 self._invalidate_config()
         except (ConfigError, PathContainmentError, validators.ValidationError, OSError) as exc:

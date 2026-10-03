@@ -1223,6 +1223,19 @@ def test_reset_of_one_band_also_clears_the_band_less_keys(tmp_path):
     assert "autostart_loraham-kiss-serial" not in cfgmod.load_stack_config(svc._paths, "kiss", "")
 
 
+def test_reset_of_one_band_is_refused_whole_on_a_malformed_band_less_file(tmp_path):
+    # The band's file and the band-less file are one reset: a broken band-less file refuses it
+    # whole, and "not modified" is true — the band's settings are still there.
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    for band, text in (("433", 'rx_only = "on"\n'), ("", "rx_only = \n")):   # band-less: invalid TOML
+        p = cfgmod._stack_config_path(svc._paths, "kiss", band)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+    r = svc.reset_config("kiss", band="433")
+    assert not r.ok and "not modified" in r.summary
+    assert cfgmod.load_stack_config(svc._paths, "kiss", "433")["rx_only"] == "on"
+
+
 def test_reset_config_gates_use_gps_on_running_consumers(tmp_path, monkeypatch):
     # Clearing use_gps is a GPS change and takes the same liveness gate as a Settings save.
     from lhpc.core.services import ControllerService
