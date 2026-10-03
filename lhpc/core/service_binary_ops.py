@@ -16,8 +16,10 @@ from __future__ import annotations
 import os
 import secrets
 import shutil
+import sys
 import tarfile
 import tempfile
+import time
 import traceback
 
 from . import binary_install as bi
@@ -706,7 +708,10 @@ class BinaryOpsMixin:
             for step in steps:
                 argv = _cmds.build_step_argv(step, self._system.runner,
                                              str(self._paths.runtime_root), src)
+                t0 = time.monotonic()
                 res = self._system.runner.run(argv, timeout=CLI_VENV_TIMEOUT_S, cwd=src)
+                # The slow-target budget's L5 quantity (docs/test-matrix.md#slow-target-baseline).
+                print(f"[venv] {time.monotonic() - t0:.1f} s", file=sys.stderr, flush=True)
                 if getattr(res, "returncode", 1) != 0:
                     raise bi.BinaryInstallError(
                         "the managed meshtastic CLI could not be provisioned "
