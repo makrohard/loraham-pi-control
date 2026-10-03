@@ -65,6 +65,7 @@ packages = [
           "data/meshcore-webui-dist/**/*",
           "data/meshchat-dist/**/*",
           "data/meshcore-webui-constraints.txt",
+          "data/meshcore-cli-constraints.txt",
           "data/openhop-repeater-constraints.txt",
           "data/meshchat-constraints.txt"]
 "lhpc.adapters.web" = ["templates/*.html", "static/*.css", "static/*.js"]

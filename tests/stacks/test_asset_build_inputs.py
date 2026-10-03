@@ -30,6 +30,7 @@ EXPECTED = {
     "meshtastic": ("scripts/meshtastic-link-gate.sh", "scripts/meshtastic-web-assets.sh"),
     "meshcom-qemu": ("scripts/meshtastic-link-gate.sh",),
     "meshcore-node": ("meshcore_host", "openhop-repeater-constraints.txt"),
+    "meshcore-cli": ("meshcore-cli-constraints.txt",),
     "meshcore-webui": ("meshcore-webui-constraints.txt",
                        "patches/meshcore-webui-lhpc-guards.patch",
                        "scripts/openhop-apply-patch.sh"),

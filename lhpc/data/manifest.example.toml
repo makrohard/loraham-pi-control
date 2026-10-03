@@ -2727,7 +2727,9 @@ main = "meshcore-node"
   run = '{asset}/scripts/meshcli-run.sh {runtime}/state/meshcore-cli.lock .venv/bin/meshcli {host} {port} {json} {debug}'
   build_steps = [
     { argv = ["python3", "-m", "venv", ".venv"] },
-    { argv = [".venv/bin/pip", "install", "."], announce = "[install] meshcli into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
+    # Every dependency is pinned by the shipped constraints file, so --prefer-binary cannot change a
+    # version here; it only keeps pip on a wheel for a dependency the file does not list yet.
+    { argv = [".venv/bin/pip", "install", "--prefer-binary", "-c", "{asset}/meshcore-cli-constraints.txt", "."], announce = "[install] meshcli into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
     # Upstream has shipped Python-3.12-only f-string syntax (PEP 701)
     # while LHPC supports >=3.11 — the pin below avoids it, and this step keeps it avoided:
     # a future pin that regresses fails the BUILD with the exact file and line, instead of

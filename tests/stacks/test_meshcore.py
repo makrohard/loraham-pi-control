@@ -620,3 +620,38 @@ def test_the_plugins_switch_renders_into_the_repeater_table(tmp_path):
     assert res.ok, res.summary
     svc.write_config_files("meshcore")
     assert '\nplugins = "off"\n' in _generated(tmp_path).split("[repeater]", 1)[1]
+
+
+# --- meshcore-cli builds against a pinned dependency closure --------------------------------------
+
+# What `pip install .` of meshcore-cli d4eac61 resolved in a clean venv (Python 3.11 and 3.13, the
+# 3.11-only typing_extensions included) — recorded by hand when the constraints file was generated.
+# The file must pin every one of them, or pip is free to pick that package's newest release.
+MESHCORE_CLI_RESOLVED = {
+    "bleak", "certifi", "charset-normalizer", "dbus-fast", "idna", "meshcore", "prompt-toolkit",
+    "pycayennelpp", "pycryptodome", "pyserial", "pyserial-asyncio-fast", "requests",
+    "typing-extensions", "urllib3", "wcwidth",
+}
+
+
+def _pins(name):
+    from lhpc.core.assets import asset_path
+    out = {}
+    for line in asset_path(name).read_text().splitlines():
+        if line.strip() and not line.startswith("#"):
+            pkg, sep, ver = line.partition("==")
+            assert sep and ver.strip(), f"{name}: not an exact pin: {line!r}"
+            out[pkg.strip().lower().replace("_", "-")] = ver.strip()
+    return out
+
+
+def test_meshcore_cli_builds_against_its_constraints_closure(tmp_path):
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    comp = next(c for s in svc.stacks() for c in s.components if c.id == "meshcore-cli")
+    pip = next(s["argv"] for s in comp.build_steps if s["argv"][0] == ".venv/bin/pip")
+    assert pip == [".venv/bin/pip", "install", "--prefer-binary",
+                   "-c", "{asset}/meshcore-cli-constraints.txt", "."]
+    pins = _pins("meshcore-cli-constraints.txt")
+    assert MESHCORE_CLI_RESOLVED <= set(pins), MESHCORE_CLI_RESOLVED - set(pins)
+    # One cached dbus-fast wheel serves both MeshCore venvs.
+    assert pins["dbus-fast"] == _pins("meshcore-webui-constraints.txt")["dbus-fast"]

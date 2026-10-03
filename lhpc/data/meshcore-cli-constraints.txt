@@ -1,0 +1,23 @@
+# meshcore-cli dependency constraints — the RESOLVED closure of `pip install .` for meshcore-cli
+# d4eac61 (v1.6.4), frozen (`pip freeze`, minus pip/setuptools and meshcore-cli itself) from a
+# clean venv on 2026-10-03 (Python 3.11 and 3.13; typing_extensions is the 3.11-only extra).
+# Pins EVERY package so a new upstream release cannot change what the build installs,
+# complementing the source pin_commit. dbus-fast is held at the same version as
+# meshcore-webui-constraints.txt (the freeze had 5.2.0), so one cached wheel serves both venvs; a
+# second clean install against this file resolved exactly this set. Regenerate deliberately when
+# the pinned meshcore-cli SHA moves.
+bleak==3.0.2
+certifi==2026.7.22
+charset-normalizer==3.5.2
+dbus-fast==5.0.22
+idna==3.20
+meshcore==2.3.14
+prompt_toolkit==3.0.53
+pycayennelpp==2.4.0
+pycryptodome==3.23.0
+pyserial==3.5
+pyserial-asyncio-fast==0.16
+requests==2.34.2
+typing_extensions==4.16.0
+urllib3==2.8.0
+wcwidth==0.9.1
