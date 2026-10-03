@@ -340,9 +340,11 @@ def test_interrupted_between_steps_stays_retryable(tmp_path, monkeypatch):
 
 # ---- unverified driver startup: the detached-driver tracking gate + orphan-risk blocking -----------
 
-_ORPHAN_ERR = ("hmac-apply 'meshcom' spawned but its job marker could not be persisted AND the process "
+_ORPHAN_ERR = (jobs.TrackOutcome.TERMINATION_UNVERIFIED,
+               "hmac-apply 'meshcom' spawned but its job marker could not be persisted AND the process "
                "could NOT be confirmed stopped — ORPHAN RISK; check `ps` and kill it.")
-_TERMINATED_ERR = ("hmac-apply 'meshcom' spawned but its job marker could not be persisted; the process "
+_TERMINATED_ERR = (jobs.TrackOutcome.TERMINATED,
+                   "hmac-apply 'meshcom' spawned but its job marker could not be persisted; the process "
                    "was terminated (not left orphaned).")
 
 
@@ -385,6 +387,20 @@ def test_orphan_risk_startup_is_blocking_unsafe_with_driver_ident(tmp_path, monk
     assert not svc._hmac_try_auto_clear(st)                     # escaped scope -> explicit ack only
     # a second apply is refused (blocking)
     assert not svc.hmac_apply_start("meshcom", "renew").ok
+
+
+def test_unverified_tracking_stays_blocking_unsafe_whatever_its_message_says(tmp_path, monkeypatch):
+    """The unsafe decision follows the typed tracking outcome: the same unverified stop with a
+    reworded message (no 'ORPHAN RISK' in it) still blocks as unsafe, never an ordinary failure."""
+    import os
+    svc = _svc(tmp_path)
+    _fake_spawn(monkeypatch, os.getpid())
+    monkeypatch.setattr(ControllerService, "_track_or_terminate",
+                        lambda self, life, ln, pid, cid, op: (_ORPHAN_ERR[0], "reworded: stop not proven"))
+    r = svc.hmac_apply_start("meshcom", "renew")
+    assert not r.ok and r.summary == "reworded: stop not proven"
+    assert svc.hmac_apply_status()["phase"] == "unsafe"
+    assert not svc.hmac_apply_start("meshcom", "renew").ok      # blocking, not retryable
 
 
 def test_confirmed_terminated_startup_is_ordinary_failed(tmp_path, monkeypatch):
@@ -552,7 +568,8 @@ def test_apply_start_spawns_and_records_the_run(tmp_path, monkeypatch):
             assert argv[:5] == [__import__("sys").executable, "-u", "-m", "lhpc", "_hmac-apply"]
             return name + ".log", 4242
     monkeypatch.setattr(type(svc), "_lifecycle", lambda self: _Life())
-    monkeypatch.setattr(type(svc), "_track_or_terminate", lambda self, *a, **k: "")
+    monkeypatch.setattr(type(svc), "_track_or_terminate",
+                        lambda self, *a, **k: (jobs.TrackOutcome.TRACKED, ""))
     r = svc.hmac_apply_start("meshcom", "enable")
     assert r.ok and svc.hmac_apply_status()["run_id"] == r.data["run_id"]
 
@@ -574,7 +591,8 @@ def test_hmac_disable_start_proceeds_with_confirm(tmp_path, monkeypatch):
     monkeypatch.setattr(type(svc), "_lifecycle",
                         lambda self: type("L", (), {"spawn_job":
                             lambda self, name, argv, cwd, env=None: (name + ".log", 4242)})())
-    monkeypatch.setattr(type(svc), "_track_or_terminate", lambda self, *a, **k: "")
+    monkeypatch.setattr(type(svc), "_track_or_terminate",
+                        lambda self, *a, **k: (jobs.TrackOutcome.TRACKED, ""))
     r = svc.hmac_apply_start("meshcom", "disable", confirm=True)
     assert r.ok and svc.hmac_apply_status()["run_id"] == r.data["run_id"]
 
@@ -584,7 +602,8 @@ def test_hmac_enable_and_renew_start_are_not_gated(tmp_path, monkeypatch):
     monkeypatch.setattr(type(svc), "_lifecycle",
                         lambda self: type("L", (), {"spawn_job":
                             lambda self, name, argv, cwd, env=None: (name + ".log", 4242)})())
-    monkeypatch.setattr(type(svc), "_track_or_terminate", lambda self, *a, **k: "")
+    monkeypatch.setattr(type(svc), "_track_or_terminate",
+                        lambda self, *a, **k: (jobs.TrackOutcome.TRACKED, ""))
     assert svc.hmac_apply_start("meshcom", "enable").ok        # confirm defaults False, still starts
     svc.hmac_apply_recover("meshcom", svc.hmac_apply_status()["run_id"])
     assert svc.hmac_apply_start("meshcom", "renew").ok
@@ -631,7 +650,8 @@ def test_hmac_disable_web_starts_with_the_correct_phrase(tmp_path, monkeypatch, 
     monkeypatch.setattr(type(svc), "_lifecycle",
                         lambda self: type("L", (), {"spawn_job":
                             lambda self, name, argv, cwd, env=None: (name + ".log", 4242)})())
-    monkeypatch.setattr(type(svc), "_track_or_terminate", lambda self, *a, **k: "")
+    monkeypatch.setattr(type(svc), "_track_or_terminate",
+                        lambda self, *a, **k: (jobs.TrackOutcome.TRACKED, ""))
     client.post("/stacks/meshcom/hmac/disable/apply",
                 data={"_csrf": tok, "confirm_phrase": svc.HMAC_DISABLE_CONFIRM}, follow_redirects=True)
     assert svc.hmac_apply_status() and svc.hmac_apply_status()["action"] == "disable"

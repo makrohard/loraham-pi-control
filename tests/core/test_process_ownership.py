@@ -538,7 +538,7 @@ def test_reused_pid_between_spawn_and_persist_is_not_owned(tmp_path, reaper):
 @pytest.mark.needs_session
 def test_untracked_job_spawn_is_terminated_not_orphaned(tmp_path, reaper, monkeypatch):
     from lhpc.core.services import ControllerService
-    from lhpc.core import runtime_fs
+    from lhpc.core import jobs, runtime_fs
     from lhpc.core.probes.backends import FakeSystem
     p = _leader(reaper)                                   # a real detached session leader
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
@@ -546,8 +546,8 @@ def test_untracked_job_spawn_is_terminated_not_orphaned(tmp_path, reaper, monkey
     # Marker persistence fails after the process is already spawned.
     monkeypatch.setattr(runtime_fs, "write_marker",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
-    err = svc._track_or_terminate(life, "build-x", p.pid, "x", "build")
-    assert err and "could not be persisted" in err and "terminated" in err
+    outcome, err = svc._track_or_terminate(life, "build-x", p.pid, "x", "build")
+    assert outcome is jobs.TrackOutcome.TERMINATED and "could not be persisted" in err
     for _ in range(50):
         if not life._proc_alive(p.pid):
             break

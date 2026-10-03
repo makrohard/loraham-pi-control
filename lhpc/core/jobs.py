@@ -35,6 +35,15 @@ class JobState(str, Enum):
     TIMEOUT = "timeout"
 
 
+class TrackOutcome(str, Enum):
+    """What publishing a spawned job's tracking marker achieved. Callers decide on this, never on
+    the accompanying message: TERMINATION_UNVERIFIED (no marker, stop unproven) is a blocking
+    unsafe state; TERMINATED (no marker, stop proven) is an ordinary failure."""
+    TRACKED = "tracked"
+    TERMINATED = "terminated"
+    TERMINATION_UNVERIFIED = "termination_unverified"
+
+
 @dataclass
 class JobResult:
     name: str

@@ -494,12 +494,12 @@ class HmacOpsMixin:
                 # Capture the driver identity at the SAME instant `_track_or_terminate` does (reuse-proof).
                 from . import procident
                 ident = procident.proc_identity(pid)
-                err = self._track_or_terminate(life, ln, pid, stack_id, "hmac-apply")
-                if err:
+                tracked, err = self._track_or_terminate(life, ln, pid, stack_id, "hmac-apply")
+                if tracked is not jobs.TrackOutcome.TRACKED:
                     # Mirror the auto-install spawn path (service_auto_install.py): an UNPROVEN-cessation tracking failure
-                    # ("ORPHAN RISK") means the driver MIGHT still be building — a BLOCKING unsafe state, never
+                    # (TERMINATION_UNVERIFIED) means the driver MIGHT still be building — a BLOCKING unsafe state, never
                     # an ordinary retryable `failed`. A proven-terminated failure stays ordinary `failed`.
-                    if "ORPHAN RISK" in err:
+                    if tracked is jobs.TrackOutcome.TERMINATION_UNVERIFIED:
                         self._hmac_mark_unsafe_orphan(
                             marker, ident,
                             "the apply driver could not be identity-tracked and its stop is UNPROVEN — it "
