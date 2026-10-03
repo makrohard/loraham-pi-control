@@ -17,6 +17,12 @@
   print the details of an unexpected error, or cannot undo itself after Ctrl-C, now says so in one line instead of
   staying silent (after Ctrl-C the next command finishes the undo, as before). In these lines an error message that
   spans several lines is joined into one.
+Upgrade note — boxes with the firewall installed: this release changes the firewall helper, so the dashboard
+reads *Update required* after the update; run `sudo bash <runtime root>/config/files/firewall/firewall-apply.sh`
+(and `lhpc webserver apply` if remote access is configured) before a reboot.
+
+- The firewall no longer treats an interrupted change it cannot read (a disk or permission error) as "nothing to
+  finish": it refuses to apply or check until the state is readable again.
 - A disk or permission error on a file LHPC must not lose no longer reads as "the file is gone": retiring a
   binary install keeps its record while a file or folder cannot be checked, a switch to the source channel does
   not take over a folder it cannot fully read, an update or uninstall treats a checkout whose `.git` cannot be

@@ -996,7 +996,13 @@ def _read_json_state(path):
     callers report unverifiable."""
     text, err = read_bounded(path, MAX_CANDIDATE_BYTES)
     if err:
-        return ("absent", None) if not os.path.lexists(path) else ("present-invalid", None)
+        try:
+            os.lstat(path)
+        except (FileNotFoundError, NotADirectoryError):
+            return ("absent", None)      # ONLY ENOENT/ENOTDIR: EIO/EACCES are not "absent"
+        except (OSError, ValueError):
+            pass
+        return ("present-invalid", None)
     try:
         return ("valid", json.loads(text))
     except ValueError:
