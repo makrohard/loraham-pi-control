@@ -152,15 +152,24 @@ def _mountinfo(upper: str | None) -> str:
             f"upperdir={upper},workdir=/w\n")
 
 
-def _resolve(tmp_path: Path, storage: str, upper: str | None):
+def _resolve(tmp_path: Path, storage: str, upper: str | None, vanish: bool = False):
     """The step, as the runner runs it (`bash -e`), with a stub `docker` naming `storage` and
-    reporting the container root `_mountinfo(upper)`, and a pass-through `sudo`."""
+    reporting the container root `_mountinfo(upper)`, and a pass-through `sudo`. With `vanish`,
+    the upperdir is deleted when its container goes, as Docker deletes it: at the exit of a
+    `run --rm`, or at `rm -f` of a detached container. Every docker call is logged to
+    `tmp_path/docker.log`."""
     stub = tmp_path / "bin"
     stub.mkdir()
     (tmp_path / "mountinfo").write_text(_mountinfo(upper))
+    mountinfo, log = tmp_path / "mountinfo", tmp_path / "docker.log"
+    gone = f"rm -rf '{upper}'" if vanish else ":"
     (stub / "docker").write_text(
-        "#!/bin/sh\ncase $1 in info) case $* in *DockerRootDir*) echo " + storage + " ;; "
-        "*) exit 9 ;; esac ;; run) cat " + str(tmp_path / "mountinfo") + " ;; *) exit 9 ;; esac\n")
+        f'#!/bin/sh\necho "$*" >> {log}\ncase $1 in\n'
+        f"info) case $* in *DockerRootDir*) echo {storage} ;; *) exit 9 ;; esac ;;\n"
+        f'run) case " $* " in *" -d "*) echo cid0 ;; *) cat {mountinfo}; {gone} ;; esac ;;\n'
+        f'exec) [ "$2" = cid0 ] || exit 9; cat {mountinfo} ;;\n'
+        f'rm) [ "$2 $3" = "-f cid0" ] || exit 9; {gone} ;;\n'
+        "*) exit 9 ;;\nesac\n")
     (stub / "sudo").write_text('#!/bin/sh\n[ "$1" = -n ] && shift\nexec "$@"\n')
     for f in ("docker", "sudo"):
         (stub / f).chmod(0o755)
@@ -206,6 +215,7 @@ def test_an_unresolvable_required_disk_stops_the_job_before_any_measurement(tmp_
     assert (f"::error::STOP: backing device of {storage} could not be "
             "resolved — the throttle cannot be applied") in r.stdout, r.stdout
     assert "SLOW_IO_FLAGS" not in env and "SLOW_IO_ROOT_DISK" not in env
+    assert "rm -f cid0" in (tmp_path / "docker.log").read_text()    # removed on the way out
 
 
 def test_disk_of_fails_loudly_on_an_unresolvable_path(tmp_path):
@@ -266,3 +276,23 @@ def test_a_container_root_that_is_not_an_overlay_stops_the_job(tmp_path):
     assert ("::error::STOP: the lab container's root is not an overlay with an upperdir — its "
             "writable layer's disk cannot be measured") in r.stdout, r.stdout
     assert "SLOW_IO_FLAGS" not in env and "SLOW_IO_ROOT_DISK" not in env
+    assert "rm -f cid0" in (tmp_path / "docker.log").read_text()    # removed on the way out
+
+
+def test_the_upperdir_is_resolved_while_its_container_lives(tmp_path):
+    """Correction 10: the upperdir exists only while its container does, and findmnt resolves
+    no missing path. Correction 9 read it from a `docker run --rm` that had already exited, so
+    every real run stopped; the job now keeps the container alive until the required disks have
+    resolved, then removes it."""
+    _tools()
+    if not _major_minor(tmp_path):
+        pytest.skip("the test's directory is not on a block device here")
+    upper = tmp_path / "overlay2" / "id0" / "diff"
+    upper.mkdir(parents=True)
+    r, env = _resolve(tmp_path, str(tmp_path), str(upper), vanish=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f"writable layer (measured): {upper}" in r.stdout, r.stdout
+    assert re.search(r"^SLOW_IO_ROOT_DISK=\d+:\d+$", env, re.M), env
+    log = (tmp_path / "docker.log").read_text().splitlines()
+    assert log[1].startswith("run -d ") and log[-1] == "rm -f cid0", log
+    assert not upper.exists()       # the stub deleted it with its container, as Docker does

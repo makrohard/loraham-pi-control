@@ -258,9 +258,12 @@ jobs:
       # assumed: a container from the lab image reports its root mount, and the overlay's
       # upperdir (a host path) is where a container's writes land; a root that is not an overlay
       # stops the job. Each disk resolves (as root: Docker's directories are root-only), or the
-      # job STOPS here, before any measurement. An active swap area's disk is throttled too, or
-      # skipped with a notice. The lane re-checks io.max for the writable layer's disk
-      # (SLOW_IO_ROOT_DISK) and the work dir's, and records nothing unless each is throttled.
+      # job STOPS here, before any measurement. The upperdir is resolved while that container
+      # lives. `sudo -n` never prompts: the workflow grants no sudo, it relies on the hosted
+      # ubuntu-24.04-arm runner's passwordless sudo; without it the required disks do not
+      # resolve and the job stops. An active swap area's disk is throttled too, or skipped with
+      # a notice. The lane re-checks io.max for the writable layer's disk (SLOW_IO_ROOT_DISK)
+      # and the work dir's, and records nothing unless each is throttled.
       - name: Resolve the disks to throttle
         run: |
           # The whole disk behind a path or block device, as /dev/NAME; non-zero, naming the
@@ -280,7 +283,12 @@ jobs:
           cat /proc/swaps
           lsblk
           storage=$(docker info -f '{{.DockerRootDir}}')
-          layer=$(docker run --rm "$IMG" cat /proc/self/mountinfo \
+          # The upperdir exists only while its container does (`--rm` deletes it at exit, and
+          # findmnt resolves no missing path), so a container is kept alive until every
+          # required disk has resolved, and removed on every way out of the step.
+          cid=$(docker run -d "$IMG" sleep 300)
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          layer=$(docker exec "$cid" cat /proc/self/mountinfo \
             | awk '$5 == "/"' | sed -n 's/.* - overlay .*[ ,]upperdir=\([^,]*\).*/\1/p')
           if [ -z "$layer" ]; then
             echo "::error::STOP: the lab container's root is not an overlay with an upperdir — its writable layer's disk cannot be measured"
@@ -296,6 +304,8 @@ jobs:
             [ "$path" = "$layer" ] && root=$d
             disks="$disks $d"
           done
+          docker rm -f "$cid" >/dev/null
+          trap - EXIT
           while read -r swap _; do
             if d=$(disk_of "$swap") && test -b "$d"; then disks="$disks $d"
             else echo "::notice::swap $swap: its disk could not be resolved — not throttled"; fi
