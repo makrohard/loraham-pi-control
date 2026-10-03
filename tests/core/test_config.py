@@ -40,7 +40,7 @@ def test_deeply_nested_config_journal_blocks(tmp_path):
     paths = _paths(tmp_path)
     (tmp_path / "state").mkdir()
     cfgmod._txn_journal(paths).write_text("[" * 3000)
-    assert cfgmod.recover_config_transaction(paths) == ""             # BLOCK, no exception
+    assert cfgmod.recover_config_transaction(paths)[0] is cfgmod.ConfigRecovery.BLOCKED             # BLOCK, no exception
 
 
 def test_non_utf8_pre_image_is_a_typed_refusal(tmp_path):
@@ -660,7 +660,7 @@ def test_rollback_failure_retains_journal_and_blocks_later(tmp_path, monkeypatch
 
 
 def test_symlinked_config_txn_journal_blocks_recovery(tmp_path):
-    # A symlinked transaction journal must not be read/followed -> recovery BLOCKS ("").
+    # A symlinked transaction journal must not be read/followed -> recovery BLOCKS.
     import os
     from lhpc.core import config as cfgmod
     from lhpc.core.paths import Paths
@@ -669,7 +669,7 @@ def test_symlinked_config_txn_journal_blocks_recovery(tmp_path):
     outside = tmp_path / "evil.json"
     outside.write_text('{"version": 1, "targets": [{"kind": "local", "rel": "x", "pre": "P", "existed": true, "mode": 420}]}')
     os.symlink(outside, cfgmod._txn_journal(paths))     # symlinked journal
-    assert cfgmod.recover_config_transaction(paths) == ""   # blocked, never followed
+    assert cfgmod.recover_config_transaction(paths)[0] is cfgmod.ConfigRecovery.BLOCKED   # blocked, never followed
 
 
 def test_dangling_internal_journal_symlink_blocks_not_absent(tmp_path):
@@ -684,7 +684,7 @@ def test_dangling_internal_journal_symlink_blocks_not_absent(tmp_path):
     # target stays inside the root (so _txn_journal/under does not raise) but does NOT exist
     os.symlink(tmp_path / "state" / "ghost.json", cfgmod._txn_journal(paths))
     assert not (tmp_path / "state" / "ghost.json").exists()          # genuinely dangling
-    assert cfgmod.recover_config_transaction(paths) == ""            # BLOCK, not None
+    assert cfgmod.recover_config_transaction(paths)[0] is cfgmod.ConfigRecovery.BLOCKED            # BLOCK, not None
 
     # save_config_bundle must refuse while that journal entry is present.
     svc = _svc_config_bundle(tmp_path)
@@ -709,7 +709,7 @@ def test_malformed_journal_pre_or_mode_blocks_not_raises(tmp_path, bad):
     second = {"kind": "stack", "rel": "config/stacks/x.toml", "pre": "S", "existed": True,
               "mode": 0o644, **bad}
     cfgmod._txn_journal(paths).write_text(json.dumps({"version": 1, "targets": [good, second]}))
-    assert cfgmod.recover_config_transaction(paths) == ""            # BLOCK, no exception
+    assert cfgmod.recover_config_transaction(paths)[0] is cfgmod.ConfigRecovery.BLOCKED            # BLOCK, no exception
     assert (tmp_path / "config" / "local.toml").read_text() == "CURRENT"   # nothing restored
     assert cfgmod._txn_journal(paths).exists()                       # journal retained
 
@@ -727,7 +727,7 @@ def test_external_journal_symlink_blocks_not_raises(tmp_path):
     outside.write_text('{"version": 1, "targets": [{"kind": "local", "rel": "config/local.toml", "pre": "P", "existed": true, "mode": 420}]}')
     os.symlink(outside, tmp_path / "state" / "config-txn.json")     # escaping journal symlink
     try:
-        assert cfgmod.recover_config_transaction(paths) == ""       # BLOCK, no exception
+        assert cfgmod.recover_config_transaction(paths)[0] is cfgmod.ConfigRecovery.BLOCKED       # BLOCK, no exception
         svc = _svc_config_bundle(tmp_path)
         r = svc.save_config_bundle("daemon", values={"radio": "868"})
         assert not r.ok and any("recovery-required" in d for d in r.details)
@@ -1822,6 +1822,26 @@ def test_a_recovery_that_raises_refuses_the_writer_with_the_typed_refusal(tmp_pa
     assert exc.value.reason == "recovery-required"
     assert exc.value.__cause__ is raised
     assert journal.exists() and local.read_text() == "# untouched\n"
+
+
+@pytest.mark.safety("config-transaction")
+@pytest.mark.parametrize("note", ["", "reworded"])
+def test_a_recovered_journal_admits_the_writer_whatever_its_note_says(tmp_path, monkeypatch, note):
+    """The writer is admitted on the typed RECOVERED verdict, not on the note: the same recovery
+    with an empty or reworded note still restores the pre-image and lets the save proceed."""
+    paths = _paths(tmp_path)
+    local = tmp_path / "config" / "local.toml"
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text("[remotes\n")                                   # half-written
+    journal = _write_journal(tmp_path, {"version": 1, "targets": [
+        {"kind": "local", "rel": "config/local.toml", "pre": '[remotes]\nx = "y"\n',
+         "existed": True, "mode": 0o600}]})
+    real = cfgmod.recover_config_transaction
+    monkeypatch.setattr(cfgmod, "recover_config_transaction", lambda p: (real(p)[0], note))
+    cfgmod.save_hardware_setup(paths, "loraham")
+    saved = tomllib.loads(local.read_text())
+    assert not journal.exists()
+    assert saved["remotes"] == {"x": "y"} and saved["radio"]["hardware"] == "loraham"
 
 
 @pytest.mark.safety("config-transaction")
