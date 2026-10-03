@@ -561,3 +561,11 @@ host = "lhpc-e293"
 lhpc = "release/0.11.12-bundle (3d0943a1)"
 date = 2026-10-03
 evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records); wall 3 s from second-resolution file times; longest quiet 3.2 s from the log"
+
+[[calibration]]
+workload = "sha256:17b2f7159232d268a932c0c043f63d0e72bfe365d9873560661012f2c123ba4f"
+source = "zero2w"
+cpu_s = 98.7
+io_s = 492.1
+mem_s = 103.2
+date = 2026-10-03
