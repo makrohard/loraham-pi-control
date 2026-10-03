@@ -1337,6 +1337,85 @@ def test_reset_refuses_cessation_while_the_console_listener_stays_exposed(tmp_pa
     assert eff["remote_listener"] is True and eff["listener_scope"] == "exposed"
 
 
+class _NginxRebindsOnlyOnRestart(FakeSystem):
+    """Real nginx: a reload cannot move a held 0.0.0.0:8443 to 127.0.0.1:8443 (the master keeps its
+    OLD config); only `systemctl --user restart lhpc-nginx.service` rebinds it."""
+
+    after_restart = [Listener(family="ipv4", ip="127.0.0.1", port=8443, inode=8)]
+
+    def run(self, argv, timeout, cwd=None, env=None):
+        if list(argv) == ["systemctl", "--user", "restart", "lhpc-nginx.service"]:
+            self.calls.append(list(argv))
+            self.listeners = list(self.after_restart)
+            return CR(0, "", "")
+        return super().run(argv, timeout, cwd, env)
+
+
+def _exposed_reset_svc(tmp_path, extra=()):
+    svc = _reset_svc(tmp_path)
+    fake = _NginxRebindsOnlyOnRestart(commands=dict(svc._system.runner.commands),
+                                      listeners=[Listener(family="ipv4", ip="0.0.0.0", port=8443,
+                                                          inode=7), *extra])
+    return ControllerService(system=fake.system, paths=svc._paths), fake
+
+
+_RESTART = ["systemctl", "--user", "restart", "lhpc-nginx.service"]
+
+
+def test_reset_restarts_nginx_when_the_reload_cannot_rebind_the_console(tmp_path, monkeypatch):
+    monkeypatch.delenv("INVOCATION_ID", raising=False)            # an operator shell
+    svc, fake = _exposed_reset_svc(tmp_path)
+    res = svc.webserver_reset_defaults()
+    assert _RESTART in fake.calls
+    assert res.ok, res.summary
+    eff = res.data["effective"]
+    assert eff["remote_cessation_proven"] is True and eff["listener_scope"] == "loopback"
+
+
+_OLD_PROXY = Listener(family="ipv4", ip="0.0.0.0", port=8444, inode=9)
+
+
+def _with_a_remote_stack_proxy(svc):
+    svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["192.168.0.0/24"], confirm=True)
+
+
+def test_reset_proves_cessation_when_the_restart_removes_the_console_and_a_stack_proxy(tmp_path,
+                                                                                      monkeypatch):
+    # The old nginx config holds the console on 0.0.0.0:8443 AND a remote stack proxy; the reload
+    # moves neither. After the restart both are gone: proven, from listeners read after the restart.
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    svc, fake = _exposed_reset_svc(tmp_path, [_OLD_PROXY])
+    _with_a_remote_stack_proxy(svc)
+    res = svc.webserver_reset_defaults()
+    assert _RESTART in fake.calls
+    assert res.ok, res.summary
+    assert res.data["effective"]["remote_cessation_proven"] is True
+
+
+def test_reset_does_not_claim_cessation_while_a_stack_proxy_listener_survives(tmp_path, monkeypatch):
+    # A stack proxy still listening off-loopback after the restart is a remote listener: reset
+    # re-reads it instead of trusting the disabled config.
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    svc, fake = _exposed_reset_svc(tmp_path, [_OLD_PROXY])
+    fake.after_restart = [Listener(family="ipv4", ip="127.0.0.1", port=8443, inode=8), _OLD_PROXY]
+    _with_a_remote_stack_proxy(svc)
+    res = svc.webserver_reset_defaults()
+    assert _RESTART in fake.calls
+    assert not res.ok and "stack web-UI proxy" in res.summary
+    assert res.data["effective"]["remote_cessation_proven"] is False
+    assert res.data["effective"]["listener_scope"] == "loopback"
+    assert any("meshcom" in d and "8444" in d for d in res.details)
+
+
+def test_reset_inside_the_web_unit_names_apply_as_the_way_out(tmp_path, monkeypatch):
+    monkeypatch.setenv("INVOCATION_ID", "x")                      # the managed console: no bus
+    svc, fake = _exposed_reset_svc(tmp_path)
+    res = svc.webserver_reset_defaults()
+    assert _RESTART not in fake.calls
+    assert not res.ok and res.data["effective"]["remote_cessation_proven"] is False
+    assert res.next_commands == ["lhpc webserver apply"]
+
+
 def test_reset_persists_a_consistent_non_exposed_scope_when_cessation_is_proven(tmp_path, monkeypatch):
     # verify() runs BEFORE the reload and records the pre-reset (exposed) scope; reset must
     # RE-READ after the reload and persist a consistent block. Simulate the 0.0.0.0 -> 127.0.0.1

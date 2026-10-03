@@ -326,7 +326,10 @@ success only once the listeners match the desired exposure.
 `lhpc webserver reset-defaults` sets desired config back to loopback:8443 /
 local-unauthenticated / remote off, clears the CIDRs and disables every stack proxy (port
 cleared, mode/CIDRs kept). It never deletes CA keys, certificates, the CRL, revocation history,
-`.p12` exports or the session secret; `verify` then proves the remote listener is gone. A box
+`.p12` exports or the session secret. A reload cannot move a console nginx holds on `0.0.0.0` back
+to loopback, so from an operator shell reset then restarts `lhpc-nginx`; from the console (which
+cannot restart services) it says so, and Apply completes it. `verify` then proves the remote
+listener is gone. A box
 that came up loopback-only (firewall gate at boot): recover over an [SSH tunnel](ssh-tunnel.md)
 and re-apply.
 

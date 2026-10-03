@@ -1625,8 +1625,10 @@ class WebserverOpsMixin:
         # active while this method proves "remote exposure ceased" — a false claim. port=0 removes
         # the block entirely; the operator's mode/CIDR choices are kept for an easy re-enable.
         disabled = []
+        old_ports = {}                           # sid -> the port its proxy listened on
         for sid, swc in self.config().stackweb.items():
             if swc.enabled:
+                old_ports[sid] = swc.port
                 _config.save_stackweb_config(self._paths, sid, port=0)
                 disabled.append(sid)
         self._invalidate_config()
@@ -1653,7 +1655,29 @@ class WebserverOpsMixin:
                 # BEFORE promote+reload, so its `listener_scope` reflects the pre-reset (still
                 # exposed) nginx. Write a CONSISTENT effective block, and only claim cessation when
                 # BOTH no stack proxy remains remote AND the console is no longer bound off-loopback.
+                def live_proxies():
+                    # A disabled proxy whose old port is still bound off-loopback (nginx kept its
+                    # old config) is a remote listener, whatever the config now says.
+                    return [sid for sid, port in old_ports.items()
+                            if sid not in remaining
+                            and _ws.listener_scope(self._system, port) == "exposed"]
                 console_scope = _ws.listener_scope(self._system, cfg.port)
+                live = live_proxies()
+                import os as _os
+                if console_scope == "exposed" and not _os.environ.get("INVOCATION_ID"):
+                    # A reload cannot move a held 0.0.0.0:P to 127.0.0.1:P: the master keeps its OLD
+                    # config, every stack proxy included. Restart, as `apply` does. Not from inside
+                    # the managed web unit (no bus by design): there Apply completes it.
+                    rstate, rmsg2 = _ws.restart(self._system, self._paths)
+                    if rstate == "restarted":
+                        detail.append("  nginx restarted to rebind the listener (a reload cannot)")
+                        console_scope = _ws.listener_scope(self._system, cfg.port)
+                        live = live_proxies()
+                    else:
+                        detail.append(f"  nginx restart failed: {rmsg2}")
+                detail += [f"  STILL LISTENING remotely: {sid} (port {old_ports[sid]})"
+                           for sid in live]
+                remaining = remaining + live
                 console_exposed = console_scope == "exposed"
                 proven = (not remaining) and (not console_exposed)
                 ev["effective"] = {**ev.get("effective", {}),
@@ -1674,8 +1698,12 @@ class WebserverOpsMixin:
                 what = ("the console listener" if console_exposed and not remaining
                         else "a stack web-UI proxy" if remaining and not console_exposed
                         else "the console listener and a stack web-UI proxy")
+                way_out = ("; Apply (`lhpc webserver apply`) restarts nginx to move it"
+                           if console_exposed else "")
                 return ActionResult(False, f"config reset and nginx reloaded, but {what} is STILL "
-                                    "bound remotely — cessation UNPROVEN", details=detail, data=ev)
+                                    f"bound remotely — cessation UNPROVEN{way_out}", details=detail,
+                                    next_commands=["lhpc webserver apply"] if console_exposed else [],
+                                    data=ev)
             return ActionResult(False, f"reset requested; nginx reload failed — remote cessation "
                                 f"UNPROVEN ({rmsg})", details=detail, data=ev)
         ev["effective"] = {**ev.get("effective", {}), "remote_cessation_proven": False}

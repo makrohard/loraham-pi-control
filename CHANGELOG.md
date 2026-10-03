@@ -22,6 +22,8 @@
 - A damaged client-certificate list is no longer replaced by an empty one: the CRL refresh renews the existing
   revocations unchanged, the console and `lhpc doctor` say the list needs repair, and issuing and revoking
   refuse and name the file, so every issued certificate stays revocable.
+- `lhpc webserver reset-defaults` restarts nginx when a reload cannot move an exposed console back to loopback (the
+  console and the stack proxies stayed reachable); from the console it tells you to run Apply.
 
 ## 0.11.10
 
