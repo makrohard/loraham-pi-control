@@ -1917,7 +1917,7 @@ def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path
     section, so snapshot and write cannot be split by a concurrent start). Everyone else MUST use
     `apply_config_transaction()`, which acquires the lock. Steps: recover/block any pending journal; journal each pre-image; atomically replace; roll back
     all on failure; remove the journal on success."""
-    if recover_config_transaction(paths) == "":
+    if recover_config_transaction(paths)[0] is ConfigRecovery.BLOCKED:
         raise ConfigError("recovery-required: a pending config journal could not be "
                           "recovered; resolve it before saving config again")
     jp = _txn_journal(paths)
