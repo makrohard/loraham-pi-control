@@ -442,11 +442,12 @@ def test_a_staging_record_never_removes_an_unproven_candidate(tmp_path, installe
     assert (staging / "part").read_text() == "keep" and rec.exists()
 
 
-@pytest.mark.parametrize("failure", ["oserror", "containment", "lost"])
+@pytest.mark.parametrize("failure", ["oserror", "containment", "unexpected", "lost"])
 def test_a_failing_staging_record_rewrite_never_stops_the_install(tmp_path, make_repo, installer,
                                                                   monkeypatch, capsys, failure):
     # The record is best-effort, like the clone log: when giving it the candidate's [dev, ino]
-    # fails, one line says so and the staging goes on (recovery then sees no recorded inode).
+    # fails — any ordinary error, not only a filesystem one — one line says so and the staging
+    # goes on (recovery then sees no recorded inode).
     from lhpc.core import runtime_fs
     make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
@@ -462,6 +463,8 @@ def test_a_failing_staging_record_rewrite_never_stops_the_install(tmp_path, make
             raise OSError(errno.EIO, "I/O error")
         if failure == "containment":
             raise PathContainmentError("swapped")
+        if failure == "unexpected":
+            raise RuntimeError("payload")
         return False
 
     def open_marker(paths, path, text, *a, **kw):   # only the staging record fails, not the journal
@@ -475,7 +478,37 @@ def test_a_failing_staging_record_rewrite_never_stops_the_install(tmp_path, make
     # One line per failed rewrite (this path creates the candidate twice: reset, then the copy).
     assert calls and len(lines) == len(calls), (calls, lines)
     assert all("install continues" in ln for ln in lines), lines
+    tail = {"oserror": ": OSError: [Errno 5] I/O error", "containment": ": PathContainmentError: swapped",
+            "unexpected": ": RuntimeError: payload", "lost": "install continues"}[failure]
+    assert all(ln.endswith(tail) for ln in lines), lines
     assert list(inst.paths.under("state", "source-txn").iterdir()) == []
+
+
+def test_ctrl_c_in_the_staging_record_rewrite_propagates_and_the_record_is_cleared(
+        tmp_path, make_repo, installer, monkeypatch):
+    # Best-effort covers ordinary errors only: Ctrl-C while the record is rewritten stops the
+    # staging (the same interrupt propagates) and the record's own cleanup still runs.
+    from lhpc.core import runtime_fs
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
+    real_open = runtime_fs.open_marker_excl
+    ctrl_c = KeyboardInterrupt()
+
+    def interrupted_rewrite(text):
+        raise ctrl_c
+
+    def open_marker(paths, path, text, *a, **kw):
+        marker = real_open(paths, path, text, *a, **kw)
+        if path.name.endswith(".staging"):
+            marker.rewrite = interrupted_rewrite
+        return marker
+    monkeypatch.setattr(runtime_fs, "open_marker_excl", open_marker)
+    with pytest.raises(KeyboardInterrupt) as got:
+        inst.adopt_source(comp, source="dev")
+    assert got.value is ctrl_c
+    assert not [p for p in inst.paths.under("state", "source-txn").iterdir()
+                if p.name.endswith(".staging")]
 
 
 def test_a_staging_record_defers_to_its_journal(tmp_path, installer):
