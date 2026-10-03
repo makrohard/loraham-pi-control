@@ -244,23 +244,31 @@ class KissBox:
     def owned(self) -> list[str]:
         return owned(self.root)
 
+    def live(self) -> list[str]:
+        """The components whose LHPC-owned process is alive (a prior boot's record is not)."""
+        d = self.root / "state" / "owned"
+        recs = [json.loads(p.read_text()) for p in d.glob("*.json")] if d.is_dir() else []
+        return sorted(r["component"] for r in recs if _alive(r["pid"]))
+
 
 @pytest.fixture
 def kiss_box(tmp_path, monkeypatch, real_spawn, set_call):
-    """`kiss_box(callsign=True)` → a KissBox: kiss installed and built, daemon READY on 433, the
-    TNC's endpoint following its process, a callsign saved (unless callsign=False)."""
-    def _make(*, callsign=True):
-        (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
-        (tmp_path / "src" / "loraham-kiss-tnc" / "loraham-kiss-tnc").write_text("#bin")
+    """`kiss_box(callsign=True, root=tmp_path)` → a KissBox: kiss installed and built, daemon
+    READY on 433, the TNC's endpoint following its process, a callsign saved (unless
+    callsign=False)."""
+    def _make(*, callsign=True, root=None):
+        root = Path(root or tmp_path)
+        (root / "src" / "loraham-kiss-tnc").mkdir(parents=True)
+        (root / "src" / "loraham-kiss-tnc" / "loraham-kiss-tnc").write_text("#bin")
         fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": _READY})
-        fake.listeners = _TncEndpoint(tmp_path)
-        svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+        fake.listeners = _TncEndpoint(root)
+        svc = ControllerService(system=fake.system, paths=Paths(runtime_root=root))
         svc.bootstrap(apply=True)
         monkeypatch.setattr(ControllerService, "_lifecycle", lambda s: Lifecycle(
             s._paths, s.stacks(), s.config(), s._system, spawn=real_spawn))
         if callsign:
             set_call(svc)
-        return KissBox(tmp_path, fake, svc)
+        return KissBox(root, fake, svc)
     return _make
 
 

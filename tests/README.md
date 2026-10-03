@@ -51,6 +51,9 @@ in a file named after when or how a defect was found:
   contract) or `known defect <finding id>:` (recorded as is, changed only by the fix of that
   finding). Pinning the step order is its purpose, so it is the one place that names coordinator
   steps: through `ORDER_SEAMS` in its `conftest.py`, which a refactor that renames a step updates.
+  Beside it, `golden/test_same_decision_across_entry_paths.py` drives each start decision through
+  every entry path (the CLI, the console route with its detached job, the job runner alone, the
+  boot-restore unit) and asserts the same decision — only the rendering may differ.
 
 ## The rules
 
