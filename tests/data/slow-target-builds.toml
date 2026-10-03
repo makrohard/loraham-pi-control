@@ -1,0 +1,51 @@
+# The slow-target BASELINE (plans/PLAN-F43.md §7, §8): what the update path's operations take on
+# the real slow target (a Pi Zero 2 W, row A) and in the throttled CI container (row C).
+# `tests/install/test_slow_target_budget.py` checks every limit on the update path against it, and
+# the `slow-build` lane checks a release's fresh evidence against it (docs/maintenance.md).
+#
+# It changes only by a normal commit before a release: row A by the maintainer
+# (docs/test-matrix.md), or the release-prep commit copying `throttled-ci` entries from a
+# candidate's `slow-build-evidence` artifact. Nothing here is estimated: a quantity nobody has
+# measured is ABSENT, and the budget test then fails by name ("no entry for <component> <op>").
+# Bootstrap: while no [[measured]] entry exists at all (before the first row A), coverage and the
+# slow-build lane's calibration and budget cases SKIP instead, naming every unmeasured operation
+# (docs/maintenance.md); the first entry committed here ends that state.
+#
+# One entry per (component, op); the evidence artifact uses the same schema:
+#
+#   [[measured]]
+#   component = "meshcore-cli"   # or "lhpc-selfupdate", "meshtastic-cli-venv", "graywolf", ...
+#   op = "build"                 # build | selfupdate-helper | selfupdate-pip | cli-venv | deb-fetch
+#                                #   | clone | checkout
+#   seconds = 1712               # the op's measured quantity (build: the build wall time)
+#   quiet_s = 140                # op = "build" only: longest gap without progress (L1)
+#   key = "pin:<manifest pin>"   # pin:<pin> | deb:<version fetched> | deps:<sha256>; never an LHPC SHA
+#   source = "zero2w"            # or "throttled-ci"
+#   host = "zero2w-ref"          # or "gha ubuntu-24.04-arm cpus=0.25 mem=416m wiops=120 riops=1200"
+#   lhpc = "v0.12.0 (6ff1937)"   # provenance and the entry's minor; not part of the key. Two
+#                                #   forms, the short SHA mandatory in both: a release tag
+#                                #   "vX.Y.Z (sha7)", or a candidate ref "release/<name> (sha7)"
+#                                #   (row A on a candidate before its tag; minor = the first
+#                                #   X.Y.Z in <name>). A self-update entry names the update it
+#                                #   timed: "<from tag> -> <to tag or ref> (sha7)".
+#   date = 2026-10-10
+#   evidence = "docs/live-tests/live-test.md#rows"   # or the Actions run URL
+#
+#   [[calibration]]              # testlab/slowbuild/calibrate.sh on the Zero, keyed by its workload
+#   workload = "sha256:..."
+#   source = "zero2w"
+#   cpu_s = 410
+#   io_s = 95
+#   mem_s = 60
+#   date = 2026-10-10
+
+# Components never built on the Zero 2 W, with the reason. Every other component the manifest
+# builds or clones needs its entries.
+[excluded]
+"meshtastic" = "built from source on the Pi 5 only (docs/test-matrix.md row 9); the Zero runs the binary row 8"
+"meshcom-bridge" = "MeshCom from source is built on the Pi 5 only (docs/test-matrix.md row 12); the Zero runs the binary row 11"
+"meshcom-qemu" = "MeshCom from source is built on the Pi 5 only (docs/test-matrix.md row 12)"
+"meshcom-firmware" = "MeshCom from source is built on the Pi 5 only (docs/test-matrix.md row 12)"
+"meshcom-gps-relay" = "MeshCom from source is built on the Pi 5 only (docs/test-matrix.md row 12)"
+"loraham-voice" = "GTK-only variant: skipped on the Lite image the Zero runs (docs/test-matrix.md row 3)"
+"sideband" = "GTK/Kivy-only: skipped on the Lite image the Zero runs (docs/test-matrix.md row 6)"
