@@ -190,7 +190,8 @@ The guarantees the controller gives, each with where it is implemented and prove
   `tests/core/test_structured_exec.py` (rendered-runner AST check + spawn-argv capture).
 - **Typed validation.** Every value is validated by type (`core/validators.py`) before
   persistence and before execution. `@file:` secrets fail closed — a missing, unreadable or empty
-  secret blocks the launch (`core/commands.py`); a `pkg-config` failure aborts a build
+  secret, or one that is a symlink, not a regular file or over 64 KiB, blocks the launch
+  (`core/commands.py`); a `pkg-config` failure aborts a build
   (`core/build_launcher_runtime.py`).
 - **Identity-verified stopping.** Each launch records full process identity under a unique id
   (`state/owned/<comp>__<band>__<pid>__<nonce>.json`: pid, start time, pgid, sid, executable, argv

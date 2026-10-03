@@ -27,7 +27,7 @@ import shlex
 import shutil
 from pathlib import Path
 
-from . import validators
+from . import runtime_fs, validators
 from .model import emit_param
 
 _PKG_RE = re.compile(r"[A-Za-z0-9._+-]+")
@@ -132,7 +132,9 @@ def build_env(env_items, runtime: str, source: str, band: str = "") -> dict:
     that file's first line (used for the MeshCom HMAC password) — no `$(cat)`.
 
     FAIL-CLOSED: a missing/unreadable/empty `@file:` secret raises CommandError
-    (which blocks the launch/build) — it never silently becomes an empty string.
+    (which blocks the launch/build) — it never silently becomes an empty string. A
+    symlink, a non-regular file, more than 64 KiB or non-UTF-8 text is unreadable
+    (`runtime_fs.read_secret_text`): never followed, read whole, or waited on.
     `@file?:PATH` is the OPTIONAL form: an absent/empty file yields "" (the
     `$(cat … 2>/dev/null)` semantics for optional secrets like the MeshCom
     HMAC); an UNREADABLE present file still fails closed."""
@@ -144,7 +146,7 @@ def build_env(env_items, runtime: str, source: str, band: str = "") -> dict:
         if v.startswith("@file?:"):
             path = _paths_subst(v[len("@file?:"):], runtime, source, band)
             try:
-                lines = Path(path).read_text(encoding="utf-8").splitlines()
+                lines = runtime_fs.read_secret_text(path).splitlines()
                 env[key] = lines[0].strip() if lines else ""
             except FileNotFoundError:
                 env[key] = ""                    # optional secret: absent -> disabled
@@ -155,7 +157,7 @@ def build_env(env_items, runtime: str, source: str, band: str = "") -> dict:
         if v.startswith("@file:"):
             path = _paths_subst(v[len("@file:"):], runtime, source, band)
             try:
-                first = Path(path).read_text(encoding="utf-8").splitlines()
+                first = runtime_fs.read_secret_text(path).splitlines()
             except OSError as exc:
                 raise CommandError(f"secret file for {key} is missing/unreadable: {exc}") from exc
             line = first[0].strip() if first else ""

@@ -1,5 +1,9 @@
 # Changelog
 
+- A secret file named with `@file:` (the MeshCom HMAC password) is used only when it is a regular file of at most
+  64 KiB, not a symlink; anything else stops the start or build with a named error instead of being followed, read
+  whole, or hanging on a pipe.
+
 ## 0.11.10
 
 Upgrade note — boxes with the firewall installed and remote access configured: this release changes the firewall
