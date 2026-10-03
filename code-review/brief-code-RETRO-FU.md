@@ -31,3 +31,6 @@ and continue with the next; never improvise a different design.
 
 ## Commit identity (the maintainer's rule — a direct violation otherwise)
 Before your first commit run `git config user.name makrohard` and `git config user.email <the author e-mail of the makrohard commits in this repository: git log -1 --format=%ae --author=makrohard origin/main>`, and commit with that identity; no Co-Authored-By, Claude-Session or any AI-attribution line in any message. After each commit check `git log -1 --format='%an %cn%n%B'` shows makrohard twice and no such line; fix it with `git commit --amend --reset-author --no-edit` before you push.
+
+## The gate-1 review packet (you build it too)
+As the LAST file of your report commit add `code-review/gate1-CODE-RETRO-FU.md`: a header for an independent reviewer with NO repository access ("This file is your whole input"; one paragraph: what the defects were and what each commit changes, in product terms — no 'threat/bypass/forge' wording), the list of your commits (`<sha> <subject>`), your report (the self-audit section included), then the FULL diff of your fix commits (`git diff <base>..<last fix commit>`) in a ```diff block; replace any home path by `$HOME`; no e-mail addresses, IPs, call signs. The reviewer answers per commit OK / FINDING and GREEN / GREEN WITH NOTES / RED — write that request into the header.
