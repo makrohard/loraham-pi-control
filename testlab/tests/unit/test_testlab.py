@@ -539,6 +539,24 @@ def test_power_trigger_guard_locked_to_production_argv():
 # --- check honesty, reset cleanliness, reboot without a tombstone -------------------------
 
 
+@pytest.fixture
+def unrelated_pid():
+    """A live process of this user that is NOT the lab's — what a stale pid file names after
+    the pid was reused."""
+    proc = subprocess.Popen(["sleep", "60"])
+    yield proc
+    proc.kill()
+    proc.wait()
+
+
+def test_nginx_ctl_never_signals_a_reused_pid(tmp_path, unrelated_pid):
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "state" / "run").mkdir(parents=True)
+    (tmp_path / "state" / "run" / "nginx.pid").write_text(f"{unrelated_pid.pid}\n")
+    assert supervisor.nginx_ctl(paths, "stop") == (True, "stopped")
+    assert unrelated_pid.poll() is None                  # not SIGQUIT/SIGTERM/SIGKILLed
+
+
 def test_check_fails_when_installed_stack_not_ready(tmp_path, monkeypatch):
     """A reported missing requirement must not coexist with 'passed'. An
     uninstalled stack is 'not installed' (fine); a dead fake fails the check."""

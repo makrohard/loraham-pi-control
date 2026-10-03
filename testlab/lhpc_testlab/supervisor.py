@@ -114,15 +114,23 @@ def _nginx_pid(paths) -> int:
         return 0
 
 
-def _nginx_alive(paths) -> bool:
-    pid = _nginx_pid(paths)
+def pid_alive(pid: int, needle: str) -> bool:
+    """`pid` is a live process whose /proc cmdline contains `needle`. A pid file alone can name a
+    REUSED pid (a stale file left when a Codespace stopped): `kill(pid, 0)` called any process of
+    this user alive, and a stop then signalled it."""
     if pid <= 0:
         return False
     try:
-        os.kill(pid, 0)
-        return True
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            cmd = fh.read().replace(b"\0", b" ").decode("utf-8", "replace")
     except OSError:
         return False
+    return needle in cmd
+
+
+def _nginx_alive(paths) -> bool:
+    # The master's title is "nginx: master process nginx -c <conf>" — it names OUR config.
+    return pid_alive(_nginx_pid(paths), str(paths.under("config", "nginx", "lhpc.conf")))
 
 
 def nginx_ctl(paths, verb: str) -> tuple[bool, str]:
