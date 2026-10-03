@@ -4,6 +4,8 @@ or orphan sub-processes. Uses harmless local subprocesses (python3/sleep) — no
 
 import time
 
+import pytest
+
 from lhpc.core.probes.backends import RealCommandRunner, _MAX_CAPTURE_BYTES
 
 
@@ -245,3 +247,45 @@ def test_setsid_descendant_is_outside_proven_ownership():
             except OSError:
                 pass
         p.kill(); p.wait()
+
+
+# --- F42: a build step ends on a stall, not on the clock ------------------------------------------
+
+@pytest.mark.slow
+@pytest.mark.parametrize("controlled", [False, True], ids=["fast", "controlled"])
+def test_sleeping_step_is_stalled(tmp_path, controlled):
+    # A step whose whole session sleeps (no CPU, no I/O, no output after its first line) is ended
+    # by the stall rule long before its ceiling, and no member survives.
+    log = tmp_path / "step.log"
+    kw = {"should_cancel": lambda: False} if controlled else {}
+    t0 = time.time()
+    with open(log, "wb" if controlled else "w") as fh:
+        r = RealCommandRunner().run_streaming(["sh", "-c", "sleep 30 & echo $!; wait"],
+                                              timeout=60, log_fh=fh, stall_s=1, sample_s=0.2, **kw)
+    assert r.timed_out and r.returncode == 124 and r.stop_reason == "stalled"
+    assert time.time() - t0 < 5.0
+    time.sleep(0.3)
+    assert _dead_or_zombie(int(log.read_text().split()[0]))    # the background sleep is gone too
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("controlled", [False, True], ids=["fast", "controlled"])
+def test_a_busy_step_still_ends_at_its_ceiling(tmp_path, controlled):
+    # preservation: the ceiling still applies to a step that is busy all the time.
+    kw = {"should_cancel": lambda: False} if controlled else {}
+    with open(tmp_path / "step.log", "wb" if controlled else "w") as fh:
+        r = RealCommandRunner().run_streaming(["python3", "-c", "while True: pass"], timeout=1.5,
+                                              log_fh=fh, stall_s=1, sample_s=0.2, **kw)
+    assert r.timed_out and r.stop_reason == "budget"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("controlled", [False, True], ids=["fast", "controlled"])
+def test_a_step_cannot_outlive_its_ceiling_by_a_wait_slice(tmp_path, controlled):
+    # Ceiling 1.5 s, sample 1 s: a 1.8 s step ends at the ceiling — each wait is capped by the time
+    # REMAINING to the ceiling, not by the whole ceiling.
+    kw = {"should_cancel": lambda: False} if controlled else {}
+    with open(tmp_path / "step.log", "wb" if controlled else "w") as fh:
+        r = RealCommandRunner().run_streaming(["sleep", "1.8"], timeout=1.5, log_fh=fh,
+                                              sample_s=1.0, **kw)
+    assert r.timed_out and r.returncode == 124 and r.stop_reason == "budget"

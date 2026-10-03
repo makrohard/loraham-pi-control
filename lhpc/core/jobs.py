@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-from . import procident, runtime_fs, validators
+from . import procident, progress, runtime_fs, validators
 from .paths import PathContainmentError, Paths
 from .probes.backends import CommandRunner
 
@@ -69,6 +69,7 @@ def run_job(
     on_log_open=None,
     announce: str | None = None,
     low_priority: bool = False,
+    stall_s: float | None = None,
 ) -> JobResult:
     """Run one bounded command (structured argv, shell=False), persist its output,
     return a compact result. `cwd`/`env` are passed to the runner directly — no shell.
@@ -76,7 +77,10 @@ def run_job(
     Log setup goes through the authoritative `runtime_fs` (contained, O_NOFOLLOW
     create/truncate) and happens BEFORE execution: a symlinked or inaccessible log leaf is
     a TYPED `FAILED` result and the command is NOT run. A failure to persist the output is
-    likewise typed — never a silently-successful job with a missing log."""
+    likewise typed — never a silently-successful job with a missing log.
+
+    `stall_s` (build steps only) adds the stall rule to the `timeout` ceiling (`progress`); it is
+    handed to the runner only when given, so host tests and other callers keep a plain timeout."""
     from . import runtime_fs
     from .paths import PathContainmentError
     # A job name is controller-derived, but guard the leaf so a planted symlinked log
@@ -128,7 +132,8 @@ def run_job(
             result = run_streaming(argv, timeout=timeout, log_fh=log_fh,
                                    cwd=cwd, env={**(env or {}), "PYTHONUNBUFFERED": "1"},
                                    redactor=redactor, should_cancel=should_cancel,
-                                   low_priority=low_priority)
+                                   low_priority=low_priority,
+                                   **({"stall_s": stall_s} if stall_s is not None else {}))
             try:
                 log_fh.flush()
                 os.fsync(log_fh.fileno())
@@ -150,7 +155,14 @@ def run_job(
         # indistinguishable from a clean finish. Write an explicit terminal marker to the log AND
         # fold it into the tail, so the operator sees WHY it stopped (and never trusts a partial build).
         if getattr(result, "timed_out", False):
-            marker = f"[TIMED OUT after {timeout:.0f}s — job was KILLED; result is INCOMPLETE]"
+            if stall_s is None:
+                marker = f"[TIMED OUT after {timeout:.0f}s — job was KILLED; result is INCOMPLETE]"
+            else:
+                # A build step names which limit fired, with the effective values.
+                why = (f"stalled: no CPU, output or I/O for {progress.span(stall_s)}"
+                       if getattr(result, "stop_reason", "") == "stalled"
+                       else f"runaway guard of {progress.span(timeout)} reached")
+                marker = f"[TIMED OUT — {why} — job was KILLED; result is INCOMPLETE]"
             try:
                 log_fh.write("\n" + marker + "\n")
                 log_fh.flush()

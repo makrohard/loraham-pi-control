@@ -246,3 +246,22 @@ def test_prune_logs_keeps_every_sidecar_when_the_inventory_is_uncertain(tmp_path
                         lambda self: ([], [{"leaf": "bad.json", "reason": "malformed"}], "ok"))
     svc.prune_logs()
     assert len(list(d.iterdir())) == svc.LOG_RETENTION + 5          # a skipped record may be live
+
+
+@pytest.mark.parametrize("reason, text", [
+    ("stalled", "[TIMED OUT — stalled: no CPU, output or I/O for 1 min — job was KILLED"),
+    ("budget", "[TIMED OUT — runaway guard of 2 s reached — job was KILLED"),
+])
+def test_stop_reason_markers(tmp_path, reason, text):
+    # F42: a build step's log names which limit ended it, with the EFFECTIVE values (here a 60 s
+    # stall window and a 2 s ceiling, not the defaults).
+    class _Runner:
+        def run_streaming(self, argv, timeout, log_fh, cwd=None, env=None, **kw):
+            assert kw["stall_s"] == 60.0
+            return CommandResult(124, "", "", timed_out=True, stop_reason=reason)
+
+    res = jobs.run_job(_Runner(), name="build-x", argv=["x"], cwd=None, logs_dir=tmp_path / "logs",
+                       paths=Paths(runtime_root=tmp_path), timeout=2.0, stall_s=60.0)
+    assert res.state is JobState.TIMEOUT
+    assert any(text in line for line in res.tail), res.tail
+    assert text in (tmp_path / "logs" / "build-x.log").read_text()

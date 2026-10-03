@@ -2394,3 +2394,30 @@ def test_auto_install_pin_mismatch_row_names_the_manual_command(tmp_path, monkey
         assert detail.endswith(f"or install the published binary anyway by hand: {cmd}")
     else:
         assert "--accept-pin-mismatch" not in detail
+
+
+def test_auto_install_build_uses_build_limits(tmp_path, monkeypatch):
+    """F42: auto-install builds through LifecycleOps.build -> the real Lifecycle.build, so it gets
+    the same limits as `lhpc build`: the stall rule and the 24 h runaway guard (meshcore-cli's old
+    manifest value no longer applies)."""
+    from contextlib import nullcontext
+
+    from lhpc.core import lifecycle as lifecycle_mod
+    from lhpc.core.jobs import JobResult, JobState
+    monkeypatch.delenv("LHPC_BUILD_STEP_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("LHPC_BUILD_STALL_S", raising=False)
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(svc, "_auto_install_ctx_error", lambda ctx, paths: "")
+    monkeypatch.setattr(svc, "_source_operation_guard", lambda *a, **k: nullcontext())
+    monkeypatch.setattr(svc, "_source_present", lambda c: True)
+    seen = []
+
+    def fake_run_job(runner, **kw):
+        seen.append((kw["name"], kw["timeout"], kw.get("stall_s")))
+        return JobResult(name=kw["name"], state=JobState.SUCCEEDED, returncode=0, log_path="",
+                         tail=[])
+    monkeypatch.setattr(lifecycle_mod, "run_job", fake_run_job)
+    r = svc.build("meshcore-cli", apply=True, auto_install_ctx=object())
+    cli = [s for s in seen if s[0].startswith("build-meshcore-cli")]
+    assert cli, (r.summary, r.details)
+    assert all(timeout == 86400.0 and stall == 600.0 for _n, timeout, stall in cli), cli

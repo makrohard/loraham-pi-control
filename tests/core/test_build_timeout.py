@@ -6,7 +6,8 @@ venv interpreter already existed, `is_built` read "built" — the failure only s
 ModuleNotFoundError at start. This covers the fixes:
 
 * every timed-out job writes an explicit "TIMED OUT after Ns" terminal line (log + tail);
-* per-component build/test timeouts come from the manifest (hardware-realistic defaults otherwise);
+* per-component test timeouts come from the manifest (hardware-realistic defaults otherwise); a build
+  step ends on a stall or at the 24 h runaway guard instead (F42);
 * a `build_marker` written ONLY after the last step succeeds is what `is_built` gates on, so a
   half-built venv can never read "built".
 """
@@ -16,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from lhpc.core import lifecycle as lifecycle_mod
+from lhpc.core import progress
 from lhpc.core.jobs import JobResult, JobState, run_job, tail_log
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult, FakeSystem
@@ -54,18 +56,23 @@ def _capture_run_job_timeout(monkeypatch, state=JobState.SUCCEEDED):
     seen = {}
     def fake(runner, **kw):
         seen["timeout"] = kw["timeout"]
+        seen["stall_s"] = kw.get("stall_s")
+        seen["n"] = seen.get("n", 0) + 1
         return JobResult(name=kw.get("name", "x"), state=state, returncode=0, log_path="", tail=[])
     monkeypatch.setattr(lifecycle_mod, "run_job", fake)
     return seen
 
 
-def test_build_uses_manifest_build_timeout(tmp_path, monkeypatch):
+def test_build_gets_the_stall_rule_and_the_runaway_guard(tmp_path, monkeypatch):
+    # F42: a build step ends after 10 min without activity, or at the 24 h guard — a manifest value
+    # below the guard no longer cuts a slow build short.
+    monkeypatch.delenv("LHPC_BUILD_STEP_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("LHPC_BUILD_STALL_S", raising=False)
     svc = _svc(tmp_path)
-    comp = _meshcore(svc)
-    assert comp.build_timeout == 1800.0        # declared for the slow venv+pip build
     seen = _capture_run_job_timeout(monkeypatch)
-    svc._lifecycle().build(comp)
-    assert seen["timeout"] == 1800.0           # honored, not the generic default
+    svc._lifecycle().build(_meshcore(svc))
+    assert seen["timeout"] == progress.BUILD_CEILING_S == 86400.0
+    assert seen["stall_s"] == progress.STALL_S == 600.0
 
 
 def test_host_test_uses_manifest_test_timeout(tmp_path, monkeypatch):
@@ -77,14 +84,68 @@ def test_host_test_uses_manifest_test_timeout(tmp_path, monkeypatch):
     assert seen["timeout"] == 900.0
 
 
-def test_default_build_timeout_is_hardware_realistic(tmp_path, monkeypatch):
-    # A component WITHOUT a manifest override falls back to the class default (>= the old 600 s).
+def test_default_build_ceiling_is_the_runaway_guard(tmp_path, monkeypatch):
+    # A component WITHOUT a manifest value gets the same 24 h guard and stall rule.
+    monkeypatch.delenv("LHPC_BUILD_STEP_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("LHPC_BUILD_STALL_S", raising=False)
     svc = _svc(tmp_path)
     daemon = next(c for s in svc.stacks() for c in s.components if c.id == "loraham-daemon")
     assert daemon.build_timeout == 0.0
     seen = _capture_run_job_timeout(monkeypatch)
     svc._lifecycle().build(daemon)
-    assert seen["timeout"] == lifecycle_mod.Lifecycle.BUILD_TIMEOUT_S >= 600.0
+    assert seen["timeout"] == progress.BUILD_CEILING_S and seen["stall_s"] == progress.STALL_S
+
+
+@pytest.mark.parametrize("var", ["LHPC_BUILD_STALL_S", "LHPC_BUILD_STEP_TIMEOUT_S"])
+@pytest.mark.parametrize("bad", ["0", "inf", "x"])
+def test_malformed_env_fails_typed(tmp_path, monkeypatch, var, bad):
+    # A malformed limit never means "no limit": the build is refused before any step.
+    monkeypatch.setenv(var, bad)
+    svc = _svc(tmp_path)
+    seen = _capture_run_job_timeout(monkeypatch)
+    res = svc._lifecycle().build(_meshcore(svc))
+    assert res.state is JobState.FAILED and "n" not in seen
+    assert "invalid build time limit" in " ".join(res.tail)
+
+
+@pytest.mark.parametrize("bad", [0, -5, float("nan"), float("inf")])
+def test_malformed_explicit_timeout_fails_typed(tmp_path, monkeypatch, bad):
+    # DELTA 1: a caller's explicit value goes through the same check as the env.
+    svc = _svc(tmp_path)
+    seen = _capture_run_job_timeout(monkeypatch)
+    res = svc._lifecycle().build(_meshcore(svc), timeout=bad)
+    assert res.state is JobState.FAILED and "n" not in seen
+
+
+def test_host_test_has_no_stall_rule(tmp_path, monkeypatch):
+    # preservation (Q2): a host test keeps its plain wall-clock timeout, without the stall rule.
+    monkeypatch.setenv("LHPC_BUILD_STALL_S", "60")
+    svc = _svc(tmp_path)
+    seen = _capture_run_job_timeout(monkeypatch)
+    svc._lifecycle().host_test(_meshcore(svc))
+    assert seen["timeout"] == 900.0 and seen["stall_s"] is None
+
+
+@pytest.mark.slow
+def test_busy_build_outlives_its_manifest_value(tmp_path, monkeypatch):
+    # A step that keeps computing for 3 s is not ended by its 1 s manifest value: only a stall
+    # (1 s here) or the 24 h guard would end it.
+    from lhpc.core.probes.backends import RealCommandRunner
+    monkeypatch.delenv("LHPC_BUILD_STEP_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("LHPC_BUILD_STALL_S", raising=False)
+    monkeypatch.setattr(progress, "STALL_S", 1.0)
+    monkeypatch.setattr(progress, "SAMPLE_S", 0.2)
+    svc = _svc(tmp_path)
+    comp = _meshcore(svc)
+    loop = "import time\nt = time.time()\nwhile time.time() - t < 3: pass"
+    object.__setattr__(comp, "build_timeout", 1.0)
+    object.__setattr__(comp, "build_steps", ({"argv": ["python3", "-c", loop]},))
+    object.__setattr__(comp, "build_marker", "")
+    life = svc._lifecycle()
+    life.system = type("S", (), {"runner": RealCommandRunner()})()
+    life.source_dir(comp).mkdir(parents=True, exist_ok=True)
+    res = life.build(comp)
+    assert res.state is JobState.SUCCEEDED, res.tail
 
 
 # --- completion marker: a killed build never reads "built" ----------------------------------------
@@ -187,13 +248,13 @@ def _flash_dir(svc, comp):
 
 
 def test_meshcom_timeout_exceeds_measured_cold_build(tmp_path, monkeypatch):
-    # Cold `pio` build is ~26 min (~1560 s) on a Zero 2W; the per-step budget must clear it with margin.
+    # Cold `pio` build is ~26 min (~1560 s) on a Zero 2W; the 24 h guard clears it by far.
+    monkeypatch.delenv("LHPC_BUILD_STEP_TIMEOUT_S", raising=False)
     svc = _svc(tmp_path)
     comp = _meshcom(svc)
-    assert comp.build_timeout >= 3600.0 and comp.build_timeout > 1560.0
     seen = _capture_run_job_timeout(monkeypatch)
     svc._lifecycle().build(comp)
-    assert seen["timeout"] == comp.build_timeout      # honored per step, not the 900 s default
+    assert seen["timeout"] == progress.BUILD_CEILING_S > 1560.0
 
 
 def test_meshcom_marker_is_colocated_with_flash_and_gates_is_built(tmp_path):

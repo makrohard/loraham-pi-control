@@ -29,7 +29,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import commands, procident, runtime_fs, validators
+from . import commands, procident, progress, runtime_fs, validators
 from .config import Config
 from .jobs import JobResult, JobState, run_job, tail_log
 from .model import Component, Stack
@@ -361,12 +361,18 @@ class Lifecycle:
         passes a RUN-SPECIFIC base so a run's build log can never collide with a prior
         run's. Multi-step components append `-<i>` to whichever base is used.
 
-        Timeout precedence: explicit `timeout` arg > the component's manifest `build_timeout` >
-        `BUILD_TIMEOUT_S`. A component that declares a `build_marker` gets it REMOVED before the first
-        step and WRITTEN only after the LAST step succeeds, so a build killed mid-way (e.g. a
-        half-populated venv) can never read "built" — the marker is `is_built`'s gate."""
+        Limits (`progress.build_limits`, the rule every build path shares): a step ends after
+        `LHPC_BUILD_STALL_S` (600 s) without activity, or past its ceiling — explicit `timeout` arg >
+        `LHPC_BUILD_STEP_TIMEOUT_S` > max(manifest `build_timeout`, 24 h runaway guard). A malformed
+        value is a typed FAILED before any step. A component that declares a `build_marker` gets it
+        REMOVED before the first step and WRITTEN only after the LAST step succeeds, so a build killed
+        mid-way (e.g. a half-populated venv) can never read "built" — the marker is `is_built`'s gate."""
         base = log_base or f"build-{comp.id}"
-        eff_timeout = timeout if timeout is not None else (comp.build_timeout or self.BUILD_TIMEOUT_S)
+        try:
+            stall_s, eff_timeout = progress.build_limits(comp.build_timeout, os.environ, timeout)
+        except ValueError as exc:
+            return JobResult(name=base, state=JobState.FAILED, returncode=1, log_path="",
+                             tail=[f"BLOCKED: invalid build time limit ({exc}) — refusing to build"])
         src, runtime = str(self.source_dir(comp)), str(self.paths.runtime_root)
         # A re-build must NEVER inherit a prior run's completion marker: invalidate it up front, FAIL
         # CLOSED. A surviving marker (permission error, unsafe symlink/dir/FIFO, containment error) would
@@ -395,7 +401,7 @@ class Lifecycle:
             last = run_job(self.system.runner, name=name, argv=argv, cwd=src, paths=self.paths,
                            env=(env or None), logs_dir=self.logs_dir(), timeout=eff_timeout,
                            redactor=redactor, should_cancel=should_cancel, on_log_open=on_log_open,
-                           announce=ann, low_priority=True)
+                           announce=ann, low_priority=True, stall_s=stall_s)
             if not last.ok:
                 return last
         if last is None:        # nothing to build

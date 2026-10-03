@@ -43,6 +43,9 @@ class CommandResult:
                                      #  cessation/draining may be PROVEN (not unsafe), but the job must not
                                      #  report success — its detailed log is incomplete
     session_ident: dict | None = None  # the build's SessionToken fields (for a persisted unsafe marker)
+    # Why a timed-out run was stopped: "stalled" (no activity for stall_s) or "budget" (the ceiling);
+    # "" when it was not timed out. `timed_out` stays True for both.
+    stop_reason: str = ""
 
     @property
     def may_still_be_running(self) -> bool:
@@ -303,7 +306,8 @@ class RealCommandRunner:
     def run_streaming(self, argv: list[str], timeout: float, log_fh,
                       cwd: str | None = None, env: dict | None = None,
                       redactor=None, should_cancel=None,
-                      low_priority: bool = False) -> CommandResult:
+                      low_priority: bool = False, stall_s: float | None = None,
+                      sample_s: float | None = None) -> CommandResult:
         """Like run(), but the child's output streams LIVE into `log_fh`. Two paths:
 
         * FAST (default, `redactor` and `should_cancel` both None): kernel-level fd redirect
@@ -320,8 +324,15 @@ class RealCommandRunner:
           `should_cancel()` and the overall timeout; on either it terminates the OWNED session first,
           closes the read end, and BOUND-joins the drain so an escaped descendant holding stdout can
           never wedge us. The typed result distinguishes normal-failure / timeout / cancellation and
-          whether the session/pipe were PROVEN clean (see CommandResult)."""
+          whether the session/pipe were PROVEN clean (see CommandResult).
+
+        `timeout` is the ceiling. `stall_s` (builds only; None = no stall rule, as for host tests)
+        also ends the run once its session shows no activity for that long (`progress.Watch`,
+        sampled every `sample_s`); `stop_reason` says which limit fired."""
         import os
+
+        from .. import progress
+        sample_s = progress.SAMPLE_S if sample_s is None else sample_s
         if redactor is None and should_cancel is None:
             try:
                 proc = subprocess.Popen(
@@ -339,28 +350,45 @@ class RealCommandRunner:
                 self._ionice_idle(proc.pid)
             from .. import proctree
             _leader_token = proctree.capture_session_token(proc.pid)
-            timed_out = False
-            termination = ""
-            try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                termination = proctree.terminate_session(_leader_token, os.getpid()).value
+            watch = self._watch(progress, stall_s, timeout, sample_s, _leader_token,
+                                lambda: os.fstat(log_fh.fileno()).st_size)
+            reason = termination = ""
+            while True:
                 try:
-                    proc.wait(timeout=2)
+                    proc.wait(timeout=min(1.0, sample_s, watch.remaining()))   # never past the ceiling
+                    break
                 except subprocess.TimeoutExpired:
-                    pass
+                    reason = watch.check() or ""
+                    if reason:
+                        termination = proctree.terminate_session(_leader_token, os.getpid()).value
+                        try:
+                            proc.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            pass
+                        break
+            timed_out = bool(reason)
             rc = 124 if timed_out else (proc.returncode if proc.returncode is not None else -1)
             return CommandResult(returncode=rc, stdout="", stderr="", timed_out=timed_out,
-                                 termination=termination)
+                                 termination=termination, stop_reason=reason)
         return self._run_controlled(argv, timeout, log_fh, cwd, env, redactor, should_cancel,
-                                    low_priority)
+                                    low_priority, stall_s, sample_s)
+
+    @staticmethod
+    def _watch(progress, stall_s, timeout, sample_s, token, out_size):
+        """The step's limits: the ceiling always; the stall rule only with `stall_s` and a captured
+        session token (without one the session cannot be sampled — the ceiling still applies)."""
+        sampler = (progress.SessionSampler(token.sid, os.getpid(), out_size)
+                   if stall_s is not None and token is not None else None)
+        return progress.Watch(stall_s, timeout, sample_s, sampler=sampler)
 
     def _run_controlled(self, argv, timeout, log_fh, cwd, env, redactor, should_cancel,
-                        low_priority: bool = False) -> CommandResult:
+                        low_priority: bool = False, stall_s: float | None = None,
+                        sample_s: float | None = None) -> CommandResult:
         import os
         import threading
-        import time as _t
+
+        from .. import progress
+        sample_s = progress.SAMPLE_S if sample_s is None else sample_s
         try:
             proc = subprocess.Popen(
                 argv,
@@ -383,6 +411,7 @@ class RealCommandRunner:
         # `.buffer` and is used directly). Keeping it byte-oriented means redaction happens pre-decode.
         sink = getattr(log_fh, "buffer", log_fh)
         write_failed = [False]
+        drained_bytes = [0]                              # raw bytes read from the child: the stall rule's "output"
 
         def _emit(data: bytes) -> None:
             # Best-effort persistence: a write error (e.g. disk full) must NOT crash the thread or stop the
@@ -398,6 +427,7 @@ class RealCommandRunner:
         def _drain():
             try:
                 for chunk in iter(lambda: proc.stdout.read(8192), b""):
+                    drained_bytes[0] += len(chunk)
                     _emit(redactor.feed(chunk) if redactor is not None else chunk)
                 if redactor is not None:
                     _emit(redactor.flush())
@@ -409,18 +439,19 @@ class RealCommandRunner:
         dt = threading.Thread(target=_drain, daemon=True)
         dt.start()
         timed_out = cancelled = False
-        termination = ""
-        deadline = _t.monotonic() + timeout
+        termination = reason = ""
+        watch = self._watch(progress, stall_s, timeout, sample_s, token, lambda: drained_bytes[0])
         while True:
             try:
-                proc.wait(timeout=0.1)
+                proc.wait(timeout=min(0.1, watch.remaining()))
                 break                                     # exited on its own
             except subprocess.TimeoutExpired:
                 if should_cancel is not None and should_cancel():
                     cancelled = True
                     termination = proctree.terminate_session(token, os.getpid()).value
                     break
-                if _t.monotonic() >= deadline:
+                reason = watch.check() or ""
+                if reason:
                     timed_out = True
                     termination = proctree.terminate_session(token, os.getpid()).value
                     break
@@ -448,7 +479,7 @@ class RealCommandRunner:
         return CommandResult(returncode=rc, stdout="", stderr="", timed_out=timed_out,
                              cancelled=cancelled, termination=termination,
                              output_unverified=output_unverified, session_ident=ident,
-                             log_write_failed=write_failed[0])
+                             log_write_failed=write_failed[0], stop_reason=reason)
 
 
 class RealProcFs:

@@ -52,7 +52,7 @@ class LabRunner:
 
     def run_streaming(self, argv, timeout: float, log_fh, cwd=None, env=None,
                       redactor=None, should_cancel=None,
-                      low_priority: bool = False) -> CommandResult:
+                      low_priority: bool = False, stall_s=None) -> CommandResult:
         kind, detail = rules.classify(argv)
         if kind != "pass":
             res = self._dispatch(argv, kind, detail)
@@ -65,7 +65,7 @@ class LabRunner:
         return self._real.run_streaming(argv, timeout, log_fh, cwd=cwd,
                                         env=env, redactor=redactor,
                                         should_cancel=should_cancel,
-                                        low_priority=low_priority)
+                                        low_priority=low_priority, stall_s=stall_s)
 
 
 class LabFs:
