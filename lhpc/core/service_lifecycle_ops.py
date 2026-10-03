@@ -2173,6 +2173,16 @@ class LifecycleOpsMixin:
         keys = [f"lifecycle.{sid}", f"claim.loraham.radio.{b}"]   # serialize vs start/stop on band
         try:
             with self._keys_guard("apply", target, keys):        # re-entrant per thread
+                # Re-checked under the band's claim, held until the last SET: a start that takes the
+                # band after the checks above is refused or waits, and never has its band retuned.
+                if not (is_daemon or self.stack_running(sid)):
+                    return ActionResult(False, f"Apply live is only available while {target} is running",
+                                        data={"band": b, "persisted": True})
+                # An app stack's profile never retunes a band another running stack uses.
+                if not is_daemon and (others := self._band_used_by_others(target, b)):
+                    return ActionResult(False, f"Cannot apply {target}'s daemon parameters on {b} MHz: "
+                                               f"that band serves {', '.join(others)}",
+                                        data={"band": b, "in_use_by": others, "persisted": True})
                 if not daemon_control.read_view(self._system, b).reachable:
                     return ActionResult(False, f"daemon not serving {b} MHz — start it first",
                                         data={"band": b, "persisted": True})
@@ -2243,6 +2253,22 @@ class LifecycleOpsMixin:
                          if ss.components[c.id].run_state in up]
             return bool(run_comps) and band in self._running_bands_of(ss, run_comps)
         return False
+
+    def _band_used_by_others(self, target: str, band: str) -> list[str]:
+        """Running daemon-client stacks OTHER than `target`'s own on `band` — the rule `_ensure_daemon`
+        keeps a band's config by. A client's daemon-param apply and TX test refuse such a band."""
+        sid = self._owner_stack_id(target)
+        daemon_sid = self.stack_of(self.DAEMON_ID) or "daemon"
+        return [d for d in self.stop_dependents(daemon_sid, bands={band}) if d != sid]
+
+    def _tx_band_conflict(self, target: str, bands: list) -> ActionResult | None:
+        """The refusal of an app stack's TX test on a band another running stack uses, or None."""
+        for b in bands:
+            if (others := self._band_used_by_others(target, b)):
+                return ActionResult(False, f"Cannot TX-test '{target}' on {b} MHz: that band "
+                                           f"serves {', '.join(others)} — stop it first",
+                                    next_commands=[f"lhpc status {target}"])
+        return None
 
     def _uncertain_daemon_dependents(self, target: str) -> list[str]:
         """Running daemon-dependent stacks whose ACTIVE radio band cannot be trusted for a PER-BAND
@@ -4180,6 +4206,11 @@ class LifecycleOpsMixin:
         # A TX test drives real RF, so it requires the radio to be READY (not merely a
         # reachable CONF socket): a FAILED/UNINITIALIZED radio must never be TX-tested.
         bands = [b for b in wanted if self.daemon_view(b).ready]
+        # An app stack never transmits on a band another running stack uses. Checked here for the
+        # plan, and again under the bands' claims right before the frames go out (see below).
+        app_target = not self._is_daemon_target(target)
+        if app_target and (refused := self._tx_band_conflict(target, bands)):
+            return refused
         if not bands:
             return ActionResult(
                 False, f"Cannot TX-test '{target}': no daemon-served radio is READY on "
@@ -4256,8 +4287,14 @@ class LifecycleOpsMixin:
         # transmit loop so it can never run concurrently with a controller self-update/uninstall. A
         # refusal returns BEFORE any frame is transmitted.
         from . import reslock as _reslock
+        # An app stack's TX test also holds each band's `claim.loraham.radio.<band>` (lock order #2,
+        # after admission) and re-checks under it: a start taking one of those bands after the check
+        # above waits for the frames or is refused, never transmitted over.
+        claims = [f"claim.loraham.radio.{b}" for b in bands] if app_target else []
         try:
-            with self._admission_guard("tx-test", target):
+            with self._admission_guard("tx-test", target), self._keys_guard("tx-test", target, claims):
+                if app_target and (refused := self._tx_band_conflict(target, bands)):
+                    return refused
                 details = []
                 ok = True
                 attempted_bands: list = []

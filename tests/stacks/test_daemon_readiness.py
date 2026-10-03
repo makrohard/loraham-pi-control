@@ -98,6 +98,72 @@ def test_tx_test_never_moves_a_client_to_another_band(tmp_path, set_call):
     assert svc.test("daemon", tx=True, apply=False).ok
 
 
+@pytest.mark.safety("RF-TX-opt-in")
+def test_tx_test_refused_on_a_band_another_stack_uses(tmp_path, set_call):
+    # kiss (433 or 868) runs on 868 next to meshcom on 433: kiss's TX test must not transmit on
+    # meshcom's band. Refused with meshcom named; the daemon's own TX test is unchanged.
+    ready = b"STATUS RADIO=READY TXMODE=MANAGED\n"
+    sys = FakeSystem(cmdlines_data={300: ["meshcom-loraham-bridge"], 301: ["qemu-system-xtensa"],
+                                    4242: ["loraham-kiss-tnc", "--config", "X"]},
+                     unix_replies={"/tmp/loraconf433.sock": ready,
+                                   "/tmp/loraconf868.sock": ready}).system
+    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
+    set_call(svc)
+    assert svc._set_running_band("kiss", "868")
+    res = svc.test("kiss", tx=True, apply=False)
+    assert not res.ok and "meshcom" in res.summary
+    assert svc.test("daemon", tx=True, apply=False).ok
+
+
+def _competing_start(svc, monkeypatch, band):
+    """A competing start of meshcore on `band`, run right AFTER each conflict check returns: it
+    takes `claim.loraham.radio.<band>` like a real start, and once it has it, meshcore uses the
+    band. Returns the list of starts that got the claim."""
+    import threading
+
+    from lhpc.core import reslock
+    started: list = []
+
+    def start():
+        try:
+            with reslock.operation_lock(svc._paths, f"claim.loraham.radio.{band}", "start", "meshcore"):
+                started.append("meshcore")
+        except reslock.ResourceBusy:
+            pass
+
+    def used(target, b):
+        out = list(started) if b == band else []
+        t = threading.Thread(target=start)
+        t.start()
+        t.join()
+        return out
+    monkeypatch.setattr(svc, "_band_used_by_others", used)
+    return started
+
+
+@pytest.mark.safety("RF-TX-opt-in")
+def test_tx_test_holds_the_band_claim_against_a_competing_start(tmp_path, set_call, monkeypatch):
+    # The conflict check and the transmit are one critical section under the band's claim: a start
+    # that takes the band after the plan check is seen by the re-check, refused, nothing transmitted;
+    # one attempted while the claim is held is refused.
+    from lhpc.core.lifecycle import Lifecycle, TxTestResult
+    sent = []
+    monkeypatch.setattr(Lifecycle, "run_daemon_tx_test", lambda self, band, payload: (
+        sent.append(band) or TxTestResult(ok=True, band=band, txok_before=0, txok_after=1,
+                                          detail="stub")))
+    ready = b"STATUS RADIO=READY TXMODE=MANAGED\n"
+    sys = FakeSystem(cmdlines_data={4242: ["loraham-kiss-tnc", "--config", "X"]},
+                     unix_replies={"/tmp/loraconf868.sock": ready}).system
+    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
+    set_call(svc)
+    assert svc._set_running_band("kiss", "868")
+    started = _competing_start(svc, monkeypatch, "868")
+    res = svc.test("kiss", tx=True, apply=True)
+    assert not res.ok and "meshcore" in res.summary
+    assert sent == []                                   # never transmitted over the start
+    assert started == ["meshcore"]                      # the start under the held claim was refused
+
+
 # --- D: dashboard state is truthful (occupied vs usable) ----------------------
 
 def test_radio_conflict_ignores_a_stack_that_reaches_rf_through_another(tmp_path):

@@ -92,7 +92,9 @@ lhpc config <stack> --band <433|868> --reset-daemon
 
 Values are validated server-side (`daemon_control.validate_set`). An apply is `ok` only when every
 SET landed: a SET the daemon answers `ERR` (or does not answer) fails with its reason; radio params
-the daemon accepted with `OK` are echoed by no `GET`, so they report *sent*, not confirmed. `MODE=FSK`
+the daemon accepted with `OK` are echoed by no `GET`, so they report *sent*, not confirmed. An app
+stack's apply is refused, naming the stack, on a band another running stack uses; the band's radio
+claim is held from that check to the last SET, so a start cannot take the band in between. `MODE=FSK`
 switches LoRa off and breaks every stack.
 
 ## Position (GPS)

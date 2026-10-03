@@ -89,7 +89,10 @@ Files you add to a source checkout survive an update; editing upstream files blo
 - TX happens only through an explicit `test --tx` or a stack you start that transmits (e.g.
   Graywolf's beacons).
 - `test --tx` shows band, parameters and expected RF effect, warns to use a **dummy load**, and
-  confirms unless `--yes`. It sends one frame per band and verifies `TXOK` incremented.
+  confirms unless `--yes`. It sends one frame per band and verifies `TXOK` incremented. An app
+  stack's TX test is refused, naming the stack, while another running stack uses one of its bands;
+  it holds each band's radio claim from that check to the last frame, so a start cannot take the band
+  in between.
 - Read-only status/doctor/page loads never transmit and never initialise a radio.
 - +20 dBm on an SX127x board is off by default and needs a per-band switch and a daemon restart;
   its limits, and the LoRaHAM 433 caveat, are in [daemon](stacks/daemon.md#settings).

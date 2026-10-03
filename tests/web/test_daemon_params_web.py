@@ -456,3 +456,53 @@ def test_daemon_param_save_refuses_without_radio_hardware(tmp_path):
     assert not r.ok and "no radio hardware configured" in r.summary
     assert not any(k.startswith("dp_") for k in load_stack_config(svc._paths, "daemon", ""))
 
+
+def _two_stacks(tmp_path):
+    """meshcom (fixed 433) running, and kiss running on 868 — both daemon clients, both bands READY."""
+    ready = b"STATUS RADIO=READY TXMODE=MANAGED\n"
+    fake = FakeSystem(cmdlines_data={300: ["meshcom-loraham-bridge"], 301: ["qemu-system-xtensa"],
+                                     4242: ["loraham-kiss-tnc", "--config", "X"]},
+                      unix_replies={"/tmp/loraconf433.sock": ready, "/tmp/loraconf868.sock": ready})
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    assert svc._set_running_band("kiss", "868")
+    return svc
+
+
+@pytest.mark.safety("radio-band-exclusive")
+def test_app_apply_refused_on_a_band_another_stack_uses(tmp_path):
+    # meshcom's profile must never retune the band kiss is running on: refused, kiss named, no SET.
+    svc = _two_stacks(tmp_path)
+    r = svc.apply_daemon_params("meshcom", "868")
+    assert not r.ok and "kiss" in r.summary
+    assert r.data["band"] == "868" and "attempted" not in r.data
+    assert svc.apply_daemon_params("meshcom", "433").data.get("attempted")    # its own band: applies
+
+
+@pytest.mark.safety("radio-band-exclusive")
+def test_app_apply_holds_the_band_claim_against_a_competing_start(tmp_path, monkeypatch):
+    # The conflict check and every SET run under `claim.loraham.radio.<band>`: a start that tries to
+    # take the band right after the check is refused while the apply holds it — the apply never
+    # retunes a band that start would then use.
+    import threading
+
+    from lhpc.core import reslock
+    svc = _two_stacks(tmp_path)
+    refused = []
+
+    def start():
+        try:
+            with reslock.operation_lock(svc._paths, "claim.loraham.radio.433", "start", "meshcore"):
+                pass
+        except reslock.ResourceBusy:
+            refused.append("meshcore")
+    real = svc._band_used_by_others
+
+    def used(target, b):
+        out = real(target, b)
+        t = threading.Thread(target=start)
+        t.start()
+        t.join()
+        return out
+    monkeypatch.setattr(svc, "_band_used_by_others", used)
+    assert svc.apply_daemon_params("meshcom", "433").data.get("attempted")
+    assert refused == ["meshcore"]

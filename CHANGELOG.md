@@ -17,6 +17,8 @@
   longer hangs until that process exits; the run returns and its log is marked unverified.
 - Hardware "Detect" is refused, naming the stack, while Meshtastic or Reticulum drives that band's radio; it
   started a probe daemon on the chip they were using.
+- "Apply live" of a stack's daemon radio parameters, and its TX test, are refused (naming the stack) on a band
+  another running stack uses; before, e.g. MeshCom's profile could retune the band KISS was running on.
 
 ## 0.11.10
 
