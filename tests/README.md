@@ -45,6 +45,10 @@ in a file named after when or how a defect was found:
   deployment scripts.
 - **`repo/`** — invariants of the repository itself: packaging, versions, README drift, suite hygiene.
 
+A transaction whose state another run must recover (a journal, receipt or marker) is also driven
+through `interrupts.py`: its module pins the operation's durable writes and fails each one in turn
+(disk full, I/O error, Ctrl-C), then proves recovery and a retry (`core/test_config_interruption.py`).
+
 ## The rules
 
 1. **Behaviour, not implementation.** No `inspect.getsource`, no reading production `.py`/`.js`/`.css`
