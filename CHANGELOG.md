@@ -105,6 +105,11 @@ before a reboot — otherwise the boot gate keeps the console loopback-only (fai
   socket cannot be created; bridge NMEA coordinates are validated as the Monitor's; a demo restart of an
   optional component is refused like start/stop; a failed packaged-service disable in `bootstrap-deps.sh` goes
   to the final verdict instead of aborting.
+- An edit made to a file inside the archived `.prev` copy while an update or its recovery removes it is no longer
+  lost: the copy is moved aside, checked again and deleted only if still unchanged, otherwise put back and kept.
+- An update interrupted after the old source was archived, and completed by the next source operation, no longer
+  leaves the archived copy behind; before, every later update of that source failed with "activation failed —
+  active source untouched" until the `.prev` folder was removed by hand.
 
 ## 0.11.9
 

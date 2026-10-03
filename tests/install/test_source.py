@@ -3620,6 +3620,144 @@ def test_recovery_rolls_back_an_update_interrupted_before_the_carry(tmp_path, v2
 
 
 @pytest.mark.safety("source-additions-preserved")
+def test_recovery_that_completes_an_interrupted_update_removes_the_archived_prior(tmp_path, v2_update_env):
+    """CRASH AFTER THE ARCHIVE, prior holding NO local additions: recovery promotes the staged
+    candidate, and then owes it the same `.prev` cleanup a completed activation gets. A `.prev`
+    left behind with the journal cleared is an orphan every later update refuses on."""
+    comp, inst, dest, v2_head = v2_update_env
+    prev = dest.with_name(".app.prev")
+    staging = dest.with_name(".app.candidate-1-2")
+    shutil.move(str(dest), str(prev))                       # (2) prior archived
+    shutil.copytree(str(tmp_path / "rt" / "local" / "app"), str(staging), symlinks=True)
+    rel = lambda q: str(q.relative_to(inst.paths.runtime_root))
+
+    def ident(q):
+        st = os.stat(q, follow_symlinks=False)
+        return [st.st_dev, st.st_ino, st.st_ctime_ns]
+    jf = inst._journal_path(dest)
+    jf.parent.mkdir(parents=True, exist_ok=True)
+    jf.write_text(json.dumps({                             # refreshed prior ident, then died
+        "version": 5, "state": "prior-archived", "source_rel": rel(dest),
+        "prev_rel": rel(prev), "candidate_rel": rel(staging),
+        "txn_id": inst._txn_id(rel(staging)),
+        "meta": {"selector": "dev", "resolved_commit": v2_head, "remote": "", "strategy": "",
+                 "components": ["app"], "had_prior": True},
+        "idents": {"candidate": ident(staging), "prev": ident(prev)}}))
+
+    msgs = inst.recover_source_activations()
+    assert all("recovery-required" not in m for m in msgs), msgs
+    assert (dest / "file.txt").read_text() == "v2\n"        # the candidate was promoted
+    assert not prev.exists() and not staging.exists()      # ...and the archive removed
+    assert not list(dest.parent.glob(".*quarantine-*"))    # ...not merely set aside
+    assert not jf.exists()
+    # the box is not blocked: the next update of this source goes through
+    assert inst.adopt_source(comp, force=True, source="dev").status != "failed"
+
+
+def _edit_prev_after_scan(monkeypatch, inst, prev):
+    """The operator edits an upstream file inside `.prev` right AFTER the final dirty scan
+    passed it as clean, before the removal: the scan is the collaborator wrapped (once)."""
+    real, fired = type(inst)._prev_dirty_scan, {"done": False}
+
+    def scan(self, txn, dest, p, *a, **kw):
+        dirty = real(self, txn, dest, p, *a, **kw)
+        if not fired["done"]:
+            fired["done"] = True
+            assert dirty is False                          # the scan saw a clean prior
+            (prev / "file.txt").write_text("late operator edit\n")
+        return dirty
+    monkeypatch.setattr(type(inst), "_prev_dirty_scan", scan)
+    return fired
+
+
+def _crash_state_prior_archived(tmp_path, inst, dest, v2_head):
+    """Crash after the archive: v2 staged, v1 at `.prev`, v5 `prior-archived` journal."""
+    prev = dest.with_name(".app.prev")
+    staging = dest.with_name(".app.candidate-1-2")
+    shutil.move(str(dest), str(prev))
+    shutil.copytree(str(tmp_path / "rt" / "local" / "app"), str(staging), symlinks=True)
+    rel = lambda q: str(q.relative_to(inst.paths.runtime_root))
+
+    def ident(q):
+        st = os.stat(q, follow_symlinks=False)
+        return [st.st_dev, st.st_ino, st.st_ctime_ns]
+    jf = inst._journal_path(dest)
+    jf.parent.mkdir(parents=True, exist_ok=True)
+    jf.write_text(json.dumps({
+        "version": 5, "state": "prior-archived", "source_rel": rel(dest),
+        "prev_rel": rel(prev), "candidate_rel": rel(staging),
+        "txn_id": inst._txn_id(rel(staging)),
+        "meta": {"selector": "dev", "resolved_commit": v2_head, "remote": "", "strategy": "",
+                 "components": ["app"], "had_prior": True},
+        "idents": {"candidate": ident(staging), "prev": ident(prev)}}))
+    return prev, staging, jf
+
+
+@pytest.mark.safety("source-additions-preserved")
+def test_recovery_promotion_keeps_a_prior_edited_after_the_final_scan(tmp_path, monkeypatch, v2_update_env):
+    """The `.prev` identity is the DIRECTORY's, so an edit to a file inside it does not change
+    it: the scan and the removal must not leave a window. The edit made after the scan
+    survives, `.prev` stays, and the result names it as late local changes."""
+    comp, inst, dest, v2_head = v2_update_env
+    prev, staging, jf = _crash_state_prior_archived(tmp_path, inst, dest, v2_head)
+    fired = _edit_prev_after_scan(monkeypatch, inst, prev)
+
+    msgs = inst.recover_source_activations()
+    assert fired["done"]
+    assert any("late local changes" in m and "recovery-required" in m for m in msgs), msgs
+    assert (prev / "file.txt").read_text() == "late operator edit\n"   # the edit is NOT lost
+    assert (dest / "file.txt").read_text() == "v2\n"                   # v2 stays active
+    assert json.loads(jf.read_text())["state"] == "prior-dirty-retained"
+    assert not list(dest.parent.glob(".*quarantine-*"))                # nothing left aside
+
+
+@pytest.mark.safety("source-additions-preserved")
+def test_recovery_of_a_completed_activation_keeps_a_prior_edited_after_the_final_scan(tmp_path, monkeypatch, v2_update_env):
+    """The usable-dest recovery branch shares the same cleanup: same window, same proof."""
+    comp, inst, dest, v2_head = v2_update_env
+    prev = dest.with_name(".app.prev")
+    shutil.move(str(dest), str(prev))
+    shutil.copytree(str(tmp_path / "rt" / "local" / "app"), str(dest), symlinks=True)
+    rel = lambda q: str(q.relative_to(inst.paths.runtime_root))
+    staging_rel = rel(dest.with_name(".app.candidate-1-2"))
+
+    def ident(q):
+        st = os.stat(q, follow_symlinks=False)
+        return [st.st_dev, st.st_ino, st.st_ctime_ns]
+    jf = inst._journal_path(dest)
+    jf.parent.mkdir(parents=True, exist_ok=True)
+    jf.write_text(json.dumps({
+        "version": 5, "state": "activated", "source_rel": rel(dest),
+        "prev_rel": rel(prev), "candidate_rel": staging_rel,
+        "txn_id": inst._txn_id(staging_rel),
+        "meta": {"selector": "dev", "resolved_commit": v2_head, "remote": "", "strategy": "",
+                 "components": ["app"], "had_prior": True},
+        "idents": {"candidate": ident(dest), "prev": ident(prev)}}))
+    fired = _edit_prev_after_scan(monkeypatch, inst, prev)
+
+    msgs = inst.recover_source_activations()
+    assert fired["done"]
+    assert any("late local changes" in m and "recovery-required" in m for m in msgs), msgs
+    assert (prev / "file.txt").read_text() == "late operator edit\n"
+    assert json.loads(jf.read_text())["state"] == "prior-dirty-retained"
+
+
+@pytest.mark.safety("source-additions-preserved")
+def test_activation_keeps_a_prior_edited_after_the_final_scan(tmp_path, monkeypatch, v2_update_env):
+    """The live activation path uses the same cleanup helper."""
+    comp, inst, dest, _v2 = v2_update_env
+    prev = dest.with_name(".app.prev")
+    fired = _edit_prev_after_scan(monkeypatch, inst, prev)
+
+    action = inst.adopt_source(comp, force=True, source="dev")
+    assert fired["done"]
+    assert action.status == "failed" and action.detail.startswith("prior-dirty:")
+    assert (prev / "file.txt").read_text() == "late operator edit\n"
+    assert (dest / "file.txt").read_text() == "v2\n"
+    assert json.loads(inst._journal_path(dest).read_text())["state"] == "prior-dirty-retained"
+
+
+@pytest.mark.safety("source-additions-preserved")
 def test_a_substituted_active_source_retains_the_archive(tmp_path, monkeypatch, v2_update_env):
     """What licenses destroying `.prev` is that the ACTIVE tree carries everything the archive
     held — proven about one inode. If the destination is swapped between that proof and the
@@ -3893,6 +4031,7 @@ def test_clean_prev_cleanup_still_succeeds_when_not_dirty(tmp_path, v2_update_en
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status == "done", action.detail
     assert not dest.with_name(".app.prev").exists()
+    assert not list(dest.parent.glob(".*quarantine-*"))    # removed, not merely set aside
     assert not inst._journal_path(dest).exists()
     assert source_registry.read_record(inst.paths, "src/app").resolved_commit == v2_head
 

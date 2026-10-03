@@ -1403,7 +1403,8 @@ class Installer:
         finally:
             h.close()
 
-    def _prev_cleanup_ok(self, txn, prev: Path, ident=None, active=None) -> bool:
+    def _prev_cleanup_ok(self, txn, prev: Path, ident=None, active=None,
+                         dest: Path | None = None, why=None) -> bool:
         """Remove the archived `.prev` — IDENT-BOUND ONLY. `.prev` is the transaction's own
         quarantine (atomically detached from dest with identity proof at archive time); its
         deletion binds to the recorded (dev, ino) through content removal and re-proves it
@@ -1416,7 +1417,14 @@ class Installer:
         the archive held — a fact established about ONE inode. If the destination is swapped
         after that proof and before this delete, the licence belonged to a tree that is no
         longer there, so the archive is retained instead. A caller with no identity evidence
-        passes `active=None` and gets the historical behaviour."""
+        passes `active=None` and gets the historical behaviour.
+
+        The ident is the DIRECTORY's, so an operator's edit to a FILE inside `.prev` after the
+        caller's dirty scan does not change it. With `dest`, the removal is therefore made
+        atomic with respect to that scan, as `source_fs.detach_and_remove` does for uninstall:
+        `.prev` is first renamed aside (a pathname writer can no longer reach it), the dirty
+        scan is re-run on the renamed tree, and it is deleted only if still clean. Otherwise it
+        is renamed back and retained — `why["dirty"]` set when the scan found late changes."""
         from . import source_fs
         if txn.leaf_kind(prev.name) == "absent":
             return True
@@ -1427,13 +1435,38 @@ class Installer:
             name, aident = active
             if aident is None or not source_fs.ident_matches(txn.fd, name, aident):
                 return False                       # active leaf swapped/unprovable -> RETAIN
+        target, bound = prev.name, ident
+        if dest is not None:
+            # The full (v5) ident is proven at the name; the detach then moves the ctime, so
+            # the quarantined leaf is bound by dev+ino (the same re-proof `remove_bound` uses
+            # before its rmdir).
+            if not source_fs.ident_matches(txn.fd, prev.name, ident):
+                return False                       # substituted -> RETAIN
+            target, bound = source_fs._quarantine_name(prev.name), list(ident[:2])
+            try:
+                txn.rename_noreplace(prev.name, target)
+            except (OSError, PathContainmentError):
+                return False                       # nothing moved -> RETAIN
+            scan = {}
+            dirty = (self._prev_dirty_scan(txn, dest, prev.with_name(target), bound, scan)
+                     if source_fs.ident_matches(txn.fd, target, bound) else None)
+            if dirty is not False:
+                try:
+                    txn.rename_noreplace(target, prev.name)
+                except (OSError, PathContainmentError):
+                    scan["why"] = (f"{scan.get('why', 'unprovable')}; preserved at "
+                                   f"{target!r} (its original path was reoccupied)")
+                    dirty = True
+                if dirty and why is not None:
+                    why.update(scan, dirty=True)
+                return False                       # late change/unprovable -> RETAIN
         # `allow_ipc`: `.prev` is THIS transaction's own inode-bound quarantine — a checkout a
         # stack runs from legitimately holds a runtime socket (meshcom's `.run/`), and refusing
         # it left the archive half-deleted and the whole box blocked.
-        ok, _why = source_fs.remove_bound(txn.fd, prev.name, ident, allow_ipc=True)
+        ok, _why = source_fs.remove_bound(txn.fd, target, bound, allow_ipc=True)
         if not ok:
             return False                           # substituted/unprovable -> RETAIN
-        return txn.leaf_kind(prev.name) == "absent"
+        return txn.leaf_kind(target) == "absent"
 
     def _finish_or_rollback(self, dest: Path, prev: Path, staging: Path, marker,
                             meta: dict, txn_id: str, idents: dict, state: str = "") -> str:
@@ -1519,6 +1552,41 @@ class Installer:
                 pass
             return (f"recovery-required for {dest.name}: ownership record could not be "
                     "persisted and rollback is not provable (journal retained)")
+
+        def _drop_prev(txn, active_ident):
+            """Remove the archived prior of a COMPLETED activation: None when it is gone, else
+            the recovery-required verdict. Late local changes in it retain it for the operator
+            (journal marked operator-only); an unprovable or substituted prior is retained."""
+            if txn.leaf_kind(prev.name) == "absent":
+                return None
+            source_fs.race_seam("pre-prev-cleanup", str(dest))
+            prev_why: dict = {}
+            dirty = self._prev_dirty_scan(txn, dest, prev, idents.get("prev"), prev_why)
+            if dirty is None:
+                return (f"recovery-required for {dest.name}: archived prior "
+                        "could not be proven (journal + prior retained)")
+            if not dirty and not self._prev_cleanup_ok(
+                    txn, prev, idents.get("prev"), active=(dest.name, active_ident),
+                    dest=dest, why=prev_why):
+                if not prev_why.get("dirty"):
+                    return (f"recovery-required for {dest.name}: archived prior "
+                            "could not be removed or was substituted (journal + "
+                            "prior retained)")
+                dirty = True
+            if dirty:
+                # LATE LOCAL CHANGES inside the archived prior: mark the
+                # transaction operator-only so no automatic recovery ever
+                # deletes it; the active source + its record stay coherent.
+                marker.rewrite(self._journal_payload(
+                    dest, prev, staging, "prior-dirty-retained", txn_id,
+                    meta, idents))
+                return (f"recovery-required for {dest.name}: activation is "
+                        f"complete, but the archived prior at "
+                        f"{self._source_rel(prev)} contains late local changes "
+                        f"({prev_why.get('why', 'unprovable')}) — retained for "
+                        "the operator (never auto-deleted)")
+            return None
+
         try:
             with source_fs.ManagedSourceTransaction(self.paths, dest.parent) as txn:
                 unproven_carry = False
@@ -1550,32 +1618,9 @@ class Installer:
                                 "exists — everything retained (unverified occupant)")
                     if not _record_ok(ours):
                         return _rollback_record_failure(txn)
-                    if txn.leaf_kind(prev.name) != "absent":
-                        source_fs.race_seam("pre-prev-cleanup", str(dest))
-                        prev_why: dict = {}
-                        dirty = self._prev_dirty_scan(txn, dest, prev,
-                                                      idents.get("prev"), prev_why)
-                        if dirty is None:
-                            return (f"recovery-required for {dest.name}: archived prior "
-                                    "could not be proven (journal + prior retained)")
-                        if dirty:
-                            # LATE LOCAL CHANGES inside the archived prior: mark the
-                            # transaction operator-only so no automatic recovery ever
-                            # deletes it; the active source + its record stay coherent.
-                            marker.rewrite(self._journal_payload(
-                                dest, prev, staging, "prior-dirty-retained", txn_id,
-                                meta, idents))
-                            return (f"recovery-required for {dest.name}: activation is "
-                                    f"complete, but the archived prior at "
-                                    f"{self._source_rel(prev)} contains late local changes "
-                                    f"({prev_why.get('why', 'unprovable')}) — retained for "
-                                    "the operator (never auto-deleted)")
-                        if not self._prev_cleanup_ok(
-                                txn, prev, idents.get("prev"),
-                                active=(dest.name, idents.get("candidate"))):
-                            return (f"recovery-required for {dest.name}: archived prior "
-                                    "could not be removed or was substituted (journal + "
-                                    "prior retained)")
+                    why = _drop_prev(txn, idents.get("candidate"))
+                    if why:
+                        return why
                     # This transaction's own candidate never became the active tree: remove it on
                     # its FULL v5 identity, or it stays on disk for good. An unprovable leaf stays.
                     cand_ident = idents.get("candidate") if idents else None
@@ -1632,7 +1677,11 @@ class Installer:
                             if txn.usable(dest.name):
                                 if not _record_ok(_head_state()):
                                     return _rollback_record_failure(txn)
-                                return _cleared("completed interrupted activation")
+                                # The prior is no longer needed: the same proven cleanup a
+                                # completed activation gets, or `.prev` blocks every later
+                                # update. dev+ino, as the re-proof above.
+                                return (_drop_prev(txn, list(cand_ident[:2]))
+                                        or _cleared("completed interrupted activation"))
                 if txn.leaf_kind(prev.name) != "absent":     # died after dest->prev: roll back
                     # An OCCUPIED dest slot (dangling symlink, file, injected dir, special
                     # leaf) is NEVER deleted to continue — retain it + `.prev` + journal.
@@ -1945,16 +1994,21 @@ class Installer:
             prior_ident = ([prior.st_dev, prior.st_ino] if prior is not None else None)
             if txn.leaf_kind(prev.name) != "absent":
                 source_fs.race_seam("pre-prev-cleanup", str(dest))
+                prev_why = {} if prev_why is None else prev_why
                 dirty = self._prev_dirty_scan(txn, dest, prev, prior_ident, prev_why)
                 if dirty is None:
                     return "recovery-required"
+                active = ((dest.name, [handle.st_dev, handle.st_ino])
+                          if handle is not None else None)
+                if not dirty and not self._prev_cleanup_ok(txn, prev, prior_ident,
+                                                           active=active, dest=dest,
+                                                           why=prev_why):
+                    if not prev_why.get("dirty"):
+                        return "recovery-required"
+                    dirty = True
                 if dirty:
                     self._update_journal(jh, dest, prev, staging, "prior-dirty-retained")
                     return "prior-dirty"
-                active = ((dest.name, [handle.st_dev, handle.st_ino])
-                          if handle is not None else None)
-                if not self._prev_cleanup_ok(txn, prev, prior_ident, active=active):
-                    return "recovery-required"
             txn.fsync()
             return "activated" if jh["marker"].remove() else "recovery-required"
         finally:
