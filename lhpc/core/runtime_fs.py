@@ -47,6 +47,7 @@ __all__ = [
     "open_log_truncate",
     "open_marker_excl",
     "probe_exists",
+    "probe_stat",
     "read_bytes",
     "read_text",
     "rename_leaf",
@@ -746,6 +747,21 @@ def probe_exists(path) -> tuple[Literal["present", "absent", "unknown"], str]:
     except (OSError, ValueError) as exc:
         return "unknown", str(exc)
     return "present", ""
+
+
+def probe_stat(path, *, follow: bool = False):
+    """`probe_exists` plus the stat result it read: `(state, why, st)`, `st` None unless
+    present. A decision that follows the probe (is it a directory? a symlink?) takes the kind
+    from `st`, never from a second `os.path.isdir`/`islink`, which would read an error as "no".
+    `follow=True` stats the target (what `os.path.isdir` asked): a dangling link is absent,
+    a target that cannot be stat'ed is unknown."""
+    try:
+        st = os.stat(path) if follow else os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return "absent", "", None
+    except (OSError, ValueError) as exc:
+        return "unknown", str(exc), None
+    return "present", "", st
 
 
 def publish_symlink(paths: Paths, path: Path, target: str) -> None:

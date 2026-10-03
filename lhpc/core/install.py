@@ -886,7 +886,11 @@ class Installer:
         not a git checkout reports clean here (ownership verification handles unknown trees).
         A FAILED git status reports the failure as a tracked entry — fail toward dirty, never
         silently clean."""
-        if not (dest / ".git").exists():
+        from . import runtime_fs
+        state, why = runtime_fs.probe_exists(dest / ".git")
+        if state == "unknown":
+            return DirtyReport(tracked=(f"(cannot examine .git ({why}) — treating as dirty)",))
+        if state == "absent":
             return DirtyReport()
         # NUL-SAFE, ENTRY-EXACT status: `-z` terminates every path with NUL (no quoting, so
         # newline/quote-containing names parse exactly), and `--untracked-files=all`
@@ -946,8 +950,10 @@ class Installer:
 
         Regenerable artifacts are filtered by the SAME predicate `dirty_report` uses, so
         `build/`, `.run/` and a component's declared `bin` stay disposable in both."""
-        if not (dest / ".git").exists():
-            return ()
+        from . import runtime_fs
+        state, _why = runtime_fs.probe_exists(dest / ".git")
+        if state != "present":
+            return () if state == "absent" else None
         r = self.system.runner.run(["git", "-C", str(dest), "ls-files", "-z", "--others"], 10.0)
         if r.returncode != 0:
             return None

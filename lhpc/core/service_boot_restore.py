@@ -72,7 +72,10 @@ class BootRestoreOpsMixin:
         rb_state, rb = "absent", ""
         marker = self._paths.under("state", "running", f"{stack_id}.band")
         try:
-            if os.path.lexists(marker):
+            state = runtime_fs.probe_exists(marker)[0]
+            if state == "unknown":              # cannot prove it absent: evidence unreadable
+                rb_state = "unsafe"
+            elif state == "present":
                 raw = runtime_fs.read_text(self._paths, marker, max_bytes=64).strip()
                 if raw in ALLOWED_BANDS:
                     rb_state, rb = "valid", raw
@@ -83,7 +86,10 @@ class BootRestoreOpsMixin:
         ls_state, ls_band, ls_at = "absent", "", 0.0
         cpath = known_working.candidate_path(self._paths, stack_id)
         try:
-            if os.path.lexists(cpath):
+            state = runtime_fs.probe_exists(cpath)[0]
+            if state == "unknown":              # cannot prove it absent: evidence unreadable
+                ls_state = "unsafe"
+            elif state == "present":
                 cand = known_working.read_candidate(self._paths, stack_id)
                 started = cand.get("started_at") if cand else None
                 if (cand is None or not isinstance(started, (int, float))

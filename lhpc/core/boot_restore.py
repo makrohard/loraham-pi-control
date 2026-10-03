@@ -137,9 +137,11 @@ def load_journal(paths: Paths) -> tuple[dict | None, str]:
     AND gate-based evidence retirement (it cannot know what was previously consumed)."""
     p = journal_path(paths)
     try:
-        import os
-        if not os.path.lexists(p):
+        state, why = runtime_fs.probe_exists(p)
+        if state == "absent":
             return None, "absent"
+        if state == "unknown":
+            return None, f"unsafe:unreadable ({why})"
         raw = runtime_fs.read_text(paths, p, max_bytes=JOURNAL_MAX_BYTES)
     except (OSError, PathContainmentError) as exc:
         return None, f"unsafe:unreadable ({exc})"

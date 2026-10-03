@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import secrets
 import shutil
+import stat
 import sys
 import tarfile
 import tempfile
@@ -611,12 +612,19 @@ class BinaryOpsMixin:
 
         Symlinks COUNT: a virtualenv is half symlinks (`bin/python3`), and owning only the
         regular files left them behind on removal — enough for `python3 -m venv` to treat the
-        environment as existing, skip ensurepip, and fail the next step."""
+        environment as existing, skip ensurepip, and fail the next step. Raises `OSError` when
+        the tree cannot be fully listed: an unread directory is not an empty one."""
         base = self._paths.under(*rel_dir.split("/"))
-        if not os.path.isdir(base):
+        state, why, st = runtime_fs.probe_stat(base, follow=True)   # what os.walk(base) lists
+        if state == "unknown":
+            raise OSError(why)
+        if state == "absent" or not stat.S_ISDIR(st.st_mode):
             return []
         out = []
-        for root, _dirs, names in os.walk(base):
+
+        def _unlistable(exc):
+            raise exc
+        for root, _dirs, names in os.walk(base, onerror=_unlistable):
             for n in names:
                 full = os.path.join(root, n)
                 if not os.path.isdir(full):          # regular file OR symlink
@@ -742,7 +750,10 @@ class BinaryOpsMixin:
         artifact published into it — it is not a checkout and not a foreign tree. Setting the
         artifact aside empties it (the retirement prunes it), so the ordinary adoption path
         clones there. Judging it as an unprovable checkout would refuse every first switch."""
-        return all(rel in owned for rel in self._rel_files_under(rel_dir))
+        try:
+            return all(rel in owned for rel in self._rel_files_under(rel_dir))
+        except OSError:
+            return False                   # not fully listable: not proven the artifact's own
 
     def switch_source_plan(self, groups, owned_files=()) -> tuple:
         """PRE-FLIGHT for a binary -> source switch: `(paths_to_replace, refusals)`.
@@ -921,8 +932,7 @@ class BinaryOpsMixin:
                 failed.append(f"{rel} ({exc})")
         # PROVE removal before dropping the receipt: a swallowed unlink failure would leave
         # binary files behind with no ownership record at all.
-        still_there = [rel for rel in rec.files
-                       if os.path.exists(self._paths.under(*rel.split("/")))]
+        still_there = [rel for rel in rec.files if self._receipt_leaf_present(rel)]
         if still_there or failed:
             return ActionResult(
                 False,
@@ -938,8 +948,15 @@ class BinaryOpsMixin:
         for rel_dir in getattr(rec, "owned_dirs", ()):
             try:
                 d = self._paths.under(*rel_dir.split("/"))
-                if os.path.isdir(d) and not os.path.islink(d):
-                    shutil.rmtree(d)
+                # The kind comes from the probes' own stat results: an error is never "not a
+                # dir" (skip, receipt dropped) — not proven gone, the receipt keeps owning it.
+                state, why, lst = runtime_fs.probe_stat(d)
+                if state == "present" and not stat.S_ISLNK(lst.st_mode):
+                    state, why, st = runtime_fs.probe_stat(d, follow=True)
+                    if state == "present" and stat.S_ISDIR(st.st_mode):
+                        shutil.rmtree(d)
+                if state == "unknown":
+                    raise OSError(why)
             except (OSError, PathContainmentError, ValueError) as exc:
                 return ActionResult(
                     False, f"Retirement of '{stack_id}' is INCOMPLETE — the receipt was kept "

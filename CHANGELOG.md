@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.0
+
+- A disk or permission error on a file LHPC must not lose no longer reads as "the file is gone": retiring a
+  binary install keeps its record while a file or folder cannot be checked, a switch to the source channel does
+  not take over a folder it cannot fully read, an update or uninstall treats a checkout whose `.git` cannot be
+  checked as changed, and boot restore and the config journal treat an unreadable record as one that needs
+  attention instead of an absent one.
+
 ## 0.11.12
 
 - Every release is now also installed, built and self-updated on a test box slowed down below a Pi Zero 2 W
