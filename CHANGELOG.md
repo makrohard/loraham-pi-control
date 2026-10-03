@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Settings "Reset to defaults" on a running stack now shows RESTART REQUIRED, like a save; a reset of one band is refused whole when the stack's band-less file is broken or GPS is in use (it cleared the band's settings and still said "not modified").
+
 ## 0.11.10
 
 Upgrade note — boxes with the firewall installed and remote access configured: this release changes the firewall

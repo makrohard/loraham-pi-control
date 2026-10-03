@@ -1419,102 +1419,8 @@ class ParamsConfigMixin:
         # Every payload is rendered before any is written, so this reads the pre-save values
         # regardless of where it sits in the target list.
         if clean_params:
-            def _render_marker(_paths, tgt=target, _sid=sid, _band=band, _cfg=cfg_band,
-                               _params=tuple(clean_params)):
-                id_recs = {(r["kind"], r["comp"], r["name"]): r
-                           for r in self._identity_fields(tgt)}
-
-                def _post_effective(kind, c, p, v) -> str:
-                    """What the stack will ACTUALLY use once this value is stored. A cleared
-                    identity does not become empty — a licensed one falls back to the global
-                    callsign (comparing the pre-save EFFECTIVE value against the RAW
-                    submitted blank marked an identity change where the running process still
-                    matches the resulting configuration)."""
-                    raw = str(v)
-                    rec = id_recs.get(("run" if kind == "r" else "file", c.id, p.name))
-                    if rec is not None and not raw.strip():
-                        return (self.inheritable_global(rec)[0]
-                                if rec["enforce"] == "licensed" else "")
-                    return raw
-
-                def _pre_effective(kind, c, p) -> str:
-                    """What the stack uses RIGHT NOW — resolved the same way as the post-save
-                    value, so the two sides of the comparison mean the same thing — otherwise
-                    the stored side went through `{callsign}` substitution (the RAW global) while
-                    the submitted side went through inheritance (the VALIDATED global), so with a
-                    SSID-bearing or lowercase global a save that wrote nothing still flagged the stack
-                    restart-required and told the operator to restart."""
-                    rec = id_recs.get(("run" if kind == "r" else "file", c.id, p.name))
-                    stored = self._stored_param_value(
-                        tgt, "run" if kind == "r" else "file", c.id, p.name, _band)
-                    if rec is not None and not stored.strip():
-                        return (self.inheritable_global(rec)[0]
-                                if rec["enforce"] == "licensed" else "")
-                    if rec is not None:
-                        return stored
-                    return self._resolved_param_value(
-                        tgt, "run" if kind == "r" else "file", c.id, p.name, _band)
-                def _key(c, p) -> str:
-                    """Which stored value a launch value belongs to: the store's band (none for
-                    a band-less param), the component, the param."""
-                    b = "" if p.name in _BANDLESS_STACK_PARAMS else (_cfg or "")
-                    return f"{b}|{c.id}|{p.name}"
-
-                # F-M1: the marker claims "saved settings differ from the running stack", so a
-                # save that brings a value BACK to its recorded launch value takes that param
-                # off the marker, and the marker goes when nothing is left. Only a value the
-                # marker recorded itself can be restored (see restart_required.merged_payload).
-                cur = self.restart_required(_sid)
-                cur = None if cur is not None and cur.get("unsafe") else cur
-                tracked = dict((cur or {}).get("launched") or {})
-                restored = {_key(c, p) for kind, c, p, v in _params
-                            if _key(c, p) in tracked
-                            and _post_effective(kind, c, p, v) == tracked[_key(c, p)]}
-                changed = [(kind, c, p) for kind, c, p, v in _params
-                           if _key(c, p) not in restored
-                           and _pre_effective(kind, c, p) != _post_effective(kind, c, p, v)]
-                modes.update(p.apply_mode for _k, _c, p in changed)
-                live_modes = {p.apply_mode for _k, _c, p in changed} & {"restart", "build"}
-                if restored:
-                    left = {k: v for k, v in tracked.items() if k not in restored}
-                    gone = {_rr.key_name(k) for k in restored} - {_rr.key_name(k) for k in left}
-                    cur = {**cur, "params": [n for n in cur["params"] if n not in gone],
-                           "launched": left}
-
-                def _unmarked():
-                    """The answer when this save adds nothing to the marker: leave it as it is,
-                    or write it reduced by what was restored, or remove it when nothing is left."""
-                    if not restored:
-                        return None
-                    if not cur["params"]:
-                        return REMOVE                 # the stack runs what is saved again
-                    return self.restart_marker_payload(_sid, [], cur.get("band", ""),
-                                                       mode=cur["mode"], current=cur)
-
-                if not live_modes:
-                    return _unmarked()                # nothing that needs a restart changed
-                live, live_band = self.active_config_consumer(_sid, fresh=True)
-                _live_seen["v"] = live         # reused by the apply hints — never probed twice
-                if not live:
-                    return _unmarked()                # nobody is reading this configuration
-                marked = [(k, c, p) for k, c, p in changed if p.apply_mode in live_modes]
-                marker_band = _cfg or live_band
-                if _cfg and live_band and _cfg != live_band:
-                    # Another band's store — the live instance's own settings are intact. Only a
-                    # STACK-LEVEL (band-less) param reaches it from here, so the marker names
-                    # those alone, and records the LIVE band: it exists because the running
-                    # instance must restart, not the edited one.
-                    marked = [(k, c, p) for k, c, p in marked if p.name in _BANDLESS_STACK_PARAMS]
-                    marker_band = live_band
-                if not marked:
-                    return _unmarked()
-                names = sorted(p.name for _k, _c, p in marked)
-                return self.restart_marker_payload(
-                    _sid, names, marker_band,
-                    mode="build" if any(p.apply_mode == "build" for _k, _c, p in marked)
-                    else "restart", current=cur,
-                    launched={_key(c, p): _pre_effective(k, c, p) for k, c, p in marked})
-            targets.append(("state", _rr.marker_path(self._paths, sid), _render_marker, 0o600))
+            targets.append(self._restart_marker_target(target, sid, band, cfg_band, clean_params,
+                                                       modes, _live_seen))
         try:
             if self._holds_config_exclusive():
                 # Inside the auto-install boundary this thread ALREADY holds the config lock EXCLUSIVELY
@@ -1534,6 +1440,109 @@ class ParamsConfigMixin:
                             details=self._apply_hints(target, modes,
                                                       live=_live_seen.get("v")) + remote_notes,
                             next_commands=[f"lhpc stack start {target}"])
+
+    def _restart_marker_target(self, target, sid, band, cfg_band, params, modes, live_seen):
+        """The config-transaction target ("state", marker path, renderer, mode) that keeps the
+        DURABLE restart-required marker in step with a config change of `params`
+        (`(kind, component, param, post-save value)`), decided INSIDE the transaction — shared by
+        a Settings save and a reset. Fills `modes` with the apply-modes of what changes and
+        `live_seen["v"]` with the live consumer it probed."""
+        def _render_marker(_paths, tgt=target, _sid=sid, _band=band, _cfg=cfg_band,
+                           _params=tuple(params)):
+            id_recs = {(r["kind"], r["comp"], r["name"]): r
+                       for r in self._identity_fields(tgt)}
+
+            def _post_effective(kind, c, p, v) -> str:
+                """What the stack will ACTUALLY use once this value is stored. A cleared
+                identity does not become empty — a licensed one falls back to the global
+                callsign (comparing the pre-save EFFECTIVE value against the RAW
+                submitted blank marked an identity change where the running process still
+                matches the resulting configuration)."""
+                raw = str(v)
+                rec = id_recs.get(("run" if kind == "r" else "file", c.id, p.name))
+                if rec is not None and not raw.strip():
+                    return (self.inheritable_global(rec)[0]
+                            if rec["enforce"] == "licensed" else "")
+                return raw
+
+            def _pre_effective(kind, c, p) -> str:
+                """What the stack uses RIGHT NOW — resolved the same way as the post-save
+                value, so the two sides of the comparison mean the same thing — otherwise
+                the stored side went through `{callsign}` substitution (the RAW global) while
+                the submitted side went through inheritance (the VALIDATED global), so with a
+                SSID-bearing or lowercase global a save that wrote nothing still flagged the stack
+                restart-required and told the operator to restart."""
+                rec = id_recs.get(("run" if kind == "r" else "file", c.id, p.name))
+                stored = self._stored_param_value(
+                    tgt, "run" if kind == "r" else "file", c.id, p.name, _band)
+                if rec is not None and not stored.strip():
+                    return (self.inheritable_global(rec)[0]
+                            if rec["enforce"] == "licensed" else "")
+                if rec is not None:
+                    return stored
+                return self._resolved_param_value(
+                    tgt, "run" if kind == "r" else "file", c.id, p.name, _band)
+            def _key(c, p) -> str:
+                """Which stored value a launch value belongs to: the store's band (none for
+                a band-less param), the component, the param."""
+                b = "" if p.name in _BANDLESS_STACK_PARAMS else (_cfg or "")
+                return f"{b}|{c.id}|{p.name}"
+
+            # F-M1: the marker claims "saved settings differ from the running stack", so a
+            # save that brings a value BACK to its recorded launch value takes that param
+            # off the marker, and the marker goes when nothing is left. Only a value the
+            # marker recorded itself can be restored (see restart_required.merged_payload).
+            cur = self.restart_required(_sid)
+            cur = None if cur is not None and cur.get("unsafe") else cur
+            tracked = dict((cur or {}).get("launched") or {})
+            restored = {_key(c, p) for kind, c, p, v in _params
+                        if _key(c, p) in tracked
+                        and _post_effective(kind, c, p, v) == tracked[_key(c, p)]}
+            changed = [(kind, c, p) for kind, c, p, v in _params
+                       if _key(c, p) not in restored
+                       and _pre_effective(kind, c, p) != _post_effective(kind, c, p, v)]
+            modes.update(p.apply_mode for _k, _c, p in changed)
+            live_modes = {p.apply_mode for _k, _c, p in changed} & {"restart", "build"}
+            if restored:
+                left = {k: v for k, v in tracked.items() if k not in restored}
+                gone = {_rr.key_name(k) for k in restored} - {_rr.key_name(k) for k in left}
+                cur = {**cur, "params": [n for n in cur["params"] if n not in gone],
+                       "launched": left}
+
+            def _unmarked():
+                """The answer when this save adds nothing to the marker: leave it as it is,
+                or write it reduced by what was restored, or remove it when nothing is left."""
+                if not restored:
+                    return None
+                if not cur["params"]:
+                    return REMOVE                 # the stack runs what is saved again
+                return self.restart_marker_payload(_sid, [], cur.get("band", ""),
+                                                   mode=cur["mode"], current=cur)
+
+            if not live_modes:
+                return _unmarked()                # nothing that needs a restart changed
+            live, live_band = self.active_config_consumer(_sid, fresh=True)
+            live_seen["v"] = live          # reused by the apply hints — never probed twice
+            if not live:
+                return _unmarked()                # nobody is reading this configuration
+            marked = [(k, c, p) for k, c, p in changed if p.apply_mode in live_modes]
+            marker_band = _cfg or live_band
+            if _cfg and live_band and _cfg != live_band:
+                # Another band's store — the live instance's own settings are intact. Only a
+                # STACK-LEVEL (band-less) param reaches it from here, so the marker names
+                # those alone, and records the LIVE band: it exists because the running
+                # instance must restart, not the edited one.
+                marked = [(k, c, p) for k, c, p in marked if p.name in _BANDLESS_STACK_PARAMS]
+                marker_band = live_band
+            if not marked:
+                return _unmarked()
+            names = sorted(p.name for _k, _c, p in marked)
+            return self.restart_marker_payload(
+                _sid, names, marker_band,
+                mode="build" if any(p.apply_mode == "build" for _k, _c, p in marked)
+                else "restart", current=cur,
+                launched={_key(c, p): _pre_effective(k, c, p) for k, c, p in marked})
+        return ("state", _rr.marker_path(self._paths, sid), _render_marker, 0o600)
 
     def operator_callsign_correction(self) -> str:
         """A VALIDATED base-callsign suggestion derived from a non-base stored global, or ""
@@ -3366,11 +3375,21 @@ class ParamsConfigMixin:
                 merged.pop(k)
             cleared.extend(normal)
             return render_stack_config(target, merged)
+        # Every form param goes back to its default (the canon a save stores nothing for); the
+        # marker renderer compares that with what the stack uses now, so only a param the reset
+        # really changes reaches the restart-required marker — written in the same transaction.
+        params = [(kind, c, p, "" if getattr(p, "validator", "") in self._IDENTITY_ENFORCE
+                   else self._param_default_canon(p, cfg_band, band))
+                  for c in self.stack(target).components
+                  for kind, ps in (("r", self._form_run_params(c)),
+                                   ("f", c.config_file.params if c.config_file else ()))
+                  for p in ps]
         try:
-            # ONE transaction for both files: both are reset, or neither is.
+            # ONE transaction for both files and the marker: all are written, or none is.
             apply_config_transaction(self._paths, [
                 ("stack", _stack_config_path(self._paths, target, b),
-                 lambda pth, b=b: _render_reset(pth, b), 0o644) for b in files])
+                 lambda pth, b=b: _render_reset(pth, b), 0o644) for b in files] + [
+                self._restart_marker_target(target, target, band, cfg_band, params, set(), {})])
             if cleared:
                 self._invalidate_config()
         except (ConfigError, PathContainmentError, validators.ValidationError, OSError) as exc:

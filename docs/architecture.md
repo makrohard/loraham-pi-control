@@ -216,7 +216,7 @@ The guarantees the controller gives, each with where it is implemented and prove
   `core/source_fs.py`; `tests/install/test_source.py`.
 - **Locking.** Start, stop, restart, build, update, uninstall and clean take named non-blocking
   locks; a contended operation refuses immediately, naming the holder. `core/reslock.py`.
-- **Config as a transaction.** A Settings save validates the whole submission before any write;
+- **Config as a transaction.** A Settings save or reset validates the whole submission before any write;
   files are journalled and atomically replaced, and a mid-write failure rolls back. A malformed
   `local.toml` is preserved, never overwritten; a present-but-malformed per-stack file is a typed
   error (CLI: clean failure, web: 409, no echo of the bad value) — only an *absent* file means

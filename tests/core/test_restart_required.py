@@ -147,6 +147,28 @@ def test_marker_write_failure_rolls_back_whole_save(tmp_path):
     assert (tmp_path / "evil.json").read_text() == "x"               # nothing through the symlink
 
 
+def test_reset_of_a_running_stack_writes_the_restart_marker(tmp_path):
+    # "Reset to defaults" changes saved settings like a save does: the running stack is flagged.
+    assert _svc(tmp_path).save_config_bundle("chat", values={"file_tx_freq": "434.500"}).ok
+    svc = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})           # launched with 434.500
+    assert svc.reset_config("chat").ok
+    assert _marker(tmp_path)["params"] == ["tx_freq"]
+    assert "chat" in svc.restart_required_stacks()
+
+
+def test_reset_marker_write_failure_resets_nothing(tmp_path):
+    from lhpc.core.config import load_stack_config
+    assert _svc(tmp_path).save_config_bundle("chat", values={"file_tx_freq": "434.500"}).ok
+    d = tmp_path / "state" / "restart-required"
+    d.mkdir(parents=True)
+    (tmp_path / "evil.json").write_text("x")
+    os.symlink(tmp_path / "evil.json", d / "chat.json")
+    svc = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})
+    assert not svc.reset_config("chat").ok                           # typed failure
+    assert load_stack_config(svc._paths, "chat")["file_tx_freq"] == "434.500"   # not reset
+    assert (tmp_path / "evil.json").read_text() == "x"               # nothing through the symlink
+
+
 def test_state_target_rolls_back_with_the_transaction(tmp_path):
     # Direct transaction-level check: a later target failing rolls the already-written
     # state marker back (pre-image = absent -> removed).
