@@ -105,6 +105,9 @@ def test_a_failed_poll_is_retried_after_the_slow_interval_not_the_normal_one(pag
     page.clock.run_for(3500)
     settled()
     assert seen == dict.fromkeys(BANDS, 1), seen
-    page.clock.run_for(12000)                    # 15.5 s after the failure: exactly one retry
+    page.clock.run_for(11000)                    # 14.5 s after the failure: still no retry
+    settled()
+    assert seen == dict.fromkeys(BANDS, 1), seen
+    page.clock.run_for(1000)                     # 15.5 s after the failure: exactly one retry
     settled()
     assert seen == dict.fromkeys(BANDS, 2), seen
