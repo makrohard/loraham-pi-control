@@ -44,6 +44,13 @@ in a file named after when or how a defect was found:
 - **`host/`** — the machine LHPC runs on: firewall, network, power, PKI, systemd units, host metrics,
   deployment scripts.
 - **`repo/`** — invariants of the repository itself: packaging, versions, README drift, suite hygiene.
+- **`golden/`** — the golden set: one characterization module per coordinating operation (start,
+  restart, stop, save_config_bundle, build, boot-restore), recording for a few fixed scenarios the
+  result fields, the files written/removed and the ORDER of its phases. Every refactor of those
+  operations runs it first. Each case's docstring opens with `intended:` (the behaviour is the
+  contract) or `known defect <finding id>:` (recorded as is, changed only by the fix of that
+  finding). Pinning the step order is its purpose, so it is the one place that names coordinator
+  steps: through `ORDER_SEAMS` in its `conftest.py`, which a refactor that renames a step updates.
 
 ## The rules
 
