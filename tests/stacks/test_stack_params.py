@@ -547,6 +547,14 @@ def test_ambiguous_flat_legacy_fails_typed_before_any_seam(tmp_path, monkeypatch
     assert res.ok is False and "ambiguous" in res.summary        # typed failure before any seam
 
 
+def test_ambiguous_flat_legacy_refuses_the_plan_too(tmp_path):
+    # CR1-7: the plan said "ok" for a start its apply refuses as ambiguous.
+    svc = _scope2_svc(tmp_path)
+    _seed_flat(svc, "ostack2", {"rp": "LEGACY"})                 # rp declared by tgt AND dep -> ambiguous
+    res = svc.start("tgt", apply=False)
+    assert res.ok is False and "ambiguous" in res.summary
+
+
 def test_unique_flat_legacy_is_backward_compatible(tmp_path, monkeypatch):
     svc = _scope2_svc(tmp_path)
     _seed_flat(svc, "ostack2", {"uniq": "LEGACY-U"})            # uniq declared only by tgt -> unique

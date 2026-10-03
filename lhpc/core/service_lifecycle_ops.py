@@ -581,6 +581,35 @@ class LifecycleOpsMixin:
                     "change it in the daemon Hardware settings")
         return ""
 
+    def _start_static_refusal(self, target: str, op: str):
+        """The start refusals that do not depend on whether the target runs (runtime root,
+        hardware, GPS, radio mode), or None — so a restart takes them BEFORE its stop, with the
+        same wording as the start."""
+        if not self._paths.runtime_root_exists:
+            return ActionResult(False, "Runtime root not bootstrapped.",
+                                next_commands=["lhpc bootstrap"])
+        # Hardware not configured: a fresh box has no radio board selected, so the daemon (and any
+        # radio stack) must refuse to start until the operator picks one. Checked BEFORE band checks.
+        hw_block = self.hardware_block(target)
+        if hw_block:
+            return ActionResult(False, f"Cannot {op} '{target}': {hw_block}",
+                                next_commands=["lhpc hardware"])
+        # GPS admission — BEFORE any lock is taken, so the plan that decides run order, claims
+        # and config rendering is the same one validated here. A direct-NMEA source is the case
+        # that fails intermittently rather than cleanly (two readers on one receiver), so it is
+        # refused up front rather than discovered as flaky position later.
+        gps_block, gps_next = self.gps_block(target)
+        if gps_block:
+            return ActionResult(False, f"Cannot {op} '{target}': {gps_block}",
+                                next_commands=gps_next or ["lhpc gps"])
+        # Radio-mode availability: a stack whose every band is excluded by the current mode cannot
+        # run (remedy = change the mode, not stop a holder). Refused for both dry-run and apply.
+        rm_block = self.radio_mode_block(target)
+        if rm_block:
+            return ActionResult(False, f"Cannot {op} '{target}': {rm_block}",
+                                next_commands=["lhpc hardware"])
+        return None
+
     @invalidates_snapshot
     def start(self, target: str, apply: bool = False, stop_owners: bool = False,
               band: str = "", auto_install_ctx=None, *,
@@ -616,6 +645,13 @@ class LifecycleOpsMixin:
         if (_bref := self.band_refusal(target, band, "start")) is not None:
             return _bref            # plan and apply take the SAME decision on an explicit band
         if not apply:
+            # The plan takes the apply's outer decision (identity, MeshCore position) at the same
+            # point and in the same order, so a start the apply would refuse never plans "ok".
+            _ob = self.operation_band(target, band)
+            _order, _radio = self._order_radio(target, _ob)
+            if (_r := self._start_outer_refusal(target, _order, _ob, _radio, position,
+                                                position_note)[0]) is not None:
+                return _r
             return self._start_impl(target, apply=False, stop_owners=stop_owners, band=band)
         # LOCK ORDER #1: task admission is acquired FIRST — outside the config-stability guard and
         # BEFORE every mutation — so a start refused by a pending self-update/uninstall changes
@@ -631,14 +667,10 @@ class LifecycleOpsMixin:
                 _op_band = self.operation_band(target, band)
                 with self._config_stable():
                     # The daemon's REQUESTED radio mode determines which bands the lock bundle covers.
-                    _order = self._run_order(target)
-                    _radio = ""
+                    _order, _radio = self._order_radio(target, _op_band)
                     # Carried down from restart, which took the snapshot before its stop — so the
                     # "started without a position" note is not lost on the way through.
                     _pos_note = position_note
-                    if _order:
-                        _r, _ = self._daemon_needs(_order, _op_band)
-                        _radio = _r or ""
                     try:
                         with self._lifecycle_guard("start", target, _op_band,
                                                    stop_owners=stop_owners, radio=_radio):
@@ -647,30 +679,16 @@ class LifecycleOpsMixin:
                             # a start with a missing/invalid identity must mutate NOTHING.
                             # The inner check remains as the authoritative backstop for direct
                             # internal callers.
-                            if _order:
-                                _id_ok, _id_fields, _id_msg = self.enforce_identity(
-                                    target, _op_band)
-                                if not _id_ok:
-                                    return ActionResult(
-                                        False, f"Cannot start '{target}': {_id_msg}",
-                                        data={"enforce_fields": _id_fields},
-                                        next_commands=self._identity_config_hints(target,
-                                                                                  _op_band))
-                            # MESHCORE POSITION SNAPSHOT: the one GPS query of this start. Taken
-                            # under every lock but BEFORE the boot hook, feed clearing and any
-                            # other mutation, because it does network I/O that can legitimately
-                            # refuse the start — and only when there is something to start, so an
-                            # already-healthy no-op never touches gpsd. `position` is passed down
-                            # rather than re-queried, so a restart asks exactly once.
-                            # `_order` is None/empty for an unknown target or nothing to run —
-                            # `_start_impl` reports that properly, so take no snapshot here.
-                            if position is None and _order \
-                                    and not self._order_already_healthy(_order, _radio):
-                                position, _pos_note = self.meshcore_position(target)
-                                if position is None:
-                                    return ActionResult(
-                                        False, f"Cannot start '{target}': {_pos_note}",
-                                        next_commands=[f"lhpc status {target}"])
+                            # MESHCORE POSITION SNAPSHOT: the one position decision of this start.
+                            # Taken under every lock but BEFORE the boot hook, feed clearing and
+                            # any other mutation, because it can legitimately refuse the start
+                            # (reads saved config only) — and only when there is something to
+                            # start. `position` is passed down rather than re-queried, so a
+                            # restart asks exactly once.
+                            _r, position, _pos_note = self._start_outer_refusal(
+                                target, _order, _op_band, _radio, position, _pos_note)
+                            if _r is not None:
+                                return _r
                             # BOOT-RESTORE CLAIM HOOK: runs with EVERY lock held, before any
                             # mutation. A refusal cancels the start with zero side effects.
                             if _before_start_locked is not None:
@@ -850,29 +868,8 @@ class LifecycleOpsMixin:
         # component-scoped start must never be widened into a whole-stack boot restore.
         _req_target = target
         _req_scope = "stack" if self.stack(target) is not None else "component"
-        if not self._paths.runtime_root_exists:
-            return ActionResult(False, "Runtime root not bootstrapped.",
-                                next_commands=["lhpc bootstrap"])
-        # Hardware not configured: a fresh box has no radio board selected, so the daemon (and any
-        # radio stack) must refuse to start until the operator picks one. Checked BEFORE band checks.
-        hw_block = self.hardware_block(target)
-        if hw_block:
-            return ActionResult(False, f"Cannot start '{target}': {hw_block}",
-                                next_commands=["lhpc hardware"])
-        # GPS admission — BEFORE any lock is taken, so the plan that decides run order, claims
-        # and config rendering is the same one validated here. A direct-NMEA source is the case
-        # that fails intermittently rather than cleanly (two readers on one receiver), so it is
-        # refused up front rather than discovered as flaky position later.
-        gps_block, gps_next = self.gps_block(target)
-        if gps_block:
-            return ActionResult(False, f"Cannot start '{target}': {gps_block}",
-                                next_commands=gps_next or ["lhpc gps"])
-        # Radio-mode availability: a stack whose every band is excluded by the current mode cannot
-        # run (remedy = change the mode, not stop a holder). Refused for both dry-run and apply.
-        rm_block = self.radio_mode_block(target)
-        if rm_block:
-            return ActionResult(False, f"Cannot start '{target}': {rm_block}",
-                                next_commands=["lhpc hardware"])
+        if (_r := self._start_static_refusal(target, "start")) is not None:
+            return _r
         # Band-switchable stack: resolve the chosen band (default = first allowed).
         # An explicit band wins; otherwise inherit the band the stack is ALREADY running
         # on, and only then fall back to the declared primary — otherwise starting an
@@ -982,6 +979,13 @@ class LifecycleOpsMixin:
                                    "box (no graphical toolkit or display)")
                 else:
                     details.append(f"  [start] {comp.id} (band {cfg_band or comp.band or '-'})")
+            # The apply's firewall gate and ambiguity refusal, behind the apply's own healthy
+            # shortcut; blockers stay plan details (the web's owner-confirm flow reads them).
+            if not self._order_already_healthy(order, radio) and (
+                    _r := self._start_preflight_refusal(target, order, band, radio, "start",
+                                                        check_blockers=False,
+                                                        render=False)) is not None:
+                return _r
             blockers = self.run_blockers(target, band, radio)
             for bl in blockers:
                 details.append(f"  [conflict] {bl['resource']} is held by running stack "
@@ -1025,34 +1029,16 @@ class LifecycleOpsMixin:
         # externally reachable stack listener could come up with no verified firewall protecting
         # it (the compatibility-mode hole). No-op when firewall integration is absent or nothing
         # non-loopback is exposed; resolved from the ACTUAL launch plan (the saved config on the
-        # launch band).
-        _fw_ok, _fw_msg, _fw_cmds = self.firewall_gate_stack_start(target, band=band)
-        if not _fw_ok:
-            return ActionResult(False, f"Cannot start '{target}': {_fw_msg}",
-                                next_commands=_fw_cmds, data={"firewall_gate": "pending"})
-
-        # A component about to start must never SILENTLY inherit an AMBIGUOUS flat value (a
-        # run/file param name declared by >= 2 owner-stack components, with a flat value present and
-        # no component-scoped value). Fail TYPED here — BEFORE any owner stop, daemon launch, daemon
-        # mutation, config-file write, process spawn or post-start scheduling.
-        _amb = self._config_ambiguity(target, order, band)
-        if _amb is not None:
-            return ActionResult(False, f"Cannot start '{target}': {_amb}",
-                                next_commands=[f"lhpc config {target}"])
-
-        # Ownership check: if a needed resource is held by another running stack,
+        # launch band). A component about to start must never SILENTLY inherit an AMBIGUOUS flat
+        # value either. Ownership check: if a needed resource is held by another running stack,
         # either stop that stack first (stop_owners) or refuse and report it.
-        blockers = self.run_blockers(target, band, radio)
+        if (_r := self._start_preflight_refusal(target, order, band, radio, "start",
+                                                check_blockers=not stop_owners,
+                                                render=True)) is not None:
+            return _r
+        blockers = self.run_blockers(target, band, radio) if stop_owners else []
         if blockers:
             owners = sorted({bl["holder_stack"] for bl in blockers})
-            if not stop_owners:
-                details = [f"  {bl['resource']} held by running stack '{bl['holder_stack']}'"
-                           for bl in blockers]
-                return ActionResult(
-                    False,
-                    f"Cannot run '{target}': {', '.join(owners)} must be stopped first.",
-                    details=details,
-                    next_commands=[f"lhpc stack stop {o}" for o in owners])
             prelude = []
             unstopped = []
             for o in owners:
@@ -2858,6 +2844,70 @@ class LifecycleOpsMixin:
         return ActionResult(False, f"Cannot {op} '{target}': {id_msg}",
                             data={"enforce_fields": id_fields},
                             next_commands=self._identity_config_hints(target, band))
+
+    def _order_radio(self, target: str, op_band: str):
+        """`(run order, the daemon's requested radio)` for an operation on `op_band` — the radio
+        decides which bands the lock bundle covers and what the healthy shortcut judges."""
+        order = self._run_order(target)
+        radio = ""
+        if order:
+            _r, _ = self._daemon_needs(order, op_band)
+            radio = _r or ""
+        return order, radio
+
+    def _position_refusal(self, target: str, op: str):
+        """`(refusal or None, position, note)` from the MeshCore position decision — the one
+        wording the start and restart plans and applies share."""
+        position, note = self.meshcore_position(target)
+        if position is None:
+            return (ActionResult(False, f"Cannot {op} '{target}': {note}",
+                                 next_commands=[f"lhpc status {target}"]), None, note)
+        return None, position, note
+
+    def _start_outer_refusal(self, target: str, order, band: str, radio: str,
+                             position: dict | None, note: str):
+        """`(refusal or None, position, note)`: the public start's identity and MeshCore position
+        decision, taken by the plan and the apply at the same point and in the same order.
+        `order` is None/empty for an unknown target or nothing to run — `_start_impl` reports
+        that properly, so no snapshot is taken then; nor for an already-healthy no-op."""
+        if order and (_r := self._identity_refusal(target, band, "start")) is not None:
+            return _r, position, note
+        if position is None and order and not self._order_already_healthy(order, radio):
+            return self._position_refusal(target, "start")
+        return None, position, note
+
+    def _start_preflight_refusal(self, target: str, order, band: str, radio: str, op: str, *,
+                                 check_blockers: bool, render: bool,
+                                 exclude_holders=frozenset()):
+        """The one firewall/ambiguity/blocker wording the start plan, the start apply and the
+        restart (plan and apply) share, or None. The FW-R8 exposure gate first (`render=False`
+        for a plan: no apply-script write); then an AMBIGUOUS flat value (a run/file param name
+        declared by >= 2 owner-stack components, with a flat value present and no component-scoped
+        value); then, only if `check_blockers`, the running holders of a needed resource —
+        except `exclude_holders` (stack ids a restart's own stop takes down)."""
+        _fw_ok, _fw_msg, _fw_cmds = self.firewall_gate_stack_start(target, band=band,
+                                                                   render=render, op=op)
+        if not _fw_ok:
+            return ActionResult(False, f"Cannot {op} '{target}': {_fw_msg}",
+                                next_commands=_fw_cmds, data={"firewall_gate": "pending"})
+        _amb = self._config_ambiguity(target, order, band)
+        if _amb is not None:
+            return ActionResult(False, f"Cannot {op} '{target}': {_amb}",
+                                next_commands=[f"lhpc config {target}"])
+        if not check_blockers:
+            return None
+        blockers = [bl for bl in self.run_blockers(target, band, radio)
+                    if bl["holder_stack"] not in exclude_holders]
+        if not blockers:
+            return None
+        owners = sorted({bl["holder_stack"] for bl in blockers})
+        details = [f"  {bl['resource']} held by running stack '{bl['holder_stack']}'"
+                   for bl in blockers]
+        return ActionResult(
+            False,
+            f"Cannot run '{target}': {', '.join(owners)} must be stopped first.",
+            details=details,
+            next_commands=[f"lhpc stack stop {o}" for o in owners])
 
     def _restart_impl(self, target: str, apply: bool = False, stop_owners: bool = False,
                       band: str = "", cascade: bool = False, position: dict | None = None,

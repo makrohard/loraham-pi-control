@@ -158,6 +158,8 @@ def test_start_refuses_absent_band_stack_after_configured(tmp_path):
     # band is not served — with the radio-mode message, not the hardware one.
     svc = _svc(tmp_path)
     _setup(svc, "waveshare-433")                                   # serves 433 only
+    # a usable identity, which plan and apply both judge first
+    assert svc.save_config_bundle("meshcore", values={"file_node_name": "TestNode"}).ok
     r = svc.start("meshcore", apply=False)                         # meshcore is fixed 868
     assert not r.ok and "radio mode is 433-only" in r.summary
 

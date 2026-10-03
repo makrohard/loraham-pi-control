@@ -1413,6 +1413,52 @@ def test_stack_start_gate_partial_install_fails_closed(tmp_path, monkeypatch):
     assert not allowed and "partially installed" in msg
 
 
+def test_start_plan_refuses_what_the_apply_firewall_gate_refuses(tmp_path, monkeypatch):
+    # CR1-7: the dry run said "ok" for a start the apply's gate refuses. It now refuses alike —
+    # without writing the apply script, which only the mutation path renders.
+    svc = _svc(tmp_path)
+    _expose_kiss(svc)
+    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
+    monkeypatch.setattr(svc, "firewall_status",
+                        lambda: {"config_ok": True, "live_ok": False})
+    script = tmp_path / "config" / "files" / "firewall" / "firewall-apply.sh"
+    plan = svc.start("kiss", apply=False)
+    assert plan.ok is False and plan.data.get("firewall_gate") == "pending"
+    assert not script.exists()
+    applied = svc.start("kiss", apply=True)
+    assert applied.ok is False and applied.summary == plan.summary
+
+
+def _running_kiss(tmp_path):
+    """kiss healthy on 433 (daemon READY, the TNC's listener up) with an exposing saved config."""
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem, Listener
+    from lhpc.core.services import ControllerService
+    (tmp_path / "config").mkdir(exist_ok=True)
+    svc = ControllerService(system=FakeSystem(
+        cmdlines_data={100: ["loraham_daemon", "--radio", "433"],
+                       200: ["loraham-kiss-tnc", "--config", "X"]},
+        listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8001, inode=1)],
+        owners={1: 200},
+        unix_replies={"/tmp/loraconf433.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system,
+        paths=Paths(runtime_root=tmp_path))
+    _expose_kiss(svc)
+    return svc
+
+
+def test_start_plan_of_a_running_stack_is_not_refused_by_the_gate(tmp_path, monkeypatch):
+    # Preservation: an already-healthy start is a no-op the gate never judged — the plan keeps
+    # that shortcut, so a running stack's dry run is not refused over a listener already up.
+    svc = _running_kiss(tmp_path)
+    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
+    monkeypatch.setattr(svc, "firewall_status",
+                        lambda: {"config_ok": True, "live_ok": False})
+    assert svc.start("kiss", apply=False).ok is True
+    applied = svc.start("kiss", apply=True)
+    assert applied.ok is True
+    assert applied.results and {r.outcome.value for r in applied.results} == {"already_healthy"}
+
+
 def test_fw_scope_modeled_matches_full_scope(tmp_path):
     # P1-1 unit: exact match on proto/family/addr/port/band with CIDRs covered; a port move,
     # CIDR widening, wrong band, or unmapped scope is NOT represented; a modeled DROP covers any.

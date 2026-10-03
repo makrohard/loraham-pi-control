@@ -395,6 +395,23 @@ def test_saved_and_override_coordinates_are_ignored(tmp_path):
     assert _coords(_generated(tmp_path)) == []
 
 
+def test_start_plan_takes_the_position_decision_like_the_apply(tmp_path, monkeypatch):
+    # CR1-7: an unusable position refused the apply only; the plan said "ok". Both now take it
+    # at the same point — before the firewall gate, which refuses here too.
+    svc = _svc(tmp_path)
+    assert svc.save_config_bundle("meshcore", values={"file_node_name": "TestNode"}).ok
+    monkeypatch.setattr(svc, "meshcore_position",
+                        lambda t: (None, "the global position source is not usable: x"))
+    monkeypatch.setattr(svc, "firewall_gate_stack_start",
+                        lambda *a, **k: (False, "Firewall changes pending", []))
+    plan = svc.start("meshcore", apply=False)
+    applied = svc.start("meshcore", apply=True)
+    assert plan.ok is False and applied.ok is False
+    assert plan.summary == applied.summary
+    assert "not usable" in plan.summary
+    assert "lhpc status meshcore" in plan.next_commands
+
+
 @pytest.mark.contract
 def test_a_live_gpsd_source_is_served_by_the_bridge_not_a_snapshot(tmp_path, fake_gpsd):
     """A live source feeds the node continuously, so its position follows the box. Writing

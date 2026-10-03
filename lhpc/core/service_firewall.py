@@ -996,40 +996,56 @@ class FirewallOpsMixin:
             return _cidrs_covered(sc["allow_cidrs"], e["allow_cidrs"])   # selected allow
         return False
 
-    def firewall_gate_stack_start(self, target, band=""):
+    def firewall_gate_stack_start(self, target, band="", *, render=True, op="start"):
         """Exposure gate for a stack/component START. Absent firewall -> allow (behaviour
         preserved). Partial -> refuse. No non-loopback scope -> allow. Otherwise the firewall
         must be live-verified against the current saved intent (config_ok+live_ok) AND every
         prospective non-loopback scope must EXACTLY match a modeled candidate scope (full
         proto/family/addr/port/band/CIDR) — a wrong-band remote scope or a saved listener the
         applied firewall does not model is refused, so a listener never binds non-loopback
-        without a verified drop/allow. Returns (allowed, message, commands)."""
+        without a verified drop/allow. Returns (allowed, message, commands).
+
+        `render=False` is the PLAN's call: same decision, no apply-script write. `op="restart"`
+        only changes the sentence: the refusal comes before the restart's stop, so it says the
+        running stack was left up."""
         state = self._fw_integration_state()
         if state == "absent":
             return True, "", []
         base = self._paths.under("config/files/firewall/firewall-apply.sh")
+
+        def _msg(reason, start_tail, remedy):
+            if op == "start":
+                return f"{reason} — {start_tail}"
+            return f"{reason} — restart was not performed; the running stack was left up. {remedy}"
+
         if state == "partial":
             return (False,
-                    "Firewall integration is partially installed — refusing to start a "
-                    "non-loopback listener until it is repaired.",
+                    _msg("Firewall integration is partially installed",
+                         "refusing to start a non-loopback listener until it is repaired.",
+                         f"Repair it first, then restart '{target}'."),
                     [f"sudo bash {base}"])
         scopes = self._fw_prospective_stack_scopes(target, band)
         if not scopes:
             return True, "", []                            # nothing non-loopback -> nothing to gate
         st = self.firewall_status()
         if not (st.get("config_ok") and st.get("live_ok")):
-            self.firewall_render()                         # keep the apply script current (mutation path)
+            if render:
+                self.firewall_render()                     # keep the apply script current (mutation path)
             return (False,
-                    "Firewall changes pending — the listener was NOT started. Apply the firewall "
-                    f"first, then start '{target}' again.",
+                    _msg("Firewall changes pending",
+                         f"the listener was NOT started. Apply the firewall first, then start "
+                         f"'{target}' again.",
+                         f"Apply the firewall first, then restart '{target}'."),
                     self._fw_apply_lines())
         modeled = st.get("candidate") or self.firewall_candidate()
         for sc in scopes:
             if not self._fw_scope_modeled(sc, modeled):
-                self.firewall_render()
+                if render:
+                    self.firewall_render()
                 return (False,
-                        "The saved listener is not covered by the applied firewall — apply "
-                        "the firewall, then start.",
+                        _msg("The saved listener is not covered by the applied firewall",
+                             "apply the firewall, then start.",
+                             f"Apply the firewall first, then restart '{target}'."),
                         [f"sudo bash {base}"])
         return True, "", []
 
