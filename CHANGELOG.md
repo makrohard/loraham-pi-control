@@ -40,6 +40,8 @@
 - `tls-renew` on a full disk no longer leaves a new server key beside the old certificate (nginx would
   refuse the pair at its next restart): both are written before either goes live, and the failure is
   reported instead of raised.
+- Boot restore starts nothing when the folder of operator stop notes cannot be read, instead of
+  ignoring every stop note; the evidence is kept for the next boot.
 
 ## 0.11.10
 

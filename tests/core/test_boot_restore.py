@@ -1402,6 +1402,24 @@ def test_operator_stop_intent_blocks_restore_and_prunes(tmp_path, monkeypatch):
     assert not evidence
 
 
+def test_an_unreadable_stop_intent_dir_restores_nothing(tmp_path, monkeypatch):
+    """When the stop-intent folder itself cannot be read (EACCES/EIO; here a non-directory in its
+    place, which takes the same error path), no stack can be shown to be free of an operator stop:
+    nothing is restored. The evidence is skipped under its own reason — NOT the intent reason the
+    caller prunes — so it is still there for the next boot."""
+    svc = _drv(tmp_path, monkeypatch)
+    rec = _v1()
+    _write_record(tmp_path, rec)
+    (tmp_path / "state" / "stop-intent").write_text("not a directory")
+
+    evidence, skipped, _issues, _state = svc._classify_boot_evidence("CURBOOT")
+    assert not evidence
+    hit = next(s for s in skipped if s["stack"] == "kiss")
+    assert hit["reason"] != svc.INTENT_SKIP_REASON and "unreadable" in hit["reason"]
+    assert hit["evidence_ids"] == [rec["launch_id"]]
+    assert (tmp_path / "state" / "owned" / f"{rec['launch_id']}.json").exists()
+
+
 def test_stop_writes_intent_and_start_clears_it(tmp_path, monkeypatch):
     """The lifecycle hooks: an applied stack stop leaves the tombstone (even when nothing was
     running — the operator's word stands against any stale leftovers), an applied stack start

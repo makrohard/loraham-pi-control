@@ -33,6 +33,9 @@ class BootRestoreOpsMixin:
         # ONE string: written at classification, matched only in _prune_intent_skips.
     INTENT_SKIP_REASON = ("operator stop intent stands — stopped after the recorded launch, "
                           "not restored")
+    # Never pruned: the evidence must survive for a boot that can read the intents again.
+    INTENTS_UNREADABLE_REASON = ("operator stop intents unreadable — no stack can be shown to be "
+                                 "free of a stop, nothing restored")
 
     # ---- gates ----------------------------------------------------------------------------------
 
@@ -141,16 +144,19 @@ class BootRestoreOpsMixin:
         except (OSError, PathContainmentError, validators.ValidationError):
             pass
 
-    def _stop_intent_stacks(self) -> set:
+    def _stop_intent_stacks(self) -> set | None:
         """Stacks with a standing operator stop intent. Unreadable/malformed files count as
         INTENT PRESENT — the file's existence is the signal; failing toward restore would
-        resurrect a stack the operator stopped, which is the exact bug this exists to end."""
+        resurrect a stack the operator stopped, which is the exact bug this exists to end.
+        A missing directory is "no intents"; one that cannot be read returns None (any stack
+        may have one)."""
         try:
             d = self._paths.under("state", "stop-intent")
-            return {p.name[:-5] for p in d.iterdir()
-                    if p.name.endswith(".json")} if d.is_dir() else set()
-        except OSError:
+            return {p.name[:-5] for p in d.iterdir() if p.name.endswith(".json")}
+        except FileNotFoundError:
             return set()
+        except (OSError, PathContainmentError):
+            return None
 
     def _classify_boot_evidence(self, cur_boot: str):
         """(evidence, skipped, integrity_issues, dir_state). Same-boot stamped records are NEVER
@@ -181,7 +187,11 @@ class BootRestoreOpsMixin:
         # skipped records are pruned by the caller (they are dead prior-boot leftovers), and
         # the standing intent is cleared only by an applied operator start.
         intents = self._stop_intent_stacks()
-        if intents:
+        if intents is None:
+            skipped.extend({"stack": ev.stack, "reason": self.INTENTS_UNREADABLE_REASON,
+                            "evidence_ids": [ev.launch_id]} for ev in evidence)
+            evidence = []
+        elif intents:
             kept = []
             for ev in evidence:
                 if ev.stack in intents:
