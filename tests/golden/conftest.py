@@ -200,11 +200,11 @@ def run_op(phases):
 @pytest.fixture(autouse=True)
 def _tagged(request):
     """Every golden case says what it records: its docstring opens with `intended:` or
-    `known defect <finding id>:`."""
+    `known defect <finding id>[, <finding id>…]:` (one id per difference it records)."""
     doc = (request.function.__doc__ or "").strip()
-    assert re.match(r"(intended|known defect [\w-]+):", doc), (
+    assert re.match(r"(intended|known defect [\w-]+(, [\w-]+)*):", doc), (
         f"{request.node.name}: a golden case's docstring must open with 'intended:' or "
-        "'known defect <id>:'")
+        "'known defect <id>[, <id>…]:'")
 
 
 # --- the one box the lifecycle goldens run on ----------------------------------------------------
@@ -292,6 +292,12 @@ class KissBox:
     def owned(self) -> list[str]:
         return owned(self.root)
 
+    def live(self) -> list[str]:
+        """The components whose LHPC-owned process is alive (a prior boot's record is not)."""
+        d = self.root / "state" / "owned"
+        recs = [json.loads(p.read_text()) for p in d.glob("*.json")] if d.is_dir() else []
+        return sorted(r["component"] for r in recs if _alive(r["pid"]))
+
     def tnc_alive(self) -> bool:
         """The TNC's owned process is alive (observed in /proc: a zombie is not)."""
         d = self.root / "state" / "owned"
@@ -301,22 +307,23 @@ class KissBox:
 
 @pytest.fixture
 def kiss_box(tmp_path, monkeypatch, set_call):
-    """`kiss_box(callsign=True)` → a KissBox: kiss installed and built, daemon READY on 433, a
-    callsign saved (unless callsign=False); the TNC is a real process listening on a real loopback
-    port (`_TncEndpoint`). The start's endpoint wait is bounded at 3 s (production: 6 s) — what it
+    """`kiss_box(callsign=True, root=tmp_path)` → a KissBox: kiss installed and built, daemon
+    READY on 433, a callsign saved (unless callsign=False); the TNC is a real process listening on
+    a real loopback port (`_TncEndpoint`). The start's endpoint wait is bounded at 3 s (production: 6 s) — what it
     sees is observed. Every TNC process the box spawned is killed (its session) at teardown."""
     procs: list = []
     monkeypatch.setattr(ControllerService, "ENDPOINT_VERIFY_TIMEOUT_S", 3.0)
 
-    def _make(*, callsign=True):
-        (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
-        (tmp_path / "src" / "loraham-kiss-tnc" / "loraham-kiss-tnc").write_text("#bin")
+    def _make(*, callsign=True, root=None):
+        root = Path(root or tmp_path)
+        (root / "src" / "loraham-kiss-tnc").mkdir(parents=True)
+        (root / "src" / "loraham-kiss-tnc" / "loraham-kiss-tnc").write_text("#bin")
         fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": _READY})
         port = _free_port()
         fake.listeners = _TncEndpoint(port)
-        svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+        svc = ControllerService(system=fake.system, paths=Paths(runtime_root=root))
         svc.bootstrap(apply=True)
-        box = KissBox(tmp_path, fake, svc, port)
+        box = KissBox(root, fake, svc, port)
         spawn = box.spawn(procs)
         monkeypatch.setattr(ControllerService, "_lifecycle", lambda s: Lifecycle(
             s._paths, s.stacks(), s.config(), s._system, spawn=spawn))
