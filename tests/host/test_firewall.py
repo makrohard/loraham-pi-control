@@ -9,6 +9,8 @@ controller can compare saved intent against a receipt's `intent_hash` without am
 from __future__ import annotations
 
 import copy
+import errno
+import os
 
 import pytest
 
@@ -693,6 +695,31 @@ def test_corrupt_journal_fails_closed(tmp_path):
     p = fh._paths(etc, run)
     fh._durable_unlink(p["journal"])
     assert fh.recover(sysx, p) is True
+
+
+@pytest.mark.safety("firewall-fail-closed")
+@pytest.mark.parametrize("err", [errno.EIO, errno.EACCES], ids=["EIO", "EACCES"])
+def test_a_journal_that_cannot_be_examined_is_not_absent(tmp_path, monkeypatch, err):
+    # Only ENOENT/ENOTDIR prove "no interrupted op": a journal the helper can neither open nor
+    # lstat (EIO, EACCES) fails recovery closed and stays where it is.
+    from lhpc.core import firewall_helper as fh
+    etc, run = str(tmp_path / "etc"), str(tmp_path / "run")
+    _seed_meta(etc)
+    p = fh._paths(etc, run)
+    fh.atomic_write(p["journal"], '{"op": "apply", "phase": "begin"}', 0o600)
+    real_open, real_lstat = os.open, os.lstat
+
+    def failing(real):
+        def fake(path, *a, **kw):
+            if path == p["journal"]:
+                raise OSError(err, os.strerror(err), path)
+            return real(path, *a, **kw)
+        return fake
+    monkeypatch.setattr(os, "open", failing(real_open))
+    monkeypatch.setattr(os, "lstat", failing(real_lstat))
+    assert fh.recover(_FakeSys(), p) is False
+    monkeypatch.undo()
+    assert os.path.exists(p["journal"])
 
 
 def test_reset_removes_only_when_owned(tmp_path):
