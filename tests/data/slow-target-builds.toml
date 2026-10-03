@@ -1,5 +1,5 @@
 # The slow-target BASELINE (plans/PLAN-F43.md §7, §8): what the update path's operations take on
-# the real slow target (Pi Zero 2 W `lhpc-e293`, row A) and in the throttled CI container (row C).
+# the real slow target (a Pi Zero 2 W, row A) and in the throttled CI container (row C).
 # `tests/install/test_slow_target_budget.py` checks every limit on the update path against it, and
 # the `slow-build` lane checks a release's fresh evidence against it (docs/maintenance.md).
 #
@@ -21,7 +21,7 @@
 #   quiet_s = 140                # op = "build" only: longest gap without progress (L1)
 #   key = "pin:<manifest pin>"   # pin:<pin> | deb:<version fetched> | deps:<sha256>; never an LHPC SHA
 #   source = "zero2w"            # or "throttled-ci"
-#   host = "lhpc-e293"           # or "gha ubuntu-24.04-arm cpus=0.5 mem=416m"
+#   host = "zero2w-ref"          # or "gha ubuntu-24.04-arm cpus=0.5 mem=416m"
 #   lhpc = "v0.12.0 (6ff1937)"   # provenance and the entry's minor; not part of the key
 #   date = 2026-10-10
 #   evidence = "docs/live-tests/live-test.md#rows"   # or the Actions run URL
@@ -556,3 +556,11 @@ host = "lhpc-e293"
 lhpc = "release/0.11.12-bundle (3d0943a1)"
 date = 2026-10-03
 evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records); wall 3 s from second-resolution file times; longest quiet 3.2 s from the log"
+
+[[calibration]]
+workload = "sha256:17b2f7159232d268a932c0c043f63d0e72bfe365d9873560661012f2c123ba4f"
+source = "zero2w"
+cpu_s = 98.7
+io_s = 492.1
+mem_s = 103.2
+date = 2026-10-03
