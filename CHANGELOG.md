@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.12
+
+- Every release is now also installed, built and self-updated on a test box slowed down below a Pi Zero 2 W
+  before it ships: an update that would stall or run into a time limit on a slow box turns the release check
+  red instead of reaching yours.
+
 ## 0.11.11
 
 Upgrade note — boxes with the firewall installed: this release changes the firewall helper again, so the dashboard
