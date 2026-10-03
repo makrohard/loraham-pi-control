@@ -1099,9 +1099,12 @@ class LifecycleOpsMixin:
         daemon_ok = True                # gate dependents on verified daemon readiness
         daemon_gate = ""                # a refusal of THIS stack's daemon config (not a daemon failure)
 
+        presented: set[str] = set()      # components whose copy-paste start command was shown
         def record(comp, stack, outcome, summary, command="", note=""):
             # A copy-paste `command` goes on a line of its own, and the `note` on the next one:
             # a note appended to the command made the pasted line a shell syntax error (F-C2).
+            if command:
+                presented.add(comp.id)
             results.append(CompResult(component=comp.id, stack=stack.id, action="start",
                                       outcome=outcome,
                                       summary=f"{summary} {command}" if command else summary))
@@ -1495,7 +1498,7 @@ class LifecycleOpsMixin:
                 return False          # optional: a manual/headless skip is an accepted outcome
             if r.outcome == Outcome.MANUAL_REQUIRED \
                     and r.component in nonmain_interactive_ids \
-                    and (r.summary or "").startswith("interactive —"):
+                    and r.component in presented:
                 # interactive sidecar whose command WAS presented: that IS the outcome.
                 # Other MANUAL_REQUIRED shapes (no marker/command presented) still block
                 # like any failure.

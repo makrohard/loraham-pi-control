@@ -85,6 +85,22 @@ def test_lite_voice_start_seeds_config_despite_display_skip(tmp_path, monkeypatc
     assert "run it yourself in a terminal:" in (cli.summary or "")
 
 
+def test_lite_voice_start_ok_does_not_depend_on_the_sidecar_wording(tmp_path, monkeypatch, set_call, real_spawn):
+    # Success follows the fact that the copy-paste command was presented, not the sentence
+    # around it: the same start with every result summary reworded is still OK.
+    from lhpc.core import service_lifecycle_ops
+    real = service_lifecycle_ops.CompResult
+    monkeypatch.setattr(service_lifecycle_ops, "CompResult",
+                        lambda **kw: real(**{**kw, "summary": "reworded: " + kw.get("summary", "")}))
+    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
+    _config_written(monkeypatch, svc)
+    set_call(svc)
+    res = svc.start("voice", apply=True)
+    cli = next(r for r in res.results if r.component == "loraham-voice-cli")
+    assert cli.outcome == Outcome.MANUAL_REQUIRED and cli.summary.startswith("reworded: ")
+    assert res.ok is True, outcomes(res)
+
+
 def test_voice_cli_command_is_printed_on_a_line_of_its_own(tmp_path, monkeypatch, set_call, real_spawn):
     # F-C2: the note was appended to the command, so pasting the printed line gave
     # "syntax error near unexpected token `('". The command line must parse as printed.
