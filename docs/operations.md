@@ -75,6 +75,23 @@ On the binary channel:
 Files you add to a source checkout survive an update; editing upstream files blocks it
 ([ownership records](provenance.md#ownership-records)).
 
+### Keeping stacks current
+
+What to run in each situation and what you will see. The channels themselves:
+[provenance](provenance.md#selections).
+
+| situation | run | what you see |
+|---|---|---|
+| first install | `lhpc install <stack> --yes`, then on the source channel `lhpc build <stack> --yes`; or `lhpc auto-install --yes` for every stack (install and build) | the plan, then the install on the stack's default channel: the published binary where there is one for this platform, else `pinned` |
+| keep current at the pins this release was tested with | `lhpc self-update --apply`, then `lhpc update <stack> --yes`, then on the source channel `lhpc build <stack> --yes` | each source moves to `pinned` — your newest known-working composition for the stack, else the release's manifest pin. A binary-installed stack updates to the published binary |
+| follow development | `lhpc update <stack> --source dev --yes`, then `lhpc build <stack> --yes` | the branch tip; when adopting it fails, the update retries once at the known-working (else manifest-pin) commit and says *FELL BACK* |
+| follow stable | `lhpc update <stack> --source stable --yes`, then `lhpc build <stack> --yes` | the newest plain version tag, else the default branch's head |
+| binary where published | once: `lhpc install <stack> --source binary --yes`; afterwards `lhpc update <stack> --yes` stays on the binary | a published binary built from other commits than this lhpc's pins is refused; `Next:` offers `lhpc self-update --apply` and the source install |
+| a fetched release (graywolf) | `lhpc update graywolf --upstream --yes` for the newest release; `lhpc build graywolf --yes` for the pinned one | the release fetched and checked against its checksums, then a restart if the stack was running |
+| back to known-working after a failed update | nothing to undo for a source: a failed update keeps the previous source active (unless its line says *prior-dirty*). `lhpc update <stack> --yes` takes a stack on `dev` or `stable` back to its known-working (else manifest-pin) commit; a binary goes back by `lhpc install <stack> --source pinned --yes` | *Update INCOMPLETE* with the failed source's line |
+| an update was refused | the commands under `Next:`; where there is none, the refusal says *nothing to run here* and what has to be fixed on the box | the cause on the first line. A running stack: `lhpc stack stop <stack> --yes`. A left-over `src/.<name>.prev`: move it out of `src/`, then retry |
+| the first start after a source update | `lhpc build <stack> --yes` | until then `lhpc stack start` refuses a component *not built* or whose *sources changed since the last build*, naming `lhpc build <stack>` |
+
 ## Fast vs explicit
 
 - Fast & bounded (no build, no mutation, no RF): `status`, `explain`, `doctor`, `logs`, `web`
