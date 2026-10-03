@@ -12,6 +12,11 @@
   a start with a terminal-only part (the Voice terminal variant) counts as successful, and whether a half-finished
   configuration save blocks the next one are now decided from a recorded fact, never from the wording of the
   message you see. The messages themselves are unchanged.
+- A source update no longer stops when recording its staged copy for crash recovery fails with an unexpected
+  error; it says so in one line and continues, as it already did for a disk error. A binary install that cannot
+  print the details of an unexpected error, or cannot undo itself after Ctrl-C, now says so in one line instead of
+  staying silent (after Ctrl-C the next command finishes the undo, as before). In these lines an error message that
+  spans several lines is joined into one.
 
 - Every release is now also installed, built and self-updated on a test box slowed down below a Pi Zero 2 W
   before it ships: an update that would stall or run into a time limit on a slow box turns the release check
