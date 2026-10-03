@@ -2141,6 +2141,45 @@ def test_ssh_precise_listenaddress_not_widened():
     assert not any(s["addr"] == "*" for s in p2200)         # wildcard NOT added
 
 
+def test_ssh_live_wildcard_socket_kept_beside_a_new_listenaddress():
+    # ListenAddress edited, sshd not yet restarted: the precise scope must not take away the
+    # still-listening wildcard socket (new sessions via the AP address or IPv6 were dropped).
+    from lhpc.core import firewall_helper as fh
+
+    class _S(_FakeSys):
+        def __init__(self):
+            super().__init__()
+            self.sshd_t = "port 22\nlistenaddress 192.0.2.5:22\n"
+            self.ss_out = ('LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1,fd=3))\n'
+                           'LISTEN 0 128 [::]:22 [::]:* users:(("sshd",pid=1,fd=4))\n'
+                           'LISTEN 0 128 192.0.2.9%eth0:22 0.0.0.0:* users:(("sshd",pid=1,fd=5))')
+    scopes, confident = fh.resolve_ssh_scopes(_S(), [])
+    p22 = [s for s in scopes if s["port"] == 22]
+    assert {"proto": "tcp", "family": "ipv4", "addr": "192.0.2.5", "port": 22} in p22  # config
+    assert {"proto": "tcp", "family": "dual", "addr": "*", "port": 22} in p22          # live *
+    assert {"proto": "tcp", "family": "ipv4", "addr": "192.0.2.9", "port": 22} in p22  # live addr
+    assert {"proto": "tcp", "family": "ipv4", "addr": "0.0.0.0", "port": 22} in p22    # live v4 *
+    assert len(p22) == 4 and confident
+
+
+def test_ssh_live_ipv4_wildcard_socket_never_opens_ipv6():
+    # An sshd listening only on 0.0.0.0:22 accepts no IPv6: keeping that live socket beside a
+    # new ListenAddress must open IPv4 :22 only, never IPv6 :22 (only `[::]` is dual-stack).
+    from lhpc.core import firewall_helper as fh
+
+    class _S(_FakeSys):
+        def __init__(self):
+            super().__init__()
+            self.sshd_t = "port 22\nlistenaddress 192.0.2.5:22\n"
+            self.ss_out = 'LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1,fd=3))'
+    scopes, confident = fh.resolve_ssh_scopes(_S(), [])
+    p22 = [s for s in scopes if s["port"] == 22]
+    assert {"proto": "tcp", "family": "ipv4", "addr": "0.0.0.0", "port": 22} in p22
+    assert all(s["family"] == "ipv4" for s in p22) and confident     # no dual / IPv6 :22
+    text, _ = fh._scope_atoms({"family": "ipv4", "addr": "0.0.0.0"})
+    assert text == ["meta nfproto ipv4"]                              # IPv4 :22 on any address
+
+
 def test_boot_gate_fails_closed_when_fallback_cannot_stage(tmp_path, monkeypatch):
     # P1-1: if the loopback fallback can't be staged, refuse to start nginx (ok=False → CLI
     # exit 1) rather than bind the promoted remote config.

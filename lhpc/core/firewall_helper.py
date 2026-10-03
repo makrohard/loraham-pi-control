@@ -884,9 +884,10 @@ def parse_socket_listen(listen_value):
 def resolve_ssh_scopes(sysx, override_ports):
     """(scopes, confident). Union of: explicit override (wildcard intent, authoritative),
     `sshd -T` effective config (honoring the unit's -f), unit -p/-o ports, socket-activation
-    listeners, and root-observed ACTIVE sshd listen ports — a config transition can never cut
-    recovery access. Port 22 is used ONLY when stock default behavior is positively
-    established. `confident=False` → secure-default must abort (caller enforces)."""
+    listeners, and root-observed ACTIVE sshd listen sockets (each with its own address) — a
+    config transition can never cut recovery access. Port 22 is used ONLY when stock default
+    behavior is positively established. `confident=False` → secure-default must abort (caller
+    enforces)."""
     # A configured override is AUTHORITATIVE for intent, but the currently ACTIVE sshd listen
     # ports are ALWAYS unioned in — a config transition (e.g. override 22 while sshd still
     # listens on 2222) must never drop the live recovery connection.
@@ -916,33 +917,43 @@ def resolve_ssh_scopes(sysx, override_ports):
             if sports:
                 ports.update(sports)
                 confident = True
-    active = active_sshd_ports(sysx)
-    ports.update(active)
+    active = active_sshd_scopes(sysx)
+    ports.update(s["port"] for s in active)
     if active:
         confident = True
     # Emit a dual-wildcard rule ONLY for ports WITHOUT a precise ListenAddress scope — a
-    # precise scope must not be widened to every address by also emitting the wildcard.
+    # precise scope must not be widened to every address by also emitting the wildcard. A LIVE
+    # socket on such a port (sshd not yet restarted after a ListenAddress edit) is kept with its
+    # own address, so the running listener is never cut.
+    live = [s for s in active if s["port"] in covered and s not in scopes]
     scopes = [{"proto": "tcp", "family": "dual", "addr": "*", "port": p}
-              for p in sorted(ports) if p not in covered] + scopes
+              for p in sorted(ports) if p not in covered] + scopes + live
     return scopes, confident
 
 
-def active_sshd_ports(sysx):
-    """Root-observed listen ports of live sshd processes (ss is present on the target OS;
-    output parsed defensively — an absent/odd ss yields the empty set, never a crash)."""
+def active_sshd_scopes(sysx):
+    """Root-observed listen sockets of live sshd processes as scopes: `*`, `[::]` or an
+    unparsable address → dual `*`, `0.0.0.0` → IPv4 only (it never accepts IPv6), a concrete one
+    → its own family and address (ss is present on the target OS; output parsed defensively —
+    an absent/odd ss yields no scope, never a crash)."""
     rc, out, _ = sysx.run(["ss", "-tlnp"])
     if rc != 0:
-        return set()
-    ports = set()
+        return []
+    scopes = []
     for line in out.splitlines():
         if "sshd" in line:
             for tok in line.split():
                 if ":" in tok:
-                    p = tok.rsplit(":", 1)[-1]
+                    host, _, p = tok.rpartition(":")
                     if p.isdigit():
-                        ports.add(int(p))
+                        host = host.split("%", 1)[0].strip("[]")       # `[addr]%iface` -> addr
+                        fam = "" if host in ("*", "::") else _ip_family(host)
+                        s = ({"proto": "tcp", "family": fam, "addr": host, "port": int(p)} if fam
+                             else {"proto": "tcp", "family": "dual", "addr": "*", "port": int(p)})
+                        if s not in scopes:
+                            scopes.append(s)
                         break
-    return ports
+    return scopes
 
 
 # --- journal + operations --------------------------------------------------------------------

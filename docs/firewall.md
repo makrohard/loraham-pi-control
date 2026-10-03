@@ -222,7 +222,9 @@ Out of scope:
 
 - **SSH scope is widened, not narrowed.** SSH ports without an explicit `ListenAddress` (unit
   `-p`, `ssh.socket`, live sshd sockets, `[firewall] ssh_ports`) get a wildcard allow; an
-  `sshd -T` `ListenAddress` keeps its address and family. Pin ports with `[firewall] ssh_ports`.
+  `sshd -T` `ListenAddress` keeps its address and family, and a socket sshd is still listening
+  on keeps its own, so a `ListenAddress` edit cuts nothing before sshd restarts. Pin ports with
+  `[firewall] ssh_ports`.
 - **Hostname binds** are treated as wildcard.
 - **DHCP client replies** are accepted on any interface.
 - **Foreign-firewall detection** comes from the root receipt, so the "Compatibility recommended"
