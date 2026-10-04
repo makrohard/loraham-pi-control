@@ -148,8 +148,9 @@ lhpc webserver apply
 ```
 
 - `--mode`: `local` (loopback only), `lan` (only `--cidr` ranges pass) or `public`
-  (like `lan`; `--cidr 0.0.0.0/0` admits everyone). Non-`local` needs `--confirm-phrase enable-remote`;
-  a public range, `no-auth` or an `http` `--scheme` need `enable-remote-danger`.
+  (like `lan`; `--cidr 0.0.0.0/0` admits everyone). `local` needs no confirm phrase, even with
+  `no-auth` or `http`. Non-`local` needs `--confirm-phrase enable-remote`; there a public range,
+  `no-auth` or an `http` `--scheme` need `enable-remote-danger`.
 - `--port`: `0` = not proxied (omitted: the saved port is kept). The console suggests console port + 1 + the page's
   position (first pages sorted by id, then further pages; fresh box: graywolf `8444`, meshcom
   `8445`, meshcore `8446`, meshtastic `8447`, reticulum `8448`), skipping ports already saved;
