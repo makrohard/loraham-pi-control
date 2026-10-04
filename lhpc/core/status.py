@@ -400,7 +400,7 @@ _SEVERITY = {
 def summarize(snapshot: Snapshot) -> dict:
     """Counts for the dashboard overview tiles (presentation-neutral). `states` counts
     components; `stack_states` counts stacks by their rollup (a stack whose main is dead while
-    its sidecars run is degraded), the unit the tiles show beside the stack count."""
+    its sidecars run is failed), the unit the tiles show beside the stack count."""
     states: dict[str, int] = {}
     components = 0
     for ss in snapshot.stacks:
@@ -452,13 +452,14 @@ def rollup_states(snapshot: Snapshot) -> dict[str, str]:
             if _SEVERITY[st.run_state] > _SEVERITY[worst]:
                 worst = st.run_state
         # A stack whose MAIN component is stopped (or not installed) while another of its components
-        # runs is only partially running (e.g. the node killed, its GPS bridge and web UI still up):
-        # degraded, not running. An interactive main never runs under lhpc, so it cannot trigger this.
+        # runs has lost its main process (e.g. the node crashed, its GPS bridge and web UI still
+        # up): failed — not degraded, which means the main runs but an endpoint is not ready. An
+        # interactive main never runs under lhpc, so it cannot trigger this.
         main = next((c for c in ss.stack.components if c.id == ss.stack.main), None)
         main_st = ss.components.get(ss.stack.main)
         if (worst is RunState.RUNNING and main is not None and not main.interactive
                 and main_st is not None and main_st.run_state in (RunState.STOPPED, RunState.NOT_INSTALLED)):
-            worst = RunState.DEGRADED
+            worst = RunState.FAILED
         out[ss.stack.id] = worst.value
     return out
 

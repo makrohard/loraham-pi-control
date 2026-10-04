@@ -461,19 +461,23 @@ def _stack_snapshot(svc, stack_id, states):
     return snap
 
 
-def test_rollup_is_degraded_when_the_main_is_down_but_sidecars_run(tmp_path):
+def test_rollup_is_failed_when_the_main_is_down_but_sidecars_run(tmp_path):
     # e293 (0.10.0 candidate): after `kill -9` of meshcore-node the stack still read "(running)" —
-    # its gps bridge and web UI were up. A stack whose MAIN component is stopped while another
-    # component runs is partially running: degraded, not running.
+    # its gps bridge and web UI were up. Finding 78 (meshtasticd's assertion abort): "degraded"
+    # did not tell a dead main process from a main whose endpoint is not ready. A stack whose
+    # MAIN component is stopped while another component runs is failed; degraded stays the
+    # running main with an endpoint down.
     from lhpc.core.services import ControllerService
     from lhpc.core.status import rollup_states
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     up = RunState.RUNNING
     killed = {"meshcore-gps": up, "meshcore-webui": up, "meshcore-node": RunState.STOPPED}
-    assert rollup_states(_stack_snapshot(svc, "meshcore", killed))["meshcore"] == "degraded"
-    # a main whose source is missing reads NOT_INSTALLED, which ranks below RUNNING: still degraded
+    assert rollup_states(_stack_snapshot(svc, "meshcore", killed))["meshcore"] == "failed"
+    # a main whose source is missing reads NOT_INSTALLED, which ranks below RUNNING: still failed
     missing = dict(killed, **{"meshcore-node": RunState.NOT_INSTALLED})
-    assert rollup_states(_stack_snapshot(svc, "meshcore", missing))["meshcore"] == "degraded"
+    assert rollup_states(_stack_snapshot(svc, "meshcore", missing))["meshcore"] == "failed"
+    endpoint_down = dict(killed, **{"meshcore-node": RunState.DEGRADED})
+    assert rollup_states(_stack_snapshot(svc, "meshcore", endpoint_down))["meshcore"] == "degraded"
     healthy = {"meshcore-gps": up, "meshcore-webui": up, "meshcore-node": up}
     assert rollup_states(_stack_snapshot(svc, "meshcore", healthy))["meshcore"] == "running"
     assert rollup_states(_stack_snapshot(svc, "meshcore", {}))["meshcore"] == "stopped"
@@ -485,8 +489,8 @@ def test_rollup_is_degraded_when_the_main_is_down_but_sidecars_run(tmp_path):
     assert rollup_states(_stack_snapshot(svc, "chat", {}))["chat"] == "stopped"
 
 
-def test_the_summary_counts_a_stack_with_a_dead_main_as_degraded(tmp_path):
-    # Agent 4, e293: after `kill -9` of meshcore-node the console tile read "0 Degraded / failed"
+def test_the_summary_counts_a_stack_with_a_dead_main_as_failed(tmp_path):
+    # e293: after `kill -9` of meshcore-node the console tile read "0 Degraded / failed"
     # because the tiles counted COMPONENT states. They now count stacks by their rollup, the unit
     # of the Stacks tile beside them. (The page's tiles: tests/web/test_web.py.)
     from lhpc.core.services import ControllerService
@@ -495,4 +499,4 @@ def test_the_summary_counts_a_stack_with_a_dead_main_as_degraded(tmp_path):
     up = RunState.RUNNING
     snap = _stack_snapshot(svc, "meshcore",
                            {"meshcore-gps": up, "meshcore-webui": up, "meshcore-node": RunState.STOPPED})
-    assert summarize(snap)["stack_states"] == {"degraded": 1}
+    assert summarize(snap)["stack_states"] == {"failed": 1}
