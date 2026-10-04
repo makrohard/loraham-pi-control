@@ -30,7 +30,7 @@ The MeshCom components, start order and pins: [stacks/meshcom.md](stacks/meshcom
 [[stack]]
 id = "meshcom"
 name = "MeshCom (QEMU)"
-summary = "MeshCom firmware under QEMU, bridged to the daemon. 433 MHz, daemon MANAGED."
+summary = "MeshCom firmware under QEMU, bridged to the daemon. 433 MHz, daemon MANAGED. Order: daemon -> bridge -> GPS -> QEMU."
 main = "meshcom-qemu"          # the app; the others are its dependencies
 ```
 
@@ -73,7 +73,7 @@ Every component executes [**shell-free**](architecture.md#safety-model):
   `{runtime}`, `{source}`, `{band}` stay; `build`/`test` are split verbatim.
 - **Structured** `run_argv` / `build_steps` / `test_argv`: required when the command contains
   any of `&& || | ; $( \` > < ${ &` or a shell word token (`cd`, `env`, `export`, `exec`,
-  `sleep`, `mkdir`, `chmod`, `ln`, `rm`, `set`). A shorthand with shell syntax fails the
+  `sleep`, `mkdir`, `chmod`, `ln`, `rm`, `set`). A shell-syntax shorthand without its structured field fails the
   manifest load; there is no shell fallback.
 
 ### Build
@@ -86,7 +86,7 @@ at a 24-hour runaway guard; `build_timeout` raises that guard for a build that n
 ```toml
   build_steps = [
     { argv = ["cmake", "-S", ".", "-B", "build"] },
-    { argv = ["cmake", "--build", "build"] },
+    { argv = ["cmake", "--build", "build"], attributable = true },
   ]
   bin = "build/meshcom-loraham-bridge"
 ```
@@ -99,7 +99,7 @@ at a 24-hour runaway guard; `build_timeout` raises that guard for a build that n
 - `endpoint`: every `ready = true` endpoint came up (below);
 - `manual`: an interactive TUI the operator runs themselves;
 - `gps-feed`: the feed's own readiness marker (never the endpoint path existing);
-- `daemon-band`: the LoRaHAM daemon, verified like `process`;
+- `daemon-band`: the LoRaHAM daemon, verified per band by `GET STATUS` reporting `RADIO=READY`;
 - `external-systemd`: a `units`-only component (no `run_argv`): LHPC prints
   `sudo systemctl start <unit>` and probes the unit.
 
@@ -111,7 +111,7 @@ cannot run, refused as a direct start target.
 
 ```toml
   readiness = "endpoint"
-  run = "build/meshcom-loraham-bridge {bind} {port} {backend} {password_file} {ping_interval} {pong_timeout}"
+  run = "build/meshcom-loraham-bridge {bind} {port} {backend} {password_file} {ping_interval} {pong_timeout} {rf_log} --rflog-path {runtime}/logs/rf-meshcom.log"
 
     [stack.component.process]
     exec_name = "meshcom-loraham-bridge"   # identity for ownership + stop
@@ -137,8 +137,8 @@ A `ready = true` endpoint gates start/stop verification (TCP ones must be loopba
 
 A `client = true` endpoint with `scheme = "http"` or `"https"` makes the component a proxied web
 **page** behind the console's nginx TLS/mTLS gate ([webserver](webserver.md#stack-web-ui-proxies)).
-Optional `proxy_deny_paths` lists request paths the proxy refuses, spelling-tolerant (`/api/x`
-also refuses `/api/x/…`, `/api-x`, `/api.x`). A stack's first page is addressed by the stack id,
+Optional `proxy_deny_paths` lists request paths the proxy refuses, spelling-tolerant (`/api/set_mode`
+also refuses `/api/set_mode/…`, `/api/set-mode`, `/api/set.mode`). A stack's first page is addressed by the stack id,
 any further one by `<stack>-<component>`; "first" is manifest order with `main` sorted last. Page
 ids must not collide (checked at load). A loopback `address` keeps the raw port off the network;
 every TCP listener also needs `firewall` metadata and a `tcp.port.<n>` claim.
@@ -200,7 +200,7 @@ The web console has the same actions per stack.
 1. Copy a similar `[[stack]]` block and rename `id` / `name` / `main`.
 2. Give each component the sections above, plus `requires_daemon_tx` and `band`
    ([TX safety](operations.md#tx-safety)).
-3. `lhpc install <id> --check` → `lhpc build <id>` → `lhpc stack start <id>`; read the typed
+3. `lhpc install <id> --check` → `lhpc install <id> --source pinned --yes` → `lhpc build <id>` → `lhpc stack start <id>`; read the typed
    outcomes.
 
 ## Maintain an existing stack

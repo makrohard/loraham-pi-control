@@ -48,8 +48,8 @@ callsign, the GPS source and the iGate config; a failed push fails the start.
 | `gate_rf_to_is` | `1` | RF → APRS-IS |
 | `gate_is_to_rf` | `0` | APRS-IS → RF — **transmits** |
 
-The band (433/868) selects the TNC/daemon chain; choose it in the console (`lhpc stack start`
-takes no band flag).
+The band (433/868) selects the TNC/daemon chain; choose it in the console or with
+`lhpc stack start graywolf --band 868`.
 
 **These params are LHPC-owned**: a web-UI edit lasts until the next start — use `lhpc config
 graywolf <param> <value>` (e.g. `igate 1`). Everything else — beacons, digipeater rules, smart

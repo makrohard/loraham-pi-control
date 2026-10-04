@@ -9,7 +9,7 @@ socket consumer, never a radio owner: every frame goes out through the daemon in
 | Source / pin | `src/loraham-kiss-tnc` ← `makrohard/loraham-kiss-tnc` |
 | Run | `./loraham-kiss-tnc --config loraham_kiss_tnc.conf.example` + the params below as flags (`--kiss-port`, `--bind`, `--kiss-host`, `--rx-freq`, `--tx-freq`, `--data-socket`, `--conf-socket`, `--rx-only`, `--verbose`, `--rflog`) |
 | Endpoints | KISS over TCP `127.0.0.1:8001` (no auth — `--bind` is the only gate) · serial PTY `<runtime>/state/loraham_kiss` (`socat PTY,link=… TCP:127.0.0.1:8001`) |
-| Resources | `tcp.port.8001` exclusive · `loraham.daemon-socket.<band>` consumer · `serial.loraham-kiss` exclusive (PTY) |
+| Resources | `tcp.port.8001` exclusive · `loraham.daemon-socket.433` consumer · `serial.loraham-kiss` exclusive (PTY) |
 | Depends on | `loraham-daemon`, `requires_daemon_tx = MANAGED` |
 | Install channel | source only — `bash build.sh` |
 
