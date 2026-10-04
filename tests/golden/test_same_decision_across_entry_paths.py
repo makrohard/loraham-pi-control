@@ -323,10 +323,14 @@ def firewall_pending_host(monkeypatch):
                         lambda self: {"config_ok": True, "live_ok": False})
 
 
+PENDING_SAVED = {"kiss_port": "8001", "verbose": "on"}
+
+
 def _pending_config_journal(box):
-    """A Settings save crashed mid-write: kiss.toml torn, its journal (with the pre-image) left."""
+    """A Settings save crashed mid-write: kiss.toml torn, its journal (with the pre-image) left.
+    The pre-image holds a non-default setting, so only its restore can bring it back."""
     f = box.root / "config" / "stacks" / "kiss.toml"
-    cfgmod.save_stack_config(box.svc._paths, "kiss", {"kiss_port": "8001"}, "")
+    cfgmod.save_stack_config(box.svc._paths, "kiss", PENDING_SAVED, "")
     pre = f.read_text()
     f.write_text("# torn\n")
     (box.root / "state" / "config-txn.json").write_text(json.dumps({"version": 1, "targets": [
@@ -495,15 +499,16 @@ def test_tx_without_high_power_permission(entry):
 
 def test_pending_config_journal(entry):
     """intended: a config journal a crashed save left behind is finished by every path's process
-    at startup (the CLI, the web's child, the job runner, the boot unit) — the torn file restored,
-    the journal gone — and the start then succeeds alike."""
+    at startup (the CLI, the web's child, the job runner, the boot unit) — the torn file restored
+    to its pre-image (its non-default setting read back), the journal gone — and the start then
+    succeeds alike."""
     res = _all(entry, "start", "kiss", _pending_config_journal)
     _same(res, started=True, refusal="ok", live=["loraham-kiss-tnc"],
           files=sorted(["config/stacks/kiss.toml", "state/config-txn.json", *KISS_STARTED]))
     assert _renders(res) == SUCCEEDED
     for r in res.values():
         assert not (r["root"] / "state" / "config-txn.json").exists()
-        assert "# torn" not in (r["root"] / "config" / "stacks" / "kiss.toml").read_text()
+        assert cfgmod.load_stack_config(Paths(runtime_root=r["root"]), "kiss") == PENDING_SAVED
 
 
 def test_damaged_client_index(entry):

@@ -62,19 +62,23 @@ def test_refused_by_validation(tmp_path, run_op):
 
 def test_pending_journal_is_recovered_first(tmp_path, run_op):
     """intended: a journal a crashed save left behind is finished under the lock (the pre-image
-    restored) BEFORE the new save journals and writes; no journal survives."""
+    restored) BEFORE the new save journals and writes; no journal survives. The pre-image carries
+    a second non-default setting the new save does not name: only the restored pre-image can
+    hand it to the new save, so it survives exactly."""
     svc = _svc(tmp_path)
-    assert svc.save_config_bundle("chat", values={"file_tx_freq": "434.500"}).ok
+    assert svc.save_config_bundle("chat", values={"file_tx_freq": "434.500",
+                                                  "file_dest": "CQ"}).ok
+    pre = _text("434.500") + 'file_dest = "CQ"\n'
+    assert (tmp_path / FILE).read_text() == pre
     (tmp_path / FILE).write_text("# torn\n")
     (tmp_path / "state/config-txn.json").write_text(json.dumps({"version": 1, "targets": [
-        {"kind": "stack", "rel": FILE, "pre": _text("434.500"), "existed": True,
-         "mode": 0o644}]}))
+        {"kind": "stack", "rel": FILE, "pre": pre, "existed": True, "mode": 0o644}]}))
     run = run_op(tmp_path, lambda: svc.save_config_bundle("chat", values={"file_tx_freq": "434.600"}))
     assert run.fields == SAVED
     assert run.phases == ["lock:config", "recheck:config-journal", "mutate:write:" + FILE,
                           "mutate:write:state/config-txn.json", "mutate:write:" + FILE]
     assert run.files == {"added": [], "removed": ["state/config-txn.json"], "changed": [FILE]}
-    assert (tmp_path / FILE).read_text() == _text("434.600")
+    assert (tmp_path / FILE).read_text() == _text("434.600") + 'file_dest = "CQ"\n'
 
 
 def test_unrecoverable_journal_refuses(tmp_path, run_op):
