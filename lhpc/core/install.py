@@ -685,8 +685,10 @@ class Installer:
                     action.status = "failed"
                     action.detail = ("update refused: "
                                      + carry_why.get("why", "local files could not be preserved")
-                                     + " — resolve it in the checkout (move or remove the local "
-                                       "file), then retry")
+                                     + " — the previous source is active again; resolve what is "
+                                       "named (a file in the way: move or remove it in the "
+                                       "checkout; a write error: free space under src/), then "
+                                       f"retry: lhpc update {comp.id} --yes")
                     return action
                 if outcome == "dirty":
                     # The owned candidate is discarded ONLY through its bound identity.
@@ -728,12 +730,16 @@ class Installer:
                     return action
                 if outcome != "activated":         # "failed-clean": no journal, safe to drop
                     self._cleanup_owned_staging(txn, handle, staging.name)   # handle-safe
+                    left = dest.with_name(f".{dest.name}.prev")
                     action.status, action.detail = "failed", (
-                        "activation failed — active source untouched. If "
-                        f"{self._source_rel(dest.with_name('.' + dest.name + '.prev'))} exists, it "
-                        "is left over from an earlier interrupted update and blocks every update "
-                        "of this source: move it out of src/ (lhpc no longer uses it), then retry "
-                        f"(lhpc update {comp.id} --yes)")
+                        f"refused: {left} is left over from an earlier interrupted update and "
+                        "blocks every update of this source — active source untouched; lhpc no "
+                        "longer uses it (it may hold your files): move it out of src/ (mv "
+                        f"{left} {self.paths.runtime_root.parent / (dest.name + '.prev.saved')}), "
+                        f"then retry: lhpc update {comp.id} --yes"
+                        if txn.leaf_kind(left.name) != "absent" else
+                        "activation failed — active source untouched; retry: "
+                        f"lhpc update {comp.id} --yes")
                     return action
                 return self._adopt_done(action, spec, dest, desc, source, signer_diags,
                                         expected=expected, kw_label=kw_label)

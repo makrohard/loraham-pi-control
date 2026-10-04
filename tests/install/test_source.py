@@ -3690,6 +3690,7 @@ def test_a_carry_failure_restores_the_prior_and_refuses(tmp_path, monkeypatch, v
 
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status == "failed" and "simulated copy failure" in action.detail
+    assert "lhpc update app --yes" in action.detail                    # the retry is named
     assert (dest / "file.txt").read_text() == "hello\n"                 # prior restored
     assert (dest / "notes.txt").read_text() == "keep me"                # local data intact
     assert not dest.with_name(".app.prev").exists()                     # nothing left archived
@@ -4835,3 +4836,19 @@ def test_a_staging_record_that_cannot_be_created_is_said_once(
     lines = [ln for ln in capsys.readouterr().err.splitlines() if ln.strip()]
     assert len(lines) == 1 and "staging record" in lines[0]
     assert _rec(inst) is not None
+
+
+def test_a_left_over_prior_refuses_naming_it_and_the_move(tmp_path, v2_update_env):
+    """A `.prev` no journal owns (an earlier interrupted update) blocks the update with nothing
+    changed, and the refusal names that directory, the move out of src/ and the retry."""
+    comp, inst, dest, _head = v2_update_env
+    left = dest.with_name(".app.prev")
+    left.mkdir()
+    (left / "mine.txt").write_text("old work")
+    action = inst.adopt_source(comp, force=True, source="dev")
+    assert action.status == "failed"
+    assert f"mv {left} " in action.detail and "lhpc update app --yes" in action.detail
+    assert (dest / "file.txt").read_text() == "hello\n"                 # active source untouched
+    assert (left / "mine.txt").read_text() == "old work"
+    assert sorted(p.name for p in dest.parent.iterdir()) == [".app.prev", "app"]
+    assert not inst._journal_path(dest).exists()
