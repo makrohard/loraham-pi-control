@@ -11,7 +11,13 @@ teardown, so production code that catches the `TypeError` cannot hide it.
 """
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+
 import pytest
+from repo_paths import REPO, TESTS
 
 from lhpc.core import binary_install as bi
 from lhpc.core import selfupdate
@@ -39,6 +45,41 @@ def test_a_refused_call_that_production_swallows_still_fails_the_test(monkeypatc
         pass
     assert signature_violations and "check_upstream" in signature_violations[0]
     signature_violations.clear()
+
+
+_SWALLOWING_TEST = """
+from lhpc.core import selfupdate
+
+
+def test_swallows(monkeypatch):
+    monkeypatch.setattr(selfupdate, "check_upstream", lambda *a, **k: {"ok": True})
+    try:
+        selfupdate.check_upstream(None, remote="origin")
+    except TypeError:                                   # production swallowing the refusal
+        pass
+"""
+
+
+def test_the_teardown_fails_a_test_that_swallowed_the_refusal(tmp_path):
+    """The case above clears the list it checked, so it cannot see the teardown's enforcement.
+    A separate pytest run with this suite's conftest, of a test that swallows the refusal and
+    clears nothing: the test's call passes, its teardown errors naming the refused fake, and
+    the run fails."""
+    (tmp_path / "test_swallows.py").write_text(_SWALLOWING_TEST)
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(TESTS), str(REPO)])}
+    run = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:xdist",
+         "-p", "conftest", f"--basetemp={tmp_path / 'bt'}", f"--junitxml={tmp_path / 'r.xml'}",
+         "test_swallows.py"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120, check=False)
+    assert run.returncode == 1, run.stdout + run.stderr
+    cases = ET.parse(tmp_path / "r.xml").getroot().iter("testcase")
+    [(name, outcome)] = [(c.get("name"), [(e.tag, e.get("message", "")) for e in c])
+                         for c in cases]
+    assert name == "test_swallows"
+    [(tag, message)] = outcome
+    assert tag == "error" and message.startswith("failed on teardown")
+    assert "lhpc.core.selfupdate.check_upstream" in message
 
 
 def test_a_fake_method_on_the_class_is_bound_with_self(monkeypatch, tmp_path, signature_violations):
