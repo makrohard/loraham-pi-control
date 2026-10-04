@@ -996,6 +996,15 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     details.append(f"  ! RESTART REQUIRED: '{sid}' — saved settings differ "
                                    f"from the running stack (lhpc stack stop {sid} && "
                                    f"lhpc stack start {sid})")
+        # A source update that is not finished (named states: prior-in-use, prior-dirty,
+        # update-interrupted) — every source operation waits on it, so it is said here.
+        try:
+            pending = self._installer().pending_states()
+        except Exception:                       # never let a diagnostic break status
+            pending = []
+        if pending:
+            details.append("")
+            details.extend(f"  ! {rel}: {word} — {how}" for rel, word, how in pending)
         if not snap.runtime_root_exists:
             details.append("")
             details.append(

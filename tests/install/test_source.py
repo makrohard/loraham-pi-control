@@ -4405,3 +4405,370 @@ def test_a_journal_that_cannot_be_created_drops_the_candidate_and_names_the_retr
     assert sorted(p.name for p in inst.paths.under("src").iterdir()) == ["app"]
     assert (inst.paths.under("src", "app") / "file.txt").read_text() == "hello\n"
     assert list(inst.paths.under("state", "source-txn").iterdir()) == []
+
+
+# Maps argv[1] shared and writable through libc and closes the descriptor (Python's `mmap` object
+# keeps a descriptor of its own); `addr` and `libc` stay for the caller.
+_LIBC_MAP = (
+    "import ctypes, os, sys\nlibc = ctypes.CDLL(None, use_errno=True)\n"
+    "libc.mmap.restype = ctypes.c_void_p\n"
+    "libc.mmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_int, "
+    "ctypes.c_int, ctypes.c_long]\n"
+    "fd = os.open(sys.argv[1], os.O_RDWR)\n"
+    "addr = libc.mmap(None, 4, 3, 1, fd, 0)\nos.close(fd)\n")      # PROT_READ|WRITE, MAP_SHARED
+
+
+_LATE_WRITERS = {
+    # a shell-like process whose working directory is the source: it creates a file there later
+    "working directory": (
+        "import os, sys\nos.chdir(sys.argv[1])\nprint('open', flush=True)\nsys.stdin.readline()\n"
+        "open('late.txt', 'w').write('late\\n')\nprint('done', flush=True)\nsys.stdin.readline()",
+        "late.txt", "late\n"),
+    # a process that mapped the stack's file shared and writable, then closed the descriptor
+    # (libc's mmap: Python's `mmap` object keeps a descriptor of its own)
+    "shared mapping": (
+        "sys_argv1 = __import__('sys').argv[1]\n__import__('sys').argv[1] = sys_argv1 + '/log.txt'\n"
+        + _LIBC_MAP + "print('open', flush=True)\nsys.stdin.readline()\n"
+        "ctypes.memmove(addr, b'late', 4)\nlibc.msync(ctypes.c_void_p(addr), 4, 4)\n"   # MS_SYNC
+        "print('done', flush=True)\nsys.stdin.readline()",
+        "log.txt", "late"),
+}
+
+
+@pytest.mark.parametrize("how", sorted(_LATE_WRITERS))
+def test_a_write_by_a_process_inside_the_prior_without_a_descriptor_is_never_lost(
+        tmp_path, git, make_repo, installer, monkeypatch, how):
+    """Beside an open descriptor, a process reaches the archived prior through its working
+    directory or a shared writable mapping of a file in it. Either keeps the prior (the process
+    named), so its write after the last scan survives."""
+    import subprocess
+    import sys
+    script, leaf, late = _LATE_WRITERS[how]
+    repo = tmp_path / "rt" / "local" / "app"
+    make_repo(repo)
+    comp = _comp()
+    inst = installer(comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    dest = inst.paths.under("src", "app")
+    (dest / "log.txt").write_text("xxxx")                                # the stack's own file
+    (repo / "file.txt").write_text("v2\n")
+    git(repo, "commit", "-qam", "v2")
+    writer = subprocess.Popen([sys.executable, "-c", script, str(dest)],
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, text=True)
+    try:
+        assert writer.stdout.readline() == "open\n"
+        written = []
+
+        def write_now():
+            if not written:
+                writer.stdin.write("go\n")
+                writer.stdin.flush()
+                written.append(writer.stdout.readline())
+        real_scan = Installer._prev_dirty_scan
+
+        def scan_then_write(self, txn, d, prev, *a, **kw):
+            result = real_scan(self, txn, d, prev, *a, **kw)
+            if ".quarantine-" in prev.name:                 # the last scan before the removal
+                write_now()
+            return result
+        monkeypatch.setattr(Installer, "_prev_dirty_scan", scan_then_write)
+
+        action = inst.adopt_source(comp, force=True, source="dev")
+        write_now()
+        assert (dest / "file.txt").read_text() == "v2\n"            # the new source is active
+        kept = inst.paths.under("src", ".app.prev") / leaf
+        assert kept.is_file() and kept.read_text() == late          # the late write survived
+        assert action.status == "failed" and f"pid {writer.pid}" in action.detail
+    finally:
+        writer.stdin.close()
+        writer.wait(timeout=10)
+
+
+def _fake_proc(tmp_path, uid, *, cwd="/"):
+    """A /proc with one other process (pid 4242) whose status names `uid`."""
+    proc = tmp_path / "proc"
+    pdir = proc / "4242"
+    (pdir / "fd").mkdir(parents=True)
+    (pdir / "status").write_text(f"Name:\tx\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n")
+    (pdir / "maps").write_text("")
+    os.symlink(cwd, pdir / "cwd")
+    os.symlink("/", pdir / "root")
+    return proc
+
+
+@pytest.mark.parametrize("how", ["open for writing", "mapped shared"])
+def test_a_writer_whose_proc_entries_cannot_be_read_is_still_a_holder(tmp_path, monkeypatch, how):
+    """Fail-closed: a process whose /proc entries this one cannot read (another user's, a
+    non-dumpable one) is not invisible — the kernel refuses a lease on a file it has open for
+    writing or mapped shared and writable, whoever it is."""
+    import subprocess
+    import sys
+    tree = tmp_path / "src"
+    (tree / "q" / "sub").mkdir(parents=True)
+    (tree / "q" / "sub" / "log.txt").write_text("xxxx")
+    script = {"open for writing": "import sys\nf = open(sys.argv[1], 'a')\n",
+              "mapped shared": _LIBC_MAP}[how]
+    child = subprocess.Popen([sys.executable, "-c", script + "print('open', flush=True)\n"
+                              "sys.stdin.readline()", str(tree / "q" / "sub" / "log.txt")],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        assert child.stdout.readline() == "open\n"
+        hidden = f"/proc/{child.pid}/"                       # its entries: unreadable to us
+
+        def deny(real):
+            def call(p, *a, **kw):
+                if str(p).startswith(hidden):
+                    raise PermissionError(errno.EACCES, "Permission denied")
+                return real(p, *a, **kw)
+            return call
+        monkeypatch.setattr(os, "readlink", deny(os.readlink))
+        monkeypatch.setattr(os, "listdir", deny(os.listdir))
+        monkeypatch.setattr(source_fs, "open", deny(open), raising=False)
+        fd = os.open(tree, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            got = source_fs.holders(fd, "q")
+        finally:
+            os.close(fd)
+        assert got == ["q/sub/log.txt is open for writing or mapped writable in another process"], got
+    finally:
+        child.stdin.close()
+        child.wait(timeout=10)
+
+
+def test_a_file_that_cannot_be_checked_counts_as_held(tmp_path, monkeypatch):
+    import fcntl
+    tree = tmp_path / "src"
+    (tree / "q").mkdir(parents=True)
+    (tree / "q" / "log.txt").write_text("x")
+    real = fcntl.fcntl
+
+    def no_leases(fd, cmd, *a):
+        if cmd == fcntl.F_SETLEASE:
+            raise OSError(errno.EINVAL, "Invalid argument")
+        return real(fd, cmd, *a)
+    monkeypatch.setattr(fcntl, "fcntl", no_leases)
+    fd = os.open(tree, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        got = source_fs.holders(fd, "q", proc=str(_fake_proc(tmp_path, 0)))
+    finally:
+        os.close(fd)
+    assert got == ["q/log.txt could not be checked ([Errno 22] Invalid argument)"], got
+
+
+def test_a_working_directory_and_a_shared_mapping_inside_are_holders_a_private_one_is_not(
+        tmp_path):
+    tree = tmp_path / "src"
+    (tree / "q" / "sub").mkdir(parents=True)
+    fd = os.open(tree, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        proc = _fake_proc(tmp_path, os.getuid(), cwd=str(tree / "q" / "sub"))
+        assert source_fs.holders(fd, "q", proc=str(proc)) == [
+            "pid 4242 (working directory inside)"]
+        os.unlink(proc / "4242" / "cwd"); os.symlink("/", proc / "4242" / "cwd")
+        mapped = tree / "q" / "log.txt"
+        (proc / "4242" / "maps").write_text(
+            f"7f00-7f01 rw-p 00000000 08:01 12 {mapped}\n")
+        assert source_fs.holders(fd, "q", proc=str(proc)) == []
+        (proc / "4242" / "maps").write_text(
+            f"7f00-7f01 rw-s 00000000 08:01 12 {mapped} (deleted)\n")
+        assert source_fs.holders(fd, "q", proc=str(proc)) == [
+            "pid 4242 (shared writable mapping)"]
+    finally:
+        os.close(fd)
+
+
+@pytest.mark.parametrize("wrote", [False, True])
+def test_a_prior_kept_in_use_is_removed_by_the_next_command_or_named_prior_dirty(
+        tmp_path, git, make_repo, installer, wrote):
+    """`prior-in-use`: the new source is active, the archived prior is kept only because another
+    process could still write into it, and the transaction stays journaled. Once that process has
+    ended, the next recovery removes the prior — unless it did write there: then it is
+    `prior-dirty`, never deleted, and moving it out of src/ (the one command named) resolves it:
+    `status` shows nothing more and the next source command goes ahead."""
+    import subprocess
+    import sys
+    repo = tmp_path / "rt" / "local" / "app"
+    make_repo(repo)
+    comp = _comp()
+    inst = installer(comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    dest = inst.paths.under("src", "app")
+    (dest / "log.txt").write_text("")
+    (repo / "file.txt").write_text("v2\n")
+    git(repo, "commit", "-qam", "v2")
+    holder = subprocess.Popen(
+        [sys.executable, "-c", "import sys\nf = open(sys.argv[1], 'a')\nprint('open', flush=True)\n"
+         "if sys.stdin.readline() == 'write\\n':\n    f.write('late\\n')\nf.close()",
+         str(dest / "log.txt")], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    assert holder.stdout.readline() == "open\n"
+    action = inst.adopt_source(comp, force=True, source="dev")
+    assert action.status == "failed" and action.detail.startswith("prior-in-use:"), action.detail
+    assert f"pid {holder.pid}" in action.detail and "lhpc update app --yes" in action.detail
+    assert [w for _r, w, _h in inst.pending_states()] == ["prior-in-use"]
+    holder.communicate("write\n" if wrote else "done\n", timeout=10)
+    msgs = inst.recover_source_activations()
+    prev = inst.paths.under("src", ".app.prev")
+    if not wrote:
+        assert not prev.exists() and not inst._pending_journals(), msgs
+        return
+    assert (prev / "log.txt").read_text() == "late\n"                  # never deleted
+    states = inst.pending_states()
+    assert [w for _r, w, _h in states] == ["prior-dirty"] and "mv " in states[0][2], states
+    saved = tmp_path / "app.prev.saved"
+    assert f"mv {prev} {saved}" in states[0][2]
+    shutil.move(str(prev), str(saved))                                  # the one command
+    assert inst.pending_states() == []                                  # nothing more to do
+    assert inst.adopt_source(comp, force=True, source="dev").status in ("done", "skipped")
+    assert not inst._pending_journals() and (saved / "log.txt").read_text() == "late\n"
+
+
+def _held_prior_update(tmp_path, git, make_repo, installer):
+    """An update whose archived prior is held by another process (a file in it open for
+    appending): `(inst, comp, holder, action)`; the holder ends on `holder.communicate("\\n")`."""
+    import subprocess
+    import sys
+    repo = tmp_path / "rt" / "local" / "app"
+    make_repo(repo)
+    comp = _comp()
+    inst = installer(comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    dest = inst.paths.under("src", "app")
+    (dest / "log.txt").write_text("")
+    (repo / "file.txt").write_text("v2\n")
+    git(repo, "commit", "-qam", "v2")
+    holder = subprocess.Popen(
+        [sys.executable, "-c", "import sys\nf = open(sys.argv[1], 'a')\nprint('open', flush=True)\n"
+         "sys.stdin.readline()", str(dest / "log.txt")],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    assert holder.stdout.readline() == "open\n"
+    return inst, comp, holder, inst.adopt_source(comp, force=True, source="dev")
+
+
+def test_an_activated_journal_reads_prior_in_use_only_while_the_probe_finds_a_holder(
+        tmp_path, git, make_repo, installer):
+    # The journal stays `activated` either way; the word comes from the in-use probe at the
+    # moment `status` asks: a holder — `prior-in-use`; none — `prior-dirty`, with its one command.
+    inst, _, holder, action = _held_prior_update(tmp_path, git, make_repo, installer)
+    assert action.detail.startswith("prior-in-use:"), action.detail
+    [(rel, word, how)] = inst.pending_states()
+    assert (rel, word) == ("src/app", "prior-in-use") and f"pid {holder.pid}" in how, how
+    holder.communicate("\n", timeout=10)
+    [(rel, word, how)] = inst.pending_states()
+    assert (rel, word) == ("src/app", "prior-dirty"), how
+    assert "resolve it with one command" in how and how.count("mv ") == 1, how
+
+
+@pytest.mark.parametrize("why", ["in use", "late local changes"])
+def test_a_journal_that_cannot_record_the_kept_prior_ends_recovery_required(
+        tmp_path, git, make_repo, installer, monkeypatch, request, why):
+    # The journal is the truth: when it cannot record why the archived prior is kept, the update
+    # says recovery-required — never `prior-in-use` / `prior-dirty`, which `status` could not show.
+    real = Installer._update_journal
+
+    def no_record(self, jh, dest, prev, staging, state):
+        if prev.exists() and dest.exists() and state in ("activated", "prior-dirty-retained") \
+                and jh.get("_activated"):
+            return False
+        jh["_activated"] = jh.get("_activated") or state == "activated"
+        return real(self, jh, dest, prev, staging, state)
+    monkeypatch.setattr(Installer, "_update_journal", no_record)
+    if why == "in use":
+        inst, _c, holder, action = _held_prior_update(tmp_path, git, make_repo, installer)
+        holder.communicate("\n", timeout=10)
+    else:
+        comp, inst, dest, _h = request.getfixturevalue("v2_update_env")
+        prev = dest.with_name(".app.prev")
+        _seam(monkeypatch, "pre-prev-cleanup",
+              lambda _p: (prev / "file.txt").write_text("late operator edit\n"))
+        action = inst.adopt_source(comp, force=True, source="dev")
+    assert action.status == "failed" and action.detail.startswith("recovery-required"), \
+        action.detail
+    assert "could not record that" in action.detail and "nothing was deleted" in action.detail
+    assert inst.paths.under("src", ".app.prev").is_dir()
+    if why == "in use":
+        # `status` agrees: the journal still says `activated` with the prior's identity from
+        # before our rename aside and back, which the removal gate would refuse.
+        [(rel, word, how)] = inst.pending_states()
+        assert (rel, word) == ("src/app", "recovery-required"), how
+        assert "not provably the one the journal recorded" in how and "mv " in how, how
+
+
+def test_recovery_that_cannot_record_the_kept_prior_says_recovery_required(
+        tmp_path, git, make_repo, installer, monkeypatch):
+    # The same in recovery: a prior still in use, and the journal rewrite fails.
+    from lhpc.core import runtime_fs
+    inst, _c, holder, action = _held_prior_update(tmp_path, git, make_repo, installer)
+    assert action.detail.startswith("prior-in-use:")
+    monkeypatch.setattr(runtime_fs.OwnedMarker, "rewrite", lambda self, text: False)
+    try:
+        msgs = inst.recover_source_activations()
+    finally:
+        holder.communicate("\n", timeout=10)
+    assert any(m.startswith("recovery-required for app: the update activated the new source")
+               and "could not record that" in m for m in msgs), msgs
+    assert not any("prior-in-use" in m for m in msgs), msgs
+    assert inst.paths.under("src", ".app.prev").is_dir()
+    [(rel, word, how)] = inst.pending_states()
+    assert (rel, word) == ("src/app", "recovery-required"), how
+
+
+def test_status_shows_an_unfinished_source_update_with_its_word(tmp_path, monkeypatch):
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert not any("prior-" in d for d in svc.status().details)
+    monkeypatch.setattr(Installer, "pending_states", lambda self: [
+        ("src/comp", "prior-dirty", "keep it by moving it out of src/: mv a b")])
+    assert "  ! src/comp: prior-dirty — keep it by moving it out of src/: mv a b" in \
+        svc.status().details
+
+
+def test_a_write_through_a_descriptor_opened_before_the_update_is_never_lost(
+        tmp_path, git, make_repo, installer, monkeypatch):
+    """Renaming the archived prior aside stops pathname writers, not a process that opened a file
+    in it earlier: its write after the last scan would land in a tree about to be deleted. While
+    another process holds a descriptor inside the prior, it is retained with its journal (the
+    holder named), so that write survives."""
+    import subprocess
+    import sys
+    repo = tmp_path / "rt" / "local" / "app"
+    make_repo(repo)
+    comp = _comp()
+    inst = installer(comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    dest = inst.paths.under("src", "app")
+    (dest / "log.txt").write_text("")                                   # the stack's own log
+    (repo / "file.txt").write_text("v2\n")
+    git(repo, "commit", "-qam", "v2")
+    writer = subprocess.Popen(
+        [sys.executable, "-c", "import sys\nf = open(sys.argv[1], 'a')\nprint('open', flush=True)\n"
+         "sys.stdin.readline()\nf.write('late\\n')\nf.flush()\nprint('done', flush=True)\n"
+         "sys.stdin.readline()", str(dest / "log.txt")],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        assert writer.stdout.readline() == "open\n"
+        written = []
+
+        def write_now():
+            if not written:
+                writer.stdin.write("go\n")
+                writer.stdin.flush()
+                written.append(writer.stdout.readline())
+        real_scan = Installer._prev_dirty_scan
+
+        def scan_then_write(self, txn, d, prev, *a, **kw):
+            result = real_scan(self, txn, d, prev, *a, **kw)
+            if ".quarantine-" in prev.name:                 # the last scan before the removal
+                write_now()
+            return result
+        monkeypatch.setattr(Installer, "_prev_dirty_scan", scan_then_write)
+
+        action = inst.adopt_source(comp, force=True, source="dev")
+        write_now()
+        assert written == ["done\n"]
+        assert (dest / "file.txt").read_text() == "v2\n"            # the new source is active
+        kept = inst.paths.under("src", ".app.prev") / "log.txt"
+        assert kept.read_text() == "late\n"                         # the late write survived
+        assert action.status == "failed" and str(writer.pid) in action.detail
+    finally:
+        writer.stdin.close()
+        writer.wait(timeout=10)

@@ -651,6 +651,19 @@ class Installer:
                     action.detail = ("a leaf appeared at the destination during activation — "
                                      "refusing to overwrite it (injected content untouched)")
                     return action
+                if outcome == "prior-in-use":
+                    # The NEW source IS active and its record coherent; the archived prior is
+                    # kept only while another process can still write into it. The transaction
+                    # stays journaled: the next source command's recovery removes it once free.
+                    action.status = "failed"
+                    action.provenance = ""
+                    action.detail = (
+                        "prior-in-use: the update activated the new source, but its archived "
+                        f"prior at {self._source_rel(dest.with_name('.' + dest.name + '.prev'))} "
+                        f"is kept — {prev_why.get('why', 'still in use')}. Once that process has "
+                        "ended, the next lhpc source command removes it: "
+                        f"lhpc update {comp.id} --yes")
+                    return action
                 if outcome == "prior-dirty":
                     # The NEW source IS active and its ownership record is coherent — but
                     # the archived prior gained late local changes and is RETAINED with the
@@ -662,8 +675,8 @@ class Installer:
                         f"prior at {self._source_rel(dest.with_name('.' + dest.name + '.prev'))} "
                         "still holds local content — "
                         f"{prev_why.get('why', 'late local changes')} — it is RETAINED with the "
-                        "transaction journal (inspect/salvage, then remove the .prev directory "
-                        "and the journal manually; automatic recovery will not delete it)")
+                        "transaction journal and never deleted by lhpc; "
+                        + self._prior_dirty_remedy(dest))
                     return action
                 if outcome == "carry-failed":
                     # A local addition could not be reproduced in the new source. The prior is
@@ -709,8 +722,9 @@ class Installer:
                     return action
                 if outcome == "recovery-required":
                     action.status = "failed"
-                    action.detail = ("recovery-required: source transaction left a retained "
-                                     "journal — candidate/prior evidence preserved")
+                    action.detail = prev_why.get("unrecorded") or (
+                        "recovery-required: source transaction left a retained "
+                        "journal — candidate/prior evidence preserved")
                     return action
                 if outcome != "activated":         # "failed-clean": no journal, safe to drop
                     self._cleanup_owned_staging(txn, handle, staging.name)   # handle-safe
@@ -1248,6 +1262,93 @@ class Installer:
                       if c.source and c.source.path == self._source_rel(dest)})
         return f"lhpc update {ids[0] if ids else '<stack>'} --yes"
 
+    def _prior_left(self, dest: Path, prev: Path, staging: Path, pident=None) -> tuple[str, list]:
+        """Where a finished activation's archived prior stands (status only): ("gone", []) —
+        moved away or removed, the active source a directory; ("kept", holders) — still at
+        `.prev` AS RECORDED (`pident`, compared as the caller passes it), with what the in-use
+        probe finds can write into it now (none: []); ("unproven", []) — at `.prev` but not the
+        identity the journal recorded; ("", []) — anything else (an interrupted removal, an
+        unsafe parent): the next command decides."""
+        from . import source_fs
+        try:
+            with source_fs.ManagedSourceTransaction(self.paths, dest.parent) as txn:
+                if txn.leaf_kind(prev.name) == "absent":
+                    gone = (txn.leaf_kind(self._prev_quarantine(prev, staging)) == "absent"
+                            and txn.usable(dest.name))
+                    return ("gone" if gone else ""), []
+                if txn.leaf_kind(prev.name) != "dir":
+                    return "", []
+                if not source_fs.ident_matches(txn.fd, prev.name, pident):
+                    return "unproven", []
+                return "kept", source_fs.holders(txn.fd, prev.name)
+        except (OSError, PathContainmentError):
+            return "", []
+
+    def pending_states(self) -> list[tuple[str, str, str]]:
+        """`(source path, state word, what resolves it)` for every source transaction still
+        journaled — what `lhpc status` shows (file reads and the in-use probe; nothing written).
+        A finished activation whose archived prior is kept is `prior-in-use` only while the probe
+        finds a process that can still write into it, else `prior-dirty`; once the prior is gone
+        only the journal is left, which the next lhpc source command clears before anything
+        else, so nothing is shown."""
+        import json
+
+        from . import runtime_fs
+        out = []
+        try:
+            d = self._txn_dir()
+            entries = runtime_fs.scandir_nofollow(self.paths, d)
+        except (OSError, PathContainmentError):
+            return [("state/source-txn", "recovery-required",
+                     "the transaction directory is unsafe — inspect it by hand")]
+        for name, is_link in sorted(entries):
+            if not name.endswith(".json"):
+                continue
+            try:
+                if is_link:
+                    raise ValueError("a symlink")
+                j = json.loads(runtime_fs.read_text_regular(self.paths, d / name,
+                                                            max_bytes=1 << 20))
+                dest = self._resolve_rel(j["source_rel"])
+                prev = self._resolve_rel(j["prev_rel"])
+                staging = self._resolve_rel(j["candidate_rel"])
+                rel, state = self._source_rel(dest), j.get("state")
+            except (OSError, PathContainmentError, ValueError, KeyError, TypeError):
+                out.append((f"state/source-txn/{name}", "recovery-required",
+                            "an unreadable transaction journal — inspect it by hand"))
+                continue
+            # The recorded prior identity, compared as recovery compares it: an `activated`
+            # journal's full [dev, ino, ctime] (its removal gate), a `prior-dirty-retained` one's
+            # dev+ino (late local changes are expected there). A journal rewrite that failed after
+            # our own rename moved the prior's ctime leaves an `activated` journal that does not
+            # match: recovery-required, never a named state the journal does not hold.
+            pi = (j.get("idents") or {}).get("prev")
+            pi = pi if state == "activated" or not isinstance(pi, list) else pi[:2]
+            where, held = (self._prior_left(dest, prev, staging, pi)
+                           if state in ("prior-dirty-retained", "activated") else ("", []))
+            if where == "gone":
+                continue                            # only the journal: cleared by the next command
+            if where == "unproven":
+                out.append((rel, "recovery-required", f"the archived prior at "
+                            f"{self._source_rel(prev)} is kept but is not provably the one the "
+                            "journal recorded (a journal update did not complete) — nothing was "
+                            "deleted; once nothing uses it, " + self._prior_dirty_remedy(dest)))
+                continue
+            if where == "kept" and state == "activated" and held:
+                out.append((rel, "prior-in-use", f"the archived prior at {self._source_rel(prev)} "
+                            "is kept while another process can still write into it ("
+                            + ", ".join(held) + "); once that has ended, the next lhpc source "
+                            "command removes it: " + self._update_cmd(dest)))
+            elif where == "kept":
+                out.append((rel, "prior-dirty", f"the archived prior at {self._source_rel(prev)} "
+                            "is kept: it may hold changes of yours and lhpc never deletes it; "
+                            + self._prior_dirty_remedy(dest)))
+            else:
+                out.append((rel, "update-interrupted", "the next lhpc source command finishes "
+                            "or rolls it back (" + self._update_cmd(dest) + "); if it cannot, it "
+                            "says recovery-required and names what to inspect"))
+        return out
+
     def _pending_journals(self) -> bool:
         """True if ANY unresolved journal remains in the txn dir (blocks ALL source
         mutation until resolved). Descriptor-anchored: a symlinked/escaping txn dir or a
@@ -1490,11 +1591,7 @@ class Installer:
             # NEVER retries its deletion — the journal and `.prev` stay until the operator
             # inspects/salvages the changes and removes them manually.
             if j.get("state") == "prior-dirty-retained":
-                return (f"recovery-required: {self._source_rel(dest)} finished activating, "
-                        f"but its archived prior at {self._source_rel(prev)} contains late "
-                        "local changes — retained for the OPERATOR (inspect/salvage, then "
-                        "remove the .prev directory and this journal manually); automatic "
-                        "recovery will not delete it")
+                return self._recover_prior_dirty(dest, prev, staging, marker)
             # GENERATIONAL FAIL-CLOSED: only a v5 journal carries ctime-hardened leaf-identity
             # evidence automatic recovery can trust. v2/v3 have no leaf identity at all; v4's
             # [dev, ino]-only identity is FORGEABLE via inode recycling (ext4 hands a substituted
@@ -1519,6 +1616,50 @@ class Installer:
                 return f"recovery-required: source {dest.name} is busy (retained)"
         finally:
             marker.close()
+
+    def _prior_dirty_remedy(self, dest: Path) -> str:
+        """The one command that resolves `prior-dirty`: the operator moves the archived prior out
+        of src/ (keeping what is in it). Nothing else is needed: `status` no longer shows it, and
+        the next lhpc source command clears the journal before it does anything else."""
+        prev = dest.with_name(f".{dest.name}.prev")
+        return (f"resolve it with one command, which keeps its content out of src/: mv {prev} "
+                f"{self.paths.runtime_root.parent / (dest.name + '.prev.saved')}")
+
+    def _prior_unrecorded(self, dest: Path, prev: Path, why: str) -> str:
+        """The archived prior is kept, but the journal could not record why: the journal is the
+        truth, so this is `recovery-required`, never `prior-in-use` / `prior-dirty`."""
+        return (f"recovery-required for {dest.name}: the update activated the new source and "
+                f"its archived prior at {self._source_rel(prev)} is kept ({why}), but the "
+                "transaction journal under state/source-txn could not record that (left as it "
+                "was) — nothing was deleted; once nothing uses the prior, "
+                + self._prior_dirty_remedy(dest))
+
+    def _recover_prior_dirty(self, dest: Path, prev: Path, staging: Path, marker) -> str:
+        """`prior-dirty`: the new source is active, the archived prior holds late local changes
+        and is never deleted here. Once the operator has moved it away (`_prior_dirty_remedy`) —
+        no `.prev` and no quarantine of it left, the active source a directory — the journal is
+        cleared; until then it is reported, with that command."""
+        from . import reslock, source_fs
+        try:
+            with reslock.operation_lock(self.paths,
+                                        self._source_lock_key(self._source_rel(dest)),
+                                        "recover", dest.name):
+                gone = (source_fs.leaf_kind(self.paths, prev) == "absent"
+                        and source_fs.leaf_kind(self.paths, prev.with_name(
+                            self._prev_quarantine(prev, staging))) == "absent"
+                        and source_fs.leaf_kind(self.paths, dest) == "dir")
+                if gone:
+                    return (f"recovered {dest.name}: prior-dirty cleared (the archived prior was "
+                            "moved away)" if marker.remove() else
+                            f"recovery-required for {dest.name}: journal could not be removed "
+                            "(retained)")
+        except reslock.ResourceBusy:
+            return f"recovery-required: source {dest.name} is busy (retained)"
+        except (OSError, PathContainmentError):
+            pass
+        return (f"recovery-required: prior-dirty — {self._source_rel(dest)} finished activating, "
+                f"but its archived prior at {self._source_rel(prev)} contains late local changes "
+                "and is never deleted by lhpc; " + self._prior_dirty_remedy(dest))
 
     def _prev_dirty_scan(self, txn, dest: Path, prev: Path, prev_ident=None, why=None):
         """FINAL scan of the archived prior, BOUND to its leaf: capture the `.prev` leaf
@@ -1648,14 +1789,26 @@ class Installer:
             except (OSError, PathContainmentError):
                 return False                       # nothing moved -> RETAIN
             scan = {}
-            dirty = (self._prev_dirty_scan(txn, dest, prev.with_name(target), bound, scan)
-                     if source_fs.ident_matches(txn.fd, target, bound) else None)
+            # The rename stops pathname writers, not a process that reaches the prior another
+            # way — an open descriptor, a working directory in it, a shared writable mapping:
+            # one is checked BEFORE the last scan, so a write it makes later cannot land after
+            # that scan in a tree about to be deleted.
+            holders = source_fs.holders(txn.fd, target)
+            if holders:
+                scan["why"] = ("the archived prior is still in use by another process ("
+                               + ", ".join(holders) + "); a later write there would be lost")
+                scan["in_use"] = True
+                dirty = True
+            else:
+                dirty = (self._prev_dirty_scan(txn, dest, prev.with_name(target), bound, scan)
+                         if source_fs.ident_matches(txn.fd, target, bound) else None)
             if dirty is not False:
                 try:
                     txn.rename_noreplace(target, prev.name)
                 except (OSError, PathContainmentError):
                     scan["why"] = (f"{scan.get('why', 'unprovable')}; preserved at "
                                    f"{target!r} (its original path was reoccupied)")
+                    scan.pop("in_use", None)        # not back at `.prev`: not retryable
                     dirty = True
                 if dirty and why is not None:
                     why.update(scan, dirty=True)
@@ -1793,18 +1946,38 @@ class Installer:
                             "could not be removed or was substituted (journal + "
                             "prior retained)")
                 dirty = True
+            if dirty and prev_why.get("in_use"):
+                # Only in use: the journal stays `activated` and the next recovery retries. The
+                # rename aside and back moved the prior's ctime: it is recorded again, bound by
+                # the dev+ino just proven (our own rename, as after every rename here).
+                recorded = False
+                try:
+                    st = os.stat(prev.name, dir_fd=txn.fd, follow_symlinks=False)
+                    if pident is not None and [st.st_dev, st.st_ino] == list(pident[:2]):
+                        recorded = marker.rewrite(self._journal_payload(
+                            dest, prev, staging, "activated", txn_id, meta,
+                            {**idents, "prev": [st.st_dev, st.st_ino, st.st_ctime_ns]}))
+                except OSError:
+                    pass
+                if not recorded:                      # the journal is the truth: no named state
+                    return self._prior_unrecorded(dest, prev, prev_why.get("why", "in use"))
+                return (f"recovery-required for {dest.name}: prior-in-use — the archived prior "
+                        f"at {self._source_rel(prev)} is kept ({prev_why.get('why', '')}); "
+                        "once that process has ended, the next lhpc source command removes it: "
+                        + self._update_cmd(dest))
             if dirty:
                 # LATE LOCAL CHANGES inside the archived prior: mark the
                 # transaction operator-only so no automatic recovery ever
                 # deletes it; the active source + its record stay coherent.
-                marker.rewrite(self._journal_payload(
-                    dest, prev, staging, "prior-dirty-retained", txn_id,
-                    meta, idents))
-                return (f"recovery-required for {dest.name}: activation is "
+                if not marker.rewrite(self._journal_payload(
+                        dest, prev, staging, "prior-dirty-retained", txn_id, meta, idents)):
+                    return self._prior_unrecorded(dest, prev,
+                                                  prev_why.get("why", "late local changes"))
+                return (f"recovery-required for {dest.name}: prior-dirty — activation is "
                         f"complete, but the archived prior at "
                         f"{self._source_rel(prev)} contains late local changes "
-                        f"({prev_why.get('why', 'unprovable')}) — retained for "
-                        "the operator (never auto-deleted)")
+                        f"({prev_why.get('why', 'unprovable')}) and is never deleted by lhpc; "
+                        + self._prior_dirty_remedy(dest))
             return None
 
         try:
@@ -2257,9 +2430,24 @@ class Installer:
                     if not prev_why.get("dirty"):
                         return "recovery-required"
                     dirty = True
+                if dirty and prev_why.get("in_use"):
+                    # Only IN USE (no late change found): the journal stays `activated`, so the
+                    # next lhpc source command's recovery retries the removal — `prior-in-use`.
+                    # The rename aside and back moved the prior's ctime: recorded again, as after
+                    # every rename of ours. Unrecorded, the outcome is recovery-required (below).
+                    jh["idents"] = self._v5_idents(handle, prior)
+                    word = "prior-in-use"
+                    recorded = self._update_journal(jh, dest, prev, staging, "activated")
+                elif dirty:
+                    word = "prior-dirty"
+                    recorded = self._update_journal(jh, dest, prev, staging,
+                                                    "prior-dirty-retained")
+                if dirty and not recorded:            # the journal is the truth: no named state
+                    prev_why["unrecorded"] = self._prior_unrecorded(
+                        dest, prev, prev_why.get("why", "late local changes"))
+                    return "recovery-required"
                 if dirty:
-                    self._update_journal(jh, dest, prev, staging, "prior-dirty-retained")
-                    return "prior-dirty"
+                    return word
             txn.fsync()
             return "activated" if jh["marker"].remove() else "recovery-required"
         finally:

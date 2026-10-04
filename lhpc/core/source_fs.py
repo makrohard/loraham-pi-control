@@ -760,6 +760,94 @@ def rmtree_at(paths: Paths, path: Path) -> None:
 # ---- race-safe destructive removal (uninstall / Clean all) -----------------------------------
 
 
+def holders(parent_fd: int, name: str, *, proc: str = "/proc") -> list[str]:
+    """What can still write into the tree at leaf `name` of `parent_fd`, one entry each (empty =
+    nothing; unknown counts as held). Two checks:
+
+      * every other process whose `/proc/<pid>` this one can read: an open descriptor at or under
+        the tree, a working or root directory inside it (a file it creates there by a relative
+        path lands in the tree), a SHARED writable mapping of a file in it — `"pid <n> (<why>)"`.
+        A private mapping is not counted: its writes never reach the file;
+      * the kernel, for every regular file in the tree: a read lease is refused while ANY process
+        — one whose `/proc` entries cannot be read included — has the file open for writing or
+        mapped shared and writable. A file that cannot be checked (not this user's, a filesystem
+        without leases) counts as held.
+
+    Not covered: a process whose `/proc` entries cannot be read (another user's, or one that made
+    itself unreadable, as the server process of an SSH login does) and whose working directory is
+    inside the tree — it could create a new file there. Counting every unreadable process instead
+    would keep the archived prior after every update run from an SSH login."""
+    try:
+        path = os.path.join(os.readlink(f"/proc/self/fd/{parent_fd}"), name)
+        pids = os.listdir(proc)
+    except OSError as exc:
+        return [f"the open-file check could not run: {exc}"]
+    me, out = os.getpid(), []
+    for pid in pids:
+        if pid.isdigit() and int(pid) != me:
+            why = _holds(f"{proc}/{pid}", path)
+            if why:
+                out.append(f"pid {pid} ({why})")
+    return out or _written(parent_fd, name)
+
+
+def _inside(target: str, path: str) -> bool:
+    return target == path or target.startswith(path + "/")
+
+
+def _holds(pdir: str, path: str) -> str:
+    """Why the process at `pdir` can write into `path` ("" = it cannot, it is gone, or its entries
+    cannot be read — the lease check in `holders` covers its writers)."""
+    try:
+        for link, why in (("cwd", "working directory inside"), ("root", "root directory inside")):
+            if _inside(os.readlink(f"{pdir}/{link}"), path):
+                return why
+        for n in os.listdir(f"{pdir}/fd"):
+            try:
+                if _inside(os.readlink(f"{pdir}/fd/{n}"), path):
+                    return "open file"
+            except FileNotFoundError:
+                continue                            # closed meanwhile
+        with open(f"{pdir}/maps", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                parts = line.split(None, 5)
+                if (len(parts) == 6 and parts[1][1] == "w" and parts[1][3] == "s"
+                        and _inside(parts[5].rstrip("\n").removesuffix(" (deleted)"), path)):
+                    return "shared writable mapping"
+    except OSError:
+        pass
+    return ""
+
+
+def _written(parent_fd: int, name: str) -> list[str]:
+    """The lease check of `holders`: the first file of the tree some process has open for writing
+    or mapped shared and writable, or that cannot be checked; [] when none."""
+    import fcntl
+    try:
+        for dirpath, _dirs, files, dfd in os.fwalk(name, dir_fd=parent_fd, follow_symlinks=False):
+            for f in files:
+                rel = os.path.join(dirpath, f)
+                try:
+                    st = os.stat(f, dir_fd=dfd, follow_symlinks=False)
+                    if not _stat.S_ISREG(st.st_mode):
+                        continue
+                    fd = os.open(f, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+                except OSError as exc:
+                    return [f"{rel} could not be checked ({exc})"]
+                try:
+                    fcntl.fcntl(fd, fcntl.F_SETLEASE, fcntl.F_RDLCK)
+                    fcntl.fcntl(fd, fcntl.F_SETLEASE, fcntl.F_UNLCK)
+                except BlockingIOError:
+                    return [f"{rel} is open for writing or mapped writable in another process"]
+                except OSError as exc:
+                    return [f"{rel} could not be checked ({exc})"]
+                finally:
+                    os.close(fd)
+    except OSError as exc:
+        return [f"the open-file check could not run: {exc}"]
+    return []
+
+
 def _quarantine_name(name: str) -> str:
     import time as _time
     return f".{name}.quarantine-{os.getpid()}-{_time.monotonic_ns()}"

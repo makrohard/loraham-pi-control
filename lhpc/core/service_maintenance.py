@@ -1927,7 +1927,7 @@ class MaintenanceOpsMixin:
                     out.append(f"  [{r.status}] {c.id}: {r.detail}")
                     if r.status == "failed":
                         ok = False                    # incl. prior-dirty: NEVER success
-                        if r.detail.startswith("prior-dirty:"):
+                        if r.detail.startswith(("prior-dirty:", "prior-in-use:")):
                             # the NEW source IS active (record coherent) — its stacks'
                             # stale candidates must still be retired truthfully
                             mutated_paths.append(path)
