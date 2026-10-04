@@ -661,10 +661,8 @@ def test_check_does_not_take_a_reused_pid_for_the_fake_gpsd(tmp_path, monkeypatc
     assert ops.check(svc).data["gpsd"] is False          # a live pid, but not the fake gpsd
     # ... while a process spawned the way reset spawns the fake (`<python> -m lhpc_testlab _gpsd`;
     # here a sleeper carrying that argv tail) is recognised
-    fake = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)",
-                             "-m", "lhpc_testlab", "_gpsd"])
+    fake = _fake_running(tmp_path / "state" / "testlab" / "gpsd.pid", "-m", "lhpc_testlab", "_gpsd")
     try:
-        (tmp_path / "state" / "testlab" / "gpsd.pid").write_text(f"{fake.pid}\n")
         assert ops.check(svc).data["gpsd"] is True
     finally:
         fake.kill()
