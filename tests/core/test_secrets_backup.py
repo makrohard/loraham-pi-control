@@ -895,7 +895,9 @@ def test_a_symlink_swapped_in_after_the_last_check_cannot_redirect_the_restore(t
 
     def swap_after_the_check(root, target):
         real(root, target)
-        if inspect.stack()[1].function == "apply" and not outside.exists():
+        # the caller, past the signature check that wraps every fake (tests/conftest.py)
+        caller = next(f.function for f in inspect.stack()[1:] if f.function != "fake")
+        if caller == "apply" and not outside.exists():
             (b / "config/tls").rename(outside)               # the real folder goes outside…
             (b / "config/tls").symlink_to(outside)           # …and a link takes its place
     monkeypatch.setattr(sb, "check_ancestors", swap_after_the_check)

@@ -46,6 +46,102 @@ from lhpc.core.services import ControllerService
 from lhpc.core.lifecycle import Lifecycle
 
 
+def _keeping_the_real_signature(target, name, value):
+    """A fake of an LHPC function or method — a lambda or def put over it with `monkeypatch.setattr`
+    — accepts only the calls the REAL one accepts: each call is bound to the real signature first,
+    so a call the production function would refuse (a renamed, removed or added parameter) fails
+    the test loudly instead of being swallowed by a permissive fake. Anything else (a class, a
+    callable object, a value, a non-LHPC target) is installed unchanged.
+
+    A fake put over an earlier fake (the same attribute patched twice in one test) is checked
+    against the production function too: each guard keeps the callable it stands for, and the
+    current value is unwrapped to it — the guard's own `__module__` is the earlier fake's, so
+    reading it would let the second fake in unchecked."""
+    import functools
+    import inspect
+    import types
+    if not inspect.isfunction(value):
+        return value
+    modular = inspect.ismodule(target) or isinstance(target, type)
+    # a module function, or a method on its class (bound with `self`); a method put on one
+    # instance has no `self`
+    real = inspect.getattr_static(target, name, None) if modular else getattr(target, name, None)
+    while hasattr(real, "_lhpc_real"):             # an earlier guard: the function it stands for
+        owner = getattr(real, "__self__", None)     # a class's guard read through the instance
+        real = real._lhpc_real
+        if owner is not None and inspect.isfunction(real):
+            real = types.MethodType(real, owner)
+    if not (inspect.isfunction(real) if modular else inspect.ismethod(real)):
+        return value
+    if not (getattr(real, "__module__", "") or "").startswith("lhpc."):
+        return value
+    signature = inspect.signature(real)
+    where = f"{real.__module__}.{real.__qualname__}"
+
+    @functools.wraps(value)
+    def fake(*args, **kwargs):
+        try:
+            signature.bind(*args, **kwargs)
+        except TypeError as exc:
+            why = f"the fake of {where}{signature} was called in a way the real function refuses: {exc}"
+            _SIGNATURE_VIOLATIONS.append(why)       # failed at teardown even if production swallows it
+            raise TypeError(why) from None
+        return value(*args, **kwargs)
+    fake._lhpc_real = real
+    return fake
+
+
+_UNSET = object()
+
+
+def _owner_of(dotted):
+    """`"pkg.mod.Cls.attr"` -> (the object holding `attr`, "attr"), as monkeypatch resolves it."""
+    import importlib
+    path, attr = dotted.rsplit(".", 1)
+    parts = path.split(".")
+    for i in range(len(parts), 0, -1):
+        try:
+            owner = importlib.import_module(".".join(parts[:i]))
+        except ImportError:
+            continue
+        for part in parts[i:]:
+            owner = getattr(owner, part)
+        return owner, attr
+    raise ImportError(dotted)
+
+
+def _setattr(self, target, name, value=_UNSET, raising=True):
+    if value is _UNSET:                             # the string form: setattr("pkg.mod.fn", value)
+        owner, attr = _owner_of(target)
+        return _real_setattr(self, owner, attr, _keeping_the_real_signature(owner, attr, name),
+                             raising=raising)
+    if isinstance(name, str):
+        value = _keeping_the_real_signature(target, name, value)
+    return _real_setattr(self, target, name, value, raising=raising)
+
+
+# Every `monkeypatch.setattr` in this suite goes through the check (tests/repo/test_fake_signatures.py).
+_real_setattr = pytest.MonkeyPatch.setattr
+pytest.MonkeyPatch.setattr = _setattr
+_SIGNATURE_VIOLATIONS: list[str] = []
+
+
+@pytest.fixture(autouse=True)
+def _fakes_called_as_the_real_function():
+    """A refused call fails the test even when the production code under test catches the
+    `TypeError` (a broad `except Exception` turning it into an ordinary failed result)."""
+    _SIGNATURE_VIOLATIONS.clear()
+    yield
+    assert not _SIGNATURE_VIOLATIONS, _SIGNATURE_VIOLATIONS[0]
+
+
+@pytest.fixture
+def signature_violations():
+    """The refused calls recorded so far, for the test that provokes one on purpose (it clears
+    them once it has checked the refusal)."""
+    return _SIGNATURE_VIOLATIONS
+
+
 @pytest.fixture
 def short_tmp_path():
     """A temporary directory with a SHORT path, removed after the test, for a test that binds an
