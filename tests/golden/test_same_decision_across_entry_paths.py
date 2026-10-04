@@ -433,14 +433,17 @@ def test_interrupted_install(entry, interrupted_install):
 
 
 def test_band_owner(entry):
-    """known defect T3-F4: a running band owner stops every path, with nothing written, but not
-    with the same decision. T3-F4 (refusal class): the web stops at its plan's `blockers` listing
-    (the confirm page) while the CLI, the job runner and boot-restore refuse in the apply's
-    preflight with "Cannot run 'kiss': meshtastic must be stopped first."."""
+    """intended: a running band owner is offered to be stopped where someone can answer, and
+    refused where no one can; nothing is written on any path. The web stops at its plan's
+    `blockers` listing (the confirm page). The CLI asks the same question, which `--yes`
+    answers: it stops the owner and starts (the confirm page's `stop_owners`), and here refuses
+    because this owner is not a process lhpc can verify stopped. The job runner and boot-restore
+    refuse in the apply's preflight."""
     res = _all(entry, "start", "kiss", _band_owner)
     refusal = "Cannot run 'kiss': meshtastic must be stopped first."
     assert _decisions(res) == {
-        "cli": {"refusal": refusal, **REFUSED_NOTHING},
+        "cli": {"refusal": "Cannot run 'kiss': conflicting stack(s) meshtastic could not be "
+                           "verified stopped.", **REFUSED_NOTHING},
         "web": {"refusal": "blockers", **REFUSED_NOTHING},
         "job": {"refusal": refusal, **REFUSED_NOTHING},
         "boot": {"refusal": refusal, **REFUSED_NOTHING}}

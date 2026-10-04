@@ -228,7 +228,11 @@ lhpc firewall --recommended                # safe preset; not combinable with th
 ### stack
 `lhpc stack {start|stop|restart} <stack> [--yes]` — start, stop or restart a stack or component.
 `start --band 433|868` starts a band-switchable stack on that band (default: its saved band); a
-band the hardware or the stack cannot serve is refused before anything starts.
+band the hardware or the stack cannot serve is refused before anything starts. When another
+running stack holds what the start needs, `start` asks, as the console's confirm page does,
+whether to stop it and start. `--yes` answers yes: `lhpc stack start <stack> --yes` stops the
+holders and starts, also from a script. A no, or no terminal to ask on, refuses with nothing
+stopped.
 
 `lhpc stack poststart <stack> [--yes]` — re-run a RUNNING stack's post-start steps without
 restarting it (any live retry runner is cancelled first). Use it when `lhpc status <stack>` shows

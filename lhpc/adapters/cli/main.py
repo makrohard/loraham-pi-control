@@ -118,6 +118,27 @@ def _apply_flow(run, yes: bool) -> int:
     return _render(run(True))
 
 
+def _start_flow(run, stack: str, yes: bool) -> int:
+    """`lhpc stack start`: `_apply_flow`, except when the plan names running stacks that hold what
+    the start needs. Then it asks, as the console's confirm page does, whether to stop them and
+    start; `--yes` answers yes. A no, or no terminal to ask on, refuses with nothing stopped."""
+    plan = run(False)
+    blockers = (plan.data.get("blockers") or []) if plan.ok else []
+    if not blockers:
+        return _apply_flow(lambda a: run(True) if a else plan, yes)
+    _render(plan)
+    holders = sorted({b["holder_stack"] for b in blockers})
+    held = ", ".join(sorted({b["resource"] for b in blockers}))
+    if yes or (sys.stdin.isatty() and sys.stdout.isatty() and _confirm(
+            f"\n{held} held by {', '.join(holders)} — stop them and start {stack}? [y/N] ")):
+        return _render(run(True, stop_owners=True))
+    return _render(ActionResult(
+        False, f"Cannot run '{stack}': {', '.join(holders)} must be stopped first.",
+        details=[f"  `lhpc stack start {stack} --yes` stops them and starts it without asking"],
+        next_commands=[*(f"lhpc stack stop {h}" for h in holders),
+                       f"lhpc stack start {stack} --yes"]))
+
+
 def _print_install_dep_gate(svc, stack, check: bool = False) -> bool:
     """Install-time system-dependency gate for the CLI `install`. Prints a WARN line for each
     missing OPTIONAL dep (advisory — install still proceeds) and, when a MANDATORY dep is missing,
@@ -1388,9 +1409,9 @@ def _run(argv: list[str] | None = None) -> int:
 
             from lhpc.core.outcomes import manual_required_only
 
-            def _run(a):
+            def _run(a, stop_owners=False):
                 res = svc.run_action(args.stack_action, args.stack, apply=a,
-                                     band=getattr(args, "band", ""))
+                                     band=getattr(args, "band", ""), stop_owners=stop_owners)
                 # An interactive MAIN component (chat) whose command was presented is the
                 # expected outcome of a start, not a failure: show it as success, exactly as the
                 # web job does. `ok` stays strict in the core (nothing is verified running).
@@ -1398,6 +1419,8 @@ def _run(argv: list[str] | None = None) -> int:
                         and manual_required_only(res.results)):
                     return replace(res, ok=True)
                 return res
+            if args.stack_action == "start":
+                return _start_flow(_run, args.stack, yes=args.yes)
             return _apply_flow(_run, yes=args.yes)
         # argparse's --help action calls sys.exit(0), so routing a usage error through
         # it exited 0 and `lhpc stack || handle_error` silently passed. Every sibling

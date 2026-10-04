@@ -584,6 +584,49 @@ def test_stack_start_of_an_interactive_main_is_success(monkeypatch, capsys):
     assert "ERR" in capsys.readouterr().out
 
 
+def _held_band(monkeypatch, *, tty, answer=""):
+    """`lhpc stack start kiss` whose plan lists meshtastic holding the 433 radio; returns the
+    applies run_action received (their stop_owners flags) and the questions asked."""
+    import builtins
+    import sys as _sys
+
+    from lhpc.core.services import ActionResult
+    applies, prompts = [], []
+
+    def run(self, op, target, **kw):
+        if not kw.get("apply"):
+            return ActionResult(True, "Run plan for 'kiss'.", data={"changes": 2, "blockers": [
+                {"resource": "loraham.radio.433", "holder_stack": "meshtastic",
+                 "holder": "meshtasticd"}]})
+        applies.append(kw.get("stop_owners"))
+        return ActionResult(True, "Run applied for 'kiss'.")
+    monkeypatch.setattr(ControllerService, "run_action", run)
+    for stream in (_sys.stdin, _sys.stdout):
+        monkeypatch.setattr(stream, "isatty", lambda: tty, raising=False)
+    monkeypatch.setattr(builtins, "input", lambda prompt: (prompts.append(prompt), answer)[1])
+    return applies, prompts
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("argv, tty, answer, rc, applies", [
+    (["--yes"], False, "", 0, [True]),         # --yes answers the question, also without a terminal
+    ([], True, "y", 0, [True]),
+    ([], True, "n", 1, []),
+    ([], False, "y", 1, []),                   # no terminal to ask on: refused, nothing stopped
+])
+def test_a_start_on_a_held_band_asks_to_stop_the_holder(monkeypatch, capsys, argv, tty, answer,
+                                                        rc, applies):
+    seen, prompts = _held_band(monkeypatch, tty=tty, answer=answer)
+    assert main(["stack", "start", "kiss", *argv]) == rc
+    assert seen == applies
+    assert prompts == (["\nloraham.radio.433 held by meshtastic — stop them and start kiss? [y/N] "]
+                       if tty and not argv else [])
+    if rc:
+        out = capsys.readouterr().out
+        assert "Cannot run 'kiss': meshtastic must be stopped first." in out
+        assert "lhpc stack stop meshtastic" in out and "lhpc stack start kiss --yes" in out
+
+
 @pytest.mark.contract
 def test_stack_start_refuses_a_band_the_box_does_not_serve(tmp_path, monkeypatch, capsys):
     # A 433-only board: `--band 868` is refused in the PLAN, before anything starts.

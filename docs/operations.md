@@ -285,7 +285,8 @@ GPS, radio mode, firewall exposure, resource conflicts, identity), and then:
   row highlighted.
 
 The CLI dry run (`lhpc stack start <id>`) refuses exactly what the web refuses, printing the
-`lhpc config` remedy.
+`lhpc config` remedy. Where the console shows *Stop owner(s) & start*, the CLI asks the same
+question (`--yes` answers yes).
 
 **A web Start/Restart is detached**: the page returns at once and the start runs as a tracked job,
 log `logs/web-start-<stack>.log` (`web-restart-…`), reachable from the banner's *view →*. While it
