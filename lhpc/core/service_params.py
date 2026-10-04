@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import ClassVar
 
-from . import daemon_control, runtime_fs, validators
+from . import config_save, daemon_control, runtime_fs, validators
 from . import meshcore_identity as _meshcore_identity
 from . import meshcore_mode as _meshcore_mode
 from . import restart_required as _rr
@@ -44,7 +44,33 @@ from .snapshot_memo import invalidates_snapshot
 # therefore stored in the band-less config file (like autostart). Both the writer
 # (`save_config_bundle`) and the reader (`_resolved_param_value`) must agree on this set —
 # disagreeing is what made the switch read as its default while being saved as "on".
-_BANDLESS_STACK_PARAMS = (USE_GPS_PARAM, _rflog.RF_LOG_PARAM)
+#
+# `use_gps`: "does this box report its position" is a property of the stack, not of the band it
+# happens to be on. Stored per band it silently reverted on a band change — and the band-less read
+# then saw nothing at all, so the switch did nothing. (the CLI wrote `use_gps` into
+# `meshtastic@868.toml` while every GPS decision read `meshtastic.toml`.) Routed in the canonical
+# bundle path, so the CLI, the console and the API all agree — an intercept on any single surface
+# only fixes that surface. A COMPONENT target (`lhpc config meshcom-qemu use_gps on`) would
+# otherwise store the component-scoped `__r__meshcom-qemu__use_gps`, which no GPS reader looks at,
+# so it is normalized to the owner stack's FLAT band-less key whichever target names it. Its
+# default comes from the MANIFEST ("on" since the source gained `auto`) — hardcoding "off" was a
+# fourth copy of the drifted literal: submitting the default value looked like a CHANGE, and the
+# running-stack refusal fired on a save that changed nothing.
+# `rf_log`: one per owner stack, read by the writer at its next start, so none of the GPS liveness
+# machinery applies. Whatever shape it arrived in (flat run/file key or component-scoped), it is
+# stored as the owner's flat band-less key — a banded copy would silently revert on a band change.
+_STACK_SWITCHES = (
+    config_save.Switch(
+        USE_GPS_PARAM, kept="on", other="off",
+        matches=lambda k: k == USE_GPS_PARAM or k.endswith(f"__{USE_GPS_PARAM}"),
+        default=lambda stacks, sid: use_gps_default(stacks, sid) if sid else "off",
+        key=lambda sid: USE_GPS_PARAM),
+    config_save.Switch(
+        _rflog.RF_LOG_PARAM, kept=_rflog.OFF, other=_rflog.ON, matches=_rflog.is_switch_key,
+        default=lambda stacks, sid: _rflog.switch_default(stacks, sid) if sid else _rflog.ON,
+        key=_rflog.switch_key),
+)
+_BANDLESS_STACK_PARAMS = tuple(sw.name for sw in _STACK_SWITCHES)
 _UNREAD = object()             # restart_marker_payload: read the committed marker itself
 
 # MeshCore's position is controller-owned: a LIVE source feeds it through the meshcore-gps
@@ -57,6 +83,19 @@ _REPEATER_SECRETS = (_meshcore_identity.REPEATER_IDENTITY_FILENAME,
                      _meshcore_identity.REPEATER_ADMIN_FILENAME)
 _IDENTITY_SECRET = _meshcore_identity.IDENTITY_FILENAME      # the Companion's key
 _POSITION_PARAMS = ("lat", "lon")
+
+
+def _commit_config(paths, targets: list, held: bool) -> None:
+    """COMMIT a save's targets as ONE journalled transaction. `held` is True only while this
+    thread holds the config lock EXCLUSIVELY (`_holds_config_exclusive`: the auto-install boundary,
+    config-stability); the held lock is then reused via the module-private locked body rather
+    than contending on a second descriptor ("config busy"). Otherwise the transaction takes the
+    lock itself."""
+    if held:
+        from .config import _apply_config_transaction_locked
+        _apply_config_transaction_locked(paths, targets)
+    else:
+        apply_config_transaction(paths, targets)
 
 
 class ParamsConfigMixin:
@@ -1073,120 +1112,25 @@ class ParamsConfigMixin:
         # whole-stack concerns, allowed only for a stack target).
         is_stack_target = self.stack(target) is not None
         sid = owner.id
-        errors: list[str] = []
-        optional_ids = ({c.id for c in owner.components if c.optional} if is_stack_target else set())
-        # Each submitted value carries component identity: a run value key is the API key
-        # (`name`/`component.name`); a file value key is `file_<apikey>`. `_param_ref` resolves it to
-        # (component, param) and REJECTS an unqualified duplicate — so colliding names never flatten.
-        clean_params: list = []      # (kind 'r'|'f', component, param, value)
-        clean_auto: dict = {}        # autostart_<id> -> "on"/""  (stack target only, flat)
-        # `_param_ref` also resolves DEPENDENCY components' params (the start-override channel);
-        # a persisted config write must stay in the component's OWN stack store, so anything the
-        # dependency fallback resolved is refused here with a pointer to the right stack.
-        own_ids = {c.id for c in self._target_components(target)}
-
-        def _own(c, key):
-            if c.id in own_ids:
-                return True
-            errors.append(f"{key!r} belongs to dependency component '{c.id}' — save it on its "
-                          f"own stack ('{self.stack_of(c.id)}')")
-            return False
-        for key, value in (values or {}).items():
-            if key.startswith("autostart_"):
-                if key[len("autostart_"):] in optional_ids:
-                    clean_auto[key] = "on" if str(value) in ("on", "1", "true", "yes") else ""
-                else:
-                    errors.append(f"unknown config field: {key!r}")
-                continue
-            if key.startswith("file_"):
-                c, p, err = self._param_ref(target, "file", key[len("file_"):])
-                if err:
-                    errors.append(f"unknown config field: {key!r}" if err.startswith("unknown")
-                                  else err)
-                    continue
-                if not _own(c, key):
-                    continue
-                vf = str(value)
-                if vf.strip() == "":
-                    # BLANK = "clear this override / use the default" — never validated
-                    # as a literal value (an empty txpower/frequency is not an error).
-                    clean_params.append(("f", c, p, vf))
-                    continue
-                try:
-                    clean_params.append(("f", c, p, validators.validate_param(p, vf)))
-                except validators.ValidationError as exc:
-                    errors.append(str(exc))
-                continue
-            c, p, err = self._param_ref(target, "run", key)
-            if err:
-                errors.append(f"unknown config field: {key!r}" if err.startswith("unknown") else err)
-                continue
-            if not _own(c, key):
-                continue
-            if self._is_hmac_managed_param(c, p) and p.name not in _allow_managed_params:
-                errors.append(self._HMAC_MANAGED_PARAM_MSG)     # never clearable via generic config
-                continue
-            v = str(value)
-            if v.strip() == "":
-                # BLANK = clear the override (any kind), same rule as file params above.
-                clean_params.append(("r", c, p, v))
-                continue
-            try:
-                clean_params.append(("r", c, p, validators.validate_param(p, v)))
-            except validators.ValidationError as exc:
-                errors.append(str(exc))
+        # NORMALIZE (config_save, before the lock): submitted names -> identified parameters.
+        clean_params, clean_auto, errors = config_save.normalize_values(
+            values or {}, lambda kind, key: self._param_ref(target, kind, key),
+            own_ids={c.id for c in self._target_components(target)},
+            optional_ids=({c.id for c in owner.components if c.optional} if is_stack_target else set()),
+            stack_of=self.stack_of,
+            refused=lambda c, p: (self._HMAC_MANAGED_PARAM_MSG
+                                  if self._is_hmac_managed_param(c, p)
+                                  and p.name not in _allow_managed_params else ""))
         # The global operator callsign is NOT settable through a stack save — the one
         # authoritative mutation path is `set_operator_identity` (atomic restart-marker
         # handling); routing it through here bypassed that. So this save only ever
         # patches `[remotes]` in local.toml.
-        # A remote submission is a PATCH for THIS stack's own source components only (enforced in
-        # the service, not the web form): validated non-blank -> set, blank -> clear that
-        # component's override. A component id not declared by `target` (unknown, another stack's,
-        # or one without a source remote) is REJECTED. Other stacks' overrides are untouched.
-        stack_remote_cids = ({c.id for c in owner.components if c.source and c.source.remote}
-                             if is_stack_target else set())
-        remote_patch: dict = {}
-        if remotes is not None:
-            for cid, url in remotes.items():
-                try:
-                    vid = validators.path_component(cid, field="component id")
-                except validators.ValidationError as exc:
-                    errors.append(str(exc))
-                    continue
-                if vid not in stack_remote_cids:
-                    errors.append(f"remote override not allowed for {vid!r} — not a source "
-                                  f"component of '{target}'")
-                    continue
-                try:
-                    remote_patch[vid] = validators.remote_url(url or "", field="remote")   # "" clears
-                except validators.ValidationError as exc:
-                    errors.append(str(exc))
-        # ONE remote per shared checkout: a submission giving two components of the same
-        # source path DIFFERENT remotes is rejected whole; a coherent value is expanded
-        # ATOMICALLY to every declarer of that path (explicitly disclosed), so divergence
-        # can never be saved — not even for consumers in other stacks.
-        remote_notes: list = []
-        if remote_patch:
-            comp_index = {c.id: c for st in self.stacks() for c in st.components}
-            by_path: dict = {}
-            for vid, vurl in remote_patch.items():
-                c = comp_index.get(vid)
-                if c is None or c.source is None:
-                    continue
-                by_path.setdefault(c.source.path, {})[vid] = vurl
-            for pth, vals in by_path.items():
-                if len(set(vals.values())) > 1:
-                    errors.append(f"conflicting remotes submitted for shared source {pth!r} "
-                                  f"({', '.join(sorted(vals))}) — one checkout has ONE remote")
-                    continue
-                url = next(iter(vals.values()))
-                group = [d.id for d in self._path_declarers(pth)]
-                extra = sorted(set(group) - set(vals))
-                for did in group:
-                    remote_patch[did] = url
-                if extra:
-                    remote_notes.append(f"shared checkout {pth}: the same remote was applied "
-                                        f"to {', '.join(extra)}")
+        remote_patch, remote_notes, remote_errors = config_save.normalize_remotes(
+            remotes or {}, target=target,
+            allowed=({c.id for c in owner.components if c.source and c.source.remote}
+                     if is_stack_target else set()),
+            stacks=self.stacks, declarers=lambda pth: [d.id for d in self._path_declarers(pth)])
+        errors += remote_errors
         if errors:                                  # reject the whole bundle — zero mutation
             return ActionResult(False, f"Config not saved for '{target}'.", details=errors)
 
@@ -1227,91 +1171,18 @@ class ParamsConfigMixin:
                 return p.name if kind == "r" else f"file_{p.name}"          # unique -> flat
             return self._scoped_key(kind, c.id, p.name)                     # scoped
 
-        to_set: dict = {}
-        to_remove: set = set()
-        auto_set: dict = {}
-        auto_remove: set = set()
-        for k, av in clean_auto.items():                                     # autostart
-            # Autostart is a STACK-LEVEL flag: it must live in the BAND-LESS stack file —
-            # `_run_order` reads it band-independently. (Live finding: stored in the
-            # band-suffixed file, the option never took effect for band-switchable
-            # stacks like kiss.)
-            if av == "on":
-                auto_set[k] = av
-            else:
-                auto_remove.add(k)
-        for kind, c, p, v in clean_params:
-            key = _store_key(kind, c, p)
-            # IDENTITY params: the only "default" is EMPTY (= inherit/required). Comparing a
-            # submitted callsign against the operator-substituted {callsign} default made
-            # saving a local value IDENTICAL to the global silently un-save it — breaking
-            # the documented migration (set the SSID per stack, then change the global to
-            # its base) whenever the global equalled the value being localized.
-            ident = getattr(p, "validator", "") in self._IDENTITY_ENFORCE
-            canon = "" if ident else self._param_default_canon(p, cfg_band, band)
-            if str(v) == canon:
-                to_remove.add(key)                                          # at default -> not persisted
-            else:
-                to_set[key] = v                                             # override -> persisted
-        # `use_gps` is a STACK-LEVEL switch, exactly like autostart above: "does this box report
-        # its position" is a property of the stack, not of the band it happens to be on. Stored
-        # per band it silently reverted on a band change — and the band-less read then saw
-        # nothing at all, so the switch did nothing. (the CLI wrote
-        # `use_gps` into `meshtastic@868.toml` while every GPS decision read `meshtastic.toml`.)
-        # Routed here, in the canonical bundle path, so the CLI, the console and the API all
-        # agree — an intercept on any single surface only fixes that surface.
-        #
-        # A COMPONENT target (`lhpc config meshcom-qemu use_gps on`) would otherwise store the
-        # component-scoped `__r__meshcom-qemu__use_gps`, which no GPS reader looks at — the
-        # switch would appear to save and then do nothing. It is one switch per STACK, so it is
-        # normalized to the owner stack's FLAT band-less key whichever target names it.
-        _gps_now, _want = False, ""
-        for _k in [k for k in to_set if k == USE_GPS_PARAM or k.endswith(f"__{USE_GPS_PARAM}")]:
-            # The WANTED state comes from the VALUE, never from which bucket the key landed in.
-            # Reading it as "in to_set => on" made `use_gps=""` — an override that differs from
-            # the default and so lands in to_set — look like "on": it matched the current "on",
-            # was seen as no change, skipped the running-stack refusal, and then disabled GPS,
-            # because every reader compares against the literal "on".
-            _gps_now = True
-            _want = "on" if str(to_set.pop(_k)).strip().lower() == "on" else "off"
-        # The switch's default comes from the MANIFEST ("on" since the source gained `auto`) —
-        # hardcoding "off" here was a fourth copy of the drifted literal: submitting the default
-        # value landed in `to_remove`, was read back as "off", looked like a CHANGE, and the
-        # running-stack refusal fired on a save that changed nothing.
-        _gps_default = use_gps_default(self.stacks(), sid) if sid else "off"
-        for _k in [k for k in to_remove if k == USE_GPS_PARAM or k.endswith(f"__{USE_GPS_PARAM}")]:
-            to_remove.discard(_k)
-            _gps_now, _want = True, _gps_default          # removing the key = back to default
-        if _gps_now:
-            # Store the CANONICAL value: only a deviation FROM THE DEFAULT is an override;
-            # the default itself is cleared, so the file never holds a third state.
-            if _want != _gps_default:
-                auto_set[USE_GPS_PARAM] = _want
-                auto_remove.discard(USE_GPS_PARAM)
-            else:
-                auto_remove.add(USE_GPS_PARAM)
-                auto_set.pop(USE_GPS_PARAM, None)
-        # The RF-log switch is the second STACK-LEVEL param: one per owner stack, read by the
-        # writer at its next start, so none of the GPS liveness machinery applies. Whatever
-        # shape it arrived in (flat run/file key or component-scoped), it is stored as the
-        # owner's flat band-less key — a banded copy would silently revert on a band change —
-        # and only a deviation from the manifest default is kept.
-        _rf_now, _rf_want = False, ""
-        for _k in [k for k in to_set if _rflog.is_switch_key(k)]:
-            _rf_now = True
-            _rf_want = _rflog.OFF if str(to_set.pop(_k)).strip().lower() == _rflog.OFF else _rflog.ON
-        _rf_default = _rflog.switch_default(self.stacks(), sid) if sid else _rflog.ON
-        for _k in [k for k in to_remove if _rflog.is_switch_key(k)]:
-            to_remove.discard(_k)
-            _rf_now, _rf_want = True, _rf_default
-        if _rf_now:
-            _rf_key = _rflog.switch_key(sid)
-            if _rf_want != _rf_default:
-                auto_set[_rf_key] = _rf_want
-                auto_remove.discard(_rf_key)
-            else:
-                auto_remove.add(_rf_key)
-                auto_set.pop(_rf_key, None)
+        # IDENTITY params: the only "default" is EMPTY (= inherit/required). Comparing a
+        # submitted callsign against the operator-substituted {callsign} default made
+        # saving a local value IDENTICAL to the global silently un-save it — breaking
+        # the documented migration (set the SSID per stack, then change the global to
+        # its base) whenever the global equalled the value being localized.
+        stack_set, stack_remove, bandless_set, bandless_remove, switched = config_save.plan_store(
+            clean_params, clean_auto, key_of=lambda ch: _store_key(ch.kind, ch.comp, ch.param),
+            default_of=lambda ch: ("" if getattr(ch.param, "validator", "") in self._IDENTITY_ENFORCE
+                                   else self._param_default_canon(ch.param, cfg_band, band)),
+            switches=_STACK_SWITCHES, stacks=self.stacks(), sid=sid, banded=bool(cfg_band))
+        _gps_now = USE_GPS_PARAM in switched
+        _want, _gps_default = switched.get(USE_GPS_PARAM, ("", ""))
         # Flipping the switch under a RUNNING stack would leave its feed, its resource claims and
         # its generated config describing a different plan than the one that launched — the same
         # reason the global source is locked while in use. Refused BEFORE anything is written;
@@ -1363,7 +1234,7 @@ class ParamsConfigMixin:
         # The stack file is written as a MERGE rendered INSIDE the transaction lock: overlay the
         # override keys (keeping daemon-profile dp_*, other bands + unrelated manual scalars), then
         # drop the at-default keys. A raise here (unsupported manual value) rolls the transaction back.
-        def _render_stack(pth, tgt=sid, b=cfg_band, setv=to_set, rmv=to_remove):
+        def _render_stack(pth, tgt=sid, b=cfg_band, setv=stack_set, rmv=stack_remove):
             # AUTHORITATIVE RECHECK, inside the transaction (the caller's
             # accept/refuse decision was taken before this lock, so a concurrent global-identity
             # clear could land in between and the submission was persisted and only THEN refused).
@@ -1377,9 +1248,8 @@ class ParamsConfigMixin:
                 if (_again := self.identity_refusal_for_values(target, band, values or {})):
                     raise ConfigError(_again.summary)
             _gps_recheck(pth)               # no-op unless this save touches the switch
-            merged = merge_stack_values(pth, tgt, b, setv, clear_empty=False)
-            for k in rmv:
-                merged.pop(k, None)
+            merged = config_save.overlay(_load_runtime_toml(pth, _stack_config_path(pth, tgt, b)),
+                                         setv, rmv)
             if sid == _meshcore_mode.STACK_ID and (_why := self._meshcore_mode_save_refusal(merged)):
                 raise ConfigError(_why, reason=_meshcore_mode.REASON_REPEATER_NAME_REQUIRED)   # rolls the submission back, like identity
             if sid == _reticulum_interfaces.STACK_ID and (
@@ -1387,23 +1257,15 @@ class ParamsConfigMixin:
                 raise ConfigError(_why, reason=_reticulum_interfaces.REASON_ENDPOINT_INCOMPLETE)   # same rollback
             return render_stack_config(tgt, merged)
         targets.append(("stack", _stack_config_path(self._paths, sid, cfg_band), _render_stack, 0o644))
-        if (auto_set or auto_remove) and cfg_band:
+        if bandless_set or bandless_remove:
             # SECOND transactional target: autostart flags land in the band-less file.
-            def _render_auto(pth, tgt=sid, setv=None, rmv=None):
+            def _render_auto(pth, tgt=sid, setv=bandless_set, rmv=bandless_remove):
                 _gps_recheck(pth)
-                if rmv is None:
-                    rmv = set(auto_remove)
-                if setv is None:
-                    setv = dict(auto_set)
-                merged = merge_stack_values(pth, tgt, "", setv, clear_empty=False)
-                for k in rmv:
-                    merged.pop(k, None)
+                merged = config_save.overlay(
+                    _load_runtime_toml(pth, _stack_config_path(pth, tgt, "")), setv, rmv)
                 return render_stack_config(tgt, merged)
             targets.append(("stack", _stack_config_path(self._paths, sid, ""),
                             _render_auto, 0o644))
-        else:
-            to_set.update(auto_set)
-            to_remove |= auto_remove
         # DURABLE restart-required marker — written INSIDE the same transaction (config-txn
         # journal kind "state", pre-image journaled): a restart/build-mode param changed while
         # the stack is RUNNING means the running processes no longer match the saved config.
@@ -1423,16 +1285,7 @@ class ParamsConfigMixin:
             targets.append(self._restart_marker_target(target, sid, band, cfg_band, clean_params,
                                                        modes, _live_seen))
         try:
-            if self._holds_config_exclusive():
-                # Inside the auto-install boundary this thread ALREADY holds the config lock EXCLUSIVELY
-                # (config-stability), so reuse it via the module-private locked body rather than contending
-                # on a second descriptor ("config busy"). The assert forbids the locked path under a SHARED
-                # guard — a config mutation must never run beneath a shared stability guard.
-                from .config import _apply_config_transaction_locked
-                assert self._holds_config_exclusive(), "locked config txn requires the EXCLUSIVE guard"
-                _apply_config_transaction_locked(self._paths, targets)
-            else:
-                apply_config_transaction(self._paths, targets)
+            _commit_config(self._paths, targets, held=self._holds_config_exclusive())
         except ConfigError as exc:
             return ActionResult(False, f"Config not saved for '{target}'.", details=[str(exc)],
                                 data={"reason": exc.reason} if getattr(exc, "reason", "") else {})
