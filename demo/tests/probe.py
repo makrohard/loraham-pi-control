@@ -198,6 +198,16 @@ try:
     _action(op="start", target="meshcom", confirmed="yes", stop_owners="yes")
     assert svc.stack_running("meshcom") and not svc.stack_running("graywolf")
     R["route_takeover"] = "web start of meshcom asks before stopping graywolf on 433"
+    # the same contract on the RESTART path: a restart of graywolf onto 433 while meshcom holds it
+    # names meshcom as the blocker, an unconfirmed restart takes nothing, and only the confirmed
+    # one (stop_owners) stops meshcom
+    _plan = svc.restart("graywolf")
+    assert _plan.ok and {b["holder_stack"] for b in _plan.data["blockers"]} == {"meshcom"}, _plan.data
+    assert svc.restart("graywolf", apply=True).ok is False
+    assert svc.stack_running("meshcom") and not svc.stack_running("graywolf")
+    assert svc.restart("graywolf", apply=True, stop_owners=True).ok
+    assert svc.stack_running("graywolf") and not svc.stack_running("meshcom")
+    R["restart_takeover"] = "restart of graywolf refused while meshcom holds 433; confirmed one stops it"
     R["lifecycle"] = "ok"
     R["render_with_state"] = c.get("/stacks").status_code
 except Exception:
