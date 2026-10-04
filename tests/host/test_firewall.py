@@ -1928,6 +1928,8 @@ def test_reapply_notice_rerenders_first_without_the_post_update_marker(tmp_path,
 
 
 def test_no_reapply_notice_when_the_helper_is_current(tmp_path, monkeypatch):
+    """A control, not a regression: it pins that the notice above stays silent while the helper
+    is current; it guards no defect of its own (no red-before)."""
     svc = _svc_stale_helper(tmp_path, monkeypatch, remote=True, rev=None)
     assert svc.firewall_status()["live_ok"]
     assert svc.firewall_reapply_notice() is None
@@ -1955,7 +1957,8 @@ def test_boot_gate_fallback_names_the_helper_update(tmp_path, monkeypatch):
 
 def test_boot_gate_fallback_survives_a_failing_notice(tmp_path, monkeypatch):
     """The notice only words the fallback: if building it fails, the loopback-only config is
-    already promoted and nginx must still start (exit 0), as before."""
+    already promoted and nginx must still start (exit 0), as before. A control, not a regression:
+    it pins that the notice added nothing the fallback depends on (no red-before)."""
     from lhpc.core import firewall as fwm
     svc = _svc_stale_helper(tmp_path, monkeypatch, remote=True)
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")

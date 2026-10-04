@@ -340,7 +340,8 @@ def test_an_update_that_changes_the_firewall_helper_says_reapply_before_reboot(
         tmp_path, monkeypatch, after, remote):
     """An advance that replaces the packaged firewall helper leaves the installed one stale, and the
     next boot starts the console loopback-only: the update result says so, with the commands, while
-    the operator can still act. An unchanged helper adds nothing."""
+    the operator can still act. An unchanged helper adds nothing (the ("OLD", True) case is a
+    control: it guards no defect of its own, no red-before)."""
     from lhpc.core import config as cfgmod
     from lhpc.core import firewall as fwm
     _o, work, up = gitrepo.repos(tmp_path)
@@ -367,11 +368,13 @@ def test_an_update_that_changes_the_firewall_helper_says_reapply_before_reboot(
         assert ("LOOPBACK-ONLY" in notes[0]) is remote
 
 
-@pytest.mark.parametrize("path", ["one-click", "cli"])
+@pytest.mark.parametrize("path", ["one-click", "one-click-sync-failed", "one-click-units-failed",
+                                  "cli", "cli-cleanup-failed"])
 def test_a_helper_changing_update_keeps_the_reapply_warning_on_every_path(tmp_path, monkeypatch, path):
     """The one-click helper records only the SUMMARY (the console shows that after the restart), so
-    the re-apply warning must be in it; the CLI keeps the full line with the commands in details.
-    The packaged helper file really changes on disk during the (faked) advance."""
+    the re-apply warning must be in it — also when the venv sync or the unit refresh fails after the
+    advance; the CLI keeps the full line with the commands in details — also on the partial result
+    of a failed cleanup. The packaged helper file really changes on disk during the (faked) advance."""
     from lhpc.core import firewall as fwm
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch)
@@ -383,22 +386,37 @@ def test_a_helper_changing_update_keeps_the_reapply_warning_on_every_path(tmp_pa
 
     def advance(*a, **k):
         (pkg / "firewall_helper.py").write_text("# helper NEW\n")
-        return {"ok": True, "message": "Update applied.", "deps_changed": False}
+        return {"ok": True, "message": "Update applied.", "deps_changed": False,
+                **({"cleanup_failed": True, "cleanup_error": "cannot unlink x"}
+                   if path == "cli-cleanup-failed" else {})}
     monkeypatch.setattr(selfupdate, "apply_update", advance)
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
-    monkeypatch.setattr(svc, "_refresh_units_post_update", lambda: (True, "ok"))
+    units_ok = path != "one-click-units-failed"
+    monkeypatch.setattr(svc, "_refresh_units_post_update",
+                        lambda: (units_ok, "ok" if units_ok else "daemon-reload failed"))
+    pip_rc = 1 if path == "one-click-sync-failed" else 0
     real_run = svc._system.runner.run
     monkeypatch.setattr(svc._system.runner, "run", lambda argv, *a, **k: (
-        CommandResult(0 if "pip" in argv else 1, "", "") if argv[0] == "systemctl" or "pip" in argv
+        CommandResult(pip_rc if "pip" in argv else 1, "", "") if argv[0] == "systemctl" or "pip" in argv
         else real_run(argv, *a, **k)))                     # no real pip install, no systemd
-    if path == "one-click":
+    if path.startswith("one-click"):
         monkeypatch.setenv("INVOCATION_ID", "x")
         (rt / "state").mkdir(parents=True, exist_ok=True)
         (rt / "state" / "selfupdate.request").write_text("normal\n")
         res = svc.self_update_run_service()
         recorded = selfupdate.status_view(svc._paths)["last_apply"]
-        assert res.ok and recorded["ok"] is True
+        failed = path != "one-click"
+        assert res.ok is not failed and recorded["ok"] is not failed
+        assert res.data.get("venv_sync_failed", False) is (path == "one-click-sync-failed")
+        assert res.data.get("units_refreshed", True) is units_ok
         assert "re-apply the firewall before you reboot" in recorded["summary"].lower()
+    elif path == "cli-cleanup-failed":
+        monkeypatch.delenv("INVOCATION_ID", raising=False)
+        res = svc.self_update_apply_operator()
+        assert not res.ok and res.data["cleanup_failed"] is True
+        assert res.data["firewall_reapply_required"] is True
+        assert any("changes the firewall helper" in d and "lhpc webserver apply" in d
+                   for d in res.details)
     else:
         monkeypatch.delenv("INVOCATION_ID", raising=False)
         res = svc.self_update_apply_operator()
