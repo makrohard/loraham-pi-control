@@ -712,6 +712,10 @@ class SelfUpdateOpsMixin:
             if selfupdate.clear_migration_journal(self._paths):         # clear FIRST; drop anchor only if
                 selfupdate.delete_anchor(self._system, completed.get("txid"))   # the journal is really gone
 
+        # An anchor the journal no longer names (a stop before the journal write, a failed delete)
+        # is reached by nothing else: drop it before a new attempt anchors its own.
+        selfupdate.sweep_anchors(self._system, {r.get("txid") for r in (completed, prepared) if r})
+
         # 4. Attempt a NEW update. Fail-closed PREPARE hook creates the durable git ANCHOR, then the
         #    runtime journal referencing it, BOTH atomically BEFORE the checkout is advanced.
         new_candidates = self._migration_candidates()

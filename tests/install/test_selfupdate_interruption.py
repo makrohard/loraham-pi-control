@@ -91,14 +91,7 @@ def test_the_apply_writes_exactly_the_pinned_points(box):
     assert [(w, "merge" if w == "git.advance" else p) for w, p in log] == POINTS
 
 
-# Known recovery defect (code-review/code-report-T2.md), a strict xfail: a fix turns it into an
-# XPASS, which fails until the mark is removed.
-KD_U1 = ("KD-U1: an anchor whose journal was never written (Ctrl-C between the two) or whose "
-         "delete failed (`delete_anchor` ignores it) stays under refs/lhpc/selfupdate/; no "
-         "recovery path removes an anchor no journal names")
-KNOWN = {(2, "KeyboardInterrupt"), (8, "EIO"), (8, "ENOSPC"), (8, "KeyboardInterrupt")}
-CASES = [pytest.param(k, f, id=f"{w}:{p}-{f}",
-                      marks=[pytest.mark.xfail(strict=True, reason=KD_U1)] if (k, f) in KNOWN else [])
+CASES = [pytest.param(k, f, id=f"{w}:{p}-{f}")
          for k, (w, p) in enumerate(POINTS) for f in sorted(FAILURES)]
 
 

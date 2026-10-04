@@ -524,6 +524,22 @@ def delete_anchor(system: System, txid) -> None:
     _git(system, root, ["update-ref", "-d", _anchor_ref(txid)], _LOCAL_TIMEOUT)
 
 
+def sweep_anchors(system: System, keep) -> None:
+    """Delete every anchor whose txid is not in `keep` (the txids the journal still names). An
+    anchor no journal names is left by a stop between `create_anchor` and the journal write, or by
+    a failed `delete_anchor`; nothing else ever reaches it. Best effort, like `delete_anchor`."""
+    root = repo_root()
+    if root is None:
+        return
+    r = _git(system, root, ["for-each-ref", "--format=%(refname)", _ANCHOR_NS], _LOCAL_TIMEOUT)
+    if r.returncode != 0:
+        return
+    for ref in r.stdout.split():
+        txid = ref.rsplit("/", 1)[-1]
+        if txid not in keep:
+            delete_anchor(system, txid)
+
+
 def anchored_record(system: System, record) -> dict | None:
     """Return the AUTHORITATIVE anchor payload for `record` — but ONLY if the anchor exists and its
     (from_head, to_head, branch, pending) EXACTLY match the runtime record's. Else None (→ block
