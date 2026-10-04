@@ -301,8 +301,9 @@ def test_a_contended_install_names_the_retry(tmp_path, monkeypatch):
     def contended(self, stack, op, target=""):
         raise reslock.ResourceBusy("controller-task-admission", {"operation": "build"})
     monkeypatch.setattr(ControllerService, "_admit", contended)
-    r = svc.install("meshcom", apply=True, source="pinned")
-    assert not r.ok and r.data["contended"] and r.next_commands == ["lhpc install meshcom --yes"]
+    r = svc.install("meshcom", apply=True, source="dev")
+    assert not r.ok and r.data["contended"]
+    assert r.next_commands == ["lhpc install meshcom --source dev --yes"]
 
 
 def test_service_zero_change_install_calls_on_admit_once(tmp_path, monkeypatch):

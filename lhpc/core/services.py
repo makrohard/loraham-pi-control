@@ -1589,6 +1589,9 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         planned_paths = sorted({c.source.path for st in self.stacks()
                                 if not stack_id or st.id == stack_id
                                 for c in st.components if c.source})
+        # The install's own command, repeating the channel it resolved (the operator's
+        # `--source`, else the default): a retry that dropped it could install from another one.
+        retry = f"lhpc install {stack_id + ' ' if stack_id else ''}--source {source} --yes"
         conflicts = sorted({c for c in (self._shared_remote_conflict(p)
                                         for p in planned_paths) if c})
         if conflicts:
@@ -1598,13 +1601,11 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                                          "  nothing to run here — give the shared source one "
                                          "remote in config/local.toml for all the components "
                                          "named above, then run the install again"],
-                                next_commands=[f"lhpc install {stack_id} --yes" if stack_id
-                                               else "lhpc install --yes"])
+                                next_commands=[retry])
         inst = self._installer()
         plan = inst.plan_install(stack_id)
         if not apply:
-            cmd = f"lhpc install {stack_id} --yes" if stack_id else "lhpc install --yes"
-            res = self._plan_result(plan, applied=False, next_apply=cmd)
+            res = self._plan_result(plan, applied=False, next_apply=retry)
             if stack_id and self.on_binary_channel(stack_id):
                 # SWITCHING AWAY from the binary channel is real work even when every source
                 # path already exists: the artifact must be retired (and its files removed)
@@ -1664,7 +1665,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             _adm_stack.close()
             return ActionResult(False, "A task is starting right now (admission contended) — retry the "
                                 "install.", data={"contended": True},
-                                next_commands=[f"lhpc install {stack_id} --yes"])
+                                next_commands=[f"lhpc install {stack_id} --source {source} --yes"])
         # An install re-adopts source trees, which can replace the template the MeshCore
         # identity may still live in. Copy it out before the first adoption — after every
         # plan/coherence refusal above, so a refused install still mints nothing.

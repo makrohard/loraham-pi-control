@@ -32,9 +32,10 @@ def test_an_install_with_inconsistent_shared_remotes_names_the_fix_and_the_retry
     (tmp_path / "config" / "local.toml").write_text(
         '[remotes]\nloraham-kiss-tnc = "https://github.com/fork-a/loraham-kiss-tnc.git"\n'
         'loraham-kiss-serial = "https://github.com/fork-b/loraham-kiss-tnc.git"\n')
-    res = _svc(tmp_path).install("kiss", apply=True)
+    res = _svc(tmp_path).install("kiss", apply=True, source="dev")
     assert not res.ok and _nothing(res)
-    assert res.next_commands == ["lhpc install kiss --yes"]
+    # The retry repeats the channel asked for (finding 130): without it, it installs another one.
+    assert res.next_commands == ["lhpc install kiss --source dev --yes"]
 
 
 def test_an_install_under_a_foreign_auto_install_context_says_to_start_again(tmp_path):
