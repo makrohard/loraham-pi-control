@@ -117,8 +117,9 @@ def test_completion_marker_is_written_last(tmp_path, run_op, phases, monkeypatch
     markers = {
         "src/openhop-core/.venv/.lhpc-build-complete":
             "lhpc build complete\nconsumed meshcore-node ok\nconsumed openhop-repeater-src ok\n",
-        "src/meshcore-webui/backend/.venv/.lhpc-build-complete": "lhpc build complete\n",
-        "src/meshcore-cli/.venv/.lhpc-build-complete": "lhpc build complete\n",
+        "src/meshcore-webui/backend/.venv/.lhpc-build-complete":
+            "lhpc build complete\nconsumed meshcore-webui ok\n",
+        "src/meshcore-cli/.venv/.lhpc-build-complete": "lhpc build complete\nconsumed meshcore-cli ok\n",
     }
     for rel, text in markers.items():
         assert (tmp_path / rel).read_text() == text

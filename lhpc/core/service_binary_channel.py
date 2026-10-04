@@ -182,6 +182,13 @@ class BinaryChannelMixin:
         return {"refused": ref["override_refused"],
                 "lagging": [(c, p[0], p[1]) for c, p in sorted(ref["pin_mismatch"].items())]}
 
+    def binary_capable(self, component_id: str) -> bool:
+        """True when a binary artifact CAN provide this component (its stack's spec covers it),
+        whatever channel it is on now: its build marker ships inside that artifact, so it stays
+        the static text every controller reads the same way (see `_consumed_source_lines`)."""
+        spec = self.binary_spec(self.stack_of(component_id) or component_id)
+        return spec is not None and component_id in spec.covers
+
     def binary_covers(self, component_id: str) -> bool:
         """True when this component's source/build is currently provided by a binary artifact.
         The single primitive every predicate/gate uses — never re-derive it."""

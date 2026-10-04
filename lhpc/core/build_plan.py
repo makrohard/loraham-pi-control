@@ -65,17 +65,23 @@ def web_round(ordered: list, is_built) -> tuple[list, bool]:
     return [c for c in ordered if c.id not in providers], False
 
 
-def consumed_sources(comp, by_id: dict, source_dir) -> list[tuple[str, str]]:
-    """The `(id, source dir)` pairs a receipt records for `comp`: its own and each direct
-    `build_requires` dependency's ("" for an id the manifest does not know). Empty for a
-    component without a completion marker or without dependencies (its receipt is static)."""
-    if not (comp.build_marker and comp.build_requires):
+def consumed_sources(comp, by_id: dict, source_dir, binary: bool = False) -> list[tuple[str, str]]:
+    """The `(id, source dir)` pairs a receipt records for `comp`: its own when it builds from a
+    git source that no binary artifact can provide (`binary`: its marker ships inside the
+    artifact and stays static, so every controller reads it the same way), and every
+    `build_requires` dependency's, transitively, each once in first-seen order ("" for an id the
+    manifest does not know). Empty for a component without a completion marker, or with neither
+    (a fetched release such as graywolf, an artifact-capable component): its receipt is static.
+    The one computation: the build writes it and `is_built` compares it."""
+    own = bool(comp.source) and not binary
+    if not comp.build_marker or not (own or comp.build_requires):
         return []
-    out = []
-    for cid in (comp.id, *comp.build_requires):
+    ids = [comp.id]
+    for cid in ids:                    # grows while walking: a dependency's own follow it
         dep = by_id.get(cid)
-        out.append((cid, str(source_dir(dep)) if dep is not None else ""))
-    return out
+        ids += [d for d in ((dep.build_requires or ()) if dep is not None else ()) if d not in ids]
+    return [(cid, str(source_dir(by_id[cid])) if cid in by_id else "")
+            for cid in (ids if own else ids[1:])]
 
 
 def consumed_lines(sources, run) -> str:

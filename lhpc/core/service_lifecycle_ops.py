@@ -3523,8 +3523,8 @@ class LifecycleOpsMixin:
                             data=build_meta)
 
     def _git_out(self, argv) -> tuple[int, str]:
-        """`build_plan.consumed_lines`'s runner on the CLI path: the injected system's runner,
-        bounded at 5 s, as `_consumed_source_lines_uncached` reads it."""
+        """`build_plan.consumed_lines`'s runner on the CLI path and in `is_built`: the injected
+        system's runner, bounded at 5 s."""
         r = self._system.runner.run(argv, 5.0)
         return getattr(r, "returncode", 1), (r.stdout or "")
 
@@ -3761,7 +3761,8 @@ class LifecycleOpsMixin:
                         _mark = bool(c.build_marker) and op == "build"
                         marker_path = str(life.source_dir(c) / c.build_marker) if _mark else ""
                         marker_text = BUILD_MARKER_TEXT if _mark else ""
-                        consumed = (build_plan.consumed_sources(c, by_all, life.source_dir)
+                        consumed = (build_plan.consumed_sources(c, by_all, life.source_dir,
+                                                                self.binary_capable(c.id))
                                     if _mark else [])
                         inputs = self._build_inputs_to_record(c) if _mark else None
                         # The same limits as lifecycle.build()/host_test() on the CLI path: a Build passes
@@ -4960,27 +4961,18 @@ class LifecycleOpsMixin:
         not know about them, and an artifact without them reads NOT built to one that does, so
         neither publishing first nor releasing first was safe.
         """
-        if not (comp.build_marker and comp.build_requires):
+        if not comp.build_marker:
             return ""
         return self._request_memo(("consumed-source", comp.id),
                                   lambda: self._consumed_source_lines_uncached(comp))
 
     def _consumed_source_lines_uncached(self, comp) -> str:
+        # The build's own computation (`build_plan`), so what is compared is what was written.
+        from . import build_plan
         by_id = {c.id: c for st in self.stacks() for c in st.components}
-        lines = []
-        for cid in (comp.id, *comp.build_requires):
-            dep = by_id.get(cid)
-            src = self._lifecycle().source_dir(dep) if dep else None
-            sha = ""
-            if src is not None:
-                r = self._system.runner.run(
-                    ["git", "-C", str(src), "rev-parse", "HEAD"], 5.0)
-                sha = (r.stdout or "").strip() if getattr(r, "returncode", 1) == 0 else ""
-            # An unreadable HEAD (not a repo) is recorded as such: the
-            # marker then only matches while it STAYS unreadable — any later real SHA
-            # is a change and forces the rebuild.
-            lines.append(f"consumed {cid} {sha or 'unknown'}\n")
-        return "".join(lines)
+        return build_plan.consumed_lines(
+            build_plan.consumed_sources(comp, by_id, self._lifecycle().source_dir,
+                                        self.binary_capable(comp.id)), self._git_out)
 
     def _build_inputs_to_record(self, comp):
         """`(path, text)` for the sidecar a build must write, or None when the component records

@@ -770,27 +770,41 @@ def _marker_service(tmp_path):
     return svc, built_with
 
 
-def test_components_without_requires_keep_the_static_marker(tmp_path):
-    """Only marker+build_requires components get receipt lines; everything else keeps
-    the exact static text, so their existing markers stay valid. Judged through is_built()
-    against a real marker file."""
+def test_a_component_without_requires_names_its_own_revision(tmp_path, monkeypatch):
+    """A component built from its own git checkout, with no build dependency, records that
+    checkout's revision too: the static text alone no longer reads built, the receipt does, and
+    a moved checkout reads NOT built. A component without a source (graywolf, a fetched release)
+    or one a binary artifact can provide (meshtastic: its marker ships inside the artifact)
+    keeps the static receipt. Judged through is_built() against a real marker file."""
     from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+    from lhpc.core.manifest import load_manifest
 
     svc, built_with = _marker_service(tmp_path)
-    # meshchat consumes only its own source: the static text (beside its asset sidecar) is built.
+    # Stubs the collaborator, git: the checkout's HEAD.
+    monkeypatch.setattr(svc, "_git_out", lambda argv: (0, "a" * 40 + "\n"))
     meshchat = _comp("meshchat")
     sidecar = svc.build_inputs_path(meshchat)
     sidecar.parent.mkdir(parents=True, exist_ok=True)
     sidecar.write_text(svc.build_inputs_text(meshchat))
-    assert built_with(meshchat, BUILD_MARKER_TEXT)
+    assert not built_with(meshchat, BUILD_MARKER_TEXT)
+    receipt = svc._consumed_source_lines(meshchat)
+    assert receipt == f"consumed meshchat {'a' * 40}\n"
+    assert built_with(meshchat, BUILD_MARKER_TEXT + receipt)
+    monkeypatch.setattr(svc, "_git_out", lambda argv: (0, "b" * 40 + "\n"))   # it moved
+    svc.invalidate_snapshot()
+    assert not svc.is_built(meshchat)
+    comps = {c.id: c for st in load_manifest() for c in st.components}
+    assert svc._consumed_source_lines(comps["graywolf"]) == ""
+    assert svc._consumed_source_lines(comps["meshtastic"]) == ""
 
 
-@pytest.mark.parametrize("cid, consumed", [("lxmd", ("lxmd", "rns")),
-                                           ("nomadnet", ("nomadnet", "rns")),
+@pytest.mark.parametrize("cid, consumed", [("lxmd", ("lxmd", "rns", "rns-lora-interface")),
+                                           ("nomadnet", ("nomadnet", "rns", "rns-lora-interface")),
                                            ("sideband", ("sideband", "rns-lora-interface", "rns"))])
 def test_a_client_is_built_only_with_the_receipt_over_its_sources(tmp_path, cid, consumed):
-    """The clients install RNS from the rns checkout (sideband also copies the driver's plugin):
-    the static text alone reads NOT built, the receipt over exactly those sources does."""
+    """The clients install RNS from the rns checkout, and with it the driver rns requires
+    (sideband also copies the driver's plugin): the static text alone reads NOT built, the
+    receipt over exactly those sources does."""
     from lhpc.core.lifecycle import BUILD_MARKER_TEXT
 
     _svc, built_with = _marker_service(tmp_path)
@@ -798,6 +812,25 @@ def test_a_client_is_built_only_with_the_receipt_over_its_sources(tmp_path, cid,
     comp = _comp(cid)
     assert not built_with(comp, BUILD_MARKER_TEXT)
     assert built_with(comp, BUILD_MARKER_TEXT + receipt)
+
+
+def test_a_receipt_covers_a_dependency_of_a_dependency(tmp_path, monkeypatch):
+    """nomadnet -> rns -> rns-lora-interface: nomadnet's receipt names the driver too, so an
+    update of the driver alone reads nomadnet NOT built (its venv holds the driver rns
+    installed)."""
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+
+    svc, built_with = _marker_service(tmp_path)
+    shas = {"nomadnet": "a" * 40, "rns": "b" * 40, "rns-lora-interface": "c" * 40}
+    dirs = {str(svc._lifecycle().source_dir(_comp(cid))): cid for cid in shas}
+    # Stubs the collaborator, git: `_git_out` is the one runner the receipt reads HEADs with.
+    monkeypatch.setattr(svc, "_git_out", lambda argv: (0, shas[dirs[argv[2]]] + "\n"))
+    nomadnet = _comp("nomadnet")
+    # A completed build writes the receipt the build plan computes.
+    assert built_with(nomadnet, BUILD_MARKER_TEXT + svc._consumed_source_lines(nomadnet))
+    shas["rns-lora-interface"] = "d" * 40
+    svc.invalidate_snapshot()          # as a source update does; the receipt is read per request
+    assert not svc.is_built(nomadnet)
 
 
 # The band-limiting rule used to be pinned by reading the service's source. Its OBSERVABLE

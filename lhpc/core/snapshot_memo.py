@@ -83,6 +83,7 @@ SNAPSHOT_NEUTRAL: dict[str, str] = {
     "binary_available": "read-only",
     "binary_behind": "read-only",
     "binary_block_reason": "read-only",
+    "binary_capable": "read-only",
     "binary_covers": "read-only",
     "binary_freshness": "read-only",
     "binary_install_refusal": "read-only",
