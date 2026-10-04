@@ -5171,6 +5171,20 @@ def test_an_unlistable_subdirectory_counts_as_held(tmp_path):
     assert held and held[0].split(" ", 1)[0] == "closed", held
 
 
+def test_an_incomplete_update_still_names_the_build_its_activated_sources_need(tmp_path, git,
+                                                                               make_repo,
+                                                                               monkeypatch):
+    """A source was activated but the update did not converge (here: its stale candidates could
+    not be retired): it is INCOMPLETE, builds nothing, and still names the stack the activated
+    source left unbuilt, with its command — before, only a converged update checked."""
+    svc = _built_svc(tmp_path, git, make_repo)
+    monkeypatch.setattr(type(svc), "_retire_candidates_for_paths", lambda self, paths, out: False)
+    res = svc.update("s", apply=True, source="dev")
+    assert not res.ok and res.data.get("needs_build") == ["s"], (res.summary, res.data)
+    assert "  [build needed] s: lhpc build s --yes" in res.details
+    assert svc.unbuilt_components("s") == ["c"]                       # nothing was built
+
+
 def _uninspectable(tmp_path, body):
     """A process of this user that made itself non-dumpable (as `systemd --user` and an SSH login's
     server are): its `/proc/<pid>/cwd` and `fd/` cannot be read, by this user either."""

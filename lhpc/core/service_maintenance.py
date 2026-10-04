@@ -1969,26 +1969,30 @@ class MaintenanceOpsMixin:
                                 next_commands=[f"lhpc update {target + ' ' if target else ''}"
                                                f"{'' if source == 'pinned' else f'--source {source} '}--yes"])
         needs_build = []
-        if ok and mutated_paths and auto_install_ctx is None and not exact_pin:
+        # Every activated source of a public update is checked, also when another part failed
+        # (auto-install builds itself; the binary channel's exact-pin repin builds nothing): the
+        # stacks it left unbuilt are named, and built only when the whole update converged.
+        if mutated_paths and auto_install_ctx is None and not exact_pin:
             self.invalidate_snapshot()                 # the sources changed under this request
             needs_build = [sid for sid in sorted({s.id for s, c in items
                                                   if c.source.path in mutated_paths})
                            if self.unbuilt_components(sid)]
         failed = []
-        for sid in needs_build if build else ():
+        build_now = build and ok
+        for sid in needs_build if build_now else ():
             b = self.build(sid, apply=True)
             out.append(f"  [{'built' if b.ok else 'build FAILED'}] {sid}: {b.summary}")
             out.extend(b.details)
             if not b.ok:
                 failed.append(sid)
-        if not build and needs_build:
+        if not build_now and needs_build:
             out.extend(f"  [build needed] {sid}: lhpc build {sid} --yes" for sid in needs_build)
         if failed:
             return self.needs_rebuild_result(target, failed, "did not build", details=out)
         return ActionResult(ok, f"Update {'applied' if ok else 'INCOMPLETE'} for "
                             f"'{target or 'all'}'.", details=out,
                             next_commands=["lhpc status --versions"],
-                            data={"needs_build": needs_build} if needs_build and not build else {})
+                            data={"needs_build": needs_build} if needs_build and not build_now else {})
 
     def needs_rebuild_result(self, target: str, sids, why: str, details=()) -> ActionResult:
         """The named state `needs-rebuild`: the update activated the new sources, but a stack they
