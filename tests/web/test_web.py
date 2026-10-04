@@ -2072,7 +2072,7 @@ def _flash_classes(body, needle):
 
 def test_stop_manual_required_flashes_yellow_not_green(tmp_path, monkeypatch, web, csrf):
     # "Stop for 'chat' is NOT fully verified" + "kill 16720 yourself" is a WARNING. The
-    # manual_required_only override is start-only; a stop must fall back to the strict ok=False.
+    # manual_required_only override is for a start or restart; a stop keeps the strict ok=False.
     svc = _manual_required_svc(tmp_path, monkeypatch,
                                "Stop for 'chat' is NOT fully verified — see details.")
     c = web(service_factory=lambda: svc)

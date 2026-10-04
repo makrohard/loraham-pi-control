@@ -577,6 +577,8 @@ def test_stack_start_of_an_interactive_main_is_success(monkeypatch, capsys):
                         fake(result(Outcome.VERIFIED, Outcome.MANUAL_REQUIRED)))
     assert main(["stack", "start", "chat", "--yes"]) == 0
     assert "OK    Run for 'chat': manual start required" in capsys.readouterr().out
+    assert main(["stack", "restart", "chat", "--yes"]) == 0          # a restart ends like a start
+    assert "OK    Run for 'chat': manual start required" in capsys.readouterr().out
     # a real failure beside the manual step is still a failure
     monkeypatch.setattr(ControllerService, "run_action",
                         fake(result(Outcome.FAILED, Outcome.MANUAL_REQUIRED)))

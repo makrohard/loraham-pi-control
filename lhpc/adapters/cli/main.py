@@ -1368,8 +1368,8 @@ def _run(argv: list[str] | None = None) -> int:
                               band=args.band, cascade=args.cascade,
                               _before_restart_locked=_admitted)
         rc = _render(res)
-        ok = res.ok or (op == "start" and manual_required_only(res.results))
-        notes = svc.start_notes(res) if op == "start" else []
+        ok = res.ok or manual_required_only(res.results)
+        notes = svc.start_notes(res)
         detail = " ".join([res.summary, *notes]).strip()
         jobresult.terminalize(svc._paths, web, aid, "done" if ok else "failed", detail=detail[:400])
         return 0 if ok else (rc or 1)
@@ -1413,9 +1413,9 @@ def _run(argv: list[str] | None = None) -> int:
                 res = svc.run_action(args.stack_action, args.stack, apply=a,
                                      band=getattr(args, "band", ""), stop_owners=stop_owners)
                 # An interactive MAIN component (chat) whose command was presented is the
-                # expected outcome of a start, not a failure: show it as success, exactly as the
+                # expected outcome of a start or restart, not a failure: show it as success, as the
                 # web job does. `ok` stays strict in the core (nothing is verified running).
-                if (a and args.stack_action == "start" and not res.ok
+                if (a and args.stack_action in ("start", "restart") and not res.ok
                         and manual_required_only(res.results)):
                     return replace(res, ok=True)
                 return res

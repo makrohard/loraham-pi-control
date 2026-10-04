@@ -548,17 +548,17 @@ def test_unverified_termination(entry):
 
 
 def test_restart_of_an_interactive_stack(entry):
-    """intended: for a restart the CLI, the web and the job runner agree that a MANUAL_REQUIRED
-    result is a failure (exit 1, job failed) — unlike a start (above), where all three count it
-    as success. Boot-restore never restarts."""
+    """intended: a restart of an interactive stack ends like its start (above): the CLI, the web
+    and the job runner count a MANUAL_REQUIRED-only result as success (exit 0, job done).
+    Boot-restore never restarts."""
     res = _all(entry, "restart", "chat", _chat_installed)
-    _same(res, started=False, refusal="manual_required", live=[],
+    _same(res, started=True, refusal="manual_required", live=[],
           files=["config/files/lorachat.conf", "state/daemon-feed-floor-433",
                  "state/interactive/chat.show"])
     assert _renders(res) == {
-        "cli": {"rc": 1},
-        "web": {"status": 302, "admission": "admitted", "child_rc": 1, "job": ("failed", True)},
-        "job": {"rc": 1, "job": ("failed", True)}}
+        "cli": {"rc": 0},
+        "web": {"status": 302, "admission": "admitted", "child_rc": 0, "job": ("done", True)},
+        "job": {"rc": 0, "job": ("done", True)}}
 
 
 def test_teardown_signals_only_the_process_it_started():
