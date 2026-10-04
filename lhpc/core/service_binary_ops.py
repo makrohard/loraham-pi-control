@@ -872,8 +872,15 @@ class BinaryOpsMixin:
             # The CALLER owns the open transaction (the channel switch): its journal already
             # carries the receipt, so the openness is ours and the raw receipt is the truth.
             _j, _js = bi.read_journal(self._paths)
-            if _js != "valid" or _j is None or _j.get("stack") != stack_id \
-                    or _j.get("txn") != txn:
+            if _js != "valid" or _j is None:          # the box's state, not a caller defect
+                return ActionResult(False, f"Cannot retire the binary install of '{stack_id}': "
+                                           f"recovery-required — the binary install journal is "
+                                           f"{_js}, so the open transaction cannot be proven",
+                                    details=["  nothing to run here — the journal must be "
+                                             "readable first: inspect state/binary/install.journal"
+                                             ".json (`lhpc doctor` lists it), then run the switch "
+                                             "again"])
+            if _j.get("stack") != stack_id or _j.get("txn") != txn:
                 return ActionResult(False, f"Cannot retire the binary install of '{stack_id}': "
                                            "the open transaction is not this one",
                                     details=["  nothing to run here — this is an lhpc defect (a "

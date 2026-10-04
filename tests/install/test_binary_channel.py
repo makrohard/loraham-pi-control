@@ -1645,3 +1645,16 @@ def test_a_daemon_that_is_not_installed_names_that_as_the_reason(short_tmp_path,
     r = svc.start(target, apply=True)
     dres = [x for x in r.results if x.component == "loraham-daemon"]
     assert not r.ok and dres and dres[0].summary == "daemon: not installed (lhpc install daemon)"
+
+
+@pytest.mark.parametrize("state", ["unsafe", "absent"])
+def test_an_unreadable_journal_under_a_switch_is_recovery_required_not_a_defect(tmp_path,
+                                                                                monkeypatch, state):
+    """Retiring inside a channel switch needs the switch's open journal. One that cannot be read
+    is the box's state (recovery-required, with what to inspect), never "an lhpc defect"."""
+    from lhpc.core import binary_install as bi
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    monkeypatch.setattr(bi, "read_journal", lambda paths: (None, state))
+    r = svc.binary_retire("meshtastic", txn="t1")
+    assert not r.ok and "recovery-required" in r.summary and state in r.summary, r.summary
+    assert "lhpc defect" not in " ".join(r.details) and "install.journal.json" in r.details[0]
