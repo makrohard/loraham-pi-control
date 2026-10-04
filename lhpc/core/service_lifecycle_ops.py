@@ -35,6 +35,7 @@ from .service_base import (
     ActionResult,
     AdmissionRefused,
     SourceTxnBlocked,
+    admission_refusal,
     busy_remedy,
 )
 from .snapshot_memo import invalidates_snapshot
@@ -794,7 +795,7 @@ class LifecycleOpsMixin:
         body failed with an OSError/PathContainmentError (mapped to "configuration guard unavailable",
         as before): a refused admission (typed `admission_blocked`), a busy lock or source-txn block."""
         if isinstance(exc, AdmissionRefused):
-            return ActionResult(False, exc.reason, data={'admission_blocked': exc.tag})
+            return admission_refusal(exc)
         if isinstance(exc, (OSError, PathContainmentError)):
             return ActionResult(False, f"Cannot {op} '{target}': configuration guard unavailable "
                                 f"({exc})", next_commands=[f"lhpc status {target}"])
@@ -1770,7 +1771,7 @@ class LifecycleOpsMixin:
             with self._admission_guard("poststart", target), self._config_stable():
                 return self._poststart_impl(target, order, band, require_all=require_all)
         except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
+            return admission_refusal(_adm)
         except reslock.ResourceBusy as busy:
             return ActionResult(False, f"Cannot re-run post-start for '{target}': {busy}",
                                 next_commands=[f"lhpc status {target}"])
@@ -3503,7 +3504,7 @@ class LifecycleOpsMixin:
                         ok = False
                         break
         except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
+            return admission_refusal(_adm)
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Build blocked for '{target}': {blocked}",
                                 details=[TXN_BLOCKED_REMEDY],
@@ -4329,7 +4330,7 @@ class LifecycleOpsMixin:
                             ok = False
                             break
             except AdmissionRefused as _adm:
-                return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
+                return admission_refusal(_adm)
             except SourceTxnBlocked as blocked:
                 return ActionResult(False, f"Host test blocked for '{target}': {blocked}",
                                     next_commands=[f"lhpc status {target}"])
@@ -4463,7 +4464,7 @@ class LifecycleOpsMixin:
                                     details=details,
                                     next_commands=[f"lhpc status {target}", f"lhpc logs {target}"])
         except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+            return admission_refusal(_adm)
         except _reslock.ResourceBusy as busy:
             return ActionResult(False, f"Cannot TX-test '{target}': {busy}",
                                 next_commands=[f"lhpc status {target}"])

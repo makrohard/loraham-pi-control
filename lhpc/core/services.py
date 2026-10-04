@@ -63,6 +63,7 @@ from .service_base import (
     _proc_start_time,
     _StopRun,
     _SwitchReplace,
+    admission_refusal,
 )
 
 # Public import surface (the adapters + tests import these names FROM lhpc.core.services). Listing
@@ -1646,7 +1647,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             self._admit(_adm_stack, "install", stack_id or "")
         except AdmissionRefused as _a:
             _adm_stack.close()
-            return ActionResult(False, _a.reason, data={"admission_blocked": _a.tag})
+            return admission_refusal(_a)
         except reslock.ResourceBusy:
             _adm_stack.close()
             return ActionResult(False, "A task is starting right now (admission contended) — retry the "

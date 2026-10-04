@@ -26,6 +26,7 @@ from .service_base import (
     ActionResult,
     AdmissionRefused,
     SourceTxnBlocked,
+    admission_refusal,
     busy_remedy,
 )
 from .snapshot_memo import invalidates_snapshot
@@ -716,7 +717,7 @@ class MaintenanceOpsMixin:
             with self._admission_guard("power", kind):
                 return self._power_apply_locked(kind, verb, running)
         except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+            return admission_refusal(_adm)
         except reslock.ResourceBusy as busy:
             return ActionResult(False, f"Cannot {kind}: {busy}")
 
@@ -961,7 +962,7 @@ class MaintenanceOpsMixin:
             with self._admission_guard("graywolf-upstream-update", target):
                 return self._graywolf_upstream_update_locked(target, main)
         except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+            return admission_refusal(_adm)
         except reslock.ResourceBusy as busy:
             # Admission contention with ANOTHER process raises ResourceBusy, not
             # AdmissionRefused — return the same typed refusal every peer op gives.
@@ -1737,7 +1738,7 @@ class MaintenanceOpsMixin:
                 ok, msg = known_working.record(self._paths, stack_id, cand["entries"],
                                                validated)
         except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
+            return admission_refusal(_adm)
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Cannot confirm '{stack_id}': {blocked}")
         except reslock.ResourceBusy as busy:
@@ -1964,7 +1965,7 @@ class MaintenanceOpsMixin:
                 # markers are retired. A clear failure is a truthful INCOMPLETE.
                 ok = self._retire_candidates_for_paths(mutated_paths, out) and ok
         except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
+            return admission_refusal(_adm)
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Update blocked for '{target or 'all'}': {blocked}",
                                 details=[TXN_BLOCKED_REMEDY],
@@ -2175,7 +2176,7 @@ class MaintenanceOpsMixin:
             except AdmissionRefused as _adm:
                 # The power-pending gate lives INSIDE _acquire_key (one choke point): a
                 # reboot/shutdown in flight must not admit an uninstall it would kill.
-                return ActionResult(False, _adm.reason, data={"prep_blocked": _adm.tag})
+                return admission_refusal(_adm, "prep_blocked")
             return self._uninstall_prep_locked()
 
     def _uninstall_prep_locked(self) -> ActionResult:
@@ -2522,7 +2523,7 @@ class MaintenanceOpsMixin:
                 # sharer's uninstall removes the leaf (live membership, not manifest).
                 ok = self._depart_kept_paths(kept, target_ids, out) and ok
         except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
+            return admission_refusal(_adm)
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Uninstall blocked for '{target or 'all'}': {blocked}",
                                 next_commands=["lhpc status"])
@@ -2859,7 +2860,7 @@ class MaintenanceOpsMixin:
                             out.append(f"  [fail] state/post/{name}")
                 out.append(f"  [removed] {removed_post} post-start file(s) in state/post")
         except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
+            return admission_refusal(_adm)
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Clean blocked for '{sid}': {blocked}",
                                 next_commands=["lhpc status"])

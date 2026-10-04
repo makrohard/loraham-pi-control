@@ -83,9 +83,9 @@ class SecretsOpsMixin:
     def _secrets_busy(self, exc) -> ActionResult | None:
         from . import config as _config
         from . import reslock, selfupdate
-        from .service_base import AdmissionRefused
+        from .service_base import AdmissionRefused, admission_refusal
         if isinstance(exc, AdmissionRefused):
-            return ActionResult(False, exc.reason, data={"admission_blocked": exc.tag})
+            return admission_refusal(exc)
         if isinstance(exc, selfupdate.ControllerRuntimeBusy):
             return ActionResult(False, "The console is running: stop it first, then run the restore "
                                 "again, and start it afterwards.",

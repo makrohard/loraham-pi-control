@@ -17,7 +17,12 @@ from .abortflag import AbortFlag
 from .lifecycle import GUI_MISSING_HINT
 from .model import RunState
 from .paths import PathContainmentError
-from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
+from .service_base import (
+    ActionResult,
+    AdmissionRefused,
+    SourceTxnBlocked,
+    admission_refusal,
+)
 from .snapshot_memo import invalidates_snapshot
 
 # ---- cooperative Abort (shared AbortFlag): the detached driver installs SIGTERM/SIGINT handlers
@@ -995,7 +1000,7 @@ class AutoInstallOpsMixin:
             self._admit(_adm_stack, "auto-install", "")
         except AdmissionRefused as _adm:
             _adm_stack.close()
-            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+            return admission_refusal(_adm)
         except reslock.ResourceBusy:
             _adm_stack.close()
             return ActionResult(False, "A task is starting right now (admission contended) — retry the "

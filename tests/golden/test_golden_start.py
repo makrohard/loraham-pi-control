@@ -94,7 +94,8 @@ def test_refused_by_admission(kiss_box, run_op, uninstall_guard):
     assert run_op(box.root, lambda: box.svc.start("kiss")).fields == PLAN
     run = run_op(box.root, lambda: box.svc.start("kiss", apply=True))
     assert run.fields == {
-        "ok": False, "data_keys": ["admission_blocked"], "next_commands": [], "heads": [],
+        "ok": False, "data_keys": ["admission_blocked"],
+        "next_commands": ["lhpc self-update --recover-request"], "heads": [],
         "outcomes": [],
         "summary": "A controller uninstall is in progress (.lhpc-uninstalling) — refusing to "
                    "start new work. Let it finish, or recover it."}

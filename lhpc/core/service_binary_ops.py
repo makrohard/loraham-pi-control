@@ -33,6 +33,7 @@ from .service_base import (
     ActionResult,
     AdmissionRefused,
     SourceTxnBlocked,
+    admission_refusal,
     busy_remedy,
 )
 from .snapshot_memo import invalidates_snapshot
@@ -214,7 +215,7 @@ class BinaryOpsMixin:
                         self._source_operation_guard(_srcs, op="binary-install"))
         except AdmissionRefused as _adm:
             _stack.close()
-            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+            return admission_refusal(_adm)
         except reslock.ResourceBusy as _busy:
             _stack.close()
             return ActionResult(False, f"Binary install of '{stack_id}' blocked: {_busy}",

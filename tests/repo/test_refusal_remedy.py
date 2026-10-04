@@ -19,9 +19,10 @@ the refusals they drive, through the ordinary fakes:
 The identity causes they share with `test_every_unsafe_identity_cause_has_a_listed_remedy` are in
 `tests/remedy_contract.py`.
 
-Not in the guard, named: the admission refusals listed in `EXEMPT` by file:line, each with its
-reason (the guard fails on a listed site that moved or disappeared, and on any unlisted bare one);
-`ControllerService.install` (services.py) is outside this batch's files.
+An admission refusal is built by one helper, `service_base.admission_refusal`, whose remedy per
+tag `core/test_admission_refusal.py` drives; `test_no_admission_refusal_is_built_by_hand` keeps
+every site on it. Not in the guard: `ControllerService.install` (services.py), whose source-channel
+refusals are partly computed from varied causes (docs/operations.md, "Not covered yet").
 
 A refusal on a busy lock or a blocked source transaction names the command to run again, never
 only `lhpc status` (a diagnostic, not a remedy): `test_busy_refusals_name_the_retry_command`, the
@@ -90,44 +91,36 @@ def _has_remedy(call: ast.Call) -> bool:
         for n in ast.walk(details))
 
 
-# The bare refusals the guard accepts, by file:line, each with its reason. All seven return the
-# shared admission refusal `ActionResult(False, <AdmissionRefused>.reason)`: its text is worded
-# once, in `_task_admission_blocked` (service_selfupdate.py) and the power-pending gate
-# (services.py), for every operation. Only its self-update-pending reason names a command
-# (`lhpc self-update --recover-request`); the uninstall, unverifiable and power-pending reasons
-# name none. Giving them a remedy changes that shared text for every operation: a U2 item.
-_ADMISSION = "shared admission refusal (_task_admission_blocked); remedy is a U2 item"
-EXEMPT = {
-    ("lhpc/core/service_binary_ops.py", 217): ("binary_install", _ADMISSION),
-    ("lhpc/core/service_selfupdate.py", 411): ("self_update_apply", _ADMISSION),
-    ("lhpc/core/service_selfupdate.py", 635): ("self_update_apply_operator", _ADMISSION),
-    ("lhpc/core/service_selfupdate.py", 1017): ("self_update_trigger", _ADMISSION),
-    ("lhpc/core/service_lifecycle_ops.py", 3506): ("build", _ADMISSION),
-    ("lhpc/core/service_maintenance.py", 964): ("graywolf_upstream_update", _ADMISSION),
-    ("lhpc/core/service_maintenance.py", 1967): ("update", _ADMISSION),
-}
-
-
 def test_no_bare_refusal_on_the_update_paths():
-    bare, seen, exempt_seen = [], set(), set()
+    bare, seen = [], set()
     for rel, functions in SCOPES.items():
         tree = ast.parse((REPO / rel).read_text(encoding="utf-8"))
         for fn, call in _refusals(tree, functions):
             seen.add((rel, fn))
-            if (rel, call.lineno) in EXEMPT and EXEMPT[(rel, call.lineno)][0] == fn \
-                    and not _has_remedy(call):
-                exempt_seen.add((rel, call.lineno))
-            elif not _has_remedy(call):
+            if not _has_remedy(call):
                 bare.append(f"{rel}:{call.lineno} ({fn})")
     # A renamed function must not empty its scope silently.
     for rel, functions in SCOPES.items():
         for fn in functions or ():
             assert (rel, fn) in seen, f"{rel}: no refusal found in {fn}() — scope out of date"
-    # A listed site that moved, gained a remedy or disappeared must be re-listed or dropped.
-    stale = sorted(set(EXEMPT) - exempt_seen)
-    assert not stale, f"EXEMPT lists no bare refusal at: {stale}"
     assert not bare, "refusal without a remedy (next_commands, or '" + NOTHING_TO_RUN + "…'):\n" \
         + "\n".join(bare)
+
+
+def test_no_admission_refusal_is_built_by_hand():
+    """Every module turns an `AdmissionRefused` into its refusal through `admission_refusal` (which
+    carries the remedy); a hand-built `ActionResult(False, <exc>.reason, …)` would drop it."""
+    hand = []
+    for path in sorted((REPO / "lhpc").rglob("*.py")):
+        if path == REPO / "lhpc" / "core" / "service_base.py":     # the helper itself
+            continue
+        for call in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (isinstance(call, ast.Call)
+                    and getattr(call.func, "id", getattr(call.func, "attr", "")) == "ActionResult"
+                    and any(isinstance(a, ast.Attribute) and a.attr == "reason"
+                            for a in call.args[1:2])):
+                hand.append(f"{path.relative_to(REPO)}:{call.lineno}")
+    assert hand == [], hand
 
 
 # The refusals whose `next_commands` is computed, not a literal list: the guard cannot evaluate them,

@@ -113,6 +113,30 @@ class AdmissionRefused(Exception):
         self.tag = tag
 
 
+# The remedy of an admission refusal, by its tag (`_task_admission_blocked`, the power gate):
+# a command where one resolves it, else the "nothing to run here" line naming what to do.
+_ADMISSION_RECOVER = "lhpc self-update --recover-request"
+_ADMISSION_NOTHING = {
+    "unverifiable": "  nothing to run here — lhpc could not read whether a self-update or an "
+                    "uninstall is pending (the cause is named above); the box's operator fixes "
+                    "that, then retries",
+    "power-pending": "  nothing to run here — a reboot or shutdown is pending in this boot: wait "
+                     "for it; a stale or unreadable marker named above is deleted by hand, then "
+                     "retry",
+}
+
+
+def admission_refusal(exc: AdmissionRefused, key: str = "admission_blocked") -> ActionResult:
+    """The one refusal of an operation that task admission turned away: the reason, the tag under
+    `key` (the uninstall prep reports it as `prep_blocked`) and its remedy — `lhpc self-update
+    --recover-request` for an uninstall or a self-update in flight, else the "nothing to run here"
+    line of its tag."""
+    if exc.tag in _ADMISSION_NOTHING:
+        return ActionResult(False, exc.reason, details=[_ADMISSION_NOTHING[exc.tag]],
+                            data={key: exc.tag})
+    return ActionResult(False, exc.reason, next_commands=[_ADMISSION_RECOVER], data={key: exc.tag})
+
+
 @dataclass(frozen=True)
 class ConfigWrite:
     """Structured result of generating one component's config file."""

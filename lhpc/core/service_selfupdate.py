@@ -374,7 +374,7 @@ class SelfUpdateOpsMixin:
         transition it was captured against actually completed — recorded DURABLY before source changes
         and recovered from the journal after a crash. Cleanup failure on force is a truthful partial."""
         from . import reslock, selfupdate
-        from .service_base import AdmissionRefused
+        from .service_base import AdmissionRefused, admission_refusal
         # LOCK ORDER: (1) task admission FIRST — held across the WHOLE mutation so no task can be
         # reserved/spawned/started while the checkout + venv are changing; (2) controller-runtime +
         # self-update locks. `_admission_guard`'s strict check ALSO enforces "direct/operator apply
@@ -408,7 +408,7 @@ class SelfUpdateOpsMixin:
                       selfupdate.update_lock(self._paths)):
                     return self._self_update_locked(force)
         except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+            return admission_refusal(_adm)
         except reslock.ResourceBusy:
             return ActionResult(False, "A task is starting right now (admission contended) — try the "
                                 "update again shortly.", data={"contended": True},
@@ -592,7 +592,7 @@ class SelfUpdateOpsMixin:
         import os as _os
 
         from . import reslock, updater_units
-        from .service_base import AdmissionRefused
+        from .service_base import AdmissionRefused, admission_refusal
         if _os.environ.get("INVOCATION_ID"):
             return ActionResult(False, "refusing to stop/start services from a managed unit — run "
                                 "`lhpc self-update --apply` from an interactive operator shell",
@@ -632,7 +632,7 @@ class SelfUpdateOpsMixin:
                                         next_commands=["systemctl --user start lhpc-web.service"])
                 return self._operator_outcome(res, restarted=True)
         except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+            return admission_refusal(_adm)
         except reslock.ResourceBusy:
             return ActionResult(False, "A task is starting right now (admission contended) — retry the "
                                 "update.", data={"contended": True},
@@ -999,7 +999,7 @@ class SelfUpdateOpsMixin:
         import contextlib
 
         from . import reslock
-        from .service_base import AdmissionRefused
+        from .service_base import AdmissionRefused, admission_refusal
         # Hold task admission through the EXCLUSIVE request-marker creation (lock order #1): a new task
         # cannot start while we create it. Recheck the uninstall guard + request state AND run the
         # complete strict blocker scan UNDER the lock, so nothing slips in between the checks and the
@@ -1014,7 +1014,7 @@ class SelfUpdateOpsMixin:
             except AdmissionRefused as _adm:
                 # The power-pending gate lives INSIDE _acquire_key (one choke point): a
                 # reboot/shutdown in flight must not admit a self-update it would kill.
-                return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+                return admission_refusal(_adm)
             if self.uninstall_guard_blocks():
                 return ActionResult(False, "A controller uninstall is in progress — cannot self-update.",
                                     data={"uninstalling": True},

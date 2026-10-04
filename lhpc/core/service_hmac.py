@@ -15,7 +15,7 @@ import uuid
 from . import jobs
 from .abortflag import AbortFlag
 from .paths import PathContainmentError
-from .service_base import ActionResult, AdmissionRefused
+from .service_base import ActionResult, AdmissionRefused, admission_refusal
 from .service_base import SourceTxnBlocked as _SourceTxnBlocked
 from .snapshot_memo import invalidates_snapshot
 
@@ -511,7 +511,7 @@ class HmacOpsMixin:
                     return ActionResult(False, err)
                 return ActionResult(True, f"HMAC {action} started.", data={"run_id": run_id})
         except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+            return admission_refusal(_adm)
         except reslock.ResourceBusy:
             return ActionResult(False, "An HMAC apply is already starting (start lock contended).")
 
