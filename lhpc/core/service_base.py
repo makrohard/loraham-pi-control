@@ -81,6 +81,22 @@ class SourceTxnBlocked(Exception):
     is present — every source-mutating op fails closed until an operator resolves it."""
 
 
+def busy_remedy(busy) -> str:
+    """The details line of a refusal on a busy lock (`reslock.ResourceBusy`): wait for the
+    holder the lock record names, then retry. Text only."""
+    op = (getattr(busy, "holder", None) or {}).get("operation") or "operation"
+    return f"  wait for the {op} named above to finish, then run the same command again"
+
+
+# The details line of a refusal on `SourceTxnBlocked`: its message names one of three causes.
+TXN_BLOCKED_REMEDY = (
+    "  if the line above names a busy lock, wait for that operation to finish and run the same "
+    "command again; if it names an auto-install run, run the recovery it names first; if it names "
+    "an unresolved source-transaction journal, nothing to run here — an earlier source update "
+    "could not be finished or rolled back, and the box's operator resolves state/source-txn/ by "
+    "hand, then retries")
+
+
 class _SwitchReplace(Exception):
     """Control-flow marker: on a binary -> source switch this destination must be REPLACED by
     a forced adoption, never treated as "destination already exists"."""

@@ -706,7 +706,12 @@ class Installer:
                     return action
                 if outcome != "activated":         # "failed-clean": no journal, safe to drop
                     self._cleanup_owned_staging(txn, handle, staging.name)   # handle-safe
-                    action.status, action.detail = "failed", "activation failed — active source untouched"
+                    action.status, action.detail = "failed", (
+                        "activation failed — active source untouched. If "
+                        f"{self._source_rel(dest.with_name('.' + dest.name + '.prev'))} exists, it "
+                        "is left over from an earlier interrupted update and blocks every update "
+                        "of this source: move it out of src/ (lhpc no longer uses it), then retry "
+                        f"(lhpc update {comp.id} --yes)")
                     return action
                 return self._adopt_done(action, spec, dest, desc, source, signer_diags,
                                         expected=expected, kw_label=kw_label)

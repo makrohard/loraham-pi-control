@@ -582,7 +582,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         # "/", "https://") canonicalizes to "" and would otherwise match a checkout with NO
         # origin (also "") — a false-accept. A valid, non-empty canonical must match.
         if not canon_spec or _canon_git_url(origin) != canon_spec:
-            return verdict("unsafe", "origin is not the approved canonical remote")
+            return verdict("unsafe", "checkout has no origin remote" if canon_spec and not origin
+                           else "origin is not the approved canonical remote")
         return verdict("ok", "identity ok")
 
     @property

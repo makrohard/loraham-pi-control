@@ -28,7 +28,13 @@ from .lifecycle import GUI_MISSING_HINT
 from .model import ComponentKind, ResourceMode, RunState
 from .outcomes import CompResult, Outcome, applied_ok
 from .paths import PathContainmentError
-from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
+from .service_base import (
+    TXN_BLOCKED_REMEDY,
+    ActionResult,
+    AdmissionRefused,
+    SourceTxnBlocked,
+    busy_remedy,
+)
 from .snapshot_memo import invalidates_snapshot
 
 # A HMAC-apply build-log base is a strict controller-generated prefix bound to the FULL 32-hex run id;
@@ -3182,7 +3188,10 @@ class LifecycleOpsMixin:
         # A caller-supplied run-specific log-base prefix (HMAC apply) is validated BEFORE any path is
         # constructed — a strict controller pattern bound to the FULL 32-hex run id (never marker-time only).
         if log_base_override and not _HMAC_LOG_BASE_RE.match(log_base_override):
-            return ActionResult(False, f"Refusing to build '{target}': invalid log-base prefix")
+            return ActionResult(False, f"Refusing to build '{target}': invalid log-base prefix",
+                                details=["  nothing to run here — this is an lhpc defect (an "
+                                         "internal caller passed a bad log name), not a problem "
+                                         "on the box; report it with this message"])
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
@@ -3319,7 +3328,10 @@ class LifecycleOpsMixin:
         src_paths = sorted({c.source.path for _, c in buildable if c.source})
         ctx_err = self._auto_install_ctx_error(auto_install_ctx, src_paths)
         if ctx_err:
-            return ActionResult(False, f"Refusing to build '{target}': {ctx_err}")
+            return ActionResult(False, f"Refusing to build '{target}': {ctx_err}",
+                                details=["  nothing to run here — this is an lhpc defect (the "
+                                         "auto-install run's lock context does not match), not a "
+                                         "problem on the box; report it with this message"])
         try:
             with self._source_operation_guard(src_paths, op="build"):
                 # A MeshCore build recreates src/openhop-core/.venv — the interpreter an orphaned
@@ -3373,10 +3385,12 @@ class LifecycleOpsMixin:
             return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Build blocked for '{target}': {blocked}",
-                                next_commands=[f"lhpc status {target}"])
+                                details=[TXN_BLOCKED_REMEDY],
+                                next_commands=[f"lhpc build {target} --yes"])
         except reslock.ResourceBusy as busy:
             return ActionResult(False, f"Build blocked for '{target}': {busy}",
-                                next_commands=[f"lhpc status {target}"])
+                                details=[busy_remedy(busy)],
+                                next_commands=[f"lhpc build {target} --yes"])
         self.prune_logs()
         # Skips are part of the RESULT, not a discarded preflight detail: a run that built the
         # headless components while dropping a GUI one must say so, never a bare "succeeded".
