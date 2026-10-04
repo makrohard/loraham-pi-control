@@ -32,6 +32,22 @@ reads *Update required* after the update; run `sudo bash <runtime root>/config/f
   present and the tree is not reported clean: every local-change check (update, uninstall, binary install, switch
   to the source channel, auto-install update) reads it as changed. Before, the `.git` was ignored and the tree
   read as clean.
+- A refusal the controller's update, graywolf-update and build functions, or any function in its
+  self-update and binary-channel modules, return outright now says what to do: a command under the
+  CLI's *Next:*, or a *nothing to run here* line naming what has to be fixed on the box. Not covered
+  yet: a refusal by task admission (only a stuck self-update names `lhpc self-update
+  --recover-request`), a failure computed from the outcome of work done (a failed build, a graywolf
+  restart, a self-update recovery or unit refresh), refusals other code hands through these paths
+  (for example the MeshCore plugin-manager refusal, which says to reboot), `lhpc update graywolf`
+  without `--upstream`, and `lhpc install` on the source channel. A self-update refused for an
+  unsafe checkout names the fix for its cause (`git … switch` for a detached HEAD or another
+  branch, `git … remote add` for a missing origin, `git … remote set-url` for a wrong one, `chmod
+  go-w` for a folder others can write) or says the install.sh layout has to be restored. A refusal
+  on a busy lock names the operation to wait for and the command to run again (before: `lhpc
+  status`, or nothing). An update blocked by a `src/.<name>.prev` folder left over from an
+  interrupted update names that folder. The update plan says which version the update fetches
+  instead of "fetch newest". What to run to keep each stack current is one table in
+  [operations](docs/operations.md#keeping-stacks-current).
 
 - Every release is now also installed, built and self-updated on a test box throttled to a Pi Zero 2 W's CPU,
   SD card and memory before it ships, and each run proves it is no faster than a real Zero on a fixed workload:
