@@ -444,20 +444,40 @@ def test_planner_component_scope_never_widens():
     assert "never widened" in plan.skipped[0]["reason"]
 
 
-def test_planner_unknown_interactive_and_missing_main_skip():
+def test_planner_unknown_and_missing_main_skip():
     plan = br.derive_plan(
         [_ev(stack="removed-stack"),
-         _ev(launch_id="L2", stack="chat", component="loraham-chat"),
          _ev(launch_id="L3", stack="kiss", component="not-the-main")],
-        {"chat": StackMeta(stack_id="chat", main="loraham-chat", interactive_main=True,
-                           declared_bands=(), fixed_band="433"),
-         "kiss": _KISS},
-        {}, "daemon")
+        {"kiss": _KISS}, {}, "daemon")
     assert not plan.items
     reasons = {s["stack"]: s["reason"] for s in plan.skipped}
     assert "unknown stack" in reasons["removed-stack"]     # e.g. a stack the manifest dropped
-    assert "interactive" in reasons["chat"]
     assert "no main-component evidence" in reasons["kiss"]
+
+
+_CHAT_METAS = {
+    "chat": StackMeta(stack_id="chat", main="loraham-chat", interactive_main=True,
+                      declared_bands=(), fixed_band="433"),
+    "daemon": StackMeta(stack_id="daemon", main="loraham-daemon", interactive_main=False,
+                        declared_bands=(), fixed_band="")}
+
+
+def test_planner_restores_an_interactive_main_from_the_daemon_its_start_ensured():
+    # chat's main is never spawned: its start left only the daemon's record, under the stack.
+    plan = br.derive_plan(
+        [_ev(launch_id="L2", stack="chat", component="loraham-daemon", requested_target="chat")],
+        _CHAT_METAS, {}, "daemon")
+    assert plan.skipped == []
+    assert [(i["kind"], i["target"], i["band"]) for i in plan.items] == [("stack", "chat", "433")]
+
+
+def test_planner_restores_an_interactive_main_from_no_other_record():
+    # Fail closed: a record of another component under the stack is not a start of chat.
+    plan = br.derive_plan(
+        [_ev(launch_id="L2", stack="chat", component="not-the-main", requested_target="chat")],
+        _CHAT_METAS, {}, "daemon")
+    assert plan.items == []
+    assert "no main-component evidence" in plan.skipped[0]["reason"]
 
 
 def test_planner_conflicting_bands_on_two_records_skip():

@@ -521,22 +521,16 @@ def test_damaged_client_index(entry):
 
 
 def test_interactive_launch(entry):
-    """known defect T3-F3, T3-F5: boot restore skips an interactive main where the CLI, the
-    console and the job runner launch it. T3-F3 (started, files): those three run the start
-    (config generated, dashboard marker set, never spawned) and count its only shortfall,
-    MANUAL_REQUIRED, as success (exit 0, job done); boot-restore's plan skips the item
-    ("interactive main — manual start"): no start, no files. T3-F5 (refusal class): the three
-    report `manual_required`, boot-restore `ok` — its driver completed with nothing to do."""
+    """intended: an interactive main is prepared on every path — config generated, dashboard
+    marker set, never spawned — and its only shortfall, MANUAL_REQUIRED, counts as success (exit
+    0, job done, boot item succeeded). Boot-restore plans it from the record its last start left:
+    the daemon that start ensured, recorded under the stack (the main has none of its own)."""
     res = _all(entry, "start", "chat", _chat_installed,
-               evidence=("chat", "loraham-chat", "433"))
-    manual = {"started": True, "refusal": "manual_required", "live": [],
-              "files": ["config/files/lorachat.conf", "state/daemon-feed-floor-433",
-                        "state/interactive/chat.show"]}
-    assert _decisions(res) == {"cli": manual, "web": manual, "job": manual,
-                               "boot": {"started": False, "refusal": "ok", "files": [],
-                                        "live": []}}
-    assert _renders(res) == {**SUCCEEDED, "boot": {
-        "rc": 0, "journal": "no-plan", "items": [], "skipped": ["interactive main — manual start"]}}
+               evidence=("chat", "loraham-daemon", "433"))
+    _same(res, started=True, refusal="manual_required", live=[],
+          files=["config/files/lorachat.conf", "state/daemon-feed-floor-433",
+                 "state/interactive/chat.show"])
+    assert _renders(res) == SUCCEEDED
 
 
 def test_unverified_termination(entry):

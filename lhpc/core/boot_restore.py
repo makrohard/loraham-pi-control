@@ -274,6 +274,7 @@ def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
     daemon_bands: set[str] = set()
     daemon_evidence: list[str] = []
     orderable: list[tuple[float, str, dict]] = []
+    daemon_main = metas[daemon_stack_id].main if daemon_stack_id in metas else None
 
     for stack_id, evs in sorted(by_stack.items()):
         ev_ids = [e.launch_id for e in evs]
@@ -287,11 +288,12 @@ def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
             daemon_bands |= ok_bands
             daemon_evidence.extend(ev_ids)
             continue
-        if meta.interactive_main:
-            plan.skipped.append({"stack": stack_id, "reason": "interactive main — manual start",
-                                 "evidence_ids": ev_ids})
-            continue
-        mains = [e for e in evs if e.component == meta.main]
+        # An interactive main (chat) is never spawned, so it leaves no record of its own: its
+        # start's evidence is the daemon that start ensured, recorded under the stack — that
+        # record and no other (the scope rule below still applies). Restoring it prepares it as
+        # the CLI does (config, dashboard marker, manual start required).
+        mains = [e for e in evs if e.component == meta.main
+                 or (meta.interactive_main and e.component == daemon_main)]
         if not mains:
             plan.skipped.append({"stack": stack_id,
                                  "reason": "no main-component evidence",
