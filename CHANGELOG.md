@@ -17,6 +17,15 @@
   start launched it (a daemon that was already running stays). The result names anything that remains
   running, with the reason, and the daemon then stays up beneath it. A start that only waits for you to run
   a terminal program (chat) is not a failure and keeps its daemon.
+- The documentation was checked line by line against the code, and the statements the check found untrue
+  now match it. Among them: `lhpc doctor` (not `lhpc deps`) prints the polkit and clock commands;
+  a proxy in `local` mode needs no confirm phrase; an omitted `proxy --port` keeps the saved port; a bare
+  `lhpc update` keeps the installed channel; a reboot or shutdown that is pending refuses every new task,
+  and a stale pending marker is removed by itself. The dated live-test records no longer name LAN
+  addresses or the bench's position. No change in behaviour.
+- Test suite: a test body no longer ignores the result of a controller action it calls, commands, lock
+  keys, unit lines and hashes are compared whole instead of by their beginning, and seven tests whose
+  setup had silently failed now set up what they test. No change in behaviour.
 
 - A build now keeps the sources it builds from locked for its whole run — the stack's own and every
   source it consumes, such as `openhop-repeater` for the MeshCore node or Reticulum for NomadNet — so an
