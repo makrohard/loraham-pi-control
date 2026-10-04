@@ -140,8 +140,9 @@ def test_a_cli_build_with_an_unreadable_dependency_revision_says_unverified(tmp_
         (root / sp).mkdir(parents=True, exist_ok=True)
     _commit(root / "src/openhop-core")
     res = _cli(svc, "meshcore-node", monkeypatch)
-    assert [d.split()[:2] for d in res.details if d.split()[:1] == ["[unverified]"]] == [
-        ["[unverified]", "openhop-repeater-src:"]]
+    unverified = [d for d in res.details if d.split()[:1] == ["[unverified]"]]
+    assert [d.split()[:2] for d in unverified] == [["[unverified]", "openhop-repeater-src:"]]
+    assert "`lhpc build meshcore --yes`" in unverified[0]                  # the remedy, not a wait
     assert not svc.is_built(next(c for c in svc.stack("meshcore").components
                                  if c.id == "meshcore-node"))
 

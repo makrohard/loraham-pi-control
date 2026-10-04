@@ -3506,7 +3506,8 @@ class LifecycleOpsMixin:
                     details.append(f"  [{res.state.value}] build {comp.id} "
                                    f"(rc {res.returncode}, log {res.log_path})")
                     details += [f"  [unverified] {ln.split()[1]}: its revision could not be read "
-                                "— the build reads as not built until it can"
+                                "— the build reads as not built; rebuild it (`lhpc build "
+                                f"{owner_of[comp.id].id} --yes`) once its revision can be read"
                                 for ln in (receipt + (rev[1] if rev else "")).splitlines()
                                 if ln.endswith(" unknown")]
                     if not res.ok:

@@ -255,7 +255,8 @@ def test_a_source_build_whose_own_revision_cannot_be_read_says_so_and_never_read
     (tmp_path / "src" / "meshtastic-firmware").mkdir(parents=True)
     res = svc.build("meshtastic", apply=True)
     assert res.ok, res.summary                                        # every step ran
-    assert [d.split()[:2] for d in res.details if d.split()[:1] == ["[unverified]"]] == [
-        ["[unverified]", "meshtastic:"]]
+    unverified = [d for d in res.details if d.split()[:1] == ["[unverified]"]]
+    assert [d.split()[:2] for d in unverified] == [["[unverified]", "meshtastic:"]]
+    assert "`lhpc build meshtastic --yes`" in unverified[0]                # the remedy, not a wait
     assert svc.is_built(_mesh(svc)) is False
 
