@@ -695,25 +695,50 @@ def test_simulated_reboot_kills_owned_groups_and_runs_boot_restore(tmp_path, mon
     ownership record kept, and the PRODUCTION boot restore consumes that record into its journal
     under the new boot id. (It stopped and restarted the stacks by hand, so boot restore never ran
     in the lab.) The console request that triggered the reboot may still hold its admission for a
-    moment; the restore then runs once it is released, as the unit does after a real boot."""
+    moment; the restore then runs once it is released, as the unit does after a real boot. The
+    group holds a descendant too, and the kill reaches it 0.3 s after the leader (members of a
+    group end at different moments): the leader AND the descendant are proven gone before the new
+    boot id is written — a reboot that waits for the leader only (the code before this fix)
+    writes it while the descendant still runs. The restore's replacement is a NEW process: its
+    launch is observed (pid and process group at spawn), after the new boot id."""
     import signal
     import time
 
-    from lhpc.core import procident
     paths = make_lab_root(tmp_path, monkeypatch)
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
     monkeypatch.setenv("LHPC_BOOT_ID_FILE", str(supervisor.boot_file(paths)))   # as lab_env sets it
     boot1 = supervisor.ensure_boot_identity(paths)
-    proc = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    import threading
+
+    from lhpc.core.lifecycle import Lifecycle
+    proc, child, launch_id = _owned_group_with_descendant(tmp_path, boot1)
+    events = []
+    real_advance, real_killpg, real_spawn = supervisor.advance_boot, os.killpg, Lifecycle._real_spawn
+
+    def advance(p, reason="reboot"):
+        events.append(("advance", _gone(proc.pid), _gone(child)))
+        return real_advance(p, reason=reason)
+
+    def staggered_killpg(pgid, sig):              # ops.os IS os: never call the patched name
+        if sig != signal.SIGKILL or pgid != proc.pid:
+            return real_killpg(pgid, sig)
+        os.kill(pgid, signal.SIGKILL)                     # the leader now, the descendant later
+
+        def late():
+            try:
+                os.kill(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass                                      # already reaped by the cleanup
+        threading.Timer(0.3, late).start()
+
+    def spawn(self, argv, log_path, cwd=None, env=None):
+        pid = real_spawn(self, argv, log_path, cwd=cwd, env=env)
+        events.append(("spawn", pid, os.getpgid(pid)))
+        return pid
+    monkeypatch.setattr(supervisor, "advance_boot", advance)
+    monkeypatch.setattr(ops.os, "killpg", staggered_killpg)
+    monkeypatch.setattr(Lifecycle, "_real_spawn", spawn)
     try:
-        ident = procident.proc_identity(proc.pid)
-        launch_id = f"loraham-kiss-tnc__x__{proc.pid}__{'0' * 32}"
-        owned = tmp_path / "state" / "owned"
-        owned.mkdir(parents=True)
-        (owned / f"{launch_id}.json").write_text(json.dumps({   # what a stack start records
-            **ident, "version": 1, "launch_id": launch_id, "stack": "kiss",
-            "component": "loraham-kiss-tnc", "requested_target": "kiss", "start_scope": "stack",
-            "band": "", "pid": proc.pid, "role": "", "launched_at": 1, "boot_id": boot1}))
         holder = 0
         if admission != "free":
             r, w = os.pipe()
@@ -727,13 +752,15 @@ def test_simulated_reboot_kills_owned_groups_and_runs_boot_restore(tmp_path, mon
                     os._exit(0)
             assert os.read(r, 4) == b"held"
         assert ops.power(ControllerService(paths=paths), "reboot") == 0
+        assert events[0] == ("advance", True, True), events     # the old group gone first
+        spawned = [(pid, pgid) for kind, pid, pgid in events[1:] if kind == "spawn"]
+        assert spawned and all(pid not in (proc.pid, child) and pgid == pid
+                               for pid, pgid in spawned), events   # a new process, own group
         assert proc.wait(timeout=10) == -signal.SIGKILL
         if holder:
             assert os.waitpid(holder, 0)[1] == 0
     finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
+        _reap_group(proc)
     journal = json.loads((tmp_path / "state" / "boot-restore.json").read_text())
     assert journal["boot_id"] == supervisor.boot_file(paths).read_text().strip() != boot1
     item = next(i for i in journal["items"] if i.get("target") == "kiss")
