@@ -548,8 +548,6 @@ class SelfUpdateOpsMixin:
                     "the venv sync FAILED" + (f" ({detail})" if detail else ""))
                 return _dc.replace(res, ok=False, summary=summary, next_commands=nxt,
                                    data={**res.data, "venv_sync_failed": True, **extra})
-            if (err := self._incomplete_clear("venv-unsynced")):
-                return self._uncleared(res, "venv-unsynced", err)
 
         # Re-render the managed units. An update whose new version changes a unit TEMPLATE
         # leaves the installed unit non-canonical, and boot restore then refuses to run —
@@ -569,8 +567,14 @@ class SelfUpdateOpsMixin:
                 res, ok=False, data={**res.data, "reason": "units-refresh-failed", **extra},
                 next_commands=nxt,
                 summary=summary)
-        elif (err := self._units_stale_clear()):
-            res = self._uncleared(res, "units-stale", err)
+        else:
+            # Only now is the update finished: `venv-unsynced` stays recorded until the units are
+            # refreshed too, so an interruption between the sync and the refresh leaves a record
+            # the next `--apply` resumes from (`_resumes_sync`).
+            for state in ("venv-unsynced", "units-stale"):
+                if (err := self._incomplete_clear(state)):
+                    res = self._uncleared(res, state, err)
+                    break
         return res
 
     @invalidates_snapshot
@@ -1164,8 +1168,6 @@ class SelfUpdateOpsMixin:
                         res = ActionResult(False, summary, next_commands=nxt,
                                            data={**dict(res.data), "venv_sync_failed": True,
                                                  **extra})
-                    elif (err := self._incomplete_clear("venv-unsynced")):
-                        res = self._uncleared(res, "venv-unsynced", err)
                     else:
                         # Refresh the managed units with the NEW code. This path applies
                         # inline (it does not go through _apply_and_sync), so without this
@@ -1173,7 +1175,12 @@ class SelfUpdateOpsMixin:
                         # then reads its own integration as non-canonical, one-click
                         # updating goes away and boot restore is skipped.
                         ok_u, det_u = self._refresh_units_post_update()
-                        err = self._units_stale_clear() if ok_u else ""
+                        # `venv-unsynced` is cleared only now, with the units refreshed (as in
+                        # `_apply_and_sync`): an interruption in between keeps it recorded.
+                        uncleared = next(((st, e) for st in ("venv-unsynced", "units-stale")
+                                          if (e := self._incomplete_clear(st))), ("", "")) \
+                            if ok_u else ("", "")
+                        err = uncleared[1]
                         if err:
                             summary, nxt, extra = res.summary, [], {}
                         elif ok_u:
@@ -1188,7 +1195,7 @@ class SelfUpdateOpsMixin:
                                   "units_refresh_detail": det_u, **extra},
                             next_commands=nxt)
                         if err:
-                            res = self._uncleared(res, "units-stale", err)
+                            res = self._uncleared(res, uncleared[0], err)
         except _StopRun:
             pass
         # The record keeps the summary only, and the console shows that after the restart: the

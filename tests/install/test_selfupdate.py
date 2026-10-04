@@ -478,6 +478,33 @@ def test_a_record_that_cannot_be_cleared_fails_the_step(op_svc, monkeypatch, pat
     assert svc.self_update_incomplete()[0] == "units-stale"
 
 
+@pytest.mark.parametrize("path", ["apply", "one-click"])
+def test_an_interrupted_sync_to_refresh_gap_keeps_the_record(op_svc, monkeypatch, tmp_path, path):
+    """`venv-unsynced` is recorded and the next run syncs the venv; an interruption before the unit
+    refresh finishes must leave the record, so the next `--apply` resumes the refresh too — the
+    record is cleared only with the units refreshed."""
+    import json
+    from lhpc.core.services import ActionResult, ControllerService
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
+                        ActionResult(True, "Already up to date.", data={"already": True}))
+    svc, _fake = (op_svc(dict(_WEB_INACTIVE), invocation=False) if path == "apply"
+                  else op_svc(units=True, invocation=True))
+    rec = svc._incomplete_path()
+    rec.parent.mkdir(parents=True, exist_ok=True)
+    rec.write_text(json.dumps({"state": "venv-unsynced", "detail": "the venv sync FAILED"}))
+
+    def interrupted(self):
+        raise KeyboardInterrupt
+    # Stubs the collaborator, systemd: the unit refresh is interrupted (a stop between the sync
+    # and the refresh).
+    monkeypatch.setattr(ControllerService, "_refresh_units_post_update", interrupted)
+    if path == "one-click":
+        (svc._paths.runtime_root / "state" / "selfupdate.request").write_text("normal\n")
+    with pytest.raises(KeyboardInterrupt):
+        svc.self_update_apply_operator() if path == "apply" else svc.self_update_run_service()
+    assert svc.self_update_incomplete()[0] == "venv-unsynced"
+
+
 def test_the_repair_does_not_clear_venv_unsynced(op_svc, monkeypatch):
     """`--repair-integration` verifies the units, not the venv: with `venv-unsynced` recorded it
     repairs, keeps the record and names it with its own command."""
