@@ -196,7 +196,8 @@ sudo usermod -aG spi,gpio "$USER"                        # → greift mit dem Ne
 <!-- test:deps-manual:end -->
 
 Die polkit-Regeln (Neustart/Herunterfahren, Netzwerk-Panel) und die Uhr-Pakete stehen nicht in
-dieser Liste: `lhpc deps` (oder Apps → LoRaHAM Pi Control → Dependencies) gibt ihre Befehle aus.
+dieser Liste: `lhpc doctor` (oder Apps → LoRaHAM Pi Control → System dependencies) gibt ihre Befehle
+aus, solange sie fehlen.
 </details>
 
 #### 5. lhpc installieren
@@ -207,7 +208,8 @@ curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/i
 #   Optionen: --target <dir> · --no-service (ohne Web-Dienst) · --no-path (ohne CLI-Symlink)
 ```
 
-Alles landet unter `~/loraham-pi-control/` ([die Runtime-Wurzel](docs/architecture.md#the-runtime-root)).
+Alles außer dem Link `~/.local/bin/lhpc` und den systemd-User-Units landet unter
+`~/loraham-pi-control/` ([die Runtime-Wurzel](docs/architecture.md#the-runtime-root)).
 
 <details><summary><em>Manuell — clone / venv / bootstrap</em></summary>
 
@@ -388,7 +390,7 @@ lhpc config chat call YOURCALL-10 # eine Option setzen (YOURCALL-10 = dein Rufze
 lhpc config <stack> --band 868 <param> <wert>     # bandabhängiger Wert bei umschaltbaren Stacks
 lhpc stack start|stop|restart <stack>             # zeigt den Plan, fragt nach; --yes überspringt
 lhpc logs <ziel>                   # Komponenten-Log verfolgen
-lhpc rflog <stack> [--band B]      # RF-Log eines Stacks verfolgen (was der Funk hörte und sendete)
+lhpc rflog <stack> [--band B]      # RF-Log eines Stacks verfolgen (was der Funk hörte und sendete); --band: Daemon
 lhpc rflog <stack> --decrypt       # dasselbe, mit den Schlüsseln dieser Box entschlüsselt (verschlüsselte Stacks)
 lhpc doctor                        # Umgebungs-/Abhängigkeits-Checks
 lhpc test <stack> [--tx] --yes     # Host-Tests; --tx sendet
@@ -423,7 +425,7 @@ liefen, kommen zurück ([boot restore](docs/operations.md#not-a-supervisor)); Sc
 | `lhpc: command not found` nach der Installation | du bist auf deinem eigenen Rechner, nicht auf dem Pi — `lhpc` gibt es nur auf der Box | erst `ssh <benutzer>@<host>`, dann dort ausführen |
 | `lhpc: command not found` auf dem Pi | PATH noch nicht wirksam | Neustart (Schritt 6), oder neue Login-Shell öffnen |
 | Build wirkt hängend, wird per OOM abgeschossen, oder das Board fällt aus dem Netz | RAM- und WLAN-Druck auf kleinen Boards | [Running on a Pi](docs/maintenance.md#running-on-a-pi) (englisch) |
-| „optionale Abhängigkeiten fehlen" im Headless-Betrieb | GUI-Komponenten absichtlich übersprungen | ignorieren, oder `--with-gui` |
+| „optional deps missing" im Headless-Betrieb | GUI-Komponenten absichtlich übersprungen | ignorieren, oder `--with-gui` |
 | WebGUI von einem anderen Rechner nicht erreichbar | nicht freigegeben / Firewall | [Schritt 8](#8-das-webgui--und-wie-du-es-von-woanders-erreichst); [Firewall](docs/firewall.md) |
 | SSH **während der Installation** abgerissen, Lauf gestoppt | der Lauf bekam SIGHUP; abgekoppelte Build-Schritte laufen ggf. weiter | `lhpc auto-install` erneut ausführen (setzt wieder auf); tmux (Schritt 2) oder ein USB-LAN-Adapter. Laufende Stacks überstehen einen Abbruch |
 | Quell-Installation meldet „GitHub clone failed" | der Clone oder der Checkout des gepinnten Commits hat aufgegeben | Grund am Ende von `logs/adopt-<Komponente>.log` (`[fail] <Schritt>: …`); Installation erneut starten |
