@@ -157,8 +157,11 @@ def test_coverage_lists_only_the_genuinely_unmeasured():
     with pytest.raises(AssertionError) as red:
         _check_coverage(measured, [("a", "build"), ("b", "clone"), PIP],
                         version=stt.PIP_SYNC_SINCE)
-    assert [ln.strip() for ln in str(red.value).splitlines()[1:]
-            if ln.startswith("  ")] == ["b clone"]
+    # One unmeasured pair per line after the header, as `_check_coverage` writes them — read
+    # without relying on pytest's rendering (it indents a message's lines and appends `assert`).
+    listed = str(red.value).split("with a reason:\n", 1)[1].splitlines()
+    assert [ln.strip() for ln in listed if ln.strip() and not ln.startswith("assert ")] \
+        == ["b clone"]
 
 
 def test_the_introducing_release_is_a_changelog_release():
