@@ -900,19 +900,15 @@ class FirewallOpsMixin:
 
     @invalidates_snapshot
     def firewall_update_after_advance(self) -> list:
-        """After a successful self-update advance: (B) regenerate the firewall operator scripts to
-        match the new helper, and (C) bring the LHPC-owned nginx unit current on disk (interactive
-        path also daemon-reloads; the bus-blocked managed path writes the file and reports that a
-        reload/reboot is required). Returns operator notes. Never raises — an update is never
-        failed by this best-effort follow-up."""
+        """After a successful self-update advance: (C) bring the LHPC-owned nginx unit current on
+        disk (interactive path also daemon-reloads; the bus-blocked managed path writes the file
+        and reports that a reload/reboot is required). (B), the scripts, is rendered by
+        `firewall_post_update_reconcile`, which keeps the marker while it fails. Returns operator
+        notes. Never raises — an update is never failed by this best-effort follow-up."""
         from . import updater_units
         notes: list = []
         if self._fw_integration_state() == "absent":
             return notes
-        try:
-            self.firewall_render()                         # (B) scripts match the updated helper
-        except Exception:
-            pass
         try:
             integ = self.updater_integration()
             verdict = integ.get("per_unit", {}).get(updater_units.NGINX_UNIT)
@@ -955,13 +951,20 @@ class FirewallOpsMixin:
     @invalidates_snapshot
     def firewall_post_update_reconcile(self) -> list:
         """Run at web-console STARTUP in the freshly-restarted (new-code) process. If a self-update
-        left the post-update marker, regenerate the firewall scripts + migrate the LHPC-owned nginx
-        unit using the CURRENT templates (via `firewall_update_after_advance`), then clear the
-        marker. Best-effort; returns operator notes for the startup log."""
+        left the post-update marker, render the firewall scripts here and migrate the LHPC-owned
+        nginx unit via `firewall_update_after_advance`, both from the CURRENT templates, then clear
+        the marker — only once the scripts rendered, so a failed render is retried at the next
+        start. Best-effort; returns operator notes for the startup log."""
         from . import runtime_fs
         if not self._marker_present(_FW_POSTUPDATE_MARKER):
             return []
+        try:
+            rendered = self.firewall_render()              # (B) scripts match the updated helper
+        except Exception as exc:
+            rendered = ActionResult(False, f"could not render firewall scripts: {exc}")
         notes = self.firewall_update_after_advance()
+        if not rendered.ok:                                # marker kept: the next start renders again
+            return [f"{rendered.summary} — run `lhpc firewall --script`.", *notes]
         try:
             runtime_fs.unlink(self._paths, self._paths.under(_FW_POSTUPDATE_MARKER))
         except Exception:

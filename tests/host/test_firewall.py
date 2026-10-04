@@ -1694,7 +1694,8 @@ def test_fw_post_update_reconcile_defers_to_fresh_process(tmp_path, monkeypatch)
     # the FRESH process reconciles: render scripts + (here) unit already OK -> clears the marker
     ran = {"render": 0}
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
-    monkeypatch.setattr(svc, "firewall_render", lambda: ran.__setitem__("render", 1))
+    monkeypatch.setattr(svc, "firewall_render",
+                        lambda: (ran.__setitem__("render", 1), ActionResult(True, "ok"))[1])
     monkeypatch.setattr(svc, "updater_integration",
                         lambda: {"per_unit": {uu.NGINX_UNIT: uu.OK}, "managed": True})
     svc.firewall_post_update_reconcile()
@@ -1702,14 +1703,40 @@ def test_fw_post_update_reconcile_defers_to_fresh_process(tmp_path, monkeypatch)
     assert not svc._marker_present(marker)                 # cleared after reconcile
 
 
+def test_fw_post_update_reconcile_keeps_the_marker_when_the_render_fails(tmp_path, monkeypatch):
+    """A render that fails at console startup leaves the old helper in the apply script; clearing
+    the marker anyway would end every retry. The marker stays, the note names the command, and
+    the next reconcile renders again and only then clears it."""
+    import os as _os
+    from lhpc.core import updater_units as uu
+    svc = _svc(tmp_path)
+    _os.makedirs(svc._paths.under("state"), exist_ok=True)
+    marker = "state/firewall-postupdate.pending"
+    svc._fw_mark_post_update()
+    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
+    monkeypatch.setattr(svc, "updater_integration",
+                        lambda: {"per_unit": {uu.NGINX_UNIT: uu.OK}, "managed": True})
+    renders = []
+
+    def fails():
+        renders.append(1)
+        raise OSError("disk full")
+    monkeypatch.setattr(svc, "firewall_scripts", fails)
+    notes = svc.firewall_post_update_reconcile()
+    assert renders == [1] and svc._marker_present(marker)
+    assert any("lhpc firewall --script" in n for n in notes)
+    monkeypatch.setattr(svc, "firewall_scripts", lambda: renders.append(2))
+    svc.firewall_post_update_reconcile()
+    assert renders == [1, 2] and not svc._marker_present(marker)
+
+
 def test_fw_update_after_advance_migrates_owned_unit(tmp_path, monkeypatch):
-    # P1-2 B/C: a real advance regenerates the firewall scripts and brings the LHPC-owned nginx
-    # unit current on disk — interactive path daemon-reloads; managed path reports reload/reboot.
+    # P1-2 C: after a real advance the LHPC-owned nginx unit is brought current on disk —
+    # interactive path daemon-reloads; managed path reports reload/reboot. (B, the scripts, is
+    # rendered by the post-update reconcile, tested above.)
     from lhpc.core import updater_units as uu
     svc = _svc(tmp_path)
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
-    rendered = {"n": 0}
-    monkeypatch.setattr(svc, "firewall_render", lambda: rendered.__setitem__("n", rendered["n"] + 1))
     written = {"n": 0}
     monkeypatch.setattr("lhpc.core.updater_units.write_set",
                         lambda ud, root: (written.__setitem__("n", written["n"] + 1), [])[1])
@@ -1721,7 +1748,7 @@ def test_fw_update_after_advance_migrates_owned_unit(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "updater_integration",
                         lambda: {"per_unit": {uu.NGINX_UNIT: uu.MODIFIED_OURS}, "managed": False})
     notes = svc.firewall_update_after_advance()
-    assert rendered["n"] == 1 and written["n"] == 1 and reloads["n"] == 1
+    assert written["n"] == 1 and reloads["n"] == 1
     assert any("reloaded systemd" in n for n in notes)
     # managed owned-stale -> write, NO daemon-reload, reload/reboot note
     written["n"] = reloads["n"] = 0
