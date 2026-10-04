@@ -39,8 +39,8 @@ a `kill` hint instead ([safety model](architecture.md#safety-model)).
 - An optional service that was started on its own (e.g. the MeshCore web UI without its
   "auto-start with the stack" tick) is started again after its stack; one that was stopped stays
   stopped.
-- A failed restore is not retried: the dashboard banner and `lhpc autostart` name the stacks to
-  start by hand. Log: `logs/lhpc-boot-restore.log` (web: Controller logs → boot-restore).
+- A failed restore is not retried: the dashboard banner and `lhpc autostart` give the number of
+  failed stacks and the command `lhpc stack start <id>`. Log: `logs/lhpc-boot-restore.log` (web: Controller logs → boot-restore).
 
 ## Install channels
 
@@ -89,7 +89,7 @@ What to run in each situation and what you will see. The channels themselves:
 | binary where published | once: `lhpc install <stack> --source binary --yes`; afterwards `lhpc update <stack> --yes` stays on the binary | a published binary built from other commits than this lhpc's pins is refused; `Next:` offers `lhpc self-update --apply` and the source install |
 | a fetched release (graywolf) | `lhpc update graywolf --upstream --yes` for the newest release; `lhpc build graywolf --yes` for the pinned one | the release fetched and checked against its checksums, then a restart if the stack was running |
 | back to known-working after a failed update | [what happens when an update fails](#what-happens-when-an-update-fails) | *Update INCOMPLETE* with the failed source's line |
-| an update was refused | the commands under `Next:`, or, where there is none, a *nothing to run here* line naming what has to be fixed on the box. That holds for every refusal the controller's `update`, graywolf-update and `build` functions themselves, and any function in its self-update and binary-channel modules, return outright as a refusal (`tests/repo/test_refusal_remedy.py` reads each one); where the step depends on a cause lhpc cannot tell apart, the line names each cause with its step. Not covered yet: a refusal by task admission (an uninstall or a reboot pending, an update state that cannot be checked; only a stuck self-update names `lhpc self-update --recover-request`); a failure these paths compute from the outcome of work done (a failed build, a graywolf update whose restart failed, a self-update recovery that combines two results, a console self-update whose unit refresh failed); refusals other code hands through these paths, for example the MeshCore plugin-manager refusal (it says to reboot) and a self-update's firewall preflight; `lhpc install` on the source channel. An *Update INCOMPLETE* result is not a refusal: its per-source lines say what failed | the cause on the first line. A running stack: `lhpc stack stop <stack> --yes`. A left-over `src/.<name>.prev`: move it out of `src/`, then retry. A busy lock: wait for the operation it names, then run the same command again |
+| an update was refused | the commands under `Next:`, or, where there is none, a *nothing to run here* line naming what has to be fixed on the box. That holds for every refusal `lhpc update`, `lhpc update graywolf --upstream`, `lhpc build`, `lhpc self-update` and `lhpc install` on the binary channel give straight away (a repository test reads each one); where the step depends on a cause lhpc cannot tell apart, the line names each cause with its step. Not covered yet: a refusal because an uninstall or a reboot is pending or an update state cannot be checked (only a stuck self-update names `lhpc self-update --recover-request`); a failure these paths compute from the outcome of work done (a failed build, a graywolf update whose restart failed, a self-update recovery that failed, a console self-update whose unit refresh failed); refusals from other parts of lhpc that these commands pass on, for example the MeshCore plugin-manager refusal (it says to reboot) and a self-update's firewall preflight; `lhpc install` on the source channel. An *Update INCOMPLETE* result is not a refusal: its per-source lines say what failed | the cause on the first line. A running stack: `lhpc stack stop <stack> --yes`. A left-over `src/.<name>.prev`: move it out of `src/`, then retry. A busy lock: wait for the operation it names, then run the same command again |
 | the first start after a source update | nothing: the update built the stack. Only if that build failed or could not start (*needs-rebuild*): `lhpc build <stack> --yes` | while a build is due, `lhpc status --versions` marks the component *needs-rebuild* and `lhpc stack start` refuses it as *not built* or *sources changed since the last build*, naming `lhpc build <stack>` |
 
 ### What happens when an update fails
@@ -144,7 +144,8 @@ install` keeps an installed source as it is and points there); a binary install 
 
 ## Fast vs explicit
 
-- Fast & bounded (no build, no mutation, no RF): `status`, `explain`, `doctor`, `logs`, `web`
+- Fast & bounded (no build, no RF; no mutation except rolling an oversized Meshtastic trace when its
+  log is read): `status`, `explain`, `doctor`, `logs`, `web`
   page loads. No network I/O, except one bounded gpsd query when the position source is `gpsd`
   ([gps.md](gps.md)).
 - Explicit & gated ([conventions](cli.md#conventions)): `install`, `build`, `update`,
@@ -257,8 +258,10 @@ exposure: [webserver.md](webserver.md).
   Test / Update / Uninstall / Clean. Interactive (TUI) apps show the command to run yourself
   ([adding-a-stack](adding-a-stack.md#run--readiness)). **Auto-install** installs (or updates),
   builds and optionally tests every stack in one run.
-- **Settings** (per stack, on the Apps page) — the **only** place configuration changes: run
-  params, config-file params and, for daemon clients, the daemon radio parameters
+- **Settings** (per stack, on the Apps page) — where a stack's own configuration changes: run
+  params, config-file params and, for daemon clients, the daemon radio parameters. The console also
+  changes it on the operator call sign, Hardware (incl. high power) and GPS pages and a stack's mode
+  switch (`/operator/callsign`, `/hardware`, `/gps`, `/stacks/<id>/mode`)
   ([stacks/daemon.md](stacks/daemon.md)). A save is validated as a whole and patches only its own
   keys; an unsupported file structure refuses the save and leaves the file byte-for-byte.
 - **System panels** — Firewall, Webserver, GPS, Hardware, System dependencies, per-target logs.
@@ -269,7 +272,7 @@ and Clean requires typing the stack id. Daemon live settings:
 
 **Start means start.** Start or Restart runs the **saved** configuration
 ([config layers](architecture.md#manifest-and-config-layers)). The click fixes the band (the Apps
-dropdown, else the running band, else the primary), plans the run (hardware, band arbitration,
+dropdown, else the running band, else an active band fallback, else the primary), plans the run (hardware, band arbitration,
 GPS, radio mode, firewall exposure, resource conflicts, identity), and then:
 
 - **nothing consequential** → the start runs; you return with the result flashed;
@@ -287,7 +290,7 @@ log `logs/web-start-<stack>.log` (`web-restart-…`), reachable from the banner'
 runs, the stack's row and dashboard card show *starting…*; when it ends the page reloads once and
 the banner turns green (result) or red (refusal, dismissed with ✕). An *unsafe* banner (the job
 could not be tracked) needs *Recover*. A second Start while one runs is refused; a pending
-self-update or contended admission refuses before anything is spawned. The CLI and boot restore
+self-update, or another task starting at that moment, refuses it before anything is spawned. The CLI and boot restore
 start synchronously.
 
 **Maintenance pass.** While the console runs, it does the box's housekeeping every 60 s (300 s on
@@ -316,8 +319,9 @@ back via boot restore. A button renders only when logind authorizes that action 
 `/etc/polkit-1/rules.d/49-lhpc-power.rules` is not readable by the operator on stock Debian.
 Install it: [README step 4](../README.md#4-install-dependencies); on an existing box the
 System-dependencies panel and `lhpc doctor` show the command, as does a refusal at apply time.
-Apply records a short-lived pending marker that refuses new builds and updates until the trigger
-fires (an unreadable or stale marker is named in the refusal; delete it yourself); failures after
+Apply records a short-lived pending marker that refuses every new task until the trigger
+fires (an unreadable marker is named in the refusal; delete it yourself — a stale one is removed
+automatically); failures after
 authorization land only in `logs/power-<kind>.log`.
 
 ## Network

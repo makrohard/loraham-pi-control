@@ -16,7 +16,8 @@
 
 Everything lives under one **runtime root** (`~/loraham-pi-control`, override
 `LHPC_RUNTIME_ROOT`), created by `lhpc bootstrap` (mode `0700`): adopted stack sources (`src/`),
-generated config (`config/`), state (`state/`), logs (`logs/`) and the venv (`venv/lhpc`).
+generated config (`config/`), state (`state/`) and logs (`logs/`); `install.sh` adds the venv
+(`venv/lhpc`).
 
 Setups differ only in where LHPC's own checkout sits:
 
@@ -25,7 +26,8 @@ Setups differ only in where LHPC's own checkout sits:
   `lhpc self-update` and the running code are one tree ([deployment.md](deployment.md)).
 - **Dev checkout** — the checkout is elsewhere with its own venv; the runtime root is separate.
 
-LHPC never writes into a checkout except via `lhpc self-update`; the
+LHPC writes into a checkout only through `lhpc self-update` and the permission repair (`lhpc
+bootstrap` sets the in-root checkout's mode to `0700`); the
 [controller-identity check](#controller-identity--self-update) reports which setup you are in.
 
 ## Package layout
@@ -49,7 +51,7 @@ lhpc/
     runtime_fs.py        # descriptor-anchored path containment, atomic writes
     reslock.py           # named non-blocking operation locks
     jobs.py              # bounded job execution, job markers, log tail
-    probes/              # read-only bounded probes (process, net, unixsock, systemd, source, hardware)
+    probes/              # read-only bounded probes (process, endpoints, unixsock, systemd, source, hardware)
     binary_install.py    # binary-channel install transaction + crash journal
     binary_receipt.py    # per-stack binary ownership record (absent|valid|superseded|unsafe)
     firewall.py          # nftables ruleset model + rendering
@@ -77,11 +79,12 @@ Not every module is listed.
 
 Dependency rule: `adapters/*` import `core/*`; `core/*` never imports `adapters/*`. Adapters
 obtain `ControllerService` and `ActionResult` from `lhpc.core.services`; the `service_*` modules
-are internal mixins composed by that facade. Exceptions: the CLI imports the two cooperative-abort
+are internal mixins composed by that facade. Exceptions: the CLI imports `ActionResult` from
+`service_base` in one place and the two cooperative-abort
 flags from `service_auto_install` and `service_hmac` for its signal handlers, and the web imports
 the disk helpers from `service_system`. Both adapters parse input, call one `ControllerService`
-method and render the `ActionResult`; the web never shells out to the CLI, so validation, gating
-and results are identical.
+method and render the `ActionResult`; the web's detached jobs run the same verbs as `python -m lhpc`
+child processes, so validation, gating and results are identical.
 
 Service mixins orchestrate — locks, admission, authoritative rechecks, transaction order.
 Reusable interpretation and policy go in plain core modules as functions with explicit inputs
@@ -98,13 +101,13 @@ when that leaves it long.
   1. tracked defaults (`lhpc/data/defaults.toml`) + the manifest;
   2. operator overrides — `~/loraham-pi-control/config/local.toml` (callsign, remotes);
   3. secrets — `config/secrets.toml`, mode `0600` (never tracked, never in output);
-  4. per-stack settings — `config/stacks/<id>[@band].toml`, written ONLY from a stack's Settings
-     (web) or `lhpc config`. A start runs exactly this saved configuration; there are no
+  4. per-stack settings — `config/stacks/<id>[@band].toml`, written only from a stack's Settings
+     (web) or `lhpc config` (and by a self-update's migration of a value still at an old default). A start runs exactly this saved configuration; there are no
      per-launch values. The one launch-time overlay is an inherited identity (below),
      materialized for that launch and never persisted.
 - The config file each app reads is generated from its `config_file` params
   (`{callsign}`/`{band}`/`{runtime}`/`{hardware}`/`{gps_*}` substituted; `{callsign}` resolves to the
-  effective identity).
+  global base callsign).
 
 ## Identity and callsigns
 
@@ -142,7 +145,7 @@ missing runtime root reports `not-installed`, not an error.
 ## Radios, bands and resource claims
 
 The LoRaHAM daemon runs one instance per band (`--radio 433|868`), each with its own CONF socket
-(`/tmp/loraconf{band}.sock`), raw data socket (`/tmp/lora{band}.sock`) and framed socket
+(`/run/loraham/loraconf{band}.sock` when it exists, else `/tmp/loraconf{band}.sock`), raw data socket (`/tmp/lora{band}.sock`) and framed socket
 (`/tmp/lora{band}f.sock`). Components declare **resource claims** in the manifest
 (`[[stack.component.resource]]`: key, kind, mode); `core/resources.py` turns declared claims plus
 observed state into conflicts, and a start is blocked, with the holder named, if a running stack
@@ -201,7 +204,7 @@ start.
 
 Live settings go to the per-band CONF socket. The daemon answers every line with one `OK` or
 `ERR <reason>`; `lhpc` reads that reply to each `SET` (an `ERR`, or no `OK` within 1 s, is a failure)
-and confirms a key the daemon reports back by reading back `GET STATUS`. Only whitelisted keys are allowed (the list:
+and confirms a key the daemon reports back by reading back `GET STATUS` (`GET CHANNEL NOSCAN` for `MODE`). Only whitelisted keys are allowed (the list:
 [stacks/daemon.md](stacks/daemon.md#radio-parameters)); nothing transmits by itself.
 
 ## Safety model
@@ -247,7 +250,8 @@ leaves on disk and which test proves it: the [invariant table](#invariant-table)
   after each is proven present there; a path the new upstream also ships is a refusal, never a
   merge. Operator rule: [provenance](provenance.md#ownership-records).
 - **Locking.** Start, stop, restart, build, update, uninstall and clean take named non-blocking
-  locks; a contended operation refuses immediately, naming the holder. Lock order: task
+  locks; a contended operation refuses, naming the holder (a holder in the same controller
+  process is waited for up to 5 s). Lock order: task
   admission, then configuration stability, then the source-transaction index and the source
   paths (or a stack's lifecycle bundle), then the self-update lock; a self-update takes the
   controller-runtime lock after admission and before the self-update lock. A build holds the lock of
@@ -321,10 +325,10 @@ the runtime root unless absolute.
 
 | area | invariant | owner | locks | durable state · recovery | proving tests |
 |---|---|---|---|---|---|
-| admission / locks | task admission: no new task while an uninstall or a self-update is pending or running ([Locking](#safety-model)) | `lhpc/core/services.py:2550` `_admit`; `lhpc/core/service_selfupdate.py:1248` `_task_admission_blocked` | `controller-task-admission` | none of its own; reads `state/selfupdate.request`, `state/selfupdate.inflight`, `.lhpc-uninstalling` | `tests/core/test_task_admission.py::test_second_service_contends_on_the_admission_lock`, `::test_apply_task_starts_refused_during_uninstall` |
-| admission / locks | named non-blocking locks; a contended operation refuses naming the holder ([Locking](#safety-model)) | `lhpc/core/reslock.py:106` `operation_lock`; `lhpc/core/services.py:2613` `_acquire_key` | one flock per key under `state/locks/` | owner record beside the lock; the kernel drops a dead holder's flock | `tests/core/test_reslock.py::test_second_acquire_is_blocked_and_names_holder`, `::test_dead_holder_lock_is_free`, `::test_concurrent_lifecycle_op_is_blocked` |
-| admission / locks | one lock order for every operation ([Locking](#safety-model)) | `lhpc/core/services.py:2600` `_admission_guard`, `:218` `_config_stable`, `:360` `_source_operation_guard`, `:2677` `_lifecycle_guard` | the order is stated once, in [Locking](#safety-model) | — | `tests/core/test_task_admission.py::test_admission_acquired_before_config_stable`, `::test_second_thread_start_and_config_do_not_invert`; `tests/core/test_op_serialization.py::test_multi_source_update_holds_locks_across_groups` |
-| admission / locks | a build holds every source it consumes, transitively, for its whole run; the receipt's revisions are read under those locks ([Locking](#safety-model)) | `lhpc/core/build_plan.py:36` `lock_sources`, `:81` `consumed_lines`; `lhpc/core/service_lifecycle_ops.py:3299` `build`, `:3635` `spawn_web_job`; `lhpc/core/build_launcher_runtime.py:206` `run` | the CLI: admission, index, every source exclusive; a detached build: index, its own source exclusive, each dependency's shared | the completion marker (the receipt) and its build-inputs sidecar, written only after the last step | `tests/core/test_build_plan.py::test_a_provider_source_cannot_move_during_a_dependent_build`, `::test_the_receipt_records_the_revision_read_under_the_locks`, `::test_both_paths_lock_and_record_the_same`, `::test_parallel_jobs_share_a_dependency` |
+| admission / locks | task admission: no new task while an uninstall, a self-update or a reboot/shutdown is pending or running ([Locking](#safety-model)) | `lhpc/core/services.py:2532` `_admit`; `lhpc/core/service_selfupdate.py:1230` `_task_admission_blocked` | `controller-task-admission` | none of its own; reads `state/selfupdate.request`, `state/selfupdate.inflight`, `.lhpc-uninstalling` | `tests/core/test_task_admission.py::test_second_service_contends_on_the_admission_lock`, `::test_apply_task_starts_refused_during_uninstall` |
+| admission / locks | named non-blocking locks; a contended operation refuses naming the holder, after waiting up to 5 s for a holder in the same controller process ([Locking](#safety-model)) | `lhpc/core/reslock.py:106` `operation_lock`; `lhpc/core/services.py:2595` `_acquire_key` | one flock per key under `state/locks/` | owner record beside the lock; the kernel drops a dead holder's flock | `tests/core/test_reslock.py::test_second_acquire_is_blocked_and_names_holder`, `::test_dead_holder_lock_is_free`, `::test_concurrent_lifecycle_op_is_blocked` |
+| admission / locks | one lock order for every operation ([Locking](#safety-model)) | `lhpc/core/services.py:2582` `_admission_guard`, `:218` `_config_stable`, `:360` `_source_operation_guard`, `:2659` `_lifecycle_guard` | the order is stated once, in [Locking](#safety-model) | — | `tests/core/test_task_admission.py::test_admission_acquired_before_config_stable`, `::test_second_thread_start_and_config_do_not_invert`; `tests/core/test_op_serialization.py::test_multi_source_update_holds_locks_across_groups` |
+| admission / locks | a build holds every source it consumes, transitively, for its whole run; the receipt's revisions are read under those locks ([Locking](#safety-model)) | `lhpc/core/build_plan.py:36` `lock_sources`, `:81` `consumed_lines`; `lhpc/core/service_lifecycle_ops.py:3206` `build`, `:3542` `spawn_web_job`; `lhpc/core/build_launcher_runtime.py:206` `run` | the CLI: admission, index, every source exclusive; a detached build: index, its own source exclusive, each dependency's shared | the completion marker (the receipt) and its build-inputs sidecar, written only after the last step | `tests/core/test_build_plan.py::test_a_provider_source_cannot_move_during_a_dependent_build`, `::test_the_receipt_records_the_revision_read_under_the_locks`, `::test_both_paths_lock_and_record_the_same`, `::test_parallel_jobs_share_a_dependency` |
 | config transactions | a save validates everything first, is journalled and rolls back; a crashed save is finished before any writer runs ([Config as a transaction](#safety-model)) | `lhpc/core/config.py:1905` `apply_config_transaction`, `:1858` `_finish_pending_journal`, `:1885` `recover_config_journal_at_startup` | config lock `config/.lock` (`lhpc/core/config.py:77` `config_lock`) | `state/config-txn.json`; `lhpc/core/config.py:1800` `recover_config_transaction` rolls back, or blocks and keeps the journal | `tests/core/test_config.py::test_pending_journal_is_recovered_before_next_save`, `::test_rollback_failure_retains_journal_and_blocks_later`, `::test_a_non_transactional_save_finishes_a_pending_journal_before_it_writes`; `tests/cli/test_cli.py::test_a_pending_config_journal_is_cleaned_up_when_lhpc_starts` |
 | config transactions | a malformed `local.toml` is kept; only an absent per-stack file means defaults ([Config as a transaction](#safety-model)) | `lhpc/core/config.py:1320` `_write_local_tables`, `:2023` `load_stack_config` | config lock (writes only) | `config/local.toml`, `config/stacks/<id>[@band].toml` | `tests/core/test_config.py::test_local_unsupported_structures_block_and_preserve`, `::test_malformed_stack_config_raises_and_is_preserved`, `::test_absent_stack_config_is_defaults`, `::test_web_returns_409_on_malformed_config`; gap: a write over a `local.toml` that is not valid TOML |
 | install / recovery | source transactions: candidate recorded before the clone, prior archived to `.prev`, no-clobber activation, ownership record, unresolved journal blocks all source mutation ([Source transactions](#safety-model)) | `lhpc/core/install.py:532` `_stage_and_activate`, `:1446` `_staged_clone_record`, `:2272` `_activate_held`, `:1373` `_pending_journals` | admission, `source-txn-index`, source paths | `state/source-txn/<name>-<sha256>.json`, its `.staging` record, `src/.<name>.prev`; `lhpc/core/install.py:1396` `_recover_scan` finishes or rolls back, else blocks | `tests/install/test_source.py::test_recovery_removes_a_clone_killed_before_its_journal`, `::test_recovery_finishes_an_activation_interrupted_right_after_the_archive_rename`, `::test_retained_journal_blocks_every_source_op`, `::test_an_empty_directory_that_is_not_the_recorded_inode_is_kept_and_named`, `::test_an_unrecorded_candidate_is_retained_and_named`; `tests/install/test_staged_update.py::test_failed_clone_leaves_active_source_intact` |
