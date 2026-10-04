@@ -3,6 +3,7 @@
 Mixin of ControllerService (state/constants on the facade). Adapters import lhpc.core.services only."""
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re as _re
@@ -44,6 +45,15 @@ SPI_SHARED_WARNING = ("daemon 433 and meshtastic 868 share one SPI bus; transmit
 # A HMAC-apply build-log base is a strict controller-generated prefix bound to the FULL 32-hex run id;
 # validated in build() BEFORE any path is constructed (marker-time validation alone is too late).
 _HMAC_LOG_BASE_RE = _re.compile(r"^hmac-apply-[0-9a-f]{32}$")
+
+
+def rollback_ids(results, keep=()) -> list[str]:
+    """Ids of the components a start launched and verified (its `start` rows reading VERIFIED),
+    last started first: what a FAILED start stops again. An ALREADY_HEALTHY row ran before that
+    start and is never in it; `keep` names rows whose VERIFIED does not mean the start launched
+    the process (the daemon's ensure row reads VERIFIED for a band that was already served)."""
+    return [r.component for r in reversed(list(results))
+            if r.action == "start" and r.outcome is Outcome.VERIFIED and r.component not in keep]
 
 
 def _daemon_presence(cmdlines) -> str:
@@ -781,7 +791,8 @@ class LifecycleOpsMixin:
                             # ...and, like the stop side, only rows of the TARGET stack count
                             # (the daemon's always-appended VERIFIED ensure
                             # row cleared the target's tombstone when nothing of the target
-                            # launched at all).
+                            # launched at all). A component a FAILED start stopped again reads
+                            # its stop outcome (`_roll_back_start`), so it does not count either.
                             if (_operator and self.stack(target) is not None
                                     and (_res.ok
                                          or any(r.action == "start" and r.outcome in
@@ -1132,6 +1143,7 @@ class LifecycleOpsMixin:
         results: list[CompResult] = []   # TYPED per-component outcomes (source of truth)
         daemon_ok = True                # gate dependents on verified daemon readiness
         daemon_gate = ""                # a refusal of THIS stack's daemon config (not a daemon failure)
+        daemon_launched: set[str] = set()   # daemon bands this start launched (roll-back scope)
 
         presented: set[str] = set()      # components whose copy-paste start command was shown
         def record(comp, stack, outcome, summary, command="", note=""):
@@ -1173,9 +1185,14 @@ class LifecycleOpsMixin:
                        "endpoint is missing) — stop it (verified) and re-run")
                 continue
             if comp.id == self.DAEMON_ID:
+                # The daemon bands THIS start launched: the ownership records the ensure added
+                # (its VERIFIED row reads the same for a band that was already served).
+                _known = {r["launch_id"] for r in life.owned_records(comp.id)}
                 dlines, dok, dgate = self._ensure_daemon(life, stack, comp, running, radio,
                                                          start_sid, requested_target=_req_target,
                                                          start_scope=_req_scope)
+                daemon_launched |= {r["band"] for r in life.owned_records(comp.id)
+                                    if r["launch_id"] not in _known}
                 out.extend(dlines)
                 results.append(CompResult(component=comp.id, stack=stack.id, action="start",
                     outcome=(Outcome.VERIFIED if dok else Outcome.FAILED),
@@ -1545,6 +1562,11 @@ class LifecycleOpsMixin:
         failed = [r.component for r in blocking if r.outcome != Outcome.MANUAL_REQUIRED]
         ok = not blocking
         if failed:
+            # ROLL BACK (finding 64): a failed start stops again what IT launched, so nothing
+            # of its own is left running — or a typed row names what stayed up and why.
+            # A start blocked only on a manual step (chat's TUI) is not failed and keeps its
+            # daemon up for the operator.
+            out += self._roll_back_start(life, order, results, cfg_band, daemon_launched)
             summary = f"Run FAILED for '{target}': {', '.join(failed)} did not start/verify."
         elif required_manual:
             summary = (f"Run for '{target}': manual start required for "
@@ -1581,6 +1603,64 @@ class LifecycleOpsMixin:
         return ActionResult(ok, summary, details=out, results=tuple(results),
                             next_commands=[f"lhpc status {target}", f"lhpc logs {target}",
                                            f"lhpc stack stop {target}"])
+
+    def _roll_back_start(self, life, order, results, band: str, daemon_launched) -> list[str]:
+        """The roll-back of a FAILED start (finding 64): stop again what THIS start launched,
+        last started first, and return the detail lines.
+
+        * A component this start launched and verified (`rollback_ids`) gets the
+          identity-verified stop of `Lifecycle.stop` (SIGTERM only), and its `start` row in
+          `results` is replaced in place: the outcome becomes the stop's (STOPPED, or
+          STILL_RUNNING / UNVERIFIED / ENDPOINT_STILL_PRESENT with ownership retained) and the
+          summary gains "; rolled back: <the stop's summary>" — so nothing downstream reads a
+          stopped component as up.
+        * A daemon band this start launched (`daemon_launched`) is stopped only when no other
+          component of the run order holds an ownership record any more — never beneath a client
+          that may still run. Each band appends one `stop` row: the stop's own, or BLOCKED naming
+          the band and those components. The daemon's `start` row is left as it was.
+        * Nothing that ran before this start (ALREADY_HEALTHY, a band already served) is
+          touched, and no marker: a running-band marker this start wrote stays until the next
+          stop of its stack retires it."""
+        by_id = {c.id: c for _, c in order}
+        lines: list[str] = []
+
+        def note(cr):
+            lines.append(f"  [rollback] [{cr.outcome.value}] {cr.component}: {cr.summary}")
+        rolled = rollback_ids(results, keep={self.DAEMON_ID})
+        for cid in rolled:
+            i = next(i for i, r in enumerate(results)
+                     if r.component == cid and r.action == "start")
+            cr = life.stop(by_id[cid], band=band)
+            results[i] = dataclasses.replace(
+                results[i], outcome=cr.outcome,
+                summary=f"{results[i].summary}; rolled back: {cr.summary}")
+            note(cr)
+        if daemon_launched and self.DAEMON_ID in by_id:
+            residual = sorted(c.id for _, c in order
+                              if c.id != self.DAEMON_ID and life.owned_records(c.id))
+            # Named by ORIGIN, from this start's own rows: one this start launched (rolled back,
+            # or left UNVERIFIED/FAILED by its own cleanup) is not verified stopped; any other
+            # ran before this start and was never asked to stop.
+            launched = set(rolled) | {r.component for r in results if r.action == "start"
+                                      and r.outcome in (Outcome.UNVERIFIED, Outcome.FAILED)}
+            left = [c for c in residual if c in launched]
+            kept = [c for c in residual if c not in launched]
+            why = "; ".join(w for w in (
+                f"{', '.join(left)} {'is' if len(left) == 1 else 'are'} not verified stopped"
+                if left else "",
+                f"{', '.join(kept)} still running (not started by this call)" if kept else "")
+                if w)
+            for b in sorted(daemon_launched):
+                if residual:
+                    cr = CompResult(component=self.DAEMON_ID, action="stop",
+                                    outcome=Outcome.BLOCKED,
+                                    summary=f"{b} MHz instance this start launched left running: "
+                                            f"{why}")
+                else:
+                    cr = life.stop(by_id[self.DAEMON_ID], band=b)
+                results.append(cr)
+                note(cr)
+        return lines
 
     def _run_post_start(self, life, stack, comp, comp_cfg, band,
                         announce=None, strict=False, require_all=False) -> tuple[bool | None, str]:

@@ -748,9 +748,6 @@ _FAILED_START_MANIFEST = (
 
 
 @pytest.mark.needs_session
-@pytest.mark.xfail(strict=True, reason=(
-    "U2 finding 20, for W4 (start/stop rework): a start whose later component fails to verify "
-    "stops only that component; the earlier verified ones stay running"))
 def test_a_failed_start_leaves_nothing_of_the_stack_running(tmp_path):
     """Real box (meshcore): a failed `stack start` left the daemon running. `a` starts and
     verifies; `b`'s ready endpoint never appears, so the start fails — and must not leave `a`
@@ -768,3 +765,193 @@ def test_a_failed_start_leaves_nothing_of_the_stack_running(tmp_path):
         assert not owned.exists() or list(owned.iterdir()) == []
     finally:
         assert svc.stop("s", apply=True).ok
+
+
+_DAEMON_FAILED_START_MANIFEST = (
+    '[[stack]]\nid = "daemon"\nname = "d"\nmain = "loraham-daemon"\n'
+    '[[stack.component]]\nid = "loraham-daemon"\nname = "d"\nkind = "service"\n'
+    'run_argv = ["sleep", "60"]\nreadiness = "process"\n'
+    + _FAILED_START_MANIFEST.replace('readiness = "endpoint"',
+                                     'readiness = "endpoint"\ndepends_on = ["loraham-daemon"]'))
+
+
+def _daemon_failed_start(tmp_path, monkeypatch, daemon_up_before: bool, a_argv=None):
+    """`s` over a daemon: `a` verifies, `b` never does. The daemon's ensure is the one stub
+    (with the real signature): for a band not yet served it launches the daemon through the
+    real lifecycle, as `_ensure_daemon` does, so ownership and stop are the real ones."""
+    from lhpc.core.probes import RealSystem
+    from lhpc.core.services import ControllerService
+    manifest = tmp_path / "m.toml"
+    text = _DAEMON_FAILED_START_MANIFEST
+    if a_argv:
+        text = text.replace('id = "a"\nname = "a"\nkind = "service"\nrun_argv = ["sleep", "60"]',
+                            f'id = "a"\nname = "a"\nkind = "service"\nrun_argv = {a_argv}')
+    manifest.write_text(text)
+    svc = ControllerService(manifest_path=manifest, system=RealSystem(),
+                            paths=Paths(runtime_root=tmp_path / "rt"))
+    daemon = svc.stack("daemon")
+
+    def ensure(self, life, stack, comp, running, radio, start_sid, *,
+               requested_target="", start_scope=""):
+        if not life.owned_records(comp.id):
+            assert life.start(stack, comp, {}, band="433").ok
+        return ["  [ok] start daemon --radio 433"], True, ""
+    monkeypatch.setattr(type(svc), "_ensure_daemon", ensure)
+    if daemon_up_before:
+        assert svc._lifecycle().start(daemon, daemon.main_component, {}, band="433").ok
+    return svc
+
+
+def _owned_ids(svc):
+    return sorted(r["component"] for r in svc._lifecycle().owned_inventory()[0])
+
+
+@pytest.mark.needs_session
+@pytest.mark.parametrize("daemon_up_before", [False, True])
+def test_a_failed_start_stops_the_daemon_only_if_it_launched_it(tmp_path, monkeypatch,
+                                                                daemon_up_before):
+    """Finding 64 (real box: a failed `stack start meshcore` left the daemon running): the
+    daemon instance this start launched is stopped again with the rest; a daemon that already
+    served the band before the start is left as it was."""
+    svc = _daemon_failed_start(tmp_path, monkeypatch, daemon_up_before)
+    try:
+        res = svc.start("s", apply=True)
+        assert not res.ok
+        assert _owned_ids(svc) == (["loraham-daemon"] if daemon_up_before else [])
+        rows = {(r.component, r.action): r.outcome.value for r in res.results}
+        assert rows[("a", "start")] == "stopped"            # its start row reads the roll-back
+        assert (("loraham-daemon", "stop") in rows) is not daemon_up_before
+    finally:
+        svc.stop("s", apply=True)
+        svc.stop("daemon", apply=True)
+
+
+@pytest.mark.needs_session
+def test_a_failed_start_names_what_it_could_not_stop(tmp_path, monkeypatch):
+    """When a component this start launched does not cease on the roll-back's SIGTERM, the
+    result names it with its typed stop outcome, and the daemon this start launched stays up
+    under it — named, with the reason — rather than being stopped beneath a live client."""
+    from lhpc.core import procident
+    svc = _daemon_failed_start(tmp_path, monkeypatch, False,
+                               a_argv='["sh", "-c", "trap \\"\\" TERM; sleep 60"]')
+    monkeypatch.setattr(Lifecycle, "STOP_WAIT_S", 0.5)
+    try:
+        res = svc.start("s", apply=True)
+        assert not res.ok
+        rows = {(r.component, r.action): r for r in res.results}
+        assert rows[("a", "start")].outcome.value == "still_running"
+        kept = rows[("loraham-daemon", "stop")]
+        assert kept.outcome.value == "blocked"
+        assert kept.summary == ("433 MHz instance this start launched left running: a is not "
+                                "verified stopped")
+        assert _owned_ids(svc) == ["a", "loraham-daemon"]
+    finally:
+        for rec in svc._lifecycle().owned_inventory()[0]:
+            if procident.identity_matches(rec, rec["pid"]):
+                os.killpg(rec["pgid"], signal.SIGKILL)
+
+
+@pytest.mark.needs_session
+def test_a_rolled_back_start_keeps_the_operators_stop_intent(tmp_path):
+    """A start that brought nothing of its stack up (everything it launched was stopped again)
+    must not erase the operator's standing stop intent — like a refused start."""
+    from lhpc.core.probes import RealSystem
+    from lhpc.core.services import ControllerService
+    manifest = tmp_path / "m.toml"
+    manifest.write_text(_FAILED_START_MANIFEST)
+    svc = ControllerService(manifest_path=manifest, system=RealSystem(),
+                            paths=Paths(runtime_root=tmp_path / "rt"))
+    svc._write_stop_intent(["s"])
+    try:
+        assert not svc.start("s", apply=True).ok
+        assert svc._stop_intent_stacks() == {"s"}
+    finally:
+        svc.stop("s", apply=True)
+
+
+def test_the_daemon_band_held_for_a_client_names_why_it_is_up(tmp_path):
+    """The daemon band this start launched is kept while a run-order component still holds an
+    ownership record. The reason names each one by what THIS start did: one it rolled back and
+    that did not cease is "not verified stopped"; one that was already running before the start
+    (ALREADY_HEALTHY, never asked to stop) is "still running (not started by this call)"."""
+    import types
+    from lhpc.core.outcomes import CompResult, Outcome
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    comp = lambda cid: types.SimpleNamespace(id=cid)
+    order = [(None, comp(c)) for c in ("loraham-daemon", "web", "ui", "node")]
+
+    class Life:
+        stopped = []
+
+        def stop(self, c, band=""):
+            self.stopped.append(c.id)
+            return CompResult(component=c.id, action="stop", outcome=Outcome.STILL_RUNNING,
+                              summary="did not cease")
+
+        def owned_records(self, cid):
+            return [{"component": cid}] if cid in ("web", "ui") else []
+    results = [CompResult(component="loraham-daemon", action="start", outcome=Outcome.VERIFIED),
+               CompResult(component="web", action="start", outcome=Outcome.ALREADY_HEALTHY),
+               CompResult(component="ui", action="start", outcome=Outcome.VERIFIED),
+               CompResult(component="node", action="start", outcome=Outcome.UNVERIFIED)]
+    life = Life()
+    svc._roll_back_start(life, order, results, "", {"433"})
+    assert life.stopped == ["ui"]                       # never the one that ran before
+    kept = [r for r in results if r.action == "stop"]
+    assert [(r.component, r.outcome) for r in kept] == [("loraham-daemon", Outcome.BLOCKED)]
+    assert kept[0].summary == ("433 MHz instance this start launched left running: ui is not "
+                               "verified stopped; web still running (not started by this call)")
+
+
+def test_a_launch_whose_own_cleanup_did_not_cease_is_named_as_started_by_this_call(tmp_path):
+    """A component THIS start launched that failed verification, and whose immediate cleanup
+    did not cease (UNVERIFIED, ownership retained), is not rolled back again — but it was
+    started by this call: the daemon band kept for it names it "not verified stopped", never
+    "not started by this call" (that is only for the one that was already running)."""
+    import types
+    from lhpc.core.outcomes import CompResult, Outcome
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    order = [(None, types.SimpleNamespace(id=c)) for c in ("loraham-daemon", "web", "node")]
+
+    class Life:
+        stopped = []
+
+        def stop(self, c, band=""):
+            self.stopped.append(c.id)
+            return CompResult(component=c.id, action="stop", outcome=Outcome.STOPPED)
+
+        def owned_records(self, cid):
+            return [{"component": cid}] if cid in ("web", "node") else []
+    results = [CompResult(component="loraham-daemon", action="start", outcome=Outcome.VERIFIED),
+               CompResult(component="web", action="start", outcome=Outcome.ALREADY_HEALTHY),
+               CompResult(component="node", action="start", outcome=Outcome.UNVERIFIED,
+                          summary="ready endpoint(s) never came up; cleanup: cessation NOT "
+                                  "verified — ownership retained")]
+    life = Life()
+    svc._roll_back_start(life, order, results, "", {"433"})
+    assert life.stopped == []
+    kept = [r for r in results if r.action == "stop"]
+    assert [(r.component, r.outcome) for r in kept] == [("loraham-daemon", Outcome.BLOCKED)]
+    assert kept[0].summary == ("433 MHz instance this start launched left running: node is not "
+                               "verified stopped; web still running (not started by this call)")
+
+
+def test_rollback_takes_what_the_start_verified_last_started_first():
+    """The pure roll-back selection: only VERIFIED `start` rows, newest first; `keep` exempts
+    the daemon's ensure row, which reads VERIFIED for a band that was already served."""
+    from lhpc.core.outcomes import CompResult, Outcome
+    from lhpc.core.service_lifecycle_ops import rollback_ids
+
+    def row(component, outcome, action="start"):
+        return CompResult(component=component, action=action, outcome=outcome)
+    results = [row("loraham-daemon", Outcome.VERIFIED), row("gps", Outcome.VERIFIED),
+               row("web", Outcome.ALREADY_HEALTHY), row("node", Outcome.UNVERIFIED),
+               row("ui", Outcome.VERIFIED), row("cli", Outcome.MANUAL_REQUIRED),
+               row("x", Outcome.SKIPPED), row("old", Outcome.VERIFIED, action="stop")]
+    assert rollback_ids(results, keep={"loraham-daemon"}) == ["ui", "gps"]
+    assert rollback_ids(results) == ["ui", "gps", "loraham-daemon"]
+    assert rollback_ids([]) == []
