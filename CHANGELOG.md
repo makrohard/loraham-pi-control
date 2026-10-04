@@ -2,6 +2,23 @@
 
 ## 0.12.0
 
+- `lhpc self-update` no longer says "Up to date." while the venv was not synced to the checkout: it
+  compares the version the venv's install recorded with the checkout's and says so, and
+  `lhpc self-update --apply` then runs the sync, also when the failed sync could not be recorded.
+- A refusal because an uninstall, a self-update or a reboot is pending, or the update state cannot be
+  read, now names what to do: `lhpc self-update --recover-request`, or what to wait for or fix. A failed
+  build names its log and `lhpc build <stack> --yes`; a graywolf update whose restart failed names
+  `lhpc stack start graywolf --yes`; the MeshCore plugin-manager refusal names `sudo reboot`.
+- `lhpc stack start` on a band another running stack holds asks, as the console does, whether to stop
+  it and start; `--yes` answers yes. Without a terminal and without `--yes` it refuses, naming both ways.
+- A restart of chat counts the manual start of its terminal program as success, as its start does.
+- Boot restore prepares chat as `lhpc stack start chat` does (daemon, settings, the dashboard's manual
+  start note) instead of skipping it.
+- A start refused before it launches anything (a band owner, the firewall gate) no longer resets the
+  band's RX/TX activity window; the start plan's firewall refusal now lists
+  `lhpc firewall --script > /dev/null` before the apply. A start interrupted by a file-system error
+  after it launched something stops what it launched again and says so.
+
 - Saving settings (the console's Settings, `lhpc config`, the RF-log and HMAC switches) is now built in
   separate steps: checking what was submitted, then reading, deciding and writing under the config lock.
   What a save accepts, refuses, writes and reports is unchanged; two saves of the same stack at the same
