@@ -4,13 +4,17 @@
 
 - `lhpc self-update` no longer says "Up to date." while the venv was not synced to the checkout: it
   compares the version the venv's install recorded with the checkout's and says so, and
-  `lhpc self-update --apply` then runs the sync, also when the failed sync could not be recorded.
+  `lhpc self-update --apply` then runs the sync, also when the failed sync could not be recorded. A
+  venv it cannot compare (no version on either side) is reported as not verified, and `--apply`
+  re-syncs it.
 - A refusal because an uninstall, a self-update or a reboot is pending, or the update state cannot be
   read, now names what to do: `lhpc self-update --recover-request`, or what to wait for or fix. A failed
   build names its log and `lhpc build <stack> --yes`; a graywolf update whose restart failed names
   `lhpc stack start graywolf --yes`; the MeshCore plugin-manager refusal names `sudo reboot`.
 - `lhpc stack start` on a band another running stack holds asks, as the console does, whether to stop
   it and start; `--yes` answers yes. Without a terminal and without `--yes` it refuses, naming both ways.
+- A suggested retry repeats what you asked for: the held-band refusal keeps `--band`, and an
+  `lhpc install` refusal keeps the channel (`--source`).
 - A restart of chat counts the manual start of its terminal program as success, as its start does.
 - Boot restore prepares chat as `lhpc stack start chat` does (daemon, settings, the dashboard's manual
   start note) instead of skipping it.
