@@ -2123,7 +2123,9 @@ def test_the_web_surface_never_mutates_systemd(recording_system, web):
 def test_the_updater_trigger_paths_never_mutate_systemd(tmp_path, recording_system):
     """The same invariant on the self-update trigger/inspection paths: they reach systemd
     through the static .path/.service units and the request marker, never by running it.
-    Only the explicit OPERATOR repair/recover ops may, and they are not exercised here."""
+    Only the explicit OPERATOR repair/recover ops may, and they are not exercised here. The
+    trigger is refused at its first gate on this box; the accepted trigger is
+    tests/install/test_selfupdate_service.py::test_an_accepted_trigger_never_mutates_systemd."""
     sys_, calls = recording_system
     svc = ControllerService(system=sys_, paths=Paths(runtime_root=tmp_path))
     svc.updater_integration()

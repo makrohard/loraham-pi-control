@@ -477,6 +477,23 @@ def test_repair_and_trigger_migrates_then_writes_marker(tmp_path, op_svc, system
     assert svc.updater_integration()["status"] == "ok"       # units converged to canonical
 
 
+def test_an_accepted_trigger_never_mutates_systemd(tmp_path, op_svc):
+    """Past the trigger's first gate (a managed console, the canonical units, an update
+    available) the trigger is accepted — its request marker written — and still changes no
+    systemd state: the static .path unit starts the update. An allowlist, not a list of known
+    mutations: the trigger runs NO systemd command at all, so any one (a `set-property`, say)
+    fails."""
+    svc, fake = op_svc(units=True, invocation=True)
+    _seed_available(tmp_path, ok=True, status="ok", reason="ok", checked_at=1)
+    n0 = len(fake.calls)
+    res = svc.self_update_trigger()
+    assert res.ok and res.data.get("triggered")
+    assert (tmp_path / "state" / "selfupdate.request").exists()
+    allowed: set = set()                         # the read-only systemd calls it may make: none
+    assert [c for c in fake.calls[n0:] if c[:1] in (["systemctl"], ["systemd-run"])
+            and tuple(c) not in allowed] == []
+
+
 def test_repair_and_trigger_ok_delegates_without_repair(tmp_path, monkeypatch, op_svc):
     svc, fake = op_svc(units=True, invocation=True)        # already-canonical units
     _seed_available(tmp_path, ok=True, status="ok", reason="ok", checked_at=1)
