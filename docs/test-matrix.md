@@ -45,7 +45,7 @@ t() { local s=$(date +%s); "$@"; echo "[timer] $* -> $(( $(date +%s) - s )) s"; 
 
 t lhpc clean <stack> --purge --yes            # 1. purge: sources, config, state, identities, logs
 t lhpc install <stack> --source <chan> --yes  # 2. install on the channel under test
-t lhpc build <stack> --yes                    # 3. build (no-op for pure binary / fetched stacks)
+t lhpc build <stack> --yes                    # 3. build (refused on the binary channel; graywolf's fetches its .deb)
 t lhpc stack start <stack> --yes              # 4. start on the band the radio budget allows
 lhpc status <stack>                           # 5. verify: the row's evidence column
 t lhpc stack stop <stack> --yes               # 6. stop; `lhpc status` shows nothing left running
@@ -80,7 +80,7 @@ its own.
 | 2 | `chat` | pinned | daemon sources | interactive | the printed command runs in a terminal and exits cleanly |
 | 3 | `voice` | pinned | `loraham-voice-cli` (GTK variant skipped on Lite) | interactive | the terminal variant's printed command runs; GTK reported skipped, not failed. On a Desktop image it is the reverse: the GTK voice starts verified and the terminal variant is skipped |
 | 4 | `kiss` | pinned | `loraham-kiss-tnc` | 433 | verified; TCP `127.0.0.1:8001` answers |
-| 5 | `graywolf` | fetched release | — | 433 (needs kiss) | verified; web UI `127.0.0.1:8080` answers; the KISS client is held |
+| 5 | `graywolf` | fetched release | fetches the pinned upstream `.deb` | 433 (needs kiss) | verified; web UI `127.0.0.1:8080` answers; the KISS client is held |
 | 6 | `reticulum` | pinned | rns, nomadnet, lxmd, meshchat (sideband skipped on Lite) | the free band | `rnstatus` lists the LoRa interface with `Mode: Internal`; the ready marker present; MeshChat's UI answers 200 on `127.0.0.1:8790`, and the generated config is `0400`. The stack's own full matrix is the dated report `docs/live-tests/reticulum-test-2026-09-12.md` |
 | 7 | `meshcore` | pinned | node, webui, openhop repeater source | 868, mode chat+repeater (set `repeater_name` first); the optional web UI started with `lhpc stack start meshcore-webui` | node and repeater verified; web UI `:8788` and dashboard `:8000` answer; `meshcore-cli` listed on the Dashboard |
 | 8 | `meshtastic` | binary | refused (no source tree) | 868 (MeshCore stopped) | verified; `lhpc meshtastic --info` returns the node; `meshtastic-cli` listed |

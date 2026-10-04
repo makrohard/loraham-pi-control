@@ -63,19 +63,19 @@ tests named next to each guarantee are the only evidence.
 
 ## Contract gaps
 
-Promises whose widest-seam case is missing — the next test-quality pass (`tests/README.md` has
-the tiers):
+Promises whose widest-seam case is missing — the next test-quality pass ([markers](../tests/README.md#markers)):
 
 1. `tests/core/test_boot_restore.py` is `needs_session` at module scope — no isolation-safe case
    (split out the pure route-toggle tests);
-2. no route-table gate in lhpc's own suite; the coverage matrix is in [testlab](testlab.md) and
-   runs in that package's CI lane.
+2. no render/CSRF sweep of the route table in lhpc's own suite (`tests/web/test_web.py` sweeps it
+   for systemd calls only); that sweep is the lab's `test_http_smoke.py`
+   ([testlab](testlab.md#running-the-verification-lanes)).
 
 ## Safety invariant IDs
 
-There is no enumerated invariant registry; `@pytest.mark.safety` ids are descriptive slugs (the
-set in use is in `tests/`). A canonical invariant table in the
-[safety model](architecture.md#safety-model) would let the ids map to it.
+There is no enumerated invariant registry; `@pytest.mark.safety` ids are a P0.x id where one exists,
+else a descriptive slug (the set in use is in `tests/`). The
+[invariant table](architecture.md#invariant-table) has no id column, so the ids do not map to it.
 
 ## No `--live` interface
 

@@ -22,7 +22,7 @@ against deterministic fake hardware and OS backends. No Pi, no radio, no root.
 3. The **LHPC console opens in a browser tab** (port 8770); if not: **Ports** tab → **8770** →
    the globe icon.
 
-The other stacks (kiss, graywolf, meshcore, reticulum, voice, sideband, meshcom, meshtastic) then
+The other stacks (kiss, graywolf, meshcore, reticulum with sideband, voice, meshcom, meshtastic) then
 install and build in the background (binary channel on aarch64 wherever a stack ships one, else
 source; log: `~/lhpc-populate.log`). To run one: **Apps** → the stack → **Start** (**Install →
 Build → Start** if its background install has not finished). Fault scenarios and traffic injection:
@@ -34,9 +34,9 @@ the **Test Lab** panel (top banner link).
 
 | Real | Simulated |
 |---|---|
-| The web console (waitress), every page/form/confirm flow | The radios: a fake `loraham_daemon` speaks the full v112 wire protocol (raw + framed + CONF sockets) with scenario-driven `RADIO=` state |
+| The web console (waitress), every page/form/confirm flow | The radios: a fake `loraham_daemon` speaks the v112 wire protocol (raw + framed + CONF sockets) with scenario-driven `RADIO=` state |
 | The CLI (`lhpc …`, the installed executable) | NetworkManager (`nmcli`: profiles, scan, join, wrong-password, AP fallback) |
-| The headless stacks (`populate`: kiss, graywolf, meshcore, reticulum, voice, sideband, meshcom, meshtastic) install/build/start/stop through the production lifecycle; on x86 meshcom (emulated-ESP32 qemu) and meshtastic (sim radio) source-build from the pinned sources, on aarch64 they install from the binary channel | logind power handshake (`busctl` CanReboot/CanPowerOff) |
+| The headless stacks (`populate`: kiss, graywolf, meshcore, reticulum with sideband, voice, meshcom, meshtastic) install/build/start/stop through the production lifecycle; on x86 meshcom (emulated-ESP32 qemu) and meshtastic (sim radio) source-build from the pinned sources, on aarch64 they install from the binary channel | logind power handshake (`busctl` CanReboot/CanPowerOff) |
 | nginx (the stackweb proxies run a real unprivileged nginx driven by the lab supervisor) | `systemctl` (stateful unit model in `state/testlab/units.json`) |
 | PKI / certificates (pure Python) | The boot identity: a simulated reboot stops owned stacks, advances the boot id and uptime epoch; the host never reboots |
 | gpsd: a real listener on 127.0.0.1:2947 streaming checksum-valid NMEA | The firewall receipt paths (relocated under the lab root via `LHPC_FW_PATH_PREFIX`; the real freshness logic runs on them) |
@@ -101,7 +101,7 @@ so).
 ## Running the verification lanes
 
 ```sh
-pytest -q                                      # default lane (lab lanes skip)
+python -m pytest -q testlab/tests                # unit lane; the opt-in lanes skip
 LHPC_ACCEPTANCE=1 pytest testlab/tests/acceptance -q   # real server + real executable
 LHPC_BROWSER=1 pytest testlab/tests/browser -q     # headless Chromium (pip install -e ./testlab[browser])
 LHPC_RELEASE_VERIFY=1 pytest testlab/tests/release -q -x  # release lane: every stack installed, built, started

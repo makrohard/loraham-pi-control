@@ -19,8 +19,8 @@ Which source commit or artifact lhpc may install, and what it records about it.
 | `dev` | Development | The configured development branch tip; an unobtainable branch is a typed "selector unavailable", never another ref. | ❌ mutable |
 | `stable` | Latest stable | Git-only: the newest tag whose WHOLE name is an optional `v` and dot-separated numbers (`v112`, `v1.2`, `1.5.2`), else the default-branch HEAD. Build-suffixed (`v2.8.0.7239fe8`) and prerelease (`1.8.2-pre`) tags are ignored. Local and remote resolution use the same rule; the resolved commit is recorded. | ❌ mutable |
 
-Without `--source`, install, `update` and `auto-install` (and so the image builder) use the
-stack's default channel: the published **binary** where there is one for this platform, else
+Without `--source`, install and `auto-install` (and so the image builder) use the stack's default
+channel (a bare `update` keeps the installed channel): the published **binary** where there is one for this platform, else
 **`pinned`**. `dev` and `stable` are reached only by naming them.
 
 A component with no configured pin cannot be installed as `pinned` (`unverified-blocked`); choose

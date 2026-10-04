@@ -16,7 +16,7 @@ a sentence or an equivalent JavaScript rewrite changed.
 | layer | proves | where |
 |---|---|---|
 | ordinary tests | LHPC's own behaviour, against injected fakes. No radio, no root, no network, no browser. | this directory |
-| testlab, four lanes | the simulator; the real executable and server over a simulated host; the console in headless Chromium; a release's evidence — [docs/testlab.md](../docs/testlab.md#running-the-verification-lanes). | `testlab/tests/` |
+| testlab, five lanes | the simulator; the real executable and server over a simulated host; the console in headless Chromium; a release's evidence; build times on a throttled slow target — [docs/testlab.md](../docs/testlab.md#running-the-verification-lanes). | `testlab/tests/` |
 | meshcore host tests | LHPC's adapter against the pinned real openHop API. | `lhpc/data/meshcore_host` |
 | RF-log decoder tests | the three decoders against each stack's pinned libraries (meshtastic, openHop, RNS/LXMF): generated keys plus the bench-recorded frames. | `lhpc/data/rfdecode/tests` |
 | release / live matrix | a real Pi, kernel and radios; nothing else replaces it. | [docs/test-matrix.md](../docs/test-matrix.md) |
@@ -87,10 +87,10 @@ through `interrupts.py`: its module pins the operation's durable writes and fail
    suites (`lhpc/data/meshcore_host/tests`, `lhpc/data/rfdecode/tests`) run under a stack's own
    interpreter, so their `conftest.py` inserts their package on `sys.path` — that insert only.
 8. **Autouse fixtures isolate the host, and say so.** They give the test a temporary runtime root,
-   HOME, firewall state and an empty host process/socket table, refuse real downloads and real
-   `pip install`, and reap spawned helpers. The two that supply a product baseline — radio hardware
+   HOME, firewall state and an empty host process/socket table, refuse real binary-channel downloads and
+   real `pip install`, and reap spawned helpers. The two that supply a product baseline — radio hardware
    and a graphical session — are opt-out by marker (`no_default_hardware`, `no_default_display`).
-   Two sanctioned gaps, both in `host/test_deploy_scripts.py` and stated in its docstring: the `slow`
+   Two sanctioned gaps, both in `host/test_deploy_scripts.py` and stated there: the `slow`
    full-install tests run `install.sh` as shipped, so pip reaches PyPI from a bash subprocess the
    in-process guard cannot see ([the planned fix](../docs/maintenance.md#gates-that-still-fetch-at-test-time));
    and the module skips on a host with real LHPC firewall state under `/etc/lhpc`, because
@@ -98,7 +98,14 @@ through `interrupts.py`: its module pins the operation's durable writes and fail
 9. **Prefer the injected `System` to patching a private method.** `FakeSystem(commands=…, files=…)` is
    the seam. Patch a private only to stub a collaborator, and say why in a comment.
 10. **A test must be able to fail.** No `assert True` fallback, no conditional body that can do
-    nothing, no skip that hides functionality CI supports.
+    nothing, no skip that hides functionality CI supports. A call whose `ActionResult` the test
+    relies on is asserted (`.ok`, or the refusal it expects), never discarded; a decision-bearing
+    value (a command, a lock key, a unit line, a hash) is compared whole, not by its prefix.
+11. **A fake keeps the real signature.** `tests/conftest.py` binds every call of a
+    `monkeypatch.setattr` fake of an LHPC function to the real signature and fails the test on a
+    call the real one would refuse (`repo/test_fake_signatures.py`).
+12. **A regression test is red before its fix.** Run it once against the parent of the fix and say
+    so in the commit; a case that passes on both sides is a control and is labelled as one.
 
 **Coverage is diagnostic, not the target:** a new test should normally accompany a behaviour or a
 defect; no test added or kept only because it covers lines.
