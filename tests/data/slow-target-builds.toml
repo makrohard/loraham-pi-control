@@ -577,3 +577,11 @@ cpu_s = 99.0
 io_s = 486.5
 mem_s = 106.1
 date = 2026-10-04
+
+[[calibration]]
+workload = "sha256:ee11e2fb05c767950c9d0ff23f73cc2638c3c26bf041a1a7612f4155832b6064"
+source = "zero2w"
+cpu_s = 99.3
+io_s = 490.0
+mem_s = 108.5
+date = 2026-10-04
