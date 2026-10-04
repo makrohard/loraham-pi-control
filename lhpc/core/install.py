@@ -1595,8 +1595,16 @@ class Installer:
         finally:
             h.close()
 
+    @staticmethod
+    def _prev_quarantine(prev: Path, staging: Path) -> str:
+        """Where this transaction's archived prior is renamed for its removal: named after the
+        candidate the journal records before that rename, so recovery finds an interrupted
+        removal (`.<prev>.quarantine-<pid>-<ns>`, the shape `source_fs.is_quarantine_name`
+        knows)."""
+        return f".{prev.name}.quarantine-{staging.name.rsplit('.candidate-', 1)[1]}"
+
     def _prev_cleanup_ok(self, txn, prev: Path, ident=None, active=None,
-                         dest: Path | None = None, why=None) -> bool:
+                         dest: Path | None = None, why=None, qname: str = "") -> bool:
         """Remove the archived `.prev` — IDENT-BOUND ONLY. `.prev` is the transaction's own
         quarantine (atomically detached from dest with identity proof at archive time); its
         deletion binds to the recorded (dev, ino) through content removal and re-proves it
@@ -1634,7 +1642,7 @@ class Installer:
             # before its rmdir).
             if not source_fs.ident_matches(txn.fd, prev.name, ident):
                 return False                       # substituted -> RETAIN
-            target, bound = source_fs._quarantine_name(prev.name), list(ident[:2])
+            target, bound = qname or source_fs._quarantine_name(prev.name), list(ident[:2])
             try:
                 txn.rename_noreplace(prev.name, target)
             except (OSError, PathContainmentError):
@@ -1748,18 +1756,38 @@ class Installer:
         def _drop_prev(txn, active_ident):
             """Remove the archived prior of a COMPLETED activation: None when it is gone, else
             the recovery-required verdict. Late local changes in it retain it for the operator
-            (journal marked operator-only); an unprovable or substituted prior is retained."""
+            (journal marked operator-only); an unprovable or substituted prior is retained.
+            A removal that was interrupted after the prior was renamed to its quarantine is put
+            back first (dev+ino: the rename moved its ctime) and finished the same way."""
+            pident = idents.get("prev")
             if txn.leaf_kind(prev.name) == "absent":
-                return None
+                qname = self._prev_quarantine(prev, staging)
+                if txn.leaf_kind(qname) == "absent":
+                    return None
+                held = prev.with_name(qname)
+                why = "not provably the archived prior"
+                if pident is not None and source_fs.ident_matches(txn.fd, qname, pident[:2]):
+                    try:
+                        txn.rename_noreplace(qname, prev.name)
+                        txn.fsync()
+                        why = ""
+                    except (OSError, PathContainmentError) as exc:
+                        why = str(exc)
+                if why:
+                    return (f"recovery-required for {dest.name}: the removal of the archived "
+                            f"prior was interrupted and {held} cannot be finished ({why}) — "
+                            f"retained; inspect it, then remove it by hand (rm -rf {held}) and "
+                            "the journal under state/source-txn")
+                pident = list(pident[:2])
             source_fs.race_seam("pre-prev-cleanup", str(dest))
             prev_why: dict = {}
-            dirty = self._prev_dirty_scan(txn, dest, prev, idents.get("prev"), prev_why)
+            dirty = self._prev_dirty_scan(txn, dest, prev, pident, prev_why)
             if dirty is None:
                 return (f"recovery-required for {dest.name}: archived prior "
                         "could not be proven (journal + prior retained)")
             if not dirty and not self._prev_cleanup_ok(
-                    txn, prev, idents.get("prev"), active=(dest.name, active_ident),
-                    dest=dest, why=prev_why):
+                    txn, prev, pident, active=(dest.name, active_ident),
+                    dest=dest, why=prev_why, qname=self._prev_quarantine(prev, staging)):
                 if not prev_why.get("dirty"):
                     return (f"recovery-required for {dest.name}: archived prior "
                             "could not be removed or was substituted (journal + "
@@ -2223,9 +2251,9 @@ class Installer:
                     return "recovery-required"
                 active = ((dest.name, [handle.st_dev, handle.st_ino])
                           if handle is not None else None)
-                if not dirty and not self._prev_cleanup_ok(txn, prev, prior_ident,
-                                                           active=active, dest=dest,
-                                                           why=prev_why):
+                if not dirty and not self._prev_cleanup_ok(
+                        txn, prev, prior_ident, active=active, dest=dest, why=prev_why,
+                        qname=self._prev_quarantine(prev, staging)):
                     if not prev_why.get("dirty"):
                         return "recovery-required"
                     dirty = True

@@ -131,21 +131,9 @@ def test_the_operation_writes_exactly_the_pinned_points(tmp_path, box, op):
     assert _copy_run_sorted(log) == _copy_run_sorted({"adopt": ADOPT, "update": UPDATE}[op])
 
 
-# Known recovery defects (code-review/code-report-T2.md), each a strict xfail: a fix turns it
-# into an XPASS, which fails until the mark is removed.
-KD_S3 = ("KD-S3: a failed removal of the quarantined prior leaves `..app.prev.quarantine-*` after "
-         "the journal is closed; no recovery removes it and uninstall/clean refuse until it is "
-         "removed by hand")
-ALL = tuple(sorted(FAILURES))
-KNOWN = {
-    "update": {(21, f): KD_S3 for f in ALL},
-    "adopt": {},
-}
-CASES = [pytest.param(op, k, f, id=f"{op}-{w}:{p}-{f}",
-                      marks=[pytest.mark.xfail(strict=True, reason=KNOWN[op][k, f])]
-                      if (k, f) in KNOWN[op] else [])
+CASES = [pytest.param(op, k, f, id=f"{op}-{w}:{p}-{f}")
          for op, points in (("adopt", ADOPT), ("update", UPDATE))
-         for k, (w, p) in enumerate(points) for f in ALL]
+         for k, (w, p) in enumerate(points) for f in sorted(FAILURES)]
 
 
 @pytest.mark.parametrize(("op", "point", "failure"), CASES)
