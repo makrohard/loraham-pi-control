@@ -118,7 +118,7 @@ STACK_DEFAULTS: dict[str, dict[str, dict[str, str]]] = {
     "voice": {
         "433": {"TXMODE": "DIRECT", "FREQ": "434.700", "SF": "7", "BW": "125.0", "CR": "5",
                 "CRC": "1", "LDRO": "AUTO", "PREAMBLE": "8", "SYNC": "0x12", "POWER": "17"},
-        "868": {"TXMODE": "DIRECT", "FREQ": "869.525", "SF": "11", "BW": "250.0", "CR": "5",
+        "868": {"TXMODE": "DIRECT", "FREQ": "869.525", "SF": "7", "BW": "250.0", "CR": "5",
                 "CRC": "1", "LDRO": "AUTO", "PREAMBLE": "16", "SYNC": "0x2B", "POWER": "10"},
     },
     "meshcom": {

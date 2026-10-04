@@ -24,7 +24,7 @@ def test_loraham_defaults_match_app_source():
 
 def test_voice_per_band_defaults():
     assert dp.default_value("voice", "433", "SF") == "7"
-    assert dp.default_value("voice", "868", "SF") == "11"
+    assert dp.default_value("voice", "868", "SF") == "7"
     assert dp.default_value("voice", "868", "SYNC") == "0x2B"
     assert dp.default_value("voice", "433", "TXMODE") == "DIRECT"
 
@@ -75,3 +75,19 @@ def test_overrides_show_on_all_params():
     assert view["CADIDLE"]["value"] == "40"          # LBT override shows
     assert view["SF"]["value"] == "9"                # radio override also shows (still greyed)
     assert view["SF"]["app_owned"]
+
+
+def test_the_voice_panel_defaults_are_the_apps_manifest_defaults():
+    """For every parameter the voice app sets, on each band, the panel's displayed default is
+    the value the app is seeded with: the manifest's band default (the app's LDRO 2 = auto is
+    the daemon's AUTO)."""
+    from lhpc.core.manifest import load_manifest
+    voice = next(s for s in load_manifest() if s.id == "voice")
+    seeded = [(band, p.name.upper(), value) for c in voice.components if c.config_file
+              for p in c.config_file.params for band, value in dict(p.band_defaults or ()).items()]
+    shown = [(band, name, {"2": "AUTO"}.get(value, value) if name == "LDRO" else value,
+              dp.default_value("voice", band, name))
+             for band, name, value in seeded if name in dp.STACK_DEFAULTS["voice"][band]]
+    assert ("868", "SF") in {(band, name) for band, name, _v, _d in shown}
+    assert [row for row in shown if row[2] != row[3]] == []
+
