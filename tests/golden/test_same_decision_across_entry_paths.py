@@ -36,12 +36,12 @@ differs from the test process's — a parent that tracked itself instead fails h
 child's own gate.
 """
 
-import contextlib
 import json
 import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import tomllib
 import uuid
@@ -96,7 +96,8 @@ def entry(kiss_box, prior_boot, monkeypatch, csrf, tmp_path):
     `subprocess.Popen` of the argv the real `spawn_start_job` built, detached (setsid), its
     output appended to the real job log — keeping the Popen object so the test, its parent,
     waits for it and reaps it (also at teardown). Teardown kills every TNC the child spawned
-    (SIGKILL to its process group); it cannot reap them, as they are not its children: once their
+    (SIGKILL to its process group, only while the pid still has the start time recorded at its
+    spawn: a reused pid is left alone); it cannot reap them, as they are not its children: once their
     parent has exited, init (or the nearest subreaper) collects them.
     The parent's admission handshake keeps its production bound, 3 s (`LHPC_WEB_ADMIT_TIMEOUT_S`
     is removed from the environment): a child admitted later renders `pending`, as it would in
@@ -204,10 +205,9 @@ def entry(kiss_box, prior_boot, monkeypatch, csrf, tmp_path):
         if c.poll() is None:
             c.kill()
         c.wait(timeout=10)
-    for d in descriptions:
-        for pid, _start, _comp in entry_host.spawned(d):
-            with contextlib.suppress(OSError):
-                os.killpg(pid, signal.SIGKILL)
+    for d in descriptions:                 # each only while it is the process recorded
+        for pid, start, _comp in entry_host.spawned(d):
+            entry_host.kill_group_if_same(pid, start)
 
 
 def _job_state(svc, op, target):
@@ -564,3 +564,21 @@ def test_restart_of_an_interactive_stack(entry):
         "cli": {"rc": 1},
         "web": {"status": 302, "admission": "admitted", "child_rc": 1, "job": ("failed", True)},
         "job": {"rc": 1, "job": ("failed", True)}}
+
+
+def test_teardown_signals_only_the_process_it_started():
+    """intended: the harness's own guard — the teardown's group kill signals a recorded pid only
+    while it carries the recorded start time — a pid now naming another process is left alive."""
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                         start_new_session=True)
+    try:
+        start = str(procident.proc_identity(p.pid)["starttime"])
+        assert entry_host.kill_group_if_same(p.pid, str(int(start) + 1)) is False
+        with pytest.raises(subprocess.TimeoutExpired):
+            p.wait(timeout=0.5)
+        assert entry_host.kill_group_if_same(p.pid, start) is True
+        assert p.wait(timeout=10) == -signal.SIGKILL
+    finally:
+        if p.poll() is None:
+            p.kill()
+            p.wait(timeout=10)

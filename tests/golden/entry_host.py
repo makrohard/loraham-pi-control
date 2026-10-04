@@ -20,7 +20,8 @@ each one the current box's host the way a lab host reaches every process:
   a recorder of its outermost start/restart decision (a delegating spy, as in the test
   process). Not replicated: the pip and shell guards (checks that fail a test, not host state).
   Every TNC it spawns is appended — pid, start time, component — to the description's `pids`
-  file, so the test checks those processes' liveness directly and kills them at teardown.
+  file, so the test checks those processes' liveness directly and kills them at teardown — each
+  only while it is still the recorded process (`kill_group_if_same`).
 """
 
 import json
@@ -88,6 +89,24 @@ def spawned(desc_path: Path) -> list[tuple]:
     """(pid, start time, component) of every process the separate process spawned."""
     p = Path(json.loads(Path(desc_path).read_text())["pids"])
     return [tuple(json.loads(x)) for x in p.read_text().splitlines()] if p.exists() else []
+
+
+def kill_group_if_same(pid: int, start) -> bool:
+    """SIGKILL the process group `pid` leads, but only while `pid` is still the process a test
+    started: alive, with the /proc start time `start` it was recorded with, and the leader of
+    its own group. A pid (or group id) since reused by another process is never signalled.
+    True when it signalled."""
+    import signal
+    golden = _golden()
+    if start is None or not golden._alive(pid) or golden._starttime(pid) != start:
+        return False
+    try:
+        if os.getpgid(pid) != pid:
+            return False
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        return False
+    return True
 
 
 def build(paths):
