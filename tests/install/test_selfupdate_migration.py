@@ -391,6 +391,8 @@ def test_a_helper_changing_update_keeps_the_reapply_warning_on_every_path(tmp_pa
                 **({"cleanup_failed": True, "cleanup_error": "cannot unlink x"}
                    if path == "cli-cleanup-failed" else {})}
     monkeypatch.setattr(selfupdate, "apply_update", advance)
+    # Stubs the collaborator, systemd: the firewall integration is present, and the unit refresh
+    # succeeds or fails as the path needs.
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
     units_ok = path != "one-click-units-failed"
     monkeypatch.setattr(svc, "_refresh_units_post_update",

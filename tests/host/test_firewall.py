@@ -1714,6 +1714,7 @@ def test_fw_post_update_reconcile_keeps_the_marker_when_the_render_fails(tmp_pat
     _os.makedirs(svc._paths.under("state"), exist_ok=True)
     marker = "state/firewall-postupdate.pending"
     svc._fw_mark_post_update()
+    # Stubs the collaborator, systemd: the firewall integration reads as installed.
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
     monkeypatch.setattr(svc, "updater_integration",
                         lambda: {"per_unit": {uu.NGINX_UNIT: uu.OK}, "managed": True})

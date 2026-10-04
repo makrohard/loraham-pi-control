@@ -779,6 +779,7 @@ def test_simulated_reboot_kills_owned_groups_and_runs_boot_restore(tmp_path, mon
         return pid
     monkeypatch.setattr(supervisor, "advance_boot", advance)
     monkeypatch.setattr(ops.os, "killpg", staggered_killpg)
+    # Observes the collaborator, the process spawn: each spawned pid and its process group.
     monkeypatch.setattr(Lifecycle, "_real_spawn", spawn)
     try:
         holder = 0

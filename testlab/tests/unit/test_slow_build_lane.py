@@ -111,6 +111,7 @@ def test_the_lane_records_the_quiet_line_a_build_step_log_ends_with(step, tmp_pa
         return _done()
     monkeypatch.setattr(lane, "run_lhpc", build)
     seen = []
+    # Stubs the collaborator, the evidence writer: records what the lane would write.
     monkeypatch.setattr(lane, "_record", lambda *a, **k: seen.append((a, k)))
     lane._build({"LHPC_RUNTIME_ROOT": str(tmp_path)}, "meshcore-cli")
     assert seen and seen[0][1] == {"quiet_s": 41.5}
@@ -123,6 +124,7 @@ def test_a_build_log_this_invocation_did_not_write_is_not_evidence(step, tmp_pat
     logs.mkdir()
     (logs / "build-meshcore-cli.log").write_text("compiling\n[progress] longest quiet 7.0 s\n")
     seen = []
+    # Stubs the collaborator, the evidence writer: records what the lane would write.
     monkeypatch.setattr(lane, "_record", lambda *a, **k: seen.append((a, k)))
     with pytest.raises(AssertionError, match="no build log written by this invocation"):
         lane._build({"LHPC_RUNTIME_ROOT": str(tmp_path)}, "meshcore-cli")
@@ -163,6 +165,7 @@ def test_the_l4_waiver_needs_the_version_rule_too(monkeypatch, tmp_path):
     """A previous tag without the line is not enough: past PIP_SYNC_SINCE the L4 failures stand
     (a lost line is a defect, not the introducing release)."""
     monkeypatch.setattr(lane, "OUT", tmp_path)
+    # Stubs the collaborator, git: the previous release tag, and that it introduced the rule.
     monkeypatch.setattr(lane, "_prev_tag", lambda: "v9.9.9")
     monkeypatch.setattr(lane, "_introducing", lambda prev: prev == "v9.9.9")
     monkeypatch.setattr(lane, "EVIDENCE", {})
@@ -181,6 +184,7 @@ def test_a_waived_failure_is_never_shown_as_fail(monkeypatch, tmp_path):
     """The summary's verdict word follows the waiver: on the introducing release the L4 pair
     passes the case, so the summary names it waived, not **FAIL**."""
     monkeypatch.setattr(lane, "OUT", tmp_path)
+    # Stubs the collaborator, git: the previous release tag, and that it introduced the rule.
     monkeypatch.setattr(lane, "_prev_tag", lambda: "v9.9.9")
     monkeypatch.setattr(lane, "_introducing", lambda prev: prev == "v9.9.9")
     monkeypatch.setattr(lane, "EVIDENCE", {})
@@ -198,6 +202,7 @@ def test_the_l4_waiver_does_not_need_a_helper_run(monkeypatch, tmp_path):
     no helper run at all (the case failed before it), the introducing release still waives the L4
     pair; the helper's own missing evidence (L3) stands, named alone."""
     monkeypatch.setattr(lane, "OUT", tmp_path)
+    # Stubs the collaborator, git: the previous release tag, and that it introduced the rule.
     monkeypatch.setattr(lane, "_prev_tag", lambda: "v9.9.9")
     monkeypatch.setattr(lane, "_introducing", lambda prev: prev == "v9.9.9")
     monkeypatch.setattr(lane, "EVIDENCE", {})

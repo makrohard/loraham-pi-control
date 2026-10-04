@@ -796,6 +796,7 @@ def _daemon_failed_start(tmp_path, monkeypatch, daemon_up_before: bool, a_argv=N
         if not life.owned_records(comp.id):
             assert life.start(stack, comp, {}, band="433").ok
         return ["  [ok] start daemon --radio 433"], True, ""
+    # Stubs the collaborator, the daemon: its ensure starts a sleeper in its place.
     monkeypatch.setattr(type(svc), "_ensure_daemon", ensure)
     if daemon_up_before:
         assert svc._lifecycle().start(daemon, daemon.main_component, {}, band="433").ok
