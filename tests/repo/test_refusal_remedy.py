@@ -92,7 +92,7 @@ EXEMPT = {
     ("lhpc/core/service_selfupdate.py", 988): ("self_update_trigger", _ADMISSION),
     ("lhpc/core/service_lifecycle_ops.py", 3407): ("build", _ADMISSION),
     ("lhpc/core/service_maintenance.py", 964): ("graywolf_upstream_update", _ADMISSION),
-    ("lhpc/core/service_maintenance.py", 1943): ("update", _ADMISSION),
+    ("lhpc/core/service_maintenance.py", 1953): ("update", _ADMISSION),
 }
 
 

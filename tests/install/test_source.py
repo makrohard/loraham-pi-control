@@ -4852,3 +4852,15 @@ def test_a_left_over_prior_refuses_naming_it_and_the_move(tmp_path, v2_update_en
     assert (left / "mine.txt").read_text() == "old work"
     assert sorted(p.name for p in dest.parent.iterdir()) == [".app.prev", "app"]
     assert not inst._journal_path(dest).exists()
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_update_of_a_stack_without_a_source_names_its_build_and_upstream(tmp_path, apply):
+    """graywolf is a listed stack whose release is fetched by its build: `update graywolf`
+    refuses with nothing changed and names the two commands that move it, never *Unknown
+    stack*."""
+    res = _svc(tmp_path).update("graywolf", apply=apply)
+    assert not res.ok
+    assert res.next_commands == ["lhpc build graywolf --yes",
+                                 "lhpc update graywolf --upstream --yes"]
+    assert not (tmp_path / "state" / "source-txn").exists()

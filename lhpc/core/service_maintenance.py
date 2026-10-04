@@ -1794,6 +1794,16 @@ class MaintenanceOpsMixin:
                 next_commands=[f"lhpc install {target} --source {source} --yes"],
                 data={"channel": "binary"})
         all_items = self._with_source(target)
+        if not all_items and target and self.stack(target) is not None:
+            # A stack with no managed source (graywolf: a fetched release) has nothing to
+            # update here: its pinned release comes with its build, a newer one by --upstream.
+            return ActionResult(
+                False, f"'{target}' has no managed source to update — its release is fetched "
+                       "by its build.",
+                details=["  the pinned release: lhpc build; the newest upstream release: "
+                         "lhpc update --upstream"],
+                next_commands=[f"lhpc build {target} --yes",
+                               f"lhpc update {target} --upstream --yes"])
         if not all_items:
             return self._unknown_stack(target) if target else ActionResult(
                 False, "No sources.",
