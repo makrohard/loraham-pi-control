@@ -158,6 +158,22 @@ def _nginx_alive(paths) -> bool:
     return _nginx_master(paths) > 0
 
 
+def _nginx_unverified(paths) -> int:
+    """The pid in the lab's nginx pid file when a live `nginx` runs there that `_nginx_master`
+    cannot verify as ours (a config path with whitespace), else 0 — up, but never signalled."""
+    pid = _nginx_pid(paths)
+    if pid <= 0 or _nginx_master(paths):
+        return 0
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as fh:          # a zombie is gone, not up
+            if fh.read().rsplit(b")", 1)[1].split()[0] == b"Z":
+                return 0
+        with open(f"/proc/{pid}/comm", "rb") as fh:
+            return pid if fh.read().decode("utf-8", "replace").strip() == "nginx" else 0
+    except (OSError, IndexError):
+        return 0
+
+
 def nginx_ctl(paths, verb: str) -> tuple[bool, str]:
     """start/stop/restart/reload the REAL nginx exactly as the production user unit
     does (`nginx -c <root>/config/nginx/lhpc.conf` — pid/logs/temp paths come from the
@@ -189,6 +205,9 @@ def nginx_ctl(paths, verb: str) -> tuple[bool, str]:
                     time.sleep(0.05)
         if _nginx_alive(paths):
             return False, f"old nginx master (pid {pid}) would not exit"
+        if (u := _nginx_unverified(paths)):
+            return False, (f"nginx (pid {u}) is not verified as the lab's master (its config path "
+                           "cannot be matched) — not signalled; stop it by hand")
         if verb == "stop":
             return True, "stopped"
     if verb == "reload" and (master := _nginx_master(paths)):

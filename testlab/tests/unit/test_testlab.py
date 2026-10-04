@@ -582,6 +582,27 @@ def test_a_reused_pid_naming_the_config_is_not_the_lab_nginx(tmp_path):
         proc.wait()
 
 
+def test_an_unverifiable_lab_nginx_is_refused_not_reported_stopped(tmp_path):
+    """A live nginx at the pid whose config path holds whitespace cannot be verified as the lab's
+    master (the title is space-joined): it is never signalled, and a stop says so instead of
+    "stopped"."""
+    import shutil
+    root = tmp_path / "lab root"
+    fake = tmp_path / "bin" / "nginx"
+    fake.parent.mkdir()
+    fake.symlink_to(shutil.which("sleep"))
+    conf = str(Paths(runtime_root=root).under("config", "nginx", "lhpc.conf"))
+    proc = subprocess.Popen([f"nginx: master process nginx -c {conf}", "60"], executable=str(fake))
+    try:
+        paths, _ = _lab_nginx_pidfile(root, proc.pid)
+        ok, why = supervisor.nginx_ctl(paths, "stop")
+        assert not ok and str(proc.pid) in why, why
+        assert proc.poll() is None                       # never signalled
+    finally:
+        proc.kill()
+        proc.wait()
+
+
 def test_the_lab_nginx_master_is_verified_and_signalled(tmp_path):
     """A process named `nginx` with the master's title and the exact `-c <config>` pair is the
     lab's master: alive, and a stop signals exactly that pid (SIGQUIT first)."""
