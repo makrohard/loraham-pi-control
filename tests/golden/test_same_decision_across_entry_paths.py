@@ -452,11 +452,10 @@ def test_band_owner(entry):
 
 
 def test_firewall_gate(entry, monkeypatch):
-    """known defect T3-F2: the firewall gate refuses on every path with the same class, but the
-    files differ. T3-F2: the CLI and the web refuse at their plan (render=False) and name the
-    apply script as the remedy WITHOUT re-rendering it — the script they point at is stale and
-    does not carry the newly exposed listener — while the job runner and boot-restore refuse at
-    the apply, which re-renders it (config/files/firewall/firewall-apply.sh)."""
+    """intended: the firewall gate refuses on every path with the same class. The CLI and the
+    web refuse at their read-only plan (render=False): the script on disk is stale, so their
+    commands re-render it before the apply lines; the job runner and boot-restore refuse at the
+    apply, which re-renders it itself (config/files/firewall/firewall-apply.sh)."""
     firewall_pending_host(monkeypatch)
     res = _all(entry, "start", "kiss", _firewall_pending)
     applied = {"started": False, "live": [], "refusal": "firewall_gate",
@@ -473,6 +472,8 @@ def test_firewall_gate(entry, monkeypatch):
     for path in PATHS:
         script = res[path]["root"] / "config" / "files" / "firewall" / "firewall-apply.sh"
         assert f"sudo bash {script}" in res[path]["next_commands"]
+        rerender = res[path]["next_commands"][0] == "lhpc firewall --script > /dev/null"
+        assert rerender is (path in ("cli", "web")), path
         assert (exposed in script.read_text()) is (path in ("job", "boot")), path
 
 

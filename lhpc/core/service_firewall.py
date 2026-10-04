@@ -1044,13 +1044,15 @@ class FirewallOpsMixin:
         applied firewall does not model is refused, so a listener never binds non-loopback
         without a verified drop/allow. Returns (allowed, message, commands).
 
-        `render=False` is the PLAN's call: same decision, no apply-script write. `op="restart"`
+        `render=False` is the PLAN's call: same decision, no apply-script write — so its commands
+        re-render the script first (the one on disk may predate the saved listener). `op="restart"`
         only changes the sentence: the refusal comes before the restart's stop, so it says the
         running stack was left up."""
         state = self._fw_integration_state()
         if state == "absent":
             return True, "", []
         base = self._paths.under("config/files/firewall/firewall-apply.sh")
+        rerender = [] if render else ["lhpc firewall --script > /dev/null"]
 
         def _msg(reason, start_tail, remedy):
             if op == "start":
@@ -1075,7 +1077,7 @@ class FirewallOpsMixin:
                          f"the listener was NOT started. Apply the firewall first, then start "
                          f"'{target}' again.",
                          f"Apply the firewall first, then restart '{target}'."),
-                    self._fw_apply_lines())
+                    [*rerender, *self._fw_apply_lines()])
         modeled = st.get("candidate") or self.firewall_candidate()
         for sc in scopes:
             if not self._fw_scope_modeled(sc, modeled):
@@ -1085,7 +1087,7 @@ class FirewallOpsMixin:
                         _msg("The saved listener is not covered by the applied firewall",
                              "apply the firewall, then start.",
                              f"Apply the firewall first, then restart '{target}'."),
-                        [f"sudo bash {base}"])
+                        [*rerender, f"sudo bash {base}"])
         return True, "", []
 
     # ---- settings view + configure (FW-7) ---------------------------------------------------
