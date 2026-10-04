@@ -160,6 +160,11 @@ class BinaryOpsMixin:
                                f"lhpc install {stack_id} --yes"],
                 data={"binary_failed": True, "missing_runtime_deps": missing})
 
+        if (not apply and override_rec is None
+                and bi.read_journal(self._paths)[1] == "absent"
+                and self._binary_installed_is(stack_id, entry)):
+            # A HINT for the plan only: the apply decides under its locks, after recovery.
+            return self._binary_already_installed(stack_id, entry, [])
         size_mb = entry.size / (1024 * 1024)
         if not apply:
             details = [f"  download {entry.filename} ({size_mb:.1f} MB, sha256-verified)",
@@ -325,6 +330,10 @@ class BinaryOpsMixin:
                             next_commands=[src_cmd], data={"binary_failed": True})
                     clone_notes.append(f"  adopted pinned source for {cid} (run scripts)")
             clone_notes = moved_notes + clone_notes
+            # AUTHORITATIVE "already installed": after recovery, under the locks, with the
+            # required clones proven above — an open transaction is never read as installed.
+            if override_rec is None and self._binary_installed_is(stack_id, entry):
+                return self._binary_already_installed(stack_id, entry, clone_notes)
 
             baseline, berr = self._binary_registry_baseline(stack_id)
             if berr:
@@ -479,6 +488,20 @@ class BinaryOpsMixin:
                 details=[*clone_notes, "  open auth (binary channel): the published firmware has no mesh " "password" if _auth_restore is not None else f"  {probe_out}" if probe_out else "  installed", "  provenance: " + ", ".join(f"{k}@{v[:9]}" for k, v in sorted(entry.components.items())), f"  artifact sha256 {entry.sha256[:12]}…"],
                 next_commands=[f"lhpc status {stack_id}", f"lhpc stack start {stack_id}"],
                 data={"channel": "binary", "changes": 1, **_ov_data})
+
+    @staticmethod
+    def _binary_already_installed(stack_id: str, entry, notes: list) -> ActionResult:
+        return ActionResult(True, f"'{stack_id}' already has the published binary "
+                                  f"{entry.filename} installed — nothing to download.",
+                            details=list(notes), next_commands=[f"lhpc status {stack_id}"],
+                            data={"changes": 1 if notes else 0, "channel": "binary"})
+
+    def _binary_installed_is(self, stack_id: str, entry) -> bool:
+        """The installed artifact IS `entry`: a valid receipt of its sha256 with no recorded
+        pin-mismatch acceptance, every recorded file still hashing as installed."""
+        state, rec, _why = self.binary_receipt_state(stack_id)
+        return (state == "valid" and rec.artifact_sha256 == entry.sha256 and rec.override is None
+                and brx.verify_files(self._paths, rec)[0])
 
     def _binary_pin_refusal(self, stack_id: str, spec, entry, exc, src_cmd: str,
                             accept: str, apply: bool):

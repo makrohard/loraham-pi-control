@@ -1668,3 +1668,55 @@ def test_cli_venv_provisioning_times_every_step(tmp_path, monkeypatch, capsys):
     assert calls and set(calls) == {sbo.CLI_VENV_TIMEOUT_S}
     err = capsys.readouterr().err
     assert len(re.findall(r"^\[venv\] \d+\.\d s$", err, re.M)) == len(calls), err
+
+
+@pytest.mark.parametrize("journal", ["committed, not yet dropped", "another stack's, interrupted"])
+def test_an_open_binary_transaction_is_recovered_before_already_installed_is_said(
+        tmp_path, monkeypatch, binary_receipt, stub_pipeline, journal):
+    """The same artifact is installed and intact, but a binary transaction is still open — this
+    stack's own, committed with its bookkeeping not yet dropped, or another stack's, interrupted
+    (there is one journal for every stack). "Already installed" is said only after the recovery
+    every binary apply runs first under its locks: the journal is gone, nothing is downloaded."""
+    svc = _svc(tmp_path, monkeypatch)
+    binary_receipt(svc, sha="a" * 64)
+    stack = "daemon" if journal.startswith("committed") else "meshcom"
+    bi.open_txn(svc._paths, stack, "0123456789abcdef", old_receipt=None)
+    if journal.startswith("committed"):
+        j, _ = bi.read_journal(svc._paths)
+        assert bi.write_journal(svc._paths, {**j, "state": "committed"})
+    stub_pipeline(svc)
+    res = svc.update("daemon", apply=True, source="binary")
+    assert res.ok and "nothing to download" in res.summary, res.summary
+    assert bi.read_journal(svc._paths)[1] == "absent"
+
+
+def test_a_plan_says_nothing_to_download_only_with_no_open_transaction(
+        tmp_path, monkeypatch, binary_receipt, stub_pipeline):
+    svc = _svc(tmp_path, monkeypatch)
+    binary_receipt(svc, sha="a" * 64)
+    stub_pipeline(svc)
+    assert "nothing to download" in svc.update("daemon", apply=False, source="binary").summary
+    bi.open_txn(svc._paths, "meshcom", "0123456789abcdef", old_receipt=None)
+    res = svc.update("daemon", apply=False, source="binary")
+    assert "nothing to download" not in res.summary, res.summary
+    assert bi.read_journal(svc._paths)[1] == "valid"               # a plan changes nothing
+
+
+@pytest.mark.parametrize(("installed", "downloads"), [
+    ("the same artifact", False), ("another artifact", True), ("a changed file", True)])
+def test_update_to_the_installed_artifact_downloads_nothing(
+        tmp_path, monkeypatch, binary_receipt, stub_pipeline, installed, downloads):
+    """Updating to the artifact that is already installed, intact, is a no-op: the receipt's
+    digest is compared before anything is fetched. Another artifact, or a file changed since
+    the install, still downloads (the reinstall is the repair)."""
+    svc = _svc(tmp_path, monkeypatch)
+    rec = binary_receipt(svc, sha="a" * 64 if installed != "another artifact" else "b" * 64)
+    if installed == "a changed file":
+        (tmp_path / rec.files[0]).write_bytes(b"EDIT")
+    stub_pipeline(svc)
+    res = svc.update("daemon", apply=True, source="binary")
+    reached = "DOWNLOAD-REACHED" in res.summary
+    assert reached is downloads
+    if not downloads:
+        assert res.ok and res.data["changes"] == 0
+        assert bi.read_journal(svc._paths)[1] == "absent"

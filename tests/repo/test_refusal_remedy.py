@@ -86,7 +86,7 @@ def _has_remedy(call: ast.Call) -> bool:
 # name none. Giving them a remedy changes that shared text for every operation: a U2 item.
 _ADMISSION = "shared admission refusal (_task_admission_blocked); remedy is a U2 item"
 EXEMPT = {
-    ("lhpc/core/service_binary_ops.py", 212): ("binary_install", _ADMISSION),
+    ("lhpc/core/service_binary_ops.py", 217): ("binary_install", _ADMISSION),
     ("lhpc/core/service_selfupdate.py", 406): ("self_update_apply", _ADMISSION),
     ("lhpc/core/service_selfupdate.py", 622): ("self_update_apply_operator", _ADMISSION),
     ("lhpc/core/service_selfupdate.py", 988): ("self_update_trigger", _ADMISSION),

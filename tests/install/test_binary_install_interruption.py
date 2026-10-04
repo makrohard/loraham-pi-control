@@ -12,6 +12,7 @@ staging directory — and the same install then succeeds to the bytes an uninter
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 
@@ -75,10 +76,12 @@ def box(monkeypatch, stub_pipeline):
     def make(root):
         version[0] = "v1"           # per box: an earlier box's re-install has staged v2 already
         svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=root))
-        stub_pipeline(svc, download=lambda entry, path: None)
+        entry = stub_pipeline(svc, download=lambda entry, path: None)
         assert svc.binary_install("daemon", apply=True).ok
         assert (root / BIN).read_bytes() == b"v1"
-        version[0] = "v2"
+        version[0] = "v2"           # another artifact: its own digest (the same one is a no-op)
+        monkeypatch.setattr(bi, "index_entry", lambda idx, sid: dataclasses.replace(
+            entry(sid), sha256="b" * 64, filename=f"{sid}-{'b' * 64}.tar.zst"))
         return svc, lambda: svc.binary_install("daemon", apply=True)
     return make
 
