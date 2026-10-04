@@ -935,18 +935,21 @@ class FirewallOpsMixin:
             pass
         return notes
 
-    def _fw_mark_post_update(self) -> None:
-        """Record (from the OLD process, right after a self-update advances the checkout) that the
-        firewall integration must be reconciled. The reconciliation itself MUST run in the FRESH
-        interpreter after restart — the current process imported the firewall/updater_units modules
-        BEFORE the update, so regenerating scripts/units here would emit the PREVIOUS version's
-        artifacts. Writing a plain marker carries no version dependency."""
+    def _fw_mark_post_update(self) -> str:
+        """Record (from the OLD process, right BEFORE a self-update advances the checkout) that the
+        firewall integration must be reconciled: "" when recorded, else the cause. The
+        reconciliation itself MUST run in the FRESH interpreter after restart — the current process
+        imported the firewall/updater_units modules BEFORE the update, so regenerating scripts/units
+        here would emit the PREVIOUS version's artifacts. Writing a plain marker carries no version
+        dependency, and a marker left by an advance that then failed only re-renders once (the
+        reconcile is idempotent)."""
         from . import runtime_fs
         try:
             runtime_fs.write_marker(self._paths,
                                     self._paths.under(_FW_POSTUPDATE_MARKER), "1")
-        except Exception:
-            pass
+        except Exception as exc:                       # containment / fs error
+            return f"{type(exc).__name__}: {' '.join(str(exc).split())}"
+        return ""
 
     @invalidates_snapshot
     def firewall_post_update_reconcile(self) -> list:

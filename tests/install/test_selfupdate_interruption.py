@@ -42,6 +42,7 @@ RAW = [(selfupdate, "create_anchor", lambda e: False),   # reports False, never 
 # The apply's durable writes, in order.
 POINTS = [
     ("write_marker", "state/locks/controller-task-admission.owner"),
+    ("write_marker", "state/firewall-postupdate.pending"),   # the firewall follow-up, before any move
     ("selfupdate.create_anchor", "*"),                       # the git anchor of the intent
     ("write_marker", "state/selfupdate-migrate.json"),       # prepared
     ("git.advance", "merge"),                                # the checkout moves
@@ -50,7 +51,6 @@ POINTS = [
     ("atomic_write", "config/stacks/s.toml"),                # the migration
     ("unlink", "state/selfupdate-migrate.json"),
     ("selfupdate.delete_anchor", "*"),
-    ("write_marker", "state/firewall-postupdate.pending"),
     ("unlink", "state/locks/controller-task-admission.owner"),
 ]
 
@@ -113,6 +113,8 @@ def test_an_interrupted_apply_is_finished_by_the_next(box, point, failure):
     assert selfupdate.read_migration_journal(nxt._paths) == (None, False)
     assert gitrepo.git(work, "for-each-ref", "refs/lhpc") == ""
     assert not (rt / "state" / "locks" / "controller-task-admission.owner").exists()
+    # (d) the checkout moved, so its firewall follow-up is recorded for the next console start
+    assert (rt / "state" / "firewall-postupdate.pending").exists()
 
 
 @pytest.mark.parametrize("path", ["apply", "one-click"])
@@ -140,3 +142,25 @@ def test_an_interrupted_sync_to_refresh_gap_keeps_the_record(op_svc, monkeypatch
     with pytest.raises(KeyboardInterrupt):
         svc.self_update_apply_operator() if path == "apply" else svc.self_update_run_service()
     assert svc.self_update_incomplete()[0] == "venv-unsynced"
+
+
+def test_a_firewall_marker_that_cannot_be_written_stops_the_update_before_it_moves(
+        box, monkeypatch):
+    """The firewall follow-up is recorded before the checkout moves; when it cannot be, the
+    update stops there: nothing moved, no journal, no anchor, and the result says why."""
+    from lhpc.core import runtime_fs
+    svc, work, rt = box
+    head = gitrepo.git(work, "rev-parse", "HEAD")
+    real = runtime_fs.write_marker
+
+    def full_disk(paths, path, *a, **k):
+        if str(path).endswith("firewall-postupdate.pending"):
+            raise OSError(28, "No space left on device")
+        return real(paths, path, *a, **k)
+    monkeypatch.setattr(runtime_fs, "write_marker", full_disk)
+    res = svc().self_update_apply()
+    assert not res.ok and res.data.get("fw_mark_failed")
+    assert res.next_commands == ["lhpc self-update --apply"]
+    assert gitrepo.git(work, "rev-parse", "HEAD") == head
+    assert selfupdate.read_migration_journal(svc()._paths) == (None, False)
+    assert gitrepo.git(work, "for-each-ref", "refs/lhpc") == ""

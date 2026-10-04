@@ -741,6 +741,15 @@ class SelfUpdateOpsMixin:
             fw_abort = self.firewall_update_nginx_preflight()
             if fw_abort is not None:
                 raise _FWAbort(fw_abort)
+            # The firewall follow-up is recorded BEFORE the checkout moves: an advance whose marker
+            # was lost (a stop, a full disk) could otherwise never be reconciled, since the retry
+            # finds the checkout current. A marker that cannot be written stops the update here.
+            if (cause := self._fw_mark_post_update()):
+                raise _FWAbort(ActionResult(
+                    False, "Could not record the firewall follow-up — nothing changed.",
+                    data={"fw_mark_failed": True}, next_commands=["lhpc self-update --apply"],
+                    details=[f"  state/firewall-postupdate.pending could not be written ({cause}); "
+                             "fix that, then run the update again"]))
             intent = self._stamp(new_candidates, from_head)
             hook.update(**{"from": from_head, "to": to_head, "branch": branch, "intent": intent})
             if not intent:
@@ -794,25 +803,24 @@ class SelfUpdateOpsMixin:
 
         # FW P1-2 B/C: on a real advance, the firewall scripts + LHPC-owned nginx unit must be
         # regenerated with the NEW templates. This process imported the old modules BEFORE the
-        # update, so it must NOT do that here (it would emit the previous version) — instead mark
-        # it, and the freshly-restarted (new-code) console reconciles on startup.
+        # update, so it must NOT do that here (it would emit the previous version) — the marker
+        # written before the advance (`_before_mutation`) has the freshly-restarted (new-code)
+        # console reconcile on startup.
         fw_notes, data_fw = [], False
-        if res.get("ok") and not res.get("already"):
-            self._fw_mark_post_update()
-            if self._fw_integration_state() != "absent":
-                fw_notes = ["Firewall integration will be refreshed automatically when the "
-                            "console restarts under the new version."]
-                # The helper file is read from disk, so this (old) process sees the new one. A
-                # changed helper leaves the installed one stale until re-applied — and the next
-                # boot starts the console loopback-only. Say it now, before that reboot.
-                if self._fw_packaged_helper_rev() != helper_rev:
-                    data_fw = True
-                    fw_notes.append(
-                        "This update changes the firewall helper — re-apply the firewall before you "
-                        "reboot: " + "; ".join(["lhpc firewall --script > /dev/null",
-                                               *self._fw_apply_lines()]) + "."
-                        + (" Until then a reboot starts the console LOOPBACK-ONLY (remote access "
-                           "off)." if self._fw_remote_web_exposed() else ""))
+        if res.get("ok") and not res.get("already") and self._fw_integration_state() != "absent":
+            fw_notes = ["Firewall integration will be refreshed automatically when the "
+                        "console restarts under the new version."]
+            # The helper file is read from disk, so this (old) process sees the new one. A
+            # changed helper leaves the installed one stale until re-applied — and the next
+            # boot starts the console loopback-only. Say it now, before that reboot.
+            if self._fw_packaged_helper_rev() != helper_rev:
+                data_fw = True
+                fw_notes.append(
+                    "This update changes the firewall helper — re-apply the firewall before you "
+                    "reboot: " + "; ".join(["lhpc firewall --script > /dev/null",
+                                           *self._fw_apply_lines()]) + "."
+                    + (" Until then a reboot starts the console LOOPBACK-ONLY (remote access "
+                       "off)." if self._fw_remote_web_exposed() else ""))
 
         instr = selfupdate.restart_instructions(res.get("deps_changed", False),
                                                 self._controller_deps_sync_cmd())
