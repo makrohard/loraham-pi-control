@@ -15,10 +15,11 @@ DAEMON = re.compile(r".*/api/daemon/(433|868)$")
 LIVE = {"reachable": True, "channel": {}, "status": {}, "stats": {}, "feed": []}
 
 
-def _open(page, answer):
+def _open(page, answer, hidden=False):
     """Open the dashboard with `answer(route, band)` serving the daemon API; return the per-band
     request counts and a `settled()` that returns once every request issued before it has
-    reached the handler."""
+    reached the handler. With `hidden`, the page is hidden from its first script on (a tab
+    opened in the background)."""
     seen = dict.fromkeys(BANDS, 0)
 
     def handler(route):
@@ -32,12 +33,17 @@ def _open(page, answer):
     page.route("**/api/dash-signature", lambda route: route.fulfill(
         status=200, content_type="application/json", body="null"))
     page.route("**/__settled__", lambda route: route.fulfill(status=204, body=""))
+    if hidden:
+        page.add_init_script(
+            "Object.defineProperty(document, 'hidden', {configurable: true, get: () => true});"
+            "Object.defineProperty(document, 'visibilityState', {configurable: true,"
+            " get: () => 'hidden'});")
     page.goto(page.lab_base + "/", wait_until="load")
 
     def settled():
         assert page.evaluate("() => fetch('/__settled__').then(r => r.status)") == 204
     settled()
-    assert seen == dict.fromkeys(BANDS, 1), seen
+    assert seen == dict.fromkeys(BANDS, 0 if hidden else 1), seen
     return seen, settled
 
 
@@ -81,6 +87,17 @@ def test_a_hidden_page_makes_no_daemon_request_and_refreshes_once_on_return(page
     _set_hidden(page, False)
     settled()
     assert seen == dict.fromkeys(BANDS, 2), seen   # one immediate refresh, no waiting for a tick
+
+
+def test_a_page_loaded_hidden_makes_no_daemon_request_until_it_is_shown(page):
+    seen, settled = _open(page, _live, hidden=True)          # no request at load (asserted there)
+    page.clock.run_for(30000)
+    settled()
+    assert seen == dict.fromkeys(BANDS, 0), seen
+    _set_hidden(page, False)
+    settled()
+    assert seen == dict.fromkeys(BANDS, 1), seen             # exactly one refresh per band
+    _wait_rendered(page)
 
 
 def test_a_slow_answer_is_never_overlapped_by_a_second_request(page):

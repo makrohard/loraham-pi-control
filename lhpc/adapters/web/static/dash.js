@@ -87,7 +87,7 @@
 
     function tick() {
       clearTimer();
-      if (polling) return;
+      if (polling || document.hidden) return;   // hidden: the visibilitychange handler refreshes
       polling = true;
       poll(band).then(function (ok) {
         polling = false;
