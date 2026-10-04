@@ -446,7 +446,7 @@ WEBSERVER_SCHEMES = ("https", "http")
 STACKWEB_MODES = (
     "local",     # nginx listens on 127.0.0.1 only
     "lan",       # listens on the console bind; only the configured CIDRs pass
-    "public",    # listens; 0.0.0.0/0 (elevated confirmation)
+    "public",    # like lan; only a public CIDR (0.0.0.0/0) admits everyone (elevated)
 )
 STACKWEB_MIN_PORT = 1024        # rootless nginx cannot bind below this
 

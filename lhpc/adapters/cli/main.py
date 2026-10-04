@@ -947,16 +947,18 @@ def build_parser() -> argparse.ArgumentParser:
                                  "stack's further web UIs")
     p_ws_proxy.add_argument("--mode", choices=_STACKWEB_MODES,
                             help="local = loopback only; lan = listen, only --cidr passes; "
-                                 "public = 0.0.0.0/0 (elevated)")
+                                 "public = like lan; --cidr 0.0.0.0/0 admits everyone (needs "
+                                 "enable-remote-danger)")
     p_ws_proxy.add_argument("--port", type=int, help="Public listener port (0 = not proxied)")
     p_ws_proxy.add_argument("--scheme", choices=_WS_SCHEMES, help="Public listener scheme")
     p_ws_proxy.add_argument("--access-mode", "--auth", choices=_WS_MODES,
                             help="Client-certificate policy: " + " | ".join(_WS_MODES))
     p_ws_proxy.add_argument("--cidr", action="append", default=[],
-                            help="Allowed source CIDR for lan mode (repeatable)")
+                            help="Allowed source CIDR for lan/public mode (repeatable)")
     p_ws_proxy.add_argument("--confirm-phrase", default="",
                             help="'enable-remote' to confirm lan/public; 'enable-remote-danger' for "
-                                 "public 0.0.0.0/0, a no-auth mode, or an http listener")
+                                 "a public range (e.g. --cidr 0.0.0.0/0), a no-auth mode, or an http "
+                                 "listener")
     p_ws_cert = ws_sub.add_parser("cert", help="Client (device) certificate lifecycle")
     cert_sub = p_ws_cert.add_subparsers(dest="cert_cmd")
     cert_sub.add_parser("list", help="List client certificates")

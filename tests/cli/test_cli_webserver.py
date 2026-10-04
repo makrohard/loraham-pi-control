@@ -38,3 +38,20 @@ def test_cli_export_and_discard_export_refuse_a_bad_label_without_a_traceback(mo
     assert main(["webserver", "cert", "discard-export", "a/b"]) == 1
     assert capsys.readouterr().out.startswith("ERR")
     assert not (tmp_path / "out.p12").exists()
+
+
+def _subparser(parser, name):
+    import argparse
+    subs = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+    return subs.choices[name]
+
+
+def test_proxy_mode_help_implies_no_source_range():
+    # `public` admits only the saved --cidr ranges (like lan); everyone is admitted only by an
+    # explicit public range. The help must not promise an implied 0.0.0.0/0.
+    from lhpc.adapters.cli.main import build_parser
+    proxy = _subparser(_subparser(build_parser(), "webserver"), "proxy")
+    mode = next(a for a in proxy._actions if "--mode" in a.option_strings)
+    assert "public" in mode.choices
+    assert "0.0.0.0/0 (elevated)" not in mode.help
+    assert "--cidr" in mode.help
