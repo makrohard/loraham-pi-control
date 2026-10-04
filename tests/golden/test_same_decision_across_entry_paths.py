@@ -22,7 +22,8 @@ outcomes, else the deciding result's summary), the `files` the path left under t
 (each path's own bookkeeping — attempt and job markers, the boot journal and its evidence, the
 web session key and job logs, lock files — excluded) and the processes the path spawned that
 are `live` afterwards (each checked by its pid and start time in /proc, not through the ownership
-records). The RENDERING (exit code, HTTP status and admission, job state, journal item) is
+records). Every path must leave exactly one ownership record of this boot per live process, naming
+its pid and start time, and none for a process that is gone (`KissBox.ownership`). The RENDERING (exit code, HTTP status and admission, job state, journal item) is
 asserted per path as well. A rendering difference (same decision, different words or format) is
 `intended:`; a DECISION difference between paths is always a `known defect <id>:` naming exactly
 that difference — never `intended`.
@@ -191,6 +192,8 @@ def entry(kiss_box, prior_boot, monkeypatch, csrf, tmp_path):
             refusal, told = entry_host.classify(decided[-1]), list(decided[-1].next_commands)
         else:                              # boot-restore planned no start at all
             refusal, told = entry_host.classify(booted[-1]), []
+        live, owned = box.ownership(also=entry_host.spawned(desc))
+        assert owned == live, f"{path}: ownership records {owned} != live processes {live}"
         return {"started": started, "refusal": refusal, "render": render,
                 "live": box.live(also=entry_host.spawned(desc)),
                 "files": sorted(k for k in before.keys() | after.keys()

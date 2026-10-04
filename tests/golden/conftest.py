@@ -386,6 +386,18 @@ class KissBox:
         return sorted(c for pid, st, c in [*self.spawned, *also]
                       if _alive(pid) and _starttime(pid) == st)
 
+    def ownership(self, also=()) -> tuple[list, list]:
+        """(live, owned): the (component, pid, start time) of every live process this box
+        spawned (and of `also`, as for `live`), and of every ownership record this boot wrote
+        under state/owned — equal when each live process is owned by its own record and no
+        record outlives its process (a previous boot's planted evidence is not this boot's)."""
+        live = sorted((c, pid, st) for pid, st, c in [*self.spawned, *also]
+                      if _alive(pid) and _starttime(pid) == st)
+        d, boot = self.root / "state" / "owned", lifecycle_mod.current_boot_id()
+        recs = [json.loads(p.read_text()) for p in d.glob("*.json")] if d.is_dir() else []
+        return live, sorted((r["component"], r["pid"], str(r.get("starttime")))
+                            for r in recs if r.get("boot_id") == boot)
+
     def tnc_alive(self) -> bool:
         """The TNC's owned process is alive (observed in /proc: a zombie is not)."""
         d = self.root / "state" / "owned"
