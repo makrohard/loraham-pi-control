@@ -1822,8 +1822,8 @@ class MaintenanceOpsMixin:
             details = []
             for _, c in items:
                 fresh = self.update_status(c)
-                details.append(f"  {c.id}: {fresh} — fetch newest from "
-                               f"{c.source.remote or 'local checkout'}")
+                details.append(f"  {c.id}: upstream {fresh} — this update fetches the "
+                               f"{source} version from {c.source.remote or 'local checkout'}")
             return ActionResult(
                 True, f"Update plan for '{target or 'all'}': refresh {len(items)} source(s) "
                 "from the remote.",
