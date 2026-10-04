@@ -4772,3 +4772,66 @@ def test_a_write_through_a_descriptor_opened_before_the_update_is_never_lost(
     finally:
         writer.stdin.close()
         writer.wait(timeout=10)
+
+
+def test_only_a_filesystem_error_creating_the_staging_record_is_tolerated(
+        tmp_path, make_repo, installer, monkeypatch, capsys):
+    """Tolerated is exactly what the record write raises for a refusing disk or an unsafe path
+    (OSError, PathContainmentError): said in one line naming the class. Anything else is a defect
+    and propagates — the install does not go on past it."""
+    from lhpc.core import runtime_fs
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
+    real = runtime_fs.open_marker_excl
+
+    def broken(paths, path, payload):
+        if Path(path).name.endswith(".staging"):
+            raise RuntimeError("a defect, not a disk")
+        return real(paths, path, payload)
+    monkeypatch.setattr(runtime_fs, "open_marker_excl", broken)
+    with pytest.raises(RuntimeError):
+        inst.adopt_source(comp, source="dev")
+    assert source_registry.read_record(inst.paths, "src/app") is None
+
+
+def test_the_staging_record_line_names_the_error_class(
+        tmp_path, make_repo, installer, monkeypatch, capsys):
+    from lhpc.core import runtime_fs
+    from lhpc.core.paths import PathContainmentError
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
+    real = runtime_fs.open_marker_excl
+
+    def unsafe(paths, path, payload):
+        if Path(path).name.endswith(".staging"):
+            raise PathContainmentError("state/source-txn is a symlink")
+        return real(paths, path, payload)
+    monkeypatch.setattr(runtime_fs, "open_marker_excl", unsafe)
+    capsys.readouterr()
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    err = [ln for ln in capsys.readouterr().err.splitlines() if ln.strip()]
+    assert len(err) == 1 and "PathContainmentError" in err[0] and "symlink" in err[0]
+
+
+def test_a_staging_record_that_cannot_be_created_is_said_once(
+        tmp_path, make_repo, installer, monkeypatch, capsys):
+    """The record is best-effort — the install goes on without it — but never silently: exactly
+    one diagnostic line, while the journal and the ownership record are written as usual."""
+    from lhpc.core import runtime_fs
+    make_repo(tmp_path / "rt" / "local" / "app")
+    comp = _comp()
+    inst = installer(comp)
+    real = runtime_fs.open_marker_excl
+
+    def no_staging_record(paths, path, payload):
+        if Path(path).name.endswith(".staging"):
+            raise OSError(errno.EACCES, os.strerror(errno.EACCES))
+        return real(paths, path, payload)
+    monkeypatch.setattr(runtime_fs, "open_marker_excl", no_staging_record)
+    capsys.readouterr()
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    lines = [ln for ln in capsys.readouterr().err.splitlines() if ln.strip()]
+    assert len(lines) == 1 and "staging record" in lines[0]
+    assert _rec(inst) is not None

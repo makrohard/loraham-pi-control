@@ -1432,8 +1432,10 @@ class Installer:
         try:
             rec = runtime_fs.open_marker_excl(self.paths, self._staged_clone_path(dest, staging),
                                               self._staged_clone_payload(dest, staging, None))
-        except (OSError, PathContainmentError):
+        except (OSError, PathContainmentError) as exc:
             rec = None
+            stderr_line(f"staging record for {staging.name} could not be created — install "
+                        f"continues without it: {type(exc).__name__}: {' '.join(str(exc).split())}")
         try:
             yield rec
         finally:
