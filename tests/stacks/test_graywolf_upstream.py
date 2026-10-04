@@ -197,6 +197,7 @@ def test_update_reports_a_failed_restart_as_not_ok(tmp_path, monkeypatch):
     res = svc.graywolf_upstream_update("graywolf", apply=True)
     assert res.ok is False, "a failed restart must surface as not-ok"
     assert "restart FAILED" in res.summary
+    assert res.next_commands == ["lhpc stack start graywolf --yes"]
 
 
 def test_upstream_update_holds_task_admission(tmp_path, monkeypatch):

@@ -3525,8 +3525,10 @@ class LifecycleOpsMixin:
             summary = f"Build FAILED for '{target}'."
         if gui_dropped:
             build_meta = {**build_meta, "skipped": list(gui_dropped)}
-        return ActionResult(ok, summary,
-                            details=details, next_commands=["lhpc status " + target],
+        # A failed build names its log and the retry, not only the status.
+        return ActionResult(ok, summary, details=details,
+                            next_commands=(["lhpc status " + target] if ok else
+                                           [f"lhpc logs {target}", f"lhpc build {target} --yes"]),
                             data=build_meta)
 
     def _git_out(self, argv) -> tuple[int, str]:

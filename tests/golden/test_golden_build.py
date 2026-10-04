@@ -68,12 +68,12 @@ def test_plan_then_build(tmp_path, run_op):
 
 
 def test_failed_step(tmp_path, run_op):
-    """intended: a failing step fails the build with its rc and log tail; the log is the step's
-    output."""
+    """intended: a failing step fails the build with its rc and log tail, naming the log and the
+    retry; the log is the step's output."""
     _fake, svc = _box(tmp_path, {})
     run = run_op(tmp_path, lambda: svc.build("chat", apply=True))
     assert run.fields == {"ok": False, "summary": "Build FAILED for 'chat'.", "data_keys": [],
-                          "next_commands": ["lhpc status chat"],
+                          "next_commands": ["lhpc logs chat", "lhpc build chat --yes"],
                           "heads": ["[log] loraham-chat", "[failed] build"], "outcomes": []}
     assert re.fullmatch(r"  \[failed\] build loraham-chat \(rc 127, log /\S+/logs/"
                         r"build-loraham-chat\.log\)", run.res.details[1])

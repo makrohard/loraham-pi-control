@@ -1027,7 +1027,8 @@ class MaintenanceOpsMixin:
             restart_ok,
             (f"'{target}' updated to {version}." if restart_ok
              else f"'{target}' updated to {version} but the restart FAILED — start it manually."),
-            details=notes, next_commands=[f"lhpc status {target}"])
+            details=notes, next_commands=([f"lhpc status {target}"] if restart_ok
+                                          else [f"lhpc stack start {target} --yes"]))
 
     def deps_script(self) -> str:
         """Render bootstrap-deps.sh — every declared prerequisite as ONE executable sudo script the
