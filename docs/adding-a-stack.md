@@ -20,7 +20,7 @@ Worked example: the **MeshCom (QEMU)** stack.
 - A component with a `source` is adopted into the runtime root at its **pinned commit**, built
   there, run by LHPC and verified by **readiness** ([architecture.md](architecture.md)).
 
-The MeshCom components, start order and pins: [stacks/meshcom.md](stacks/meshcom.md).
+The MeshCom components, start order and sources: [stacks/meshcom.md](stacks/meshcom.md).
 
 ## Anatomy of a stack (MeshCom)
 

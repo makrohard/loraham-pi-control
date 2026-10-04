@@ -178,7 +178,7 @@ interface take `spi0.lock`; meshtasticd does not. LHPC refuses meshtastic + reti
 allows daemon + meshtastic on opposite bands.
 
 Measured (dual-TX soak, 2026-10-03, Pi 5: 15 min of non-overlapping transmissions as control, then
-1 h with 16 forced overlaps; record `S0-partB-summary.md` of the S0 SPI records): no frame was
+1 h with 16 forced overlaps; the records are kept outside this repository): no frame was
 corrupted on either band — 433: 8/8 control and 15/16 soak frames received intact; 868: 10/10 and
 39/40. At one of the 16 overlaps (22:56:59Z) meshtasticd logged RadioLib `err=-16`
 (`RADIOLIB_ERR_SPI_WRITE_FAILED`) and aborted on its `setStandby` assertion, and the daemon's frame

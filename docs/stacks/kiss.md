@@ -42,7 +42,7 @@ None — an APRS position belongs to the TNC's client ([graywolf](graywolf.md#po
 ## Notes
 
 - **One KISS client.** The TNC bridges one KISS/TCP client to the daemon at a time and waits for
-  the next after a disconnect. Not a declared resource, so not reslock-enforced.
+  the next after a disconnect. Not a declared resource, so LHPC does not lock it.
 - **One app stack per band.** The daemon-socket consumer claim only records the dependency; the
   start gate's same-frequency rule refuses a second daemon client on a band ("… must be stopped
   first"). Resource model: [architecture](../architecture.md#radios-bands-and-resource-claims).

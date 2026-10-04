@@ -102,7 +102,7 @@ lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --
   (10 minutes by default), so "Skip send NodeInfo since we sent it <600s ago" means one was
   generated, not that it went over the air — a logged node-info is not proof of a transmission.
   (That line and "Started Tx"/"Completed sending" are DEBUG: `lhpc config meshtastic loglevel debug`.)
-  On a fresh node the node-info logged at start did not reach the peer in our tests: a following
+  On a fresh node the node-info logged at start did not reach the peer in the recorded live test: a following
   start step cut its transmission, the throttle then applied, and the node's later answer was
   dropped by a peer still holding the old key (next note). Record:
   [live test](../live-tests/live-test.md#notes-from-the-run).

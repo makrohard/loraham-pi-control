@@ -76,7 +76,7 @@ is up and, with TX enabled, the MANAGED-TX handshake is complete.
 proxy answers 502 for it. Login `admin` + the minted password, shown in the stack page's Password
 section. The proxy refuses (404, reads included) every route that changes upstream configuration,
 identities, radio settings or LHPC-owned state (`proxy_deny_paths` on the 8000 endpoint). Statistics, packets, neighbours, logs, login and a logged-in
-admin's operational actions pass, and by decision two writing routes: the plugin manager
+admin's operational actions pass, and, deliberately, two writing routes: the plugin manager
 (`/api/plugins/…`, including an uploaded wheel) and `/api/sensors_config_update`, which fails
 without change because the repeater has no config file.
 

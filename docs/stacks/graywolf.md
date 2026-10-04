@@ -89,6 +89,6 @@ graywolf's UI; a `use_gps` beacon sends nothing while there is no fix.
 ## Conflicts
 
 - **Not with `loraham-kiss-serial`** — one KISS client: if the PTY holds the TNC, graywolf's
-  dial is refused and retried; if graywolf holds it, the PTY is dead. Not reslock-enforced.
+  dial is refused and retried; if graywolf holds it, the PTY is dead. LHPC does not lock it.
 - One app stack per band ([kiss](kiss.md#notes)): its kiss/daemon chain claims the band, so a
   start on the other band is refused while that chain is up.

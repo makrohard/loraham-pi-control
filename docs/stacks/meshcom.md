@@ -64,7 +64,7 @@ never by editing the file ([operations](../operations.md#secrets-and-passwords))
   launch before the `.lhpc-qemu-built` marker. Build requires: `lhpc deps`; runtime: `libslirp0`.
 - **Firmware**: `scripts/setup.sh --src <the meshcom-firmware remote> --ref {pin:src/MeshCom-Firmware}`
   fetches the firmware at the `meshcom-firmware` pin into `.work/` (always the `{pin:…}` token,
-  never a literal commit — `tests/repo/test_build_steps_reference_pins.py`); `apply-overlay.sh`
+  never a literal commit); `apply-overlay.sh`
   applies the QEMU overlay (fail-closed `git apply --check`), `prepare-openeth.sh` resolves the
   ESP32 platform, `build.sh --env qemu-headless-extradio-gpsd` produces `flash.bin`.
 
