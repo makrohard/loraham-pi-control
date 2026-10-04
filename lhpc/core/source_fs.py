@@ -773,10 +773,21 @@ def holders(parent_fd: int, name: str, *, proc: str = "/proc") -> list[str]:
         mapped shared and writable. A file that cannot be checked (not this user's, a filesystem
         without leases) counts as held.
 
-    Not covered: a process whose `/proc` entries cannot be read (another user's, or one that made
-    itself unreadable, as the server process of an SSH login does) and whose working directory is
-    inside the tree — it could create a new file there. Counting every unreadable process instead
-    would keep the archived prior after every update run from an SSH login."""
+    What the lease probe proves: a read lease cannot be taken while any process holds the file
+    open for writing, so a successful take proves that no writer had it open at that instant; the
+    read-back also catches a writer that opened while the lease was held (the lease is taken
+    twice, which catches strictly more). A writer that opens later is a later writer — the same as
+    one that opens after the check returns — and no probe can exclude it without locking the tree.
+
+    So: a process lhpc can inspect, or any process with a file in the tree open for writing or
+    mapped writable (the lease probe sees those regardless of /proc readability). A process whose
+    working directory, root or an open DIRECTORY descriptor is inside the prior tree, with no file
+    open there, is not seen when its `/proc` entries cannot be read (an open directory lets it
+    create files by `openat`); a superuser process is not modelled at all (it can write anywhere)
+    — move the prior out by hand if such a process exists.
+    Counting every unreadable process instead would keep every prior: the user's own `systemd
+    --user` (and an SSH login's server process) cannot be inspected. This is the decided behaviour
+    and its named gap (test_an_uninspectable_process_is_seen_only_through_the_lease_probe)."""
     try:
         path = os.path.join(os.readlink(f"/proc/self/fd/{parent_fd}"), name)
         pids = os.listdir(proc)

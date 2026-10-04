@@ -5169,3 +5169,55 @@ def test_an_unlistable_subdirectory_counts_as_held(tmp_path):
     finally:
         (tmp_path / "tree" / "closed").chmod(0o755)
     assert held and held[0].split(" ", 1)[0] == "closed", held
+
+
+def _uninspectable(tmp_path, body):
+    """A process of this user that made itself non-dumpable (as `systemd --user` and an SSH login's
+    server are): its `/proc/<pid>/cwd` and `fd/` cannot be read, by this user either."""
+    import subprocess
+    import sys
+    code = ("import ctypes, os, sys, time\nctypes.CDLL(None).prctl(4, 0, 0, 0, 0)\n" + body
+            + "\nprint('ready', flush=True)\ntime.sleep(60)")
+    p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+    assert p.stdout.readline() == "ready\n"
+    try:
+        os.readlink(f"/proc/{p.pid}/cwd")
+        p.kill()
+        p.wait()
+        pytest.skip("this kernel lets the same user read a non-dumpable process's cwd")
+    except PermissionError:
+        return p
+
+
+def test_an_uninspectable_process_is_seen_only_through_the_lease_probe(tmp_path):
+    """The decided behaviour and its gap (gate 2 chunk 4b, P1-3): a process lhpc cannot inspect
+    whose working directory — or an open directory descriptor — is inside the prior tree, with no
+    file open there, is NOT listed; the same kind of process with a file in the tree open for
+    writing IS listed, by the lease probe. (Its root directory inside the tree is the same gap;
+    it cannot be set up without privilege, so it is named, not run.)"""
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "f").write_text("x")
+    parent = os.open(str(tmp_path), os.O_RDONLY)
+    sitter = _uninspectable(tmp_path, f"os.chdir({str(tree)!r})")
+    try:
+        assert source_fs.holders(parent, "tree") == []                 # the named gap
+    finally:
+        sitter.kill()
+        sitter.wait()
+    writer = _uninspectable(tmp_path, f"fh = open({str(tree / 'f')!r}, 'a')")
+    try:
+        held = source_fs.holders(parent, "tree")
+        assert held and held[0].split(" ", 1)[0] == "tree/f", held
+    finally:
+        writer.kill()
+        writer.wait()
+    # The directory-fd case of the same gap: an open DIRECTORY descriptor inside the tree (its
+    # working directory elsewhere, no file open) is invisible to /proc here and is no regular
+    # file for the lease probe — not listed, although it can create a file there by `openat`.
+    dirfd = _uninspectable(tmp_path, f"d = os.open({str(tree)!r}, os.O_RDONLY | os.O_DIRECTORY)")
+    try:
+        assert source_fs.holders(parent, "tree") == []                 # the named gap
+    finally:
+        dirfd.kill()
+        dirfd.wait()

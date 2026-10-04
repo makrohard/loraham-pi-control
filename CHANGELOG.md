@@ -84,8 +84,14 @@
   copy leaves it kept and named with the old tree (*recovery-required*), and once you have removed it the
   next lhpc source command puts the old tree back.
 - An update keeps the old source tree (*prior-in-use*, the process named) while another process can still
-  write into it — an open file, a working directory inside it, a shared writable mapping, or a file the
-  kernel reports open for writing — instead of deleting what that process writes later. `lhpc status`
+  write into it — a process lhpc can inspect (an open file, a working directory or root inside it, a shared
+  writable mapping), or any process with a file in the tree open for writing or mapped writable when that
+  file is checked (a read lease is refused then, regardless of /proc readability; a writer that opens a
+  file after its check is a later writer, as one after the check returns) — instead of deleting what that
+  process writes later. A
+  process whose working directory, root or an open directory descriptor is inside the old tree, with no
+  file open there, is not seen when lhpc cannot inspect it (an open directory lets it create files), nor
+  is a superuser process: move the old tree out by hand if such a process exists. `lhpc status`
   says *prior-in-use* only while such a process is still found; after that the next lhpc source command
   removes the old tree, or keeps it as *prior-dirty* if it holds changes of yours; a journal that cannot
   record why the old tree is kept says *recovery-required*. A staged-copy
