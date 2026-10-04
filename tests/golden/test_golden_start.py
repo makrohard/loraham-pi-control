@@ -12,6 +12,7 @@ restart-required marker, stop intent).
 import pytest
 
 from lhpc.core.service_base import ActionResult
+from lhpc.core.services import ControllerService
 
 pytestmark = pytest.mark.needs_session
 
@@ -161,6 +162,23 @@ def test_unverified_termination_is_cleaned_up(kiss_box, run_op):
         "verify:endpoints:loraham-kiss-tnc", "mutate:signal:loraham-kiss-tnc"]
     assert run.files == {"added": ["logs/start-loraham-kiss-tnc-433.log",
                                    "state/daemon-feed-floor-433"], "removed": [], "changed": []}
+    assert box.owned() == []
+
+
+def test_an_error_after_the_launch_rolls_it_back(kiss_box, run_op, monkeypatch):
+    """intended: an OSError escaping the launch after the TNC came up (finding 123) fails the
+    start with the error as a row and rolls back what it launched — no process left running."""
+    box = kiss_box()
+
+    def disk_error(self, keep):
+        raise OSError(5, "Input/output error")
+    monkeypatch.setattr(ControllerService, "clear_stale_interactive", disk_error)
+    run = run_op(box.root, lambda: box.svc.start("kiss", apply=True))
+    assert run.fields["ok"] is False and run.fields["summary"] == (
+        "Run FAILED for 'kiss': kiss did not start/verify.")
+    assert ("loraham-kiss-tnc", "stopped") in run.fields["outcomes"]
+    assert "  [failed] kiss: the start stopped on an error ([Errno 5] Input/output error)" \
+        in run.res.details
     assert box.owned() == []
 
 

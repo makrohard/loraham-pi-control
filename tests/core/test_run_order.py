@@ -1370,18 +1370,19 @@ def test_a_successful_applied_start_beside_the_other_side_is_warned(tmp_path, mo
     carries the shared-SPI warning, in either direction."""
     from lhpc.core.outcomes import CompResult, Outcome
     from lhpc.core.service_lifecycle_ops import SPI_SHARED_WARNING
-    from lhpc.core.start_plan import StartRun
     svc = _msvc(tmp_path, other) if target == "daemon" else _dsvc(tmp_path, other)
     if target == "meshtastic":
         assert svc.save_config_bundle(
             "meshtastic", values={"node_name": "Field Node", "node_short": "FN1"}).ok
     # Stubbed collaborator, and why: the launch itself (a real daemon or meshtasticd cannot run
     # here). The start's guards, preparation and FINALIZE are the real ones; finalize decides the
-    # warning from the verified rows.
-    monkeypatch.setattr(ControllerService, "_execute_start", lambda self, prep: StartRun(
-        out=[], results=[CompResult(component=c.id, stack=s.id, action="start",
-                                    outcome=Outcome.VERIFIED) for s, c in prep.order],
-        presented=set(), daemon_launched=set(), life=None, pre_marker=None))
+    # warning from the verified rows. The stand-in fills the ledger the coordinator hands it, as
+    # the real launch does.
+    def launched(self, prep, run):
+        run.results.extend(CompResult(component=c.id, stack=s.id, action="start",
+                                      outcome=Outcome.VERIFIED) for s, c in prep.order)
+        return run
+    monkeypatch.setattr(ControllerService, "_execute_start", launched)
     res = svc.start(target, band=band, apply=True)
     assert res.ok, res.summary
     assert f"  [warning] {SPI_SHARED_WARNING}" in res.details, res.details

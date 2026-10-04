@@ -909,7 +909,9 @@ class LifecycleOpsMixin:
             the daemon ensure and, per component in run order, its gates, config files,
             pre-steps / interactive marker, RF-log roll, spawn, readiness, post-start and
             running-band marker. A component that fails its readiness, post-start or marker
-            check is stopped again on the spot (typed UNVERIFIED).
+            check is stopped again on the spot (typed UNVERIFIED). An OSError or
+            PathContainmentError escaping it is a FAILED row, and what it launched is rolled
+            back like any failed start (`run` is the ledger it fills).
           * VERIFY (`verify_start`) decides the outcome from the typed outcomes alone.
           * A FAILED start rolls back what it launched (`_roll_back_start`).
           * FINALIZE (`_finalize_start`) clears only the state this start satisfied.
@@ -920,9 +922,20 @@ class LifecycleOpsMixin:
                                                      position_note, apply=True)  # PHASE 2
             if isinstance(prep, ActionResult):
                 return prep                 # a refusal, or the already-healthy no-op
-            run = self._execute_start(prep)                                     # PHASE 3
-            if isinstance(run, ActionResult):
-                return run                  # a conflicting owner did not verify stopped
+            run = StartRun(out=[], results=[], presented=set(), daemon_launched=set(),
+                           life=self._lifecycle(), pre_marker=None)
+            try:
+                stopped = self._execute_start(prep, run)                        # PHASE 3
+            except (OSError, PathContainmentError) as exc:
+                # An error after a launch: what the ledger holds is rolled back below, and the
+                # error is the failed row — never the bare guard refusal, which left it running.
+                run.results.append(CompResult(
+                    component=prep.target, stack=prep.start_sid, action="start",
+                    outcome=Outcome.FAILED, summary=f"the start stopped on an error: {exc}"))
+                run.out.append(f"  [failed] {prep.target}: the start stopped on an error ({exc})")
+                stopped = run
+            if isinstance(stopped, ActionResult):
+                return stopped              # a conflicting owner did not verify stopped
             failed, required_manual = verify_start(prep, run.results,
                                                    run.presented)               # PHASE 4
             if failed:
@@ -1134,7 +1147,7 @@ class LifecycleOpsMixin:
                             data={"changes": len(order), "blockers": blockers,
                                   "commands": commands})
 
-    def _execute_start(self, prep):
+    def _execute_start(self, prep, run):
         """PHASE 3 EXECUTE in explicit order: the feed floor of the start's bands reset, conflicting
         owners stopped (`stop_owners`; one that
         does not verify stopped refuses here, before anything of the target runs), the process
@@ -1142,7 +1155,8 @@ class LifecycleOpsMixin:
         MANUAL_REQUIRED), config files, pre-steps / interactive marker, RF-log roll, spawn — each
         spawn followed at once by its readiness, post-start and running-band checks, a failed one
         stopping that launch again (typed UNVERIFIED) — and last the stale interactive markers of
-        other stacks cleared. Returns the StartRun, or the refusal."""
+        other stacks cleared. Fills `run` (the coordinator's ledger, so a launch an error cuts short
+        is still rolled back) and returns it, or the refusal."""
         target, band, order, radio = prep.target, prep.band, prep.order, prep.radio
         cfg_band, position, start_sid = prep.cfg_band, prep.position, prep.start_sid
         params, file_over = prep.params, prep.file_over
@@ -1156,7 +1170,7 @@ class LifecycleOpsMixin:
         # every arbitrated band, a non-radio start nothing.
         for _b in sorted(self._operation_bands(target, band, radio, "start")):
             self.clear_daemon_feed(_b)
-        life = self._lifecycle()
+        life = run.life
         blockers = self.run_blockers(target, band, radio) if prep.stop_owners else []
         if blockers:
             owners = sorted({bl["holder_stack"] for bl in blockers})
@@ -1187,13 +1201,14 @@ class LifecycleOpsMixin:
         snap = self.build_snapshot()
         st_index = {c.id: ss.components[c.id]
                     for ss in snap.stacks for c in ss.stack.components}
-        out = list(prelude)
-        results: list[CompResult] = []   # TYPED per-component outcomes (source of truth)
+        out = run.out
+        out.extend(prelude)
+        results = run.results            # TYPED per-component outcomes (source of truth)
         daemon_ok = True                # gate dependents on verified daemon readiness
         daemon_gate = ""                # a refusal of THIS stack's daemon config (not a daemon failure)
-        daemon_launched: set[str] = set()   # daemon bands this start launched (roll-back scope)
+        daemon_launched = run.daemon_launched   # daemon bands this start launched (roll-back scope)
 
-        presented: set[str] = set()      # components whose copy-paste start command was shown
+        presented = run.presented        # components whose copy-paste start command was shown
         def record(comp, stack, outcome, summary, command="", note=""):
             # A copy-paste `command` goes on a line of its own, and the `note` on the next one:
             # a note appended to the command made the pasted line a shell syntax error (F-C2).
@@ -1578,8 +1593,8 @@ class LifecycleOpsMixin:
                           if cleanup.outcome == Outcome.STOPPED
                           else "cessation NOT verified — ownership retained"))
         self.clear_stale_interactive(keep=self.stack_of(target) or target)
-        return StartRun(out=out, results=results, presented=presented,
-                        daemon_launched=daemon_launched, life=life, pre_marker=_pre_marker)
+        run.pre_marker = _pre_marker
+        return run
 
     def _finalize_start(self, prep, run, failed, required_manual) -> ActionResult:
         """PHASE 5 FINALIZE: the summary from the verdict; on a successful STACK start the
