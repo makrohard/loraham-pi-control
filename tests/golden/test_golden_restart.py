@@ -39,7 +39,8 @@ def _running(kiss_box, **kw):
 
 
 def test_plan_is_read_only(kiss_box, run_op):
-    """intended: the restart plan merges the stop and start plans; no lock, no write."""
+    """intended: the restart plan is the start plan plus the stop plan's collateral (here: no
+    dependent, no other band, no running optional component); no lock, no write."""
     box = _running(kiss_box)
     plan = run_op(box.root, lambda: box.svc.restart("kiss"))
     assert plan.fields == {
@@ -48,6 +49,10 @@ def test_plan_is_read_only(kiss_box, run_op):
                       "other_bands"],
         "next_commands": ["lhpc stack restart kiss --yes"],
         "heads": ["[daemon] start/ensure", "[start] loraham-kiss-tnc"], "outcomes": []}
+    assert plan.res.details == ["  [daemon] start/ensure --radio 433, TXMODE=MANAGED",
+                                "  [start] loraham-kiss-tnc (band 433)"]
+    assert plan.res.data == {"blockers": [], "changes": 2, "commands": [], "dependents": [],
+                             "optional_restarted": [], "other_bands": []}
     assert plan.phases == ["recheck:identity", "recheck:preflight"]
     assert plan.files == NOTHING
 

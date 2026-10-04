@@ -52,6 +52,9 @@ def test_plan_then_build(tmp_path, run_op):
     assert plan.fields == {"ok": True, "summary": "Build plan for 'chat': 1 component(s).",
                            "data_keys": ["changes"], "next_commands": ["lhpc build chat --yes"],
                            "heads": ["[build] loraham-chat"], "outcomes": []}
+    assert plan.res.details == ["  [build] loraham-chat: gcc clients/chat/lorachat_ncurses_113.c "
+                                "-o loraham_chat -lncurses -lpthread"]
+    assert plan.res.data == {"changes": 1}
     assert plan.phases == [] and plan.files == NOTHING and _steps(fake) == []
 
     run = run_op(tmp_path, lambda: svc.build("chat", apply=True))
