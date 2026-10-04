@@ -213,22 +213,33 @@ def test_the_console_builds_a_component_as_the_cli_does(tmp_path, monkeypatch):
     svc, root = _box(tmp_path)
     for sp in ("src/reticulum", "src/loraham-rns-interface", "src/nomadnet"):
         (root / sp).mkdir(parents=True, exist_ok=True)
+    steps = [["python3", "-m", "venv", "--system-site-packages", ".venv"],
+             [".venv/bin/pip", "install", "--disable-pip-version-check", "{runtime}/src/reticulum"],
+             [".venv/bin/pip", "install", "--disable-pip-version-check", "."]]
     plan = svc.build("nomadnet")
-    assert plan.details == [d for d in plan.details if d.startswith("  [build] nomadnet:")]
+    assert plan.ok and plan.details == [
+        "  [build] nomadnet: " + " ; ".join(" ".join(argv) for argv in steps)]
     rendered = []
     from lhpc.core import commands
     real = commands.render_build_launcher
 
     def render(*a, **kw):
-        rendered.append((kw["target"], sorted(kw["shared_lock_paths"])))
+        rendered.append((kw["target"], sorted(kw["shared_lock_paths"]),
+                         [st["argv"] for st in (a[0] if a else kw["steps"])]))
         return real(*a, **kw)
     monkeypatch.setattr(commands, "render_build_launcher", render)
+    child = subprocess.Popen(["sleep", "30"])
+    # Stubs the collaborator, the detached spawn: a live process stands in for the launcher.
     monkeypatch.setattr(Lifecycle, "spawn_job",
-                        lambda self, name, argv, cwd, env=None: (f"{name}.log", 0))
-    svc.spawn_web_job("build", "nomadnet")
+                        lambda self, name, argv, cwd, env=None: (f"{name}.log", child.pid))
+    try:
+        assert svc.spawn_web_job("build", "nomadnet")[:2] == ("build-nomadnet.log", "pending")
+    finally:
+        child.kill()
+        child.wait()
     shared = sorted(str(reslock.lock_file_path(svc._paths, reslock.source_lock_key(sp)))
                     for sp in ("src/loraham-rns-interface", "src/reticulum"))
-    assert rendered == [("nomadnet", shared)]
+    assert rendered == [("nomadnet", shared, steps)]
 
 
 def test_parallel_jobs_share_a_dependency(tmp_path, monkeypatch):
