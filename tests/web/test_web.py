@@ -1100,8 +1100,8 @@ def test_config_saved_values_launch_per_component(tmp_path, monkeypatch, web, cs
         seen[comp.id] = dict(cfg)
         return StartLaunch(True, "log", "")
     monkeypatch.setattr(Lifecycle, "start", stub)
-    ControllerService(manifest_path=m, system=FakeSystem().system,
-                      paths=Paths(runtime_root=tmp_path)).start("ostack2", apply=True)
+    assert ControllerService(manifest_path=m, system=FakeSystem().system,
+                      paths=Paths(runtime_root=tmp_path)).start("ostack2", apply=True).ok
     assert seen["tgt"]["rp"] == "RP-T" and seen["dep"]["rp"] == "RP-D"        # own saved run value
     files = tmp_path / "config" / "files"
     assert "FP=FP-T" in (files / "tgt.conf").read_text()                     # own generated file config
@@ -2128,7 +2128,7 @@ def test_the_updater_trigger_paths_never_mutate_systemd(tmp_path, recording_syst
     svc = ControllerService(system=sys_, paths=Paths(runtime_root=tmp_path))
     svc.updater_integration()
     svc.self_update_trigger()
-    svc.self_update_run_service()
+    assert svc.self_update_run_service().ok
     offenders = _systemd_mutations(calls)
     assert not offenders, f"an updater path tried to change systemd state: {offenders}"
 
@@ -2572,8 +2572,8 @@ def test_routine_restart_runs_with_no_page_between(tmp_path, monkeypatch, web, c
     _flag_restart(tmp_path)
     c = web(cmdlines={555: ["loraham_chat"]})
     from lhpc.core.services import ControllerService as _CS
-    _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).set_operator_identity(
-        callsign="XX0XXA")
+    assert _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).set_operator_identity(
+        callsign="XX0XXA").ok
     spawns = _spy_spawns(monkeypatch)
     tok = csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "restart", "target": "chat"})
@@ -2674,7 +2674,7 @@ def test_a_restart_that_takes_dependents_down_asks_first(tmp_path, monkeypatch, 
             cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["loraham_chat"]},
             unix_replies={"/tmp/loraconf433.sock": rdy}).system,
             paths=Paths(runtime_root=tmp_path))
-    factory().set_operator_identity(callsign="XX0XXA")
+    assert factory().set_operator_identity(callsign="XX0XXA").ok
     c = web(service_factory=factory)
     spawns = _spy_spawns(monkeypatch)
     tok = csrf(c)

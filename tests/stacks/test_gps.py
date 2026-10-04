@@ -618,7 +618,7 @@ def test_the_per_stack_switch_survives_a_band_change(tmp_path):
     property of the STACK. A switch that silently reverted when the operator moved 868 -> 433
     would be a trap — and it is what happened before this was read across bands."""
     svc = _svc(tmp_path)
-    svc.save_stack_config("meshtastic", {"use_gps": "on"}, band="868")
+    assert svc.save_stack_config("meshtastic", {"use_gps": "on"}, band="868").ok
     assert svc.gps_enabled_for("meshtastic") is True, "set on 868"
     save_gps(svc._paths, source="gpsd")
     svc._invalidate_config()
@@ -1539,7 +1539,7 @@ def test_every_gps_hint_is_a_runnable_command(tmp_path):
     # The refusal that carries use_gps hints today: a production feed started ALONE while the
     # plan does not use it. (The old sample — use_gps on + source off — is no longer a refusal:
     # with the switch defaulting on, that combination starts without position instead.)
-    svc.save_stack_config("meshcom", {"use_gps": "off"})
+    assert svc.save_stack_config("meshcom", {"use_gps": "off"}).ok
     reason, cmds = svc.gps_block("meshcom-gps")
     assert reason, "this is the refusal that carries the hint"
     # Bind the hints and PROVE there are some: keyed on the command form, not on the parameter
@@ -2368,9 +2368,9 @@ def test_gps_capable_stacks_are_derived_from_the_manifest(tmp_path):
     for sid in declared:
         assert svc.gps_owner_stack(sid) == sid
         # ... and the saved switch is actually readable for each, in BOTH states.
-        svc.save_stack_config(sid, {"use_gps": "on"})
+        assert svc.save_stack_config(sid, {"use_gps": "on"}).ok
         assert svc.gps_enabled_for(sid) is True
-        svc.save_stack_config(sid, {"use_gps": "off"})
+        assert svc.save_stack_config(sid, {"use_gps": "off"}).ok
         assert svc.gps_enabled_for(sid) is False
 
     # A stack with no such param stays out — the switch is not invented for it.
@@ -2406,14 +2406,14 @@ def test_a_position_feed_is_never_an_operator_autostart_choice(tmp_path):
 
     # The exact broken state from the box: feed ticked, GPS off -> feed stays OUT.
     # (off is explicit now — the switch defaults on since the source gained `auto`.)
-    svc.save_stack_config("meshcom", {"autostart_meshcom-gps": "on", "use_gps": "off"})
+    assert svc.save_stack_config("meshcom", {"autostart_meshcom-gps": "on", "use_gps": "off"}).ok
     assert svc.gps_enabled_for("meshcom") is False
     assert "meshcom-gps" not in [c.id for _, c in svc._run_order("meshcom")]
 
     # And the plan still admits it when GPS is genuinely on — the checkbox was never what
     # turned the feed on, so removing it takes nothing away.
-    svc.set_gps(source="gpsd", host="127.0.0.1", port=2947)
-    svc.save_stack_config("meshcom", {"use_gps": "on"})
+    assert svc.set_gps(source="gpsd", host="127.0.0.1", port=2947).ok
+    assert svc.save_stack_config("meshcom", {"use_gps": "on"}).ok
     svc._invalidate_config()
     assert svc.gps_plan("meshcom").enabled
     assert "meshcom-gps" in [c.id for _, c in svc._run_order("meshcom")]
@@ -2467,7 +2467,7 @@ def test_a_stale_fixture_autostart_tick_is_ignored_by_the_run_order(tmp_path):
     silently replaying a synthetic position on air, with no UI left that could show or clear
     the flag. Feeds and fixtures share ONE rule (`optional_role` == "hidden")."""
     svc = _gsvc(tmp_path)
-    svc.save_stack_config("meshcom", {"autostart_meshcom-gps-relay": "on"})
+    assert svc.save_stack_config("meshcom", {"autostart_meshcom-gps-relay": "on"}).ok
 
     order = [c.id for _, c in svc._run_order("meshcom")]
     assert "meshcom-gps-relay" not in order
@@ -2523,7 +2523,7 @@ def test_auto_source_resolves_softly_and_explicit_sources_stay_fail_closed(tmp_p
 
     # Explicit off: not auto, and not a refusal either — the stack runs without position.
     monkeypatch.setattr(gps_mod, "local_gpsd_listening", lambda: False)
-    svc.set_gps(source="off")
+    assert svc.set_gps(source="off").ok
     svc._invalidate_config()
     assert svc.gps_settings()["source"] == "off"
     assert svc.gps_block("meshtastic") == ("", [])
@@ -2556,7 +2556,7 @@ def test_fixed_source_says_that_graywolf_gets_no_position(tmp_path):
     NOT a refusal — with the switch defaulting on, a fixed box could otherwise never start
     graywolf — but `lhpc gps` must say it, where the operator chose the source."""
     svc = _gsvc(tmp_path)
-    svc.set_gps(source="fixed", fixed_lat="48.4", fixed_lon="11.6")
+    assert svc.set_gps(source="fixed", fixed_lat="48.4", fixed_lon="11.6").ok
     svc._invalidate_config()
     from lhpc.core.gps import graywolf_post_step_values
     assert graywolf_post_step_values(svc.gps_plan("graywolf"))["gps_args"] == \

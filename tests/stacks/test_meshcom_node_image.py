@@ -55,7 +55,7 @@ def test_clean_purge_removes_the_node_image(tmp_path):
 def test_uninstall_keeps_the_node_image(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     d = _seed_node_image(tmp_path)
-    svc.uninstall("meshcom", apply=True)
+    assert svc.uninstall("meshcom", apply=True).ok
     assert (d / "node-flash.bin").exists()
 
 

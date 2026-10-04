@@ -672,7 +672,7 @@ def test_default_ports_are_stable_per_stack_and_never_collide(tmp_path):
     assert svc.stack_web_view("meshcore")["suggested_port"] == 8446
     assert svc.stack_web_view("meshtastic")["suggested_port"] == 8447   # distinct even when none is enabled
     # stable after one is enabled
-    svc.stack_web_configure("meshcom", mode="local", port=8445)
+    assert svc.stack_web_configure("meshcom", mode="local", port=8445).ok
     assert svc.stack_web_view("meshtastic")["suggested_port"] == 8447
     assert svc.stack_web_view("meshcore")["suggested_port"] == 8446
     assert svc.stack_web_view("meshcom")["suggested_port"] == 8445
@@ -686,7 +686,7 @@ def test_default_port_skips_a_port_another_stack_already_saved(tmp_path):
     # another stack's web UI") is a dead prefill, so a taken port is skipped.
     svc = _svc(tmp_path)
     assert svc.stack_web_view("graywolf")["suggested_port"] == 8444
-    svc.stack_web_configure("meshcom", mode="local", port=8444)      # the pre-upgrade choice
+    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok      # the pre-upgrade choice
     assert svc.stack_web_view("graywolf")["suggested_port"] == 8445   # not the taken 8444
     assert svc.stack_web_view("meshcom")["suggested_port"] == 8444    # its own saved port stands
 
@@ -751,8 +751,8 @@ def test_applied_remote_proxy_links_the_reachable_address(tmp_path):
     # remote (proxy_remote), in sync with the saved mode (not pending). The dashboard fills the host
     # from request.host; the CLI/no-request fallback link is loopback.
     svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 1}])
-    svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["192.168.178.0/24"],
-                            confirm=True)
+    assert svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["192.168.178.0/24"],
+                            confirm=True).ok
     itf = _ifaces(svc, "meshcom")[0]
     assert itf["proxy_remote"] and itf["proxy_port"] == 8444 and itf["proxy_scheme"] == "https"
     assert "local only" not in itf["label"] and itf["pending"] is False
@@ -791,7 +791,7 @@ def test_drift_local_mode_but_exposed_listener_is_truthfully_remote(tmp_path):
     # changed to local without an Apply). The link must reflect REALITY — remotely reachable, flagged
     # `pending` — never a misleading "local only".
     svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 1}])
-    svc.stack_web_configure("meshcom", mode="local", port=8444)
+    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
     itf = _ifaces(svc, "meshcom")[0]
     assert itf["proxy_remote"] and itf["proxy_port"] == 8444
     assert "local only" not in itf["label"] and itf["pending"] is True
@@ -801,8 +801,8 @@ def test_drift_remote_mode_not_yet_applied_is_loopback_and_pending(tmp_path):
     # Saved `public` but Apply not run: the live listener is still 127.0.0.1 -> honestly loopback, and
     # flagged pending so the operator knows to Apply.
     svc = _svc(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 8445, "inode": 1}])
-    svc.stack_web_configure("meshtastic", mode="public", port=8445, cidrs=["0.0.0.0/0"],
-                            confirm=True, confirm_public=True)
+    assert svc.stack_web_configure("meshtastic", mode="public", port=8445, cidrs=["0.0.0.0/0"],
+                            confirm=True, confirm_public=True).ok
     itf = _ifaces(svc, "meshtastic")[0]
     assert not itf["proxy_remote"] and "local only" in itf["label"] and itf["pending"] is True
 
@@ -811,8 +811,8 @@ def test_enabled_proxy_with_no_listener_is_marked_not_active(tmp_path):
     # Enabled in config but nothing listening on the port (nginx down / never applied): honest
     # "not active", pending an Apply — not a dead remote link.
     svc = _svc(tmp_path)                                      # no listeners
-    svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["0.0.0.0/0"],
-                            confirm=True, confirm_public=True)
+    assert svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["0.0.0.0/0"],
+                            confirm=True, confirm_public=True).ok
     itf = _ifaces(svc, "meshcom")[0]
     assert not itf["proxy_remote"] and "Apply" in itf["label"] and itf["pending"] is True
 
@@ -828,7 +828,7 @@ def test_url_host_helper_is_ipv6_safe():
 def test_applied_local_proxy_is_labelled_local_only(tmp_path):
     # Applied local proxy: nginx is live on 127.0.0.1:8444 -> loopback, honestly labelled, not pending.
     svc = _svc(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 8444, "inode": 1}])
-    svc.stack_web_configure("meshcom", mode="local", port=8444)
+    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
     itf = _ifaces(svc, "meshcom")[0]
     assert itf["link"] == "https://127.0.0.1:8444/"
     assert "local only" in itf["label"] and itf["pending"] is False   # honest for a remote reader
@@ -837,15 +837,15 @@ def test_applied_local_proxy_is_labelled_local_only(tmp_path):
 def test_view_reports_live_listen_scope_and_pending_drift(tmp_path):
     # stack_web_view carries the EFFECTIVE listen scope + a pending flag for the stacks-page header.
     svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 1}])
-    svc.stack_web_configure("meshcom", mode="local", port=8444)   # desired local, live exposed -> drift
+    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok   # desired local, live exposed -> drift
     v = svc.stack_web_view("meshcom")
     assert v["listen_scope"] == "exposed" and v["pending"] is True
 
 
 def test_view_in_sync_public_is_not_pending(tmp_path):
     svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8445, "inode": 1}])
-    svc.stack_web_configure("meshtastic", mode="public", port=8445, cidrs=["0.0.0.0/0"],
-                            confirm=True, confirm_public=True)
+    assert svc.stack_web_configure("meshtastic", mode="public", port=8445, cidrs=["0.0.0.0/0"],
+                            confirm=True, confirm_public=True).ok
     v = svc.stack_web_view("meshtastic")
     assert v["listen_scope"] == "exposed" and v["pending"] is False
 
@@ -860,7 +860,7 @@ def test_stacks_panel_shows_running_state(tmp_path, web):
     # AND the nginx proxy port (8444) both listening, it reads "proxied" (green).
     c, svc = _app(web, tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 18083, "inode": 1},
                                {"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 2}])
-    svc.stack_web_configure("meshcom", mode="local", port=8444)
+    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
     body = c.get("/stacks?open=meshcom").get_data(as_text=True)   # webserver panel is deferred
     assert 'id="stack-webserver-meshcom"' in body
     assert ">proxied</span>" in body
@@ -870,15 +870,15 @@ def test_stack_running_pill_offline_localonly_proxied(tmp_path):
     UP = {"family": "ipv4", "ip": "127.0.0.1", "port": 18083, "inode": 1}   # stack's web-UI upstream
     PROXY = {"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 2}   # nginx proxy port
     # (i) stack not started -> upstream absent -> grey "offline"
-    svc = _svc(tmp_path); svc.stack_web_configure("meshcom", mode="local", port=8444)
+    svc = _svc(tmp_path); assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
     p = svc.stack_web_view("meshcom")["posture"]
     assert p["run"] == "offline" and p["run_level"] == "off"
     # (ii) stack started, nginx not proxying -> upstream up, proxy port absent -> yellow "local-only"
-    svc = _svc(tmp_path, [UP]); svc.stack_web_configure("meshcom", mode="local", port=8444)
+    svc = _svc(tmp_path, [UP]); assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
     p = svc.stack_web_view("meshcom")["posture"]
     assert p["run"] == "local-only" and p["run_level"] == "warn"
     # (iii) stack started AND nginx proxying -> both listening -> green "proxied"
-    svc = _svc(tmp_path, [UP, PROXY]); svc.stack_web_configure("meshcom", mode="local", port=8444)
+    svc = _svc(tmp_path, [UP, PROXY]); assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
     p = svc.stack_web_view("meshcom")["posture"]
     assert p["run"] == "proxied" and p["run_level"] == "ok"
 
@@ -936,7 +936,7 @@ def test_dashboard_not_proxied_web_ui_shows_direct_address_and_name_link(tmp_pat
 
 def test_stack_monitor_carries_the_same_exposure_warnings_as_the_console(tmp_path):
     from lhpc.core import webserver as _ws
-    svc = _svc(tmp_path); svc.stack_web_configure("meshcom", mode="local", port=8444)
+    svc = _svc(tmp_path); assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
     v = svc.stack_web_view("meshcom")
     # Identical wording/values to the console Monitor — driven by the SINGLE shared source.
     assert v["warnings"] == _ws.exposure_warnings(
@@ -1038,7 +1038,7 @@ def test_verify_validates_the_stack_proxy_blocks_not_a_console_only_config(tmp_p
 
 def test_verify_surfaces_the_stack_proxies_as_evidence(tmp_path):
     svc = _svc_stackweb_verify(tmp_path)
-    svc.stack_web_configure("meshcom", mode="local", port=8444)
+    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
     ev = svc.webserver_verify().data
     assert [p["stack_id"] for p in ev["stack_proxies"]] == ["meshcom"]
     assert ev["stack_proxies"][0]["upstream"] == "127.0.0.1:18083"
@@ -1064,7 +1064,7 @@ def test_verify_warns_about_a_bypassable_upstream_without_failing(tmp_path):
     # (An https console with no PKI on disk fails server_cert here — that is a DIFFERENT, real
     # failure; what must not happen is the bypass itself entering the failed set.)
     svc = _svc_stackweb_verify(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}])
-    svc.stack_web_configure("meshtastic", mode="local", port=8445)
+    assert svc.stack_web_configure("meshtastic", mode="local", port=8445).ok
     res = svc.webserver_verify()
     checks = res.data["checks"]
     assert checks["upstream_bypass"] == "warn"
@@ -1084,15 +1084,15 @@ def test_a_bypassable_upstream_alone_still_verifies_ok(tmp_path):
     svc = _svc_stackweb_verify(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1},
                           {"family": "ipv4", "ip": "127.0.0.1", "port": 8443, "inode": 2},
                           {"family": "ipv4", "ip": "127.0.0.1", "port": 8445, "inode": 3}])
-    svc.stack_web_configure("meshtastic", mode="local", port=8445,
-                            scheme="http", access_mode="no-auth")
+    assert svc.stack_web_configure("meshtastic", mode="local", port=8445,
+                            scheme="http", access_mode="no-auth").ok
     res = svc.webserver_verify()
     assert res.ok and res.data["checks"]["upstream_bypass"] == "warn"
 
 
 def test_verify_of_a_loopback_upstream_raises_no_warning(tmp_path):
     svc = _svc_stackweb_verify(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 18083, "inode": 1}])
-    svc.stack_web_configure("meshcom", mode="local", port=8444)
+    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
     ev = svc.webserver_verify().data
     assert "upstream_bypass" not in ev["checks"]
     assert ev["stack_proxies"][0]["bypassable"] is False
@@ -1154,7 +1154,7 @@ def test_http_console_with_an_https_proxy_still_demands_the_certificate(tmp_path
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     cfgmod.save_webserver_config(p, scheme="http", access_mode="no-auth")
     svc = _svc_stackweb_verify(tmp_path)
-    svc.stack_web_configure("meshcom", mode="local", port=8444, scheme="https")
+    assert svc.stack_web_configure("meshcom", mode="local", port=8444, scheme="https").ok
     checks = svc.webserver_verify().data["checks"]
     assert checks["tls_required"] == "yes" and checks["server_cert"] == "failed"
 
@@ -1164,7 +1164,7 @@ def test_no_auth_console_with_a_cert_auth_proxy_checks_the_client_ca(tmp_path):
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     cfgmod.save_webserver_config(p, access_mode="no-auth")
     svc = _svc_stackweb_verify(tmp_path)
-    svc.stack_web_configure("meshcom", mode="local", port=8444, access_mode="auth-everywhere")
+    assert svc.stack_web_configure("meshcom", mode="local", port=8444, access_mode="auth-everywhere").ok
     checks = svc.webserver_verify().data["checks"]
     assert checks["client_ca"] == "failed" and checks["crl"] == "failed"
 
@@ -1251,7 +1251,7 @@ def test_console_urls_use_the_configured_scheme(monkeypatch):
 
 def test_monitor_surfaces_the_proxies_and_the_bypass_warning(tmp_path):
     svc = _svc_stackweb_verify(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}])
-    svc.stack_web_configure("meshtastic", mode="local", port=8445)
+    assert svc.stack_web_configure("meshtastic", mode="local", port=8445).ok
     data = svc.webserver_monitor().data
     assert [p["stack_id"] for p in data["stack_proxies"]] == ["meshtastic"]
     # monitor_view warnings are {"level","text"} dicts (the template renders w.level/w.text).
@@ -1268,7 +1268,7 @@ def test_monitor_lists_no_proxies_by_default(tmp_path):
 def test_monitor_warnings_are_all_dicts_never_plain_strings(tmp_path):
     # a plain string here renders as an empty flash (the template reads w.level/w.text).
     svc = _svc_stackweb_verify(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}])
-    svc.stack_web_configure("meshtastic", mode="local", port=8445)
+    assert svc.stack_web_configure("meshtastic", mode="local", port=8445).ok
     for w in svc.webserver_monitor().data["warnings"]:
         assert isinstance(w, dict) and w.get("text") and w.get("level")
 
@@ -1322,8 +1322,8 @@ def _reset_svc(tmp_path, listeners=()):
 
 def test_reset_disables_enabled_stack_proxies(tmp_path):
     svc = _reset_svc(tmp_path)
-    svc.stack_web_configure("meshcom", mode="lan", port=8444,
-                            cidrs=["192.168.0.0/24"], confirm=True)
+    assert svc.stack_web_configure("meshcom", mode="lan", port=8444,
+                            cidrs=["192.168.0.0/24"], confirm=True).ok
     assert svc.config().stackweb["meshcom"].enabled
     res = svc.webserver_reset_defaults()
     assert res.ok and "remote exposure ceased" in res.summary
@@ -1339,8 +1339,8 @@ def test_reset_evidence_does_not_claim_cessation_while_a_remote_proxy_would_bind
     # a remote listener is gone. Simulate that by making the disable loop a no-op.
     from lhpc.core import config as _config
     svc = _reset_svc(tmp_path)
-    svc.stack_web_configure("meshcom", mode="public", port=8444,
-                            cidrs=["0.0.0.0/0"], confirm=True, confirm_public=True)
+    assert svc.stack_web_configure("meshcom", mode="public", port=8444,
+                            cidrs=["0.0.0.0/0"], confirm=True, confirm_public=True).ok
     orig = _config.save_stackweb_config
     monkeypatch.setattr(_config, "save_stackweb_config",
                         lambda paths, sid, **kw: None if "port" in kw and kw["port"] == 0
@@ -1477,7 +1477,7 @@ def test_reset_leaves_a_local_only_proxy_alone_is_still_provable(tmp_path):
     # A `local` proxy binds loopback, so it is NOT a remote listener — but reset still disables it,
     # because "reset to defaults" means defaults, and cessation is trivially proven.
     svc = _reset_svc(tmp_path)
-    svc.stack_web_configure("meshcom", mode="local", port=8444)
+    assert svc.stack_web_configure("meshcom", mode="local", port=8444).ok
     res = svc.webserver_reset_defaults()
     assert res.ok and res.data["effective"]["remote_cessation_proven"] is True
     assert not svc.config().stackweb["meshcom"].enabled
@@ -1595,7 +1595,7 @@ def test_a_denied_upstream_is_not_reachable_around_the_proxy(tmp_path, monkeypat
     # authentication" for endpoints the managed firewall drops by default — they bypass nothing.
     fw = _fw(eps=[_sc(9443, selected=False, deny_default=True, allow_cidrs=[])])
     svc = _meshtastic_svc(tmp_path, [_MT_9443], fw, monkeypatch)
-    svc.stack_web_configure("meshtastic", mode="local", port=8445)
+    assert svc.stack_web_configure("meshtastic", mode="local", port=8445).ok
     assert svc.stack_web_view("meshtastic")["bypassable"] is False
     warnings = svc.webserver_monitor().data.get("warnings", [])
     assert not any("bypassing" in w["text"] for w in warnings)
@@ -1610,14 +1610,14 @@ def test_a_denied_upstream_is_not_reachable_around_the_proxy(tmp_path, monkeypat
 def test_anything_short_of_denied_still_bypasses_the_proxy(tmp_path, monkeypatch, verdict,
                                                            eps, bypassable):
     svc = _meshtastic_svc(tmp_path, [_MT_9443], _fw(eps=eps), monkeypatch)
-    svc.stack_web_configure("meshtastic", mode="local", port=8445)
+    assert svc.stack_web_configure("meshtastic", mode="local", port=8445).ok
     assert svc.stack_web_view("meshtastic")["bypassable"] is bypassable, verdict
 
 
 def test_a_loopback_or_absent_upstream_bypasses_nothing(tmp_path):
     loopback = _meshtastic_svc(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1",
                                            "port": 9443, "inode": 1}])
-    loopback.stack_web_configure("meshtastic", mode="local", port=8445)
+    assert loopback.stack_web_configure("meshtastic", mode="local", port=8445).ok
     assert loopback.stack_web_view("meshtastic")["bypassable"] is False
 
 
@@ -1710,12 +1710,12 @@ def test_the_intended_zero_state_is_constructible(tmp_path, monkeypatch):
     paths = Paths(runtime_root=tmp_path)
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     boot = ControllerService(system=FakeSystem().system, paths=paths)
-    boot.webserver_init(dns_sans=["pi.local"])
+    assert boot.webserver_init(dns_sans=["pi.local"]).ok
     cfgmod.save_webserver_config(paths, bind="0.0.0.0", port=8443, remote_exposed=True,
                                  access_mode="no-auth", allowed_cidrs=LAN, scheme="https")
     boot._invalidate_config()
-    boot.stack_web_configure("meshtastic", mode="lan", port=8445, scheme="https",
-                             access_mode="no-auth", cidrs=LAN, confirm=True, confirm_public=True)
+    assert boot.stack_web_configure("meshtastic", mode="lan", port=8445, scheme="https",
+                             access_mode="no-auth", cidrs=LAN, confirm=True, confirm_public=True).ok
     runtime_fs.mkdir(paths, "state", "run")
     runtime_fs.write_marker(paths, paths.under(*webserver.NGINX_PID), str(os.getpid()))
     staged, live = (str(paths.under(*webserver.NGINX_CONF_STAGED)),
@@ -1764,10 +1764,10 @@ def test_a_saved_proxy_port_move_keeps_advertising_the_port_that_still_answers(t
     paths = Paths(runtime_root=tmp_path)
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     boot = ControllerService(system=FakeSystem().system, paths=paths)
-    boot.webserver_init(dns_sans=["pi.local"])
-    boot.stack_web_configure("meshtastic", mode="lan", port=8445, scheme="https",
+    assert boot.webserver_init(dns_sans=["pi.local"]).ok
+    assert boot.stack_web_configure("meshtastic", mode="lan", port=8445, scheme="https",
                              access_mode="no-auth", cidrs=["192.168.0.0/24"],
-                             confirm=True, confirm_public=True)
+                             confirm=True, confirm_public=True).ok
     runtime_fs.mkdir(paths, "state", "run")
     runtime_fs.write_marker(paths, paths.under(*webserver.NGINX_PID), str(os.getpid()))
     staged, live = (str(paths.under(*webserver.NGINX_CONF_STAGED)),
@@ -2156,10 +2156,10 @@ def test_a_saved_disable_keeps_the_live_proxy_visible_until_apply(tmp_path, web)
     paths = Paths(runtime_root=tmp_path)
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     boot = ControllerService(system=FakeSystem().system, paths=paths)
-    boot.webserver_init(dns_sans=["pi.local"])
-    boot.stack_web_configure("meshtastic", mode="lan", port=8445, scheme="https",
+    assert boot.webserver_init(dns_sans=["pi.local"]).ok
+    assert boot.stack_web_configure("meshtastic", mode="lan", port=8445, scheme="https",
                              access_mode="no-auth", cidrs=["192.168.0.0/24"],
-                             confirm=True, confirm_public=True)
+                             confirm=True, confirm_public=True).ok
     runtime_fs.mkdir(paths, "state", "run")
     runtime_fs.write_marker(paths, paths.under(*webserver.NGINX_PID), str(os.getpid()))
     staged, live = (str(paths.under(*webserver.NGINX_CONF_STAGED)),

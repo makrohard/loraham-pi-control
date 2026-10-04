@@ -243,7 +243,7 @@ def test_direct_valid_identity_reaches_start_seam(short_tmp_path, monkeypatch):
 
 def test_direct_file_identity_uses_the_owner_stack_store(tmp_path):
     svc = _svc(tmp_path)
-    svc.save_config_bundle("meshcore", values={"file_node_name": "SavedNode"}, band="868")
+    assert svc.save_config_bundle("meshcore", values={"file_node_name": "SavedNode"}, band="868").ok
     rows = svc.identity_resolution("meshcore-node", "868")
     assert rows[0]["effective"] == "SavedNode" and rows[0]["source"] == "local"
     assert svc.enforce_identity("meshcore-node", "868")[0] is True
@@ -506,7 +506,7 @@ def test_scoped_values_isolate_target_and_dependency(tmp_path, monkeypatch):
     assert svc.save_config_bundle("tgt", values={"rp": "RP-T", "file_fp": "FP-T"}).ok
     assert svc.save_config_bundle("dep", values={"rp": "RP-D", "file_fp": "FP-D"}).ok
     seen = _capture_start(svc, monkeypatch)
-    svc.start("tgt", apply=True)                                  # direct start of tgt (+dep)
+    assert svc.start("tgt", apply=True).ok                                  # direct start of tgt (+dep)
     assert seen["tgt"]["rp"] == "RP-T" and seen["dep"]["rp"] == "RP-D"   # argv per component
     files = tmp_path / "config" / "files"
     assert "FP=FP-T" in (files / "tgt.conf").read_text()
@@ -518,7 +518,7 @@ def test_only_target_scoped_dependency_uses_defaults(tmp_path, monkeypatch):
     svc = _scope2_svc(tmp_path)
     assert svc.save_config_bundle("tgt", values={"rp": "RP-T", "file_fp": "FP-T"}).ok
     seen = _capture_start(svc, monkeypatch)
-    svc.start("tgt", apply=True)
+    assert svc.start("tgt", apply=True).ok
     assert seen["tgt"]["rp"] == "RP-T"
     assert seen["dep"]["rp"] == "rp-dep"                         # dependency DEFAULT, never target's
     assert "FP=fp-dep" in (tmp_path / "config" / "files" / "dep.conf").read_text()
@@ -531,7 +531,7 @@ def test_stack_start_honors_scoped_and_unique_flat(tmp_path, monkeypatch):
     assert svc.save_config_bundle("ostack2", values={"uniq": "U-FLAT"}).ok   # stack -> flat legacy
     assert _cfg_has_flat(svc, "uniq")                                    # stack save stays flat
     seen = _capture_start(svc, monkeypatch)
-    svc.start("ostack2", apply=True)                                     # whole-stack start
+    assert svc.start("ostack2", apply=True).ok                                     # whole-stack start
     assert seen["tgt"]["rp"] == "RP-T" and seen["dep"]["rp"] == "RP-D"   # scoped honored per component
     assert seen["tgt"]["uniq"] == "U-FLAT"                               # unique flat legacy honored
 
@@ -560,7 +560,7 @@ def test_unique_flat_legacy_is_backward_compatible(tmp_path, monkeypatch):
     svc = _scope2_svc(tmp_path)
     _seed_flat(svc, "ostack2", {"uniq": "LEGACY-U"})            # uniq declared only by tgt -> unique
     seen = _capture_start(svc, monkeypatch)
-    svc.start("tgt", apply=True)
+    assert svc.start("tgt", apply=True).ok
     assert seen["tgt"]["uniq"] == "LEGACY-U"                     # unique flat legacy still applied
 
 
@@ -648,7 +648,7 @@ def test_unique_name_stack_stays_bare_no_regression(tmp_path):                  
 
 def test_config_view_identity_and_values_per_component(tmp_path):
     svc = _id_collide_svc(tmp_path)
-    svc.save_config_bundle("ids", values={"tgt.call": "XX0XXA-2", "dep.call": "XX0XXA-1"})
+    assert svc.save_config_bundle("ids", values={"tgt.call": "XX0XXA-2", "dep.call": "XX0XXA-1"}).ok
     cv = svc.config_view("ids")
     tgt = next(c for c in cv["components"] if c["id"] == "tgt")
     dep = next(c for c in cv["components"] if c["id"] == "dep")

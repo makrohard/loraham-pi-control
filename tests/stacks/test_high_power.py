@@ -215,14 +215,14 @@ def test_argv_carries_the_bare_flag_only_when_on(tmp_path):
 def test_live_set_twenty_needs_running_permission_and_saved_switch(tmp_path):
     svc, _ = _svc(tmp_path, status=_status("SX127x", "1"))
     assert not svc.daemon_set("433", "POWER", "20").ok            # saved off
-    svc.set_high_power("433", "on")
+    assert svc.set_high_power("433", "on").ok
     assert svc.daemon_set("433", "POWER", "20").ok                # running on + saved on
     assert not svc.daemon_set("433", "POWER", "18").ok
 
 
 def test_live_set_twenty_refused_while_restart_is_pending(tmp_path):
     svc, _ = _svc(tmp_path, status=_status("SX127x", "0"))
-    svc.set_high_power("433", "on")
+    assert svc.set_high_power("433", "on").ok
     r = svc.daemon_set("433", "POWER", "20")
     assert not r.ok and "restart" in r.summary
 
@@ -327,7 +327,7 @@ def test_high_power_state_keys_on_the_running_daemon(tmp_path, setup, family, hp
                                                      needle):
     svc, _ = _svc(tmp_path, setup, status=_status(family, hp))
     if saved:
-        svc.set_high_power("433", "on")
+        assert svc.set_high_power("433", "on").ok
     st = svc.high_power_state("433")
     assert st["warn"] is warn
     assert st["family"] == family.lower()
@@ -336,7 +336,7 @@ def test_high_power_state_keys_on_the_running_daemon(tmp_path, setup, family, hp
 
 def test_high_power_state_old_daemon_and_unreachable(tmp_path):
     svc, _ = _svc(tmp_path, status=_OLD_STATUS)
-    svc.set_high_power("433", "on")
+    assert svc.set_high_power("433", "on").ok
     st = svc.high_power_state("433")
     assert st["live"] is None and st["family"] == "" and not st["warn"]
     assert "older daemon" in st["mismatch"]

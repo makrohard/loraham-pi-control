@@ -46,7 +46,7 @@ def test_install_still_drops_the_memoized_snapshot(tmp_path):
     svc = _svc_with_kiss(tmp_path, "dev")
     before = svc.build_snapshot()
     assert svc.build_snapshot() is before                          # memoized
-    svc.install("kiss", apply=False, source="pinned")
+    assert svc.install("kiss", apply=False, source="pinned").ok
     assert svc.build_snapshot() is not before                      # recomputed after the install
 
 

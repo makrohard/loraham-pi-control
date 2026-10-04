@@ -356,7 +356,7 @@ def test_busy_update_names_the_holder_and_the_retry_command(tmp_path, monkeypatc
 
     monkeypatch.setattr(ControllerService, "_SELF_LOCK_WAIT_S", 0.2)    # fast contention
     holder = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    holder.bootstrap(apply=True)
+    assert holder.bootstrap(apply=True).ok
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     held, release = threading.Event(), threading.Event()
 

@@ -303,7 +303,7 @@ def test_install_skip_rejoins_shared_membership(tmp_path):
     svc = _shared_svc(tmp_path)
     assert svc.uninstall("loraham-kiss-serial", apply=True).ok
     assert _members(tmp_path) == ("loraham-kiss-tnc",)
-    svc.install("kiss", apply=True)
+    assert svc.install("kiss", apply=True).ok
     assert set(_members(tmp_path)) == {"loraham-kiss-tnc", "loraham-kiss-serial"}  # re-joined
     r2 = svc.uninstall("loraham-kiss-serial", apply=True)
     assert r2.ok and dest.exists()                               # kept for kiss-tnc again
@@ -316,7 +316,7 @@ def test_recordless_leaf_keeps_manifest_fallback(tmp_path):
     dest = tmp_path / "src" / "loraham-kiss-tnc"
     dest.mkdir(parents=True)
     svc = _svc(tmp_path)
-    svc.uninstall("loraham-kiss-serial", apply=True)
+    assert svc.uninstall("loraham-kiss-serial", apply=True).ok
     assert dest.exists()                                         # kept (manifest fallback)
     r2 = svc.uninstall("loraham-kiss-tnc", apply=True)
     assert dest.exists()                                         # manifest fallback: kept

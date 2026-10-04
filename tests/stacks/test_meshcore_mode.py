@@ -125,7 +125,7 @@ def test_a_stale_repeater_mode_without_a_name_still_refuses_the_start(tmp_path):
 
 def test_companion_clients_are_refused_and_not_seeded_without_a_companion(tmp_path):
     svc = _svc(tmp_path)
-    svc.save_config(mm.STACK_ID, {"autostart_meshcore-webui": "on"})
+    assert svc.save_config(mm.STACK_ID, {"autostart_meshcore-webui": "on"}).ok
     svc._invalidate_config()
     assert "meshcore-webui" in [c.id for _s, c in svc._run_order(mm.STACK_ID)]
     assert svc._meshcore_mode_refusal("meshcore-webui") is None
@@ -373,7 +373,7 @@ def test_the_cli_is_never_an_auto_start_choice(tmp_path):
     listed = svc.config_view(mm.STACK_ID)["optional"]
     assert {o["id"] for o in listed} == {"meshcore-webui", "meshcore-cli"}
     assert {o["id"] for o in listed if o["startable"]} == {"meshcore-webui"}   # ... no tick
-    svc.save_config(mm.STACK_ID, {"autostart_meshcore-cli": "on", "autostart_meshcore-webui": "on"})
+    assert svc.save_config(mm.STACK_ID, {"autostart_meshcore-cli": "on", "autostart_meshcore-webui": "on"}).ok
     svc._invalidate_config()
     order = [c.id for _s, c in svc._run_order(mm.STACK_ID)]
     assert "meshcore-webui" in order and "meshcore-cli" not in order
@@ -432,6 +432,6 @@ def test_an_interactive_service_keeps_its_settings_tick(tmp_path):
     assert settings["nomadnet"]["startable"] is True           # Settings tick
     nomadnet = svc.stack("reticulum").component("nomadnet")
     assert svc.optional_role(nomadnet) == "tickable"          # planned, printed as MANUAL_REQUIRED
-    svc.save_config("reticulum", {"autostart_nomadnet": "on"})
+    assert svc.save_config("reticulum", {"autostart_nomadnet": "on"}).ok
     svc._invalidate_config()
     assert "nomadnet" in [c.id for _s, c in svc._run_order("reticulum")]   # planned (MANUAL_REQUIRED)

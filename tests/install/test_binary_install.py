@@ -821,7 +821,7 @@ def test_superseded_receipt_is_retired_on_a_switch(tmp_path, monkeypatch, binary
 def test_source_dry_run_never_retires(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch)
     rec = binary_receipt(svc)
-    svc.install("daemon", apply=False, source="pinned")
+    assert svc.install("daemon", apply=False, source="pinned").ok
     assert (tmp_path / rec.proof_paths[0]).exists()
     assert svc.on_binary_channel("daemon") is True
 

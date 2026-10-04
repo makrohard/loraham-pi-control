@@ -79,7 +79,7 @@ def test_mutating_ops_drop_the_memo(tmp_path):
     # invalidation also covers refusal paths, so this holds regardless of the op's outcome.
     svc = _svc(tmp_path)
     a = svc.build_snapshot()
-    svc.stop("kiss", apply=False)                    # traverses the decorated public entry
+    assert svc.stop("kiss", apply=False).ok                    # traverses the decorated public entry
     assert svc.build_snapshot() is not a
 
 

@@ -229,7 +229,7 @@ def test_the_saved_config_reaches_the_launch_and_post_start(tmp_path, monkeypatc
     # Start runs exactly the SAVED configuration (there are no per-launch values): the
     # value saved in Settings is what the launch and the post-start push carry.
     svc = _kiss_svc(tmp_path)
-    svc.save_config("kiss", {"tx_freq": "434.500"})
+    assert svc.save_config("kiss", {"tx_freq": "434.500"}).ok
     monkeypatch.setattr(ControllerService, "_lifecycle",
                         lambda svc: _fake_life_factory(real_spawn, svc))
     seen = {}
@@ -238,7 +238,7 @@ def test_the_saved_config_reaches_the_launch_and_post_start(tmp_path, monkeypatc
         return (None, "")
     monkeypatch.setattr(ControllerService, "_run_post_start", cap)
     set_call(svc)
-    svc.start("kiss", apply=True)
+    assert svc.start("kiss", apply=True).ok
     assert seen["cfg"]["tx_freq"] == "434.500"
 
 

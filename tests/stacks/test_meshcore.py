@@ -252,12 +252,12 @@ def test_adopt_never_mints(tmp_path):
 @pytest.mark.safety("meshcore-identity")
 def test_read_only_operations_create_no_key(tmp_path):
     svc = _svc(tmp_path)
-    svc.status("meshcore")
+    assert svc.status("meshcore").ok
     svc.start("meshcore", apply=False)
     svc.source_check("meshcore")
-    svc.update("meshcore", apply=False)
-    svc.uninstall("meshcore", apply=False)
-    svc.clean("meshcore", apply=False)
+    assert svc.update("meshcore", apply=False).ok
+    assert svc.uninstall("meshcore", apply=False).ok
+    assert svc.clean("meshcore", apply=False).ok
     assert not mi.secret_path(svc._paths).exists()
 
 
@@ -279,7 +279,7 @@ def test_clean_purge_removes_the_identity_so_a_reinstall_is_a_new_node(tmp_path)
 def test_uninstall_adopts_the_key_before_removing_the_source(tmp_path):
     svc = _svc(tmp_path)
     _generated_with_key(tmp_path, KEY)
-    svc.uninstall("meshcore", apply=True)
+    assert svc.uninstall("meshcore", apply=True).ok
     assert mi.secret_path(svc._paths).read_text().strip() == KEY
 
 
@@ -376,7 +376,7 @@ def test_use_gps_off_omits_coordinates_and_clears_a_stale_pair(tmp_path):
     assert svc.set_gps(source="fixed", fixed_lat=LAT, fixed_lon=LON).ok
     svc.write_config_files("meshcore", position={"lat": LAT, "lon": LON})
     assert _coords(_generated(tmp_path)) != []
-    svc.save_stack_config("meshcore", {"use_gps": "off"})
+    assert svc.save_stack_config("meshcore", {"use_gps": "off"}).ok
     pos, note = svc.meshcore_position("meshcore")
     assert (pos, note) == ({}, "")
     svc.write_config_files("meshcore", position=pos)
@@ -388,7 +388,7 @@ def test_saved_and_override_coordinates_are_ignored(tmp_path):
     # Controller-owned: only the resolved global plan may put a position on the air.
     svc = _svc(tmp_path)
     assert svc.set_gps(source="off").ok
-    svc.save_stack_config("meshcore", {"file_lat": "99.9", "file_lon": "88.8"})
+    assert svc.save_stack_config("meshcore", {"file_lat": "99.9", "file_lon": "88.8"}).ok
     pos, _ = svc.meshcore_position("meshcore")
     svc.write_config_files("meshcore", position=pos,
                            overrides={"lat": "12.3", "lon": "45.6"})
@@ -446,7 +446,7 @@ def test_use_gps_off_runs_no_bridge_and_writes_no_device(tmp_path, fake_gpsd):
     srv = fake_gpsd(json_lines=[_tpv()])
     svc = _svc(tmp_path)
     assert svc.set_gps(source="gpsd", host="127.0.0.1", port=srv.port).ok
-    svc.save_stack_config("meshcore", {"use_gps": "off"})
+    assert svc.save_stack_config("meshcore", {"use_gps": "off"}).ok
     order = [c.id for _s, c in (svc._run_order("meshcore") or ())]
     assert "meshcore-gps" not in order
     svc.write_config_files("meshcore", position={})

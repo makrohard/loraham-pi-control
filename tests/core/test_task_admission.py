@@ -126,7 +126,7 @@ def test_guard_present_of_any_kind_blocks(tmp_path):
         sub = Path(tmp_path) / f"r{id(maker)}"
         sub.mkdir()
         svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=sub))
-        svc.bootstrap(apply=True)
+        assert svc.bootstrap(apply=True).ok
         maker(sub / updater_units.UNINSTALL_GUARD)
         assert svc.uninstall_guard_blocks() is True
 

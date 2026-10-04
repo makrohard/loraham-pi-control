@@ -90,7 +90,7 @@ def test_running_required_host_test_is_deferred_in_auto_install_but_runs_explici
 
         # EXPLICIT (no auto_install_ctx) -> the test actually runs.
         ran.clear()
-        svc.test("meshcom", tx=False, apply=True)
+        assert svc.test("meshcom", tx=False, apply=True).ok
         assert "meshcom-qemu" in ran
     finally:
         object.__setattr__(comp, "test_requires_running", False)
@@ -1139,7 +1139,7 @@ def test_tx_allowed_when_only_independent_stack_fails(tmp_path, monkeypatch):
 @pytest.mark.needs_session
 def test_tx_happy_path_still_runs(tmp_path, monkeypatch):
     svc, lifecycle = _tx_run_env(tmp_path, monkeypatch)
-    svc.auto_install(apply=True, tests=True, tx=True, emit=lambda s: None)
+    assert svc.auto_install(apply=True, tests=True, tx=True, emit=lambda s: None).ok
     st = svc.auto_install_status()
     assert lifecycle == [("start", "daemon"), ("stop", "daemon")]
     assert st["tx_phase"]["status"] == "success"
@@ -1317,7 +1317,7 @@ def test_dev_selector_frozen_against_remote_advance(tmp_path, monkeypatch):
                             lambda self2, c2, s2: ((sha_b, "moved"), ""))
         return PlanAction("adopt", "", f"adopt {comp.id}", status="done", detail="ok")
     monkeypatch.setattr(Installer, "adopt_source", adopt)
-    svc.auto_install(apply=True, tests=False, source="dev", emit=lambda s: None)
+    assert svc.auto_install(apply=True, tests=False, source="dev", emit=lambda s: None).ok
     assert seen, "no adoptions ran"
     assert all(exp[0] == sha_a for _, exp in seen)               # ALL groups frozen @ A
     assert all(n == 1 for n in fakes.values())                   # ONE resolution per path
@@ -1371,7 +1371,7 @@ def test_frozen_resolution_failure_refuses_before_mutation(tmp_path, monkeypatch
     ])
     svc = ControllerService(manifest_path=mpath, system=FakeSystem().system,
                             paths=Paths(runtime_root=tmp_path / "rt"))
-    svc.bootstrap(apply=True)                                    # FakeSystem: ls-remote fails
+    assert svc.bootstrap(apply=True).ok                                    # FakeSystem: ls-remote fails
     r = svc.auto_install(apply=True, tests=False, source="dev", emit=lambda s: None)
     assert not r.ok and "resolution" in " ".join([r.summary] + r.details)
     assert svc.auto_install_status() is None                     # refused BEFORE the marker
@@ -1616,7 +1616,7 @@ def test_pinned_auto_install_freezes_artifact_commit(tmp_path, monkeypatch):
                         ActionResult(True, "b"))
     svc = _svc(tmp_path)
     _mark_chat_artifact(svc)
-    svc.auto_install(apply=True, tests=False, source="pinned", emit=lambda s: None)
+    assert svc.auto_install(apply=True, tests=False, source="pinned", emit=lambda s: None).ok
     art = [(p, exp) for p, is_art, exp in seen if is_art]
     assert art, "no artifact adoptions ran"
     assert all(exp is not None and exp[0] == art_sha for _, exp in art)
@@ -1660,7 +1660,7 @@ def test_artifact_remote_advance_after_plan_is_ignored(tmp_path, monkeypatch):
                         ActionResult(True, "b"))
     svc = _svc(tmp_path)
     _mark_chat_artifact(svc)
-    svc.auto_install(apply=True, tests=False, source="pinned", emit=lambda s: None)
+    assert svc.auto_install(apply=True, tests=False, source="pinned", emit=lambda s: None).ok
     assert seen and all(sha == sha_a for _, sha in seen)         # ALL frozen @ A
 
 
@@ -1831,7 +1831,7 @@ def test_auto_install_cooperative_cancel_writes_aborted(tmp_path, monkeypatch):
     # first between-stack poll and records a clean, retryable `aborted` terminal marker.
     import lhpc.core.service_auto_install as sai
     svc = _svc(tmp_path)
-    svc.bootstrap(apply=True)
+    assert svc.bootstrap(apply=True).ok
     monkeypatch.setattr(type(svc), "_frozen_ref",
                         lambda self, comp, source: (("f" * 40, "frozen: stub"), ""))
     monkeypatch.setattr(sai._auto_install_abort, "_v", True)   # as the SIGTERM handler would (auto-reverts)
@@ -1926,7 +1926,7 @@ def test_ack_escaped_needs_explicit_confirm(tmp_path):
 def test_unsafe_marker_blocks_outermost_source_op(tmp_path):
     from lhpc.core.service_base import SourceTxnBlocked
     _unsafe_marker(Paths(runtime_root=tmp_path), "c" * 32, "escaped-or-output-unverified")
-    svc = _svc(tmp_path); svc.bootstrap(apply=True)
+    svc = _svc(tmp_path); assert svc.bootstrap(apply=True).ok
     with pytest.raises(SourceTxnBlocked):
         with svc._source_operation_guard(["src/LoRaHAM_Daemon"], op="build"):
             pass
@@ -1965,7 +1965,7 @@ def test_tx_loop_cancels_between_bands(tmp_path, monkeypatch):
 def test_marker_carries_per_stack_selection(tmp_path, monkeypatch):
     _happy_ops(monkeypatch)
     svc = _svc(tmp_path)
-    svc.auto_install(apply=True, source="stable", tests=False, emit=lambda s: None)
+    assert svc.auto_install(apply=True, source="stable", tests=False, emit=lambda s: None).ok
     st = svc.auto_install_status()
     for row in st["stacks"]:
         assert row["selected"]["version"] == "stable" and row["selected"]["tests"] is False
@@ -2102,7 +2102,7 @@ def test_independent_stack_is_attempted_when_another_fails(tmp_path, monkeypatch
     fake = FakeSystem()
     svc = ControllerService(manifest_path=mpath, system=fake.system,
                             paths=Paths(runtime_root=tmp_path / "rt"))
-    svc.bootstrap(apply=True)                       # auto-install requires a bootstrapped root
+    assert svc.bootstrap(apply=True).ok                       # auto-install requires a bootstrapped root
     _stub_frozen(monkeypatch)
     # alpha's adoption fails; beta's succeeds. Neither depends on the other.
     from lhpc.core.install import Installer, PlanAction
@@ -2303,7 +2303,7 @@ def test_gui_skip_verdict_is_frozen_at_planning_time(tmp_path, monkeypatch):
                         lambda self, st: (_ for _ in ()).throw(
                             AssertionError("re-probed during execution")))
     monkeypatch.setattr(type(svc), "_auto_install_scope", lambda self: scope)
-    svc.auto_install(apply=True, tests=False, emit=lambda s: None)
+    assert svc.auto_install(apply=True, tests=False, emit=lambda s: None).ok
     rows = {x["id"]: x for x in svc.auto_install_status()["stacks"]}
     assert rows["voice"]["status"] == "success"            # headless install via the CLI variant
     # ...and the frozen plan's component skip stood without any execution-time re-probe

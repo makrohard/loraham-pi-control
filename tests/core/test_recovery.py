@@ -61,8 +61,8 @@ def test_update_overview_lists_source(tmp_path):
 
 def test_uninstall_removes_source_but_keeps_config(tmp_path):
     svc, rt = _svc(tmp_path)
-    svc.install("s", apply=True)
+    assert svc.install("s", apply=True).ok
     assert (rt / "src" / "comp").exists()
-    svc.uninstall("s", apply=True)
+    assert svc.uninstall("s", apply=True).ok
     assert not (rt / "src" / "comp").exists()
     assert (rt / "config" / "local.toml").exists()   # config preserved

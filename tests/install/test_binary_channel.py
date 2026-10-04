@@ -883,7 +883,7 @@ def test_clean_force_retires_binary(tmp_path, monkeypatch, binary_receipt):
     binary_receipt(svc, "meshcom")
     proof = tmp_path / svc.binary_spec("meshcom").proof_paths[0]
     assert proof.exists()
-    svc.clean("meshcom", apply=True, purge=True)
+    assert svc.clean("meshcom", apply=True, purge=True).ok
     assert not proof.exists()
     assert brx.receipt_state(svc._paths, "meshcom")[0] == "absent"
 

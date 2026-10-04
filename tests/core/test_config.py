@@ -177,7 +177,7 @@ def test_remaining_stacks_expose_real_cli_options(tmp_path):
     assert {"env"} <= names("meshcom", "meshcom-qemu")
 
     # a saved value flows into the effective run command
-    svc.save_config("meshcom", {"port": "7001", "backend": "fake"})
+    assert svc.save_config("meshcom", {"port": "7001", "backend": "fake"}).ok
     c = svc.stack("meshcom").component("meshcom-bridge")
     vals = svc.stack_config("meshcom")
     # emit_param now returns argv TOKENS (option and value are separate entries).
@@ -411,7 +411,7 @@ def _svc(tmp_path):
 def test_daemon_override_survives_save_config(tmp_path):
     from lhpc.core.config import load_stack_config
     svc = _svc(tmp_path)
-    svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"})
+    assert svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"}).ok
     assert svc.save_config("meshcom", {}).ok                          # normal save (no run change)
     assert load_stack_config(svc._paths, "meshcom")["dp_433_CADIDLE"] == "40"
 
@@ -419,7 +419,7 @@ def test_daemon_override_survives_save_config(tmp_path):
 def test_daemon_override_survives_save_config_bundle(tmp_path):
     from lhpc.core.config import load_stack_config
     svc = _svc(tmp_path)
-    svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"})
+    assert svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"}).ok
     assert svc.save_config_bundle("meshcom", values={}, remotes={}).ok
     assert load_stack_config(svc._paths, "meshcom")["dp_433_CADIDLE"] == "40"
 
@@ -452,11 +452,11 @@ def test_normal_and_autostart_survive_daemon_save_and_reset(tmp_path):
     p = _stack_config_path(svc._paths, "meshcom", "")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('autostart_meshcom-gps-relay = "on"\nfile_x = "y"\ndp_868_CADIDLE = "77"\n')
-    svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"})
+    assert svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"}).ok
     st = load_stack_config(svc._paths, "meshcom")
     assert st["autostart_meshcom-gps-relay"] == "on" and st["file_x"] == "y"
     assert st["dp_868_CADIDLE"] == "77" and st["dp_433_CADIDLE"] == "40"   # other band survives
-    svc.reset_daemon_params("meshcom", "433")
+    assert svc.reset_daemon_params("meshcom", "433").ok
     st = load_stack_config(svc._paths, "meshcom")
     assert st["dp_868_CADIDLE"] == "77" and "dp_433_CADIDLE" not in st     # only 433 cleared
     assert st["autostart_meshcom-gps-relay"] == "on"                      # normal untouched
@@ -1527,7 +1527,7 @@ def test_competing_save_blocks_until_start_completes_then_succeeds(tmp_path, mon
 def test_restart_not_stopped_then_failed_by_concurrent_invalid_save(tmp_path, monkeypatch):
     from lhpc.core.services import ActionResult
     svc = _guard_svc(tmp_path)
-    svc.save_config_bundle("graywolf", values={"call": "XX0XXA-5"})  # valid persisted call
+    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-5"}).ok  # valid persisted call
     refused = _observe_refused_writes(monkeypatch)
     stops = []
     monkeypatch.setattr(svc, "stop",
@@ -1572,7 +1572,7 @@ def test_saved_remote_is_visible_immediately(tmp_path):
 
 def test_reset_config_reloads_fresh(tmp_path):
     svc = _svc_config_typed(tmp_path)
-    svc.save_config_bundle("daemon", values={"radio": "433"})
+    assert svc.save_config_bundle("daemon", values={"radio": "433"}).ok
     _ = svc.config()
     assert svc.reset_config("daemon").ok
     assert svc.config() is not None                        # fresh read, no crash
@@ -1619,14 +1619,14 @@ def test_config_get_non_table_section_returns_default():
 
 def test_changed_param_produces_apply_hint(tmp_path):
     svc = _svc_config_typed(tmp_path)
-    svc.save_config_bundle("daemon", values={"radio": "433"})           # baseline
+    assert svc.save_config_bundle("daemon", values={"radio": "433"}).ok           # baseline
     r = svc.save_config_bundle("daemon", values={"radio": "868"})       # CHANGE (restart)
     assert r.ok and any("Start-time change" in d or "Restart" in d for d in r.details)
 
 
 def test_unchanged_param_produces_no_apply_hint(tmp_path):
     svc = _svc_config_typed(tmp_path)
-    svc.save_config_bundle("daemon", values={"radio": "433"})
+    assert svc.save_config_bundle("daemon", values={"radio": "433"}).ok
     r = svc.save_config_bundle("daemon", values={"radio": "433"})       # no change
     assert r.ok and not any("Start-time change" in d or "Restart" in d for d in r.details)
 
@@ -1647,7 +1647,7 @@ def test_reset_config_refuses_symlinked_leaf(tmp_path):
 
 def test_reset_config_normal_then_idempotent(tmp_path):
     svc = _svc_config_typed(tmp_path)
-    svc.save_config_bundle("daemon", values={"radio": "868"})   # non-default (default is 433)
+    assert svc.save_config_bundle("daemon", values={"radio": "868"}).ok   # non-default (default is 433)
     r = svc.reset_config("daemon")
     assert r.ok and "reset to defaults" in r.summary
     r2 = svc.reset_config("daemon")

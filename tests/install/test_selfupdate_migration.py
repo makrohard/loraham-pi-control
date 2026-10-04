@@ -209,7 +209,7 @@ def test_both_forms_at_default_both_migrate(tmp_path, monkeypatch):
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
     gitrepo.upstream_commit(up)
     cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD", "__r__c__ropt": "OLD"})  # both == default
-    svc.self_update_apply()
+    assert svc.self_update_apply().ok
     stored = cfgmod.load_stack_config(svc._paths, "s")
     assert "ropt" not in stored and "__r__c__ropt" not in stored    # every valid form migrated
 
@@ -668,11 +668,11 @@ def test_finalization_clear_failure_self_heals(tmp_path, monkeypatch):
             return
         return real_clear(paths)
     monkeypatch.setattr(selfupdate, "clear_migration_journal", clr)
-    svc.self_update_apply()
+    assert svc.self_update_apply().ok
     assert "ropt" not in cfgmod.load_stack_config(svc._paths, "s")       # migration applied
     assert selfupdate.read_migration_journal(svc._paths)[0] is not None   # stale journal lingered
     svc2 = ControllerService(manifest_path=man, system=RealSystem(), paths=Paths(runtime_root=rt))
-    svc2.self_update_apply()
+    assert svc2.self_update_apply().ok
     assert selfupdate.read_migration_journal(svc2._paths)[0] is None      # self-healed / cleared
     assert svc2.stack_config("s")["ropt"] == "NEW"
 
@@ -1107,7 +1107,7 @@ def test_fresh_service_retry_of_removed_param_is_non_destructive(tmp_path, monke
     svc, man, rt = _svc(tmp_path, work)
     cfgmod.save_stack_config(svc._paths, "s", {"ropt": "OLD"})
     _seed_journal(svc, from_head=a, to_head=b, pending=[_cand(a, expected="OLD")])
-    svc.self_update_apply()                                             # deferred (ropt removed)
+    assert svc.self_update_apply().ok                                             # deferred (ropt removed)
     # a FRESH post-update service retries the pending candidate: still unprovable -> non-destructive
     svc2 = ControllerService(manifest_path=man, system=RealSystem(), paths=Paths(runtime_root=rt))
     res2 = svc2.self_update_apply()

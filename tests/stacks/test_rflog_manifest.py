@@ -92,7 +92,7 @@ def test_meshtastic_trace_file_is_derived_from_the_switch(tmp_path):
     svc.write_config_files("meshtastic")
     assert active_trace() == []                       # omitted, never blank
     # A stored or ephemeral value of the hidden param is ignored: the switch is the only input.
-    svc.save_stack_config("meshtastic", {"file_trace_file": "/elsewhere/x.log"})
+    assert svc.save_stack_config("meshtastic", {"file_trace_file": "/elsewhere/x.log"}).ok
     svc.write_config_files("meshtastic", overrides={"trace_file": "/elsewhere/y.log"})
     assert active_trace() == []
 

@@ -299,7 +299,7 @@ def test_apply_live_other_band_not_blocked(tmp_path):
 def test_lowercase_enum_canonicalized(tmp_path):
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)
-    svc.save_daemon_params("daemon", "433", {"MODE": "fsk", "TXMODE": "direct"})
+    assert svc.save_daemon_params("daemon", "433", {"MODE": "fsk", "TXMODE": "direct"}).ok
     st = cfgmod.load_stack_config(svc._paths, "daemon")
     assert st["dp_433_MODE"] == "FSK"                     # fsk -> FSK (valid, canonical)
     assert st["dp_433_TXMODE"] == "DIRECT"                # direct -> DIRECT (differs from default)
@@ -308,17 +308,17 @@ def test_lowercase_enum_canonicalized(tmp_path):
 def test_leading_zero_int_canonicalized_and_default_equiv_clears(tmp_path):
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)
-    svc.save_daemon_params("daemon", "433", {"CADIDLE": "040"})       # 40 != default 250 -> store 40
+    assert svc.save_daemon_params("daemon", "433", {"CADIDLE": "040"}).ok       # 40 != default 250 -> store 40
     assert cfgmod.load_stack_config(svc._paths, "daemon")["dp_433_CADIDLE"] == "40"
-    svc.save_daemon_params("daemon", "433", {"CADIDLE": "0250"})      # == default 250 -> clear
+    assert svc.save_daemon_params("daemon", "433", {"CADIDLE": "0250"}).ok      # == default 250 -> clear
     assert "dp_433_CADIDLE" not in cfgmod.load_stack_config(svc._paths, "daemon")
 
 
 def test_omitted_key_leaves_override_unchanged(tmp_path):
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)
-    svc.save_daemon_params("daemon", "433", {"CADIDLE": "40"})
-    svc.save_daemon_params("daemon", "433", {"MODE": "FSK"})          # CADIDLE omitted -> unchanged
+    assert svc.save_daemon_params("daemon", "433", {"CADIDLE": "40"}).ok
+    assert svc.save_daemon_params("daemon", "433", {"MODE": "FSK"}).ok          # CADIDLE omitted -> unchanged
     st = cfgmod.load_stack_config(svc._paths, "daemon")
     assert st["dp_433_CADIDLE"] == "40" and st["dp_433_MODE"] == "FSK"
 
@@ -326,8 +326,8 @@ def test_omitted_key_leaves_override_unchanged(tmp_path):
 def test_explicit_blank_clears_only_that_key(tmp_path):
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)
-    svc.save_daemon_params("daemon", "433", {"CADIDLE": "40", "MODE": "FSK"})
-    svc.save_daemon_params("daemon", "433", {"CADIDLE": ""})          # blank clears CADIDLE only
+    assert svc.save_daemon_params("daemon", "433", {"CADIDLE": "40", "MODE": "FSK"}).ok
+    assert svc.save_daemon_params("daemon", "433", {"CADIDLE": ""}).ok          # blank clears CADIDLE only
     st = cfgmod.load_stack_config(svc._paths, "daemon")
     assert "dp_433_CADIDLE" not in st and st["dp_433_MODE"] == "FSK"
 
@@ -335,7 +335,7 @@ def test_explicit_blank_clears_only_that_key(tmp_path):
 def test_reset_clears_all_profile_keys(tmp_path):
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)
-    svc.save_daemon_params("daemon", "433", {"CADIDLE": "40", "MODE": "FSK", "CADWAIT": "1200"})
+    assert svc.save_daemon_params("daemon", "433", {"CADIDLE": "40", "MODE": "FSK", "CADWAIT": "1200"}).ok
     assert svc.reset_daemon_params("daemon", "433").ok
     assert not [k for k in cfgmod.load_stack_config(svc._paths, "daemon") if k.startswith("dp_433_")]
 
@@ -419,12 +419,12 @@ def test_a_start_applies_the_saved_daemon_params_and_nothing_else(tmp_path):
     # per-band values. `_daemon_param_applies` has no per-launch input any more.
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)
-    svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"})
+    assert svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"}).ok
     assert svc._daemon_param_applies("meshcom", "433")["CADIDLE"] == "40"
     assert cfgmod.load_stack_config(svc._paths, "meshcom")["dp_433_CADIDLE"] == "40"
     # per-band stores never cross
-    svc.save_daemon_params("daemon", "433", {"CADIDLE": "111"})
-    svc.save_daemon_params("daemon", "868", {"CADIDLE": "222"})
+    assert svc.save_daemon_params("daemon", "433", {"CADIDLE": "111"}).ok
+    assert svc.save_daemon_params("daemon", "868", {"CADIDLE": "222"}).ok
     assert svc._daemon_param_applies("daemon", "433")["CADIDLE"] == "111"
     assert svc._daemon_param_applies("daemon", "868")["CADIDLE"] == "222"
 
@@ -437,7 +437,7 @@ def test_crafted_start_post_fields_are_ignored_not_applied(tmp_path, web):
     c = _daemon_web(web, tmp_path)
     from lhpc.core.services import ControllerService as _CS
     svc = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    svc.save_daemon_params("daemon", "433", {"CADIDLE": "40"})
+    assert svc.save_daemon_params("daemon", "433", {"CADIDLE": "40"}).ok
     r = _start_post(c, {"dp_433_SF": "99", "dp_433_CADIDLE": "250", "dp_bad": "x"})
     assert b"invalid daemon parameter" not in r.data and b"malformed daemon field" not in r.data
     assert cfgmod.load_stack_config(svc._paths, "daemon")["dp_433_CADIDLE"] == "40"

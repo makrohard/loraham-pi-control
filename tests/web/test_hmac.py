@@ -605,7 +605,7 @@ def test_hmac_enable_and_renew_start_are_not_gated(tmp_path, monkeypatch):
     monkeypatch.setattr(type(svc), "_track_or_terminate",
                         lambda self, *a, **k: (jobs.TrackOutcome.TRACKED, ""))
     assert svc.hmac_apply_start("meshcom", "enable").ok        # confirm defaults False, still starts
-    svc.hmac_apply_recover("meshcom", svc.hmac_apply_status()["run_id"])
+    assert svc.hmac_apply_recover("meshcom", svc.hmac_apply_status()["run_id"]).ok
     assert svc.hmac_apply_start("meshcom", "renew").ok
 
 
@@ -666,7 +666,7 @@ def _resolved_pw(svc):
 
 def test_generic_config_cannot_clear_or_replace_password_file(tmp_path):
     svc = _svc(tmp_path)
-    svc.hmac_set_secret("meshcom", "enable")                   # managed path -> override set
+    assert svc.hmac_set_secret("meshcom", "enable").ok                   # managed path -> override set
     before = _resolved_pw(svc)
     assert before                                             # non-blank (enabled)
     # blank submission would restore open auth -> refused, nothing changed
@@ -682,7 +682,7 @@ def test_config_reset_keeps_the_hmac_managed_password_file(tmp_path):
     # "Reset to defaults" owns the generic Config keys only; clearing password_file would restore open
     # auth without the disable-confirm gate while the secret stays on disk.
     svc = _svc(tmp_path)
-    svc.hmac_set_secret("meshcom", "enable")
+    assert svc.hmac_set_secret("meshcom", "enable").ok
     before = _resolved_pw(svc)
     assert svc.reset_config("meshcom").ok
     assert _resolved_pw(svc) == before and svc.hmac_status("meshcom") is True

@@ -136,8 +136,8 @@ def test_hardware_block_refuses_daemon_and_radio_stacks_when_unset(tmp_path):
     svc = _svc(tmp_path)                                            # default: unset
     # identity now gates first at the public entry (callsign-identities): satisfy it so
     # this test keeps exercising the hardware refusal it is about
-    svc.set_operator_identity(callsign="XX0XXA")
-    svc.save_config_bundle("meshcore", values={"file_node_name": "TestNode"})
+    assert svc.set_operator_identity(callsign="XX0XXA").ok
+    assert svc.save_config_bundle("meshcore", values={"file_node_name": "TestNode"}).ok
     for target in ("daemon", "meshcore", "chat"):
         assert "no radio hardware configured" in svc.hardware_block(target)
         for apply in (False, True):

@@ -178,7 +178,7 @@ def test_a_busy_source_operation_names_what_it_is_working_on(tmp_path):
     # leaves the operator guessing what occupies the box.
     import threading
     svc = _svc(tmp_path)
-    svc.bootstrap(apply=True)
+    assert svc.bootstrap(apply=True).ok
     svc._SELF_LOCK_WAIT_S = 0.3
     started, release, results = threading.Event(), threading.Event(), {}
 

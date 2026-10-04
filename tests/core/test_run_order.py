@@ -434,7 +434,7 @@ def test_daemon_named_by_component_id_still_cascades(tmp_path, monkeypatch):
     real = ControllerService.stop_dependents
     monkeypatch.setattr(ControllerService, "stop_dependents",
                         lambda self, t, bands=None: (seen.append(t), real(self, t, bands=bands))[1])
-    svc.stop("loraham-daemon", apply=True)
+    assert svc.stop("loraham-daemon", apply=True).ok
     assert "daemon" in seen and "loraham-daemon" not in seen
 
 
@@ -872,7 +872,7 @@ def test_daemon_cascade_no_nested_daemon_release(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: ["kiss"])
     calls = _spy_stop(monkeypatch)
-    svc.stop("daemon", apply=True)
+    assert svc.stop("daemon", apply=True).ok
     assert ("kiss", "", False) in calls                       # dependent stopped WITHOUT release
     assert len([c for c in calls if c[0] == "daemon"]) == 1   # outer daemon stop, exactly once
 
@@ -881,7 +881,7 @@ def test_daemon_cascade_both_bands_no_inner_release(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: ["kiss", "meshcore"])
     calls = _spy_stop(monkeypatch)
-    svc.stop("daemon", apply=True)
+    assert svc.stop("daemon", apply=True).ok
     assert all(rd is False for (t, b, rd) in calls if t in ("kiss", "meshcore"))  # no inner release
     assert len([c for c in calls if c[0] == "daemon"]) == 1
 
@@ -891,7 +891,7 @@ def test_standalone_client_releases_daemon_once(tmp_path, monkeypatch):
         unix_replies={"/tmp/loraconf868.sock": _RDYP1}).system, paths=Paths(runtime_root=tmp_path))
     svc._set_running_band("voice", "868")
     calls = _spy_stop(monkeypatch)
-    svc.stop("voice", apply=True)
+    assert svc.stop("voice", apply=True).ok
     assert [c for c in calls if c[0] == "daemon"] == [("daemon", "868", True)]   # released once, on 868
 
 
@@ -1277,7 +1277,7 @@ def test_restart_plan_and_apply_preflight_one_band(tmp_path, monkeypatch, set_ca
             seen.append(b)
         return real(self, target, order, b, radio, op, **kw)
     monkeypatch.setattr(ControllerService, "_start_preflight_refusal", spy)
-    svc.restart("kiss", apply=False, band=band)
+    assert svc.restart("kiss", apply=False, band=band).ok
     svc.restart("kiss", apply=True, band=band)
     assert len(seen) == 2 and seen[0] == seen[1] == svc.operation_band("kiss", band)
 

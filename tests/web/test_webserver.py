@@ -34,7 +34,7 @@ def _staged(paths):
 
 def test_apply_repair_required_when_no_master(tmp_path):
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     fake = FakeSystem(commands={
         ("nginx", "-v"): CommandResult(0, "", "nginx/1.24"),
         ("nginx", "-t", "-c", _staged(svc0._paths)): CommandResult(0, "", "successful"),
@@ -49,7 +49,7 @@ def test_apply_repair_required_when_no_master(tmp_path):
 
 def test_apply_reloads_running_master(tmp_path):
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths
     # Simulate a live LHPC-owned master: pidfile -> this (alive) test process.
     from lhpc.core import runtime_fs
@@ -118,7 +118,7 @@ def test_apply_keeps_the_reload_when_no_held_listener_is_proven(tmp_path, case):
     # C07: only a listener the master HOLDS on the wrong side skips the reload; every doubt keeps
     # today's reload (and today's result for it).
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths
     _seed_exposed(svc0)
     held = [Listener(family="ipv4", ip="127.0.0.1", port=8443, inode=1)]
@@ -141,7 +141,7 @@ def test_apply_keeps_the_reload_when_no_held_listener_is_proven(tmp_path, case):
 
 def test_apply_bind_change_restarts_when_reload_leaves_loopback(tmp_path):
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths
     _seed_exposed(svc0)
     _live_master(paths)
@@ -157,7 +157,7 @@ def test_apply_bind_change_restarts_when_reload_leaves_loopback(tmp_path):
 
 def test_apply_bind_change_fails_closed_when_restart_does_not_rebind(tmp_path):
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths
     _seed_exposed(svc0)
     _live_master(paths)
@@ -191,7 +191,7 @@ def test_apply_stack_proxy_public_transition_restarts_automatically(tmp_path):
     # the mismatch on the PROXY listener (console matches fine), restart the unit AUTOMATICALLY (no
     # operator action), re-verify, and only then report success.
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths                                          # console stays loopback-desired
     _seed_meshcom_public(paths)
     _live_master(paths)
@@ -210,13 +210,13 @@ def test_apply_reloads_when_a_new_proxy_port_is_held_by_someone_else(tmp_path):
     # C07's guard: the master runs and :8444 is held on the wrong side, but the last Apply never
     # served meshcom there, so it is not OUR listener flipping: the reload is still attempted.
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths
     _seed_meshcom_public(paths)
     _live_master(paths)
     _seed_applied(paths)                        # the console only; no proxy was ever applied
     fake = _StackRestartFlipsFake(commands=_apply_cmds(paths))
-    ControllerService(system=fake.system, paths=paths).webserver_apply()
+    assert ControllerService(system=fake.system, paths=paths).webserver_apply().ok
     assert _reloaded(fake, paths)
 
 
@@ -225,7 +225,7 @@ def test_apply_web_context_without_hatch_units_falls_back_typed(tmp_path, monkey
     # (old install / tampered): apply must NOT attempt a doomed bus restart NOR write a request
     # nobody consumes — it returns the typed boundary message with both remedies.
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths
     _seed_meshcom_public(paths)
     _live_master(paths)
@@ -294,7 +294,7 @@ def test_apply_web_context_completes_via_restart_watcher(tmp_path, monkeypatch):
     # never touching systemctl.
     from lhpc.core import service_webserver as SW
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths
     _seed_meshcom_public(paths)
     _live_master(paths)
@@ -320,7 +320,7 @@ def test_apply_web_context_timeout_unclaimed_names_the_watcher(tmp_path, monkeyp
     # request is removed and the failure points at the integration remedies, not at nginx.
     from lhpc.core import service_webserver as SW
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths
     _seed_meshcom_public(paths)
     _live_master(paths)
@@ -343,7 +343,7 @@ def test_apply_web_context_timeout_claimed_names_nginx_evidence(tmp_path, monkey
     # integration worked; the failure points at the nginx-side evidence and removes nothing.
     from lhpc.core import service_webserver as SW
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths
     _seed_meshcom_public(paths)
     _live_master(paths)
@@ -398,7 +398,7 @@ def test_apply_stack_proxy_stuck_listener_fails_closed_naming_stack(tmp_path):
     # Even the automatic restart cannot rebind (listener pinned to loopback) -> apply must FAIL,
     # name the stuck stack, and never report the exposure as effective.
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths
     _seed_meshcom_public(paths)
     _live_master(paths)
@@ -414,7 +414,7 @@ def test_apply_stack_proxy_stuck_listener_fails_closed_naming_stack(tmp_path):
 
 def test_apply_no_restart_when_scope_already_matches(tmp_path):
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths                                          # loopback desired (default)
     _live_master(paths)
     fake = FakeSystem(commands=_apply_cmds(paths),
@@ -466,7 +466,7 @@ def test_restart_without_output_names_the_reason_and_the_resulting_state(tmp_pat
 
 def test_apply_refuses_invalid_config(tmp_path):
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     fake = FakeSystem(commands={
         ("nginx", "-v"): CommandResult(0, "", "nginx/1.24"),
         ("nginx", "-t", "-c", _staged(svc0._paths)): CommandResult(1, "", "emerg: bad"),
@@ -479,7 +479,7 @@ def test_apply_refuses_invalid_config(tmp_path):
 
 def test_apply_refuses_when_nginx_not_installed(tmp_path):
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     # FakeSystem with no nginx command mapping -> `nginx -v` returns not_found.
     svc = ControllerService(system=FakeSystem().system, paths=svc0._paths)
     r = svc.webserver_apply()
@@ -490,7 +490,7 @@ def test_apply_refuses_when_nginx_not_installed(tmp_path):
 
 def test_monitor_lists_nginx_as_system_dependency(tmp_path):
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     # before verify -> status unknown; nginx declared as a system dep with its install command
     mon = svc0.webserver_monitor().data
     deps = {d["name"]: d for d in mon["system_deps"]}
@@ -650,8 +650,8 @@ def _staged_webserver_blockers(paths):
 
 def test_reset_unproven_without_master_preserves_pki(tmp_path):
     svc0 = _svc_webserver_blockers(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
-    svc0.webserver_cert_issue("laptop", "pw")
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
+    assert svc0.webserver_cert_issue("laptop", "pw").ok
     svc0.webserver_expose(["192.168.0.0/24"], confirm=True)      # desired: exposed
     fake = FakeSystem(commands={("nginx", "-v"): CR(0, "", ""),
                                 ("nginx", "-t", "-c", _staged_webserver_blockers(svc0._paths)): CR(0, "", "ok")})
@@ -667,7 +667,7 @@ def test_reset_unproven_without_master_preserves_pki(tmp_path):
 
 def test_reset_proven_with_running_master(tmp_path):
     svc0 = _svc_webserver_blockers(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths
     runtime_fs.mkdir(paths, "state", "run")
     runtime_fs.write_marker(paths, paths.under(*webserver.NGINX_PID), str(os.getpid()))
@@ -701,7 +701,7 @@ def test_gui_expose_uses_typed_phrase(tmp_path, web, csrf):
                                          "confirm_phrase": "enable-remote"})
     assert svc.config().webserver.remote_exposed is True
     # a public range needs the elevated phrase
-    svc.webserver_disable_remote()
+    assert svc.webserver_disable_remote().ok
     c.post("/webserver/configure", data={"_csrf": tok, "bind": "0.0.0.0", "cidrs": "0.0.0.0/0",
                                          "confirm_phrase": "enable-remote"})
     assert svc.config().webserver.remote_exposed is False        # normal phrase insufficient
@@ -713,7 +713,7 @@ def test_gui_expose_uses_typed_phrase(tmp_path, web, csrf):
 def test_gui_revoke_requires_typed_label(tmp_path, web, csrf):
     c, svc = _app(web, tmp_path)
     tok = csrf(c)
-    svc.webserver_init(); svc.webserver_cert_issue("laptop", "pw")
+    assert svc.webserver_init().ok; assert svc.webserver_cert_issue("laptop", "pw").ok
     c.post("/webserver/cert", data={"_csrf": tok, "op": "revoke", "label": "laptop",
                                     "confirm_phrase": "wrong"})
     assert all(x["state"] == "active" for x in pki.list_client_certs(svc._paths)
@@ -854,8 +854,8 @@ def test_webserver_modules_and_page_present_from_installed_package(tmp_path, web
 def test_no_key_or_passphrase_leak_in_status_or_evidence(tmp_path):
     import json
     svc = _svc_webserver_blockers(tmp_path)
-    svc.webserver_init(dns_sans=["pi.local"])
-    svc.webserver_cert_issue("laptop", "sup3r-secret-pass")
+    assert svc.webserver_init(dns_sans=["pi.local"]).ok
+    assert svc.webserver_cert_issue("laptop", "sup3r-secret-pass").ok
     blob = json.dumps(svc.webserver_monitor().data)
     assert "BEGIN" not in blob and "PRIVATE KEY" not in blob and "sup3r-secret-pass" not in blob
     svc.webserver_verify()
@@ -1097,7 +1097,7 @@ def _live(tmp_path):
 
 
 def test_apply_invalid_config_leaves_live_intact(tmp_path):
-    svc0 = _svc_webserver_corrections(tmp_path); svc0.webserver_init(dns_sans=["pi.local"])
+    svc0 = _svc_webserver_corrections(tmp_path); assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths
     runtime_fs.mkdir(paths, "config", "nginx")
     runtime_fs.atomic_write(paths, paths.under(*webserver.NGINX_CONF), "SENTINEL-LIVE\n", 0o644)
@@ -1110,7 +1110,7 @@ def test_apply_invalid_config_leaves_live_intact(tmp_path):
 
 
 def test_apply_valid_promotes_staged(tmp_path):
-    svc0 = _svc_webserver_corrections(tmp_path); svc0.webserver_init(dns_sans=["pi.local"])
+    svc0 = _svc_webserver_corrections(tmp_path); assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths
     runtime_fs.mkdir(paths, "state", "run")
     runtime_fs.write_marker(paths, paths.under(*webserver.NGINX_PID), str(os.getpid()))
@@ -1125,7 +1125,7 @@ def test_apply_valid_promotes_staged(tmp_path):
 
 
 def test_verify_does_not_touch_live_config(tmp_path):
-    svc0 = _svc_webserver_corrections(tmp_path); svc0.webserver_init(dns_sans=["pi.local"])
+    svc0 = _svc_webserver_corrections(tmp_path); assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths
     runtime_fs.mkdir(paths, "config", "nginx")
     runtime_fs.atomic_write(paths, paths.under(*webserver.NGINX_CONF), "SENTINEL\n", 0o644)
@@ -1137,7 +1137,7 @@ def test_verify_does_not_touch_live_config(tmp_path):
 
 def test_init_persists_sans_for_trusted_host_and_renew(tmp_path, web):
     svc = _svc_webserver_corrections(tmp_path)
-    svc.webserver_init(dns_sans=["pi.local"], ip_sans=["192.168.0.10"])
+    assert svc.webserver_init(dns_sans=["pi.local"], ip_sans=["192.168.0.10"]).ok
     cfg = svc.config().webserver
     assert cfg.dns_sans == ("pi.local",) and cfg.ip_sans == ("192.168.0.10",)
     # tls-renew uses the saved SANs (no empty-SAN failure)
@@ -1150,7 +1150,7 @@ def test_init_persists_sans_for_trusted_host_and_renew(tmp_path, web):
 
 
 def test_revoke_crl_failure_keeps_cert_active(tmp_path, monkeypatch):
-    svc = _svc_webserver_corrections(tmp_path); svc.webserver_init(); svc.webserver_cert_issue("laptop", "pw")
+    svc = _svc_webserver_corrections(tmp_path); assert svc.webserver_init().ok; assert svc.webserver_cert_issue("laptop", "pw").ok
     monkeypatch.setattr(pki, "_build_and_write_crl",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
     r = svc.webserver_cert_revoke("laptop")
@@ -1161,7 +1161,7 @@ def test_revoke_crl_failure_keeps_cert_active(tmp_path, monkeypatch):
 
 def test_revoke_index_save_failure_is_pending_not_active(tmp_path, monkeypatch):
     # Correction B: CRL written but inventory commit fails -> 'revocation-pending', not active.
-    svc = _svc_webserver_corrections(tmp_path); svc.webserver_init(); svc.webserver_cert_issue("laptop", "pw")
+    svc = _svc_webserver_corrections(tmp_path); assert svc.webserver_init().ok; assert svc.webserver_cert_issue("laptop", "pw").ok
     monkeypatch.setattr(pki, "_save_index",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
     r = svc.webserver_cert_revoke("laptop")
@@ -1187,7 +1187,7 @@ def _revoke_serial_in_crl_only(paths):
 def test_revoke_pending_marker_and_index_both_fail_still_pending(tmp_path, monkeypatch):
     # Worst case: CRL written, but BOTH the inventory commit and the pending-marker write fail.
     # The CRL is authoritative -> the cert is still surfaced as revocation-pending, never active.
-    svc = _svc_webserver_corrections(tmp_path); svc.webserver_init(); svc.webserver_cert_issue("laptop", "pw")
+    svc = _svc_webserver_corrections(tmp_path); assert svc.webserver_init().ok; assert svc.webserver_cert_issue("laptop", "pw").ok
     monkeypatch.setattr(pki, "_save_index",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
     monkeypatch.setattr(pki, "_add_pending",
@@ -1202,7 +1202,7 @@ def test_revoke_pending_marker_and_index_both_fail_still_pending(tmp_path, monke
 
 
 def test_crl_is_truth_source_when_pending_marker_missing_or_malformed(tmp_path):
-    svc = _svc_webserver_corrections(tmp_path); svc.webserver_init(); svc.webserver_cert_issue("laptop", "pw")
+    svc = _svc_webserver_corrections(tmp_path); assert svc.webserver_init().ok; assert svc.webserver_cert_issue("laptop", "pw").ok
     p = svc._paths
     serial = _revoke_serial_in_crl_only(p)         # CRL revokes serial; inventory still 'active'
     marker = tmp_path / "config/tls/client-ca/revocation-pending.json"
@@ -1220,8 +1220,8 @@ def test_crl_is_truth_source_when_pending_marker_missing_or_malformed(tmp_path):
 
 def test_active_cert_not_in_crl_stays_active(tmp_path):
     # A cert whose serial is NOT in the CRL must remain ordinary active (no false positives).
-    svc = _svc_webserver_corrections(tmp_path); svc.webserver_init()
-    svc.webserver_cert_issue("keep", "pw"); svc.webserver_cert_issue("gone", "pw")
+    svc = _svc_webserver_corrections(tmp_path); assert svc.webserver_init().ok
+    assert svc.webserver_cert_issue("keep", "pw").ok; assert svc.webserver_cert_issue("gone", "pw").ok
     p = svc._paths
     assert svc.webserver_cert_revoke("gone").ok     # clean revoke -> committed
     by_label = {c["label"]: c["state"] for c in pki.list_client_certs(p)}
@@ -1230,7 +1230,7 @@ def test_active_cert_not_in_crl_stays_active(tmp_path):
 
 
 def test_committed_revoked_stays_revoked(tmp_path):
-    svc = _svc_webserver_corrections(tmp_path); svc.webserver_init(); svc.webserver_cert_issue("laptop", "pw")
+    svc = _svc_webserver_corrections(tmp_path); assert svc.webserver_init().ok; assert svc.webserver_cert_issue("laptop", "pw").ok
     p = svc._paths
     assert svc.webserver_cert_revoke("laptop").ok
     states = {c["state"] for c in pki.list_client_certs(p) if c["label"] == "laptop"}
@@ -1275,7 +1275,7 @@ def test_start_service_prereqs(monkeypatch, tmp_path):
 
 def test_start_service_enables_and_starts(monkeypatch, tmp_path):
     monkeypatch.delenv("INVOCATION_ID", raising=False)
-    svc0 = _svc_webserver_corrections(tmp_path); svc0.webserver_init(dns_sans=["pi.local"])
+    svc0 = _svc_webserver_corrections(tmp_path); assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths
     fake = FakeSystem(commands={
         ("nginx", "-v"): CR(0, "", ""),
@@ -1628,7 +1628,7 @@ def test_expose_requires_confirmation(tmp_path, web, csrf):
 def test_p12_download_is_loopback_only(tmp_path, web, csrf):
     c, svc = _app_svc(web, tmp_path)
     tok = csrf(c)
-    svc.webserver_init()
+    assert svc.webserver_init().ok
     c.post("/webserver/cert", data={"_csrf": tok, "op": "issue", "label": "laptop"})
     # remote peer (nginx-set header) -> refused
     assert c.get("/webserver/cert/laptop/download",
@@ -2047,7 +2047,7 @@ def test_expose_is_a_no_op_when_the_ip_is_already_a_san(tmp_path, monkeypatch):
     monkeypatch.setattr(_ws, "local_ip", lambda: "192.168.178.66")
     calls = _capture_certs(monkeypatch)
     svc = _svc_webserver_service(tmp_path)
-    svc.webserver_configure(ip_sans=["192.168.178.66"])
+    assert svc.webserver_configure(ip_sans=["192.168.178.66"]).ok
     res = svc.webserver_expose(["192.168.0.0/24"], confirm=True)
     assert res.ok and not calls                       # no pointless cert churn
     assert any("already an IP SAN" in d for d in res.details)
@@ -2090,7 +2090,7 @@ def test_expose_gating(tmp_path):
     assert svc.webserver_expose(["0.0.0.0/0"], confirm=True, confirm_public=True).ok
     assert svc.config().webserver.remote_exposed is True
     # no-auth remote also needs elevated confirmation
-    svc.webserver_disable_remote()
+    assert svc.webserver_disable_remote().ok
     assert not svc.webserver_expose(["192.168.0.0/24"], access_mode="no-auth", confirm=True).ok
     assert svc.webserver_expose(["192.168.0.0/24"], access_mode="no-auth",
                                 confirm=True, confirm_public=True).ok
@@ -2098,9 +2098,9 @@ def test_expose_gating(tmp_path):
 
 def test_disable_remote_and_reset_preserve_pki(tmp_path):
     svc = _svc_webserver_service(tmp_path)
-    svc.webserver_init(dns_sans=["pi.local"])
-    svc.webserver_cert_issue("laptop", "pw")
-    svc.webserver_expose(["192.168.0.0/24"], confirm=True, replace_certificate=True)
+    assert svc.webserver_init(dns_sans=["pi.local"]).ok
+    assert svc.webserver_cert_issue("laptop", "pw").ok
+    assert svc.webserver_expose(["192.168.0.0/24"], confirm=True, replace_certificate=True).ok
     assert svc.config().webserver.remote_exposed is True
     r = svc.webserver_reset_defaults()
     # Without a running nginx master (FakeSystem has no nginx) cessation cannot be proven, so
@@ -2115,7 +2115,7 @@ def test_disable_remote_and_reset_preserve_pki(tmp_path):
 
 def test_cert_lifecycle(tmp_path):
     svc = _svc_webserver_service(tmp_path)
-    svc.webserver_init()
+    assert svc.webserver_init().ok
     issued = svc.webserver_cert_issue("tablet", "pw")
     assert issued.ok and issued.data["label"] == "tablet"
     assert any(c["label"] == "tablet" for c in svc.webserver_cert_list().data["certs"])
@@ -2126,7 +2126,7 @@ def test_cert_lifecycle(tmp_path):
 
 def test_verify_uses_runner(tmp_path):
     svc0 = _svc_webserver_service(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     conf_path = str(svc0._paths.under(*webserver.NGINX_CONF_STAGED))
     fake = FakeSystem(commands={
         ("nginx", "-v"): CommandResult(0, "", "nginx/1.24"),
@@ -2191,7 +2191,7 @@ def test_verify_fails_when_the_console_is_not_serving(tmp_path):
     the thing nginx proxies to is alive. With the console unit failed and every page
     answering 502 it still reported "webserver verified": a live-probing command
     handing out a false green."""
-    svc0 = _svc_webserver_corrections(tmp_path); svc0.webserver_init(dns_sans=["pi.local"])
+    svc0 = _svc_webserver_corrections(tmp_path); assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     paths = svc0._paths
     staged = _staged_webserver_corrections(paths)
     unit = ("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service")
@@ -2280,7 +2280,7 @@ def test_apply_records_the_activated_policy_and_verify_never_advances_it(tmp_pat
     # the desired config is VALID, which says nothing about nginx having loaded it.
     cfgmod.save_webserver_config(svc._paths, access_mode="auth-everywhere")
     svc._invalidate_config()
-    svc.webserver_verify()
+    assert svc.webserver_verify().ok
     assert webserver.read_applied(svc._paths)["console"]["access_mode"] == "no-auth"
 
 
@@ -2361,7 +2361,7 @@ def test_a_live_loopback_console_is_still_local(tmp_path):
     # reached off-box whatever any policy says.
     from lhpc.core import config as cfgmod
     svc0 = _svc(tmp_path)
-    svc0.webserver_init(dns_sans=["pi.local"])
+    assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     fake = FakeSystem(listeners=[Listener("ipv4", "127.0.0.1", 8443, 1)])
     svc = ControllerService(system=fake.system, paths=svc0._paths)
     assert svc.webserver_monitor().data["live_scope"] == "loopback"
@@ -2516,10 +2516,10 @@ def test_replacing_the_client_ca_resets_every_old_client_state(tmp_path, monkeyp
     """AUDIT: the confirmed re-init replaced the client CA but kept the old inventory (old labels
     'active', old revoked serials in the new CA's CRL) and the pending marker (a later rebuild
     carried old serials back). Both CA-replacing paths now share one reset."""
-    svc = _svc_webserver_corrections(tmp_path); svc.webserver_init()
+    svc = _svc_webserver_corrections(tmp_path); assert svc.webserver_init().ok
     p = svc._paths
     for label in ("laptop", "phone", "tablet"):
-        svc.webserver_cert_issue(label, "pw")
+        assert svc.webserver_cert_issue(label, "pw").ok
     pki.revoke_client_cert(p, "phone")
     save = pki._save_index
     monkeypatch.setattr(pki, "_save_index", lambda *a, **k: (_ for _ in ()).throw(OSError("full")))
@@ -2602,7 +2602,7 @@ def test_a_marker_that_cannot_be_written_is_a_typed_result_never_a_traceback(tmp
     # cannot be written. The caller must get a normal failed result that claims NO automatic retry.
     from lhpc.core import runtime_fs as _rfs
     from lhpc.core import webserver as _ws
-    svc = _svc_webserver_corrections(tmp_path); svc.webserver_init(); svc.webserver_cert_issue("laptop", "pw")
+    svc = _svc_webserver_corrections(tmp_path); assert svc.webserver_init().ok; assert svc.webserver_cert_issue("laptop", "pw").ok
     monkeypatch.setattr(_ws, "reload", lambda system, paths: ("failed", "failed"))
     real = _rfs.atomic_write
 
@@ -2620,7 +2620,7 @@ def test_a_marker_that_cannot_be_written_is_a_typed_result_never_a_traceback(tmp
 
 def test_a_reissue_whose_reload_failed_still_hands_out_its_bundle(tmp_path, monkeypatch):
     from lhpc.core import webserver as _ws
-    svc = _svc_webserver_corrections(tmp_path); svc.webserver_init(); svc.webserver_cert_issue("laptop", "pw")
+    svc = _svc_webserver_corrections(tmp_path); assert svc.webserver_init().ok; assert svc.webserver_cert_issue("laptop", "pw").ok
     monkeypatch.setattr(_ws, "reload", lambda system, paths: ("failed", "failed"))
     r = svc.webserver_cert_reissue("laptop", "pw-two")
     assert not r.ok and r.data["bundle_created"] is True and "reload FAILED" in r.summary

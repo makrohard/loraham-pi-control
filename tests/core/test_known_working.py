@@ -505,7 +505,7 @@ def test_update_plan_is_frozen_against_concurrent_confirmation(tmp_path, monkeyp
         return PlanAction("adopt", "", f"adopt {comp.id}", status="done", detail="(fake)")
     monkeypatch.setattr(Installer, "adopt_source", fake_adopt)
     svc = _svc(tmp_path)
-    svc.update("daemon", apply=True, source="pinned")
+    assert svc.update("daemon", apply=True, source="pinned").ok
     assert len(seen) == 2
     commits = {cid: exp[0] for cid, exp in seen}
     assert commits["loraham-daemon"] == "1" * 40          # ORIGINAL plan, not 8…
@@ -556,7 +556,7 @@ def test_update_adopts_shared_group_once(tmp_path, monkeypatch):
         return PlanAction("adopt", "", f"adopt {comp.id}", status="done", detail="(fake)")
     monkeypatch.setattr(Installer, "adopt_source", fake_adopt)
     svc = _svc(tmp_path)
-    svc.update("kiss", apply=True, source="dev")
+    assert svc.update("kiss", apply=True, source="dev").ok
     assert calls.count("src/loraham-kiss-tnc") == 1
 
 

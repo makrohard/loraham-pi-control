@@ -183,7 +183,7 @@ def test_stack_sweep_covers_non_runnable_library_components(tmp_path):
     rl = _install(tmp_path, "src/RadioLib")
     cmds = {**_ls_remote(DAEMON_REMOTE, DAEMON_BRANCH, A), **_git_src(ds, A),
             **_ls_remote(RADIOLIB_REMOTE, "master", B), **_git_src(rl, A)}
-    _svc(tmp_path, cmds).source_check("daemon")
+    assert _svc(tmp_path, cmds).source_check("daemon").ok
     comps = su.view(Paths(runtime_root=tmp_path))["components"]
     assert comps["loraham-daemon"]["status"] == su.UP_TO_DATE
     assert comps["radiolib"]["status"] == su.BEHIND

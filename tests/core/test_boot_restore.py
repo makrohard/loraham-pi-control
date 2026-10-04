@@ -1794,7 +1794,7 @@ def test_parts_all_start_before_the_one_settle_write(tmp_path, monkeypatch):
         return real_write(paths, journal)
     monkeypatch.setattr(type(svc), "_boot_prune_evidence", prune)
     monkeypatch.setattr(br, "write_journal", write)
-    svc.boot_restore_run()
+    assert svc.boot_restore_run().ok
     order = [e["target"] for e in events]
     assert order[:4] == ["meshcore", "meshcore-webui", "PRUNE", "SETTLE-WRITE"]
     assert events[3]["parts"][0]["component"] == "meshcore-webui"

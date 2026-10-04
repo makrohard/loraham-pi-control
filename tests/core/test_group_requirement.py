@@ -127,9 +127,9 @@ def test_start_gate_blocked_reason_advises_restart_when_pending(tmp_path):
     # The START gate itself (not only the display sites) must advise a RESTART for a configured-but-not-
     # effective grant, instead of re-showing the already-run usermod.
     svc = _svc(tmp_path, effective=set(), configured={"spi", "gpio"})
-    svc.bootstrap(apply=True)
+    assert svc.bootstrap(apply=True).ok
     # identity now gates first: seed the required local node names (callsign-identities)
-    svc.save_config_bundle("meshtastic", values={"node_name": "Field Node", "node_short": "FN1"})
+    assert svc.save_config_bundle("meshtastic", values={"node_name": "Field Node", "node_short": "FN1"}).ok
     # meshtastic is source-less (apt binary + lhpc-shipped config base) -> always "installed"
     r = svc.start("meshtastic", apply=True)
     blob = "\n".join(r.details) + " " + r.summary

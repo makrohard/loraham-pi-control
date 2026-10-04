@@ -164,7 +164,7 @@ def test_run_service_overwrite_mode_from_request(tmp_path, monkeypatch, op_svc):
     monkeypatch.setattr(ControllerService, "self_update_apply",
                         lambda self, *, force=False: (seen.__setitem__("f", force),
                                                       ActionResult(True, "ok", data={"already": True}))[1])
-    svc.self_update_run_service()
+    assert svc.self_update_run_service().ok
     assert seen["f"] is True
 
 
