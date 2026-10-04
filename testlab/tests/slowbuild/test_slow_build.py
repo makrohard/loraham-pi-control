@@ -30,6 +30,7 @@ import subprocess
 import sys
 import time
 import tomllib
+import uuid
 from pathlib import Path
 
 import pytest
@@ -181,13 +182,23 @@ def _adoption(env: dict, component: str) -> None:
 
 
 def _build(env: dict, component: str) -> None:
+    """The build's wall clock and its longest quiet gap (L1), from the logs THIS invocation
+    wrote. A log already there is overwritten with a stale mark naming this invocation before
+    the build; `run_job` truncates every log it writes, so a log still carrying the mark after
+    the build is an older one and never evidence."""
+    name = re.compile(rf"build-{re.escape(component)}(-\d+)?\.log")
+    mark = f"[slow-build] stale: written before invocation {uuid.uuid4()}\n"
+    logs_dir = _logs(env)
+    for p in (logs_dir.iterdir() if logs_dir.is_dir() else ()):
+        if name.fullmatch(p.name):
+            p.write_text(mark)
     t0 = time.monotonic()
     r = run_lhpc(env, "build", component, "--yes", timeout=HARNESS_S)
     seconds = time.monotonic() - t0
     _judged(f"building {component}", r)
-    name = re.compile(rf"build-{re.escape(component)}(-\d+)?\.log")
-    logs = [p for p in _logs(env).iterdir() if name.fullmatch(p.name)]
-    assert logs, f"{component}: no build log — not evidence"
+    logs = [p for p in (logs_dir.iterdir() if logs_dir.is_dir() else ())
+            if name.fullmatch(p.name) and p.read_text(errors="replace") != mark]
+    assert logs, f"{component}: no build log written by this invocation — not evidence"
     text = "\n".join(p.read_text(errors="replace") for p in logs)
     _reject(f"{component}: the build log", text)
     quiet = _QUIET.findall(text)

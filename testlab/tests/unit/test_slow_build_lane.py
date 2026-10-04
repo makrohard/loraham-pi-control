@@ -105,12 +105,28 @@ def test_the_lane_records_the_quiet_line_a_build_step_log_ends_with(step, tmp_pa
             log_fh.write("compiling\n")
             return CommandResult(returncode=0, stdout="", stderr="", longest_quiet_s=41.5)
 
-    run_job(_Streaming(), name="build-meshcore-cli", argv=["make"], cwd=None,
-            logs_dir=tmp_path / "logs", paths=Paths(runtime_root=tmp_path), stall_s=600.0)
+    def build(*a, **k):                         # the build this invocation runs writes it
+        run_job(_Streaming(), name="build-meshcore-cli", argv=["make"], cwd=None,
+                logs_dir=tmp_path / "logs", paths=Paths(runtime_root=tmp_path), stall_s=600.0)
+        return _done()
+    monkeypatch.setattr(lane, "run_lhpc", build)
     seen = []
     monkeypatch.setattr(lane, "_record", lambda *a, **k: seen.append((a, k)))
     lane._build({"LHPC_RUNTIME_ROOT": str(tmp_path)}, "meshcore-cli")
     assert seen and seen[0][1] == {"quiet_s": 41.5}
+
+
+def test_a_build_log_this_invocation_did_not_write_is_not_evidence(step, tmp_path, monkeypatch):
+    """A zero-exit build that wrote no fresh log (nothing to build, or a broken log path) must not
+    record an older build's quiet time from a log left in logs/."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "build-meshcore-cli.log").write_text("compiling\n[progress] longest quiet 7.0 s\n")
+    seen = []
+    monkeypatch.setattr(lane, "_record", lambda *a, **k: seen.append((a, k)))
+    with pytest.raises(AssertionError, match="no build log written by this invocation"):
+        lane._build({"LHPC_RUNTIME_ROOT": str(tmp_path)}, "meshcore-cli")
+    assert seen == []
 
 
 # ---- the budget case's waivers (bootstrap; L4 on the introducing release) -------------------
