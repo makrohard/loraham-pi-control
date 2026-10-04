@@ -15,6 +15,9 @@
   the dashboard shows a task whose last run failed until a later run succeeds; before, nothing was kept
   and only a log that could not be cut was logged. A failed task is now logged as one line per task (it
   replaces the old one line per log that could not be cut).
+- The docs now state the measured SPI result for the daemon on 433 MHz with Meshtastic on 868 MHz: in a
+  one-hour test with 16 simultaneous transmissions, one of them failed an SPI write, crashed meshtasticd
+  and lost a daemon frame. The pair stays allowed; avoid transmitting on both at the same moment.
 
 - The systemd units LHPC installs are now pinned in the test suite: no release can change one by
   accident, because a changed unit would make boot restore refuse on every box that already has the old one.

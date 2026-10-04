@@ -166,8 +166,29 @@ The radio claims:
   `<runtime>/state/loraham/spi0.lock` flock, so they may share the bus on opposite bands.
 - `spi.bus.0.unlocked` — meshtasticd drives `/dev/spidev0.0` without that lock and claims this key
   **exclusive**; so does the Reticulum node. `meshtastic + reticulum` is refused; `daemon +
-  meshtastic` on opposite bands is allowed and shares `/dev/spidev0.0` without mutual exclusion —
-  an accepted hazard, not a safe design.
+  meshtastic` on opposite bands is allowed (the policy below).
+
+**SPI policy.** On the Pi 5 with the shipped trees there is one SPI node, `/dev/spidev0.0`
+(overlay `spi0-0cs`; the chip selects are driven from userspace as GPIOs): the daemon's 433 radio
+is CS 8, its 868 radio CS 7, and meshtasticd's 868 radio CS 7. The daemon and the Reticulum
+interface take `spi0.lock`; meshtasticd does not. LHPC refuses meshtastic + reticulum together and
+allows daemon + meshtastic on opposite bands.
+
+Measured (dual-TX soak, 2026-10-03, Pi 5: 15 min of non-overlapping transmissions as control, then
+1 h with 16 forced overlaps; record `S0-partB-summary.md` of the S0 SPI records): no frame was
+corrupted on either band — 433: 8/8 control and 15/16 soak frames received intact; 868: 10/10 and
+39/40. At one of the 16 overlaps (22:56:59Z) meshtasticd logged RadioLib `err=-16`
+(`RADIOLIB_ERR_SPI_WRITE_FAILED`) and aborted on its `setStandby` assertion, and the daemon's frame
+of that second was never transmitted (`STATS TXERR 1`, no daemon log line). So on the shared bus
+the pair daemon 433 + meshtasticd 868 is **not safe under concurrent transmission**: one real
+overlap gave an SPI write failure, a meshtasticd crash and a lost daemon frame.
+
+Decided by the maintainer (2026-10-04): **allow, but warn.** The pair stays admitted, with this
+warning where it is admitted: "daemon 433 and meshtastic 868 share one SPI bus; transmitting at the
+same moment can crash meshtasticd (measured) — avoid simultaneous transmission". LHPC does not show
+it yet; adding it where the start is admitted is a pending change. Serialising the
+two through kernel-owned chip selects (overlay `spi0-2cs`, each radio its own spidev node) is
+planned for 0.13.0; it is not present.
 
 Each stack document lists its claims; a band, a TCP port and a serial device are claimed the same
 way. A claim marked `advisory = true` (the single MeshCore companion-client slot,
@@ -327,7 +348,7 @@ the runtime root unless absolute.
 | self-update | the update request is claimed once; an in-flight record is cleared only when its helper is proven gone ([deployment](deployment.md#recovery)) | `lhpc/core/service_selfupdate.py:920` `self_update_trigger`, `:1047` `_self_update_run_service_locked`, `:1298` `self_update_recover_request` | admission | `state/selfupdate.request`, `state/selfupdate.inflight`; `lhpc self-update --recover-request` | `tests/install/test_selfupdate_service.py::test_trigger_writes_exclusive_request_no_systemctl`, `::test_recover_inflight_requires_dead_helper`, `::test_run_service_refuses_preexisting_inflight_preserving_both` |
 | self-update | config migration is recorded before the checkout moves; a damaged journal blocks with no change ([deployment](deployment.md#self-update)) | `lhpc/core/selfupdate.py:600` `classify_journal` | the self-update lock | `state/selfupdate-migrate.json` and its git anchor | `tests/install/test_selfupdate_migration.py::test_interrupted_migration_recovered_by_fresh_service`, `::test_journal_persist_failure_refuses_before_mutation`, `::test_malformed_journal_blocks_without_mutation_or_deletion` |
 | radio / band ownership | one stack per band; a start is refused with the holder named ([Radios](#radios-bands-and-resource-claims)) | `lhpc/core/resources.py:49` `interpret_conflicts` | `claim.<resource>` keys in the lifecycle bundle | none (observed state) | `tests/core/test_run_order.py::test_same_frequency_blocks_second_stack`; `tests/web/test_daemon_params_web.py::test_app_apply_refused_on_a_band_another_stack_uses`; `tests/stacks/test_hardware.py::test_probe_refused_while_a_direct_radio_stack_owns_the_band` |
-| radio / band ownership | the SPI bus is shared only through the daemon's `spi0.lock` ([Radios](#radios-bands-and-resource-claims)) | the daemon, not LHPC; LHPC models it as the `spi.bus.0` / `spi.bus.0.unlocked` claims | the daemon's flock `state/loraham/spi0.lock` | — | `tests/core/test_resources_conflicts.py::test_cooperative_peers_do_not_conflict`, `::test_meshtastic_conflicts_with_daemon_on_868_radio_not_spi`; gap: the lock itself (daemon side) |
+| radio / band ownership | the SPI bus is shared through the daemon's `spi0.lock` by the daemon and the Reticulum node; meshtasticd takes no part and is admitted beside the daemon only on the opposite band ([Radios](#radios-bands-and-resource-claims)) | the daemon, not LHPC; LHPC models it as the `spi.bus.0` / `spi.bus.0.unlocked` claims | the daemon's flock `state/loraham/spi0.lock` | — | `tests/core/test_resources_conflicts.py::test_cooperative_peers_do_not_conflict`, `::test_meshtastic_conflicts_with_daemon_on_868_radio_not_spi`; gap: the lock itself (daemon side) |
 | radio / band ownership | bounded CONF replies, TX-mode read-back, `/tmp` socket peer check ([Daemon sockets](#safety-model)) | `lhpc/core/daemon_control.py:179` `parse_conf_reply`, `:519` `apply_set`; `lhpc/core/probes/backends.py:767` `_authenticate_tmp_peer` | none | — | `tests/stacks/test_daemon_bounds.py::test_oversized_response_rejected`, `::test_too_many_tokens_rejected`; `tests/stacks/test_daemon_control.py::test_a_set_without_an_ok_is_never_reported_sent`; `tests/core/test_post_start.py::test_tx_mode_fails_when_readback_mismatches`; `tests/web/test_socket_peercred.py::test_foreign_uid_tmp_peer_is_refused` |
 | radio / band ownership | truthful outcomes: a start fails unless every required component is verified ready; a stop counts only when the process ceased and its endpoints are gone; an update with a failed part reports failure; the CLI exit status follows the result ([Truthful outcomes](#safety-model)) | `lhpc/core/service_lifecycle_ops.py:889` `_start_impl_inner`, `:2435` `_stop_impl`; `lhpc/core/outcomes.py:71` `applied_ok`; `lhpc/core/service_maintenance.py:1756` `update`; `lhpc/adapters/cli/main.py:228` `_render` | the start, stop and update locks | owned records and markers cleared only on verified stop | `tests/core/test_outcomes.py::test_applied_ok_requires_all_verified`; `tests/core/test_post_start.py::test_start_required_post_start_failure_is_unverified`, `::test_dependent_not_started_when_daemon_unready`; `tests/core/test_stop_propagation.py::test_stop_unverified_keeps_markers`; `tests/core/test_known_working.py::test_candidate_clear_failure_is_truthful_incomplete`; `tests/cli/test_cli.py::test_status_unknown_stack_exits_one`; gap: a daemon start's check of each band's CONF socket separately (only a daemon that is not ready at all is driven); the web flash agreeing with the CLI exit status (no test drives one result through both) |
 | radio / band ownership | no start without a resolvable identity ([Identity](#identity-and-callsigns)) | `lhpc/core/service_params.py:2960` `enforce_identity` | the start locks (re-judged under them) | — | `tests/core/test_identity.py::test_start_refuses_identity_before_boot_hook_and_feed_clear`, `::test_licensed_with_neither_value_is_refused`; `tests/web/test_web.py::test_identity_refusal_sends_the_operator_to_the_settings_row` |
