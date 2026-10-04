@@ -457,7 +457,8 @@ def rollup_states(snapshot: Snapshot) -> dict[str, str]:
         # interactive main never runs under lhpc, so it cannot trigger this.
         main = next((c for c in ss.stack.components if c.id == ss.stack.main), None)
         main_st = ss.components.get(ss.stack.main)
-        if (worst is RunState.RUNNING and main is not None and not main.interactive
+        if (worst in (RunState.RUNNING, RunState.DEGRADED)               # a helper is still live
+                and main is not None and not main.interactive
                 and main_st is not None and main_st.run_state in (RunState.STOPPED, RunState.NOT_INSTALLED)):
             worst = RunState.FAILED
         out[ss.stack.id] = worst.value

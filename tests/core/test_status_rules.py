@@ -461,6 +461,16 @@ def _stack_snapshot(svc, stack_id, states):
     return snap
 
 
+def test_a_dead_main_beside_a_degraded_helper_is_failed(tmp_path):
+    """"degraded" means the main runs with an endpoint not ready. A stopped main whose helper is
+    only degraded is still a stack that lost its main process: failed, as beside a running one."""
+    from lhpc.core.services import ControllerService
+    from lhpc.core.status import rollup_states
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    rows = {"meshcore-gps": RunState.DEGRADED, "meshcore-node": RunState.STOPPED}
+    assert rollup_states(_stack_snapshot(svc, "meshcore", rows))["meshcore"] == "failed"
+
+
 def test_rollup_is_failed_when_the_main_is_down_but_sidecars_run(tmp_path):
     # e293 (0.10.0 candidate): after `kill -9` of meshcore-node the stack still read "(running)" —
     # its gps bridge and web UI were up. Finding 78 (meshtasticd's assertion abort): "degraded"
