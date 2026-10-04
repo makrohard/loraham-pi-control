@@ -66,8 +66,14 @@ Back up `config/`, `profiles/` and the app data under `state/` first
   unit): if the console is running it stops `lhpc-web`, applies, syncs the venv, then starts the
   console again.
 - **Dirty checkout** blocks apply unless you choose `--overwrite`.
-- **Venv sync** runs after a real advance on both paths; if it fails the update is reported
-  failed and the result names the `pip install -e` command to run by hand.
+- **Venv sync and unit refresh** run after a real advance on both paths. If one fails, the
+  checkout has moved and the update is reported failed in a named state, shown by `lhpc status`
+  on the controller row: *venv-unsynced* (resolve with `lhpc self-update --apply`, which then runs
+  the sync and the refresh it skipped) or *units-stale* (resolve with `lhpc self-update
+  --repair-integration`, which clears only that state) — see [what happens when an update
+  fails](operations.md#what-happens-when-an-update-fails). If that record cannot be written, the
+  update fails *recovery-required* with the cause and the command to run instead; a record that cannot be read shows as
+  *recovery-required*.
 
 ### Recovery
 

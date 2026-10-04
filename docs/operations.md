@@ -83,14 +83,64 @@ What to run in each situation and what you will see. The channels themselves:
 | situation | run | what you see |
 |---|---|---|
 | first install | `lhpc install <stack> --yes`, then on the source channel `lhpc build <stack> --yes`; or `lhpc auto-install --yes` for every stack (install and build) | the plan, then the install on the stack's default channel: the published binary where there is one for this platform, else `pinned` |
-| keep current at the pins this release was tested with | `lhpc self-update --apply`, then `lhpc update <stack> --yes`, then on the source channel `lhpc build <stack> --yes` | each source moves to `pinned` — your newest known-working composition for the stack, else the release's manifest pin. A binary-installed stack updates to the published binary |
-| follow development | `lhpc update <stack> --source dev --yes`, then `lhpc build <stack> --yes` | the branch tip; when adopting it fails, the update retries once at the known-working (else manifest-pin) commit and says *FELL BACK* |
-| follow stable | `lhpc update <stack> --source stable --yes`, then `lhpc build <stack> --yes` | the newest plain version tag, else the default branch's head |
+| keep current at the pins this release was tested with | `lhpc self-update --apply`, then `lhpc update <stack> --yes` | each source moves to `pinned` — your newest known-working composition for the stack, else the release's manifest pin — and the stack is built again when the new sources need it (in the console, as a build job with its live log). A binary-installed stack updates to the published binary; one already installed and intact is not downloaded again |
+| follow development | `lhpc update <stack> --source dev --yes` | the branch tip; when adopting it fails, the update retries once at the known-working (else manifest-pin) commit and says *FELL BACK* |
+| follow stable | `lhpc update <stack> --source stable --yes` | the newest plain version tag, else the default branch's head |
 | binary where published | once: `lhpc install <stack> --source binary --yes`; afterwards `lhpc update <stack> --yes` stays on the binary | a published binary built from other commits than this lhpc's pins is refused; `Next:` offers `lhpc self-update --apply` and the source install |
 | a fetched release (graywolf) | `lhpc update graywolf --upstream --yes` for the newest release; `lhpc build graywolf --yes` for the pinned one | the release fetched and checked against its checksums, then a restart if the stack was running |
-| back to known-working after a failed update | nothing to undo for a source: a failed update keeps the previous source active (unless its line says *prior-dirty*). `lhpc update <stack> --yes` takes a stack on `dev` or `stable` back to its known-working (else manifest-pin) commit; a binary goes back by `lhpc install <stack> --source pinned --yes` | *Update INCOMPLETE* with the failed source's line |
-| an update was refused | the commands under `Next:`, or, where there is none, a *nothing to run here* line naming what has to be fixed on the box. That holds for every refusal the controller's `update`, graywolf-update and `build` functions themselves, and any function in its self-update and binary-channel modules, return outright as a refusal (`tests/repo/test_refusal_remedy.py` reads each one); where the step depends on a cause lhpc cannot tell apart, the line names each cause with its step. Not covered yet: a refusal by task admission (an uninstall or a reboot pending, an update state that cannot be checked; only a stuck self-update names `lhpc self-update --recover-request`); a failure these paths compute from the outcome of work done (a failed build, a graywolf update whose restart failed, a self-update recovery that combines two results, a console self-update whose unit refresh failed); refusals other code hands through these paths, for example the MeshCore plugin-manager refusal (it says to reboot) and a self-update's firewall preflight; `lhpc update graywolf` without `--upstream` (it answers *Unknown stack*; use the fetched-release row above); `lhpc install` on the source channel. An *Update INCOMPLETE* result is not a refusal: its per-source lines say what failed | the cause on the first line. A running stack: `lhpc stack stop <stack> --yes`. A left-over `src/.<name>.prev`: move it out of `src/`, then retry. A busy lock: wait for the operation it names, then run the same command again |
-| the first start after a source update | `lhpc build <stack> --yes` | until then `lhpc stack start` refuses a component *not built* or whose *sources changed since the last build*, naming `lhpc build <stack>` |
+| back to known-working after a failed update | [what happens when an update fails](#what-happens-when-an-update-fails) | *Update INCOMPLETE* with the failed source's line |
+| an update was refused | the commands under `Next:`, or, where there is none, a *nothing to run here* line naming what has to be fixed on the box. That holds for every refusal the controller's `update`, graywolf-update and `build` functions themselves, and any function in its self-update and binary-channel modules, return outright as a refusal (`tests/repo/test_refusal_remedy.py` reads each one); where the step depends on a cause lhpc cannot tell apart, the line names each cause with its step. Not covered yet: a refusal by task admission (an uninstall or a reboot pending, an update state that cannot be checked; only a stuck self-update names `lhpc self-update --recover-request`); a failure these paths compute from the outcome of work done (a failed build, a graywolf update whose restart failed, a self-update recovery that combines two results, a console self-update whose unit refresh failed); refusals other code hands through these paths, for example the MeshCore plugin-manager refusal (it says to reboot) and a self-update's firewall preflight; `lhpc install` on the source channel. An *Update INCOMPLETE* result is not a refusal: its per-source lines say what failed | the cause on the first line. A running stack: `lhpc stack stop <stack> --yes`. A left-over `src/.<name>.prev`: move it out of `src/`, then retry. A busy lock: wait for the operation it names, then run the same command again |
+| the first start after a source update | nothing: the update built the stack. Only if that build failed or could not start (*needs-rebuild*): `lhpc build <stack> --yes` | while a build is due, `lhpc status --versions` marks the component *needs-rebuild* and `lhpc stack start` refuses it as *not built* or *sources changed since the last build*, naming `lhpc build <stack>` |
+
+### What happens when an update fails
+
+An update — `lhpc update <stack>`, `lhpc self-update --apply`, or the same from the console — ends
+in exactly one of three ways, or — only where lhpc cannot prove what it finds is its own, or cannot
+record what it did — *recovery-required* (below the table):
+
+1. **Converged.** The stack is at the version its selector names (`pinned` unless you chose `dev`
+   or `stable`) and built; lhpc itself is at its upstream with its venv synced and its units
+   refreshed. The result says so. A binary update to the artifact already installed and intact
+   downloads nothing — said only after an interrupted binary install has been recovered first.
+2. **Nothing changed, the remedy named.** The previous version is still the active one: a refusal,
+   a failed carry or activation (rolled back), or Ctrl-C, a full disk or an I/O error at any one
+   step — and a power loss while a source update stages its copy (once the copy's identity is
+   recorded) — rolled back or finished by the next lhpc source command (a binary install: by the
+   next binary command, which runs that recovery first under its locks). The result names the
+   cause and the command that resolves it.
+3. **A named state** — only where putting the previous version back is not one operation lhpc
+   has. Each is recorded on disk, shown by `lhpc status` with its word, and resolved by one
+   command:
+
+| state | what happened | recorded in | shown by | resolved by |
+|---|---|---|---|---|
+| *needs-rebuild* | `lhpc update` activated the new sources, and the stack's build failed or could not start (in the console: its build job was refused). The previous build went with the tree the update replaced, so the old version would need a build too | the build marker in the source tree, which no longer matches its sources | `lhpc status --versions` | `lhpc build <stack> --yes` |
+| *prior-in-use* | the new source is active; its archived prior `src/.<name>.prev` is kept because another process can still write into it (an open file, a working directory, a shared writable mapping, or a file the kernel reports open for writing) | the transaction journal under `state/source-txn/` | `lhpc status`, while that check still finds the process (once it has ended: *prior-dirty*) | `lhpc update <component> --yes` once that process has ended (any lhpc source command removes the prior then). If the line names a file that *could not be checked*, it is not your user's (created with `sudo`, say): give it back to your user (`sudo chown`), then the same command |
+| *prior-dirty* | the new source is active; its archived prior is kept because it may hold changes of yours — made while the update ran, or a prior kept in use that nothing uses any more — and lhpc never deletes it | the transaction journal (`prior-dirty-retained`, or `activated`) | `lhpc status` | one command, the `mv` the result and `lhpc status` print, which moves the prior out of `src/` and keeps it: `lhpc status` then shows nothing, and the next lhpc source command clears the journal before anything else |
+| *venv-unsynced* | `lhpc self-update` moved the checkout, and the venv sync failed | `state/selfupdate.incomplete` | `lhpc status` (the controller row) | `lhpc self-update --apply` (it finds the checkout current and runs the sync and the unit refresh it skipped) |
+| *units-stale* | `lhpc self-update` moved the checkout, and the managed units could not be refreshed: boot restore is skipped until they are | `state/selfupdate.incomplete` | `lhpc status` (the controller row) | `lhpc self-update --repair-integration` |
+
+Besides these, lhpc keeps — never deletes — what it cannot prove is its own, and names it:
+something outside lhpc changed a tree or a journal while an update ran, or a disk refused the
+undo itself. The result, and every later operation of that kind, says *recovery-required* and
+what to inspect; `lhpc status` shows an unfinished source transaction as *update-interrupted*. So
+are: a staged copy whose identity was never recorded (a power loss between its creation and its
+record) or that is not the one its record names — kept, the line saying *a staging directory this
+run cannot prove as its own* with its path; a staged copy a power loss caught while your files
+were being copied into it — kept with the old tree and the journal, its path named, and once you
+have removed it the next lhpc source command puts the old tree back; a transaction journal that
+could not record why an archived prior is kept; a self-update state record that cannot be read
+(`lhpc status` shows *recovery-required* on the controller row with the steps by hand; neither
+self-update command clears it); a self-update whose state record cannot be written at all — it
+leaves no state, so it fails *recovery-required* with the cause, where the checkout is, and what
+to run: for a failed venv sync the sync and then `lhpc self-update --repair-integration` (the unit
+refresh it skipped; `--apply` cannot resume it without the record), for stale units
+`lhpc self-update --repair-integration`. These are resolved by hand.
+
+Back to known-working from a broken `dev` or `stable` follow: `lhpc update <stack> --source pinned
+--yes` for a source install — your newest known-working commit, else the manifest pin (`lhpc
+install` keeps an installed source as it is and points there); a binary install goes back by
+`lhpc install <stack> --source pinned --yes`.
 
 ## Fast vs explicit
 
