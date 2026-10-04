@@ -4989,6 +4989,23 @@ def _built_svc(tmp_path, git, make_repo, build_sh="printf built > out.bin\n"):
                              paths=Paths(runtime_root=rt))
 
 
+def test_an_update_rebuilds_an_already_built_stack_on_its_new_version(tmp_path, git, make_repo):
+    """A stack built at v1 and updated to v2 is built again by the update: the artifact is v2's
+    (the rebuild tests below only start from a first adoption). The v1 build is a separate
+    `build`, so only the update's rebuild is under test; the update replaces the checkout, so
+    without that rebuild no artifact is left at all."""
+    svc = _built_svc(tmp_path, git, make_repo, build_sh="cp file.txt out.bin\n")
+    assert svc.update("s", apply=True, source="dev", build=False).ok
+    assert svc.build("s", apply=True).ok
+    out = tmp_path / "rt" / "src" / "comp" / "out.bin"
+    assert out.read_text() == "v1\n" and svc.unbuilt_components("s") == []
+    upstream = tmp_path / "rt" / "local" / "comp"
+    (upstream / "file.txt").write_text("v2\n")
+    git(upstream, "commit", "-qam", "v2")
+    assert svc.update("s", apply=True, source="dev").ok
+    assert out.read_text() == "v2\n" and svc.unbuilt_components("s") == []
+
+
 def test_an_update_builds_the_stack_its_new_sources_left_unbuilt(tmp_path, git, make_repo):
     """An update replaces the checkout, so the stack read *not built* and every start was
     refused until a build. The update now runs that build itself: the stack is startable after
