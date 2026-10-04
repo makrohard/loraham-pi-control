@@ -840,8 +840,10 @@ def _written(parent_fd: int, name: str) -> list[str]:
     """The lease check of `holders`: the first file of the tree some process has open for writing
     or mapped shared and writable, or that cannot be checked; [] when none."""
     import fcntl
+    errs: list = []                                  # a directory the walk could not list
     try:
-        for dirpath, _dirs, files, dfd in os.fwalk(name, dir_fd=parent_fd, follow_symlinks=False):
+        for dirpath, _dirs, files, dfd in os.fwalk(name, dir_fd=parent_fd, follow_symlinks=False,
+                                                   onerror=errs.append):
             for f in files:
                 rel = os.path.join(dirpath, f)
                 try:
@@ -876,6 +878,8 @@ def _written(parent_fd: int, name: str) -> list[str]:
                     os.close(fd)
     except OSError as exc:
         return [f"the open-file check could not run: {exc}"]
+    if errs:                                         # a subtree not looked at counts as held
+        return [f"{getattr(errs[0], 'filename', None) or name} could not be checked ({errs[0]})"]
     return []
 
 

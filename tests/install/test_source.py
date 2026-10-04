@@ -5155,3 +5155,17 @@ state["writer"].kill()
                        timeout=60)
     assert r.returncode == 0, r.stderr
     assert "tree/f " in r.stdout and "[]" not in r.stdout, r.stdout
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root lists a mode-000 directory")
+def test_an_unlistable_subdirectory_counts_as_held(tmp_path):
+    """A directory the probe cannot list is a part of the tree it did not look at: held, never
+    "nothing written"."""
+    (tmp_path / "tree" / "closed").mkdir(parents=True)
+    (tmp_path / "tree" / "closed" / "f").write_text("x")
+    (tmp_path / "tree" / "closed").chmod(0)
+    try:
+        held = source_fs._written(os.open(str(tmp_path), os.O_RDONLY), "tree")
+    finally:
+        (tmp_path / "tree" / "closed").chmod(0o755)
+    assert held and held[0].split(" ", 1)[0] == "closed", held
