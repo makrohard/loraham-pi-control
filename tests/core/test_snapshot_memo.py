@@ -326,12 +326,12 @@ _TMP = __import__("re").compile(r"\..+\.tmp-\d+-[0-9a-f]+")     # runtime_fs's a
 _READ_ONLY_COMMANDS = (("systemctl", "show"), ("systemctl", "is-system-running"),
                        ("systemctl", "--user", "is-system-running"), ("systemctl", "is-active"),
                        ("systemctl", "is-enabled"))
-# The tty ioctls that change a device (its mode, line state, window or exclusivity); a read
-# (TCGETS, TIOCMGET, ...) is not a write.
-_TTY_SETS = frozenset(getattr(__import__("termios"), n) for n in (
-    "TCSETS", "TCSETSW", "TCSETSF", "TCSETA", "TCSETAW", "TCSETAF", "TCFLSH", "TCXONC", "TCSBRK",
-    "TCSBRKP", "TIOCSWINSZ", "TIOCMSET", "TIOCMBIS", "TIOCMBIC", "TIOCEXCL", "TIOCNXCL",
-    "TIOCSCTTY", "TIOCSTI", "TIOCSBRK", "TIOCCBRK", "TIOCSSERIAL", "TIOCSETD")
+# The tty ioctls that only read a device (its mode, line state, window, queues or settings).
+# Every other request counts as a write — an unknown one too (TIOCSSOFTCAR changes CLOCAL).
+_TTY_READS = frozenset(getattr(__import__("termios"), n) for n in (
+    "TCGETS", "TCGETA", "TIOCMGET", "TIOCGWINSZ", "TIOCINQ", "FIONREAD", "TIOCOUTQ", "TIOCGSERIAL",
+    "TIOCGETD", "TIOCGICOUNT", "TIOCGSOFTCAR", "TIOCGPGRP", "TIOCGSID", "TIOCGEXCL",
+    "TIOCGLCKTRMIOS", "TIOCSERGETLSR")
     if hasattr(__import__("termios"), n))
 _READ_ONLY_GIT = {"rev-parse", "status", "rev-list", "describe", "log", "show", "ls-files"}
 
@@ -480,9 +480,9 @@ def _trace_writes(fn, root, dev, fake, monkeypatch):
             return f(self, args, *a, **k)
         return g
 
-    def w_ioctl(f):                 # only a tty request that changes the device
+    def w_ioctl(f):                 # every tty request but a known read
         def g(fd, request, *a, **k):
-            if request in _TTY_SETS:
+            if request not in _TTY_READS:
                 p = _fd_path(fd)
                 out.add(_RECEIVER if p == dev else f"termios:{p}")
             return f(fd, request, *a, **k)
@@ -859,11 +859,13 @@ def test_the_write_trace_catches_a_writing_property(tmp_path, receiver, monkeypa
 
 
 @pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc/self/fd")
-@pytest.mark.parametrize("request_name, expected", [("TCSETS", {_RECEIVER}), ("TCGETS", set())])
+@pytest.mark.parametrize("request_name, expected", [("TCSETS", {_RECEIVER}), ("TCGETS", set()),
+                                                    ("TIOCSSOFTCAR", {_RECEIVER})])
 def test_the_write_trace_catches_a_mutating_tty_ioctl(tmp_path, receiver, monkeypatch,
                                                      request_name, expected):
     # The receiver's tty mode set through fcntl.ioctl (TCSETS), not termios.tcsetattr, is a write;
-    # the read (TCGETS) alone is not.
+    # the read (TCGETS) alone is not; a request the tracer does not list as a read (TIOCSSOFTCAR,
+    # which changes CLOCAL) is a write too.
     import fcntl
     import termios
     svc, root, fake = _live(tmp_path, receiver, monkeypatch)
