@@ -1,6 +1,6 @@
 # Maintaining LoRaHAM Pi Control
 
-The entry point for anyone, human or agent, who maintains LHPC: the repositories, house rules,
+The entry point for anyone who maintains LHPC: the repositories, house rules,
 release checklists, regular chores and incidents. Each step is one line and a link; when this file
 and a linked document disagree, the linked document is right.
 
@@ -183,7 +183,7 @@ The bot never moves the daemon, the chat source (same repository) or RadioLib.
 2. In the controller: move `src/loraham-daemon` and `src/LoRaHAM_Daemon` to the same commit, and
    RadioLib if it moved, in one commit ([maintenance](docs/maintenance.md#moving-a-pin)).
 3. Rebuild the daemon binary from that controller commit and prove it with the
-   [release test matrix](docs/test-matrix.md) on the box (every radio stack runs on the daemon).
+   [release test matrix](docs/test-matrix.md) on the box (every daemon-backed stack runs on it).
 4. Release it as a patch or a minor by the usual rule, followed by the image.
 
 ## Regular maintenance

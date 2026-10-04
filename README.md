@@ -188,7 +188,8 @@ sudo usermod -aG spi,gpio "$USER"                        # → applied by the re
 <!-- test:deps-manual:end -->
 
 The polkit rules (Reboot/Shut down, Network panel) and the clock packages are not in this list:
-`lhpc deps` (or Apps → LoRaHAM Pi Control → Dependencies) prints their commands.
+`lhpc doctor` (or Apps → LoRaHAM Pi Control → System dependencies) prints their commands while
+they are missing.
 </details>
 
 #### 5. Install lhpc
@@ -199,7 +200,8 @@ curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/i
 #   options: --target <dir> · --no-service (skip the web service) · --no-path (skip the CLI symlink)
 ```
 
-Everything lands under `~/loraham-pi-control/` ([the runtime root](docs/architecture.md#the-runtime-root)).
+Everything but the `~/.local/bin/lhpc` link and the systemd user units lands under
+`~/loraham-pi-control/` ([the runtime root](docs/architecture.md#the-runtime-root)).
 
 <details><summary><em>Manual — clone / venv / bootstrap</em></summary>
 
@@ -375,7 +377,7 @@ lhpc config chat call YOURCALL-10 # set one option (YOURCALL-10 = your callsign+
 lhpc config <stack> --band 868 <param> <value>    # per-band value on a band-switchable stack
 lhpc stack start|stop|restart <stack>             # plans + confirms; --yes to skip the prompt
 lhpc logs <target>                 # tail a component log
-lhpc rflog <stack> [--band B]      # tail a stack's RF log (what the radio heard and sent)
+lhpc rflog <stack> [--band B]      # tail a stack's RF log (what the radio heard and sent); --band: daemon
 lhpc rflog <stack> --decrypt       # the same, decoded with the keys on this box (encrypted stacks)
 lhpc doctor                        # environment / dependency checks
 lhpc test <stack> [--tx] --yes     # host tests; --tx transmits

@@ -32,7 +32,8 @@ that does not may still be taken, but the chances are lower and it will take lon
 
 ## What should be green
 
-Run these locally in a venv with `pip install -e .[dev]` before opening the PR. CI runs them and
+Run these locally in a venv with `pip install -e .[dev]` and `pip install -e ./testlab` before
+opening the PR. CI runs them and
 more on every PR: [what CI enforces](docs/maintenance.md#what-ci-enforces).
 
 | gate | command |
