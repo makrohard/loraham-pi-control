@@ -575,10 +575,7 @@ class SelfUpdateOpsMixin:
             # Only now is the update finished: `venv-unsynced` stays recorded until the units are
             # refreshed too, so an interruption between the sync and the refresh leaves a record
             # the next `--apply` resumes from (`_resumes_sync`).
-            for state in ("venv-unsynced", "units-stale"):
-                if (err := self._incomplete_clear(state)):
-                    res = self._uncleared(res, state, err)
-                    break
+            res = self._clear_incomplete_states(res, ("venv-unsynced", "units-stale")) or res
         return res
 
     @invalidates_snapshot
@@ -1187,27 +1184,25 @@ class SelfUpdateOpsMixin:
                         # then reads its own integration as non-canonical, one-click
                         # updating goes away and boot restore is skipped.
                         ok_u, det_u = self._refresh_units_post_update()
+                        refreshed = {"units_refreshed": ok_u, "units_refresh_detail": det_u}
                         # `venv-unsynced` is cleared only now, with the units refreshed (as in
                         # `_apply_and_sync`): an interruption in between keeps it recorded.
-                        uncleared = next(((st, e) for st in ("venv-unsynced", "units-stale")
-                                          if (e := self._incomplete_clear(st))), ("", "")) \
-                            if ok_u else ("", "")
-                        err = uncleared[1]
-                        if err:
-                            summary, nxt, extra = res.summary, [], {}
-                        elif ok_u:
-                            summary, nxt, extra = (
-                                self._ONECLICK_CLEANUP_SUMMARY if res.data.get("cleanup_failed")
-                                else res.summary), [], {}
+                        uncleared = self._clear_incomplete_states(
+                            ActionResult(bool(res.ok), res.summary,
+                                         data={**dict(res.data), **refreshed}),
+                            ("venv-unsynced", "units-stale")) if ok_u else None
+                        if uncleared is not None:
+                            res = uncleared
                         else:
-                            summary, nxt, extra = self._units_stale_outcome(res, det_u)
-                        res = ActionResult(
-                            bool(res.ok) and ok_u, summary,
-                            data={**dict(res.data), "units_refreshed": ok_u,
-                                  "units_refresh_detail": det_u, **extra},
-                            next_commands=nxt)
-                        if err:
-                            res = self._uncleared(res, uncleared[0], err)
+                            if ok_u:
+                                summary, nxt, extra = (
+                                    self._ONECLICK_CLEANUP_SUMMARY
+                                    if res.data.get("cleanup_failed") else res.summary), [], {}
+                            else:
+                                summary, nxt, extra = self._units_stale_outcome(res, det_u)
+                            res = ActionResult(bool(res.ok) and ok_u, summary,
+                                               data={**dict(res.data), **refreshed, **extra},
+                                               next_commands=nxt)
         except _StopRun:
             pass
         # The record keeps the summary only, and the console shows that after the restart: the
@@ -1573,6 +1568,15 @@ class SelfUpdateOpsMixin:
 
     def _units_stale_clear(self) -> str:
         return self._incomplete_clear("units-stale")
+
+    def _clear_incomplete_states(self, res: ActionResult, states) -> ActionResult | None:
+        """Clear the recorded `states` in order, stopping at the first record that cannot be
+        removed: that step's `_uncleared` result, or None when every one is cleared (or was not
+        recorded)."""
+        for state in states:
+            if (err := self._incomplete_clear(state)):
+                return self._uncleared(res, state, err)
+        return None
 
     def _uncleared(self, res: ActionResult, state: str, cause: str) -> ActionResult:
         """The result of a step that succeeded but could not remove its state record: not a
