@@ -54,6 +54,8 @@
   names the exact revisions it used. The console's Build and `lhpc build` now decide which components to
   build the same way: Build on a single component builds that component, as `lhpc build <component>`
   does; the stack's Build still builds a missing dependency first.
+- A build whose source revision lhpc could not read (`[unverified]`) now names `lhpc build <stack> --yes`
+  to run once that revision can be read; until then the component reads *not built*.
 
 - The console's housekeeping (finishing a deferred web-server Apply, refreshing the client-certificate
   revocation list, re-dating certificates made before the clock was set, cutting oversized logs) now
