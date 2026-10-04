@@ -7,8 +7,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
+from pathlib import Path
 
 import lhpc_testlab as testlab
 import pytest
@@ -555,6 +557,50 @@ def test_nginx_ctl_never_signals_a_reused_pid(tmp_path, unrelated_pid):
     (tmp_path / "state" / "run" / "nginx.pid").write_text(f"{unrelated_pid.pid}\n")
     assert supervisor.nginx_ctl(paths, "stop") == (True, "stopped")
     assert unrelated_pid.poll() is None                  # not SIGQUIT/SIGTERM/SIGKILLed
+
+
+def _lab_nginx_pidfile(tmp_path, pid):
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "state" / "run").mkdir(parents=True)
+    (tmp_path / "state" / "run" / "nginx.pid").write_text(f"{pid}\n")
+    return paths, str(paths.under("config", "nginx", "lhpc.conf"))
+
+
+def test_a_reused_pid_naming_the_config_is_not_the_lab_nginx(tmp_path):
+    """A reused pid whose command line merely contains the config path (an editor open on the
+    file) is neither alive as the lab's nginx nor ever signalled by a stop or a reload."""
+    conf = str(Paths(runtime_root=tmp_path).under("config", "nginx", "lhpc.conf"))
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", conf])
+    try:
+        paths, _ = _lab_nginx_pidfile(tmp_path, proc.pid)
+        assert conf in Path(f"/proc/{proc.pid}/cmdline").read_text().replace("\0", " ")
+        assert supervisor._nginx_alive(paths) is False
+        assert supervisor.nginx_ctl(paths, "stop") == (True, "stopped")
+        assert proc.poll() is None                       # never SIGQUIT/SIGTERM/SIGKILLed
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_the_lab_nginx_master_is_verified_and_signalled(tmp_path):
+    """A process named `nginx` with the master's title and the exact `-c <config>` pair is the
+    lab's master: alive, and a stop signals exactly that pid (SIGQUIT first)."""
+    import shutil
+    fake = tmp_path / "bin" / "nginx"                   # comm is the name exec'd: "nginx"
+    fake.parent.mkdir()
+    fake.symlink_to(shutil.which("sleep"))
+    conf = str(Paths(runtime_root=tmp_path).under("config", "nginx", "lhpc.conf"))
+    proc = subprocess.Popen([f"nginx: master process nginx -c {conf}", "60"], executable=str(fake))
+    try:
+        paths, _ = _lab_nginx_pidfile(tmp_path, proc.pid)
+        assert Path(f"/proc/{proc.pid}/comm").read_text().strip() == "nginx"
+        assert supervisor._nginx_alive(paths) is True
+        assert supervisor.nginx_ctl(paths, "stop") == (True, "stopped")
+        assert proc.wait(timeout=5) == -signal.SIGQUIT
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
 
 
 def test_check_fails_when_installed_stack_not_ready(tmp_path, monkeypatch):

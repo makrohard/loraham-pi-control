@@ -7,6 +7,7 @@ no-op) so enable/start/stop/restart flows succeed and read back consistently.
 """
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import signal
@@ -128,9 +129,33 @@ def pid_alive(pid: int, needle: str) -> bool:
     return needle in cmd
 
 
+def _nginx_master(paths) -> int:
+    """The pid in the lab's nginx pid file when it is OUR nginx master, else 0. Verified, not
+    guessed: the process name (`comm`) is `nginx`, its title is the master's ("nginx: master
+    process …") and it carries `-c <the lab's config>` as one argument pair. A reused pid whose
+    command line merely contains the config path (an editor open on the file) is not it. A config
+    path containing whitespace is never verified (the title is space-joined), so it reads as no
+    master and is never signalled."""
+    pid = _nginx_pid(paths)
+    if pid <= 0:
+        return 0
+    conf = str(paths.under("config", "nginx", "lhpc.conf"))
+    try:
+        with open(f"/proc/{pid}/comm", "rb") as fh:
+            comm = fh.read().decode("utf-8", "replace").strip()
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            title = fh.read().replace(b"\0", b" ").decode("utf-8", "replace")
+    except OSError:
+        return 0
+    tokens = title.split()
+    if (comm == "nginx" and title.startswith("nginx: master process ")
+            and any(a == "-c" and b == conf for a, b in itertools.pairwise(tokens))):
+        return pid
+    return 0
+
+
 def _nginx_alive(paths) -> bool:
-    # The master's title is "nginx: master process nginx -c <conf>" — it names OUR config.
-    return pid_alive(_nginx_pid(paths), str(paths.under("config", "nginx", "lhpc.conf")))
+    return _nginx_master(paths) > 0
 
 
 def nginx_ctl(paths, verb: str) -> tuple[bool, str]:
@@ -145,14 +170,17 @@ def nginx_ctl(paths, verb: str) -> tuple[bool, str]:
         # RE-REVIEW: escalate until the old master is PROVEN gone — success was
         # reported while it kept serving the old config. SIGQUIT (graceful) ->
         # SIGTERM -> SIGKILL, each with a bounded wait; still alive = honest failure.
+        # Each signal goes to the pid verified as our master just before it, never to the
+        # pid file's bare content.
         pid = _nginx_pid(paths)
         if pid > 0:
             for sig, waits in ((signal.SIGQUIT, 40), (signal.SIGTERM, 40),
                                (signal.SIGKILL, 20)):
-                if not _nginx_alive(paths):
+                master = _nginx_master(paths)
+                if not master:
                     break
                 try:
-                    os.kill(pid, sig)
+                    os.kill(master, sig)
                 except OSError:
                     break
                 for _ in range(waits):
@@ -163,9 +191,9 @@ def nginx_ctl(paths, verb: str) -> tuple[bool, str]:
             return False, f"old nginx master (pid {pid}) would not exit"
         if verb == "stop":
             return True, "stopped"
-    if verb == "reload" and _nginx_alive(paths):
+    if verb == "reload" and (master := _nginx_master(paths)):
         try:
-            os.kill(_nginx_pid(paths), signal.SIGHUP)
+            os.kill(master, signal.SIGHUP)
             return True, "reloaded"
         except OSError:
             pass                                    # fall through to a fresh start
