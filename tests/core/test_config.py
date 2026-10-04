@@ -724,14 +724,15 @@ def test_external_journal_symlink_blocks_not_raises(tmp_path):
     paths = Paths(runtime_root=tmp_path)
     (tmp_path / "state").mkdir()
     outside = tmp_path.parent / "evil_external_journal.json"        # OUTSIDE the runtime root
-    outside.write_text('{"version": 1, "targets": [{"kind": "local", "rel": "config/local.toml", "pre": "P", "existed": true, "mode": 420}]}')
+    orig = '{"version": 1, "targets": [{"kind": "local", "rel": "config/local.toml", "pre": "P", "existed": true, "mode": 420}]}'
+    outside.write_text(orig)
     os.symlink(outside, tmp_path / "state" / "config-txn.json")     # escaping journal symlink
     try:
         assert cfgmod.recover_config_transaction(paths)[0] is cfgmod.ConfigRecovery.BLOCKED       # BLOCK, no exception
         svc = _svc_config_bundle(tmp_path)
         r = svc.save_config_bundle("daemon", values={"radio": "868"})
         assert not r.ok and any("recovery-required" in d for d in r.details)
-        assert outside.read_text().startswith('{"version"')         # external file untouched
+        assert outside.read_text() == orig                          # external file untouched
     finally:
         outside.unlink(missing_ok=True)
 
@@ -1106,7 +1107,7 @@ def test_malformed_stack_config_raises_and_is_preserved(tmp_path):
     bad = _write_malformed(paths, "daemon")
     with pytest.raises(ConfigError):
         load_stack_config(paths, "daemon")
-    assert bad.read_text().startswith("this is not")     # left untouched for diagnosis
+    assert bad.read_text() == "this is not = valid toml [[[\n"     # left untouched for diagnosis
 
 
 def test_stack_config_funnel_fails_closed(tmp_path):

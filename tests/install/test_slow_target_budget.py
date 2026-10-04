@@ -12,6 +12,7 @@ is the bootstrap state — no measured entry at all — where coverage SKIPS and
 from __future__ import annotations
 
 import datetime as dt
+import re
 import tomllib
 
 import pytest
@@ -51,7 +52,7 @@ def test_every_baseline_entry_is_well_formed():
 
 def test_every_calibration_entry_is_well_formed():
     for c in BASELINE.get("calibration", []):
-        assert str(c.get("workload", "")).startswith("sha256:"), c
+        assert re.fullmatch(r"sha256:[0-9a-f]{64}", str(c.get("workload", ""))), c
         assert c.get("source") in stt.SOURCES, c
         assert all(isinstance(c.get(p), (int, float)) and c[p] > 0
                    for p in ("cpu_s", "io_s", "mem_s")), c
@@ -255,7 +256,7 @@ def test_deps_key_ignores_the_version_and_follows_the_dependencies():
     for changed in (doc(deps='"a>=2", "b"'), doc(python=">=3.12"),
                     doc(build='"setuptools>=69"')):
         assert stt.deps_key(changed) != base
-    assert stt.deps_key(PYPROJECT).startswith("deps:")
+    assert re.fullmatch(r"deps:[0-9a-f]{64}", stt.deps_key(PYPROJECT))
 
 
 def test_no_key_holds_an_lhpc_sha():

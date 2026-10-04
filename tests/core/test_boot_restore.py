@@ -8,6 +8,7 @@ ownership inventory (schema v1 only, integrity diagnostics, directory states).
 """
 
 import json
+import re
 import subprocess
 
 import pytest
@@ -80,8 +81,7 @@ def test_record_launch_writes_v1_reserved_fields_and_nonce(tmp_path):
         assert rec["boot_id"] == lifecycle_mod.current_boot_id() != "EVIL"
         # nonce'd id: deterministic prefix + 32 hex chars
         prefix = f"{comp.id}__433__{proc.pid}__"
-        assert rec["launch_id"].startswith(prefix)
-        assert len(rec["launch_id"]) == len(prefix) + 32
+        assert re.fullmatch(re.escape(prefix) + r"[0-9a-f]{32}", rec["launch_id"]), rec["launch_id"]
     finally:
         proc.kill(); proc.wait()
 

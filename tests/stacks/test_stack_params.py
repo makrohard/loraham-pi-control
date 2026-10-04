@@ -68,18 +68,19 @@ def test_identity_hint_leads_with_the_local_field(tmp_path):
     # operator asked for THIS stack); the optional global fallback is a trailing note for
     # licensed stacks, never the first answer. Command derived from the param model.
     svc = _svc(tmp_path)
-    for target, frag in (("meshcom", "lhpc config meshcom mc_callsign"),
-                         ("chat", "lhpc config chat call"),
-                         ("voice", "lhpc config voice callsign"),
-                         ("graywolf", "lhpc config graywolf call")):
+    for target, cmd in (("meshcom", "lhpc config meshcom mc_callsign YOURCALL-99"),
+                        ("chat", "lhpc config chat call YOURCALL-10"),
+                        ("voice", "lhpc config voice callsign YOURCALL"),
+                        ("graywolf", "lhpc config graywolf call YOURCALL-10")):
         hint = svc._identity_config_hints(target)[0]
-        assert hint.startswith(frag), (target, hint)
+        assert hint.split("   #", 1)[0] == cmd, (target, hint)
         assert "lhpc config operator --callsign" in hint, (target, hint)   # the global option
     # Unlicensed: local field only — no operator-command mention at all.
     hint = svc._identity_config_hints("meshtastic")[0]
-    assert hint.startswith("lhpc config meshtastic node_name"), hint
+    assert hint.split("   #", 1)[0] == "lhpc config meshtastic node_name NODENAME", hint
     assert "operator" not in hint
-    assert svc._identity_config_hints("meshcore")[0].startswith("lhpc config meshcore node_name")
+    assert (svc._identity_config_hints("meshcore")[0].split("   #", 1)[0]
+            == "lhpc config meshcore node_name NODENAME")
 
 
 def test_start_refusal_text_carries_the_local_command(tmp_path):
@@ -87,8 +88,8 @@ def test_start_refusal_text_carries_the_local_command(tmp_path):
     svc = _svc(tmp_path)
     res = svc.run_action("start", "meshcom", apply=True)
     assert not res.ok
-    assert any(c.startswith("lhpc config meshcom mc_callsign")
-               for c in (res.next_commands or [])), (res.summary, res.next_commands)
+    assert [c.split("   #", 1)[0] for c in res.next_commands] == [
+        "lhpc config meshcom mc_callsign YOURCALL-99"], (res.summary, res.next_commands)
 
 
 def test_unlicensed_requires_deliberate_local_names(tmp_path, set_call):

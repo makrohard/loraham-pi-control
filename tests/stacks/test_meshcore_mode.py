@@ -3,6 +3,8 @@ expected endpoints for start readiness AND ongoing status, chat-identity enforce
 Companion clients, the repeater's own name, and the two controller-minted repeater secrets."""
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from lhpc.core import meshcore_identity as mi
@@ -255,7 +257,9 @@ def test_repeater_only_consumes_no_position(tmp_path, monkeypatch):
         assert svc._gps_components_for(mm.STACK_ID) == {"meshcore-gps"}
         assert "meshcore-gps" in [c.id for _s, c in svc._run_order(mm.STACK_ID)]
         assert svc._gps_run_order_uses_position(mm.STACK_ID)
-        assert svc._gps_device_claim(mm.STACK_ID).startswith("gps.")
+        st = os.stat("/dev/null")
+        assert svc._gps_device_claim(mm.STACK_ID) == \
+            f"gps.serial.dev.{os.major(st.st_rdev)}:{os.minor(st.st_rdev)}"
     _set_mode(svc, "repeater")
     assert svc._gps_components_for(mm.STACK_ID) == set()
     order = [c.id for _s, c in svc._run_order(mm.STACK_ID)]

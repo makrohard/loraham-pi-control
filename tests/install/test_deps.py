@@ -61,7 +61,8 @@ def test_daemon_reports_radiolib_build_dep(tmp_path):
 def test_system_deps_carry_operator_commands(tmp_path):
     g = _svc(tmp_path).deps_report("voice")
     assert g["system"] and all(not d.satisfied for d in g["system"])
-    assert all(d.install_cmd.startswith("sudo apt install") for d in g["system"])
+    assert all(re.fullmatch(r"sudo apt install -y [a-z0-9][a-z0-9.+-]*( [a-z0-9][a-z0-9.+-]*)*",
+                            d.install_cmd) for d in g["system"]), [d.install_cmd for d in g["system"]]
     assert all("not executed by LHPC" in d.note for d in g["system"])
 
 
@@ -107,10 +108,9 @@ def test_every_controller_dep_has_a_copyable_install_command(tmp_path):
     import tomllib
     flat = [d for grp in svc.controller_system_deps() for d in grp["deps"]]
     flask = next(d for d in flat if d["what"] == "flask")
-    assert flask["install"].startswith(f"{sys.executable} -m pip install ")
     declared = next(dep for dep in tomllib.loads((repo_paths.REPO / "pyproject.toml").read_text())
                     ["project"]["dependencies"] if dep.startswith("flask"))
-    assert f"'{declared}'" in flask["install"]
+    assert flask["install"] == f"{sys.executable} -m pip install '{declared}'"
 
 
 def test_build_requires_manifest_validation():
@@ -251,11 +251,14 @@ def test_meshtastic_and_spi_copyboxes_are_executable(tmp_path):
         assert "opensuse" not in (d["install"] or "")
         assert "install -y meshtasticd" not in (d["install"] or "")
     libs = next(d for d in deps if "libyaml-cpp-dev" in (d["install"] or ""))
-    assert libs["install"].startswith("sudo apt install -y")
+    assert libs["install"] == ("sudo apt install -y libyaml-cpp-dev libuv1-dev libgpiod-dev "
+                               "libi2c-dev libusb-1.0-0-dev libulfius-dev libssl-dev "
+                               "libbluetooth-dev pkg-config")
     for forbidden in ("libsdl", "libx11", "xkbcommon", "libinput", "libpulse"):
         assert forbidden not in libs["install"]
     spi = next(d for d in deps if d["what"].startswith("SPI device"))
-    assert spi["install"].startswith("printf")                 # a command, not prose
+    assert spi["install"] == ("printf 'dtparam=spi=on\\ndtoverlay=spi0-0cs\\n' "
+                              "| sudo tee -a /boot/firmware/config.txt")   # a command, not prose
     assert "/boot/firmware/config.txt" in spi["install"] and "Enable SPI" not in spi["install"]
 
 

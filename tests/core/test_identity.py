@@ -198,12 +198,11 @@ def test_stack_reset_returns_licensed_to_inheritance_and_unlicensed_to_required(
 
 def test_cli_hint_prints_the_exact_local_command(tmp_path):
     svc = _svc(tmp_path)
-    assert svc._identity_config_hints("meshcom")[0].startswith(
-        "lhpc config meshcom mc_callsign YOURCALL-99")
-    assert svc._identity_config_hints("meshtastic")[0].startswith(
-        "lhpc config meshtastic node_name ")
-    assert svc._identity_config_hints("meshcore")[0].startswith(
-        "lhpc config meshcore node_name ")
+    def command(target):
+        return svc._identity_config_hints(target)[0].split("   #", 1)[0]
+    assert command("meshcom") == "lhpc config meshcom mc_callsign YOURCALL-99"
+    assert command("meshtastic") == "lhpc config meshtastic node_name NODENAME"
+    assert command("meshcore") == "lhpc config meshcore node_name NODENAME"
 
 
 def test_global_card_renders_and_never_marked_required(tmp_path):
@@ -301,8 +300,8 @@ def test_fresh_meshtastic_refusal_prints_both_commands(tmp_path):
     svc = _svc(tmp_path)
     hints = svc._identity_config_hints("meshtastic")
     assert len(hints) == 2, hints
-    assert hints[0].startswith("lhpc config meshtastic node_name ")
-    assert hints[1].startswith("lhpc config meshtastic node_short ")
+    assert [h.split("   #", 1)[0] for h in hints] == ["lhpc config meshtastic node_name NODENAME",
+                                                        "lhpc config meshtastic node_short SHORTNAME"]
     res = svc.start("meshtastic", apply=True)
     assert [c for c in res.next_commands if "node_name" in c]
     assert [c for c in res.next_commands if "node_short" in c]
@@ -454,8 +453,8 @@ def test_refusal_remedy_targets_the_refusing_band(tmp_path, monkeypatch):
                                   band="433").ok
     res = svc.start("voice", apply=True)
     assert not res.ok and res.data.get("enforce_fields")
-    assert any(c.startswith("lhpc config voice callsign") and "--band 868" in c
-               for c in res.next_commands), res.next_commands
+    assert [c.split("   #", 1)[0] for c in res.next_commands] == [
+        "lhpc config voice callsign YOURCALL --band 868"], res.next_commands
     # a bandless stack's hint stays without --band
     assert not any("--band" in c for c in svc._identity_config_hints("meshtastic"))
 

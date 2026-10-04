@@ -15,6 +15,7 @@ Two field-verified defects, both covered here:
    without being enabled the run-failure path names it as the likely cause.
 """
 
+import fnmatch
 from pathlib import Path
 
 import pytest
@@ -291,7 +292,7 @@ def test_meshtastic_config_base_ships_with_lhpc_and_needs_no_hardware_clone(tmp_
     # now — upstream meshtastic/firmware, cloned to BUILD the server-only daemon, which is a
     # different thing entirely from cloning a hardware repo for a config file.
     comp = _meshtastic_comp(_svc(tmp_path)[0])
-    assert comp.config_file.base.startswith("{asset}/")
+    assert comp.config_file.base == "{asset}/bases/meshtasticd.yaml"
     assert "LoRaHAM_Pi" not in (comp.source.remote if comp.source else "")
     assert comp.source is not None and comp.source.remote.endswith("meshtastic/firmware.git")
 
@@ -310,7 +311,7 @@ def test_packaged_base_is_declared_package_data():
     import tomllib
     pj = tomllib.loads((repo_paths.REPO / "pyproject.toml").read_text())
     globs = pj["tool"]["setuptools"]["package-data"]["lhpc"]
-    assert any(g.startswith("data/bases/") for g in globs), globs
+    assert any(fnmatch.fnmatch("data/bases/meshtasticd.yaml", g) for g in globs), globs
 
 
 def test_asset_base_generates_without_any_source(tmp_path):

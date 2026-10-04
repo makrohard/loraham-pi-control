@@ -13,6 +13,8 @@ These pin the properties an audit flagged as load-bearing:
     path, quotes what ConfigObj needs quoted, and refuses control characters.
 """
 
+import re
+
 import pytest
 
 from lhpc.core import reticulum_interfaces as ri
@@ -392,7 +394,7 @@ def test_sideband_is_built_from_its_pinned_checkout():
     # installed artefact. `pip install .` is not the answer either: upstream's setup.py
     # drops every .kv layout when built from this repo layout, and the app then exits at
     # window creation. A version pin is what actually makes the install deterministic.
-    assert target.startswith("sbapp=="), f"sideband installs {target!r} — not version-pinned"
+    assert re.fullmatch(r"sbapp==\d+(\.\d+)+", target), f"sideband installs {target!r} — not version-pinned"
     assert _comp("sideband").source.pin_commit, "a pin is required for that to mean anything"
     # pip skips an already-present version, so a venv holding a BROKEN build of the same
     # version survives a rebuild. One step must force the package itself back.

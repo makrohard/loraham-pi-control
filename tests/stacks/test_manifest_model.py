@@ -165,7 +165,7 @@ def test_gui_stacks_keep_their_state_out_of_a_read_only_home():
     for cid, var in (("sideband", "KIVY_HOME"),):
         env = dict(comps[cid].run_env or ())      # run_env is a tuple of pairs, not a dict
         assert var in env, f"{cid}: {var} missing — a read-only HOME would break startup"
-        assert env[var].startswith("{runtime}/"), \
+        assert env[var] == "{runtime}/state/sideband/kivy", \
             f"{cid}: {var}={env[var]!r} must live under the runtime root, not HOME"
 
 

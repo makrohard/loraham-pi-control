@@ -296,7 +296,7 @@ def test_the_upperdir_is_resolved_while_its_container_lives(tmp_path):
     assert f"writable layer (measured): {upper}" in r.stdout, r.stdout
     assert re.search(r"^SLOW_IO_ROOT_DISK=\d+:\d+$", env, re.M), env
     log = (tmp_path / "docker.log").read_text().splitlines()
-    assert log[1].startswith("run -d ") and log[-1] == "rm -f cid0", log
+    assert log[1] == "run -d lhpc-testlab:ci sleep 300" and log[-1] == "rm -f cid0", log
     assert not upper.exists()       # the stub deleted it with its container, as Docker does
 
 

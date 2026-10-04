@@ -138,8 +138,8 @@ OTHER = "no row C evidence for kiss build: the slow-build run did not measure it
 
 def test_bootstrap_on_the_introducing_release_names_l4_and_waives_only_it():
     fails, boot = lane._waived([L4, NO_Z, OTHER], [], intro=True)
-    assert fails == [OTHER]
-    assert boot.startswith(lane.stt.BOOTSTRAP) and boot.endswith(lane.L4_INTRODUCING)
+    assert fails == [OTHER]                          # the decision: only the L4 pair is waived
+    assert lane.stt.BOOTSTRAP in boot and lane.L4_INTRODUCING in boot   # named, not its prose
 
 
 def test_missing_l4_evidence_fails_when_not_the_introducing_release():

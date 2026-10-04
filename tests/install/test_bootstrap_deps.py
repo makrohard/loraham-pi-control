@@ -1761,7 +1761,7 @@ def test_the_chrony_dropin_has_no_trailing_comments(tmp_path):
     # and the directives themselves must still be there
     body = [ln for ln in deps.chrony_dropin_text().splitlines()
             if ln.strip() and not ln.lstrip().startswith("#")]
-    assert any(ln.startswith("refclock SHM 0") for ln in body)
+    assert "refclock SHM 0 refid GPS delay 1.0 precision 0.1 poll 2" in body
     assert "makestep 1.0 -1" in body and "rtcsync" in body
 
 

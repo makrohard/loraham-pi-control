@@ -839,7 +839,7 @@ def test_uninstall_fails_closed_on_malformed_leftover_staged(tmp_path):
     (ud / "lhpc-web.service.uninstall-staged").write_text("[Service]\nExecStart=/bin/false\n")   # garbage
     r = _run(UNINSTALL, ["--target", str(root), "--yes"], home, _fake_bin(tmp_path))
     assert r.returncode != 0 and "not a byte-exact canonical" in (r.stdout + r.stderr)
-    assert (ud / "lhpc-web.service.uninstall-staged").read_text().startswith("[Service]\nExecStart=/bin/false")
+    assert (ud / "lhpc-web.service.uninstall-staged").read_text() == "[Service]\nExecStart=/bin/false\n"
     assert not (ud / "lhpc-web.service").exists()                 # not resurrected
     assert (root / "src").exists()                                # nothing removed
 

@@ -466,7 +466,8 @@ def test_apply_happy_path_writes_snapshot_and_verified_receipt(tmp_path):
     assert rc == fh.EXIT_OK
     snap = _json.loads((tmp_path / "etc" / "firewall.snapshot.json").read_text())
     assert snap["intent_hash"] == fw.intent_hash(cand)     # helper hash == controller hash
-    assert snap["model_hash"] and snap["nft_text"].startswith("destroy table inet lhpc")
+    assert snap["model_hash"] == fh.model_hash(snap["model"])
+    assert snap["nft_text"] == fh.render_nft_text(snap["model"])
     receipt = _json.loads((tmp_path / "run" / "check.json").read_text())
     assert receipt["verdict"] == "verified" and receipt["boot_id"] == "boot-1"
     assert receipt["intent_hash"] != receipt["model_hash"]  # two DISTINCT hashes
@@ -3218,7 +3219,8 @@ def test_every_apply_sequence_ends_with_the_webserver_apply(tmp_path):
     assert svc._fw_apply_commands(ActionResult(True, "rendered"))[-1] == "lhpc webserver apply"
     assert svc.firewall_settings_view()["webserver_apply_cmd"] == "lhpc webserver apply"
     lines = svc._fw_apply_lines()
-    assert lines[0].startswith("sudo bash ") and lines[-1] == "lhpc webserver apply"
+    assert lines == [f"sudo bash {svc._paths.under('config/files/firewall/firewall-apply.sh')}",
+                     "sudo systemctl start lhpc-firewall-check.service", "lhpc webserver apply"]
 
 
 def test_bootstrap_on_an_existing_root_restores_missing_firewall_scripts(tmp_path):

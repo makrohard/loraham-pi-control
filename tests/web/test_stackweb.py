@@ -150,7 +150,8 @@ def test_the_branded_page_is_internal_in_every_block_that_references_it():
     blocks = conf.split("location = /_lhpc_updating.html {")
     assert len(blocks) == 3, "console + one stack block"
     for tail in blocks[1:]:
-        assert tail.split("}")[0].strip().startswith("internal;")
+        assert tail.split("}")[0].split() == ["internal;", "alias",
+                                             "/GOLDEN/config/nginx/_lhpc_updating.html;"]
 
 
 def test_websocket_map_appears_exactly_once_for_many_blocks():

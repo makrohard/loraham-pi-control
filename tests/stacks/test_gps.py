@@ -583,7 +583,8 @@ def test_a_direct_receiver_is_an_exclusive_lifecycle_claim(tmp_path):
     save_gps(svc._paths, source="nmea", device="/dev/null")
     svc._invalidate_config()
     keys = [k for k in svc._operation_resource_keys("meshtastic") if k.startswith("gps.")]
-    assert len(keys) == 1 and keys[0].startswith("gps.serial.dev."), \
+    st = os.stat("/dev/null")
+    assert keys == [f"gps.serial.dev.{os.major(st.st_rdev)}:{os.minor(st.st_rdev)}"], \
         "direct NMEA must contribute an exclusive claim keyed on the real device"
 
     # Sources that open no local device must claim nothing, or they would refuse valid combos.

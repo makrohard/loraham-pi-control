@@ -1007,8 +1007,8 @@ def test_second_window_frames_every_step_end_to_end(tmp_path, monkeypatch):
         assert header in seed
     assert "verified healthy" in seed                            # restart DETAIL landed in window 2
     # every registered leaf is a valid, run-owned per-step leaf (never the run log, never traversal)
-    for e in st["component_logs"]:
-        assert e["log"].startswith(f"hmac-apply-{_RID}-") and e["log"].endswith(".log")
+    assert [e["log"] for e in st["component_logs"]] == [
+        f"hmac-apply-{_RID}-{k}.log" for k in ("secret", "bridge", "node")]
 
 
 def test_step_log_never_leaks_secret_into_window_two(tmp_path, monkeypatch):

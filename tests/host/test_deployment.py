@@ -44,7 +44,7 @@ def test_unit_has_least_privilege_hardening():
     for directive in ("NoNewPrivileges=true", "ProtectSystem=strict", "ProtectHome=read-only",
                       "ProtectKernelModules=true", "RestrictNamespaces=true", "PrivateTmp=false"):
         assert directive in active, directive
-    assert any(ln.startswith("RestrictAddressFamilies=") for ln in active)
+    assert "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_BLUETOOTH" in active
     # Writable areas: the runtime root, /tmp, and the optional -%h/.meshcore_nm entry ONLY
     # (no shipped component uses it) — never broad $HOME or /var.
     rw = [ln for ln in active if ln.startswith("ReadWritePaths=")]
@@ -60,7 +60,9 @@ def test_unit_redirects_tool_caches_into_runtime_root():
             for ln in active if ln.startswith("Environment=") and ln.count("=") >= 2}
     for var in ("PLATFORMIO_CORE_DIR", "IDF_TOOLS_PATH", "XDG_CACHE_HOME", "PIP_CACHE_DIR"):
         assert var in envs, var
-        assert envs[var].startswith("%h/loraham-pi-control/"), (var, envs[var])
+        assert envs[var] == "%h/loraham-pi-control/build/tool-cache/" + {
+            "PLATFORMIO_CORE_DIR": "platformio", "IDF_TOOLS_PATH": "espressif",
+            "XDG_CACHE_HOME": "cache", "PIP_CACHE_DIR": "pip"}[var], (var, envs[var])
     # No ACTIVE directive points at an unrelated user-home cache (comments may name them).
     assert not any(p in ln for ln in active for p in ("/.platformio", "/.espressif", "/.cache"))
 
@@ -127,8 +129,8 @@ def test_helper_unit_is_sandboxed_declarative_no_systemctl():
     """The helper: sandboxed at web parity + W^X + bus block; declarative console stop/restart
     (Conflicts/After/OnSuccess/OnFailure) with NO systemctl; refuses manual start."""
     active = _active_directives((_ROOT / "deploy" / "lhpc-selfupdate.service").read_text())
-    assert "Type=oneshot" in active and any(ln.startswith("TimeoutStartSec=") for ln in active)
-    assert next(ln for ln in active if ln.startswith("ExecStart=")).endswith("self-update --run-service")
+    assert "Type=oneshot" in active and "TimeoutStartSec=900" in active
+    assert "ExecStart=%h/loraham-pi-control/venv/lhpc/bin/lhpc self-update --run-service" in active
     for d in ("RefuseManualStart=yes", "Conflicts=lhpc-web.service", "After=lhpc-web.service",
               "OnSuccess=lhpc-web.service", "OnFailure=lhpc-web.service",
               "ProtectSystem=strict", "ProtectHome=read-only", "MemoryDenyWriteExecute=true",

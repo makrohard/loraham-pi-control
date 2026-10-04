@@ -207,7 +207,7 @@ def test_argv_carries_the_bare_flag_only_when_on(tmp_path):
     assert "--high-power" not in off
     on = commands.expand_argv(comp.run_argv, comp, {**base, "hipower": "on"}, op, "/rt", "/src", "433")
     assert on.count("--high-power") == 1
-    assert on[on.index("--high-power") + 1].startswith("--")        # bare: no value token follows
+    assert [a for a in on if a != "--high-power"] == off           # bare: no value token added
 
 
 # --- live SET through the service: the running daemon decides --------------------------------
