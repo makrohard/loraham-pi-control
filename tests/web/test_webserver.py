@@ -498,7 +498,7 @@ def test_monitor_lists_nginx_as_system_dependency(tmp_path):
     assert deps["nginx"]["status"] == "unknown"
     # after a verify that finds nginx absent -> status 'absent' + a warning
     svc = ControllerService(system=FakeSystem().system, paths=svc0._paths)   # no nginx
-    svc.webserver_verify()
+    assert svc.webserver_verify().data["checks"]["nginx_present"] == "failed"
     mon2 = svc.webserver_monitor().data
     assert {d["name"]: d["status"] for d in mon2["system_deps"]}["nginx"] == "absent"
     assert any("nginx" in w["text"] and "apt install" in w["text"] for w in mon2["warnings"])
@@ -530,8 +530,8 @@ def test_configure_apply_saves_remote_with_elevated_confirmation(tmp_path):
     # WITH the elevated confirmation it saves ALL fields in one write (incl. remote_exposed derived
     # from bind + allowed_cidrs), then applies (apply itself may repair-require without nginx here).
     svc = _svc(tmp_path)
-    svc.webserver_configure_apply(bind="0.0.0.0", access_mode="no-auth",
-                                  allowed_cidrs=["0.0.0.0/0"], confirm=True, confirm_public=True)
+    assert not svc.webserver_configure_apply(bind="0.0.0.0", access_mode="no-auth", allowed_cidrs=["0.0.0.0/0"],
+                                          confirm=True, confirm_public=True).ok   # saved; no nginx to apply
     cfg = svc.config().webserver
     assert cfg.bind == "0.0.0.0" and cfg.remote_exposed is True and cfg.access_mode == "no-auth"
     assert list(cfg.allowed_cidrs) == ["0.0.0.0/0"]
@@ -542,7 +542,7 @@ def test_configure_apply_saves_remote_with_elevated_confirmation(tmp_path):
 def test_configure_apply_loopback_needs_no_confirmation(tmp_path):
     # A loopback config derives remote_exposed=False and applies with no confirmation gate.
     svc = _svc(tmp_path)
-    svc.webserver_configure_apply(bind="127.0.0.1", port=8443)
+    assert not svc.webserver_configure_apply(bind="127.0.0.1", port=8443).ok   # saved; no nginx to apply
     cfg = svc.config().webserver
     assert cfg.bind == "127.0.0.1" and cfg.remote_exposed is False
 
@@ -652,7 +652,7 @@ def test_reset_unproven_without_master_preserves_pki(tmp_path):
     svc0 = _svc_webserver_blockers(tmp_path)
     assert svc0.webserver_init(dns_sans=["pi.local"]).ok
     assert svc0.webserver_cert_issue("laptop", "pw").ok
-    svc0.webserver_expose(["192.168.0.0/24"], confirm=True)      # desired: exposed
+    assert svc0.webserver_expose(["192.168.0.0/24"], confirm=True, replace_certificate=True).ok   # desired: exposed
     fake = FakeSystem(commands={("nginx", "-v"): CR(0, "", ""),
                                 ("nginx", "-t", "-c", _staged_webserver_blockers(svc0._paths)): CR(0, "", "ok")})
     svc = ControllerService(system=fake.system, paths=svc0._paths)   # no nginx master (no pidfile)
@@ -858,7 +858,7 @@ def test_no_key_or_passphrase_leak_in_status_or_evidence(tmp_path):
     assert svc.webserver_cert_issue("laptop", "sup3r-secret-pass").ok
     blob = json.dumps(svc.webserver_monitor().data)
     assert "BEGIN" not in blob and "PRIVATE KEY" not in blob and "sup3r-secret-pass" not in blob
-    svc.webserver_verify()
+    assert not svc.webserver_verify().ok    # no nginx here; the evidence file is still written
     ev = (tmp_path / "state" / "webserver.json").read_text()
     assert "BEGIN" not in ev and "PRIVATE KEY" not in ev and "sup3r-secret-pass" not in ev
 
@@ -1131,7 +1131,8 @@ def test_verify_does_not_touch_live_config(tmp_path):
     runtime_fs.atomic_write(paths, paths.under(*webserver.NGINX_CONF), "SENTINEL\n", 0o644)
     fake = FakeSystem(commands={("nginx", "-v"): CR(0, "", ""),
                                 ("nginx", "-t", "-c", _staged_webserver_corrections(paths)): CR(0, "", "ok")})
-    ControllerService(system=fake.system, paths=paths).webserver_verify()
+    r = ControllerService(system=fake.system, paths=paths).webserver_verify()
+    assert r.data["checks"]["nginx_config_valid"] == "ok"   # the staged config really was validated
     assert _live(tmp_path).read_text() == "SENTINEL\n"
 
 
@@ -2294,9 +2295,10 @@ def test_a_saved_narrowing_cannot_improve_the_live_console(tmp_path, field, valu
     from lhpc.core import config as cfgmod
     svc = _console_apply(tmp_path)
     assert _sec(svc) == "bad"                    # applied: exposed + no-auth
-    cfgmod.save_webserver_config(svc._paths, **{field: value})
+    cfgmod.save_webserver_config(svc._paths, **{field: value},
+                                 **({"remote_exposed": False} if field == "bind" else {}))
     svc._invalidate_config()
-    svc.webserver_verify()                       # even an explicit verify changes nothing
+    assert svc.webserver_verify().ok is (field != "bind")   # changes nothing; a loopback bind is a listener mismatch
     assert _sec(svc) == "bad", f"saving {field} improved a listener nginx never rebound"
 
 

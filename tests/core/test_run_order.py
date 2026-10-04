@@ -1123,11 +1123,11 @@ def test_restart_cascade_consent_reaches_the_stop_leg(tmp_path, monkeypatch, set
     assert stopped.index("graywolf") < stopped.index("loraham-kiss-tnc")   # dependent first
     assert any("dependent] graywolf" in d for d in res.details)            # ...and the result says so
     stopped.clear()
-    svc.restart("kiss", apply=True)
+    assert not svc.restart("kiss", apply=True).ok  # the stubbed stop leaves kiss without a band: the restart aborts
     assert "loraham-kiss-tnc" in stopped and "graywolf" not in stopped
     # the same consent travels through run_action (the web/CLI dispatch)
     stopped.clear()
-    svc.run_action("restart", "kiss", apply=True, cascade=True)
+    assert not svc.run_action("restart", "kiss", apply=True, cascade=True).ok  # the stubbed stop leaves kiss without a band: the restart aborts
     assert "graywolf" in stopped
 
 
@@ -1145,10 +1145,10 @@ def test_restart_plan_predicts_exactly_what_its_apply_does_with_dependents(tmp_p
     assert any("[stop] graywolf" in d for d in cascading.details)
     # ...and the apply matches each prediction
     stopped = _spy_life_stops(monkeypatch)
-    svc.restart("kiss", apply=True)
+    assert not svc.restart("kiss", apply=True).ok  # the stubbed stop leaves kiss without a band: the restart aborts
     assert "graywolf" not in stopped
     stopped.clear()
-    svc.restart("kiss", apply=True, cascade=True)
+    assert not svc.restart("kiss", apply=True, cascade=True).ok  # the stubbed stop leaves kiss without a band: the restart aborts
     assert "graywolf" in stopped
     # run_action carries one value to both halves — what the CLI's plan→apply flow relies on
     assert not any("[stop] graywolf" in d for d in svc.run_action("restart", "kiss").details)
@@ -1278,7 +1278,7 @@ def test_restart_plan_and_apply_preflight_one_band(tmp_path, monkeypatch, set_ca
         return real(self, target, order, b, radio, op, **kw)
     monkeypatch.setattr(ControllerService, "_start_preflight_refusal", spy)
     assert svc.restart("kiss", apply=False, band=band).ok
-    svc.restart("kiss", apply=True, band=band)
+    assert not svc.restart("kiss", apply=True, band=band).ok  # the stubbed stop leaves kiss without a band: the restart aborts
     assert len(seen) == 2 and seen[0] == seen[1] == svc.operation_band("kiss", band)
 
 

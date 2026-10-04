@@ -395,7 +395,8 @@ def test_without_the_flag_no_override_is_recorded(tmp_path, monkeypatch, stub_pi
         seen.update(k)
         raise bi.BinaryInstallError("CAPTURED")
     monkeypatch.setattr(bi, "build_receipt", _capture)
-    svc.binary_install("daemon", apply=True)
+    r = svc.binary_install("daemon", apply=True)
+    assert not r.ok and r.data["rolled_back"] is True
     assert seen["override"] is None
 
 

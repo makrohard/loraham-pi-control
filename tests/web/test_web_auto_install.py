@@ -167,7 +167,7 @@ def test_run_view_rows_and_api(tmp_path, monkeypatch, web):
     monkeypatch.setattr(ControllerService, "_frozen_ref",
                         lambda self, comp, source: (("f" * 40, "frozen: stub"), ""))
     c, svc = _client(web, tmp_path)
-    svc.auto_install(apply=True, tests=True, emit=lambda s: None)
+    assert not svc.auto_install(apply=True, tests=True, emit=lambda s: None).ok  # no git here: the daemon clone fails
     body = c.get("/auto-install").data.decode()
     # data-stack= now appears in BOTH the selection table (8 rows) and the results table (8 rows)
     assert 'id="ai-run"' in body and 'id="ai-tasks"' in body and body.count("data-stack=") >= 8

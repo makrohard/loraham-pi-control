@@ -169,5 +169,5 @@ def test_install_adopts_each_coherent_shared_group_once(tmp_path, monkeypatch):
         return PlanAction("adopt", "", f"adopt {comp.id}", status="failed", detail="(fake)")
     monkeypatch.setattr(Installer, "adopt_source", fake_adopt)
     svc = _svc(tmp_path)
-    svc.install("kiss", apply=True)                    # kiss-tnc + kiss-serial share ONE path
+    assert not svc.install("kiss", apply=True).ok  # the fake adoption fails; kiss-tnc + kiss-serial share ONE path
     assert calls.count("src/loraham-kiss-tnc") == 1    # adopted once per coherent group

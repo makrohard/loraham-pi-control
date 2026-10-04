@@ -721,10 +721,10 @@ def _pins(svc, stack="daemon"):
 @pytest.mark.contract
 def test_install_binary_channel_dispatches(tmp_path, monkeypatch):
     svc = _svc(tmp_path, monkeypatch)
-    called = {}
+    called, done = {}, ActionResult(True, "the binary install's own result")
     monkeypatch.setattr(ControllerService, "binary_install",
-                        lambda self, sid, apply=False, **_k: called.setdefault("args", (sid, apply)))
-    svc.install("daemon", apply=True, source="binary")
+                        lambda self, sid, apply=False, **_k: (called.setdefault("args", (sid, apply)), done)[1])
+    assert svc.install("daemon", apply=True, source="binary") is done
     assert called["args"] == ("daemon", True)
 
 
@@ -855,11 +855,11 @@ def test_retire_without_receipt_is_noop(tmp_path, monkeypatch):
 def test_update_binary_to_binary_when_current(tmp_path, monkeypatch, binary_receipt):
     svc = _svc(tmp_path, monkeypatch)
     binary_receipt(svc)                                 # components == manifest pins
-    seen = {}
+    seen, done = {}, ActionResult(True, "the binary install's own result")
     monkeypatch.setattr(ControllerService, "binary_install",
-                        lambda self, sid, apply=False, **_k: seen.setdefault("args", (sid, apply)))
+                        lambda self, sid, apply=False, **_k: (seen.setdefault("args", (sid, apply)), done)[1])
     # "binary" is what the CLI resolves to for a binary-installed stack with no --source
-    svc.update("daemon", apply=True, source="binary")
+    assert svc.update("daemon", apply=True, source="binary") is done
     assert seen["args"] == ("daemon", True)                  # fast path, no dialog
 
 
@@ -870,10 +870,10 @@ def test_update_tries_the_published_binary_even_when_the_receipt_lags(tmp_path, 
     svc = _svc(tmp_path, monkeypatch)
     stale = {cid: "9" * 40 for cid in _pins(svc)}
     binary_receipt(svc, commits=stale)
-    seen = {}
+    seen, done = {}, ActionResult(True, "the binary install's own result")
     monkeypatch.setattr(ControllerService, "binary_install",
-                        lambda self, sid, apply=False, **_k: seen.setdefault("args", (sid, apply)))
-    svc.update("daemon", apply=True, source="binary")
+                        lambda self, sid, apply=False, **_k: (seen.setdefault("args", (sid, apply)), done)[1])
+    assert svc.update("daemon", apply=True, source="binary") is done
     assert seen["args"] == ("daemon", True)
 
 
@@ -956,13 +956,15 @@ def test_clone_required_is_adopted_before_the_overlay(tmp_path, monkeypatch, stu
     monkeypatch.setattr(ControllerService, "_installer", lambda self: _FakeInstaller())
     monkeypatch.setattr(bi, "fetch_index",
                         lambda url: (_ for _ in ()).throw(bi.BinaryInstallError("stop here")))
-    svc.binary_install("meshcom", apply=True)
+    r = svc.binary_install("meshcom", apply=True)
+    assert not r.ok and r.data["binary_failed"] and "rolled_back" not in r.data  # refused at the index
     # the index fetch happens FIRST (gates before mutation), so nothing was adopted yet
     assert adopted == []
 
     stub_pipeline(svc, download=lambda e, d: (_ for _ in ()).throw(
         bi.BinaryInstallError("stop after clone")))
-    svc.binary_install("meshcom", apply=True)
+    r = svc.binary_install("meshcom", apply=True)
+    assert not r.ok and r.data["rolled_back"] is True
     assert ("meshcom-qemu", "pinned") in adopted        # adopted BEFORE the download
 
 
@@ -1606,7 +1608,8 @@ def test_a_stale_clone_moves_to_the_manifest_pin_not_an_older_known_working(tmp_
     seen = []
     _record_adoption_target(monkeypatch, svc, seen)
     stub_pipeline(svc, download=lambda e, d: pytest.fail("the staging stop comes first"))
-    svc.binary_install("meshcom", apply=True)
+    r = svc.binary_install("meshcom", apply=True)
+    assert not r.ok and r.data["binary_failed"]  # stopped at staging by the test
     assert seen and all(c == comp.source.pin_commit for _cid, c in seen), seen
 
 
@@ -1618,7 +1621,8 @@ def test_a_missing_clone_is_adopted_at_the_manifest_pin_not_an_older_known_worki
     seen, recs = [], []
     _record_adoption_target(monkeypatch, svc, seen, recs)
     stub_pipeline(svc, download=lambda e, d: pytest.fail("the staging stop comes first"))
-    svc.binary_install("meshcom", apply=True)
+    r = svc.binary_install("meshcom", apply=True)
+    assert not r.ok and r.data["binary_failed"]  # stopped at staging by the test
     assert seen == [("meshcom-qemu", comp.source.pin_commit)], seen
     # The staging gets the pre-clone record the real path holds for it (CR3-3b): the
     # `<journal stem><candidate>.staging` leaf, written before the candidate exists.
@@ -1637,7 +1641,7 @@ def test_an_ordinary_pinned_update_still_resolves_known_working(tmp_path, monkey
     old = _older_known_working(svc)
     seen = []
     _record_adoption_target(monkeypatch, svc, seen)
-    svc.update("meshcom-qemu", apply=True, source="pinned")
+    assert not svc.update("meshcom-qemu", apply=True, source="pinned").ok  # stopped at staging
     assert seen and all(c == old for _cid, c in seen), seen
 
 

@@ -209,7 +209,7 @@ def test_auto_install_gate_blocks_before_any_source_work(tmp_path, monkeypatch):
                         lambda self, t, tx=False, apply=False, auto_install_ctx=None, **k:
                         ActionResult(True, "tested"))
     lines = []
-    _svc(tmp_path).auto_install(apply=True, tests=True, emit=lines.append)
+    assert not _svc(tmp_path).auto_install(apply=True, tests=True, emit=lines.append).ok
     joined = "\n".join(lines)
     assert "==== chat: BLOCKED (missing mandatory system deps" in joined
     assert "==== chat: sources ====" not in joined            # never reached the source phase

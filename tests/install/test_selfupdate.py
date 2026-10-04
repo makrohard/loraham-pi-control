@@ -456,7 +456,7 @@ def test_operator_admission_held_across_apply_and_sync(op_svc, monkeypatch):
         held["apply"] = self._held_counts().get(self.ADMISSION_KEY, 0)
         return ActionResult(True, "advanced", data={})
     monkeypatch.setattr(ControllerService, "self_update_apply", fake_apply)
-    svc, fake = op_svc(dict(_WEB_INACTIVE), invocation=False)
+    svc, fake = op_svc(dict(_WEB_INACTIVE), invocation=False, units=True)
     root = selfupdate.repo_root()
     real_run = fake.run
     def rec_run(argv, timeout, cwd=None, env=None):
@@ -464,7 +464,7 @@ def test_operator_admission_held_across_apply_and_sync(op_svc, monkeypatch):
             held["sync"] = svc._held_counts().get(svc.ADMISSION_KEY, 0)
         return real_run(argv, timeout, cwd=cwd, env=env)
     monkeypatch.setattr(fake, "run", rec_run)
-    svc.self_update_apply_operator()
+    assert svc.self_update_apply_operator().ok
     assert held.get("apply", 0) > 0 and held.get("sync", 0) > 0                   # held across BOTH
 
 

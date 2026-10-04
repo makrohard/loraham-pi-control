@@ -165,7 +165,8 @@ def test_admission_acquired_before_config_stable(tmp_path, monkeypatch):
             yield
     monkeypatch.setattr(ControllerService, "_admit", spy_admit)
     monkeypatch.setattr(ControllerService, "_config_stable", spy_cfg)
-    svc.start("daemon", apply=True)                      # not installed -> refuses, but AFTER the guards
+    r = svc.start("daemon", apply=True)
+    assert not r.ok and not r.data.get("admission_blocked")  # refused past admission: not installed
     assert order[:2] == ["admit", "config"], order       # admission is lock-order #1, BEFORE config
 
 

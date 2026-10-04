@@ -1658,9 +1658,10 @@ def test_a_saved_proxy_narrowing_cannot_improve_the_live_proxy(tmp_path):
     assert svc.stack_web_view("meshtastic")["posture"]["sec_level"] == "bad"
     for field in ({"access_mode": "auth-everywhere"}, {"mode": "local"},
                   {"cidrs": ["192.168.0.5/32"]}):
-        svc.stack_web_configure("meshtastic", **field)
+        assert svc.stack_web_configure("meshtastic", confirm=True, **field).ok
         assert svc.stack_web_view("meshtastic")["posture"]["sec_level"] == "bad", field
-    svc.webserver_verify()                                    # verify never advances it
+    r = svc.webserver_verify()                                # verify never advances it
+    assert not r.ok and r.data["checks"]["stack_listener_mismatch_stacks"] == ["meshtastic"]                                    # verify never advances it
     assert webserver.applied_proxy(webserver.read_applied(svc._paths),
                                    "meshtastic")["access_mode"] == "no-auth"
 

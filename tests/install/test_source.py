@@ -1788,7 +1788,7 @@ def test_run_action_without_a_source_installs_the_pinned_selector(tmp_path):
         root = tmp_path / kw.get("source", "default")
         root.mkdir()
         svc = ControllerService(system=fake.system, paths=Paths(runtime_root=root))
-        svc.run_action("install", "daemon", apply=True, **kw)
+        assert not svc.run_action("install", "daemon", apply=True, **kw).ok   # no git here: the clone fails
         return [c[:-1] for c in fake.calls if c[:2] == ["git", "clone"]]   # minus the fd-pinned dest
     default = clones()
     assert default and default == clones(source="pinned")

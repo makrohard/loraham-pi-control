@@ -83,7 +83,14 @@ def test_purge_wipes_what_the_stack_owns_and_nothing_else(tmp_path, sid):
 def test_uninstall_keeps_what_the_stack_owns(tmp_path, sid):
     svc = _svc(tmp_path)
     _seed(tmp_path, OWNED[sid])
-    svc.uninstall(sid, apply=True)
+    for key in ("meshcore_identity.key", "openhop_repeater_identity.key"):   # a VALID identity:
+        p = tmp_path / "config" / "secrets" / key                         # the uninstall's guard
+        if p.exists():                                                    # refuses a damaged one
+            p.write_text("11" * 32 + "\n")
+            p.chmod(0o600)
+    r = svc.uninstall(sid, apply=True)
+    # graywolf is package-managed: it has no source, so there is nothing to uninstall
+    assert r.ok is (sid != "graywolf"), r.summary
     for rel in OWNED[sid]:
         assert _present(tmp_path / rel), rel
 

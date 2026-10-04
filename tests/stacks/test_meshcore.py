@@ -252,9 +252,12 @@ def test_adopt_never_mints(tmp_path):
 @pytest.mark.safety("meshcore-identity")
 def test_read_only_operations_create_no_key(tmp_path):
     svc = _svc(tmp_path)
+    # a node name, so the dry-run start reaches its plan instead of the identity refusal
+    assert svc.save_config_bundle("meshcore", values={"file_node_name": "TestNode"}).ok
     assert svc.status("meshcore").ok
-    svc.start("meshcore", apply=False)
-    svc.source_check("meshcore")
+    assert svc.start("meshcore", apply=False).ok
+    r = svc.source_check("meshcore")
+    assert not r.ok and r.data["counts"]["up_to_date"] == r.data["counts"]["behind"] == 0  # nothing installed
     assert svc.update("meshcore", apply=False).ok
     assert svc.uninstall("meshcore", apply=False).ok
     assert svc.clean("meshcore", apply=False).ok
@@ -529,7 +532,9 @@ def test_a_dry_run_start_does_no_gps_io(tmp_path, fake_gpsd):
     srv = fake_gpsd(json_lines=[_tpv()])
     svc = _svc(tmp_path)
     assert svc.set_gps(source="gpsd", host="127.0.0.1", port=srv.port).ok
-    svc.start("meshcore", apply=False)
+    # a node name, so the dry run reaches the position step instead of the identity refusal
+    assert svc.save_config_bundle("meshcore", values={"file_node_name": "TestNode"}).ok
+    assert svc.start("meshcore", apply=False).ok
     assert srv.connections == 0
 
 

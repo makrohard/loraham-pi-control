@@ -2127,7 +2127,7 @@ def test_the_updater_trigger_paths_never_mutate_systemd(tmp_path, recording_syst
     sys_, calls = recording_system
     svc = ControllerService(system=sys_, paths=Paths(runtime_root=tmp_path))
     svc.updater_integration()
-    svc.self_update_trigger()
+    assert svc.self_update_trigger().data["not_managed"]   # refused at its first gate here
     assert svc.self_update_run_service().ok
     offenders = _systemd_mutations(calls)
     assert not offenders, f"an updater path tried to change systemd state: {offenders}"

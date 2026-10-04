@@ -787,7 +787,7 @@ def test_restart_panel_and_restart_agree_on_the_band_with_a_stale_marker(tmp_pat
     # the whole operation — plan and launch — must stay on the PRIMARY band (433), because the
     # stale marker is not active...
     plan = svc.restart("voice")                                   # dry run
-    svc.restart("voice", apply=True)
+    assert not svc.restart("voice", apply=True).ok  # the daemon is not installed here: the start leg fails
     # NEITHER frame may carry the stale marker's band. The plan frame legitimately receives an
     # unresolved "" — public start()'s dry-run branch returns before the operation band is resolved,
     # and _start_impl resolves it itself — so the plan is anchored on its rendered band as well.
@@ -825,7 +825,7 @@ def test_restart_band_is_resolved_under_admission_not_before(tmp_path, monkeypat
         return real_impl(self, target, **kw)
     monkeypatch.setattr(type(svc), "_start_impl", impl)
     before = b433.read_bytes() if b433.exists() else None
-    svc.restart("voice", apply=True)
+    assert not svc.restart("voice", apply=True).ok  # the daemon is not installed here: the start leg fails
     assert seen["stop"] == "868", seen        # the band the operation runs on is the one it stops
     assert seen["launch"] == "868", seen      # ...and the same band it launches
     assert (b433.read_bytes() if b433.exists() else None) == before   # 433 byte-identical
@@ -1526,7 +1526,7 @@ def test_a_config_write_during_a_launch_is_reported_not_locked_out(tmp_path, mon
         seen["at_launch"] = svc._stored_param_value("chat", "file", "loraham-chat", "call")
         return real_impl(self, t, **kw)
     monkeypatch.setattr(type(svc), "_start_impl", spy)
-    svc.start("chat", apply=True)
+    assert not svc.start("chat", apply=True).ok  # the daemon is not installed here
     assert seen["at_launch"] == "XX0XXA-7"     # the launch used the saved identity
     # a later write is ACCEPTED (never blocked) and the live consumer is warned
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-9"}).ok

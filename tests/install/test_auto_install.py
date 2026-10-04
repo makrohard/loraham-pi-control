@@ -1892,7 +1892,7 @@ def test_host_test_unverified_escaped_writes_unsafe(tmp_path, monkeypatch):
                                      "unsafe_scope": "escaped-or-output-unverified",
                                      "session_ident": None}))
     svc = _svc(tmp_path)
-    svc.auto_install(apply=True, tests=True, emit=lambda s: None)
+    assert not svc.auto_install(apply=True, tests=True, emit=lambda s: None).ok
     st = svc.auto_install_status()
     assert st["state"] == "unsafe" and st["unsafe_scope"] == "escaped-or-output-unverified"
 
@@ -2124,7 +2124,7 @@ def test_independent_stack_is_attempted_when_another_fails(tmp_path, monkeypatch
     monkeypatch.setattr(ControllerService, "test",
                         lambda self, t, tx=False, apply=False, auto_install_ctx=None, **k:
                         ActionResult(True, "tested"))
-    svc.auto_install(apply=True, tests=False, emit=lambda s: None)
+    assert not svc.auto_install(apply=True, tests=False, emit=lambda s: None).ok
     rows = {x["id"]: x for x in svc.auto_install_status()["stacks"]}
     assert rows["alpha"]["status"] == "fail"
     # beta is INDEPENDENT: attempted and successful, never blocked on alpha's failure.
@@ -2387,7 +2387,7 @@ def test_a_refused_binary_row_names_the_real_source_command(tmp_path, monkeypatc
            for st, _ in scope}
     sel["meshtastic"]["version"] = "binary"
     assert svc._auto_install_selection_errors(scope, sel) == []
-    svc.auto_install(apply=True, tests=False, selection=sel, emit=lambda s: None)
+    assert not svc.auto_install(apply=True, tests=False, selection=sel, emit=lambda s: None).ok
     row = {x["id"]: x for x in svc.auto_install_status()["stacks"]}["meshtastic"]
     assert row["status"] == "blocked"
     detail = row["detail"]
@@ -2417,7 +2417,7 @@ def test_auto_install_pin_mismatch_row_names_the_manual_command(tmp_path, monkey
     sel = {st.id: {"install": True, "version": "pinned", "tests": False, "tx": False}
            for st, _ in scope}
     sel["meshtastic"]["version"] = "binary"
-    svc.auto_install(apply=True, tests=False, selection=sel, emit=lambda s: None)
+    assert not svc.auto_install(apply=True, tests=False, selection=sel, emit=lambda s: None).ok
     detail = {x["id"]: x for x in svc.auto_install_status()["stacks"]}["meshtastic"]["detail"]
     assert detail.split(" — ", 1)[1].startswith("update LHPC first (lhpc self-update --apply)")
     if overridable:

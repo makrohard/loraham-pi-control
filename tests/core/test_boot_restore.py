@@ -258,10 +258,10 @@ def test_direct_component_start_records_component_scope(tmp_path, monkeypatch, s
                start_scope="":
         (captured.setdefault(comp.id, []).append((requested_target, start_scope)) or
          lifecycle_mod.StartLaunch(True, "")))
-    svc.start("loraham-kiss-tnc", apply=True)
+    assert not svc.start("loraham-kiss-tnc", apply=True).ok  # the stubbed spawn opens no endpoint: unverified
     assert captured.get("loraham-kiss-tnc") == [("loraham-kiss-tnc", "component")]
     captured.clear()
-    svc.start("kiss", apply=True)
+    assert not svc.start("kiss", apply=True).ok  # the stubbed spawn opens no endpoint: unverified
     assert captured.get("loraham-kiss-tnc") == [("kiss", "stack")]
 
 
@@ -1000,7 +1000,7 @@ def test_start_feed_clear_scoped_to_operation_bands(tmp_path, monkeypatch, set_c
     monkeypatch.setattr(lifecycle_mod.Lifecycle, "start",
                         lambda self, stack, comp, params=None, band="", **kw:
                         lifecycle_mod.StartLaunch(True, ""))
-    svc.start("kiss", apply=True)         # post-start endpoint verify fails on the fake box —
+    assert not svc.start("kiss", apply=True).ok         # post-start endpoint verify fails on the fake box —
     assert cleared == ["433"]             # irrelevant: the clear happened, scoped to 433 only
 
 
@@ -1035,7 +1035,7 @@ def test_hook_runs_after_every_lock_before_any_mutation(tmp_path, monkeypatch, s
     monkeypatch.setattr(lifecycle_mod.Lifecycle, "start",
                         lambda self, stack, comp, params=None, band="", **kw:
                         (events.append("spawn"), lifecycle_mod.StartLaunch(True, ""))[1])
-    svc.start("kiss", apply=True, _before_start_locked=lambda: events.append("hook"))
+    assert not svc.start("kiss", apply=True, _before_start_locked=lambda: events.append("hook")).ok  # the stubbed spawn opens no endpoint: unverified
     assert "hook" in events and "spawn" in events
     hook_at = events.index("hook")
     assert "admission" in events[:hook_at] and "config-stable" in events[:hook_at]
@@ -1176,7 +1176,8 @@ def test_status_completed_run_with_pending_projects_truncated(tmp_path, monkeypa
     path = _write_record(tmp_path, _v1())
     calls = []
     monkeypatch.setattr(ControllerService, "start", _stub_start(calls, ok=False, call_hook=False))
-    svc.boot_restore_run()                          # hook never ran -> pending item, run "failed"
+    r = svc.boot_restore_run()
+    assert not r.ok and r.data["driver_completed"]  # an item left pending, not an integrity failure
     assert path.exists()
     st = svc.boot_restore_status()
     assert st["state"] == "truncated"               # remedy: restart the unit
@@ -1732,7 +1733,8 @@ def test_parts_a_failed_stack_starts_no_part(tmp_path, monkeypatch):
     _mc_records(tmp_path)
     calls = []
     monkeypatch.setattr(ControllerService, "start", _parts_stub(calls, stack_ok=False))
-    svc.boot_restore_run()
+    r = svc.boot_restore_run()
+    assert not r.ok and r.data["driver_completed"]  # the stack failed; the run completed
     assert [c["target"] for c in calls] == ["meshcore"]
     item = _journal_on_disk(tmp_path)["items"][0]
     assert item["state"] == "failed"

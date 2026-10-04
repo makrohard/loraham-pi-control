@@ -209,7 +209,8 @@ def test_run_service_times_the_venv_sync(tmp_path, monkeypatch, op_svc, capsys):
     import re
     svc, fake, pip = _advancing_svc(tmp_path, monkeypatch, op_svc)
     fake.commands[pip] = CommandResult(returncode=1, stdout="", stderr="boom")
-    svc.self_update_run_service()
+    r = svc.self_update_run_service()
+    assert not r.ok and r.data["venv_sync_failed"]
     err = capsys.readouterr().err
     assert len(re.findall(r"^\[selfupdate\] pip sync \d+\.\d s$", err, re.M)) == 1, err
 

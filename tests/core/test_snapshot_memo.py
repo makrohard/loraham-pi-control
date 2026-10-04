@@ -273,7 +273,7 @@ def test_graywolf_upstream_update_drops_the_memo(tmp_path):
     # It re-marks the build and replaces the installed tree; a later read must reassess.
     svc = _svc(tmp_path)
     a = svc.build_snapshot()
-    svc.graywolf_upstream_update("graywolf", apply=False)
+    assert not svc.graywolf_upstream_update("graywolf", apply=False).ok  # no upstream check recorded
     assert svc.build_snapshot() is not a
 
 
