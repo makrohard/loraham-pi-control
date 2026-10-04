@@ -23,12 +23,22 @@ pytestmark = [pytest.mark.contract, pytest.mark.safety("P0.5")]
 SRC = "src/loraham-kiss-tnc"
 REMOTE = "https://github.com/makrohard/loraham-kiss-tnc.git"
 RUNNING = {555: ["loraham-kiss-tnc"]}
+# A checkout's representative content: a top-level file, a nested source, a dotfile.
+SEEDED = {"README.md": b"# kiss\n", "src/tnc.c": b"int main(void) { return 0; }\n",
+          ".gitignore": b"*.o\n"}
+
+
+def _tree(root):
+    """Every file under `root` (relative path -> bytes)."""
+    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
 
 
 def _client(tmp_path, web, cmdlines):
-    """kiss's source checked out, recorded as LHPC's adoption, and answering the identity queries
+    """kiss's source checked out (the `SEEDED` files), recorded as LHPC's adoption, and answering the identity queries
     with its canonical remote; `cmdlines` is the host's process table."""
-    (tmp_path / SRC).mkdir(parents=True)
+    for rel, data in SEEDED.items():
+        (tmp_path / SRC / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / SRC / rel).write_bytes(data)
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord(SRC, "", "pinned", "", time.time(), "",
@@ -58,9 +68,13 @@ def _post(client, csrf, op):
 
 @pytest.mark.parametrize("op", ["uninstall", "clean"])
 def test_a_running_stack_is_refused_and_keeps_its_source(tmp_path, web, csrf, op):
-    flashes = _post(_client(tmp_path, web, RUNNING), csrf, op)
-    assert (tmp_path / SRC).is_dir()
-    assert source_registry.read_record(Paths(runtime_root=tmp_path), SRC) is not None
+    client = _client(tmp_path, web, RUNNING)
+    registry = tmp_path / "state" / "source-registry"
+    before = _tree(registry)
+    assert before and _tree(tmp_path / SRC) == SEEDED
+    flashes = _post(client, csrf, op)
+    assert _tree(tmp_path / SRC) == SEEDED                  # every file kept, byte for byte
+    assert _tree(registry) == before                        # the adoption record untouched
     assert [cat for cat, _msg in flashes] == ["warn"]
     assert "running" in flashes[0][1].lower()
 
