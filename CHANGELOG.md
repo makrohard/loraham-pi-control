@@ -7,6 +7,11 @@
   What a save accepts, refuses, writes and reports is unchanged; two saves of the same stack at the same
   moment still both land.
 
+- Starting and restarting a stack now runs in five visible phases in the code — taking its locks,
+  checking everything against the saved settings, starting, verifying, and recording the outcome — and a
+  restart as checks, stop, start and the return of its optional parts. The recorded start, stop, restart and
+  boot-restore cases give the same results, refusals and writes as before.
+
 - A stack start that fails now stops again the parts it started — a part that fails its own check is
   told to stop at once, the parts it verified once the start as a whole has failed — and the daemon too when that
   start launched it (a daemon that was already running stays). The result names anything that remains
