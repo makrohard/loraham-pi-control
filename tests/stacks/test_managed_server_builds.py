@@ -248,6 +248,58 @@ class _StepsSucceedRevisionUnreadable(dict):
         return CommandResult(1 if "rev-parse" in argv else 0, "ok\n", "")
 
 
+class _StepsSucceedRevisionReadable(dict):
+    """A runner table answering every build step with rc 0 and `git rev-parse` with one revision."""
+
+    def get(self, argv, default=None):
+        from lhpc.core.probes.backends import CommandResult
+        return CommandResult(0, "c" * 40 + "\n" if "rev-parse" in argv else "ok\n", "")
+
+
+def test_a_successful_cli_source_build_writes_its_own_revision_and_reads_built(tmp_path):
+    svc = ControllerService(system=FakeSystem(commands=_StepsSucceedRevisionReadable()).system,
+                            paths=Paths(runtime_root=tmp_path))
+    assert svc.bootstrap(apply=True).ok
+    (tmp_path / "src" / "meshtastic-firmware").mkdir(parents=True)
+    res = svc.build("meshtastic", apply=True)
+    assert res.ok, res.summary
+    c = _mesh(svc)
+    side = tmp_path / "src" / "meshtastic-firmware" / (c.build_marker + ".rev")
+    assert side.read_text() == f"consumed meshtastic {'c' * 40}\n"
+    svc.invalidate_snapshot()
+    assert svc.is_built(c) is True
+
+
+def test_a_successful_console_source_build_writes_its_own_revision_and_reads_built(tmp_path):
+    """The console's detached build: the launcher reads the checkout's revision under its locks
+    and writes the side file before the marker."""
+    import subprocess
+
+    from lhpc.core import build_launcher_runtime
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+    src = tmp_path / "src" / "meshtastic-firmware"
+    src.mkdir(parents=True)
+    git = ["git", "-C", str(src), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+    sha = subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True,
+                         text=True).stdout.strip()
+    svc = ControllerService(system=FakeSystem(commands=readable_heads(tmp_path, sha)).system,
+                            paths=Paths(runtime_root=tmp_path))
+    c = _mesh(svc)
+    assert svc._consumed_source_lines(c) == ""          # premise: meshtastic consumes no other source
+    rev_path, rev_consumed = svc._own_rev_source(c)     # what the console hands the launcher
+    build_launcher_runtime.run({
+        "steps": [{"argv": ["true"]}], "cwd": str(src), "runtime_root": str(tmp_path),
+        "lock_names": [], "index_lock_name": "",
+        "marker_path": str(src / c.build_marker), "marker_text": BUILD_MARKER_TEXT,
+        "inputs_path": str(svc.build_inputs_path(c)), "inputs_text": svc.build_inputs_text(c),
+        "rev_path": str(rev_path), "rev_consumed": [list(p) for p in rev_consumed]})
+    assert (src / (c.build_marker + ".rev")).read_text() == f"consumed meshtastic {sha}\n"
+    svc.invalidate_snapshot()
+    assert svc.is_built(c) is True
+
+
 def test_a_source_build_whose_own_revision_cannot_be_read_says_so_and_never_reads_built(tmp_path):
     svc = ControllerService(system=FakeSystem(commands=_StepsSucceedRevisionUnreadable()).system,
                             paths=Paths(runtime_root=tmp_path))
