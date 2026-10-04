@@ -1,4 +1,4 @@
-"""The phases of a start, each driven directly from explicit inputs.
+"""The phases of a start and the legs of a restart, each driven directly from explicit inputs.
 
 The pure decisions (`lhpc.core.start_plan`) take plain values. The phase methods are called on a
 stand-in `self` that provides only the collaborators the phase may use: a phase reaching for any
@@ -209,3 +209,30 @@ def test_finalize_keeps_a_restart_marker_saved_during_the_launch(monkeypatch, ma
     res = M._finalize_start(me, _prep(), run, [], [])
     assert res.ok and res.summary == "Run applied for 's'."
     assert cleared_for == (["s"] if cleared else [])
+
+
+# ── the restart's legs ──
+
+def test_restart_preflight_refuses_before_any_stop():
+    """The stand-in has no `stop`, `_stop_impl` or later check: the refusal is returned first."""
+    refusal = ActionResult(False, "Cannot restart 's': a callsign is required")
+    me = _Self(operation_band=lambda t, b: b, _start_static_refusal=lambda t, op: None,
+               _identity_refusal=lambda t, b, op: refusal)
+    assert M._restart_preflight(me, "s", "433", False, False, True) is refusal
+
+
+def test_restore_raises_only_what_the_start_did_not_bring_back():
+    started = []
+    stopped = ActionResult(True, "stopped", details=["  [stopped] main"],
+                           results=(_row("main", Outcome.STOPPED, "stop"),))
+    res = ActionResult(True, "Run applied for 's'.", details=["  [verified] main"],
+                       results=(_row("main", Outcome.VERIFIED),),
+                       next_commands=["lhpc status s"])
+    me = _Self(_running_optional_components=lambda t: ["web"],
+               start=lambda cid, apply, band: started.append(cid) or ActionResult(True, "ok"))
+    out = M._restore_optional(me, "s", "433", stopped, res, ["web", "ui"])
+    assert started == ["ui"]
+    assert out.ok and out.summary == ("Restarted 's'. Run applied for 's'. Optional components "
+                                      "restarted: ui.")
+    assert [(r.component, r.action) for r in out.results] == [("main", "stop"),
+                                                              ("main", "start")]

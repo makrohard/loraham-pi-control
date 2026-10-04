@@ -2876,52 +2876,33 @@ class LifecycleOpsMixin:
                     # the start that follows.
                     if (_pf_err := self._identity_refusal(target, _rband, "restart")) is not None:
                         return _pf_err
-                    _order = self._run_order(target)
-                    _radio = ""
-                    if _order:
-                        _r, _ = self._daemon_needs(_order, _rband)
-                        _radio = _r or ""
+                    _order, _radio = self._order_radio(target, _rband)
                     if (_pf_err := self._saved_launch_refusal(target, _rband, "restart")) is not None:
                         return _pf_err
-                    try:
-                        with self._lifecycle_guard("restart", target, _rband,
-                                                   stop_owners=stop_owners, cascade=cascade,
-                                                   radio=_radio):
-                            # MESHCORE POSITION: taken HERE — under the guard, before the stop —
-                            # and handed to the nested start, so a restart queries gpsd exactly
-                            # once and a refusal leaves the running node up rather than stopping
-                            # it and only then discovering there is no position.
-                            _pf_err, _position, _pos_note = self._position_refusal(target,
-                                                                                   "restart")
-                            if _pf_err is not None:
-                                return _pf_err
-                            # PRE-MUTATION HOOK: every lock held, nothing stopped yet. A refusal
-                            # cancels the restart with the running stack untouched.
-                            if _before_restart_locked is not None:
-                                _hook_refusal = _before_restart_locked()
-                                if _hook_refusal is not None:
-                                    return _hook_refusal
-                            return self._restart_impl(target, apply=True,
-                                                      stop_owners=stop_owners, band=_rband,
-                                                      cascade=cascade, position=_position,
-                                                      position_note=_pos_note)
-                    except SourceTxnBlocked as blocked:
-                        return ActionResult(False, f"Cannot restart '{target}': {blocked}",
-                                            next_commands=[f"lhpc status {target}"])
-                    except reslock.ResourceBusy as busy:
-                        return ActionResult(False, f"Cannot restart '{target}': {busy}",
-                                            next_commands=[f"lhpc status {target}"])
-        except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
-        except reslock.ResourceBusy as busy:
-            return ActionResult(False, f"Cannot restart '{target}': {busy}",
-                                next_commands=[f"lhpc status {target}"])
-        except SourceTxnBlocked as blocked:
-            return ActionResult(False, f"Cannot restart '{target}': {blocked}",
-                                next_commands=[f"lhpc status {target}"])
-        except (OSError, PathContainmentError) as exc:
-            return ActionResult(False, f"Cannot restart '{target}': configuration guard unavailable "
-                                f"({exc})", next_commands=[f"lhpc status {target}"])
+                    with self._lifecycle_guard("restart", target, _rband,
+                                               stop_owners=stop_owners, cascade=cascade,
+                                               radio=_radio):
+                        # MESHCORE POSITION: taken HERE — under the guard, before the stop —
+                        # and handed to the nested start, so a restart queries gpsd exactly
+                        # once and a refusal leaves the running node up rather than stopping
+                        # it and only then discovering there is no position.
+                        _pf_err, _position, _pos_note = self._position_refusal(target,
+                                                                               "restart")
+                        if _pf_err is not None:
+                            return _pf_err
+                        # PRE-MUTATION HOOK: every lock held, nothing stopped yet. A refusal
+                        # cancels the restart with the running stack untouched.
+                        if _before_restart_locked is not None:
+                            _hook_refusal = _before_restart_locked()
+                            if _hook_refusal is not None:
+                                return _hook_refusal
+                        return self._restart_impl(target, apply=True,
+                                                  stop_owners=stop_owners, band=_rband,
+                                                  cascade=cascade, position=_position,
+                                                  position_note=_pos_note)
+        except (AdmissionRefused, reslock.ResourceBusy, SourceTxnBlocked, OSError,
+                PathContainmentError) as exc:
+            return self._guard_refusal("restart", target, exc)
 
     def _saved_launch_refusal(self, target: str, band: str, op: str):
         """The typed refusal for SAVED launch values the launch itself would reject, or None.
@@ -3120,14 +3101,8 @@ class LifecycleOpsMixin:
                 return self._restart_impl_inner(target, apply=True, stop_owners=stop_owners,
                                                 band=band, cascade=cascade, position=position,
                                                 position_note=position_note)
-        except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
-        except SourceTxnBlocked as blocked:
-            return ActionResult(False, f"Cannot restart '{target}': {blocked}",
-                                next_commands=[f"lhpc status {target}"])
-        except (OSError, PathContainmentError) as exc:
-            return ActionResult(False, f"Cannot restart '{target}': configuration guard unavailable "
-                                f"({exc})", next_commands=[f"lhpc status {target}"])
+        except (AdmissionRefused, SourceTxnBlocked, OSError, PathContainmentError) as exc:
+            return self._guard_refusal("restart", target, exc)
 
     def _restart_impl_inner(self, target: str, apply: bool = False, stop_owners: bool = False,
                             band: str = "", cascade: bool = False,
@@ -3135,7 +3110,13 @@ class LifecycleOpsMixin:
                             position_note: str = "") -> ActionResult:
         """Stop then start a target — used to apply a config change to a running stack.
         With no band given, keep the band the stack is currently running on (so a
-        restart doesn't move a band-switchable stack back to its default band)."""
+        restart doesn't move a band-switchable stack back to its default band).
+
+        THE RESTART, its legs in order: PREFLIGHT (`_restart_preflight`: every refusal the start that
+        follows would take, bar MeshCore's position refusal (public `restart`'s, unchanged), before any stop) → STOP (the public `stop`;
+        one that is not verified ends the restart, nothing started) → START (the public `start`,
+        its five phases and roll-back included) → RESTORE (`_restore_optional`: the optional
+        components that were up and the start did not raise)."""
         # DEFENSIVE twin of the public-entry guard: an internal/direct restart of voice's
         # terminal fallback must refuse BEFORE stop() — the later start can only ever refuse
         # it, and by then the component and its daemon would already be down (restart
@@ -3152,9 +3133,36 @@ class LifecycleOpsMixin:
             # to eliminate, and the preflight then materialized the inherited global over a deliberate
             # local callsign. It also split the dry-run plan from the applied band.)
             band = self.operation_band(target, band)
-        # PREFLIGHT, plan and apply alike, BEFORE the stop: every refusal the start that follows
-        # would take — never stop a running target and only then discover that the start is
-        # refused. On apply `band` is already the operation band; on the plan an explicit band
+        if (_r := self._restart_preflight(target, band, stop_owners, cascade, apply)) is not None:
+            return _r
+        if not apply:
+            return self._restart_preview(target, band, cascade)
+        # OPTIONAL components that are UP inside the stack (MeshChat beside rns, an optional
+        # client started by name) come back after the restart: a stack start raises only the
+        # run order, so before 0.9.2 `lhpc stack restart reticulum` left a running MeshChat
+        # stopped (F-R3, reticulum-rnode-test-2026-09-24). Captured BEFORE the stop leg — after
+        # it nothing is running — and re-raised by name after the stack is back.
+        _optional_up = self._running_optional_components(target) if self.stack(target) else []
+        stopped = self.stop(target, apply=True, cascade=cascade, band=band, _operator=False)
+        if not stopped.ok:
+            # Strict transition: never start after an unverified/failed stop. Preserve
+            # the failed-stop typed results as the restart evidence.
+            return ActionResult(False,
+                                f"Restart aborted for '{target}': stop was not verified.",
+                                details=[*list(stopped.details), "  [aborted] not starting " "after an unverified stop — resolve the stop first"],
+                                results=tuple(stopped.results),
+                                next_commands=[f"lhpc status {target}"])
+        time.sleep(1.0)  # let sockets/locks release before re-starting
+        res = self.start(target, apply=True, stop_owners=stop_owners, band=band,
+                         position=position, position_note=position_note)
+        return self._restore_optional(target, band, stopped, res, _optional_up)
+
+    def _restart_preflight(self, target: str, band: str, stop_owners: bool, cascade: bool,
+                           apply: bool):
+        """PREFLIGHT of a restart, plan and apply alike, BEFORE the stop: every refusal the start that
+        follows would take (except MeshCore's position refusal, taken by public `restart` before, as
+        before) — never stop a running target, then find the start refused. Returns it, or None."""
+        # On apply `band` is already the operation band; on the plan an explicit band
         # is still raw, so it is resolved here the way the apply resolved it.
         _rband = self.operation_band(target, band)
         if (_r := self._start_static_refusal(target, "restart")) is not None:
@@ -3188,66 +3196,59 @@ class LifecycleOpsMixin:
                                                     check_blockers=_check, render=apply,
                                                     exclude_holders=_ex)) is not None:
                 return _r
-        if not apply:
-            # THE COMBINED restart plan: the start plan (preflight, blockers, identity — a refusal
-            # there IS the restart's refusal) plus the stop plan's consequential collateral
-            # (dependents that stop too, the forced daemon cascade, the other served bands) — the
-            # two existing planners, merged, so a web Restart that would take OTHER stacks down can
-            # ask for confirmation while an isolated restart runs directly. The INNER planners:
-            # `restart()` (the public, snapshot-invalidating entry) has already taken the
-            # controller/GUI/mode/band refusals the public `start()`/`stop()` would repeat, and
-            # going through them again would drop the request memo and the snapshot between the
-            # two legs — a second full assessment inside the web Restart click.
-            res = self._start_impl(target, apply=False, band=band)
-            if not res.ok:
-                return ActionResult(False, res.summary.replace("start", "restart", 1),
-                                    details=res.details, data=res.data,
-                                    next_commands=res.next_commands)
-            stp = self._stop_impl(target, apply=False, band=band)
-            data = dict(res.data)
-            data["dependents"] = list(stp.data.get("dependents") or [])
-            data["other_bands"] = list(stp.data.get("other_bands") or [])
-            # The plan says what THIS restart will do with the dependents: a cascading restart
-            # (the confirmed web choice; a daemon always cascades) stops them first; a plain one
-            # (the CLI, an unconfirmed web click) leaves them running across the restart — the
-            # same decision the apply takes, never a `[stop]` the stop leg will not perform.
-            _will_stop = self._restart_stops_dependents(target, cascade)
-            _opt = self._running_optional_components(target) if self.stack(target) else []
-            data["optional_restarted"] = list(_opt)
-            details = [*[(f"  [stop] {d}" if _will_stop else
-                          f"  [running dependent] {d}: left running across this restart "
-                          "(a cascading restart stops it first)") for d in data["dependents"]],
-                       *[f"  [optional] {c}: running — restarted with the stack" for c in _opt],
-                       *res.details]
-            return ActionResult(res.ok, f"Restart plan for '{target}': stop then run.",
-                                details=details, data=data,
-                                next_commands=[f"lhpc stack restart {target} --yes"])
-        # OPTIONAL components that are UP inside the stack (MeshChat beside rns, an optional
-        # client started by name) come back after the restart: a stack start raises only the
-        # run order, so before 0.9.2 `lhpc stack restart reticulum` left a running MeshChat
-        # stopped (F-R3, reticulum-rnode-test-2026-09-24). Captured BEFORE the stop leg — after
-        # it nothing is running — and re-raised by name after the stack is back.
-        _optional_up = self._running_optional_components(target) if self.stack(target) else []
-        stopped = self.stop(target, apply=True, cascade=cascade, band=band, _operator=False)
-        if not stopped.ok:
-            # Strict transition: never start after an unverified/failed stop. Preserve
-            # the failed-stop typed results as the restart evidence.
-            return ActionResult(False,
-                                f"Restart aborted for '{target}': stop was not verified.",
-                                details=[*list(stopped.details), "  [aborted] not starting " "after an unverified stop — resolve the stop first"],
-                                results=tuple(stopped.results),
-                                next_commands=[f"lhpc status {target}"])
-        time.sleep(1.0)  # let sockets/locks release before re-starting
-        res = self.start(target, apply=True, stop_owners=stop_owners, band=band,
-                         position=position, position_note=position_note)
+        return None
+
+    def _restart_preview(self, target: str, band: str, cascade: bool) -> ActionResult:
+        """The restart PLAN (after its preflight passed). Advisory only: the apply decides
+        everything again under its own guards and never reads this result."""
+        # THE COMBINED restart plan: the start plan (preflight, blockers, identity — a refusal
+        # there IS the restart's refusal) plus the stop plan's consequential collateral
+        # (dependents that stop too, the forced daemon cascade, the other served bands) — the
+        # two existing planners, merged, so a web Restart that would take OTHER stacks down can
+        # ask for confirmation while an isolated restart runs directly. The INNER planners:
+        # `restart()` (the public, snapshot-invalidating entry) has already taken the
+        # controller/GUI/mode/band refusals the public `start()`/`stop()` would repeat, and
+        # going through them again would drop the request memo and the snapshot between the
+        # two legs — a second full assessment inside the web Restart click.
+        res = self._start_impl(target, apply=False, band=band)
+        if not res.ok:
+            return ActionResult(False, res.summary.replace("start", "restart", 1),
+                                details=res.details, data=res.data,
+                                next_commands=res.next_commands)
+        stp = self._stop_impl(target, apply=False, band=band)
+        data = dict(res.data)
+        data["dependents"] = list(stp.data.get("dependents") or [])
+        data["other_bands"] = list(stp.data.get("other_bands") or [])
+        # The plan says what THIS restart will do with the dependents: a cascading restart
+        # (the confirmed web choice; a daemon always cascades) stops them first; a plain one
+        # (the CLI, an unconfirmed web click) leaves them running across the restart — the
+        # same decision the apply takes, never a `[stop]` the stop leg will not perform.
+        _will_stop = self._restart_stops_dependents(target, cascade)
+        _opt = self._running_optional_components(target) if self.stack(target) else []
+        data["optional_restarted"] = list(_opt)
+        details = [*[(f"  [stop] {d}" if _will_stop else
+                      f"  [running dependent] {d}: left running across this restart "
+                      "(a cascading restart stops it first)") for d in data["dependents"]],
+                   *[f"  [optional] {c}: running — restarted with the stack" for c in _opt],
+                   *res.details]
+        return ActionResult(res.ok, f"Restart plan for '{target}': stop then run.",
+                            details=details, data=data,
+                            next_commands=[f"lhpc stack restart {target} --yes"])
+
+    def _restore_optional(self, target: str, band: str, stopped: ActionResult,
+                          res: ActionResult, optional_up: list[str]) -> ActionResult:
+        """RESTORE, the restart's last leg: after a successful start, the OPTIONAL components
+        that were up before the stop (`optional_up`) and that the start did not bring back
+        itself are started again by name; one that does not come back fails the restart. The
+        result is the stop's details and rows followed by the start's (and the re-raised)."""
         ok, details, results = res.ok, [*stopped.details, *res.details], list(res.results)
         _reraised, _lost = [], []
-        if ok and _optional_up:
+        if ok and optional_up:
             # Start ONLY what the stack start did not bring back itself (an optional component
             # that is also in the run order — a GPS feed, a web UI — is up again already; a
             # second start() would answer "already healthy" and the report would lie).
             _still_up = set(self._running_optional_components(target))
-            for cid in [c for c in _optional_up if c not in _still_up]:
+            for cid in [c for c in optional_up if c not in _still_up]:
                 r2 = self.start(cid, apply=True, band=band)
                 (_reraised if r2.ok else _lost).append(cid)
                 details += [f"  [optional] {cid}: was running — "
