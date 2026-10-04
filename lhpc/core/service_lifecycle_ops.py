@@ -37,6 +37,10 @@ from .service_base import (
 )
 from .snapshot_memo import invalidates_snapshot
 
+# docs/architecture.md, SPI policy: the maintainer's wording, shown where the pair is admitted.
+SPI_SHARED_WARNING = ("daemon 433 and meshtastic 868 share one SPI bus; transmitting at the same "
+                      "moment can crash meshtasticd (measured) — avoid simultaneous transmission")
+
 # A HMAC-apply build-log base is a strict controller-generated prefix bound to the FULL 32-hex run id;
 # validated in build() BEFORE any path is constructed (marker-time validation alone is too late).
 _HMAC_LOG_BASE_RE = _re.compile(r"^hmac-apply-[0-9a-f]{32}$")
@@ -463,6 +467,28 @@ class LifecycleOpsMixin:
                     add(sid, c.id,
                         f"radio {'/'.join(sorted(comp_bands & needed_bands))} MHz")
         return blockers
+
+    def _spi_shared_warning(self, target: str, band: str = "", radio: str = "") -> str | None:
+        """The maintainer's "allow, but warn" for the one shared-SPI pair LHPC admits
+        (docs/architecture.md, SPI policy): the daemon on 433 beside a component that drives the
+        bus WITHOUT the daemon's spi0.lock (claims `spi.bus.0.unlocked`, not `spi.bus.0`:
+        meshtasticd) on 868. Both directions: this start brings one side up while the other runs."""
+        def unlocked(c):
+            keys = {r.key for r in c.resources}
+            return "spi.bus.0.unlocked" in keys and "spi.bus.0" not in keys
+        order = self._run_order(target) or []
+        if any(unlocked(c) for _, c in order) and self._config_band(target, band) == "868" \
+                and "433" in self._daemon_claimed_bands():
+            return SPI_SHARED_WARNING
+        if any(c.id == self.DAEMON_ID for _, c in order) and "433" in self._daemon_serve_bands(radio):
+            for ss in self.build_snapshot().stacks:
+                for c in ss.stack.components:
+                    if unlocked(c) and ss.components[c.id].run_state in (
+                            RunState.RUNNING, RunState.DEGRADED) and "868" in (
+                            self._live_bands(ss.stack.id, c.band)
+                            if self.stack_bands(ss.stack.id) else {c.band}):
+                        return SPI_SHARED_WARNING
+        return None
 
     def gps_block(self, target: str) -> tuple[str, list]:
         """(reason, next_commands) when this stack must NOT start under the current GPS plan.
@@ -1024,6 +1050,8 @@ class LifecycleOpsMixin:
             for bl in blockers:
                 details.append(f"  [conflict] {bl['resource']} is held by running stack "
                                f"'{bl['holder_stack']}' ({bl['holder']})")
+            if not blockers and (_spi := self._spi_shared_warning(target, band, radio)):
+                details.append(f"  [warning] {_spi}")
             return ActionResult(True, f"Run plan for '{target}': {len(order)} component(s) in order.",
                                 details=details,
                                 next_commands=[f"lhpc stack start {target}"
@@ -1548,6 +1576,8 @@ class LifecycleOpsMixin:
             # `auto` could not get a fix. Never gating, but never silent either: the node is
             # on the air without a position and the operator has to be able to see that.
             out = [*out, f"  [gps] {position_note}"]
+        if ok and (_spi := self._spi_shared_warning(target, band, radio)):
+            out = [*out, f"  [warning] {_spi}"]   # only once the new side came up
         return ActionResult(ok, summary, details=out, results=tuple(results),
                             next_commands=[f"lhpc status {target}", f"lhpc logs {target}",
                                            f"lhpc stack stop {target}"])

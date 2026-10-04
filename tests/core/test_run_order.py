@@ -1308,3 +1308,55 @@ def test_a_non_advisory_exclusive_claim_still_blocks(tmp_path):
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     assert any(b["resource"] == "spi.bus.0.unlocked" and b["holder"] == "meshtastic"
                for b in svc.run_blockers("reticulum"))
+
+
+# --- the shared-SPI warning (docs/architecture.md, SPI policy: "allow, but warn") ------------
+
+def _dsvc(tmp_path, radio):
+    """The daemon running and serving `radio` (its command line), nothing else running."""
+    return ControllerService(system=FakeSystem(
+        cmdlines_data={100: ["loraham_daemon", "--radio", radio]},
+        unix_replies={f"/tmp/loraconf{radio}.sock": _RDY6}).system,
+        paths=Paths(runtime_root=tmp_path))
+
+
+def test_meshtastic_868_beside_the_daemon_on_433_is_warned(tmp_path):
+    from lhpc.core.service_lifecycle_ops import SPI_SHARED_WARNING
+    svc = _dsvc(tmp_path, "433")
+    assert svc._spi_shared_warning("meshtastic", band="868") == SPI_SHARED_WARNING
+    assert svc.save_config_bundle(
+        "meshtastic", values={"node_name": "Field Node", "node_short": "FN1"}).ok
+    plan = svc.start("meshtastic", band="868")
+    assert f"  [warning] {SPI_SHARED_WARNING}" in plan.details, plan.details
+
+
+def test_the_daemon_on_433_beside_meshtastic_868_is_warned(tmp_path):
+    from lhpc.core.service_lifecycle_ops import SPI_SHARED_WARNING
+    svc = _msvc(tmp_path, "868")
+    assert svc._spi_shared_warning("daemon", radio="433") == SPI_SHARED_WARNING
+    plan = svc.start("daemon", band="433")
+    assert f"  [warning] {SPI_SHARED_WARNING}" in plan.details, plan.details
+
+
+def test_no_other_pair_is_warned(tmp_path):
+    # meshtastic on 433 with the daemon on 868, both directions; and the Reticulum node, which
+    # takes the daemon's spi0.lock (it claims `spi.bus.0` too), beside the daemon on 433.
+    assert _dsvc(tmp_path / "a", "868")._spi_shared_warning("meshtastic", band="433") is None
+    assert _msvc(tmp_path / "b", "433")._spi_shared_warning("daemon", radio="868") is None
+    assert _dsvc(tmp_path / "c", "433")._spi_shared_warning("reticulum", band="868") is None
+    plan = _msvc(tmp_path / "d", "433").start("daemon", band="868")
+    assert plan.ok, plan.summary
+    assert not any("[warning]" in d for d in plan.details), plan.details
+
+
+def test_a_failed_start_beside_the_other_side_is_not_warned(tmp_path):
+    """The pair is side by side only once the new side came up: a FAILED applied start (here the
+    started side cannot run on this box) carries no warning, in either direction. The plan's line
+    stays: a plan has no outcome yet."""
+    res = _msvc(tmp_path / "a", "868").start("daemon", band="433", apply=True)
+    assert not res.ok and not any("[warning]" in d for d in res.details), res.details
+    svc = _dsvc(tmp_path / "b", "433")
+    assert svc.save_config_bundle(
+        "meshtastic", values={"node_name": "Field Node", "node_short": "FN1"}).ok
+    res = svc.start("meshtastic", band="868", apply=True)
+    assert not res.ok and not any("[warning]" in d for d in res.details), res.details
