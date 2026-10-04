@@ -407,6 +407,7 @@ FAKE_HWCLOCK_DEFAULT="${FAKE_HWCLOCK_DEFAULT:-/etc/default/fake-hwclock}"
 CLOCK_EPOCH="${CLOCK_EPOCH:-/usr/lib/clock-epoch}"
 TS_STAMP="${TS_STAMP:-$CLOCK_EPOCH.ok}"
 LHPC_TMPDIR="${LHPC_TMPDIR:-/run}"
+SYSTEMD_RUNDIR="${SYSTEMD_RUNDIR:-/run/systemd/system}"
 
 # Retract any previous success BEFORE changing anything: from here until the verdict, the
 # most recent run has not completed, and nothing should claim otherwise.
@@ -605,7 +606,7 @@ esac
 # Rerunning setup is the documented repair, so it must repair this too.
 systemctl enable gpsd >/dev/null 2>&1 || true
 if ! systemctl restart gpsd >/dev/null 2>&1; then
-  if [ -d /run/systemd/system ]; then
+  if [ -d "$SYSTEMD_RUNDIR" ]; then
     echo "[bootstrap-deps] WARNING: gpsd could not be enabled/started. GPS time will not be" >&2
     echo "[bootstrap-deps]          available until it is: sudo systemctl status gpsd" >&2
     TS_FAILED=1
@@ -621,7 +622,7 @@ if ! systemctl restart chrony >/dev/null 2>&1; then
   # removed systemd-timesyncd, the box now has NO time daemon at all. Saying nothing is
   # needed there is worse than saying nothing: it is a false all-clear. (This is exactly
   # how a fatal drop-in error survived a full install on box E, 2026-09-14.)
-  if [ -d /run/systemd/system ]; then
+  if [ -d "$SYSTEMD_RUNDIR" ]; then
     echo "[bootstrap-deps] ERROR: chrony REFUSED to start and systemd-timesyncd has been" >&2
     echo "[bootstrap-deps]        removed, so this box now has NO time daemon. See why:" >&2
     echo "[bootstrap-deps]          sudo systemctl status chrony" >&2

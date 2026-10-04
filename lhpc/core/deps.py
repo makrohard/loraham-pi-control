@@ -435,6 +435,7 @@ def time_source_setup_sh() -> str:
         # two pointing at the real /usr/lib.
         'TS_STAMP="${TS_STAMP:-$CLOCK_EPOCH.ok}"\n'
         'LHPC_TMPDIR="${LHPC_TMPDIR:-/run}"\n'
+        'SYSTEMD_RUNDIR="${SYSTEMD_RUNDIR:-/run/systemd/system}"\n'
         "\n"
         "# Retract any previous success BEFORE changing anything: from here until the verdict, the\n"
         "# most recent run has not completed, and nothing should claim otherwise.\n"
@@ -618,7 +619,7 @@ def time_source_setup_sh() -> str:
         "# Rerunning setup is the documented repair, so it must repair this too.\n"
         "systemctl enable gpsd >/dev/null 2>&1 || true\n"
         "if ! systemctl restart gpsd >/dev/null 2>&1; then\n"
-        "  if [ -d /run/systemd/system ]; then\n"
+        "  if [ -d \"$SYSTEMD_RUNDIR\" ]; then\n"
         "    echo \"[bootstrap-deps] WARNING: gpsd could not be enabled/started. GPS time will not be\" >&2\n"
         "    echo \"[bootstrap-deps]          available until it is: sudo systemctl status gpsd\" >&2\n"
         "    TS_FAILED=1\n"
@@ -634,7 +635,7 @@ def time_source_setup_sh() -> str:
         "  # removed systemd-timesyncd, the box now has NO time daemon at all. Saying nothing is\n"
         "  # needed there is worse than saying nothing: it is a false all-clear. (This is exactly\n"
         "  # how a fatal drop-in error survived a full install on box E, 2026-09-14.)\n"
-        "  if [ -d /run/systemd/system ]; then\n"
+        "  if [ -d \"$SYSTEMD_RUNDIR\" ]; then\n"
         "    echo \"[bootstrap-deps] ERROR: chrony REFUSED to start and systemd-timesyncd has been\" >&2\n"
         "    echo \"[bootstrap-deps]        removed, so this box now has NO time daemon. See why:\" >&2\n"
         "    echo \"[bootstrap-deps]          sudo systemctl status chrony\" >&2\n"

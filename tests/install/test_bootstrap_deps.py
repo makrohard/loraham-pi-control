@@ -151,7 +151,7 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
          systemctl_broken=False, systemctl_disabled="", wifi_iw_fail=False,
          wifi_iw_absent=False, fake_hwclock_absent=False, nm_devs=None, defroute_dev=None,
          chrony_conf=None, gpsd_default=None, lhpc_gps_source=None, runtime_root_env=True,
-         operator_home=None):
+         operator_home=None, systemd_running=True):
     fb, apt, um = _fakebin(tmp_path, no_sudo=no_sudo)
     if operator_home is not None:
         # The operator's home from `getent passwd` — a tmp dir, never a real user's home.
@@ -196,6 +196,12 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
     env["FAKE_HWCLOCK_DEFAULT"] = str(ts / "fake-hwclock")
     env["CLOCK_EPOCH"] = str(ts / "clock-epoch")
     env["LHPC_TMPDIR"] = str(ts)
+    # "Is systemd running" is a directory test; point it at a tmp dir (running) or a missing
+    # path (a container/image build) so no test depends on the host's own systemd.
+    rundir = ts / "systemd-run"
+    if systemd_running:
+        rundir.mkdir(exist_ok=True)
+    env["SYSTEMD_RUNDIR"] = str(rundir)
     # The NMEA pre-flight reads <runtime root>/config/local.toml. Always point it at a tmp root:
     # the default would resolve through the REAL operator's home and read their real config.
     rt = tmp_path / "runtime"; (rt / "config").mkdir(parents=True, exist_ok=True)
@@ -1787,6 +1793,15 @@ def test_a_refused_chrony_start_is_reported_as_an_error_not_an_all_clear(tmp_pat
     # image build) saw a green run over a box whose timesyncd had been replaced by a chrony that
     # would not start. Exit 11 is distinct from every other refusal this script makes.
     assert r.returncode == 11, r.stderr
+
+
+def test_a_refused_chrony_start_without_systemd_stays_best_effort(tmp_path):
+    """The container/image-build branch: no running systemd, so activation is genuinely not
+    possible. It prints a NOTE (stdout) and never fails the setup."""
+    r = _run(tmp_path, _ARGS, systemctl_fail="chrony", systemd_running=False)[0]
+    assert "NOTE: no running systemd" in r.stdout
+    assert "NO time daemon" not in r.stdout + r.stderr
+    assert r.returncode == 0, r.stderr
 
 
 def test_the_unprivileged_dry_run_still_simulates_the_time_source(tmp_path):
