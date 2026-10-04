@@ -35,6 +35,7 @@ the kernel), its cessation the real one. The substitutions, every one by name:
 
 from __future__ import annotations
 
+import collections
 import contextlib
 import dataclasses
 import json
@@ -100,6 +101,19 @@ ORDER_SEAMS = (
     (boot_restore, "write_journal", _journal),
 )
 
+# Each mutation's lock: a mutation recorded while no lock of that label is held fails the case at
+# teardown, and so does a mutation seam this table does not list. A lock's label is its seam label
+# up to the key's first ".", e.g. "lock:lifecycle" for every per-component lifecycle lock.
+REQUIRED_LOCK = {
+    "write": "lock:config",              # a config file or the config journal
+    "config-files": "lock:lifecycle",
+    "feed-floor": "lock:lifecycle",
+    "spawn": "lock:lifecycle",
+    "signal": "lock:lifecycle",
+    "build-step": "lock:source",
+    "invalidate-marker": "lock:source",
+}
+
 # Phases whose repeats are not behaviour (re-entrant guards, a recheck run twice): recorded on
 # their first occurrence only. Mutations, verifications and finalizations are recorded each time.
 _ONCE = ("admission", "lock", "config-stable", "recheck")
@@ -114,7 +128,30 @@ def phases(monkeypatch):
     """The ordered phase log of the operation under test: every `ORDER_SEAMS` call, delegating to
     the real implementation. Admission, lock and recheck labels are recorded on their FIRST
     occurrence only (`_ONCE`). Call `phases.clear()` after the scenario's set-up."""
-    log: list[str] = []
+    class _Log(list):
+        outside: list[str]      # mutations that ran while no lock was held (checked at teardown)
+
+    log = _Log()
+    held = collections.Counter()  # lock label -> context managers entered and not yet exited
+    outside = log.outside = []
+
+    class _Held:
+        """A lock helper's context manager, its label counted as held only once its entry returned
+        and until its exit ran, so a mutation moved outside ITS lock is caught even though the call
+        order stays the same — another lock held around it does not count."""
+        def __init__(self, cm, label):
+            self._cm, self._label = cm, label.split(".", 1)[0]
+
+        def __enter__(self):
+            res = self._cm.__enter__()
+            held[self._label] += 1
+            return res
+
+        def __exit__(self, *exc):
+            try:
+                return self._cm.__exit__(*exc)
+            finally:
+                held[self._label] -= 1
 
     def _wrap(owner, attr, label):
         real = getattr(owner, attr)
@@ -124,14 +161,28 @@ def phases(monkeypatch):
             pos = args[1:] if is_method else args
             text = (label(*pos) if callable(label)
                     else label.format(*[_name(a) for a in pos], *([""] * 3)))
+            if text.startswith("mutate:"):
+                need = REQUIRED_LOCK.get(text.split(":")[1])
+                if need is None or held[need] <= 0:
+                    outside.append(text if need else f"{text} (no required lock listed)")
             if not (text.split(":", 1)[0] in _ONCE and text in log):
                 log.append(text)
-            return real(*args, **kwargs)
+            res = real(*args, **kwargs)
+            if text.split(":", 1)[0] in ("lock", "config-stable", "admission") \
+                    and hasattr(res, "__enter__") and hasattr(res, "__exit__"):
+                return _Held(res, text)
+            return res
         monkeypatch.setattr(owner, attr, wrapper)
 
     for owner, attr, label in ORDER_SEAMS:
         _wrap(owner, attr, label)
-    return log
+    # `config_lock` finishes a pending journal inside its own entry, once its flock is taken: the
+    # flock itself counts as the config lock (not logged), so that recovery write is seen under it.
+    real_flock = cfgmod._config_flock
+    monkeypatch.setattr(cfgmod, "_config_flock",
+                        lambda *a, **k: _Held(real_flock(*a, **k), "lock:config"))
+    yield log
+    assert not outside, f"a mutation ran while its lock was not held: {outside}"
 
 
 def phase_kinds(log):
