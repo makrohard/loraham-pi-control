@@ -108,19 +108,51 @@ def test_no_bare_refusal_on_the_update_paths():
         + "\n".join(bare)
 
 
+def _hand_built_admission_refusals(source: str) -> list[int]:
+    """Lines of the ActionResults a module builds from an `AdmissionRefused` without a remedy:
+    one built inside an `except AdmissionRefused as X` handler, or anywhere in that function with
+    X in its arguments (so `reason = X.reason` first does not hide it), that is not the helper."""
+    lines = []
+    for fn in ast.walk(ast.parse(source)):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        handlers = [h for h in ast.walk(fn) if isinstance(h, ast.ExceptHandler) and h.name
+                    and "AdmissionRefused" in ast.unparse(h.type or ast.Constant(""))]
+        names = {h.name for h in handlers}
+        tainted = names | {t.id for a in ast.walk(fn) if isinstance(a, ast.Assign)
+                           and any(isinstance(n, ast.Name) and n.id in names
+                                   for n in ast.walk(a.value))
+                           for t in a.targets if isinstance(t, ast.Name)}
+        inside = {id(n) for h in handlers for n in ast.walk(h)}
+        for call in ast.walk(fn):
+            if not (isinstance(call, ast.Call)
+                    and getattr(call.func, "id", getattr(call.func, "attr", "")) == "ActionResult"):
+                continue
+            uses = any(isinstance(n, ast.Name) and n.id in tainted for n in ast.walk(call))
+            if (id(call) in inside or uses) and not _has_remedy(call):
+                lines.append(call.lineno)
+    return sorted(set(lines))
+
+
+def test_the_admission_check_sees_through_a_local_name():
+    indirect = ("def op(self):\n"
+                "    try:\n        self._admit()\n"
+                "    except AdmissionRefused as exc:\n"
+                "        reason = exc.reason\n"
+                "        return ActionResult(False, reason)\n")
+    assert _hand_built_admission_refusals(indirect) == [6]
+
+
 def test_no_admission_refusal_is_built_by_hand():
     """Every module turns an `AdmissionRefused` into its refusal through `admission_refusal` (which
-    carries the remedy); a hand-built `ActionResult(False, <exc>.reason, …)` would drop it."""
+    carries the remedy), or names a remedy of its own; a refusal built from it without one would
+    drop it."""
     hand = []
     for path in sorted((REPO / "lhpc").rglob("*.py")):
         if path == REPO / "lhpc" / "core" / "service_base.py":     # the helper itself
             continue
-        for call in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if (isinstance(call, ast.Call)
-                    and getattr(call.func, "id", getattr(call.func, "attr", "")) == "ActionResult"
-                    and any(isinstance(a, ast.Attribute) and a.attr == "reason"
-                            for a in call.args[1:2])):
-                hand.append(f"{path.relative_to(REPO)}:{call.lineno}")
+        hand += [f"{path.relative_to(REPO)}:{n}"
+                 for n in _hand_built_admission_refusals(path.read_text(encoding="utf-8"))]
     assert hand == [], hand
 
 
