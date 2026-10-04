@@ -791,6 +791,23 @@ def holders(parent_fd: int, name: str, *, proc: str = "/proc") -> list[str]:
     return out or _written(parent_fd, name)
 
 
+def _lease_broken(_signum, _frame) -> None:
+    """SIGIO from a broken probe lease: nothing to do here — `_written` reads the lease back."""
+
+
+def arm_lease_break_handler() -> None:
+    """The lease probe of `holders` (`_written`) makes this process the owner of a lease-break
+    signal: a process that opens a probed file for writing in that moment sends it SIGIO, whose
+    default action ends the process — mid-update. Each process entry (the CLI, the console) arms a
+    no-op handler once, on its main thread (a handler, not SIG_IGN: an ignored signal would stay
+    ignored in every program lhpc starts; a handler is reset on exec). `_written` sees such a
+    writer by reading its lease back."""
+    import signal
+    import threading
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGIO, _lease_broken)
+
+
 def _inside(target: str, path: str) -> bool:
     return target == path or target.startswith(path + "/")
 
@@ -836,7 +853,21 @@ def _written(parent_fd: int, name: str) -> list[str]:
                     return [f"{rel} could not be checked ({exc})"]
                 try:
                     fcntl.fcntl(fd, fcntl.F_SETLEASE, fcntl.F_RDLCK)
+                    # A writer that opened the file while we held the lease broke it (SIGIO,
+                    # handled): the lease is no longer ours — that writer is a holder.
+                    broken = fcntl.fcntl(fd, fcntl.F_GETLEASE) != fcntl.F_RDLCK
                     fcntl.fcntl(fd, fcntl.F_SETLEASE, fcntl.F_UNLCK)
+                    if not broken:
+                        # Taken again: a writer that opened between the read-back and the release
+                        # and still holds the file open makes this take fail (EAGAIN) — it catches
+                        # strictly more. It does not close the window: a writer that opens after
+                        # the final read-back is a later writer, as one opening after `holders`
+                        # returned (see `holders`).
+                        fcntl.fcntl(fd, fcntl.F_SETLEASE, fcntl.F_RDLCK)
+                        broken = fcntl.fcntl(fd, fcntl.F_GETLEASE) != fcntl.F_RDLCK
+                        fcntl.fcntl(fd, fcntl.F_SETLEASE, fcntl.F_UNLCK)
+                    if broken:
+                        return [f"{rel} is open for writing or mapped writable in another process"]
                 except BlockingIOError:
                     return [f"{rel} is open for writing or mapped writable in another process"]
                 except OSError as exc:

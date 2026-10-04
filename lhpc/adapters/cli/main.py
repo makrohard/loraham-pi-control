@@ -990,6 +990,8 @@ def main(argv: list[str] | None = None) -> int:
     clean typed failure (rc 1) with the offending file left untouched — never a traceback, and never
     a silent fall-through to defaults."""
     from lhpc.core.config import ConfigError
+    from lhpc.core.source_fs import arm_lease_break_handler
+    arm_lease_break_handler()
     try:
         return _run(argv)
     except ConfigError as exc:

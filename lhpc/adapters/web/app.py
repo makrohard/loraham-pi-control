@@ -2498,6 +2498,8 @@ def run_server(host: str = "127.0.0.1", port: int = 8770, socket: bool = False) 
       * INTERACTIVE (default, ``socket=False``): a loopback-only TCP bind for bare local use;
         Waitress preferred, Flask dev server only as a loud non-productive fallback.
     """
+    from lhpc.core.source_fs import arm_lease_break_handler
+    arm_lease_break_handler()
     if not socket and host not in _LOOPBACK_HOSTS:
         print(
             f"ERR  refusing to bind '{host}': the operator console is loopback-only "

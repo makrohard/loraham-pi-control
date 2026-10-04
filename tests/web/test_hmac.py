@@ -467,7 +467,10 @@ def test_hmac_apply_cli_gates_before_handlers_and_run(monkeypatch):
                         lambda self, sid, rid, emit: (order.append("gate"), gate_rc[0])[1])
     monkeypatch.setattr(ControllerService, "_hmac_run_steps",
                         lambda self, sid, action, rid, emit: (order.append("run"), 0)[1])
-    monkeypatch.setattr(_signal, "signal", lambda *a, **k: order.append("handler"))
+    real = _signal.signal                       # the abort handlers only (SIGTERM/SIGINT), not
+    monkeypatch.setattr(_signal, "signal",      # the entry's lease-break handler (SIGIO)
+                        lambda sig, h: order.append("handler") if sig in (_signal.SIGTERM, _signal.SIGINT)
+                        else real(sig, h))
     # gate refuses -> only the gate ran
     assert cli_main.main(["_hmac-apply", "meshcom", "renew", _RID]) == 1
     assert order == ["gate"]

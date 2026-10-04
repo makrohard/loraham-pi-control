@@ -5039,3 +5039,119 @@ def test_an_update_whose_build_does_not_happen_ends_in_needs_rebuild(
     monkeypatch.undo()
     assert svc.build("s", apply=True).ok                                # the one remedy
     assert not any("needs-rebuild" in d for d in svc.status_versions().details)
+
+
+def _entry_leaves_sigio_ignored(entry):
+    """True when `entry` armed the no-op lease-break handler (a handler, never SIG_IGN, which
+    would be inherited by every program lhpc starts)."""
+    import signal
+    old = signal.getsignal(signal.SIGIO)
+    signal.signal(signal.SIGIO, signal.SIG_DFL)
+    try:
+        try:
+            entry()
+        except SystemExit:
+            pass
+        h = signal.getsignal(signal.SIGIO)          # a handler: neither the default nor ignored
+        return h not in (signal.SIG_DFL, signal.SIG_IGN, None) and callable(h)
+    finally:
+        signal.signal(signal.SIGIO, old)
+
+
+def test_the_cli_ignores_the_lease_break_signal_from_its_first_line():
+    # `holders`' lease probe makes the process the owner of a lease-break SIGIO (default: end it).
+    from lhpc.adapters.cli.main import main
+    assert _entry_leaves_sigio_ignored(lambda: main(["--help"]))
+
+
+def test_the_console_ignores_the_lease_break_signal_from_its_first_line():
+    from lhpc.adapters.web.app import run_server
+    assert _entry_leaves_sigio_ignored(lambda: run_server(host="203.0.113.1"))   # refused at once
+
+
+@pytest.mark.parametrize("ignored", [True, False])
+def test_a_writer_inside_the_lease_probe_does_not_end_the_process(tmp_path, ignored):
+    """A process that opens a probed file for writing while `_written` holds its lease breaks the
+    lease, and the kernel sends SIGIO to the probing process: with the entries' handler armed the
+    probe goes on and reports that writer (it reads its lease back); with the default action the
+    process dies (the mechanism `arm_lease_break_handler` closes)."""
+    import signal
+    import subprocess
+    import sys
+    from pathlib import Path
+    (tmp_path / "tree").mkdir()
+    (tmp_path / "tree" / "f").write_text("x")
+    code = f"""
+import fcntl, os, subprocess, sys, time
+from lhpc.core import source_fs
+if {ignored}: source_fs.arm_lease_break_handler()
+real = fcntl.fcntl
+def probe(fd, cmd, arg=0):
+    r = real(fd, cmd, arg)
+    if cmd == fcntl.F_SETLEASE and arg == fcntl.F_RDLCK:          # a writer arrives inside the lease
+        subprocess.Popen([sys.executable, "-c", "open({str(tmp_path / 'tree' / 'f')!r}, 'a').close()"])
+        end = time.monotonic() + 10                                # until its open breaks the lease
+        while real(fd, fcntl.F_GETLEASE) == fcntl.F_RDLCK:
+            if time.monotonic() > end:
+                sys.exit("the writer never broke the lease")
+            time.sleep(0.01)
+    return r
+fcntl.fcntl = probe
+print(source_fs._written(os.open({str(tmp_path)!r}, os.O_RDONLY), "tree"))
+"""
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+    r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
+                       timeout=60)
+    assert r.returncode == (0 if ignored else -signal.SIGIO), r.stderr
+    if ignored:                                   # ... and the writer inside the lease is seen
+        assert "tree/f " in r.stdout and "[]" not in r.stdout, r.stdout
+
+
+def test_a_writer_between_the_read_back_and_the_release_is_seen(tmp_path):
+    """A writer that starts after `_written` read its lease back (still F_RDLCK) and holds the file
+    open by the second take is seen, whichever side of the first release it opened: the second
+    take finds the file open for writing and reports it. The second take catches strictly more;
+    a writer that opens after the final read-back is a later writer, which no probe excludes."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    (tmp_path / "tree").mkdir()
+    (tmp_path / "tree" / "f").write_text("x")
+    code = f"""
+import fcntl, os, subprocess, sys, time
+from lhpc.core import source_fs
+source_fs.arm_lease_break_handler()
+path = {str(tmp_path / 'tree' / 'f')!r}
+real, state = fcntl.fcntl, {{"writer": None, "released": False}}
+def holds(pid):
+    fds = f"/proc/{{pid}}/fd"
+    for n in os.listdir(fds):
+        try:
+            if os.readlink(os.path.join(fds, n)) == path:
+                return True
+        except OSError:
+            pass
+    return False
+def probe(fd, cmd, arg=0):
+    r = real(fd, cmd, arg)
+    if cmd == fcntl.F_GETLEASE and state["writer"] is None:
+        # read back as F_RDLCK: a writer arrives now
+        state["writer"] = subprocess.Popen([sys.executable, "-c",
+                                            f"import time; f = open({{path!r}}, 'a'); time.sleep(30)"])
+    elif cmd == fcntl.F_SETLEASE and arg == fcntl.F_UNLCK and not state["released"]:
+        state["released"] = True
+        end = time.monotonic() + 10                    # until the writer holds the file open
+        while not holds(state["writer"].pid):
+            if time.monotonic() > end:
+                sys.exit("the writer never opened the file")
+            time.sleep(0.01)
+    return r
+fcntl.fcntl = probe
+print(source_fs._written(os.open({str(tmp_path)!r}, os.O_RDONLY), "tree"))
+state["writer"].kill()
+"""
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+    r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
+                       timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert "tree/f " in r.stdout and "[]" not in r.stdout, r.stdout
