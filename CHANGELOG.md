@@ -9,6 +9,13 @@
   build the same way: Build on a single component builds that component, as `lhpc build <component>`
   does; the stack's Build still builds a missing dependency first.
 
+- The console's housekeeping (finishing a deferred web-server Apply, refreshing the client-certificate
+  revocation list, re-dating certificates made before the clock was set, cutting oversized logs) now
+  records each task's last success and last failure. `lhpc doctor` lists every task with its time, and
+  the dashboard shows a task whose last run failed until a later run succeeds; before, nothing was kept
+  and only a log that could not be cut was logged. A failed task is now logged as one line per task (it
+  replaces the old one line per log that could not be cut).
+
 - The systemd units LHPC installs are now pinned in the test suite: no release can change one by
   accident, because a changed unit would make boot restore refuse on every box that already has the old one.
 

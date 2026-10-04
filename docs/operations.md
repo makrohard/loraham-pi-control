@@ -240,6 +240,18 @@ could not be tracked) needs *Recover*. A second Start while one runs is refused;
 self-update or contended admission refuses before anything is spawned. The CLI and boot restore
 start synchronously.
 
+**Maintenance pass.** While the console runs, it does the box's housekeeping every 60 s (300 s on
+a box without the access point and with no web-server Apply or PKI normalisation pending): it
+finishes an Apply the firewall gate deferred, rebuilds an expired client-CA CRL, normalises
+certificates minted under an unverified clock, cuts the run logs and the controller's own logs
+over their trigger and rolls the Meshtastic trace. Each task's last success and last failure (UTC
+time and message) are kept in `state/maintenance.json`; `lhpc doctor` lists every task, and a task
+whose last run failed is shown on the dashboard until a later run succeeds. No file yet (a box
+just upgraded, or a console that has not run since) reads *never run*. **Log retention while the
+console is stopped:** no log is cut on a schedule — a run log is cut only when its component
+starts, the Meshtastic trace when it starts or its log page is read, and the controller's own logs
+not at all, until the console's next pass. The trigger sizes: [maintenance](maintenance.md#running-on-a-pi).
+
 **RF logs** — one page for every stack's RF log: [maintenance → RF logs](maintenance.md#rf-logs).
 
 ## Reboot / Shut down

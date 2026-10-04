@@ -1276,6 +1276,28 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 details.append("    | run yourself: lhpc self-update --apply")
                 _add_cmd("lhpc self-update --apply")
 
+        # The console's maintenance pass (`maintenance.py`): each task's last success and last
+        # failure. Informational, like the clock line — but a task whose last pass failed, or a
+        # record that cannot be read, is never shown as healthy.
+        from . import maintenance
+        m_state, m_tasks = maintenance.read(self._paths)
+        if m_state == "absent":
+            details.append("  maintenance: never run — the console runs it every 60 s or 300 s "
+                           "while it runs; until then no log is cut on a schedule and nothing is "
+                           "refreshed")
+        for name, at, msg in maintenance.failing(self._paths):
+            details.append(f" !maintenance {name}: FAILED at {at or 'an unknown time'} — {msg}")
+        if m_state == "ok":
+            for name, _task in maintenance.TASKS:
+                e = m_tasks.get(name) or {}
+                if e.get("last") != "ok":
+                    continue
+                ok_at = e.get("last_success", {}).get("at", "")
+                fail = e.get("last_failure")
+                details.append(f"  maintenance {name}: ok at {ok_at}"
+                               + (f" (last failure {fail.get('at', '')}: {fail.get('message', '')})"
+                                  if fail else ""))
+
         # Run-state tally from a fresh snapshot.
         snap = self.build_snapshot()
         tally: dict[str, int] = {}

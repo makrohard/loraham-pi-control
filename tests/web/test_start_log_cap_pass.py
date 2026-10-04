@@ -24,10 +24,17 @@ def _ran_every_unit_once(calls, *, tick):
         assert calls.index("cap") < calls.index("tick"), calls
 
 
+def _paths(root):
+    from lhpc.core.paths import Paths
+    (root / "state").mkdir(exist_ok=True)
+    return Paths(runtime_root=root)
+
+
 class _Svc:
     """Only what `network_watch_pass` calls; records the order of the units."""
 
-    def __init__(self, *, ap_box=False, cap_result=None, cap_raises=False, raises=()):
+    def __init__(self, paths, *, ap_box=False, cap_result=None, cap_raises=False, raises=()):
+        self._paths = paths                       # where the maintenance pass records its outcomes
         self.calls: list[str] = []
         self.ap_box = ap_box
         self.cap_result = {} if cap_result is None else cap_result
@@ -78,35 +85,36 @@ class _Svc:
         self.calls.append("tick")
 
 
-def test_the_pass_caps_start_logs_on_every_box_before_the_ap_tick():
-    non_ap = _Svc(ap_box=False)
+def test_the_pass_caps_start_logs_on_every_box_before_the_ap_tick(tmp_path):
+    non_ap = _Svc(_paths(tmp_path), ap_box=False)
     assert network_watch_pass(non_ap) == 300.0
     _ran_every_unit_once(non_ap.calls, tick=False)
-    ap = _Svc(ap_box=True)
+    ap = _Svc(_paths(tmp_path), ap_box=True)
     assert network_watch_pass(ap) == 60.0
     _ran_every_unit_once(ap.calls, tick=True)
 
 
-def test_a_failing_cap_never_breaks_the_pass():
-    svc = _Svc(ap_box=True, cap_raises=True)
+def test_a_failing_cap_never_breaks_the_pass(tmp_path):
+    svc = _Svc(_paths(tmp_path), ap_box=True, cap_raises=True)
     assert network_watch_pass(svc) == 60.0
     _ran_every_unit_once(svc.calls, tick=True)
 
 
-def test_a_malformed_cap_result_never_breaks_the_pass():
-    svc = _Svc(ap_box=True)
+def test_a_malformed_cap_result_never_breaks_the_pass(tmp_path):
+    svc = _Svc(_paths(tmp_path), ap_box=True)
     svc.cap_result = None                       # not a dict: `.items()` raises inside the unit
     assert network_watch_pass(svc) == 60.0
     assert svc.calls[-1] == "tick"
 
 
-def test_only_a_log_that_could_not_be_capped_is_logged(caplog):
-    svc = _Svc(cap_result={"start-a.log": "capped", "start-b.log": "error: OSError",
+def test_only_a_log_that_could_not_be_capped_is_logged(caplog, tmp_path):
+    svc = _Svc(_paths(tmp_path), cap_result={"start-a.log": "capped", "start-b.log": "error: OSError",
                            "start-c.log": "busy", "start-d.log": "below", "start-e.log": "absent"})
     with caplog.at_level(logging.WARNING, logger="lhpc.adapters.web.app"):
         network_watch_pass(svc)
     warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
-    assert warnings == ["start log start-b.log not capped: error: OSError"]
+    # S5: one line per failed maintenance task, naming each log that could not be capped.
+    assert warnings == ["maintenance start-logs failed: start-b.log: error: OSError"]
 
 
 def test_serving_the_console_never_caps(web, tmp_path):
@@ -127,18 +135,18 @@ def test_serving_the_console_never_caps(web, tmp_path):
 
 
 @pytest.mark.parametrize("bad", ["disk", "cap-controller", "roll-trace"])
-def test_one_failing_log_unit_does_not_skip_the_others(bad):
+def test_one_failing_log_unit_does_not_skip_the_others(bad, tmp_path):
     # A1: the disk level, the start-log cap, the controller-log cap and the trace roll each have their
     # own try; any one raising still runs every other unit and the AP tick.
-    svc = _Svc(ap_box=True, raises={bad})
+    svc = _Svc(_paths(tmp_path), ap_box=True, raises={bad})
     assert network_watch_pass(svc) == 60.0
     _ran_every_unit_once(svc.calls, tick=True)
 
 
-def test_only_a_controller_log_that_could_not_be_capped_is_logged(caplog):
-    svc = _Svc()
+def test_only_a_controller_log_that_could_not_be_capped_is_logged(caplog, tmp_path):
+    svc = _Svc(_paths(tmp_path))
     svc.cap_controller_logs = lambda: {"lhpc-web.log": "capped", "nginx-access.log": "error: OSError"}
     with caplog.at_level(logging.WARNING, logger="lhpc.adapters.web.app"):
         network_watch_pass(svc)
     warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
-    assert warnings == ["log nginx-access.log not capped: error: OSError"]
+    assert warnings == ["maintenance controller-logs failed: nginx-access.log: error: OSError"]

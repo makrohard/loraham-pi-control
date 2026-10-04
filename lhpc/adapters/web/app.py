@@ -444,10 +444,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         except Exception:
             fw_reapply = None
         restart_required = service.restart_required_stacks()      # read once: box + signature
+        try:                           # the maintenance tasks whose last pass failed (file read)
+            from lhpc.core import maintenance as _maintenance
+            maintenance_failing = _maintenance.failing(service._paths)
+        except Exception as exc:       # never shown as healthy: the read failure is the row
+            maintenance_failing = [("record", "", f"{type(exc).__name__}: {exc}")]
         return render_template(
             "dashboard.html", version=__version__, runtime_root=_runtime_root(),
             radios=radios, pending_interactive=pending_interactive, webservers=webservers,
             firewall=firewall, security_pill=security_pill, fw_reapply=fw_reapply,
+            maintenance_failing=maintenance_failing,
             # The host the browser used to reach the console — a proxied web-UI link points here on
             # the proxy's port, so it is correct however the operator got here (LAN IP / hostname).
             req_host=_url_host(request.host or ""),
@@ -2430,54 +2436,29 @@ def _disk_level_log(svc) -> None:
 
 def network_watch_pass(svc) -> float:
     """ONE pass of the console's network watchdog; returns the seconds to sleep before the next.
-    The maintenance units (1–3) each have their own try/except so none can starve another or the
-    AP tick; the AP probe and tick (4) rely on the caller's loop-level catch:
-      1. an Apply the firewall gate deferred is completed;
-      2. the client-CA CRL is rebuilt when its nextUpdate has passed — on EVERY box, every pass.
-         LIVE-FOUND (box B, 2026-09-13): the heal used to live only inside the AP-box tick and the
-         WLAN-join path, so a box without the AP feature (a Desktop image on cable) that simply kept
-         running past the CRL's 30-day nextUpdate had nginx refuse EVERY client cert ("400 The SSL
-         certificate error") with nothing revoked — a total remote-console lockout that no tick
-         would ever heal. The rebuild is unprivileged and reads one file, so it costs nothing to run
-         here; the first pass at console start covers a box restored from an old backup;
-      3. the logs are tried against their trigger: every start log (`cap_start_logs`), the controller's
-         own logs (`cap_controller_logs`) and the Meshtastic trace (`rflog_roll_native_all`); a log
-         another capper holds ("busy") is left unchanged for the next pass. A log is checked once per
-         pass, so between two passes it can grow past its trigger by what its writer emits; there is
-         no hard maximum. Each never raises; a start or controller log whose cap failed
-         ("error: …") is logged here, a failed trace roll is contained; either is retried on the next
-         pass;
-      4. the AP-box tick (only where the Wi-Fi feature exists)."""
-    try:                            # an Apply the firewall gate deferred
-        svc.webserver_apply_complete_pending()
-    except Exception:
-        pass
-    try:
-        svc.crl_refresh_if_expired()
-    except Exception:
-        pass
-    try:                            # a PKI minted under an unverified clock, once time arrives
-        svc.pki_clock_normalise()
-    except Exception:
-        pass
+    The disk-level log and the maintenance pass (`lhpc.core.maintenance.run`) cannot starve one
+    another or the AP tick; the AP probe and tick rely on the caller's loop-level catch:
+      1. the disk-space level: one log line per change;
+      2. the maintenance pass, in its order (`maintenance.TASKS`): an Apply the firewall gate
+         deferred is completed; the client-CA CRL is rebuilt when its nextUpdate has passed — on
+         EVERY box, every pass (LIVE-FOUND, box B, 2026-09-13: a box without the AP feature that
+         kept running past the CRL's 30-day nextUpdate had nginx refuse every client certificate,
+         a total remote-console lockout no tick healed); a PKI minted under an unverified clock is
+         normalised once time arrives; every start log, the controller's own logs and the
+         Meshtastic trace are tried against their trigger (a log another capper holds is left for
+         the next pass; between two passes a log can grow past its trigger, there is no hard
+         maximum). Each task's outcome is recorded (`state/maintenance.json`, shown by `lhpc
+         doctor` and the dashboard) and a failed one is logged here; it is retried next pass;
+      3. the AP-box tick (only where the Wi-Fi feature exists)."""
     try:                            # the disk-space level: one log line per change
         _disk_level_log(svc)
     except Exception:
         pass
-    try:                            # start logs over their cap (the pass runs while stacks do)
-        for name, result in svc.cap_start_logs().items():
-            if result.startswith("error"):
-                _logging.getLogger(__name__).warning("start log %s not capped: %s", name, result)
-    except Exception:
-        pass
-    try:                            # the controller's own logs (units, nginx) over the same cap
-        for name, result in svc.cap_controller_logs().items():
-            if result.startswith("error"):
-                _logging.getLogger(__name__).warning("log %s not capped: %s", name, result)
-    except Exception:
-        pass
-    try:                            # the Meshtastic trace: its writer never rolls it
-        svc.rflog_roll_native_all()
+    try:
+        from lhpc.core import maintenance
+        for task, (outcome, message) in maintenance.run(svc).items():
+            if outcome is maintenance.Outcome.FAILED:
+                _logging.getLogger(__name__).warning("maintenance %s failed: %s", task, message)
     except Exception:
         pass
     ap_box = svc.network_supported()
