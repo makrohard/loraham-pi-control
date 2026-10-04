@@ -124,3 +124,40 @@ def test_the_cadence_is_unchanged_when_a_task_fails(tmp_path, monkeypatch, ap_bo
     monkeypatch.setattr(ControllerService, "_network_watch_tick",
                         lambda self, force=False: (True, ""))
     assert network_watch_pass(svc) == expected
+
+
+def test_a_record_that_stops_being_written_is_shown_failing(tmp_path, monkeypatch, web, caplog):
+    """A pass whose task fails and whose record cannot be written leaves the last record on disk;
+    once that record is older than three pass intervals, doctor and the dashboard say it is no
+    longer current, from the same row, instead of showing its old success."""
+    import json
+    import time
+
+    from lhpc.core import maintenance, runtime_fs
+    svc = _svc(tmp_path)
+    network_watch_pass(svc)                                       # a pass that succeeds
+    rec = tmp_path / "state" / "maintenance.json"
+    old = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                        time.gmtime(time.time() - 1200))          # 20 min > 3 × 300 s
+    data = json.loads(rec.read_text())
+    for e in data["tasks"].values():
+        for k in ("last_success", "last_failure"):
+            if k in e:
+                e[k]["at"] = old                                  # ...written that long ago
+    rec.write_text(json.dumps(data))
+
+    def refused(*a, **k):
+        raise OSError("read-only file system")
+    monkeypatch.setattr(runtime_fs, "atomic_write", refused)      # no later pass can write
+    monkeypatch.setattr(ControllerService, "crl_refresh_if_expired",
+                        lambda self: (_ for _ in ()).throw(RuntimeError("crl")))
+    with caplog.at_level("WARNING"):
+        network_watch_pass(svc)
+    assert any(m.startswith("maintenance record failed: maintenance.json not written: ")
+               for m in caplog.messages), caplog.messages     # the record write was reached
+    rows = [r for r in maintenance.failing(svc._paths) if r[0] == "record"]
+    assert rows == [("record", "", rows[0][2])] and rows[0][2].startswith(
+        f"stale — last written {old}, not updated since"), rows    # the time is the last pass
+    assert f" !maintenance record: FAILED — stale — last written {old}, not updated since" in \
+        "\n".join(svc.doctor().details)
+    assert f"record — stale — last written {old}" in " ".join((_notice(web, svc) or "").split())

@@ -1304,7 +1304,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                            "while it runs; until then no log is cut on a schedule and nothing is "
                            "refreshed")
         for name, at, msg in maintenance.failing(self._paths):
-            details.append(f" !maintenance {name}: FAILED at {at or 'an unknown time'} — {msg}")
+            details.append(f" !maintenance {name}: FAILED{' at ' + at if at else ''} — {msg}")
         if m_state == "ok":
             for name, _task in maintenance.TASKS:
                 e = m_tasks.get(name) or {}

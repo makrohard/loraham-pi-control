@@ -296,7 +296,10 @@ finishes an Apply the firewall gate deferred, rebuilds an expired client-CA CRL,
 certificates minted under an unverified clock, cuts the run logs and the controller's own logs
 over their trigger and rolls the Meshtastic trace. Each task's last success and last failure (UTC
 time and message) are kept in `state/maintenance.json`; `lhpc doctor` lists every task, and a task
-whose last run failed is shown on the dashboard until a later run succeeds. No file yet (a box
+whose last run failed is shown on the dashboard until a later run succeeds. A record that cannot be
+written is logged by the console at once and shown by `lhpc doctor` and the dashboard as *stale*
+once its newest pass is older than 900 s (three of the 300 s cadence; a backward clock step delays
+that, a forward step shows it early). No file yet (a box
 just upgraded, or a console that has not run since) reads *never run*. **Log retention while the
 console is stopped:** no log is cut on a schedule — a run log is cut only when its component
 starts, the Meshtastic trace when it starts or its log page is read, and the controller's own logs

@@ -10,6 +10,7 @@ started since)."""
 
 from __future__ import annotations
 
+import calendar
 import json
 import time
 from enum import Enum
@@ -20,6 +21,11 @@ from .paths import PathContainmentError
 RECORD = ("state", "maintenance.json")
 _RECORD_MAX = 64 * 1024
 _MESSAGE_MAX = 300
+# The pass runs every 60 s, or 300 s on a box without the Wi-Fi feature (web `network_watch_pass`):
+# a record whose newest pass is older than three of the longer interval is no longer being written.
+# A failed pass that cannot write its record is logged at once and shown within STALE_S; a backward
+# clock step delays that, a forward step shows it early.
+STALE_S = 900
 
 
 class Outcome(str, Enum):
@@ -136,11 +142,25 @@ def record(paths, outcomes: dict, at: str) -> None:
 
 
 def failing(paths) -> list[tuple[str, str, str]]:
-    """`(task, UTC time, message)` per task whose last outcome failed — an unreadable record is
-    one such row (task "record") — in pass order. Empty when every task's last pass succeeded or
-    the pass never ran (`read` tells those apart)."""
-    _state, tasks = read(paths)
+    """`(task, UTC time of the failure or "", message)` per task whose last outcome failed — an
+    unreadable record is one such row (task "record"), and so is a record whose newest pass is
+    older than `STALE_S` (its writes fail, or no pass runs: what it shows is no longer current;
+    no failure time, the message names the last pass) — in pass order.
+    Empty when every task's last pass succeeded or the pass never ran (`read` tells those
+    apart)."""
+    state, tasks = read(paths)
     order = [n for n, _ in TASKS] + sorted(set(tasks) - {n for n, _ in TASKS})
-    return [(n, tasks[n].get("last_failure", {}).get("at", ""),
+    rows = [(n, tasks[n].get("last_failure", {}).get("at", ""),
              tasks[n].get("last_failure", {}).get("message", ""))
             for n in order if n in tasks and tasks[n].get("last") != "ok"]
+    newest = max((e.get(k, {}).get("at", "") for e in tasks.values()
+                  for k in ("last_success", "last_failure")), default="")
+    try:
+        age = time.time() - calendar.timegm(time.strptime(newest, "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        age = 0.0                                  # no pass time to judge: nothing more to say
+    if state == "ok" and age > STALE_S:
+        rows.append(("record", "", f"stale — last written {newest}, not updated since: the pass "
+                     "could not write its record, or no pass has run since; what is shown may be "
+                     "out of date"))
+    return rows

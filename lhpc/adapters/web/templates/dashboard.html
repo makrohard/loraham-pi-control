@@ -49,7 +49,7 @@
   {% if maintenance_failing %}
     {# The console's maintenance pass (`lhpc doctor` lists every task): a failed task is never healthy. #}
     <p class="depnote depnote-warn" id="maintenance-notice">Maintenance failed:
-      {% for task, at, msg in maintenance_failing %}<code>{{ task }}</code> at {{ at or 'an unknown time' }} — {{ msg }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+      {% for task, at, msg in maintenance_failing %}<code>{{ task }}</code>{% if at %} at {{ at }}{% endif %} — {{ msg }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
   {% endif %}
   {% if not hardware_configured %}
     {% call banner('warn', url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon', 'Configure') %}
