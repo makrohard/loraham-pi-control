@@ -88,8 +88,8 @@ _ADMISSION = "shared admission refusal (_task_admission_blocked); remedy is a U2
 EXEMPT = {
     ("lhpc/core/service_binary_ops.py", 217): ("binary_install", _ADMISSION),
     ("lhpc/core/service_selfupdate.py", 407): ("self_update_apply", _ADMISSION),
-    ("lhpc/core/service_selfupdate.py", 626): ("self_update_apply_operator", _ADMISSION),
-    ("lhpc/core/service_selfupdate.py", 1000): ("self_update_trigger", _ADMISSION),
+    ("lhpc/core/service_selfupdate.py", 627): ("self_update_apply_operator", _ADMISSION),
+    ("lhpc/core/service_selfupdate.py", 1001): ("self_update_trigger", _ADMISSION),
     ("lhpc/core/service_lifecycle_ops.py", 3500): ("build", _ADMISSION),
     ("lhpc/core/service_maintenance.py", 964): ("graywolf_upstream_update", _ADMISSION),
     ("lhpc/core/service_maintenance.py", 1960): ("update", _ADMISSION),

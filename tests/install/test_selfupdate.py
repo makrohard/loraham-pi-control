@@ -445,6 +445,39 @@ def test_a_record_with_an_unhashable_state_is_recovery_required(op_svc, monkeypa
     assert any("recovery-required" in d for d in svc.status().details)
 
 
+@pytest.mark.parametrize("path", ["apply", "repair"])
+def test_a_record_that_cannot_be_cleared_fails_the_step(op_svc, monkeypatch, path):
+    """A step that succeeded but could not remove its state record has not finished: `status`
+    still shows the state. The result is recovery-required and names the record to remove by
+    hand — never ok while the record remains."""
+    import json
+    from lhpc.core import runtime_fs
+    from lhpc.core.probes.backends import CommandResult as CR
+    from lhpc.core.services import ActionResult, ControllerService
+    svc, _fake, _root = _op_inactive(op_svc, monkeypatch, ActionResult(True, "advanced", data={}),
+                                     pip=CR(0, "", ""))
+    # Stubs the collaborator, systemd: the unit refresh and the repair succeed without a user manager.
+    monkeypatch.setattr(ControllerService, "_refresh_units_post_update",
+                        lambda self: (True, "units canonical"))
+    monkeypatch.setattr(ControllerService, "_repair_integration_steps",
+                        lambda self, *, restart=True: ActionResult(True, "repaired"))
+    rec = svc._incomplete_path()
+    rec.parent.mkdir(parents=True, exist_ok=True)
+    rec.write_text(json.dumps({"state": "units-stale", "detail": "x"}))
+    real = runtime_fs.unlink
+
+    def refused(paths, p, *a, **kw):
+        if p == rec:
+            raise OSError(30, "Read-only file system")
+        return real(paths, p, *a, **kw)
+    monkeypatch.setattr(runtime_fs, "unlink", refused)
+    r = (svc.self_update_apply_operator() if path == "apply"
+         else svc.self_update_repair_integration(restart=False))
+    assert r.ok is False and r.summary.startswith("recovery-required:"), r.summary
+    assert "Read-only file system" in r.summary and str(rec) in " ".join(r.details), r
+    assert svc.self_update_incomplete()[0] == "units-stale"
+
+
 def test_the_repair_does_not_clear_venv_unsynced(op_svc, monkeypatch):
     """`--repair-integration` verifies the units, not the venv: with `venv-unsynced` recorded it
     repairs, keeps the record and names it with its own command."""

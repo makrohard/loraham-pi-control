@@ -548,7 +548,8 @@ class SelfUpdateOpsMixin:
                     "the venv sync FAILED" + (f" ({detail})" if detail else ""))
                 return _dc.replace(res, ok=False, summary=summary, next_commands=nxt,
                                    data={**res.data, "venv_sync_failed": True, **extra})
-            self._incomplete_clear("venv-unsynced")
+            if (err := self._incomplete_clear("venv-unsynced")):
+                return self._uncleared(res, "venv-unsynced", err)
 
         # Re-render the managed units. An update whose new version changes a unit TEMPLATE
         # leaves the installed unit non-canonical, and boot restore then refuses to run —
@@ -568,8 +569,8 @@ class SelfUpdateOpsMixin:
                 res, ok=False, data={**res.data, "reason": "units-refresh-failed", **extra},
                 next_commands=nxt,
                 summary=summary)
-        else:
-            self._units_stale_clear()
+        elif (err := self._units_stale_clear()):
+            res = self._uncleared(res, "units-stale", err)
         return res
 
     @invalidates_snapshot
@@ -1163,16 +1164,19 @@ class SelfUpdateOpsMixin:
                         res = ActionResult(False, summary, next_commands=nxt,
                                            data={**dict(res.data), "venv_sync_failed": True,
                                                  **extra})
+                    elif (err := self._incomplete_clear("venv-unsynced")):
+                        res = self._uncleared(res, "venv-unsynced", err)
                     else:
-                        self._incomplete_clear("venv-unsynced")
                         # Refresh the managed units with the NEW code. This path applies
                         # inline (it does not go through _apply_and_sync), so without this
                         # a one-click update left the OLD units installed: the new version
                         # then reads its own integration as non-canonical, one-click
                         # updating goes away and boot restore is skipped.
                         ok_u, det_u = self._refresh_units_post_update()
-                        if ok_u:
-                            self._units_stale_clear()
+                        err = self._units_stale_clear() if ok_u else ""
+                        if err:
+                            summary, nxt, extra = res.summary, [], {}
+                        elif ok_u:
                             summary, nxt, extra = (
                                 self._ONECLICK_CLEANUP_SUMMARY if res.data.get("cleanup_failed")
                                 else res.summary), [], {}
@@ -1183,6 +1187,8 @@ class SelfUpdateOpsMixin:
                             data={**dict(res.data), "units_refreshed": ok_u,
                                   "units_refresh_detail": det_u, **extra},
                             next_commands=nxt)
+                        if err:
+                            res = self._uncleared(res, "units-stale", err)
         except _StopRun:
             pass
         # The record keeps the summary only, and the console shows that after the restart: the
@@ -1456,7 +1462,8 @@ class SelfUpdateOpsMixin:
         import dataclasses as _dc
         res = self._repair_integration_steps(restart=restart)
         if res.ok:
-            self._units_stale_clear()
+            if (err := self._units_stale_clear()):
+                return self._uncleared(res, "units-stale", err)
             state, what = self.self_update_incomplete()
             if state:
                 res = _dc.replace(res, summary=(
@@ -1532,18 +1539,34 @@ class SelfUpdateOpsMixin:
         except (OSError, PathContainmentError, ValueError) as exc:
             return f"{type(exc).__name__}: {' '.join(str(exc).split())}"
 
-    def _incomplete_clear(self, state: str) -> None:
-        """Clear the record when it names `state` (a later step's success clears only its own)."""
+    def _incomplete_clear(self, state: str) -> str:
+        """Clear the record when it names `state` (a later step's success clears only its own):
+        "" when cleared or not recorded, else the cause — the record remains, so the step that
+        asked has not finished (`_uncleared`)."""
         from . import runtime_fs
         if self.self_update_incomplete()[0] != state:
-            return
+            return ""
         try:
             runtime_fs.unlink(self._paths, self._incomplete_path())
-        except (OSError, PathContainmentError, ValueError):
-            pass                       # still recorded: `status` keeps saying so, which is safe
+        except (OSError, PathContainmentError, ValueError) as exc:
+            return f"{type(exc).__name__}: {' '.join(str(exc).split())}"
+        return ""
 
-    def _units_stale_clear(self) -> None:
-        self._incomplete_clear("units-stale")
+    def _units_stale_clear(self) -> str:
+        return self._incomplete_clear("units-stale")
+
+    def _uncleared(self, res: ActionResult, state: str, cause: str) -> ActionResult:
+        """The result of a step that succeeded but could not remove its state record: not a
+        success — `status` keeps showing `state`, so the operator removes the record by hand."""
+        import dataclasses as _dc
+        path = self._incomplete_path()
+        return _dc.replace(
+            res, ok=False, next_commands=[],
+            summary=(f"recovery-required: {res.summary} — but its state record could not be "
+                     f"removed ({cause}); `lhpc status` still shows {state}"),
+            details=[*res.details, f"  nothing to run here — remove {path} by hand, then "
+                                   "`lhpc status` shows the update as finished"],
+            data={**res.data, "record_not_cleared": True})
 
     def _incomplete_outcome(self, res: ActionResult, state: str,
                             what: str) -> tuple[str, list, dict]:
