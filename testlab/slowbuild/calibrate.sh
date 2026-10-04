@@ -8,8 +8,9 @@
 #   mem  touch 700 MB of anonymous pages twice (more than a Zero has: zram/swap must work)
 #
 # Prints one line:  cpu=<s> io=<s> mem=<s> workload=sha256:<hex>
-# `workload` hashes this script, every file under calib-src/ and the io size, so a changed
-# workload never matches a calibration recorded for another one.
+# `workload` hashes this script, the .c files and Makefile in calib-src/ (exactly what is copied
+# and built) and the io size, so a changed workload never matches a calibration recorded for
+# another one.
 #
 # The work dir is on the disk the lane calibrates, never in TMPDIR: on a Zero 2 W /tmp is a
 # ~200 MB tmpfs, too small for the io part, and io on tmpfs measures RAM. Default: the runtime
@@ -67,13 +68,17 @@ if (( free_mb < io_mb + margin_mb )); then
   exit 1
 fi
 
-workload=$( { cd "$here" && find calib-src -type f \( -name '*.c' -o -name Makefile \) -print0 \
-                | LC_ALL=C sort -z | xargs -0 sha256sum calibrate.sh; echo "io_mb=$io_mb"; } \
+# The inputs, one list for the hash AND the build: only these are copied, so an object or a
+# `calib` left in calib-src (a manual make there) can never shorten the measured build.
+mapfile -d '' inputs < <(cd "$here" && find calib-src -maxdepth 1 -type f \
+                           \( -name '*.c' -o -name Makefile \) -print0 | LC_ALL=C sort -z)
+workload=$( { cd "$here" && sha256sum calibrate.sh "${inputs[@]}"; echo "io_mb=$io_mb"; } \
             | sha256sum | cut -d' ' -f1)
 
 elapsed() { awk -v a="$1" -v b="$2" 'BEGIN { printf "%.1f", b - a }'; }
 
-cp -r "$here/calib-src" "$work/cpu"
+mkdir "$work/cpu"
+(cd "$here" && cp -- "${inputs[@]}" "$work/cpu/")
 t0=$EPOCHREALTIME
 make -s -C "$work/cpu" -j"$(nproc)" >/dev/null
 cpu=$(elapsed "$t0" "$EPOCHREALTIME")

@@ -94,3 +94,30 @@ def test_the_default_work_dir_is_on_disk_and_never_tmpdir(tmp_path, installed):
     want = root / "state" / "lhpc-calib" if installed else home / ".cache" / "lhpc-calib"
     assert r.returncode == 1 and f"work dir {want} has " in r.stderr, r.stderr
     assert not want.exists()
+
+
+def test_stale_artefacts_in_calib_src_never_shorten_the_measured_build(tmp_path):
+    """The cpu part builds exactly the hashed inputs (the .c files and the Makefile): an object or
+    a `calib` left in calib-src (a manual `make` there) is not copied, so every source is still
+    compiled and linked — never a partial or no-op build the workload hash does not cover."""
+    if _fstype(tmp_path) in ("tmpfs", "ramfs"):
+        pytest.skip("pytest's tmp dir is on tmpfs on this box")
+    lab = tmp_path / "slowbuild"
+    shutil.copytree(SCRIPT.parent, lab)
+    src = lab / "calib-src"
+    sources = sorted(p.name for p in src.glob("*.c"))
+    subprocess.run(["make", "-s", "-C", str(src)], check=True, capture_output=True)  # stale build
+    assert (src / "calib").is_file() and all((src / s).with_suffix(".o").is_file()
+                                              for s in sources)
+    log = tmp_path / "cc.log"
+    cc = tmp_path / "cc-log"
+    cc.write_text(f'#!/bin/sh\necho "$*" >> {log}\nexec cc "$@"\n')
+    cc.chmod(0o755)
+    r = subprocess.run(["bash", str(lab / "calibrate.sh"), "--work-dir", str(tmp_path / "w"),
+                        "--io-mb", "1"], capture_output=True, text=True, timeout=600, check=False,
+                       env={**os.environ, "CC": str(cc)})
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = log.read_text().splitlines() if log.exists() else []
+    compiled = sorted(c.split()[-1] for c in calls if " -c " in f" {c} ")
+    assert compiled == sources, calls
+    assert sum(1 for c in calls if " -c " not in f" {c} ") == 1, calls     # the link
