@@ -154,8 +154,8 @@ def _decode_hex_ip(ip_hex: str) -> str:
 # --- real implementation --------------------------------------------------
 
 # A bounded, stable environment for subprocesses. HOME and the XDG vars are passed through so
-# git honours the user's config + global gitignore (otherwise globally-ignored files like
-# .claude/ show as untracked -> false "dirty") and so `systemctl --user` can find its bus. The
+# git honours the user's config + global gitignore (otherwise a globally-ignored tool directory
+# shows as untracked -> false "dirty") and so `systemctl --user` can find its bus. The
 # tool-cache vars (PLATFORMIO_CORE_DIR / IDF_TOOLS_PATH / XDG_CACHE_HOME / PIP_CACHE_DIR) are
 # forwarded so that, under the hardened web-service sandbox (ProtectHome=read-only), build/test
 # tools write their caches into the runtime-owned location the unit points them at — never into
