@@ -150,6 +150,33 @@ def test_a_provider_source_cannot_move_during_a_dependent_build(tmp_path, monkey
     assert refused and all(refused)
 
 
+
+@PATHS
+def test_a_dependency_of_a_dependency_is_locked(tmp_path, monkeypatch, build):
+    """The manifest's chain nomadnet -> rns -> rns-lora-interface: a build of nomadnet holds all
+    three sources for its whole run, the dependency's dependency included, so an operation that
+    needs rns-lora-interface's source is refused busy while nomadnet builds."""
+    chain = ("src/loraham-rns-interface", "src/nomadnet", "src/reticulum")
+    held, refused = [], []
+
+    def probe():
+        held.append([sp for sp in chain if _busy(svc, sp)])
+        refused.append(_busy(svc, "src/loraham-rns-interface"))
+    svc, root = _box(tmp_path, probe)
+    for sp in chain:
+        (root / sp).mkdir(parents=True, exist_ok=True)
+    build(svc, "nomadnet", monkeypatch)
+    assert held and all(h == list(chain) for h in held), held
+    assert refused and all(refused)
+
+
+def _busy(svc, sp):
+    try:
+        with reslock.operation_lock(svc._paths, reslock.source_lock_key(sp), "update", "probe"):
+            return False
+    except reslock.ResourceBusy:
+        return True
+
 def test_the_receipt_records_the_revision_read_under_the_locks(tmp_path, monkeypatch):
     """The dependency moves after the console spawned the build and before the build holds its
     locks: the receipt records the revision the build consumed, not the one seen at spawn."""
