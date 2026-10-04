@@ -125,6 +125,35 @@ jobs:
         if: ${{ !cancelled() }}
         run: pip-audit . --strict --progress-spinner=off
 
+  # The two suite guards as their own named check, so a red one reads as what it is: a fake of a
+  # production function called in a way the real one refuses (tests/conftest.py checks every
+  # monkeypatch.setattr), or a changed systemd unit template (frozen until the staged unit
+  # migration exists). Both also run inside `test`; this job only names them.
+  guards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and test tooling
+        run: |
+          . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
+          retry 3 python -m pip install --upgrade pip
+          retry 3 pip install .[dev]
+
+      - name: Fake-signature guard and frozen unit templates
+        run: python -m pytest -q -p no:cacheprovider tests/repo/test_fake_signatures.py tests/repo/test_unit_templates_frozen.py
+
   # Authoritative CROSS-REPOSITORY pin gate. Catches BOTH orphaned-pin classes: a pin that predates a
   # referenced script, AND a once-valid SHA orphaned by force-pushing/amending the source branch (no
   # longer an ancestor of the remote branch tip). Read-only, immutable action SHAs, no persisted creds.
