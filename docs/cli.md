@@ -240,9 +240,9 @@ is a host test too; it runs against the pinned upstream in the built environment
 
 ### update
 `lhpc update [<target>] [--source binary|pinned|dev|stable] [--accept-pin-mismatch] [--upstream] [--yes]`
-— update a stack/component.
+— update a stack/component. Which command for which situation:
+[keeping stacks current](operations.md#keeping-stacks-current).
 
-- Without `--source`, a binary-installed target stays binary; any other goes to `pinned`.
 - When the published binary lags this lhpc's pins, the update refuses and names the ways forward
   (self-update, a source build, `--accept-pin-mismatch` where allowed); cancelling keeps the
   working binary.
