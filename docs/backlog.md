@@ -29,7 +29,7 @@ power cycle with nothing running. The update path cannot repair this:
 Only detection exists: verification runs out of process against the new checkout, and a failure
 makes the update visibly partial.
 
-**Holding the line:** `tests/host/test_updater_units.py::test_unit_bytes_are_the_frozen_render`.
+**Holding the line:** `tests/repo/test_unit_templates_frozen.py` (hashes in `tests/data/unit-templates.sha256`).
 
 **Workaround for new writable paths:** redirect the state into the runtime root with an
 environment variable instead of granting a HOME path (Sideband:

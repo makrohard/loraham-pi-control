@@ -98,7 +98,7 @@ def test_web_and_helper_carry_the_bus_block_and_sandbox():
     # Sideband is NOT granted %h/.kivy: KIVY_HOME redirects its state into
     # {root}/state/sideband/kivy, which is already writable. Granting it here would
     # change the unit bytes and strand every installed box — see
-    # test_unit_bytes_are_the_frozen_render.
+    # tests/repo/test_unit_templates_frozen.py.
     assert f"ReadWritePaths={ROOT} -%h/.meshcore_nm /tmp" in web
     assert f"ReadWritePaths={ROOT} /tmp" in helper
     assert "%h/.meshcore_nm" not in helper and "%h/.kivy" not in helper
@@ -454,53 +454,3 @@ def test_verify_and_integration_cover_the_restart_units(tmp_path):
     (dropin / "evil.conf").write_text("[Service]\nExecStart=\n")
     assert U.verify(ud, U.RESTART_UNIT, ROOT, CO, VENV) == U.OVERRIDDEN
     assert U.integration(ud, ROOT)["status"] == "overridden"
-
-
-# The frozen rendered unit bytes, pinned. See the frozen-template banner in updater_units.py.
-_UNIT_BYTES_0_1_6 = {
-    "lhpc-web.service":
-        "1dcfc443666fd2e9780e8c32822aec3a1b3b924088c19d4c056c6e1bff5b7963",
-    "lhpc-selfupdate.service":
-        "aff7551b15392d7e665882d2a0a1d3a1268164d99918111e02d40dfb634f1bd2",
-    "lhpc-selfupdate.path":
-        "3ea1a78764b95349cc5ff9b2005feb30278c91d7b61798d0bc0696bae85e891f",
-    "lhpc-nginx.service":
-        "2033890f7a3b062f15577b714eea83f51b679c94b83e36c84e9007ca9445949a",
-    "lhpc-nginx-restart.service":
-        "d11077656397af64409854cb7a9928d91d2a72e64d7520025100ab139d98aac1",
-    "lhpc-nginx-restart.path":
-        "1f7b523f2e863e05cd1dda74dd59b1ce9812d7ebfdf77584216eec310302a39a",
-    "lhpc-boot-restore.service":
-        "5c667fb424138a61513cb1df3f6cabd7137a33da8d1e14b6b6009ae249de6780",
-}
-
-
-def test_unit_bytes_are_the_frozen_render():
-    """The managed units must render EXACTLY the frozen bytes.
-
-    `verify()` compares byte-for-byte, so any change — including to a COMMENT inside a
-    template — makes every already-installed unit non-canonical. Boot restore then
-    refuses and the box comes back from a power cycle with nothing running. No update
-    path repairs this: the in-process repair renders pre-update templates, and the
-    systemd-helper route cannot write units at all (ProtectHome=read-only).
-
-    Caught exactly that during an audit fix: reverting an added
-    `-%h/.kivy` write path restored the DIRECTIVE, but the reworded comment beside it
-    still changed lhpc-web.service's bytes.
-
-    If you are here because this failed: do NOT just re-pin the hash. Either keep the
-    bytes identical (redirect state into {root} with an env var, as KIVY_HOME does), or
-    build the two-stage migration in docs/backlog.md first.
-    """
-    import hashlib
-
-    assert set(_UNIT_BYTES_0_1_6) == set(U.ALL_UNITS), \
-        "a managed unit was added or removed — that alone changes the installed set"
-    drifted = {}
-    for kind in U.ALL_UNITS:
-        got = hashlib.sha256(U.render(kind, ROOT, CO, VENV).encode()).hexdigest()
-        if got != _UNIT_BYTES_0_1_6[kind]:
-            drifted[kind] = got
-    assert not drifted, (
-        "unit template bytes changed -> boot restore will refuse on every "
-        f"installed box: {sorted(drifted)}")
