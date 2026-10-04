@@ -284,7 +284,7 @@ GPS, radio mode, firewall exposure, resource conflicts, identity), and then:
 - **a missing or unusable identity** → nothing runs; the stack's Settings open with the offending
   row highlighted.
 
-The CLI dry run (`lhpc stack start <id>`) refuses exactly what the web refuses, printing the
+`lhpc stack start <id>` (its plan, then the start) refuses exactly what the web refuses, printing the
 `lhpc config` remedy. Where the console shows *Stop owner(s) & start*, the CLI asks the same
 question (`--yes` answers yes).
 
