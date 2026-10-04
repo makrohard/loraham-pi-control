@@ -34,7 +34,7 @@ Run **one** process: per-request state and CSRF handling are only safe single-pr
 ## Self-hosted deployment layout
 
 The layout is [the runtime root](architecture.md#the-runtime-root). The unit sets
-`LHPC_RUNTIME_ROOT=~/loraham-pi-control` explicitly, runs `venv/lhpc/bin/lhpc web`, and works from
+`LHPC_RUNTIME_ROOT=~/loraham-pi-control` explicitly, runs `venv/lhpc/bin/lhpc web --socket`, and works from
 `src/loraham-pi-control`. The venv sits outside the checkout so self-update's `git clean` cannot
 reach it.
 
@@ -91,7 +91,8 @@ Back up `config/`, `profiles/` and the app data under `state/` first
 
 ## Run it under systemd
 
-`install.sh` writes all **seven canonical user units**, refusing to overwrite a foreign one:
+`install.sh` writes all **seven canonical user units**, refusing if any of them, or a drop-in folder for one, already
+exists:
 
 - `lhpc-web.service` — the console;
 - `lhpc-selfupdate.service` / `.path` — the self-update helper and its watcher;
@@ -102,7 +103,7 @@ Back up `config/`, `profiles/` and the app data under `state/` first
   next boot).
 
 It then runs `daemon-reload`, enables the units, and turns on lingering so the console autostarts
-at boot. `--no-service` skips all of this. The units match the shipped `deploy/*.service`
+at boot. `--no-service` skips all of this. The units match the shipped `deploy/`
 templates except for `%h` vs resolved paths; their bytes are frozen
 ([backlog](backlog.md#two-stage-unit-template-migration)).
 
@@ -116,7 +117,7 @@ They are **user** units, no root. To install the console unit by hand:
 ```bash
 mkdir -p ~/.config/systemd/user
 cp ~/loraham-pi-control/src/loraham-pi-control/deploy/lhpc-web.service ~/.config/systemd/user/
-# adjust ExecStart path / port in the copy if your layout differs
+# adjust the paths in the copy if your layout differs
 systemctl --user daemon-reload
 systemctl --user enable --now lhpc-web.service
 loginctl enable-linger "$USER"     # keep running after logout

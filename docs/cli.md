@@ -10,9 +10,13 @@ the same service layer ([architecture](architecture.md#package-layout)).
 
 ## Conventions
 
-- Mutating commands (`install`, `stack start`, `build`, `test`, `update`, …) print a
-  **dry-run plan** and apply only after a `[y/N]` confirmation, or at once with `--yes`.
-- Read-only commands (`list`, `status`, `explain`, `doctor`, `source-check`, `config <stack>`) change nothing.
+- Plan-first commands (`bootstrap`, `install`, `auto-install`, `stack`, `build`, `test`, `update`,
+  `uninstall`, `clean`, `daemon --set`) print a **dry-run plan** and apply only after a `[y/N]`
+  confirmation, or at once with `--yes`.
+- Setting commands (`config <stack> <param> <value>`, `hardware`, `gps`, `autostart on|off`,
+  `firewall`, `webserver`, `known-working`) apply at once.
+- Read-only commands (`list`, `status`, `explain`, `doctor`, `config <stack>`) change nothing;
+  `source-check` writes only its cache, `state/stackupdates.json`.
 - Exit codes: `0` success, `1` a command error (`ERR`), `2` a usage error.
 - Help: `lhpc --help`, `lhpc <command> --help`, `lhpc help <topic>`.
 
@@ -82,7 +86,8 @@ Pi Zero 2W and a Pi 5; QEMU and PlatformIO come later with `lhpc build`. The shi
 this script: [what CI enforces](maintenance.md#what-ci-enforces).
 
 ### source-check
-`lhpc source-check [<target>]` — check managed sources for upstream updates (read-only).
+`lhpc source-check [<target>]` — check managed sources for upstream updates (network;
+refreshes only `state/stackupdates.json`).
 
 ---
 
@@ -95,7 +100,8 @@ this script: [what CI enforces](maintenance.md#what-ci-enforces).
 root. Channels and defaults: [provenance](provenance.md#selections); the binary channel in
 operation: [operations](operations.md#install-channels).
 
-- Without `--source`, each stack takes its default channel; `dev` is always explicit.
+- Without `--source`, a named stack takes its default channel; `lhpc install` without a stack uses
+  `pinned`; `dev` is always explicit.
 - A failed binary install asks whether to build from source; it never falls back silently.
 - `--check` — dry run: the plan plus missing mandatory system dependencies (the apply refuses
   until they are installed). Never prompts or applies.
@@ -334,8 +340,8 @@ lhpc webserver cert discard-export <label>
 
 - `configure`/`expose`/`proxy` write intent only; `apply` activates it
   ([applying changes](webserver.md#applying-changes-and-recovery)).
-- `expose` and `proxy` need `--confirm-phrase` ([access modes](webserver.md#access-modes),
-  [proxies](webserver.md#stack-web-ui-proxies)); `proxy --port 0` or absent = not proxied.
+- `expose`, and `proxy` in `lan`/`public` mode, need `--confirm-phrase` ([access modes](webserver.md#access-modes),
+  [proxies](webserver.md#stack-web-ui-proxies)); `proxy --port 0` = not proxied (omitted: the saved port is kept).
 - `expose --replace-certificate` — consent, without a prompt, to replacing the server certificate
   when it does not name this host's LAN address; off a terminal `expose` otherwise writes nothing.
 - `--accept-unverified-clock` (`tls-renew`, `expose`, `cert issue|reissue|revoke`) — proceed on an
@@ -376,8 +382,9 @@ MeshCom HMAC password between bridge and firmware (default stack: meshcom;
   as your acknowledgement after inspecting `ps`.
 
 ### _gps-bridge
-Internal — `lhpc _gps-bridge <meshtastic|meshcom>`: started by the lifecycle to present the global
-position source as a device (NMEA on a PTY or a UNIX socket under `state/gps/<consumer>/`).
+Internal — `lhpc _gps-bridge <meshtastic|meshcom|meshcore>`: started by the lifecycle to feed one
+consumer the global position source (NMEA on a PTY for Meshtastic, NMEA into QEMU's UART socket for
+MeshCom, line-JSON on a socket for MeshCore).
 
 ### _network-finalize
 Internal — `lhpc _network-finalize --uuid <uuid> --op-id <token> [--pwfile <path>] [--allow-console] [--delay <s>]`:

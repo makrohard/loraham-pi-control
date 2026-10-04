@@ -46,7 +46,8 @@ release may move, on pushes to `main` and on dispatch with `release_verify=true`
 ([testlab.md](testlab.md#running-the-verification-lanes)); `slow-build`, on the same triggers,
 is the slow-target build row below.
 
-No external project's own test suite runs in CI.
+No external project's own test suite runs in CI, apart from meshcom-qemu-raspi's
+`tests/test-fetch-qemu.sh` in `pin-validation`.
 
 ## What CI does not enforce
 
@@ -55,7 +56,8 @@ No external project's own test suite runs in CI.
 - **The contract lane** (`pytest -m contract`, ~20 s) runs inside the suite but is no separate gate;
   use it as a pre-flight.
 - **Docs formatting.** Tests pin only a `### ` section in `cli.md` per CLI verb and the two
-  READMEs' dependency list and hardware table (`tests/repo/test_readme_not_drifted.py`). Headings,
+  READMEs' dependency list and hardware table (`tests/cli/test_cli.py::test_docs_cli_lists_every_command`,
+`tests/repo/test_readme_not_drifted.py`). Headings,
   Contents blocks and prose are kept by hand: `adding-a-stack.md` when the manifest model changes,
   the operator docs when behaviour changes.
 - Nothing Pi-specific ([Running on a Pi](#running-on-a-pi)).
