@@ -2,6 +2,11 @@
 
 ## 0.12.0
 
+- Saving settings (the console's Settings, `lhpc config`, the RF-log and HMAC switches) is now built in
+  separate steps: checking what was submitted, then reading, deciding and writing under the config lock.
+  What a save accepts, refuses, writes and reports is unchanged; two saves of the same stack at the same
+  moment still both land.
+
 - A build now keeps the sources it builds from locked for its whole run — the stack's own and every
   source it consumes, such as `openhop-repeater` for the MeshCore node or Reticulum for NomadNet — so an
   update or uninstall of one of them is refused until the build ends, and the build's completion record
