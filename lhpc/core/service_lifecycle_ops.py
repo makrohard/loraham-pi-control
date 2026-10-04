@@ -903,9 +903,9 @@ class LifecycleOpsMixin:
           * PREPARE (`_prepare_from_fresh_evidence`) itself calls no stop, spawn or config-file
             generation (its firewall gate renders the FW-R8 apply script); it
             refuses, or returns the already-healthy no-op, before any stop or spawn.
-          * EXECUTE (`_execute_start`): the feed floor of its bands reset; conflicting owners
-            stopped (`stop_owners`) — one that does not verify stopped refuses the start with
-            nothing of the target launched; then
+          * EXECUTE (`_execute_start`): conflicting owners stopped (`stop_owners`) — one that
+            does not verify stopped refuses the start with nothing of the target launched; the
+            feed floor of its bands reset; then
             the daemon ensure and, per component in run order, its gates, config files,
             pre-steps / interactive marker, RF-log roll, spawn, readiness, post-start and
             running-band marker. A component that fails its readiness, post-start or marker
@@ -1148,10 +1148,9 @@ class LifecycleOpsMixin:
                                   "commands": commands})
 
     def _execute_start(self, prep, run):
-        """PHASE 3 EXECUTE in explicit order: the feed floor of the start's bands reset, conflicting
-        owners stopped (`stop_owners`; one that
-        does not verify stopped refuses here, before anything of the target runs), the process
-        observation taken, then per component in run order its gates (typed BLOCKED / SKIPPED /
+        """PHASE 3 EXECUTE in explicit order: conflicting owners stopped (`stop_owners`; one that
+        does not verify stopped refuses here, before anything of the target runs), the feed floor
+        of the start's bands reset, the process observation taken, then per component in run order its gates (typed BLOCKED / SKIPPED /
         MANUAL_REQUIRED), config files, pre-steps / interactive marker, RF-log roll, spawn — each
         spawn followed at once by its readiness, post-start and running-band checks, a failed one
         stopping that launch again (typed UNVERIFIED) — and last the stale interactive markers of
@@ -1164,12 +1163,6 @@ class LifecycleOpsMixin:
         # (incl. an ensured daemon), threaded EXPLICITLY — never ambient/thread-local. A
         # component-scoped start must never be widened into a whole-stack boot restore.
         _req_target, _req_scope = target, prep.scope
-        # The feed-floor reset, after PREPARE (a refused start writes nothing) and before any
-        # stop or spawn: the RX/TX window is cleared at the start boundary, SCOPED to the band
-        # set the lock bundle covers — a 433 client clears 433 only, an all-active daemon start
-        # every arbitrated band, a non-radio start nothing.
-        for _b in sorted(self._operation_bands(target, band, radio, "start")):
-            self.clear_daemon_feed(_b)
         life = run.life
         blockers = self.run_blockers(target, band, radio) if prep.stop_owners else []
         if blockers:
@@ -1197,6 +1190,12 @@ class LifecycleOpsMixin:
             # so the build_snapshot() below and the launch-loop recheck already recompute fresh.)
         else:
             prelude = []
+        # The feed-floor reset, after PREPARE and the owner stops (a refused start writes
+        # nothing) and before the first spawn: the RX/TX window is cleared at the start boundary,
+        # SCOPED to the band set the lock bundle covers — a 433 client clears 433 only, an
+        # all-active daemon start every arbitrated band, a non-radio start nothing.
+        for _b in sorted(self._operation_bands(target, band, radio, "start")):
+            self.clear_daemon_feed(_b)
 
         snap = self.build_snapshot()
         st_index = {c.id: ss.components[c.id]

@@ -141,6 +141,18 @@ def test_refused_by_band_owner(kiss_box, run_op):
     assert run.files == NOTHING
 
 
+def test_refused_when_the_band_owner_does_not_stop(kiss_box, run_op):
+    """intended: with stop_owners (the console's confirmed *Stop owner(s) & start*), an owner that
+    does not verify stopped refuses the start before the feed-floor reset — nothing written."""
+    box = kiss_box()
+    box.fake.cmdlines_data[300] = ["meshtasticd"]
+    run = run_op(box.root, lambda: box.svc.start("kiss", apply=True, stop_owners=True))
+    assert (run.fields["ok"], run.fields["summary"]) == (
+        False, "Cannot run 'kiss': conflicting stack(s) meshtastic could not be verified stopped.")
+    assert "mutate:feed-floor:433" not in run.phases
+    assert run.files == NOTHING
+
+
 def test_unverified_termination_is_cleaned_up(kiss_box, run_op):
     """intended: a TNC that is alive but never opens its ready endpoint (observed absent through
     the whole bounded wait) is stopped again (identity-verified) and reported UNVERIFIED; no
