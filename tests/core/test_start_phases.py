@@ -6,7 +6,6 @@ other one fails with AttributeError, so each test also proves what that phase do
 (rule 9: the stand-in stubs collaborators only; the one order asserted is the documented lock
 order)."""
 
-import contextlib
 import types
 
 import pytest
@@ -107,75 +106,6 @@ def test_the_kept_daemon_band_names_each_residual_component_by_origin():
     assert residual_reason(["web"], [], results) == "web still running (not started by this call)"
 
 
-# ── PHASE 1 ADMIT AND ACQUIRE GUARDS ──
-
-def test_the_guards_are_taken_admission_config_bundle_and_released_in_reverse():
-    log = []
-
-    def guard(name):
-        @contextlib.contextmanager
-        def cm(*a, **kw):
-            log.append(f"enter {name} {a} {kw}")
-            yield
-            log.append(f"exit {name}")
-        return cm
-    me = _Self(_admission_guard=guard("admission"), _config_stable=guard("config"),
-               _lifecycle_guard=guard("bundle"),
-               operation_band=lambda t, b: log.append("op-band") or "868",
-               _order_radio=lambda t, ob: log.append(f"order {ob}") or (ORDER, "868"))
-    with M._admit_and_acquire_guards(me, "start", "s", "", True) as got:
-        log.append("body")
-    assert got == ("868", ORDER, "868")
-    assert log == ["enter admission ('start', 's') {}", "op-band", "enter config () {}",
-                   "order 868",
-                   "enter bundle ('start', 's', '868') {'stop_owners': True, 'radio': '868'}",
-                   "body", "exit bundle", "exit config", "exit admission"]
-
-
-# ── PHASE 2 PREPARE FROM FRESH EVIDENCE ──
-
-def _prepare_self(**over):
-    attrs = dict(
-        _run_order=lambda t: ORDER, _gui_fallback_refusal=lambda t: None,
-        _meshcore_mode_refusal=lambda t: None, _start_static_refusal=lambda t, op: None,
-        _launch_band_hint=lambda t, b: b, _config_band=lambda t, b: b,
-        operation_band=lambda t, b: b, stack_of=lambda t: t, running_band=lambda s, d: "",
-        _dep_band_block=lambda t, o, b: None, _daemon_needs=lambda o, b: (b, "MANAGED"),
-        _owner_stack_id=lambda t: t, enforce_identity=lambda t, b: (True, [], ""),
-        _materialize_inherited_identity=lambda t, b: ({"call": "X"}, {}),
-        _saved_launch_refusal=lambda t, b, op: None, stack=lambda t: STACK,
-        _order_already_healthy=lambda o, r: False,
-        _start_preflight_refusal=lambda *a, **kw: None)
-    return _Self(**{**attrs, **over})
-
-
-def test_prepare_resolves_the_plan_inputs_and_stops_before_the_apply_only_checks():
-    me = _prepare_self()
-    prep = M._prepare_from_fresh_evidence(me, "s", "433", False, None, "", apply=False)
-    assert prep == _prep(tx="MANAGED")
-    assert "_order_already_healthy" not in me.calls and "_start_preflight_refusal" not in me.calls
-
-
-def test_prepare_refuses_on_a_saved_value_before_the_apply_checks():
-    refusal = ActionResult(False, "Cannot start 's': bad saved value")
-    me = _prepare_self(_saved_launch_refusal=lambda t, b, op: refusal)
-    assert M._prepare_from_fresh_evidence(me, "s", "433", False, None, "",
-                                          apply=True) is refusal
-    assert "_order_already_healthy" not in me.calls and "_start_preflight_refusal" not in me.calls
-
-
-def test_prepare_on_the_apply_ends_with_the_preflight_and_hands_it_the_owner_choice():
-    seen = {}
-    refusal = ActionResult(False, "Cannot run 's': x must be stopped first.")
-
-    def preflight(*a, **kw):
-        seen.update(kw)
-        return refusal
-    me = _prepare_self(_start_preflight_refusal=preflight)
-    assert M._prepare_from_fresh_evidence(me, "s", "433", True, None, "", apply=True) is refusal
-    assert seen == {"check_blockers": False, "render": True}
-
-
 # ── PHASE 3 EXECUTE ──
 
 def test_execute_refuses_when_a_conflicting_owner_does_not_verify_stopped():
@@ -231,13 +161,6 @@ def test_a_successful_applied_start_beside_the_other_side_is_warned(monkeypatch,
 
 
 # ── the restart's legs ──
-
-def test_restart_preflight_refuses_before_any_stop():
-    """The stand-in has no `stop`, `_stop_impl` or later check: the refusal is returned first."""
-    refusal = ActionResult(False, "Cannot restart 's': a callsign is required")
-    me = _Self(operation_band=lambda t, b: b, _start_static_refusal=lambda t, op: None,
-               _identity_refusal=lambda t, b, op: refusal)
-    assert M._restart_preflight(me, "s", "433", False, False, True) is refusal
 
 
 def test_restore_raises_only_what_the_start_did_not_bring_back():

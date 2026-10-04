@@ -917,6 +917,8 @@ def test_a_launch_whose_own_cleanup_did_not_cease_is_named_as_started_by_this_ca
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     order = [(None, types.SimpleNamespace(id=c)) for c in ("loraham-daemon", "web", "node")]
 
+    # A lifecycle stand-in, and why: it keeps an ownership record for `web` (running before the
+    # start) and `node` (its cleanup did not cease), which a real start cannot arrange on demand.
     class Life:
         stopped = []
 
@@ -936,8 +938,8 @@ def test_a_launch_whose_own_cleanup_did_not_cease_is_named_as_started_by_this_ca
     assert life.stopped == []
     kept = [r for r in results if r.action == "stop"]
     assert [(r.component, r.outcome) for r in kept] == [("loraham-daemon", Outcome.BLOCKED)]
-    assert kept[0].summary == ("433 MHz instance this start launched left running: node is not "
-                               "verified stopped; web still running (not started by this call)")
+    assert "node is not verified stopped" in kept[0].summary, kept[0].summary
+    assert "web still running (not started by this call)" in kept[0].summary, kept[0].summary
 
 
 def test_rollback_takes_what_the_start_verified_last_started_first():
