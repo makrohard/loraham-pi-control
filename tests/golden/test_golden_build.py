@@ -158,7 +158,7 @@ def test_refused_by_interrupted_install(tmp_path, run_op, interrupted_install):
     interrupted_install(tmp_path)
     run = run_op(tmp_path, lambda: svc.build("chat", apply=True))
     assert run.fields == {
-        "ok": False, "data_keys": [], "next_commands": ["lhpc status chat"], "heads": [],
+        "ok": False, "data_keys": [], "next_commands": ["lhpc build chat --yes"], "heads": [],
         "outcomes": [],
         "summary": "Build blocked for 'chat': an unresolved source-transaction journal is "
                    "present — resolve it before any source operation"}
@@ -175,6 +175,6 @@ def test_contended_source_lock_refuses(tmp_path, run_op, held_lock):
     assert run.fields == {
         "ok": False, "summary": f"Build blocked for 'chat': resource 'source.src-loraham_daemon' "
                                 f"is busy: golden on 'x' (pid {holder})",
-        "data_keys": [], "next_commands": ["lhpc status chat"], "heads": [], "outcomes": []}
+        "data_keys": [], "next_commands": ["lhpc build chat --yes"], "heads": [], "outcomes": []}
     assert run.phases == LOCKS
     assert run.files == NOTHING and _steps(fake) == []
