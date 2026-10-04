@@ -332,6 +332,7 @@ def test_service_maps_cleanup_failure_to_partial(tmp_path, monkeypatch):
         "message": "aligned, cleanup incomplete", "deps_changed": False})
     res = svc.self_update_apply(force=True)
     assert res.ok is False and res.data.get("cleanup_failed") is True   # partial -> not a plain success
+    assert res.next_commands, res                                  # the restart instructions
     assert any("cannot unlink" in d for d in res.details)         # the cleanup error passes through
 
 
@@ -409,6 +410,8 @@ def test_a_helper_changing_update_keeps_the_reapply_warning_on_every_path(tmp_pa
         assert res.ok is not failed and recorded["ok"] is not failed
         assert res.data.get("venv_sync_failed", False) is (path == "one-click-sync-failed")
         assert res.data.get("units_refreshed", True) is units_ok
+        assert not failed or res.next_commands or any("nothing to run here" in d
+                                                      for d in res.details), res
         assert "re-apply the firewall before you reboot" in recorded["summary"].lower()
     elif path == "cli-cleanup-failed":
         monkeypatch.delenv("INVOCATION_ID", raising=False)

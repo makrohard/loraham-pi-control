@@ -459,6 +459,7 @@ def test_self_update_apply_blocked_by_unsafe_identity(identity_svc):
     assert svc.controller_identity_live()["status"] == "unsafe"
     res = svc.self_update_apply()
     assert not res.ok and res.data.get("identity_unsafe")
+    assert res.next_commands or any("nothing to run here" in d for d in res.details), res
 
 
 def test_self_update_apply_not_blocked_when_not_self_hosted(tmp_path, monkeypatch):

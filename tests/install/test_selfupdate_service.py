@@ -128,7 +128,9 @@ def test_trigger_preflight_passes_or_refuses_without_a_request_marker(tmp_path, 
     assert not r.ok and r.data.get("already_pending") and req.read_text() == "normal\n"
     req.unlink()
     _seed_available(tmp_path, ok=False, status="unsafe", reason="bad", checked_at=1)
-    assert svc.self_update_trigger(queue=False).data.get("identity_unsafe") and not req.exists()
+    r = svc.self_update_trigger(queue=False)
+    assert r.data.get("identity_unsafe") and not req.exists()
+    assert r.next_commands or any("nothing to run here" in d for d in r.details), r
     svc, fake = op_svc(units=True, invocation=False)                 # a foreground console
     assert svc.self_update_trigger(queue=False).data.get("not_managed") and not req.exists()
 

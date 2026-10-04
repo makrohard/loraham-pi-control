@@ -86,6 +86,7 @@ def test_update_rechecks_running_after_locks(tmp_path, monkeypatch):
     res = svc.update("kiss", apply=True, source="dev")
     assert fired["done"]
     assert not res.ok and "started while" in res.summary
+    assert res.next_commands == ["lhpc stack stop kiss --yes"]
     assert _snapshot_state(tmp_path, paths) == before      # ZERO mutation, marker preserved
 
 
