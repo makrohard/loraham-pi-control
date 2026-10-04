@@ -603,6 +603,40 @@ def test_an_unverifiable_lab_nginx_is_refused_not_reported_stopped(tmp_path):
         proc.wait()
 
 
+@pytest.mark.parametrize("proc_stat", ["unreadable", "malformed"])
+def test_an_unreadable_lab_nginx_proc_entry_is_refused_not_reported_stopped(tmp_path, monkeypatch,
+                                                                           proc_stat):
+    """A /proc stat that cannot be read (not ENOENT) or has no ')' proves nothing about the pid:
+    the stop refuses it as unverified and never signals it, instead of "stopped"."""
+    import builtins
+    import io
+    import shutil
+    root = tmp_path / "lab root"
+    fake = tmp_path / "bin" / "nginx"
+    fake.parent.mkdir()
+    fake.symlink_to(shutil.which("sleep"))
+    conf = str(Paths(runtime_root=root).under("config", "nginx", "lhpc.conf"))
+    proc = subprocess.Popen([f"nginx: master process nginx -c {conf}", "60"], executable=str(fake))
+    stat = f"/proc/{proc.pid}/stat"
+
+    def reading(path, *a, **k):
+        if str(path) == stat:
+            if proc_stat == "unreadable":
+                raise PermissionError(13, "Permission denied", stat)
+            return io.BytesIO(f"{proc.pid} nginx S 1".encode())   # no ')'
+        return builtins.open(path, *a, **k)
+    # Stubs the collaborator, /proc: the supervisor's read of this pid's stat entry.
+    monkeypatch.setattr(supervisor, "open", reading, raising=False)
+    try:
+        paths, _ = _lab_nginx_pidfile(root, proc.pid)
+        ok, why = supervisor.nginx_ctl(paths, "stop")
+        assert not ok and str(proc.pid) in why, why
+        assert proc.poll() is None                       # never signalled
+    finally:
+        proc.kill()
+        proc.wait()
+
+
 def test_the_lab_nginx_master_is_verified_and_signalled(tmp_path):
     """A process named `nginx` with the master's title and the exact `-c <config>` pair is the
     lab's master: alive, and a stop signals exactly that pid (SIGQUIT first)."""

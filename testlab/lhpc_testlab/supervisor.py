@@ -160,7 +160,9 @@ def _nginx_alive(paths) -> bool:
 
 def _nginx_unverified(paths) -> int:
     """The pid in the lab's nginx pid file when a live `nginx` runs there that `_nginx_master`
-    cannot verify as ours (a config path with whitespace), else 0 — up, but never signalled."""
+    cannot verify as ours (a config path with whitespace), else 0 — up, but never signalled.
+    Only a process that is gone (no /proc entry) or not nginx reads as 0; a /proc entry that
+    cannot be read or parsed is not verified either, so its pid is returned."""
     pid = _nginx_pid(paths)
     if pid <= 0 or _nginx_master(paths):
         return 0
@@ -170,8 +172,10 @@ def _nginx_unverified(paths) -> int:
                 return 0
         with open(f"/proc/{pid}/comm", "rb") as fh:
             return pid if fh.read().decode("utf-8", "replace").strip() == "nginx" else 0
+    except (FileNotFoundError, ProcessLookupError):
+        return 0                                             # gone
     except (OSError, IndexError):
-        return 0
+        return pid                                           # unreadable or malformed: unverified
 
 
 def nginx_ctl(paths, verb: str) -> tuple[bool, str]:
