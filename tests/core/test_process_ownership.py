@@ -810,9 +810,9 @@ def _owned_ids(svc):
 @pytest.mark.parametrize("daemon_up_before", [False, True])
 def test_a_failed_start_stops_the_daemon_only_if_it_launched_it(tmp_path, monkeypatch,
                                                                 daemon_up_before):
-    """Finding 64 (real box: a failed `stack start meshcore` left the daemon running): the
-    daemon instance this start launched is stopped again with the rest; a daemon that already
-    served the band before the start is left as it was."""
+    """The daemon instance a failed start launched is stopped again with the rest; a daemon that
+    already served the band before the start is left as it was (finding 64: on a real box a failed
+    `stack start meshcore` left the daemon running)."""
     svc = _daemon_failed_start(tmp_path, monkeypatch, daemon_up_before)
     try:
         res = svc.start("s", apply=True)
@@ -842,8 +842,9 @@ def test_a_failed_start_names_what_it_could_not_stop(tmp_path, monkeypatch):
         assert rows[("a", "start")].outcome.value == "still_running"
         kept = rows[("loraham-daemon", "stop")]
         assert kept.outcome.value == "blocked"
-        assert kept.summary == ("433 MHz instance this start launched left running: a is not "
-                                "verified stopped")
+        # The kept band and the component that holds it are what the operator acts on.
+        assert kept.summary.startswith("433 MHz instance") and "a is not verified stopped" in \
+            kept.summary, kept.summary
         assert _owned_ids(svc) == ["a", "loraham-daemon"]
     finally:
         for rec in svc._lifecycle().owned_inventory()[0]:
@@ -882,6 +883,9 @@ def test_the_daemon_band_held_for_a_client_names_why_it_is_up(tmp_path):
     comp = lambda cid: types.SimpleNamespace(id=cid)
     order = [(None, comp(c)) for c in ("loraham-daemon", "web", "ui", "node")]
 
+    # A lifecycle stand-in, and why: it decides which run-order components still hold an
+    # ownership record after the roll-back (here `web`, which ran before the start, and `ui`, whose
+    # stop did not cease), which a real start cannot arrange on demand.
     class Life:
         stopped = []
 
@@ -901,8 +905,10 @@ def test_the_daemon_band_held_for_a_client_names_why_it_is_up(tmp_path):
     assert life.stopped == ["ui"]                       # never the one that ran before
     kept = [r for r in results if r.action == "stop"]
     assert [(r.component, r.outcome) for r in kept] == [("loraham-daemon", Outcome.BLOCKED)]
-    assert kept[0].summary == ("433 MHz instance this start launched left running: ui is not "
-                               "verified stopped; web still running (not started by this call)")
+    # The band and both holders are named (how each is classified is the pure
+    # `residual_reason`'s, owned by test_start_plan.py).
+    assert kept[0].summary.startswith("433 MHz instance"), kept[0].summary
+    assert "ui is not verified stopped" in kept[0].summary and "web still running" in kept[0].summary
 
 
 def test_a_launch_whose_own_cleanup_did_not_cease_is_named_as_started_by_this_call(tmp_path):

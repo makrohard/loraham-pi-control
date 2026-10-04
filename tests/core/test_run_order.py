@@ -1360,3 +1360,28 @@ def test_a_failed_start_beside_the_other_side_is_not_warned(tmp_path):
         "meshtastic", values={"node_name": "Field Node", "node_short": "FN1"}).ok
     res = svc.start("meshtastic", band="868", apply=True)
     assert not res.ok and not any("[warning]" in d for d in res.details), res.details
+
+
+@pytest.mark.parametrize("target, band, other", [("daemon", "433", "868"),
+                                                 ("meshtastic", "868", "433")])
+def test_a_successful_applied_start_beside_the_other_side_is_warned(tmp_path, monkeypatch, target,
+                                                                    band, other):
+    """Once the new side came up beside the other one (a VERIFIED applied start), the result
+    carries the shared-SPI warning, in either direction."""
+    from lhpc.core.outcomes import CompResult, Outcome
+    from lhpc.core.service_lifecycle_ops import SPI_SHARED_WARNING
+    from lhpc.core.start_plan import StartRun
+    svc = _msvc(tmp_path, other) if target == "daemon" else _dsvc(tmp_path, other)
+    if target == "meshtastic":
+        assert svc.save_config_bundle(
+            "meshtastic", values={"node_name": "Field Node", "node_short": "FN1"}).ok
+    # Stubbed collaborator, and why: the launch itself (a real daemon or meshtasticd cannot run
+    # here). The start's guards, preparation and FINALIZE are the real ones; finalize decides the
+    # warning from the verified rows.
+    monkeypatch.setattr(ControllerService, "_execute_start", lambda self, prep: StartRun(
+        out=[], results=[CompResult(component=c.id, stack=s.id, action="start",
+                                    outcome=Outcome.VERIFIED) for s, c in prep.order],
+        presented=set(), daemon_launched=set(), life=None, pre_marker=None))
+    res = svc.start(target, band=band, apply=True)
+    assert res.ok, res.summary
+    assert f"  [warning] {SPI_SHARED_WARNING}" in res.details, res.details

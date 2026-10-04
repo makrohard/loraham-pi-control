@@ -435,3 +435,53 @@ def test_marker_path_is_the_config_transactions_one_state_target(tmp_path):
     rel = rr.marker_path(paths, "chat").relative_to(tmp_path)
     assert tuple(rel.parts[:2]) == rr.MARKER_DIR and rel.suffix == ".json"
     assert cfg._resolve_journal_target(paths, {"kind": "state", "rel": rel.as_posix()}) == rr.marker_path(paths, "chat")
+
+
+# A stack whose main has a REQUIRED post-start step: the one step a start runs with the config
+# guard released (`_config_unstable`), so a save can land while the launch is still running.
+_POST_START_MANIFEST = (
+    '[[stack]]\nid = "s"\nname = "s"\nmain = "m"\n'
+    '[[stack.component]]\nid = "m"\nname = "m"\nkind = "service"\nrun_argv = ["sleep", "60"]\n'
+    'readiness = "process"\n'
+    'post_steps = [{ kind = "exec", label = "p", required = true, argv = ["true"] }]\n')
+
+
+@pytest.mark.needs_session
+@pytest.mark.parametrize("save_during_launch", [True, False])
+def test_a_restart_marker_saved_during_the_launch_survives_the_start(tmp_path, monkeypatch,
+                                                                     save_during_launch):
+    """A save that lands while the required post-start runs writes a newer restart marker: it
+    describes configuration this launch never applied, so the start keeps it. A marker that was
+    already there and did not change is the one this launch satisfies, so the start clears it."""
+    from lhpc.core import restart_required as rr
+    from lhpc.core import runtime_fs
+    from lhpc.core.jobs import JobResult, JobState
+    from lhpc.core.lifecycle import Lifecycle
+    from lhpc.core.probes import RealSystem
+    manifest = tmp_path / "m.toml"
+    manifest.write_text(_POST_START_MANIFEST)
+    svc = ControllerService(manifest_path=manifest, system=RealSystem(),
+                            paths=Paths(runtime_root=tmp_path / "rt"))
+    path = rr.marker_path(svc._paths, "s")
+    runtime_fs.write_marker(svc._paths, path, svc.restart_marker_payload("s", ["old"], ""))
+    newer = svc.restart_marker_payload("s", ["old", "newer"], "")
+
+    # Stubbed collaborator, and why: the step's own process (it would run `true`); the start's
+    # real `_run_post_start` hands it the released guard, and the save is the marker write a
+    # concurrent Settings save makes there.
+    def required_step(self, stack, comp, params=None, band="", timeout=0, on_log_open=None,
+                      require_all=False, while_running=None):
+        with while_running:
+            if save_during_launch:
+                runtime_fs.write_marker(svc._paths, path, newer)
+        return JobResult(name=f"post-{comp.id}", state=JobState.SUCCEEDED, returncode=0,
+                         log_path="")
+    monkeypatch.setattr(Lifecycle, "run_required_post_start", required_step)
+    try:
+        assert svc.start("s", apply=True).ok
+        if save_during_launch:
+            assert path.read_text() == newer                  # kept: newer than the launch
+        else:
+            assert not path.exists()                          # satisfied by this launch
+    finally:
+        assert svc.stop("s", apply=True).ok

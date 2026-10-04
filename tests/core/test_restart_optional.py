@@ -65,6 +65,20 @@ def test_an_optional_component_that_does_not_come_back_fails_the_restart(tmp_pat
     assert any("NOT back" in d for d in res.details)
 
 
+def test_restart_reraises_only_what_the_stack_start_did_not_bring_back(tmp_path, monkeypatch):
+    """Of the optional components up before the stop, one the stack start brought back on its own
+    is not started again; only the one still down is re-raised."""
+    svc = _svc(tmp_path)
+    calls = _isolate(monkeypatch, svc, ["meshchat", "sideband"])
+    seq = [["meshchat", "sideband"], ["meshchat"]]       # before the stop / after the stack start
+    monkeypatch.setattr(type(svc), "_running_optional_components",
+                        lambda self, t: seq.pop(0) if seq else [])
+    res = svc.restart("reticulum", apply=True)
+    assert res.ok, res.summary
+    assert calls == [("stop", "reticulum"), ("start", "reticulum", "868"),
+                     ("start", "sideband", "868")]
+
+
 def test_the_plan_lists_running_optional_components(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     T = type(svc)

@@ -88,7 +88,9 @@ def test_restart_aborts_after_unverified_stop(tmp_path, monkeypatch):
 
 
 def test_failed_owner_stop_blocks_start(tmp_path, monkeypatch):
-    # A conflicting owner that won't verify-stop must block the target launch.
+    # A conflicting owner that won't verify-stop must block the target launch: the owner stop is
+    # the start's first destructive step, so the start ends there (a launch would reach the stand-in
+    # lifecycle, which serves stops only, and fail this test) and names the owner that stayed up.
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "run_blockers",
                         lambda self, t, b="", radio="": [{"resource": "radio 433",
@@ -97,6 +99,7 @@ def test_failed_owner_stop_blocks_start(tmp_path, monkeypatch):
     _patch_life(monkeypatch, svc, Outcome.STILL_RUNNING)
     res = svc.start("kiss", apply=True, stop_owners=True)
     assert not res.ok and "could not be verified stopped" in res.summary
+    assert any("'meshtastic' did not stop" in d for d in res.details), res.details
 
 
 # --- §8.3 web job-log selector hardening -------------------------------------
