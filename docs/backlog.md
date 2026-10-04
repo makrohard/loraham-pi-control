@@ -81,16 +81,10 @@ tests named next to each guarantee are the only evidence.
 Promises whose widest-seam case is missing — the next test-quality pass (`tests/README.md` has
 the tiers):
 
-1. no `POST /firewall/configure` route test observing an applied effect (apply/fail-closed is
-   proven only at the `ActionResult` seam);
-2. `tests/core/test_boot_restore.py` is `needs_session` at module scope — no isolation-safe case
+1. `tests/core/test_boot_restore.py` is `needs_session` at module scope — no isolation-safe case
    (split out the pure route-toggle tests);
-3. no route-level binary-channel SWITCH test (only the install confirmation's channel selection);
-4. no `/action` POST test for `op=uninstall`/`op=clean` refuse-while-running;
-5. no direct `/hardware` setup POST test (only `/hardware/probe`);
-6. no route-table gate in lhpc's own suite; the coverage matrix is in [testlab](testlab.md) and
-   runs in that package's CI lane;
-7. no single composite "TX opt-in + tests + callsign" gate test (covered by several separate ones).
+2. no route-table gate in lhpc's own suite; the coverage matrix is in [testlab](testlab.md) and
+   runs in that package's CI lane.
 
 ## Safety invariant IDs
 
