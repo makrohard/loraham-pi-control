@@ -138,16 +138,13 @@ KD_S2 = ("KD-S2: carrying a local file changes the candidate's recorded ctime; a
 KD_S3 = ("KD-S3: a failed removal of the quarantined prior leaves `..app.prev.quarantine-*` after "
          "the journal is closed; no recovery removes it and uninstall/clean refuse until it is "
          "removed by hand")
-KD_S4 = ("KD-S4: a Ctrl-C inside the atomic-rename probe leaves `src/.lhpc-atomic-probe-*`; "
-         "source_fs.py `require_atomic_rename` removes it only on an OSError")
 ALL = tuple(sorted(FAILURES))
 KNOWN = {
     "update": {**{(k, f): KD_S1 for k in (5, 8, 9, 10) for f in ("KeyboardInterrupt",)},
                **{(k, f): KD_S1 for k in (6, 11) for f in ALL},
                (15, "KeyboardInterrupt"): KD_S2,
                **{(19, f): KD_S3 for f in ALL}},
-    "adopt": {**{(k, "KeyboardInterrupt"): KD_S4 for k in (4, 5)},
-              **{(k, "KeyboardInterrupt"): KD_S1 for k in (8, 11, 12, 13)},
+    "adopt": {**{(k, "KeyboardInterrupt"): KD_S1 for k in (8, 11, 12, 13)},
               **{(k, f): KD_S1 for k in (9, 14) for f in ALL}},
 }
 CASES = [pytest.param(op, k, f, id=f"{op}-{w}:{p}-{f}",

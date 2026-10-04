@@ -168,6 +168,13 @@ def require_atomic_rename(paths: Paths = None, parent: Path | None = None) -> st
                 os.mkdir(nonce, dir_fd=pfd)
             except OSError as exc:
                 return f"cannot probe atomic rename on the source filesystem: {exc}"
+
+            def _drop_probe() -> None:
+                for leftover in (nonce, nonce + "-b"):    # best-effort: never leak a probe dir
+                    try:
+                        os.rmdir(leftover, dir_fd=pfd)
+                    except OSError:
+                        pass
             try:
                 try:
                     _rename_noreplace_at(pfd, nonce, nonce + "-b")
@@ -176,12 +183,11 @@ def require_atomic_rename(paths: Paths = None, parent: Path | None = None) -> st
                     os.rmdir(nonce, dir_fd=pfd)
                     return str(exc)
             except OSError as exc:
-                for leftover in (nonce, nonce + "-b"):    # best-effort: never leak a probe dir
-                    try:
-                        os.rmdir(leftover, dir_fd=pfd)
-                    except OSError:
-                        pass
+                _drop_probe()
                 return f"atomic-rename probe failed on the source filesystem: {exc}"
+            except BaseException:                         # Ctrl-C: the probe dir goes too
+                _drop_probe()
+                raise
             _ATOMIC_OK_DEVS.add(dev)
             return ""
     except (OSError, PathContainmentError) as exc:
