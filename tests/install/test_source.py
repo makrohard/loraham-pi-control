@@ -570,6 +570,54 @@ def test_a_staging_record_defers_to_its_journal(tmp_path, installer):
     assert (staging / "part").read_text() == "NEW" and (dest / "marker").read_text() == "LIVE"
 
 
+@pytest.mark.parametrize("journal", ["unreadable", "invalid", "other-inode", "other-candidate",
+                                     "no-ident"])
+def test_a_staging_record_keeps_a_journal_that_cannot_prove_the_candidate(tmp_path, installer,
+                                                                           journal):
+    # A journal PATH is no proof: the record is cleared only once the journal is read and the
+    # candidate identity it records is the directory at the name the record holds. An unreadable
+    # or invalid journal, or one recording another inode or candidate, keeps the record, and the
+    # result names the directory.
+    inst = installer(search_root=tmp_path / "rt")
+    src = inst.paths.under("src"); src.mkdir(parents=True)
+    dest = src / "app"; dest.mkdir(); (dest / "marker").write_text("LIVE")
+    staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "part").write_text("NEW")
+    rec = _staging_record(inst, staging, _ident_of(staging, ctime=False))
+    other = src / ".app.candidate-3-4"
+    _journal(inst, dest, src / ".app.prev", other if journal == "other-candidate" else staging,
+             "planned")
+    jp = inst._journal_path(dest)
+    j = json.loads(jp.read_text())
+    if journal == "unreadable":
+        jp.unlink(); jp.mkdir()
+    elif journal == "invalid":
+        jp.write_text("{not json")
+    elif journal == "other-inode":
+        j["idents"]["candidate"][1] += 1
+        jp.write_text(json.dumps(j))
+    elif journal == "no-ident":
+        j["idents"]["candidate"] = None
+        jp.write_text(json.dumps(j))
+    msgs = inst.recover_source_activations()
+    assert rec.exists(), msgs
+    assert any(f"staging record {rec.name} kept" in m and str(staging) in m for m in msgs), msgs
+    assert (staging / "part").read_text() == "NEW" and (dest / "marker").read_text() == "LIVE"
+
+
+def test_a_staging_record_whose_candidate_is_gone_is_cleared_whatever_its_journal(tmp_path,
+                                                                                  installer):
+    # No directory at the recorded name: nothing is left for the record to name.
+    inst = installer(search_root=tmp_path / "rt")
+    src = inst.paths.under("src"); src.mkdir(parents=True)
+    dest = src / "app"; dest.mkdir()
+    staging = src / ".app.candidate-1-2"
+    rec = _staging_record(inst, staging, None)
+    _journal(inst, dest, src / ".app.prev", staging, "planned")
+    inst._journal_path(dest).write_text("{not json")
+    inst.recover_source_activations()
+    assert not rec.exists()
+
+
 def test_the_carry_makes_what_it_wrote_durable(tmp_path, monkeypatch):
     # Before the activation rename makes the candidate the source, every carried file and every
     # directory entry the carry created is fsynced: a power loss after the rename must not leave

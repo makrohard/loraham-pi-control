@@ -1520,6 +1520,11 @@ class Installer:
                                             self._source_lock_key(self._source_rel(dest)),
                                             "recover", dest.name):
                     if source_fs.leaf_kind(self.paths, self._journal_path(dest)) != "absent":
+                        why = self._journal_owns_staging(dest, staging)
+                        if why:
+                            return (f"staging record {jf.name} kept: {why}; check {staging} "
+                                    "and its journal by hand (the record is cleared by the "
+                                    "next lhpc source command once one of them proves it)")
                         kind = "staging record cleared: its journal owns the candidate"
                     else:
                         with source_fs.ManagedSourceTransaction(self.paths, dest.parent) as txn:
@@ -1545,6 +1550,39 @@ class Installer:
                 return f"staging record {jf.name} not resolvable now ({exc}) (retained)"
         finally:
             marker.close()
+
+    def _journal_owns_staging(self, dest: Path, staging: Path) -> str:
+        """"" when the journal of `dest` provably owns the candidate a staging record names: no
+        directory is left at that name, or the journal reads, names that candidate, and records
+        the [dev, ino] of the directory there (not its ctime: the carry moves it). Otherwise why
+        not — a journal PATH alone never clears a record. Assumes the source-path lock is held."""
+        import json
+
+        from . import runtime_fs, source_fs
+        jp = self._journal_path(dest)
+        with source_fs.ManagedSourceTransaction(self.paths, dest.parent) as txn:
+            try:
+                st = os.stat(staging.name, dir_fd=txn.fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return ""                               # the candidate is gone
+        try:
+            marker = runtime_fs.open_existing_marker(self.paths, jp)
+        except (OSError, PathContainmentError):
+            return f"its journal {jp} is unreadable/unsafe"
+        try:
+            j = json.loads(marker.read())
+            ident = (j.get("idents") or {}).get("candidate")
+            named = self._resolve_rel(j["candidate_rel"])
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return f"its journal {jp} is invalid"
+        finally:
+            marker.close()
+        if named != staging:
+            return f"its journal {jp} names another candidate"
+        if not (stat.S_ISDIR(st.st_mode) and isinstance(ident, list) and len(ident) >= 2
+                and ident[:2] == [st.st_dev, st.st_ino]):
+            return f"its journal {jp} records no identity matching {staging}"
+        return ""
 
     def _recover_one(self, jf: Path) -> str:
         """Resolve ONE journal under an OWNED marker handle: open the existing regular journal
