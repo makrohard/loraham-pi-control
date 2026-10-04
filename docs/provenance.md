@@ -21,7 +21,9 @@ Which source commit or artifact lhpc may install, and what it records about it.
 
 Without `--source`, install and `auto-install` (and so the image builder) use the stack's default
 channel (a bare `update` keeps the installed channel): the published **binary** where there is one for this platform, else
-**`pinned`**. `dev` and `stable` are reached only by naming them.
+**`pinned`**. The exception is `lhpc install` without a stack: one plan covers every stack and
+the binary channel installs one stack at a time, so it uses `pinned`; name a stack for its binary.
+`dev` and `stable` are reached only by naming them.
 
 A component with no configured pin cannot be installed as `pinned` (`unverified-blocked`); choose
 `dev` or `stable` explicitly. lhpc never fabricates a missing pin or signature. An **artifact**
