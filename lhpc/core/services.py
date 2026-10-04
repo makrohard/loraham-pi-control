@@ -1072,6 +1072,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         for ss in snap.stacks:
             # package -> version -> components, to name a package the stack runs in two versions
             seen: dict[str, dict[str, list[str]]] = {}
+            unbuilt = set(self.unbuilt_components(ss.stack.id))   # e.g. after a source update
             for comp in ss.stack.components:
                 if comp.source is None:
                     continue
@@ -1094,6 +1095,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     details.append(
                         f"  {comp.id:24s} {st.source_state.value:12s} "
                         f"pin={pin} tag={tag}"
+                        + (" needs-rebuild" if comp.id in unbuilt else "")
                         + "".join(f" {n}={v}" for n, v in versions.items())
                     )
             for name, by_ver in seen.items():

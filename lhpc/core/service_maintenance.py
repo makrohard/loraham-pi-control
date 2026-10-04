@@ -1755,12 +1755,19 @@ class MaintenanceOpsMixin:
     @invalidates_snapshot
     def update(self, target: str = "", apply: bool = False,
                source: str = "pinned", auto_install_ctx=None,
-               exact_pin: bool = False, accept_pin_mismatch: str = "") -> ActionResult:
+               exact_pin: bool = False, accept_pin_mismatch: str = "",
+               build: bool = True) -> ActionResult:
         """Refresh the managed source(s) from the remote (version per `source`:
         dev/stable/pinned); a failed `dev` adoption retries once at the known-working (else
         manifest-pin) identity, disclosed. Skips
         optional libs/firmware unless one is targeted directly. `exact_pin` is internal (the
         binary channel): 'pinned' means the manifest pin, not known-working.
+
+        A stack whose updated sources leave it needing a build is then built by `build()` itself,
+        after the update's locks are released, so it can start. `build=False` (the console's
+        inline update, which must not hold a request for a build) leaves that to the caller:
+        `data["needs_build"]` names the stacks. Not for the internal callers (`auto_install_ctx`
+        builds itself; `exact_pin` serves a binary artifact, which is not built).
         """
         if (_r := self._controller_refusal(target)) is not None:
             return _r
@@ -1959,9 +1966,44 @@ class MaintenanceOpsMixin:
             return ActionResult(False, f"Update blocked for '{target or 'all'}': {busy}",
                                 details=[busy_remedy(busy)],
                                 next_commands=[f"lhpc update {target + ' ' if target else ''}--yes"])
+        needs_build = []
+        if ok and mutated_paths and auto_install_ctx is None and not exact_pin:
+            self.invalidate_snapshot()                 # the sources changed under this request
+            needs_build = [sid for sid in sorted({s.id for s, c in items
+                                                  if c.source.path in mutated_paths})
+                           if self.unbuilt_components(sid)]
+        failed = []
+        for sid in needs_build if build else ():
+            b = self.build(sid, apply=True)
+            out.append(f"  [{'built' if b.ok else 'build FAILED'}] {sid}: {b.summary}")
+            out.extend(b.details)
+            if not b.ok:
+                failed.append(sid)
+        if not build and needs_build:
+            out.extend(f"  [build needed] {sid}: lhpc build {sid} --yes" for sid in needs_build)
+        if failed:
+            return self.needs_rebuild_result(target, failed, "did not build", details=out)
         return ActionResult(ok, f"Update {'applied' if ok else 'INCOMPLETE'} for "
                             f"'{target or 'all'}'.", details=out,
-                            next_commands=["lhpc status --versions"])
+                            next_commands=["lhpc status --versions"],
+                            data={"needs_build": needs_build} if needs_build and not build else {})
+
+    def needs_rebuild_result(self, target: str, sids, why: str, details=()) -> ActionResult:
+        """The named state `needs-rebuild`: the update activated the new sources, but a stack they
+        feed is not built (its build failed, or could not be started). Restoring the previous
+        version is not one existing operation — its build lived in the source tree the update
+        replaced, so the old commit would need a build too — so the update ends in this state:
+        recorded on disk by the build marker the new sources no longer match (`is_built`), shown
+        by `lhpc status --versions` as *needs-rebuild*, resolved by `lhpc build <stack> --yes`.
+        The CLI's update and the console's (whose build is a detached job) both end here."""
+        sids = list(sids)
+        who = ", ".join(f"'{sid}'" for sid in sids)
+        return ActionResult(
+            False, f"Update applied for '{target or 'all'}' — needs-rebuild: {who} {why}, so it "
+                   "cannot start until it builds: "
+                   + "; ".join(f"lhpc build {sid} --yes" for sid in sids),
+            details=list(details), next_commands=[f"lhpc build {sid} --yes" for sid in sids],
+            data={"needs_build": sids, "state": "needs-rebuild"})
 
     def _remove_source_leaf(self, path: str, comp, consumers: dict, inst,
                             allow_dirty: bool) -> tuple:

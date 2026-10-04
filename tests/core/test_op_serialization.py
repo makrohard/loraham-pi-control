@@ -151,7 +151,9 @@ def test_fresh_candidate_after_release_is_preserved(tmp_path, monkeypatch):
         lambda self, comp, spec, dest_, action, force, source, pinned_expected=None:
         PlanAction("adopt", str(dest_), f"adopt {comp.id}", status="done", detail="(fake)"))
     svc = _svc(tmp_path)
-    res = svc.update("kiss", apply=True, source="dev")
+    # the adoption is stubbed (no tree is written), so the build the update runs after its
+    # locks are released is left out too: these tests are about what happens under the locks
+    res = svc.update("kiss", apply=True, source="dev", build=False)
     assert res.ok, res.details
     assert known_working.read_candidate(paths, "kiss") is None      # STALE marker retired
     assert known_working.read_candidate(paths, "chat") is not None  # other stack untouched
@@ -189,7 +191,7 @@ def test_concurrent_remote_save_blocks_behind_update(tmp_path, monkeypatch):
             state["blocked_while_locked"] = not save_done.wait(0.4)
         return real(p)
     monkeypatch.setattr(svc, "_op_seam", seam)
-    res = svc.update("kiss", apply=True, source="dev")
+    res = svc.update("kiss", apply=True, source="dev", build=False)   # stubbed adoption: no build
     assert res.ok, res.details
     assert state["blocked_while_locked"] is True           # save waited behind the update
     assert save_done.wait(5.0)                             # ...and completed after release

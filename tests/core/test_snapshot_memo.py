@@ -526,6 +526,7 @@ def _drive_args(svc):
         "prospective_ports": [], "stack_ids": ["meshtastic"], "values": {}, "rec": {},
         "listeners": [], "port": 4403, "records": [], "scope": {"addr": comp.endpoints[0].address.rsplit(":", 1)[0]},
         "groups": [], "params": {}, "result": ActionResult(True, "x"),
+        "sids": ["meshtastic"], "why": "did not build",
     }
 
 

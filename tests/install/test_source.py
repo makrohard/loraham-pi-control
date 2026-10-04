@@ -4886,3 +4886,75 @@ def test_a_pinned_update_converges_to_the_pin(tmp_path, git, make_repo, installe
     assert action.status == "done", action.detail
     assert git(dest, "rev-parse", "HEAD") == v2 == _rec(inst).resolved_commit
     assert sorted(p.name for p in dest.parent.iterdir()) == ["app"]
+
+
+def _built_svc(tmp_path, git, make_repo, build_sh="printf built > out.bin\n"):
+    """A controller over one stack `s` whose component `c` is sourced from a local repo and
+    built by `build.sh` into `out.bin` (its `bin`): a stack an update leaves needing a build."""
+    make_repo(tmp_path / "rt" / "local" / "comp",
+              {"build.sh": build_sh, "file.txt": "v1\n"})
+    manifest = tmp_path / "m.toml"
+    manifest.write_text(
+        '[[stack]]\nid = "s"\nname = "s"\nmain = "c"\n'
+        '[[stack.component]]\nid = "c"\nname = "c"\nkind = "service"\n'
+        'run_argv = ["./out.bin"]\nrun_cwd = "{source}"\nbin = "out.bin"\nreadiness = "process"\n'
+        'build_steps = [ { argv = ["bash", "build.sh"] } ]\n'
+        '[stack.component.source]\npath = "src/comp"\nlocal_dir = "comp"\n')
+    rt = tmp_path / "rt"
+    (rt / "config").mkdir(parents=True)
+    (rt / "config" / "local.toml").write_text(
+        f'[install]\nadopt_search_root = "{rt / "local"}"\n')
+    return ControllerService(manifest_path=manifest, system=RealSystem(),
+                             paths=Paths(runtime_root=rt))
+
+
+def test_an_update_builds_the_stack_its_new_sources_left_unbuilt(tmp_path, git, make_repo):
+    """An update replaces the checkout, so the stack read *not built* and every start was
+    refused until a build. The update now runs that build itself: the stack is startable after
+    it, and `status --versions` says *needs-rebuild* only while a build is due."""
+    svc = _built_svc(tmp_path, git, make_repo)
+    assert svc.update("s", apply=True, source="dev").ok
+    assert svc.unbuilt_components("s") == []
+    assert (tmp_path / "rt" / "src" / "comp" / "out.bin").read_text() == "built"
+    assert not any("needs-rebuild" in d for d in svc.status_versions().details)
+
+
+def test_the_consoles_update_leaves_the_build_to_its_detached_job(tmp_path, git, make_repo):
+    """`build=False` (the console's inline update): nothing is built in the request; the result
+    names the stack to build, and `status --versions` shows the build is due."""
+    svc = _built_svc(tmp_path, git, make_repo)
+    res = svc.update("s", apply=True, source="dev", build=False)
+    assert res.ok and res.data["needs_build"] == ["s"]
+    assert svc.unbuilt_components("s") == ["c"]
+    assert any(d.split()[:2] == ["c", "match"] and d.endswith(" needs-rebuild")
+               for d in svc.status_versions().details), svc.status_versions().details
+
+
+@pytest.mark.parametrize("how", ["the build fails", "the build is refused"])
+def test_an_update_whose_build_does_not_happen_ends_in_needs_rebuild(
+        tmp_path, git, make_repo, monkeypatch, how):
+    """The new sources are active and the build did not happen. Undoing the update is not one
+    operation (the previous build went with the tree it replaced), so the update ends in the
+    named state *needs-rebuild*: a failed result with that word, `status --versions` showing it,
+    and one command — `lhpc build s --yes` — that resolves it."""
+    from lhpc.core.service_base import ActionResult
+    fails = how == "the build fails"
+    svc = _built_svc(tmp_path, git, make_repo,
+                     build_sh=("exit 3\n" if fails else "printf built > out.bin\n"))
+    if not fails:
+        monkeypatch.setattr(ControllerService, "build",
+                            lambda self, sid, apply=False, **kw: ActionResult(
+                                False, "an uninstall is pending", data={"admission_blocked": "x"}))
+    res = svc.update("s", apply=True, source="dev")
+    assert res.ok is False and "needs-rebuild" in res.summary, res.summary
+    assert res.next_commands == ["lhpc build s --yes"]
+    assert res.data["state"] == "needs-rebuild"
+    assert any(d.split()[:1] == ["c"] and d.endswith(" needs-rebuild")
+               for d in svc.status_versions().details), svc.status_versions().details
+    if fails:
+        assert not svc.build("s", apply=True).ok        # still failing: the state stays
+        assert any(d.endswith(" needs-rebuild") for d in svc.status_versions().details)
+        return
+    monkeypatch.undo()
+    assert svc.build("s", apply=True).ok                                # the one remedy
+    assert not any("needs-rebuild" in d for d in svc.status_versions().details)

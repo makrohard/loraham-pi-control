@@ -1708,6 +1708,23 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # The inline Update's pin refusal is shown on the confirm page itself, with the same
             # ways out (self-update first) as the dry run's — not flattened into a flash.
             return _render_confirm(op, target, band, source, frm, plan=result)
+        if op == "update" and result.ok and result.data.get("needs_build"):
+            # The updated sources need their build before the stack can start: the CLI's update
+            # runs it inline, the console as its detached build job (the live output below). A
+            # build that cannot start ends the update as the CLI's does when its build fails:
+            # the failed outcome `needs-rebuild`, never a warning on a success.
+            sid, *rest = result.data["needs_build"]
+            job, admission, reason = service.spawn_web_job("build", sid)
+            if admission == "blocked":
+                res = service.needs_rebuild_result(
+                    target, [sid, *rest], f"could not start its build ({reason or 'refused'})")
+                flash(f"{res.summary} {' '.join(res.details[:6])}".strip(), "err")
+                return _redirect_for(target)
+            flash(f"{result.summary} Building '{sid}' — watch the live output below.", "ok")
+            if rest:
+                flash(service.needs_rebuild_result(
+                    target, rest, "is not built yet (one build job runs at a time)").summary, "warn")
+            return redirect(url_for("logs_view", target=sid, job=job))
         # On a stop, MANUAL_REQUIRED means "a foreign process is still running, kill it yourself"
         # — a WARNING (`stop` already returns ok=False). Start notes travel in the start job's
         # marker detail (banner hint) since the start became detached.

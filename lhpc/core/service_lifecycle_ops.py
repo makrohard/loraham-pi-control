@@ -6037,7 +6037,8 @@ class LifecycleOpsMixin:
             "install": lambda: self.install(target, apply=apply, source=source,
                                             accept_pin_mismatch=accept_pin_mismatch),
             "update": lambda: self.update(target, apply=apply, source=source,
-                                          accept_pin_mismatch=accept_pin_mismatch),
+                                          accept_pin_mismatch=accept_pin_mismatch,
+                                          build=False),     # the console builds it detached
             "uninstall": lambda: self.uninstall(target, apply=apply),
             "start": lambda: self.start(target, apply=apply, stop_owners=stop_owners, band=band),
             "stop": lambda: self.stop(target, apply=apply, cascade=cascade, band=band),

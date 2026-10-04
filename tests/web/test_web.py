@@ -2848,3 +2848,53 @@ def test_the_running_card_rules_off_one_stack_from_the_next(tmp_path, web):
     doc, col = _band_column(web, tmp_path, ("kiss",))
     assert len(col.find("div", class_="runstack")) == 1
     assert not col.find("hr"), "a single running stack needs no separator"
+
+
+def test_an_inline_update_that_needs_a_build_starts_the_detached_build(web, csrf, monkeypatch):
+    """The console runs an update inline, so it never builds inside the request: it starts the
+    build the updated stack needs as its detached build job and opens that job's live log."""
+    from lhpc.core.service_base import ActionResult
+    seen = {}
+
+    def _update(self, target="", apply=False, source="pinned", accept_pin_mismatch="",
+                build=True, **_kw):
+        if apply:
+            seen["build"] = build
+            return ActionResult(True, "Update applied for 'kiss'.", data={"needs_build": ["kiss"]})
+        return ActionResult(True, "plan", data={"changes": 1})
+
+    def _spawn(self, op, target, source="pinned", accept_pin_mismatch=""):
+        seen["spawn"] = (op, target)
+        return "build-kiss.log", "admitted", ""
+    monkeypatch.setattr(ControllerService, "update", _update)
+    monkeypatch.setattr(ControllerService, "spawn_web_job", _spawn)
+    c = web()
+    r = c.post("/action", data={"_csrf": csrf(c), "op": "update", "target": "kiss",
+                                "source": "pinned", "confirmed": "yes"})
+    assert seen == {"build": False, "spawn": ("build", "kiss")}
+    assert r.status_code == 302 and "/logs/kiss" in r.headers["Location"]
+
+
+def test_an_inline_update_whose_build_job_is_refused_ends_as_the_clis_failed_build(
+        web, csrf, monkeypatch):
+    """The console's update must end like the CLI's: a build that cannot start is the failed
+    outcome *needs-rebuild* with its one command, shown as an error — not a warning on a
+    success."""
+    from lhpc.core.service_base import ActionResult
+
+    def _update(self, target="", apply=False, source="pinned", accept_pin_mismatch="",
+                build=True, **_kw):
+        if apply:
+            return ActionResult(True, "Update applied for 'kiss'.", data={"needs_build": ["kiss"]})
+        return ActionResult(True, "plan", data={"changes": 1})
+    monkeypatch.setattr(ControllerService, "update", _update)
+    monkeypatch.setattr(ControllerService, "spawn_web_job",
+                        lambda self, op, target, source="pinned", accept_pin_mismatch="":
+                        ("", "blocked", "an uninstall is pending"))
+    c = web()
+    body = c.post("/action", data={"_csrf": csrf(c), "op": "update", "target": "kiss",
+                                   "source": "pinned", "confirmed": "yes"},
+                  follow_redirects=True).data.decode()
+    cls = _flash_classes(body, "needs-rebuild")
+    assert "flash-bad" in cls and "flash-ok" not in cls and "flash-warn" not in cls
+    assert "lhpc build kiss --yes" in body and "an uninstall is pending" in body

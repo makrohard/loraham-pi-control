@@ -192,6 +192,7 @@ SNAPSHOT_NEUTRAL: dict[str, str] = {
     "meshcore_running_mode": "read-only",
     "missing_system_deps": "read-only",
     "needs_display": "read-only",
+    "needs_rebuild_result": "read-only",
     "network_supported": "read-only",
     "observed_conflicts": "read-only",
     "on_binary_channel": "read-only",
