@@ -147,7 +147,8 @@ def test_the_l4_waiver_needs_the_version_rule_too(monkeypatch, tmp_path):
     """A previous tag without the line is not enough: past PIP_SYNC_SINCE the L4 failures stand
     (a lost line is a defect, not the introducing release)."""
     monkeypatch.setattr(lane, "OUT", tmp_path)
-    monkeypatch.setattr(lane, "INTRODUCING", ["v9.9.9"])
+    monkeypatch.setattr(lane, "_prev_tag", lambda: "v9.9.9")
+    monkeypatch.setattr(lane, "_introducing", lambda prev: prev == "v9.9.9")
     monkeypatch.setattr(lane, "EVIDENCE", {})
     monkeypatch.setattr(lane, "LANE_OPS", [(lane.stt.SELFUPDATE_COMPONENT, "selfupdate-pip")])
     monkeypatch.setattr(lane, "BASELINE", {"measured": [{"op": "build"}]})
@@ -158,6 +159,39 @@ def test_the_l4_waiver_needs_the_version_rule_too(monkeypatch, tmp_path):
     lane.test_slow_build_budget()
     assert "**NO EVIDENCE**" in (tmp_path / "slow-build-summary.md").read_text()
 
+
+
+def test_the_l4_waiver_does_not_need_a_helper_run(monkeypatch, tmp_path):
+    """Correction 12: the waiver reads the previous tag, not the self-update case's outcome. With
+    no helper run at all (the case failed before it), the introducing release still waives the L4
+    pair; the helper's own missing evidence (L3) stands, named alone."""
+    monkeypatch.setattr(lane, "OUT", tmp_path)
+    monkeypatch.setattr(lane, "_prev_tag", lambda: "v9.9.9")
+    monkeypatch.setattr(lane, "_introducing", lambda prev: prev == "v9.9.9")
+    monkeypatch.setattr(lane, "EVIDENCE", {})
+    monkeypatch.setattr(lane, "LANE_OPS", [(lane.stt.SELFUPDATE_COMPONENT, "selfupdate-helper"),
+                                           (lane.stt.SELFUPDATE_COMPONENT, "selfupdate-pip")])
+    monkeypatch.setattr(lane, "BASELINE", {"measured": [{"op": "build"}]})
+    monkeypatch.setattr(lane, "__version__", lane.stt.PIP_SYNC_SINCE)
+    with pytest.raises(AssertionError) as exc:
+        lane.test_slow_build_budget()
+    lines = str(exc.value).split("\n")
+    assert "selfupdate-helper" in str(exc.value) and "selfupdate-pip" not in str(exc.value), lines
+
+
+def test_the_box_is_hardened_like_a_bootstrapped_one(tmp_path):
+    """Correction 12 (testlab run 37162748975): a clone under a group-writable umask left the
+    checkout 0775, and the helper refused it ("checkout is group/other-writable"). The case now
+    hardens the root, src/ and the checkout to 0700, as a box's bootstrap does. The predicate is
+    the identity check's own: `st_mode & 0o022` on each of the three."""
+    root = tmp_path / "runtime"
+    co = root / "src" / "loraham-pi-control"
+    co.mkdir(parents=True)
+    for d in (root, root / "src", co):
+        d.chmod(0o775)
+    assert all(d.stat().st_mode & 0o022 for d in (root, root / "src", co))      # refused
+    lane._harden_box(root, co)
+    assert [d.stat().st_mode & 0o777 for d in (root, root / "src", co)] == [0o700] * 3  # accepted
 
 # ---- a step faster than the log's resolution (testlab run 37145791526) ----------------------
 

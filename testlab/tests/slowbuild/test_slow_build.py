@@ -61,7 +61,6 @@ LANE_OPS = [(c, o) for c, o in stt.required(STACKS, BASELINE.get("excluded", {})
 EVIDENCE: dict[tuple[str, str], dict] = {}
 CALIBRATION: list[dict] = []
 FETCHED: dict[str, str] = {}
-INTRODUCING: list[str] = []      # the previous tag, when its helper has no pip sync line
 # calibrate.sh's work dir in the lane (its own default outside an install): named here so the
 # disk throttle is proved on the disk that backs it (`_required_disks`).
 CALIB_WORK = Path.home() / ".cache" / "lhpc-calib"
@@ -408,6 +407,28 @@ def _install_units(python: Path, root: Path, env: dict) -> list[str]:
     return kinds
 
 
+def _prev_tag() -> str:
+    """The release tag before this commit: the one a one-click update starts from."""
+    cand = _git("-C", str(REPO), "rev-parse", "HEAD")
+    return _git("-C", str(REPO), "describe", "--tags", "--abbrev=0", "--match", "v*", f"{cand}^")
+
+
+def _introducing(prev: str) -> bool:
+    """True when `prev`'s helper has no pip sync line, so L4 cannot be measured on this release
+    (docs/maintenance.md). Read from the tag itself, never from a helper run."""
+    return _PIP_SYNC_MARK not in _git("-C", str(REPO), "show",
+                                      f"{prev}:lhpc/core/service_selfupdate.py")
+
+
+def _harden_box(root: Path, checkout: Path) -> None:
+    """Owner-only 0700 on the runtime root, `src/` and the controller checkout, as a box's
+    bootstrap leaves them (`Installer.plan_bootstrap`, its three `harden` actions). A clone made
+    under a group-writable umask (the lab user's) fails the helper's controller-identity check
+    otherwise: "checkout is group/other-writable"."""
+    for d in (root, root / "src", checkout):
+        d.chmod(0o700)
+
+
 def test_slow_build_selfupdate(tmp_path):
     """L3 + L4: a one-click self-update from the previous release tag to this commit — the
     helper body (`lhpc self-update --run-service`) timed whole, its pip sync from its own line.
@@ -418,7 +439,7 @@ def test_slow_build_selfupdate(tmp_path):
     release that introduces the pip sync line the previous tag's helper cannot print it: L4 then
     has no evidence, by name (L4_INTRODUCING), and the budget case says so."""
     cand = _git("-C", str(REPO), "rev-parse", "HEAD")
-    prev = _git("-C", str(REPO), "describe", "--tags", "--abbrev=0", "--match", "v*", f"{cand}^")
+    prev = _prev_tag()
     root = tmp_path / "runtime"
     LabServer(root).init_and_reset()
     env = _box_env(root, tmp_path / "home")
@@ -428,6 +449,7 @@ def test_slow_build_selfupdate(tmp_path):
     _git("-C", str(remote), "update-ref", "refs/heads/main", cand)
     _git("clone", "--quiet", "--branch", "main", str(remote), str(co))
     _git("-C", str(co), "reset", "--quiet", "--hard", prev)
+    _harden_box(root, co)
     # A box's origin is the approved canonical remote, which the helper's controller-identity
     # check demands of an in-root checkout; the lane serves it from the local candidate remote
     # (git's own `insteadOf`, set in this checkout only), so `origin` reads as on a box.
@@ -444,9 +466,7 @@ def test_slow_build_selfupdate(tmp_path):
     assert _git("-C", str(co), "rev-parse", "HEAD") == cand, f"{prev} was not updated to {cand}"
     _record(stt.SELFUPDATE_COMPONENT, "selfupdate-helper", seconds)
     sync = _PIP_SYNC.findall(out)
-    if not sync and _PIP_SYNC_MARK not in _git("-C", str(REPO), "show",
-                                               f"{prev}:lhpc/core/service_selfupdate.py"):
-        INTRODUCING.append(prev)
+    if not sync and _introducing(prev):
         print(f"{L4_INTRODUCING} ({prev} has no pip sync line)")
         return
     assert sync, "no `[selfupdate] pip sync <n> s` line from the helper — not evidence"
@@ -508,7 +528,7 @@ def test_slow_build_budget():
         lines.append(line)
     # The release introducing the pip sync line has no L4 evidence (docs/maintenance.md).
     l4 = f"no row C evidence for {stt.SELFUPDATE_COMPONENT} selfupdate-pip"
-    intro = (bool(INTRODUCING) and any(f.startswith(l4) for f in fails)
+    intro = (_introducing(_prev_tag()) and any(f.startswith(l4) for f in fails)
              and bool(stt.waiver(stt.SELFUPDATE_COMPONENT, "selfupdate-pip", __version__)))
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "slow-build-summary.md").write_text(
