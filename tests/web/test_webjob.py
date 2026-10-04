@@ -289,6 +289,20 @@ def test_install_on_admit_false_installs_nothing(tmp_path, monkeypatch):
                         lambda self, *a, **k: called.append(1))
     r = svc.install("meshcom", apply=True, source="pinned", on_admit=lambda: False)
     assert not r.ok and "superseded" in r.summary.lower() and called == []
+    assert r.details[0].startswith("  nothing to run here — ")
+
+
+def test_a_contended_install_names_the_retry(tmp_path, monkeypatch):
+    from lhpc.core import reslock
+    svc = _svc(tmp_path)
+
+    # Stubbed: a second process holding the admission lock at this moment cannot be arranged
+    # in-process; `_admit` raising ResourceBusy is exactly what that contention looks like.
+    def contended(self, stack, op, target=""):
+        raise reslock.ResourceBusy("controller-task-admission", {"operation": "build"})
+    monkeypatch.setattr(ControllerService, "_admit", contended)
+    r = svc.install("meshcom", apply=True, source="pinned")
+    assert not r.ok and r.data["contended"] and r.next_commands == ["lhpc install meshcom --yes"]
 
 
 def test_service_zero_change_install_calls_on_admit_once(tmp_path, monkeypatch):

@@ -1651,7 +1651,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         except reslock.ResourceBusy:
             _adm_stack.close()
             return ActionResult(False, "A task is starting right now (admission contended) — retry the "
-                                "install.", data={"contended": True})
+                                "install.", data={"contended": True},
+                                next_commands=[f"lhpc install {stack_id} --yes"])
         # An install re-adopts source trees, which can replace the template the MeshCore
         # identity may still live in. Copy it out before the first adoption — after every
         # plan/coherence refusal above, so a refused install still mints nothing.
@@ -1707,7 +1708,10 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             if on_admit is not None and not on_admit():
                 if _retire_note:
                     self.binary_recover()      # put the set-aside artifact back
-                return ActionResult(False, "Install superseded before admission — nothing was changed.")
+                return ActionResult(False, "Install superseded before admission — nothing was changed.",
+                                    details=["  nothing to run here — this console attempt was "
+                                             "replaced or dismissed in the task banner before it "
+                                             "was admitted; the banner shows the current one"])
             for path, comp, selector, resolved in groups:
                 dest = self._paths.resolve_source(path)
                 # DESCRIPTOR-PROVEN skip: only a healthy managed DIRECTORY is "already
