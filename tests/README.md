@@ -57,6 +57,7 @@ in a file named after when or how a defect was found:
   difference is a `known defect` naming one id per difference (`known defect T3-F4, T1-F1:`).
   Its helper `golden/entry_host.py` is the `LHPC_SYSTEM_PROVIDER` that hands every process —
   the console's detached child included, a separate process — the test's box.
+  `golden/test_harness.py` checks the harness itself: a write moved outside its lock is reported.
 
 A transaction whose state another run must recover (a journal, receipt or marker) is also driven
 through `interrupts.py`: its module pins the operation's durable writes and fails each one in turn

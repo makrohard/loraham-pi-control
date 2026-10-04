@@ -9,11 +9,13 @@ from __future__ import annotations
 
 
 import gitrepo
+from selfupdate_fakes import WEB_INACTIVE
 import pytest
 from lhpc.core import selfupdate
 from lhpc.core import updater_units
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult
+from remedy_contract import IDENTITY_CAUSES, NOTHING_TO_RUN
 
 
 # --- last_apply envelope field (one-click web update outcome) ----------------------------------
@@ -52,8 +54,7 @@ def test_last_apply_malformed_is_rejected_safely(tmp_path):
 
 # --- one-click updater: marker trigger + de-systemctl'd run-service (escape-proof design) -------
 
-_WEB_INACTIVE = {("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service"):
-                 CommandResult(1, "", "")}
+_WEB_INACTIVE = WEB_INACTIVE
 
 
 def _seed_available(tmp_path, **identity):
@@ -810,3 +811,122 @@ def test_run_service_cleanup_partial_does_not_ask_for_a_restart_systemd_does(tmp
     assert "delete them manually" in res.summary and "restarts automatically" in res.summary
     assert "then restart the console" not in res.summary
     assert "restarts automatically" in selfupdate.status_view(svc._paths)["last_apply"]["summary"]
+
+
+# ---- refusal remedies: the behavioural twins of repo/test_refusal_remedy.py's guards ----------
+
+
+def _identity_svc(tmp_path, monkeypatch, reason):
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+
+    svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    verdict = {"status": "unsafe", "ok": False, "reason": reason}
+    # Stubbed collaborators: the live identity probe (it needs a real self-hosted checkout), the
+    # job/auto-install/HMAC scan, and (trigger) the managed-unit gates in front of the cached
+    # verdict; the refusal under test is the identity gate behind them.
+    monkeypatch.setattr(ControllerService, "controller_identity_live", lambda self: verdict)
+    monkeypatch.setattr(ControllerService, "_self_update_blockers", lambda self: None)
+    monkeypatch.setattr(ControllerService, "updater_integration", lambda self: {"status": "ok"})
+    monkeypatch.setattr(ControllerService, "self_update_status",
+                        lambda self: {"available": True, "identity": verdict})
+    monkeypatch.setenv("INVOCATION_ID", "test")
+    return svc
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("entry", ["apply", "trigger"])
+@pytest.mark.parametrize("cause", sorted(IDENTITY_CAUSES))
+def test_unsafe_identity_refusal_names_the_remedy_for_its_cause(tmp_path, monkeypatch, cause,
+                                                                entry):
+    """`lhpc self-update --apply` (and the console's update button) on a checkout whose identity
+    is unsafe — measured on a Pi Zero 2 W with a checkout left in detached HEAD: the refusal names
+    the command that fixes that cause, or says there is nothing to run and who restores it."""
+    reason, command = IDENTITY_CAUSES[cause]
+    svc = _identity_svc(tmp_path, monkeypatch, reason)
+    res = svc.self_update_apply() if entry == "apply" else svc.self_update_trigger()
+    assert not res.ok and res.data.get("identity_unsafe")
+    assert reason in res.summary
+    if command is None:
+        assert res.next_commands == []
+        assert any(d.strip().startswith(NOTHING_TO_RUN.strip()) and "install.sh" in d
+                   for d in res.details)
+    else:
+        remote = svc.controller().remote
+        assert res.next_commands == [command.format(root=tmp_path, remote=remote),
+                                     "lhpc self-update --apply"]
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("entry", ["apply", "trigger"])
+def test_writable_runtime_root_refusal_names_chmod_of_the_runtime_root(tmp_path, monkeypatch,
+                                                                       entry):
+    """A runtime root others can write: the refusal names `chmod go-w` of the runtime root
+    itself, not of `src` or the checkout."""
+    svc = _identity_svc(tmp_path, monkeypatch, "runtime root is group/other-writable")
+    res = svc.self_update_apply() if entry == "apply" else svc.self_update_trigger()
+    assert not res.ok and res.data.get("identity_unsafe")
+    assert res.next_commands == [f"chmod go-w {tmp_path}", "lhpc self-update --apply"]
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("entry", ["apply", "trigger"])
+def test_writable_checkout_refusal_names_chmod_of_the_checkout(tmp_path, monkeypatch, entry):
+    """A checkout others can write: the refusal names `chmod go-w` of the checkout."""
+    svc = _identity_svc(tmp_path, monkeypatch, "checkout is group/other-writable")
+    res = svc.self_update_apply() if entry == "apply" else svc.self_update_trigger()
+    assert not res.ok and res.data.get("identity_unsafe")
+    assert res.next_commands == [f"chmod go-w {tmp_path}/src/loraham-pi-control",
+                                 "lhpc self-update --apply"]
+
+
+_GIT_ENV = {
+    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e", "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@e", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
+    "GIT_TERMINAL_PROMPT": "0", "HOME": "/nonexistent", "PATH": "/usr/bin:/bin",
+}
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("origin, command", [
+    (None, "remote add origin"),
+    ("https://example.invalid/other.git", "remote set-url origin"),
+])
+def test_live_identity_tells_a_missing_origin_from_a_wrong_one(tmp_path, monkeypatch, origin,
+                                                                command):
+    """`lhpc self-update --apply` on a real self-hosted checkout with no origin, and with a
+    foreign origin: the identity check tells the two apart, and the refusal names
+    `git remote add` for the first and `git remote set-url` for the second."""
+    import os
+    import subprocess
+
+    import lhpc
+    from lhpc.core import selfupdate
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import RealSystem
+    from lhpc.core.services import ControllerService
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=co, env=_GIT_ENV, check=True, capture_output=True)
+
+    co = tmp_path / "src" / "loraham-pi-control"
+    (co / "lhpc").mkdir(parents=True)
+    (co / "lhpc" / "__init__.py").write_text("")
+    for d in (tmp_path, tmp_path / "src", co):
+        os.chmod(d, 0o700)
+    git("init", "-q")
+    git("checkout", "-q", "-b", "main")
+    git("add", "-A")
+    git("commit", "-q", "-m", "seed")
+    if origin:
+        git("remote", "add", "origin", origin)
+    monkeypatch.setattr(selfupdate, "repo_root", lambda: co)
+    monkeypatch.setattr(lhpc, "__file__", str(co / "lhpc" / "__init__.py"))
+    monkeypatch.setattr(ControllerService, "_self_update_blockers", lambda self: None)
+    svc = ControllerService(system=RealSystem(), paths=Paths(runtime_root=tmp_path))
+    res = svc.self_update_apply()
+    assert not res.ok and res.data.get("identity_unsafe")
+    assert res.next_commands == [f"git -C {co} {command} {svc.controller().remote}",
+                                 "lhpc self-update --apply"]

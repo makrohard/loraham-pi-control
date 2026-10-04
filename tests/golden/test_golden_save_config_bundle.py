@@ -11,28 +11,12 @@ import json
 import re
 
 from lhpc.core import config as cfgmod
-from lhpc.core import service_params
-from lhpc.core.paths import Paths
-from lhpc.core.probes.backends import FakeSystem
-from lhpc.core.services import ControllerService
 
-FILE = "config/stacks/chat.toml"
-WRITES = ["lock:config", "recheck:config-journal", "mutate:write:state/config-txn.json",
-          "mutate:write:" + FILE]
-SAVED = {"ok": True, "summary": "Config saved for 'chat'.", "data_keys": [],
-         "next_commands": ["lhpc stack start chat"], "heads": [], "outcomes": []}
+from chat_save import FILE, SAVED, WRITES, chat_svc as _svc
+
 REFUSED = {"ok": False, "summary": "Config not saved for 'chat'.", "next_commands": [],
            "heads": [], "outcomes": []}
 NOTHING = {"added": [], "removed": [], "changed": []}
-
-
-def _svc(root, running=False):
-    cmd = {555: ["loraham_chat"]} if running else {}
-    svc = ControllerService(system=FakeSystem(cmdlines_data=cmd).system,
-                            paths=Paths(runtime_root=root))
-    seeded = svc.bootstrap(apply=True)
-    assert seeded.ok, f"seeding: bootstrap failed: {seeded.summary}"
-    return svc
 
 
 def _text(freq):
@@ -65,23 +49,6 @@ def test_save_while_running_writes_the_restart_marker(tmp_path, run_op):
     marker.pop("created_at")
     assert marker == {"version": 1, "stack": "chat", "mode": "restart", "params": ["tx_freq"],
                       "band": "", "launched": {"|loraham-chat|tx_freq": "433.775"}}
-
-
-def test_a_write_moved_outside_its_lock_is_caught(tmp_path, run_op, phases, monkeypatch):
-    """intended: the harness counts a lock as held from its entry to its exit, so the same save
-    with its transaction run AFTER the config lock was released — the trace unchanged — is
-    reported (the teardown check fails on what this test clears)."""
-    def released_first(paths, targets):
-        with cfgmod.config_lock(paths):
-            pass
-        cfgmod._apply_config_transaction_locked(paths, targets)
-    monkeypatch.setattr(service_params, "apply_config_transaction", released_first)
-    svc = _svc(tmp_path)
-    phases.outside.clear()
-    run = run_op(tmp_path, lambda: svc.save_config_bundle("chat", values={"file_tx_freq": "434.500"}))
-    assert run.fields == SAVED and run.phases == WRITES
-    assert phases.outside == WRITES[2:]
-    phases.outside.clear()
 
 
 def test_refused_by_validation(tmp_path, run_op):

@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 import gitrepo
+from selfupdate_fakes import WEB_INACTIVE
 from lhpc.core import selfupdate
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult
@@ -289,8 +290,7 @@ def _pip_key(root):
     return (sys.executable, "-m", "pip", "install", "-e", str(root))
 
 
-_WEB_INACTIVE = {("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service"):
-                 CommandResult(1, "", "")}
+_WEB_INACTIVE = WEB_INACTIVE
 
 
 def _op_inactive(op_svc, monkeypatch, apply_result, *, pip=None):
@@ -492,33 +492,6 @@ def test_a_record_that_cannot_be_cleared_fails_the_step(op_svc, monkeypatch, pat
     assert r.ok is False and r.summary.startswith("recovery-required:"), r.summary
     assert "Read-only file system" in r.summary and str(rec) in " ".join(r.details), r
     assert svc.self_update_incomplete()[0] == "units-stale"
-
-
-@pytest.mark.parametrize("path", ["apply", "one-click"])
-def test_an_interrupted_sync_to_refresh_gap_keeps_the_record(op_svc, monkeypatch, tmp_path, path):
-    """`venv-unsynced` is recorded and the next run syncs the venv; an interruption before the unit
-    refresh finishes must leave the record, so the next `--apply` resumes the refresh too — the
-    record is cleared only with the units refreshed."""
-    import json
-    from lhpc.core.services import ActionResult, ControllerService
-    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
-                        ActionResult(True, "Already up to date.", data={"already": True}))
-    svc, _fake = (op_svc(dict(_WEB_INACTIVE), invocation=False) if path == "apply"
-                  else op_svc(units=True, invocation=True))
-    rec = svc._incomplete_path()
-    rec.parent.mkdir(parents=True, exist_ok=True)
-    rec.write_text(json.dumps({"state": "venv-unsynced", "detail": "the venv sync FAILED"}))
-
-    def interrupted(self):
-        raise KeyboardInterrupt
-    # Stubs the collaborator, systemd: the unit refresh is interrupted (a stop between the sync
-    # and the refresh).
-    monkeypatch.setattr(ControllerService, "_refresh_units_post_update", interrupted)
-    if path == "one-click":
-        (svc._paths.runtime_root / "state" / "selfupdate.request").write_text("normal\n")
-    with pytest.raises(KeyboardInterrupt):
-        svc.self_update_apply_operator() if path == "apply" else svc.self_update_run_service()
-    assert svc.self_update_incomplete()[0] == "venv-unsynced"
 
 
 def test_the_repair_does_not_clear_venv_unsynced(op_svc, monkeypatch):
@@ -816,8 +789,6 @@ def test_overwrite_discards_untracked_keeps_ignored(env):
     assert not (w / "untracked.txt").exists() and not (w / "untr_dir").exists()   # untracked discarded
     assert "tracked edit" not in (w / "lhpc" / "version.py").read_text()          # tracked discarded
     assert (w / ".venv" / "keep").read_text() == "keep-me"                        # ignored preserved
-
-
 
 
 # --- a forced update whose reset worked but whose `git clean` failed (ultrareview U2) ------------

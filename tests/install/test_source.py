@@ -5252,3 +5252,88 @@ def test_an_uninspectable_process_is_seen_only_through_the_lease_probe(tmp_path)
     finally:
         dirfd.kill()
         dirfd.wait()
+
+
+# ---- refusal remedies: the behavioural twins of repo/test_refusal_remedy.py's guards ----------
+
+
+@pytest.mark.contract
+def test_busy_update_names_the_holder_and_the_retry_command(tmp_path, monkeypatch):
+    """`lhpc update daemon --yes` while another process runs an update (the admission lock is
+    held): the refusal says to wait for that update and names the command to run again."""
+    import threading
+
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+
+    monkeypatch.setattr(ControllerService, "_SELF_LOCK_WAIT_S", 0.2)    # fast contention
+    holder = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert holder.bootstrap(apply=True).ok
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    held, release = threading.Event(), threading.Event()
+
+    def hold():
+        with holder._admission_guard("update", "meshcore"):
+            held.set()
+            release.wait(5)
+    t = threading.Thread(target=hold)
+    t.start()
+    try:
+        assert held.wait(5)
+        named, everything = svc.update("daemon", apply=True), svc.update("", apply=True)
+    finally:
+        release.set()
+        t.join(5)
+    assert not named.ok and "is busy: update on 'meshcore'" in named.summary
+    assert named.details == ["  wait for the update named above to finish, then run the same "
+                             "command again"]
+    assert named.next_commands == ["lhpc update daemon --yes"]
+    assert everything.next_commands == ["lhpc update --yes"]
+
+
+class _GitRunner:
+    """A clone that succeeds, a clean tree, and the identity the ownership record holds."""
+
+    def run(self, argv, timeout=None, *a, **k):
+        from lhpc.core.probes.backends import CommandResult
+        if argv[:2] == ["git", "clone"]:
+            (Path(argv[-1]) / ".git").mkdir(parents=True, exist_ok=True)
+            return CommandResult(0, "", "")
+        if "status" in argv or "ls-files" in argv:
+            return CommandResult(0, "", "")
+        if "config" in argv:
+            return CommandResult(0, "https://example/repo.git\n", "")
+        return CommandResult(0, "abc123\n", "")
+
+
+@pytest.mark.contract
+def test_leftover_prev_refusal_names_the_folder_and_the_command(tmp_path):
+    """An update blocked by a `.prev` folder an interrupted update left behind (measured on a
+    Pi Zero 2 W): the refusal names that folder and the command to run after moving it."""
+    import time
+
+    from lhpc.core import source_registry
+    from lhpc.core.config import Config
+    from lhpc.core.install import Installer
+    from lhpc.core.model import Component, ComponentKind, SourceSpec, Stack
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+
+    rt = tmp_path / "rt"
+    (rt / "src" / "repo").mkdir(parents=True)
+    (rt / "src" / ".repo.prev").mkdir()                    # left over by an interrupted update
+    comp = Component(id="c", name="c", kind=ComponentKind.SERVICE,
+                     source=SourceSpec(path="src/repo", local_dir="repo",
+                                       remote="https://example/repo.git", branch="main"))
+    paths = Paths(runtime_root=rt)
+    assert source_registry.write_record(paths, source_registry.RegistryRecord(
+        "src/repo", "https://example/repo.git", "dev", "abc123", time.time(), "", ("c",)))
+    system = FakeSystem().system
+    system.runner = _GitRunner()
+    inst = Installer(paths, (Stack(id="s", name="s", main="c", components=(comp,)),),
+                     Config(values={"install": {"adopt_search_root": str(rt / "nolocal")}}), system)
+    action = inst.adopt_source(comp, force=True, source="dev")
+    assert action.status == "failed"
+    assert "src/.repo.prev" in action.detail and "lhpc update c --yes" in action.detail
+    assert (rt / "src" / ".repo.prev").is_dir()            # the refusal itself removes nothing

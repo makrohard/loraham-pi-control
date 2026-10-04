@@ -1658,3 +1658,29 @@ def test_an_unreadable_journal_under_a_switch_is_recovery_required_not_a_defect(
     r = svc.binary_retire("meshtastic", txn="t1")
     assert not r.ok and "recovery-required" in r.summary and state in r.summary, r.summary
     assert "lhpc defect" not in " ".join(r.details) and "install.journal.json" in r.details[0]
+
+
+# ---- refusal remedies: the behavioural twins of repo/test_refusal_remedy.py's guards ----------
+
+
+@pytest.mark.contract
+def test_receipt_refusals_name_the_invalid_path_cause(tmp_path, monkeypatch):
+    """A retirement whose receipt path lhpc rejects as invalid (a stack id with a path
+    separator): both refusals that follow a failed receipt removal (the switch path and the
+    plain retirement) word that cause and say to report it."""
+    from types import SimpleNamespace
+
+    from lhpc.core import binary_install
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    rec = SimpleNamespace(files=(), owned_dirs=())
+    line = "nothing to run here — the receipt path is invalid: state/binary/a/b.json; report it"
+    monkeypatch.setattr(binary_install, "displace", lambda *a, **k: None)  # no files to move
+    switch = svc._retire_body("a/b", "present", rec, "", force=True, locked=True, txn="t")
+    plain = svc._retire_body("a/b", "present", rec, "", force=True, locked=True, txn="")
+    for res in (switch, plain):
+        assert not res.ok and "receipt" in res.summary
+        assert any(line in d for d in res.details), res.details
