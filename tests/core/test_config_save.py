@@ -168,7 +168,12 @@ def test_commit_writes_through_the_journal_and_takes_the_lock_only_when_not_held
         tmp_path, monkeypatch, held):
     paths = Paths(runtime_root=tmp_path)
     target = tmp_path / "config" / "stacks" / "s.toml"
-    real, entered = cfgmod.config_lock, []
+    journal = tmp_path / "state" / "config-txn.json"
+    real, entered, journalled = cfgmod.config_lock, [], []
+
+    def render(_p):                               # rendered inside the transaction, before any write
+        journalled.append(journal.exists())
+        return "a = 1\n"
 
     @contextlib.contextmanager
     def recording(p, *a, **k):
@@ -178,13 +183,14 @@ def test_commit_writes_through_the_journal_and_takes_the_lock_only_when_not_held
     if held:
         with real(paths):                         # the caller's EXCLUSIVE hold
             monkeypatch.setattr(cfgmod, "config_lock", recording)
-            _commit_config(paths, [("stack", target, lambda _p: "a = 1\n", 0o644)], held=True)
+            _commit_config(paths, [("stack", target, render, 0o644)], held=True)
     else:
         monkeypatch.setattr(cfgmod, "config_lock", recording)
-        _commit_config(paths, [("stack", target, lambda _p: "a = 1\n", 0o644)], held=False)
+        _commit_config(paths, [("stack", target, render, 0o644)], held=False)
     assert entered == ([] if held else [paths])
+    assert journalled == [True]                   # the journal was written before the target
     assert target.read_text() == "a = 1\n"
-    assert not (tmp_path / "state" / "config-txn.json").exists()
+    assert not journal.exists()
 
 
 def test_two_saves_meeting_at_the_lock_both_land(tmp_path, monkeypatch):
