@@ -3322,7 +3322,7 @@ class LifecycleOpsMixin:
         # non-runnable sources (libraries like RadioLib — their artifacts are consumed
         # via build_requires, so skipping them silently pushed builds onto external
         # fallbacks outside the runtime root). The one selection rule: `build_plan.select`.
-        from . import build_plan
+        from . import build_plan, jobresult
         by_all = {c.id: c for st in self.stacks() for c in st.components}
         owner_of = {c.id: st for st in self.stacks() for c in st.components}
         buildable = [(owner_of[c.id], c) for c in
@@ -3485,6 +3485,8 @@ class LifecycleOpsMixin:
                                      marker_extra=receipt,
                                      inputs=self._build_inputs_to_record(comp))
                     ok = ok and res.ok
+                    if res.ok:                  # a console build's failure of it is now stale
+                        jobresult.supersede(self._paths, f"build-{comp.id}.log")
                     details.append(f"  [{res.state.value}] build {comp.id} "
                                    f"(rc {res.returncode}, log {res.log_path})")
                     details += [f"  [unverified] {ln.split()[1]}: its revision could not be read "

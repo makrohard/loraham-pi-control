@@ -316,6 +316,17 @@ def remove(paths, log, attempt_id) -> bool:
         return _unlink(paths, log)
 
 
+def supersede(paths, log) -> bool:
+    """A later successful build of the same target (the CLI's) makes a stored FAILED marker stale:
+    unlink it, under the per-log lock. Any other state (running, unsafe, done) is left as it is.
+    True only when a failed marker was removed."""
+    with _locked(paths, log) as ok:
+        if not ok:
+            return False
+        d = _read_raw(paths, log)
+        return d is not None and d.get("state") == "failed" and _unlink(paths, log)
+
+
 def read_one(paths, log: str) -> dict | None:
     """GET-safe read of ONE validated marker (or None). Never mutates/raises."""
     return _read_raw(paths, log)

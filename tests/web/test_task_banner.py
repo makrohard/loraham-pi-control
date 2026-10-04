@@ -4,6 +4,8 @@ import calendar
 import json
 import time
 
+import pytest
+
 from lhpc.core import runtime_fs
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -302,3 +304,25 @@ def test_job_items_expose_the_admitted_flag_for_the_reload_decision(tmp_path):
     items = {t["run_id"]: t for t in svc.running_tasks() if t["kind"] == "job"}
     assert items["web-start-chat.log"]["admitted"] is False
     assert items["web-restart-kiss.log"]["admitted"] is True
+
+
+@pytest.mark.parametrize("state, after", [("failed", []), ("unsafe", ["unsafe"])])
+def test_a_successful_cli_build_supersedes_a_failed_console_build(tmp_path, state, after):
+    """A console build of a component that FAILED stays on the banner until something replaces
+    it; a later successful CLI build of the same component does: the failed job leaves the
+    banner. An unsafe one (termination never verified) stays — the build proves nothing about
+    that process."""
+    from lhpc.core.probes.backends import CommandResult
+    step = ("gcc", "clients/chat/lorachat_ncurses_113.c", "-o", "loraham_chat", "-lncurses",
+            "-lpthread")
+    svc = ControllerService(system=FakeSystem(commands={step: CommandResult(0, "", "")}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    assert svc.bootstrap(apply=True).ok
+    (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True)
+    _job(svc, state, log="build-loraham-chat.log", target="loraham-chat")
+    jobs = lambda: [t["state"] for t in svc.running_tasks()
+                    if t["kind"] == "job" and t["run_id"] == "build-loraham-chat.log"]
+    assert jobs() == [state]
+    assert svc.build("chat", apply=True).ok
+    assert jobs() == after
+
