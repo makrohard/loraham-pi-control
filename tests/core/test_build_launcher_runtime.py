@@ -14,6 +14,7 @@ import pytest
 from lhpc.core import build_launcher_runtime as blr
 from lhpc.core import commands, reslock
 from lhpc.core.paths import Paths
+from repo_paths import REPO
 
 
 def _spec(tmp_path, *, steps=(), lock_names=(), index="", step_timeout=None):
@@ -155,7 +156,10 @@ def test_env_step_timeout_rejects_nan(tmp_path, monkeypatch):
 
 
 def _launch_no_env_timeout(launcher):
+    # The launcher imports lhpc: PYTHONPATH makes that the tree under test, not whatever copy the
+    # interpreter's site-packages would resolve (a stale editable install of another checkout).
     env = {k: v for k, v in os.environ.items() if k != "LHPC_BUILD_STEP_TIMEOUT_S"}
+    env["PYTHONPATH"] = str(REPO)
     return subprocess.run([sys.executable, str(launcher)], capture_output=True, text=True, env=env)
 
 
