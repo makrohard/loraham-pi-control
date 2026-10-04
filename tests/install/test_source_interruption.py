@@ -45,6 +45,7 @@ ADOPT = [
     ("os.mkdir", CANDIDATE),
     ("OwnedMarker.rewrite", STAGING),
     ("source_fs.remove_bound", CANDIDATE),
+    ("OwnedMarker.rewrite", STAGING),                              # no inode until the next
     ("os.mkdir", CANDIDATE),
     ("OwnedMarker.rewrite", STAGING),
     ("shutil.copytree", "local/app/.git"),
@@ -67,6 +68,7 @@ UPDATE = [
     ("os.mkdir", CANDIDATE),
     ("OwnedMarker.rewrite", STAGING),                              # its identity
     ("source_fs.remove_bound", CANDIDATE),               # no remote: clone fails,
+    ("OwnedMarker.rewrite", STAGING),                              # no inode recorded until
     ("os.mkdir", CANDIDATE),                                       # the local fallback restages
     ("OwnedMarker.rewrite", STAGING),
     ("shutil.copytree", "local/app/.git"),
@@ -130,9 +132,6 @@ def test_the_operation_writes_exactly_the_pinned_points(tmp_path, box, op):
 
 # Known recovery defects (code-review/code-report-T2.md), each a strict xfail: a fix turns it
 # into an XPASS, which fails until the mark is removed.
-KD_S1 = ("KD-S1: leaving the staging block by an exception or a failed cleanup removes the "
-         "staging record (install.py `_staged_clone_record` finally) while the candidate stays; "
-         "no recovery path names it again")
 KD_S2 = ("KD-S2: carrying a local file changes the candidate's recorded ctime; a crash between "
          "the carry and the activation leaves no active source and recovery refuses")
 KD_S3 = ("KD-S3: a failed removal of the quarantined prior leaves `..app.prev.quarantine-*` after "
@@ -140,12 +139,9 @@ KD_S3 = ("KD-S3: a failed removal of the quarantined prior leaves `..app.prev.qu
          "removed by hand")
 ALL = tuple(sorted(FAILURES))
 KNOWN = {
-    "update": {**{(k, f): KD_S1 for k in (5, 8, 9, 10) for f in ("KeyboardInterrupt",)},
-               **{(k, f): KD_S1 for k in (6, 11) for f in ALL},
-               (15, "KeyboardInterrupt"): KD_S2,
-               **{(19, f): KD_S3 for f in ALL}},
-    "adopt": {**{(k, "KeyboardInterrupt"): KD_S1 for k in (8, 11, 12, 13)},
-              **{(k, f): KD_S1 for k in (9, 14) for f in ALL}},
+    "update": {(16, "KeyboardInterrupt"): KD_S2,
+               **{(20, f): KD_S3 for f in ALL}},
+    "adopt": {},
 }
 CASES = [pytest.param(op, k, f, id=f"{op}-{w}:{p}-{f}",
                       marks=[pytest.mark.xfail(strict=True, reason=KNOWN[op][k, f])]

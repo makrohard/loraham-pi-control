@@ -442,6 +442,43 @@ def test_a_staging_record_never_removes_an_unproven_candidate(tmp_path, installe
     assert (staging / "part").read_text() == "keep" and rec.exists()
 
 
+def test_an_empty_directory_that_is_not_the_recorded_inode_is_kept_and_named(tmp_path, installer):
+    # The record names [dev, ino]; at its name is another, EMPTY, directory. Empty is no proof:
+    # nothing the record names may be removed by its pathname. Kept, record kept, path named.
+    inst = installer(search_root=tmp_path / "rt")
+    staging = inst.paths.under("src", ".app.candidate-1-2")
+    staging.mkdir(parents=True)
+    st = os.stat(staging)
+    rec = _staging_record(inst, staging, [st.st_dev, st.st_ino + 1])
+    msgs = inst.recover_source_activations()
+    assert staging.is_dir() and rec.exists()
+    assert any(str(staging) in m and "kept" in m for m in msgs), msgs
+
+
+@pytest.mark.parametrize("when", ["before the record", "after the record"])
+def test_an_unrecorded_candidate_is_retained_and_named(tmp_path, installer, when):
+    # No identity recorded (a stop between the candidate's creation and its record): nothing
+    # proves the directory is that staging's — not its owner, its emptiness, nor a ctime after
+    # the record's. It is never removed by the code: kept with its record, its path named.
+    inst = installer(search_root=tmp_path / "rt")
+    staging = inst.paths.under("src", ".app.candidate-1-2")
+    if when == "before the record":
+        staging.mkdir(parents=True)
+        time.sleep(0.05)
+        rec = _staging_record(inst, staging, None)
+    else:
+        rec = _staging_record(inst, staging, None)
+        time.sleep(0.05)
+        staging.mkdir(parents=True)
+    msgs = inst.recover_source_activations()
+    assert staging.is_dir() and rec.exists()
+    assert any(f"a staging directory this run cannot prove as its own: {staging}; remove it "
+               "by hand after checking" in m for m in msgs), msgs
+    staging.rmdir()                                         # the operator, after checking
+    inst.recover_source_activations()
+    assert not rec.exists()
+
+
 @pytest.mark.parametrize("failure", ["oserror", "containment", "unexpected", "lost"])
 def test_a_failing_staging_record_rewrite_never_stops_the_install(tmp_path, make_repo, installer,
                                                                   monkeypatch, capsys, failure):
@@ -484,10 +521,12 @@ def test_a_failing_staging_record_rewrite_never_stops_the_install(tmp_path, make
     assert list(inst.paths.under("state", "source-txn").iterdir()) == []
 
 
-def test_ctrl_c_in_the_staging_record_rewrite_propagates_and_the_record_is_cleared(
+def test_ctrl_c_in_the_staging_record_rewrite_propagates_and_recovery_clears_it(
         tmp_path, make_repo, installer, monkeypatch):
     # Best-effort covers ordinary errors only: Ctrl-C while the record is rewritten stops the
-    # staging (the same interrupt propagates) and the record's own cleanup still runs.
+    # staging (the same interrupt propagates). The candidate it was recording is removed on its
+    # live handle before the interrupt leaves (unrecorded, recovery could never prove it), so
+    # its record goes with it and recovery finds nothing.
     from lhpc.core import runtime_fs
     make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
@@ -507,8 +546,11 @@ def test_ctrl_c_in_the_staging_record_rewrite_propagates_and_the_record_is_clear
     with pytest.raises(KeyboardInterrupt) as got:
         inst.adopt_source(comp, source="dev")
     assert got.value is ctrl_c
-    assert not [p for p in inst.paths.under("state", "source-txn").iterdir()
-                if p.name.endswith(".staging")]
+    assert list(inst.paths.under("src").iterdir()) == []
+    monkeypatch.setattr(runtime_fs, "open_marker_excl", real_open)
+    assert inst.recover_source_activations() == []
+    assert list(inst.paths.under("state", "source-txn").iterdir()) == []
+    assert list(inst.paths.under("src").iterdir()) == []
 
 
 def test_a_staging_record_defers_to_its_journal(tmp_path, installer):
@@ -4311,3 +4353,33 @@ def test_dirty_report_ignores_the_shipped_patch_only(tmp_path, git, make_repo, i
     (dest / "a.txt").write_text("one\ntwo\nthree\n")                     # an extra hunk
     assert inst.dirty_report(dest, "src/app")
 
+
+
+def test_a_journal_that_cannot_be_created_drops_the_candidate_and_names_the_retry(
+        tmp_path, git, make_repo, installer, monkeypatch):
+    """The activation journal cannot be created (disk full): nothing was archived, so the update
+    refuses with the prior active, its candidate removed and no record left — and says so, never
+    that a journal was retained."""
+    from lhpc.core import runtime_fs
+    repo = tmp_path / "rt" / "local" / "app"
+    make_repo(repo)
+    comp = _comp()
+    inst = installer(comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    (repo / "file.txt").write_text("v2\n")
+    git(repo, "commit", "-qam", "v2")
+    real = runtime_fs.open_marker_excl
+
+    def full_for_the_journal(paths, path, payload):
+        if Path(path).suffix == ".json":                  # the journal, not the staging record
+            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+        return real(paths, path, payload)
+    monkeypatch.setattr(runtime_fs, "open_marker_excl", full_for_the_journal)
+
+    action = inst.adopt_source(comp, force=True, source="dev")
+    assert action.status == "failed"
+    assert "lhpc update app --yes" in action.detail
+    assert "retained journal" not in action.detail
+    assert sorted(p.name for p in inst.paths.under("src").iterdir()) == ["app"]
+    assert (inst.paths.under("src", "app") / "file.txt").read_text() == "hello\n"
+    assert list(inst.paths.under("state", "source-txn").iterdir()) == []

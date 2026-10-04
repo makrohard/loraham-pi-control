@@ -699,6 +699,14 @@ class Installer:
                                      "(prior source and its record intact; a fresh install was "
                                      "fully undone); the new version was NOT adopted")
                     return action
+                if outcome == "journal-failed":
+                    self._cleanup_owned_staging(txn, handle, staging.name)   # handle-safe
+                    action.status = "failed"
+                    action.detail = (
+                        "the transaction journal could not be created under state/source-txn "
+                        "(disk full or not writable?) — active source untouched; free space or "
+                        f"fix that directory, then retry: lhpc update {comp.id} --yes")
+                    return action
                 if outcome == "recovery-required":
                     action.status = "failed"
                     action.detail = ("recovery-required: source transaction left a retained "
@@ -750,8 +758,7 @@ class Installer:
         # pre-existing leaf of any kind fails closed) and RETAIN its fd, then write INTO the
         # candidate FD-pinned path — Git/copy never re-resolve the leaf by name.
         remote = self.config.remotes.get(comp.id) or spec.remote
-        handle = txn.create_candidate(staging.name)
-        self._note_staged(clone_rec, dest, staging, handle)
+        handle = self._create_recorded(txn, clone_rec, dest, staging)
         # Adoption is the auto-install's FIRST long phase and git is silent off-TTY — give the
         # clone a tail-able `logs/adopt-<comp>.log` whose first content says what is happening
         # (quiet-step preamble), with `git clone --progress` streamed below it. BEST-EFFORT:
@@ -786,8 +793,11 @@ class Installer:
             action.status, action.detail = "failed", (
                 "recovery-required: staging candidate was substituted (evidence retained)")
             return None, None
-        handle = txn.create_candidate(staging.name)
-        self._note_staged(clone_rec, dest, staging, handle)
+        # The record still names the removed candidate's inode; it names none before the next one
+        # exists, so a stop between that creation and its record leaves an UNRECORDED candidate,
+        # which recovery keeps and names (as it would another inode at the recorded name).
+        self._note_staged(clone_rec, dest, staging, None)
+        handle = self._create_recorded(txn, clone_rec, dest, staging)
 
         def _unavailable(why: str) -> str:
             # `dev` NEVER silently uses a different ref: when the configured branch cannot be
@@ -1308,9 +1318,10 @@ class Installer:
     def _staged_clone_record(self, dest: Path, staging: Path):
         """Hold the record of one staging, written before the candidate exists; yields its
         `OwnedMarker`, or None when it cannot be written (best-effort, like the clone log: the
-        staging then runs as it did before records existed). Removed on exit — by then a journal
-        owns the candidate, or the candidate is gone or kept as evidence, as before."""
-        from . import runtime_fs
+        staging then runs as it did before records existed). On exit — normal, an exception or a
+        Ctrl-C — it is removed only once the candidate is gone or a journal owns it; otherwise it
+        stays, and recovery resolves the candidate it names (`_recover_staged_clone`)."""
+        from . import runtime_fs, source_fs
         try:
             rec = runtime_fs.open_marker_excl(self.paths, self._staged_clone_path(dest, staging),
                                               self._staged_clone_payload(dest, staging, None))
@@ -1320,18 +1331,41 @@ class Installer:
             yield rec
         finally:
             if rec is not None:
-                rec.remove()
+                try:
+                    settled = (source_fs.leaf_kind(self.paths, staging) == "absent"
+                               or source_fs.leaf_kind(self.paths,
+                                                      self._journal_path(dest)) != "absent")
+                except (OSError, PathContainmentError):
+                    settled = False                  # unprovable: keep the record
+                if settled:
+                    rec.remove()
                 rec.close()
+
+    def _create_recorded(self, txn, rec, dest: Path, staging: Path):
+        """Create the candidate and record its identity. A stop while it is recorded (Ctrl-C)
+        removes it here, on the live handle: an unrecorded candidate is one recovery can never
+        prove, so it would stay for the operator."""
+        handle = txn.create_candidate(staging.name)
+        try:
+            self._note_staged(rec, dest, staging, handle)
+        except BaseException:
+            self._cleanup_owned_staging(txn, handle, staging.name)
+            raise
+        return handle
 
     def _note_staged(self, rec, dest: Path, staging: Path, handle) -> None:
         """Record the candidate's [dev, ino] right after its creation, before anything is written
-        into it. (No ctime: the clone itself changes the directory's.) Best-effort: a failure is
-        one stderr line and the staging goes on; recovery then finds no inode recorded."""
+        into it (No ctime: the clone itself changes the directory's.); `handle=None` clears it
+        before a restage creates the next one. Best-effort: a failure is one stderr line and the
+        staging goes on; recovery then finds the previous value — no inode, or the removed
+        candidate's (another inode at that name) — and keeps the candidate and names it, never
+        removes it."""
         if rec is None:
             return
         what = f"staging record {rec.name} could not record the candidate — install continues"
-        if best_effort(lambda: rec.rewrite(self._staged_clone_payload(
-                dest, staging, [handle.st_dev, handle.st_ino])), what=what) is False:
+        ident = None if handle is None else [handle.st_dev, handle.st_ino]
+        if best_effort(lambda: rec.rewrite(self._staged_clone_payload(dest, staging, ident)),
+                       what=what) is False:
             stderr_line(what)
 
     def _recover_staged_clone(self, jf: Path) -> str:
@@ -1339,9 +1373,10 @@ class Installer:
         lock for the whole staging, and a flock dies with its process, so holding that lock here
         proves the staging dead; a busy lock leaves everything alone. A source with a journal: the
         journal owns the candidate, so only the record is cleared. Otherwise the named candidate is
-        removed on its recorded [dev, ino] — with none recorded yet, only while it is still an empty
-        directory — and the record is cleared once the candidate is gone. A candidate that cannot be
-        proven is kept, and so is its record."""
+        removed only on the identity its record holds ([dev, ino], `_note_staged`), and the record
+        is cleared once the candidate is gone. A candidate with no recorded identity, or another
+        inode at the recorded name, is never removed: it is kept with its record and the result
+        names the path for the operator."""
         import json
 
         from . import reslock, runtime_fs, source_fs
@@ -1374,17 +1409,17 @@ class Installer:
                     else:
                         with source_fs.ManagedSourceTransaction(self.paths, dest.parent) as txn:
                             if txn.leaf_kind(staging.name) != "absent":
-                                if ident is not None:
-                                    ok, _why = source_fs.remove_bound(txn.fd, staging.name, ident)
-                                else:
-                                    try:
-                                        os.rmdir(staging.name, dir_fd=txn.fd)
-                                        ok = True
-                                    except OSError:
-                                        ok = False
+                                # Only the recorded identity proves the directory is this
+                                # staging's. None recorded (a stop between its creation and
+                                # its record), or another inode at the name: never removed —
+                                # not by its pathname, its owner, its emptiness or its age.
+                                ok = ident is not None and source_fs.remove_bound(
+                                    txn.fd, staging.name, ident)[0]
                                 if not ok:
-                                    return (f"interrupted clone {staging.name} kept: not provably "
-                                            "the one its record names (record retained)")
+                                    return (f"a staging directory this run cannot prove as its "
+                                            f"own: {staging}; remove it by hand after checking "
+                                            f"(its record {jf.name} is kept until then and "
+                                            "cleared by the next lhpc source command)")
                                 txn.fsync()
                         kind = "removed an interrupted clone"
                     return (f"recovered {dest.name}: {kind}" if marker.remove()
@@ -1961,7 +1996,11 @@ class Installer:
             idents = self._v5_idents(handle, prior)
         jh = self._create_journal(dest, prev, staging, meta, idents)
         if jh is None:
-            return "recovery-required"
+            # A journal leaf that exists blocks (injected or stale); one that could not be
+            # created at all left nothing behind: the caller drops the candidate and refuses.
+            return ("recovery-required"
+                    if source_fs.leaf_kind(self.paths, self._journal_path(dest)) != "absent"
+                    else "journal-failed")
         try:
             archived = False
             try:
