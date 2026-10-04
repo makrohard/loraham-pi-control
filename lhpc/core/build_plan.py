@@ -65,6 +65,15 @@ def web_round(ordered: list, is_built) -> tuple[list, bool]:
     return [c for c in ordered if c.id not in providers], False
 
 
+def artifact_capable(stack, comp_id: str) -> bool:
+    """A binary artifact CAN provide this component: its stack's `[stack.binary]` covers it,
+    whatever channel it is on now. Its marker ships inside that artifact and stays static, so a
+    source build records its own revision beside it (`<marker>.rev`). The one predicate for
+    both: the service's `binary_capable` and the installer's artefact carve-out."""
+    spec = getattr(stack, "binary", None)
+    return spec is not None and comp_id in spec.covers
+
+
 def consumed_sources(comp, by_id: dict, source_dir, binary: bool = False) -> list[tuple[str, str]]:
     """The `(id, source dir)` pairs a receipt records for `comp`: its own when it builds from a
     git source that no binary artifact can provide (`binary`: its marker ships inside the

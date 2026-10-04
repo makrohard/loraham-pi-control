@@ -186,8 +186,9 @@ class BinaryChannelMixin:
         """True when a binary artifact CAN provide this component (its stack's spec covers it),
         whatever channel it is on now: its build marker ships inside that artifact, so it stays
         the static text every controller reads the same way (see `_consumed_source_lines`)."""
-        spec = self.binary_spec(self.stack_of(component_id) or component_id)
-        return spec is not None and component_id in spec.covers
+        from . import build_plan
+        return build_plan.artifact_capable(self.stack(self.stack_of(component_id)
+                                                      or component_id), component_id)
 
     def binary_covers(self, component_id: str) -> bool:
         """True when this component's source/build is currently provided by a binary artifact.

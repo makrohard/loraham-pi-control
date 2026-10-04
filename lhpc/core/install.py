@@ -928,10 +928,18 @@ class Installer:
         return True                               # dev with no branch: documented permissive
 
     def _path_bins(self, source_path: str) -> set:
-        """Every consumer component's declared built-binary path inside `source_path` — these
-        are LHPC-regenerated artifacts, never operator changes."""
-        return {c.bin for stack in self.stacks for c in stack.components
-                if c.source and c.source.path == source_path and c.bin}
+        """Every consumer component's declared built-binary path inside `source_path`, its build
+        completion marker, and — for a component a binary artifact can provide, the only kind a
+        source build writes it for — the own-revision file beside the marker. These are
+        LHPC-regenerated artifacts, never operator changes, and a replaced checkout must not carry
+        a marker that would claim the new tree built. A file named like a `.rev` of any other
+        component is the operator's, and is checked and carried as such."""
+        from . import build_plan
+        return {p for stack in self.stacks for c in stack.components
+                if c.source and c.source.path == source_path
+                for p in (c.bin, c.build_marker,
+                          c.build_marker + ".rev" if c.build_marker
+                          and build_plan.artifact_capable(stack, c.id) else "") if p}
 
     def dirty_report(self, dest: Path, source_path: str) -> DirtyReport:
         """Local changes a destructive operation (update overwrite / uninstall) would discard:

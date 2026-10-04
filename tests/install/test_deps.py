@@ -11,7 +11,7 @@ from lhpc.core.manifest import ManifestError, parse_manifest
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
-from seams import readable_heads
+from seams import readable_heads, write_own_rev
 
 import pytest
 
@@ -939,11 +939,13 @@ def _mesh_svc_with(tmp_path, moved_text):
     src.mkdir(parents=True, exist_ok=True)
     (src / comp.build_marker).write_text(
         BUILD_MARKER_TEXT + built._consumed_source_lines(comp))
+    write_own_rev(built, comp)
     _stamp_inputs(built.build_inputs_path(comp), built.build_inputs_text(comp))
     assert built.is_built(_mesh(_svc(tmp_path))) is True, "the baseline must read built"
     moved = tmp_path / "moved-manifest.toml"
     moved.write_text(moved_text)
-    svc = ControllerService(manifest_path=moved, system=FakeSystem().system,
+    svc = ControllerService(manifest_path=moved,
+                            system=FakeSystem(commands=readable_heads(tmp_path)).system,
                             paths=Paths(runtime_root=tmp_path))
     return svc, _mesh(svc)
 
@@ -966,6 +968,7 @@ def test_a_rebuild_at_the_new_inputs_reads_built_again(tmp_path, manifest_with_m
     svc, comp = _mesh_svc_with(tmp_path, manifest_with_moved_input("meshtastic", "meshtastic-web", "9.9.9")[0])
     marker = tmp_path / "src" / "meshtastic-firmware" / comp.build_marker
     marker.write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(comp))
+    write_own_rev(svc, comp)
     _stamp_inputs(svc.build_inputs_path(comp), svc.build_inputs_text(comp))
     assert svc.is_built(comp) is True
 
@@ -997,6 +1000,7 @@ def test_an_artifact_that_records_inputs_still_reads_built_to_a_controller_witho
     src = tmp_path / "src" / "meshtastic-firmware"
     src.mkdir(parents=True, exist_ok=True)
     (src / c.build_marker).write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(c))
+    write_own_rev(svc, c)
     _stamp_inputs(svc.build_inputs_path(c), svc.build_inputs_text(c))
 
     assert (src / c.build_marker).read_text() == BUILD_MARKER_TEXT, (

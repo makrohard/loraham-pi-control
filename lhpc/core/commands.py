@@ -963,7 +963,8 @@ def render_build_launcher(steps: list, runtime: str, source: str,
                           inputs_path: str = "", inputs_text: str = "",
                           step_timeout: float | None = None,
                           shared_lock_paths: list | tuple = (),
-                          consumed: list | tuple = ()) -> str:
+                          consumed: list | tuple = (),
+                          rev_path: str = "", rev_consumed: list | tuple = ()) -> str:
     """A self-contained Python launcher that runs build/test steps sequentially with
     NO shell: it resolves `{pkgconfig:NAME}` via pkg-config and runs each argv with
     its env and cwd, streaming output. Returns nonzero on the first failing step.
@@ -1026,7 +1027,10 @@ def render_build_launcher(steps: list, runtime: str, source: str,
             # the marker — the same contract as lifecycle.build().
             "inputs_path": inputs_path, "inputs_text": inputs_text,
             # The receipt's (id, source dir) pairs: their revisions are read under the locks.
-            "consumed": [[str(cid), str(src)] for cid, src in consumed]}
+            "consumed": [[str(cid), str(src)] for cid, src in consumed],
+            # A binary-capable component's own-revision side file (written before the marker;
+            # its revision is read under the locks too).
+            "rev_path": rev_path, "rev_consumed": [[str(cid), str(src)] for cid, src in rev_consumed]}
     # Per-step timeout (the component's manifest build/test timeout, as on the CLI path); absent
     # -> the runtime's own default. LHPC_BUILD_STEP_TIMEOUT_S still overrides it at exec time.
     # Carried as a STRING: repr() of a non-finite float (TOML allows inf/nan) is the bare name

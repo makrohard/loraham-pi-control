@@ -331,6 +331,7 @@ def run(spec: dict) -> None:
             from . import build_plan
             receipt = ((spec.get("marker_text") or "")
                        + build_plan.consumed_lines(spec.get("consumed") or [], _git_out))
+            rev_text = build_plan.consumed_lines(spec.get("rev_consumed") or [], _git_out)
 
             # Invalidate the completion marker FAIL-CLOSED before the first step —
             # same contract as lifecycle.build(): a build killed mid-way must never
@@ -394,6 +395,8 @@ def run(spec: dict) -> None:
                     if spec.get("inputs_path") and spec.get("inputs_text"):
                         runtime_fs.atomic_write(paths, Path(spec["inputs_path"]),
                                                 spec["inputs_text"], 0o644)
+                    if spec.get("rev_path") and rev_text:
+                        runtime_fs.atomic_write(paths, Path(spec["rev_path"]), rev_text, 0o644)
                     runtime_fs.atomic_write(paths, Path(marker_path), receipt, 0o644)
                 except (OSError, PathContainmentError) as exc:
                     detail[0] = f"steps passed but the completion marker could not be written ({exc})"[:200]

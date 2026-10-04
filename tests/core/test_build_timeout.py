@@ -22,7 +22,7 @@ from lhpc.core.jobs import JobResult, JobState, run_job, tail_log
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult, FakeSystem
 from lhpc.core.services import ControllerService
-from seams import readable_heads
+from seams import readable_heads, write_own_rev
 
 
 def _svc(tmp_path):
@@ -278,6 +278,7 @@ def test_meshcom_marker_is_colocated_with_flash_and_gates_is_built(tmp_path):
     # Removing/cleaning the firmware dir takes the marker with it (co-located): still not built.
     (svc._lifecycle().source_dir(comp) / comp.build_marker).write_text("lhpc build complete\n")
     svc.build_inputs_path(comp).write_text(svc.build_inputs_text(comp))   # 0.7.0 sidecar
+    write_own_rev(svc, comp)                                               # its own revision
     assert svc.is_built(comp)
     import shutil
     shutil.rmtree(fd)                                           # clean the firmware artifact + its marker
@@ -309,6 +310,7 @@ def test_meshcom_failed_rebuild_leaves_no_marker(tmp_path, monkeypatch):
     marker = svc._lifecycle().source_dir(comp) / comp.build_marker
     marker.write_text("lhpc build complete\n")                                # a prior build's marker
     svc.build_inputs_path(comp).write_text(svc.build_inputs_text(comp))     # ... and its sidecar (0.7.0)
+    write_own_rev(svc, comp)                                                # ... and its own revision
     assert svc.is_built(comp)
     monkeypatch.setattr(lifecycle_mod, "run_job",
                         lambda runner, **kw: JobResult(name="b", state=JobState.FAILED,

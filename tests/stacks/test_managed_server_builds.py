@@ -7,13 +7,17 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
+from seams import readable_heads, write_own_rev
 
 
 def _svc(tmp_path):
-    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    return ControllerService(system=FakeSystem(commands=readable_heads(tmp_path)).system,
+                             paths=Paths(runtime_root=tmp_path))
 
 
 def _stamp_inputs(path, text):
@@ -97,8 +101,10 @@ def test_source_update_leaves_the_stack_needing_a_rebuild(tmp_path):
     src = tmp_path / "src" / "meshtastic-firmware"
     src.mkdir(parents=True)
     marker = src / c.build_marker
-    # What a real build writes: the marker's own content, and the recorded inputs BESIDE it.
+    # What a real build writes: the marker's own content, its own revision and the recorded
+    # inputs BESIDE it.
     marker.write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(c))
+    write_own_rev(svc, c)
     _stamp_inputs(svc.build_inputs_path(c), svc.build_inputs_text(c))
     assert svc.is_built(_mesh(_svc(tmp_path))) is True
     # An update REPLACES the checkout, taking the source-local marker with it.
@@ -178,3 +184,78 @@ def test_meshtastic_never_needs_root_to_build_start_or_configure(tmp_path):
     for s in c.build_steps:
         for tok in s.get("argv", []):
             assert not tok.startswith(("/etc/", "/usr/", "/var/", "/opt/")), tok
+
+
+# --- a source build of an artifact-capable component proves its own revision BESIDE the marker -----
+# The marker stays the static text (a binary artifact ships it); the side file `<marker>.rev`
+# records the checkout's own revision and is compared only off the binary channel.
+
+
+def _built_from_source(tmp_path):
+    """meshtastic built from its checkout, as `svc.build` leaves it: the static marker, the
+    own-revision side file and the recorded inputs. Returns (service, component, marker)."""
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+    svc = _svc(tmp_path)
+    c = _mesh(svc)
+    src = tmp_path / "src" / "meshtastic-firmware"
+    src.mkdir(parents=True, exist_ok=True)
+    marker = src / c.build_marker
+    marker.write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(c))
+    write_own_rev(svc, c)
+    _stamp_inputs(svc.build_inputs_path(c), svc.build_inputs_text(c))
+    return svc, c, marker
+
+
+def test_a_source_build_whose_checkout_moved_in_place_reads_not_built(tmp_path, monkeypatch):
+    svc, c, marker = _built_from_source(tmp_path)
+    assert svc.is_built(c) is True
+    assert marker.read_text() == "lhpc build complete\n"            # the marker stays static
+    # Stubs the collaborator, git: the checkout's HEAD moved (a hand-made change, no update).
+    monkeypatch.setattr(svc, "_git_out", lambda argv: (0, "f" * 40 + "\n"))
+    svc.invalidate_snapshot()
+    assert svc.is_built(c) is False
+
+
+def test_a_source_build_from_before_the_side_file_reads_not_built_once(tmp_path):
+    svc, c, marker = _built_from_source(tmp_path)
+    (marker.parent / (c.build_marker + ".rev")).unlink()              # built by an older lhpc
+    svc.invalidate_snapshot()
+    assert svc.is_built(c) is False
+
+
+@pytest.mark.parametrize("side_file", ["absent", "stale"])
+def test_on_the_binary_channel_the_side_file_is_never_compared(tmp_path, monkeypatch,
+                                                               binary_receipt, side_file):
+    # Stubs the collaborator, the host: the binary channel is published for this target.
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    svc, c, marker = _built_from_source(tmp_path)
+    rev = marker.parent / (c.build_marker + ".rev")
+    if side_file == "absent":
+        rev.unlink()
+    else:
+        rev.write_text(f"consumed {c.id} {'0' * 40}\n")              # a stale one inside an artifact
+    binary_receipt(svc, "meshtastic")
+    assert svc.on_binary_channel("meshtastic") is True
+    assert svc.is_built(c) is True
+
+
+class _StepsSucceedRevisionUnreadable(dict):
+    """A runner table answering every build step with rc 0 and `git rev-parse` with rc 1: the
+    checkout's revision cannot be read."""
+
+    def get(self, argv, default=None):
+        from lhpc.core.probes.backends import CommandResult
+        return CommandResult(1 if "rev-parse" in argv else 0, "ok\n", "")
+
+
+def test_a_source_build_whose_own_revision_cannot_be_read_says_so_and_never_reads_built(tmp_path):
+    svc = ControllerService(system=FakeSystem(commands=_StepsSucceedRevisionUnreadable()).system,
+                            paths=Paths(runtime_root=tmp_path))
+    assert svc.bootstrap(apply=True).ok
+    (tmp_path / "src" / "meshtastic-firmware").mkdir(parents=True)
+    res = svc.build("meshtastic", apply=True)
+    assert res.ok, res.summary                                        # every step ran
+    assert [d.split()[:2] for d in res.details if d.split()[:1] == ["[unverified]"]] == [
+        ["[unverified]", "meshtastic:"]]
+    assert svc.is_built(_mesh(svc)) is False
+

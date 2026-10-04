@@ -1,7 +1,7 @@
 """Shared start-path probes for the ordinary tests (core/ and stacks/), beside `htmlq` and
 `repo_paths`: importable as a plain module because pytest puts this directory on `sys.path`.
 
-    from seams import LifecycleSeam, outcomes, readable_heads, seed_built
+    from seams import LifecycleSeam, outcomes, readable_heads, seed_built, write_own_rev
 """
 
 
@@ -36,3 +36,13 @@ def readable_heads(root, sha="a" * 40):
     return {("git", "-C", str(paths.resolve_source(c.source.path)), "rev-parse", "HEAD"):
             CommandResult(0, sha + "\n", "")
             for st in load_manifest() for c in st.components if c.source}
+
+
+def write_own_rev(svc, comp):
+    """The side file a SOURCE build of a binary-capable component writes beside its marker
+    (its own checkout's revision; nothing for any other component), as `svc.build` writes it."""
+    rev = svc._own_rev(comp)
+    if rev is not None:
+        rev[0].parent.mkdir(parents=True, exist_ok=True)
+        rev[0].write_text(rev[1])
+

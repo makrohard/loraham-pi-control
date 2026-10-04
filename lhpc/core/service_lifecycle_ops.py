@@ -3494,11 +3494,12 @@ class LifecycleOpsMixin:
                     receipt = build_plan.consumed_lines(
                         build_plan.consumed_sources(comp, by_all, life.source_dir,
                                                     self.binary_capable(comp.id)), self._git_out)
+                    rev = self._own_rev(comp)
                     res = life.build(comp, log_base=log_base,
                                      redactor=redactor, should_cancel=should_cancel,
                                      on_log_open=self._log_announcer(comp.id, details),
                                      marker_extra=receipt,
-                                     inputs=self._build_inputs_to_record(comp))
+                                     inputs=self._build_inputs_to_record(comp), rev=rev)
                     ok = ok and res.ok
                     if res.ok:                  # a console build's failure of it is now stale
                         jobresult.supersede(self._paths, f"build-{comp.id}.log")
@@ -3506,7 +3507,8 @@ class LifecycleOpsMixin:
                                    f"(rc {res.returncode}, log {res.log_path})")
                     details += [f"  [unverified] {ln.split()[1]}: its revision could not be read "
                                 "— the build reads as not built until it can"
-                                for ln in receipt.splitlines() if ln.endswith(" unknown")]
+                                for ln in (receipt + (rev[1] if rev else "")).splitlines()
+                                if ln.endswith(" unknown")]
                     if not res.ok:
                         details.extend(f"      {ln}" for ln in res.tail[-6:])
                     # Surface a cooperative-cancellation / UNVERIFIED-stop outcome so the caller (the HMAC
@@ -3799,7 +3801,9 @@ class LifecycleOpsMixin:
                             marker_path=marker_path, marker_text=marker_text,
                             inputs_path=str(inputs[0]) if inputs else "",
                             inputs_text=inputs[1] if inputs else "",
-                            step_timeout=step_timeout)
+                            step_timeout=step_timeout,
+                            **({"rev_path": str(_own[0]), "rev_consumed": _own[1]}
+                               if _mark and (_own := self._own_rev_source(c)) else {}))
                     except commands.CommandError as exc:
                         jobresult.terminalize(self._paths, log, aid, "failed", detail=str(exc)[:200])
                         return None, aid, f"cannot {op} '{c.id}': {exc}"
@@ -4995,6 +4999,27 @@ class LifecycleOpsMixin:
         return self._request_memo(("consumed-source", comp.id),
                                   lambda: self._consumed_source_lines_uncached(comp))
 
+    def _own_rev(self, comp):
+        """`(path, text)` of the side file a SOURCE build of a binary-capable component writes
+        beside its marker — `consumed <id> <rev>`, its own checkout's revision — or None. The
+        marker itself stays the static text, because an artifact ships it; `is_built` checks the
+        side file only while the stack is not on the binary channel. Read fresh (under the
+        build's locks); `is_built` uses `_own_rev_expected`."""
+        from . import build_plan
+        own = self._own_rev_source(comp)
+        return (own[0], build_plan.consumed_lines(own[1], self._git_out)) if own else None
+
+    def _own_rev_source(self, comp):
+        """`(side file path, [(id, source dir)])` for `_own_rev`, or None — the console's
+        detached build reads the revision itself, under its locks."""
+        if not (comp.build_marker and comp.source and self.binary_capable(comp.id)):
+            return None
+        src = self._lifecycle().source_dir(comp)
+        return src / (comp.build_marker + ".rev"), [(comp.id, str(src))]
+
+    def _own_rev_expected(self, comp):
+        return self._request_memo(("own-rev", comp.id), lambda: self._own_rev(comp))
+
     def _consumed_source_lines_uncached(self, comp) -> str:
         # The build's own computation (`build_plan`), so what is compared is what was written.
         from . import build_plan
@@ -5101,6 +5126,15 @@ class LifecycleOpsMixin:
                 expected = BUILD_MARKER_TEXT + self._consumed_source_lines(comp)
                 if " unknown\n" in expected or (runtime_fs.read_text_regular(
                         self._paths, marker, max_bytes=_BUILD_MARKER_MAX) != expected):
+                    return False
+                # A source build of a binary-capable component also records its own revision
+                # beside the marker (`_own_rev`): checked only off the binary channel, where an
+                # artifact's static marker (and any side file inside it) is never compared.
+                own = self._own_rev_expected(comp)
+                if (own is not None
+                        and not self.on_binary_channel(self.stack_of(comp.id) or comp.id)
+                        and (" unknown\n" in own[1] or runtime_fs.read_text_regular(
+                            self._paths, own[0], max_bytes=_BUILD_MARKER_MAX) != own[1])):
                     return False
                 # Declared inputs AND consumed assets: an old sidecar without the asset
                 # lines mismatches and reads NOT built, exactly like a missing one.
