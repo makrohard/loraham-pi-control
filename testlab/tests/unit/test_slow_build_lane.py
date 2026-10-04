@@ -54,7 +54,7 @@ def _paths(tmp_path):
         "install": lambda: lane._install(env, "kiss"),
         "build": lambda: lane._build(env, "meshcore-cli"),
         "deb-fetch": lambda: lane._deb_fetch(_Svc(), GRAYWOLF, tmp_path),
-        "cli-venv": lambda: lane._cli_venv(lane.run_lhpc()),
+        "cli-venv": lambda: lane._cli_venv(lane.run_lhpc(env)),   # the real shape: env first
         "self-update": lambda: lane._helper(tmp_path / "lhpc", env),
         "calibrate": lane._calibrate,
     }
