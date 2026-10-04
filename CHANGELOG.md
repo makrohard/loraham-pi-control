@@ -26,8 +26,51 @@
 - Every step that writes a journal, receipt or marker the next run recovers from (settings saves, boot restore,
   binary installs, source installs and updates, self-update, the firewall apply) is now tested against a full
   disk, an I/O error and Ctrl-C at that exact step: recovery must leave a clean state and the same command must
-  then succeed. Five places where an interrupted source install or self-update leaves a leftover behind are
-  recorded for fixing.
+  then succeed.
+
+- An update — `lhpc update <stack>`, `lhpc self-update --apply`, or the same from the console — now ends in
+  exactly one of three ways (or *recovery-required*, where lhpc cannot prove what it finds is its own, or
+  cannot record what it did):
+  converged (at its target version, built; lhpc itself synced and its units
+  refreshed); nothing changed, with the cause and the command that fixes it; or, only where putting the
+  previous version back is not one operation lhpc has, a named state that is recorded on disk, shown by
+  `lhpc status` with its word and resolved by one command: *needs-rebuild* (`lhpc build <stack> --yes`),
+  *prior-in-use* (`lhpc update <component> --yes` once the process using the old tree has ended),
+  *prior-dirty* (the `mv` the result and `lhpc status` print), *venv-unsynced* (`lhpc self-update --apply`) and *units-stale*
+  (`lhpc self-update --repair-integration`). [Operations](docs/operations.md#what-happens-when-an-update-fails)
+  lists them.
+  - The update builds the stack again when its new sources need it, so the next start works (in the
+    console: as a build job with its live output). A build that fails, or cannot start, ends the update as
+    *needs-rebuild* — in the console as in the CLI. `lhpc status --versions` marks the component while a
+    build is due.
+  - `lhpc update graywolf` names `lhpc build graywolf --yes` and `--upstream` instead of *Unknown stack*.
+  - A binary update to the artifact that is already installed and intact downloads nothing; it says so only
+    after an interrupted binary install has been recovered.
+  - A left-over `src/.<name>.prev` refusal names that directory and the `mv` out of `src/`; a failed carry
+    of your own files, or a transaction journal that cannot be written, names the retry.
+  - The pinned fallback says *no compatible known-working record* (also when a record exists that no
+    longer fits the stack).
+- Ctrl-C, a full disk or an I/O error at any one step of a source install or update, or of a self-update,
+  no longer leaves a staged copy, a probe directory, a half-removed old tree or a self-update recovery
+  reference behind: the next lhpc command of that kind cleans it up. A staged copy is removed only on the
+  identity recorded for it: one with no identity recorded, or another directory at its name, is kept and
+  named (*a staging directory this run cannot prove as its own*), never removed. Your own files copied into
+  the new tree are journaled before the copy writes and on disk before the switch; a power loss during that
+  copy leaves it kept and named with the old tree (*recovery-required*), and once you have removed it the
+  next lhpc source command puts the old tree back.
+- An update keeps the old source tree (*prior-in-use*, the process named) while another process can still
+  write into it — an open file, a working directory inside it, a shared writable mapping, or a file the
+  kernel reports open for writing — instead of deleting what that process writes later. `lhpc status`
+  says *prior-in-use* only while such a process is still found, else *prior-dirty*; a journal that cannot
+  record why the old tree is kept says *recovery-required*. A staged-copy
+  record that cannot be created is said in one line.
+- `lhpc self-update --apply`: a checkout on a detached HEAD is refused with the `git switch` that puts it
+  back; an unreachable upstream says what to fix. A self-update state record that cannot be written fails
+  the update *recovery-required* with the cause and what to run by hand (after a failed venv sync: the sync, then
+  `lhpc self-update --repair-integration`); one that cannot be read is *recovery-required*, and
+  `--repair-integration` clears *units-stale* only.
+- `lhpc status`: a stack whose main process died while its helpers run reads *failed*, no longer
+  *degraded* (that now means the main runs but an endpoint is not ready).
 
 - The dashboard's radio columns ask the daemon for updates only while the page is shown: nothing while the tab
   is in the background (one refresh when you come back), never a second request while the first is still
