@@ -2,6 +2,12 @@
 
 ## 0.12.0
 
+- Every step that writes a journal, receipt or marker the next run recovers from (settings saves, boot restore,
+  binary installs, source installs and updates, self-update, the firewall apply) is now tested against a full
+  disk, an I/O error and Ctrl-C at that exact step: recovery must leave a clean state and the same command must
+  then succeed. Five places where an interrupted source install or self-update leaves a leftover behind are
+  recorded for fixing.
+
 - The dashboard's radio columns ask the daemon for updates only while the page is shown: nothing while the tab
   is in the background (one refresh when you come back), never a second request while the first is still
   unanswered, and after a failed update the next try waits 15 s instead of 3 s.
