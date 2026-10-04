@@ -8,6 +8,7 @@ from __future__ import annotations
 import inspect
 import os
 import threading
+import types
 
 import pytest
 
@@ -325,6 +326,13 @@ _TMP = __import__("re").compile(r"\..+\.tmp-\d+-[0-9a-f]+")     # runtime_fs's a
 _READ_ONLY_COMMANDS = (("systemctl", "show"), ("systemctl", "is-system-running"),
                        ("systemctl", "--user", "is-system-running"), ("systemctl", "is-active"),
                        ("systemctl", "is-enabled"))
+# The tty ioctls that change a device (its mode, line state, window or exclusivity); a read
+# (TCGETS, TIOCMGET, ...) is not a write.
+_TTY_SETS = frozenset(getattr(__import__("termios"), n) for n in (
+    "TCSETS", "TCSETSW", "TCSETSF", "TCSETA", "TCSETAW", "TCSETAF", "TCFLSH", "TCXONC", "TCSBRK",
+    "TCSBRKP", "TIOCSWINSZ", "TIOCMSET", "TIOCMBIS", "TIOCMBIC", "TIOCEXCL", "TIOCNXCL",
+    "TIOCSCTTY", "TIOCSTI", "TIOCSBRK", "TIOCCBRK", "TIOCSSERIAL", "TIOCSETD")
+    if hasattr(__import__("termios"), n))
 _READ_ONLY_GIT = {"rev-parse", "status", "rev-list", "describe", "log", "show", "ls-files"}
 
 
@@ -390,6 +398,7 @@ def _trace_writes(fn, root, dev, fake, monkeypatch):
     `exec:`/`kill:` for a command that is not a known read or a signal other than 0 (kill,
     killpg)."""
     import builtins
+    import fcntl
     import io
     import subprocess
     import termios
@@ -471,6 +480,14 @@ def _trace_writes(fn, root, dev, fake, monkeypatch):
             return f(self, args, *a, **k)
         return g
 
+    def w_ioctl(f):                 # only a tty request that changes the device
+        def g(fd, request, *a, **k):
+            if request in _TTY_SETS:
+                p = _fd_path(fd)
+                out.add(_RECEIVER if p == dev else f"termios:{p}")
+            return f(fd, request, *a, **k)
+        return g
+
     def w_tcset(f):
         def g(fd, when, attrs):
             p = _fd_path(fd)
@@ -498,6 +515,7 @@ def _trace_writes(fn, root, dev, fake, monkeypatch):
         m.setattr(os, "killpg", w_kill(os.killpg))
         m.setattr(subprocess.Popen, "__init__", w_popen(subprocess.Popen.__init__))
         m.setattr(termios, "tcsetattr", w_tcset(termios.tcsetattr))
+        m.setattr(fcntl, "ioctl", w_ioctl(fcntl.ioctl))
         try:
             fn()
         except Exception as exc:                            # writes before it still count
@@ -536,10 +554,18 @@ _DRIVE_KW = {"log_tail": {"job": "rf-meshtastic.log"}, "rflog_records": {"lines"
 
 
 def _drive(svc, name):
-    """Call one neutral entry with a value for each required parameter; None if not callable."""
+    """A call of one neutral entry with a value for each required parameter. Nothing of the entry
+    runs here: a method is looked up without its descriptor running, and a property is READ by the
+    returned call, so a getter that writes runs inside the trace. Any other kind of entry (a
+    callable object, a partial, a builtin, a cached_property) fails here, naming it: the trace
+    could not prove what it does."""
+    entry = inspect.getattr_static(svc, name)
+    if isinstance(entry, property):
+        return lambda: getattr(svc, name)
+    assert isinstance(entry, (types.FunctionType, staticmethod, classmethod)), (
+        f"{name}: a {type(entry).__name__} entry — make it a method or a property so the trace "
+        "can drive it")
     fn = getattr(svc, name)
-    if not callable(fn):
-        return None
     args = _drive_args(svc)
     kw = {}
     for p in inspect.signature(fn).parameters.values():
@@ -576,9 +602,6 @@ def test_every_traced_write_is_classified(tmp_path, receiver, monkeypatch):
     for name in sorted(set(SNAPSHOT_NEUTRAL) - _READ_PATH_WRITERS):
         svc, root, fake = _live(tmp_path / name, receiver, monkeypatch)
         call = _drive(svc, name)
-        if call is None:
-            assert SNAPSHOT_NEUTRAL[name] == "read-only", name   # a property: nothing to call
-            continue
         writes, err = _trace_writes(call, root, receiver, fake, monkeypatch)
         if err is not None:
             raised.append((name, repr(err)))
@@ -818,3 +841,40 @@ def test_the_write_trace_catches_a_mislabelled_writer(tmp_path, receiver, monkey
     w, _err = _trace_writes(_drive(svc, "gps_monitor"), root, receiver, fake, monkeypatch)
     globs = snapshot_memo.SNAPSHOT_NEUTRAL_WRITERS.get("gps_monitor", ())
     assert [x for x in w if not any(_matches(x, g) for g in globs)]
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc/self/fd")
+def test_the_write_trace_catches_a_writing_property(tmp_path, receiver, monkeypatch):
+    # A neutral entry that is a property is read INSIDE the trace: a getter that writes is
+    # reported, never read before the trace starts and then skipped as "nothing to call".
+    svc, root, fake = _live(tmp_path, receiver, monkeypatch)
+
+    def getter(self):
+        with open(os.path.join(root, "state", "written-by-a-getter"), "w") as fh:
+            fh.write("x")
+        return "value"
+    monkeypatch.setattr(ControllerService, "writing_getter", property(getter), raising=False)
+    writes, err = _trace_writes(_drive(svc, "writing_getter"), root, receiver, fake, monkeypatch)
+    assert err is None and writes == {"state/written-by-a-getter"}
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc/self/fd")
+@pytest.mark.parametrize("request_name, expected", [("TCSETS", {_RECEIVER}), ("TCGETS", set())])
+def test_the_write_trace_catches_a_mutating_tty_ioctl(tmp_path, receiver, monkeypatch,
+                                                     request_name, expected):
+    # The receiver's tty mode set through fcntl.ioctl (TCSETS), not termios.tcsetattr, is a write;
+    # the read (TCGETS) alone is not.
+    import fcntl
+    import termios
+    svc, root, fake = _live(tmp_path, receiver, monkeypatch)
+
+    def set_mode():
+        fd = os.open(receiver, os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
+        try:
+            mode = fcntl.ioctl(fd, termios.TCGETS, bytes(64))
+            if request_name != "TCGETS":
+                fcntl.ioctl(fd, getattr(termios, request_name), mode)
+        finally:
+            os.close(fd)
+    writes, err = _trace_writes(set_mode, root, receiver, fake, monkeypatch)
+    assert err is None and writes == expected
