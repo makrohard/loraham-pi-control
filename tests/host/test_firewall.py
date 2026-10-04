@@ -1878,13 +1878,25 @@ def test_reapply_notice_only_for_a_stale_helper(tmp_path, monkeypatch, remote):
     assert "before you reboot" in note["text"]
     assert ("LOOPBACK-ONLY" in note["text"]) is remote
     apply_sh = svc._paths.under("config/files/firewall/firewall-apply.sh")
-    assert note["commands"][0] == f"sudo bash {apply_sh}"
+    assert note["commands"][:2] == ["lhpc firewall --script > /dev/null", f"sudo bash {apply_sh}"]
     assert note["commands"][-1] == "lhpc webserver apply"
     # Before the restarted console reconciled, the script on disk embeds the OLD helper: re-render
     # it with the new code first.
     _os.makedirs(svc._paths.under("state"), exist_ok=True)
     svc._fw_mark_post_update()
     note = svc.firewall_reapply_notice()
+    assert note["commands"][:2] == ["lhpc firewall --script > /dev/null", f"sudo bash {apply_sh}"]
+
+
+def test_reapply_notice_rerenders_first_without_the_post_update_marker(tmp_path, monkeypatch):
+    """A stale helper with NO post-update marker (the checkout moved outside the updater, or an
+    update made by an earlier release, whose failed render dropped the marker): the apply script
+    on disk may still embed the old helper, so the notice lists the re-render before the apply,
+    or the re-apply installs the old helper again."""
+    svc = _svc_stale_helper(tmp_path, monkeypatch, remote=True)
+    assert not svc._marker_present("state/firewall-postupdate.pending")
+    note = svc.firewall_reapply_notice()
+    apply_sh = svc._paths.under("config/files/firewall/firewall-apply.sh")
     assert note["commands"][:2] == ["lhpc firewall --script > /dev/null", f"sudo bash {apply_sh}"]
 
 

@@ -717,10 +717,10 @@ class FirewallOpsMixin:
         text = (f"{why[0].upper()}{why[1:]} — re-apply the firewall before you reboot"
                 + ("; until then a reboot starts the console LOOPBACK-ONLY (remote access off)."
                    if remote else "."))
-        # Until the restarted console has reconciled, the apply script on disk still embeds the
-        # OLD helper — re-render it with this (new) code first, or the re-apply changes nothing.
-        stale = self._marker_present(_FW_POSTUPDATE_MARKER)
-        cmds = (["lhpc firewall --script > /dev/null"] if stale else []) + self._fw_apply_lines()
+        # The apply script on disk may still embed the OLD helper (no reconcile yet, a failed one,
+        # or code changed outside the updater) — re-render it with this code first, or the
+        # re-apply changes nothing. Rendering is idempotent, so it is always listed.
+        cmds = ["lhpc firewall --script > /dev/null", *self._fw_apply_lines()]
         return {"why": why, "text": text, "remote": remote, "commands": cmds}
 
     def _narrowing_is_console_removal_only(self) -> bool:
