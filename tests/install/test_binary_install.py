@@ -1720,3 +1720,26 @@ def test_update_to_the_installed_artifact_downloads_nothing(
     if not downloads:
         assert res.ok and res.data["changes"] == 0
         assert bi.read_journal(svc._paths)[1] == "absent"
+
+
+@pytest.mark.parametrize("missing", ["no asset for the stack", "another target"])
+def test_update_without_a_published_binary_names_the_source_channel(
+        tmp_path, monkeypatch, binary_receipt, stub_pipeline, missing):
+    """The release has no artifact for this stack, or only one for another target: the update
+    changes nothing and names the source-channel install."""
+    import dataclasses
+    svc = _svc(tmp_path, monkeypatch)
+    rec = binary_receipt(svc)
+    entry = stub_pipeline(svc)
+    if missing == "no asset for the stack":
+        monkeypatch.setattr(bi, "index_entry", lambda idx, sid: (_ for _ in ()).throw(
+            bi.BinaryInstallError(f"no binary is published for '{sid}'")))
+    else:
+        monkeypatch.setattr(bi, "index_entry",
+                            lambda idx, sid: dataclasses.replace(entry(sid), target="armv6-other"))
+    res = svc.update("daemon", apply=True, source="binary")
+    assert not res.ok
+    assert res.next_commands == ["lhpc install daemon --source pinned --yes"]
+    assert brx.receipt_state(svc._paths, "daemon")[0] == "valid"        # nothing changed
+    assert (tmp_path / rec.proof_paths[0]).read_bytes() == b"ELF"
+    assert bi.read_journal(svc._paths)[1] == "absent"
