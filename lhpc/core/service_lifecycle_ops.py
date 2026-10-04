@@ -3,6 +3,7 @@
 Mixin of ControllerService (state/constants on the facade). Adapters import lhpc.core.services only."""
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import os
@@ -37,6 +38,13 @@ from .service_base import (
     busy_remedy,
 )
 from .snapshot_memo import invalidates_snapshot
+from .start_plan import (
+    StartRun,
+    prepare_start,
+    residual_reason,
+    rollback_ids,
+    verify_start,
+)
 
 # docs/architecture.md, SPI policy: the maintainer's wording, shown where the pair is admitted.
 SPI_SHARED_WARNING = ("daemon 433 and meshtastic 868 share one SPI bus; transmitting at the same "
@@ -45,15 +53,6 @@ SPI_SHARED_WARNING = ("daemon 433 and meshtastic 868 share one SPI bus; transmit
 # A HMAC-apply build-log base is a strict controller-generated prefix bound to the FULL 32-hex run id;
 # validated in build() BEFORE any path is constructed (marker-time validation alone is too late).
 _HMAC_LOG_BASE_RE = _re.compile(r"^hmac-apply-[0-9a-f]{32}$")
-
-
-def rollback_ids(results, keep=()) -> list[str]:
-    """Ids of the components a start launched and verified (its `start` rows reading VERIFIED),
-    last started first: what a FAILED start stops again. An ALREADY_HEALTHY row ran before that
-    start and is never in it; `keep` names rows whose VERIFIED does not mean the start launched
-    the process (the daemon's ensure row reads VERIFIED for a band that was already served)."""
-    return [r.component for r in reversed(list(results))
-            if r.action == "start" and r.outcome is Outcome.VERIFIED and r.component not in keep]
 
 
 def _daemon_presence(cmdlines) -> str:
@@ -723,132 +722,109 @@ class LifecycleOpsMixin:
                                                 position_note)[0]) is not None:
                 return _r
             return self._start_impl(target, apply=False, stop_owners=stop_owners, band=band)
-        # LOCK ORDER #1: task admission is acquired FIRST — outside the config-stability guard and
-        # BEFORE every mutation — so a start refused by a pending self-update/uninstall changes
-        # NOTHING. The inner _lifecycle_guard reuses this admission reentrantly.
+        # The guards: admission FIRST (outside the config-stability guard and before every
+        # mutation, so a start refused by a pending self-update/uninstall changes NOTHING), then
+        # config stability, then the lifecycle/resource bundle.
         try:
-            with self._admission_guard("start", target):
-                # ONE effective band for the WHOLE operation, resolved ONCE under admission and
-                # never recomputed (planning/locks used the raw band while the inner
-                # launch resolved the running band; then the identity save and this resolution
-                # each read the mutable interactive marker, so a dismiss in the window could store
-                # the identity on 868 and launch on 433). "" only for bandless stacks, which the
-                # inner path cannot reinterpret.
-                _op_band = self.operation_band(target, band)
-                with self._config_stable():
-                    # The daemon's REQUESTED radio mode determines which bands the lock bundle covers.
-                    _order, _radio = self._order_radio(target, _op_band)
-                    # Carried down from restart, which took the snapshot before its stop — so the
-                    # "started without a position" note is not lost on the way through.
-                    _pos_note = position_note
-                    try:
-                        with self._lifecycle_guard("start", target, _op_band,
-                                                   stop_owners=stop_owners, radio=_radio):
-                            # IDENTITY ENFORCEMENT: FIRST refusal under the stable configuration,
-                            # BEFORE the GPS snapshot, the boot-restore hook and feed clearing —
-                            # a start with a missing/invalid identity must mutate NOTHING.
-                            # The inner check remains as the authoritative backstop for direct
-                            # internal callers.
-                            # MESHCORE POSITION SNAPSHOT: the one position decision of this start.
-                            # Taken under every lock but BEFORE the boot hook, feed clearing and
-                            # any other mutation, because it can legitimately refuse the start
-                            # (reads saved config only) — and only when there is something to
-                            # start. `position` is passed down rather than re-queried, so a
-                            # restart asks exactly once.
-                            _r, position, _pos_note = self._start_outer_refusal(
-                                target, _order, _op_band, _radio, position, _pos_note)
-                            if _r is not None:
-                                return _r
-                            # BOOT-RESTORE CLAIM HOOK: runs with EVERY lock held, before any
-                            # mutation. A refusal cancels the start with zero side effects.
-                            if _before_start_locked is not None:
-                                _hook_refusal = _before_start_locked()
-                                if _hook_refusal is not None:
-                                    return _hook_refusal
-                            # Clear the RX/TX window at the start boundary (BEFORE any spawn), SCOPED
-                            # to this operation's band set — the SAME set the lock bundle covers
-                            # (never a broader recompute): a 433 client clears 433 only, an
-                            # all-active daemon start clears every arbitrated band, a non-radio
-                            # start clears nothing. Under the guard + after the hook, so a cancelled
-                            # restore attempt mutates NOTHING.
-                            for _b in sorted(self._operation_bands(target, _op_band, _radio,
-                                                                   "start")):
-                                self.clear_daemon_feed(_b)
-                            # The IMMUTABLE resolved band travels into the applied inner
-                            # path — never the raw argument the inner hint could re-resolve
-                            # differently after a marker change.
-                            _res = self._start_impl(target, apply=True,
-                                                    stop_owners=stop_owners, band=_op_band,
-                                                    position=position, position_note=_pos_note)
-                            # An OPERATOR stack start that actually brought something up
-                            # supersedes any standing stop intent. Three refinements:
-                            # a REFUSED start (nothing launched) must NOT clear; a PARTIAL start
-                            # (e.g. manual_required on an interactive component, ok=False but
-                            # components launched) MUST clear — the stack is running, a stale
-                            # tombstone would skip-and-prune it at the next boot; and an INTERNAL
-                            # start (auto-install's daemon ensure, _operator=False) must not
-                            # clear an operator's tombstone its paired internal stop never rewrites.
-                            # ...and, like the stop side, only rows of the TARGET stack count
-                            # (the daemon's always-appended VERIFIED ensure
-                            # row cleared the target's tombstone when nothing of the target
-                            # launched at all). A component a FAILED start stopped again reads
-                            # its stop outcome (`_roll_back_start`), so it does not count either.
-                            if (_operator and self.stack(target) is not None
-                                    and (_res.ok
-                                         or any(r.action == "start" and r.outcome in
-                                                (Outcome.STARTED, Outcome.VERIFIED,
-                                                 Outcome.ALREADY_HEALTHY)
-                                                and (self.stack_of(r.component) or r.stack)
-                                                == target
-                                                for r in (_res.results or ())))):
-                                self._clear_stop_intent(target)
-                            return _res
-                    except SourceTxnBlocked as blocked:
-                        return ActionResult(False, f"Cannot start '{target}': {blocked}",
-                                            next_commands=[f"lhpc status {target}"])
-                    except reslock.ResourceBusy as busy:
-                        return ActionResult(False, f"Cannot start '{target}': {busy}",
-                                            next_commands=[f"lhpc status {target}"])
-        except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
-        except reslock.ResourceBusy as busy:
-            return ActionResult(False, f"Cannot start '{target}': {busy}",
-                                next_commands=[f"lhpc status {target}"])
-        except SourceTxnBlocked as blocked:
-            # The config-stability guard itself was busy (e.g. an auto-install run holds config
-            # EXCLUSIVE for its whole lifetime) — refuse typed rather than hang or crash.
-            return ActionResult(False, f"Cannot start '{target}': {blocked}",
-                                next_commands=[f"lhpc status {target}"])
-        except (OSError, PathContainmentError) as exc:
-            return ActionResult(False, f"Cannot start '{target}': configuration guard unavailable "
+            with self._admit_and_acquire_guards("start", target, band,
+                                                stop_owners) as (_op_band, _order, _radio):
+                # The outer recheck under every lock: identity enforcement
+                # FIRST, then the MeshCore position snapshot (the one position decision of this
+                # start, passed down rather than re-queried, so a restart asks exactly once) —
+                # before the boot-restore claim, the feed clearing and any other mutation.
+                # The inner PREPARE remains the authoritative backstop for direct callers.
+                _r, position, _pos_note = self._start_outer_refusal(
+                    target, _order, _op_band, _radio, position, position_note)
+                if _r is not None:
+                    return _r
+                # BOOT-RESTORE CLAIM HOOK: every lock held, nothing mutated yet. A refusal
+                # cancels the start with zero side effects.
+                if _before_start_locked is not None:
+                    _hook_refusal = _before_start_locked()
+                    if _hook_refusal is not None:
+                        return _hook_refusal
+                # The feed-floor reset — known defect T1-F1: this write (like the claim above)
+                # precedes the inner PREPARE. The RX/TX window is cleared at the start boundary
+                # (BEFORE any spawn), SCOPED to the band set the lock bundle covers: a 433
+                # client clears 433 only, an all-active daemon start every arbitrated band, a
+                # non-radio start nothing.
+                for _b in sorted(self._operation_bands(target, _op_band, _radio, "start")):
+                    self.clear_daemon_feed(_b)
+                # The launch's five phases (`_start_coordinator`), on the IMMUTABLE resolved
+                # band — never the raw argument a marker change could re-resolve differently.
+                _res = self._start_impl(target, apply=True, stop_owners=stop_owners,
+                                        band=_op_band, position=position, position_note=_pos_note)
+                # The operator's stop intent, from the launch's result.
+                if _operator and self._start_supersedes_stop_intent(target, _res):
+                    self._clear_stop_intent(target)
+                return _res
+        except (AdmissionRefused, reslock.ResourceBusy, SourceTxnBlocked, OSError,
+                PathContainmentError) as exc:
+            return self._guard_refusal("start", target, exc)
+
+    @contextlib.contextmanager
+    def _admit_and_acquire_guards(self, op: str, target: str, band: str, stop_owners: bool):
+        """The guards of an applied start: task admission → config stability → the lifecycle/
+        resource bundle (LOCK ORDER), yielding `(op_band, order, radio)` resolved between them.
+        ONE effective band for the WHOLE operation, resolved ONCE under admission and never
+        recomputed (a dismiss of the interactive marker in a later window must not move it); ""
+        only for a bandless stack. The daemon's REQUESTED radio, read under config stability,
+        decides which bands the bundle covers. Raises what the guards raise
+        (`_guard_refusal` types it)."""
+        with self._admission_guard(op, target):
+            op_band = self.operation_band(target, band)
+            with self._config_stable():
+                order, radio = self._order_radio(target, op_band)
+                with self._lifecycle_guard(op, target, op_band, stop_owners=stop_owners,
+                                           radio=radio):
+                    yield op_band, order, radio
+
+    def _start_supersedes_stop_intent(self, target: str, res: ActionResult) -> bool:
+        """Whether an OPERATOR stack start ends a standing stop intent. A REFUSED start (nothing
+        launched) does not; a PARTIAL start (e.g. manual_required on an interactive component,
+        ok=False but components launched) does — the stack is running, a stale tombstone would
+        skip-and-prune it at the next boot. Only rows of the TARGET stack count (the daemon's
+        always-appended VERIFIED ensure row cleared the target's tombstone when nothing of the
+        target launched at all), and a component a FAILED start stopped again reads its stop
+        outcome (`_roll_back_start`), so it does not count either. An INTERNAL start
+        (auto-install's daemon ensure, `_operator=False`) is not asked: it must not clear an
+        operator's tombstone its paired internal stop never rewrites."""
+        return self.stack(target) is not None and (
+            res.ok or any(r.action == "start" and r.outcome in
+                          (Outcome.STARTED, Outcome.VERIFIED, Outcome.ALREADY_HEALTHY)
+                          and (self.stack_of(r.component) or r.stack) == target
+                          for r in (res.results or ())))
+
+    @staticmethod
+    def _guard_refusal(op: str, target: str, exc: BaseException) -> ActionResult:
+        """The typed refusal of a start/restart whose guard could not be taken or held, or whose guarded
+        body failed with an OSError/PathContainmentError (mapped to "configuration guard unavailable",
+        as before): a refused admission (typed `admission_blocked`), a busy lock or source-txn block."""
+        if isinstance(exc, AdmissionRefused):
+            return ActionResult(False, exc.reason, data={'admission_blocked': exc.tag})
+        if isinstance(exc, (OSError, PathContainmentError)):
+            return ActionResult(False, f"Cannot {op} '{target}': configuration guard unavailable "
                                 f"({exc})", next_commands=[f"lhpc status {target}"])
+        return ActionResult(False, f"Cannot {op} '{target}': {exc}",
+                            next_commands=[f"lhpc status {target}"])
 
     def _start_impl(self, target: str, apply: bool = False, stop_owners: bool = False,
                     band: str = "", position: dict | None = None,
                     position_note: str = "") -> ActionResult:
         """Applied starts run under the configuration-stability guard so saved config is a stable
         snapshot from the first read through generation/launch/post-start — a direct/internal
-        apply=True call cannot bypass it. Dry-run holds no long-lived guard. A guard/read failure is
+        apply=True call cannot skip it. Dry-run holds no long-lived guard. A guard/read failure is
         a TYPED failure returned BEFORE any lifecycle side effect."""
         if not apply:
-            return self._start_impl_inner(target, apply=False, stop_owners=stop_owners,
-                                          band=band, position=position,
-                                          position_note=position_note)
+            prep = self._prepare_from_fresh_evidence(target, band, stop_owners, position,
+                                                     position_note, apply=False)
+            return prep if isinstance(prep, ActionResult) else self._start_preview(prep)
         try:
-            with self._config_stable():                          # re-entrant (no-op if start() holds it)
-                return self._start_impl_inner(target, apply=True, stop_owners=stop_owners,
-                                              band=band, position=position,
-                                              position_note=position_note)
-        except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
-        except SourceTxnBlocked as blocked:
-            # The config-stability guard itself was busy (e.g. an auto-install run holds config
-            # EXCLUSIVE for its whole lifetime) — refuse typed rather than hang or crash.
-            return ActionResult(False, f"Cannot start '{target}': {blocked}",
-                                next_commands=[f"lhpc status {target}"])
-        except (OSError, PathContainmentError) as exc:
-            return ActionResult(False, f"Cannot start '{target}': configuration guard unavailable "
-                                f"({exc})", next_commands=[f"lhpc status {target}"])
+            return self._start_coordinator(target, stop_owners, band, position, position_note)
+        except (AdmissionRefused, SourceTxnBlocked, OSError, PathContainmentError) as exc:
+            # The config-stability guard itself busy (e.g. an auto-install run holds config
+            # EXCLUSIVE for its whole lifetime) — refused typed rather than hang or crash.
+            return self._guard_refusal("start", target, exc)
 
     def _global_operator_callsign(self) -> str:
         """The stored global operator callsign, or "" — used to identify a transmission from a
@@ -903,8 +879,9 @@ class LifecycleOpsMixin:
         component whose stack main is gui_optional): refused before ANY side effect — the
         boot hook, feed clearing, owner stops, daemon ensure and the already-healthy
         shortcut all come later, and none of them may run for a target whose start can only
-        ever be refused. Guards the public entry AND _start_impl_inner, so internal callers
-        (restart, boot restore) are covered too. Returns None for every other target."""
+        ever be refused. Guards the public entry AND the start PREPARE
+        (`_prepare_from_fresh_evidence`), so internal callers (restart, boot restore) are
+        covered too. Returns None for every other target."""
         if self.stack(target) is not None:
             return None
         for stack in self.stacks():
@@ -923,9 +900,54 @@ class LifecycleOpsMixin:
                 return None
         return None
 
-    def _start_impl_inner(self, target: str, apply: bool = False, stop_owners: bool = False,
-                          band: str = "", position: dict | None = None,
-                          position_note: str = "") -> ActionResult:
+    def _start_coordinator(self, target: str, stop_owners: bool, band: str,
+                           position: dict | None, position_note: str) -> ActionResult:
+        """THE APPLIED START as its five phases in order. PHASE 1 here is the configuration-
+        stability guard, re-entrant: the public `start` already holds admission, config
+        stability and the lifecycle bundle; a direct `_start_impl` apply holds this one only.
+        Each destructive step, its precondition and its failure outcome:
+          * PREPARE (`_prepare_from_fresh_evidence`) itself calls no stop, spawn or config-file
+            generation (its firewall gate renders the FW-R8 apply script); it
+            refuses, or returns the already-healthy no-op, before any stop or spawn.
+          * EXECUTE (`_execute_start`): conflicting owners are stopped (`stop_owners`) — one that
+            does not verify stopped refuses the start with nothing of the target launched; then
+            the daemon ensure and, per component in run order, its gates, config files,
+            pre-steps / interactive marker, RF-log roll, spawn, readiness, post-start and
+            running-band marker. A component that fails its readiness, post-start or marker
+            check is stopped again on the spot (typed UNVERIFIED).
+          * VERIFY (`verify_start`) decides the outcome from the typed outcomes alone.
+          * A FAILED start rolls back what it launched (`_roll_back_start`).
+          * FINALIZE (`_finalize_start`) clears only the state this start satisfied.
+        Before this runs, the public `start` takes its guards, its outer recheck (identity,
+        MeshCore position), the boot-restore claim and the feed-floor reset — known defect
+        T1-F1: those two writes precede this PREPARE."""
+        with self._config_stable():                                             # PHASE 1
+            prep = self._prepare_from_fresh_evidence(target, band, stop_owners, position,
+                                                     position_note, apply=True)  # PHASE 2
+            if isinstance(prep, ActionResult):
+                return prep                 # a refusal, or the already-healthy no-op
+            run = self._execute_start(prep)                                     # PHASE 3
+            if isinstance(run, ActionResult):
+                return run                  # a conflicting owner did not verify stopped
+            failed, required_manual = verify_start(prep, run.results,
+                                                   run.presented)               # PHASE 4
+            if failed:
+                # ROLL BACK (finding 64): a failed start stops again what IT launched — or a
+                # typed row names what stayed up and why. A start blocked only on a manual step
+                # (chat's TUI) is not failed and keeps its daemon up for the operator.
+                run.out += self._roll_back_start(run.life, prep.order, run.results,
+                                                 prep.cfg_band, run.daemon_launched)
+            return self._finalize_start(prep, run, failed, required_manual)       # PHASE 5
+
+    def _prepare_from_fresh_evidence(self, target: str, band: str, stop_owners: bool,
+                                     position: dict | None, position_note: str, *,
+                                     apply: bool):
+        """PHASE 2 PREPARE: every input of the start resolved once from the saved configuration — on
+        the apply under the stability guard `_start_coordinator` takes first, on the plan (`_start_impl`,
+        `apply=False`) without it — and the launch's refusals, before its first stop or spawn: the
+        PreparedStart, or the ActionResult that ends the start here. The plan stops after the checks it
+        shares with the apply; the apply adds the already-healthy no-op and the preflight (firewall gate,
+        which renders the FW-R8 apply script; ambiguity; band owners unless `stop_owners`)."""
         order = self._run_order(target)
         if order is None:
             return ActionResult(False, f"Unknown stack or component '{target}'.",
@@ -934,11 +956,6 @@ class LifecycleOpsMixin:
             return _r
         if (_r := self._meshcore_mode_refusal(target)) is not None:
             return _r
-        # Ownership scope of THIS public operation: recorded on every launch it causes
-        # (incl. an ensured daemon), threaded EXPLICITLY — never ambient/thread-local. A
-        # component-scoped start must never be widened into a whole-stack boot restore.
-        _req_target = target
-        _req_scope = "stack" if self.stack(target) is not None else "component"
         if (_r := self._start_static_refusal(target, "start")) is not None:
             return _r
         # Band-switchable stack: resolve the chosen band (default = first allowed).
@@ -978,7 +995,6 @@ class LifecycleOpsMixin:
         _dep_block = self._dep_band_block(target, order, band or cfg_band)
         if _dep_block is not None:
             return _dep_block
-        life = self._lifecycle()
         radio, tx = self._daemon_needs(order, op_band)
         # The stack whose daemon params to apply once the daemon is up (a direct component target
         # resolves to its owning stack).
@@ -1001,80 +1017,18 @@ class LifecycleOpsMixin:
         # before owner stops or config generation (a restart preflights the same check).
         if (_cfg_err := self._saved_launch_refusal(target, band, "start")) is not None:
             return _cfg_err
+        prep = prepare_start(
+            target=target, band=band, cfg_band=cfg_band, op_band=op_band, order=order,
+            radio=radio, tx=tx, start_sid=start_sid, target_is_stack=self.stack(target) is not None,
+            params=params, file_over=file_over, position=position, position_note=position_note,
+            stop_owners=stop_owners)
         if not apply:
-            details = []
-            commands = []   # copyable commands the operator must run themselves
-            for _stack, comp in order:
-                if comp.id == self.DAEMON_ID:
-                    kept, owned = self._daemon_arbitrated_bands(radio)
-                    if owned:
-                        served = "+".join(kept) if kept else "none"
-                        skips = ", ".join(f"{b} owned by {owned[b]}" for b in sorted(owned))
-                        details.append(f"  [daemon] start/ensure --radio {served} ({skips} — skipped)"
-                                       + (f", TXMODE={tx}" if tx else ""))
-                    else:
-                        details.append(f"  [daemon] start/ensure --radio {radio or 'all bands'}"
-                                       + (f", TXMODE={tx}" if tx else ""))
-                elif comp.interactive:
-                    # The PLAN obeys the same fallback policy as the apply path: where the
-                    # GUI main is usable, voice's terminal variant is not offered — neither
-                    # the CLI plan nor the web may render its command.
-                    _st = self.stack_of(comp.id)
-                    _stk = self.stack(_st) if _st else None
-                    _m = (next((c for c in _stk.components if c.id == _stk.main), None)
-                          if _stk else None)
-                    if (comp.id != getattr(_stk, "main", None)
-                            and _m is not None and _m.gui_optional
-                            and not self.gui_fallback_active(_stk)):
-                        details.append(f"  [skip] {comp.id}: {_stk.main} runs on this box — "
-                                       "the terminal variant is the fallback for boxes "
-                                       "without a graphical environment")
-                        continue
-                    cmd = self.manual_start_command(comp)
-                    details.append(f"  [manual] {comp.id} is interactive — the daemon is "
-                                   "ensured, then run it yourself in a terminal:")
-                    details.append(f"    {cmd}")
-                    commands.append(cmd)
-                elif comp.units and not comp.run_argv:
-                    cmd = f"sudo systemctl start {comp.units[0].name}"
-                    details.append(f"  [manual] {comp.id} is a system service — start it with:")
-                    details.append(f"    {cmd}")
-                    commands.append(cmd)
-                elif comp.gui_optional and (
-                        comp.id in self.gui_unavailable_components(_stack)
-                        or (self.needs_display(comp) and not self.display_available())):
-                    # The apply types this component SKIPPED (no GUI toolkit or no display) —
-                    # the same predicate the already-healthy check uses — so the plan must not
-                    # promise to start it.
-                    details.append(f"  [skip] {comp.id}: GUI component — not applicable on this "
-                                   "box (no graphical toolkit or display)")
-                else:
-                    details.append(f"  [start] {comp.id} (band {cfg_band or comp.band or '-'})")
-            # The apply's firewall gate and ambiguity refusal, behind the apply's own healthy
-            # shortcut; blockers stay plan details (the web's owner-confirm flow reads them).
-            if not self._order_already_healthy(order, radio) and (
-                    _r := self._start_preflight_refusal(target, order, band, radio, "start",
-                                                        check_blockers=False,
-                                                        render=False)) is not None:
-                return _r
-            blockers = self.run_blockers(target, band, radio)
-            for bl in blockers:
-                details.append(f"  [conflict] {bl['resource']} is held by running stack "
-                               f"'{bl['holder_stack']}' ({bl['holder']})")
-            if not blockers and (_spi := self._spi_shared_warning(target, band, radio)):
-                details.append(f"  [warning] {_spi}")
-            return ActionResult(True, f"Run plan for '{target}': {len(order)} component(s) in order.",
-                                details=details,
-                                next_commands=[f"lhpc stack start {target}"
-                                               + (f" --band {band}" if band else "") + " --yes"],
-                                data={"changes": len(order), "blockers": blockers,
-                                      "commands": commands})
-
+            return prep
         # No-side-effect Start FIRST — BEFORE any owner handling: if EVERY requested component is
         # already healthy, return ALREADY_HEALTHY immediately. Never run blockers for mutation,
         # never stop owners (even with stop_owners=True), never launch/write config/apply params/
         # CONF SET/touch markers for an already-healthy target.
-        if apply and self._order_already_healthy(order, radio):
+        if self._order_already_healthy(order, radio):
             # Only components the health predicate actually JUDGED may be reported
             # 'already running': a non-main interactive component was satisfied by its
             # marker (its command was presented — nothing is running under lhpc), and a
@@ -1109,7 +1063,100 @@ class LifecycleOpsMixin:
                                                 check_blockers=not stop_owners,
                                                 render=True)) is not None:
             return _r
-        blockers = self.run_blockers(target, band, radio) if stop_owners else []
+        return prep
+
+    def _start_preview(self, prep) -> ActionResult:
+        """The start PLAN from the prepared start: what the apply would do, per component, plus
+        the apply's firewall gate and ambiguity refusal behind its healthy shortcut and the
+        running holders as `[conflict]` details. Advisory only: the apply decides everything
+        again under its own guards and never reads this result."""
+        target, band, order, radio, tx, cfg_band = (prep.target, prep.band, prep.order,
+                                                    prep.radio, prep.tx, prep.cfg_band)
+        details = []
+        commands = []   # copyable commands the operator must run themselves
+        for _stack, comp in order:
+            if comp.id == self.DAEMON_ID:
+                kept, owned = self._daemon_arbitrated_bands(radio)
+                if owned:
+                    served = "+".join(kept) if kept else "none"
+                    skips = ", ".join(f"{b} owned by {owned[b]}" for b in sorted(owned))
+                    details.append(f"  [daemon] start/ensure --radio {served} ({skips} — skipped)"
+                                   + (f", TXMODE={tx}" if tx else ""))
+                else:
+                    details.append(f"  [daemon] start/ensure --radio {radio or 'all bands'}"
+                                   + (f", TXMODE={tx}" if tx else ""))
+            elif comp.interactive:
+                # The PLAN obeys the same fallback policy as the apply path: where the
+                # GUI main is usable, voice's terminal variant is not offered — neither
+                # the CLI plan nor the web may render its command.
+                _st = self.stack_of(comp.id)
+                _stk = self.stack(_st) if _st else None
+                _m = (next((c for c in _stk.components if c.id == _stk.main), None)
+                      if _stk else None)
+                if (comp.id != getattr(_stk, "main", None)
+                        and _m is not None and _m.gui_optional
+                        and not self.gui_fallback_active(_stk)):
+                    details.append(f"  [skip] {comp.id}: {_stk.main} runs on this box — "
+                                   "the terminal variant is the fallback for boxes "
+                                   "without a graphical environment")
+                    continue
+                cmd = self.manual_start_command(comp)
+                details.append(f"  [manual] {comp.id} is interactive — the daemon is "
+                               "ensured, then run it yourself in a terminal:")
+                details.append(f"    {cmd}")
+                commands.append(cmd)
+            elif comp.units and not comp.run_argv:
+                cmd = f"sudo systemctl start {comp.units[0].name}"
+                details.append(f"  [manual] {comp.id} is a system service — start it with:")
+                details.append(f"    {cmd}")
+                commands.append(cmd)
+            elif comp.gui_optional and (
+                    comp.id in self.gui_unavailable_components(_stack)
+                    or (self.needs_display(comp) and not self.display_available())):
+                # The apply types this component SKIPPED (no GUI toolkit or no display) —
+                # the same predicate the already-healthy check uses — so the plan must not
+                # promise to start it.
+                details.append(f"  [skip] {comp.id}: GUI component — not applicable on this "
+                               "box (no graphical toolkit or display)")
+            else:
+                details.append(f"  [start] {comp.id} (band {cfg_band or comp.band or '-'})")
+        # The apply's firewall gate and ambiguity refusal, behind the apply's own healthy
+        # shortcut; blockers stay plan details (the web's owner-confirm flow reads them).
+        if not self._order_already_healthy(order, radio) and (
+                _r := self._start_preflight_refusal(target, order, band, radio, "start",
+                                                    check_blockers=False,
+                                                    render=False)) is not None:
+            return _r
+        blockers = self.run_blockers(target, band, radio)
+        for bl in blockers:
+            details.append(f"  [conflict] {bl['resource']} is held by running stack "
+                           f"'{bl['holder_stack']}' ({bl['holder']})")
+        if not blockers and (_spi := self._spi_shared_warning(target, band, radio)):
+            details.append(f"  [warning] {_spi}")
+        return ActionResult(True, f"Run plan for '{target}': {len(order)} component(s) in order.",
+                            details=details,
+                            next_commands=[f"lhpc stack start {target}"
+                                           + (f" --band {band}" if band else "") + " --yes"],
+                            data={"changes": len(order), "blockers": blockers,
+                                  "commands": commands})
+
+    def _execute_start(self, prep):
+        """PHASE 3 EXECUTE in explicit order: conflicting owners stopped (`stop_owners`; one that
+        does not verify stopped refuses here, before anything of the target runs), the process
+        observation taken, then per component in run order its gates (typed BLOCKED / SKIPPED /
+        MANUAL_REQUIRED), config files, pre-steps / interactive marker, RF-log roll, spawn — each
+        spawn followed at once by its readiness, post-start and running-band checks, a failed one
+        stopping that launch again (typed UNVERIFIED) — and last the stale interactive markers of
+        other stacks cleared. Returns the StartRun, or the refusal."""
+        target, band, order, radio = prep.target, prep.band, prep.order, prep.radio
+        cfg_band, position, start_sid = prep.cfg_band, prep.position, prep.start_sid
+        params, file_over = prep.params, prep.file_over
+        # Ownership scope of THIS public operation: recorded on every launch it causes
+        # (incl. an ensured daemon), threaded EXPLICITLY — never ambient/thread-local. A
+        # component-scoped start must never be widened into a whole-stack boot restore.
+        _req_target, _req_scope = target, prep.scope
+        life = self._lifecycle()
+        blockers = self.run_blockers(target, band, radio) if prep.stop_owners else []
         if blockers:
             owners = sorted({bl["holder_stack"] for bl in blockers})
             prelude = []
@@ -1163,7 +1210,7 @@ class LifecycleOpsMixin:
         # Config generation + launch config are COMPONENT-scoped so a direct component start never
         # writes a sibling's config nor leaks the target's run params into a dependency: each
         # component renders its OWN saved/default values (plus its own inherited identity).
-        _target_is_stack = self.stack(target) is not None
+        _target_is_stack = prep.target_is_stack
         # The successful-start tail cleared restart-required UNCONDITIONALLY, so a
         # save landing while the required post-start had released config stability had its warning
         # deleted by the very launch that did NOT apply it — saved config said B, the radio still
@@ -1530,43 +1577,19 @@ class LifecycleOpsMixin:
                           if cleanup.outcome == Outcome.STOPPED
                           else "cessation NOT verified — ownership retained"))
         self.clear_stale_interactive(keep=self.stack_of(target) or target)
-        # ok derives ENTIRELY from typed outcomes. A MANUAL_REQUIRED for an OPTIONAL
-        # component does not block; every other non-success outcome does. Two more
-        # accepted shapes joined with voice's terminal variant:
-        #   * a NON-MAIN interactive component can only ever be MANUAL_REQUIRED — its
-        #     card command is the expected outcome, and treating it as blocking would
-        #     flip a healthy desktop `start voice` (GTK VERIFIED) to ok=False. The MAIN
-        #     staying blocking preserves chat's manual-start presentation unchanged.
-        #   * a gui_optional component's display/headless SKIPPED is accepted like an
-        #     optional one — the stack is usable without it by design.
-        optional_ids = {c.id for _, c in order if c.optional}
-        gui_optional_ids = {c.id for _, c in order if c.gui_optional}
-        nonmain_interactive_ids = {c.id for s, c in order
-                                   if c.interactive and c.id != s.main}
-        def blocks(r):
-            if r.outcome in (Outcome.MANUAL_REQUIRED, Outcome.SKIPPED) \
-                    and r.component in optional_ids:
-                return False          # optional: a manual/headless skip is an accepted outcome
-            if r.outcome == Outcome.MANUAL_REQUIRED \
-                    and r.component in nonmain_interactive_ids \
-                    and r.component in presented:
-                # interactive sidecar whose command WAS presented: that IS the outcome.
-                # Other MANUAL_REQUIRED shapes (no marker/command presented) still block
-                # like any failure.
-                return False
-            if r.outcome == Outcome.SKIPPED and r.component in gui_optional_ids:
-                return False          # gui_optional: headless display-skip is accepted
-            return not r.ok
-        blocking = [r for r in results if blocks(r)]
-        required_manual = [r.component for r in blocking if r.outcome == Outcome.MANUAL_REQUIRED]
-        failed = [r.component for r in blocking if r.outcome != Outcome.MANUAL_REQUIRED]
-        ok = not blocking
+        return StartRun(out=out, results=results, presented=presented,
+                        daemon_launched=daemon_launched, life=life, pre_marker=_pre_marker)
+
+    def _finalize_start(self, prep, run, failed, required_manual) -> ActionResult:
+        """PHASE 5 FINALIZE: the summary from the verdict; on a successful STACK start the
+        last-start candidate composition and the restart-required marker — cleared only when this
+        launch satisfied it (unchanged since `execute` read it, and no component of the stack
+        kept running its old configuration); the position note; the SPI warning once the new
+        side came up."""
+        target, band, radio, out, results = (prep.target, prep.band, prep.radio, run.out,
+                                             run.results)
+        ok = not failed and not required_manual
         if failed:
-            # ROLL BACK (finding 64): a failed start stops again what IT launched, so nothing
-            # of its own is left running — or a typed row names what stayed up and why.
-            # A start blocked only on a manual step (chat's TUI) is not failed and keeps its
-            # daemon up for the operator.
-            out += self._roll_back_start(life, order, results, cfg_band, daemon_launched)
             summary = f"Run FAILED for '{target}': {', '.join(failed)} did not start/verify."
         elif required_manual:
             summary = (f"Run for '{target}': manual start required for "
@@ -1578,8 +1601,8 @@ class LifecycleOpsMixin:
         # record — the operator confirms it explicitly ("Confirm this stack as working").
         # A successful start also satisfies any restart-required flag: the processes now
         # run the saved config.
-        if ok and self.stack(target) is not None:
-            self._capture_start_composition(target, cfg_band)
+        if ok and prep.target_is_stack:
+            self._capture_start_composition(target, prep.cfg_band)
             # Clear ONLY a marker this launch actually satisfied. Two ways it can fail to:
             #   * CREATED or CHANGED while the required post-start ran unguarded — it describes
             #     configuration this launch never applied;
@@ -1592,12 +1615,12 @@ class LifecycleOpsMixin:
             _kept_old = any(r.outcome == Outcome.ALREADY_HEALTHY
                             and (self.stack_of(r.component) or r.stack) == target
                             for r in results)
-            if not _kept_old and self.restart_required(target) == _pre_marker:
+            if not _kept_old and self.restart_required(target) == run.pre_marker:
                 _rr.clear_marker(self._paths, target)
-        if position_note:
+        if prep.position_note:
             # `auto` could not get a fix. Never gating, but never silent either: the node is
             # on the air without a position and the operator has to be able to see that.
-            out = [*out, f"  [gps] {position_note}"]
+            out = [*out, f"  [gps] {prep.position_note}"]
         if ok and (_spi := self._spi_shared_warning(target, band, radio)):
             out = [*out, f"  [warning] {_spi}"]   # only once the new side came up
         return ActionResult(ok, summary, details=out, results=tuple(results),
@@ -1638,18 +1661,7 @@ class LifecycleOpsMixin:
         if daemon_launched and self.DAEMON_ID in by_id:
             residual = sorted(c.id for _, c in order
                               if c.id != self.DAEMON_ID and life.owned_records(c.id))
-            # Named by ORIGIN, from this start's own rows: one this start launched (rolled back,
-            # or left UNVERIFIED/FAILED by its own cleanup) is not verified stopped; any other
-            # ran before this start and was never asked to stop.
-            launched = set(rolled) | {r.component for r in results if r.action == "start"
-                                      and r.outcome in (Outcome.UNVERIFIED, Outcome.FAILED)}
-            left = [c for c in residual if c in launched]
-            kept = [c for c in residual if c not in launched]
-            why = "; ".join(w for w in (
-                f"{', '.join(left)} {'is' if len(left) == 1 else 'are'} not verified stopped"
-                if left else "",
-                f"{', '.join(kept)} still running (not started by this call)" if kept else "")
-                if w)
+            why = residual_reason(residual, rolled, results)
             for b in sorted(daemon_launched):
                 if residual:
                     cr = CompResult(component=self.DAEMON_ID, action="stop",
