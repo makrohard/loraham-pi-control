@@ -194,13 +194,22 @@ def _busy(svc, sp):
 
 def test_the_receipt_records_the_revision_read_under_the_locks(tmp_path, monkeypatch):
     """The dependency moves after the console spawned the build and before the build holds its
-    locks: the receipt records the revision the build consumed, not the one seen at spawn."""
+    locks: the receipt records the revision the build consumed, not the one seen at spawn — the
+    launcher reads every revision while it holds both sources' locks."""
     svc, root = _box(tmp_path, lambda: None)
     own, _at_spawn = _meshcore_sources(root)
-    moved = []
+    moved, held_at_read = [], []
+    real_read = blr._git_out
+
+    def read(argv):
+        held_at_read.append(_locked(svc))
+        return real_read(argv)
+    # Observes the collaborator, git, at the launcher's revision reads: which sources are locked.
+    monkeypatch.setattr(blr, "_git_out", read)
     _background(svc, "meshcore-node", monkeypatch,
                 before_run=lambda: moved.append(_commit(root / "src/openhop-repeater")))
     assert len(moved) == 1
+    assert held_at_read == [["src/openhop-core", "src/openhop-repeater"]] * 2
     assert (root / "src/openhop-core/.venv/.lhpc-build-complete").read_text() == (
         f"lhpc build complete\nconsumed meshcore-node {own}\n"
         f"consumed openhop-repeater-src {moved[0]}\n")
