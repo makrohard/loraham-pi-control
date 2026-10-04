@@ -211,6 +211,25 @@ def test_finalize_keeps_a_restart_marker_saved_during_the_launch(monkeypatch, ma
     assert cleared_for == (["s"] if cleared else [])
 
 
+@pytest.mark.parametrize("target, band", [("meshtastic", "868"), ("daemon", "433")])
+def test_a_successful_applied_start_beside_the_other_side_is_warned(monkeypatch, target, band):
+    """The plan's shared-SPI warning has its pair in the result: an applied start that came up
+    beside the other side of the bus carries the one `[warning]` line. The finalize step passes the
+    pair to the warning in both orders (asked with this start's own values); the direction decision
+    itself is `_spi_shared_warning`'s, covered by S5's tests in tests/core/test_run_order.py."""
+    monkeypatch.setattr(ops._rr, "clear_marker", lambda paths, t: None)
+    asked = []
+    me = _Self(_capture_start_composition=lambda t, b: None, stack_of=lambda c: target,
+               restart_required=lambda t: None, _paths=None,
+               _spi_shared_warning=lambda t, b, r: asked.append((t, b, r)) or ops.SPI_SHARED_WARNING)
+    run = StartRun(out=["  [verified] main: started"], results=[_row("main", Outcome.VERIFIED)],
+                   presented=set(), daemon_launched=set(), life=None, pre_marker=None)
+    res = M._finalize_start(me, _prep(target=target, band=band, radio=band, start_sid=target),
+                            run, [], [])
+    assert res.ok and f"  [warning] {ops.SPI_SHARED_WARNING}" in res.details, res.details
+    assert asked == [(target, band, band)]
+
+
 # ── the restart's legs ──
 
 def test_restart_preflight_refuses_before_any_stop():
