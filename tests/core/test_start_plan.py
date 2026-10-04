@@ -77,6 +77,16 @@ def test_verify_decides_from_the_typed_outcomes_alone(rows, presented, verdict):
     assert verify_start(_prep(), results, presented) == verdict
 
 
+def test_an_interactive_main_stays_blocking_when_its_command_was_presented():
+    # ORDER's main is a service; chat's is interactive. A presented command clears an interactive
+    # sidecar (voice's terminal variant), never an interactive MAIN: it keeps its manual-start
+    # verdict, which the entry paths then show as success (finding 122).
+    order = [(STACK, _comp("loraham-daemon")), (STACK, _comp("main", interactive=True))]
+    prep = _prep(order=order)
+    assert prep.nonmain_interactive_ids == set()
+    assert verify_start(prep, [_row("main", Outcome.MANUAL_REQUIRED)], {"main"}) == ([], ["main"])
+
+
 # ── the reason a failed start gives for a daemon band it keeps ──
 
 def _named(reason: str) -> dict:
