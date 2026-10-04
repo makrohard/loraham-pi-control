@@ -630,6 +630,19 @@ def test_a_start_on_a_held_band_asks_to_stop_the_holder(monkeypatch, capsys, arg
 
 
 @pytest.mark.contract
+def test_the_held_band_refusal_repeats_the_band(monkeypatch, capsys):
+    # A suggested retry repeats the operator's explicit selections (finding 129): without the
+    # band, following it would start on the saved band instead.
+    from lhpc.adapters.cli import main as cli_main
+    _held_band(monkeypatch, tty=False)
+    rendered = []
+    monkeypatch.setattr(cli_main, "_render", lambda res: (rendered.append(res), 1)[1])
+    assert main(["stack", "start", "kiss", "--band", "868"]) == 1
+    assert rendered[-1].next_commands == ["lhpc stack stop meshtastic",
+                                          "lhpc stack start kiss --band 868 --yes"]
+
+
+@pytest.mark.contract
 def test_stack_start_refuses_a_band_the_box_does_not_serve(tmp_path, monkeypatch, capsys):
     # A 433-only board: `--band 868` is refused in the PLAN, before anything starts.
     _rt(monkeypatch, tmp_path, capsys)

@@ -118,10 +118,11 @@ def _apply_flow(run, yes: bool) -> int:
     return _render(run(True))
 
 
-def _start_flow(run, stack: str, yes: bool) -> int:
+def _start_flow(run, stack: str, yes: bool, band: str = "") -> int:
     """`lhpc stack start`: `_apply_flow`, except when the plan names running stacks that hold what
     the start needs. Then it asks, as the console's confirm page does, whether to stop them and
-    start; `--yes` answers yes. A no, or no terminal to ask on, refuses with nothing stopped."""
+    start; `--yes` answers yes. A no, or no terminal to ask on, refuses with nothing stopped; its
+    suggested retry repeats an explicit `--band`."""
     plan = run(False)
     blockers = (plan.data.get("blockers") or []) if plan.ok else []
     if not blockers:
@@ -132,11 +133,11 @@ def _start_flow(run, stack: str, yes: bool) -> int:
     if yes or (sys.stdin.isatty() and sys.stdout.isatty() and _confirm(
             f"\n{held} held by {', '.join(holders)} — stop them and start {stack}? [y/N] ")):
         return _render(run(True, stop_owners=True))
+    retry = f"lhpc stack start {stack}" + (f" --band {band}" if band else "") + " --yes"
     return _render(ActionResult(
         False, f"Cannot run '{stack}': {', '.join(holders)} must be stopped first.",
-        details=[f"  `lhpc stack start {stack} --yes` stops them and starts it without asking"],
-        next_commands=[*(f"lhpc stack stop {h}" for h in holders),
-                       f"lhpc stack start {stack} --yes"]))
+        details=[f"  `{retry}` stops them and starts it without asking"],
+        next_commands=[*(f"lhpc stack stop {h}" for h in holders), retry]))
 
 
 def _print_install_dep_gate(svc, stack, check: bool = False) -> bool:
@@ -1420,7 +1421,8 @@ def _run(argv: list[str] | None = None) -> int:
                     return replace(res, ok=True)
                 return res
             if args.stack_action == "start":
-                return _start_flow(_run, args.stack, yes=args.yes)
+                return _start_flow(_run, args.stack, yes=args.yes,
+                                   band=getattr(args, "band", "") or "")
             return _apply_flow(_run, yes=args.yes)
         # argparse's --help action calls sys.exit(0), so routing a usage error through
         # it exited 0 and `lhpc stack || handle_error` silently passed. Every sibling
