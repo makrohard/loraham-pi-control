@@ -359,8 +359,10 @@ class SelfUpdateOpsMixin:
                         "`--overwrite` (or the web confirmation) to reset onto upstream.")
             return ActionResult(True, msg, data=view)
         if (behind := selfupdate.venv_unsynced(selfupdate.repo_root())):
-            return ActionResult(True, f"The checkout is up to date, but the venv is not synced "
-                                f"to it ({behind}).", data={**view, "venv_unsynced": True},
+            msg = ("The checkout is up to date, but the venv could not be verified against it — "
+                   "`lhpc self-update --apply` re-syncs it." if behind == selfupdate.VENV_UNKNOWN
+                   else f"The checkout is up to date, but the venv is not synced to it ({behind}).")
+            return ActionResult(True, msg, data={**view, "venv_unsynced": True},
                                 next_commands=["lhpc self-update --apply"])
         return ActionResult(True, "Up to date.", data=view)
 
@@ -1628,7 +1630,8 @@ class SelfUpdateOpsMixin:
     def _resumes_sync(self, res: ActionResult) -> bool:
         """An apply that found the checkout current while `venv-unsynced` is recorded — or while
         the venv's recorded version differs from the checkout's (a failed sync whose record was
-        never written) — runs the sync (and the unit refresh) it skipped."""
+        never written) or cannot be read on either side (fail closed: the sync is idempotent) —
+        runs the sync (and the unit refresh) it skipped."""
         from . import selfupdate
         return (bool(res.ok) and bool(res.data.get("already"))
                 and (self.self_update_incomplete()[0] == "venv-unsynced"

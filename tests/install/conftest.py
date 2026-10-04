@@ -111,7 +111,10 @@ def op_svc(tmp_path, monkeypatch):
 
         rt = Path(root) if root is not None else tmp_path
         checkout = tmp_path / "checkout"
-        checkout.mkdir(exist_ok=True)
+        # The checkout declares the version the venv records (_venv_records_this_version), so the
+        # venv reads as in sync; the tests about an unsynced or unverifiable venv change either.
+        (checkout / "lhpc").mkdir(parents=True, exist_ok=True)
+        (checkout / "lhpc" / "version.py").write_text(f'__version__ = "{selfupdate.__version__}"\n')
         monkeypatch.setattr(selfupdate, "repo_root", staticmethod(lambda: checkout))
         table = {(sys.executable, "-m", "pip", "install", "-e", str(checkout)):
                  CommandResult(0, "", "")}

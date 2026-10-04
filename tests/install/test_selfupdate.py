@@ -385,6 +385,21 @@ def test_the_check_reports_a_venv_behind_the_checkout(env, monkeypatch):
     assert res.next_commands == ["lhpc self-update --apply"]
 
 
+@pytest.mark.parametrize("break_it", ["no-metadata", "no-version-file"])
+def test_the_check_reports_a_venv_it_cannot_verify(env, monkeypatch, break_it):
+    """Fail closed (finding 129): a version it cannot read on either side is not "Up to date." —
+    the check says the venv could not be verified and names the re-sync."""
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=env["sys"], paths=env["paths"])
+    if break_it == "no-metadata":
+        monkeypatch.setattr(selfupdate, "installed_version", lambda: "")
+    else:
+        (env["work"] / "lhpc" / "version.py").unlink()
+    res = svc.self_update_check()
+    assert res.data["venv_unsynced"] and "could not be verified" in res.summary
+    assert res.next_commands == ["lhpc self-update --apply"]
+
+
 def test_an_apply_finding_the_checkout_current_syncs_a_venv_behind_it(op_svc, monkeypatch):
     """Without a `venv-unsynced` record, an apply that finds the checkout current still runs the
     sync and the unit refresh when the venv's recorded version differs from the checkout's."""
@@ -395,8 +410,6 @@ def test_an_apply_finding_the_checkout_current_syncs_a_venv_behind_it(op_svc, mo
     # sync runs, and the refresh has its own coverage.
     monkeypatch.setattr(ControllerService, "_refresh_units_post_update",
                         lambda self: (True, "units canonical"))
-    (root / "lhpc").mkdir()
-    (root / "lhpc" / "version.py").write_text(f'__version__ = "{selfupdate.__version__}"\n')
     svc.self_update_apply_operator()
     assert list(_pip_key(root)) not in fake.calls                     # the control: in sync
     monkeypatch.setattr(selfupdate, "installed_version", lambda: "0.0.1")

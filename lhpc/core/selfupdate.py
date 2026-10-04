@@ -149,22 +149,28 @@ def installed_version() -> str:
         return ""
 
 
+# `venv_unsynced` when either version cannot be read: not proven in sync (fail closed).
+VENV_UNKNOWN = "unknown"
+
+
 def venv_unsynced(root: Path | None) -> str:
     """"installed <a>, checkout <b>" when the venv's recorded version differs from the version in
-    the checkout at `root`, else "" (also when either cannot be read). Needs no state of its own,
-    so it finds a failed sync whose `venv-unsynced` record was never written; a source change that
-    keeps the version number is not seen."""
+    the checkout at `root`; VENV_UNKNOWN when either cannot be read (an unreadable version file,
+    no declaration in it, no distribution metadata); "" when they match or lhpc is not a git
+    checkout (`root` None). Needs no state of its own, so it finds a failed sync whose
+    `venv-unsynced` record was never written; a source change that keeps the version number is
+    not seen."""
     if root is None:
         return ""
     try:
         m = re.search(r'__version__\s*=\s*"([^"]+)"',
                       (root / "lhpc" / "version.py").read_text(encoding="utf-8"))
     except OSError:
-        return ""
+        return VENV_UNKNOWN
     have = installed_version()
-    if not (m and have) or m.group(1) == have:
-        return ""
-    return f"installed {have}, checkout {m.group(1)}"
+    if not (m and have):
+        return VENV_UNKNOWN
+    return "" if m.group(1) == have else f"installed {have}, checkout {m.group(1)}"
 
 
 def _git(system: System, root: Path, args: list[str], timeout: float):
