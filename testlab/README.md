@@ -18,4 +18,4 @@ pip install -e . && pip install -e ./testlab
 
 ## Documentation
 
-Launch, scenarios, the four verification lanes and Codespaces: [docs/testlab.md](../docs/testlab.md).
+Launch, scenarios, the verification lanes (unit and the four opt-in lanes) and Codespaces: [docs/testlab.md](../docs/testlab.md).
