@@ -374,6 +374,12 @@ def test_slow_build_env():
 
 @pytest.mark.parametrize("stack", LANE_STACKS)
 def test_slow_build_stack(env, svc, stack, tmp_path):
+    if stack == "meshtastic" and on_binary(env, stack):
+        # The lab's reset already binary-installs meshtastic on aarch64, and an install of the
+        # artifact already installed downloads nothing (no `[venv] <n> s` line): the row
+        # measures a first install, so it uninstalls that one first.
+        _judged("uninstalling the lab's meshtastic",
+                run_lhpc(env, "uninstall", stack, "--yes", timeout=HARNESS_S))
     r = _install(env, stack)
     mine = [(c, o) for c, o in LANE_OPS if _STACK_OF.get(c) == stack]
     for component, op in mine:
