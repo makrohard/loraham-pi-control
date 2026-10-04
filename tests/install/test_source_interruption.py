@@ -77,6 +77,7 @@ UPDATE = [
     ("source_fs._rename_noreplace_at", "app"),           # active -> .app.prev
     ("OwnedMarker.rewrite", "app-*.json"),                         # prior-archived
     ("source_fs.carry_extras", "?"),
+    ("OwnedMarker.rewrite", "app-*.json"),                         # the candidate after the carry
     ("source_fs._rename_noreplace_at", CANDIDATE),       # candidate -> active
     ("OwnedMarker.rewrite", "app-*.json"),                         # activated
     ("write_marker", "state/source-registry/app-*.json"),          # the ownership record
@@ -132,15 +133,12 @@ def test_the_operation_writes_exactly_the_pinned_points(tmp_path, box, op):
 
 # Known recovery defects (code-review/code-report-T2.md), each a strict xfail: a fix turns it
 # into an XPASS, which fails until the mark is removed.
-KD_S2 = ("KD-S2: carrying a local file changes the candidate's recorded ctime; a crash between "
-         "the carry and the activation leaves no active source and recovery refuses")
 KD_S3 = ("KD-S3: a failed removal of the quarantined prior leaves `..app.prev.quarantine-*` after "
          "the journal is closed; no recovery removes it and uninstall/clean refuse until it is "
          "removed by hand")
 ALL = tuple(sorted(FAILURES))
 KNOWN = {
-    "update": {(16, "KeyboardInterrupt"): KD_S2,
-               **{(20, f): KD_S3 for f in ALL}},
+    "update": {(21, f): KD_S3 for f in ALL},
     "adopt": {},
 }
 CASES = [pytest.param(op, k, f, id=f"{op}-{w}:{p}-{f}",
@@ -183,3 +181,69 @@ def _assert_one_whole_source(root, inst, git, versions, op, *, allow_absent):
     if op == "update":
         assert (root / "src" / "app" / "notes.txt").read_text() == "mine\n"   # never collateral
     return versions[head]
+
+
+class _PowerLoss(BaseException):
+    """The process stops: no `except` clause of the operation runs (only the `finally` blocks that
+    close descriptors — what a power loss leaves on disk is the same)."""
+
+
+def test_a_power_loss_after_the_carry_wrote_is_recovered_and_retried(tmp_path, box, git,
+                                                                      monkeypatch):
+    # The carry has written the operator's file into the candidate (which moves the candidate's
+    # ctime) and the process stops before the journal records it again. The candidate no longer
+    # matches its full recorded identity, so recovery retains everything and names it; once the
+    # operator has removed it, the next recovery puts the prior back with the file and the retry
+    # lands on v2.
+    import shutil
+    root = tmp_path / "rt"
+    inst, run, versions = box(root, "update")
+    real = source_fs.carry_extras
+
+    def carry_then_power_loss(src_fd, dst_fd, rels):
+        assert real(src_fd, dst_fd, rels) == ""
+        raise _PowerLoss()
+    monkeypatch.setattr(source_fs, "carry_extras", carry_then_power_loss)
+    with pytest.raises(_PowerLoss):
+        run()
+    monkeypatch.setattr(source_fs, "carry_extras", real)
+    assert inst._pending_journals()                          # the crash left the transaction open
+    [cand] = (root / "src").glob(CANDIDATE)
+    msgs = inst.recover_source_activations()
+    assert any(f"the staged candidate {cand} is not provably the one the journal recorded" in m
+               and "lhpc update app --yes" in m for m in msgs), msgs
+    assert cand.is_dir() and (root / "src" / ".app.prev" / "notes.txt").is_file()
+    assert inst._pending_journals()
+    shutil.rmtree(cand)                                      # the operator, after checking
+    inst.recover_source_activations()
+    assert not inst._pending_journals()
+    txn = root / "state" / "source-txn"
+    assert not txn.exists() or list(txn.iterdir()) == []
+    assert _assert_one_whole_source(root, inst, git, versions, "update", allow_absent=False) == b"v1\n"
+    assert run().status == "done"
+    assert _assert_one_whole_source(root, inst, git, versions, "update", allow_absent=False) == b"v2\n"
+
+
+def test_a_directory_on_a_recycled_inode_in_carrying_is_never_removed(tmp_path, box, monkeypatch):
+    # The journal says `carrying`; at the candidate's name is a directory with the recorded dev and
+    # inode but another ctime — what inode recycling hands a different directory. It is not
+    # removed: dev+ino is no proof. Everything is retained and the path named.
+    import json
+    root = tmp_path / "rt"
+    inst, run, _ = box(root, "update")
+
+    def power_loss(src_fd, dst_fd, rels):
+        raise _PowerLoss()                                   # stops before the carry writes
+    monkeypatch.setattr(source_fs, "carry_extras", power_loss)
+    with pytest.raises(_PowerLoss):
+        run()
+    monkeypatch.undo()
+    jf = next(p for p in (root / "state" / "source-txn").iterdir() if p.suffix == ".json")
+    j = json.loads(jf.read_text())
+    assert j["state"] == "carrying"
+    [cand] = (root / "src").glob(CANDIDATE)
+    (cand / "theirs.txt").write_text("not this transaction's\n")    # another ctime, same inode
+    msgs = inst.recover_source_activations()
+    assert (cand / "theirs.txt").read_text() == "not this transaction's\n"
+    assert any(f"the staged candidate {cand} is not provably" in m for m in msgs), msgs
+    assert jf.exists() and (root / "src" / ".app.prev").is_dir()

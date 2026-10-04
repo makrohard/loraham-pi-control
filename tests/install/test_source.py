@@ -570,6 +570,28 @@ def test_a_staging_record_defers_to_its_journal(tmp_path, installer):
     assert (staging / "part").read_text() == "NEW" and (dest / "marker").read_text() == "LIVE"
 
 
+def test_the_carry_makes_what_it_wrote_durable(tmp_path, monkeypatch):
+    # Before the activation rename makes the candidate the source, every carried file and every
+    # directory entry the carry created is fsynced: a power loss after the rename must not leave
+    # an empty copy of the operator's file in the active tree.
+    src, dst = tmp_path / "prior", tmp_path / "cand"
+    (src / "sub").mkdir(parents=True); dst.mkdir()
+    (src / "sub" / "notes.txt").write_text("mine\n")
+    synced = []
+    real = os.fsync
+
+    def fsync(fd):
+        synced.append(os.readlink(f"/proc/self/fd/{fd}"))
+        return real(fd)
+    monkeypatch.setattr(source_fs.os, "fsync", fsync)
+    sfd, dfd = os.open(src, os.O_RDONLY | os.O_DIRECTORY), os.open(dst, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        assert source_fs.carry_extras(sfd, dfd, ["sub/notes.txt"]) == ""
+    finally:
+        os.close(sfd); os.close(dfd)
+    assert {str(dst), str(dst / "sub"), str(dst / "sub" / "notes.txt")} <= set(synced), synced
+
+
 def test_transaction_renames_survive_parent_swap(tmp_path):
     # A parent-path swap AFTER opening the transaction cannot redirect later renames —
     # they keep hitting the ORIGINAL held inode, never the swapped-in path.

@@ -532,6 +532,7 @@ def _carry_parent(dst_fd: int, parts: tuple, rel: str) -> tuple:
     for name in parts:
         try:
             os.mkdir(name, 0o755, dir_fd=fd)
+            os.fsync(fd)                        # the new entry is durable before anything in it
         except FileExistsError:
             pass
         except OSError as exc:
@@ -554,6 +555,9 @@ def carry_extras(src_fd: int, dst_fd: int, rels) -> str:
     at identical relative paths. Returns "" on success or the FIRST conflict, in which case the
     caller restores the prior and refuses — LHPC never picks a winner between a local file and
     the upstream file that now claims its path.
+
+    Each copied file, and each directory entry the carry creates, is fsynced before the next
+    one, so what the caller activates afterwards is on disk.
 
     Both ends are directory fds and every path component is opened `O_NOFOLLOW`, so no mutable
     pathname is ever traversed on either side. The candidate leaf is created
@@ -586,6 +590,7 @@ def carry_extras(src_fd: int, dst_fd: int, rels) -> str:
                 if _stat.S_ISLNK(st.st_mode):
                     try:
                         os.symlink(os.readlink(leaf, dir_fd=qfd), leaf, dir_fd=pfd)
+                        os.fsync(pfd)
                     except FileExistsError:
                         return (f"local file {rel} conflicts with the new source version; "
                                 "existing source preserved")
@@ -615,6 +620,10 @@ def carry_extras(src_fd: int, dst_fd: int, rels) -> str:
                         # mode again: O_CREAT is masked by umask, the local file's bits are the
                         # contract (setuid/setgid/sticky deliberately dropped).
                         os.fchmod(dfd, st.st_mode & 0o777)
+                        # Durable before the activation rename makes the candidate the source:
+                        # a power loss after it must not leave an empty copy in the active tree.
+                        os.fsync(dfd)
+                        os.fsync(pfd)
                     except OSError as exc:
                         return f"{rel}: local file could not be copied ({exc})"
                     finally:

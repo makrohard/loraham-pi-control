@@ -1078,7 +1078,7 @@ class Installer:
     # controller's candidate/prior naming patterns. An invalid journal is RETAINED and
     # blocks the affected source — it is never followed or deleted blindly.
 
-    _VALID_STATES = ("planned", "prior-archived", "activated", "prior-dirty-retained")
+    _VALID_STATES = ("planned", "prior-archived", "carrying", "activated", "prior-dirty-retained")
 
     def _txn_dir(self) -> Path:
         return self.paths.under("state", "source-txn")
@@ -1241,6 +1241,12 @@ class Installer:
         validation, the blocking decision, and recovery, BEFORE any per-source-path lock
         (stable global order: index first, then source paths sorted)."""
         return "source-txn-index"
+
+    def _update_cmd(self, dest: Path) -> str:
+        """`lhpc update <component> --yes` for the component(s) whose source is `dest`."""
+        ids = sorted({c.id for st in self.stacks for c in st.components
+                      if c.source and c.source.path == self._source_rel(dest)})
+        return f"lhpc update {ids[0] if ids else '<stack>'} --yes"
 
     def _pending_journals(self) -> bool:
         """True if ANY unresolved journal remains in the txn dir (blocks ALL source
@@ -1789,6 +1795,10 @@ class Installer:
                 if (state == "prior-archived" and idents and idents.get("candidate")
                         and txn.leaf_kind(staging.name) == "absent"):
                     idents = {**idents, "candidate": list(idents["candidate"][:2])}
+                # Not the carry: `carrying` is written before the carry writes into the candidate,
+                # which moves its ctime for as long as the carry runs. A candidate in `carrying`
+                # keeps its FULL recorded identity — a stop inside the carry leaves one that no
+                # longer matches, and it is retained and named, never removed on dev+ino.
                 if txn.usable(dest.name):
                     # Completed activation: the ownership record must be completed (ONE retry —
                     # this call) and the archived prior PROVEN removed (held FD) before the
@@ -1815,9 +1825,9 @@ class Installer:
                     return _cleared("active source intact")
                 if txn.leaf_kind(staging.name) != "absent" and txn.leaf_kind(dest.name) == "absent":
                     # PROMOTION IS CARRY-BLIND. The interruption may have landed anywhere between
-                    # the archive and the carry, and the journal deliberately records no carry
-                    # state, so a candidate promoted here cannot be shown to hold the local
-                    # additions the archived prior still has. Rather than complete an activation
+                    # the archive and the end of the carry (`carrying` says a carry was due, not
+                    # how far it got), so a candidate promoted here cannot be shown to hold the
+                    # local additions the archived prior still has. Rather than complete an activation
                     # that would then have `.prev` (and the additions with it) cleaned away, roll
                     # the transaction back below: the prior returns intact WITH its additions, and
                     # the next update stages afresh and carries them again. An UNPROVABLE
@@ -1893,21 +1903,20 @@ class Installer:
                                     "update cannot be proven to have preserved local "
                                     "additions and its candidate has no identity evidence "
                                     "(everything retained)")
-                        # FULL v5 identity, deliberately. The carry writes into this candidate
-                        # after the journal recorded its ident, so a crash mid-carry leaves a
-                        # ctime that can no longer be proven — and then the candidate is NOT
-                        # deleted. dev+ino alone is forgeable through inode recycling, and the
-                        # post-rename re-proofs that use it are a different trust boundary: there
-                        # LHPC has just proven all three fields and caused the change itself,
-                        # inside one held operation. Here an arbitrary amount of time and any
-                        # number of processes sit between the proof and this deletion, so an
-                        # unprovable candidate is retained as evidence, never destroyed.
+                        # FULL v5 identity, in every state. A candidate whose ctime does not
+                        # match is not proven (dev+ino alone is forgeable through inode
+                        # recycling) and is retained as evidence, the path named — `carrying`
+                        # included: a stop inside the carry leaves it so, and the operator
+                        # removes it after checking; the next source command then restores the
+                        # prior (proven above).
                         source_fs.race_seam("pre-recovery-rollback-delete", staging.name)
                         ok, _w = source_fs.remove_bound(txn.fd, staging.name, cand_ident)
                         if not ok:
-                            return (f"recovery-required for {dest.name}: staged candidate is "
-                                    "not the recorded one or could not be removed "
-                                    "(everything retained)")
+                            return (f"recovery-required for {dest.name}: the staged candidate "
+                                    f"{staging} is not provably the one the journal recorded "
+                                    "(or could not be removed) — everything retained; remove it "
+                                    "by hand after checking, then the next lhpc source command "
+                                    f"restores the prior ({self._update_cmd(dest)})")
                     try:
                         txn.rename_noreplace(prev.name, dest.name)
                         txn.fsync()
@@ -2051,8 +2060,12 @@ class Installer:
                     # REFRESH the prior ident: dest -> .prev renamed the prior, which bumps its
                     # ctime, so the journal must record the .prev's CURRENT ctime for recovery to
                     # re-prove it. (Candidate is untouched — still at `staging`.)
+                    # With a carry to come the state is `carrying`: the carry writes into the
+                    # candidate after this record, so recovery knows its ctime may have moved.
                     jh["idents"] = self._v5_idents(handle, prior)
-                    if not self._update_journal(jh, dest, prev, staging, "prior-archived"):
+                    if not self._update_journal(jh, dest, prev, staging,
+                                                "carrying" if carry is not None
+                                                else "prior-archived"):
                         raise _JournalLost()
                     # SECOND dirty scan THROUGH THE CAPTURED PRIOR HANDLE, after the archive
                     # and before promotion: a file created INSIDE the unchanged directory
@@ -2083,8 +2096,28 @@ class Installer:
                     # writer can add another file to it before activation — this inventory is
                     # final. A collision or an unprovable copy restores the prior and refuses;
                     # nothing is ever merged or overwritten.
-                    if carry is not None and carry():
-                        return _restore("carry-failed")
+                    if carry is not None:
+                        # The journal says `carrying` (above), so a stop anywhere in the carry —
+                        # a power loss included — is found by recovery: the candidate no longer
+                        # matches its FULL recorded identity (the carry wrote into it), so it is
+                        # retained and named, never removed on dev+ino, and the next source
+                        # command restores the prior once it is removed by hand. Once the carry is
+                        # durable (it fsyncs what it wrote), the
+                        # journal records the candidate's full identity again, before the
+                        # activation rename. A Ctrl-C in that window, or a record that cannot be
+                        # written, is undone here while the handle still proves it.
+                        try:
+                            if carry():
+                                return _restore("carry-failed")
+                            jh["idents"] = self._v5_idents(handle, prior)
+                            recorded = self._update_journal(jh, dest, prev, staging,
+                                                            "prior-archived")
+                        except KeyboardInterrupt:
+                            if _restore("restored") == "restored":
+                                self._cleanup_owned_staging(txn, handle, staging.name)
+                            raise
+                        if not recorded:
+                            return _restore("failed-clean")
                 # TIGHT re-check IMMEDIATELY before promotion (bounded only by kernel rename
                 # atomicity): a substituted candidate leaf is never promoted.
                 if not self._verify_staged(txn, handle, staging.name):
