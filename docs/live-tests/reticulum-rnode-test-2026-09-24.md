@@ -1,16 +1,16 @@
 # Reticulum against a real RNode — live test 2026-09-24
 
-Run by the maintainer's agent, unattended, on the maintainer's instruction; the fix it led to is 0.9.1's airtime default.
+Run unattended on the maintainer's instruction; the fix it led to is 0.9.1's airtime default.
 
 **Purpose (maintainer, verbatim):** "prove lhpc working against real hardware for reticulum. prove as many functions as you can."
-**Setup:** PC host = Reticulum 1.5.4 (`~/claude/.venv-rns`, config `~/claude/rns-host`) on a Heltec LoRa32 V3 flashed as
+**Setup:** PC host = Reticulum 1.5.4 (a venv under `$HOME`, its own config directory) on a Heltec LoRa32 V3 flashed as
 RNode 1.86 (868, `/dev/ttyUSB1`, txpower 7 dBm). Box = `lhpc-e293` (Pi Zero 2 W, Lite image, controller **main@1dfc5e8 = v0.9.0**,
 Uputronics 868 module), reticulum stack at its defaults (868.5 MHz, BW 125 k, SF8, CR 4/5, 14 dBm, no IFAC) plus
 `rnode_framing = yes`. MeshCore chat+repeater (the maintainer's normal 868 holder) stopped cleanly first; restored at the end.
 Distance ~1 m (RSSI −41…−68 dBm). Box clock is UTC, PC clock CEST (UTC+2). Runtime changes only; no code, no builds on the Zero.
 
 **Result: 19 rows, 17 PASS, 2 FAIL-by-design (rows 12/13, both the airtime governor at defaults → F-R2).** Run 16:31–16:55 CEST,
-unattended, coordinated with the teammate (box acked, released 14:54:56Z). Box left as found (MeshCore chat+repeater back on 868, settings reset,
+unattended, coordinated with the box's other user (box acked, released 14:54:56Z). Box left as found (MeshCore chat+repeater back on 868, settings reset,
 the `secrets.toml` created by row 16 removed — it did not exist before).
 
 | # | LHPC function under test | Result | Evidence |

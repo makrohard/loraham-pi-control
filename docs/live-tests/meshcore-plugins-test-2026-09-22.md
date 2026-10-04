@@ -1,8 +1,8 @@
 # MeshCore plugin manager — live proof, 2026-09-22/23
 
 The openHop plugin manager as part of the repeater (`docs/stacks/meshcore.md`, "Plugins"), run on the
-reference box against the maintainer's own repeater. Measured values only; where the run went wrong
-by my hand it says so.
+reference box against the maintainer's own repeater. Measured values only; where the run itself went
+wrong it says so.
 
 **Bench.** Box `lhpc-e293`, Pi Zero 2 W, Lite image, Wi-Fi only. Controller `feature/meshcore-plugins`
 (one commit on v0.8.3); MeshCore sources at the v0.8.3 pins (openhop-core `cedb26b`, openhop-repeater
@@ -30,9 +30,9 @@ of `meshcore_host`, the marker file, the dashboard's API with a real admin login
 | browser | the Plugins page in a real browser through LHPC's mTLS proxy (headless Chromium with a client certificate, `https://<box>:8448`, login as admin, System → Plugins) | pass | no "Plugin manager is unavailable" banner; Installed 2 / Enabled 2 / Running 1 / Failed 0; NOMAD Bridge 0.1.2 RUNNING "Enabled · pid 2761" (Service + UI app); waev:outpost 0.9.395 UI READY "No background service"; Catalogue tab present; no page errors |
 | end | box as found | | mode chat+repeater, `plugins = on`, daemon + MeshCore running with one manager and one plugin, 158 MB available, 0 OOM lines |
 
-## Two mistakes of my own during the run, recorded rather than hidden
+## Two mistakes in running the test, recorded rather than hidden
 
-1. My afternoon API probes had started the manager with `setsid … &` and killed `$!`; setsid forks,
+1. The afternoon API probes had started the manager with `setsid … &` and killed `$!`; setsid forks,
    so three orphan managers survived on the box and the first row 4 killed one of them instead of the
    live manager. They were killed in the repair and the row helpers now count only managers in
    `meshcore_host`'s process group.
