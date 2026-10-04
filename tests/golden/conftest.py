@@ -223,11 +223,11 @@ def run_op(phases):
 @pytest.fixture(autouse=True)
 def _tagged(request):
     """Every golden case says what it records: its docstring opens with `intended:` or
-    `known defect <finding id>:`."""
+    `known defect <finding id>[, <finding id>…]:` (one id per difference it records)."""
     doc = (request.function.__doc__ or "").strip()
-    assert re.match(r"(intended|known defect [\w-]+):", doc), (
+    assert re.match(r"(intended|known defect [\w-]+(, [\w-]+)*):", doc), (
         f"{request.node.name}: a golden case's docstring must open with 'intended:' or "
-        "'known defect <id>:'")
+        "'known defect <id>[, <id>…]:'")
 
 
 # --- the one box the lifecycle goldens run on ----------------------------------------------------
@@ -261,6 +261,15 @@ def _alive(pid: int) -> bool:
         return False
 
 
+def _starttime(pid: int) -> str | None:
+    """The process's start time (/proc/<pid>/stat field 22): with the pid, its identity."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -291,6 +300,7 @@ class KissBox:
     def __init__(self, root: Path, fake: FakeSystem, svc: ControllerService, port: int):
         self.root, self.fake, self.svc, self.port = root, fake, svc, port
         self.listens, self.term = True, "default"
+        self.spawned: list[tuple[int, str | None, str]] = []   # (pid, start time, component)
 
     def endpoint_never_up(self) -> None:
         """The next TNC this box spawns stays alive but never opens its port."""
@@ -310,11 +320,20 @@ class KissBox:
                 [sys.executable, "-c", _TNC, str(self.port if self.listens else 0), self.term],
                 start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             procs.append(p)
+            self.spawned.append((p.pid, _starttime(p.pid), Path(argv[0]).name))
             return p.pid
         return _spawn
 
     def owned(self) -> list[str]:
         return owned(self.root)
+
+    def live(self, also=()) -> list[str]:
+        """The component of every process this box spawned — and of `also`, the (pid, start
+        time, component) of those spawned for it in another process — that is still alive,
+        checked by pid and start time in /proc (a zombie is not alive). The ownership records
+        are not consulted: a process left running after its record was removed still counts."""
+        return sorted(c for pid, st, c in [*self.spawned, *also]
+                      if _alive(pid) and _starttime(pid) == st)
 
     def tnc_alive(self) -> bool:
         """The TNC's owned process is alive (observed in /proc: a zombie is not)."""
@@ -325,23 +344,24 @@ class KissBox:
 
 @pytest.fixture
 def kiss_box(tmp_path, monkeypatch, set_call):
-    """`kiss_box(callsign=True)` → a KissBox: kiss installed and built, daemon READY on 433, a
-    callsign saved (unless callsign=False); the TNC is a real process listening on a real loopback
-    port (`_TncEndpoint`). The start's endpoint wait is bounded at 3 s (production: 6 s) — what it
+    """`kiss_box(callsign=True, root=tmp_path)` → a KissBox: kiss installed and built, daemon
+    READY on 433, a callsign saved (unless callsign=False); the TNC is a real process listening on
+    a real loopback port (`_TncEndpoint`). The start's endpoint wait is bounded at 3 s (production: 6 s) — what it
     sees is observed. Every TNC process the box spawned is killed (its session) at teardown."""
     procs: list = []
     monkeypatch.setattr(ControllerService, "ENDPOINT_VERIFY_TIMEOUT_S", 3.0)
 
-    def _make(*, callsign=True):
-        (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
-        (tmp_path / "src" / "loraham-kiss-tnc" / "loraham-kiss-tnc").write_text("#bin")
+    def _make(*, callsign=True, root=None):
+        root = Path(root or tmp_path)
+        (root / "src" / "loraham-kiss-tnc").mkdir(parents=True)
+        (root / "src" / "loraham-kiss-tnc" / "loraham-kiss-tnc").write_text("#bin")
         fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": _READY})
         port = _free_port()
         fake.listeners = _TncEndpoint(port)
-        svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+        svc = ControllerService(system=fake.system, paths=Paths(runtime_root=root))
         seeded = svc.bootstrap(apply=True)
         assert seeded.ok, f"seeding: bootstrap failed: {seeded.summary}"
-        box = KissBox(tmp_path, fake, svc, port)
+        box = KissBox(root, fake, svc, port)
         spawn = box.spawn(procs)
         monkeypatch.setattr(ControllerService, "_lifecycle", lambda s: Lifecycle(
             s._paths, s.stacks(), s.config(), s._system, spawn=spawn))
