@@ -1029,9 +1029,14 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     ident = "not self-hosted"
                 upd = "update available" if cs["update_available"] else "up to date"
                 head = f"@{cs['head_short']}" if cs["head_short"] else ""
-                details.append(f"[controller] {cs['display_name']}  ({upd})")
+                state, what = self.self_update_incomplete()
+                details.append(f"[controller] {cs['display_name']}  ({upd}"
+                               + (f", {state})" if state else ")"))
                 details.append(f"  v{cs['version']} {head}  {ident}  — manage with: "
                                f"{cs['self_update_cmd']}")
+                if state:
+                    details.append(f"  ! {state}: {what} — resolve it with: "
+                                   f"{self._incomplete_remedy(state)}")
         # Disk space: ONE line, only when the worst filesystem is not ok (the normal status stays
         # unchanged).
         if not stack_id:

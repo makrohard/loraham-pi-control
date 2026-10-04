@@ -47,6 +47,9 @@ CONTROLLER_LOGS = ("lhpc-web.log", "lhpc-selfupdate.log", "lhpc-boot-restore.log
 # in-root request-transaction paths (relative to the runtime root)
 REQUEST_REL = ("state", "selfupdate.request")
 INFLIGHT_REL = ("state", "selfupdate.inflight")
+# The named state an applied self-update left (`venv-unsynced` / `units-stale`,
+# service_selfupdate.self_update_incomplete); cleared by the one command that resolves it.
+SELFUPDATE_INCOMPLETE_REL = ("state", "selfupdate.incomplete")
 # nginx-restart escape hatch: the web console (bus-blind by design) requests a front-end restart by
 # creating this marker; lhpc-nginx-restart.path consumes it. Same claim discipline as self-update.
 NGINX_RESTART_REQUEST_REL = ("state", "nginx-restart.request")

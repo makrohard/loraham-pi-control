@@ -344,7 +344,106 @@ def test_operator_inactive_sync_failure_is_typed(op_svc, monkeypatch):
                                    ActionResult(True, "advanced", data={}), pip=CR(1, "boom traceback", ""))
     r = svc.self_update_apply_operator()
     assert not r.ok and r.data.get("venv_sync_failed") and r.data.get("update_applied")
-    assert "pip install -e" in r.summary                                         # bounded recovery command
+    assert "venv-unsynced" in r.summary and r.next_commands == ["lhpc self-update --apply"]
+
+
+def test_a_failed_venv_sync_is_the_named_state_venv_unsynced_resolved_by_the_next_apply(
+        op_svc, monkeypatch):
+    """The checkout moved and the venv sync failed: `venv-unsynced`, journaled and shown by
+    `status`. Its one command, `lhpc self-update --apply`, finds the checkout current and runs the
+    sync (and the unit refresh) it skipped; its success clears the state."""
+    from lhpc.core.probes.backends import CommandResult as CR
+    from lhpc.core.services import ActionResult, ControllerService
+    svc, fake, root = _op_inactive(op_svc, monkeypatch, ActionResult(True, "advanced", data={}),
+                                   pip=CR(1, "boom", ""))
+    refreshed = []
+    monkeypatch.setattr(ControllerService, "_refresh_units_post_update",
+                        lambda self: (refreshed.append(1), (True, "units canonical"))[1])
+    assert svc.self_update_apply_operator().data.get("state") == "venv-unsynced"
+    assert svc.self_update_incomplete()[0] == "venv-unsynced" and not refreshed
+    assert any("venv-unsynced" in d and "lhpc self-update --apply" in d
+               for d in svc.status().details), svc.status().details
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
+                        ActionResult(True, "Already up to date.", data={"already": True}))
+    fake.commands[_pip_key(root)] = CR(0, "", "")
+    fake.calls.clear()
+    r = svc.self_update_apply_operator()
+    assert r.ok and list(_pip_key(root)) in fake.calls and refreshed == [1], r.summary
+    assert svc.self_update_incomplete() == ("", "")
+    assert not any("venv-unsynced" in d for d in svc.status().details)
+
+
+@pytest.mark.parametrize("state", ["venv-unsynced", "units-stale"])
+def test_a_named_state_whose_record_cannot_be_written_fails_with_the_command_to_run(
+        op_svc, monkeypatch, state):
+    """No record, no state: `status` cannot show it and `--apply` cannot resume from it. So the
+    update is not said to be in that state — it fails with the cause, where the checkout is, and
+    what resolves it without the record: for a failed venv sync the sync AND the unit refresh it
+    skipped, in that order (never the sync alone); for stale units the repair."""
+    from lhpc.core import runtime_fs
+    from lhpc.core.probes.backends import CommandResult as CR
+    from lhpc.core.services import ActionResult, ControllerService
+    svc, _fake, root = _op_inactive(
+        op_svc, monkeypatch, ActionResult(True, "advanced", data={"new_head_short": "abc1234"}),
+        pip=CR(1, "boom", "") if state == "venv-unsynced" else None)
+    monkeypatch.setattr(ControllerService, "_refresh_units_post_update",
+                        lambda self: (False, "units still not canonical"))
+    real = runtime_fs.write_marker
+
+    def full_disk(paths, path, text, *a, **kw):
+        if path.name == "selfupdate.incomplete":
+            raise OSError(28, "No space left on device")
+        return real(paths, path, text, *a, **kw)
+    monkeypatch.setattr(runtime_fs, "write_marker", full_disk)
+    r = svc.self_update_apply_operator()
+    cmds = ([" ".join(_pip_key(root)), "lhpc self-update --repair-integration"]
+            if state == "venv-unsynced" else ["lhpc self-update --repair-integration"])
+    assert r.ok is False and "state" not in r.data, r.data
+    assert r.summary.startswith("recovery-required: the update was applied"), r.summary
+    assert "No space left on device" in r.summary and "abc1234" in r.summary, r.summary
+    assert f"no {state} state exists" in r.summary and r.next_commands == cmds, r.summary
+    if state == "venv-unsynced":
+        assert "in this order" in r.summary and "cannot resume it without the record" in r.summary
+        # `--apply` really cannot: with no record it finds the checkout current and runs nothing.
+        assert not svc._resumes_sync(ActionResult(True, "current", data={"already": True}))
+    assert svc.self_update_incomplete() == ("", "")
+
+
+@pytest.mark.parametrize("raw", ["{not json", '{"state": "units-fine"}', '["units-stale"]'])
+def test_an_invalid_self_update_record_is_recovery_required_and_no_command_clears_it(
+        op_svc, monkeypatch, raw):
+    """Which step failed is unknown: the record is never read as `units-stale` or
+    `venv-unsynced`, and neither one-step command clears it — status names it recovery-required
+    with what to do by hand."""
+    from lhpc.core.services import ActionResult, ControllerService
+    svc, _fake, _root = _op_inactive(op_svc, monkeypatch,
+                                     ActionResult(True, "Already up to date.", data={}))
+    rec = svc._incomplete_path()
+    rec.parent.mkdir(parents=True, exist_ok=True)
+    rec.write_text(raw)
+    state, _what = svc.self_update_incomplete()
+    assert state == "recovery-required" and not svc.units_stale()
+    assert any("recovery-required" in d and "by hand" in d for d in svc.status().details)
+    monkeypatch.setattr(ControllerService, "_repair_integration_steps",
+                        lambda self, *, restart=True: ActionResult(True, "repaired"))
+    r = svc.self_update_repair_integration(restart=False)
+    assert r.ok and "Still recorded" in r.summary and "recovery-required" in r.summary
+    assert rec.read_text() == raw
+
+
+def test_the_repair_does_not_clear_venv_unsynced(op_svc, monkeypatch):
+    """`--repair-integration` verifies the units, not the venv: with `venv-unsynced` recorded it
+    repairs, keeps the record and names it with its own command."""
+    from lhpc.core.probes.backends import CommandResult as CR
+    from lhpc.core.services import ActionResult, ControllerService
+    svc, _fake, _root = _op_inactive(op_svc, monkeypatch, ActionResult(True, "advanced", data={}),
+                                     pip=CR(1, "boom", ""))
+    assert svc.self_update_apply_operator().data.get("state") == "venv-unsynced"
+    monkeypatch.setattr(ControllerService, "_repair_integration_steps",
+                        lambda self, *, restart=True: ActionResult(True, "repaired"))
+    r = svc.self_update_repair_integration(restart=False)
+    assert r.ok and svc.self_update_incomplete()[0] == "venv-unsynced"
+    assert "Still recorded" in r.summary and "lhpc self-update --apply" in r.summary, r.summary
 
 
 def test_operator_admission_held_across_apply_and_sync(op_svc, monkeypatch):
@@ -678,4 +777,34 @@ def test_operator_cleanup_partial_then_a_failed_sync_keeps_both_remedies(op_svc,
     svc, fake, root = _op_inactive(op_svc, monkeypatch, _cleanup_partial(), pip=CR(1, "boom", ""))
     r = svc.self_update_apply_operator(force=True)
     assert not r.ok and r.data.get("venv_sync_failed") and r.data.get("cleanup_failed")
-    assert "pip install -e" in r.summary and "untracked files" in r.summary
+    assert "venv-unsynced" in r.summary and "untracked files" in r.summary
+
+
+# --- a dev checkout off its branch, an unreachable upstream: refused with the remedy ------------
+
+def test_a_detached_checkout_is_refused_with_the_switch_back(env):
+    """A developer moved the checkout to a detached HEAD: fast-forwarding it would leave it
+    detached. Nothing is fetched or moved; Next names the switch back and the retry."""
+    from lhpc.core.services import ControllerService
+    gitrepo.upstream_commit(env["up"])
+    w = env["work"]
+    gitrepo.git(w, "checkout", "-q", "--detach")
+    before = gitrepo.git(w, "rev-parse", "HEAD")
+    res = ControllerService(system=env["sys"], paths=env["paths"]).self_update_apply()
+    assert not res.ok
+    assert res.next_commands == [f"git -C {w} switch main", "lhpc self-update --apply"]
+    assert gitrepo.git(w, "rev-parse", "HEAD") == before
+    assert gitrepo.git(w, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"
+
+
+def test_an_unreachable_upstream_is_refused_without_the_overwrite(env):
+    """The origin cannot be reached: no change, no reset offered — a line saying what has to
+    be fixed before the same command is run again."""
+    from lhpc.core.services import ControllerService
+    w = env["work"]
+    gitrepo.git(w, "remote", "set-url", "origin", str(w.parent / "gone.git"))
+    before = gitrepo.git(w, "rev-parse", "HEAD")
+    res = ControllerService(system=env["sys"], paths=env["paths"]).self_update_apply()
+    assert not res.ok and res.next_commands == []
+    assert any(d.startswith("  nothing to run here — ") for d in res.details)
+    assert gitrepo.git(w, "rev-parse", "HEAD") == before

@@ -682,6 +682,39 @@ def test_a_failed_unit_refresh_makes_the_update_visibly_partial(op_svc, monkeypa
     assert res.data.get("reason") == "units-refresh-failed"
     assert res.data.get("units_refreshed") is False
     assert "repair-integration" in res.summary              # the command the operator is told to run
+    assert res.next_commands == ["lhpc self-update --repair-integration"]
+
+
+@pytest.mark.parametrize("path", ["operator", "one-click helper"])
+def test_stale_units_after_an_applied_update_are_the_named_state_units_stale(
+        tmp_path, op_svc, monkeypatch, path):
+    """The checkout moved and the units could not be refreshed. Undoing that is not one existing
+    operation (the old checkout, its venv and the config migrations already run), so it is the
+    named state `units-stale`: journaled, shown by `status`, resolved by exactly one command —
+    whose success clears it."""
+    from lhpc.core.service_base import ActionResult
+    from lhpc.core.services import ControllerService
+
+    svc, _fake = op_svc(_WEB_INACTIVE, invocation=(path != "operator"))
+    if path != "operator":
+        _write_request(tmp_path, "normal")
+    monkeypatch.setattr(ControllerService, "self_update_apply",
+                        lambda self, *, force=False: ActionResult(True, "applied", data={}))
+    monkeypatch.setattr(ControllerService, "_refresh_units_post_update",
+                        lambda self: (False, "units still not canonical"))
+    res = (svc.self_update_apply_operator() if path == "operator"
+           else svc.self_update_run_service())
+    assert res.ok is False and "units-stale" in res.summary, res.summary
+    assert res.next_commands == ["lhpc self-update --repair-integration"]
+    assert svc.units_stale()                                      # journaled
+    assert any("units-stale" in d and "lhpc self-update --repair-integration" in d
+               for d in svc.status().details), svc.status().details
+    monkeypatch.undo()
+    monkeypatch.setattr(ControllerService, "_repair_integration_steps",
+                        lambda self, *, restart=True: ActionResult(True, "repaired"))
+    assert svc.self_update_repair_integration(restart=False).ok
+    assert not svc.units_stale()
+    assert not any("units-stale" in d for d in svc.status().details)
 
 
 
@@ -761,7 +794,7 @@ def test_run_service_cleanup_partial_then_a_failed_sync_keeps_both_remedies(tmp_
     fake.commands[pip] = CommandResult(returncode=1, stdout="", stderr="boom")
     res = svc.self_update_run_service()
     assert not res.ok and res.data.get("venv_sync_failed") and res.data.get("cleanup_failed")
-    assert "pip install -e" in res.summary and "untracked files" in res.summary
+    assert "venv-unsynced" in res.summary and "untracked files" in res.summary
 
 
 def test_run_service_cleanup_partial_does_not_ask_for_a_restart_systemd_does(tmp_path, monkeypatch, op_svc):

@@ -7,6 +7,7 @@ import json
 import os
 from os.path import exists as _op_exists
 from os.path import join as _op_join
+from typing import ClassVar
 
 from .paths import PathContainmentError
 from .service_base import ActionResult, _proc_ceased, _proc_start_time, _StopRun
@@ -531,7 +532,7 @@ class SelfUpdateOpsMixin:
 
         from . import selfupdate
         res = self.self_update_apply(force=force)
-        if not self._source_advanced(res):
+        if not (self._source_advanced(res) or self._resumes_sync(res)):
             return res                                        # no-op / already-current / failed / refused
         res = _dc.replace(res, data={**res.data, "update_applied": True})   # a real source advance
         root = selfupdate.repo_root()
@@ -540,12 +541,14 @@ class SelfUpdateOpsMixin:
                 [_sys.executable, "-m", "pip", "install", "-e", str(root)], self._PIP_SYNC_TIMEOUT_S)
             if pip.returncode != 0:
                 detail = selfupdate._summarize_output(pip.stderr or pip.stdout)
-                return _dc.replace(res, ok=False,
-                                   summary=self._with_cleanup_note(
-                                       res, "Update applied but the venv sync FAILED — run "
-                                       f"{_sys.executable} -m pip install -e {root} manually."
-                                       + (f" ({detail})" if detail else "")),
-                                   data={**res.data, "venv_sync_failed": True})
+                # Named and recorded, or — the record not written — the cause and the command
+                # to run by hand (`_incomplete_outcome`); ok=False either way.
+                summary, nxt, extra = self._incomplete_outcome(
+                    res, "venv-unsynced",
+                    "the venv sync FAILED" + (f" ({detail})" if detail else ""))
+                return _dc.replace(res, ok=False, summary=summary, next_commands=nxt,
+                                   data={**res.data, "venv_sync_failed": True, **extra})
+            self._incomplete_clear("venv-unsynced")
 
         # Re-render the managed units. An update whose new version changes a unit TEMPLATE
         # leaves the installed unit non-canonical, and boot restore then refuses to run —
@@ -560,12 +563,13 @@ class SelfUpdateOpsMixin:
         if not ok_units:
             # VISIBLE, not buried in data: a successful-looking update that left stale
             # units disables boot restore, and the operator has no reason to suspect it.
+            summary, nxt, extra = self._units_stale_outcome(res, unit_detail)
             res = _dc.replace(
-                res, ok=False, data={**res.data, "reason": "units-refresh-failed"},
-                summary=self._with_cleanup_note(
-                    res, "Update applied, but the managed systemd units could NOT be "
-                    f"refreshed — {unit_detail}. Boot restore will be skipped until "
-                    "this is repaired: lhpc self-update --repair-integration"))
+                res, ok=False, data={**res.data, "reason": "units-refresh-failed", **extra},
+                next_commands=nxt,
+                summary=summary)
+        else:
+            self._units_stale_clear()
         return res
 
     @invalidates_snapshot
@@ -820,7 +824,15 @@ class SelfUpdateOpsMixin:
             if refusal:
                 refusal.insert(0, "These paths would be discarded by 'overwrite local changes':")
             nxt = []
-            if res.get("needs_overwrite") or refusal:
+            if res.get("detached"):
+                # A developer moved the checkout off its branch: put it back, then update.
+                nxt = [f"git -C {selfupdate.repo_root()} switch "
+                       f"{getattr(self.controller(), 'branch', 'main')}", "lhpc self-update --apply"]
+            elif res.get("unreachable"):
+                refusal = ["  nothing to run here — the box could not reach the checkout's origin "
+                           "(network, DNS or the remote itself); once it can, run the same "
+                           "command again"]
+            elif res.get("needs_overwrite") or refusal:
                 refusal.append("Resetting the checkout to upstream discards exactly those local "
                                "commits/changes and keeps nothing of them.")
                 nxt = ["lhpc self-update --apply --overwrite"]
@@ -1130,7 +1142,7 @@ class SelfUpdateOpsMixin:
                                                 "checks state/locks/, then retries"])
                     raise _StopRun() from None
             res = self.self_update_apply(force=force)
-            if self._source_advanced(res):                  # incl. the reset+clean-failed partial
+            if self._source_advanced(res) or self._resumes_sync(res):   # incl. reset+clean-failed
                 root = selfupdate.repo_root()
                 if root is not None:
                     t0 = _time.monotonic()
@@ -1145,30 +1157,32 @@ class SelfUpdateOpsMixin:
                         # First line of pip's diagnostics, stripped of box-drawing/ANSI so the
                         # persisted summary reads cleanly in the GUI flash (never a mid-box tail).
                         detail = selfupdate._summarize_output(pip.stderr or pip.stdout)
-                        res = ActionResult(False, self._with_cleanup_note(
-                                               res, "Update applied, but the venv sync FAILED — run "
-                                               f"{sys.executable} -m pip install -e {root} manually, "
-                                               "then restart the console."
-                                               + (f" ({detail})" if detail else "")),
-                                           data={**dict(res.data), "venv_sync_failed": True},
-                                           next_commands=[f"{sys.executable} -m pip install -e {root}",
-                                                          "systemctl --user restart lhpc-web.service"])
+                        summary, nxt, extra = self._incomplete_outcome(
+                            res, "venv-unsynced",
+                            "the venv sync FAILED" + (f" ({detail})" if detail else ""))
+                        res = ActionResult(False, summary, next_commands=nxt,
+                                           data={**dict(res.data), "venv_sync_failed": True,
+                                                 **extra})
                     else:
+                        self._incomplete_clear("venv-unsynced")
                         # Refresh the managed units with the NEW code. This path applies
                         # inline (it does not go through _apply_and_sync), so without this
                         # a one-click update left the OLD units installed: the new version
                         # then reads its own integration as non-canonical, one-click
                         # updating goes away and boot restore is skipped.
                         ok_u, det_u = self._refresh_units_post_update()
+                        if ok_u:
+                            self._units_stale_clear()
+                            summary, nxt, extra = (
+                                self._ONECLICK_CLEANUP_SUMMARY if res.data.get("cleanup_failed")
+                                else res.summary), [], {}
+                        else:
+                            summary, nxt, extra = self._units_stale_outcome(res, det_u)
                         res = ActionResult(
-                            bool(res.ok) and ok_u,
-                            (self._ONECLICK_CLEANUP_SUMMARY if res.data.get("cleanup_failed")
-                             else res.summary) if ok_u else self._with_cleanup_note(
-                                res, "Update applied, but the managed systemd units could NOT be "
-                                f"refreshed — {det_u}. Boot restore will be skipped until "
-                                "repaired: lhpc self-update --repair-integration"),
+                            bool(res.ok) and ok_u, summary,
                             data={**dict(res.data), "units_refreshed": ok_u,
-                                  "units_refresh_detail": det_u})
+                                  "units_refresh_detail": det_u, **extra},
+                            next_commands=nxt)
         except _StopRun:
             pass
         # The record keeps the summary only, and the console shows that after the restart: the
@@ -1436,6 +1450,141 @@ class SelfUpdateOpsMixin:
 
     @invalidates_snapshot
     def self_update_repair_integration(self, *, restart: bool = True) -> ActionResult:
+        """The one command that resolves `units-stale` (`units_stale`): its success clears that
+        record and no other — a state it did not verify (`venv-unsynced`, `recovery-required`)
+        stays recorded and is named in its result; see `_repair_integration_steps`."""
+        import dataclasses as _dc
+        res = self._repair_integration_steps(restart=restart)
+        if res.ok:
+            self._units_stale_clear()
+            state, what = self.self_update_incomplete()
+            if state:
+                res = _dc.replace(res, summary=(
+                    f"{res.summary} Still recorded, not cleared by this repair — {state}: {what}. "
+                    f"Resolve it with: {self._incomplete_remedy(state)}"))
+        return res
+
+    # ---- the named states an applied self-update can leave -------------------------------------
+    #
+    # The checkout moved, but a step after it failed. Undoing the update is not one existing
+    # operation (the previous checkout, its venv and the config migrations already run would all
+    # have to come back), so the update ends in a NAMED state instead — journaled here, shown by
+    # `lhpc status` with its word, resolved by exactly one command, whose success clears it:
+    #   * `venv-unsynced` — the venv sync failed: `lhpc self-update --apply` (an apply finding the
+    #     checkout current runs the sync and the unit refresh it skipped);
+    #   * `units-stale` — the unit refresh failed: `lhpc self-update --repair-integration` (also
+    #     cleared by a later update whose refresh succeeds).
+    # A record that cannot be read or names no such state is `recovery-required` (which step
+    # failed is unknown: never read as one of the two, never cleared by either command). A record
+    # that cannot be WRITTEN leaves no state at all, so that update fails with the cause and the
+    # command to run by hand (`_incomplete_outcome`).
+
+    _INCOMPLETE_REMEDY: ClassVar[dict[str, str]] = {
+        "venv-unsynced": "lhpc self-update --apply",
+        "units-stale": "lhpc self-update --repair-integration"}
+
+    def _pip_sync_cmd(self) -> str:
+        import sys as _sys
+
+        from . import selfupdate
+        return f"{_sys.executable} -m pip install -e {selfupdate.repo_root() or '<checkout>'}"
+
+    def _incomplete_remedy(self, state: str) -> str:
+        if state in self._INCOMPLETE_REMEDY:
+            return self._INCOMPLETE_REMEDY[state]
+        return (f"by hand — sync the venv ({self._pip_sync_cmd()}), then lhpc self-update "
+                f"--repair-integration, then remove {self._incomplete_path()}")
+
+    def _incomplete_path(self):
+        from . import updater_units
+        return self._paths.under(*updater_units.SELFUPDATE_INCOMPLETE_REL)
+
+    def self_update_incomplete(self) -> tuple[str, str]:
+        """`(state, detail)` of the recorded named state, or `("", "")` (GET-safe: one read)."""
+        from . import runtime_fs
+        try:
+            raw = runtime_fs.read_text_regular(self._paths, self._incomplete_path(),
+                                               max_bytes=4096)
+        except FileNotFoundError:
+            return "", ""
+        except (OSError, PathContainmentError, ValueError):
+            return "recovery-required", "the self-update state record is unreadable"
+        try:
+            d = json.loads(raw)
+            if d.get("state") not in self._INCOMPLETE_REMEDY:
+                raise ValueError("no known state")
+            return d["state"], str(d.get("detail") or "")
+        except (ValueError, AttributeError):
+            return "recovery-required", ("the self-update state record is invalid — which step "
+                                         "of the last update failed is unknown")
+
+    def units_stale(self) -> str:
+        state, detail = self.self_update_incomplete()
+        return (detail or "units not refreshed") if state == "units-stale" else ""
+
+    def _incomplete_mark(self, state: str, detail: str) -> str:
+        """Record `state`: "" when written, else the cause."""
+        from . import runtime_fs
+        try:
+            runtime_fs.write_marker(self._paths, self._incomplete_path(),
+                                    json.dumps({"state": state, "detail": detail}))
+            return ""
+        except (OSError, PathContainmentError, ValueError) as exc:
+            return f"{type(exc).__name__}: {' '.join(str(exc).split())}"
+
+    def _incomplete_clear(self, state: str) -> None:
+        """Clear the record when it names `state` (a later step's success clears only its own)."""
+        from . import runtime_fs
+        if self.self_update_incomplete()[0] != state:
+            return
+        try:
+            runtime_fs.unlink(self._paths, self._incomplete_path())
+        except (OSError, PathContainmentError, ValueError):
+            pass                       # still recorded: `status` keeps saying so, which is safe
+
+    def _units_stale_clear(self) -> None:
+        self._incomplete_clear("units-stale")
+
+    def _incomplete_outcome(self, res: ActionResult, state: str,
+                            what: str) -> tuple[str, list, dict]:
+        """`(summary, next_commands, data)` of an update that ended in a named state (both
+        self-update paths; the result is ok=False either way). Recorded: the state, its word and
+        its one command. NOT recorded: no state exists for `status` or the command to find, so
+        the result is recovery-required — the cause, where the checkout is, and what to run by
+        hand: for a failed venv sync the sync AND the unit refresh it skipped, in that order
+        (`--apply` resumes them only from the record; without it, it finds the checkout current
+        and does nothing)."""
+        err = self._incomplete_mark(state, what)
+        if not err:
+            cmd = self._INCOMPLETE_REMEDY[state]
+            return (self._with_cleanup_note(
+                        res, f"Update applied — {state}: {what}. Resolve it with: {cmd}."),
+                    [cmd], {"state": state})
+        cmds = ([self._pip_sync_cmd(), self._INCOMPLETE_REMEDY["units-stale"]]
+                if state == "venv-unsynced" else [self._INCOMPLETE_REMEDY[state]])
+        how = (f"Resolve it by hand, in this order: {cmds[0]}; then {cmds[1]} (the unit refresh "
+               "this update skipped). `lhpc self-update --apply` cannot resume it without the "
+               "record" if state == "venv-unsynced" else f"Resolve it with: {cmds[0]}")
+        head = res.data.get("new_head_short") or "the new version"
+        return (self._with_cleanup_note(
+                    res, f"recovery-required: the update was applied, but {what}; the "
+                         f"self-update state record could not be written ({err}), so no {state} "
+                         f"state exists and `lhpc status` cannot show it. The checkout is at "
+                         f"{head}. {how}."),
+                cmds, {"state_record_error": err})
+
+    def _units_stale_outcome(self, res: ActionResult, detail: str) -> tuple[str, list, dict]:
+        return self._incomplete_outcome(
+            res, "units-stale", f"the managed systemd units could NOT be refreshed ({detail}); "
+                                "boot restore is skipped until this is repaired")
+
+    def _resumes_sync(self, res: ActionResult) -> bool:
+        """An apply that found the checkout current while `venv-unsynced` is recorded runs the
+        sync (and the unit refresh) it skipped: the one command that resolves that state."""
+        return (bool(res.ok) and bool(res.data.get("already"))
+                and self.self_update_incomplete()[0] == "venv-unsynced")
+
+    def _repair_integration_steps(self, *, restart: bool = True) -> ActionResult:
         """OPERATOR / migration: install/restore the COMPLETE canonical unit set (`updater_units.ALL_UNITS`) for this runtime root, then daemon-reload, verify the active fragments, enable both request watchers (`--now`), the web unit and the boot-restore unit. With `restart=True` (CLI default) also restart the console; with
         `restart=False` (the web self-repair bridge) leave the running console alone so the update
         itself bounces it. Refuses while an uninstall guard or request/in-flight evidence exists,

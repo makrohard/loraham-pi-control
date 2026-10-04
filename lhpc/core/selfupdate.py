@@ -812,10 +812,17 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, branch: s
     if root is None:
         return {"ok": False, "message": "Not a git checkout — self-update is unavailable."}
     local = local_state(system)
+    if not branch and local.get("head") and not local.get("branch"):
+        # A detached HEAD (a developer moved the checkout): fast-forwarding it would leave it
+        # detached; nothing is fetched or moved until it is back on its branch.
+        return {"ok": False, "detached": True,
+                "message": "The checkout is not on a branch (detached HEAD) — self-update follows "
+                           "a branch; switch the checkout back to it first."}
     br = branch or local.get("branch") or "main"
     up = check_upstream(system, br)
     if not up.get("ok"):
-        return {"ok": False, "message": f"Could not reach upstream: {up.get('error', '')}"}
+        return {"ok": False, "unreachable": True,
+                "message": f"Could not reach upstream: {up.get('error', '')}"}
     ref = f"{_REMOTE}/{br}"
     if up["upstream_head"] and up["upstream_head"] == local.get("head"):
         return {"ok": True, "already": True, "message": "Already up to date.", "deps_changed": False}
