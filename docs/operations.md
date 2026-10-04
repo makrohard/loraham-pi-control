@@ -107,7 +107,9 @@ record what it did — *recovery-required* (below the table):
    step — and a power loss while a source update stages its copy (once the copy's identity is
    recorded) — rolled back or finished by the next lhpc source command (a binary install: by the
    next binary command, which runs that recovery first under its locks). The result names the
-   cause and the command that resolves it.
+   cause and, for every refusal but two, the command that resolves it: a refusal because a
+   controller uninstall is in progress or a reboot or shutdown is pending names none — it resolves
+   by itself once that uninstall or power action has ended.
 3. **A named state** — only where putting the previous version back is not one operation lhpc
    has. Each is recorded on disk, shown by `lhpc status` with its word, and resolved by one
    command:
