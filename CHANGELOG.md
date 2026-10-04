@@ -7,6 +7,12 @@
   What a save accepts, refuses, writes and reports is unchanged; two saves of the same stack at the same
   moment still both land.
 
+- A stack start that fails now stops again the parts it started — a part that fails its own check is
+  told to stop at once, the parts it verified once the start as a whole has failed — and the daemon too when that
+  start launched it (a daemon that was already running stays). The result names anything that remains
+  running, with the reason, and the daemon then stays up beneath it. A start that only waits for you to run
+  a terminal program (chat) is not a failure and keeps its daemon.
+
 - A build now keeps the sources it builds from locked for its whole run — the stack's own and every
   source it consumes, such as `openhop-repeater` for the MeshCore node or Reticulum for NomadNet — so an
   update or uninstall of one of them is refused until the build ends, and the build's completion record
