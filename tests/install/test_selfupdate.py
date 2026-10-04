@@ -431,6 +431,20 @@ def test_an_invalid_self_update_record_is_recovery_required_and_no_command_clear
     assert rec.read_text() == raw
 
 
+@pytest.mark.parametrize("raw", ['{"state": []}', '{"state": {}}'], ids=["list", "dict"])
+def test_a_record_with_an_unhashable_state_is_recovery_required(op_svc, monkeypatch, raw):
+    """Valid JSON whose "state" is a list or an object is a malformed record: recovery-required,
+    as an invalid one — never an exception out of `status` or recovery."""
+    from lhpc.core.services import ActionResult
+    svc, _fake, _root = _op_inactive(op_svc, monkeypatch,
+                                     ActionResult(True, "Already up to date.", data={}))
+    rec = svc._incomplete_path()
+    rec.parent.mkdir(parents=True, exist_ok=True)
+    rec.write_text(raw)
+    assert svc.self_update_incomplete()[0] == "recovery-required"
+    assert any("recovery-required" in d for d in svc.status().details)
+
+
 def test_the_repair_does_not_clear_venv_unsynced(op_svc, monkeypatch):
     """`--repair-integration` verifies the units, not the venv: with `venv-unsynced` recorded it
     repairs, keeps the record and names it with its own command."""

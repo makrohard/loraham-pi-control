@@ -1514,7 +1514,7 @@ class SelfUpdateOpsMixin:
             if d.get("state") not in self._INCOMPLETE_REMEDY:
                 raise ValueError("no known state")
             return d["state"], str(d.get("detail") or "")
-        except (ValueError, AttributeError):
+        except (ValueError, AttributeError, TypeError):    # TypeError: an unhashable "state"
             return "recovery-required", ("the self-update state record is invalid — which step "
                                          "of the last update failed is unknown")
 
