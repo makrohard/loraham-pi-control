@@ -4864,3 +4864,25 @@ def test_update_of_a_stack_without_a_source_names_its_build_and_upstream(tmp_pat
     assert res.next_commands == ["lhpc build graywolf --yes",
                                  "lhpc update graywolf --upstream --yes"]
     assert not (tmp_path / "state" / "source-txn").exists()
+
+
+@pytest.mark.parametrize("start", ["behind the pin", "clone missing"])
+def test_a_pinned_update_converges_to_the_pin(tmp_path, git, make_repo, installer, start):
+    """A clone left at an older pin, or one moved away while its ownership record stays: the
+    pinned update ends with the new pin checked out and recorded — the one state it promises."""
+    repo = tmp_path / "rt" / "local" / "app"
+    v1 = make_repo(repo)
+    assert installer(_comp(pin=v1)).adopt_source(_comp(pin=v1), source="pinned").status == "done"
+    (repo / "file.txt").write_text("v2\n")
+    git(repo, "commit", "-qam", "v2")
+    v2 = git(repo, "rev-parse", "HEAD")
+    comp = _comp(pin=v2)
+    inst = installer(comp)
+    dest = inst.paths.under("src", "app")
+    if start == "clone missing":
+        shutil.rmtree(dest)
+        assert _rec(inst) is not None                                  # the record still says installed
+    action = inst.adopt_source(comp, force=True, source="pinned")
+    assert action.status == "done", action.detail
+    assert git(dest, "rev-parse", "HEAD") == v2 == _rec(inst).resolved_commit
+    assert sorted(p.name for p in dest.parent.iterdir()) == ["app"]
