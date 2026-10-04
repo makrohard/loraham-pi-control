@@ -29,7 +29,7 @@ refuses every setting flag.
 
 The Monitor shows the receiver's state, coordinates, altitude **with its datum** (`512.3 m MSL`,
 `560.8 m HAE`, or `(legacy alt)`), the receiver's reported time (never the box's clock; without an
-RMC date it reads `12:34:56 UTC (date unavailable)`), satellites used of seen, a **Skyview** pane
+RMC date it reads `12:34:56 (date unavailable)`), satellites used of seen, a **Skyview** pane
 (azimuth clockwise from north, elevation towards the centre, filled = used, size = SNR) and an
 **NMEA stream** pane. It polls only while open, one request at a time.
 
@@ -40,7 +40,7 @@ RMC date it reads `12:34:56 UTC (date unavailable)`), satellites used of seen, a
 | `no fix` | the receiver talks, no usable position; with mode 0 or 1 no coordinate is shown |
 | `no gpsd device` | gpsd lists no device |
 | `gpsd device present, no position data yet` | a device is listed but produced no position report in the 2.5 s budget — a listed path may be RTCM or AIS, so it is not called a receiver until it reports |
-| `several position sources` | two gpsd devices produced positions, or an untagged report sits beside several devices; nothing is merged and the NMEA pane is disabled |
+| `several position sources` | two gpsd devices produced positions, or, with no device-tagged report, an untagged one sits beside several devices; nothing is merged and the NMEA pane is disabled |
 | `gpsd unavailable` | no connection, protocol failure, or an unsupported protocol major |
 | `stale` | a direct receiver sent no navigation sentence for 20 s |
 | `fixed position (configured)` | the manual source; altitude is MSL (that is how the fixed feed emits it) |
@@ -106,7 +106,7 @@ meshcom-gps` is refused unless the current plan uses that feed.
 |---|---|---|
 | `auto` | default | gpsd on `127.0.0.1:2947` if one is listening, otherwise no position; never refuses a start |
 | `gpsd` | almost always | USB receiver, HAT, or a GPS server on the network all look the same through gpsd; `--host` reaches a gpsd on another box |
-| `nmea` | no gpsd, one consumer | opens the device directly, so gpsd must **not** also own it. Bootstrap it with `--no-time-source`, or it will install gpsd — see below |
+| `nmea` | no gpsd, one consumer | opens the device directly, so gpsd must **not** also own it. Bootstrap skips gpsd once `source = nmea` is saved (or pass `--no-time-source`) — see below |
 | `fixed` | the station does not move | no receiver needed |
 | `off` | no position | explicit |
 
@@ -135,7 +135,7 @@ gpsd's own protocol; a remote *gpsd* is reached with `--host`). If lhpc cannot r
 `lhpc doctor` says so and names the fix.
 
 HAT serial wiring, `dialout` membership and antenna placement are outside lhpc. **Cold start
-takes minutes**: `gpsd reachable but no fix` is a warning, not a failure.
+takes minutes**: `source reachable, waiting for a fix` is a warning, not a failure.
 
 ## Per stack
 

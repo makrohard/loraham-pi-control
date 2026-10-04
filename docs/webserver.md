@@ -57,13 +57,14 @@ Every valid, unrevoked client certificate (a named device credential) has full a
 | `auth-everywhere` | requires a client cert | requires a client cert |
 | `no-auth` | open | open (**dangerous**) |
 
-Decisions use the real TCP peer (`$remote_addr`); nginx strips client-supplied
-`X-Forwarded-For` / `Forwarded` / `X-LHPC-*` headers.
+Decisions use the real TCP peer (`$remote_addr`); nginx blanks client-supplied
+`X-Forwarded-For` / `Forwarded` and overwrites `X-LHPC-Peer` / `X-LHPC-Client-Verify` with its own
+values.
 
 Remote exposure needs a bind of `0.0.0.0`, at least one allowed source CIDR and a confirm
 phrase: `enable-remote` for a private range with a cert-requiring mode, `enable-remote-danger`
-for a public range (`0.0.0.0/0`) or `no-auth` (the Monitor and Configuration views then show a
-red warning). IPv6 bind/CIDR values are rejected; `::1` counts for local access only.
+for a public range (`0.0.0.0/0`) or `no-auth` (the Monitor then shows a red warning
+for `no-auth`, a yellow one for a public range). IPv6 CIDRs are rejected; `::1` counts for local access only.
 
 With the managed firewall in use, exposure (`apply` and the boot-time bind) is gated on its live
 receipt ([the three status dimensions](firewall.md#the-three-status-dimensions-and-why-green-is-strict)).
@@ -105,7 +106,8 @@ Flags: [CLI](cli.md#webserver).
    console's **Webserver → Certificates** panel offers **Download .p12** on a loopback session
    only.
 4. **Copy the bundle and the server CA to the remote machine**, one file per `scp` (the panel
-   shows these commands with the box's current address; `ca.crt` is also a plain download there,
+   shows equivalent commands with the box's current address, fetching the `.p12` straight from
+   `config/tls/exports/`; `ca.crt` is also a plain download there,
    the path phones use):
    ```
    scp <user>@<host>:lhpc-laptop.p12 .
@@ -122,7 +124,8 @@ Flags: [CLI](cli.md#webserver).
    [managed firewall](firewall.md#the-managed-firewall-one-command), or open `8443` in your own.
 7. **Prove it:** `lhpc webserver verify`, browse to `https://192.168.0.10:8443/` from the remote
    machine and pick the `lhpc-laptop` certificate. Then delete the bundle on the Pi:
-   `lhpc webserver cert discard-export lhpc-laptop` (the certificate stays valid).
+   `lhpc webserver cert discard-export lhpc-laptop && rm ~/lhpc-laptop.p12` (the certificate stays
+   valid).
 
 Back to loopback: `lhpc webserver disable-remote && lhpc webserver apply`, then `verify`.
 
@@ -145,9 +148,9 @@ lhpc webserver apply
 ```
 
 - `--mode`: `local` (loopback only), `lan` (only `--cidr` ranges pass) or `public`
-  (`0.0.0.0/0`). Non-`local` needs `--confirm-phrase enable-remote`; `public`, `no-auth` or an
-  `http` `--scheme` need `enable-remote-danger`.
-- `--port`: `0` or absent = not proxied. The console suggests console port + 1 + the page's
+  (like `lan`; `--cidr 0.0.0.0/0` admits everyone). Non-`local` needs `--confirm-phrase enable-remote`;
+  a public range, `no-auth` or an `http` `--scheme` need `enable-remote-danger`.
+- `--port`: `0` = not proxied (omitted: the saved port is kept). The console suggests console port + 1 + the page's
   position (first pages sorted by id, then further pages; fresh box: graywolf `8444`, meshcom
   `8445`, meshcore `8446`, meshtastic `8447`, reticulum `8448`), skipping ports already saved;
   any free port ≥ 1024 works.
@@ -215,8 +218,8 @@ A Pi has no battery-backed clock, so a box in 1970, or one whose GPS gave it a r
 would mint material that is already expired (a clock running ahead: "not yet valid") and lock you
 out.
 
-**Gated:** `tls-renew`, `cert issue`, `cert reissue`, `cert revoke`, and `expose` / a WLAN join
-when they re-issue the server certificate. The check runs before anything is written (for
+**Gated:** `tls-renew`, `cert issue`, `cert reissue`, `cert revoke`, and `expose` when it
+re-issues the server certificate (a WLAN join under an unverified clock skips the re-issue instead). The check runs before anything is written (for
 `reissue`, before the old certificate is revoked). The clock counts as verified when the kernel
 reports it synchronised, its estimated error is at most 1 s, and it reads no earlier than
 2025-01-01 (compiled in). File timestamps are not an input (they come from the same clock); the
@@ -295,15 +298,15 @@ lhpc webserver verify     # runs the proof checklist and persists state/webserve
 lhpc webserver status     # renders the cached evidence (read-only)
 ```
 
-The checklist covers config validity, dependencies, the Waitress socket, `nginx -t`, PKI
-presence and the effective listeners. The presented certificate, mTLS behaviour and revocation
-enforcement are proven only by the live tests with real client material; without that, remote
-exposure reads **not proven active**.
+The checklist covers config validity, dependencies, whether `lhpc-web` (the Waitress backend) is
+active, `nginx -t`, PKI presence and the effective listeners. The presented certificate, mTLS
+behaviour and revocation enforcement are proven only by the live tests with real client material;
+verify does not claim them.
 
 **Verify activates nothing.** The evidence file also keeps the *applied snapshot*: the console's
 and every enabled proxy's bind/port/scheme/access mode/CIDRs as nginx last loaded them
 successfully. The security pills colour a live listener from that snapshot, never from a saved
-policy; a live exposed listener with no snapshot reads red ("policy unknown") until one `apply`.
+policy; a live exposed listener with no snapshot reads red (auth `unknown`) until one `apply`.
 
 ## Applying changes and recovery
 
@@ -319,12 +322,12 @@ success only once the listeners match the desired exposure.
   restart goes through the managed watcher (`lhpc-nginx-restart.path`): the console cannot
   command systemd, it writes a request marker. If the console does not come back:
   `systemctl --user restart lhpc-nginx lhpc-web` from an operator shell.
-- **nginx not running**: `apply` reports **"service not active / repair required"** and starts
+- **nginx not running**: `apply` reports **"the nginx service is not active — repair required"** and starts
   nothing; start it from an operator shell with `lhpc webserver start-service` (or
   `systemctl --user enable --now lhpc-nginx.service`).
 
 `lhpc webserver reset-defaults` sets desired config back to loopback:8443 /
-local-unauthenticated / remote off, clears the CIDRs and disables every stack proxy (port
+https / `local-open-remote-auth` / remote off, clears the CIDRs and disables every stack proxy (port
 cleared, mode/CIDRs kept). It never deletes CA keys, certificates, the CRL, revocation history,
 `.p12` exports or the session secret. A reload cannot move a console nginx holds on `0.0.0.0` back
 to loopback, so from an operator shell reset then restarts `lhpc-nginx`; from the console (which

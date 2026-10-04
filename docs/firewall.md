@@ -32,7 +32,7 @@ else is needed.
 | 8080 | Graywolf web UI | loopback hardcoded | password | already safe (reach it via its `graywolf` proxy page) |
 | 8788 | MeshCore Web UI | loopback hardcoded | **none** | already safe (reach it via its `meshcore` proxy page) |
 | 8790 | MeshChat (reticulum) | loopback hardcoded | **none** | already safe (reach it via its `reticulum` proxy page) |
-| 4242 | Reticulum client access | loopback (bind locked) | source allow-list (`rns_allow`), no app auth | direct-access row |
+| 4242 | Reticulum client access | loopback (bind locked) | source allow-list (`rns_allow`), no app auth | already safe (bind locked to loopback) |
 | 18083/12323 | MeshCom QEMU | loopback hardcoded | — | already safe |
 | 8443 | lhpc console (nginx) | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
 | 8444–8448 (+1 per further page, e.g. 8449) | stack proxy pages | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
@@ -74,7 +74,7 @@ To verify on demand:
 sudo systemctl start lhpc-firewall-check.service
 ```
 
-The dashboard's Firewall line then reads one of:
+The dashboard's Firewall line then reads, for example:
 
 - `Firewall: Active — Secure default · Config ✓ · Boot ✓ · Live ✓`
 - `Firewall: Active — Compatibility · unwanted stack ports blocked · Config ✓ · Boot ✓ · Live ✓`
@@ -98,8 +98,8 @@ The dashboard's Firewall line then reads one of:
 
 **Any base chain's `drop` beats another table's `accept`.** In secure-default mode the lhpc input
 chain has `policy drop`, so an accept in *your* table cannot open a port lhpc does not allow;
-with a custom firewall prefer compatibility mode. The apply script lists the foreign tables it
-detects and changes none of them. Conversely, an lhpc allow cannot guarantee reachability past a
+with a custom firewall prefer compatibility mode. The apply records the foreign tables it
+detects (`lhpc firewall` and the dashboard name them) and changes none of them. Conversely, an lhpc allow cannot guarantee reachability past a
 foreign drop.
 
 ## Modes
@@ -184,8 +184,8 @@ table inet lhpc {
         ct state established,related accept
         meta l4proto ipv6-icmp accept              # NDP — mandatory for IPv6
         ip protocol icmp accept
-        udp sport 67 udp dport 68 accept           # DHCPv4 client
-        udp sport 547 udp dport 546 accept         # DHCPv6 client
+        meta nfproto ipv4 udp sport 67 udp dport 68 accept   # DHCPv4 client
+        meta nfproto ipv6 udp sport 547 udp dport 546 accept # DHCPv6 client
         ip daddr 224.0.0.251 udp dport 5353 accept # mDNS (v4)
         ip6 daddr ff02::fb udp dport 5353 accept   # mDNS (v6)
         tcp dport 22 accept                        # SSH (or your configured ports)
@@ -209,7 +209,7 @@ A restart refused by the gate says *restart was not performed; the running stack
 the same reason; the dry run (`lhpc stack start <id>` / `lhpc stack restart <id>` without `--yes`)
 shows the same refusal.
 
-A TCP listener with no firewall metadata is treated as exposed and gated.
+A non-loopback TCP listener with no firewall metadata is treated as exposed and gated.
 
 **Across updates.** Every receipt carries the installed helper's revision (a hash of its
 source); after an update replaces the helper the dashboard shows *Update required* until you
