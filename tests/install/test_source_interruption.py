@@ -82,6 +82,7 @@ UPDATE = [
     ("OwnedMarker.rewrite", "app-*.json"),                         # activated
     ("write_marker", "state/source-registry/app-*.json"),          # the ownership record
     ("source_fs._rename_noreplace_at", ".app.prev"),     # prior -> quarantine
+    ("OwnedMarker.rewrite", "app-*.json"),                         # the quarantine's identity
     ("source_fs.remove_bound", "..app.prev.quarantine-*-*"),
     ("OwnedMarker.remove", "app-*.json"),
     ("OwnedMarker.remove", STAGING),
@@ -131,9 +132,14 @@ def test_the_operation_writes_exactly_the_pinned_points(tmp_path, box, op):
     assert _copy_run_sorted(log) == _copy_run_sorted({"adopt": ADOPT, "update": UPDATE}[op])
 
 
+# The journal write that names the renamed-aside prior by its full identity. A stop between that
+# rename and this write is the one point recovery cannot prove (the rename moved the ctime the
+# journal holds): it is retained, not resumed — its own test below.
+QUARANTINE_RECORD = UPDATE.index(("source_fs._rename_noreplace_at", ".app.prev")) + 1
 CASES = [pytest.param(op, k, f, id=f"{op}-{w}:{p}-{f}")
          for op, points in (("adopt", ADOPT), ("update", UPDATE))
-         for k, (w, p) in enumerate(points) for f in sorted(FAILURES)]
+         for k, (w, p) in enumerate(points) for f in sorted(FAILURES)
+         if (op, k, f) != ("update", QUARANTINE_RECORD, "KeyboardInterrupt")]
 
 
 @pytest.mark.parametrize(("op", "point", "failure"), CASES)
@@ -154,6 +160,24 @@ def test_an_interrupted_operation_recovers_and_retries(tmp_path, box, git, op, p
     assert run().status == ("skipped" if op == "adopt" and held else "done")
     newest = _assert_one_whole_source(root, inst, git, versions, op, allow_absent=False)
     assert newest == max(versions.values())
+
+
+def test_a_stop_before_the_quarantine_is_recorded_retains_it(tmp_path, box):
+    """The process stops right after the archived prior was renamed to its quarantine, before the
+    journal names it: the journal still holds the prior's identity from before the rename, whose
+    ctime the rename moved. Recovery cannot tell that tree from a directory on a recycled inode,
+    so it retains it, with the one by-hand text `lhpc status` shows too."""
+    root = tmp_path / "rt"
+    inst, run, _ = box(root, "update")
+    run_interrupted(root, run, fail_at=QUARANTINE_RECORD, exc=KeyboardInterrupt, raw=RAW)
+    [q] = (root / "src").glob("..app.prev.quarantine-*-*")
+    msgs = inst.recover_source_activations()
+    text = (f"the removal of the archived prior was interrupted and {q} cannot be finished (not "
+            f"provably the archived prior) — retained; inspect it, then remove it by hand (rm -rf "
+            f"{q}) and the journal under state/source-txn")
+    assert f"recovery-required for app: {text}" in msgs, msgs
+    assert q.is_dir() and (q / "notes.txt").read_text() == "mine\n" and inst._pending_journals()
+    assert [(w, h) for _r, w, h in inst.pending_states()] == [("recovery-required", text)]
 
 
 def _assert_one_whole_source(root, inst, git, versions, op, *, allow_absent):

@@ -1273,15 +1273,19 @@ class Installer:
         moved away or removed, the active source a directory; ("kept", holders) — still at
         `.prev` AS RECORDED (`pident`, compared as the caller passes it), with what the in-use
         probe finds can write into it now (none: []); ("unproven", []) — at `.prev` but not the
-        identity the journal recorded; ("", []) — anything else (an interrupted removal, an
+        identity the journal recorded; ("quarantine-unproven", []) — an interrupted removal whose
+        quarantine is not the identity the journal recorded (the next command retains it, the same
+        text: `_quarantine_kept`); ("", []) — anything else (an interrupted removal it resumes, an
         unsafe parent): the next command decides."""
         from . import source_fs
         try:
             with source_fs.ManagedSourceTransaction(self.paths, dest.parent) as txn:
                 if txn.leaf_kind(prev.name) == "absent":
-                    gone = (txn.leaf_kind(self._prev_quarantine(prev, staging)) == "absent"
-                            and txn.usable(dest.name))
-                    return ("gone" if gone else ""), []
+                    qname = self._prev_quarantine(prev, staging)
+                    if txn.leaf_kind(qname) == "absent":
+                        return ("gone" if txn.usable(dest.name) else ""), []
+                    return ("" if source_fs.ident_matches(txn.fd, qname, pident)
+                            else "quarantine-unproven"), []
                 if txn.leaf_kind(prev.name) != "dir":
                     return "", []
                 if not source_fs.ident_matches(txn.fd, prev.name, pident):
@@ -1337,6 +1341,9 @@ class Installer:
                            if state in ("prior-dirty-retained", "activated") else ("", []))
             if where == "gone":
                 continue                            # only the journal: cleared by the next command
+            if where == "quarantine-unproven":
+                out.append((rel, "recovery-required", self._quarantine_kept(prev, staging)))
+                continue
             if where == "unproven":
                 out.append((rel, "recovery-required", f"the archived prior at "
                             f"{self._source_rel(prev)} is kept but is not provably the one the "
@@ -1790,6 +1797,15 @@ class Installer:
         finally:
             h.close()
 
+    def _quarantine_kept(self, prev: Path, staging: Path,
+                         why: str = "not provably the archived prior") -> str:
+        """The one text for an interrupted removal of the archived prior that is not finished
+        (`_drop_prev` and `status` both say it)."""
+        held = prev.with_name(self._prev_quarantine(prev, staging))
+        return (f"the removal of the archived prior was interrupted and {held} cannot be finished "
+                f"({why}) — retained; inspect it, then remove it by hand (rm -rf {held}) and the "
+                "journal under state/source-txn")
+
     @staticmethod
     def _prev_quarantine(prev: Path, staging: Path) -> str:
         """Where this transaction's archived prior is renamed for its removal: named after the
@@ -1799,7 +1815,8 @@ class Installer:
         return f".{prev.name}.quarantine-{staging.name.rsplit('.candidate-', 1)[1]}"
 
     def _prev_cleanup_ok(self, txn, prev: Path, ident=None, active=None,
-                         dest: Path | None = None, why=None, qname: str = "") -> bool:
+                         dest: Path | None = None, why=None, qname: str = "",
+                         record=None) -> bool:
         """Remove the archived `.prev` — IDENT-BOUND ONLY. `.prev` is the transaction's own
         quarantine (atomically detached from dest with identity proof at archive time); its
         deletion binds to the recorded (dev, ino) through content removal and re-proves it
@@ -1819,7 +1836,12 @@ class Installer:
         atomic with respect to that scan, as `source_fs.detach_and_remove` does for uninstall:
         `.prev` is first renamed aside (a pathname writer can no longer reach it), the dirty
         scan is re-run on the renamed tree, and it is deleted only if still clean. Otherwise it
-        is renamed back and retained — `why["dirty"]` set when the scan found late changes."""
+        is renamed back and retained — `why["dirty"]` set when the scan found late changes.
+
+        `record(ident)` journals the renamed-aside tree's FULL identity, read after the rename
+        (which moved its ctime): the only proof on which recovery resumes a removal a crash
+        interrupted. A write error (OSError) lets the removal run on; an interrupt between the rename
+        and that write leaves the quarantine unprovable: retained, recovery-required."""
         from . import source_fs
         if txn.leaf_kind(prev.name) == "absent":
             return True
@@ -1842,6 +1864,12 @@ class Installer:
                 txn.rename_noreplace(prev.name, target)
             except (OSError, PathContainmentError):
                 return False                       # nothing moved -> RETAIN
+            if record is not None:
+                try:
+                    st = os.stat(target, dir_fd=txn.fd, follow_symlinks=False)
+                    record([st.st_dev, st.st_ino, st.st_ctime_ns])
+                except OSError:
+                    pass                           # unrecorded: see the docstring
             scan = {}
             # The rename stops pathname writers, not a process that reaches the prior another
             # way — an open descriptor, a working directory in it, a shared writable mapping:
@@ -1965,15 +1993,15 @@ class Installer:
             the recovery-required verdict. Late local changes in it retain it for the operator
             (journal marked operator-only); an unprovable or substituted prior is retained.
             A removal that was interrupted after the prior was renamed to its quarantine is put
-            back first (dev+ino: the rename moved its ctime) and finished the same way."""
+            back first — only when the quarantine has the FULL identity the journal recorded
+            after that rename — and finished the same way; any other is retained."""
             pident = idents.get("prev")
             if txn.leaf_kind(prev.name) == "absent":
                 qname = self._prev_quarantine(prev, staging)
                 if txn.leaf_kind(qname) == "absent":
                     return None
-                held = prev.with_name(qname)
                 why = "not provably the archived prior"
-                if pident is not None and source_fs.ident_matches(txn.fd, qname, pident[:2]):
+                if pident is not None and source_fs.ident_matches(txn.fd, qname, pident):
                     try:
                         txn.rename_noreplace(qname, prev.name)
                         txn.fsync()
@@ -1981,11 +2009,9 @@ class Installer:
                     except (OSError, PathContainmentError) as exc:
                         why = str(exc)
                 if why:
-                    return (f"recovery-required for {dest.name}: the removal of the archived "
-                            f"prior was interrupted and {held} cannot be finished ({why}) — "
-                            f"retained; inspect it, then remove it by hand (rm -rf {held}) and "
-                            "the journal under state/source-txn")
-                pident = list(pident[:2])
+                    return (f"recovery-required for {dest.name}: "
+                            + self._quarantine_kept(prev, staging, why))
+                pident = list(pident[:2])          # our rename back moved its ctime again
             source_fs.race_seam("pre-prev-cleanup", str(dest))
             prev_why: dict = {}
             dirty = self._prev_dirty_scan(txn, dest, prev, pident, prev_why)
@@ -1994,7 +2020,9 @@ class Installer:
                         "could not be proven (journal + prior retained)")
             if not dirty and not self._prev_cleanup_ok(
                     txn, prev, pident, active=(dest.name, active_ident),
-                    dest=dest, why=prev_why, qname=self._prev_quarantine(prev, staging)):
+                    dest=dest, why=prev_why, qname=self._prev_quarantine(prev, staging),
+                    record=lambda q: marker.rewrite(self._journal_payload(
+                        dest, prev, staging, "activated", txn_id, meta, {**idents, "prev": q}))):
                 if not prev_why.get("dirty"):
                     return (f"recovery-required for {dest.name}: archived prior "
                             "could not be removed or was substituted (journal + "
@@ -2478,9 +2506,12 @@ class Installer:
                     return "recovery-required"
                 active = ((dest.name, [handle.st_dev, handle.st_ino])
                           if handle is not None else None)
+                def record(q):
+                    jh["idents"] = {**jh["idents"], "prev": q}
+                    return self._update_journal(jh, dest, prev, staging, "activated")
                 if not dirty and not self._prev_cleanup_ok(
                         txn, prev, prior_ident, active=active, dest=dest, why=prev_why,
-                        qname=self._prev_quarantine(prev, staging)):
+                        qname=self._prev_quarantine(prev, staging), record=record):
                     if not prev_why.get("dirty"):
                         return "recovery-required"
                     dirty = True

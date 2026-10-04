@@ -314,7 +314,11 @@ class OwnedMarker:
         """Rewrite the journal to `text` through the RETAINED file fd, but only while the
         VISIBLE leaf is still our inode. Verifies visible identity before AND after the write
         (a replacement swapped in during the write is detected), fsyncs the file. Returns
-        False on any mismatch — the caller then rolls back and retains evidence."""
+        False on any mismatch or write error; a write error can leave the journal truncated,
+        which a later reader finds unreadable (`lhpc status`: recovery-required). The caller
+        decides: most roll back and retain evidence; the record of a prior's quarantine
+        identity (install.py `_prev_cleanup_ok`) is crash insurance only, and the removal it
+        guards runs on without it."""
         if not self._visible_matches():
             return False
         try:
