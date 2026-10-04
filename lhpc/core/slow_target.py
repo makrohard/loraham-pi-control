@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import math
 import re
 import tomllib
 
@@ -35,6 +36,12 @@ _REF_MINOR_RE = re.compile(r"(\d+)\.(\d+)\.\d")
 # TO it runs the previous release's helper, which cannot print the line, on the Zero and in the
 # lane alike: L4 is measurable from the next release on (docs/maintenance.md).
 PIP_SYNC_SINCE = "0.12.0"
+
+
+def _num(v) -> bool:
+    """A real, finite number: NaN compares false with everything and would pass every budget
+    check, and inf is no measurement."""
+    return not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(v)
 
 
 class LimitUnavailable(Exception):
@@ -225,11 +232,11 @@ def entry_errors(entry: dict) -> list[str]:
     if entry.get("op") not in OPS:
         errs.append(f"op {entry.get('op')!r} not one of {OPS}")
     sec = entry.get("seconds")
-    if isinstance(sec, bool) or not isinstance(sec, (int, float)) or sec <= 0:
+    if not _num(sec) or sec <= 0:
         errs.append("seconds must be a positive number")
     if entry.get("op") == "build":
         q = entry.get("quiet_s")
-        if isinstance(q, bool) or not isinstance(q, (int, float)) or q < 0:
+        if not _num(q) or q < 0:
             errs.append("a build entry needs quiet_s (longest gap without progress)")
     if not isinstance(entry.get("key"), str) or not _KEY_RE.fullmatch(entry.get("key", "")):
         errs.append("key must be pin:<..>, deb:<..> or deps:<..>")
@@ -330,7 +337,15 @@ def calibration_failures(calibrations, workload: str, measured: dict) -> list[st
     if not zero:
         return [f"uncalibrated: run the Zero row (no zero2w [[calibration]] for {workload})"]
     z = max(zero, key=lambda c: c.get("date"))
-    return [f"the container is faster than the Zero at {part}: {measured.get(part)} s < "
-            f"{z[part]} s — lower SLOW_CPUS"
-            for part in ("cpu_s", "io_s", "mem_s")
-            if not isinstance(measured.get(part), (int, float)) or measured[part] < z[part]]
+    fails = []
+    for part in ("cpu_s", "io_s", "mem_s"):
+        if not _num(z.get(part)):
+            fails.append(f"the zero2w [[calibration]] of {workload} has no finite {part}: "
+                         f"{z.get(part)!r}")
+        elif not _num(measured.get(part)):
+            fails.append(f"the container's {part} is not a finite number: "
+                         f"{measured.get(part)!r}")
+        elif measured[part] < z[part]:
+            fails.append(f"the container is faster than the Zero at {part}: {measured[part]} s "
+                         f"< {z[part]} s — lower SLOW_CPUS")
+    return fails

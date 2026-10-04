@@ -129,6 +129,9 @@ reads *Update required* after the update; run `sudo bash <runtime root>/config/f
   an update that would stall or run into a time limit on a slow box turns the release check red instead of
   reaching yours.
 
+- The slow-box release check refuses a time or calibration value that is not a finite number (NaN,
+  infinity) and names it, instead of letting it pass the budget comparison.
+
 ## 0.11.11
 
 Upgrade note — boxes with the firewall installed: this release changes the firewall helper again, so the dashboard

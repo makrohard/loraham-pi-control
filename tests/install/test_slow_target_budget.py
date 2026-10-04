@@ -338,3 +338,22 @@ def test_calibration_fails_a_container_faster_than_the_zero():
     assert stt.calibration_failures(zero, "sha256:other", {"cpu_s": 9e9, "io_s": 9e9,
                                                            "mem_s": 9e9})
     assert stt.calibration_failures(zero, "sha256:w", {"cpu_s": 500})       # parts missing
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_a_non_finite_number_is_malformed_never_compared(bad):
+    """NaN compares false with everything, so `NaN <= 0` and `NaN < z` both pass: a non-finite
+    number must be refused by name before any budget comparison sees it."""
+    assert stt.entry_errors(_entry(seconds=1.5)) == []
+    assert stt.entry_errors(_entry(op="build", seconds=2.0, quiet_s=0.5)) == []
+    assert any(e.startswith("seconds") for e in stt.entry_errors(_entry(seconds=bad)))
+    assert any(e.startswith("a build entry needs quiet_s")
+               for e in stt.entry_errors(_entry(op="build", seconds=2.0, quiet_s=bad)))
+    zero = [{"workload": "sha256:w", "source": "zero2w", "cpu_s": 400.0, "io_s": 90.0,
+             "mem_s": 60.0, "date": dt.date(2026, 10, 1)}]
+    ok = {"cpu_s": 400.5, "io_s": 90.0, "mem_s": 61.0}
+    assert stt.calibration_failures(zero, "sha256:w", ok) == []
+    fails = stt.calibration_failures(zero, "sha256:w", {**ok, "io_s": bad})
+    assert len(fails) == 1 and "io_s" in fails[0], fails
+    fails = stt.calibration_failures([{**zero[0], "mem_s": bad}], "sha256:w", ok)
+    assert len(fails) == 1 and "mem_s" in fails[0], fails
