@@ -541,13 +541,16 @@ def test_slow_build_budget():
     l4 = f"no row C evidence for {stt.SELFUPDATE_COMPONENT} selfupdate-pip"
     intro = (_introducing(_prev_tag()) and any(f.startswith(l4) for f in fails)
              and bool(stt.waiver(stt.SELFUPDATE_COMPONENT, "selfupdate-pip", __version__)))
+    # The waiver first, then the verdict word: a waived failure never reads **FAIL**.
+    standing, boot = _waived(fails, BASELINE.get("measured", []), intro)
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "slow-build-summary.md").write_text(
         "### slow-build: E (row C) vs Z (Zero baseline)\n\n"
-        + "\n".join(f"- {s}" for s in lines + [f"**FAIL** {f}" for f in fails]
+        + "\n".join(f"- {s}" for s in lines
+                     + [f"**FAIL** {f}" if f in standing else f"**WAIVED** {f}" for f in fails]
                      + ([f"**NO EVIDENCE** {L4_INTRODUCING}"] if intro else [])) + "\n")
     assert LANE_OPS, "the lane measures nothing"
-    fails, boot = _waived(fails, BASELINE.get("measured", []), intro)
+    fails = standing
     assert not fails, f"{len(fails)} budget failure(s):\n" + "\n".join(fails)
     if boot:
         pytest.skip(boot)

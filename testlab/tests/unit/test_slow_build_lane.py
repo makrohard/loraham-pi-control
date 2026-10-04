@@ -177,6 +177,22 @@ def test_the_l4_waiver_needs_the_version_rule_too(monkeypatch, tmp_path):
 
 
 
+def test_a_waived_failure_is_never_shown_as_fail(monkeypatch, tmp_path):
+    """The summary's verdict word follows the waiver: on the introducing release the L4 pair
+    passes the case, so the summary names it waived, not **FAIL**."""
+    monkeypatch.setattr(lane, "OUT", tmp_path)
+    monkeypatch.setattr(lane, "_prev_tag", lambda: "v9.9.9")
+    monkeypatch.setattr(lane, "_introducing", lambda prev: prev == "v9.9.9")
+    monkeypatch.setattr(lane, "EVIDENCE", {})
+    monkeypatch.setattr(lane, "LANE_OPS", [(lane.stt.SELFUPDATE_COMPONENT, "selfupdate-pip")])
+    monkeypatch.setattr(lane, "BASELINE", {"measured": [{"op": "build"}]})
+    monkeypatch.setattr(lane, "__version__", lane.stt.PIP_SYNC_SINCE)
+    lane.test_slow_build_budget()
+    summary = (tmp_path / "slow-build-summary.md").read_text()
+    assert "**FAIL**" not in summary, summary
+    assert f"**WAIVED** {L4}" in summary and "**NO EVIDENCE**" in summary, summary
+
+
 def test_the_l4_waiver_does_not_need_a_helper_run(monkeypatch, tmp_path):
     """Correction 12: the waiver reads the previous tag, not the self-update case's outcome. With
     no helper run at all (the case failed before it), the introducing release still waives the L4
