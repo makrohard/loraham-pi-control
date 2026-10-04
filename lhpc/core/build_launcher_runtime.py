@@ -92,14 +92,24 @@ def _bias_child_oom() -> None:
         pass
 
 
-def _flock_bounded(fd: int, tries: int) -> bool:
+def _flock_bounded(fd: int, tries: int, mode: int = fcntl.LOCK_EX) -> bool:
     for _ in range(tries):
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, mode | fcntl.LOCK_NB)
             return True
         except OSError:
             time.sleep(_LOCK_POLL)
     return False
+
+
+def _git_out(argv: list) -> tuple[int, str]:
+    """`build_plan.consumed_lines`'s runner in the launcher: bounded at 5 s like the CLI path's; a
+    timeout or a git that cannot run reads as an unreadable revision."""
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return 1, ""
+    return r.returncode, r.stdout
 
 
 def _resolve_argv(tokens: list) -> list:
@@ -210,6 +220,7 @@ def run(spec: dict) -> None:
     cwd = spec["cwd"]
     paths = Paths(runtime_root=Path(spec["runtime_root"]))
     lock_names = sorted(spec.get("lock_names") or [])
+    shared_names = set(spec.get("shared_lock_names") or []) - set(lock_names)
     index_name = spec.get("index_lock_name") or ""
     op, target = spec.get("op") or "", spec.get("target") or ""
     # A Build gets the CLI's limits, read here at exec time from the unit's env; a Test keeps its plain
@@ -286,15 +297,17 @@ def run(spec: dict) -> None:
                                      "— resolve it before building/testing\n")
                     raise SystemExit(3)
 
-            # Hold the source-path lock(s) for the FULL job lifetime BEFORE touching the source.
-            for name in lock_names:
+            # Hold the source-path lock(s) for the FULL job lifetime BEFORE touching the source:
+            # the job's own exclusive, a build's dependency sources shared, in one sorted order.
+            for name in sorted(set(lock_names) | shared_names):
                 try:
                     f = _open(name)
                 except (PathContainmentError, OSError) as e:
                     detail[0] = "blocked: source lock unsafe"
                     sys.stderr.write(f"source lock open failed ({name}): {e}\n")
                     raise SystemExit(3) from None
-                if not _flock_bounded(f.fileno(), tries):
+                mode = fcntl.LOCK_SH if name in shared_names else fcntl.LOCK_EX
+                if not _flock_bounded(f.fileno(), tries, mode):
                     f.close()
                     detail[0] = "blocked: another source operation holds the source lock"
                     sys.stderr.write(f"could not acquire source lock {name} — another source operation "
@@ -312,6 +325,12 @@ def run(spec: dict) -> None:
                 detail[0] = "attempt superseded before admission"
                 sys.stderr.write("web job: attempt superseded — refusing to run\n")
                 raise SystemExit(3)
+
+            # The receipt's source revisions, read now that every lock is held: what the steps
+            # below consume is what the receipt records.
+            from . import build_plan
+            receipt = ((spec.get("marker_text") or "")
+                       + build_plan.consumed_lines(spec.get("consumed") or [], _git_out))
 
             # Invalidate the completion marker FAIL-CLOSED before the first step —
             # same contract as lifecycle.build(): a build killed mid-way must never
@@ -375,8 +394,7 @@ def run(spec: dict) -> None:
                     if spec.get("inputs_path") and spec.get("inputs_text"):
                         runtime_fs.atomic_write(paths, Path(spec["inputs_path"]),
                                                 spec["inputs_text"], 0o644)
-                    runtime_fs.atomic_write(paths, Path(marker_path),
-                                            spec["marker_text"], 0o644)
+                    runtime_fs.atomic_write(paths, Path(marker_path), receipt, 0o644)
                 except (OSError, PathContainmentError) as exc:
                     detail[0] = f"steps passed but the completion marker could not be written ({exc})"[:200]
                     raise SystemExit(1) from None

@@ -961,7 +961,9 @@ def render_build_launcher(steps: list, runtime: str, source: str,
                           op: str = "", target: str = "", stack: str = "",
                           marker_path: str = "", marker_text: str = "",
                           inputs_path: str = "", inputs_text: str = "",
-                          step_timeout: float | None = None) -> str:
+                          step_timeout: float | None = None,
+                          shared_lock_paths: list | tuple = (),
+                          consumed: list | tuple = ()) -> str:
     """A self-contained Python launcher that runs build/test steps sequentially with
     NO shell: it resolves `{pkgconfig:NAME}` via pkg-config and runs each argv with
     its env and cwd, streaming output. Returns nonzero on the first failing step.
@@ -970,7 +972,10 @@ def render_build_launcher(steps: list, runtime: str, source: str,
     lock (`index_lock`), acquires the `lock_paths` source flock(s) for its WHOLE lifetime,
     and only THEN releases the index lock. While the index lock is held no new journal can
     appear and the source lock is already taken, so a concurrent update/uninstall cannot
-    race the running job."""
+    race the running job. `shared_lock_paths` (a build's dependency sources) are held SHARED
+    the same way, so a dependency cannot change while it is consumed. `consumed` lists the
+    `(id, source dir)` pairs whose revisions the launcher appends to `marker_text`, read once
+    it holds every lock (`build_plan.consumed_lines`)."""
     resolved = []
     for step in steps:
         # SECRETS-AT-REST: env is carried UNRESOLVED (the `@file:`/`@env:` tokens, not
@@ -1007,6 +1012,7 @@ def render_build_launcher(steps: list, runtime: str, source: str,
     from pathlib import Path as _P
     spec = {"steps": resolved, "cwd": source, "runtime_root": str(runtime),
             "lock_names": sorted(_P(p).name for p in lock_paths),
+            "shared_lock_names": sorted(_P(p).name for p in shared_lock_paths),
             "index_lock_name": (_P(index_lock).name if index_lock else ""),
             # Web-job attempt identity (all plain identity strings — no secrets) so the child can
             # gate on its job marker and record a terminal green/red result. "" for non-web builds.
@@ -1018,7 +1024,9 @@ def render_build_launcher(steps: list, runtime: str, source: str,
             "marker_path": marker_path, "marker_text": marker_text,
             # Build-input sidecar (declared inputs + consumed-asset digests), written BEFORE
             # the marker — the same contract as lifecycle.build().
-            "inputs_path": inputs_path, "inputs_text": inputs_text}
+            "inputs_path": inputs_path, "inputs_text": inputs_text,
+            # The receipt's (id, source dir) pairs: their revisions are read under the locks.
+            "consumed": [[str(cid), str(src)] for cid, src in consumed]}
     # Per-step timeout (the component's manifest build/test timeout, as on the CLI path); absent
     # -> the runtime's own default. LHPC_BUILD_STEP_TIMEOUT_S still overrides it at exec time.
     # Carried as a STRING: repr() of a non-finite float (TOML allows inf/nan) is the bare name

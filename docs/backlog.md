@@ -5,7 +5,6 @@ Known gaps reviewed and left for a later change. Each entry says what holds the 
 ## Contents
 
 - [Two-stage unit-template migration](#two-stage-unit-template-migration)
-- [Transitive build-dependency source locks](#transitive-build-dependency-source-locks)
 - [SX1262 on 868 — not run on hardware](#sx1262-on-868--not-run-on-hardware)
 - [On-air coverage](#on-air-coverage)
 - [Independent review](#independent-review)
@@ -39,20 +38,6 @@ environment variable instead of granting a HOME path (Sideband:
 allowed to write them — staged outside the sandboxed helper, applied before boot restore next
 evaluates canonicality, and able to roll back. Design it before the first release that must
 change a unit.
-
-## Transitive build-dependency source locks
-
-Detached builds lock only the component's **own** checkout, so a `build_requires` dependency can
-move while the build runs.
-
-**Holding the line:** the build marker is a *receipt*. `is_built()` recomputes the consumed
-source SHAs; if a dependency ended at a different SHA the component reads **not built** and
-cannot start as a completed build. Sideband reading "built" with an obsolete copied plugin is
-closed by `build_requires = ["rns-lora-interface"]`. Regression:
-`tests/stacks/test_reticulum_stack.py::test_changing_a_consumed_source_invalidates_the_completed_receipt`.
-
-**What a real fix needs:** lock the component *and every transitive build dependency* for the
-build's lifetime, and derive the receipt only once all are held.
 
 ## SX1262 on 868 — not run on hardware
 

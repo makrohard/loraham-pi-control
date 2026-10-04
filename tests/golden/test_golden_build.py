@@ -2,7 +2,8 @@
 
 Phases: the static refusals (controller id, binary channel, not installed — no lock, no write) →
 the plan (apply=False) → task admission → the source-txn index lock (recover-scan, refuse an
-unresolved journal) → every source lock → per component: invalidate a stale completion marker,
+unresolved journal) → every source lock (each built component's and every `build_requires`
+dependency's, transitively) → per component: invalidate a stale completion marker,
 run each step through the runner into its own log, then write the build-inputs sidecar and the
 completion marker last. The detached web build is a different code path (a rendered launcher,
 tests/core/test_build_launcher_runtime.py).
@@ -105,9 +106,11 @@ def test_completion_marker_is_written_last(tmp_path, run_op, phases, monkeypatch
     per_comp = [["mutate:invalidate-marker"] + ["mutate:build-step"] * n
                 + ["final:stamp:.lhpc-build-inputs", "final:stamp:.lhpc-build-complete"]
                 for n in (5, 3, 3)]                   # meshcore-node, meshcore-webui, meshcore-cli
+    # S4: the source of meshcore-node's build dependency (openhop-repeater-src) is locked too.
     assert run.phases == ["admission", "lock:controller-task-admission", "lock:source-txn-index",
                           "lock:source.src/meshcore-cli", "lock:source.src/meshcore-webui",
-                          "lock:source.src/openhop-core"] + sum(per_comp, [])
+                          "lock:source.src/openhop-core", "lock:source.src/openhop-repeater"
+                          ] + sum(per_comp, [])
     markers = {
         "src/openhop-core/.venv/.lhpc-build-complete":
             "lhpc build complete\nconsumed meshcore-node ok\nconsumed openhop-repeater-src ok\n",

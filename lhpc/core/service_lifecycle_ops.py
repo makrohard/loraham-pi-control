@@ -3198,14 +3198,13 @@ class LifecycleOpsMixin:
         # _resolve returns RUNNABLE components; the build must ALSO cover buildable
         # non-runnable sources (libraries like RadioLib — their artifacts are consumed
         # via build_requires, so skipping them silently pushed builds onto external
-        # fallbacks outside the runtime root).
-        st_full = self.stack(target)
-        if st_full is not None:
-            have = {c.id for _, c in items}
-            items = items + [(st_full, c) for c in st_full.components
-                             if c.build_steps and c.id not in have]
+        # fallbacks outside the runtime root). The one selection rule: `build_plan.select`.
+        from . import build_plan
+        by_all = {c.id: c for st in self.stacks() for c in st.components}
+        owner_of = {c.id: st for st in self.stacks() for c in st.components}
+        buildable = [(owner_of[c.id], c) for c in
+                     build_plan.select([c for _, c in items], self.stack(target))]
         life = self._lifecycle()
-        buildable = [(s, c) for s, c in items if c.build_steps]
         # MISSING-SOURCE PREFLIGHT — BEFORE the GUI one, and for the same reason: decide
         # explicitly instead of letting the build discover it. `Lifecycle.build` joins the
         # source path lexically and hands it to Popen as `cwd`, so an absent directory
@@ -3226,9 +3225,8 @@ class LifecycleOpsMixin:
             # Only a dependency with NO build steps of its own (a pure checkout, e.g. the pinned
             # openhop repeater source) is decided here: one with build steps is a `buildable`
             # entry the missing-source preflight below already judges (optional -> skipped).
-            _by_id = {cc.id: cc for st in self.stacks() for cc in st.components}
             _deps_absent = sorted({(s.id, d.id) for s, c in buildable
-                                   for d in (_by_id.get(x) for x in c.build_requires)
+                                   for d in (by_all.get(x) for x in c.build_requires)
                                    if d is not None and d.source and not d.build_steps
                                    and not self._source_present(d)})
             if _deps_absent:
@@ -3237,7 +3235,7 @@ class LifecycleOpsMixin:
                     f"Refusing to build '{target}': build dependency "
                     f"{', '.join(sorted({d for _, d in _deps_absent}))} is not installed.",
                     details=[f"  [not-installed] {d}: no source at "
-                             f"{life.source_dir(_by_id[d])} — install the stack to adopt it"
+                             f"{life.source_dir(by_all[d])} — install the stack to adopt it"
                              for _, d in _deps_absent],
                     next_commands=[f"lhpc install {sid}" for sid in sorted({s for s, _ in _deps_absent})])
         if _absent:
@@ -3300,17 +3298,7 @@ class LifecycleOpsMixin:
         # BUILD-DEPENDENCY order: a component's build_requires providers build FIRST
         # (fresh root: RadioLib's libRadioLib.a must exist before the daemon's build.sh
         # consumes it). Stable within equal rank (manifest order preserved).
-        by_id = {c.id: c for _, c in buildable}   # BEFORE sort: the list is empty
-        def _rank(c, seen=None):                  # during sorting (CPython list.sort)
-            seen = seen or set()
-            if c.id in seen:
-                return 0                         # defensive: cycle -> flat
-            seen.add(c.id)
-            deps = [d for d in (c.build_requires or ()) if d in by_id]
-            if not deps:
-                return 0
-            return 1 + max(_rank(by_id[d], seen) for d in deps)
-        buildable.sort(key=lambda sc: _rank(sc[1]))
+        buildable = [(owner_of[c.id], c) for c in build_plan.order([c for _, c in buildable])]
         if not apply:
             details = [f"  [build] {c.id}: "
                        + " ; ".join(" ".join(str(t) for t in st.get("argv", []))
@@ -3325,7 +3313,8 @@ class LifecycleOpsMixin:
         # preflight/acquire race: a journal that appears after a failed transaction is
         # caught under the index lock before the source locks are taken.
         from . import reslock
-        src_paths = sorted({c.source.path for _, c in buildable if c.source})
+        # Every source the build consumes, transitively, stays locked for the whole build.
+        src_paths = build_plan.lock_sources([c for _, c in buildable], by_all)
         ctx_err = self._auto_install_ctx_error(auto_install_ctx, src_paths)
         if ctx_err:
             return ActionResult(False, f"Refusing to build '{target}': {ctx_err}",
@@ -3366,7 +3355,10 @@ class LifecycleOpsMixin:
                     res = life.build(comp, log_base=log_base,
                                      redactor=redactor, should_cancel=should_cancel,
                                      on_log_open=self._log_announcer(comp.id, details),
-                                     marker_extra=self._consumed_source_lines(comp),
+                                     # read under the locks, never from the request memo
+                                     marker_extra=build_plan.consumed_lines(
+                                         build_plan.consumed_sources(comp, by_all, life.source_dir),
+                                         self._git_out),
                                      inputs=self._build_inputs_to_record(comp))
                     ok = ok and res.ok
                     details.append(f"  [{res.state.value}] build {comp.id} "
@@ -3406,6 +3398,12 @@ class LifecycleOpsMixin:
         return ActionResult(ok, summary,
                             details=details, next_commands=["lhpc status " + target],
                             data=build_meta)
+
+    def _git_out(self, argv) -> tuple[int, str]:
+        """`build_plan.consumed_lines`'s runner on the CLI path: the injected system's runner,
+        bounded at 5 s, as `_consumed_source_lines_uncached` reads it."""
+        r = self._system.runner.run(argv, 5.0)
+        return getattr(r, "returncode", 1), (r.stdout or "")
 
     def log_tail(self, target: str, lines: int = 300, job: str | None = None,
                  band: str = ""):
@@ -3523,7 +3521,7 @@ class LifecycleOpsMixin:
         import time as _time
         import uuid
 
-        from . import commands, jobresult, procident, reslock, runtime_fs
+        from . import build_plan, commands, jobresult, procident, reslock, runtime_fs
         life = self._lifecycle()
         import contextlib as _contextlib
         _adm_stack = _contextlib.ExitStack()
@@ -3549,31 +3547,19 @@ class LifecycleOpsMixin:
             if err:
                 return None, "blocked", err
             comps = [c for _, c in items]
-            # BUILD-REQUIRES ordering for DETACHED (parallel, unsequenceable) jobs: a provider like RadioLib
-            # must have its artifact built BEFORE the daemon's build.sh runs. `_resolve` returns only RUNNABLE
-            # components, so a non-runnable library provider is otherwise never built by the web job at all.
-            # Pull the owning stack's declared providers in; if any is not built yet, build the MISSING
-            # provider(s) THIS round and defer the consumer (the operator builds again once they finish) —
-            # never build a provider and its consumer in the same parallel round (the consumer would race the
-            # provider's artifact). When the providers are already built, build the consumer(s) only.
+            # BUILD: the one selection and order (`build_plan`); the parallel per-component jobs
+            # then build one round — a provider and its consumer never in the same round (the
+            # consumer would race the provider's artifact). While a provider is not built, this
+            # round builds it and the operator builds again once it finishes.
             build_dep_note = ""
+            by_all = {c.id: c for st in self.stacks() for c in st.components}
             if op == "build":
-                provider_ids = {d for c in comps for d in (c.build_requires or ())}
-                if provider_ids:
-                    sid = self.stack_of(target)
-                    st_full = self.stack(sid) if sid else None
-                    have = {c.id for c in comps}
-                    if st_full is not None:
-                        comps = comps + [c for c in st_full.components
-                                         if c.id in provider_ids and c.build_steps and c.id not in have]
-                    unbuilt_prov = [c for c in comps if c.id in provider_ids and not self.is_built(c)]
-                    if unbuilt_prov:
-                        comps = unbuilt_prov
-                        names = ", ".join(c.name for c in unbuilt_prov)
-                        build_dep_note = (f"Building the build dependency first ({names}) — run Build again "
-                                          "to build the rest once it finishes.")
-                    else:
-                        comps = [c for c in comps if c.id not in provider_ids]
+                ordered = build_plan.order(build_plan.select(comps, self.stack(target)))
+                comps, again = build_plan.web_round(ordered, self.is_built)
+                if again:
+                    names = ", ".join(c.name for c in comps)
+                    build_dep_note = (f"Building the build dependency first ({names}) — run Build again "
+                                      "to build the rest once it finishes.")
             src_paths = {c.source.path for c in comps if c.source}
             src_keys = sorted({reslock.source_lock_key(c.source.path) for c in comps if c.source})
 
@@ -3630,6 +3616,13 @@ class LifecycleOpsMixin:
                 src = str(life.source_dir(c))
                 ckeys = sorted({reslock.source_lock_key(c.source.path)}) if c.source else []
                 lock_paths = ([str(reslock.lock_file_path(self._paths, ckeys[0]))] if ckeys else [])
+                # A BUILD also holds every other source it consumes (transitively) for its whole
+                # run — SHARED, so the parallel jobs of one request can consume the same provider,
+                # while any operation that changes that source (it locks exclusive) is refused.
+                shared_paths = ([str(reslock.lock_file_path(self._paths, reslock.source_lock_key(sp)))
+                                 for sp in build_plan.lock_sources([c], by_all)
+                                 if not (c.source and sp == c.source.path)]
+                                if op == "build" else [])
                 if not jobresult.reserve(self._paths, log, aid, op, c.id,
                                          self.stack_of(c.id) or "", ckeys):
                     return None, aid, f"could not record the {op} job for '{c.id}' (a live attempt exists)"
@@ -3637,16 +3630,16 @@ class LifecycleOpsMixin:
                     try:
                         # The detached job must complete the SAME contract as lifecycle.build():
                         # invalidate the marker before step one, write the receipt only after
-                        # every step passes. The receipt SHAs are computed here at spawn; the
-                        # launcher holds the source locks for its whole lifetime, so the
-                        # consumed sources cannot move between spawn and completion.
+                        # every step passes. The receipt's source revisions are read by the
+                        # launcher once it holds every lock (`consumed`), never here at spawn.
                         from .lifecycle import BUILD_MARKER_TEXT
                         # BUILD only: a detached TEST run goes through this same spawn and
                         # must never invalidate or rewrite the build completion marker.
                         _mark = bool(c.build_marker) and op == "build"
                         marker_path = str(life.source_dir(c) / c.build_marker) if _mark else ""
-                        marker_text = (BUILD_MARKER_TEXT + self._consumed_source_lines(c)
-                                       if _mark else "")
+                        marker_text = BUILD_MARKER_TEXT if _mark else ""
+                        consumed = (build_plan.consumed_sources(c, by_all, life.source_dir)
+                                    if _mark else [])
                         inputs = self._build_inputs_to_record(c) if _mark else None
                         # The same limits as lifecycle.build()/host_test() on the CLI path: a Build passes
                         # the raw manifest value (0 = none) to progress.build_limits in the launcher.
@@ -3654,6 +3647,7 @@ class LifecycleOpsMixin:
                                         else (c.test_timeout or life.TEST_TIMEOUT_S))
                         script = commands.render_build_launcher(
                             steps, runtime, src, lock_paths, index_lock=index_lock,
+                            shared_lock_paths=shared_paths, consumed=consumed,
                             result_name=log, attempt_id=aid, op=op, target=c.id, stack=self.stack_of(c.id) or "",
                             marker_path=marker_path, marker_text=marker_text,
                             inputs_path=str(inputs[0]) if inputs else "",

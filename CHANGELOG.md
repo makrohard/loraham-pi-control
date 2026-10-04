@@ -2,6 +2,13 @@
 
 ## 0.12.0
 
+- A build now keeps the sources it builds from locked for its whole run — the stack's own and every
+  source it consumes, such as `openhop-repeater` for the MeshCore node or Reticulum for NomadNet — so an
+  update or uninstall of one of them is refused until the build ends, and the build's completion record
+  names the exact revisions it used. The console's Build and `lhpc build` now decide which components to
+  build the same way: Build on a single component builds that component, as `lhpc build <component>`
+  does; the stack's Build still builds a missing dependency first.
+
 - The systemd units LHPC installs are now pinned in the test suite: no release can change one by
   accident, because a changed unit would make boot restore refuse on every box that already has the old one.
 
