@@ -358,6 +358,10 @@ class SelfUpdateOpsMixin:
                         "fast-forward update will be REFUSED. Review the divergence, then use "
                         "`--overwrite` (or the web confirmation) to reset onto upstream.")
             return ActionResult(True, msg, data=view)
+        if (behind := selfupdate.venv_unsynced(selfupdate.repo_root())):
+            return ActionResult(True, f"The checkout is up to date, but the venv is not synced "
+                                f"to it ({behind}).", data={**view, "venv_unsynced": True},
+                                next_commands=["lhpc self-update --apply"])
         return ActionResult(True, "Up to date.", data=view)
 
     @invalidates_snapshot
@@ -1590,8 +1594,9 @@ class SelfUpdateOpsMixin:
         its one command. NOT recorded: no state exists for `status` or the command to find, so
         the result is recovery-required — the cause, where the checkout is, and what to run by
         hand: for a failed venv sync the sync AND the unit refresh it skipped, in that order
-        (`--apply` resumes them only from the record; without it, it finds the checkout current
-        and does nothing)."""
+        (without the record `--apply` resumes them only when the update changed the version
+        number, `selfupdate.venv_unsynced`; otherwise it finds the checkout current and does
+        nothing)."""
         err = self._incomplete_mark(state, what)
         if not err:
             cmd = self._INCOMPLETE_REMEDY[state]
@@ -1601,8 +1606,8 @@ class SelfUpdateOpsMixin:
         cmds = ([self._pip_sync_cmd(), self._INCOMPLETE_REMEDY["units-stale"]]
                 if state == "venv-unsynced" else [self._INCOMPLETE_REMEDY[state]])
         how = (f"Resolve it by hand, in this order: {cmds[0]}; then {cmds[1]} (the unit refresh "
-               "this update skipped). `lhpc self-update --apply` cannot resume it without the "
-               "record" if state == "venv-unsynced" else f"Resolve it with: {cmds[0]}")
+               "this update skipped). Without the record, `lhpc self-update --apply` resumes it "
+               "only when the update changed the version number" if state == "venv-unsynced" else f"Resolve it with: {cmds[0]}")
         head = res.data.get("new_head_short") or "the new version"
         return (self._with_cleanup_note(
                     res, f"recovery-required: the update was applied, but {what}; the "
@@ -1617,10 +1622,13 @@ class SelfUpdateOpsMixin:
                                 "boot restore is skipped until this is repaired")
 
     def _resumes_sync(self, res: ActionResult) -> bool:
-        """An apply that found the checkout current while `venv-unsynced` is recorded runs the
-        sync (and the unit refresh) it skipped: the one command that resolves that state."""
+        """An apply that found the checkout current while `venv-unsynced` is recorded — or while
+        the venv's recorded version differs from the checkout's (a failed sync whose record was
+        never written) — runs the sync (and the unit refresh) it skipped."""
+        from . import selfupdate
         return (bool(res.ok) and bool(res.data.get("already"))
-                and self.self_update_incomplete()[0] == "venv-unsynced")
+                and (self.self_update_incomplete()[0] == "venv-unsynced"
+                     or bool(selfupdate.venv_unsynced(selfupdate.repo_root()))))
 
     def _repair_integration_steps(self, *, restart: bool = True) -> ActionResult:
         """OPERATOR / migration: install/restore the COMPLETE canonical unit set (`updater_units.ALL_UNITS`) for this runtime root, then daemon-reload, verify the active fragments, enable both request watchers (`--now`), the web unit and the boot-restore unit. With `restart=True` (CLI default) also restart the console; with

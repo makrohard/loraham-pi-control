@@ -225,6 +225,16 @@ def _no_pip_install(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _venv_records_this_version(monkeypatch):
+    """HERMETIC: the version the test venv's install recorded is the developer's, not the box's
+    (a venv installed from an older checkout records an older one), and `venv_unsynced` would
+    read every checkout as unsynced. Pin it to this checkout's version; the tests about an
+    unsynced venv set their own."""
+    from lhpc.core import selfupdate
+    monkeypatch.setattr(selfupdate, "installed_version", lambda: selfupdate.__version__)
+
+
+@pytest.fixture(autouse=True)
 def _no_shell_execution():
     """SAFETY: nothing LHPC runs may go through a shell.
 

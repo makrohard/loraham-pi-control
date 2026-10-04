@@ -138,6 +138,35 @@ def repo_root() -> Path | None:
     return None
 
 
+def installed_version() -> str:
+    """The version the venv's install of lhpc recorded (its distribution metadata, written by the
+    last `pip install -e`), or "" when there is none. A checkout that moved without a sync still
+    imports its new code but keeps the old record."""
+    from importlib import metadata
+    try:
+        return metadata.version("loraham-pi-control")
+    except metadata.PackageNotFoundError:
+        return ""
+
+
+def venv_unsynced(root: Path | None) -> str:
+    """"installed <a>, checkout <b>" when the venv's recorded version differs from the version in
+    the checkout at `root`, else "" (also when either cannot be read). Needs no state of its own,
+    so it finds a failed sync whose `venv-unsynced` record was never written; a source change that
+    keeps the version number is not seen."""
+    if root is None:
+        return ""
+    try:
+        m = re.search(r'__version__\s*=\s*"([^"]+)"',
+                      (root / "lhpc" / "version.py").read_text(encoding="utf-8"))
+    except OSError:
+        return ""
+    have = installed_version()
+    if not (m and have) or m.group(1) == have:
+        return ""
+    return f"installed {have}, checkout {m.group(1)}"
+
+
 def _git(system: System, root: Path, args: list[str], timeout: float):
     return system.runner.run(["git", "-C", str(root), *args], timeout=timeout)
 

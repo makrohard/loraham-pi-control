@@ -373,6 +373,38 @@ def test_a_failed_venv_sync_is_the_named_state_venv_unsynced_resolved_by_the_nex
     assert not any("venv-unsynced" in d for d in svc.status().details)
 
 
+def test_the_check_reports_a_venv_behind_the_checkout(env, monkeypatch):
+    """No record names the failed sync (it could not be written), yet the venv's recorded version
+    differs from the checkout's: the check says so instead of "Up to date." (finding 83)."""
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=env["sys"], paths=env["paths"])
+    assert not svc.self_update_check().data.get("venv_unsynced")
+    monkeypatch.setattr(selfupdate, "installed_version", lambda: "0.0.1")
+    res = svc.self_update_check()
+    assert res.data["venv_unsynced"] and "0.0.1" in res.summary
+    assert res.next_commands == ["lhpc self-update --apply"]
+
+
+def test_an_apply_finding_the_checkout_current_syncs_a_venv_behind_it(op_svc, monkeypatch):
+    """Without a `venv-unsynced` record, an apply that finds the checkout current still runs the
+    sync and the unit refresh when the venv's recorded version differs from the checkout's."""
+    from lhpc.core.services import ActionResult, ControllerService
+    svc, fake, root = _op_inactive(op_svc, monkeypatch, ActionResult(
+        True, "Already up to date.", data={"already": True}))
+    # Stubbed: the unit refresh needs a real systemd unit set; this test is about whether the
+    # sync runs, and the refresh has its own coverage.
+    monkeypatch.setattr(ControllerService, "_refresh_units_post_update",
+                        lambda self: (True, "units canonical"))
+    (root / "lhpc").mkdir()
+    (root / "lhpc" / "version.py").write_text(f'__version__ = "{selfupdate.__version__}"\n')
+    svc.self_update_apply_operator()
+    assert list(_pip_key(root)) not in fake.calls                     # the control: in sync
+    monkeypatch.setattr(selfupdate, "installed_version", lambda: "0.0.1")
+    r = svc.self_update_apply_operator()
+    assert r.ok and list(_pip_key(root)) in fake.calls, r.summary
+    assert svc.self_update_incomplete() == ("", "")
+
+
 @pytest.mark.parametrize("state", ["venv-unsynced", "units-stale"])
 def test_a_named_state_whose_record_cannot_be_written_fails_with_the_command_to_run(
         op_svc, monkeypatch, state):
@@ -403,7 +435,7 @@ def test_a_named_state_whose_record_cannot_be_written_fails_with_the_command_to_
     assert "No space left on device" in r.summary and "abc1234" in r.summary, r.summary
     assert f"no {state} state exists" in r.summary and r.next_commands == cmds, r.summary
     if state == "venv-unsynced":
-        assert "in this order" in r.summary and "cannot resume it without the record" in r.summary
+        assert "in this order" in r.summary and "resumes it only when the update changed the version number" in r.summary
         # `--apply` really cannot: with no record it finds the checkout current and runs nothing.
         assert not svc._resumes_sync(ActionResult(True, "current", data={"already": True}))
     assert svc.self_update_incomplete() == ("", "")
