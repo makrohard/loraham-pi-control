@@ -483,7 +483,7 @@ class MaintenanceOpsMixin:
         for path, members in by_path.items():
             idents = {m[3] for m in members}
             if len(idents) > 1:
-                who = ", ".join(f"{st.id}/{c.id}" for st, c, _, _, _ in members)
+                who = ", ".join(f"{st.id}/{c.id} ({sel})" for st, c, sel, _, _ in members)
                 conflicts.append(f"shared source {path!r}: targeted consumers ({who}) "
                                  "resolve to incompatible source identities (selector/"
                                  "remote/known-working) — resolve or re-confirm before "

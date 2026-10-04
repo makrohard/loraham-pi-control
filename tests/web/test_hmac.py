@@ -119,6 +119,7 @@ def test_install_fails_closed_when_hmac_enable_fails(tmp_path, monkeypatch):
                         lambda self, *a, **k: ActionResult(False, "boom"))   # forces enable to fail
     r = svc.install("meshcom", apply=True)
     assert not r.ok and "HMAC password could NOT be enabled" in r.summary
+    assert r.next_commands, r                    # the install's own next steps are kept
     assert svc.hmac_status("meshcom") is False and not _xr_pw(tmp_path).exists()
 
 

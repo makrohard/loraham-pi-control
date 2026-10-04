@@ -54,6 +54,7 @@ SCOPES = {
     "lhpc/core/service_lifecycle_ops.py": {"build"},
     "lhpc/core/service_maintenance.py": {"update", "graywolf_upstream_update",
                                          "_graywolf_upstream_update_locked"},
+    "lhpc/core/services.py": {"install"},
 }
 
 
@@ -153,6 +154,11 @@ DYNAMIC = {
         "built only inside `if _deps_absent:` and `if _refused:`, from their stacks",
         ("tests/install/test_deps.py::test_direct_build_of_an_uninstalled_component_says_so",
          "tests/golden/test_golden_build.py::test_refused_not_installed")),
+    ("lhpc/core/services.py", "install"): (2,
+        "the refused install hands on the next steps of the install it completed (`res`): the "
+        "HMAC enable that failed afterwards, or the candidate cleanup left incomplete",
+        ("tests/web/test_hmac.py::test_install_fails_closed_when_hmac_enable_fails",
+         "tests/install/test_binary_install.py::test_switch_transaction_is_resolved_even_when_a_later_step_fails")),
     ("lhpc/core/service_maintenance.py", "update"): (2,
         "built only inside `if running:`, `owners` their stacks (the preflight and the recheck)",
         ("tests/core/test_uninstall_safety.py::test_update_refuses_while_target_running",
@@ -189,7 +195,7 @@ def _same_operation(fn: str) -> str:
     """The command a busy/blocked refusal in `fn` must name to run the same operation again."""
     if fn.startswith(("self_update", "_self_update", "_recover")):
         return "lhpc self-update"
-    if fn.startswith("binary"):
+    if fn.startswith("binary") or fn == "install":
         return "lhpc install"
     return "lhpc build" if fn == "build" else "lhpc update"
 

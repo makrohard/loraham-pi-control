@@ -1594,7 +1594,12 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         if conflicts:
             return ActionResult(False, f"Refusing to install '{stack_id or 'all'}': "
                                 "shared-source remote configuration is inconsistent.",
-                                details=[f"  {c}" for c in conflicts])
+                                details=[*(f"  {c}" for c in conflicts),
+                                         "  nothing to run here — give the shared source one "
+                                         "remote in config/local.toml for all the components "
+                                         "named above, then run the install again"],
+                                next_commands=[f"lhpc install {stack_id} --yes" if stack_id
+                                               else "lhpc install --yes"])
         inst = self._installer()
         plan = inst.plan_install(stack_id)
         if not apply:
@@ -1625,12 +1630,19 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                                        {c.source.path for _, c in install_items})
         if ctx_err:
             return ActionResult(False, f"Refusing to install '{stack_id or 'all'}': "
-                                f"{ctx_err}")
+                                f"{ctx_err}",
+                                details=["  nothing to run here — the auto-install's plan no "
+                                         "longer matches the sources; start it again from the "
+                                         "console"])
         groups, plan_conflicts = self._plan_source_groups(install_items, source)
         if plan_conflicts:
             return ActionResult(False, f"Refusing to install '{stack_id or 'all'}': "
                                 "incompatible source resolutions for a shared checkout.",
-                                details=[f"  {c}" for c in plan_conflicts])
+                                details=[*(f"  {c}" for c in plan_conflicts),
+                                         "  install them with one selection"],
+                                next_commands=[f"lhpc install {stack_id} --source pinned --yes"
+                                               if stack_id else
+                                               "lhpc install --source pinned --yes"])
         mutated_paths, extra_out = [], []
         # WEB-JOB admission (P1-4): a detached web install must record `running` (authoritative admission)
         # only AFTER it holds its source guard, and must mutate nothing if it was superseded meanwhile.
@@ -1659,7 +1671,11 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         _id_err = self.meshcore_identity_guard([c for _s, c in install_items])
         if _id_err:
             _adm_stack.close()
-            return ActionResult(False, f"Refusing to install '{stack_id or 'all'}': {_id_err}")
+            return ActionResult(False, f"Refusing to install '{stack_id or 'all'}': {_id_err}",
+                                details=["  nothing to run here — the MeshCore identity "
+                                         "could not be copied out of the source; the "
+                                         "box's operator checks the file named above, "
+                                         "then retries"])
         _guard = (self._source_operation_guard(_guard_paths, op="install")
                   if on_admit is not None else contextlib.nullcontext())
         _switch_txn = ""
@@ -1697,7 +1713,12 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     old_receipt=binary_receipt_mod.read_raw(self._paths, stack_id))
             except binary_install_mod.BinaryInstallError as _exc:
                 _adm_stack.close()
-                return ActionResult(False, f"Refusing to install '{stack_id}': {_exc.message}")
+                return ActionResult(False, f"Refusing to install '{stack_id}': {_exc.message}",
+                                    details=["  nothing to run here — state/binary/"
+                                             "install.journal.json could not be written "
+                                             "(free space / permissions)"],
+                                    next_commands=[f"lhpc install {stack_id} --source {source} "
+                                                   "--yes"])
             _ret = self.binary_retire(stack_id, txn=_switch_txn)
             if not _ret.ok:
                 self.binary_recover()               # nothing moved, or everything goes back
@@ -1759,7 +1780,9 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                         return ActionResult(
                             False, f"Refusing to switch '{stack_id}' to the {source} source "
                                    f"channel: {_err}",
-                            details=self._resolve_switch(ok=False, created=_switch_created))
+                            details=[*self._resolve_switch(ok=False, created=_switch_created),
+                                     "  fix the path named above, then run the install again"],
+                            next_commands=[f"lhpc install {stack_id} --source {source} --yes"])
                 _pre_absent = False
                 if _retire_binary:
                     try:

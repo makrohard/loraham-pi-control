@@ -1195,6 +1195,7 @@ def test_switch_transaction_is_resolved_even_when_a_later_step_fails(tmp_path, m
                         lambda *a, **k: False)                   # a LATER step fails
     res = svc.install("daemon", apply=True, source="pinned")
     assert not res.ok and "candidate cleanup INCOMPLETE" in res.summary
+    assert res.next_commands, res                # the install's own next steps are kept
     assert bi.read_journal(svc._paths)[1] == "absent"             # committed, not left open
     assert brx.receipt_state(svc._paths, "daemon")[0] == "absent"
 
