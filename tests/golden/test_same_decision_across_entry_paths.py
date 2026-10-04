@@ -187,8 +187,8 @@ def entry(kiss_box, prior_boot, monkeypatch, csrf, tmp_path):
         if "child" in web:                 # the separate process decided (or refused at its gate)
             assert child is not None, f"the web child decided nothing (rc {render['child_rc']})"
             refusal, told = child["refusal"], child["next_commands"]
-        elif parent and parent[1] == "blocked":
-            refusal, told = parent[2], []  # the web parent refused: no child was spawned
+        elif parent and parent[0] is None:  # the web parent refused: no child was spawned
+            refusal, told = (parent[2] if parent[1] == "blocked" else parent[1]), []
         elif decided:
             refusal, told = entry_host.classify(decided[-1]), list(decided[-1].next_commands)
         else:                              # boot-restore planned no start at all
@@ -401,20 +401,13 @@ def test_missing_identity(entry):
 
 
 def test_admission_refusal(entry, uninstall_guard):
-    """known defect T3-F1: every path refuses with nothing written, but the web parent's refusal
-    (`spawn_start_job` → `(None, "blocked", reason)`) carries the reason text only — the typed
-    class `admission_blocked` the CLI, the job runner and boot-restore return is lost there."""
+    """intended: every path refuses at admission with the typed class `admission_blocked` and
+    nothing written — the web parent's refusal is typed too (its admission value)."""
     res = _all(entry, "start", "kiss", lambda b: uninstall_guard(b.root))
-    reason = ("A controller uninstall is in progress (.lhpc-uninstalling) — refusing to start "
-              "new work. Let it finish, or recover it.")
-    assert _decisions(res) == {
-        "cli": {"refusal": "admission_blocked", **REFUSED_NOTHING},
-        "web": {"refusal": reason, **REFUSED_NOTHING},
-        "job": {"refusal": "admission_blocked", **REFUSED_NOTHING},
-        "boot": {"refusal": "admission_blocked", **REFUSED_NOTHING}}
+    _same(res, refusal="admission_blocked", **REFUSED_NOTHING)
     assert _renders(res) == {
         "cli": {"rc": 1},
-        "web": {"status": 302, "admission": "blocked", "child_rc": None, "job": None},
+        "web": {"status": 302, "admission": "admission_blocked", "child_rc": None, "job": None},
         "job": {"rc": 1, "job": ("failed", False)},
         "boot": {"rc": 1, "journal": None, "items": [], "skipped": []}}
 

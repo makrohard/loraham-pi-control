@@ -500,6 +500,16 @@ def _second_service_can_take_admission(svc):
         return False
 
 
+def test_a_web_start_refused_at_admission_is_typed_and_names_the_remedy(tmp_path):
+    from lhpc.core import updater_units
+    svc = _svc(tmp_path)
+    svc._paths.under(updater_units.UNINSTALL_GUARD).write_text("")
+    log, admission, reason = svc.spawn_start_job("start", "meshcom")
+    assert (log, admission) == (None, "admission_blocked")
+    assert reason.startswith("A controller uninstall is in progress")
+    assert reason.endswith("Next: lhpc self-update --recover-request")
+
+
 def test_spawn_start_job_captures_then_releases_admission_before_publishing(tmp_path, monkeypatch):
     # The ordering the child depends on: the tracking marker is published only AFTER the parent
     # released task admission, so the child's own admission never sees the parent as a holder.

@@ -3887,8 +3887,9 @@ class LifecycleOpsMixin:
     def spawn_start_job(self, op: str, target: str, band: str = "", stop_owners: bool = False,
                         cascade: bool = False):
         """Spawn a DETACHED web start/restart (the hidden `lhpc _stack-start` verb) and return
-        `(job_log_name, admission, reason)` exactly like `spawn_web_job`: the web flashes per the
-        admission and returns immediately; the task banner follows the job (`web-start-<target>.log`
+        `(job_log_name, admission, reason)` like `spawn_web_job` — except that an admission refusal
+        is typed `admission_blocked` (not `blocked`): the web flashes per the admission and returns
+        immediately; the task banner follows the job (`web-start-<target>.log`
         / `web-restart-<target>.log`, never the `start-<x>.log` process-log namespace `spawn_job`
         truncates). One attempt per log: a second Start while one runs is a typed refusal. The child
         proves it was tracked (`webjob_gate`), then runs the ordinary locked `start()`/`restart()`
@@ -3909,7 +3910,12 @@ class LifecycleOpsMixin:
             self._admit(_adm, "web-job", target)
         except AdmissionRefused as _a:
             _adm.close()
-            return None, "blocked", _a.reason
+            # Typed, like every other path's admission refusal, and with its remedy in the text
+            # the console flashes.
+            res = admission_refusal(_a)
+            return None, "admission_blocked", " ".join(
+                [res.summary, *(f"Next: {c}" for c in res.next_commands),
+                 *(d.strip() for d in res.details)])
         except reslock.ResourceBusy:
             _adm.close()
             return None, "blocked", "a task is starting right now (admission contended) — retry"

@@ -1692,7 +1692,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             job, admission, reason = service.spawn_start_job(op, target, band=band,
                                                              stop_owners=stop_owners,
                                                              cascade=cascade)
-            if admission == "blocked":
+            if job is None:                             # blocked, or admission_blocked (typed)
                 flash(reason or f"{op} could not start.", "warn")
             elif admission == "pending":
                 flash(f"{op.capitalize()} of '{target}' requested — admission not yet confirmed; "
