@@ -11,6 +11,7 @@ from lhpc.core.manifest import ManifestError, parse_manifest
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
+from seams import readable_heads
 
 import pytest
 
@@ -25,7 +26,8 @@ def _stamp_inputs(path, text):
 
 
 def _svc(tmp_path, cmdlines=None):
-    return ControllerService(system=FakeSystem(cmdlines_data=cmdlines or {}).system,
+    return ControllerService(system=FakeSystem(cmdlines_data=cmdlines or {},
+                                               commands=readable_heads(tmp_path)).system,
                              paths=Paths(runtime_root=tmp_path))
 
 

@@ -22,10 +22,12 @@ from lhpc.core.jobs import JobResult, JobState, run_job, tail_log
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult, FakeSystem
 from lhpc.core.services import ControllerService
+from seams import readable_heads
 
 
 def _svc(tmp_path):
-    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=Path(tmp_path)))
+    return ControllerService(system=FakeSystem(commands=readable_heads(Path(tmp_path))).system,
+                             paths=Paths(runtime_root=Path(tmp_path)))
 
 
 def _meshcore(svc):

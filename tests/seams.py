@@ -1,7 +1,7 @@
 """Shared start-path probes for the ordinary tests (core/ and stacks/), beside `htmlq` and
 `repo_paths`: importable as a plain module because pytest puts this directory on `sys.path`.
 
-    from seams import LifecycleSeam, outcomes, seed_built
+    from seams import LifecycleSeam, outcomes, readable_heads, seed_built
 """
 
 
@@ -23,3 +23,16 @@ def outcomes(res):
     which is unusable when the run that fails is a CI runner you cannot attach to."""
     return [(r.component, getattr(r.outcome, "name", r.outcome), (r.summary or "")[:90])
             for r in res.results]
+
+
+def readable_heads(root, sha="a" * 40):
+    """`FakeSystem(commands=…)` entries answering `git rev-parse HEAD` for every shipped
+    component's checkout under `root`: a build receipt then records real revisions (an
+    unreadable one, `unknown`, never reads built)."""
+    from lhpc.core.manifest import load_manifest
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import CommandResult
+    paths = Paths(runtime_root=root)
+    return {("git", "-C", str(paths.resolve_source(c.source.path)), "rev-parse", "HEAD"):
+            CommandResult(0, sha + "\n", "")
+            for st in load_manifest() for c in st.components if c.source}

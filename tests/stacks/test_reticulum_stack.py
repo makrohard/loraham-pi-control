@@ -759,8 +759,10 @@ def _marker_service(tmp_path):
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
 
+    from seams import readable_heads
+
     paths = Paths(runtime_root=tmp_path)
-    svc = ControllerService(system=FakeSystem().system, paths=paths)
+    svc = ControllerService(system=FakeSystem(commands=readable_heads(tmp_path)).system, paths=paths)
 
     def built_with(comp, text):
         marker = paths.resolve_source(comp.source.path) / comp.build_marker
@@ -808,10 +810,27 @@ def test_a_client_is_built_only_with_the_receipt_over_its_sources(tmp_path, cid,
     from lhpc.core.lifecycle import BUILD_MARKER_TEXT
 
     _svc, built_with = _marker_service(tmp_path)
-    receipt = "".join(f"consumed {c} unknown\n" for c in consumed)   # no checkout: HEADs unknown
+    receipt = "".join(f"consumed {c} {'a' * 40}\n" for c in consumed)   # readable_heads' revision
     comp = _comp(cid)
     assert not built_with(comp, BUILD_MARKER_TEXT)
     assert built_with(comp, BUILD_MARKER_TEXT + receipt)
+
+
+def test_a_receipt_with_an_unreadable_revision_never_reads_built(tmp_path, monkeypatch):
+    """An unreadable revision (no checkout, not a repository, a failed git) is recorded as
+    `unknown`: a receipt that verifies nothing, so it never reads built — not even against a
+    marker holding exactly that receipt."""
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+
+    svc, built_with = _marker_service(tmp_path)
+    driver = str(svc._lifecycle().source_dir(_comp("rns-lora-interface")))
+    real = svc._git_out
+    # Stubs the collaborator, git: the driver's HEAD cannot be read.
+    monkeypatch.setattr(svc, "_git_out", lambda argv: (128, "") if argv[2] == driver else real(argv))
+    rns = _comp("rns")
+    receipt = svc._consumed_source_lines(rns)
+    assert "consumed rns-lora-interface unknown\n" in receipt
+    assert not built_with(rns, BUILD_MARKER_TEXT + receipt)
 
 
 def test_a_receipt_covers_a_dependency_of_a_dependency(tmp_path, monkeypatch):

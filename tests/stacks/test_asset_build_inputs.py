@@ -20,6 +20,7 @@ from lhpc.core.manifest import ManifestError
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
+from seams import readable_heads
 
 # The shipped recipe, by hand: a new consumer joins by being listed here, a dropped one by being
 # removed — the point is that the extraction sees every spelling the manifest uses. meshchat
@@ -39,7 +40,8 @@ EXPECTED = {
 
 
 def _svc(tmp_path):
-    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    return ControllerService(system=FakeSystem(commands=readable_heads(tmp_path)).system,
+                             paths=Paths(runtime_root=tmp_path))
 
 
 def _comp(svc, cid):

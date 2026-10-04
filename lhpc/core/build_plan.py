@@ -87,7 +87,7 @@ def consumed_sources(comp, by_id: dict, source_dir, binary: bool = False) -> lis
 def consumed_lines(sources, run) -> str:
     """The receipt's lines, one `consumed <id> <sha>` per `(id, source dir)` pair. `run(argv)`
     returns `(returncode, stdout)`; an unreadable HEAD (no dir, not a repository, a failed git) is
-    recorded as `unknown`, so the receipt matches only while it stays unreadable."""
+    recorded as `unknown`: an unverified receipt, which `is_built` never reads as current."""
     lines = []
     for cid, src in sources:
         sha = ""

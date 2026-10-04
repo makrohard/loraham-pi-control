@@ -3475,17 +3475,21 @@ class LifecycleOpsMixin:
                             title = (f"{comp.name} — Build log (step {i + 1}/{n})"
                                      if n > 1 else f"{comp.name} — Build log")
                             on_component_log(f"{title} · logs/{fn}", fn)   # per-step path shown in the web view
+                    # read under the locks, never from the request memo
+                    receipt = build_plan.consumed_lines(
+                        build_plan.consumed_sources(comp, by_all, life.source_dir,
+                                                    self.binary_capable(comp.id)), self._git_out)
                     res = life.build(comp, log_base=log_base,
                                      redactor=redactor, should_cancel=should_cancel,
                                      on_log_open=self._log_announcer(comp.id, details),
-                                     # read under the locks, never from the request memo
-                                     marker_extra=build_plan.consumed_lines(
-                                         build_plan.consumed_sources(comp, by_all, life.source_dir),
-                                         self._git_out),
+                                     marker_extra=receipt,
                                      inputs=self._build_inputs_to_record(comp))
                     ok = ok and res.ok
                     details.append(f"  [{res.state.value}] build {comp.id} "
                                    f"(rc {res.returncode}, log {res.log_path})")
+                    details += [f"  [unverified] {ln.split()[1]}: its revision could not be read "
+                                "— the build reads as not built until it can"
+                                for ln in receipt.splitlines() if ln.endswith(" unknown")]
                     if not res.ok:
                         details.extend(f"      {ln}" for ln in res.tail[-6:])
                     # Surface a cooperative-cancellation / UNVERIFIED-stop outcome so the caller (the HMAC
@@ -5067,9 +5071,11 @@ class LifecycleOpsMixin:
                 # Expected = the static text + the CURRENT consumed-source SHAs. A marker
                 # written against older sources (or the pre-receipt static form) mismatches
                 # and reads NOT built — `lhpc build reticulum` is then surfaced as required.
-                if (runtime_fs.read_text_regular(self._paths, marker,
-                                                  max_bytes=_BUILD_MARKER_MAX)
-                        != BUILD_MARKER_TEXT + self._consumed_source_lines(comp)):
+                # A revision that cannot be read verifies nothing: such a receipt is never
+                # current.
+                expected = BUILD_MARKER_TEXT + self._consumed_source_lines(comp)
+                if " unknown\n" in expected or (runtime_fs.read_text_regular(
+                        self._paths, marker, max_bytes=_BUILD_MARKER_MAX) != expected):
                     return False
                 # Declared inputs AND consumed assets: an old sidecar without the asset
                 # lines mismatches and reads NOT built, exactly like a missing one.

@@ -131,6 +131,21 @@ def test_both_paths_lock_and_record_the_same(tmp_path, monkeypatch, build):
                              if c.id == "meshcore-node"))
 
 
+def test_a_cli_build_with_an_unreadable_dependency_revision_says_unverified(tmp_path,
+                                                                           monkeypatch):
+    """The repeater checkout is no repository: the build runs, its receipt records `unknown`,
+    the result names the unverified dependency, and the component does not read built."""
+    svc, root = _box(tmp_path)
+    for sp in MESHCORE_SOURCES:
+        (root / sp).mkdir(parents=True, exist_ok=True)
+    _commit(root / "src/openhop-core")
+    res = _cli(svc, "meshcore-node", monkeypatch)
+    assert [d.split()[:2] for d in res.details if d.split()[:1] == ["[unverified]"]] == [
+        ["[unverified]", "openhop-repeater-src:"]]
+    assert not svc.is_built(next(c for c in svc.stack("meshcore").components
+                                 if c.id == "meshcore-node"))
+
+
 @PATHS
 def test_a_provider_source_cannot_move_during_a_dependent_build(tmp_path, monkeypatch, build):
     """An update of the dependency's source (it takes that source's lock) is refused busy while
