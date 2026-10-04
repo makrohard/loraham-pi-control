@@ -50,6 +50,34 @@ def test_a_fake_method_on_the_class_is_bound_with_self(monkeypatch, tmp_path, si
     signature_violations.clear()
 
 
+def test_a_fake_of_a_staticmethod_is_checked_and_stays_static(monkeypatch, tmp_path,
+                                                              signature_violations):
+    """A staticmethod is a descriptor on its class, which the check once skipped: a permissive
+    fake over it took any call. It is checked against the function it wraps, and stays static,
+    so a call through an instance passes no `self`."""
+    monkeypatch.setattr(ControllerService, "_boot_start_ok", lambda *a, **k: True)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc._boot_start_ok(object()) is True                 # the real shape passes
+    with pytest.raises(TypeError, match="_boot_start_ok"):
+        svc._boot_start_ok(object(), "extra")                   # the real one takes one argument
+    signature_violations.clear()
+
+
+def test_a_fake_of_a_classmethod_is_checked_and_stays_a_classmethod(monkeypatch,
+                                                                   signature_violations):
+    """A classmethod's fake is checked against the function it wraps and installed as a
+    classmethod again: it receives the class, through the class and through an instance."""
+    import inspect
+
+    from lhpc.core.service_auto_install import StackWork
+    monkeypatch.setattr(StackWork, "of", lambda cls, stack, skip=(): (cls, stack))
+    assert isinstance(inspect.getattr_static(StackWork, "of"), classmethod)
+    assert StackWork.of("s") == (StackWork, "s")
+    with pytest.raises(TypeError, match="StackWork.of"):
+        StackWork.of("s", (), "extra")                          # the real one takes two
+    signature_violations.clear()
+
+
 def test_a_fake_method_on_one_instance_has_no_self(monkeypatch, tmp_path, signature_violations):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(svc, "running_band", lambda *a, **k: "868")

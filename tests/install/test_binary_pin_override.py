@@ -600,7 +600,7 @@ def test_boot_restore_success_records_active_binary_override_note(tmp_path, monk
     svc, cid, pin, _rec = _overridden(tmp_path, monkeypatch, binary_receipt, stack)
     item = make_item()
     journal = boot_restore.new_journal(boot_id="b", pid=1, process_start_time=1, items=[item])
-    monkeypatch.setattr(type(svc), "_boot_start_ok", lambda self, res: True)
+    monkeypatch.setattr(type(svc), "_boot_start_ok", lambda res: True)   # a staticmethod
     monkeypatch.setattr(type(svc), "_boot_prune_evidence", lambda self, ids: None)
     svc._boot_settle_item(journal, item, type("R", (), {"summary": "started", "ok": True})())
     assert item["result"]["override"] == {cid: [A, pin]}
@@ -612,7 +612,7 @@ def test_boot_restore_success_without_an_override_has_no_note(tmp_path, monkeypa
     binary_receipt(svc)
     item = _daemon_reconcile_item()
     journal = boot_restore.new_journal(boot_id="b", pid=1, process_start_time=1, items=[item])
-    monkeypatch.setattr(type(svc), "_boot_start_ok", lambda self, res: True)
+    monkeypatch.setattr(type(svc), "_boot_start_ok", lambda res: True)   # a staticmethod
     monkeypatch.setattr(type(svc), "_boot_prune_evidence", lambda self, ids: None)
     svc._boot_settle_item(journal, item, type("R", (), {"summary": "started", "ok": True})())
     assert "override" not in item["result"]

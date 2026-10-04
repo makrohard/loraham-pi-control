@@ -66,12 +66,19 @@ def _keeping_the_real_signature(target, name, value):
     # a module function, or a method on its class (bound with `self`); a method put on one
     # instance has no `self`
     real = inspect.getattr_static(target, name, None) if modular else getattr(target, name, None)
+    # A static or class method is a descriptor here, which `isfunction` would skip: check it by
+    # the function it wraps, and install the fake as the same kind again — a staticmethod's call
+    # passes no `self`, a classmethod's passes the class (`cls`) as the real one's does.
+    kind = type(real) if isinstance(real, (staticmethod, classmethod)) else None
+    if kind is not None:
+        real = real.__func__
     while hasattr(real, "_lhpc_real"):             # an earlier guard: the function it stands for
         owner = getattr(real, "__self__", None)     # a class's guard read through the instance
         real = real._lhpc_real
         if owner is not None and inspect.isfunction(real):
             real = types.MethodType(real, owner)
-    if not (inspect.isfunction(real) if modular else inspect.ismethod(real)):
+    if not (inspect.ismethod(real) if kind is None and not modular
+            else inspect.isfunction(real)):
         return value
     if not (getattr(real, "__module__", "") or "").startswith("lhpc."):
         return value
@@ -88,7 +95,7 @@ def _keeping_the_real_signature(target, name, value):
             raise TypeError(why) from None
         return value(*args, **kwargs)
     fake._lhpc_real = real
-    return fake
+    return kind(fake) if kind is not None else fake
 
 
 _UNSET = object()
