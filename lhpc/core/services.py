@@ -1000,8 +1000,10 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         # update-interrupted) — every source operation waits on it, so it is said here.
         try:
             pending = self._installer().pending_states()
-        except Exception:                       # never let a diagnostic break status
-            pending = []
+        except Exception as exc:                # never let a diagnostic break status, nor hide one
+            pending = [("state/source-txn", "recovery-required",
+                        f"the source journals could not be read ({type(exc).__name__}) — "
+                        "inspect them by hand")]
         if pending:
             details.append("")
             details.extend(f"  ! {rel}: {word} — {how}" for rel, word, how in pending)

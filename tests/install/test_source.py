@@ -4771,6 +4771,26 @@ def test_status_shows_an_unfinished_source_update_with_its_word(tmp_path, monkey
         svc.status().details
 
 
+def test_a_malformed_journal_is_shown_as_recovery_required(tmp_path, monkeypatch):
+    """A journal `status` cannot read is shown as recovery-required, never as no pending state:
+    one that parses but whose `idents` is not a table is its own row, and a reader that fails
+    as a whole is one row for the journal directory."""
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    d = tmp_path / "state" / "source-txn"
+    d.mkdir(parents=True)
+    (d / "app.json").write_text(json.dumps({
+        "source_rel": "src/app", "prev_rel": "src/.app.prev",
+        "candidate_rel": "src/.app.candidate-1-2", "state": "activated", "idents": [1]}))
+    assert "  ! state/source-txn/app.json: recovery-required — an unreadable transaction journal " \
+        "— inspect it by hand" in svc.status().details
+
+    def boom(self):
+        raise RuntimeError("unexpected")
+    monkeypatch.setattr(Installer, "pending_states", boom)
+    assert "  ! state/source-txn: recovery-required — the source journals could not be read " \
+        "(RuntimeError) — inspect them by hand" in svc.status().details
+
+
 def test_a_write_through_a_descriptor_opened_before_the_update_is_never_lost(
         tmp_path, git, make_repo, installer, monkeypatch):
     """Renaming the archived prior aside stops pathname writers, not a process that opened a file

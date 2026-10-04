@@ -1319,16 +1319,17 @@ class Installer:
                 prev = self._resolve_rel(j["prev_rel"])
                 staging = self._resolve_rel(j["candidate_rel"])
                 rel, state = self._source_rel(dest), j.get("state")
-            except (OSError, PathContainmentError, ValueError, KeyError, TypeError):
+                # The recorded prior identity, compared as recovery compares it: an `activated`
+                # journal's full [dev, ino, ctime] (its removal gate), a `prior-dirty-retained`
+                # one's dev+ino (late local changes are expected there). A journal rewrite that
+                # failed after our own rename moved the prior's ctime leaves an `activated` journal
+                # that does not match: recovery-required, never a named state the journal does not
+                # hold.
+                pi = (j.get("idents") or {}).get("prev")
+            except (OSError, PathContainmentError, ValueError, KeyError, TypeError, AttributeError):
                 out.append((f"state/source-txn/{name}", "recovery-required",
                             "an unreadable transaction journal — inspect it by hand"))
                 continue
-            # The recorded prior identity, compared as recovery compares it: an `activated`
-            # journal's full [dev, ino, ctime] (its removal gate), a `prior-dirty-retained` one's
-            # dev+ino (late local changes are expected there). A journal rewrite that failed after
-            # our own rename moved the prior's ctime leaves an `activated` journal that does not
-            # match: recovery-required, never a named state the journal does not hold.
-            pi = (j.get("idents") or {}).get("prev")
             pi = pi if state == "activated" or not isinstance(pi, list) else pi[:2]
             where, held = (self._prior_left(dest, prev, staging, pi)
                            if state in ("prior-dirty-retained", "activated") else ("", []))
