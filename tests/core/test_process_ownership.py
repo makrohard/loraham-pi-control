@@ -735,3 +735,36 @@ def test_wait_ceased_honours_the_components_stop_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr("os.killpg", lambda pgid, sig: None)
     life.stop(comp)
     assert seen["timeout"] == 0.3
+
+
+_FAILED_START_MANIFEST = (
+    '[[stack]]\nid = "s"\nname = "s"\nmain = "b"\n'
+    '[[stack.component]]\nid = "a"\nname = "a"\nkind = "service"\nrun_argv = ["sleep", "60"]\n'
+    'readiness = "process"\nstart_order = 0\n'
+    '[[stack.component]]\nid = "b"\nname = "b"\nkind = "service"\nrun_argv = ["sleep", "60"]\n'
+    'readiness = "endpoint"\nstart_order = 1\n'
+    '[[stack.component.endpoint]]\nkind = "path"\naddress = "state/never"\nready = true\n'
+    'role = "provider"\ndescription = "never appears"\n')
+
+
+@pytest.mark.needs_session
+@pytest.mark.xfail(strict=True, reason=(
+    "U2 finding 20, for W4 (start/stop rework): a start whose later component fails to verify "
+    "stops only that component; the earlier verified ones stay running"))
+def test_a_failed_start_leaves_nothing_of_the_stack_running(tmp_path):
+    """Real box (meshcore): a failed `stack start` left the daemon running. `a` starts and
+    verifies; `b`'s ready endpoint never appears, so the start fails — and must not leave `a`
+    up."""
+    from lhpc.core.probes import RealSystem
+    from lhpc.core.services import ControllerService
+    manifest = tmp_path / "m.toml"
+    manifest.write_text(_FAILED_START_MANIFEST)
+    svc = ControllerService(manifest_path=manifest, system=RealSystem(),
+                            paths=Paths(runtime_root=tmp_path / "rt"))
+    try:
+        res = svc.start("s", apply=True)
+        assert not res.ok
+        owned = tmp_path / "rt" / "state" / "owned"
+        assert not owned.exists() or list(owned.iterdir()) == []
+    finally:
+        assert svc.stop("s", apply=True).ok
