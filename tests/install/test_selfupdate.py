@@ -545,7 +545,7 @@ def test_repair_integration_creates_logs_dir_and_enables_linger(tmp_path, op_svc
 
 
 def test_a_failed_web_restart_points_at_the_log_that_exists(tmp_path, op_svc, systemctl_ok_rows):
-    # R6+ (claude-b6's Desktop-image report): the hint said `journalctl --user -u lhpc-web.service`,
+    # R6+ (the Desktop-image report): the hint said `journalctl --user -u lhpc-web.service`,
     # which fails for the operator on the image, and the unit sends its output to logs/lhpc-web.log
     # anyway (docs/deployment.md). The hint names the file the unit really appends to.
     from lhpc.core import updater_units as U

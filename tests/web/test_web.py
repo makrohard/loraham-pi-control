@@ -991,7 +991,7 @@ def _stack_snapshot(svc, stack_id, states):
 
 
 def test_the_tiles_count_a_stack_with_a_dead_main_as_degraded(tmp_path, web, monkeypatch):
-    # Agent 4, e293: after `kill -9` of meshcore-node the console tile read "0 Degraded / failed"
+    # On the reference box: after `kill -9` of meshcore-node the console tile read "0 Degraded / failed"
     # because the tiles counted COMPONENT states. They now count stacks by their rollup, the unit
     # of the Stacks tile beside them (the rollup itself: tests/core/test_status_rules.py).
     from lhpc.core.model import RunState

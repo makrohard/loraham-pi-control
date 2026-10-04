@@ -379,7 +379,7 @@ def test_restart_claim_consumes_request_once_and_refuses_stray(tmp_path):
 
 
 def test_restart_claim_recovers_a_stale_inflight_breadcrumb(tmp_path):
-    # A crashed prior agent left an in-flight breadcrumb: unlike self-update (multi-step, needs
+    # A crashed prior restart run left an in-flight breadcrumb: unlike self-update (multi-step, needs
     # recovery) a restart is idempotent — the stale breadcrumb is cleared and the claim retried.
     from lhpc.core import updater_units as U
     svc = _svc(tmp_path)

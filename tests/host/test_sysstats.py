@@ -511,7 +511,7 @@ _UNSYNCED = {"synced": False, "maxerror_us": 2_000_000}
      "red", "dup"),
 ])
 def test_chrony_history_decides_lost_fake_or_unknown(tmp_path, why, kw, state, label):
-    """Audit Agent 3, round 6: chrony replaces timesyncd on an LHPC box, so timesyncd's
+    """Audit round 6: chrony replaces timesyncd on an LHPC box, so timesyncd's
     /run/systemd/timesync/synchronized never exists there, and a chrony box that had synced and
     then lost its source read red "fake". chrony's RMS offset (> 0 once it took a reference since
     it started) is the evidence; a chronyd started late (restarted) with 0 is unknown."""

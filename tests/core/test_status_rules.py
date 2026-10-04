@@ -490,7 +490,7 @@ def test_rollup_is_failed_when_the_main_is_down_but_sidecars_run(tmp_path):
 
 
 def test_the_summary_counts_a_stack_with_a_dead_main_as_failed(tmp_path):
-    # e293: after `kill -9` of meshcore-node the console tile read "0 Degraded / failed"
+    # On the reference box: after `kill -9` of meshcore-node the console tile read "0 Degraded / failed"
     # because the tiles counted COMPONENT states. They now count stacks by their rollup, the unit
     # of the Stacks tile beside them. (The page's tiles: tests/web/test_web.py.)
     from lhpc.core.services import ControllerService

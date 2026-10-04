@@ -678,7 +678,7 @@ def test_docs_cli_lists_every_command():
 
 
 def test_update_source_help_names_the_real_default(capsys):
-    # K1 (Audit Agent 2, round 7): the help said "default: keep the stack's current channel";
+    # K1 (audit round 7): the help said "default: keep the stack's current channel";
     # without --source the CLI updates a binary-installed target binary->binary, any other to
     # `pinned` (the `update` branch of main()).
     def help_of(*argv):
