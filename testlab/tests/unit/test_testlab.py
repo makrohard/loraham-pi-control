@@ -603,19 +603,33 @@ def test_the_lab_nginx_master_is_verified_and_signalled(tmp_path):
             proc.wait()
 
 
+def _fake_running(pid_file, *argv_tail):
+    """A sleeper carrying the argv tail the lab spawns a fake with, its pid in `pid_file`: what
+    `check` recognises as that fake alive. The caller kills it."""
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", *argv_tail])
+    pid_file.write_text(f"{proc.pid}\n")
+    return proc
+
+
 def test_check_fails_when_installed_stack_not_ready(tmp_path, monkeypatch):
     """A reported missing requirement must not coexist with 'passed'. An
     uninstalled stack is 'not installed' (fine); a dead fake fails the check."""
     paths = make_lab_root(tmp_path, monkeypatch)
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
     (tmp_path / "state" / "testlab" / "gpsd.pid").write_text("2147480000")  # dead
-    svc = ControllerService(paths=paths)
-    r = ops.check(svc)
-    assert not r.ok and r.data["gpsd"] is False      # the dead fake is the found problem
-    # uninstalled stacks are reported as such, never as ready or as a problem
-    ids = {s.id for s in svc.stacks()}
-    assert r.data["not_installed"] and set(r.data["not_installed"]) <= ids
-    assert not set(r.data["not_installed"]) & set(r.data["not_ready"])
+    sink = _fake_running(tmp_path / "state" / "testlab" / "aprs-sink.pid", "aprs_sink.py")
+    try:                                            # the sink is up: the dead gpsd is the cause
+        svc = ControllerService(paths=paths)
+        r = ops.check(svc)
+        assert r.data["aprs_sink"] is True and r.data["not_ready"] == []
+        assert not r.ok and r.data["gpsd"] is False  # the dead fake is the found problem
+        # uninstalled stacks are reported as such, never as ready or as a problem
+        ids = {s.id for s in svc.stacks()}
+        assert r.data["not_installed"] and set(r.data["not_installed"]) <= ids
+        assert not set(r.data["not_installed"]) & set(r.data["not_ready"])
+    finally:
+        sink.kill()
+        sink.wait()
 
 
 def test_check_does_not_take_a_reused_pid_for_the_fake_gpsd(tmp_path, monkeypatch, unrelated_pid):
@@ -642,18 +656,25 @@ def test_check_fails_when_the_aprs_is_sink_is_down(tmp_path, monkeypatch, unrela
     paths = make_lab_root(tmp_path, monkeypatch)
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
     svc = ControllerService(paths=paths)
-    r = ops.check(svc)
-    assert not r.ok and r.data["aprs_sink"] is False                    # never started
-    pid_file = tmp_path / "state" / "testlab" / "aprs-sink.pid"
-    pid_file.write_text(f"{unrelated_pid.pid}\n")
-    assert ops.check(svc).data["aprs_sink"] is False                    # a reused pid
-    sink = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "aprs_sink.py"])
-    try:                                                                 # spawned as reset does
-        pid_file.write_text(f"{sink.pid}\n")
-        assert ops.check(svc).data["aprs_sink"] is True
+    gpsd = _fake_running(tmp_path / "state" / "testlab" / "gpsd.pid", "-m", "lhpc_testlab", "_gpsd")
+    try:                                    # otherwise healthy: the fake gpsd is up, no stack unready
+        r = ops.check(svc)
+        assert r.data["gpsd"] is True and r.data["not_ready"] == []
+        assert not r.ok and r.data["aprs_sink"] is False                # never started
+        pid_file = tmp_path / "state" / "testlab" / "aprs-sink.pid"
+        pid_file.write_text(f"{unrelated_pid.pid}\n")
+        r = ops.check(svc)
+        assert not r.ok and r.data["aprs_sink"] is False                # a reused pid
+        sink = _fake_running(pid_file, "aprs_sink.py")                  # spawned as reset does
+        try:
+            r = ops.check(svc)
+            assert r.ok and r.data["aprs_sink"] is True                 # the sink alone decided
+        finally:
+            sink.kill()
+            sink.wait()
     finally:
-        sink.kill()
-        sink.wait()
+        gpsd.kill()
+        gpsd.wait()
 
 
 def test_reset_clears_accumulated_state(tmp_path, monkeypatch):
