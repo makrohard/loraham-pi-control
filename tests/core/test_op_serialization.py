@@ -6,6 +6,8 @@ through the `_op_seam` hook using separate service instances over one runtime ro
 import threading
 import time
 
+import pytest
+
 from lhpc.core import known_working, source_registry
 from lhpc.core.install import Installer, PlanAction
 from lhpc.core.paths import Paths
@@ -199,3 +201,21 @@ def test_concurrent_remote_save_blocks_behind_update(tmp_path, monkeypatch):
     cfg = _svc(tmp_path).config()                          # coherent shared-group result
     assert cfg.remotes.get("loraham-kiss-tnc") == _KISS_REMOTE
     assert cfg.remotes.get("loraham-kiss-serial") == _KISS_REMOTE
+
+
+@pytest.mark.parametrize("raised", ["busy", "txn"])
+def test_a_refused_update_names_the_retry_with_its_own_source(tmp_path, monkeypatch, raised):
+    """A busy lock or a blocked source transaction refuses the update; the command it names to
+    run again keeps the requested `--source` — without it the retry would select the default."""
+    from lhpc.core import reslock
+    from lhpc.core.service_base import SourceTxnBlocked
+    _seed_kiss_env(tmp_path)
+    svc = _svc(tmp_path)
+
+    def seam(p):
+        if p == "update-locked":
+            raise (reslock.ResourceBusy("source:x", {"operation": "build"}) if raised == "busy"
+                   else SourceTxnBlocked("a journal is open"))
+    monkeypatch.setattr(svc, "_op_seam", seam)
+    res = svc.update("kiss", apply=True, source="dev", build=False)
+    assert not res.ok and res.next_commands == ["lhpc update kiss --source dev --yes"], res

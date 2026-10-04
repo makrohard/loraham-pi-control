@@ -1961,11 +1961,13 @@ class MaintenanceOpsMixin:
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Update blocked for '{target or 'all'}': {blocked}",
                                 details=[TXN_BLOCKED_REMEDY],
-                                next_commands=[f"lhpc update {target + ' ' if target else ''}--yes"])
+                                next_commands=[f"lhpc update {target + ' ' if target else ''}"
+                                               f"{'' if source == 'pinned' else f'--source {source} '}--yes"])
         except reslock.ResourceBusy as busy:
             return ActionResult(False, f"Update blocked for '{target or 'all'}': {busy}",
                                 details=[busy_remedy(busy)],
-                                next_commands=[f"lhpc update {target + ' ' if target else ''}--yes"])
+                                next_commands=[f"lhpc update {target + ' ' if target else ''}"
+                                               f"{'' if source == 'pinned' else f'--source {source} '}--yes"])
         needs_build = []
         if ok and mutated_paths and auto_install_ctx is None and not exact_pin:
             self.invalidate_snapshot()                 # the sources changed under this request
