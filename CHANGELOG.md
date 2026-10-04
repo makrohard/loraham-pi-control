@@ -77,7 +77,8 @@
 - An update keeps the old source tree (*prior-in-use*, the process named) while another process can still
   write into it — an open file, a working directory inside it, a shared writable mapping, or a file the
   kernel reports open for writing — instead of deleting what that process writes later. `lhpc status`
-  says *prior-in-use* only while such a process is still found, else *prior-dirty*; a journal that cannot
+  says *prior-in-use* only while such a process is still found; after that the next lhpc source command
+  removes the old tree, or keeps it as *prior-dirty* if it holds changes of yours; a journal that cannot
   record why the old tree is kept says *recovery-required*. A staged-copy
   record that cannot be created is said in one line.
 - `lhpc self-update --apply`: a checkout on a detached HEAD is refused with the `git switch` that puts it

@@ -1294,9 +1294,11 @@ class Installer:
         """`(source path, state word, what resolves it)` for every source transaction still
         journaled — what `lhpc status` shows (file reads and the in-use probe; nothing written).
         A finished activation whose archived prior is kept is `prior-in-use` only while the probe
-        finds a process that can still write into it, else `prior-dirty`; once the prior is gone
-        only the journal is left, which the next lhpc source command clears before anything
-        else, so nothing is shown."""
+        finds a process that can still write into it, else `update-interrupted` (the next source
+        command removes the prior, or keeps it as `prior-dirty` when it holds changes); only a
+        `prior-dirty-retained` journal is `prior-dirty`, the prior lhpc never deletes. Once the
+        prior is gone only the journal is left, which the next lhpc source command clears before
+        anything else, so nothing is shown."""
         import json
 
         from . import runtime_fs
@@ -1346,6 +1348,11 @@ class Installer:
                             "is kept while another process can still write into it ("
                             + ", ".join(held) + "); once that has ended, the next lhpc source "
                             "command removes it: " + self._update_cmd(dest)))
+            elif where == "kept" and state == "activated":
+                out.append((rel, "update-interrupted", "the next lhpc source command removes the "
+                            f"archived prior at {self._source_rel(prev)} if it holds no changes "
+                            "of yours, else keeps it for you (prior-dirty): "
+                            + self._update_cmd(dest)))
             elif where == "kept":
                 out.append((rel, "prior-dirty", f"the archived prior at {self._source_rel(prev)} "
                             "is kept: it may hold changes of yours and lhpc never deletes it; "

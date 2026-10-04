@@ -4697,15 +4697,28 @@ def _held_prior_update(tmp_path, git, make_repo, installer):
 def test_an_activated_journal_reads_prior_in_use_only_while_the_probe_finds_a_holder(
         tmp_path, git, make_repo, installer):
     # The journal stays `activated` either way; the word comes from the in-use probe at the
-    # moment `status` asks: a holder — `prior-in-use`; none — `prior-dirty`, with its one command.
+    # moment `status` asks: a holder — `prior-in-use`; none — `update-interrupted`.
     inst, _, holder, action = _held_prior_update(tmp_path, git, make_repo, installer)
     assert action.detail.startswith("prior-in-use:"), action.detail
     [(rel, word, how)] = inst.pending_states()
     assert (rel, word) == ("src/app", "prior-in-use") and f"pid {holder.pid}" in how, how
     holder.communicate("\n", timeout=10)
     [(rel, word, how)] = inst.pending_states()
-    assert (rel, word) == ("src/app", "prior-dirty"), how
-    assert "resolve it with one command" in how and how.count("mv ") == 1, how
+    assert (rel, word) == ("src/app", "update-interrupted"), how
+
+
+def test_an_activated_prior_with_no_holder_is_not_promised_kept(
+        tmp_path, git, make_repo, installer):
+    """Once nothing holds it, an `activated` journal's archived prior is removed by the next
+    source command when it holds no changes — so `status` must not promise "lhpc never deletes
+    it" (that is `prior-dirty-retained`'s promise); it says what the next command does."""
+    inst, _, holder, _action = _held_prior_update(tmp_path, git, make_repo, installer)
+    holder.communicate("\n", timeout=10)
+    [(rel, word, how)] = inst.pending_states()
+    assert word != "prior-dirty" and "never deletes" not in how, how
+    assert "removes the archived prior" in how and "lhpc update app --yes" in how, how
+    inst.recover_source_activations()                                   # and it does
+    assert not inst.paths.under("src", ".app.prev").exists() and inst.pending_states() == []
 
 
 @pytest.mark.parametrize("why", ["in use", "late local changes"])
