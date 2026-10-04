@@ -540,11 +540,13 @@ def test_configure_apply_saves_remote_with_elevated_confirmation(tmp_path):
 @pytest.mark.contract
 @pytest.mark.safety("exposure-fail-closed")
 def test_configure_apply_loopback_needs_no_confirmation(tmp_path):
-    # A loopback config derives remote_exposed=False and applies with no confirmation gate.
+    # A loopback config derives remote_exposed=False and applies with no confirmation gate: the
+    # non-default port is saved and the apply goes on to its nginx dependency (absent here).
     svc = _svc(tmp_path)
-    assert not svc.webserver_configure_apply(bind="127.0.0.1", port=8443).ok   # saved; no nginx to apply
+    res = svc.webserver_configure_apply(bind="127.0.0.1", port=8444)
+    assert not res.ok and res.next_commands == ["sudo apt install -y nginx"]
     cfg = svc.config().webserver
-    assert cfg.bind == "127.0.0.1" and cfg.remote_exposed is False
+    assert (cfg.bind, cfg.port, cfg.remote_exposed) == ("127.0.0.1", 8444, False)
 
 
 def test_plan_exposure_elevates_and_flags_cleartext_http():
