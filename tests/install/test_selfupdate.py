@@ -431,6 +431,22 @@ def test_an_invalid_self_update_record_is_recovery_required_and_no_command_clear
     assert rec.read_text() == raw
 
 
+@pytest.mark.parametrize("raw", ["{not json", '{"state": "units-fine"}', '["units-stale"]'])
+def test_an_invalid_self_update_record_survives_the_operator_apply(op_svc, monkeypatch, raw):
+    """The other one-step command, `lhpc self-update --apply` (here finding the checkout current),
+    does not clear an invalid record either: it stays byte-for-byte, and `status` keeps naming it
+    recovery-required."""
+    from lhpc.core.services import ActionResult
+    svc, _fake, _root = _op_inactive(op_svc, monkeypatch, ActionResult(
+        True, "Already up to date.", data={"already": True}))
+    rec = svc._incomplete_path()
+    rec.parent.mkdir(parents=True, exist_ok=True)
+    rec.write_text(raw)
+    assert svc.self_update_apply_operator().data.get("already")     # the checkout is current
+    assert rec.read_text() == raw and svc.self_update_incomplete()[0] == "recovery-required"
+    assert any("recovery-required" in d for d in svc.status().details)
+
+
 @pytest.mark.parametrize("raw", ['{"state": []}', '{"state": {}}'], ids=["list", "dict"])
 def test_a_record_with_an_unhashable_state_is_recovery_required(op_svc, monkeypatch, raw):
     """Valid JSON whose "state" is a list or an object is a malformed record: recovery-required,
