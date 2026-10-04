@@ -150,16 +150,22 @@ def test_second_call_right_after_is_below(paths):
 
 _WRITER = r"""
 import os, sys, time
-n, pause = int(sys.argv[1]), float(sys.argv[2])
-for i in range(n):
+stop, pause = sys.argv[1], float(sys.argv[2])
+i = 0
+while not os.path.exists(stop):
     os.write(1, b"w-%08d\n" % i)      # ONE write(2) per line, on the inherited O_APPEND stdout
+    i += 1
     if pause:
         time.sleep(pause)
+os.write(1, b"w-%08d\n" % i)          # one line after the last cap: the live log is never empty
+sys.stderr.write(str(i + 1))           # the total, so the test can check the live log's end
 """
 _LINE = 11                                  # len(b"w-00000000\n")
 
 
-def _seq(data: bytes) -> list[int]:
+def _seq(data: bytes, *, partial_ok: bool = False) -> list[int]:
+    if partial_ok and not data.endswith(b"\n"):
+        data = data[:data.rfind(b"\n") + 1]    # a tail may end in a partial line (cap_start_log keeps it)
     assert data.endswith(b"\n"), "a writer line was split"
     out = []
     for raw in data.split(b"\n")[:-1]:
@@ -168,12 +174,13 @@ def _seq(data: bytes) -> list[int]:
     return out
 
 
-def _spawn_writer(paths: Paths, log: Path, n: int, pause: float) -> subprocess.Popen:
-    """Attach the writer exactly as the start path does: stdout = runtime_fs.open_log_append(...)."""
+def _spawn_writer(paths: Paths, log: Path, stop: Path, pause: float) -> subprocess.Popen:
+    """Attach the writer exactly as the start path does: stdout = runtime_fs.open_log_append(...).
+    It writes until `stop` exists, then one final line, and reports its line count on stderr."""
     fh = runtime_fs.open_log_append(paths, log)
     try:
-        return subprocess.Popen([sys.executable, "-c", _WRITER, str(n), str(pause)], stdout=fh,
-                                stderr=subprocess.DEVNULL)
+        return subprocess.Popen([sys.executable, "-c", _WRITER, str(stop), str(pause)], stdout=fh,
+                                stderr=subprocess.PIPE)
     finally:
         fh.close()                          # the child keeps its own copy of the descriptor
 
@@ -188,14 +195,15 @@ def test_start_log_descriptor_is_append_mode(paths):
         fh.close()
 
 
+@pytest.mark.slow
 def test_concurrent_append_writer_no_hole_and_only_the_window_lost(paths):
     log = _log(paths)
-    total = 6000
-    proc = _spawn_writer(paths, log, total, 0.0002)
+    stop = paths.runtime_root / "stop-writer"
+    proc = _spawn_writer(paths, log, stop, 0.0002)
     caps = 0
     deadline = time.monotonic() + 60
     try:
-        while proc.poll() is None and time.monotonic() < deadline:
+        while caps < 2 and proc.poll() is None and time.monotonic() < deadline:
             if log.stat().st_size > MAX:
                 r = runtime_fs.cap_start_log(paths, log, max_bytes=MAX, keep_bytes=KEEP)
                 assert r in ("capped", "below")
@@ -203,13 +211,15 @@ def test_concurrent_append_writer_no_hole_and_only_the_window_lost(paths):
                     caps += 1
                     tail = _prev(log).read_bytes()
                     assert tail, "a cap above max_bytes kept an empty tail"
-                    kept = _seq(tail)
+                    kept = _seq(tail, partial_ok=True)
                     assert kept == list(range(kept[0], kept[0] + len(kept)))
             time.sleep(0.001)
     finally:
-        proc.wait(timeout=60)
+        stop.touch()
+        _out, err = proc.communicate(timeout=60)
     assert proc.returncode == 0
-    assert caps >= 2, "the writer outran the test; the cap never ran while it was writing"
+    assert caps >= 2, "the cap did not run twice within 60 s while the writer was writing"
+    total = int(err)
 
     data = log.read_bytes()
     assert b"\0" not in data, "sparse hole: a writer continued at its old offset after the truncate"
@@ -219,7 +229,7 @@ def test_concurrent_append_writer_no_hole_and_only_the_window_lost(paths):
 
     tail = _prev(log).read_bytes()
     assert tail, "the last cap kept an empty tail"
-    kept = _seq(tail)
+    kept = _seq(tail, partial_ok=True)
     assert kept == list(range(kept[0], kept[-1] + 1))
     # The lines between the last kept line and the first live line were written between the cap's read
     # and its truncate: lost by design. Nothing bounds how many (the capper can be descheduled).
