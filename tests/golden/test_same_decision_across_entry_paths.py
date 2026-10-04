@@ -433,19 +433,17 @@ def test_interrupted_install(entry, interrupted_install):
 
 
 def test_band_owner(entry):
-    """known defect T3-F4, T1-F1: a running band owner stops every path, but not with the same
-    decision. T3-F4 (refusal class): the web stops at its plan's `blockers` listing (the confirm
-    page) while the CLI, the job runner and boot-restore refuse in the apply's preflight with
-    "Cannot run 'kiss': meshtastic must be stopped first.". T1-F1 (files): those three reset the
-    band's feed floor before that refusal (state/daemon-feed-floor-433), the web writes nothing."""
+    """known defect T3-F4: a running band owner stops every path, with nothing written, but not
+    with the same decision. T3-F4 (refusal class): the web stops at its plan's `blockers` listing
+    (the confirm page) while the CLI, the job runner and boot-restore refuse in the apply's
+    preflight with "Cannot run 'kiss': meshtastic must be stopped first."."""
     res = _all(entry, "start", "kiss", _band_owner)
     refusal = "Cannot run 'kiss': meshtastic must be stopped first."
-    floor = {"started": False, "files": ["state/daemon-feed-floor-433"], "live": []}
     assert _decisions(res) == {
-        "cli": {"refusal": refusal, **floor},
+        "cli": {"refusal": refusal, **REFUSED_NOTHING},
         "web": {"refusal": "blockers", **REFUSED_NOTHING},
-        "job": {"refusal": refusal, **floor},
-        "boot": {"refusal": refusal, **floor}}
+        "job": {"refusal": refusal, **REFUSED_NOTHING},
+        "boot": {"refusal": refusal, **REFUSED_NOTHING}}
     assert _renders(res) == {
         "cli": {"rc": 1},
         "web": {"status": 200, "admission": None, "child_rc": None, "job": None},
@@ -454,16 +452,15 @@ def test_band_owner(entry):
 
 
 def test_firewall_gate(entry, monkeypatch):
-    """known defect T3-F2, T1-F1: the firewall gate refuses on every path with the same class,
-    but the files differ. T3-F2: the CLI and the web refuse at their plan (render=False) and name
-    the apply script as the remedy WITHOUT re-rendering it — the script they point at is stale
-    and does not carry the newly exposed listener — while the job runner and boot-restore refuse
-    at the apply, which re-renders it (config/files/firewall/firewall-apply.sh). T1-F1: those two
-    have also reset the feed floor (state/daemon-feed-floor-433)."""
+    """known defect T3-F2: the firewall gate refuses on every path with the same class, but the
+    files differ. T3-F2: the CLI and the web refuse at their plan (render=False) and name the
+    apply script as the remedy WITHOUT re-rendering it — the script they point at is stale and
+    does not carry the newly exposed listener — while the job runner and boot-restore refuse at
+    the apply, which re-renders it (config/files/firewall/firewall-apply.sh)."""
     firewall_pending_host(monkeypatch)
     res = _all(entry, "start", "kiss", _firewall_pending)
     applied = {"started": False, "live": [], "refusal": "firewall_gate",
-               "files": ["config/files/firewall/firewall-apply.sh", "state/daemon-feed-floor-433"]}
+               "files": ["config/files/firewall/firewall-apply.sh"]}
     assert _decisions(res) == {"cli": {"refusal": "firewall_gate", **REFUSED_NOTHING},
                                "web": {"refusal": "firewall_gate", **REFUSED_NOTHING},
                                "job": applied, "boot": applied}

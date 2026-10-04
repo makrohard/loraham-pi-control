@@ -42,7 +42,7 @@ def test_restores_the_prior_boot(kiss_box, prior_boot, run_op):
     assert run.fields == _fields("Boot restore: 1 restored.")
     assert run.res.data == {"driver_completed": True}
     assert run.phases == DRIVER + ["journal:running[kiss=pending]"] + START_LOCKS + [
-        "journal:running[kiss=attempting]", "mutate:feed-floor:433", "recheck:preflight",
+        "journal:running[kiss=attempting]", "recheck:preflight", "mutate:feed-floor:433",
         "mutate:spawn:loraham-kiss-tnc", "verify:endpoints:loraham-kiss-tnc", "verify:post-start",
         "final:running-band:433", "final:known-working:kiss", "final:clear-restart-marker:kiss",
         "final:clear-stop-intent:kiss", "journal:running[kiss=succeeded]",

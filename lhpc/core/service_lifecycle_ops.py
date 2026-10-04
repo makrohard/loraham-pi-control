@@ -743,13 +743,6 @@ class LifecycleOpsMixin:
                     _hook_refusal = _before_start_locked()
                     if _hook_refusal is not None:
                         return _hook_refusal
-                # The feed-floor reset — known defect T1-F1: this write (like the claim above)
-                # precedes the inner PREPARE. The RX/TX window is cleared at the start boundary
-                # (BEFORE any spawn), SCOPED to the band set the lock bundle covers: a 433
-                # client clears 433 only, an all-active daemon start every arbitrated band, a
-                # non-radio start nothing.
-                for _b in sorted(self._operation_bands(target, _op_band, _radio, "start")):
-                    self.clear_daemon_feed(_b)
                 # The launch's five phases (`_start_coordinator`), on the IMMUTABLE resolved
                 # band — never the raw argument a marker change could re-resolve differently.
                 _res = self._start_impl(target, apply=True, stop_owners=stop_owners,
@@ -909,8 +902,9 @@ class LifecycleOpsMixin:
           * PREPARE (`_prepare_from_fresh_evidence`) itself calls no stop, spawn or config-file
             generation (its firewall gate renders the FW-R8 apply script); it
             refuses, or returns the already-healthy no-op, before any stop or spawn.
-          * EXECUTE (`_execute_start`): conflicting owners are stopped (`stop_owners`) — one that
-            does not verify stopped refuses the start with nothing of the target launched; then
+          * EXECUTE (`_execute_start`): the feed floor of its bands reset; conflicting owners
+            stopped (`stop_owners`) — one that does not verify stopped refuses the start with
+            nothing of the target launched; then
             the daemon ensure and, per component in run order, its gates, config files,
             pre-steps / interactive marker, RF-log roll, spawn, readiness, post-start and
             running-band marker. A component that fails its readiness, post-start or marker
@@ -919,8 +913,7 @@ class LifecycleOpsMixin:
           * A FAILED start rolls back what it launched (`_roll_back_start`).
           * FINALIZE (`_finalize_start`) clears only the state this start satisfied.
         Before this runs, the public `start` takes its guards, its outer recheck (identity,
-        MeshCore position), the boot-restore claim and the feed-floor reset — known defect
-        T1-F1: those two writes precede this PREPARE."""
+        MeshCore position) and the boot-restore claim."""
         with self._config_stable():                                             # PHASE 1
             prep = self._prepare_from_fresh_evidence(target, band, stop_owners, position,
                                                      position_note, apply=True)  # PHASE 2
@@ -1141,7 +1134,8 @@ class LifecycleOpsMixin:
                                   "commands": commands})
 
     def _execute_start(self, prep):
-        """PHASE 3 EXECUTE in explicit order: conflicting owners stopped (`stop_owners`; one that
+        """PHASE 3 EXECUTE in explicit order: the feed floor of the start's bands reset, conflicting
+        owners stopped (`stop_owners`; one that
         does not verify stopped refuses here, before anything of the target runs), the process
         observation taken, then per component in run order its gates (typed BLOCKED / SKIPPED /
         MANUAL_REQUIRED), config files, pre-steps / interactive marker, RF-log roll, spawn — each
@@ -1155,6 +1149,12 @@ class LifecycleOpsMixin:
         # (incl. an ensured daemon), threaded EXPLICITLY — never ambient/thread-local. A
         # component-scoped start must never be widened into a whole-stack boot restore.
         _req_target, _req_scope = target, prep.scope
+        # The feed-floor reset, after PREPARE (a refused start writes nothing) and before any
+        # stop or spawn: the RX/TX window is cleared at the start boundary, SCOPED to the band
+        # set the lock bundle covers — a 433 client clears 433 only, an all-active daemon start
+        # every arbitrated band, a non-radio start nothing.
+        for _b in sorted(self._operation_bands(target, band, radio, "start")):
+            self.clear_daemon_feed(_b)
         life = self._lifecycle()
         blockers = self.run_blockers(target, band, radio) if prep.stop_owners else []
         if blockers:

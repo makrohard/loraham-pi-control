@@ -3,8 +3,8 @@
 The box (`kiss_box`): kiss installed and built over a daemon already serving 433; the TNC is a
 real process, and its ready endpoint is the real loopback listener that process opens (or never
 opens), read from the kernel's TCP table. Phases: admission → the config-stability guard and
-the operation locks (sorted) → the authoritative identity recheck → the daemon feed-floor reset →
-the preflight (firewall gate, config ambiguity, band owners) → spawn + ownership record →
+the operation locks (sorted) → the authoritative identity recheck → the preflight (firewall gate,
+config ambiguity, band owners) → the daemon feed-floor reset → spawn + ownership record →
 endpoint/post-start verification → finalization (running band, known-working candidate,
 restart-required marker, stop intent).
 """
@@ -22,7 +22,7 @@ KISS_LOCKS = [
     "lock:source.src/loraham-kiss-tnc",
 ]
 RECHECK = ["recheck:start", "recheck:identity"]
-KISS_RUN = ["mutate:feed-floor:433", "recheck:preflight", "mutate:spawn:loraham-kiss-tnc",
+KISS_RUN = ["recheck:preflight", "mutate:feed-floor:433", "mutate:spawn:loraham-kiss-tnc",
             "verify:endpoints:loraham-kiss-tnc", "verify:post-start", "final:running-band:433",
             "final:known-working:kiss", "final:clear-restart-marker:kiss",
             "final:clear-stop-intent:kiss"]
@@ -51,8 +51,7 @@ def test_plan_then_apply_happy_path(kiss_box, run_op):
     assert run.phases == KISS_LOCKS + RECHECK + KISS_RUN
     assert run.res.details[-1] == ("  [verified] loraham-kiss-tnc: started; ready endpoint(s) up "
                                    "(127.0.0.1:8001: present (family=ipv4))")
-    assert run.kinds == ["admission", "lock", "recheck", "mutate", "recheck", "mutate", "verify",
-                         "final"]
+    assert run.kinds == ["admission", "lock", "recheck", "mutate", "verify", "final"]
     assert run.files == {"added": ["logs/start-loraham-kiss-tnc-433.log",
                                    "state/daemon-feed-floor-433",
                                    "state/owned/loraham-kiss-tnc__433__<pid>__<nonce>.json",
@@ -122,10 +121,9 @@ def test_refused_by_interrupted_install(kiss_box, run_op, interrupted_install):
 
 
 def test_refused_by_band_owner(kiss_box, run_op):
-    """known defect T1-F1: a running stack owning the band is listed by the plan (ok, with
-    blockers) and refuses the apply without stop_owners — but only in the preflight, AFTER the
-    band's daemon feed floor was already reset (state/daemon-feed-floor-433 written by a start
-    that never ran)."""
+    """intended: a running stack owning the band is listed by the plan (ok, with blockers) and
+    refuses the apply without stop_owners in the preflight — before the feed-floor reset, so the
+    refused start writes nothing."""
     box = kiss_box()
     box.fake.cmdlines_data[300] = ["meshtasticd"]
     plan = run_op(box.root, lambda: box.svc.start("kiss"))
@@ -137,8 +135,8 @@ def test_refused_by_band_owner(kiss_box, run_op):
         "ok": False, "summary": "Cannot run 'kiss': meshtastic must be stopped first.",
         "data_keys": [], "next_commands": ["lhpc stack stop meshtastic"], "heads": [],
         "outcomes": []}
-    assert run.phases == KISS_LOCKS + RECHECK + ["mutate:feed-floor:433", "recheck:preflight"]
-    assert run.files == {"added": ["state/daemon-feed-floor-433"], "removed": [], "changed": []}
+    assert run.phases == KISS_LOCKS + RECHECK + ["recheck:preflight"]
+    assert run.files == NOTHING
 
 
 def test_unverified_termination_is_cleaned_up(kiss_box, run_op):
@@ -158,7 +156,7 @@ def test_unverified_termination_is_cleaned_up(kiss_box, run_op):
         "  [unverified] loraham-kiss-tnc: ready endpoint(s) never came up "
         "(127.0.0.1:8001: absent (family=ipv4)); cleanup: stopped")
     assert run.phases == KISS_LOCKS + RECHECK + [
-        "mutate:feed-floor:433", "recheck:preflight", "mutate:spawn:loraham-kiss-tnc",
+        "recheck:preflight", "mutate:feed-floor:433", "mutate:spawn:loraham-kiss-tnc",
         "verify:endpoints:loraham-kiss-tnc", "mutate:signal:loraham-kiss-tnc"]
     assert run.files == {"added": ["logs/start-loraham-kiss-tnc-433.log",
                                    "state/daemon-feed-floor-433"], "removed": [], "changed": []}
@@ -197,7 +195,7 @@ def test_interactive_launch_is_manual_required(kiss_box, run_op):
         "next_commands": ["lhpc status chat", "lhpc logs chat", "lhpc stack stop chat"],
         "heads": ["[ok] daemon", "[manual_required] loraham-chat"],
         "outcomes": [("loraham-daemon", "verified"), ("loraham-chat", "manual_required")]}
-    assert run.phases[-4:] == ["recheck:identity", "mutate:feed-floor:433", "recheck:preflight",
+    assert run.phases[-4:] == ["recheck:identity", "recheck:preflight", "mutate:feed-floor:433",
                                "mutate:config-files:loraham-chat"]
     assert run.files == {"added": ["config/files/lorachat.conf", "state/daemon-feed-floor-433",
                                    "state/interactive/chat.show"], "removed": [], "changed": []}
