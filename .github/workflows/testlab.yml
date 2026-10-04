@@ -207,7 +207,7 @@ jobs:
           retention-days: 14
 
   slow-build:
-    # Row C of the slow-target build proof (docs/maintenance.md, plans/PLAN-F43.md): every
+    # Row C of the slow-target build proof (docs/maintenance.md, the slow-target build row): every
     # operation on the update path, run and timed under the PRODUCTION limits inside a container
     # throttled to a Pi Zero 2 W, then judged against tests/data/slow-target-builds.toml.
     # The same triggers as release-verify, so every release candidate, bot ones included.
@@ -234,7 +234,7 @@ jobs:
       # IOPS gives ~100 files/s, ~650 s. Reads also pace the mem part, whose swap-ins hit
       # the disk (the Zero swaps into zram instead): measured 608 s at 300 read IOPS, 186 s at
       # 1000, 97 s at 2000; 1200 keeps it above the Zero's 110 s. These are local measurements
-      # (x86, cgroup v1, Correction 7 of code-review/code-report-F43.md); the calibration case
+      # (x86, cgroup v1, not the arm runner); the calibration case
       # of every run is the proof on the runner.
       SLOW_WRITE_IOPS: "120"
       SLOW_READ_IOPS: "1200"

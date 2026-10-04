@@ -15,6 +15,7 @@ runner change.
 from __future__ import annotations
 
 import ast
+import re
 
 import pytest
 
@@ -89,3 +90,19 @@ def test_a_process_running_on_the_host_is_invisible_to_the_suite(monkeypatch, tm
     finally:
         host.kill()
         host.wait(5)
+
+
+# Written with a character class so this module does not cite them itself.
+_ABSENT_PLAN_CITATION = re.compile(rb"plans/PLAN[-]|code-review/code[-]report")
+
+
+def test_no_file_cites_a_plan_file_the_repository_does_not_ship():
+    """Plan and review files live outside the repository; a comment that cites one points a
+    maintainer at nothing. Cite the shipped doc (docs/maintenance.md, docs/test-matrix.md)."""
+    hits = []
+    for top in ("lhpc", "testlab", "tests", "deploy", "docs", ".github"):
+        for p in sorted((repo_paths.REPO / top).rglob("*")):
+            if p.is_file() and "__pycache__" not in p.parts \
+                    and _ABSENT_PLAN_CITATION.search(p.read_bytes()):
+                hits.append(str(p.relative_to(repo_paths.REPO)))
+    assert hits == []

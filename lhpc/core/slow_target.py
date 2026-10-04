@@ -1,4 +1,5 @@
-"""The slow-target budget rule (plans/PLAN-F43.md §4a, §7, §8), in ONE place.
+"""The slow-target budget rule (docs/maintenance.md, the slow-target build row;
+docs/test-matrix.md#slow-target-baseline), in ONE place.
 
 Two consumers read it: the ordinary suite (`tests/install/test_slow_target_budget.py`) checks
 the checked-in baseline, and the `slow-build` lane (`testlab/tests/slowbuild`) checks a

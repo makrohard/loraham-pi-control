@@ -1,4 +1,4 @@
-"""The slow-build lane's verdict on its own steps (plans/PLAN-F43.md §7), without the throttled
+"""The slow-build lane's verdict on its own steps (docs/maintenance.md), without the throttled
 box: every path the lane runs a step on fails on a rejection marker, on stdout or stderr, and on
 a non-zero exit status; and the budget case's waivers hold only in the bootstrap state.
 

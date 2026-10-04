@@ -1,4 +1,4 @@
-"""Slow-target build lane (row C of plans/PLAN-F43.md): every operation on the update path, run
+"""Slow-target build lane (row C, docs/maintenance.md): every operation on the update path, run
 under the production limits inside a CPU- and memory-throttled container, measured and checked
 against the slow-target budget.
 

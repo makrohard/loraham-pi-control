@@ -253,7 +253,7 @@ def test_the_output_holds_no_member_content_or_digest_and_names_the_passphrases(
     text = "\n".join([r.summary, *r.details, *r.next_commands])
     assert PROBE.decode() not in text and hashlib.sha256(PROBE).hexdigest() not in text
     assert "in clear" in text
-    assert "passphrases are not in this file" in text                  # PLAN-DELTA
+    assert "passphrases are not in this file" in text  # no passphrase in the backup
     assert "lhpc webserver cert reissue" in text
 
 
@@ -340,7 +340,7 @@ def test_the_plan_lists_the_three_groups_and_left_ones_stay(tmp_path):
     assert r.ok and "OVERWRITTEN (1): config/secrets" in text
     assert "CREATED (3): config/tls, state/graywolf, state/meshtasticd" in text
     assert "LEFT AS IT IS (2): state/reticulum, config/secrets.toml" in text
-    assert "passphrases are not in this file" in text                  # PLAN-DELTA
+    assert "passphrases are not in this file" in text  # no passphrase in the backup
     assert "lhpc webserver cert reissue" in text
     assert _tree(b) == before                                          # no flag: nothing changed
     assert _svc(b).secrets_restore(str(tmp_path / "b.tar"), choice="overwrite").ok

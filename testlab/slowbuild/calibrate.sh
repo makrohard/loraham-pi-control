@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The fixed calibration workload of the slow-target build proof (plans/PLAN-F43.md §4b,
+# The fixed calibration workload of the slow-target build proof (docs/maintenance.md,
 # docs/test-matrix.md#slow-target-baseline). The same bytes run on the Zero 2 W (row A) and in
 # the throttled CI container (row C); the container must be at least as slow on every part.
 #

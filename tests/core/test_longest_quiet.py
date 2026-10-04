@@ -1,4 +1,4 @@
-"""Every build step's log ends with its longest quiet period (plans/PLAN-F43.md §5 change 4): the
+"""Every build step's log ends with its longest quiet period (docs/maintenance.md): the
 L1 quantity the slow-target budget holds against the stall limit, read by the slow-build lane and
 by row A from `[progress] longest quiet <n> s`.
 

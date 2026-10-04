@@ -1,4 +1,4 @@
-"""Row C of the slow-target build proof (plans/PLAN-F43.md §4, §5 change 5, §8).
+"""Row C of the slow-target build proof (docs/maintenance.md, the slow-target build row).
 
 Inside a container throttled to less than the Pi Zero 2 W (`docker run --cpus --memory`, the
 CI job `slow-build`), every operation on the update path runs under the PRODUCTION limits and

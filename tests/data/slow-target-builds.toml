@@ -1,4 +1,4 @@
-# The slow-target BASELINE (plans/PLAN-F43.md §7, §8): what the update path's operations take on
+# The slow-target BASELINE (docs/test-matrix.md): what the update path's operations take on
 # the real slow target (a Pi Zero 2 W, row A) and in the throttled CI container (row C).
 # `tests/install/test_slow_target_budget.py` checks every limit on the update path against it, and
 # the `slow-build` lane checks a release's fresh evidence against it (docs/maintenance.md).

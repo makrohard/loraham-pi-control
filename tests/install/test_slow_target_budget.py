@@ -1,4 +1,4 @@
-"""Every limit on the update path holds twice what the slow target measured (plans/PLAN-F43.md).
+"""Every limit on the update path holds twice what the slow target measured (docs/maintenance.md).
 
 A build or update that passes on fast hardware can still be killed on a Pi Zero 2 W by a fixed
 wall clock. The baseline `tests/data/slow-target-builds.toml` records what each operation took
