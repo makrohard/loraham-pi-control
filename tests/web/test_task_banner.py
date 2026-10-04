@@ -84,11 +84,11 @@ _JA = "a" * 32
 
 
 def _job(svc, state, log=_JLOG, attempt=_JA, op="build", target="meshcom-qemu",
-         startup_unverified=False, finished_at=None):
+         startup_unverified=False, finished_at=None, detail=""):
     """Write a job attempt marker directly in a chosen state (bypassing the child)."""
     d = {"op": op, "target": target, "stack": "meshcom", "log": log, "attempt_id": attempt,
          "state": state, "startup_unverified": startup_unverified, "source_keys": [],
-         "started_at": _utc(-5), "finished_at": finished_at or "", "detail": ""}
+         "started_at": _utc(-5), "finished_at": finished_at or "", "detail": detail}
     if state in ("done", "failed", "unsafe") and not d["finished_at"]:
         d["finished_at"] = _utc(0)
     assert jobresult._write(svc._paths, log, d)
@@ -156,7 +156,19 @@ def test_job_hints_per_op(tmp_path, monkeypatch):
         _job(svc, "done", op=op, finished_at=_utc(0))
         assert _only_job(svc)["hint"] == hint
     _job(svc, "failed", op="build")
-    assert _only_job(svc)["hint"] == "Build failed — open the log to see the error."
+    assert "lhpc build meshcom-qemu --yes" in _only_job(svc)["hint"]
+
+
+def test_a_failed_build_banner_keeps_the_cause_the_retry_and_the_log(tmp_path, monkeypatch):
+    """Finding 91: a build stopped by the runaway guard persisted its cause in the job detail,
+    but the banner showed only a static sentence; the cause lived on the log page alone."""
+    svc = _svc(tmp_path)
+    _manifest_ok(monkeypatch)
+    _job(svc, "failed", op="build", detail="timed out (runaway guard 3600 s): make -j4")
+    hint = _only_job(svc)["hint"]
+    assert "runaway guard" in hint
+    assert "lhpc build meshcom-qemu --yes" in hint
+    assert f"logs/{_JLOG}" in hint
 
 
 def test_hmac_failed_stays_until_dismissed(tmp_path, monkeypatch):

@@ -1107,6 +1107,13 @@ class MaintenanceOpsMixin:
         _detail = rec.get("detail", "") if op in ("start", "restart") else None
         if st == "done":
             return "done", self._JOB_HINT.get((op, "done")) or _detail
+        if st == "failed" and op == "build":
+            # The child's persisted detail (e.g. "timed out (runaway guard …): <argv>") is the cause;
+            # the hint carries it with the retry and the job log, not only the static sentence.
+            why = str(rec.get("detail") or "").strip()
+            head = f"Build failed: {why}." if why else self._JOB_HINT[("build", "failed")]
+            return "failed", (f"{head} Retry: lhpc build {rec.get('target', '')} --yes"
+                              f" — log: logs/{log}")
         if st == "failed":
             return "failed", self._JOB_HINT.get((op, "failed")) or _detail
         if st == "unsafe":
