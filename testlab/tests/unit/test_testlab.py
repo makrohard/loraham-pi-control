@@ -740,6 +740,114 @@ def test_simulated_reboot_kills_owned_groups_and_runs_boot_restore(tmp_path, mon
     assert item["state"] in ("succeeded", "failed") and item["evidence_ids"] == [launch_id]
 
 
+def _owned_group_with_descendant(tmp_path, boot1):
+    """A group leader (`sh`, setsid) with a descendant (`sleep`) in its group, recorded as a stack
+    start records it: (leader Popen, descendant pid, launch id)."""
+    from lhpc.core import procident
+    proc = subprocess.Popen(["sh", "-c", "sleep 300 & echo $!; wait"], preexec_fn=os.setsid,
+                            stdout=subprocess.PIPE, text=True)
+    child = int(proc.stdout.readline())
+    assert os.getpgid(child) == proc.pid
+    ident = procident.proc_identity(proc.pid)
+    launch_id = f"loraham-kiss-tnc__x__{proc.pid}__{'0' * 32}"
+    owned = tmp_path / "state" / "owned"
+    owned.mkdir(parents=True)
+    (owned / f"{launch_id}.json").write_text(json.dumps({   # what a stack start records
+        **ident, "version": 1, "launch_id": launch_id, "stack": "kiss",
+        "component": "loraham-kiss-tnc", "requested_target": "kiss", "start_scope": "stack",
+        "band": "", "pid": proc.pid, "role": "", "launched_at": 1, "boot_id": boot1}))
+    return proc, child, launch_id
+
+
+def _gone(pid: int) -> bool:
+    """The process no longer runs: ESRCH, or a zombie its parent has not reaped yet."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return True
+    return stat[stat.rfind(")") + 2] in "ZXx"
+
+
+def _reap_group(proc) -> None:
+    import signal
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    proc.wait()
+    proc.stdout.close()
+
+
+@pytest.mark.parametrize("fault", ["leader-only", "eperm", "malformed-record"])
+def test_a_simulated_reboot_refuses_while_the_old_group_is_not_proven_gone(tmp_path, monkeypatch,
+                                                                           capsys, fault):
+    """A kill that misses part of the group (only the leader dies), a failing signal, or a record
+    the inventory cannot read: the old group's end is unproven, so the reboot is refused, the boot
+    id stays and each error is reported — never a new boot with the old processes still running."""
+    import signal
+    paths = make_lab_root(tmp_path, monkeypatch)
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    monkeypatch.setenv("LHPC_BOOT_ID_FILE", str(supervisor.boot_file(paths)))
+    boot1 = supervisor.ensure_boot_identity(paths)
+    proc, child, _launch_id = _owned_group_with_descendant(tmp_path, boot1)
+    real_killpg = os.killpg                  # ops.os IS os: the fakes must not call themselves
+    try:
+        if fault == "leader-only":
+            monkeypatch.setattr(ops.os, "killpg", lambda pgid, sig: os.kill(pgid, sig)
+                                if sig else real_killpg(pgid, sig))
+        elif fault == "eperm":
+            def eperm(pgid, sig):
+                if sig:
+                    raise PermissionError(1, "Operation not permitted")
+                return real_killpg(pgid, sig)
+            monkeypatch.setattr(ops.os, "killpg", eperm)
+        else:
+            (tmp_path / "state" / "owned" / "broken.json").write_text("{not json")
+        from lhpc.core.lifecycle import Lifecycle
+        monkeypatch.setattr(Lifecycle, "STOP_WAIT_S", 0.5)
+        assert ops.power(ControllerService(paths=paths), "reboot") != 0
+        assert supervisor.boot_file(paths).read_text().strip() == boot1
+        err = capsys.readouterr().err
+        want = "broken.json" if fault == "malformed-record" else f"pgid {proc.pid}"
+        assert want in err, err
+        if fault == "leader-only":
+            assert not _gone(child)
+    finally:
+        monkeypatch.undo()
+        _reap_group(proc)
+    if fault == "malformed-record":
+        assert proc.returncode == -signal.SIGKILL      # the provable group was still killed
+
+
+def test_a_dead_leader_with_a_live_descendant_keeps_the_boot_id(tmp_path, monkeypatch, capsys):
+    """The leader of an owned group has died (killed and reaped) before the reboot, its
+    descendant still runs: the record no longer proves the leader, so nothing is signalled — and
+    the group must still be proven gone by its recorded PGID before the boot id may advance."""
+    import signal
+    paths = make_lab_root(tmp_path, monkeypatch)
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    monkeypatch.setenv("LHPC_BOOT_ID_FILE", str(supervisor.boot_file(paths)))
+    boot1 = supervisor.ensure_boot_identity(paths)
+    proc, child, _launch_id = _owned_group_with_descendant(tmp_path, boot1)
+    try:
+        os.kill(proc.pid, signal.SIGKILL)               # only the leader
+        proc.wait()
+        assert not _gone(child)
+        from lhpc.core.lifecycle import Lifecycle
+        monkeypatch.setattr(Lifecycle, "STOP_WAIT_S", 0.5)
+        assert ops.power(ControllerService(paths=paths), "reboot") != 0
+        assert supervisor.boot_file(paths).read_text().strip() == boot1
+        assert f"pgid {proc.pid}" in capsys.readouterr().err
+        assert not _gone(child)                         # nothing signalled the descendant
+    finally:
+        monkeypatch.undo()
+        _reap_group(proc)
+
+
 def _populate_stub(paths, *, installed=(), binary=(), fail_install=()):
     """A ControllerService stand-in for populate(): records install/build calls and lets a
     test choose which stacks are pre-installed, binary-backed, or fail to install. A real

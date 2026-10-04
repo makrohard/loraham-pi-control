@@ -290,7 +290,15 @@ def power(svc, kind: str) -> int:
     if not is_active(svc):
         return 1
     if kind == "reboot":
-        killed = _kill_owned_groups(svc)
+        killed, errors = _kill_owned_groups(svc)
+        if errors:
+            # A power cut ends every process; one this run cannot prove ended would run on into
+            # the next boot. The boot id stays, so nothing reads the old processes as gone.
+            for e in errors:
+                print(f"lhpc-testlab _power: {e}", file=sys.stderr)
+            scenarios.log_event(svc._paths, f"simulated {kind} refused: {len(errors)} owned "
+                                "group(s) not proven gone; boot id kept")
+            return 1
         supervisor.advance_boot(svc._paths, reason=f"simulated {kind}")
         _respawn_gpsd(svc, [])
         # The driver's one host-file gate reads $HOME/.config/systemd/user for an enabled, canonical
@@ -337,24 +345,72 @@ def _wait_for_admission(svc, timeout: float = 30.0) -> None:
             time.sleep(0.5)
 
 
-def _kill_owned_groups(svc) -> int:
+def _kill_owned_groups(svc) -> tuple[int, list[str]]:
     """What a power cut does to the stacks: SIGKILL every owned process group whose record still
     proves it (`verify_owned`: this boot, start time, session leader — a reused pid is never
-    signalled), then wait for proven cessation. The records stay: boot restore reads them."""
+    signalled), then wait for proven cessation of the WHOLE group (`_group_ceased`), not only its
+    leader. The records stay: boot restore reads them. Returns (groups killed, errors): every
+    inventory problem, record that is neither provable nor provably gone, failed signal, and
+    group not proven gone in time is one error."""
     life = svc._lifecycle()
-    valid, _issues, _dir_state = life.owned_inventory()
+    valid, issues, dir_state = life.owned_inventory()
+    errors = [] if dir_state in ("ok", "missing") else [f"owned inventory is {dir_state}"]
+    errors += [f"owned record {i.get('name')}: {i.get('reason')}" for i in issues]
     killed = []
     for rec in valid:
-        if not life.verify_owned(rec)[0]:
+        ok, why = life.verify_owned(rec)
+        if not ok:
+            # Not signalled: the record no longer proves its leader. Its group must still be
+            # proven gone by the recorded PGID — a dead leader can leave a running descendant.
+            gone, gwhy = _group_ceased(rec["pgid"])
+            if not (life._original_ceased(rec) and gone):
+                errors.append(f"pgid {rec.get('pgid')}: not signalled ({why}) and not proven "
+                              "gone" + (f" ({gwhy})" if gwhy else ""))
             continue
         try:
             os.killpg(rec["pgid"], signal.SIGKILL)
-        except OSError:
+        except ProcessLookupError:
+            pass                                       # gone since the check: proven below
+        except OSError as exc:
+            errors.append(f"pgid {rec['pgid']}: SIGKILL failed ({exc})")
             continue
         killed.append(rec)
+    deadline = time.monotonic() + life.STOP_WAIT_S
     for rec in killed:
-        life._wait_ceased(rec)
-    return len(killed)
+        while not (res := _group_ceased(rec["pgid"]))[0] and time.monotonic() < deadline:
+            time.sleep(life.STOP_POLL_S)
+        if not res[0]:
+            errors.append(f"pgid {rec['pgid']}: not proven gone after SIGKILL ({res[1]})")
+    return len(killed), errors
+
+
+def _group_ceased(pgid: int) -> tuple[bool, str]:
+    """(True, "") only when no process of group `pgid` runs: `killpg(pgid, 0)` says ESRCH, or
+    every member /proc lists is a zombie (an unreaped leader keeps the group signalable). An
+    unreadable /proc entry is no proof."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return True, ""
+    except OSError as exc:
+        return False, f"liveness probe failed: {exc}"
+    try:
+        pids = [n for n in os.listdir("/proc") if n.isdigit()]
+    except OSError as exc:
+        return False, f"/proc unreadable: {exc}"
+    live = []
+    for n in pids:
+        try:
+            with open(f"/proc/{n}/stat") as fh:
+                data = fh.read()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            return False, f"/proc/{n}/stat unreadable: {exc}"
+        fields = data[data.rfind(")") + 2:].split()      # state ppid pgrp ...
+        if len(fields) > 2 and fields[2] == str(pgid) and fields[0] not in ("Z", "X", "x"):
+            live.append(int(n))
+    return (not live), (f"pid(s) {live} still running" if live else "")
 
 
 def _clear_runtime_state(svc) -> None:
