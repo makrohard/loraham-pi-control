@@ -99,10 +99,10 @@ def test_unclean_refusal_only_for_unsafe_and_unprovable(tmp_path, monkeypatch):
     _write_marker(tmp_path, BOOT_A)
     r = mp.unclean_refusal(paths, "update 'meshcore'")
     assert r is not None and not r.ok and "reboot" in r.summary and "update 'meshcore'" in r.summary
-    assert r.data["reason"] == "meshcore-plugins"
+    assert r.data["reason"] == "meshcore-plugins" and r.next_commands == ["sudo reboot"]
     mp.marker_path(paths).write_text("garbage")
     r = mp.unclean_refusal(paths, "x")
-    assert r is not None and "cannot prove" in r.summary
+    assert r is not None and "cannot prove" in r.summary and r.next_commands == ["sudo reboot"]
     _boot(monkeypatch, tmp_path, "")
     _write_marker(tmp_path, BOOT_B)
     assert mp.unclean_refusal(paths, "x") is not None                   # no boot id: unprovable

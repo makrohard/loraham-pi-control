@@ -70,7 +70,7 @@ def unclean_refusal(paths, action: str) -> ActionResult | None:
                 "malformed, or the boot id is unavailable) — reboot before modifying the "
                 "MeshCore installation")
     return ActionResult(False, f"Refusing to {action}: {why}.",
-                        details=[f"  marker: {marker_path(paths)}"],
+                        details=[f"  marker: {marker_path(paths)}"], next_commands=["sudo reboot"],
                         data={"prep_blocked": "meshcore_plugins", "reason": "meshcore-plugins"})
 
 
