@@ -294,7 +294,10 @@ def test_pinned_selector_resolves_composition_commit(tmp_path):
     assert rec.resolved_commit == first
 
 
-def test_pinned_selector_fallback_is_labelled(tmp_path):
+@pytest.mark.parametrize("stored", ["none", "incompatible"])
+def test_pinned_selector_fallback_is_labelled(tmp_path, stored):
+    """No composition, or only one that no longer fits the stack (here: another source path), both
+    fall back to the manifest pin, and the label says why without claiming no record exists."""
     import subprocess
     from lhpc.core.install import Installer
     from lhpc.core.config import Config
@@ -319,9 +322,14 @@ def test_pinned_selector_fallback_is_labelled(tmp_path):
     inst = Installer(Paths(runtime_root=tmp_path / "rt"), stacks,
                      Config(values={"install": {"adopt_search_root": str(tmp_path / "rt" / "local")}}),
                      RealSystem())
-    action = inst.adopt_source(comp, source="pinned")             # NO composition exists
+    if stored == "incompatible":
+        entries = {"app": {"commit": "b" * 40, "selector": "pinned", "remote": "",
+                           "source_rel": "src/elsewhere"}}
+        assert known_working.record(Paths(runtime_root=tmp_path / "rt"), "s", entries,
+                                    {"confirmed_at": 1.0})[0]
+    action = inst.adopt_source(comp, source="pinned")             # NO compatible composition
     assert action.status == "done", action.detail
-    assert "fallback: manifest pin" in action.detail              # truthful fallback label
+    assert "fallback: manifest pin — no compatible known-working record" in action.detail
 
 
 def test_confirm_refuses_manually_changed_source(tmp_path):

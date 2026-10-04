@@ -473,7 +473,7 @@ class MaintenanceOpsMixin:
                     resolved = (entries[comp.id]["commit"],
                                 "known working (operator-confirmed composition)")
                 else:
-                    resolved = ("", "fallback: manifest pin — no known-working record")
+                    resolved = ("", "fallback: manifest pin — no compatible known-working record")
             ident = (sel, bool(spec.artifact),
                      source_registry.norm_remote(self._effective_remote(comp)), resolved)
             by_path.setdefault(spec.path, []).append((st, comp, sel, ident, resolved))

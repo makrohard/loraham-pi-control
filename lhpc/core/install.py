@@ -527,7 +527,7 @@ class Installer:
         if entries and comp.id in entries:
             return (entries[comp.id]["commit"],
                     "known working (operator-confirmed composition)")
-        return "", "fallback: manifest pin — no known-working record"
+        return "", "fallback: manifest pin — no compatible known-working record"
 
     def _stage_and_activate(self, comp: Component, source: str, action: PlanAction,
                             dest: Path, spec, local: Path | None,
