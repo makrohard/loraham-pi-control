@@ -646,7 +646,7 @@ def test_the_plugins_switch_renders_into_the_repeater_table(tmp_path):
 
 # --- meshcore-cli builds against a pinned dependency closure --------------------------------------
 
-# What `pip install .` of meshcore-cli d4eac61 resolved in a clean venv (Python 3.11 and 3.13, the
+# What `pip install .` of meshcore-cli a43041f (and d4eac61) resolved in a clean venv (Python 3.11 and 3.13, the
 # 3.11-only typing_extensions included) — recorded by hand when the constraints file was generated.
 # The file must pin every one of them, or pip is free to pick that package's newest release.
 MESHCORE_CLI_RESOLVED = {

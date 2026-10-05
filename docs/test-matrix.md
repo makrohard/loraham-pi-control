@@ -118,7 +118,7 @@ Only a run that exited 0 with no `[stalled]`, `[timeout]` or `[fail]` line count
 Row 7's client commands are typed in the client whose command `lhpc stack start meshcore-cli`
 prints ([one connection at a time](stacks/meshcore.md#command-line-client)); the web UI keeps
 running. "no_event_received" means no reply within the client's timeout (15 s in meshcore
-2.3.14), not that the frame was unsent: read `logs/rf-meshcore.log`.
+2.3.15), not that the frame was unsent: read `logs/rf-meshcore.log`.
 
 ### Coverage
 
