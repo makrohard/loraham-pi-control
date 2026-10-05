@@ -15,29 +15,28 @@ Known gaps reviewed and left for a later change. Each entry says what holds the 
 
 ## Two-stage unit-template migration
 
-**The unit templates in `lhpc/core/updater_units.py` cannot change yet**
-([the units](deployment.md#run-it-under-systemd)): a changed byte, even a comment, strands every
-installed box — a non-canonical unit makes boot restore refuse, so the box comes back from a
-power cycle with nothing running. The update path cannot repair this:
+**The first half exists:** the verifier accepts the next release's units as `compatible`
+(`updater_units._NEXT_EDITS`): the nginx unit with a true comment on its firewall boot gate, and the
+web and boot-restore units without the dead `-%h/.meshcore_nm` path. Boot restore runs on them, so
+a box that goes back from the release that ships them still restores
+([maintenance](maintenance.md), *Changing a unit*; `tests/repo/test_unit_templates_frozen.py`).
 
-* `service_selfupdate._refresh_units_post_update()` runs **in process**, so it renders the
-  *pre-update* templates;
-* the systemd helper cannot write units at all (`ProtectHome=read-only`, writable paths limited
-  to the runtime root and `/tmp`).
+**Open — the release that ships them:**
 
-Only detection exists: verification runs out of process against the new checkout, and a failure
-makes the update visibly partial.
-
-**Holding the line:** `tests/repo/test_unit_templates_frozen.py` (hashes in `tests/data/unit-templates.sha256`).
+* the edits become the templates, their digests join `tests/data/unit-templates-released.sha256`,
+  and the previous bytes are accepted the same way;
+* the update path still cannot write new units: `service_selfupdate._refresh_units_post_update()`
+  repairs **in process** with the pre-update templates, and the systemd helper cannot write units
+  at all (`ProtectHome=read-only`, writable paths limited to the runtime root and `/tmp`). The
+  operator path is to run the repair through the new checkout's CLI; a failure leaves the units as
+  they are, recorded *units-stale*. Until then an update that brings new bytes ends *units-stale*
+  and `lhpc self-update --repair-integration` finishes it;
+* that release proves the forward and mixed unit states on a box. A downgrade below the accepting
+  release does not restore at boot until that release's own repair runs.
 
 **Workaround for new writable paths:** redirect the state into the runtime root with an
 environment variable instead of granting a HOME path (Sideband:
 `KIVY_HOME={runtime}/state/sideband/kivy`).
-
-**What a real fix needs:** a migration that writes units from the *new* templates in a context
-allowed to write them — staged outside the sandboxed helper, applied before boot restore next
-evaluates canonicality, and able to roll back. Design it before the first release that must
-change a unit.
 
 ## SX1262 on 868 — not run on hardware
 

@@ -30,9 +30,10 @@ What CI enforces, branches and releases, the pin-bump recipe, and the gotchas on
 - `guards`, on Python 3.13, names the two suite guards that also run inside `test`:
   - a fake that `monkeypatch.setattr` puts over an LHPC function or method is checked at every call
     against the real signature (`tests/conftest.py`, `tests/repo/test_fake_signatures.py`);
-  - the ten systemd unit templates render to the hashes in `tests/data/unit-templates.sha256`, frozen
-    until the [staged unit migration](backlog.md#two-stage-unit-template-migration) exists
-    (`tests/repo/test_unit_templates_frozen.py`).
+  - the ten systemd unit templates render to the hashes in `tests/data/unit-templates.sha256`; every
+    current digest is in the append-only history `tests/data/unit-templates-released.sha256`, and the
+    next release's units (`updater_units._NEXT_EDITS`) render to `tests/data/unit-templates-next.sha256`
+    (`tests/repo/test_unit_templates_frozen.py`; the procedure: *Changing a unit* below).
 - `pin-validation`: every pinned source has a rule in the release bot's policy, and every pin is
   an ancestor of its live branch with its referenced scripts present
 - `meshcore-host`: LHPC's own tests for `lhpc/data/meshcore_host` (not collected by `pytest -q`)
@@ -144,6 +145,17 @@ repositories.
     changed refusal) inside the pin patch that moved the daemon to 1.0.0, because that daemon
     introduces the narrower range, so controller and daemon agree; a refusal change still needs a
     minor's justification.
+  - **Changing a unit** takes two releases, so a box restores at boot after an update and after a
+    downgrade between them. First a release that only ACCEPTS the new bytes: `_NEXT_EDITS` in
+    `lhpc/core/updater_units.py`, its digests in `unit-templates-next.sha256`; `verify` reads an
+    installed unit equal to them as `compatible`, and boot restore runs on it. Then the release that
+    ships them: the edits become the templates, their digests are appended to the released history,
+    and the previous bytes are accepted the same way (that release runs the forward and mixed unit
+    proof and shows its current renders equal the earlier `unit-templates-next.sha256`). Accepted
+    digests are append-only within a minor line; a minor may prune them, with a CHANGELOG note naming
+    the releases whose units then need `lhpc self-update --repair-integration` after the update. A
+    downgrade to a release older than the accepting one (also skipping over it) does not restore at
+    boot until that older release's `lhpc self-update --repair-integration` rewrites its own units.
   - **The proof a patch needs** is what its change calls for. A pin move: the binary builder's
     smoke and clean-runtime test plus the
     [release-verification lane](testlab.md#running-the-verification-lanes), no box. That lane

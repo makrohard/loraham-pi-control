@@ -32,7 +32,8 @@ a `kill` hint instead ([safety model](architecture.md#safety-model)).
   so a stack that crashed shortly before may come back too. Every restored start replays the
   **saved** configuration through the normal gated start path (hardware, band arbitration,
   callsign, firewall exposure, TX mode), as a web or CLI start does.
-- It refuses to act unless the web console unit is enabled and byte-exact canonical, and honours
+- It refuses to act unless the web console unit is enabled and byte-exact canonical (this
+  version's, or the next release's: `compatible`, which it names with the repair), and honours
   `[boot] restore` in `local.toml` (strictly boolean; anything else disables restore).
 - An explicit `lhpc stack stop` is the last word: the stack stays down across reboots even when
   the stop could not verify the process gone; the next `stack start` makes it restorable again.
@@ -203,7 +204,7 @@ Three things are not regenerable; a default `uninstall.sh` keeps them (plus `bac
 `uninstall.sh` writes the `.lhpc-uninstalling` guard (no new tasks), refuses on active or
 unprovable jobs or any UNKNOWN component, stops clients before the shared daemon and verifies
 they stopped; if it cannot prove that, it removes the guard and deletes nothing. It stops and
-removes only byte-exact canonical units of the same root.
+removes only canonical units of the same root (this version's or the next release's).
 
 **Full backup.** With every stack stopped (`lhpc stack stop <stack>`), as the LHPC user; `-p`
 keeps the `0600` modes, and missing app-data directories are skipped:

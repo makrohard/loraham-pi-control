@@ -61,7 +61,9 @@ Back up `config/`, `profiles/` and the app data under `state/` first
   `systemctl --user set-property` overrides and the `service.d/` / `lhpc-.service.d/` folders). To repair the integration, run
   `lhpc self-update --repair-integration` from a shell — it restores the exact canonical set on an
   existing or `--no-service` deployment (the console's *Repair & update* does the same while its
-  unit still has bus access).
+  unit still has bus access). Units of the next release read `compatible`: boot restore runs on them
+  and `lhpc status` and `lhpc doctor` name them; only the shell repair rewrites them to this
+  version's ([maintenance](maintenance.md), *Changing a unit*).
 - **Manual path.** `lhpc self-update --apply` from an operator shell (refused inside a managed
   unit): if the console is running it stops `lhpc-web`, applies, syncs the venv, then starts the
   console again.
