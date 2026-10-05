@@ -138,11 +138,13 @@ def _run(script: Path, args, home: Path, fakebin: Path, *, real_first=False):
 
 
 def _deployment(root: Path, *, unit_home: Path, unit_target: Path | None = None,
-                link_target: Path | None = None, marker: bool = True, canonical_units: bool = True):
+                link_target: Path | None = None, marker: bool = True, canonical_units: bool = True,
+                next_units: bool = False):
     """A fake installed layout with a WORKING venv/python (symlinked to this interpreter, which
     has lhpc importable) so uninstall's byte-exact unit render works, plus CANONICAL web+updater
-    units and a root marker. `unit_target`/`link_target` default to this root; point them
-    elsewhere to model another deployment's integration that must be left untouched."""
+    units and a root marker (`next_units`: the next release's units where it changes one, read
+    `compatible`). `unit_target`/`link_target` default to this root; point them elsewhere to model
+    another deployment's integration that must be left untouched."""
     import sys as _sys
 
     from lhpc.core import updater_units as _U
@@ -177,7 +179,8 @@ def _deployment(root: Path, *, unit_home: Path, unit_target: Path | None = None,
     if canonical_units:
         r, co, venv = _U.deployment_paths(str(ut))
         for k in _U.ALL_UNITS:
-            (unit_dir / k).write_text(_U.render(k, r, co, venv))
+            nxt = _U.render_next(k, r, co, venv) if next_units else None
+            (unit_dir / k).write_text(nxt or _U.render(k, r, co, venv))
     else:
         (unit_dir / "lhpc-web.service").write_text(
             f"[Service]\nEnvironment=LHPC_RUNTIME_ROOT={ut}\n"
@@ -811,6 +814,34 @@ def test_uninstall_retry_recovers_leftover_staged_units_then_completes(tmp_path)
     assert not (root / "src").exists() and not (root / "venv").exists()   # NOW removed
     for k in ("lhpc-web.service", "lhpc-selfupdate.service", "lhpc-selfupdate.path"):
         assert not (ud / k).exists() and not (ud / (k + ".uninstall-staged")).exists()
+
+
+def test_uninstall_removes_a_newer_releases_unit_set(tmp_path):
+    # units of the next release (`compatible`) are this deployment's: removed, not "CUSTOMIZED"
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"
+    _deployment(root, unit_home=home, next_units=True)
+    ud = _unit_dir(home)
+    r = _run(UNINSTALL, ["--target", str(root), "--yes"], home, _fake_bin(tmp_path, systemctl="ok"))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "CUSTOMIZED" not in r.stdout + r.stderr
+    assert not (ud / "lhpc-web.service").exists() and not (root / "src").exists()
+
+
+def test_uninstall_retry_recovers_a_newer_releases_staged_units(tmp_path):
+    # the staged-recovery path reads the same verdict: a leftover `*.uninstall-staged` unit of the
+    # next release is restored and the retry completes
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"
+    _deployment(root, unit_home=home, next_units=True)
+    ud = _unit_dir(home)
+    r1 = _run(UNINSTALL, ["--target", str(root), "--yes"], home,
+              _fake_bin(tmp_path, systemctl="reloadfail", break_restore=True))
+    assert r1.returncode != 0
+    assert (ud / "lhpc-web.service.uninstall-staged").exists()
+    r2 = _run(UNINSTALL, ["--target", str(root), "--yes"], home, _fake_bin(tmp_path, systemctl="ok"))
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+    assert not (ud / "lhpc-web.service").exists() and not (root / "src").exists()
 
 
 def test_uninstall_fails_closed_when_canonical_and_staged_both_exist(tmp_path):

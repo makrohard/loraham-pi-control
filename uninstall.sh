@@ -76,7 +76,6 @@ for _r in config backups .lhpc-root; do
 done
 
 readonly VENV="${TARGET_DIR}/venv/lhpc"
-readonly CHECKOUT="${TARGET_DIR}/src/loraham-pi-control"
 readonly LOCAL_BIN_LINK="${HOME}/.local/bin/lhpc"
 readonly UNIT_DIR="${HOME}/.config/systemd/user"
 readonly WEB_UNIT="${UNIT_DIR}/lhpc-web.service"
@@ -243,11 +242,13 @@ else
 fi
 
 sysctl_ok() { command -v systemctl >/dev/null 2>&1; }
-render_unit() { "${VENV}/bin/python" -m lhpc.core.updater_units render "$1" "$TARGET_DIR" "$CHECKOUT" "$VENV" 2>/dev/null; }
-is_canonical() {                          # $1=kind $2=file — byte-exact match to the render
+is_canonical() {                          # $1=kind $2=file — this version's unit or the next release's
 	[ -f "$2" ] && [ ! -L "$2" ] || return 1
 	[ -x "${VENV}/bin/python" ] || return 1
-	diff -q <(render_unit "$1") "$2" >/dev/null 2>&1
+	case "$("${VENV}/bin/python" -m lhpc.core.updater_units verify-file "$1" "$2" "$TARGET_DIR" 2>/dev/null)" in
+		ok|compatible) return 0 ;;
+	esac
+	return 1
 }
 owns_root() {                             # $1=file — provenance names THIS root (noncanonical but ours)
 	[ -f "$1" ] || return 1
