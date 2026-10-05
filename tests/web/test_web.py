@@ -2167,6 +2167,36 @@ def test_update_ui_manual_guidance_for_unsafe_no_apply_advice(tmp_path, monkeypa
     assert "self-update --apply" not in b            # the wrong advice is gone
 
 
+def test_update_ui_names_the_shell_repair_for_a_newer_releases_units(tmp_path, monkeypatch, web):
+    from lhpc.core.services import ControllerService
+    _selfcache_update_available(tmp_path)
+    monkeypatch.setattr(ControllerService, "updater_integration",
+                        lambda self: {"status": "compatible", "fixable": False, "managed": True,
+                                      "per_unit": {"lhpc-web.service": "compatible"},
+                                      "request": "absent"})
+    b = web().get("/stacks").get_data(as_text=True)
+    assert "Repair &amp; update" not in b and "Update now" not in b
+    assert "lhpc self-update --repair-integration" in b and "operator shell" in b
+    assert "resolve them manually" not in b
+
+
+@pytest.mark.parametrize("other", ["missing", "modified_ours"])
+def test_update_ui_names_the_shell_repair_for_a_mixed_set_with_newer_units(tmp_path, monkeypatch,
+                                                                           web, other):
+    # a compatible unit beside a missing or modified one reads "incomplete"; the panel says what
+    # the console's repair-then-update says for it: the shell repair
+    from lhpc.core.services import ControllerService
+    _selfcache_update_available(tmp_path)
+    monkeypatch.setattr(ControllerService, "updater_integration",
+                        lambda self: {"status": "incomplete", "fixable": False, "managed": True,
+                                      "per_unit": {"lhpc-web.service": "compatible",
+                                                   "lhpc-selfupdate.path": other},
+                                      "request": "absent"})
+    b = web().get("/stacks").get_data(as_text=True)
+    assert "lhpc self-update --repair-integration" in b and "operator shell" in b
+    assert "resolve them manually" not in b and "Repair &amp; update" not in b
+
+
 def test_controller_system_deps_panel(monkeypatch, web):
     # The controller row surfaces its OWN system deps (git required, nginx optional) in a stack-styled
     # panel — git the previously-missed hard dep. With git+nginx forced absent, git reads as a problem

@@ -523,6 +523,21 @@ def test_repair_and_trigger_refuses_unfixable(tmp_path, monkeypatch, op_svc):
     assert not any("daemon-reload" in " ".join(c) for c in fake.calls)   # no writes/repair
 
 
+def test_repair_and_trigger_names_the_shell_repair_for_a_newer_releases_units(tmp_path, op_svc):
+    from lhpc.core import updater_units as U
+    svc, fake = op_svc(units=True, invocation=True)
+    _seed_available(tmp_path, ok=True, status="ok", reason="ok", checked_at=1)
+    ud, root = svc._user_unit_dir(), str(tmp_path)
+    _r, co, venv = U.deployment_paths(root)
+    (ud / U.WEB_UNIT).write_text(U.render_next(U.WEB_UNIT, root, co, venv))
+    res = svc.self_update_repair_and_trigger()
+    assert not res.ok and res.data.get("compatible") is True
+    assert res.next_commands == ["lhpc self-update --repair-integration"]
+    assert "operator shell" in res.summary and "outside lhpc" not in " ".join(res.details)
+    assert not (tmp_path / "state" / "selfupdate.request").exists()
+    assert not any("daemon-reload" in " ".join(c) for c in fake.calls)
+
+
 # --- the migration path: the managed gate, an active watcher, and overwrite identity ----------
 
 def test_repair_and_trigger_refuses_foreground_no_writes(tmp_path, monkeypatch, op_svc, systemctl_ok_rows):
@@ -657,6 +672,53 @@ def test_the_unit_refresh_runs_out_of_process(op_svc, monkeypatch):
     assert argv[0] != "", argv
     assert any("verify-set" in a for a in argv), (
         f"the refresh must ask a FRESH interpreter to verify the unit set, got {argv}")
+
+
+def test_the_refresh_leaves_a_newer_releases_units_as_they_are(op_svc, monkeypatch):
+    """A `compatible` set is the next release's units: the running code must not write its own
+    (older) render over them; the out-of-process verifier still runs and decides."""
+    from lhpc.core.probes.backends import CommandResult as CR
+    from lhpc.core.services import ControllerService
+
+    svc, _fake = op_svc()
+    seen, repaired = [], []
+    # Production bypasses the injected System here on purpose (the verifier is a fresh
+    # interpreter, a real `subprocess.run`); `seen` records it and executes nothing.
+    monkeypatch.setattr("subprocess.run",
+                        lambda argv, *a, **k: seen.append(list(argv)) or CR(1, "x: compatible\n", ""))
+    monkeypatch.setattr(ControllerService, "updater_integration", lambda self: {
+        "fixable": False, "status": "compatible",
+        "per_unit": {"lhpc-web.service": "compatible", "lhpc-selfupdate.service": "ok"}})
+    monkeypatch.setattr(ControllerService, "self_update_repair_integration",
+                        lambda self, **k: repaired.append(k))
+    ok, why = svc._refresh_units_post_update()  # the private IS the seam under test
+    assert repaired == []                                       # no in-process write
+    assert any("verify-set" in str(a) for a in seen[-1])
+    assert not ok and why.startswith("units of a newer release — left as they are")
+
+
+@pytest.mark.parametrize("other", ["missing", "modified_ours"])
+def test_the_refresh_keeps_a_mixed_set_with_newer_units_and_verifies_it(op_svc, monkeypatch, other):
+    """A newer release's unit beside a missing or changed one of this deployment is still ours:
+    nothing is written in process, the verifier runs, and the result names the shell repair."""
+    from lhpc.core.probes.backends import CommandResult as CR
+    from lhpc.core.services import ControllerService
+
+    svc, _fake = op_svc()
+    seen, repaired = [], []
+    # Production bypasses the injected System here on purpose (the verifier is a fresh
+    # interpreter, a real `subprocess.run`); `seen` records it and executes nothing.
+    monkeypatch.setattr("subprocess.run",
+                        lambda argv, *a, **k: seen.append(list(argv)) or CR(1, "x: compatible\n", ""))
+    monkeypatch.setattr(ControllerService, "updater_integration", lambda self: {
+        "fixable": False, "status": "incomplete",
+        "per_unit": {"lhpc-web.service": "compatible", "lhpc-selfupdate.path": other}})
+    monkeypatch.setattr(ControllerService, "self_update_repair_integration",
+                        lambda self, **k: repaired.append(k))
+    ok, why = svc._refresh_units_post_update()  # the private IS the seam under test
+    assert repaired == []                                       # no in-process write
+    assert seen and any("verify-set" in str(a) for a in seen[-1])
+    assert not ok and "newer release" in why and "lhpc self-update --repair-integration" in why
 
 
 def test_the_one_click_helper_verifies_the_units_it_refreshed(tmp_path, op_svc, monkeypatch):

@@ -1280,6 +1280,22 @@ def test_web_integration_proven_real_function(tmp_path, monkeypatch):
     assert ok is False and "wants symlink points at" in why
 
 
+def test_the_next_releases_web_unit_proves_the_console_with_a_note(tmp_path, monkeypatch):
+    # The REAL gate: the next release's web unit (updater_units.render_next) is `compatible` —
+    # proven, the reason being the units-compatible note naming the shell repair.
+    from lhpc.core import updater_units as U
+    home = tmp_path / "home"
+    ud = home / ".config" / "systemd" / "user"
+    (ud / "default.target.wants").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    _r, checkout, venv = U.deployment_paths(str(tmp_path))
+    (ud / U.WEB_UNIT).write_text(U.render_next(U.WEB_UNIT, str(tmp_path), checkout, venv))
+    (ud / "default.target.wants" / U.WEB_UNIT).symlink_to(ud / U.WEB_UNIT)
+    ok, why = _svc(tmp_path)._web_integration_proven()
+    assert ok is True
+    assert "units-compatible:" in why and "lhpc self-update --repair-integration" in why
+
+
 def test_driver_defect_is_clean_integrity_failure(tmp_path, monkeypatch):
     # Any unexpected exception inside the driver -> clean nonzero failure, never a traceback
     # escaping to systemd as the unit's only diagnostic.

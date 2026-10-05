@@ -842,6 +842,17 @@ def test_doctor_warns_when_boot_restore_would_be_skipped(tmp_path, monkeypatch):
     assert "BOOT RESTORE WILL BE SKIPPED" not in "\n".join(svc.doctor().details)
 
 
+def test_doctor_names_a_newer_releases_units_without_warning_of_a_skip(tmp_path, monkeypatch):
+    from lhpc.core import updater_units as U
+    svc = _svc(tmp_path)
+    # Stubs the collaborator, the boot gate's unit proof: the web unit is `compatible`.
+    monkeypatch.setattr(type(svc), "_web_integration_proven",
+                        lambda self: (True, U.COMPATIBLE_NOTE))
+    text = "\n".join(svc.doctor().details)
+    assert "units-compatible:" in text and "lhpc self-update --repair-integration" in text
+    assert "BOOT RESTORE WILL BE SKIPPED" not in text
+
+
 def test_controller_dep_detection_uses_abspath_fallback(tmp_path, monkeypatch):
     # P2-2: a narrow-PATH managed service where shutil.which() finds nothing still detects a tool that
     # exists at a normal absolute path (via the injectable fs.exists) — and never runs a subprocess.

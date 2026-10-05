@@ -43,7 +43,8 @@ class BootRestoreOpsMixin:
     def _web_integration_proven(self) -> tuple[bool, str]:
         """BOTH proofs, bus-free and descriptor-safe: the enablement symlink resolves to the
         expected managed unit path, AND lhpc-web.service verifies byte-exact/no-drop-in via the
-        PER-UNIT canonical verifier (never the aggregate verdict, never unrelated units)."""
+        PER-UNIT canonical verifier (never the aggregate verdict, never unrelated units) — this
+        version's unit, or the next release's (`compatible`: proven, with a note as the reason)."""
         user_dir = self._user_unit_dir()
         root = Path(self._paths.runtime_root)
         _root, checkout, venv = updater_units.deployment_paths(str(root))
@@ -61,6 +62,8 @@ class BootRestoreOpsMixin:
             return False, f"cannot inspect the enablement symlink: {exc}"
         verdict = updater_units.verify(Path(user_dir), updater_units.WEB_UNIT,
                                        str(root), checkout, venv)
+        if verdict == updater_units.COMPATIBLE:
+            return True, updater_units.COMPATIBLE_NOTE
         if verdict != updater_units.OK:
             return False, f"lhpc-web.service is not canonical ({verdict})"
         return True, ""
@@ -338,6 +341,8 @@ class BootRestoreOpsMixin:
         if not enabled or not web_ok:
             reason = en_reason if not enabled else f"web console integration not proven: {web_reason}"
             return self._boot_finish_disabled(cur_boot, evidence, reason, skipped=skipped)
+        # A proven gate's reason is the units-compatible note: every exit below carries it.
+        note = [f"  {web_reason}"] if web_reason else []
 
         metas = self._boot_stack_metas()
         markers = {sid: self._boot_marker_view(sid) for sid in
@@ -354,14 +359,14 @@ class BootRestoreOpsMixin:
             journal["state"] = "no-plan"
             journal["finished_at"] = time.time()
             if not boot_restore.write_journal(self._paths, journal):
-                return ActionResult(False, "Boot restore: journal unwritable.")
+                return ActionResult(False, "Boot restore: journal unwritable.", details=note)
             self._prune_intent_skips(journal)
             n = len(plan.skipped)
             return ActionResult(True, "Boot restore: nothing to restore"
                                       + (f" ({n} skipped — see the log)." if n else "."),
-                                data={"driver_completed": True})
+                                details=note, data={"driver_completed": True})
         if not boot_restore.write_journal(self._paths, journal):
-            return ActionResult(False, "Boot restore: journal unwritable.")
+            return ActionResult(False, "Boot restore: journal unwritable.", details=note)
         self._prune_intent_skips(journal)
 
         integrity_failure = ""
@@ -387,7 +392,8 @@ class BootRestoreOpsMixin:
         wrote = boot_restore.write_journal(self._paths, journal)
         if integrity_failure or not wrote:
             return ActionResult(False, "Boot restore: driver integrity failure "
-                                       f"({integrity_failure or 'journal unwritable'}).")
+                                       f"({integrity_failure or 'journal unwritable'}).",
+                                details=note)
         done = [i for i in journal["items"] if i["state"] == "succeeded"]
         cancelled = [i for i in journal["items"] if i["state"] == "cancelled"]
         bits = [f"{len(done)} restored"]
@@ -408,7 +414,7 @@ class BootRestoreOpsMixin:
         why += [f"{i['target']}: part {p['component']} {p['outcome']} — {p['reason']}"
                 for i, p in parts_left]
         return ActionResult(not (failed or pending),
-                            "Boot restore: " + ", ".join(bits) + ".", details=why,
+                            "Boot restore: " + ", ".join(bits) + ".", details=note + why,
                             data={"driver_completed": True})
 
     def _own_start_time(self):

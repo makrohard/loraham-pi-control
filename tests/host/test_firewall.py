@@ -1679,6 +1679,21 @@ def test_fw_update_preflight_gates_nginx_unit(tmp_path, monkeypatch):
     assert svc.firewall_update_nginx_preflight() is None
 
 
+def test_fw_a_newer_releases_nginx_unit_carries_the_gate(tmp_path, monkeypatch):
+    # The next release's nginx unit (`compatible`) differs from this one only in a comment: the
+    # boot gate is in it, so neither the preflight nor the after-advance step touches it.
+    from lhpc.core import updater_units as uu
+    svc = _svc(tmp_path)
+    # Stubs the collaborators: the firewall is installed, remote web is exposed, and the
+    # nginx unit reads `compatible` (a managed, bus-blocked console).
+    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
+    monkeypatch.setattr(svc, "_fw_remote_web_exposed", lambda: True)
+    monkeypatch.setattr(svc, "updater_integration",
+                        lambda: {"per_unit": {uu.NGINX_UNIT: uu.COMPATIBLE}, "managed": True})
+    assert svc.firewall_update_nginx_preflight() is None
+    assert svc.firewall_update_after_advance() == []
+
+
 def test_fw_post_update_reconcile_defers_to_fresh_process(tmp_path, monkeypatch):
     # A self-update must NOT regenerate firewall artifacts in the old (pre-update) process
     # — it marks, and the freshly-restarted new-code process reconciles on startup, then clears it.

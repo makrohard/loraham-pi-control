@@ -1040,6 +1040,12 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 if state:
                     details.append(f"  ! {state}: {what} — resolve it with: "
                                    f"{self._incomplete_remedy(state)}")
+                try:
+                    from . import updater_units as _uu
+                    if self.updater_integration()["status"] == _uu.COMPATIBLE:
+                        details.append(f"  ! {_uu.COMPATIBLE_NOTE}")
+                except Exception:               # a diagnostic line never breaks status
+                    pass
         # Disk space: ONE line, only when the worst filesystem is not ok (the normal status stays
         # unchanged).
         if not stack_id:
@@ -1341,6 +1347,9 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             details.append("  ! BOOT RESTORE WILL BE SKIPPED — " + why)
             details.append("    stacks will NOT come back after a reboot until this is repaired:")
             details.append("      lhpc self-update --repair-integration")
+        elif why:                               # proven on a newer release's units: say so
+            details.append("")
+            details.append(f"  ! {why}")
 
         # An update that replaced the firewall helper leaves the installed one stale: the next boot
         # starts the console loopback-only until it is re-applied. Say it before that reboot.

@@ -934,3 +934,13 @@ def test_an_unreachable_upstream_is_refused_without_the_overwrite(env):
     assert not res.ok and res.next_commands == []
     assert any(d.startswith("  nothing to run here — ") for d in res.details)
     assert gitrepo.git(w, "rev-parse", "HEAD") == before
+
+
+def test_status_names_a_newer_releases_units_and_the_shell_repair(op_svc, tmp_path):
+    from lhpc.core import updater_units as U
+    svc, _fake = op_svc(units=True)
+    _r, co, venv = U.deployment_paths(str(tmp_path))
+    assert not any("units-compatible:" in d for d in svc.status().details)          # control
+    (svc._user_unit_dir() / U.WEB_UNIT).write_text(U.render_next(U.WEB_UNIT, str(tmp_path), co, venv))
+    assert any("units-compatible:" in d and "lhpc self-update --repair-integration" in d
+               for d in svc.status().details), svc.status().details

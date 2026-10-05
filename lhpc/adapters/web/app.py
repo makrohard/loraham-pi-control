@@ -1344,7 +1344,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # (normal|overwrite); a stale overwrite tick with a meanwhile-clean, fast-forwardable tree
         # drops to normal. repair_and_trigger delegates straight to the marker trigger when the units
         # are already canonical, and otherwise migrates a non-canonical same-root deployment (old/%h units,
-        # no .path) to the canonical set first — all in this one click.
+        # no .path) to the canonical set first — all in this one click — except compatible units (a
+        # newer release's), which only the shell repair rewrites.
         overwrite = (request.form.get("overwrite") == "yes"
                      and (service.self_update_local_dirty() or service.self_update_ff_blocked()))
         # Every gate runs NOW (a refusal stays on /stacks); the marker itself is written only

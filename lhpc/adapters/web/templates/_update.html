@@ -96,6 +96,12 @@
     <p class="depnote depnote-warn"><strong>Update recovery required.</strong> A previous update did
       not finish cleanly. From a shell on this machine, run
       <code>lhpc self-update --recover-request</code>, then try again.</p>
+  {% elif updater and 'compatible' in (updater.per_unit or {}).values()
+          and not ((updater.per_unit or {}).values()
+                   | select('in', ['foreign', 'ambiguous', 'overridden', 'unsafe', 'unreadable'])
+                   | list) %}
+    <p class="depnote depnote-warn">The units are a newer release's (compatible): run
+      <code>lhpc self-update --repair-integration</code> from an operator shell, then update.</p>
   {% elif updater and updater.status != 'ok' and st.update_available and not updater.fixable %}
     <p class="depnote depnote-warn">One-click update needs attention ({{ updater.status }} web/updater
       units). The systemd units aren't safely this deployment's — resolve them manually

@@ -33,6 +33,11 @@ def _fields(summary, ok=True, heads=()):
             "heads": list(heads), "outcomes": []}
 
 
+def _noted(details):
+    return any("units-compatible:" in d and "lhpc self-update --repair-integration" in d
+               for d in details)
+
+
 def test_restores_the_prior_boot(kiss_box, prior_boot, run_op):
     """intended: pending → attempting (inside the start, after its locks and recheck, before its
     first mutation) → succeeded → done; the old evidence is replaced by the new launch."""
@@ -40,6 +45,7 @@ def test_restores_the_prior_boot(kiss_box, prior_boot, run_op):
     prior_boot(box.root)
     run = run_op(box.root, box.svc.boot_restore_run)
     assert run.fields == _fields("Boot restore: 1 restored.")
+    assert not _noted(run.res.details)                  # this version's unit: no units note
     assert run.res.data == {"driver_completed": True}
     assert run.phases == DRIVER + ["journal:running[kiss=pending]"] + START_LOCKS + [
         "journal:running[kiss=attempting]", "recheck:preflight", "mutate:feed-floor:433",
@@ -64,9 +70,34 @@ def test_nothing_to_restore(kiss_box, prior_boot, run_op):
     prior_boot(box.root, evidence=False)
     run = run_op(box.root, box.svc.boot_restore_run)
     assert run.fields == _fields("Boot restore: nothing to restore.")
+    assert not _noted(run.res.details)                  # this version's unit: no units note
     assert run.phases == DRIVER + ["journal:no-plan[]"]
     assert _journal(box.root)[:2] == ("no-plan", [])
     assert run.files == {"added": ["state/boot-restore.json"], "removed": [], "changed": []}
+
+
+def test_restores_on_the_next_releases_web_unit_and_says_so(kiss_box, prior_boot, run_op):
+    """intended: a web unit of the next release (`compatible`) proves the console as the current
+    one does; the restore runs exactly as on a current unit, and its result carries the
+    units-compatible note."""
+    box = kiss_box()
+    prior_boot(box.root, next_unit=True)
+    run = run_op(box.root, box.svc.boot_restore_run)
+    assert run.fields == _fields("Boot restore: 1 restored.")
+    assert _noted(run.res.details)
+    state, items, _j = _journal(box.root)
+    assert (state, items) == ("done", [("kiss", "433", "succeeded")])
+    assert box.owned() == ["loraham-kiss-tnc"]
+
+
+def test_nothing_to_restore_on_the_next_releases_web_unit_says_so(kiss_box, prior_boot, run_op):
+    """intended: the note is carried on the no-plan exit too."""
+    box = kiss_box()
+    prior_boot(box.root, evidence=False, next_unit=True)
+    run = run_op(box.root, box.svc.boot_restore_run)
+    assert run.fields == _fields("Boot restore: nothing to restore.")
+    assert _noted(run.res.details)
+    assert _journal(box.root)[:2] == ("no-plan", [])
 
 
 def test_disabled_retires_the_evidence(kiss_box, prior_boot, run_op):

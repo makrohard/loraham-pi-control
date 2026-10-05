@@ -484,6 +484,9 @@ OK = "ok"                 # byte-exact canonical, no drop-in, no symlinked dir
 MISSING = "missing"
 MODIFIED_OURS = "modified_ours"   # not byte-exact but carries THIS root's provenance
 COMPATIBLE = "compatible"  # byte-exact the NEXT release's unit for this deployment (_NEXT_EDITS)
+# The one line every surface prints for a `compatible` set (boot restore, doctor, status).
+COMPATIBLE_NOTE = ("units-compatible: the managed units are a newer release's — boot restore runs "
+                   "on them; `lhpc self-update --repair-integration` rewrites this version's")
 FOREIGN = "foreign"       # provenance names another runtime root
 AMBIGUOUS = "ambiguous"   # neither clearly ours nor clearly foreign
 OVERRIDDEN = "overridden"  # a <unit>.d/ drop-in exists somewhere in the search path

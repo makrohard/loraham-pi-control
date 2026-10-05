@@ -482,7 +482,15 @@ class SelfUpdateOpsMixin:
                 # verifies: its sandbox cannot write units, and the repair refuses on that record.
                 ours = all(v in (updater_units.OK, updater_units.MISSING,
                                  updater_units.MODIFIED_OURS) for v in integ["per_unit"].values())
-            if not ours:
+            verdicts = (integ.get("per_unit") or {}).values()
+            # A newer release's units, alone or beside missing / changed units of this deployment:
+            # ours, but this code's render must not be written over the newer ones.
+            newer = (updater_units.COMPATIBLE in verdicts
+                     and all(v in (updater_units.OK, updater_units.COMPATIBLE, updater_units.MISSING,
+                                   updater_units.MODIFIED_OURS) for v in verdicts))
+            mixed = newer and any(v in (updater_units.MISSING, updater_units.MODIFIED_OURS)
+                                  for v in verdicts)
+            if not ours and not newer:
                 return True, "units not this deployment's — left untouched"
         except Exception as exc:
             return True, f"integration state unavailable ({type(exc).__name__}) — units left untouched"
@@ -492,7 +500,10 @@ class SelfUpdateOpsMixin:
         if not _op_exists(py):
             py = _sys.executable
         try:
-            rep = None if helper else self.self_update_repair_integration(restart=False)
+            # A newer release's units are not rewritten with this code's render (it would put
+            # the older bytes back); the verify-set below still decides.
+            rep = (None if helper or newer
+                   else self.self_update_repair_integration(restart=False))
         except Exception as exc:
             return False, f"unit refresh raised {type(exc).__name__}: {exc}"[:160]
         try:
@@ -503,6 +514,12 @@ class SelfUpdateOpsMixin:
         if chk.returncode == 0:
             return True, "units canonical"
         detail = (chk.stdout or chk.stderr or "").strip()[:140]
+        if mixed:
+            return False, ("units of a newer release beside missing or changed ones — left as they "
+                           "are; repair them from an operator shell with `lhpc self-update "
+                           f"--repair-integration`: {detail}")[:240]
+        if newer:
+            return False, f"units of a newer release — left as they are: {detail}"
         if rep is None:
             return False, f"units not canonical: {detail}"
         return False, f"units still not canonical after repair ({rep.summary[:60]}): {detail}"
@@ -1851,6 +1868,13 @@ class SelfUpdateOpsMixin:
         fixable_set = (updater_units.OK, updater_units.MISSING, updater_units.MODIFIED_OURS)
         per = integ.get("per_unit", {})
         bad = {k: v for k, v in per.items() if v not in fixable_set}
+        if bad and all(v == updater_units.COMPATIBLE for v in bad.values()):
+            # A newer release's units: ours, but only the shell repair rewrites them (this
+            # console's service cannot write the user unit folder).
+            return ActionResult(False, "The units are a newer release's (compatible): run "
+                                "`lhpc self-update --repair-integration` from an operator shell, "
+                                "then update.", data={"integration": status, "compatible": True},
+                                next_commands=["lhpc self-update --repair-integration"])
         if bad:
             detail = ", ".join(f"{k}: {v}" for k, v in bad.items())
             return ActionResult(False, "The web/updater units are not safely this deployment's "
