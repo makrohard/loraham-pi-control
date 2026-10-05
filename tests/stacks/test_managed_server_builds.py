@@ -271,8 +271,9 @@ def test_a_successful_cli_source_build_writes_its_own_revision_and_reads_built(t
 
 
 def test_a_successful_console_source_build_writes_its_own_revision_and_reads_built(tmp_path):
-    """The console's detached build: the launcher reads the checkout's revision under its locks
-    and writes the side file before the marker."""
+    """The console's detached build: given the side file's path and source as the console hands
+    them, the launcher writes the checkout's revision there, and the component reads built. (The
+    locks and the side-file-before-marker order are not exercised here.)"""
     import subprocess
 
     from lhpc.core import build_launcher_runtime
