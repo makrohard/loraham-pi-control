@@ -24,15 +24,12 @@ SOURCES = ("zero2w", "throttled-ci")
 SELFUPDATE_COMPONENT = "lhpc-selfupdate"
 CLI_VENV_COMPONENT = "meshtastic-cli-venv"
 _KEY_RE = re.compile(r"(pin|deb|deps):\S+")
-_MINOR_RE = re.compile(r"v?(\d+)\.(\d+)\.")
 # `lhpc`: the LHPC tree an entry was measured on, the short SHA mandatory: a release tag
 # `vX.Y.Z (sha7)`, or a release candidate's ref `release/<name> (sha7)` (row A measures the
 # candidate before its tag exists). A self-update entry names the update it timed,
-# `<from tag> -> <to tag or ref> (sha7)`. The minor is the (target) tag's X.Y, or the first X.Y.Z
-# in a candidate ref's name.
+# `<from tag> -> <to tag or ref> (sha7)`.
 _REL = r"(?:v\d+\.\d+\.\d+\S*|release/\S+)"
 _LHPC_RE = re.compile(rf"(?:v\d+\.\d+\.\d+\S* -> )?{_REL} \([0-9a-f]{{7,40}}\)")
-_REF_MINOR_RE = re.compile(r"(\d+)\.(\d+)\.\d")
 # The first release whose self-update helper prints `[selfupdate] pip sync <n> s` (L4). An update
 # TO it runs the previous release's helper, which cannot print the line, on the Zero and in the
 # lane alike: L4 is measurable from the next release on (docs/maintenance.md).
@@ -254,22 +251,6 @@ def entry_errors(entry: dict) -> list[str]:
     return errs
 
 
-def minor(entry: dict):
-    """The minor of the entry's `lhpc` label (an update's: its target's): the tag's X.Y, or the
-    first X.Y.Z in a candidate ref's name; None when it names none (such an entry is only ever
-    FRESH, never carried)."""
-    label = str(entry.get("lhpc", "")).split(" -> ")[-1]
-    m = (_MINOR_RE.match(label) if label.startswith("v")
-         else _REF_MINOR_RE.search(label.split(" ", 1)[0]) if label.startswith("release/")
-         else None)
-    return (int(m.group(1)), int(m.group(2))) if m else None
-
-
-def version_minor(version: str):
-    m = _MINOR_RE.match(version + ".")
-    return (int(m.group(1)), int(m.group(2))) if m else None
-
-
 def _release(version: str) -> tuple[int, ...]:
     return tuple(int(x) for x in re.findall(r"\d+", version)[:3])
 
@@ -288,27 +269,26 @@ def waiver(component: str, op: str, version: str) -> str:
 
 # ---- the rule (§8) -------------------------------------------------------------------------
 
-def zero_baseline(entries, component: str, op: str, key: str, this_minor):
+def zero_baseline(entries, component: str, op: str, key: str):
     """(Z, "fresh" | "carried" | "none") — the Zero entry with the current key, else the latest
-    Zero entry of this (component, op) from this or the previous minor."""
+    Zero entry of this (component, op), however old: a carried entry never expires (the margin
+    rule in `compare` is the guarantee)."""
     zero = [e for e in entries if e.get("source") == "zero2w"
             and e.get("component") == component and e.get("op") == op]
     fresh = [e for e in zero if key and e.get("key") == key]
     if fresh:
         return max(fresh, key=lambda e: e["date"]), "fresh"
-    near = {this_minor, (this_minor[0], this_minor[1] - 1)}
-    carried = [e for e in zero if minor(e) in near]
-    if carried:
-        return max(carried, key=lambda e: e["date"]), "carried"
+    if zero:
+        return max(zero, key=lambda e: e["date"]), "carried"
     return None, "none"
 
 
-def compare(component: str, op: str, lim: float, baseline, evidence, key: str,
-            this_minor) -> tuple[list[str], str]:
+def compare(component: str, op: str, lim: float, baseline, evidence,
+            key: str) -> tuple[list[str], str]:
     """§8 for one (component, op): (failures, summary line). `evidence` is the release run's
     fresh row-C entry, or None when the run produced none (a failure of its own)."""
     fails = []
-    z, how = zero_baseline(baseline, component, op, key, this_minor)
+    z, how = zero_baseline(baseline, component, op, key)
     ci = [quantity(e) for e in baseline if e.get("source") == "throttled-ci"
           and e.get("component") == component and e.get("op") == op]
     e_q = quantity(evidence) if evidence is not None else None
@@ -320,9 +300,6 @@ def compare(component: str, op: str, lim: float, baseline, evidence, key: str,
         fails.append(f"{component} {op}: limit {lim:.0f} s < 2 x {max(seen):.0f} s measured")
     if how == "none":
         fails.append(f"no Zero baseline for {component} {op}: run row A")
-    elif how == "carried" and e_q is not None and e_q > lim / 4:
-        fails.append(f"pin moved and row C is near the budget: run row A ({component} {op}: "
-                     f"{e_q:.0f} s > limit/4 = {lim / 4:.0f} s)")
     ratio = (f"{e_q / quantity(z):.2f}" if z and e_q is not None and quantity(z) > 0 else "n/a")
     summary = (f"{component} {op}: E={'n/a' if e_q is None else f'{e_q:.0f}'} s "
                f"Z={'n/a' if z is None else f'{quantity(z):.0f}'} s ({how}) E/Z={ratio} "

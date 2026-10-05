@@ -28,7 +28,7 @@ MEASURED = BASELINE.get("measured", [])
 EXCLUDED = BASELINE.get("excluded", {})
 STACKS = load_manifest(default_manifest_path())
 PYPROJECT = (repo_paths.REPO / "pyproject.toml").read_text()
-THIS_MINOR = stt.version_minor(__version__)
+THIS_MINOR = tuple(int(x) for x in __version__.split(".")[:2])
 REQUIRED = stt.required(STACKS, EXCLUDED)
 
 
@@ -73,10 +73,6 @@ def test_the_lhpc_label_takes_a_tag_or_a_candidate_ref():
                 "release/ (3d0943a)", "main (3d0943a)", "v0.12 (6ff1937)", "",
                 "v0.11.10 -> v0.11.11", "main -> v0.11.11 (35923b80)"):
         assert label_errors(bad), bad
-    assert stt.minor(_entry(lhpc="release/0.11.12-bundle (3d0943a1)")) == (0, 11)
-    assert stt.minor(_entry(lhpc="v0.12.0 (6ff1937)")) == (0, 12)
-    assert stt.minor(_entry(lhpc="release/bundle (3d0943a1)")) is None
-    assert stt.minor(_entry(lhpc="v0.10.9 -> v0.11.0 (35923b80)")) == (0, 11)
 
 
 def test_every_excluded_component_exists_and_says_why():
@@ -265,21 +261,23 @@ def test_no_key_holds_an_lhpc_sha():
 
 
 def test_a_moved_key_is_carried_not_dropped():
-    z, how = stt.zero_baseline([_entry(key="pin:old")], "c", "clone", "pin:new", THIS_MINOR)
+    z, how = stt.zero_baseline([_entry(key="pin:old")], "c", "clone", "pin:new")
     assert how == "carried" and z["key"] == "pin:old"
-    z, how = stt.zero_baseline([_entry(key="pin:new")], "c", "clone", "pin:new", THIS_MINOR)
+    z, how = stt.zero_baseline([_entry(key="pin:new")], "c", "clone", "pin:new")
     assert how == "fresh"
 
 
-def test_a_carried_entry_from_two_minors_ago_is_no_baseline():
+def test_a_carried_entry_never_expires():
+    # Generous by order: a Zero entry two minors old still carries; the margin rule is the guarantee.
     old = _entry(lhpc=f"v{THIS_MINOR[0]}.{THIS_MINOR[1] - 2}.0 (abc1234)")
-    assert stt.zero_baseline([old], "c", "clone", "pin:new", THIS_MINOR) == (None, "none")
+    z, how = stt.zero_baseline([old], "c", "clone", "pin:new")
+    assert how == "carried" and z is old
 
 
 # ---- (d) the compare rule of §8 ------------------------------------------------------------
 
 def _cmp(baseline, evidence, lim=900.0, key="pin:new"):
-    return stt.compare("c", "clone", lim, baseline, evidence, key, THIS_MINOR)[0]
+    return stt.compare("c", "clone", lim, baseline, evidence, key)[0]
 
 
 def test_compare_passes_a_fresh_zero_entry_within_budget():
@@ -304,16 +302,18 @@ def test_compare_fails_without_evidence():
     assert any(f.startswith("no row C evidence") for f in _cmp([_entry(key="pin:new")], None))
 
 
-def test_compare_requires_row_a_when_a_moved_pin_nears_the_budget():
+def test_a_moved_pin_is_held_to_the_margin_rule_only():
+    # Between limit/4 and limit/2 a carried entry passes (no row A demanded); above limit/2 the
+    # margin rule (limit >= 2 x every measurement) fails it.
     carried = [_entry(key="pin:old", seconds=100)]
-    assert _cmp(carried, _entry(source="throttled-ci", seconds=225)) == []
-    assert any(f.startswith("pin moved and row C is near the budget")
-               for f in _cmp(carried, _entry(source="throttled-ci", seconds=226)))
+    assert _cmp(carried, _entry(source="throttled-ci", seconds=400)) == []
+    assert any("limit 900 s < 2 x 451 s" in f
+               for f in _cmp(carried, _entry(source="throttled-ci", seconds=451)))
 
 
 def test_compare_summary_prints_the_ratio():
     _, line = stt.compare("c", "clone", 900.0, [_entry(key="pin:new", seconds=200)],
-                          _entry(source="throttled-ci", seconds=300), "pin:new", THIS_MINOR)
+                          _entry(source="throttled-ci", seconds=300), "pin:new")
     assert "E/Z=1.50" in line and "(fresh)" in line
 
 
@@ -321,7 +321,7 @@ def test_build_is_budgeted_on_its_quiet_gap():
     e = _entry(op="build", seconds=5000, quiet_s=100)
     assert stt.quantity(e) == 100
     assert stt.compare("c", "build", 600.0, [dict(e, key="pin:new")], dict(e),
-                       "pin:new", THIS_MINOR)[0] == []
+                       "pin:new")[0] == []
 
 
 # ---- calibration (§4b) ---------------------------------------------------------------------

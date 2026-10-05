@@ -529,7 +529,6 @@ def _waived(fails: list[str], measured, intro: bool) -> tuple[list[str], str]:
 def test_slow_build_budget():
     """§8 over every operation this lane measures; every failure named, the E/Z ratios printed
     to `slow-build-summary.md` for the job summary."""
-    this_minor = stt.version_minor(__version__)
     fails, lines = [], []
     for component, op in LANE_OPS:
         try:
@@ -539,8 +538,7 @@ def test_slow_build_budget():
             continue
         ev = EVIDENCE.get((component, op))
         key = ev["key"] if ev else stt.current_key(component, op, STACKS, PYPROJECT)
-        f, line = stt.compare(component, op, lim, BASELINE.get("measured", []), ev, key,
-                              this_minor)
+        f, line = stt.compare(component, op, lim, BASELINE.get("measured", []), ev, key)
         fails += f
         lines.append(line)
     # The release introducing the pip sync line has no L4 evidence (docs/maintenance.md).

@@ -216,7 +216,10 @@ jobs:
     # throttle below; a throttle only ever gets tighter.
     if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.release_verify }}
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 330
+    # Kept well below the release bot's testlab bound (280 min, counted from the bot's dispatch),
+    # leaving >= 40 min for queueing and setup, so a hung slow-build job is cut before the bot gives
+    # up; real runs take ~45 min. Not a guarantee against an extreme queue.
+    timeout-minutes: 240
     env:
       # The throttle. Measured: the Zero's calibration (row A, 2026-10-03) is cpu 99.7 s,
       # io 489.8 s, mem 110.1 s; this container at --cpus 0.5, --memory 416m and no disk

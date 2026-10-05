@@ -166,10 +166,10 @@ repositories.
   [testlab.md](testlab.md#running-the-verification-lanes)) runs on the release SHA of every
   release, minor, patch and bot alike, and is green with `test_slow_build_calibrated` and
   `test_slow_build_budget` PASSED (a skip is not a pass); its artifact is the evidence. A pin moved
-  by a patch or bot release needs no Zero row: it is budgeted against the last Zero entry of that
-  (component, op), carried from this or the previous minor, and a fresh row A becomes required only
-  when row C measures the new pin above limit/4 (= 50 % of the budget) or that (component, op) has
-  no Zero entry at all. A minor runs rows 6, 7, 8, the self-update and `calibrate.sh` on the Zero 2 W
+  by a patch or bot release needs no Zero row: it is budgeted against the latest Zero entry of that
+  (component, op), however old (a carried entry never expires), held to the margin rule (every
+  limit at least twice everything measured); a fresh row A is required only when that
+  (component, op) has no Zero entry at all. A minor runs rows 6, 7, 8, the self-update and `calibrate.sh` on the Zero 2 W
   before the tag and commits the numbers ([test matrix](test-matrix.md#slow-target-baseline)),
   which refreshes the baselines and the calibration. Run from the installed checkout
   `<runtime root>/src/loraham-pi-control` while `<runtime root>/state` exists, `calibrate.sh` works
