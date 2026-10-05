@@ -573,3 +573,44 @@ def test_the_log_names_the_rule_expects_are_the_ones_the_builder_writes(tmp_path
         f"build() named the failed step {PurePosixPath(res.log_path).name!r}, but the "
         f"attribution rule looks for one of {sorted(br.own_step_logs(stack))} — a rename here "
         f"silently disables every automatic freeze")
+
+
+# --- an interactive program's readiness: only evidence of breaking blames the stack -------------
+
+def _readiness_failure(command, tmp_path, *, expect="NEVER-DRAWN", logs=()):
+    import os
+
+    from lhpc_testlab.release import pty_readiness
+    with pytest.raises(AssertionError) as exc:
+        pty_readiness(command, dict(os.environ), expect, ready_timeout=1.5, hold=0.2,
+                      stack="reticulum", logs=logs)
+    return str(exc.value)
+
+
+@pytest.mark.parametrize("command", [
+    "sleep 30",                                         # still running, drew nothing
+    "printf 'loading the node list'; sleep 30",         # still running, drew something else
+    "printf '[Error] interface not ready\\n'; sleep 30",  # an app's own log tag, not a crash
+])
+def test_a_readiness_timeout_without_evidence_blames_no_stack(tmp_path, command):
+    msg = _readiness_failure(command, tmp_path)
+    assert "STACK-REGRESSION" not in msg
+
+
+@pytest.mark.parametrize("command", [
+    "true",                                                                  # exited, drew nothing
+    "printf 'Traceback (most recent call last):\\n'; sleep 30",             # drew a traceback
+    "printf 'ModuleNotFoundError: no module named x\\n'; sleep 30",         # drew an exception line
+])
+def test_a_readiness_failure_with_evidence_of_breaking_is_marked(tmp_path, command):
+    msg = _readiness_failure(command, tmp_path)
+    assert "STACK-REGRESSION stack=reticulum phase=readiness" in msg
+
+
+def test_a_readiness_failure_carries_the_tails_of_the_named_logs(tmp_path):
+    app, daemon = tmp_path / "logfile", tmp_path / "absent-logfile"
+    app.write_text("old line\n" + "x" * 2000 + "APP-LOG-LAST-LINE\n")
+    msg = _readiness_failure("sleep 30", tmp_path, logs=(app, daemon))
+    assert f"--- {app} (tail) ---" in msg and "APP-LOG-LAST-LINE" in msg
+    assert "old line" not in msg                                      # a tail, not the whole log
+    assert f"--- {daemon} (tail) ---" in msg and "not readable" in msg

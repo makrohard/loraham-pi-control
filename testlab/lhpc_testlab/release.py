@@ -100,8 +100,9 @@ def stack_regression(stack: str, phase: str) -> str:
     - the readiness evidence of the stack under test (`phase=readiness`): its own port
       (`wait_tcp`/`wait_http`), `alive()` on its own component, `lhpc meshtastic --info`, and
       `rnstatus` listing Reticulum's LoRa interface.
-    - `pty_readiness()` when the caller names the stack (`phase=readiness`): drew nothing, drew
-      something other than what only a working program draws, or exited on its own.
+    - `pty_readiness()` when the caller names the stack (`phase=readiness`) and the program
+      shows it is broken: it exited on its own, or drew a traceback or an exception line
+      (`_DREW_AN_ERROR`).
 
     **Deliberately UNMARKED, and why** — an unattributed failure is reported as an ordinary
     failure and freezes nothing, which is the right outcome for all of these:
@@ -129,6 +130,10 @@ def stack_regression(stack: str, phase: str) -> str:
       the stack, so a lab that lost its display would freeze an innocent stack.
     - `pty_readiness()`'s SIGTERM escalation: cleanup, and it can equally be this harness's
       process group rather than the program.
+    - `pty_readiness()`'s readiness TIMEOUT with no such evidence: the program is still running
+      and drew nothing, or nothing it was expected to and no error, by the deadline. A slow box
+      or a slow peer looks exactly like that, so the stack is not blamed; the failure carries
+      the tails of the logs the caller names.
     - the negative assertion in `test_release_meshcore_repeater` ("repeater-only mode is hosting
       a companion"): mode wiring between LHPC's config and the upstream repeater, and not one of
       the four phases.
@@ -387,8 +392,27 @@ def _matches(drawn: bytes, expect: str) -> bool:
     return bool(re.search(expect, drawn.decode("utf-8", "replace"), re.IGNORECASE | re.DOTALL))
 
 
+# What a broken interactive program draws: a Python traceback, or an exception LINE
+# (`ValueError: …`). Not a bare word: Reticulum tags its own log lines `[Error]`.
+_DREW_AN_ERROR = re.compile(
+    rb"Traceback \(most recent call last\)|\b[A-Z][A-Za-z]*(?:Error|Exception): ")
+
+
+def _log_tails(logs, size: int = 1500) -> str:
+    """The last `size` characters of each named log, for a readiness failure's message."""
+    out = []
+    for path in logs:
+        try:
+            text = Path(path).read_text(encoding="utf-8", errors="replace")[-size:]
+        except OSError as exc:
+            text = f"(not readable: {type(exc).__name__})"
+        out.append(f"\n--- {path} (tail) ---\n{text}")
+    return "".join(out)
+
+
 def pty_readiness(command: str, env: dict, expect: str, *, ready_timeout: float = 60.0,
-                  hold: float = 5.0, stack: str | None = None) -> bytes:
+                  hold: float = 5.0, stack: str | None = None,
+                  logs=()) -> bytes:  # `logs` tails go in unfiltered: name lab-identity logs only
     """Run an INTERACTIVE component the way an operator does — on a real terminal — and prove
     it: it must draw its OWN screen, still be running afterwards, and exit CLEANLY when asked.
     Returns what it drew.
@@ -408,10 +432,13 @@ def pty_readiness(command: str, env: dict, expect: str, *, ready_timeout: float 
     window size, and exits immediately without them. CI has neither, so both are supplied here —
     otherwise this would measure the runner's environment instead of the build.
 
-    `stack` names the stack this component belongs to, and marks the three READINESS assertions
-    — drew nothing, drew the wrong thing, exited on its own — with `stack_regression`. It is
-    validated before the program is started, so a typo fails immediately instead of an hour in.
-    The SIGTERM escalation below stays unmarked on purpose: see `stack_regression`.
+    `stack` names the stack this component belongs to, and marks a READINESS failure with
+    `stack_regression` when the program shows it is broken: it exited on its own, or drew a
+    traceback or an exception line (`_DREW_AN_ERROR`). A timeout without that evidence — still running, drew nothing or
+    not what was expected — stays unmarked: see `stack_regression`. `stack` is validated before
+    the program is started, so a typo fails immediately instead of an hour in. `logs` are files
+    whose tails every readiness failure appends (the program's own log, its daemon's). The
+    SIGTERM escalation below stays unmarked on purpose.
     """
     import fcntl
     import pty
@@ -452,15 +479,17 @@ def pty_readiness(command: str, env: dict, expect: str, *, ready_timeout: float 
             if proc.poll() is not None:
                 break
         tail = drawn[-600:].decode("utf-8", "replace")
-        assert drawn, (f"{mark}{command!r} drew nothing on its terminal within "
-                       f"{ready_timeout} s")
+        broken = proc.poll() is not None or bool(_DREW_AN_ERROR.search(drawn))
+        why = mark if broken else ""                # a timeout without evidence blames no stack
+        assert drawn, (f"{why}{command!r} drew nothing on its terminal within "
+                       f"{ready_timeout} s{_log_tails(logs)}")
         assert _matches(drawn, expect), (
-            f"{mark}{command!r} did not draw anything matching {expect!r} within "
-            f"{ready_timeout} s. It drew: {tail!r}")
+            f"{why}{command!r} did not draw anything matching {expect!r} within "
+            f"{ready_timeout} s. It drew: {tail!r}{_log_tails(logs)}")
         time.sleep(hold)
         assert proc.poll() is None, (
             f"{mark}{command!r} exited on its own (rc={proc.returncode}) — not a running app. "
-            f"It drew: {tail!r}")
+            f"It drew: {tail!r}{_log_tails(logs)}")
         killed = False
     finally:
         try:

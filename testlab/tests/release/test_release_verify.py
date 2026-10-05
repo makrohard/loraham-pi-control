@@ -366,8 +366,10 @@ def test_release_reticulum_nomadnet(env, svc):
     require_prerequisite(env, "reticulum", left_by="test_release_reticulum")
     comp = next(c for c in svc.stack("reticulum").components if c.id == "nomadnet")
     try:
+        state = Path(env["LHPC_RUNTIME_ROOT"]) / "state"
         pty_readiness(svc.manual_start_command(comp), env, NOMADNET_DRAWS, ready_timeout=90,
-                      stack="reticulum")
+                      stack="reticulum",
+                      logs=(state / "nomadnet" / "logfile", state / "reticulum" / "logfile"))
     finally:
         stop(env, "reticulum")
 

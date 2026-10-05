@@ -137,7 +137,11 @@ subprocesses import `lhpc` from the editable install, i.e. whichever checkout wa
     `STACK-REGRESSION stack=<id> phase=<install|build|start|readiness>` (grammar and unmarked
     sites: `lhpc_testlab.release.stack_regression`); a build only at a step the manifest marks
     `attributable = true` (a compile, a patch, a check over fetched code), never at a fetch. An
-    automation may freeze a stack only on a marked failure.
+    interactive program's readiness is marked only when it exited or drew a traceback or an
+    exception line; a timeout without that evidence is unmarked and carries the tails of its logs.
+    A regression that only hangs is therefore unmarked: the release stops at its proof, nothing is
+    released and nothing frozen (a deliberate trade). An automation may freeze a stack only on a
+    marked failure.
   - **It runs with `-x`:** the cases chain over one radio pair, so nothing after the first
     failure is meaningful. A stopped run attributes its first regression but never satisfies the
     publication gate (every required case passed). Cleanup still runs; a failed stop is a
