@@ -73,7 +73,7 @@
           {% if blockers %}
             <p class="depnote depnote-warn"><strong>Radio/resource owned by another running stack:</strong>
               {% for b in blockers %}<br>{{ b.resource }} — held by <strong>{{ b.holder_stack }}</strong>{% endfor %}
-              <br>Stopping {{ blockers|map(attribute='holder_stack')|unique|join(', ') }} is required to run this stack.</p>
+              <br>Stopping {{ stop_labels|join(', ') }} is required to run this stack.</p>
             <input type="hidden" name="stop_owners" value="yes">
           {% endif %}
           {% if override_consent %}

@@ -1493,8 +1493,9 @@ def test_boot_restore_run_honors_stop_intent_end_to_end(tmp_path, monkeypatch):
 
 
 def test_stop_intent_scope_is_exactly_the_named_operator_stack_stop(tmp_path, monkeypatch):
-    """REVIEW-FOUND rescoping: only a DIRECT, WHOLE-STACK operator stop tombstones. A
-    component-scoped stop, a band-scoped stop, and every internal route (`_operator=False`:
+    """REVIEW-FOUND rescoping: only a DIRECT, WHOLE-STACK operator stop tombstones — with or
+    without a band (the console stops a client with its band, finding 143). A component-scoped
+    stop, the daemon's per-band stop, and every internal route (`_operator=False`:
     daemon band release, cascades, owner stops, restart's stop leg, uninstall/clean,
     auto-install) must write nothing — they tombstoned the shared daemon and whole stacks the
     operator never named, and restore then pruned evidence of things legitimately running."""
@@ -1506,12 +1507,21 @@ def test_stop_intent_scope_is_exactly_the_named_operator_stack_stop(tmp_path, mo
 
     assert svc.stop("loraham-kiss-serial", apply=True).ok       # component target
     assert tombstones() == []
-    assert svc.stop("kiss", apply=True, band="433").ok          # band-scoped
+    assert svc.stop("daemon", apply=True, band="433").ok        # the daemon on one band
     assert tombstones() == []
     assert svc.stop("kiss", apply=True, _operator=False).ok     # internal route
     assert tombstones() == []
-    assert svc.stop("kiss", apply=True).ok                      # the real thing
+    assert svc.stop("kiss", apply=True, band="433").ok          # the console's client Stop
     assert tombstones() == ["kiss.json"]
+    (intents / "kiss.json").unlink()
+    assert svc.stop("kiss", apply=True).ok                      # the CLI's
+    assert tombstones() == ["kiss.json"]
+    # A cascade from that console Stop is the operator's too. Stubbed: kiss's dependents.
+    (intents / "kiss.json").unlink()
+    monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: (
+        ["graywolf"] if t == "kiss" else []))
+    assert svc.stop("kiss", apply=True, band="433", cascade=True).ok
+    assert tombstones() == ["graywolf.json", "kiss.json"]
 
 
 def test_a_refused_start_keeps_the_tombstone(tmp_path, monkeypatch):

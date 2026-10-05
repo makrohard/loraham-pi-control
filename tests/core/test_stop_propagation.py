@@ -102,6 +102,95 @@ def test_failed_owner_stop_blocks_start(tmp_path, monkeypatch):
     assert any("'meshtastic' did not stop" in d for d in res.details), res.details
 
 
+class _Launched(Exception):
+    """Raised at the first step after the owner stops: the start went past them."""
+
+
+def test_a_band_owner_on_the_daemon_is_stopped_per_band(tmp_path, monkeypatch):
+    # Finding 140: kiss on 433 and meshcore on 868 run on the daemon; a reticulum start (868)
+    # with stop_owners must stop meshcore and the daemon on 868 ONLY — a whole-daemon stop took kiss and
+    # the 433 daemon down with it. Stubbed collaborators: the blocker scan (once the app owner is
+    # stopped it sees the daemon's 868 band only) and the stops themselves (recorded).
+    from lhpc.core.services import ActionResult, ControllerService
+    svc = _svc(tmp_path)
+    stops = []
+    meshcore = {"resource": "loraham.radio.868", "holder_stack": "meshcore",
+                "holder": "meshcore-node", "band": "868"}
+    daemon = {"resource": "loraham.radio.868", "holder_stack": "daemon",
+              "holder": "loraham-daemon", "band": "868"}
+    monkeypatch.setattr(ControllerService, "run_blockers", lambda self, t, b="", radio="": (
+        [daemon] if ("meshcore", "") in stops else [meshcore, daemon]))
+    monkeypatch.setattr(ControllerService, "stop", lambda self, t, apply=False, band="", **k: (
+        stops.append((t, band)), ActionResult(True, "stopped"))[1])
+
+    def launched(self, b):
+        raise _Launched()
+    monkeypatch.setattr(ControllerService, "clear_daemon_feed", launched)
+    with pytest.raises(_Launched):
+        svc.start("reticulum", apply=True, stop_owners=True)
+    assert stops == [("meshcore", ""), ("daemon", "868")]
+
+
+def _owners_on_868(monkeypatch, stops, meshcore_ok=True):
+    """kiss on 433 and meshcore on 868, both on the daemon; records the owner stops."""
+    from lhpc.core.services import ActionResult, ControllerService
+    meshcore = {"resource": "loraham.radio.868", "holder_stack": "meshcore",
+                "holder": "meshcore-node", "band": "868"}
+    daemon = {"resource": "loraham.radio.868", "holder_stack": "daemon",
+              "holder": "loraham-daemon", "band": "868"}
+    monkeypatch.setattr(ControllerService, "run_blockers", lambda self, t, b="", radio="": (
+        [daemon] if ("meshcore", "") in stops else [meshcore, daemon]))
+    monkeypatch.setattr(ControllerService, "stop", lambda self, t, apply=False, band="", **k: (
+        stops.append((t, band)),
+        ActionResult(meshcore_ok or t != "meshcore", "stopped" if meshcore_ok else "unverified",
+                     details=["  [unverified] meshcore-node: still running"]))[1])
+
+
+def test_an_owner_that_does_not_stop_leaves_the_daemon_alone(tmp_path, monkeypatch):
+    # A half-stopped owner set must not also lose its daemon: refuse before the daemon stop, and
+    # the stop's own lines say why.
+    stops = []
+    _owners_on_868(monkeypatch, stops, meshcore_ok=False)
+    res = _svc(tmp_path).start("kiss", apply=True, stop_owners=True)
+    assert stops == [("meshcore", "")] and not res.ok
+    assert "  [unverified] meshcore-node: still running" in res.details
+
+
+def test_a_dual_band_daemon_is_not_stopped_under_the_other_bands_clients(tmp_path, monkeypatch):
+    # One daemon process serving 433 and 868: its per-band stop would take 433 and kiss with it.
+    # Stubbed: the topology resolver (that process) and the dependents running on 433.
+    from lhpc.core.services import ControllerService
+    stops = []
+    _owners_on_868(monkeypatch, stops)
+    real = ControllerService._operation_bands
+    monkeypatch.setattr(ControllerService, "_operation_bands", lambda self, t, b="", radio="", op="": (
+        {"433", "868"} if (t, b, op) == ("daemon", "868", "stop") else real(self, t, b, radio, op)))
+    monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: (
+        ["kiss"] if bands == {"433"} else []))
+    res = _svc(tmp_path).start("reticulum", apply=True, stop_owners=True)
+    assert stops == [("meshcore", "")] and not res.ok
+    tail = res.summary.split("kiss", 1)[1]        # after the client it would have stopped
+    assert "meshcore" in tail and "stopped" in tail and "daemon" in tail and "not" in tail
+    assert res.next_commands == ["lhpc stack stop kiss", "lhpc stack start reticulum --yes"]
+
+
+def test_the_band_owner_refusal_names_the_band_scoped_daemon_stop(tmp_path, monkeypatch):
+    # Without stop_owners the preflight refuses; its remedy for a daemon holder stops that band
+    # only, never the bare `lhpc stack stop daemon` (finding 140).
+    from lhpc.core.services import ControllerService
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(ControllerService, "run_blockers", lambda self, t, b="", radio="": [
+        {"resource": "loraham.radio.868", "holder_stack": "daemon", "holder": "loraham-daemon",
+         "band": "868"},
+        {"resource": "loraham.radio.868", "holder_stack": "meshcore", "holder": "meshcore-node",
+         "band": "868"}])
+    res = svc.start("kiss", apply=True)
+    assert not res.ok and res.next_commands == ["lhpc stack stop meshcore",
+                                                "lhpc stack stop daemon --band 868"]
+    s = res.summary
+    assert "meshcore" in s and "868" in s and s.index("meshcore") < s.index("daemon")
+
+
 # --- §8.3 web job-log selector hardening -------------------------------------
 
 @pytest.mark.parametrize("bad", ["../../etc/passwd", "/etc/passwd", "a/b.log",

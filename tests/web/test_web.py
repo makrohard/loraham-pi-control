@@ -2667,6 +2667,26 @@ def test_a_refused_plan_flashes_where_the_operator_came_from(tmp_path, monkeypat
     assert "radio hardware not set" in page and "set it under Settings" in page
 
 
+def test_the_confirm_page_names_the_daemon_by_band(tmp_path, monkeypatch, web, csrf):
+    # Finding 140: Stop owner(s) & start stops the daemon on the held band only — the page says so,
+    # in the order the stops run (the app first). Stubbed: the plan (its blocker list).
+    from lhpc.core.services import ActionResult, ControllerService
+    plan = ActionResult(True, "Run plan for 'daemon'.", data={"changes": 1, "blockers": [
+        {"resource": "loraham.radio.868", "holder_stack": "daemon", "holder": "loraham-daemon",
+         "band": "868"},
+        {"resource": "loraham.radio.868", "holder_stack": "meshcore", "holder": "meshcore-node",
+         "band": "868"}]})
+    monkeypatch.setattr(ControllerService, "run_action", lambda self, op, target, **kw: plan)
+    binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
+    binp.parent.mkdir(parents=True); binp.write_text("#!/bin/sh\n")      # installed: no redirect
+    c = web()
+    r = c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": "daemon", "band": "868",
+                                "from": "dash"})
+    body = r.get_data(as_text=True)
+    line = next(l for l in body.splitlines() if "is required to run this stack" in l)
+    assert "meshcore" in line and "868" in line and line.index("meshcore") < line.index("daemon")
+
+
 def test_a_resource_conflict_asks_for_the_minimal_confirmation(tmp_path, monkeypatch, web, csrf):
     # meshtastic owns the 868 radio -> starting the daemon on 868 needs "Stop owner(s) & start":
     # the ONE consequential choice that still gets a page (Start lower right, Cancel lower left).

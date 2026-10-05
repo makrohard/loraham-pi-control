@@ -545,6 +545,8 @@ def _drive_args(svc):
         "listeners": [], "port": 4403, "records": [], "scope": {"addr": comp.endpoints[0].address.rsplit(":", 1)[0]},
         "groups": [], "params": {}, "result": ActionResult(True, "x"),
         "sids": ["meshtastic"], "why": "did not build",
+        "blockers": [{"resource": "loraham.radio.868", "holder_stack": "daemon", "holder": "x",
+                      "band": "868"}],
     }
 
 

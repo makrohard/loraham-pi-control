@@ -554,6 +554,56 @@ def test_stack_start_takes_a_band(monkeypatch, capsys):
 
 
 @pytest.mark.contract
+def test_the_held_band_question_names_the_daemon_by_band(monkeypatch):
+    # Finding 140: the question names what --yes stops: the app, then the daemon on that band.
+    import builtins
+    import sys as _sys
+
+    from lhpc.core.services import ActionResult
+    prompts = []
+    monkeypatch.setattr(ControllerService, "run_action", lambda self, op, target, **kw: (
+        ActionResult(True, "plan", data={"changes": 1, "blockers": [
+            {"resource": "loraham.radio.868", "holder_stack": "daemon", "holder": "d", "band": "868"},
+            {"resource": "loraham.radio.868", "holder_stack": "meshcore", "holder": "m",
+             "band": "868"}]})))
+    for stream in (_sys.stdin, _sys.stdout):
+        monkeypatch.setattr(stream, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(builtins, "input", lambda prompt: (prompts.append(prompt), "n")[1])
+    assert main(["stack", "start", "reticulum"]) == 1
+    assert len(prompts) == 1
+    p = prompts[0]
+    who = p.split("held by", 1)[1].split("—", 1)[0]      # the holders named, not the resource
+    assert "meshcore" in who and "daemon on 868" in who and "reticulum" in p
+    assert who.index("meshcore") < who.index("daemon")
+
+
+@pytest.mark.contract
+def test_stack_stop_takes_a_band_for_the_daemon_only(monkeypatch, capsys):
+    # A band on another stack's stop would only skip its stop intent (boot restore starts it
+    # again): refused, nothing run.
+    calls = []
+    monkeypatch.setattr(ControllerService, "run_action",
+                        lambda self, op, target, **kw: calls.append((op, target)))
+    assert main(["stack", "stop", "meshtastic", "--band", "868", "--yes"]) == 2
+    assert calls == [] and "--band" in capsys.readouterr().err
+
+
+@pytest.mark.contract
+def test_stack_stop_takes_a_band(monkeypatch):
+    # The band-scoped remedy a held band names (`lhpc stack stop daemon --band 868`, finding 140)
+    # must be a command the CLI accepts and passes on.
+    from lhpc.core.services import ActionResult
+    calls = []
+
+    def cap(self, op, target, **kw):
+        calls.append((op, target, kw.get("apply"), kw.get("band")))
+        return ActionResult(True, "ok", data={"changes": 1})
+    monkeypatch.setattr(ControllerService, "run_action", cap)
+    assert main(["stack", "stop", "daemon", "--band", "868", "--yes"]) == 0
+    assert calls[-1] == ("stop", "daemon", True, "868")
+
+
+@pytest.mark.contract
 def test_stack_start_of_an_interactive_main_is_success(monkeypatch, capsys):
     # chat: the daemon is ensured and the TUI's command printed — the expected outcome of an
     # interactive stack (outcomes.manual_required_only). The CLI shows it as success, like the web

@@ -201,6 +201,8 @@ SNAPSHOT_NEUTRAL: dict[str, str] = {
     "operator_callsign_correction": "read-only",
     "operator_callsign_legacy": "read-only",
     "optional_role": "read-only",
+    "owner_stop_commands": "read-only",
+    "owner_stops": "read-only",
     "page_mode_note": "read-only",
     "pki_normalise_pending": "read-only",
     "power_supported": "read-only",

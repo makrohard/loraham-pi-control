@@ -118,7 +118,8 @@ def _apply_flow(run, yes: bool) -> int:
     return _render(run(True))
 
 
-def _start_flow(run, stack: str, yes: bool, band: str = "") -> int:
+def _start_flow(run, stack: str, yes: bool, band: str = "", stop_cmds=None,
+                stop_labels=None) -> int:
     """`lhpc stack start`: `_apply_flow`, except when the plan names running stacks that hold what
     the start needs. Then it asks, as the console's confirm page does, whether to stop them and
     start; `--yes` answers yes. A no, or no terminal to ask on, refuses with nothing stopped; its
@@ -130,14 +131,17 @@ def _start_flow(run, stack: str, yes: bool, band: str = "") -> int:
     _render(plan)
     holders = sorted({b["holder_stack"] for b in blockers})
     held = ", ".join(sorted({b["resource"] for b in blockers}))
+    # Who is stopped, the daemon by band ("daemon on 868"), as the stop itself does.
+    who = ", ".join(lbl for lbl, _ in stop_labels(blockers)) if stop_labels else ", ".join(holders)
     if yes or (sys.stdin.isatty() and sys.stdout.isatty() and _confirm(
-            f"\n{held} held by {', '.join(holders)} — stop them and start {stack}? [y/N] ")):
+            f"\n{held} held by {who} — stop them and start {stack}? [y/N] ")):
         return _render(run(True, stop_owners=True))
     retry = f"lhpc stack start {stack}" + (f" --band {band}" if band else "") + " --yes"
     return _render(ActionResult(
-        False, f"Cannot run '{stack}': {', '.join(holders)} must be stopped first.",
+        False, f"Cannot run '{stack}': {who} must be stopped first.",
         details=[f"  `{retry}` stops them and starts it without asking"],
-        next_commands=[*(f"lhpc stack stop {h}" for h in holders), retry]))
+        next_commands=[*(stop_cmds(blockers) if stop_cmds else (f"lhpc stack stop {h}" for h in holders)),
+                       retry]))
 
 
 def _print_install_dep_gate(svc, stack, check: bool = False) -> bool:
@@ -687,6 +691,12 @@ def build_parser() -> argparse.ArgumentParser:
             from lhpc.core.daemon_control import ALLOWED_BANDS
             sp.add_argument("--band", default="", choices=ALLOWED_BANDS,
                             help="Start on this band (band-switchable stacks); default: the saved one")
+        elif action == "stop":
+            # A per-band stop (the daemon on one band only, as the console's per-band Stop does) —
+            # the remedy a held band names (finding 140).
+            from lhpc.core.daemon_control import ALLOWED_BANDS
+            sp.add_argument("--band", default="", choices=ALLOWED_BANDS,
+                            help="Stop the daemon on this band only (daemon only)")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
 
     # Per-stack settings (callsign/params/daemon params) and the global operator identity.
@@ -1405,6 +1415,13 @@ def _run(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "stack":
+        if (args.stack_action == "stop" and getattr(args, "band", "")
+                and args.stack not in (svc.DAEMON_ID, svc.stack_of(svc.DAEMON_ID) or "daemon")):
+            # Fail closed: for any other stack a band would only skip the operator's stop intent,
+            # so boot restore would start it again (finding 140's review).
+            print("lhpc stack stop: --band applies to the daemon only (a stack's own stop needs no "
+                  "band)", file=sys.stderr)
+            return 2
         if args.stack_action in ("start", "stop", "restart", "poststart"):
             from dataclasses import replace
 
@@ -1422,7 +1439,9 @@ def _run(argv: list[str] | None = None) -> int:
                 return res
             if args.stack_action == "start":
                 return _start_flow(_run, args.stack, yes=args.yes,
-                                   band=getattr(args, "band", "") or "")
+                                   band=getattr(args, "band", "") or "",
+                                   stop_cmds=svc.owner_stop_commands,
+                                   stop_labels=svc.owner_stops)
             return _apply_flow(_run, yes=args.yes)
         # argparse's --help action calls sys.exit(0), so routing a usage error through
         # it exited 0 and `lhpc stack || handle_error` silently passed. Every sibling

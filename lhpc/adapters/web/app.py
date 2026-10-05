@@ -1536,6 +1536,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             op=op, target=target, plan=plan, tx=("tx" in op),
             source=source, band=band,
             blockers=(plan.data.get("blockers") if op in ("start", "restart") else None),
+            stop_labels=([lbl for lbl, _ in service.owner_stops(plan.data.get("blockers") or [])]
+                         if op in ("start", "restart") else None),
             stop_deps=(plan.data.get("dependents") if op in ("stop", "restart") else None),
             other_bands=(plan.data.get("other_bands") if op in ("stop", "restart") else None),
             commands=(plan.data.get("commands") if op in ("start", "stop") else None),

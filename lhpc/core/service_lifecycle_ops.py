@@ -422,8 +422,11 @@ class LifecycleOpsMixin:
             key = (stack_id, resource)
             if key not in seen:
                 seen.add(key)
+                # The radio band a held `loraham.radio.<band>` is on, so a daemon holder can be
+                # stopped (and named) per band; "" for any other resource.
+                rband = resource.rsplit(".", 1)[-1] if resource.startswith("loraham.radio.") else ""
                 blockers.append({"resource": resource, "holder": holder,
-                                 "holder_stack": stack_id})
+                                 "holder_stack": stack_id, "band": rband})
 
         for ss in snap.stacks:
             sid = ss.stack.id
@@ -1166,17 +1169,50 @@ class LifecycleOpsMixin:
         life = run.life
         blockers = self.run_blockers(target, band, radio) if prep.stop_owners else []
         if blockers:
-            owners = sorted({bl["holder_stack"] for bl in blockers})
             prelude = []
             unstopped = []
-            for o in owners:
-                ores = self.stop(o, apply=True, _operator=False)
+
+            def stop_owner(o, b=""):
+                ores = self.stop(o, apply=True, _operator=False, band=b)
+                name = f"'{o}'" + (f" on {b}" if b else "")
                 if ores.ok:
-                    prelude.append(f"  [stopped] conflicting stack '{o}'")
+                    prelude.append(f"  [stopped] conflicting stack {name}")
                 else:
                     unstopped.append(o)
-                    prelude.append(f"  [blocked] conflicting stack '{o}' did not stop "
+                    prelude.append(f"  [blocked] conflicting stack {name} did not stop "
                                    f"(verified): {ores.summary}")
+                    prelude.extend(ores.details)
+            # The app stacks first: a whole-stack stop of the daemon would take down every client
+            # on every band (finding 140). Then the daemon only on the radio bands still held —
+            # stopping an app that ran on the daemon often releases its band already.
+            daemon_sid = self.stack_of(self.DAEMON_ID) or "daemon"
+            for o in sorted({bl["holder_stack"] for bl in blockers} - {daemon_sid}):
+                stop_owner(o)
+            if not unstopped and any(bl["holder_stack"] == daemon_sid for bl in blockers):
+                left = [bl for bl in self.run_blockers(target, band, radio)
+                        if bl["holder_stack"] == daemon_sid]
+                bands = sorted({bl.get("band", "") for bl in left})
+                # One daemon process serving both bands stops both on a per-band stop: refuse
+                # rather than stop the clients of a band this start does not need.
+                needed = set(self._operation_bands(target, band, radio, "start"))
+                for b in [b for b in bands if b]:
+                    extra = set(self._operation_bands(daemon_sid, b, "", "stop")) - needed - {b}
+                    hit = self.stop_dependents(daemon_sid, bands=extra) if extra else []
+                    if hit:
+                        apps = sorted({bl["holder_stack"] for bl in blockers} - {daemon_sid})
+                        return ActionResult(
+                            False,
+                            f"Cannot run '{target}': the daemon on {b} also serves "
+                            f"{', '.join(sorted(extra))} (one process); stopping it would stop "
+                            f"{', '.join(hit)} too. "
+                            + (f"{', '.join(apps)} {'was' if len(apps) == 1 else 'were'} stopped; "
+                               if apps else "") + "the daemon was not.",
+                            details=[*prelude, f"  [blocked] daemon {b}: one process with "
+                                     f"{', '.join(sorted(extra))} — {', '.join(hit)} left running"],
+                            next_commands=[*(f"lhpc stack stop {h}" for h in hit),
+                                           f"lhpc stack start {target} --yes"])
+                for b in ([""] if "" in bands else bands):
+                    stop_owner(daemon_sid, b)
             if unstopped:
                 # Do not launch the target while a conflicting owner is still up.
                 return ActionResult(
@@ -2560,14 +2596,18 @@ class LifecycleOpsMixin:
                 # auto-install): those tombstoned the shared daemon and whole
                 # stacks the operator never named, and boot-restore then pruned evidence for
                 # things legitimately running at shutdown. Band- and component-scoped stops
-                # never tombstone. Written when the stop stopped something (verified or
+                # never tombstone — a band-scoped stop only for the daemon. Written when the stop
+                # stopped something (verified or
                 # UNVERIFIED — the key case) or there was nothing to stop; a REFUSED stop that
                 # left the stack running writes nothing, so a still-running stack is never
                 # silently dropped from restore.
                 # The UNVERIFIED escape hatch counts ONLY the target stack's OWN components
                 # (a dependent's UNVERIFIED row satisfied it while the daemon's
                 # own stop was BLOCKED and the daemon kept running — tombstoning a live stack).
-                if (_operator and not band and self.stack(target) is not None
+                # Only the DAEMON's per-band stop is exempt: a client the console stops with its
+                # band is still the operator's stop (finding 143), or boot restore restarts it.
+                if (_operator and not (band and self._is_daemon_target(target))
+                        and self.stack(target) is not None
                         and (res.ok
                              or any(r.action == "stop" and r.outcome == Outcome.UNVERIFIED
                                     and (self.stack_of(r.component) or r.stack) == target
@@ -2688,10 +2728,12 @@ class LifecycleOpsMixin:
                     # reboot for exactly the unverified-dependent case. Internal cascades
                     # (restart, uninstall, auto-install) still pass False from the outer stop.
                     # Only a WHOLE-STACK operator stop passes its operator-ness down: a
-                    # band-scoped daemon stop (band switch) names no dependent for good —
-                    # tombstoning them dropped stacks from restore the operator never stopped.
+                    # band-scoped DAEMON stop (band switch) names no dependent for good —
+                    # tombstoning them dropped stacks from restore the operator never stopped. A
+                    # client's stop with its band (the console's) is the operator's (finding 143).
                     dep_res = self.stop(dep, apply=True, release_daemon=False,
-                                        _operator=_operator and not band)
+                                        _operator=_operator and not (
+                                            band and self._is_daemon_target(target)))
                     results.append(CompResult(component=dep, stack=dep, action="stop",
                         outcome=Outcome.STOPPED if dep_res.ok else Outcome.UNVERIFIED,
                         summary=dep_res.summary))
@@ -3101,14 +3143,31 @@ class LifecycleOpsMixin:
                     if bl["holder_stack"] not in exclude_holders]
         if not blockers:
             return None
-        owners = sorted({bl["holder_stack"] for bl in blockers})
+        owners = [lbl for lbl, _ in self.owner_stops(blockers)]
         details = [f"  {bl['resource']} held by running stack '{bl['holder_stack']}'"
                    for bl in blockers]
         return ActionResult(
             False,
             f"Cannot run '{target}': {', '.join(owners)} must be stopped first.",
             details=details,
-            next_commands=[f"lhpc stack stop {o}" for o in owners])
+            next_commands=self.owner_stop_commands(blockers))
+
+    def owner_stops(self, blockers) -> list[tuple[str, str]]:
+        """`(label, command)` per stop the holders of `blockers` need, in the order a start with
+        stop_owners runs them: the app stacks first, then the daemon per radio band it holds (a
+        bare `lhpc stack stop daemon` would stop every client on every band, finding 140)."""
+        daemon_sid = self.stack_of(self.DAEMON_ID) or "daemon"
+        holders = {bl["holder_stack"] for bl in blockers}
+        out = [(o, f"lhpc stack stop {o}") for o in sorted(holders - {daemon_sid})]
+        if daemon_sid in holders:
+            bands = sorted({bl.get("band", "") for bl in blockers if bl["holder_stack"] == daemon_sid})
+            out += ([(daemon_sid, f"lhpc stack stop {daemon_sid}")] if "" in bands else
+                    [(f"{daemon_sid} on {b}", f"lhpc stack stop {daemon_sid} --band {b}") for b in bands])
+        return out
+
+    def owner_stop_commands(self, blockers) -> list[str]:
+        """The commands of `owner_stops`."""
+        return [cmd for _label, cmd in self.owner_stops(blockers)]
 
     def _restart_impl(self, target: str, apply: bool = False, stop_owners: bool = False,
                       band: str = "", cascade: bool = False, position: dict | None = None,
