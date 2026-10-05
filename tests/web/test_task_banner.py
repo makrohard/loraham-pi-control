@@ -161,6 +161,16 @@ def test_job_hints_per_op(tmp_path, monkeypatch):
     assert "lhpc build meshcom-qemu --yes" in _only_job(svc)["hint"]
 
 
+@pytest.mark.parametrize("binary, hint", [(True, "Next: Start."), (False, "Next: Build.")])
+def test_a_finished_install_names_build_only_from_source(tmp_path, monkeypatch, binary, hint):
+    svc = _svc(tmp_path)
+    _manifest_ok(monkeypatch)
+    # Collaborator stub: which channel the stack ended on is the receipt reader's own question.
+    monkeypatch.setattr(ControllerService, "on_binary_channel", lambda self, sid: binary)
+    _job(svc, "done", op="install", finished_at=_utc(0))
+    assert _only_job(svc)["hint"] == hint
+
+
 def test_a_failed_build_banner_keeps_the_cause_the_retry_and_the_log(tmp_path, monkeypatch):
     """Finding 91: a build stopped by the runaway guard persisted its cause in the job detail,
     but the banner showed only a static sentence; the cause lived on the log page alone."""

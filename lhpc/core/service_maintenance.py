@@ -1108,6 +1108,8 @@ class MaintenanceOpsMixin:
         # carried in the marker detail — never a secret, never a path.
         _detail = rec.get("detail", "") if op in ("start", "restart") else None
         if st == "done":
+            if op == "install" and self.on_binary_channel(rec.get("target", "")):
+                return "done", "Next: Start."          # a binary install has no Build step
             return "done", self._JOB_HINT.get((op, "done")) or _detail
         if st == "failed" and op == "build":
             # The child's persisted detail (e.g. "timed out (runaway guard …): <argv>") is the cause;
