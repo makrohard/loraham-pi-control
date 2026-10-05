@@ -1386,6 +1386,20 @@ def test_a_successful_applied_start_beside_the_other_side_is_warned(tmp_path, mo
     res = svc.start(target, band=band, apply=True)
     assert res.ok, res.summary
     assert f"  [warning] {SPI_SHARED_WARNING}" in res.details, res.details
+    # the console's start banner shows the summary and these notes (`_stack-start`)
+    assert SPI_SHARED_WARNING in svc.start_notes(res)
+
+
+def test_a_restart_keeps_the_shared_spi_warning_for_the_console(tmp_path):
+    """A restart's result is rebuilt from its stop and start legs (`_restore_optional`); the
+    start leg's shared-SPI warning stays in it, so the console's restart banner shows it too."""
+    from lhpc.core.service_lifecycle_ops import SPI_SHARED_WARNING
+    svc = _dsvc(tmp_path, "433")
+    started = ActionResult(True, "Run applied for 'meshtastic'.",
+                           data={"spi_warning": SPI_SHARED_WARNING})
+    # the private IS the seam under test: what a restart returns from its two legs
+    res = svc._restore_optional("meshtastic", "868", ActionResult(True, "stopped"), started, [])
+    assert SPI_SHARED_WARNING in svc.start_notes(res)
 
 
 

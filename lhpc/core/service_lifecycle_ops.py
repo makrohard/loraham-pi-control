@@ -1643,9 +1643,11 @@ class LifecycleOpsMixin:
             # `auto` could not get a fix. Never gating, but never silent either: the node is
             # on the air without a position and the operator has to be able to see that.
             out = [*out, f"  [gps] {prep.position_note}"]
+        warned = {}
         if ok and (_spi := self._spi_shared_warning(target, band, radio)):
             out = [*out, f"  [warning] {_spi}"]   # only once the new side came up
-        return ActionResult(ok, summary, details=out, results=tuple(results),
+            warned = {"spi_warning": _spi}        # the console's start banner shows it too
+        return ActionResult(ok, summary, details=out, results=tuple(results), data=warned,
                             next_commands=[f"lhpc status {target}", f"lhpc logs {target}",
                                            f"lhpc stack stop {target}"])
 
@@ -3288,6 +3290,7 @@ class LifecycleOpsMixin:
         # the target comes back (the stop leg's lines were dropped).
         return ActionResult(ok, summary, details=details,
                             results=tuple(stopped.results) + tuple(results),
+                            data=res.data,     # the start's facts (the shared-SPI warning)
                             next_commands=res.next_commands)
 
     def _restart_stops_dependents(self, target: str, cascade: bool) -> bool:
@@ -6168,7 +6171,8 @@ class LifecycleOpsMixin:
     def start_notes(self, result: ActionResult) -> list[str]:
         """Per-component `start_note` strings for components that actually started
         (verified / already-healthy) in this result — e.g. how to connect a just-
-        launched GUI to its node. Shown as a transient green dashboard note."""
+        launched GUI to its node — and the shared-SPI warning of a start that came up
+        beside the other side. Shown as a transient dashboard note."""
         started = {r.component for r in result.results
                    if getattr(r, "outcome", None) is not None
                    and r.outcome.value in ("verified", "started", "already_healthy")}
@@ -6177,6 +6181,8 @@ class LifecycleOpsMixin:
             for c in s.components:
                 if c.id in started and c.start_note:
                     out.append(c.start_note)
+        if (result.data or {}).get("spi_warning"):
+            out.append(result.data["spi_warning"])
         return out
 
     @invalidates_snapshot
