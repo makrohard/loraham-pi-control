@@ -1333,6 +1333,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # see is not consent.
             _dirty = service.self_update_local_dirty()
             _diverged = service.self_update_ff_blocked()
+            if st.get("have_upstream") and not st.get("update_available") and not (_dirty or _diverged):
+                # Nothing to update (the panel says "Up to date."): no confirm to stop the console.
+                flash("Already up to date — nothing to update.", "ok")
+                return redirect(url_for("stacks_overview") + "#controller-update")
             _ahead, _behind = service.self_update_divergence() if _diverged else (0, 0)
             return _render_stacks(confirm={"dirty": _dirty,
                                            "diverged": _diverged,

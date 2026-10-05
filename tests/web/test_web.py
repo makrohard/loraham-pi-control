@@ -1303,6 +1303,23 @@ def test_diverged_confirm_names_the_commit_count_and_upstream_ref(tmp_path, monk
     assert "7 ahead of it" in body
 
 
+def test_an_up_to_date_console_offers_no_update_confirm(tmp_path, monkeypatch, web, csrf):
+    # The panel says "Up to date." (upstream checked, the same head): the update POST returns to
+    # the panel saying so, instead of a confirm that would stop the console for nothing.
+    from lhpc.core.services import ControllerService
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"},
+                     {"ok": True, "upstream_version": "0.12.2", "upstream_head": "a" * 40,
+                      "upstream_head_short": "aaaaaaaaa"})
+    monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
+    monkeypatch.setattr(ControllerService, "self_update_ff_blocked", lambda self: False)
+    c = web()
+    r = c.post("/self-update/apply", data={"_csrf": csrf(c)})
+    assert r.status_code == 302 and r.headers["Location"].endswith("#controller-update")
+    body = c.get("/stacks").get_data(as_text=True)
+    assert "Already up to date" in body and "Update &amp; restart now" not in body
+
+
 def test_clean_tree_confirm_shows_neither_banner_nor_checkbox(tmp_path, monkeypatch, web, csrf):
     body = _confirm_body(web, csrf, tmp_path, monkeypatch)      # clean + fast-forwardable (the normal case)
     assert 'name="overwrite"' not in body
