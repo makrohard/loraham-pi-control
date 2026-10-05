@@ -6,38 +6,40 @@ Upgrade note — boxes with the firewall installed: this release changes the fir
 reads *Update required* after the update; run `sudo bash <runtime root>/config/files/firewall/firewall-apply.sh`
 (and `lhpc webserver apply` if remote access is configured) before a reboot.
 
-**Update reliability**
+New
 
-- An update — `lhpc update <stack>`, `lhpc self-update --apply`, or the same from the console — now ends in
-  exactly one of three ways (or *recovery-required*, where lhpc cannot prove what it finds is its own, or
-  cannot record what it did):
-  converged (at its target version, built; lhpc itself synced and its units
-  refreshed); nothing changed, with the cause and the command that fixes it; or, only where putting the
-  previous version back is not one operation lhpc has, a named state that is recorded on disk, shown by
-  `lhpc status` with its word and resolved by one command: *needs-rebuild* (`lhpc build <stack> --yes`),
-  *prior-in-use* (`lhpc update <component> --yes` once the process using the old tree has ended),
-  *prior-dirty* (the `mv` the result and `lhpc status` print), *venv-unsynced* (`lhpc self-update --apply`) and *units-stale*
-  (`lhpc self-update --repair-integration`). [Operations](docs/operations.md#what-happens-when-an-update-fails)
-  lists them.
-  - The update builds the stack again when its new sources need it, so the next start works (in the
-    console: as a build job with its live output). A build that fails, or cannot start, ends the update as
-    *needs-rebuild* — in the console as in the CLI. `lhpc status --versions` marks the component while a
-    build is due.
-  - `lhpc update graywolf` names `lhpc build graywolf --yes` and `--upstream` instead of *Unknown stack*.
-  - A binary update to the artifact that is already installed and intact downloads nothing; it says so only
-    after an interrupted binary install has been recovered.
-  - A left-over `src/.<name>.prev` refusal names that directory and the `mv` out of `src/`; a failed carry
-    of your own files, or a transaction journal that cannot be written, names the retry.
-  - The pinned fallback says *no compatible known-working record* (also when a record exists that no
-    longer fits the stack).
-- Ctrl-C, a full disk or an I/O error at any one step of a source install or update, or of a self-update,
-  no longer leaves a staged copy, a probe directory, a half-removed old tree or a self-update recovery
-  reference behind: the next lhpc command of that kind cleans it up. A staged copy is removed only on the
-  identity recorded for it: one with no identity recorded, or another directory at its name, is kept and
-  named (*a staging directory this run cannot prove as its own*), never removed. Your own files copied into
-  the new tree are journaled before the copy writes and on disk before the switch; a power loss during that
-  copy leaves it kept and named with the old tree (*recovery-required*), and once you have removed it the
-  next lhpc source command puts the old tree back.
+- An update (`lhpc update`, `lhpc self-update --apply`, or the console) ends converged; unchanged, with the
+  cause and the fix; or in a named state `lhpc status` shows with the one command that resolves it; or
+  *recovery-required* where lhpc cannot prove what it finds is its own or cannot record what it did
+  ([operations](docs/operations.md#what-happens-when-an-update-fails) lists them).
+- An update builds the stack again when its new sources need it.
+- `lhpc stack start` on a band another running stack holds asks, as the console does, whether to stop it; `--yes`
+  stops the holders without asking (also in a script); with no terminal and no `--yes` it refuses, naming both.
+- Boot restore prepares chat as `lhpc stack start chat` does, instead of skipping it.
+- The console's housekeeping records each task's last success and last failure: `lhpc doctor` lists every task
+  with its time, and the dashboard shows a task whose last run failed until a later run succeeds.
+- Every release is installed, built and self-updated on a test box throttled to a Pi Zero 2 W before it ships.
+
+Changed
+
+- A build locks every source it builds from and records their revisions. MeshChat, the MeshCore web UI and CLI,
+  NomadNet, the LXMF router, Meshtastic and the MeshCom QEMU node then read *not built* until one `lhpc build`
+  of their stack (built from source; on the binary channel nothing changes).
+- The console's Build on a single component builds that component, as `lhpc build <component>` does.
+- A refusal `lhpc update`, `lhpc build`, `lhpc self-update` and the binary channel return outright names what to
+  do (a command, or a *nothing to run here* line), as do the named `lhpc install` refusals (a shared source's
+  remotes, stacks sharing a checkout, a journal or set-aside failure); a suggested retry repeats the `--band` or
+  `--source` you gave.
+- A failed stack start stops again what it started and names anything left running.
+- A restart of chat counts the manual start of its terminal program as success, as its start does.
+- `lhpc status`: a stack whose main process died while its helpers run reads *failed*, no longer *degraded*.
+- Starting the daemon on 433 MHz while Meshtastic runs on 868 MHz, or the reverse, shows a warning: avoid
+  transmitting on both at once.
+
+Fixed
+
+- After Ctrl-C, a full disk or an I/O error during a source install or update, or a self-update, the next command
+  of that kind cleans up what was left; what lhpc cannot prove as its own is kept and named.
 - An update keeps the old source tree (*prior-in-use*, the process named) while another process can still
   write into it — a process lhpc can inspect (an open file, a working directory or root inside it, a shared
   writable mapping), or any process with a file in the tree open for writing or mapped writable when that
@@ -46,338 +48,58 @@ reads *Update required* after the update; run `sudo bash <runtime root>/config/f
   process writes later. A
   process whose working directory, root or an open directory descriptor is inside the old tree, with no
   file open there, is not seen when lhpc cannot inspect it (an open directory lets it create files), nor
-  is a superuser process: move the old tree out by hand if such a process exists. `lhpc status`
-  says *prior-in-use* only while such a process is still found; after that the next lhpc source command
-  removes the old tree, or keeps it as *prior-dirty* if it holds changes of yours; a journal that cannot
-  record why the old tree is kept says *recovery-required*. A staged-copy
-  record that cannot be created is said in one line.
-- `lhpc self-update --apply`: a checkout on a detached HEAD is refused with the `git switch` that puts it
-  back; an unreachable upstream says what to fix. A self-update state record that cannot be written fails
-  the update *recovery-required* with the cause and what to run by hand (after a failed venv sync: the sync, then
-  `lhpc self-update --repair-integration`); one that cannot be read is *recovery-required*, and
-  `--repair-integration` clears *units-stale* only.
-- `lhpc self-update` no longer says "Up to date." while the venv is behind a checkout with a new version
-  number: it compares the version the venv's install recorded with the checkout's and says so, and `lhpc
-  self-update --apply` then runs the sync, also when the failed sync could not be recorded. A checkout
-  that moved without a new version number is seen only through the *venv-unsynced* record. A venv it
-  cannot compare (no version on either side) is reported as not verified, and `--apply` re-syncs it.
-- A self-update records the firewall follow-up for the next console start before it moves the
-  checkout; when that cannot be written (a full disk) it stops with nothing changed and says so.
-- `lhpc status`: a stack whose main process died while its helpers run reads *failed*, no longer
-  *degraded* (that now means the main runs but an endpoint is not ready).
-- A refusal the controller's update, graywolf-update and build functions, or any function in its
-  self-update and binary-channel modules, return outright now says what to do: a command under the CLI's
-  *Next:*, or a *nothing to run here* line naming what has to be fixed on the box. A refusal because an
-  uninstall, a self-update or a reboot is pending, or the update state cannot be read, names `lhpc
-  self-update --recover-request` or what to wait for or fix; a failed build names its log and `lhpc build
-  <stack> --yes`; a graywolf update whose restart failed names `lhpc stack start graywolf --yes`; the
-  MeshCore plugin-manager refusal names `sudo reboot`. `lhpc install` names its remedy too: one remote for
-  a shared source in `config/local.toml`, one `--source` for stacks sharing a checkout (each consumer
-  named with its selection), and the retry after a journal or set-aside failure. A result built from work
-  already done names its remedy only where this entry says so: a one-click self-update that moved the
-  checkout but could not remove untracked files says to delete them by hand, with no command to run. A
-  self-update refused for an unsafe checkout names the fix for its cause (`git … switch` for a detached
-  HEAD or another branch, `git … remote add` for a missing origin, `git … remote set-url` for a wrong one,
-  `chmod go-w` for a folder others can write) or says the install.sh layout has to be restored. A refusal
-  on a busy lock names the operation to wait for and the command to run again (before: `lhpc status`, or
-  nothing). An update blocked by a `src/.<name>.prev` folder left over from an interrupted update names
-  that folder. The update plan says which version the update fetches instead of "fetch newest". What to
-  run to keep each stack current is one table in [operations](docs/operations.md#keeping-stacks-current).
-- An update whose removal of the old source tree was interrupted is finished by the next lhpc source
-  command only when that tree is provably the one the update set aside; any other is kept and named
-  (*recovery-required*) with what to remove by hand, and `lhpc status` says the same.
-- `lhpc status` shows a source transaction journal it cannot read as *recovery-required*, instead of
-  showing no unfinished update.
-- The firewall's "re-apply before you reboot" notice now always lists `lhpc firewall --script` first, so
-  an apply after a code change outside the updater installs the new firewall helper; before, the apply
-  could install the old one again and the status stayed *update-required*. A console start whose script
-  render fails retries it at the next start instead of dropping the follow-up.
-- A directory of the old source tree that the open-file check cannot list now counts as held, instead of
-  being skipped.
-- The controller no longer ends when another process opens a file of the old tree for writing while the
-  open-file check holds its lease on it: the CLI and the console ignore that signal from their start.
-- A refused update (a busy lock, an open source transaction) names the retry with the `--source` it was
-  asked for.
-- Retiring a binary install inside a channel switch whose journal cannot be read says *recovery-required*
-  and names the journal file, instead of reporting an lhpc defect.
-- An update that activated a new source but did not complete names the build that source still needs
-  (`lhpc build <stack> --yes`).
-- `lhpc status`: a stack whose main process is stopped while a helper is degraded reads *failed*.
-
-**Safety helpers**
-
-- Whether a job, an HMAC apply or an auto-install whose stop could not be proven is treated as unsafe, whether
-  a start with a terminal-only part (the Voice terminal variant) counts as successful, and whether a half-finished
-  configuration save blocks the next one are now decided from a recorded fact, never from the wording of the
-  message you see. The messages themselves are unchanged.
-- A disk or permission error on a file LHPC must not lose no longer reads as "the file is gone": retiring a
-  binary install keeps its record while a file or folder cannot be checked, a switch to the source channel does
-  not take over a folder it cannot fully read, an update or uninstall treats a checkout whose `.git` cannot be
-  checked as changed, and boot restore and the config journal treat an unreadable record as one that needs
-  attention instead of an absent one.
-- A source checkout whose `.git` is a symlink that does not resolve (dangling, or a loop) is now treated as
-  present and the tree is not reported clean: every local-change check (update, uninstall, binary install, switch
-  to the source channel, auto-install update) reads it as changed. Before, the `.git` was ignored and the tree
-  read as clean.
-- The firewall no longer treats an interrupted change it cannot read (a disk or permission error) as "nothing to
-  finish": it refuses to apply or check until the state is readable again.
-- A source update no longer stops when recording its staged copy for crash recovery fails with an unexpected
-  error; it says so in one line and continues, as it already did for a disk error. A binary install that cannot
-  print the details of an unexpected error, or cannot undo itself after Ctrl-C, now says so in one line instead of
-  staying silent (after Ctrl-C the next command finishes the undo, as before). In these lines an error message that
-  spans several lines is joined into one.
-- No change in behaviour, the same checks in the same order: the rule for when this box's clock may date
-  certificates (the clock gate behind `--accept-unverified-clock` and `lhpc doctor`'s `clock:` line) now lives in
-  one place, `lhpc/core/clock.py`.
-- `lhpc stack start` on a band another running stack holds asks, as the console does, whether to stop
-  it and start; `--yes` answers yes. Without a terminal and without `--yes` it refuses, naming both ways.
-- A suggested retry repeats what you asked for: the held-band refusal keeps `--band`, and an
-  `lhpc install` refusal keeps the channel (`--source`).
-- A restart of chat counts the manual start of its terminal program as success, as its start does.
-- Boot restore prepares chat as `lhpc stack start chat` does (daemon, settings, the dashboard's manual
-  start note) instead of skipping it.
-- A start refused before it launches anything (a band owner, the firewall gate) no longer resets the
-  band's RX/TX activity window; the start plan's firewall refusal now lists
-  `lhpc firewall --script > /dev/null` before the apply. A start interrupted by a file-system error
-  after it launched something stops what it launched again and says so.
-- A stack start that fails now stops again the parts it started — a part that fails its own check is
-  told to stop at once, the parts it verified once the start as a whole has failed — and the daemon too when that
-  start launched it (a daemon that was already running stays). The result names anything that remains
-  running, with the reason, and the daemon then stays up beneath it. A start that only waits for you to run
-  a terminal program (chat) is not a failure and keeps its daemon.
-- Starting and restarting a stack now runs in five visible phases in the code — taking its locks,
-  checking everything against the saved settings, starting, verifying, and recording the outcome — and a
-  restart as checks, stop, start and the return of its optional parts. The recorded start, stop, restart and
-  boot-restore cases give the same results, refusals and writes as before.
-
-**Settings**
-
-- Saving settings (the console's Settings, `lhpc config`, the RF-log and HMAC switches) is now built in
-  separate steps: checking what was submitted, then reading, deciding and writing under the config lock.
-  What a save accepts, refuses, writes and reports is unchanged; two saves of the same stack at the same
-  moment still both land.
-
-**Console**
-
-- The dashboard's radio columns ask the daemon for updates only while the page is shown: nothing while the tab
-  is in the background (one refresh when you come back), never a second request while the first is still
-  unanswered, and after a failed update the next try waits 15 s instead of 3 s.
-
-**Build**
-
-- A build now keeps the sources it builds from locked for its whole run — the stack's own and every
-  source it consumes, such as `openhop-repeater` for the MeshCore node or Reticulum for NomadNet — so an
-  update or uninstall of one of them is refused until the build ends, and the build's completion record
-  names the exact revisions it used. The console's Build and `lhpc build` now decide which components to
-  build the same way: Build on a single component builds that component, as `lhpc build <component>`
-  does; the stack's Build still builds a missing dependency first.
-- A build's completion record now names every source it was built from: its own checkout (unless a binary
-  release can provide the component) and each dependency's, a dependency's dependency included. A record
-  holding a revision lhpc could not read never counts as built, and `lhpc build` says which one
-  (`[unverified]`) and names `lhpc build <stack> --yes` to run once that revision can be read. After this
-  update, MeshChat, the MeshCore web UI and CLI, NomadNet and the LXMF router read *not built* until one
-  `lhpc build` of their stack. Meshtastic and the MeshCom QEMU node, whose marker a binary release ships
-  unchanged, record their own revision in a file beside it when built from source; built from source
-  before this update, they read *not built* until one `lhpc build` too. On the binary channel nothing
-  changes.
-- A failed console build's banner names the cause it recorded (for example the runaway guard), the retry
-  `lhpc build <stack> --yes` and the job log.
-- A console build that failed no longer stays on the console after a later successful `lhpc build` of
-  the same component; a build whose stop could not be verified still does.
-
-**Maintenance and radios**
-
-- The console's housekeeping (finishing a deferred web-server Apply, refreshing the client-certificate
-  revocation list, re-dating certificates made before the clock was set, cutting oversized logs) now
-  records each task's last success and last failure. `lhpc doctor` lists every task with its time, and
-  the dashboard shows a task whose last run failed until a later run succeeds; before, nothing was kept
-  and only a log that could not be cut was logged. A failed task is now logged as one line per task (it
-  replaces the old one line per log that could not be cut).
-- The daemon panel shows the voice app's 868 MHz spreading factor as SF7, the value the app is seeded
-  with (it showed SF11); the app sets it itself after start, so the steady value on air is unchanged and
-  only the one setting sent before the app starts is now SF7.
-- The docs now state the measured SPI result for the daemon on 433 MHz with Meshtastic on 868 MHz: in a
-  one-hour test with 16 simultaneous transmissions, one of them failed an SPI write, crashed meshtasticd
-  and lost a daemon frame. The pair stays allowed; avoid transmitting on both at the same moment. Starting
-  either side while the other runs now shows this warning.
-- When the housekeeping record has not been written for 15 minutes (its writes fail, or no pass runs),
-  `lhpc doctor` and the dashboard say so instead of showing its last success as current.
-
-**Tests, guards and docs**
-
-- Every step that writes a journal, receipt or marker the next run recovers from (settings saves, boot restore,
-  binary installs, source installs and updates, self-update, the firewall apply) is now tested against a full
-  disk, an I/O error and Ctrl-C at that exact step: recovery must leave a clean state and the same command must
-  then succeed.
-- The shared-SPI warning is now tested on a successful start in both directions, not only in the plan.
-- The test lab's nginx stop refuses, instead of reporting *stopped*, when the running nginx cannot be
-  verified as the lab's (a config path containing whitespace); it never signals such a process.
-- The systemd units LHPC installs are now pinned in the test suite: no release can change one by
-  accident, because a changed unit would make boot restore refuse on every box that already has the old one.
-- Test suite: a test body no longer ignores the result of a controller action it calls, commands, lock
-  keys, unit lines and hashes are compared whole instead of by their beginning, and seven tests whose
-  setup had silently failed now set up what they test. No change in behaviour.
-- The documentation was checked line by line against the code, and the statements the check found untrue
-  now match it. Among them: `lhpc doctor` (not `lhpc deps`) prints the polkit and clock commands;
-  a proxy in `local` mode needs no confirm phrase; an omitted `proxy --port` keeps the saved port; a bare
-  `lhpc update` keeps the installed channel; a reboot or shutdown that is pending refuses every new task,
-  and a stale pending marker is removed by itself. The dated live-test records no longer name LAN
-  addresses or the bench's position. No change in behaviour.
-
-**Slow-target proof**
-
-- Every release is now also installed, built and self-updated on a test box throttled to a Pi Zero 2 W's CPU,
-  SD card and memory before it ships, and each run proves it is no faster than a real Zero on a fixed workload:
-  an update that would stall or run into a time limit on a slow box turns the release check red instead of
-  reaching yours.
-- The slow-box release check refuses a time or calibration value that is not a finite number (NaN,
-  infinity) and names it, instead of letting it pass the budget comparison.
+  is a superuser process: move the old tree out by hand if such a process exists.
+- A checkout whose `.git` cannot be checked (update, uninstall) or is a dangling or looping symlink (update,
+  uninstall, binary install, switch to the source channel, auto-install update) is treated as changed, no longer
+  as clean.
+- Refuses now, with nothing changed: a self-update that cannot record its firewall follow-up; a firewall apply or
+  check while an interrupted change cannot be read.
+- `lhpc self-update` no longer says "Up to date." while the venv is behind a checkout with a new version number.
+- A disk or permission error on a file lhpc must not lose no longer reads as "the file is gone".
+- A failed console build no longer stays shown after a later successful `lhpc build` of that component; one
+  whose stop could not be verified still does.
 
 ## 0.11.11
 
 Upgrade note — boxes with the firewall installed: this release changes the firewall helper again, so the dashboard
 reads *Update required* after the update; run `sudo bash <runtime root>/config/files/firewall/firewall-apply.sh`
 (and `lhpc webserver apply` if remote access is configured) before a reboot. From this release on, the console,
-`lhpc doctor` and `lhpc firewall` say so themselves before the reboot.
+`lhpc doctor` and `lhpc firewall` say so themselves before the reboot. A secret named with `@file:` (the MeshCom
+HMAC password) must be a regular file of at most 64 KiB, not a symlink; anything else stops the start or build.
 
-Fixes from the full code review of 0.11.10, each with a regression test. The ones an operator could meet:
+Changed
 
-Updates and builds
-
-- A build on a slow Pi is no longer killed after 15 or 30 minutes while it is still compiling: a step is stopped
-  only after 10 minutes with no CPU, output or disk/network activity (*stalled*), or by a 24-hour runaway guard,
-  and says which. A web *Build* follows the same rule as `lhpc build`; a web *Test* gets the component's test
-  limit, as `lhpc test` does. A timed-out web job says *timed out after Ns* instead of *step failed*.
-- The MeshCore CLI's dependencies are pinned by a constraints file, and it reads *built* only after a complete
-  build. After the update it reads *not built* until you build it once (`lhpc build meshcore-cli --yes`).
-- A build, host test or other command whose program leaves a detached background process holding its output no
-  longer hangs until that process exits; the run returns and its log is marked unverified.
-- An update no longer fails with a puzzling "local file could not be read" when a checkout holds a Git repository
-  of your own: it refuses naming that folder (move it out of the checkout).
-- `lhpc update <component>` without `--source` picks the same channel as the console (binary while its stack is
-  installed from the binary).
-- Web jobs: a build, test, install, start or restart that fails between recording and launching its job is marked
-  failed instead of staying "starting"; when even that cannot be written it shows as unsafe until Recover.
-- Binary install: any unexpected error during the install is rolled back like an ordinary failure (the previous
-  install and mesh password come back), with the error kept in the log.
-- Retiring a binary install no longer deletes a file you put in place of an installed one when it cannot be hashed
-  (a symlink, an unreadable or very large file): it refuses as for any changed file.
-- Uninstall: a stopped HMAC apply whose build is proven gone no longer blocks uninstall; when it does block, the
-  message names `lhpc hmac recover <stack>`.
-
-Self-update, recovery and boot restore
-
-- The one-click update now really checks the systemd units against the new version; it reported them refreshed
-  without checking, so a release that changed a unit could have stopped boot restore unnoticed.
-- An override of LHPC's units wherever an operator or admin can place one (`systemctl --user set-property`,
-  `service.d/`, `lhpc-.service.d/`, `~/.config/systemd/user.control`, `/etc/systemd/user`, `/run`) now marks them
-  *overridden*, so one-click update and boot restore stay off until it is removed; a drop-in the distribution
-  ships for every service (under `/usr/lib` or `/usr/share`) does not count.
-- `signature-verified` now means the signature covers the pinned commit: a `pin_tag` counts only when it points at
-  the pin; otherwise (another commit, or a `git describe` string) the pin commit's own signature is checked.
-- A source update interrupted by a crash or power loss right after one of its renames is finished by recovery
-  instead of blocking every source change on the box, and it no longer leaves its staged copy on the SD card.
-- An update interrupted after the old source was archived, and completed by the next source operation, no longer
-  leaves the archived copy behind; before, every later update of that source failed with "activation failed —
-  active source untouched" until the `.prev` folder was removed by hand.
-- Update journals, reservations and request files appear only once fully written, so a check running at that
-  moment can no longer mistake a half-written one for a broken one.
-- Boot restore starts nothing when the folder of operator stop notes cannot be read, instead of ignoring every
-  stop note; the evidence is kept for the next boot.
-
-Firewall, web console and certificates
-
-- An update that changes the firewall helper now says so before the reboot: a dashboard notice, `lhpc doctor` and
-  `lhpc firewall` (and, for updates made from this version on, the update result) ask you to re-apply the firewall
-  and `lhpc webserver apply` before you reboot; a boot that kept the console loopback-only for this reason names
-  it and the commands.
-- After an `sshd` `ListenAddress` change, SSH stays reachable on every address sshd still listens on until sshd is
-  restarted (secure-default dropped new sessions on the other addresses).
-- A KISS TNC or MeshCom bridge bound to `::` is now blocked for IPv4 too when it is not ticked for direct access
-  (compatibility mode left its IPv4 side open).
-- When saving the firewall settings fails, the firewall apply script is put back to the saved settings, so the
-  command the console shows can no longer apply the selection that was not saved.
-- Firewall: a failed first install whose table state cannot be read no longer reports "previous ruleset restored".
-- A damaged client-certificate list is no longer replaced by an empty one: the CRL refresh renews the existing
-  revocations unchanged, the console and `lhpc doctor` say the list needs repair, and issuing and revoking refuse
-  and name the file, so every issued certificate stays revocable.
-- `lhpc webserver reset-defaults` restarts nginx when a reload cannot move an exposed console back to loopback (the
-  console and the stack proxies stayed reachable); from the console it tells you to run Apply.
-- A symlinked or non-folder `config/tls/server` (or `client-ca`) reads as an unreadable certificate (way out:
-  `lhpc webserver tls-renew`) instead of an error in Monitor, verify, expose and Apply.
-- `tls-renew` on a full disk no longer leaves a new server key beside the old certificate (nginx would refuse the
-  pair at its next restart): both are staged before either goes live, the old key comes back if the new
-  certificate cannot be put in place, and the failure is reported instead of raised.
-- Two simultaneous console saves can no longer combine plain http with client-certificate access (which the next
-  read silently turned into no authentication): the check reads the settings under the lock.
-- Every action that changes the box (Graywolf upstream update, binary install/retire, config and parameter saves,
-  GPS, high power, RF-log switches, boot restore and the rest) refreshes the status view immediately.
-- RF log: a malformed line (non-numeric or huge values, deep nesting) is shown as a raw line and never breaks the
-  view.
-- A Wi-Fi join that the helper refuses before activating (another network action running at that moment, a stale
-  request) no longer leaves the Wi-Fi password file on disk; an abandoned join's password file is removed when its
-  pending record expires.
-- A Wi-Fi join to a new network that fails before it starts no longer leaves a stray stored network on the Network
-  panel; "Back to AP" no longer says "nothing was changed" when it had already cleared the preferred network.
-
-Settings and config
-
-- Settings *Reset to defaults* on a running stack now shows *Restart required*, as a save does. Resetting one band
-  is now refused as a whole when the stack's shared settings file is broken or GPS is in use; before, it cleared
-  that band's settings and still said *not modified*.
-- A Settings save no longer undoes a hardware, GPS, callsign or remote change made after a crash left an unfinished
-  config save behind: the next `lhpc` command (or the console's start) finishes it first.
-- A corrupt state file (nested too deeply, or not UTF-8 text) is reported as unreadable instead of a traceback or a
-  500 page; a non-UTF-8 secret file refuses the launch or build with a clear message.
-- Meshtastic: a Reset or Busy pin set for an exotic board reaches the generated `meshtasticd.yaml`; the shipped
-  template has no such line under `Lora:`, and the value was dropped while the save reported success.
-- Reticulum: a value with a `"` or `\` (an IFAC passphrase, say) reaches `reticulum.conf` unchanged; it was
-  escaped, and Reticulum read the escapes as part of the value (a different passphrase than the one set).
-- The copy-paste command of an interactive program (MeshCore CLI, Meshtastic CLI, chat, Voice CLI, NomadNet)
-  carries the saved Settings and the band it runs on; it showed the defaults.
-- A node name that happens to read like an internal template word (e.g. `__ROOT__`) reaches the node unchanged
-  instead of breaking the post-start step.
-- `bootstrap-deps.sh` no longer glues the SPI line onto the last line of a `config.txt` that does not end in a
-  newline (which disabled SPI and broke your last setting).
-- `sudo bash bootstrap-deps.sh` on a box installed with `install.sh --target <elsewhere>` finds that install's
-  `[gps] source = nmea` and leaves gpsd off the receiver, as on a default install.
-
-Starts, radios and bands
-
+- A build on a slow Pi is no longer killed while it still compiles: a step stops only after 10 minutes with no
+  CPU, output or disk/network activity, or by a 24-hour runaway guard.
+- The MeshCore CLI's dependencies are pinned; after the update it reads *not built* until one
+  `lhpc build meshcore-cli --yes`.
+- `lhpc update <component>` without `--source` picks the same channel as the console.
+- An operator or admin override of LHPC's systemd units marks them *overridden* (a drop-in the distribution ships
+  for every service, under `/usr/lib` or `/usr/share`, does not count); one-click update and boot restore stay
+  off until it is removed.
 - A restart that the firewall gate, an ambiguous saved value, a running conflicting stack, the GPS check or the
-  radio mode would refuse is now refused before anything is stopped and says the running stack was left up; it
-  previously left the stack down. The start and restart dry runs and the web Start/Restart plans show these
-  refusals, and an unusable MeshCore position, instead of an ok plan.
-- A start whose main program dies during a required post-start step (e.g. MeshCom's callsign push) is reported
-  failed instead of verified; the step had been skipped and the runner still exited 0.
-- A daemon setting the daemon refuses (`ERR …`) is now shown as failed, with the daemon's reason, in the console,
-  `lhpc daemon --set`, Apply and the start log. Radio parameters were reported "sent" even when the daemon
-  rejected them.
-- "Apply live" of a stack's daemon radio parameters, and its TX test, are refused (naming the stack) on a band
-  another running stack uses; before, e.g. MeshCom's profile could retune the band KISS was running on.
-- Hardware "Detect" is refused, naming the stack, while Meshtastic or Reticulum drives that band's radio; it
-  started a probe daemon on the chip they were using.
-- Stopping the daemon on one band no longer refuses as busy while a stack that only runs on the other band is
-  starting.
-- Stopping one daemon band clears "restart required" and the known-working offer only when no daemon process is
-  left running.
-- The dashboard's daemon readiness no longer reads a garbled or oversized daemon status reply as "ready": it uses
-  the same strict reader as the daemon settings.
-- The dashboard no longer offers a band-switchable stack (Graywolf, KISS, Reticulum, …) in the "Start a stack" list
-  of its other band while it runs; that start was always refused.
+  radio mode would refuse is refused before anything is stopped; the running stack stays up.
+- `signature-verified` now means the signature covers the pinned commit.
+- Refuses now: an update while a checkout holds a Git repository of yours (naming the folder); a per-band *Reset
+  to defaults* while the shared settings file is broken or GPS is in use.
+- Boot restore starts nothing while the folder of operator stop notes cannot be read; the evidence is kept for
+  the next boot.
 
-Test lab and demo
+Fixed
 
-- Test lab: `check` also requires the fake APRS-IS sink and never mistakes a reused process id for a fake; the
-  lab's nginx control never signals an unrelated process.
-- Demo: Meshtastic and MeshCore need a node name, and taking a band from a running stack asks first, as on a real
-  box.
-- A secret file named with `@file:` (the MeshCom HMAC password) is used only when it is a regular file of at most
-  64 KiB, not a symlink; anything else stops the start or build with a named error instead of being followed, read
-  whole, or hanging on a pipe.
-- An install or update interrupted by a power cut or crash while it was still downloading no longer leaves the
-  partial download beside the source for good; the next source operation removes it.
-- Test lab: the simulated Reboot now kills the running stacks and runs the real boot restore.
+- A source update interrupted by a crash or power loss right after one of its renames is finished by recovery,
+  one interrupted after the old source was archived no longer leaves the archived copy behind, and a partial
+  download of an interrupted install or update is removed by the next source operation.
+- Firewall: after an `sshd` `ListenAddress` change, SSH stays reachable on every address sshd still listens on
+  until sshd is restarted; a KISS TNC or MeshCom bridge bound to `::` is blocked for IPv4 too when it is not
+  ticked for direct access.
+- A damaged client-certificate list is no longer replaced by an empty one; `tls-renew` on a full disk no longer
+  leaves a new key beside the old certificate.
+- A Meshtastic Reset or Busy pin reaches the generated `meshtasticd.yaml`, and a Reticulum value with `"` or `\`
+  reaches `reticulum.conf` unchanged.
+- A setting the daemon refuses is shown as failed with its reason; "Apply live" is refused on a band another
+  running stack uses, and hardware "Detect" while Meshtastic or Reticulum drives that radio.
+- `bootstrap-deps.sh` no longer breaks a `config.txt` that does not end in a newline.
 
 ## 0.11.10
 
