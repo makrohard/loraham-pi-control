@@ -189,8 +189,8 @@ overlap gave an SPI write failure, a meshtasticd crash and a lost daemon frame.
 Decided by the maintainer (2026-10-04): **allow, but warn.** The pair stays admitted, with this
 warning where it is admitted: "daemon 433 and meshtastic 868 share one SPI bus; transmitting at the
 same moment can crash meshtasticd (measured) — avoid simultaneous transmission". The warning is
-shown where the start is admitted: a `[warning]` line in the start's plan and in its result, in
-both directions (meshtastic on 868 while the daemon serves 433, or the daemon on 433 while
+shown where the start is admitted: a `[warning]` line in the start's plan and in its result (the
+console's start and restart banner shows it too), in both directions (meshtastic on 868 while the daemon serves 433, or the daemon on 433 while
 meshtasticd runs on 868). Serialising the
 two through kernel-owned chip selects (overlay `spi0-2cs`, each radio its own spidev node) is
 planned for 0.13.0; it is not present.

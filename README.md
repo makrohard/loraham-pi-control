@@ -376,6 +376,7 @@ lhpc config <stack>                # list the stack's options and current values
 lhpc config chat call YOURCALL-10 # set one option (YOURCALL-10 = your callsign+SSID)
 lhpc config <stack> --band 868 <param> <value>    # per-band value on a band-switchable stack
 lhpc stack start|stop|restart <stack>             # plans + confirms; --yes to skip the prompt
+lhpc stack stop daemon --band 433                 # stop the daemon on one band only (daemon only)
 lhpc logs <target>                 # tail a component log
 lhpc rflog <stack> [--band B]      # tail a stack's RF log (what the radio heard and sent); --band: daemon
 lhpc rflog <stack> --decrypt       # the same, decoded with the keys on this box (encrypted stacks)

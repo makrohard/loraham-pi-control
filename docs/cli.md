@@ -231,8 +231,14 @@ lhpc firewall --recommended                # safe preset; not combinable with th
 band the hardware or the stack cannot serve is refused before anything starts. When another
 running stack holds what the start needs, `start` asks, as the console's confirm page does,
 whether to stop it and start. `--yes` answers yes: `lhpc stack start <stack> --yes` stops the
-holders and starts, also from a script. A no, or no terminal to ask on, refuses with nothing
-stopped.
+holders and starts, also from a script — the apps first, then the daemon on the held band only.
+A single daemon process serving both bands stops on both when the other band has no clients, and
+the start refuses, naming them, when it has. A no, or no terminal to ask on, refuses with nothing
+stopped. `--band` on a stop is for the daemon only (another stack is refused):
+`lhpc stack stop daemon --band <band>` stops the daemon on that band and its clients there — the
+remedy a held band names. A start of a
+stack that already runs changes nothing; a GPS feed running without a position source under
+`[gps] source = "auto"` counts as running.
 
 `lhpc stack poststart <stack> [--yes]` — re-run a RUNNING stack's post-start steps without
 restarting it (any live retry runner is cancelled first). Use it when `lhpc status <stack>` shows
