@@ -372,6 +372,20 @@ lhpc = "v0.11.10 -> v0.11.11 (35923b80)"
 date = 2026-10-03
 evidence = "row A 2026-10-03"
 
+# the one real one-click update v0.12.0 -> main (90fdcdb3, `git describe` v0.12.0-1-g90fdcdb3),
+# its venv sync timed by the helper's own `[selfupdate] pip sync` line;
+# key = slow_target.deps_key(pyproject) at 90fdcdb3 (the same set as the helper entry above)
+[[measured]]
+component = "lhpc-selfupdate"
+op = "selfupdate-pip"
+seconds = 19.6
+key = "deps:bf671c3665c6df001f1fe894ddc3fb1a3f087d94067ffdf49f79203a1dabe159"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "v0.12.0 -> v0.12.0-1-g90fdcdb3 (90fdcdb3)"
+date = 2026-10-05
+evidence = "row A 2026-10-05 (rowA-0120-oneclick-e293)"
+
 [[calibration]]
 workload = "sha256:ae7c6013789cd763709f768588f2b2c8d656bdf4418446f906ca7d178e3921fb"
 source = "zero2w"
