@@ -134,13 +134,24 @@ def _hand_built_admission_refusals(source: str) -> list[int]:
     return sorted(set(lines))
 
 
-def test_the_admission_check_sees_through_a_local_name():
-    indirect = ("def op(self):\n"
-                "    try:\n        self._admit()\n"
-                "    except AdmissionRefused as exc:\n"
-                "        reason = exc.reason\n"
-                "        return ActionResult(False, reason)\n")
-    assert _hand_built_admission_refusals(indirect) == [6]
+_INSIDE = ("def op(self):\n"
+           "    try:\n        self._admit()\n"
+           "    except AdmissionRefused as exc:\n"
+           "        reason = exc.reason\n"
+           "        return ActionResult(False, reason)\n")
+# The local name leaves the handler: only the alias, not the handler, carries the refusal.
+_AFTER = ("def op(self):\n"
+          "    reason = None\n"
+          "    try:\n        self._admit()\n"
+          "    except AdmissionRefused as exc:\n"
+          "        reason = exc.reason\n"
+          "    if reason:\n"
+          "        return ActionResult(False, reason)\n")
+
+
+@pytest.mark.parametrize(("source", "line"), [(_INSIDE, 6), (_AFTER, 8)], ids=["inside", "after"])
+def test_the_admission_check_sees_through_a_local_name(source, line):
+    assert _hand_built_admission_refusals(source) == [line]
 
 
 def test_no_admission_refusal_is_built_by_hand():
