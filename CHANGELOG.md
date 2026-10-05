@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.12.1
+
+Changed
+
+- Boot restore, `lhpc status`, `lhpc doctor` and uninstall accept the systemd units the next release will ship
+  (*compatible*): boot restore runs on them, and status and doctor name `lhpc self-update --repair-integration`,
+  which rewrites this version's. No installed unit changes in this release. Going back from a later release that
+  changes units to 0.12.0 or older (also skipping 0.12.1) restores at boot only after that older release's
+  `lhpc self-update --repair-integration`.
+- The MeshCore CLI's pinned dependencies move to meshcore 2.3.15, which meshcore-cli v1.6.5 needs; v1.6.4 installs
+  with them as well.
+- The slow-target release check carries the last Zero 2 W measurement of an operation however old it is, and a
+  moved pin whose build comes near the budget no longer asks for a new one; every limit still holds twice
+  anything measured.
+
+Fixed
+
+- `lhpc self-update` asks to re-apply the firewall only when the installed firewall helper is not the new
+  version's — the same check the dashboard's notice makes. Before, it asked whenever the update changed the
+  helper, also when the installed one already was the new build.
+
 ## 0.12.0
 
 Upgrade note — boxes with the firewall installed: this release changes the firewall helper, so the dashboard

@@ -144,7 +144,10 @@ repositories.
     unbuildable. 0.6.2, by the maintainer's decision, narrowed `POWER` to the fitted chip (a
     changed refusal) inside the pin patch that moved the daemon to 1.0.0, because that daemon
     introduces the narrower range, so controller and daemon agree; a refusal change still needs a
-    minor's justification.
+    minor's justification. 0.12.1, by the maintainer's decision, shipped the first half of a unit
+    change as a patch: the verifier accepts the next release's three units as `compatible`, while
+    no installed unit byte changes; going back below 0.12.1 after the release that ships those units
+    restores at boot only after the older release's `lhpc self-update --repair-integration`.
   - **Changing a unit** takes two releases, so a box restores at boot after an update and after a
     downgrade between them. First a release that only ACCEPTS the new bytes: `_NEXT_EDITS` in
     `lhpc/core/updater_units.py`, its digests in `unit-templates-next.sha256`; `verify` reads an
