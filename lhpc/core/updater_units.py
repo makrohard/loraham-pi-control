@@ -71,14 +71,17 @@ _MAX_UNIT_BYTES = 64 * 1024
 # cannot write at all (ProtectHome=read-only). So a template edit silently strands every box that
 # already has the old unit installed.
 #
-# Until the two-stage migration in docs/backlog.md exists, treat these as frozen. If a stack needs
-# a new writable path, redirect it into {root} with an environment variable instead — that is why
-# Sideband's Kivy state goes to KIVY_HOME={root}/state/sideband/kivy rather than ~/.kivy.
+# A changed unit ships in two releases (docs/backlog.md, the staged unit migration): first the
+# release that ACCEPTS the new bytes (`_NEXT_EDITS` below: `verify` reads them `compatible`, and
+# boot restore runs on them), then the release that ships them. Until then these strings stay as
+# they are. If a stack needs a new writable path, redirect it into {root} with an environment
+# variable instead — that is why Sideband's Kivy state goes to KIVY_HOME={root}/state/sideband/kivy
+# rather than ~/.kivy.
 #
-# tests/test_updater_units.py::test_unit_bytes_are_the_frozen_render enforces this.
+# tests/repo/test_unit_templates_frozen.py enforces this.
 
 # The ReadWritePaths comment inside _WEB names a `meshcore-nodegui` component that does not exist;
-# no shipped component uses ~/.meshcore_nm. It is frozen with the rest of the unit bytes (see above).
+# no shipped component uses ~/.meshcore_nm. `_NEXT_EDITS` removes both in the next release's units.
 _WEB = """\
 # LoRaHAM Pi Control web console — CANONICAL managed unit (generated; do not hand-edit).
 # Rendered by lhpc.core.updater_units; the one-click updater proves this file BYTE-EXACT.
@@ -399,6 +402,64 @@ _TEMPLATES = {WEB_UNIT: _WEB, HELPER_UNIT: _HELPER, PATH_UNIT: _PATH, NGINX_UNIT
               RESTART_UNIT: _NGINX_RESTART, RESTART_PATH_UNIT: _NGINX_RESTART_PATH,
               BOOT_RESTORE_UNIT: _BOOT_RESTORE}
 
+# --------------------------------------------------------------------------- the next release's units
+# The units the next release will ship, as exact edits of the templates above (old, new). An
+# installed unit equal to their render for this deployment reads `compatible`: boot restore runs on
+# it, so a box that goes back from that release to this one still restores. No replacement text
+# contains a brace (the template is formatted after the edits), and each edit matches its template
+# exactly once; an edit that does not is left out of `_NEXT_TEMPLATES` here, never raised, and
+# tests/repo/test_unit_templates_frozen.py fails on it.
+_NEXT_EDITS = {
+    WEB_UNIT: (
+        ("# runtime root + /tmp for lhpc itself; %h/.meshcore_nm because a stack GUI started under "
+         "this\n# unit (meshcore-nodegui) keeps its sessions/settings/favourites there. %h expanded "
+         "by systemd.\n",
+         "# runtime root + /tmp for lhpc itself.\n"),
+        (" -%h/.meshcore_nm /tmp\n", " /tmp\n")),
+    NGINX_UNIT: (
+        ("# firewall is absent or nothing remote is desired. Always exits 0 so nginx still starts.\n",
+         "# firewall is absent or nothing remote is desired. Exits non-zero (nginx then does not\n"
+         "# start) only when that loopback-only config cannot be established.\n"),),
+    BOOT_RESTORE_UNIT: ((" -%h/.meshcore_nm /tmp\n", " /tmp\n"),),
+}
+
+
+def _next_template(kind: str):
+    """The next release's template for `kind`, or None (no edits, or an edit that does not match
+    its template exactly once, or a replacement with a brace)."""
+    text = _TEMPLATES.get(kind)
+    edits = _NEXT_EDITS.get(kind)
+    if text is None or not edits:
+        return None
+    for old, new in edits:
+        if text.count(old) != 1 or "{" in new or "}" in new:
+            return None
+        text = text.replace(old, new)
+    return text
+
+
+_NEXT_TEMPLATES = {k: t for k in _NEXT_EDITS if (t := _next_template(k)) is not None}
+
+
+def render_next(kind: str, root: str, checkout: str, venv: str):
+    """The next release's unit text for `kind` (as `render`), or None when it ships none."""
+    tmpl = _NEXT_TEMPLATES.get(kind)
+    if tmpl is None:
+        return None
+    return tmpl.format(root=root, checkout=checkout, venv=venv,
+                       path_unit=PATH_UNIT, restart_path_unit=RESTART_PATH_UNIT,
+                       guard=UNINSTALL_GUARD)
+
+
+def _is_next(kind: str, text: str, root: str, checkout: str, venv: str) -> bool:
+    """`text` is the next release's unit for this deployment. Never raises: any problem with the
+    next render reads as no match (the caller then classifies as before)."""
+    try:
+        nxt = render_next(kind, root, checkout, venv)
+    except Exception:
+        return False
+    return nxt is not None and text == nxt
+
 
 def render(kind: str, root: str, checkout: str, venv: str) -> str:
     """The canonical unit text for `kind` (one of ALL_UNITS). `root`/`checkout`/`venv` may be
@@ -422,6 +483,7 @@ def deployment_paths(root: str) -> tuple[str, str, str]:
 OK = "ok"                 # byte-exact canonical, no drop-in, no symlinked dir
 MISSING = "missing"
 MODIFIED_OURS = "modified_ours"   # not byte-exact but carries THIS root's provenance
+COMPATIBLE = "compatible"  # byte-exact the NEXT release's unit for this deployment (_NEXT_EDITS)
 FOREIGN = "foreign"       # provenance names another runtime root
 AMBIGUOUS = "ambiguous"   # neither clearly ours nor clearly foreign
 OVERRIDDEN = "overridden"  # a <unit>.d/ drop-in exists somewhere in the search path
@@ -575,6 +637,27 @@ def verify(user_dir: Path, kind: str, root: str, checkout: str, venv: str) -> st
         return OVERRIDDEN
     if text == render(kind, root, checkout, venv):
         return OK
+    if _is_next(kind, text, root, checkout, venv):
+        return COMPATIBLE
+    return _classify_mismatch(kind, text, root)
+
+
+def verify_file(path: Path, kind: str, root: str) -> str:
+    """The verdict for ONE unit file at `path` (e.g. a staged copy uninstall.sh restores), read
+    no-follow and bounded like `verify`; drop-ins are not looked up (the file is not installed)."""
+    _r, checkout, venv = deployment_paths(root)
+    try:
+        text = _read_unit(path)
+    except FileNotFoundError:
+        return MISSING
+    except UnicodeDecodeError:
+        return UNREADABLE
+    except OSError as exc:
+        return UNSAFE if getattr(exc, "errno", None) == _errno.ELOOP else UNREADABLE
+    if text == render(kind, root, checkout, venv):
+        return OK
+    if _is_next(kind, text, root, checkout, venv):
+        return COMPATIBLE
     return _classify_mismatch(kind, text, root)
 
 
@@ -588,6 +671,8 @@ def integration(user_dir: Path, root: str) -> dict:
                  ("overridden" if OVERRIDDEN in per.values() else "unsafe")
     elif all(v == OK for v in per.values()):
         status = "ok"
+    elif all(v in (OK, COMPATIBLE) for v in per.values()):
+        status = "compatible"             # a newer release's units: boot restore runs on them
     else:
         status = "incomplete"
     return {"status": status, "per_unit": per}
@@ -656,6 +741,20 @@ def _main(argv: list[str]) -> int:
         import sys
         sys.stdout.write(render(argv[2], argv[3], argv[4], argv[5]))
         return 0
+    # `... render-next <kind> <root> <checkout> <venv>` — the next release's unit (exit 1: none).
+    if len(argv) == 6 and argv[1] == "render-next":
+        import sys
+        text = render_next(argv[2], argv[3], argv[4], argv[5])
+        if text is None:
+            return 1
+        sys.stdout.write(text)
+        return 0
+    # `... verify-file <kind> <file> <root>` — the verdict for one unit file (uninstall.sh).
+    if len(argv) == 5 and argv[1] == "verify-file":
+        import sys
+        from pathlib import Path
+        sys.stdout.write(verify_file(Path(argv[3]), argv[2], argv[4]) + "\n")
+        return 0
     # `... verify-set <root>` — is EVERY managed unit byte-for-byte canonical?
     # Run as a SUBPROCESS after an update so the check uses the NEW checkout's
     # templates: an in-process check runs the pre-update code already imported into
@@ -676,7 +775,8 @@ def _main(argv: list[str]) -> int:
         return 0
     import sys
     sys.stderr.write("usage: python -m lhpc.core.updater_units "
-                     "render <kind> <root> <checkout> <venv> | verify-set <root>\n")
+                     "render <kind> <root> <checkout> <venv> | render-next <kind> <root> "
+                     "<checkout> <venv> | verify-file <kind> <file> <root> | verify-set <root>\n")
     return 2
 
 

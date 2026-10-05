@@ -454,3 +454,73 @@ def test_verify_and_integration_cover_the_restart_units(tmp_path):
     (dropin / "evil.conf").write_text("[Service]\nExecStart=\n")
     assert U.verify(ud, U.RESTART_UNIT, ROOT, CO, VENV) == U.OVERRIDDEN
     assert U.integration(ud, ROOT)["status"] == "overridden"
+
+
+# --- the next release's units (the staged migration's expand step) ---------------------------
+
+def _next_set(root, co, venv):
+    """The unit set as the next release installs it: its three changed units, the rest current."""
+    return {k: U.render_next(k, root, co, venv) or U.render(k, root, co, venv) for k in U.ALL_UNITS}
+
+
+@pytest.mark.parametrize("root", [
+    ROOT,                                    # install.sh's default target, $HOME/loraham-pi-control
+    "/srv/lhpc",                             # a custom --target outside $HOME
+    "/tmp",                                  # a root that is also other text in the unit
+])
+def test_the_next_releases_units_read_compatible_for_any_root(tmp_path, root):
+    co, venv = f"{root}/src/loraham-pi-control", f"{root}/venv/lhpc"
+    ud = _install(tmp_path, **_next_set(root, co, venv))
+    changed = {U.WEB_UNIT, U.NGINX_UNIT, U.BOOT_RESTORE_UNIT}
+    assert {k: U.verify(ud, k, root, co, venv) for k in U.ALL_UNITS} == {
+        k: (U.COMPATIBLE if k in changed else U.OK) for k in U.ALL_UNITS}
+    assert U.integration(ud, root)["status"] == "compatible"
+
+
+def test_a_changed_next_unit_is_modified_ours_and_a_dropin_still_overrides(tmp_path):
+    ud = _install(tmp_path, **{U.WEB_UNIT: U.render_next(U.WEB_UNIT, ROOT, CO, VENV) + "# x\n"})
+    assert U.verify(ud, U.WEB_UNIT, ROOT, CO, VENV) == U.MODIFIED_OURS
+    (ud / U.WEB_UNIT).write_text(U.render_next(U.WEB_UNIT, ROOT, CO, VENV))
+    d = ud / f"{U.WEB_UNIT}.d"; d.mkdir()
+    (d / "override.conf").write_text("[Service]\nExecStart=\nExecStart=/usr/bin/evil\n")
+    assert U.verify(ud, U.WEB_UNIT, ROOT, CO, VENV) == U.OVERRIDDEN
+
+
+def test_a_broken_next_render_never_raises_in_verify(tmp_path, monkeypatch):
+    ud = _install(tmp_path, **{U.WEB_UNIT: U.render_next(U.WEB_UNIT, ROOT, CO, VENV)})
+    # Stubs the collaborator, the next template table: its web entry cannot be formatted.
+    monkeypatch.setitem(U._NEXT_TEMPLATES, U.WEB_UNIT, "{no_such_field}")
+    assert U.verify(ud, U.WEB_UNIT, ROOT, CO, VENV) == U.MODIFIED_OURS
+
+
+def test_write_set_rewrites_a_compatible_set_to_this_versions_units(tmp_path):
+    ud = _install(tmp_path, **_next_set(ROOT, CO, VENV))
+    actions = dict(U.write_set(ud, ROOT))
+    assert {k for k, a in actions.items() if a == "restored"} == {
+        U.WEB_UNIT, U.NGINX_UNIT, U.BOOT_RESTORE_UNIT}
+    assert U.integration(ud, ROOT)["status"] == "ok"
+
+
+def test_verify_file_reads_one_file_as_verify_does(tmp_path):
+    f = tmp_path / "lhpc-web.service.uninstall-staged"
+    f.write_text(U.render_next(U.WEB_UNIT, ROOT, CO, VENV))
+    assert U.verify_file(f, U.WEB_UNIT, ROOT) == U.COMPATIBLE
+    f.write_text(U.render(U.WEB_UNIT, ROOT, CO, VENV))
+    assert U.verify_file(f, U.WEB_UNIT, ROOT) == U.OK
+    f.write_text(U.render(U.WEB_UNIT, ROOT, CO, VENV) + "# x\n")
+    assert U.verify_file(f, U.WEB_UNIT, ROOT) == U.MODIFIED_OURS
+    link = tmp_path / "link.service"
+    link.symlink_to(f)
+    assert U.verify_file(link, U.WEB_UNIT, ROOT) == U.UNSAFE
+    assert U.verify_file(tmp_path / "absent", U.WEB_UNIT, ROOT) == U.MISSING
+
+
+def test_the_module_cli_renders_the_next_unit_and_verifies_a_file(tmp_path, capsys):
+    assert U._main(["x", "render-next", U.NGINX_UNIT, ROOT, CO, VENV]) == 0
+    assert capsys.readouterr().out == U.render_next(U.NGINX_UNIT, ROOT, CO, VENV)
+    assert U._main(["x", "render-next", U.HELPER_UNIT, ROOT, CO, VENV]) == 1   # unchanged unit
+    f = tmp_path / "u"
+    f.write_text(U.render_next(U.NGINX_UNIT, ROOT, CO, VENV))
+    capsys.readouterr()
+    assert U._main(["x", "verify-file", U.NGINX_UNIT, str(f), ROOT]) == 0
+    assert capsys.readouterr().out == "compatible\n"
