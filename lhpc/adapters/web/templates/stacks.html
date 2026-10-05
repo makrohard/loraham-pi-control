@@ -23,7 +23,7 @@
        note would sit on the dashboard forever. The dismissal records the current shortfall, so a
        LARGER one later brings the note back rather than being silently swallowed. The
        mandatory-missing / restart-pending branches above are NOT dismissable. #}
-    <div class="depnote depnote-ok">{% if dep_summary.optional_missing %}{{ dep_summary.optional_missing }} optional dependenc{{ 'y is' if dep_summary.optional_missing == 1 else 'ies are' }} missing{% endif %}{% if dep_summary.gui_missing %}{% if dep_summary.optional_missing %} · {% endif %}{{ dep_summary.gui_missing }} GUI-only dependenc{{ 'y is' if dep_summary.gui_missing == 1 else 'ies are' }} not installed (opt-in: --with-gui){% endif %} — see the <a href="{{ url_for('dependencies_page') }}">Dependency Overview</a>.
+    <div class="depnote depnote-ok">{% if dep_summary.optional_missing %}{{ dep_summary.optional_missing }} optional dependenc{{ 'y is' if dep_summary.optional_missing == 1 else 'ies are' }} missing{% endif %}{% if dep_summary.gui_missing %}{% if dep_summary.optional_missing %} · {% endif %}{{ dep_summary.gui_missing }} GUI-only dependenc{{ 'y is' if dep_summary.gui_missing == 1 else 'ies are' }} not installed (opt-in: --with-gui){% endif %} — see the <a href="{{ url_for('dependencies_page') }}">Dependency Overview</a>.{% if dep_summary.gui_missing %} On a headless box (Lite image, no desktop) this is expected: the GUI parts have nothing to run on.{% endif %}
       <form method="post" action="{{ url_for('dep_note_dismiss') }}" class="act dismiss" title="Dismiss">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <button type="submit" aria-label="Dismiss the optional dependency note">&times;</button>

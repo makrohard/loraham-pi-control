@@ -1303,6 +1303,21 @@ def test_diverged_confirm_names_the_commit_count_and_upstream_ref(tmp_path, monk
     assert "7 ahead of it" in body
 
 
+@pytest.mark.parametrize("gui_missing, expected", [(2, True), (0, False)])
+def test_the_dependency_note_calls_missing_gui_parts_expected_on_a_headless_box(
+        monkeypatch, web, gui_missing, expected):
+    # Missing GUI-only parts are the normal state of a Lite image: the note says so. With only
+    # optional (non-GUI) parts missing it does not.
+    from lhpc.core.services import ControllerService
+    summary = {"mandatory_missing": 0, "restart_pending": 0, "optional_missing": 1,
+               "gui_missing": gui_missing}
+    monkeypatch.setattr(ControllerService, "dependency_overview", lambda self: summary)
+    monkeypatch.setattr(ControllerService, "dep_note_dismissed", lambda self, s: False)
+    body = web().get("/stacks").get_data(as_text=True)
+    assert "depnote-ok" in body
+    assert ("headless box" in body) is expected
+
+
 def test_an_up_to_date_console_offers_no_update_confirm(tmp_path, monkeypatch, web, csrf):
     # The panel says "Up to date." (upstream checked, the same head): the update POST returns to
     # the panel saying so, instead of a confirm that would stop the console for nothing.
