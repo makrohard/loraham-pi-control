@@ -373,9 +373,14 @@ class _FakeSys:
             if self.listing is None or not (self._loaded or self.preexisting):
                 return 1, "", "Error: No such file or directory"
             return 0, self.listing, ""
-        if argv[:4] == ["nft", "-j", "list", "tables"]:
+        if argv[:4] in (["nft", "-j", "list", "ruleset"], ["nft", "-j", "list", "tables"]):
+            # `tables_listing` is the whole ruleset (tables AND their chains); `list tables`
+            # answers with the table entries of it only, as nft does.
             import json as _json
-            return 0, _json.dumps(self.tables_listing), ""
+            entries = self.tables_listing.get("nftables", [])
+            if argv[3] == "tables":
+                entries = [e for e in entries if "table" in e]
+            return 0, _json.dumps({"nftables": entries}), ""
         if argv[:2] == ["nft", "destroy"]:
             self.listing = None
             self._loaded = False
@@ -3269,3 +3274,124 @@ def test_a_gate_deferred_apply_raises_the_persistent_notice_until_the_marker_cle
     svc._ws_apply_pending_clear()
     body = client.get("/", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
     assert 'id="fw-pending-notice"' not in body
+
+
+# --- finding 136: a routed-only table (NetworkManager's shared-AP NAT) is not "foreign" ----------
+
+def _nm_shared_ruleset(*extra_chains):
+    """The ruleset measured on a Zero 2 W running the product's Wi-Fi AP: lhpc's own table plus
+    NetworkManager's `nm-shared-wlan0` with a postrouting NAT and a forward filter base chain."""
+    return {"nftables": [
+        {"metainfo": {"version": "1.1.3"}},
+        {"table": {"family": "inet", "name": "lhpc", "handle": 1}},
+        {"chain": {"family": "inet", "table": "lhpc", "name": "input", "handle": 1,
+                   "type": "filter", "hook": "input", "prio": 0, "policy": "drop"}},
+        {"table": {"family": "ip", "name": "nm-shared-wlan0", "handle": 2}},
+        {"chain": {"family": "ip", "table": "nm-shared-wlan0", "name": "nat_postrouting",
+                   "handle": 1, "type": "nat", "hook": "postrouting", "prio": 100,
+                   "policy": "accept"}},
+        {"chain": {"family": "ip", "table": "nm-shared-wlan0", "name": "filter_forward",
+                   "handle": 2, "type": "filter", "hook": "forward", "prio": 0,
+                   "policy": "accept"}},
+        # NM's rules as measured: one masquerade on postrouting; accepts and rejects on forward.
+        {"rule": {"family": "ip", "table": "nm-shared-wlan0", "chain": "nat_postrouting",
+                  "handle": 5, "expr": [
+                      {"match": {"op": "==", "left": {"payload": {"protocol": "ip",
+                                                                   "field": "saddr"}},
+                                 "right": {"prefix": {"addr": "10.42.0.0", "len": 24}}}},
+                      {"masquerade": None}]}},
+        {"rule": {"family": "ip", "table": "nm-shared-wlan0", "chain": "filter_forward",
+                  "handle": 6, "expr": [
+                      {"match": {"op": "==", "left": {"meta": {"key": "iifname"}},
+                                 "right": "wlan0"}},
+                      {"reject": None}]}},
+        *extra_chains]}
+
+
+def _foreign(listing, rc=0):
+    from lhpc.core import firewall_helper as fh
+    sysx = _FakeSys()
+    sysx.tables_listing = listing
+    if rc:
+        sysx.run = lambda argv, timeout=30.0, stdin_text=None: (rc, "", "Error: permission denied")
+    return fh.list_foreign_tables(sysx)
+
+
+def test_foreign_tables_excuse_a_forward_postrouting_only_table():
+    # Red before the fix: the table list alone named ip:nm-shared-wlan0, so the dashboard warned
+    # that a foreign chain "may drop" although no chain of it sees the box's own traffic.
+    assert _foreign(_nm_shared_ruleset()) == []
+
+
+def test_foreign_tables_keep_a_table_with_an_input_hook():
+    extra = {"chain": {"family": "ip", "table": "nm-shared-wlan0", "name": "filter_input",
+                       "handle": 3, "type": "filter", "hook": "input", "prio": 0,
+                       "policy": "accept"}}
+    assert _foreign(_nm_shared_ruleset(extra)) == ["ip:nm-shared-wlan0"]
+
+
+def test_foreign_tables_keep_a_table_without_a_base_chain():
+    listing = {"nftables": [
+        {"table": {"family": "inet", "name": "lhpc"}},
+        {"table": {"family": "inet", "name": "custom"}},
+        {"chain": {"family": "inet", "table": "custom", "name": "helper", "handle": 1}}]}
+    assert _foreign(listing) == ["inet:custom"]
+
+
+def test_foreign_tables_keep_a_table_with_a_malformed_chain():
+    extra = {"chain": {"family": "ip", "table": "nm-shared-wlan0", "name": "odd", "hook": 7}}
+    assert _foreign(_nm_shared_ruleset(extra)) == ["ip:nm-shared-wlan0"]
+
+
+def test_foreign_tables_keep_every_table_when_a_chain_cannot_be_attributed():
+    extra = {"chain": {"name": "orphan", "hook": "input"}}       # no family/table
+    assert _foreign(_nm_shared_ruleset(extra)) == ["ip:nm-shared-wlan0"]
+
+
+def test_foreign_tables_keep_a_filter_postrouting_chain():
+    # A filter chain on postrouting sees the box's OWN output and can drop it: only a nat
+    # postrouting chain (NM's nat_postrouting, still excused above) is harmless.
+    extra = {"chain": {"family": "ip", "table": "nm-shared-wlan0", "name": "filter_post",
+                       "handle": 4, "type": "filter", "hook": "postrouting", "prio": 0,
+                       "policy": "drop"}}
+    assert _foreign(_nm_shared_ruleset(extra)) == ["ip:nm-shared-wlan0"]
+
+
+def test_foreign_tables_keep_a_base_chain_without_a_type():
+    # A forward hook alone is not enough: a base chain whose type is missing is malformed.
+    extra = {"chain": {"family": "ip", "table": "nm-shared-wlan0", "name": "untyped",
+                       "handle": 7, "hook": "forward", "prio": 0, "policy": "accept"}}
+    assert _foreign(_nm_shared_ruleset(extra)) == ["ip:nm-shared-wlan0"]
+
+
+def test_foreign_tables_keep_a_nat_postrouting_chain_that_drops():
+    # nft accepts a drop verdict in a nat chain; such a chain can drop the box's own output.
+    extra = {"rule": {"family": "ip", "table": "nm-shared-wlan0", "chain": "nat_postrouting",
+                      "handle": 8, "expr": [{"drop": None}]}}
+    assert _foreign(_nm_shared_ruleset(extra)) == ["ip:nm-shared-wlan0"]
+
+
+def test_foreign_tables_keep_a_nat_postrouting_chain_that_jumps():
+    # A jump/goto could reach a regular chain that drops: not provably address-rewrite-only.
+    extra = {"rule": {"family": "ip", "table": "nm-shared-wlan0", "chain": "nat_postrouting",
+                      "handle": 9, "expr": [{"jump": {"target": "elsewhere"}}]}}
+    assert _foreign(_nm_shared_ruleset(extra)) == ["ip:nm-shared-wlan0"]
+
+
+def test_foreign_tables_keep_a_nat_postrouting_chain_with_a_verdict_map():
+    # A named verdict map can hold a drop that the chain's own rule never spells out.
+    extra = {"rule": {"family": "ip", "table": "nm-shared-wlan0", "chain": "nat_postrouting",
+                      "handle": 10, "expr": [{"vmap": {"key": {"meta": {"key": "oifname"}},
+                                                       "data": "@vm"}}]}}
+    assert _foreign(_nm_shared_ruleset(extra)) == ["ip:nm-shared-wlan0"]
+
+
+def test_foreign_tables_keep_a_nat_postrouting_chain_that_queues():
+    # queue hands the packet to a userspace program, which may drop it.
+    extra = {"rule": {"family": "ip", "table": "nm-shared-wlan0", "chain": "nat_postrouting",
+                      "handle": 11, "expr": [{"queue": {"num": 0}}]}}
+    assert _foreign(_nm_shared_ruleset(extra)) == ["ip:nm-shared-wlan0"]
+
+
+def test_foreign_tables_unreadable_ruleset_is_unknown():
+    assert _foreign(_nm_shared_ruleset(), rc=1) is None

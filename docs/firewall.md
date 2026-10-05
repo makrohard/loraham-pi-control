@@ -99,7 +99,7 @@ The dashboard's Firewall line then reads, for example:
 **Any base chain's `drop` beats another table's `accept`.** In secure-default mode the lhpc input
 chain has `policy drop`, so an accept in *your* table cannot open a port lhpc does not allow;
 with a custom firewall prefer compatibility mode. The apply records the foreign tables it
-detects (`lhpc firewall` and the dashboard name them) and changes none of them. Conversely, an lhpc allow cannot guarantee reachability past a
+detects (`lhpc firewall` and the dashboard name them) and changes none of them. A table whose base chains are all forward chains, or postrouting NAT chains that only rewrite addresses (policy accept, no drop, reject, jump, goto, queue or verdict map; such as NetworkManager's `nm-shared-<iface>` for the Wi-Fi access point), cannot drop the box's own traffic and is not counted as foreign. Conversely, an lhpc allow cannot guarantee reachability past a
 foreign drop.
 
 ## Modes

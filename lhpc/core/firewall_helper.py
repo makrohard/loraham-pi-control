@@ -789,21 +789,96 @@ def write_receipt(sysx, verdict, detail, intent_h, model_h, foreign, transitiona
     return receipt
 
 
+# A foreign base chain that cannot touch the box's own traffic: a `forward` chain (it only sees
+# routed packets), and a `postrouting` chain of type `nat` with policy accept whose rules carry no
+# drop, reject, jump, goto, queue or verdict map (it only rewrites addresses, e.g.
+# NetworkManager's masquerade in `nm-shared-<iface>`, the shared Wi-Fi AP's table). Anything else
+# stays foreign: a filter postrouting chain sees the box's own output, nft accepts drop in a nat
+# chain, a jump/goto could reach a chain that drops, a verdict map (named or inline) can hold a
+# drop, and queue hands the packet to userspace, which may drop it. A base chain without a valid
+# type is malformed.
+_CHAIN_TYPES = frozenset({"filter", "nat", "route"})
+_STOP_VERDICTS = frozenset({"drop", "reject", "jump", "goto", "queue", "vmap"})
+
+
+def _has_stop_verdict(node):
+    """True when an nft JSON expression tree contains a drop/reject/jump/goto/queue statement or
+    a verdict map (any vmap)."""
+    if isinstance(node, dict):
+        return any(k in _STOP_VERDICTS or _has_stop_verdict(v) for k, v in node.items())
+    if isinstance(node, list):
+        return any(_has_stop_verdict(v) for v in node)
+    return False
+
+
 def list_foreign_tables(sysx):
-    """Names of non-lhpc tables (evidence only — NEVER touched). An lhpc allow can never
-    guarantee reachability while these exist: a later foreign base chain may still drop."""
-    rc, out, _err = sysx.run(["nft", "-j", "list", "tables"])
+    """Names of non-lhpc tables that can affect this box's own traffic (evidence only — NEVER
+    touched). An lhpc allow can never guarantee reachability while these exist: a later foreign
+    base chain may still drop. A table is excused only when it has at least one base chain and
+    EVERY base chain is a forward chain, or a nat postrouting chain with policy accept whose
+    rules only rewrite addresses (no drop/reject/jump/goto/queue/vmap). A table without a base chain, with
+    any other base chain, or with a malformed entry stays foreign. Unreadable ruleset -> None."""
+    rc, out, _err = sysx.run(["nft", "-j", "list", "ruleset"])
     if rc != 0:
         return None
     try:
         entries = json.loads(out).get("nftables", [])
-    except ValueError:
+    except (ValueError, AttributeError):
         return None
-    names = []
+    if not isinstance(entries, list):
+        return None
+    tables, base, bad, stops = [], {}, set(), set()
+    unattributable = False
     for e in entries:
-        t = e.get("table")
-        if t and not (t.get("family") == TABLE_FAMILY and t.get("name") == TABLE_NAME):
-            names.append(f"{t.get('family', '?')}:{t.get('name', '?')}")
+        if not isinstance(e, dict):
+            unattributable = True
+            continue
+        if "table" in e:
+            t = e["table"]
+            if not isinstance(t, dict):
+                unattributable = True
+                continue
+            key = (t.get("family", "?"), t.get("name", "?"))
+            if key == (TABLE_FAMILY, TABLE_NAME):
+                continue
+            tables.append(key)
+            if "family" not in t or "name" not in t:
+                bad.add(key)
+        elif "chain" in e:
+            c = e["chain"]
+            if not isinstance(c, dict) or "family" not in c or "table" not in c:
+                unattributable = True
+                continue
+            key = (c["family"], c["table"])
+            if "hook" in c:
+                if (isinstance(c["hook"], str) and c.get("type") in _CHAIN_TYPES
+                        and isinstance(c.get("name"), str)):
+                    base.setdefault(key, []).append((c["name"], c["hook"], c["type"],
+                                                     c.get("policy")))
+                else:
+                    bad.add(key)
+        elif "rule" in e:
+            r = e["rule"]
+            if (not isinstance(r, dict) or "family" not in r or "table" not in r
+                    or "chain" not in r):
+                unattributable = True
+                continue
+            if _has_stop_verdict(r.get("expr")):
+                stops.add((r["family"], r["table"], r["chain"]))
+
+    def harmless(key, chain):
+        name, hook, kind, policy = chain
+        if hook == "forward":
+            return True
+        return (hook == "postrouting" and kind == "nat" and policy == "accept"
+                and (key[0], key[1], name) not in stops)
+
+    names = []
+    for key in tables:
+        chains = base.get(key, [])
+        excused = bool(chains) and all(harmless(key, c) for c in chains)
+        if unattributable or key in bad or not excused:
+            names.append(f"{key[0]}:{key[1]}")
     return sorted(names)
 
 

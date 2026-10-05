@@ -69,7 +69,7 @@ class _Nft:
         if argv[:2] == ["nft", "-f"]:
             self.loaded = stdin_text
             return 0, "", ""
-        if argv[:4] == ["nft", "-j", "list", "tables"]:
+        if argv[:4] in (["nft", "-j", "list", "ruleset"], ["nft", "-j", "list", "tables"]):
             tables = [{"table": {"family": "inet", "name": "lhpc"}}] if self.loaded else []
             return 0, json.dumps({"nftables": tables}), ""
         if argv[:4] == ["nft", "-j", "list", "table"]:
