@@ -2,79 +2,11 @@
 
 ## 0.12.0
 
-- `lhpc self-update` no longer says "Up to date." while the venv was not synced to the checkout: it
-  compares the version the venv's install recorded with the checkout's and says so, and
-  `lhpc self-update --apply` then runs the sync, also when the failed sync could not be recorded. A
-  venv it cannot compare (no version on either side) is reported as not verified, and `--apply`
-  re-syncs it.
-- A refusal because an uninstall, a self-update or a reboot is pending, or the update state cannot be
-  read, now names what to do: `lhpc self-update --recover-request`, or what to wait for or fix. A failed
-  build names its log and `lhpc build <stack> --yes`; a graywolf update whose restart failed names
-  `lhpc stack start graywolf --yes`; the MeshCore plugin-manager refusal names `sudo reboot`.
-- `lhpc stack start` on a band another running stack holds asks, as the console does, whether to stop
-  it and start; `--yes` answers yes. Without a terminal and without `--yes` it refuses, naming both ways.
-- A suggested retry repeats what you asked for: the held-band refusal keeps `--band`, and an
-  `lhpc install` refusal keeps the channel (`--source`).
-- A restart of chat counts the manual start of its terminal program as success, as its start does.
-- Boot restore prepares chat as `lhpc stack start chat` does (daemon, settings, the dashboard's manual
-  start note) instead of skipping it.
-- A start refused before it launches anything (a band owner, the firewall gate) no longer resets the
-  band's RX/TX activity window; the start plan's firewall refusal now lists
-  `lhpc firewall --script > /dev/null` before the apply. A start interrupted by a file-system error
-  after it launched something stops what it launched again and says so.
+Upgrade note — boxes with the firewall installed: this release changes the firewall helper, so the dashboard
+reads *Update required* after the update; run `sudo bash <runtime root>/config/files/firewall/firewall-apply.sh`
+(and `lhpc webserver apply` if remote access is configured) before a reboot.
 
-- Saving settings (the console's Settings, `lhpc config`, the RF-log and HMAC switches) is now built in
-  separate steps: checking what was submitted, then reading, deciding and writing under the config lock.
-  What a save accepts, refuses, writes and reports is unchanged; two saves of the same stack at the same
-  moment still both land.
-
-- Starting and restarting a stack now runs in five visible phases in the code — taking its locks,
-  checking everything against the saved settings, starting, verifying, and recording the outcome — and a
-  restart as checks, stop, start and the return of its optional parts. The recorded start, stop, restart and
-  boot-restore cases give the same results, refusals and writes as before.
-
-- A stack start that fails now stops again the parts it started — a part that fails its own check is
-  told to stop at once, the parts it verified once the start as a whole has failed — and the daemon too when that
-  start launched it (a daemon that was already running stays). The result names anything that remains
-  running, with the reason, and the daemon then stays up beneath it. A start that only waits for you to run
-  a terminal program (chat) is not a failure and keeps its daemon.
-- The documentation was checked line by line against the code, and the statements the check found untrue
-  now match it. Among them: `lhpc doctor` (not `lhpc deps`) prints the polkit and clock commands;
-  a proxy in `local` mode needs no confirm phrase; an omitted `proxy --port` keeps the saved port; a bare
-  `lhpc update` keeps the installed channel; a reboot or shutdown that is pending refuses every new task,
-  and a stale pending marker is removed by itself. The dated live-test records no longer name LAN
-  addresses or the bench's position. No change in behaviour.
-- Test suite: a test body no longer ignores the result of a controller action it calls, commands, lock
-  keys, unit lines and hashes are compared whole instead of by their beginning, and seven tests whose
-  setup had silently failed now set up what they test. No change in behaviour.
-
-- A build now keeps the sources it builds from locked for its whole run — the stack's own and every
-  source it consumes, such as `openhop-repeater` for the MeshCore node or Reticulum for NomadNet — so an
-  update or uninstall of one of them is refused until the build ends, and the build's completion record
-  names the exact revisions it used. The console's Build and `lhpc build` now decide which components to
-  build the same way: Build on a single component builds that component, as `lhpc build <component>`
-  does; the stack's Build still builds a missing dependency first.
-- A build whose source revision lhpc could not read (`[unverified]`) now names `lhpc build <stack> --yes`
-  to run once that revision can be read; until then the component reads *not built*.
-
-- The console's housekeeping (finishing a deferred web-server Apply, refreshing the client-certificate
-  revocation list, re-dating certificates made before the clock was set, cutting oversized logs) now
-  records each task's last success and last failure. `lhpc doctor` lists every task with its time, and
-  the dashboard shows a task whose last run failed until a later run succeeds; before, nothing was kept
-  and only a log that could not be cut was logged. A failed task is now logged as one line per task (it
-  replaces the old one line per log that could not be cut).
-- The docs now state the measured SPI result for the daemon on 433 MHz with Meshtastic on 868 MHz: in a
-  one-hour test with 16 simultaneous transmissions, one of them failed an SPI write, crashed meshtasticd
-  and lost a daemon frame. The pair stays allowed; avoid transmitting on both at the same moment. Starting
-  either side while the other runs now shows this warning.
-
-- The systemd units LHPC installs are now pinned in the test suite: no release can change one by
-  accident, because a changed unit would make boot restore refuse on every box that already has the old one.
-
-- Every step that writes a journal, receipt or marker the next run recovers from (settings saves, boot restore,
-  binary installs, source installs and updates, self-update, the firewall apply) is now tested against a full
-  disk, an I/O error and Ctrl-C at that exact step: recovery must leave a clean state and the same command must
-  then succeed.
+**Update reliability**
 
 - An update — `lhpc update <stack>`, `lhpc self-update --apply`, or the same from the console — now ends in
   exactly one of three ways (or *recovery-required*, where lhpc cannot prove what it finds is its own, or
@@ -124,30 +56,60 @@
   the update *recovery-required* with the cause and what to run by hand (after a failed venv sync: the sync, then
   `lhpc self-update --repair-integration`); one that cannot be read is *recovery-required*, and
   `--repair-integration` clears *units-stale* only.
+- `lhpc self-update` no longer says "Up to date." while the venv is behind a checkout with a new version
+  number: it compares the version the venv's install recorded with the checkout's and says so, and `lhpc
+  self-update --apply` then runs the sync, also when the failed sync could not be recorded. A checkout
+  that moved without a new version number is seen only through the *venv-unsynced* record. A venv it
+  cannot compare (no version on either side) is reported as not verified, and `--apply` re-syncs it.
+- A self-update records the firewall follow-up for the next console start before it moves the
+  checkout; when that cannot be written (a full disk) it stops with nothing changed and says so.
 - `lhpc status`: a stack whose main process died while its helpers run reads *failed*, no longer
   *degraded* (that now means the main runs but an endpoint is not ready).
+- A refusal the controller's update, graywolf-update and build functions, or any function in its
+  self-update and binary-channel modules, return outright now says what to do: a command under the CLI's
+  *Next:*, or a *nothing to run here* line naming what has to be fixed on the box. A refusal because an
+  uninstall, a self-update or a reboot is pending, or the update state cannot be read, names `lhpc
+  self-update --recover-request` or what to wait for or fix; a failed build names its log and `lhpc build
+  <stack> --yes`; a graywolf update whose restart failed names `lhpc stack start graywolf --yes`; the
+  MeshCore plugin-manager refusal names `sudo reboot`. `lhpc install` names its remedy too: one remote for
+  a shared source in `config/local.toml`, one `--source` for stacks sharing a checkout (each consumer
+  named with its selection), and the retry after a journal or set-aside failure. A result built from work
+  already done names its remedy only where this entry says so: a one-click self-update that moved the
+  checkout but could not remove untracked files says to delete them by hand, with no command to run. A
+  self-update refused for an unsafe checkout names the fix for its cause (`git … switch` for a detached
+  HEAD or another branch, `git … remote add` for a missing origin, `git … remote set-url` for a wrong one,
+  `chmod go-w` for a folder others can write) or says the install.sh layout has to be restored. A refusal
+  on a busy lock names the operation to wait for and the command to run again (before: `lhpc status`, or
+  nothing). An update blocked by a `src/.<name>.prev` folder left over from an interrupted update names
+  that folder. The update plan says which version the update fetches instead of "fetch newest". What to
+  run to keep each stack current is one table in [operations](docs/operations.md#keeping-stacks-current).
+- An update whose removal of the old source tree was interrupted is finished by the next lhpc source
+  command only when that tree is provably the one the update set aside; any other is kept and named
+  (*recovery-required*) with what to remove by hand, and `lhpc status` says the same.
+- `lhpc status` shows a source transaction journal it cannot read as *recovery-required*, instead of
+  showing no unfinished update.
+- The firewall's "re-apply before you reboot" notice now always lists `lhpc firewall --script` first, so
+  an apply after a code change outside the updater installs the new firewall helper; before, the apply
+  could install the old one again and the status stayed *update-required*. A console start whose script
+  render fails retries it at the next start instead of dropping the follow-up.
+- A directory of the old source tree that the open-file check cannot list now counts as held, instead of
+  being skipped.
+- The controller no longer ends when another process opens a file of the old tree for writing while the
+  open-file check holds its lease on it: the CLI and the console ignore that signal from their start.
+- A refused update (a busy lock, an open source transaction) names the retry with the `--source` it was
+  asked for.
+- Retiring a binary install inside a channel switch whose journal cannot be read says *recovery-required*
+  and names the journal file, instead of reporting an lhpc defect.
+- An update that activated a new source but did not complete names the build that source still needs
+  (`lhpc build <stack> --yes`).
+- `lhpc status`: a stack whose main process is stopped while a helper is degraded reads *failed*.
 
-- The dashboard's radio columns ask the daemon for updates only while the page is shown: nothing while the tab
-  is in the background (one refresh when you come back), never a second request while the first is still
-  unanswered, and after a failed update the next try waits 15 s instead of 3 s.
-- No change in behaviour, the same checks in the same order: the rule for when this box's clock may date
-  certificates (the clock gate behind `--accept-unverified-clock` and `lhpc doctor`'s `clock:` line) now lives in
-  one place, `lhpc/core/clock.py`.
+**Safety helpers**
+
 - Whether a job, an HMAC apply or an auto-install whose stop could not be proven is treated as unsafe, whether
   a start with a terminal-only part (the Voice terminal variant) counts as successful, and whether a half-finished
   configuration save blocks the next one are now decided from a recorded fact, never from the wording of the
   message you see. The messages themselves are unchanged.
-- A source update no longer stops when recording its staged copy for crash recovery fails with an unexpected
-  error; it says so in one line and continues, as it already did for a disk error. A binary install that cannot
-  print the details of an unexpected error, or cannot undo itself after Ctrl-C, now says so in one line instead of
-  staying silent (after Ctrl-C the next command finishes the undo, as before). In these lines an error message that
-  spans several lines is joined into one.
-Upgrade note — boxes with the firewall installed: this release changes the firewall helper, so the dashboard
-reads *Update required* after the update; run `sudo bash <runtime root>/config/files/firewall/firewall-apply.sh`
-(and `lhpc webserver apply` if remote access is configured) before a reboot.
-
-- The firewall no longer treats an interrupted change it cannot read (a disk or permission error) as "nothing to
-  finish": it refuses to apply or check until the state is readable again.
 - A disk or permission error on a file LHPC must not lose no longer reads as "the file is gone": retiring a
   binary install keeps its record while a file or folder cannot be checked, a switch to the source channel does
   not take over a folder it cannot fully read, an update or uninstall treats a checkout whose `.git` cannot be
@@ -157,28 +119,117 @@ reads *Update required* after the update; run `sudo bash <runtime root>/config/f
   present and the tree is not reported clean: every local-change check (update, uninstall, binary install, switch
   to the source channel, auto-install update) reads it as changed. Before, the `.git` was ignored and the tree
   read as clean.
-- A refusal the controller's update, graywolf-update and build functions, or any function in its
-  self-update and binary-channel modules, return outright now says what to do: a command under the
-  CLI's *Next:*, or a *nothing to run here* line naming what has to be fixed on the box. Not covered
-  yet: a refusal by task admission (only a stuck self-update names `lhpc self-update
-  --recover-request`), a failure computed from the outcome of work done (a failed build, a graywolf
-  restart, a self-update recovery or unit refresh), refusals other code hands through these paths
-  (for example the MeshCore plugin-manager refusal, which says to reboot), `lhpc update graywolf`
-  without `--upstream`, and `lhpc install` on the source channel. A self-update refused for an
-  unsafe checkout names the fix for its cause (`git … switch` for a detached HEAD or another
-  branch, `git … remote add` for a missing origin, `git … remote set-url` for a wrong one, `chmod
-  go-w` for a folder others can write) or says the install.sh layout has to be restored. A refusal
-  on a busy lock names the operation to wait for and the command to run again (before: `lhpc
-  status`, or nothing). An update blocked by a `src/.<name>.prev` folder left over from an
-  interrupted update names that folder. The update plan says which version the update fetches
-  instead of "fetch newest". What to run to keep each stack current is one table in
-  [operations](docs/operations.md#keeping-stacks-current).
+- The firewall no longer treats an interrupted change it cannot read (a disk or permission error) as "nothing to
+  finish": it refuses to apply or check until the state is readable again.
+- A source update no longer stops when recording its staged copy for crash recovery fails with an unexpected
+  error; it says so in one line and continues, as it already did for a disk error. A binary install that cannot
+  print the details of an unexpected error, or cannot undo itself after Ctrl-C, now says so in one line instead of
+  staying silent (after Ctrl-C the next command finishes the undo, as before). In these lines an error message that
+  spans several lines is joined into one.
+- No change in behaviour, the same checks in the same order: the rule for when this box's clock may date
+  certificates (the clock gate behind `--accept-unverified-clock` and `lhpc doctor`'s `clock:` line) now lives in
+  one place, `lhpc/core/clock.py`.
+- `lhpc stack start` on a band another running stack holds asks, as the console does, whether to stop
+  it and start; `--yes` answers yes. Without a terminal and without `--yes` it refuses, naming both ways.
+- A suggested retry repeats what you asked for: the held-band refusal keeps `--band`, and an
+  `lhpc install` refusal keeps the channel (`--source`).
+- A restart of chat counts the manual start of its terminal program as success, as its start does.
+- Boot restore prepares chat as `lhpc stack start chat` does (daemon, settings, the dashboard's manual
+  start note) instead of skipping it.
+- A start refused before it launches anything (a band owner, the firewall gate) no longer resets the
+  band's RX/TX activity window; the start plan's firewall refusal now lists
+  `lhpc firewall --script > /dev/null` before the apply. A start interrupted by a file-system error
+  after it launched something stops what it launched again and says so.
+- A stack start that fails now stops again the parts it started — a part that fails its own check is
+  told to stop at once, the parts it verified once the start as a whole has failed — and the daemon too when that
+  start launched it (a daemon that was already running stays). The result names anything that remains
+  running, with the reason, and the daemon then stays up beneath it. A start that only waits for you to run
+  a terminal program (chat) is not a failure and keeps its daemon.
+- Starting and restarting a stack now runs in five visible phases in the code — taking its locks,
+  checking everything against the saved settings, starting, verifying, and recording the outcome — and a
+  restart as checks, stop, start and the return of its optional parts. The recorded start, stop, restart and
+  boot-restore cases give the same results, refusals and writes as before.
+
+**Settings**
+
+- Saving settings (the console's Settings, `lhpc config`, the RF-log and HMAC switches) is now built in
+  separate steps: checking what was submitted, then reading, deciding and writing under the config lock.
+  What a save accepts, refuses, writes and reports is unchanged; two saves of the same stack at the same
+  moment still both land.
+
+**Console**
+
+- The dashboard's radio columns ask the daemon for updates only while the page is shown: nothing while the tab
+  is in the background (one refresh when you come back), never a second request while the first is still
+  unanswered, and after a failed update the next try waits 15 s instead of 3 s.
+
+**Build**
+
+- A build now keeps the sources it builds from locked for its whole run — the stack's own and every
+  source it consumes, such as `openhop-repeater` for the MeshCore node or Reticulum for NomadNet — so an
+  update or uninstall of one of them is refused until the build ends, and the build's completion record
+  names the exact revisions it used. The console's Build and `lhpc build` now decide which components to
+  build the same way: Build on a single component builds that component, as `lhpc build <component>`
+  does; the stack's Build still builds a missing dependency first.
+- A build's completion record now names every source it was built from: its own checkout (unless a binary
+  release can provide the component) and each dependency's, a dependency's dependency included. A record
+  holding a revision lhpc could not read never counts as built, and `lhpc build` says which one
+  (`[unverified]`) and names `lhpc build <stack> --yes` to run once that revision can be read. After this
+  update, MeshChat, the MeshCore web UI and CLI, NomadNet and the LXMF router read *not built* until one
+  `lhpc build` of their stack. Meshtastic and the MeshCom QEMU node, whose marker a binary release ships
+  unchanged, record their own revision in a file beside it when built from source; built from source
+  before this update, they read *not built* until one `lhpc build` too. On the binary channel nothing
+  changes.
+- A failed console build's banner names the cause it recorded (for example the runaway guard), the retry
+  `lhpc build <stack> --yes` and the job log.
+- A console build that failed no longer stays on the console after a later successful `lhpc build` of
+  the same component; a build whose stop could not be verified still does.
+
+**Maintenance and radios**
+
+- The console's housekeeping (finishing a deferred web-server Apply, refreshing the client-certificate
+  revocation list, re-dating certificates made before the clock was set, cutting oversized logs) now
+  records each task's last success and last failure. `lhpc doctor` lists every task with its time, and
+  the dashboard shows a task whose last run failed until a later run succeeds; before, nothing was kept
+  and only a log that could not be cut was logged. A failed task is now logged as one line per task (it
+  replaces the old one line per log that could not be cut).
+- The daemon panel shows the voice app's 868 MHz spreading factor as SF7, the value the app is seeded
+  with (it showed SF11); the app sets it itself after start, so the steady value on air is unchanged and
+  only the one setting sent before the app starts is now SF7.
+- The docs now state the measured SPI result for the daemon on 433 MHz with Meshtastic on 868 MHz: in a
+  one-hour test with 16 simultaneous transmissions, one of them failed an SPI write, crashed meshtasticd
+  and lost a daemon frame. The pair stays allowed; avoid transmitting on both at the same moment. Starting
+  either side while the other runs now shows this warning.
+- When the housekeeping record has not been written for 15 minutes (its writes fail, or no pass runs),
+  `lhpc doctor` and the dashboard say so instead of showing its last success as current.
+
+**Tests, guards and docs**
+
+- Every step that writes a journal, receipt or marker the next run recovers from (settings saves, boot restore,
+  binary installs, source installs and updates, self-update, the firewall apply) is now tested against a full
+  disk, an I/O error and Ctrl-C at that exact step: recovery must leave a clean state and the same command must
+  then succeed.
+- The shared-SPI warning is now tested on a successful start in both directions, not only in the plan.
+- The test lab's nginx stop refuses, instead of reporting *stopped*, when the running nginx cannot be
+  verified as the lab's (a config path containing whitespace); it never signals such a process.
+- The systemd units LHPC installs are now pinned in the test suite: no release can change one by
+  accident, because a changed unit would make boot restore refuse on every box that already has the old one.
+- Test suite: a test body no longer ignores the result of a controller action it calls, commands, lock
+  keys, unit lines and hashes are compared whole instead of by their beginning, and seven tests whose
+  setup had silently failed now set up what they test. No change in behaviour.
+- The documentation was checked line by line against the code, and the statements the check found untrue
+  now match it. Among them: `lhpc doctor` (not `lhpc deps`) prints the polkit and clock commands;
+  a proxy in `local` mode needs no confirm phrase; an omitted `proxy --port` keeps the saved port; a bare
+  `lhpc update` keeps the installed channel; a reboot or shutdown that is pending refuses every new task,
+  and a stale pending marker is removed by itself. The dated live-test records no longer name LAN
+  addresses or the bench's position. No change in behaviour.
+
+**Slow-target proof**
 
 - Every release is now also installed, built and self-updated on a test box throttled to a Pi Zero 2 W's CPU,
   SD card and memory before it ships, and each run proves it is no faster than a real Zero on a fixed workload:
   an update that would stall or run into a time limit on a slow box turns the release check red instead of
   reaching yours.
-
 - The slow-box release check refuses a time or calibration value that is not a finite number (NaN,
   infinity) and names it, instead of letting it pass the budget comparison.
 

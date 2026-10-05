@@ -21,8 +21,8 @@ The identity causes they share with `test_every_unsafe_identity_cause_has_a_list
 
 An admission refusal is built by one helper, `service_base.admission_refusal`, whose remedy per
 tag `core/test_admission_refusal.py` drives; `test_no_admission_refusal_is_built_by_hand` keeps
-every site on it. Not in the guard: `ControllerService.install` (services.py), whose source-channel
-refusals are partly computed from varied causes (docs/operations.md, "Not covered yet").
+every site on it. `ControllerService.install` (services.py) is in the guard too: its two refusals
+with a computed remedy are in `DYNAMIC`, and `install/test_install_refusals.py` drives the others.
 
 A refusal on a busy lock or a blocked source transaction names the command to run again, never
 only `lhpc status` (a diagnostic, not a remedy): `test_busy_refusals_name_the_retry_command`, the
