@@ -555,6 +555,39 @@ def test_driver_full_run_restores_and_prunes(tmp_path, monkeypatch):
     assert j["items"][0]["prune"]["ok"] is True
 
 
+@pytest.mark.parametrize("record, outcome", [
+    ("dead", "recovered"),      # helper gone (a reboot): cleared, recorded, the restore runs
+    ("live", "kept"),           # helper still running: never cleared, admission refuses
+    ("pending", "kept"),        # a request the path unit services at boot: left alone
+])
+def test_boot_restore_recovers_a_dead_self_update_helper(tmp_path, monkeypatch, record, outcome):
+    # Finding 135: a self-update helper that died left its in-flight record, and boot restore
+    # refused at admission on every boot until `lhpc self-update --recover-request` ran by hand.
+    import os
+
+    from lhpc.core import selfupdate
+    from lhpc.core.services import _proc_start_time
+    svc = _drv(tmp_path, monkeypatch)
+    (tmp_path / "state").mkdir(exist_ok=True)
+    if record == "pending":
+        rec = tmp_path / "state" / "selfupdate.request"
+        rec.write_text("normal\n")
+    else:
+        pid = os.getpid() if record == "live" else 999999
+        start = _proc_start_time(pid) if record == "live" else 1
+        rec = tmp_path / "state" / "selfupdate.inflight"
+        rec.write_text(json.dumps({"mode": "normal", "pid": pid, "start_time": start}))
+    calls = []
+    monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
+    res = svc.boot_restore_run()
+    if outcome == "recovered":
+        assert not rec.exists() and not res.data.get("admission_blocked")
+        assert selfupdate.status_view(svc._paths)["last_apply"]["ok"] is False
+        assert any("Cleared an interrupted update" in d for d in res.details)
+    else:
+        assert rec.exists() and res.data.get("admission_blocked")
+
+
 def test_driver_failed_item_exits_completed(tmp_path, monkeypatch):
     # Failure consumes the evidence (no automatic retries) but the DRIVER completed:
     # data["driver_completed"] keeps the RemainAfterExit unit active (CLI exit 0).

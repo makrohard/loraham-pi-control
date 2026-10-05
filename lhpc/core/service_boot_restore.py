@@ -15,6 +15,7 @@ the `_before_start_locked` hook that runs under every start lock). No automatic 
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import time
 from pathlib import Path
@@ -289,7 +290,27 @@ class BootRestoreOpsMixin:
     def boot_restore_run(self) -> ActionResult:
         """The unit body. `data["driver_completed"]` gates the service exit code: True whenever
         every terminal result was durably recorded (even with failed items — the RemainAfterExit
-        unit must stay active); absent/False only on driver/integrity failures."""
+        unit must stay active); absent/False only on driver/integrity failures.
+
+        Before admission, an IN-FLIGHT self-update record whose helper is proven dead (pid + start
+        time ceased — always so after a reboot) is cleared by the code `lhpc self-update
+        --recover-request` runs, recording the interrupted update; it would otherwise refuse
+        every boot until someone runs that command. A PENDING request is left alone: its path
+        unit services it at boot and admission defers the restore to that update."""
+        note = self._boot_recover_dead_update()
+        res = self._boot_restore_run_guarded()
+        return dataclasses.replace(res, details=(note, *res.details)) if note else res
+
+    def _boot_recover_dead_update(self) -> str:
+        """The details line of the boot-time recovery of a dead helper's in-flight record, or ""."""
+        try:
+            if self.classify_request() != "in_flight":
+                return ""
+            return f"  {self._recover_update_state().summary}"
+        except Exception as exc:
+            return f"  the self-update in-flight record was not recovered: {exc}"
+
+    def _boot_restore_run_guarded(self) -> ActionResult:
         try:
             with self._admission_guard("boot-restore", "controller"):
                 return self._boot_restore_run_admitted()

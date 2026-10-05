@@ -89,7 +89,9 @@ Back up `config/`, `profiles/` and the app data under `state/` first
   `lhpc self-update --recover-request`. It clears a never-claimed request outright, and an
   in-flight record only after proving the helper process has stopped (a missing/unreadable
   identity is never auto-cleared; the command says what to check). One-click is blocked until
-  then.
+  then. After a reboot, boot restore clears a dead helper's in-flight record itself (the same
+  proof, the update recorded as interrupted) before it restores; `--recover-request` remains for
+  a stuck record without a reboot, a pending request and a malformed record.
 
 ## Run it under systemd
 
