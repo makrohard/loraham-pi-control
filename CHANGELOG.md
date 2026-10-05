@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.12.2
+
+Upgrade note — boxes with the firewall installed: This release changes the firewall helper: after the update the
+firewall shows *Update required* until it is re-applied (`lhpc firewall --script`, then the printed `sudo bash
+…/firewall-apply.sh`, `sudo systemctl start lhpc-firewall-check.service`, `lhpc webserver apply`; or the
+dashboard's re-apply). Until then the old helper keeps protecting the box.
+
+Changed
+
+- `lhpc stack start <stack> --yes` on a band the daemon holds for another stack stops that stack and the daemon on
+  that band only; it no longer stops the whole daemon, so clients on the other band keep running. `lhpc stack
+  stop daemon` takes `--band`.
+- After a power cut or crash during a self-update, boot restore clears the dead helper's leftover record itself
+  (recording the update as interrupted) instead of refusing at every boot.
+- The release check blames a stack for an interactive program only when it exited or drew a traceback or an
+  exception line, not when it is still starting at the deadline; its failure shows the program's logs.
+
+Fixed
+
+- A stack stopped in the console stays stopped after a reboot (a Stop with the stack's band no longer skipped the
+  operator's stop intent).
+- `lhpc stack start` on a running Meshtastic whose GPS feed has no position source (`auto`) finds it already
+  running instead of refusing.
+- The console's start and restart banner shows the shared-SPI warning (the daemon on 433 MHz beside Meshtastic
+  on 868 MHz), as the CLI does.
+- The firewall no longer reports NetworkManager's access-point table (`nm-shared-<iface>`) as foreign: a table
+  whose base chains are all forward chains, or postrouting NAT chains that only rewrite addresses, cannot drop the
+  box's own traffic.
+
 ## 0.12.1
 
 Changed

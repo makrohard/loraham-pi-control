@@ -148,6 +148,10 @@ repositories.
     change as a patch: the verifier accepts the next release's three units as `compatible`, while
     no installed unit byte changes; going back below 0.12.1 after the release that ships those units
     restores at boot only after the older release's `lhpc self-update --repair-integration`.
+    0.12.2, by the maintainer's decision, changed a refusal and added a selector as a patch: the
+    start refusal for a band the daemon holds names the narrower, correct remedy, and
+    `lhpc stack stop daemon` takes `--band` (that remedy; daemon only); no format or default
+    changes.
   - **Changing a unit** takes two releases, so a box restores at boot after an update and after a
     downgrade between them. First a release that only ACCEPTS the new bytes: `_NEXT_EDITS` in
     `lhpc/core/updater_units.py`, its digests in `unit-templates-next.sha256`; `verify` reads an
