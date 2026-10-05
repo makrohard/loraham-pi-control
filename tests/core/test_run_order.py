@@ -1386,3 +1386,88 @@ def test_a_successful_applied_start_beside_the_other_side_is_warned(tmp_path, mo
     res = svc.start(target, band=band, apply=True)
     assert res.ok, res.summary
     assert f"  [warning] {SPI_SHARED_WARNING}" in res.details, res.details
+
+
+
+
+def _start_meshtastic_with(tmp_path, monkeypatch, states, *, source="auto", feed=None):
+    """`lhpc stack start meshtastic` (GPS feed in the plan, `source` the [gps] source) with the
+    named components' run states stubbed and the feed's marker reading `feed`; returns (result by
+    component, the result, the commands it ran)."""
+    import dataclasses
+
+    from lhpc.core import gps, service_lifecycle_ops
+    from lhpc.core.config import save_gps
+    from lhpc.core.model import RunState
+    fake = FakeSystem(effective_group_names=frozenset({"spi", "gpio"}),
+                      configured_group_names=frozenset({"spi", "gpio"}),
+                      paths={"/usr/include/yaml-cpp/yaml.h", "/dev/spidev0.0",
+                             str(tmp_path / "build/tools/meshtastic-cli/.venv/bin/meshtastic")})
+    (tmp_path / "src" / "meshtastic-firmware").mkdir(parents=True)
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    assert svc.bootstrap(apply=True).ok
+    assert svc.save_config_bundle("meshtastic", values={"node_name": "Field Node",
+                                                        "node_short": "FN1"}).ok
+    assert svc.save_stack_config("meshtastic", {"use_gps": "on"}, band="868").ok
+    # Stubs the collaborator, the gpsd socket probe: a gpsd listens on this box (with `auto`, the
+    # feed is planned only then), whether or not it delivers a position.
+    monkeypatch.setattr(gps, "local_gpsd_listening", lambda *a, **k: True)
+    save_gps(svc._paths, source=source)                         # the feed is in the start plan
+    svc._invalidate_config()
+    real = ControllerService.build_snapshot
+
+    def snapshot(self, fresh=False):
+        snap = real(self, fresh=fresh)
+        for ss in snap.stacks:
+            for cid, st in states.items():
+                if cid in ss.components:
+                    cs = ss.components[cid]
+                    ss.components[cid] = dataclasses.replace(
+                        cs, run_state=st, endpoints=tuple(
+                            dataclasses.replace(e, present=(st == RunState.RUNNING))
+                            for e in (cs.endpoints or ())))
+        return snap
+    # Stubs the collaborators: the status prober (the components read the given states), the
+    # feed's own readiness marker, and the clock the feed gate polls with.
+    monkeypatch.setattr(ControllerService, "build_snapshot", snapshot)
+    monkeypatch.setattr(ControllerService, "gps_feed_state", lambda self, comp: dict(feed or {}))
+    monkeypatch.setattr(service_lifecycle_ops.time, "sleep", lambda s: None)
+    fake.calls.clear()
+    res = svc.start("meshtastic", apply=True)
+    return {r.component: r for r in res.results}, res, fake.calls
+
+
+def test_a_running_stack_whose_auto_feed_has_no_source_starts_idempotently(tmp_path, monkeypatch):
+    """`lhpc stack start meshtastic` on a running meshtastic whose GPS feed is DEGRADED because
+    its `auto` source delivers no position (source-lost) is already running, as a fresh start
+    would admit it: nothing is launched, and it says so."""
+    from lhpc.core.model import RunState
+    by, res, calls = _start_meshtastic_with(tmp_path, monkeypatch, {
+        "meshtastic-gps": RunState.DEGRADED, "meshtastic": RunState.RUNNING},
+        source="auto", feed={"state": "source-lost", "detail": "no gpsd"})
+    assert res.ok, res.summary
+    assert by["meshtastic-gps"].outcome.value == "already_healthy"
+    assert "WITHOUT position" in by["meshtastic-gps"].summary
+    assert by["meshtastic"].outcome.value == "already_healthy"
+    assert not any("meshtasticd" in " ".join(c) for c in calls)            # nothing launched
+
+
+def test_an_explicit_gpsd_feed_without_its_source_still_blocks_the_start(tmp_path, monkeypatch):
+    """Control: with an EXPLICIT gpsd source, a feed whose gpsd is gone is refused, as a fresh
+    start refuses it."""
+    from lhpc.core.model import RunState
+    by, res, _calls = _start_meshtastic_with(tmp_path, monkeypatch, {
+        "meshtastic-gps": RunState.DEGRADED, "meshtastic": RunState.RUNNING},
+        source="gpsd", feed={"state": "source-lost", "detail": "no gpsd"})
+    assert not res.ok, by
+    assert by["meshtastic-gps"].outcome.value == "blocked"
+
+
+def test_a_degraded_main_component_still_blocks_the_start(tmp_path, monkeypatch):
+    """Control: a DEGRADED component the stack cannot do without stays a blocked start."""
+    from lhpc.core.model import RunState
+    by, res, _calls = _start_meshtastic_with(tmp_path, monkeypatch, {
+        "meshtastic-gps": RunState.RUNNING, "meshtastic": RunState.DEGRADED},
+        feed={"state": "ready", "sentences": 3})
+    assert not res.ok
+    assert by["meshtastic"].outcome.value == "blocked" and "DEGRADED" in by["meshtastic"].summary

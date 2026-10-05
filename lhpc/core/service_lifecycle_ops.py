@@ -1241,8 +1241,15 @@ class LifecycleOpsMixin:
             state = st_index[comp.id].run_state
             running = state == RunState.RUNNING        # DEGRADED is NOT healthy
             # A DEGRADED component (process up but a ready endpoint missing) must not
-            # be treated as healthy and must not trigger a duplicate launch.
+            # be treated as healthy and must not trigger a duplicate launch. A GPS feed is judged
+            # by the rule a fresh start applies (`_gps_feed_admission`): under `auto` a feed whose
+            # source is missing runs without position, so it is already running, left as it is.
             if state == RunState.DEGRADED and comp.id != self.DAEMON_ID:
+                if str(getattr(comp, "readiness", "")) == "gps-feed":
+                    feed_ok, ev = self._gps_feed_admission(comp)
+                    if feed_ok:
+                        record(comp, stack, Outcome.ALREADY_HEALTHY, f"already running ({ev})")
+                        continue
                 record(comp, stack, Outcome.BLOCKED, "running but DEGRADED (a ready "
                        "endpoint is missing) — stop it (verified) and re-run")
                 continue
