@@ -767,7 +767,6 @@ class SelfUpdateOpsMixin:
                 raise selfupdate.JournalPersistError()
             hook.update(written=True, txid=txid)
 
-        helper_rev = self._fw_packaged_helper_rev()
         try:
             res = selfupdate.apply_update(self._system, self._paths, force=force,
                                           before_mutation=_before_mutation)
@@ -813,14 +812,17 @@ class SelfUpdateOpsMixin:
         if res.get("ok") and not res.get("already") and self._fw_integration_state() != "absent":
             fw_notes = ["Firewall integration will be refreshed automatically when the "
                         "console restarts under the new version."]
-            # The helper file is read from disk, so this (old) process sees the new one. A
-            # changed helper leaves the installed one stale until re-applied — and the next
-            # boot starts the console loopback-only. Say it now, before that reboot.
-            if self._fw_packaged_helper_rev() != helper_rev:
+            # The status's own question, asked after the advance (the helper file is read from
+            # disk, so this old process sees the new one): is the INSTALLED helper — stamped into
+            # the receipt — a different build? Then the next boot starts the console
+            # loopback-only; say it now, before that reboot. Whether the update changed the
+            # packaged helper is a different question: an installed helper already re-applied,
+            # or left by a move of the checkout, answers it wrongly (finding 134).
+            if self.firewall_reapply_notice() is not None:
                 data_fw = True
                 fw_notes.append(
-                    "This update changes the firewall helper — re-apply the firewall before you "
-                    "reboot: " + "; ".join(["lhpc firewall --script > /dev/null",
+                    "The installed firewall helper is not this version's — re-apply the firewall "
+                    "before you reboot: " + "; ".join(["lhpc firewall --script > /dev/null",
                                            *self._fw_apply_lines()]) + "."
                     + (" Until then a reboot starts the console LOOPBACK-ONLY (remote access "
                        "off)." if self._fw_remote_web_exposed() else ""))
@@ -873,15 +875,6 @@ class SelfUpdateOpsMixin:
         details += list(fw_notes)
         return ActionResult(True, res["message"], data=data, details=tuple(details),
                             next_commands=list(instr["commands"]))
-
-    @staticmethod
-    def _fw_packaged_helper_rev() -> str:
-        """The packaged firewall helper's revision as it is on disk now ("" if unreadable)."""
-        from . import firewall as _fw
-        try:
-            return _fw.integration_rev()
-        except (OSError, ValueError):
-            return ""
 
     def _user_unit_dir(self):
         from pathlib import Path
@@ -1211,7 +1204,7 @@ class SelfUpdateOpsMixin:
         # re-apply warning (details carry the commands) must ride in it, on every branch above.
         if res.data.get("firewall_reapply_required"):
             res = _dc.replace(res, summary=res.summary + " Re-apply the firewall before you reboot: "
-                              "this update changed the firewall helper.")
+                              "the installed firewall helper is not this version's.")
         # Record the outcome DURABLY, then release the in-flight record. If the STRICT record does
         # not persist, retain in-flight and report incomplete (one-click blocked until recovery) —
         # never delete the evidence on an unrecorded outcome.

@@ -336,31 +336,36 @@ def test_service_maps_cleanup_failure_to_partial(tmp_path, monkeypatch):
     assert any("cannot unlink" in d for d in res.details)         # the cleanup error passes through
 
 
-@pytest.mark.parametrize("after, remote", [("NEW", True), ("NEW", False), ("OLD", True)])
-def test_an_update_that_changes_the_firewall_helper_says_reapply_before_reboot(
-        tmp_path, monkeypatch, after, remote):
-    """An advance that replaces the packaged firewall helper leaves the installed one stale, and the
-    next boot starts the console loopback-only: the update result says so, with the commands, while
-    the operator can still act. An unchanged helper adds nothing (the ("OLD", True) case is a
-    control: it guards no defect of its own, no red-before)."""
+def _status_reads(svc, monkeypatch, reason):
+    # Stubbed: the firewall status (the root-written receipt under /run and the units under /etc
+    # cannot be set up here); `reason` is what it reads after the advance.
+    monkeypatch.setattr(svc, "firewall_status", lambda: {"reason": reason})
+
+
+@pytest.mark.parametrize("reason, remote", [("update-required", True),
+                                            ("update-required", False), ("active", True)])
+def test_an_update_leaving_the_installed_helper_stale_says_reapply_before_reboot(
+        tmp_path, monkeypatch, reason, remote):
+    """An advance after which the installed firewall helper is not the packaged one (the status
+    reads update-required) leaves the next boot starting the console loopback-only: the update
+    result says so, with the commands, while the operator can still act. A status that reads
+    active adds nothing (the ("active", True) case is a control: no red-before)."""
     from lhpc.core import config as cfgmod
-    from lhpc.core import firewall as fwm
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
     gitrepo.upstream_commit(up)
     cfgmod.save_webserver_config(svc._paths, bind="0.0.0.0" if remote else "127.0.0.1",
                                  port=8443, remote_exposed=remote)
     svc._invalidate_config()
-    revs = iter(["OLD", after])                    # the packaged helper before / after the advance
-    monkeypatch.setattr(fwm, "integration_rev", lambda: next(revs))
+    _status_reads(svc, monkeypatch, reason)
     monkeypatch.setattr(selfupdate, "apply_update", lambda *a, **k: {
         "ok": True, "message": "updated", "deps_changed": False})
     # The installed integration lives under /etc/lhpc; stub its presence.
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
     res = svc.self_update_apply()
-    changed = after != "OLD"
+    changed = reason == "update-required"
     assert res.ok and res.data["firewall_reapply_required"] is changed
-    notes = [d for d in res.details if "changes the firewall helper" in d]
+    notes = [d for d in res.details if "installed firewall helper is not" in d]
     assert bool(notes) is changed
     if changed:
         apply_sh = svc._paths.under("config/files/firewall/firewall-apply.sh")
@@ -369,13 +374,10 @@ def test_an_update_that_changes_the_firewall_helper_says_reapply_before_reboot(
         assert ("LOOPBACK-ONLY" in notes[0]) is remote
 
 
-@pytest.mark.parametrize("path", ["one-click", "one-click-sync-failed", "one-click-units-failed",
-                                  "cli", "cli-cleanup-failed"])
-def test_a_helper_changing_update_keeps_the_reapply_warning_on_every_path(tmp_path, monkeypatch, path):
-    """The one-click helper records only the SUMMARY (the console shows that after the restart), so
-    the re-apply warning must be in it — also when the venv sync or the unit refresh fails after the
-    advance; the CLI keeps the full line with the commands in details — also on the partial result
-    of a failed cleanup. The packaged helper file really changes on disk during the (faked) advance."""
+def test_the_update_and_the_status_agree_on_the_firewall_reapply(tmp_path, monkeypatch):
+    """Finding 134: the update changes the packaged helper, but the installed one is already that
+    build (re-applied, or left by a move of the checkout), so the status reads active with no
+    notice — the update result must not ask for a re-apply either."""
     from lhpc.core import firewall as fwm
     _o, work, up = gitrepo.repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch)
@@ -387,6 +389,29 @@ def test_a_helper_changing_update_keeps_the_reapply_warning_on_every_path(tmp_pa
 
     def advance(*a, **k):
         (pkg / "firewall_helper.py").write_text("# helper NEW\n")
+        return {"ok": True, "message": "Update applied.", "deps_changed": False}
+    monkeypatch.setattr(selfupdate, "apply_update", advance)
+    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
+    _status_reads(svc, monkeypatch, "active")
+    res = svc.self_update_apply()
+    assert res.ok and svc.firewall_reapply_notice() is None
+    assert res.data["firewall_reapply_required"] is False
+    assert not any("re-apply" in d for d in res.details)
+
+
+@pytest.mark.parametrize("path", ["one-click", "one-click-sync-failed", "one-click-units-failed",
+                                  "cli", "cli-cleanup-failed"])
+def test_a_helper_changing_update_keeps_the_reapply_warning_on_every_path(tmp_path, monkeypatch, path):
+    """The one-click helper records only the SUMMARY (the console shows that after the restart), so
+    the re-apply warning must be in it — also when the venv sync or the unit refresh fails after the
+    advance; the CLI keeps the full line with the commands in details — also on the partial result
+    of a failed cleanup. The status reads update-required after the advance."""
+    _o, work, up = gitrepo.repos(tmp_path)
+    svc, man, rt = _svc_rf(tmp_path, work, monkeypatch)
+    gitrepo.upstream_commit(up)
+    _status_reads(svc, monkeypatch, "update-required")
+
+    def advance(*a, **k):
         return {"ok": True, "message": "Update applied.", "deps_changed": False,
                 **({"cleanup_failed": True, "cleanup_error": "cannot unlink x"}
                    if path == "cli-cleanup-failed" else {})}
@@ -420,13 +445,13 @@ def test_a_helper_changing_update_keeps_the_reapply_warning_on_every_path(tmp_pa
         res = svc.self_update_apply_operator()
         assert not res.ok and res.data["cleanup_failed"] is True
         assert res.data["firewall_reapply_required"] is True
-        assert any("changes the firewall helper" in d and "lhpc webserver apply" in d
+        assert any("installed firewall helper is not" in d and "lhpc webserver apply" in d
                    for d in res.details)
     else:
         monkeypatch.delenv("INVOCATION_ID", raising=False)
         res = svc.self_update_apply_operator()
         assert res.ok and res.data["firewall_reapply_required"] is True
-        assert any("changes the firewall helper" in d and "lhpc webserver apply" in d
+        assert any("installed firewall helper is not" in d and "lhpc webserver apply" in d
                    for d in res.details)
 
 
