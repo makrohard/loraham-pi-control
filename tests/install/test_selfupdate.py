@@ -418,6 +418,26 @@ def test_an_apply_finding_the_checkout_current_syncs_a_venv_behind_it(op_svc, mo
     assert svc.self_update_incomplete() == ("", "")
 
 
+@pytest.mark.parametrize("break_it", ["no-metadata", "no-version-file"])
+def test_an_apply_finding_the_checkout_current_syncs_a_venv_it_cannot_verify(op_svc, monkeypatch,
+                                                                             break_it):
+    """Fail closed (finding 129): with no record and a version it cannot read on either side, an
+    apply that finds the checkout current still runs the sync."""
+    from lhpc.core.services import ActionResult, ControllerService
+    svc, fake, root = _op_inactive(op_svc, monkeypatch, ActionResult(
+        True, "Already up to date.", data={"already": True}))
+    # Stubbed: the unit refresh needs a real systemd unit set; this test is about whether the
+    # sync runs, and the refresh has its own coverage.
+    monkeypatch.setattr(ControllerService, "_refresh_units_post_update",
+                        lambda self: (True, "units canonical"))
+    if break_it == "no-metadata":
+        monkeypatch.setattr(selfupdate, "installed_version", lambda: "")
+    else:
+        (root / "lhpc" / "version.py").unlink()
+    r = svc.self_update_apply_operator()
+    assert r.ok and list(_pip_key(root)) in fake.calls, r.summary
+
+
 @pytest.mark.parametrize("state", ["venv-unsynced", "units-stale"])
 def test_a_named_state_whose_record_cannot_be_written_fails_with_the_command_to_run(
         op_svc, monkeypatch, state):
