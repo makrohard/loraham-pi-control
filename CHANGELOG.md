@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.4
+
+Fixed
+
+- After a binary install, the console's task banner says "Next: Start." instead of "Next: Build.".
+
 ## 0.12.3
 
 Changed
