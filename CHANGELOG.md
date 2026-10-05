@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.12.3
+
+Changed
+
+- The dashboard's note about missing GUI-only dependencies says this is expected on a headless box (Lite image,
+  no desktop).
+
+Fixed
+
+- A console update request while the console is up to date (a page loaded before the last check) no longer shows
+  the "Update & restart now" confirm; it returns to the panel with "Already up to date".
+
 ## 0.12.2
 
 Upgrade note — boxes with the firewall installed: This release changes the firewall helper: after the update the
