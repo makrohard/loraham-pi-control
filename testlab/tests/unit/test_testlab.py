@@ -10,6 +10,7 @@ import re
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import lhpc_testlab as testlab
@@ -559,6 +560,20 @@ def test_nginx_ctl_never_signals_a_reused_pid(tmp_path, unrelated_pid):
     assert unrelated_pid.poll() is None                  # not SIGQUIT/SIGTERM/SIGKILLed
 
 
+def _spawned(proc, needle):
+    """`proc` once its /proc cmdline carries `needle`, as the lab's matchers read it. Popen returns
+    while the child's exec is still finishing, and until then its cmdline (and comm) is not yet
+    the new program's: a slow runner reads it there. Bounded; a child that never shows is killed."""
+    deadline = time.monotonic() + 10
+    while not supervisor.pid_alive(proc.pid, needle) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if not supervisor.pid_alive(proc.pid, needle):
+        proc.kill()
+        proc.wait()
+        pytest.fail(f"{needle!r} never showed in /proc (exit {proc.returncode})")
+    return proc
+
+
 def _lab_nginx_pidfile(tmp_path, pid):
     paths = Paths(runtime_root=tmp_path)
     (tmp_path / "state" / "run").mkdir(parents=True)
@@ -570,7 +585,8 @@ def test_a_reused_pid_naming_the_config_is_not_the_lab_nginx(tmp_path):
     """A reused pid whose command line merely contains the config path (an editor open on the
     file) is neither alive as the lab's nginx nor ever signalled by a stop or a reload."""
     conf = str(Paths(runtime_root=tmp_path).under("config", "nginx", "lhpc.conf"))
-    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", conf])
+    proc = _spawned(subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", conf]),
+                    conf)
     try:
         paths, _ = _lab_nginx_pidfile(tmp_path, proc.pid)
         assert conf in Path(f"/proc/{proc.pid}/cmdline").read_text().replace("\0", " ")
@@ -592,7 +608,8 @@ def test_an_unverifiable_lab_nginx_is_refused_not_reported_stopped(tmp_path):
     fake.parent.mkdir()
     fake.symlink_to(shutil.which("sleep"))
     conf = str(Paths(runtime_root=root).under("config", "nginx", "lhpc.conf"))
-    proc = subprocess.Popen([f"nginx: master process nginx -c {conf}", "60"], executable=str(fake))
+    proc = _spawned(subprocess.Popen([f"nginx: master process nginx -c {conf}", "60"],
+                                     executable=str(fake)), conf)
     try:
         paths, _ = _lab_nginx_pidfile(root, proc.pid)
         ok, why = supervisor.nginx_ctl(paths, "stop")
@@ -616,7 +633,8 @@ def test_an_unreadable_lab_nginx_proc_entry_is_refused_not_reported_stopped(tmp_
     fake.parent.mkdir()
     fake.symlink_to(shutil.which("sleep"))
     conf = str(Paths(runtime_root=root).under("config", "nginx", "lhpc.conf"))
-    proc = subprocess.Popen([f"nginx: master process nginx -c {conf}", "60"], executable=str(fake))
+    proc = _spawned(subprocess.Popen([f"nginx: master process nginx -c {conf}", "60"],
+                                     executable=str(fake)), conf)
     stat = f"/proc/{proc.pid}/stat"
 
     def reading(path, *a, **k):
@@ -645,7 +663,8 @@ def test_the_lab_nginx_master_is_verified_and_signalled(tmp_path):
     fake.parent.mkdir()
     fake.symlink_to(shutil.which("sleep"))
     conf = str(Paths(runtime_root=tmp_path).under("config", "nginx", "lhpc.conf"))
-    proc = subprocess.Popen([f"nginx: master process nginx -c {conf}", "60"], executable=str(fake))
+    proc = _spawned(subprocess.Popen([f"nginx: master process nginx -c {conf}", "60"],
+                                     executable=str(fake)), conf)
     try:
         paths, _ = _lab_nginx_pidfile(tmp_path, proc.pid)
         assert Path(f"/proc/{proc.pid}/comm").read_text().strip() == "nginx"
@@ -660,8 +679,11 @@ def test_the_lab_nginx_master_is_verified_and_signalled(tmp_path):
 
 def _fake_running(pid_file, *argv_tail):
     """A sleeper carrying the argv tail the lab spawns a fake with, its pid in `pid_file`: what
-    `check` recognises as that fake alive. The caller kills it."""
-    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", *argv_tail])
+    `check` recognises as that fake alive. The caller kills it.
+
+    Returns once `check`'s own matcher sees it (`_spawned`)."""
+    proc = _spawned(subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)",
+                                      *argv_tail]), " ".join(argv_tail))
     pid_file.write_text(f"{proc.pid}\n")
     return proc
 
