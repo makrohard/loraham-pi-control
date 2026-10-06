@@ -184,6 +184,27 @@ def test_stack_update_includes_radiolib_despite_optional(tmp_path):
     assert "radiolib" in blob                            # build_requires target included
 
 
+def _planned(svc, target):
+    plan = svc.update(target, apply=False)
+    assert plan.ok, plan.details
+    return {line.split(":")[0].strip() for line in plan.details}
+
+
+def test_stack_update_includes_an_installed_optional_component(tmp_path):
+    """The line status, build and source-check draw: an optional component that is installed
+    is part of its stack, so a stack update refreshes it too; one never installed is not."""
+    svc = _svc(tmp_path)
+    assert "meshcore-cli" not in _planned(svc, "meshcore")             # never installed
+    (tmp_path / "src" / "meshcore-cli").mkdir(parents=True)
+    assert "meshcore-cli" in _planned(svc, "meshcore")                 # installed
+    assert "meshcore-cli" in _planned(svc, "")                         # "all" draws the same line
+
+
+def test_a_named_optional_component_is_updated_installed_or_not(tmp_path):
+    svc = _svc(tmp_path)
+    assert _planned(svc, "meshcore-cli") == {"meshcore-cli"}
+
+
 def test_radiolib_built_state_is_honest(tmp_path):
     # RadioLib compiles via build_steps and declares its .a as `bin`, so is_built must reflect whether
     # build/libRadioLib.a actually exists (it used to be a permanent false-positive True, hiding the

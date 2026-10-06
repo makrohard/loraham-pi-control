@@ -186,15 +186,11 @@ class MaintenanceOpsMixin:
         named_component = bool(target) and self.stack(target) is None
         excused = set()
         if not named_component:
-            # A HARD BUILD DEPENDENCY is never excused, even though it is marked optional:
-            # RadioLib is `optional` yet the daemon cannot build without it, so an absent
-            # RadioLib is a real, reportable gap in an installed daemon — not an unused
-            # extra. `update()` draws the same line for the same reason.
+            # The line `update()` draws too (`_stack_scope_keeps`): an optional component that
+            # was never installed is excused; a hard build dependency never is — RadioLib is
+            # `optional`, yet an absent RadioLib is a real gap in an installed daemon.
             required = {dep for c in comps if not c.optional for dep in c.build_requires}
-            for c in comps:
-                if c.optional and c.id not in required and c.source and \
-                        not source_fs.source_present(self._paths, self._paths.resolve_source(c.source.path)):
-                    excused.add(c.id)
+            excused = {c.id for c in comps if not self._stack_scope_keeps(c, required)}
         results, details = {}, []
         counts = {stackupdates.BEHIND: 0, stackupdates.UP_TO_DATE: 0,
                   stackupdates.UNKNOWN: 0, stackupdates.ERROR: 0}
@@ -1763,6 +1759,16 @@ class MaintenanceOpsMixin:
                                      + ")"
                                      for cid, e in sorted(cand["entries"].items())])
 
+    def _stack_scope_keeps(self, c, required: set) -> bool:
+        """Does a stack-wide (or "all") pass include component `c`? Every required one; a
+        hard build dependency (`required`: the ids non-optional components `build_requires`,
+        e.g. the daemon's RadioLib) although it is optional; and an optional one only once it
+        is installed — one never installed has nothing to refresh or compare. The ONE line
+        `update()` and source-check both draw."""
+        return (not c.optional or c.id in required or not c.source
+                or source_fs.source_present(self._paths,
+                                            self._paths.resolve_source(c.source.path)))
+
     @invalidates_snapshot
     def update(self, target: str = "", apply: bool = False,
                source: str = "pinned", auto_install_ctx=None,
@@ -1770,9 +1776,10 @@ class MaintenanceOpsMixin:
                build: bool = True) -> ActionResult:
         """Refresh the managed source(s) from the remote (version per `source`:
         dev/stable/pinned); a failed `dev` adoption retries once at the known-working (else
-        manifest-pin) identity, disclosed. Skips
-        optional libs/firmware unless one is targeted directly. `exact_pin` is internal (the
-        binary channel): 'pinned' means the manifest pin, not known-working.
+        manifest-pin) identity, disclosed. A stack (or "all") updates its required sources,
+        its hard build dependencies, and the optional components that are INSTALLED; an
+        optional one never installed is skipped unless targeted directly. `exact_pin` is
+        internal (the binary channel): 'pinned' means the manifest pin, not known-working.
 
         A stack whose updated sources leave it needing a build is then built by `build()` itself,
         after the update's locks are released, so it can start. `build=False` (the console's
@@ -1827,16 +1834,16 @@ class MaintenanceOpsMixin:
                 False, "No sources.",
                 details=["  nothing to run here — the manifest declares no managed source, so "
                          "there is nothing to update"])
-        # A NAMED component updates exactly itself; a stack (or the empty "all"
-        # target) skips its optional libs/firmware — EXCEPT hard build dependencies
-        # (`build_requires`, e.g. the daemon's RadioLib), which are updated with their
-        # consumer despite the optional flag.
+        # A NAMED component updates exactly itself; a stack (or the empty "all" target)
+        # updates what it has installed — the line status and source-check draw
+        # (`_stack_scope_keeps`): an optional component that was never installed is skipped,
+        # a hard build dependency (`build_requires`, e.g. the daemon's RadioLib) never is.
         is_component = target != "" and self.stack(target) is None
         if is_component:
             items = all_items
         else:
             required = {dep for _, c in all_items if not c.optional for dep in c.build_requires}
-            items = [(s, c) for s, c in all_items if not c.optional or c.id in required]
+            items = [(s, c) for s, c in all_items if self._stack_scope_keeps(c, required)]
         ctx_err = self._auto_install_ctx_error(auto_install_ctx, {c.source.path for _, c in items})
         if ctx_err:
             return ActionResult(False, f"Refusing to update '{target or 'all'}': {ctx_err}",
