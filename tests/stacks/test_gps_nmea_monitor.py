@@ -339,6 +339,31 @@ def _ask_monitor(path):
     return json.loads(buf.split(b"\n", 1)[0])
 
 
+# Every field the readiness marker has. Pinning the schema keeps a position out of it in any form,
+# without searching its text: a timestamp or a pid may contain the coordinate's digits.
+_MARKER_KEYS = {"state", "detail", "sentences", "fixes", "nav", "updated", "pid"}
+
+
+def _marker_problems(m: dict) -> list:
+    bad = sorted(set(m) ^ _MARKER_KEYS)
+    bad += [k for k in ("sentences", "fixes", "nav", "updated", "pid")
+            if k in m and type(m[k]) is not int]
+    return bad
+
+
+def test_the_marker_check_is_not_fooled_by_a_timestamp_with_the_coordinate_digits():
+    m = {"state": "ready", "detail": "", "sentences": 4, "fixes": 1, "nav": 2,
+         "updated": 1791248078, "pid": 1131}                     # the failed CI run's timestamp
+    assert "4807" in json.dumps(m)                                # the old substring check flags it
+    assert _marker_problems(m) == []
+
+
+def test_the_marker_check_rejects_an_added_field():
+    m = {"state": "ready", "detail": "", "sentences": 4, "fixes": 1, "nav": 2,
+         "updated": 1, "pid": 1, "lat": 48.1173}
+    assert _marker_problems(m) == ["lat"]
+
+
 def test_monitor_socket_answers_the_feeds_snapshot_and_is_private(short_tmp_path):
     paths, fifo, out, ready, monitor, stop, t = _fifo_bridge(short_tmp_path)
     try:
@@ -353,7 +378,8 @@ def test_monitor_socket_answers_the_feeds_snapshot_and_is_private(short_tmp_path
         assert oct(os.stat(os.path.dirname(monitor.path)).st_mode & 0o777) == "0o700"
         assert GGA_3D + b"\r\n" in out.data                    # the consumer got its bytes
         marker = (short_tmp_path / "state" / "gps" / "meshcom" / "readiness.json").read_text()
-        assert "4807" not in marker and "lat" not in marker    # no coordinate on disk
+        m = json.loads(marker)
+        assert _marker_problems(m) == [] and m["state"] == "ready" and m["detail"] == ""
     finally:
         stop.set()
         t.join(3)
