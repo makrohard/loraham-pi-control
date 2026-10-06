@@ -131,7 +131,7 @@ def test_release_graywolf(env, svc):
     stop(env, "graywolf")
 
 
-def test_release_chat(env, svc):
+def test_release_chat(env, svc, record_property):
     """Chat is interactive: the controller presents a command instead of starting it, so the
     proof is that command running on a real terminal against the fake daemon."""
     stop(env, "kiss", require=False)
@@ -140,7 +140,8 @@ def test_release_chat(env, svc):
     # — a broken fixture must never freeze chat.
     _start(env, "daemon", timeout=300, attribute=False)
     comp = next(c for c in svc.stack("chat").components if c.id == "loraham-chat")
-    pty_readiness(svc.manual_start_command(comp), env, CHAT_DRAWS, stack="chat")
+    pty_readiness(svc.manual_start_command(comp), env, CHAT_DRAWS, stack="chat",
+                  record=record_property)
 
 
 def test_release_voice_gtk(env, svc):
@@ -168,7 +169,7 @@ def test_release_voice_gtk(env, svc):
     stop(env, "voice")
 
 
-def test_release_voice_terminal(env, svc, headless_box):
+def test_release_voice_terminal(env, svc, headless_box, record_property):
     """The terminal variant on a box with NO graphical session — the box LHPC ships it for.
 
     Nothing here is faked into place. With the display gone, LHPC's own start typed-SKIPS the
@@ -190,7 +191,8 @@ def test_release_voice_terminal(env, svc, headless_box):
     _start(env, "voice", timeout=300)
     cli = next(c for c in svc.stack("voice").components if c.id == "loraham-voice-cli")
     try:
-        pty_readiness(svc.manual_start_command(cli), env, VOICE_CLI_DRAWS, stack="voice")
+        pty_readiness(svc.manual_start_command(cli), env, VOICE_CLI_DRAWS, stack="voice",
+                      record=record_property)
     finally:
         stop(env, "voice")
         stop(env, "daemon")
@@ -288,7 +290,7 @@ def test_release_meshcore_repeater(env):
     _meshcore_mode(env, "chat")
 
 
-def test_release_meshcore_cli(env, svc):
+def test_release_meshcore_cli(env, svc, record_property):
     """The MeshCore CLI is an interactive component: proved on a terminal against the running
     companion, not by `--version`."""
     _start(env, "meshcore", timeout=900)
@@ -298,7 +300,7 @@ def test_release_meshcore_cli(env, svc):
     comp = next(c for c in svc.stack("meshcore").components if c.id == "meshcore-cli")
     try:
         pty_readiness(svc.manual_start_command(comp), env, MESHCLI_DRAWS, ready_timeout=90,
-                      stack="meshcore")
+                      stack="meshcore", record=record_property)
     finally:
         stop(env, "meshcore")
 
@@ -361,15 +363,19 @@ def test_release_reticulum(env, svc):
                                     "sideband is startable here but did not come up")
 
 
-def test_release_reticulum_nomadnet(env, svc):
+def test_release_reticulum_nomadnet(env, svc, record_property):
     """NomadNet is interactive: proved on a terminal against the running Reticulum."""
     require_prerequisite(env, "reticulum", left_by="test_release_reticulum")
     comp = next(c for c in svc.stack("reticulum").components if c.id == "nomadnet")
     try:
-        state = Path(env["LHPC_RUNTIME_ROOT"]) / "state"
+        root = Path(env["LHPC_RUNTIME_ROOT"])
+        # NomadNet's own log, and the start logs (those that exist) of the Reticulum node it
+        # talks to and of the other Reticulum components.
+        logs = (root / "state" / "nomadnet" / "logfile",
+                *sorted(p for name in ("rns", "lxmd", "meshchat", "sideband")
+                        for p in (root / "logs").glob(f"start-{name}-*.log")))
         pty_readiness(svc.manual_start_command(comp), env, NOMADNET_DRAWS, ready_timeout=90,
-                      stack="reticulum",
-                      logs=(state / "nomadnet" / "logfile", state / "reticulum" / "logfile"))
+                      stack="reticulum", logs=logs, record=record_property)
     finally:
         stop(env, "reticulum")
 

@@ -577,13 +577,15 @@ def test_the_log_names_the_rule_expects_are_the_ones_the_builder_writes(tmp_path
 
 # --- an interactive program's readiness: only evidence of breaking blames the stack -------------
 
-def _readiness_failure(command, tmp_path, *, expect="NEVER-DRAWN", logs=()):
+def _readiness_failure(command, tmp_path, *, expect="NEVER-DRAWN", logs=(), record=None):
     import os
+    import warnings
 
     from lhpc_testlab.release import pty_readiness
-    with pytest.raises(AssertionError) as exc:
+    with pytest.raises(AssertionError) as exc, warnings.catch_warnings():
+        warnings.simplefilter("ignore")             # a retry warns; its cases check `record`
         pty_readiness(command, dict(os.environ), expect, ready_timeout=1.5, hold=0.2,
-                      stack="reticulum", logs=logs)
+                      stack="reticulum", logs=logs, record=record)
     return str(exc.value)
 
 
@@ -614,3 +616,108 @@ def test_a_readiness_failure_carries_the_tails_of_the_named_logs(tmp_path):
     assert f"--- {app} (tail) ---" in msg and "APP-LOG-LAST-LINE" in msg
     assert "old line" not in msg                                      # a tail, not the whole log
     assert f"--- {daemon} (tail) ---" in msg and "not readable" in msg
+
+
+# --- a readiness timeout: its stack is captured, and a first one is retried once ----------------
+
+def _counted(tmp_path, first, then):
+    """A shell command that appends one line per start to a counter file and runs `first` on
+    the first start, `then` on every later one. Returns (command, counter)."""
+    counter = tmp_path / "starts"
+    return (f"echo start >> {counter}; "
+            f"if [ $(wc -l < {counter}) -eq 1 ]; then {first}; else {then}; fi"), counter
+
+
+def _hang_in_python():
+    import sys
+    return f"exec {sys.executable} -c 'import time; time.sleep(60)'"
+
+
+def test_a_first_start_that_times_out_is_retried_once_and_reported(tmp_path):
+    import os
+
+    from lhpc_testlab.release import pty_readiness
+    command, counter = _counted(tmp_path, _hang_in_python(), "printf 'READY'; sleep 30")
+    recorded = []
+    with pytest.warns(UserWarning) as warned:
+        drawn = pty_readiness(command, dict(os.environ), "READY", ready_timeout=1.5, hold=0.2,
+                              stack="reticulum", record=lambda k, v: recorded.append((k, v)))
+    assert b"READY" in drawn
+    assert counter.read_text().count("start") == 2
+    [(name, note)] = recorded
+    assert name == "readiness-retry" and "retried once" in note
+    assert "Fatal Python error" in note and "time.sleep" in note   # the first start's stack
+    assert any("retried once" in str(w.message) for w in warned)
+
+
+def test_a_start_that_times_out_twice_fails_unmarked_with_both_stacks(tmp_path):
+    command, counter = _counted(tmp_path, _hang_in_python(), _hang_in_python())
+    recorded = []
+    msg = _readiness_failure(command, tmp_path, record=lambda k, v: recorded.append((k, v)))
+    assert counter.read_text().count("start") == 2
+    [(name, note)] = recorded                 # the failed retry is in the JUnit too
+    assert name == "readiness-retry" and "Fatal Python error" in note
+    assert "STACK-REGRESSION" not in msg      # a dump is drawn after the abort; it blames nobody
+    assert msg.count("Fatal Python error") == 2 and "first start" in msg
+
+
+@pytest.mark.parametrize("first", [
+    "exit 3",                                                           # exited
+    "printf 'Traceback (most recent call last):\\n'; sleep 30",         # drew a traceback
+])
+def test_a_start_that_shows_it_is_broken_is_never_retried(tmp_path, first):
+    command, counter = _counted(tmp_path, first, "printf 'READY'; sleep 30")
+    msg = _readiness_failure(command, tmp_path, expect="READY")
+    assert counter.read_text().count("start") == 1
+    assert "STACK-REGRESSION stack=reticulum phase=readiness" in msg
+
+
+@pytest.mark.parametrize("then", [
+    "exit 3",                                                           # exited
+    "printf 'Traceback (most recent call last):\\n'; sleep 30",         # drew a traceback
+])
+def test_a_retried_start_that_breaks_blames_no_stack(tmp_path, then):
+    """The retry runs against what the aborted first start left behind, so its breakage may be
+    the harness's own doing: it fails, unmarked."""
+    command, counter = _counted(tmp_path, _hang_in_python(), then)
+    recorded = []
+    msg = _readiness_failure(command, tmp_path, expect="READY",
+                             record=lambda k, v: recorded.append((k, v)))
+    assert counter.read_text().count("start") == 2
+    assert [k for k, _v in recorded] == ["readiness-retry"]
+    assert "STACK-REGRESSION" not in msg and "first start" in msg
+
+
+def test_the_program_runs_without_core_dumps(tmp_path):
+    import os
+
+    from lhpc_testlab.release import pty_readiness
+    limit = tmp_path / "core-limit"
+    pty_readiness(f"ulimit -c > {limit}; printf 'READY'; sleep 30", dict(os.environ), "READY",
+                  ready_timeout=5, hold=0.2)
+    assert limit.read_text().strip() == "0"
+
+
+@pytest.mark.parametrize("fails", ["_pty_stop", "_pty_launch"])
+def test_a_retry_that_never_started_is_not_reported(tmp_path, monkeypatch, fails):
+    """The first start's cleanup, or the second launch, raises: no retry ran, so none is
+    reported, and the error is what the case fails on."""
+    import os
+
+    from lhpc_testlab import release
+    real, calls = getattr(release, fails), []
+
+    def once_then_raise(*a, **kw):
+        calls.append(1)
+        if (fails == "_pty_stop" and len(calls) == 1) or (fails == "_pty_launch"
+                                                          and len(calls) == 2):
+            if fails == "_pty_stop":
+                real(*a, **kw)                    # leave nothing running
+            raise OSError("injected")
+        return real(*a, **kw)
+    monkeypatch.setattr(release, fails, once_then_raise)
+    recorded = []
+    with pytest.raises(OSError, match="injected"):
+        release.pty_readiness(_hang_in_python(), dict(os.environ), "READY", ready_timeout=1.5,
+                              hold=0.2, record=lambda k, v: recorded.append((k, v)))
+    assert recorded == []

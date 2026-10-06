@@ -15,6 +15,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+import warnings
 from pathlib import Path
 
 from lhpc.core import build_regression as br
@@ -412,7 +413,8 @@ def _log_tails(logs, size: int = 1500) -> str:
 
 def pty_readiness(command: str, env: dict, expect: str, *, ready_timeout: float = 60.0,
                   hold: float = 5.0, stack: str | None = None,
-                  logs=()) -> bytes:  # `logs` tails go in unfiltered: name lab-identity logs only
+                  logs=(), record=None) -> bytes:
+    # `logs` tails go in unfiltered: name lab-identity logs only
     """Run an INTERACTIVE component the way an operator does — on a real terminal — and prove
     it: it must draw its OWN screen, still be running afterwards, and exit CLEANLY when asked.
     Returns what it drew.
@@ -439,73 +441,152 @@ def pty_readiness(command: str, env: dict, expect: str, *, ready_timeout: float 
     the program is started, so a typo fails immediately instead of an hour in. `logs` are files
     whose tails every readiness failure appends (the program's own log, its daemon's). The
     SIGTERM escalation below stays unmarked on purpose.
-    """
-    import fcntl
-    import pty
-    import struct
-    import termios
 
+    A readiness TIMEOUT captures where the program is stuck before anything else happens: it
+    runs with `PYTHONFAULTHANDLER=1`, and its process group is sent SIGABRT, whose thread dump is
+    drained from the terminal for ~3 s and appended. Whether it is broken, and whom that blames,
+    is still decided from what it drew BEFORE the abort.
+
+    ONE retry: a first start that times out with no evidence of breaking (still running,
+    nothing broken drawn) is stopped and started once more, the same command. Only a second
+    start that draws passes. Every retry, with the first start's dump and log tails, is
+    reported when it starts, as a warning and through `record(name, value)` — pytest's
+    `record_property` — into the JUnit, whether the second start then passes or fails. A start that hangs twice still fails; one that exits or draws an error is
+    never retried. A retried start's failure is never marked: it ran after an abort, against
+    whatever the first start left behind. The program runs without core dumps.
+    """
     mark = f"{stack_regression(stack, 'readiness')}\n" if stack else ""
-    master, slave = pty.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
     env = dict(env)
     # Present-but-empty is the CI case, and ncurses reports it as TERM="unknown" and exits.
     if env.get("TERM", "") in ("", "unknown", "dumb"):
         env["TERM"] = "xterm-256color"
     env["LINES"], env["COLUMNS"] = "40", "120"
+    env["PYTHONFAULTHANDLER"] = "1"            # SIGABRT then dumps every thread's stack
+    first = ""
+    for attempt in (1, 2):
+        proc, master = _pty_launch(command, env)
+        if attempt == 2:
+            # Reported once the retry is really running — after the first start was stopped
+            # and the second launched — and before it is judged, so a retry that fails is too.
+            note = f"{command!r} was started a second time{first}"
+            warnings.warn(note, stacklevel=2)
+            if record:
+                record("readiness-retry", note)
+        try:
+            drawn = _pty_read(master, proc, expect, ready_timeout)
+            tail = drawn[-600:].decode("utf-8", "replace")
+            broken = proc.poll() is not None or bool(_DREW_AN_ERROR.search(drawn))
+            matched = _matches(drawn, expect)
+            dump = "" if (matched or broken) else _pty_abort(proc, master)
+            if attempt == 1 and not matched and not broken:
+                first = (f"\n--- first start: timed out after {ready_timeout} s, retried once. "
+                         f"It drew: {tail!r}{dump}{_log_tails(logs)}\n--- end of first start")
+                continue                            # `finally` stops it; then the retry
+            # A timeout without evidence blames no stack; neither does a retried start, which
+            # runs against whatever the aborted first start left (a held connection, a lock).
+            why = mark if broken and not first else ""
+            assert drawn, (f"{why}{command!r} drew nothing on its terminal within "
+                           f"{ready_timeout} s{dump}{_log_tails(logs)}{first}")
+            assert matched, (
+                f"{why}{command!r} did not draw anything matching {expect!r} within "
+                f"{ready_timeout} s. It drew: {tail!r}{dump}{_log_tails(logs)}{first}")
+            time.sleep(hold)
+            assert proc.poll() is None, (
+                f"{mark if not first else ''}{command!r} exited on its own (rc={proc.returncode}) — not a running "
+                f"app. It drew: {tail!r}{_log_tails(logs)}{first}")
+        finally:
+            killed = _pty_stop(proc, master)
+        assert not killed, (f"{command!r} ignored SIGTERM and had to be killed — it does not "
+                            f"exit cleanly")
+        return drawn
+    raise AssertionError("unreachable")          # the second start returns or fails
+
+
+def _pty_launch(command: str, env: dict):
+    """The command on a fresh terminal, in its own process group. Returns (process, master
+    fd)."""
+    import fcntl
+    import pty
+    import struct
+    import termios
+
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
     # `manual_start_command` renders what the operator PASTES INTO A SHELL — it carries `cd`,
     # `&&` and a trailing `stty sane`. Run it through a shell on a real terminal, exactly as the
     # documentation tells the operator to; splitting it into argv would execute `cd` as a program.
-    proc = subprocess.Popen(["/bin/bash", "-lc", command], stdin=slave, stdout=slave,
-                            stderr=slave, env=env, start_new_session=True, close_fds=True)
+    # No core file: the abort on a timeout would otherwise leave one in the program's working
+    # directory — a source checkout, whose identity checks an untracked file can trip. Set by a
+    # shell in front of the operator's, not by a `preexec_fn`: this process has threads, and no
+    # Python should run between its fork and exec.
+    proc = subprocess.Popen(["/bin/bash", "-c", 'ulimit -c 0; exec /bin/bash -lc "$1"', "bash",
+                             command], stdin=slave, stdout=slave, stderr=slave, env=env,
+                            start_new_session=True, close_fds=True)
     os.close(slave)
+    return proc, master
+
+
+def _pty_read(master: int, proc, expect: str, timeout: float) -> bytes:
+    """Read until what we are waiting for is on the screen, the program ends, or the deadline —
+    not until some byte count: a full-screen TUI paints in several writes and the wanted line
+    can be the last of them, so stopping at the first chunk would fail a healthy program."""
+    import select
     drawn = b""
-    try:
-        import select
-        deadline = time.monotonic() + ready_timeout
-        # Read until what we are waiting for is on the screen, not until some byte count: a
-        # full-screen TUI paints in several writes and the wanted line can be the last of them,
-        # so stopping at the first chunk would fail a healthy program.
-        while time.monotonic() < deadline and not _matches(drawn, expect):
-            r, _, _ = select.select([master], [], [], 1.0)
-            if r:
-                try:
-                    chunk = os.read(master, 4096)
-                except OSError:
-                    break
-                if not chunk:
-                    break
-                drawn += chunk
-            if proc.poll() is not None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and not _matches(drawn, expect):
+        r, _, _ = select.select([master], [], [], 1.0)
+        if r:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
                 break
-        tail = drawn[-600:].decode("utf-8", "replace")
-        broken = proc.poll() is not None or bool(_DREW_AN_ERROR.search(drawn))
-        why = mark if broken else ""                # a timeout without evidence blames no stack
-        assert drawn, (f"{why}{command!r} drew nothing on its terminal within "
-                       f"{ready_timeout} s{_log_tails(logs)}")
-        assert _matches(drawn, expect), (
-            f"{why}{command!r} did not draw anything matching {expect!r} within "
-            f"{ready_timeout} s. It drew: {tail!r}{_log_tails(logs)}")
-        time.sleep(hold)
-        assert proc.poll() is None, (
-            f"{mark}{command!r} exited on its own (rc={proc.returncode}) — not a running app. "
-            f"It drew: {tail!r}{_log_tails(logs)}")
-        killed = False
-    finally:
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            proc.terminate()
-        try:
-            proc.wait(timeout=20)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait(timeout=10)
-            killed = True
-        os.close(master)
-    assert not killed, (f"{command!r} ignored SIGTERM and had to be killed — it does not exit "
-                        f"cleanly")
+            if not chunk:
+                break
+            drawn += chunk
+        if proc.poll() is not None:
+            break
     return drawn
+
+
+def _pty_abort(proc, master: int, drain: float = 3.0) -> str:
+    """SIGABRT the program's process group and return what it printed for ~`drain` seconds: with
+    `PYTHONFAULTHANDLER=1` a Python program dumps every thread's stack there."""
+    import select
+    try:
+        os.killpg(proc.pid, signal.SIGABRT)
+    except (ProcessLookupError, PermissionError):
+        return ""
+    out = b""
+    deadline = time.monotonic() + drain
+    while time.monotonic() < deadline:
+        r, _, _ = select.select([master], [], [], 0.2)
+        if r:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            out += chunk
+    text = out.decode("utf-8", "replace")[-6000:]
+    return f"\n--- stack at the timeout (SIGABRT, faulthandler) ---\n{text}"
+
+
+def _pty_stop(proc, master: int) -> bool:
+    """SIGTERM the program's process group, SIGKILL after 20 s; True when it had to be killed."""
+    killed = False
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        proc.terminate()
+    try:
+        proc.wait(timeout=20)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=10)
+        killed = True
+    os.close(master)
+    return killed
 
 
 def start_component(env: dict, component: str, timeout: float = 900.0, *,

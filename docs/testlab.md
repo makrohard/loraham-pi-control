@@ -139,6 +139,9 @@ subprocesses import `lhpc` from the editable install, i.e. whichever checkout wa
     `attributable = true` (a compile, a patch, a check over fetched code), never at a fetch. An
     interactive program's readiness is marked only when it exited or drew a traceback or an
     exception line; a timeout without that evidence is unmarked and carries the tails of its logs.
+    Such a timeout also captures the program's stack (SIGABRT with Python's faulthandler) and gets
+    ONE retry, since a flaky third-party UI start is not the stack's regression: the first start's
+    stack and log tails are kept as a warning in the JUnit, and only a second start that draws passes.
     A regression that only hangs is therefore unmarked: the release stops at its proof, nothing is
     released and nothing frozen (a deliberate trade). An automation may freeze a stack only on a
     marked failure.
