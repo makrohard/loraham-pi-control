@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.5
+
+Fixed
+
+- The release check's interactive start test retries a stalled third-party UI once and keeps the first attempt's
+  stack.
+- A GPS monitor test no longer fails when the time contains its test latitude.
+
 ## 0.12.4
 
 Fixed
