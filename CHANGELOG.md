@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.6
+
+Fixed
+
+- The test lab's checks of a spawned helper wait until the helper's command line is visible, so they no longer
+  fail on a slow runner.
+
 ## 0.12.5
 
 Fixed
