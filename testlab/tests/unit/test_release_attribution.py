@@ -721,3 +721,55 @@ def test_a_retry_that_never_started_is_not_reported(tmp_path, monkeypatch, fails
         release.pty_readiness(_hang_in_python(), dict(os.environ), "READY", ready_timeout=1.5,
                               hold=0.2, record=lambda k, v: recorded.append((k, v)))
     assert recorded == []
+
+
+def test_a_start_whose_terminal_closed_before_it_was_reaped_is_an_exit(tmp_path, monkeypatch):
+    """The race CI hit: the program's terminal closes BEFORE its exit can be reaped, so
+    `poll()` still says "running" right after an exit. That is an exit — marked, never retried
+    as a pure timeout. Modelled with a process whose `poll()` answers "running" until waited."""
+    from lhpc_testlab import release
+    real_launch = release._pty_launch
+
+    class NotYetReaped:
+        def __init__(self, proc):
+            self._proc, self._waited = proc, False
+
+        def poll(self):
+            return self._proc.poll() if self._waited else None
+
+        def wait(self, timeout=None):
+            self._waited = True
+            return self._proc.wait(timeout)
+
+        def __getattr__(self, name):
+            return getattr(self._proc, name)
+
+    def launch(command, env):
+        proc, master = real_launch(command, env)
+        return NotYetReaped(proc), master
+    monkeypatch.setattr(release, "_pty_launch", launch)
+    command, counter = _counted(tmp_path, "exit 3", "printf 'READY'; sleep 30")
+    msg = _readiness_failure(command, tmp_path, expect="READY")
+    assert counter.read_text().count("start") == 1
+    assert "STACK-REGRESSION stack=reticulum phase=readiness" in msg
+
+
+def test_a_read_error_other_than_a_closed_terminal_propagates_unmarked(tmp_path, monkeypatch):
+    """Only EOF and EIO mean the program's terminal closed. Any other read error (EBADF here)
+    is this harness's own fault: it propagates, and never reads as a marked exit."""
+    import errno
+    import os
+    import types
+
+    from lhpc_testlab import release
+    fake_os = types.SimpleNamespace(**{k: getattr(os, k) for k in dir(os) if not k.startswith("__")})
+
+    def read(fd, n):
+        raise OSError(errno.EBADF, "injected")
+    fake_os.read = read
+    monkeypatch.setattr(release, "os", fake_os)
+    with pytest.raises(OSError) as exc:
+        release.pty_readiness("printf 'READY'; sleep 30", dict(os.environ), "READY",
+                              ready_timeout=3, hold=0.2, stack="reticulum")
+    assert exc.value.errno == errno.EBADF
+    assert "STACK-REGRESSION" not in str(exc.value)

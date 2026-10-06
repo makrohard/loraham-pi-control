@@ -6,6 +6,8 @@ They drive the REAL `lhpc` executable and read LHPC's own predicates. Nothing he
 """
 from __future__ import annotations
 
+import contextlib
+import errno
 import os
 import pathlib
 import re
@@ -473,9 +475,14 @@ def pty_readiness(command: str, env: dict, expect: str, *, ready_timeout: float 
             if record:
                 record("readiness-retry", note)
         try:
-            drawn = _pty_read(master, proc, expect, ready_timeout)
+            drawn, ended = _pty_read(master, proc, expect, ready_timeout)
+            if ended:
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=2)            # for its exit status in the message
             tail = drawn[-600:].decode("utf-8", "replace")
-            broken = proc.poll() is not None or bool(_DREW_AN_ERROR.search(drawn))
+            # ENDED, not `poll()`: the terminal closes before the exit can be reaped, and a
+            # program read as still running there would be retried as a pure timeout.
+            broken = ended or proc.poll() is not None or bool(_DREW_AN_ERROR.search(drawn))
             matched = _matches(drawn, expect)
             dump = "" if (matched or broken) else _pty_abort(proc, master)
             if attempt == 1 and not matched and not broken:
@@ -526,10 +533,19 @@ def _pty_launch(command: str, env: dict):
     return proc, master
 
 
-def _pty_read(master: int, proc, expect: str, timeout: float) -> bytes:
+def _pty_read(master: int, proc, expect: str, timeout: float) -> tuple[bytes, bool]:
     """Read until what we are waiting for is on the screen, the program ends, or the deadline —
     not until some byte count: a full-screen TUI paints in several writes and the wanted line
-    can be the last of them, so stopping at the first chunk would fail a healthy program."""
+    can be the last of them, so stopping at the first chunk would fail a healthy program.
+
+    Returns (drawn, ended). `ended` is True when the program's terminal closed (EOF or EIO on
+    the pty; any other read error propagates) or the process was reaped: its terminal closes BEFORE its parent can reap it, so right
+    after an exit `proc.poll()` can still say "running", and only the terminal says it ended.
+
+    EOF means EVERY holder of the terminal closed it. That cannot be a healthy start only
+    because `manual_start_command` (lhpc/core/service_lifecycle_ops.py) ends in `; stty sane`:
+    that tail keeps the `bash -lc` running, and holding the terminal, for the whole run.
+    Without it, a program that briefly closes its stdio could read as ended."""
     import select
     drawn = b""
     deadline = time.monotonic() + timeout
@@ -538,14 +554,16 @@ def _pty_read(master: int, proc, expect: str, timeout: float) -> bytes:
         if r:
             try:
                 chunk = os.read(master, 4096)
-            except OSError:
-                break
+            except OSError as exc:
+                if exc.errno != errno.EIO:          # only EIO says the terminal closed;
+                    raise                           # anything else is this harness's fault
+                return drawn, True
             if not chunk:
-                break
+                return drawn, True
             drawn += chunk
         if proc.poll() is not None:
-            break
-    return drawn
+            return drawn, True
+    return drawn, False
 
 
 def _pty_abort(proc, master: int, drain: float = 3.0) -> str:
