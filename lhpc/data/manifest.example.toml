@@ -903,7 +903,7 @@ main = "graywolf"
   # auto-install run all fetch it — and adds NO system dependency (curl is already a bootstrap
   # package, dpkg-deb ships with dpkg), so bootstrap-deps.sh stays untouched.
   build_steps = [
-    { argv = ["bash", "{asset}/scripts/graywolf-fetch.sh", "{runtime}/build/tools/graywolf", "0.14.13"], announce = "[fetch] graywolf 0.14.13 upstream .deb -> build/tools/graywolf (sha256-verified, unpacked rootless)" },
+    { argv = ["bash", "{asset}/scripts/graywolf-fetch.sh", "{runtime}/build/tools/graywolf", "0.14.14"], announce = "[fetch] graywolf 0.14.14 upstream .deb -> build/tools/graywolf (sha256-verified, unpacked rootless)" },
   ]
   bin = "build/tools/graywolf/usr/bin/graywolf"
   # The marker FILENAME carries the version on purpose: with only `bin`, `is_built` is satisfied
@@ -913,7 +913,7 @@ main = "graywolf"
   # build step above. It is deliberately NOT the fetch script's own `.lhpc-graywolf-version`
   # stamp: LHPC deletes the marker before every build, which would defeat the script's
   # already-at-this-version short-circuit (the one thing that lets a rebuild work offline).
-  build_marker = "build/tools/graywolf/.lhpc-built-0.14.13"
+  build_marker = "build/tools/graywolf/.lhpc-built-0.14.14"
   # The tree the build OWNS. There is no `source` for `clean` to remove here, so name the
   # artifact directory explicitly or "Clean all" would leave the graywolf binaries behind.
   build_root = "build/tools/graywolf"
@@ -1835,8 +1835,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "3c30c07e413309bd3520e26ea2d2d178c596ca4e"
-    pin_tag = "3c30c07"
+    pin_commit = "c2335d12f59b2f59c76274cc7c4708c8b7ed7616"
+    pin_tag = "c2335d1"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2076,8 +2076,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "3c30c07e413309bd3520e26ea2d2d178c596ca4e"
-    pin_tag = "3c30c07"
+    pin_commit = "c2335d12f59b2f59c76274cc7c4708c8b7ed7616"
+    pin_tag = "c2335d1"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2135,8 +2135,8 @@ main = "meshcom-qemu"
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
     # The setup step fetches from this remote (--src), and a repo test keeps the two identical.
     path = "src/MeshCom-Firmware"
-    pin_commit = "62095658c2f01e6faef63d526face7571f68d8f5"
-    pin_tag = "v4.35v"
+    pin_commit = "e1e2acea6a18285301b57f32caacd0beb62638f2"
+    pin_tag = "v4.40a"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 
@@ -2450,8 +2450,8 @@ main = "meshcore-node"
     # openhop_core — so what is known-working is the upstream revision itself.
     [stack.component.source]
     path = "src/openhop-core"
-    pin_commit = "cedb26b4b5c687856bcf6bdd74dc945597d7fc8b"
-    pin_tag = "v1.0.10-423-gcedb26b"
+    pin_commit = "6e6dcf65f8207bc23729bfc8ae01fcf8b2218fe0"
+    pin_tag = "v1.0.10-441-g6e6dcf6"
     remote = "https://github.com/openhop-dev/openhop_core.git"
     branch = "dev"
 
@@ -2773,8 +2773,8 @@ main = "meshcore-node"
     # (-t -p -j -D) are all present; it byte-compiles under Python 3.11 (LHPC supports >=3.11),
     # and the byte-compile build step above fails the BUILD with file+line if a future pin
     # regresses on 3.11.
-    pin_commit = "d4eac61bd30b9f919143499fa669fb40fd869b5d"
-    pin_tag = "v1.6.4"
+    pin_commit = "a43041fff80223033f4eaad0f6b5882e3d0677e2"
+    pin_tag = "v1.6.5"
     remote = "https://github.com/meshcore-dev/meshcore-cli.git"
     branch = "main"
 
@@ -2796,8 +2796,8 @@ main = "meshcore-node"
     path = "src/openhop-repeater"
     remote = "https://github.com/openhop-dev/openhop_repeater.git"
     branch = "dev"
-    pin_commit = "b846c79123c21c08424f5d62cd9dbf2bedfa6e0d"
-    pin_tag = "1.1.4-70-gb846c79"
+    pin_commit = "9c958e3111604aca5ab664c9feead8c8bc5e4240"
+    pin_tag = "1.1.4-151-g9c958e3"
 
 [[stack]]
 id = "reticulum"
@@ -2841,8 +2841,8 @@ note = "Pins, chip, TCXO and PA settings come from the hardware setup chosen wit
 path = "src/reticulum"
 remote = "https://github.com/markqvist/Reticulum.git"
 branch = "master"
-pin_commit = "d5962d14eb4fbf4a34a0b83e6942534a4965dd17"
-pin_tag = "1.5.2-91-gd5962d14"
+pin_commit = "e40191b3d193b46b7f2d8a44424a594cd758839b"
+pin_tag = "1.5.5-1-ge40191b3"
 [stack.component.process]
 exec_name = "loraham-rns-node"
 [stack.component.run_env]
@@ -3257,8 +3257,8 @@ note = "Interactive ncurses browser (needs a real TTY; no headless mode) — sta
 path = "src/nomadnet"
 remote = "https://github.com/markqvist/NomadNet.git"
 branch = "master"
-pin_commit = "cfe23af68dfea725f4d88d95ffe9a4ef0e188941"
-pin_tag = "1.2.0-123-gcfe23af"
+pin_commit = "b2f852c9e0efc68d89d9185939f42ec0c2fee125"
+pin_tag = "1.4.4"
 [stack.component.process]
 exec_name = "nomadnet"
 [[stack.component.pre_steps]]
@@ -3302,8 +3302,8 @@ note = "Propagation is OFF by default: enabling it on a duty-limited link is a d
 path = "src/lxmf"
 remote = "https://github.com/markqvist/LXMF.git"
 branch = "master"
-pin_commit = "e52016c20fbbd0bb9082a6e6d5177f5f4eeff1c7"
-pin_tag = "1.1.0-12-ge52016c"
+pin_commit = "c3ff2d6dc2f256daab896dadc044dd5a913ecbb7"
+pin_tag = "1.2.0"
 [stack.component.process]
 exec_name = "lxmd"
 [[stack.component.pre_steps]]
@@ -3363,8 +3363,8 @@ KIVY_HOME = "{runtime}/state/sideband/kivy"
 path = "src/sideband"
 remote = "https://github.com/markqvist/Sideband.git"
 branch = "main"
-pin_commit = "1402bb6a492e87dc5224139a300cbb547487f7b6"
-pin_tag = "2.1.0"
+pin_commit = "ef572b58e88ff4e4326d51778336922a53b2a03f"
+pin_tag = "2.2.0"
 [stack.component.process]
 exec_name = "sideband"
 [[stack.component.pre_steps]]

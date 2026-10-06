@@ -32,6 +32,9 @@ BASE_URL="https://github.com/chrissnell/graywolf/releases/download"
 #   key: <version>/<debian-arch>
 sums() {
     case "$1" in
+        0.14.14/arm64) echo "5cf6b193ac5083fb64e58de1cfc801b28eeaf848dd8a23783c9638b1548fe605" ;;
+        0.14.14/armhf) echo "8ad0f31e677a4e64c3f47e7a70f24fd2c9cd38f88b1c99337a72012cd72dfd6f" ;;
+        0.14.14/amd64) echo "f074bec1c394f88d5b3132e851a91189bf811c826975f74476c3a6ab193874e9" ;;
         0.14.13/arm64) echo "1c85cb35e8ffbf364aa7fccc4b62f2c344e847739f4323ba5fac663de7167ed7" ;;
         0.14.13/armhf) echo "4885291f0138c9417ffef415d0f473c451d68742ccdd4f9cb3951dcc5fd933fa" ;;
         0.14.13/amd64) echo "660e79f0d0779575fb049506dc05a1d96799c697a0c94598cbf7eaf64dd98360" ;;

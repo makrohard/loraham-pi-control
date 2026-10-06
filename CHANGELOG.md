@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.7
+
+- meshcom-qemu-raspi: 3c30c07e4 -> c2335d12f (c2335d1), used by meshcom-gps-relay, meshcom-qemu
+- MeshCom-Firmware: 62095658c -> e1e2acea6 (v4.40a), used by meshcom-firmware
+- openhop-core: cedb26b4b -> 6e6dcf65f (v1.0.10-441-g6e6dcf6), used by meshcore-node
+- meshcore-cli: d4eac61bd -> a43041fff (v1.6.5), used by meshcore-cli
+- openhop-repeater: b846c7912 -> 9c958e311 (1.1.4-151-g9c958e3), used by openhop-repeater-src
+- reticulum: d5962d14e -> e40191b3d (1.5.5-1-ge40191b3), used by rns
+- nomadnet: cfe23af68 -> b2f852c9e (1.4.4), used by nomadnet
+- lxmf: e52016c20 -> c3ff2d6dc (1.2.0), used by lxmd
+- sideband: 1402bb6a4 -> ef572b58e (2.2.0), used by sideband
+- extra.graywolf: 0.14.13 -> 0.14.14 (0.14.14)
+
 ## 0.12.6
 
 Fixed
