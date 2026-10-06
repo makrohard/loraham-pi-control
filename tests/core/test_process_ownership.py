@@ -964,3 +964,52 @@ def test_rollback_takes_what_the_start_verified_last_started_first():
     assert rollback_ids(results, keep={"loraham-daemon"}) == ["ui", "gps"]
     assert rollback_ids(results) == ["ui", "gps", "loraham-daemon"]
     assert rollback_ids([]) == []
+
+
+# --- the exec window: a just-spawned process's identity is waited for, within a bound -------
+
+def _identity_after(life, pid, seconds):
+    """The real /proc identity of `pid`, but with an empty exe and argv until `seconds` have
+    passed — the exec window right after a spawn, stretched the way a loaded box stretches it."""
+    real, start = life._proc_identity, time.monotonic()
+
+    def read(p):
+        ident = real(p)
+        if ident is not None and time.monotonic() - start < seconds:
+            ident = dict(ident, exec="", argv_fp="", argv_len=0)
+        return ident
+    return read
+
+
+def test_an_identity_that_completes_late_is_still_captured_complete(tmp_path, reaper):
+    life = _life(tmp_path)
+    p = _leader(reaper)
+    life._proc_identity = _identity_after(life, p.pid, 0.5)
+    assert life._identity_complete(life._capture_identity(p.pid))
+
+
+def test_an_identity_that_never_completes_is_returned_weak_within_the_bound(tmp_path, reaper):
+    life = _life(tmp_path)
+    p = _leader(reaper)
+    life._proc_identity = _identity_after(life, p.pid, 3600)
+    t0 = time.monotonic()
+    ident = life._capture_identity(p.pid)
+    waited = time.monotonic() - t0
+    assert ident is not None and not life._identity_complete(ident)   # fail-closed
+    assert Lifecycle.CAPTURE_WAIT_S <= waited < Lifecycle.CAPTURE_WAIT_S + 1.0
+
+
+def test_a_process_that_already_ended_is_not_waited_for(tmp_path, reaper):
+    """A component that crashes at once is a zombie until reaped: its /proc entry stays, with
+    an empty exe and argv. Its identity can never complete, so the capture must not wait."""
+    life = _life(tmp_path)
+    p = subprocess.Popen(["true"], start_new_session=True)
+    reaper.append(p)                       # NOT waited on here: it stays a zombie
+    deadline = time.monotonic() + 5
+    while life._proc_alive(p.pid) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert not life._proc_alive(p.pid)
+    t0 = time.monotonic()
+    ident = life._capture_identity(p.pid)
+    assert time.monotonic() - t0 < Lifecycle.CAPTURE_WAIT_S / 4
+    assert not life._identity_complete(ident)

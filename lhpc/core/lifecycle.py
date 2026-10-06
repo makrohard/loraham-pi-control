@@ -898,16 +898,24 @@ class Lifecycle:
 
     _identity_complete = staticmethod(procident.identity_complete)   # THE shared predicate
 
+    CAPTURE_WAIT_S = 2.0       # bounded wait for a just-spawned process's identity to complete
+    CAPTURE_POLL_S = 0.05
+
     def _capture_identity(self, pid: int) -> dict | None:
-        """Capture one COMPLETE process identity, briefly retrying so a transient empty
-        /proc/<pid>/exe or cmdline read under load doesn't record a weak identity."""
-        ident = None
-        for _ in range(10):
+        """Capture one COMPLETE process identity, waiting up to `CAPTURE_WAIT_S` so the exec
+        window right after a spawn (an empty /proc/<pid>/exe or cmdline, longer on a loaded
+        box) doesn't record a weak identity. A process that has already ended is not waited
+        for. Still fail-closed: an identity that is not complete by then is returned as it is,
+        and no record is made from it."""
+        deadline = time.monotonic() + self.CAPTURE_WAIT_S
+        while True:
             ident = self._proc_identity(pid)
-            if ident is None or (ident.get("exec") and ident.get("argv_len")):
-                break
-            time.sleep(0.02)
-        return ident
+            # A process that already ended (a zombie still has a /proc entry, with an empty
+            # exe and argv) will never complete: waiting for it only delays a failed start.
+            if (ident is None or self._identity_complete(ident) or not self._proc_alive(pid)
+                    or time.monotonic() >= deadline):
+                return ident
+            time.sleep(self.CAPTURE_POLL_S)
 
     def record_launch(self, stack: Stack, comp: Component, pid: int | None,
                       band: str = "", ident: dict | None = None, role: str = "",
