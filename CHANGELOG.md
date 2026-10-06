@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.9
+
+Fixed
+
+- `lhpc update <stack>` now also updates the stack's installed optional components (e.g. meshcore-cli, nomadnet,
+  lxmd, sideband) whose pins moved; like a required one, a running one makes the update refuse until it is stopped.
+
 ## 0.12.8
 
 Fixed
