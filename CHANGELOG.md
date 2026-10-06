@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.8
+
+Fixed
+
+- The controller now waits up to 2 s for a just-started component's process identity to become complete, reducing
+  the chance of leaving it running unowned on a loaded box.
+- The release check no longer reads a program that exited as a stalled one (and retries it); an exit is reported as
+  the stack's failure.
+
 ## 0.12.7
 
 - meshcom-qemu-raspi: 3c30c07e4 -> c2335d12f (c2335d1), used by meshcom-gps-relay, meshcom-qemu
