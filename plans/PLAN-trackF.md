@@ -1,4 +1,4 @@
-# Plan v2 — Track F: install channels without nagging, the Meshtastic web client as its own component
+# Plan v3 — Track F: install channels without nagging, the Meshtastic web client as its own component
 
 Base `origin/dev` 254bbae3; analysis MT-WEB-CLIENT (61e18c6d). Repos: loraham-pi-control (C),
 lhpc-binaries (B), lhpc-release-bot (R). binary = prebuilt known-working, no questions; rest compiled/fetched.
@@ -10,6 +10,7 @@ lhpc-binaries (B), lhpc-release-bot (R). binary = prebuilt known-working, no que
 | 3 packets strictly sequenced, shared files named; a live proof per packet | F5 |
 | 4 nothing future is called measured ("to be measured") | F3, F6 |
 | 5 the three decisions neutral, alternatives and trade-offs, recommendation on its own line | D1–D3 |
+| v2 → v3 (round 2): `dev` named honestly = the latest lab-built HEAD snapshot; staleness bounded (weekly bot build + on request) | F3 |
 
 ## F1 — The measured case: "I had to compile MeshCom by hand"
 
@@ -34,10 +35,9 @@ then `build-meshcom-qemu.log` (the compile).
 
 ## F2 — Binary without nagging
 
-**Compatible:** an index entry whose commit equals the manifest pin for every covered component
-(`check_pins`, unchanged, exact) AND whose recorded build-input digest equals `sha256(build_inputs_text
-(comp))` computed by THIS controller (the byte-exact sidecar `is_built` compares,
-`service_lifecycle_ops.py:5148-5170`).
+**Compatible:** an entry whose commits equal the manifest pins for every covered component (`check_pins`,
+exact) AND whose build-input digest equals `sha256(build_inputs_text(comp))` computed here (the
+byte-exact sidecar `is_built` compares, `service_lifecycle_ops.py:5148-5170`).
 
 1. **C1, his case — narrowed.** The stale-pin refusal at `service_binary_ops.py:283-291` becomes the
    adoption the same loop already performs for a MISSING clone under the held locks (`:321`), with
@@ -83,13 +83,15 @@ binary install replaces); version-bearing marker `.lhpc-built-<version>`; `build
 |---|---|---|---|
 | `binary` (default, known-working) | the manifest pin's release `build.tar`, from upstream | manifest sha256 (today) | release-verify lane |
 | `stable` | the newest upstream release, republished by lhpc-binaries | index-v3 sha256 | the entry's smoke |
-| `dev` | the newest built upstream commit = upstream `main` HEAD when it was built | index-v3 sha256 | the entry's smoke |
+| `dev` | the latest lab-built snapshot of upstream `main` HEAD (may trail HEAD, bounded below) | index-v3 sha256 | the entry's smoke |
 
-- **dev = latest commit.** The B2 builder takes NO ref: `git ls-remote https://github.com/meshtastic/
-  web refs/heads/main` at run time, builds that commit (`pnpm install --frozen-lockfile && pnpm run
-  build && pnpm run package`; Node on the runner, never a box), records it. Refresh = a `build-binary`
-  dispatch, `stack = meshtastic-web` ("on request", decision 2). The box's `dev` = the newest `dev`
-  entry; the plan shows commit + build date. No arbitrary-ref lane.
+- **dev = the latest lab-built HEAD snapshot.** The B2 builder takes NO ref: `git ls-remote
+  https://github.com/meshtastic/web refs/heads/main` at run time, builds that commit (`pnpm install
+  --frozen-lockfile && pnpm run build && pnpm run package`; Node on the runner, never a box). The box
+  installs the newest `dev` entry and never triggers a build; plan and status show its commit and
+  build date. Staleness bound: the weekly bot run (R1) dispatches a dev build when upstream HEAD moved
+  past the newest entry, so the snapshot trails HEAD by at most ~7 days plus one build; a
+  `build-binary` dispatch (`stack = meshtastic-web`) refreshes it on request. No arbitrary-ref lane.
 - `stable`/`dev` come from index-v3 (key `meshtastic-web`): upstream has no digest, the guard needs a
   lab proof. `pinned` (compiled): typed refusal "no compiled lane".
 - **Lab check (fail-closed), the web entry's mandatory smoke:** meshtasticd from the index-v3
@@ -104,8 +106,8 @@ binary install replaces); version-bearing marker `.lhpc-built-<version>`; `build
   meshtastic (`_MARKER_RECORDED` loses `extra.meshtastic-web`, `bot/cli.py:818`); `autofreeze` maps
   `meshtastic-web` to the component; on a new upstream release and on a meshtasticd pin move the bot
   dispatches the builder for the release tag, so `stable` stays lab-proven.
-- **Status:** `status --versions` shows version + selector from `web.provenance` (`stable`/`dev` read
-  `differs`): no claimed client that is not served (0.3.12 (a)); the lane proves (c). Pin move: D3.
+- **Status:** version + selector from `web.provenance` (`stable`/`dev` read `differs`): no claimed
+  client that is not served (0.3.12 (a)); the lane proves (c). Pin move: D3.
 - **Migration:** `meshtastic-web` reads *not built* once → one 2 MB fetch; the meshtastic sidecar
   loses a line → binary boxes reinstall once (~53 MB), source boxes rebuild (time to be measured in
   the C3 live row); the old `build/tools/meshtasticd/web` (2 MB) stays on source boxes (CHANGELOG).
@@ -114,8 +116,7 @@ binary install replaces); version-bearing marker `.lhpc-built-<version>`; `build
 
 `--source binary` = the pinned `.deb` (today's build step; the default); `--source stable` = today's
 `--upstream` (latest release, verified against its `checksums.txt`); `--upstream` stays as a hidden
-alias. `pinned`/`dev`: typed refusal "graywolf has no compiled lane" — NOT decided, a ToDo.
-Unchanged: fetch script, checksum check, `release_repo`, marker, upstream check, auto-install.
+alias. `pinned`/`dev`: typed refusal "graywolf has no compiled lane" — NOT decided, a ToDo. Rest unchanged.
 
 ## Decisions for the maintainer (neutral; recommendation on its own line)
 
@@ -147,7 +148,7 @@ B1/B2 `publish.sh`, `lib_index.py`. Order: C1 (also fit for 0.12.10) → B1 → 
 | B1 | B | schema-3 index, history (20), `inputs`, publish into the index the `lhpc_ref` names | B `tests.yml` | dispatch daemon for the C2 ref → `index-v3.json` read back; `index.json` byte-unchanged |
 | C2 | C | index-v3 reader, newest compatible, `none_compatible`, D1 | CI + `release_verify` | Pi 5: `install daemon --source binary` from v3 picks the matching entry |
 | B2 | B | `meshtastic-web` builder (HEAD) + lab smoke | B `tests.yml` | dispatch → entry with both commits, smoke passed |
-| R1 | R | index named by the manifest; web move no republish; stable dispatch | R CI | `release.yml` mode `dry-run` on the R1 ref → plan names index-v3, no meshtastic rebuild for a web move |
+| R1 | R | index named by the manifest; web move no republish; stable + weekly dev dispatch | R CI | `release.yml` mode `dry-run` on the R1 ref → plan names index-v3, no meshtastic rebuild for a web move |
 | C3 | C | `meshtastic-web` component + selectors + migration | CI + `release_verify` | Pi 5: stable, dev, binary; index JS version, `/api/v1/fromradio` 200, meshtasticd PID + receipt unchanged |
 | C4 | C | graywolf vocabulary | CI | Pi 5: `update graywolf --source stable` = `--upstream` plan; `--source pinned` typed refusal |
 
@@ -175,6 +176,5 @@ before C2 reaches `main` (release ordering, checked by R1).
 | live index vs dev pins | scratch `pins.py` over `index.json` + `load_manifest` | 6/6 components MATCH |
 | the e293 refusal | `grep blocked runlogs/auto-install-11c3b495.log` | "…is at 3c30c07e4, the pin is c2335d12f" |
 | primitive, call sites | `grep -n` adopt_source( / locked=True / "install from source with"; `kind == "dir" and force` / verify_identity( / blocks_update in install.py | `:321`; `:1265`, `:1275`; `:447`, `:458`, `:476` |
-| override refs | `grep -rn[l] 'accept-pin-mismatch\|accept_pin_mismatch\|pin_mismatch\|consent' lhpc --include=*.py \| wc -l` | 93 lines, 13 files |
-| override tests | `grep -c 'def test'` over the five files | 32+16+6+6+3 = 63 |
+| override refs; tests | `grep -rn[l] 'accept-pin-mismatch\|accept_pin_mismatch\|pin_mismatch\|consent' lhpc --include=*.py \| wc -l`; `grep -c 'def test'` over the five files | 93 lines, 13 files; 32+16+6+6+3 = 63 |
 | retained assets; web pin, root | `gh release view binaries --json assets -q '.assets\|length'`; `grep -n` manifest | 112; `:1183`, `:1210`, `:1423`, `:1095` |
