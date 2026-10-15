@@ -240,6 +240,36 @@ def _drain_fd(stream, emit, stop) -> bool:
     return False
 
 
+def _wait_exit(proc, timeout: float) -> None:
+    """`proc.wait(timeout=timeout)` without its sleep loop: CPython polls a timed wait in sleeps of
+    1 to 50 ms, so every short probe was noticed late. Block on a pidfd until the child exits or the
+    timeout passes (TimeoutExpired, as before), then reap. An interrupted poll is resumed by Python
+    with the time left (PEP 475); without pidfd, or when the poll itself fails, the timed wait runs
+    for what is left of the same deadline."""
+    import select
+    import time
+    deadline = time.monotonic() + timeout
+    try:
+        fd = os.pidfd_open(proc.pid)
+    except (AttributeError, OSError):
+        proc.wait(timeout=timeout)
+        return
+    try:
+        poller = select.poll()
+        poller.register(fd, select.POLLIN)
+        ready = poller.poll(max(deadline - time.monotonic(), 0) * 1000)
+    except OSError:
+        ready = None
+    finally:
+        os.close(fd)
+    if ready is None:
+        proc.wait(timeout=max(deadline - time.monotonic(), 0))
+    elif not ready:
+        raise subprocess.TimeoutExpired(proc.args, timeout)
+    else:
+        proc.wait()
+
+
 def _bounded_drain(stream, sink: bytearray, stop) -> None:
     """Read a subprocess pipe to EOF (or until `stop`), retaining only the last
     _MAX_CAPTURE_BYTES in `sink`."""
@@ -284,7 +314,7 @@ class RealCommandRunner:
         timed_out = False
         termination = ""
         try:
-            proc.wait(timeout=timeout)
+            _wait_exit(proc, timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
             # Terminate the WHOLE owned session (a TERM-ignoring child can outlive its
