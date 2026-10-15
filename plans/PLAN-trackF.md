@@ -1,4 +1,4 @@
-# Plan v3.1 — Track F: install channels without nagging, the Meshtastic web client as its own component
+# Plan v3.2 — Track F: install channels without nagging, the Meshtastic web client as its own component
 
 Base `origin/dev` 254bbae3; analysis MT-WEB-CLIENT (61e18c6d). Repos: loraham-pi-control (C),
 lhpc-binaries (B), lhpc-release-bot (R). binary = prebuilt known-working, no questions; rest compiled/fetched.
@@ -10,6 +10,7 @@ lhpc-binaries (B), lhpc-release-bot (R). binary = prebuilt known-working, no que
 | 3 packets strictly sequenced, shared files named; a live proof per packet | F5 |
 | 4 nothing future is called measured ("to be measured") | F3, F6 |
 | 5 the three decisions neutral, alternatives and trade-offs, recommendation on its own line | D1–D3 |
+| v3.2: the maintainer's D1–D3 applied; D3 = NO reset (the web choice survives a pin move) | D1–D3, F3 |
 | v2 → v3 (round 2): `dev` named honestly = the latest lab-built HEAD snapshot; refresh cadence stated (weekly bot build + on request; v3.1: a cadence, not a bound) | F3 |
 
 ## F1 — The measured case: "I had to compile MeshCom by hand"
@@ -61,7 +62,7 @@ byte-exact sidecar `is_built` compares, `service_lifecycle_ops.py:5148-5170`).
    newest entry's commits vs the pins; next: `lhpc self-update --apply`, then `--source pinned`.
 3. **Information line, no question:** an entry older than the newest adds "a newer binary is
    published for a newer LHPC (lhpc self-update --apply)". Override flag: D1; index format: D2.
-5. **0.3.12 guarantee:** nothing is installed whose commits differ from the pins (D1-a removes the
+5. **0.3.12 guarantee:** nothing is installed whose commits differ from the pins (D1 removes the
    only exception); the inputs digest adds web/CLI/asset inputs to the pre-download gate; the launch
    gate (`is_built`) is unchanged behind it.
 
@@ -74,7 +75,7 @@ touched (`test_golden_start.py` uses meshtastic only as a process holder).
 **Manifest:** component `meshtastic-web` in the meshtastic stack on the graywolf pattern (a fetched
 package): build step = today's `meshtastic-web-assets.sh` into `{runtime}/build/tools/meshtastic-web`
 (OUTSIDE the meshtasticd publish root `build/tools/meshtasticd`, `manifest.example.toml:1095`, which a
-binary install replaces); version-bearing marker `.lhpc-built-<version>`; `build_root`;
+binary install replaces); static marker `.lhpc-built` (D3); `build_root`;
 `web.provenance` (version, sha256, selector, origin). `web_root` default (`:1423`) and
 `bases/meshtasticd.yaml:228` move to the new path; meshtasticd loses the web step (`:1183`) and its
 `meshtastic-web` input (`:1210`); the CLI and crypto inputs stay.
@@ -107,7 +108,7 @@ binary install replaces); version-bearing marker `.lhpc-built-<version>`; `build
   `meshtastic-web` to the component; on a new upstream release and on a meshtasticd pin move the bot
   dispatches the builder for the release tag, so `stable` stays lab-proven.
 - **Status:** version + selector from `web.provenance` (`stable`/`dev` read `differs`): no claimed
-  client that is not served (0.3.12 (a)); the lane proves (c). Pin move: D3.
+  client that is not served (0.3.12 (a)); the lane proves (c). Pin move: D3 (a `binary` client reads *behind*).
 - **Migration:** `meshtastic-web` reads *not built* once → one 2 MB fetch; the meshtastic sidecar
   loses a line → binary boxes reinstall once (~53 MB), source boxes rebuild (time to be measured in
   the C3 live row); the old `build/tools/meshtasticd/web` (2 MB) stays on source boxes (CHANGELOG).
@@ -118,23 +119,21 @@ binary install replaces); version-bearing marker `.lhpc-built-<version>`; `build
 `--upstream` (latest release, verified against its `checksums.txt`); `--upstream` stays as a hidden
 alias. `pinned`/`dev`: typed refusal "graywolf has no compiled lane" — NOT decided, a ToDo. Rest unchanged.
 
-## Decisions for the maintainer (neutral; recommendation on its own line)
+## Decisions (the maintainer, 2026-10-15, DECISIONS-channels-and-web-client)
 
-- **D1 — `--accept-pin-mismatch`.** (a) Remove: flag, consent token (`binary_install.py:206-217`),
-  web checkbox/job token (`app.py:1527-1713`, `service_lifecycle_ops.py:3824`), the auto-install hint
-  (`service_auto_install.py:1278-1280`); keep the receipt reader (`service_binary_channel.py:157-183`).
-  Less code (93 lines, 13 files; 63 tests shrink to the reader cases); no expert escape if no entry
-  fits. (b) Hide (help suppressed): keeps the escape and all that code and tests. (c) Keep visible.
-  Recommendation: (a).
-- **D2 — index format.** (a) A second file `index-v3.json` (history + inputs) named by
-  `[stack.binary] index_url`; the builder publishes into the file the `lhpc_ref` manifest names:
-  older controllers never see a new-shape artifact; B and R read two files. (b) Fields added to
-  `index.json`: one file, but older controllers read `stacks[<id>]` and would install the new-shape
-  meshtastic artifact, then read *behind* until self-update. Recommendation: (a).
-- **D3 — a web pin move over a `stable`/`dev` choice.** (a) Reset to the new pin at the next build
-  (version-bearing marker, graywolf's rule): known-working stays the default, the choice is lost.
-  (b) Keep the choice: a per-box saved selector the build honours — a new persisted setting.
-  Recommendation: (a).
+- **D1 — REMOVE `--accept-pin-mismatch`:** the flag, the consent token (`binary_install.py:206-217`),
+  the web checkbox/job token (`app.py:1527-1713`, `service_lifecycle_ops.py:3824`), the auto-install
+  hint (`service_auto_install.py:1278-1280`); the receipt reader stays (`service_binary_channel.py:157-183`).
+- **D2 — YES, a second index file** `index-v3.json` (history + inputs), named by `[stack.binary]
+  index_url`; the builder publishes into the file the `lhpc_ref` manifest names.
+- **D3 — NO reset:** an operator's `stable`/`dev` web choice survives a pin move; the move changes
+  only the known-working entry. How: the marker is the static `.lhpc-built` (not version-bearing);
+  the choice is the selector recorded in `web.provenance`, and a bare `lhpc update meshtastic-web`
+  (or rebuild) keeps it — the rule a source checkout already follows ("a bare `update` keeps the
+  installed channel", provenance.md:23). A pin move makes only a `binary` client read *behind*
+  (version ≠ pin, a plain status function) until `lhpc update meshtastic-web` fetches the new pin.
+  Red-before-style tests: a `stable` client after a pin move stays `stable` and *built*; a `binary`
+  client reads *behind*, then the update serves the new pin.
 
 ## F5 — Packets, strict order, proofs, docs
 
