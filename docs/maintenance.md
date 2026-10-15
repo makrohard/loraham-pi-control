@@ -99,6 +99,15 @@ repositories.
   [tests/README.md](../tests/README.md#markers).
 - **Version bump** = `pyproject.toml` **and** `lhpc/version.py` (a test pins them equal and
   requires the matching `CHANGELOG.md` heading) + tag.
+- **Docs and CHANGELOG.** One place per fact; elsewhere a link. Short and structured: tables and
+  lists over prose. No history and no explanation of why it was once otherwise. Every sentence is
+  checkable against the code or a command. A change that makes a sentence untrue fixes that
+  sentence in the same commit. CHANGELOG: one or two entries per item, each at most three lines, in
+  the operator's words, under `## Unreleased`; an item that only corrects a released section passes
+  `--correction`. `python tools/check_houserules.py <base>..<head> [--fact <literal>]` prints the
+  item's HOUSE RULES KEPT block (CHANGELOG, docs, tests, patterns, markers, attribution, module
+  budgets); a HARD line fails it. It checks form, not truth: a PASS says nothing about whether a
+  stated red-before ran, a CHANGELOG line is precise or a claim in a report holds.
 
 ## Branches and releases
 
