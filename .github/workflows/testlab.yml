@@ -24,9 +24,10 @@ on:
 permissions:
   contents: read
 
+# As in ci.yml: only a newer push to a topic branch (`cons/*`) cancels its superseded run.
 concurrency:
   group: testlab-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/cons/') }}
 
 jobs:
   testlab:
@@ -215,6 +216,9 @@ jobs:
     # on ANY part (cpu, io, mem) of the fixed calibration workload: then tighten that part's
     # throttle below; a throttle only ever gets tighter.
     if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.release_verify }}
+    # After the `testlab` job passes (not release-verify): a candidate it rejects does not hold an arm
+    # runner for the ~45 min of this job.
+    needs: testlab
     runs-on: ubuntu-24.04-arm
     # Kept well below the release bot's testlab bound (280 min, counted from the bot's dispatch),
     # leaving >= 40 min for queueing and setup, so a hung slow-build job is cut before the bot gives

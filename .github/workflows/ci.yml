@@ -12,10 +12,11 @@ on:
 permissions:
   contents: read
 
-# Cancel superseded runs for the same ref so only the latest matters.
+# A newer push to a topic branch (`cons/*`) cancels its superseded run. Never on main, dev, a
+# release or bot branch, or a pull request: every commit there keeps its own complete result.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/cons/') }}
 
 jobs:
   test:
@@ -87,7 +88,7 @@ jobs:
         # nobody executes and reports ~0% however many tests pass. `-m` puts the working directory
         # first, so the imported and the measured tree are the same one. The install above still
         # proves the package builds and installs.
-        run: python -m pytest -q -rs --cov=lhpc --cov-branch --cov-report=term:skip-covered --cov-report=xml:coverage.xml
+        run: python -m pytest -q -rs -n auto --dist loadfile --cov=lhpc --cov-branch --cov-report=term:skip-covered --cov-report=xml:coverage.xml
 
       - name: Coverage summary
         if: ${{ !cancelled() }}

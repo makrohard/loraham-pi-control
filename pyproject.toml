@@ -39,6 +39,9 @@ dev = [
     # Coverage plugin. CI MEASURES and publishes line and branch coverage; there is no
     # threshold and no gate — a drop is judged in review.
     "pytest-cov",
+    # Parallel test processes (`-n auto --dist loadfile`, CI's test job): one module stays in one
+    # process, so module-level fixtures behave as in a serial run.
+    "pytest-xdist",
     # In-process Zstandard (genuine .zst) for the binary-channel archive tests, so they no longer
     # shell out to build fixtures. Production extraction still uses the host `zstd`.
     "zstandard",

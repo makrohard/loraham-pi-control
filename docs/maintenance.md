@@ -23,7 +23,8 @@ What CI enforces, branches and releases, the pin-bump recipe, and the gotchas on
     is the committed `lhpc deps --script` snapshot for the pre-clone moment; the suite fails when it
     differs from the generator (`tests/install/test_bootstrap_deps.py`).
   - `ruff check lhpc testlab` (the frozen ruleset) and `ruff check tests --select F,E9`
-  - `python -m pytest -q -rs --cov=lhpc --cov-branch`: the whole suite, no `-m` lane; branch
+  - `python -m pytest -q -rs -n auto --dist loadfile --cov=lhpc --cov-branch`: the whole suite in
+    parallel processes, no `-m` lane; branch
     coverage in the log, a `coverage.xml` artifact per Python version and the total in the job
     summary
   - `bandit -q -r lhpc -lll` (high severity) and `pip-audit . --strict`, also after a test failure
@@ -44,8 +45,9 @@ What CI enforces, branches and releases, the pin-bump recipe, and the gotchas on
 `.github/workflows/testlab.yml`, on the same events: the `testlab` job runs the lab lanes on an
 aarch64 runner; `release-verify` installs, builds, starts and identity-proves every stack a pin
 release may move, on pushes to `main` and on dispatch with `release_verify=true` only
-([testlab.md](testlab.md#running-the-verification-lanes)); `slow-build`, on the same triggers,
-is the slow-target build row below.
+([testlab.md](testlab.md#running-the-verification-lanes)); `slow-build`, on the same triggers
+and only after `testlab` passed, is the slow-target build row below. A newer push to a `cons/*`
+branch cancels that branch's superseded runs of both workflows; nothing else is cancelled.
 
 No external project's own test suite runs in CI, apart from meshcom-qemu-raspi's
 `tests/test-fetch-qemu.sh` in `pin-validation`.
