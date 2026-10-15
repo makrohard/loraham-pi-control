@@ -1,0 +1,88 @@
+"""The service family does not grow (tests/README.md, rule 13).
+
+The family is `lhpc/core/services.py` and every `service_*` module it imports relatively
+(`service_base.py` and the mixins). Each file has a ceiling for its lines and for its public methods
+(functions defined directly in a class body whose name does not start with `_`). This test enforces
+the ceilings only. A raise with `# <item id>: <one sentence>` on its line, and an item removing at
+least what it adds, are review rules this test does not check; lowering a value is free.
+
+A repository invariant, not behaviour: it reads the production files to measure their size, which
+rule 1 otherwise forbids; nothing it asserts is about what the code does.
+"""
+import ast
+
+import pytest
+
+import repo_paths
+
+CORE = repo_paths.REPO / "lhpc" / "core"
+
+# file: (max lines, max public methods) — measured on dev at 0.12.9, raised where a line says why
+BUDGETS = {
+    "services.py": (2959, 28),
+    "service_base.py": (166, 0),
+    "service_auto_install.py": (1875, 16),
+    "service_binary_channel.py": (297, 19),
+    "service_binary_ops.py": (1077, 5),
+    "service_boot_restore.py": (678, 2),
+    "service_firewall.py": (1533, 19),
+    "service_hmac.py": (1016, 17),
+    "service_lifecycle_ops.py": (6315, 73),
+    "service_maintenance.py": (2891, 30),  # testlab-det-1: S1 keeps curl rc and message
+    "service_network.py": (1183, 9),
+    "service_params.py": (3380, 54),
+    "service_secrets.py": (399, 2),
+    "service_selfupdate.py": (1932, 22),
+    "service_system.py": (759, 2),
+    "service_webserver.py": (2388, 42),
+}
+
+
+def measure(source: str) -> tuple[int, int]:
+    """(lines, public methods) of one module's source."""
+    tree = ast.parse(source)
+    public = sum(1 for cls in tree.body if isinstance(cls, ast.ClassDef)
+                 for node in cls.body
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and not node.name.startswith("_"))
+    return len(source.splitlines()), public
+
+
+def family(services_source: str) -> set:
+    """`services.py` and every `service_*` module it imports relatively."""
+    return {"services.py"} | {f"{node.module}.py" for node in ast.walk(ast.parse(services_source))
+                              if isinstance(node, ast.ImportFrom) and node.level == 1
+                              and (node.module or "").startswith("service_")}
+
+
+def test_the_table_covers_the_whole_family():
+    # Every module of the family has a budget, and the table names no other file: a new mixin
+    # without an entry fails here, and so does an entry removed while its module stays.
+    assert family((CORE / "services.py").read_text()) == set(BUDGETS)
+
+
+@pytest.mark.parametrize("source, missing, extra", [
+    ("from .service_base import X\nfrom .service_new import Y\n", {"service_new.py"}, set()),
+    ("from .service_base import X\n", set(), set()),
+])
+def test_an_unbudgeted_mixin_or_a_removed_entry_breaks_the_equality(source, missing, extra):
+    # Negative fixture for the completeness rule (a new invariant: no parent-red exists).
+    table = {"services.py", "service_base.py", "service_gone.py"}
+    found = family(source)
+    assert (found - table, table - found) == (missing, {"service_gone.py"} | extra)
+
+
+@pytest.mark.parametrize("name", sorted(BUDGETS))
+def test_service_family_within_budget(name):
+    lines, public = measure((CORE / name).read_text())
+    max_lines, max_public = BUDGETS[name]
+    assert lines <= max_lines and public <= max_public, (
+        f"{name}: {lines} lines / {public} public methods, budget {max_lines} / {max_public}")
+
+
+def test_measure_counts_lines_and_only_public_methods_of_classes():
+    # Negative/positive fixture for the counter itself (a new invariant: no parent-red exists).
+    source = ("def top():\n    pass\n"
+              "class A:\n    def run(self):\n        pass\n    def _helper(self):\n        pass\n"
+              "    async def fetch(self):\n        pass\n")
+    assert measure(source) == (9, 2)

@@ -107,6 +107,12 @@ through `interrupts.py`: its module pins the operation's durable writes and fail
     call the real one would refuse (`repo/test_fake_signatures.py`).
 12. **A regression test is red before its fix.** Run it once against the parent of the fix and say
     so in the commit; a case that passes on both sides is a control and is labelled as one.
+13. **The service family does not grow.** `repo/test_module_budgets.py` caps the lines and public
+    methods of `services.py` and every `service_*` module it imports relatively (a repository
+    invariant, so it may read their source). Review rules the test does not check: new behaviour
+    goes into a plain function module, not a mixin; an item that touches the family removes at
+    least what it adds; a budget is raised only with `# <item id>: <reason>` on its line. Lowering a
+    budget is free; the test enforces fixed caps and never lowers one by itself.
 
 **Coverage is diagnostic, not the target:** a new test should normally accompany a behaviour or a
 defect; no test added or kept only because it covers lines.
