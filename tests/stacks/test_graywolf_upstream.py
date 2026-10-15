@@ -159,11 +159,16 @@ def test_a_failed_check_keeps_curls_exit_code_and_message(tmp_path, monkeypatch)
     class R:
         returncode = 22
         stdout = ""
-        stderr = "curl: (22) The requested URL returned error: 403\n"
+        # A multi-line message longer than the kept 200 characters: kept as its END, one line.
+        stderr = "x" * 300 + "\ncurl: (22) The requested URL\n  returned error: 403\n"
     monkeypatch.setattr(svc._system.runner, "run", lambda a, timeout=None: R())
     r = svc.graywolf_upstream_check("graywolf")
+    error = svc.graywolf_upstream_state("graywolf")["error"]
+    kept = "curl: (22) The requested URL returned error: 403"
+    for text in (r.summary, error):                 # the result and the status it keeps
+        assert "curl rc 22: " in text and kept in text and "\n" not in text
+        assert len(text.split("curl rc 22: ", 1)[1].rstrip(")")) <= 200
     assert r.ok is False and r.data["curl_rc"] == 22
-    assert "403" in svc.graywolf_upstream_state("graywolf")["error"]
 
 
 def test_transient_check_preserves_the_last_known_version(tmp_path, monkeypatch):
