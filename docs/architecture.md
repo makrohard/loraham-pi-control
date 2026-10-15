@@ -287,7 +287,8 @@ leaves on disk and which test proves it: the [invariant table](#invariant-table)
 - **Evidence once per request.** A page render reads each piece of evidence once (status
   snapshot, per-(stack, band) config, consumed-source SHAs, firewall status, listeners, git state
   per distinct checkout) through a thread-local request memo dropped at every request start and
-  around every mutation; rechecks under operation locks use `build_snapshot(fresh=True)`. Every
+  around every mutation; rechecks under operation locks use `build_snapshot(fresh=True)`. A
+  snapshot reads the process table once, so every component is judged against the same table. Every
   public `ControllerService` entry that writes anything is `@invalidates_snapshot`; the rest are
   listed with a reason in `snapshot_memo.SNAPSHOT_NEUTRAL`. The
   neutral writers whose writes no snapshot input observes (lock files, the native RF-log roll,

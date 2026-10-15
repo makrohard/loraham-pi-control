@@ -75,9 +75,10 @@ class StatusProber:
         # artifact. Passed in by the service (which owns the receipt read) so status stays a
         # pure, bounded assessor.
         self._binary_cover = binary_cover or {}
-        # ONE /proc/net/tcp read per whole-snapshot assessment (set by `assess_stacks`); None
-        # outside it, so a standalone `assess_component` still reads fresh.
+        # ONE /proc/net/tcp read and ONE /proc cmdline table per whole-snapshot assessment (set by
+        # `assess_stacks`); None outside it, so a standalone `assess_component` still reads fresh.
         self._listeners = None
+        self._cmdlines = None
         # ONE git probe per identical (checkout, pin) for the life of this prober — several
         # components share a checkout (loraham-kiss-tnc and loraham-kiss-serial both come from src/loraham-kiss-tnc), and the
         # probe's answer depends on nothing but the path and the pin. A prober lives for one
@@ -122,6 +123,10 @@ class StatusProber:
         except Exception:
             self._listeners = None
         try:
+            self._cmdlines = self._system.procfs.cmdlines()         # once for every process match
+        except Exception:
+            self._cmdlines = None
+        try:
             for stack in stacks:
                 ss = StackStatus(stack=stack)
                 for comp in stack.components:
@@ -131,7 +136,7 @@ class StatusProber:
                     all_components.append(comp)
                 snap.stacks.append(ss)
         finally:
-            self._listeners = None
+            self._listeners = self._cmdlines = None
 
         # Attach runtime dependency observations now that all are computed.
         for stack in stacks:
@@ -180,7 +185,7 @@ class StatusProber:
 
         proc_matched = False
         if comp.process is not None:
-            pm = probe_process(self._system, comp.process)
+            pm = probe_process(self._system, comp.process, self._cmdlines)
             proc_matched = pm.matched
             status.pids = pm.pids
             status.evidence.update({f"process.{k}": v for k, v in pm.evidence.items()})

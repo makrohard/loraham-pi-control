@@ -50,10 +50,11 @@ def matches(spec: ProcessSpec, argv: list[str]) -> bool:
     return not (spec.any_args and not any(_token_contains(argv, p) for p in spec.any_args))
 
 
-def probe_process(system: System, spec: ProcessSpec) -> ProcessMatch:
+def probe_process(system: System, spec: ProcessSpec, table=None) -> ProcessMatch:
+    """Match `spec` against `table` ({pid: argv}, one snapshot's read of /proc), else a fresh read."""
     pids: list[int] = []
     sample = ""
-    for pid, argv in sorted(system.procfs.cmdlines().items()):
+    for pid, argv in sorted((system.procfs.cmdlines() if table is None else table).items()):
         if matches(spec, argv):
             pids.append(pid)
             if not sample:
