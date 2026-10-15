@@ -106,6 +106,21 @@ def test_start_plan_is_dry_run_without_yes(tmp_path, monkeypatch, capsys):
     assert "Run plan" in capsys.readouterr().out
 
 
+def test_ctrl_c_ends_a_command_with_one_line_and_exit_130(tmp_path, monkeypatch, capsys):
+    # Ctrl-C while a verb runs: every `finally` below has already run; the operator gets one line
+    # naming where to look, never a Python traceback.
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+    main(["bootstrap", "--yes"])
+    capsys.readouterr()
+
+    def _interrupted(self, *a, **k):                        # noqa: ANN001, ANN002, ANN003
+        raise KeyboardInterrupt
+    monkeypatch.setattr(ControllerService, "start", _interrupted)
+    assert main(["stack", "start", "daemon", "--yes"]) == 130
+    err = capsys.readouterr().err
+    assert "lhpc status" in err and "Traceback" not in err and len(err.splitlines()) == 1
+
+
 def test_help_topic(capsys):
     assert main(["help", "safety"]) == 0
     assert "never auto-enables TX" in capsys.readouterr().out

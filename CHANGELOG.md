@@ -4,6 +4,8 @@
 
 Fixed
 
+- An `lhpc` command stopped with Ctrl-C prints one line naming `lhpc status` instead of a Python traceback (exit
+  status 130, as before).
 - The GPS sky view no longer alternates with "no satellites reported" when gpsd reports the satellites only
   every few seconds: the console keeps each receiver's last satellite list for up to 20 s.
 - MeshCore repeater dashboard: a restart no longer signs everyone out; the login-signing secret is kept in

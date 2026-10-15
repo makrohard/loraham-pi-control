@@ -1022,7 +1022,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """CLI entry. Fail-closed boundary: a malformed/unreadable stored configuration surfaces as a
     clean typed failure (rc 1) with the offending file left untouched — never a traceback, and never
-    a silent fall-through to defaults."""
+    a silent fall-through to defaults. Ctrl-C ends with one line and rc 130."""
     from lhpc.core.config import ConfigError
     from lhpc.core.source_fs import arm_lease_break_handler
     arm_lease_break_handler()
@@ -1033,6 +1033,10 @@ def main(argv: list[str] | None = None) -> int:
             f"error: a stored configuration file is unreadable or malformed — {exc}\n"
             "It was left untouched for inspection; repair or remove it, then retry.\n")
         return 1
+    except KeyboardInterrupt:
+        # Every `finally` below has run by now; the operator needs where to look, not a traceback.
+        sys.stderr.write("interrupted — `lhpc status` shows where it stopped\n")
+        return 130
 
 
 def _cmd_meshtastic(passthrough: list[str]) -> int:
