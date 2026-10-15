@@ -1006,9 +1006,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         groups.sort(key=lambda g: (not g["running"], len(g["dep_stacks"]), g["stack"].id))
         return groups, snapshot
 
-    def _firewall_view_safe(svc):
+    def _firewall_view_safe(svc, fw=None):
         try:
-            return svc.firewall_settings_view()
+            return svc.firewall_settings_view(fw)
         except Exception:
             return None                    # fail-safe: never break the Apps page over firewall
 
@@ -1096,7 +1096,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             "controller_system_deps": service.controller_system_deps(),
             "ws_mon": _ws, "ws_certs": (_ws or {}).get("pki", {}).get("clients", []),
             "ws_modes": list(_WS_MODES), "ws_loopback": peer_is_loopback(),
-            "firewall_view": _firewall_view_safe(service),
+            "firewall_view": _firewall_view_safe(service, fw_status),
             "st": service.self_update_status(), "jobs": service.active_jobs(),
             "updater": service.updater_integration(),
             "dep_summary": (_dep := service.dependency_overview()),
