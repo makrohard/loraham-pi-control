@@ -2,6 +2,14 @@
 
 Base `origin/dev` = `eb9673a4` (0.12.9). Scope: `testlab/`, `.github/workflows/testlab.yml`, one product function (S1); a bot change only if decision c1 approves it (B1). Rules: tests/README.md rules 1–10 and "Where a new test goes"; no waiver, no lane exclusion, no weakened assertion; red-before for every fix; a flake never freezes a stack.
 
+## Decisions (DECISIONS-testlab-determinism.md, the maintainer, 2026-10-15; they win where this plan differs)
+
+- (a) SEPARATE, cheap: each timed operation records its transfer time as its own number; the budget is judged on the non-network part only (replaces both §5(a) options).
+- (b) slow-build joins the bot's required jobs with a GENEROUS budget: a stuck-lane guard, never killing a build that still progresses.
+- (c1) supersedes §1's "no retry inside a lane" for TRANSFERS: every transfer (acquisition step, the lane's unavoidable class-B transfers, the bot) is retried long with growing waits (at once, then 1, 2, 5, 10 min … to a generous total); the lane wraps the transfer, never an assertion; a test body is never re-run. B1 becomes: the bot re-runs an EXTERNAL-UNAVAILABLE job after growing waits within its run window, then reports "unproven, external", never a regression.
+- (c2) as recommended, plus the long-retry wrapper now. (c3) yes.
+- (c4) REMOVE the 146 NomadNet retry AND fix its cause inside P2 (cause from the saved failed-run logs; instrumentation first if they are not enough); M2 keeps a timeout UNMARKED meanwhile.
+
 ## 0. Changes
 
 v3 (round-2 findings, all accepted; F3 with added evidence rather than a weaker word):
