@@ -68,6 +68,7 @@ class NetworkOpsMixin:
     # Capability/authorization verdicts re-probe at most this often — both ways.
     _NET_PROBE_TTL_S: ClassVar[float] = 60.0
     _NET_VIEW_TTL_S: ClassVar[float] = 10.0
+    _NM_ACTIVE: ClassVar[tuple] = ("-t", "-f", "UUID,NAME,TYPE,DEVICE", "connection", "show", "--active")
     # NetworkManager actions the Network panel needs (scan/list are already unprivileged):
     # join/save a client profile, plus re-activate the box's own shared AP (wifi.share.*) —
     # without the latter the "Back to AP mode" way home is denied and the box strands.
@@ -122,10 +123,10 @@ class NetworkOpsMixin:
                          "priority": parts[4]})
         return rows
 
-    def _nm_active(self) -> dict:
-        """The active wifi connection as {uuid, name} plus the device address, or {}."""
-        rc, out, _err = self._nmcli(["-t", "-f", "UUID,NAME,TYPE,DEVICE",
-                                     "connection", "show", "--active"])
+    def _nm_active(self, listed=None) -> dict:
+        """The active wifi connection as {uuid, name} plus the device address, or {}; `listed`: the
+        caller's (rc, out) of `_NM_ACTIVE`, so the Wi-Fi and the wired row come from one answer."""
+        rc, out = listed or self._nmcli(self._NM_ACTIVE)[:2]
         act: dict = {}
         if rc == 0:
             for line in out.splitlines():
@@ -139,11 +140,10 @@ class NetworkOpsMixin:
             act["address"] = (out.splitlines() or [""])[0].strip() if rc == 0 else ""
         return act
 
-    def _nm_ethernet(self) -> dict:
+    def _nm_ethernet(self, listed=None) -> dict:
         """The active wired connection as {name, device, address}, or {} (the dashboard's
-        Network row: a wired uplink is shown in preference to Wi-Fi)."""
-        rc, out, _err = self._nmcli(["-t", "-f", "UUID,NAME,TYPE,DEVICE",
-                                     "connection", "show", "--active"])
+        Network row: a wired uplink is shown in preference to Wi-Fi). `listed`: as `_nm_active`."""
+        rc, out = listed or self._nmcli(self._NM_ACTIVE)[:2]
         eth: dict = {}
         if rc == 0:
             for line in out.splitlines():
@@ -292,11 +292,11 @@ class NetworkOpsMixin:
 
             from . import deps as deps_mod
             view["install"] = deps_mod.network_rule_install_cmd(getpass.getuser())
-        act = self._nm_active()
+        act = self._nm_active(listed := self._nmcli(self._NM_ACTIVE)[:2])   # one answer, both rows
         view["mode"] = ("ap" if act.get("name") == self.AP_PROFILE
                         else ("client" if act else "off"))
         view["active"] = act
-        view["ethernet"] = self._nm_ethernet()
+        view["ethernet"] = self._nm_ethernet(listed)
         if view["mode"] == "ap":
             rc, out, _err = self._nmcli(["-g", "802-11-wireless.ssid", "connection", "show",
                                          self.AP_PROFILE])
