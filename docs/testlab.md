@@ -114,6 +114,23 @@ LHPC_SLOW_BUILD=1 SLOW_CPUS=0.25 SLOW_MEM=416m SLOW_WRITE_IOPS=120 SLOW_READ_IOP
 subprocesses import `lhpc` from the editable install, i.e. whichever checkout was
 `pip install -e`'d, and can pass on another checkout's code. CI installs from the commit itself.
 
+**What a CI lane may fetch.** A lane reaches an external service only where that service is what it
+proves. Everything else is acquired before the lane's tests run, with the transfer backoff
+(`backoff` in `.github/scripts/retry.sh`: retry at once, then after 1, 2, 5 and 10 min, then
+every 10 min until the waits would pass 30 min): the lab image and the upstream git sources of the
+testlab and release-verify lanes in workflow steps of their own, the lab's Python packages and
+Chromium at the start of the lane's step. The sources are git mirrors
+(`.github/scripts/mirror-sources.py`): the lane copies a git config with one `insteadOf` per
+remote to the lab user's `~/.gitconfig`, so the product's own, unchanged `git clone` resolves to
+them. It is a file in `HOME` because the product's command runner passes `HOME` to git and drops
+`GIT_CONFIG_GLOBAL`. A step with no network proves every listed remote resolves locally, and the
+lane proves, through that runner, that each one resolves to its mirror before its tests start;
+the list is every manifest remote but the few that script names, each with its reason. A
+published binary, a pinned release download and a build step's packages are still fetched in
+the lane, as the product fetches them. A deterministic
+failure of an acquisition (a broken Dockerfile, say) turns red only after the backoff's waits,
+about half an hour.
+
 `testlab/tests/unit` tests the simulator itself; the four opt-in lanes:
 
 - **acceptance** drives the running server and the real `lhpc` executable and verifies the

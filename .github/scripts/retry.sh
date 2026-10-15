@@ -33,3 +33,36 @@ retry() {
     _retry_n=$((_retry_n + 1))
   done
 }
+
+# backoff <argv...> — the TRANSFER backoff (docs/testlab.md, "Running the verification lanes"):
+# run argv until it exits 0, retrying at once, then after 1, 2, 5 and 10 min, then every 10 min,
+# until the waits would pass 30 min; every wait is logged with the failed status, and the last
+# status is returned. Like `retry`, only around a transfer (an acquisition or a download), never
+# around a verdict. BACKOFF_WAITS (seconds) and BACKOFF_TOTAL replace the schedule in tests; a
+# last wait of 0 is not repeated.
+backoff() {
+  local -a _bo_waits
+  read -r -a _bo_waits <<< "${BACKOFF_WAITS-0 60 120 300 600}"
+  local _bo_total="${BACKOFF_TOTAL-1800}" _bo_spent=0 _bo_i=0 _bo_w _bo_status
+  while true; do
+    if "$@"; then
+      return 0
+    else
+      _bo_status=$?
+    fi
+    if [ "$_bo_i" -lt "${#_bo_waits[@]}" ]; then
+      _bo_w="${_bo_waits[$_bo_i]}"
+    else
+      _bo_w="${_bo_waits[${#_bo_waits[@]}-1]}"
+      [ "$_bo_w" -gt 0 ] || _bo_w=$((_bo_total + 1))
+    fi
+    if [ $((_bo_spent + _bo_w)) -gt "$_bo_total" ]; then
+      echo "backoff: '$1' still failing after ${_bo_spent}s of waits; giving up (status $_bo_status)" >&2
+      return "$_bo_status"
+    fi
+    echo "backoff: '$1' failed (status $_bo_status); retrying in ${_bo_w}s" >&2
+    sleep "$_bo_w"
+    _bo_spent=$((_bo_spent + _bo_w))
+    _bo_i=$((_bo_i + 1))
+  done
+}

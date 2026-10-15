@@ -127,7 +127,7 @@ def test_the_helper_does_not_wrap_a_verdict():
             stripped = line.strip()
             if stripped.startswith("#"):
                 continue
-            m = re.search(r"\bretry\s+\d+\s+(.*)", stripped)
+            m = re.search(r"\b(?:retry\s+\d+|backoff)\s+(.*)", stripped)
             if not m:
                 continue
             argv = m.group(1).split()
@@ -142,3 +142,35 @@ def test_the_helper_does_not_wrap_a_verdict():
                 or (program == "node" and "tests/" in rest)
             )
             assert not verdict, f"{wf.name}:{lineno} retries a verdict: {stripped}"
+
+
+# --- backoff: the transfer backoff in the same helper file ----------------------------------------
+
+def _backoff(script: str, **env):
+    """The helper with `sleep` replaced by a recorder, so the schedule is read, not waited."""
+    return subprocess.run(
+        ["bash", "-c", f'. "{RETRY}"\nsleep() {{ echo "slept $1"; }}\n{script}'],
+        capture_output=True, text=True, env={"PATH": "/usr/bin:/bin", **env},
+    )
+
+
+def test_the_backoff_schedule_is_the_documented_one():
+    """At once, then 1, 2, 5 and 10 min, then every 10 min until the waits would pass 30 min
+    (docs/testlab.md); the command's own status comes back."""
+    r = _backoff('c() { return 7; }; backoff c; echo "status=$?"')
+    assert [ln.split()[1] for ln in r.stdout.splitlines() if ln.startswith("slept ")] == [
+        "0", "60", "120", "300", "600", "600"]
+    assert "status=7" in r.stdout
+    assert r.stderr.count("failed (status 7); retrying in") == 6 and "giving up" in r.stderr
+
+
+def test_a_transfer_that_recovers_is_a_success_after_the_waits():
+    r = _backoff('n=0; c() { n=$((n+1)); [ "$n" -ge 3 ]; }; backoff c; echo "attempts=$n status=$?"')
+    assert "attempts=3 status=0" in r.stdout
+    assert [ln for ln in r.stdout.splitlines() if ln.startswith("slept ")] == ["slept 0", "slept 60"]
+
+
+def test_a_test_schedule_without_a_last_wait_stops_after_the_list():
+    r = _backoff('n=0; c() { n=$((n+1)); return 3; }; backoff c; echo "attempts=$n status=$?"',
+                 BACKOFF_WAITS="0 0", BACKOFF_TOTAL="0")
+    assert "attempts=3 status=3" in r.stdout

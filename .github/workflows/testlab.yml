@@ -39,6 +39,21 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Acquire the upstream sources the lanes clone (mirrors, transfer backoff)
+        # Class A of the rule in docs/testlab.md: the lane itself reaches no git remote. Each
+        # mirror is fetched here with the transfer backoff; the lane clones through the
+        # `insteadOf` lines of srcmirror/gitconfig, copied to the lab user's ~/.gitconfig, so the
+        # product's own clone code runs unchanged.
+        run: |
+          . .github/scripts/retry.sh
+          mkdir -p srcmirror
+          python3 .github/scripts/mirror-sources.py list lhpc/data/manifest.example.toml > srcmirror/remotes.txt
+          while read -r remote; do
+            dir="srcmirror/$(python3 .github/scripts/mirror-sources.py name "$remote")"
+            backoff sh -c 'rm -rf "$1" && git clone --quiet --mirror "$2" "$1"' _ "$dir" "$remote"
+          done < srcmirror/remotes.txt
+          python3 .github/scripts/mirror-sources.py config srcmirror/remotes.txt /srcmirror > srcmirror/gitconfig
+
       - name: Build the lab image from THIS commit's Dockerfile
         # Build (never pull) so the image deps always match the checkout — a stale
         # published `latest` (e.g. racing the image-publish workflow) would miss deps a
@@ -46,16 +61,22 @@ jobs:
         # the heavy acceptance lane below boots the binary meshcom and meshtastic legs on
         # this native aarch64 runner.
         run: |
+          . .github/scripts/retry.sh
           IMG=lhpc-testlab:ci
-          docker build -t "$IMG" -f .devcontainer/Dockerfile .devcontainer
+          backoff docker build -t "$IMG" -f .devcontainer/Dockerfile .devcontainer
           echo "IMG=$IMG" >> "$GITHUB_ENV"
+
+      - name: Prove the mirror is complete (no network)
+        run: |
+          docker run --rm --network none -v "$PWD/srcmirror":/srcmirror:ro \
+            -v "$PWD/.github/scripts":/scripts:ro "$IMG" python3 /scripts/mirror-sources.py verify /srcmirror
 
       - name: Run the lab lanes in the image
         # Root copies the checkout in and DROPS to the unprivileged lab user — the
         # same privilege boundary users get (uid mapping of -v mounts is not assumed).
         run: |
           docker run --rm --user root -v "$PWD":/repo:ro \
-            -v lhpc_lab_tmp:/tmp \
+            -v "$PWD/srcmirror":/srcmirror:ro -v lhpc_lab_tmp:/tmp \
             "$IMG" bash -lc '
               set -e
               cp -r /repo /tmp/repo && chown -R lhpclab /tmp/repo
@@ -63,19 +84,26 @@ jobs:
                 set -e
                 cd /tmp/repo
                 export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build
+                # Clones resolve to the mirrors. A file in HOME, because the product runner
+                # forwards HOME to git and drops GIT_CONFIG_GLOBAL (mirror-sources.py).
+                cp /srcmirror/gitconfig ~/.gitconfig
                 python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
                 # Sourced from the COPY inside the container: a helper sourced in the host shell
                 # does not survive docker run, let alone the su below.
                 . /tmp/repo/.github/scripts/retry.sh
-                retry 3 pip install -q -e .            # the product
-                retry 3 pip install -q -e ./testlab    # the SEPARATE lab package
-                retry 3 pip install -q pytest playwright
-                retry 3 python -m playwright install chromium
+                backoff pip install -q -e .            # the product
+                python3 .github/scripts/mirror-sources.py resolved /srcmirror
+                backoff pip install -q -e ./testlab    # the SEPARATE lab package
+                backoff pip install -q pytest playwright
+                backoff python -m playwright install chromium
                 # A virtual display for the ACCEPTANCE lane only: voice and sideband are
                 # GTK/Kivy programs, and without one the lab would skip starting them
                 # instead of proving they start. The browser lane below runs with no
                 # DISPLAY at all — headless Chromium needs no desktop.
                 (Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &)
+                # Its socket, before the lanes rely on it (60 x 0.5 s).
+                n=0; until [ -S /tmp/.X11-unix/X99 ] || [ \$n -ge 60 ]; do sleep 0.5; n=\$((n+1)); done
+                [ -S /tmp/.X11-unix/X99 ] || { echo Xvfb did not open its socket; exit 1; }
                 python -m pytest testlab/tests/unit -q
                 # LHPC_CHAIN_HEAVY=1: this runner is NATIVE aarch64 (not nested emulation),
                 # so the binary meshcom (qemu-system-xtensa) and meshtastic START legs can
@@ -130,11 +158,32 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Acquire the upstream sources the lanes clone (mirrors, transfer backoff)
+        # Class A of the rule in docs/testlab.md: the lane itself reaches no git remote. Each
+        # mirror is fetched here with the transfer backoff; the lane clones through the
+        # `insteadOf` lines of srcmirror/gitconfig, copied to the lab user's ~/.gitconfig, so the
+        # product's own clone code runs unchanged.
+        run: |
+          . .github/scripts/retry.sh
+          mkdir -p srcmirror
+          python3 .github/scripts/mirror-sources.py list lhpc/data/manifest.example.toml > srcmirror/remotes.txt
+          while read -r remote; do
+            dir="srcmirror/$(python3 .github/scripts/mirror-sources.py name "$remote")"
+            backoff sh -c 'rm -rf "$1" && git clone --quiet --mirror "$2" "$1"' _ "$dir" "$remote"
+          done < srcmirror/remotes.txt
+          python3 .github/scripts/mirror-sources.py config srcmirror/remotes.txt /srcmirror > srcmirror/gitconfig
+
       - name: Build the lab image from THIS commit's Dockerfile
         run: |
+          . .github/scripts/retry.sh
           IMG=lhpc-testlab:ci
-          docker build -t "$IMG" -f .devcontainer/Dockerfile .devcontainer
+          backoff docker build -t "$IMG" -f .devcontainer/Dockerfile .devcontainer
           echo "IMG=$IMG" >> "$GITHUB_ENV"
+
+      - name: Prove the mirror is complete (no network)
+        run: |
+          docker run --rm --network none -v "$PWD/srcmirror":/srcmirror:ro \
+            -v "$PWD/.github/scripts":/scripts:ro "$IMG" python3 /scripts/mirror-sources.py verify /srcmirror
 
       # The lane's script is written to a FILE and run, never nested inside quoted strings.
       # It was nested twice before, and both times a quote in a COMMENT broke it: an apostrophe
@@ -152,11 +201,15 @@ jobs:
           set -e
           cd /tmp/repo
           export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build
+          # Clones resolve to the mirrors. A file in HOME, because the product runner forwards
+          # HOME to git and drops GIT_CONFIG_GLOBAL (mirror-sources.py).
+          cp /srcmirror/gitconfig ~/.gitconfig
           python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
           . /tmp/repo/.github/scripts/retry.sh
-          retry 3 pip install -q -e .
-          retry 3 pip install -q -e ./testlab
-          retry 3 pip install -q pytest
+          backoff pip install -q -e .
+          python3 .github/scripts/mirror-sources.py resolved /srcmirror
+          backoff pip install -q -e ./testlab
+          backoff pip install -q pytest
           # -x: STOP AT THE FIRST FAILURE. The lane chains stacks over one radio pair, so a
           # case that fails leaves the run in a state later cases cannot be judged in — and the
           # automated release reads this JUnit to decide which stack to freeze. Continuing
@@ -171,7 +224,7 @@ jobs:
             python -m pytest testlab/tests/release -q -rs -x \
               --junitxml=/out/junit-release.xml
           LANE
-          docker run --rm --user root -v "$PWD":/repo:ro \
+          docker run --rm --user root -v "$PWD":/repo:ro -v "$PWD/srcmirror":/srcmirror:ro \
             -v lhpc_release_tmp:/tmp -v "$PWD/releaseevidence":/out \
             "$IMG" bash -lc '
               set -e
