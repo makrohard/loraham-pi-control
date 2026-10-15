@@ -30,7 +30,6 @@ import os
 import re
 import stat
 import struct
-import time
 from collections import deque
 from typing import Callable, Optional
 
@@ -160,7 +159,6 @@ class LoRaHAMRadio(_LoRaRadioBase):
         reconnect_delay: float = 5.0,
         tx_result_margin: float = 1.0,
         max_packet_size: int = 255,
-        airtime_dutycycle: float = 10.0,
         noise_poll_interval: float = NOISE_POLL_INTERVAL_S,
         resolve_sockets: bool = True,
         rf_log_path: str = "",
@@ -193,7 +191,6 @@ class LoRaHAMRadio(_LoRaRadioBase):
         self.reconnect_delay = reconnect_delay
         self.tx_result_margin = tx_result_margin
         self.max_packet_size = max_packet_size
-        self.airtime_dutycycle = airtime_dutycycle
         self._noise_poll_interval = noise_poll_interval
 
         self._validate_config()
@@ -230,15 +227,6 @@ class LoRaHAMRadio(_LoRaRadioBase):
         self._tx_ready = False
         self._connected = False
         self._pending_tx_result: Optional[asyncio.Future] = None
-
-        # Rolling duty-cycle accounting: the last 5 TX
-        # timestamps and airtimes bound the on-air share to `airtime_dutycycle` percent.
-        # DELIBERATELY separate from openHop's dispatcher TX budget: that leaky bucket
-        # is active only while client-repeat is enabled (prefs.client_repeat), while
-        # this limiter is the LHPC-configured regulatory backstop that must hold for
-        # a plain companion too. With client-repeat off it is the only governor.
-        self._airtime_txtimestamp: deque = deque([0.0] * 5, maxlen=5)
-        self._airtime_txtime: deque = deque([0.0] * 5, maxlen=5)
 
         # Optional observer: called with (connected: bool, tx_ready: bool) on every
         # connection state change, for host-level readiness reporting.
@@ -288,10 +276,6 @@ class LoRaHAMRadio(_LoRaRadioBase):
                 or not isinstance(self.tx_result_margin, (int, float))
                 or self.tx_result_margin < 0):
             raise ValueError("tx_result_margin must be zero or positive")
-        if (isinstance(self.airtime_dutycycle, bool)
-                or not isinstance(self.airtime_dutycycle, (int, float))
-                or not 0 < self.airtime_dutycycle <= 100):
-            raise ValueError("airtime_dutycycle must be between 0 and 100 percent")
 
     # ------------------------------------------------------------------
     # openHop LoRaRadio contract
@@ -350,17 +334,6 @@ class LoRaHAMRadio(_LoRaRadioBase):
                 )
                 self._request_reconnect()
                 return None
-
-            # Rolling duty-cycle guard: pace rather than refuse, so the mesh sees a
-            # delayed packet instead of a lost one.
-            wait_s = self.transmit_wait()
-            if wait_s > 0:
-                logger.info("Duty-cycle limit: delaying TX %.2f s", wait_s)
-                await asyncio.sleep(wait_s)
-                if self._data_writer is None or self._data_writer.is_closing() \
-                        or not self._tx_ready:
-                    logger.warning("Daemon link changed during duty-cycle wait; packet not sent")
-                    return None
 
             airtime_ms = self._calculate_airtime_ms(len(data))
             timeout = self._cadwait_s + (airtime_ms / 1000.0) + self.tx_result_margin
@@ -429,8 +402,6 @@ class LoRaHAMRadio(_LoRaRadioBase):
             if status == TX_RESULT_STATUS_OK:
                 # OK also covers send-after-CAD-timeout (flag 0x04): transmitted.
                 self._rflog.tx("ok", data)
-                self._airtime_txtimestamp.append(time.monotonic())
-                self._airtime_txtime.append(airtime_ms)
                 logger.debug(
                     "TX ok: %d bytes, airtime %.1f ms, flags=0x%02X seq=%d",
                     len(data), airtime_ms, flags, seq,
@@ -972,8 +943,8 @@ class LoRaHAMRadio(_LoRaRadioBase):
         """LoRa packet airtime in milliseconds.
 
         Uses openHop's RadioLib-matched helper — the SAME formula the Dispatcher
-        applies for its airtime maths — so the TX_RESULT timeout and the duty
-        accounting agree with the rest of the process. The local Semtech-formula
+        applies for its airtime maths — so the TX_RESULT timeout agrees with the
+        rest of the process. The local Semtech-formula
         fallback exists only for openhop-less standalone use.
         """
         if calculate_lora_airtime_ms is not None:
@@ -997,25 +968,6 @@ class LoRaHAMRadio(_LoRaRadioBase):
             0,
         )
         return (self.preamble_length + 4.25 + payload_symbols) * symbol_time * 1000
-
-    def transmit_wait(self) -> float:
-        """Suggested duty-cycle wait in seconds before the next TX (0 = go now)."""
-        tx_earliest = self._airtime_txtimestamp[0]
-        tx_period = time.monotonic() - tx_earliest
-        tx_total = sum(self._airtime_txtime)
-        if tx_earliest <= 0 or tx_period <= 0 or tx_total <= 0:
-            return 0.0
-        duty_cycle = 100 * (tx_total / 1000) / tx_period
-        for c in range(3):
-            fraction = 1 / (1 << c)
-            limit = self.airtime_dutycycle * fraction
-            if duty_cycle > limit:
-                tx_min = (
-                    tx_earliest + (tx_total / 1000) / (limit / 100) - time.monotonic()
-                ) * fraction
-                if tx_min > 0:
-                    return tx_min
-        return 0.0
 
     def get_radioconfig(self) -> tuple:
         """(freq_khz, bw_hz, sf, cr, txpower_dbm, txmaxpower_dbm)."""
