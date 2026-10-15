@@ -19,7 +19,7 @@ v2 (round-1 findings, all accepted):
 | 1 the rule contradicts itself (pre-acquired vs in-lane fetch; "never retries" vs `curl --retry`) | §1 now has three exclusive classes. A lane step is never repeated; a product's own transport retry is product behaviour and stays. The existing 146 readiness retry is named and becomes decision (c4) |
 | 2 M2 does not cover "drew its own error" | §1 narrowed: for wait-based checks the evidence is "process gone". The "drew an error" evidence stays where it is implemented (`pty_readiness`, `_DREW_AN_ERROR`, release.py:401). Failure of `lhpc status` ⇒ UNMARKED |
 | 3 `--network none` scope undefined | M3: the proof is a workflow step, not the lane. It clones every listed remote through the mirror config in a `--network none` container |
-| 4 M4: no slow-build proof, no fail-safe | M4 hooks slow-build's `_judged` too, and slow-build is in its lane proof. Precedence: EXTERNAL > marker; unrecognised ⇒ UNMARKED; tests for both |
+| 4 M4: no slow-build proof, no fail-safe | M4 hooks slow-build's `_judged` too, and slow-build is in its lane proof. Precedence: EXTERNAL > marker; unrecognised ⇒ UNMARKED; tests for both (precedence SUPERSEDED by v3 r2-2: the decisive step decides; an attributable step is always marked) |
 | 5 S2 has no lane proof | Phase 3 gets a `workflow_dispatch` input `inject` (none / binaries-unreachable / github-api-unreachable). It adds `--add-host` lines, so the testlab job's reset fails with the EXTERNAL line |
 | 6 decision (a) framed one-sidedly | §5 (a) states both options with both arguments and no recommendation (the maintainer's call) |
 | 7 B1 written as settled | B1 exists only if c1 approves it. If not, a typed external failure stays a red, unmarked failure with no re-run |
