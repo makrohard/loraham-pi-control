@@ -457,3 +457,23 @@ def test_an_interactive_service_keeps_its_settings_tick(tmp_path):
     assert svc.save_config("reticulum", {"autostart_nomadnet": "on"}).ok
     svc._invalidate_config()
     assert "nomadnet" in [c.id for _s, c in svc._run_order("reticulum")]   # planned (MANUAL_REQUIRED)
+
+
+def test_the_running_mode_is_read_once_per_request_and_again_after_a_render(tmp_path, monkeypatch):
+    # Every Lifecycle re-read and re-parsed the generated config for the running mode (144 times per
+    # Stacks page on a Zero). It is read once per request; a render in the same request (a start)
+    # is seen by the next Lifecycle, so a stop is never verified against the mode before the render.
+    svc = _svc(tmp_path)
+    _set_mode(svc, "chat+repeater", name="Relay 1")
+    svc.write_config_files(mm.STACK_ID)
+    _set_mode(svc, "repeater", name="Relay 1")                    # saved, not rendered yet
+    reads = []
+    orig = ControllerService.meshcore_running_mode
+    monkeypatch.setattr(ControllerService, "meshcore_running_mode",
+                        lambda self: (reads.append(1), orig(self))[1])
+    node = _node(svc)
+    svc.invalidate_snapshot()                                     # a request starts
+    ports = [[mm._port(e) for e in svc._lifecycle().expected_endpoints(node)] for _ in range(5)]
+    assert ports == [[5000, 8000]] * 5 and len(reads) == 1
+    svc.write_config_files(mm.STACK_ID)                           # a start renders the new role
+    assert [mm._port(e) for e in svc._lifecycle().expected_endpoints(node)] == [8000]

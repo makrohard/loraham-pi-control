@@ -1906,7 +1906,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     def _lifecycle(self) -> Lifecycle:
         lc = Lifecycle(self._paths, self.stacks(), self.config(), self._system)
         # Stop verification probes the endpoints the RUNNING launch opened (MeshCore: by mode).
-        running = self.meshcore_running_mode()           # once per operation, not per poll
+        running = self._request_memo(("meshcore-running-mode",), self.meshcore_running_mode)
         lc.expected_endpoints = lambda comp: _meshcore_mode.expected_endpoints(comp, running)
         wrap = getattr(self._ext, "wrap_spawn", None) if self._ext else None
         if wrap is not None:
