@@ -1,8 +1,18 @@
-# PLAN testlab-determinism (v2)
+# PLAN testlab-determinism (v3)
 
 Base `origin/dev` = `eb9673a4` (0.12.9). Scope: `testlab/`, `.github/workflows/testlab.yml`, one product function (S1); a bot change only if decision c1 approves it (B1). Rules: tests/README.md rules 1–10 and "Where a new test goes"; no waiver, no lane exclusion, no weakened assertion; red-before for every fix; a flake never freezes a stack.
 
-## 0. Changes from v1 (round-1 findings, all accepted)
+## 0. Changes
+
+v3 (round-2 findings, all accepted; F3 with added evidence rather than a weaker word):
+
+| finding | change |
+|---|---|
+| r2-1 decision (a) option 1 breaks class A | §1 class A names the lanes' clones EXCEPT slow-build's; (a) option 1 states that slow-build's clone, CLI-venv and .deb transfers are then class B (live transfer deliberately under test, with no mirror); option 2 makes them class A |
+| r2-2 M4 precedence not causally scoped | M4 is rewritten around the DECISIVE step (the one whose failure ended the operation, named by LHPC's own typed line); EXTERNAL only from that step's own output; an attributable decisive step is always marked; a mixed-log twin test (unrelated transport line, attributable failure ⇒ STACK-REGRESSION) and an earlier-step twin (⇒ UNMARKED) |
+| r2-3 "same hang" for 37291605525 | kept, with its measured line added: `did not draw anything matching 'Conversations' within 90 s` (§6) |
+
+v2 (round-1 findings, all accepted):
 
 | finding | change |
 |---|---|
@@ -20,7 +30,7 @@ Base `origin/dev` = `eb9673a4` (0.12.9). Scope: `testlab/`, `.github/workflows/t
 ## 1. The rule (one place: docs/testlab.md, "Running the verification lanes")
 
 > Every external access by a testlab job is in exactly one class.
-> **(A) Acquisition, before the lane.** The container image, the lab's Python packages, Chromium, and the upstream git sources the lanes clone (as mirrors). A workflow step of its own does it; it may retry (`retry.sh`) and names what failed.
+> **(A) Acquisition, before the lane.** The container image, the lab's Python packages, Chromium, and the upstream git sources the testlab and release-verify lanes clone (as mirrors; slow-build's per decision a). A workflow step of its own does it; it may retry (`retry.sh`) and names what failed.
 > **(B) Under test, inside the lane.** What a lane proves needs the real service: the published binaries and the pinned release downloads a stack installs, and a stack's build-step packages. These run exactly as the product runs them, including the product's own transport retries (`graywolf-fetch.sh`'s `curl --retry 3`, pip's own retries), which are product behaviour. The lane never repeats a test, a step or an assertion. A failure that the product's typed output shows to be transport is reported as one `EXTERNAL-UNAVAILABLE <what>: <line>` line, never marked `STACK-REGRESSION`.
 > **(C) Everything else is forbidden.** A lane reaches no other external service.
 > **Attribution.** `STACK-REGRESSION` needs typed evidence of the component itself: for a wait-based readiness check, its process is gone; for an interactive program (`pty_readiness`), it exited or drew a traceback/exception line; for a build, a failure at a step the recipe declares `attributable`. Without that evidence, a failure, including an unrecognised one, is UNMARKED.
@@ -54,9 +64,19 @@ Known exception, open: `pty_readiness` repeats a first start that timed out once
 **M4 [P2] class-B transport failures say so; unknown stays unmarked.**
 - Fetches inside lanes: the binary channel (https only, binary_install.py:101–116; reset ops.py:632–649), graywolf's .deb (graywolf-fetch.sh:109), and build-step pip.
 - Change: `external_unavailable(output) -> str` in release.py; it matches only typed product lines: `download failed:` (BinaryInstallError); graywolf-fetch `download failed`; git `Could not resolve host` / `Failed to connect`; pip `ConnectionError` / `ReadTimeoutError` / `HTTP error 5`; it is printed as a `::error title=EXTERNAL-UNAVAILABLE::` annotation and goes first in the message.
-- Precedence: a match ⇒ EXTERNAL and never a marker; no match ⇒ the existing evidence rules decide; no evidence ⇒ UNMARKED.
-- Called from `install_build` (release.py:322–340) and slow-build's `_judged` (test_slow_build.py:105–109).
-- Red-before: (a) a fake install printing `download failed: <urlopen error [Errno -3]>` ⇒ the message starts `EXTERNAL-UNAVAILABLE`, no marker; (b) a typed attributable build failure whose log also has a transport line ⇒ EXTERNAL, no marker; (c) unknown error text ⇒ neither line; (a) and (b) are red on the parent.
+- The DECISIVE step is the one whose failure ended the operation, as LHPC itself names it; the classifier reads only that step's own text:
+  - install: the failing action's own line(s), i.e. `[failed] …` / `ERR …` lines of `lhpc install` (e.g. `[failed] clone … — <git's words>`, `Binary install … download failed: …`), never the rest of the output;
+  - build: the step log named by LHPC's typed line `[failed] build <comp> (rc N, log <path>)` (`TYPED_BUILD_FAILURE`, lhpc/core/build_regression.py:29; a build stops at its first failing step). If that step is `attributable` ⇒ STACK-REGRESSION, unchanged, whatever any other text says (an attributable step only compiles/patches what earlier steps fetched, release.py docstring :289–299). Otherwise EXTERNAL iff that step log's tail (last 40 lines) has a typed transport line, else UNMARKED;
+  - slow-build `_judged` (test_slow_build.py:105–109): the one timed command; it never marks; EXTERNAL iff its own `[failed]`/`ERR`/`download failed` line matches;
+  - readiness: never EXTERNAL (no fetch).
+- Safety property: EXTERNAL never removes a marker that the existing rules give; the EXTERNAL/UNMARKED difference is diagnostic (both unmarked, neither freezes).
+- Red-before / twins (test_release_attribution.py and test_slowbuild_fetch.py):
+  - (a) install whose `[failed]` line says `download failed: <urlopen error [Errno -3]>` ⇒ message starts `EXTERNAL-UNAVAILABLE`, no marker (red on the parent);
+  - (b) MIXED-LOG TWIN: decisive attributable step fails with a compile error while the output and an earlier step log carry `ConnectionError` ⇒ STACK-REGRESSION, no EXTERNAL (green before and after: the guard);
+  - (c) decisive non-attributable pip step whose log ends in `ReadTimeoutError` ⇒ EXTERNAL, no marker (red on the parent);
+  - (d) EARLIER-STEP TWIN: a transport line only in an earlier, successful step's log, decisive non-attributable step fails with `ResolutionImpossible` ⇒ UNMARKED, no EXTERNAL;
+  - (e) unknown error text ⇒ neither line;
+  - (f) slow-build: a timed `graywolf-fetch.sh` failing with `download failed` ⇒ EXTERNAL (red on the parent).
 - Lanes: testlab, release-verify, slow-build.
 
 **S2 [P2] reset no longer hides a failed binary download.**
@@ -104,7 +124,7 @@ Known exception, open: `pty_readiness` repeats a first start that timed out once
 
 ## 5. Decisions for the human gate
 
-- **(a) slow-build budgets and network time.** Measured facts: The budgeted limits L5 (CLI venv), L6 (upstream .deb) and L7a (clone) are the product's own timeouts, which on a box include the transfer (slow_target.py:79–87, :102–110); the rule fails when `limit < 2 × max(Zero, past CI, this run)`; the runner's network is a datacentre's, not a Zero's Wi-Fi; *Option 1, keep live transfers in slow-build:* the timeout a box uses really has to cover a download, so the transfer is part of what the budget protects. The auditor's argument against: a slow but successful download can fail the budget without any EXTERNAL line, a release-gating red that this plan cannot make deterministic; *Option 2, slow-build times local work only:* it uses the mirror, and pre-acquired .deb/wheels (class A) where possible. That is deterministic, but the Zero budgets then cover no real download, and a per-op network allowance would be new, unmeasured data.
+- **(a) slow-build budgets and network time.** Measured facts: The budgeted limits L5 (CLI venv), L6 (upstream .deb) and L7a (clone) are the product's own timeouts, which on a box include the transfer (slow_target.py:79–87, :102–110); the rule fails when `limit < 2 × max(Zero, past CI, this run)`; the runner's network is a datacentre's, not a Zero's Wi-Fi; *Option 1, keep live transfers in slow-build* (slow-build's clone, CLI-venv and .deb transfers are then class B: live transfer deliberately under test, no mirror there): the timeout a box uses really has to cover a download, so the transfer is part of what the budget protects. The auditor's argument against: a slow but successful download can fail the budget without any EXTERNAL line, a release-gating red that this plan cannot make deterministic; *Option 2, slow-build times local work only* (those transfers become class A): it uses the mirror, and pre-acquired .deb/wheels (class A) where possible. That is deterministic, but the Zero budgets then cover no real download, and a per-op network allowance would be new, unmeasured data.
 - **(b) slow-build as a release gate.** *Name it in `REQUIRED_TESTLAB` (recommended):* it already blocks via the whole-run conclusion (10-13). *Exclude it:* a lane exclusion. *Keep:* it blocks unnamed.
 - **(c1) the bot re-runs a job that said EXTERNAL-UNAVAILABLE once (B1).**; *Approve:* fewer releases stopped by a passing outage. But it is a whole-job retry that can turn a run green; *Reject:* an EXTERNAL red stays red until a person re-runs it.
 - **(c2) class-B fetches stay in the lanes** (binaries, pinned .deb, build-step pip). *Recommended: yes for now.* Serving them locally needs a lab https server trusted by `_http_get` (a security-boundary change) or a per-venv wheelhouse, each its own item.
@@ -132,7 +152,7 @@ Known exception, open: `pty_readiness` repeats a first start that timed out once
 | 38338362029 | slow-build | `upstream check failed for 'graywolf': network/API error` | external dependency, cause unrecorded |
 | 37410182407 | testlab | `test_check_fails_when_the_aprs_is_sink_is_down … assert (False is True)` | spawn race (147), fixed 31ac0844 |
 | 37401912454, 37395375156 | release-verify | `did not draw anything matching 'Conversations' within 90 s` | first-start hang (146): the retry |
-| 37291605525 | release-verify | `STACK-REGRESSION stack=reticulum phase=readiness` | same hang, marked (finding 139) |
+| 37291605525 | release-verify | `STACK-REGRESSION stack=reticulum phase=readiness` + `did not draw anything matching 'Conversations' within 90 s` | same hang, marked (finding 139) |
 | 37145791526 | slow-build | `['seconds must be a positive number']` | lane defect at introduction |
 | 37148794385, 37162748975, 37261689237, 37275585327 | slow-build | `N budget failure(s): no row C evidence … / no Zero baseline …` | missing lane data |
 | 37239771769 | slow-build | ``no `[venv] <n> s` line from the binary install`` | missing evidence line |
