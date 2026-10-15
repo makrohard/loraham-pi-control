@@ -287,7 +287,9 @@ leaves on disk and which test proves it: the [invariant table](#invariant-table)
   snapshot, per-(stack, band) config, consumed-source SHAs, firewall status, listeners, git state
   per distinct checkout) through a thread-local request memo dropped at every request start and
   around every mutation; rechecks under operation locks use `build_snapshot(fresh=True)`. A
-  snapshot reads the process table once, so every component is judged against the same table. Every
+  snapshot reads the process table once, so every component is judged against the same table, and
+  the network view asks NetworkManager for the active connections once, so its Wi-Fi and wired rows
+  come from one answer. Every
   public `ControllerService` entry that writes anything is `@invalidates_snapshot`; the rest are
   listed with a reason in `snapshot_memo.SNAPSHOT_NEUTRAL`. The
   neutral writers whose writes no snapshot input observes (lock files, the native RF-log roll,

@@ -1282,3 +1282,18 @@ def test_network_view_without_a_wired_link(tmp_path):
     _fake_nmcli(svc, _std_replies(active="CL-UUID-2:HomeNet:802-11-wireless:wlan0\n"))
     nv = svc.network_view()
     assert nv["mode"] == "client" and nv["ethernet"] == {} and "ap_ssid" not in nv
+
+
+def test_the_network_view_lists_the_active_connections_once(tmp_path):
+    # The Wi-Fi row and the wired row each ran `nmcli connection show --active`: the view now asks
+    # once and both rows come from that one answer (one moment instead of two).
+    svc = _svc(tmp_path)
+    active = ("AP-UUID-1:lhpc-ap:802-11-wireless:wlan0\n"
+              "ETH-UUID-3:Wired connection 1:802-3-ethernet:eth0\n")
+    calls = _fake_nmcli(svc, _std_replies(active=active))
+    view = svc.network_view()
+    assert sum("--active" in c for c in calls) == 1
+    assert (view["mode"], view["active"]["name"], view["active"]["address"]) == \
+        ("ap", "lhpc-ap", "10.42.0.1/24")
+    assert view["ethernet"] == {"name": "Wired connection 1", "device": "eth0",
+                                "address": "10.42.0.1/24"}
