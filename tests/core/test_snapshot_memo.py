@@ -205,7 +205,7 @@ def _git_src(src, sha):
     return {("git", "-C", a, "rev-parse", "HEAD"): CR(0, sha + "\n", ""),
             ("git", "-C", a, "status", "--porcelain=v2", "--branch", "--untracked-files=no"):
                 CR(0, f"# branch.oid {sha}\n# branch.head main\n", ""),
-            ("git", "-C", a, "describe", "--tags", "--always", "--dirty"): CR(0, "v111a\n", "")}
+            ("git", "-C", a, "describe", "--tags", "--always"): CR(0, "v111a\n", "")}
 
 
 def test_components_sharing_a_checkout_and_pin_are_probed_once_per_snapshot(tmp_path):

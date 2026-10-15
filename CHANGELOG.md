@@ -20,6 +20,8 @@ Fixed
   readiness timeout names the stack only when LHPC reports the component stopped or failed.
 - The release check no longer starts an interactive program a second time after a timeout: a hung start fails
   (unmarked), and NomadNet's records the stacks of every Reticulum process and the shared instance's sockets.
+- Reading a stack's status (console pages, `lhpc status`) no longer takes git's index lock or rewrites the git
+  index in the stack's source checkout.
 
 ## 0.12.9
 

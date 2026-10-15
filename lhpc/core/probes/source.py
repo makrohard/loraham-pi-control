@@ -14,6 +14,9 @@ from ..model import SourceSpec, SourceState
 from .backends import System
 
 _TIMEOUT_S = 3.0
+# A read never takes `.git/index.lock` to refresh the index: same answers, no write into the checkout,
+# and no lock a concurrent update's own git could fail on (git's switch for background readers).
+_READ_ONLY = {"GIT_OPTIONAL_LOCKS": "0"}
 
 
 @dataclass
@@ -62,13 +65,13 @@ def lhpc_patched_only(system: System, abs_path: str, patches) -> bool:
     if not files:
         return False
     check = system.runner.run(["git", "-C", abs_path, "apply", "--reverse", "--check", *files],
-                              timeout=_TIMEOUT_S)
+                              timeout=_TIMEOUT_S, env=_READ_ONLY)
     if check.returncode != 0:
         return False
     want = system.runner.run(["git", "-C", abs_path, "apply", "--numstat", *files],
-                             timeout=_TIMEOUT_S)
+                             timeout=_TIMEOUT_S, env=_READ_ONLY)
     have = system.runner.run(["git", "-C", abs_path, "diff", "HEAD", "--numstat"],
-                             timeout=_TIMEOUT_S)
+                             timeout=_TIMEOUT_S, env=_READ_ONLY)
     if want.returncode != 0 or have.returncode != 0:
         return False
     return _numstat(want.stdout) == _numstat(have.stdout)
@@ -94,7 +97,7 @@ def probe_source(system: System, spec: SourceSpec, abs_path: str) -> SourceProbe
     # their own repo are NOT source edits). Two subprocesses per source instead of three.
     status_res = system.runner.run(
         ["git", "-C", abs_path, "status", "--porcelain=v2", "--branch", "--untracked-files=no"],
-        timeout=_TIMEOUT_S,
+        timeout=_TIMEOUT_S, env=_READ_ONLY,
     )
     if status_res.timed_out:
         ev["error"] = "git status timed out"
@@ -109,11 +112,13 @@ def probe_source(system: System, spec: SourceSpec, abs_path: str) -> SourceProbe
         return SourceProbe(SourceState.UNKNOWN, evidence=ev)
     ev["head"] = head
 
+    # `--dirty` is not used: describe refreshes the index under its lock even with optional locks
+    # off. The suffix comes from the status answer above, the same verdict that makes it DIRTY.
     desc = system.runner.run(
-        ["git", "-C", abs_path, "describe", "--tags", "--always", "--dirty"],
-        timeout=_TIMEOUT_S,
+        ["git", "-C", abs_path, "describe", "--tags", "--always"],
+        timeout=_TIMEOUT_S, env=_READ_ONLY,
     )
-    version = desc.stdout.strip() if desc.returncode == 0 else head[:12]
+    version = (desc.stdout.strip() + ("-dirty" if dirty else "")) if desc.returncode == 0 else head[:12]
     if dirty and spec.patches and lhpc_patched_only(system, abs_path, spec.patches):
         # The only modifications are LHPC's own build-time patch: not an operator change.
         dirty, version = False, version.removesuffix("-dirty")
