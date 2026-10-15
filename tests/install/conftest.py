@@ -16,10 +16,8 @@ from pathlib import Path
 import pytest
 
 import gitrepo
+import installers
 from lhpc.core import selfupdate
-from lhpc.core.config import Config
-from lhpc.core.install import Installer
-from lhpc.core.model import Component, ComponentKind, SourceSpec, Stack
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import RealSystem
 
@@ -49,13 +47,6 @@ def make_repo(git):
     return _make
 
 
-def _app_component():
-    """The plain managed-source component the install suites adopt: `app`, sourced from
-    `src/app`, with a local fallback directory `app` under the adopt search root."""
-    return Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app", local_dir="app"))
-
-
 @pytest.fixture
 def installer(tmp_path):
     """`installer(comp=None, *, extra=(), root=None, search_root=None, system=None, values=None)`
@@ -64,12 +55,9 @@ def installer(tmp_path):
     `extra`. `search_root` is the adopt search root (default `<root>/local`); `values` are
     further config values merged beside it."""
     def _build(comp=None, *, extra=(), root=None, search_root=None, system=None, values=None):
-        root = Path(root) if root is not None else tmp_path / "rt"
-        comp = comp or _app_component()
-        cfg = Config(values={"install": {"adopt_search_root": str(search_root or root / "local")},
-                             **(values or {})})
-        stacks = (Stack(id="s", name="s", main=comp.id, components=(comp, *extra)),)
-        return Installer(Paths(runtime_root=root), stacks, cfg, system or RealSystem())
+        return installers.build_installer(root if root is not None else tmp_path / "rt", comp,
+                                          extra=extra, search_root=search_root, system=system,
+                                          values=values)
     return _build
 
 
@@ -105,7 +93,6 @@ def op_svc(tmp_path, monkeypatch):
         import sys
 
         from lhpc.core import selfupdate, updater_units
-        from lhpc.core.paths import Paths
         from lhpc.core.probes.backends import CommandResult, FakeSystem
         from lhpc.core.services import ControllerService
 

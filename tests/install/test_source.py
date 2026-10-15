@@ -371,31 +371,25 @@ def test_parent_swap_after_fd_cannot_redirect_clone_outside(tmp_path, git, make_
     assert (moved / ".app.candidate-x" / "MARK").read_text() == "payload"   # landed in held inode
 
 
-def test_recovery_removes_a_clone_killed_before_its_journal(tmp_path, make_repo, installer, monkeypatch):
+def test_recovery_removes_a_clone_killed_before_its_journal(tmp_path, make_repo, installer):
     # Power lost while the candidate was still being staged (a clone may take 15 minutes), before
     # any journal exists: nothing named the partial tree, so it stayed beside the source for good.
     import signal
+    import subprocess
+    import sys
     make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = installer(comp)
-    real_copy = Installer._copy_into_candidate
-
-    def copy_then_die(local, cand):           # stubs the copy: the one seam inside the staging
-        real_copy(local, cand)
-        os.kill(os.getpid(), signal.SIGKILL)
-    monkeypatch.setattr(Installer, "_copy_into_candidate", staticmethod(copy_then_die))
-    pid = os.fork()
-    if pid == 0:                              # the box: dies mid-staging, no cleanup runs
-        try:
-            inst.adopt_source(comp, source="dev")
-        finally:
-            os._exit(1)
-    _, status = os.waitpid(pid, 0)
-    assert os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL
+    # The box: the same installer in a fresh interpreter (installers.py), killed mid-staging, no
+    # cleanup runs. Not os.fork(): an xdist worker has threads, and a fork can deadlock there.
+    r = subprocess.run([sys.executable, str(Path(__file__).with_name("installers.py")),
+                        "kill-mid-staging", str(tmp_path / "rt")], capture_output=True, text=True,
+                       timeout=120, check=False,
+                       env={**os.environ, "PYTHONPATH": str(Path(__file__).parents[2])})
+    assert r.returncode == -signal.SIGKILL, r.stderr[-1500:]
     staged = list(inst.paths.under("src").glob(".app.candidate-*"))
     assert len(staged) == 1 and (staged[0] / "file.txt").is_file()
     assert not inst._pending_journals()
-    monkeypatch.undo()
     msgs = inst.recover_source_activations()
     assert not staged[0].exists()
     assert any("removed an interrupted clone" in m for m in msgs), msgs
