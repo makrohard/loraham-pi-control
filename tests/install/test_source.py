@@ -84,7 +84,7 @@ def _git_src(src, sha):
     return {("git", "-C", a, "rev-parse", "HEAD"): CR(0, sha + "\n", ""),     # the source check's own read
             ("git", "-C", a, "status", "--porcelain=v2", "--branch", "--untracked-files=no"):
                 CR(0, f"# branch.oid {sha}\n# branch.head main\n", ""),
-            ("git", "-C", a, "describe", "--tags", "--always", "--dirty"): CR(0, "v111a\n", "")}
+            ("git", "-C", a, "describe", "--tags", "--always"): CR(0, "v111a\n", "")}
 
 
 def test_uninstalled_source_is_unknown_and_makes_no_network_call(tmp_path):
@@ -5361,3 +5361,69 @@ def test_leftover_prev_refusal_names_the_folder_and_the_command(tmp_path):
     assert action.status == "failed"
     assert "src/.repo.prev" in action.detail and "lhpc update c --yes" in action.detail
     assert (rt / "src" / ".repo.prev").is_dir()            # the refusal itself removes nothing
+
+
+@pytest.mark.parametrize("edit, state", [("touch", SourceState.MATCH), ("change", SourceState.DIRTY)])
+def test_a_source_probe_writes_nothing_into_the_checkout(tmp_path, make_repo, edit, state):
+    """A status read is read-only: probing a checkout whose index stat cache is stale changes
+    nothing under `.git` (no `index.lock`, no index rewrite), and it still tells a touched file
+    from a changed one."""
+    from lhpc.core.probes.source import probe_source
+    repo = tmp_path / "src" / "app"
+    head = make_repo(repo)
+    f = repo / "file.txt"
+    if edit == "change":
+        f.write_text("changed\n")
+    st = f.stat()
+    os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+    def tree():                     # every path under .git: kind, size, mtime, bytes
+        out = {}
+        for d, _dirs, files in os.walk(repo / ".git"):
+            out[d] = os.stat(d).st_mtime_ns
+            for n in files:
+                p = os.path.join(d, n)
+                out[p] = (os.stat(p).st_mtime_ns, Path(p).read_bytes())
+        return out
+    before = tree()
+    probe = probe_source(RealSystem(), SourceSpec(path="src/app", pin_commit=head), str(repo))
+    assert (probe.state, probe.head) == (state, head)
+    assert probe.version == head[:7] + ("-dirty" if state is SourceState.DIRTY else "")
+    assert tree() == before
+
+
+@pytest.mark.parametrize("edit", [
+    "clean", "modified", "staged-only", "staged-and-modified", "staged-new", "deleted",
+    "deleted-from-index", "mode", "untracked", "intent-to-add"])
+def test_the_probed_version_is_what_git_describe_dirty_says(tmp_path, make_repo, git, edit):
+    """The probe no longer runs `describe --dirty` (it rewrites the index even with optional locks
+    off); its `-dirty` suffix comes from the status answer. Equal output: for every kind of tracked
+    change the version is exactly what `git describe --tags --always --dirty` prints for a copy of
+    the same checkout."""
+    from lhpc.core.probes.source import probe_source
+    repo = tmp_path / "src" / "app"
+    head = make_repo(repo, {"f": "a\n", "g": "b\n"})
+    git(repo, "tag", "v1")
+    f = repo / "f"
+    if edit in ("modified", "staged-only", "staged-and-modified"):
+        f.write_text("x\n")
+    if edit in ("staged-only", "staged-and-modified"):
+        git(repo, "add", "f")
+    if edit == "staged-only":
+        f.write_text("a\n")                       # the worktree equals HEAD again
+    if edit in ("staged-new", "untracked", "intent-to-add"):
+        (repo / "n").write_text("n\n")
+    if edit == "staged-new":
+        git(repo, "add", "n")
+    if edit == "intent-to-add":
+        git(repo, "add", "-N", "n")
+    if edit == "deleted":
+        f.unlink()
+    if edit == "deleted-from-index":
+        git(repo, "rm", "-q", "--cached", "f")
+    if edit == "mode":
+        f.chmod(0o755)
+    ref = tmp_path / "ref"
+    shutil.copytree(repo, ref, symlinks=True)
+    want = git(ref, "describe", "--tags", "--always", "--dirty")
+    probe = probe_source(RealSystem(), SourceSpec(path="src/app", pin_commit=head), str(repo))
+    assert probe.version == want

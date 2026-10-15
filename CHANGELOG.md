@@ -16,6 +16,8 @@ Fixed
   are still changed in LHPC's Settings.
 - Graywolf's update check now says why GitHub could not be reached: curl's exit code and the end of its message,
   in the result and in the status it keeps.
+- Reading a stack's status (console pages, `lhpc status`) no longer takes git's index lock or rewrites the git
+  index in the stack's source checkout.
 
 ## 0.12.9
 

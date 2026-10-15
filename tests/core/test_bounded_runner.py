@@ -435,3 +435,11 @@ def test_the_exit_wait_and_its_fallback_share_one_deadline(monkeypatch):
     assert (r.returncode, r.stdout) == (0, "ok\n")
     assert polls == [9000.0]                                      # what is left when the poll starts
     assert waits[0] == 5.0                                        # the fallback: what is left after it
+
+
+def test_a_command_gets_the_runners_environment_plus_its_own_variables():
+    # `env` adds to the runner's fixed environment; it never brings in the controller's own.
+    from lhpc.core.probes.backends import _FIXED_ENV
+    r = RealCommandRunner().run(["env"], timeout=10, env={"GIT_OPTIONAL_LOCKS": "0"})
+    got = dict(line.split("=", 1) for line in r.stdout.splitlines() if "=" in line)
+    assert got == {**_FIXED_ENV, "GIT_OPTIONAL_LOCKS": "0"}
