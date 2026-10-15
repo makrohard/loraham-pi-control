@@ -31,12 +31,12 @@ class FirewallOpsMixin:
         stack+component. A TCP listener WITHOUT metadata is surfaced as `unmapped` (fail
         closed — no allow derived) so a newly added listener can never be silently exposed."""
         mapped, unmapped = [], []
-        for st in self.build_snapshot().stacks if hasattr(self, "build_snapshot") else []:
-            for comp in st.stack.components:
+        for stk in self.stacks() if hasattr(self, "stacks") else []:     # the manifest's, no status
+            for comp in stk.components:
                 for ep in comp.endpoints:
                     if ep.kind != "tcp" or ep.role != "listener":
                         continue
-                    (mapped if ep.firewall else unmapped).append((st.stack, comp, ep))
+                    (mapped if ep.firewall else unmapped).append((stk, comp, ep))
         return mapped, unmapped
 
     def _fw_resolve_scope(self, stk, comp, ep, band=None):
@@ -1092,13 +1092,13 @@ class FirewallOpsMixin:
 
     # ---- settings view + configure (FW-7) ---------------------------------------------------
 
-    def firewall_settings_view(self) -> dict:
+    def firewall_settings_view(self, st=None) -> dict:
         """Everything the Firewall settings section renders: mode, per-listener rows (stable
         id, resolved proto/port, deny flag, selection, whether it exposes non-loopback), the
         locked SSH + proxy-ingress rows, AP controls, foreign-firewall recommendation, and the
-        three script paths for the cmdboxes."""
+        three script paths for the cmdboxes. `st`: the page's own `firewall_status()`, if it has one."""
         fwcfg = getattr(self.config(), "firewall", None)
-        st = self.firewall_status()
+        st = self.firewall_status() if st is None else st
         cand = st.get("candidate") or self.firewall_candidate()   # the status already built it
         rows, seen_ids = [], set()
         for e in cand["endpoints"]:

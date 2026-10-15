@@ -3395,3 +3395,42 @@ def test_foreign_tables_keep_a_nat_postrouting_chain_that_queues():
 
 def test_foreign_tables_unreadable_ruleset_is_unknown():
     assert _foreign(_nm_shared_ruleset(), rc=1) is None
+
+
+def test_a_stacks_render_builds_the_firewall_candidate_once(web, monkeypatch):
+    # The Stacks page built the firewall status for its wide reads and again for the settings
+    # section (1.8 s for the two on a Zero); the section now takes the status the page has.
+    from lhpc.core import service_firewall as sf
+    n = []
+    orig = sf.FirewallOpsMixin.firewall_candidate
+    monkeypatch.setattr(sf.FirewallOpsMixin, "firewall_candidate",
+                        lambda self, *a, **k: (n.append(1), orig(self, *a, **k))[1])
+    assert web().get("/stacks").status_code == 200
+    assert len(n) == 1
+
+
+def test_the_firewall_settings_view_is_the_same_with_the_status_handed_in(tmp_path):
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.firewall_settings_view(svc.firewall_status()) == svc.firewall_settings_view()
+
+
+def test_the_firewall_listener_list_needs_no_status_snapshot(tmp_path, monkeypatch):
+    # The listener list is the manifest's; building a whole status snapshot for it cost a firewall-
+    # only read (the firewall page, the CLI) a full assessment of every stack.
+    from lhpc.core import status as statusmod
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    mapped, unmapped = svc._fw_listener_endpoints()
+    ids = [(s.id, c.id, e.address) for s, c, e in mapped + unmapped]
+    assessed, orig = [], statusmod.StatusProber.assess_stacks
+    monkeypatch.setattr(statusmod.StatusProber, "assess_stacks",
+                        lambda self, stacks: (assessed.append(1), orig(self, stacks))[1])
+    svc.invalidate_snapshot()
+    mapped2, unmapped2 = svc._fw_listener_endpoints()
+    assert [(s.id, c.id, e.address) for s, c, e in mapped2 + unmapped2] == ids and ids
+    assert assessed == []
