@@ -333,3 +333,105 @@ def test_streaming_run_returns_and_flags_unverified_output(tmp_path):
         assert log.read_text().split()[1:] == ["hi"]
     finally:
         _kill(log.read_text())
+
+
+def test_a_short_command_is_reaped_without_a_sleep_loop(monkeypatch):
+    # A timed `Popen.wait` polls in sleeps of 1 to 50 ms, so every git/systemctl probe was noticed
+    # late (on a Zero, 141 sleeps per status page). The runner blocks on the child's exit instead.
+    import subprocess
+
+    def no_sleep(_s):
+        raise AssertionError("the runner slept while waiting for the child")
+    monkeypatch.setattr(subprocess.time, "sleep", no_sleep)
+    r = RealCommandRunner().run(["python3", "-c", "print('ok')"], timeout=10)
+    assert (r.returncode, r.stdout, r.timed_out) == (0, "ok\n", False)
+
+
+def test_without_pidfd_the_runner_falls_back_to_the_timed_wait(monkeypatch):
+    import os
+
+    def unsupported(_pid, *_a):
+        raise OSError(38, "Function not implemented")
+    monkeypatch.setattr(os, "pidfd_open", unsupported)
+    r = RealCommandRunner().run(["python3", "-c", "import sys; sys.exit(3)"], timeout=10)
+    assert (r.returncode, r.timed_out) == (3, False)
+    t0 = time.time()
+    r = RealCommandRunner().run(["sleep", "30"], timeout=0.4)
+    assert r.timed_out and r.returncode == 124 and time.time() - t0 < 5.0
+
+
+def test_a_child_killed_by_a_signal_reports_the_signal():
+    r = RealCommandRunner().run(["sh", "-c", "kill -TERM $$"], timeout=10)
+    assert (r.returncode, r.timed_out) == (-15, False)            # as Popen reports it
+
+
+def test_a_failing_poll_falls_back_to_the_timed_wait_on_the_same_deadline(monkeypatch):
+    import select
+
+    real, failed = select.poll, []
+
+    class ExitPollFails:
+        # Only the exit wait registers POLLIN alone; the pipe drains (POLLIN|POLLHUP|POLLERR) run
+        # on the real poll, so the output is still captured.
+        def __init__(self):
+            self._p, self._exit_wait = real(), False
+
+        def register(self, fd, mask):
+            self._exit_wait = mask == select.POLLIN
+            self._p.register(fd, mask)
+
+        def poll(self, *a):
+            if self._exit_wait:
+                failed.append(1)
+                raise OSError(5, "Input/output error")
+            return self._p.poll(*a)
+    monkeypatch.setattr(select, "poll", ExitPollFails)
+    r = RealCommandRunner().run(["python3", "-c", "print('ok')"], timeout=10)
+    assert failed == [1]                                          # the fallback branch ran
+    assert (r.returncode, r.stdout, r.timed_out) == (0, "ok\n", False)
+
+
+def test_the_exit_wait_and_its_fallback_share_one_deadline(monkeypatch):
+    # Whatever the exit wait has used of the timeout is not given again: the poll waits for what is
+    # left of the deadline when it starts, and when it fails part-way the timed wait gets only the rest.
+    import select
+    import subprocess
+    import time as _time
+    now = [1000.0]
+    monkeypatch.setattr(_time, "monotonic", lambda: now[0])
+    real_poll, polls, waits = select.poll, [], []
+
+    class ExitPollFailsLate:
+        def __init__(self):
+            self._p, self._exit_wait = real_poll(), False
+
+        def register(self, fd, mask):
+            self._exit_wait = mask == select.POLLIN
+            self._p.register(fd, mask)
+
+        def poll(self, *a):
+            if self._exit_wait:
+                polls.append(a[0])
+                now[0] += 4.0                                     # 4 s of the budget go by
+                raise OSError(5, "Input/output error")
+            return self._p.poll(*a)
+    probe = subprocess.Popen(["true"])                            # the real class (the suite may wrap
+    probe.wait()                                                  # the `Popen` name in a guard)
+    popen, real_wait = type(probe), type(probe).wait
+
+    def wait(self, timeout=None):
+        waits.append(timeout)
+        return real_wait(self, timeout)
+    import os
+    real_open = os.pidfd_open
+
+    def slow_open(pid, *a):
+        now[0] += 1.0                                             # 1 s goes by before the poll
+        return real_open(pid, *a)
+    monkeypatch.setattr(os, "pidfd_open", slow_open)
+    monkeypatch.setattr(select, "poll", ExitPollFailsLate)
+    monkeypatch.setattr(popen, "wait", wait)
+    r = RealCommandRunner().run(["python3", "-c", "print('ok')"], timeout=10)
+    assert (r.returncode, r.stdout) == (0, "ok\n")
+    assert polls == [9000.0]                                      # what is left when the poll starts
+    assert waits[0] == 5.0                                        # the fallback: what is left after it
