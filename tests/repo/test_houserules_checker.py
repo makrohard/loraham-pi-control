@@ -166,7 +166,7 @@ def test_a_clean_range_passes_with_every_line_ok(repo):
 def test_product_tokens_are_not_attribution_words(repo):
     # An HTTP header and pytest's own fixture scope / marker contain the words; they are exempt.
     _commit(repo, _test('\nimport pytest\n\n\n@pytest.fixture(scope="' + "ses" + 'sion")\ndef f():\n'
-                        '    return {"User-' + "Ag" + 'ent": "x"}\n'))
+                        '    return {"User-' + "Ag" + 'ent": "x"}  # signals the ' + "ses" + 'sion leader\n'))
     rc, rows = _run(repo)
     assert (rc, rows["attribution"]) == (0, "OK")
 

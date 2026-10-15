@@ -32,9 +32,9 @@ ATTRIBUTION = ("Clau" + "de", "Chat" + "GPT", "Anthro" + "pic", "Generated " + "
 TRAILER = re.compile("^" + "Co-" + "Authored-By:", re.IGNORECASE | re.MULTILINE)
 WORDS = re.compile(r"\b(" + "ag" + "ent" + "|" + "ses" + "sion" + r")\b", re.IGNORECASE)
 # Product tokens that contain those words and are not attribution: an HTTP header, pytest's fixture
-# scope and the suite's marker.
-WORD_EXEMPT = re.compile(r"user[-_]" + "ag" + "ent" + r'|scope="' + "ses" + 'sion"|needs_' + "ses" + "sion",
-                         re.IGNORECASE)
+# scope, the suite's marker and the POSIX process term.
+WORD_EXEMPT = re.compile(r"user[-_]" + "ag" + "ent" + r'|scope="' + "ses" + 'sion"|needs_' + "ses" + "sion"
+                         + r"|\b" + "ses" + r"sion leader", re.IGNORECASE)
 HARD_PATTERNS = {"getsource": re.compile(r"inspect\.getsource\("),
                  "assert-True": re.compile(r"^\s*assert True\b")}
 WARN_PATTERNS = {"source-read": re.compile(r"""(read_text|open)\(.*["']lhpc/[^"']+\.(py|js|css)["']"""),
