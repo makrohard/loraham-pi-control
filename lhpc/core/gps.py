@@ -1015,6 +1015,15 @@ def _altitude(tpv: dict) -> tuple[float | None, str | None]:
     return None, None
 
 
+# The last satellite list of each gpsd device: (host, port, device path) -> (monotonic start of the
+# read that saw it, satellites, sats_used, sats_seen). Stamped at the read's start, so the list is
+# never older than its stamp says. gpsd sends a SKY with satellites only every few seconds (5 s
+# measured with an NMEA receiver), so one 2.5 s read can miss it; a list at most `NMEA_STALE_S` old
+# fills that gap. Its own monotonic clock, no host or receiver time; process memory, so a one-shot
+# CLI run starts without it.
+_SKY_MEMO: dict = {}
+
+
 def gpsd_snapshot(host: str, port: int, timeout: float = 2.5) -> dict:
     """One bounded read of gpsd's JSON stream, collecting the latest coherent per-device state
     for the WHOLE budget (several TPV per epoch are normal; the first may carry no fix).
@@ -1023,9 +1032,11 @@ def gpsd_snapshot(host: str, port: int, timeout: float = 2.5) -> dict:
     that device; absent with several -> unattributed, never combined with anything, and it
     keeps the ambiguity visible (`nmea_ok` false). Early exit only on `DEVICES=[]` or a
     connection failure. Missing optional fields neither refresh nor clear a value, except that
-    losing a usable fix clears lat, lon and altitude.
+    losing a usable fix clears lat, lon and altitude. A window without a satellite SKY for the
+    resolved device reports that device's last list if it is at most `NMEA_STALE_S` old.
     """
-    deadline = time.monotonic() + max(0.05, timeout)
+    started = time.monotonic()                      # a SKY in this read arrived after this
+    deadline = started + max(0.05, timeout)
     out = {"ok": False, "error": "", "state": "unavailable", "devices": [], "device": None,
            "mode": None, "lat": None, "lon": None, "alt": None, "alt_kind": None,
            "time": None, "time_has_date": False, "sats_used": None, "sats_seen": None,
@@ -1153,6 +1164,13 @@ def gpsd_snapshot(host: str, port: int, timeout: float = 2.5) -> dict:
         out["alt"], out["alt_kind"] = r["alt"], r["alt_kind"]
     out["time"] = r["time"]
     out["time_has_date"] = bool(r["time"])
+    key = (host, port, dev)
+    if r["satellites"] is not None:                 # a satellite SKY in this window, even an empty one
+        _SKY_MEMO[key] = (started, [dict(s_) for s_ in r["satellites"]],
+                          r["sats_used"], r["sats_seen"])
+    elif key in _SKY_MEMO and time.monotonic() - _SKY_MEMO[key][0] <= NMEA_STALE_S:
+        _at, sats, r["sats_used"], r["sats_seen"] = _SKY_MEMO[key]
+        r["satellites"] = [dict(s_) for s_ in sats]
     out["sats_used"], out["sats_seen"] = r["sats_used"], r["sats_seen"]
     out["satellites"] = r["satellites"] or []
     return out

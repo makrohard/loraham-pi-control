@@ -17,7 +17,8 @@ import pytest
 class _FakeGpsd:
     """A minimal gpsd: answers ?DEVICES with a device list and streams NMEA after ?WATCH.
 
-    `json_lines` serves a JSON `?WATCH` response instead of NMEA:
+    `json_lines` serves a JSON `?WATCH` response instead of NMEA, to each connection in turn (read
+    when it connects, so a test may change it between two polls):
     pass raw byte chunks, so a test can split one TPV across recv boundaries, send junk, or
     send a TPV with no fix. `silent=True` accepts the connection and says nothing, for the
     timeout path.
@@ -71,9 +72,8 @@ class _FakeGpsd:
                         except OSError:
                             return
                         time.sleep(0.01)
-                    while not self._stop.wait(0.05):
-                        pass
-                    return
+                    self._hold_until_closed(conn)    # then serve the next connection
+                    continue
                 sent = 0
                 while not self._stop.is_set():
                     for s in self.sentences:
@@ -86,12 +86,33 @@ class _FakeGpsd:
                             return
                     time.sleep(0.05)
 
+    def _hold_until_closed(self, conn):
+        """Keep the connection open, as gpsd does, until the client closes it or the fake stops."""
+        while not self._stop.is_set():
+            try:
+                if not conn.recv(4096):
+                    return
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+
     def close(self):
         self._stop.set()
         try:
             self._srv.close()
         except OSError:
             pass
+
+
+@pytest.fixture(autouse=True)
+def _no_satellite_memo():
+    """Isolation: `gps.gpsd_snapshot` remembers each gpsd device's last satellite list in the
+    process; every test starts and ends without one."""
+    from lhpc.core import gps
+    gps._SKY_MEMO.clear()
+    yield
+    gps._SKY_MEMO.clear()
 
 
 @pytest.fixture
