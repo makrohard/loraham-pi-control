@@ -17,7 +17,8 @@ def _cfg(**over) -> HostConfig:
                      frequency=869618000, bandwidth=62500, spreading_factor=8, coding_rate=8,
                      txpower=14, preamble=16, airtime=10.0, mode="chat+repeater",
                      repeater_name="Relay 1", repeater_key=KEY64, repeater_behaviour="forward",
-                     dashboard_password="x" * 24, repeater_state_dir="/rt/state/openhop")
+                     dashboard_password="x" * 24, jwt_secret="j" * 64,
+                     repeater_state_dir="/rt/state/openhop")
     for k, v in over.items():
         setattr(cfg, k, v)
     return cfg
@@ -36,7 +37,7 @@ def test_upstream_config_is_translated_from_lhpcs_one_file():
     conf = rep.build_upstream_config(_cfg())
     assert conf["repeater"]["node_name"] == "Relay 1"
     assert conf["repeater"]["mode"] == "forward"
-    assert conf["repeater"]["security"]["admin_password"] == "x" * 24
+    assert conf["repeater"]["security"] == {"admin_password": "x" * 24, "jwt_secret": "j" * 64}
     assert conf["radio_type"] == "loraham"                        # non-disabled: no setup wizard
     assert conf["radio"]["preamble_length"] == 16                 # upstream's name for `preamble`
     assert conf["radio"]["frequency"] == 869618000 and conf["radio"]["tx_power"] == 14
@@ -97,6 +98,7 @@ name = "%s"
 key = "{KEY64}"
 behaviour = "forward"
 admin_password = "{'x' * 24}"
+jwt_secret = "{'j' * 64}"
 state_dir = "/rt/state/openhop"
 '''
     chat_key = f'key = "{SEED}"'
@@ -109,6 +111,10 @@ state_dir = "/rt/state/openhop"
     p.write_text(base % ("", "repeater", "Relay 1"))
     cfg = load_config(p)
     assert cfg.repeater_on and not cfg.companion_on and cfg.repeater_name == "Relay 1"
+    assert cfg.jwt_secret == "j" * 64
+    p.write_text((base % ("", "repeater", "Relay 1")).replace(f'jwt_secret = "{"j" * 64}"\n', ""))
+    with pytest.raises(Exception, match="jwt_secret is required"):
+        load_config(p)
     p.write_text(base % ("", "bogus", "Relay 1"))
     with pytest.raises(Exception, match="role must be one of"):
         load_config(p)

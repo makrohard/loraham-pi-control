@@ -12,7 +12,7 @@ persistence, readiness and lifecycle. The node never drives SPI or GPIO itself.
 | Build | `lhpc build meshcore`: `.venv` (`--system-site-packages`) → openHop Core → `meshcore_host` → the repeater's closure (`openhop-repeater-constraints.txt`) and checkout. Web UI: a backend venv from `meshcore-webui-constraints.txt`; the frontend is prebuilt package data (no npm). All headless |
 | Run | `.venv/bin/python -m meshcore_host <runtime>/config/files/meshcore.toml` — the same command in every mode |
 | Config | `<runtime>/config/files/meshcore.toml` (0600 — it carries the private key), rendered from `lhpc/data/bases/meshcore.toml` on every start |
-| Identity | `<runtime>/config/secrets/meshcore_identity.key` (0600) → the config's `[identity] key`; repeater: `openhop_repeater_identity.key` + `openhop_repeater_admin.txt`. Updates and `uninstall` keep them; `lhpc clean meshcore --purge` removes them, so a reinstall is a new node |
+| Identity | `<runtime>/config/secrets/meshcore_identity.key` (0600) → the config's `[identity] key`; repeater: `openhop_repeater_identity.key` + `openhop_repeater_admin.txt` + `openhop_repeater_jwt.txt` (the dashboard's login-signing secret). Updates and `uninstall` keep them; `lhpc clean meshcore --purge` removes them, so a reinstall is a new node |
 | Endpoints | Companion TCP `:5000` (chat modes; binds loopback while `meshcore_allow` is `127.0.0.1`, else `0.0.0.0`) · repeater dashboard `127.0.0.1:8000` (repeater modes) · Web UI backend `127.0.0.1:8788` — reached through the LHPC proxy or an [SSH tunnel](../ssh-tunnel.md) |
 | Persistence | chat: `<runtime>/state/meshcore/companion.db` (contacts, channels, routes, prefs, queued messages) · repeater modes: `<runtime>/state/openhop/` (the repeater's own SQLite/RRD; the hosted Companion persists there) · Web UI: `<runtime>/state/meshcore-webui/` (a display cache, never the identity) |
 | Resources | `tcp.port.5000` / `.8000` / `.8788` exclusive · `loraham.daemon-socket.868` consumer · `loraham.profile.868` requirement `MANAGED` · `meshcore.companion-client` exclusive, advisory (webui and cli) |
@@ -65,8 +65,9 @@ meshcore` prints the saved mode plus "restart to apply" while another one runs.
 
 The chat node is the same node (name, key) in `chat` and `chat+repeater`; only the contact store
 differs (`companion.db` vs the repeater's database under `state/openhop/`), and nothing is copied
-between them. The repeater is a distinct MeshCore node: its key and the dashboard password are
-minted on the first repeater-mode start and reused. LHPC owns its radio settings, version and
+between them. The repeater is a distinct MeshCore node: its key, the dashboard password and the
+dashboard's login-signing secret are minted on the first repeater-mode start and reused, so a
+restart does not sign a dashboard login out. LHPC owns its radio settings, version and
 configuration: it gets no config path (an upstream save would aim at
 `/etc/openhop_repeater/config.yaml`, which it cannot create); MQTT, Glass and time-sync are off. Its dashboard shows the daemon link *ok* only while the daemon connection
 is up and, with TX enabled, the MANAGED-TX handshake is complete.

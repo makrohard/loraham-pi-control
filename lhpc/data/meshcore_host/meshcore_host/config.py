@@ -98,6 +98,7 @@ class HostConfig:
     repeater_key: str = ""
     repeater_behaviour: str = "forward"
     dashboard_password: str = ""
+    jwt_secret: str = ""             # the dashboard's login-signing secret, minted by LHPC
     repeater_state_dir: str = ""
     presets_file: str = ""           # upstream's radio-presets.json in the pinned checkout
     plugins_on: bool = True          # the plugin manager runs beside the repeater
@@ -244,6 +245,7 @@ def load_config(path: str | Path) -> HostConfig:
     cfg.repeater_key = _opt(rep, "key", "", str, "repeater")
     cfg.repeater_behaviour = _opt(rep, "behaviour", cfg.repeater_behaviour, str, "repeater")
     cfg.dashboard_password = _opt(rep, "admin_password", "", str, "repeater")
+    cfg.jwt_secret = _opt(rep, "jwt_secret", "", str, "repeater")
     cfg.repeater_state_dir = _opt(rep, "state_dir", "", str, "repeater")
     cfg.presets_file = _opt(rep, "presets_file", "", str, "repeater")
     if cfg.companion_on:
@@ -263,6 +265,8 @@ def load_config(path: str | Path) -> HostConfig:
             raise ConfigError("[repeater] behaviour must be one of: " + ", ".join(BEHAVIOURS))
         if not cfg.dashboard_password:
             raise ConfigError("[repeater] admin_password is required in the repeater roles")
+        if not cfg.jwt_secret:
+            raise ConfigError("[repeater] jwt_secret is required in the repeater roles")
         if not cfg.repeater_state_dir:
             raise ConfigError("[repeater] state_dir is required in the repeater roles")
         # Strict literal, like every LHPC switch: only "on" and "off" mean anything — "ON",

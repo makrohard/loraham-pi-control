@@ -26,6 +26,7 @@ OWNED = {
                  "state/openhop/repeater.db", "config/secrets/meshcore_identity.key",
                  "config/secrets/openhop_repeater_identity.key",
                  "config/secrets/openhop_repeater_admin.txt",
+                 "config/secrets/openhop_repeater_jwt.txt",
                  "config/secrets/meshcore_webui_vapid.pem", "config/files/meshcore.toml"],
     "reticulum": ["state/reticulum/storage/transport_identity", "state/reticulum/config",
                   "state/meshchat/identity", "state/nomadnet/storage/identity",
@@ -136,7 +137,7 @@ def test_every_controller_minted_secret_file_is_declared_by_its_stack(tmp_path):
                 assert c.ui_password_file.split("/")[-1] in decl[st.id][0], c.id
     from lhpc.core import meshcore_identity as mi, service_hmac
     assert {mi.IDENTITY_FILENAME, mi.REPEATER_IDENTITY_FILENAME,
-            mi.REPEATER_ADMIN_FILENAME} <= decl["meshcore"][0]
+            mi.REPEATER_ADMIN_FILENAME, mi.REPEATER_JWT_FILENAME} <= decl["meshcore"][0]
     assert service_hmac._XR_PW[-1] in decl["meshcom"][0]
 
 

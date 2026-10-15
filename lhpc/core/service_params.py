@@ -79,8 +79,7 @@ _UNREAD = object()             # restart_marker_payload: read the committed mark
 MESHCORE_COMPONENT = "meshcore-node"
 # The repeater's controller-minted secrets (see meshcore_identity) and the rows that select the
 # node's mode — saved settings only, never per-launch overrides (see _normalize_file_overrides).
-_REPEATER_SECRETS = (_meshcore_identity.REPEATER_IDENTITY_FILENAME,
-                     _meshcore_identity.REPEATER_ADMIN_FILENAME)
+_REPEATER_SECRETS = _meshcore_identity.REPEATER_SECRETS
 _IDENTITY_SECRET = _meshcore_identity.IDENTITY_FILENAME      # the Companion's key
 _POSITION_PARAMS = ("lat", "lon")
 
@@ -1685,7 +1684,7 @@ class ParamsConfigMixin:
             # The repeater is a DISTINCT MeshCore node: its own key, minted once, never adopted
             # from anywhere (nothing before this feature could hold one).
             return meshcore_identity.ensure_identity(self._paths, (), filename=name)
-        if name == meshcore_identity.REPEATER_ADMIN_FILENAME:
+        if name in (meshcore_identity.REPEATER_ADMIN_FILENAME, meshcore_identity.REPEATER_JWT_FILENAME):
             return meshcore_identity.ensure_password(self._paths, name)
         raise ValueError(f"unknown controller secret {name!r}")
 

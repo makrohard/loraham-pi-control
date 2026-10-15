@@ -34,6 +34,10 @@ IDENTITY_FILENAME = "meshcore_identity.key"
 # a default and ask for a setup wizard). Same store, same 0600 rules, same minted-once contract.
 REPEATER_IDENTITY_FILENAME = "openhop_repeater_identity.key"
 REPEATER_ADMIN_FILENAME = "openhop_repeater_admin.txt"
+# The dashboard's login-signing (JWT) secret: upstream mints a new one at every start unless it is
+# given one, which signs every dashboard login out; minted once here like the password.
+REPEATER_JWT_FILENAME = "openhop_repeater_jwt.txt"
+REPEATER_SECRETS = (REPEATER_IDENTITY_FILENAME, REPEATER_ADMIN_FILENAME, REPEATER_JWT_FILENAME)
 
 # The pinned `ed25519_wrapper.ED25519_Wrapper` accepts exactly these two, hex-encoded: a
 # 32-byte ed25519 seed, or the 64-byte Meshcore-style (a,RH) key. Any other length raises.
@@ -244,13 +248,19 @@ def _normalize_password(raw: object) -> str:
     return s
 
 
+# Minted length per controller-minted login secret: the admin password fits an over-the-air login;
+# the JWT secret is only ever machine-read (64 letters and digits, about 381 bits).
+_MINTED_LENGTH = {REPEATER_ADMIN_FILENAME: OTA_LOGIN_MAX, REPEATER_JWT_FILENAME: 64}
+
+
 def ensure_password(paths: Paths, filename: str) -> str:
-    """A controller-minted login secret (the openHop dashboard admin password): read the stored
-    one, else mint 15 random letters and digits ONCE and persist it 0600 like the identities. Never
-    replaces a stored value; a lax or garbled file raises, exactly like a bad key."""
-    what = "dashboard password"
+    """A controller-minted login secret (the openHop dashboard admin password or its JWT secret):
+    read the stored one, else mint random letters and digits ONCE (`_MINTED_LENGTH`) and persist it
+    0600 like the identities. Never replaces a stored value; a lax or garbled file raises, exactly
+    like a bad key."""
+    what = "dashboard password" if filename == REPEATER_ADMIN_FILENAME else "dashboard JWT secret"
     stored = _read_secret(paths, filename, normalize=_normalize_password, what=what)
     if stored:
         return stored
-    minted = "".join(_secrets.choice(_ALNUM) for _ in range(OTA_LOGIN_MAX))
+    minted = "".join(_secrets.choice(_ALNUM) for _ in range(_MINTED_LENGTH[filename]))
     return _store(paths, minted, filename, normalize=_normalize_password, what=what)

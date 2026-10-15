@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import os
 
+import stat
+
 import pytest
 
 from lhpc.core import meshcore_identity as mi
@@ -160,9 +162,11 @@ def test_chat_mode_mints_no_repeater_secrets(tmp_path):
     assert (secrets / mi.IDENTITY_FILENAME).exists()
     assert not (secrets / mi.REPEATER_IDENTITY_FILENAME).exists()
     assert not (secrets / mi.REPEATER_ADMIN_FILENAME).exists()
+    assert not (secrets / mi.REPEATER_JWT_FILENAME).exists()
     import tomllib
     rep_tbl = tomllib.loads((tmp_path / "config" / "files" / "meshcore.toml").read_text())["repeater"]
     assert "key" not in rep_tbl and "admin_password" not in rep_tbl and rep_tbl["role"] == "chat"
+    assert "jwt_secret" not in rep_tbl
 
 
 def test_a_build_needs_the_repeater_checkout_and_names_the_remedy(tmp_path):
@@ -236,6 +240,23 @@ def test_generation_renders_the_repeater_table_from_one_file(tmp_path):
     assert rep["state_dir"] == str(tmp_path / "state" / "openhop")
     assert rep["presets_file"] == str(tmp_path / "src" / "openhop-repeater" / "radio-presets.json")
     assert doc["companion"]["name"] == "Chat 1"
+
+
+def test_the_dashboard_login_secret_survives_every_regeneration(tmp_path):
+    # Upstream mints a new JWT signing secret at every start unless it is given one, which signs every
+    # dashboard login out; LHPC mints it once under config/secrets/ (so purge and the secrets backup
+    # take it, like the password) and passes the same value on every generation.
+    import tomllib
+    svc = _svc(tmp_path)
+    _set_mode(svc, "repeater", name="Relay 1")
+    toml = tmp_path / "config" / "files" / "meshcore.toml"
+    svc.write_config_files(mm.STACK_ID)
+    first = tomllib.loads(toml.read_text())["repeater"]["jwt_secret"]
+    svc.write_config_files(mm.STACK_ID)
+    assert tomllib.loads(toml.read_text())["repeater"]["jwt_secret"] == first
+    assert len(first) == 64 and first.isalnum()
+    stored = tmp_path / "config" / "secrets" / mi.REPEATER_JWT_FILENAME
+    assert stored.read_text().strip() == first and stat.S_IMODE(stored.stat().st_mode) == 0o600
 
 
 # --- the box's position ------------------------------------------------------------------------------

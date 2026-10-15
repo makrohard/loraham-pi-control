@@ -6,6 +6,8 @@ Fixed
 
 - The GPS sky view no longer alternates with "no satellites reported" when gpsd reports the satellites only
   every few seconds: the console keeps each receiver's last satellite list for up to 20 s.
+- MeshCore repeater dashboard: a restart no longer signs everyone out; the login-signing secret is kept in
+  `config/secrets/` and is part of `lhpc secrets backup`.
 - MeshCore repeater dashboard: the radio presets list loads (it reported "Presets file not found"); radio settings
   are still changed in LHPC's Settings.
 - The slow-target release check times the download of the Graywolf release the manifest pins and no longer asks

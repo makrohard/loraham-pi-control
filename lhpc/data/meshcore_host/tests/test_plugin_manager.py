@@ -410,6 +410,7 @@ name = "Relay 1"
 key = "{KEY64}"
 behaviour = "forward"
 admin_password = "{'x' * 24}"
+jwt_secret = "{'j' * 64}"
 state_dir = "/rt/state/openhop"
 {line}''')
     assert load_config(p).plugins_on is expect
@@ -432,6 +433,7 @@ name = "Relay 1"
 key = "{KEY64}"
 behaviour = "forward"
 admin_password = "{'x' * 24}"
+jwt_secret = "{'j' * 64}"
 state_dir = "/rt/state/openhop"
 plugins = {value}
 ''')

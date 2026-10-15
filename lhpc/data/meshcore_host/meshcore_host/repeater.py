@@ -86,7 +86,7 @@ def build_upstream_config(cfg: HostConfig) -> dict:
             "node_name": cfg.repeater_name,
             "identity_key": seed_bytes(cfg.repeater_key),
             "mode": cfg.repeater_behaviour,
-            "security": {"admin_password": cfg.dashboard_password},
+            "security": {"admin_password": cfg.dashboard_password, "jwt_secret": cfg.jwt_secret},
         },
         # A non-disabled marker: upstream never builds a radio (ours is injected), but its setup
         # wizard reads `radio_type` and would flag a missing one as "setup needed".
