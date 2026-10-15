@@ -1,4 +1,4 @@
-# Plan v3 — Track F: install channels without nagging, the Meshtastic web client as its own component
+# Plan v3.1 — Track F: install channels without nagging, the Meshtastic web client as its own component
 
 Base `origin/dev` 254bbae3; analysis MT-WEB-CLIENT (61e18c6d). Repos: loraham-pi-control (C),
 lhpc-binaries (B), lhpc-release-bot (R). binary = prebuilt known-working, no questions; rest compiled/fetched.
@@ -10,7 +10,7 @@ lhpc-binaries (B), lhpc-release-bot (R). binary = prebuilt known-working, no que
 | 3 packets strictly sequenced, shared files named; a live proof per packet | F5 |
 | 4 nothing future is called measured ("to be measured") | F3, F6 |
 | 5 the three decisions neutral, alternatives and trade-offs, recommendation on its own line | D1–D3 |
-| v2 → v3 (round 2): `dev` named honestly = the latest lab-built HEAD snapshot; staleness bounded (weekly bot build + on request) | F3 |
+| v2 → v3 (round 2): `dev` named honestly = the latest lab-built HEAD snapshot; refresh cadence stated (weekly bot build + on request; v3.1: a cadence, not a bound) | F3 |
 
 ## F1 — The measured case: "I had to compile MeshCom by hand"
 
@@ -89,9 +89,9 @@ binary install replaces); version-bearing marker `.lhpc-built-<version>`; `build
   https://github.com/meshtastic/web refs/heads/main` at run time, builds that commit (`pnpm install
   --frozen-lockfile && pnpm run build && pnpm run package`; Node on the runner, never a box). The box
   installs the newest `dev` entry and never triggers a build; plan and status show its commit and
-  build date. Staleness bound: the weekly bot run (R1) dispatches a dev build when upstream HEAD moved
-  past the newest entry, so the snapshot trails HEAD by at most ~7 days plus one build; a
-  `build-binary` dispatch (`stack = meshtastic-web`) refreshes it on request. No arbitrary-ref lane.
+  build date. Refresh: the weekly bot run (R1) builds when HEAD moved past the newest entry — normally
+  within one weekly cycle plus build time; a failed build or smoke keeps the previous proven snapshot
+  until a later success. On request: `build-binary`, `stack = meshtastic-web`. No arbitrary-ref lane.
 - `stable`/`dev` come from index-v3 (key `meshtastic-web`): upstream has no digest, the guard needs a
   lab proof. `pinned` (compiled): typed refusal "no compiled lane".
 - **Lab check (fail-closed), the web entry's mandatory smoke:** meshtasticd from the index-v3
