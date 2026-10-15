@@ -20,6 +20,7 @@ import os
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Optional
 
 from .config import DASHBOARD_PORT, HostConfig, ConfigError
@@ -52,6 +53,26 @@ def radio_status(connected: bool, tx_ready: bool, enable_tx: bool) -> str:
     """Upstream's dashboard radio state from the adapter's link state: "ok" only when the daemon
     link is up and — with TX enabled — the MANAGED-TX handshake is complete; else "degraded"."""
     return "ok" if connected and (tx_ready or not enable_tx) else "degraded"
+
+
+def install_presets(cfg: HostConfig) -> None:
+    """Place upstream's radio presets where its dashboard reads them, `<storage>/radio-presets.json`
+    (its installer copies the file there; LHPC installs with pip, which does not). The source is the
+    pinned checkout, so the file follows the pin. Best effort: a missing or unwritable file is
+    logged and the repeater starts anyway; the preset picker then reports upstream's own error."""
+    if not cfg.presets_file:
+        return
+    target = Path(cfg.repeater_state_dir) / "radio-presets.json"
+    try:
+        data = Path(cfg.presets_file).read_bytes()
+        if target.is_file() and target.read_bytes() == data:
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, target)
+    except OSError as exc:
+        logger.warning("radio presets not installed (%s); the dashboard's preset picker stays empty", exc)
 
 
 def build_upstream_config(cfg: HostConfig) -> dict:
@@ -207,6 +228,7 @@ class _Host:
                     self.cfg.mode, self.cfg.repeater_name,
                     self.cfg.name if self.cfg.companion_on else "-",
                     "on" if self.plugins is not None else "off")
+        install_presets(self.cfg)
         # Upstream begins the radios IT builds; an injected one is ours to begin (sync: it
         # schedules the daemon connection manager) and ours to close (async aclose — upstream
         # only calls a sync `cleanup()` when a radio has one).

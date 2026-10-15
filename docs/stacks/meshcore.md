@@ -48,7 +48,7 @@ persistence, readiness and lifecycle. The node never drives SPI or GPIO itself.
 | `plugins` | on | the repeater's plugin manager — see *Plugins* under [Mode](#mode) |
 
 Controller-owned, not settings rows: the private keys, the dashboard password (Password section), `db`, the GPS
-socket/coordinates, `state_dir`. The daemon-side radio parameters live in [daemon](daemon.md).
+socket/coordinates, `state_dir`, `presets_file`. The daemon-side radio parameters live in [daemon](daemon.md).
 
 ## Mode
 
@@ -78,7 +78,9 @@ section. The proxy refuses (404, reads included) every route that changes upstre
 identities, radio settings or LHPC-owned state (`proxy_deny_paths` on the 8000 endpoint). Statistics, packets, neighbours, logs, login and a logged-in
 admin's operational actions pass, and, deliberately, two writing routes: the plugin manager
 (`/api/plugins/…`, including an uploaded wheel) and `/api/sensors_config_update`, which fails
-without change because the repeater has no config file.
+without change because the repeater has no config file. The radio presets come from the pinned checkout and are
+copied into `state/openhop/` at each start; a picked preset cannot be saved there (radio settings are LHPC's:
+Settings).
 
 The pinned openhop_core logs each decrypted over-the-air login, password included, at INFO
 ([openhop-dev/openhop_core#156](https://github.com/openhop-dev/openhop_core/issues/156)).

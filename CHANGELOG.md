@@ -6,6 +6,8 @@ Fixed
 
 - The GPS sky view no longer alternates with "no satellites reported" when gpsd reports the satellites only
   every few seconds: the console keeps each receiver's last satellite list for up to 20 s.
+- MeshCore repeater dashboard: the radio presets list loads (it reported "Presets file not found"); radio settings
+  are still changed in LHPC's Settings.
 - The slow-target release check times the download of the Graywolf release the manifest pins and no longer asks
   GitHub's API for the newest one, so the API's rate limit can no longer stop a release candidate (the download itself
   still comes from GitHub).

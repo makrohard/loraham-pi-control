@@ -2409,6 +2409,15 @@ main = "meshcore-node"
       kind = "str"
       hidden = true
       default = "{runtime}/state/openhop"
+      # Upstream's radio presets (the dashboard's preset picker), copied by the host into the state
+      # dir at each start, where upstream's own installer would put them.
+      [[stack.component.config_file.param]]
+      name = "presets_file"
+      key = "presets_file"
+      section = "repeater"
+      kind = "str"
+      hidden = true
+      default = "{runtime}/src/openhop-repeater/radio-presets.json"
       # The openHop plugin manager (dashboard -> Plugins): upstream's separate process, spawned
       # by the host beside the repeater in the repeater roles. `off` = the dashboard shows its
       # "plugin manager unavailable" banner. Plugins are third-party code; see the stack doc.

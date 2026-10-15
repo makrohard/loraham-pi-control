@@ -234,6 +234,7 @@ def test_generation_renders_the_repeater_table_from_one_file(tmp_path):
     assert len(rep["key"]) == 64 and rep["key"] != doc["identity"]["key"]
     assert len(rep["admin_password"]) == 15
     assert rep["state_dir"] == str(tmp_path / "state" / "openhop")
+    assert rep["presets_file"] == str(tmp_path / "src" / "openhop-repeater" / "radio-presets.json")
     assert doc["companion"]["name"] == "Chat 1"
 
 

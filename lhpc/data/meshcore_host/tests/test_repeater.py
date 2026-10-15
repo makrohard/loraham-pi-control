@@ -57,6 +57,25 @@ def test_the_chat_node_is_the_one_hosted_companion_only_in_chat_plus_repeater():
     assert rep.build_upstream_config(_cfg(mode="repeater"))["identities"]["companions"] == []
 
 
+def test_the_pinned_radio_presets_are_placed_where_upstream_reads_them(tmp_path):
+    src = tmp_path / "src" / "radio-presets.json"
+    src.parent.mkdir()
+    src.write_bytes(b'{"config": {"suggested_radio_settings": {"entries": []}}}\n')
+    state = tmp_path / "state" / "openhop"                         # absent before the first start
+    cfg = _cfg(presets_file=str(src), repeater_state_dir=str(state))
+    rep.install_presets(cfg)
+    assert (state / "radio-presets.json").read_bytes() == src.read_bytes()
+    src.write_bytes(b'{"moved": "with the pin"}\n')                 # the next start follows the pin
+    rep.install_presets(cfg)
+    assert (state / "radio-presets.json").read_bytes() == b'{"moved": "with the pin"}\n'
+
+
+def test_a_missing_presets_source_neither_fails_the_start_nor_writes(tmp_path):
+    state = tmp_path / "state" / "openhop"
+    rep.install_presets(_cfg(presets_file=str(tmp_path / "absent.json"), repeater_state_dir=str(state)))
+    assert not (state / "radio-presets.json").exists()
+
+
 def test_radio_status_follows_the_link_state():
     assert rep.radio_status(True, True, True) == "ok"
     assert rep.radio_status(True, False, True) == "degraded"       # TX enabled, handshake pending

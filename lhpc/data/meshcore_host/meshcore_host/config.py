@@ -99,6 +99,7 @@ class HostConfig:
     repeater_behaviour: str = "forward"
     dashboard_password: str = ""
     repeater_state_dir: str = ""
+    presets_file: str = ""           # upstream's radio-presets.json in the pinned checkout
     plugins_on: bool = True          # the plugin manager runs beside the repeater
 
     extra: dict = field(default_factory=dict)
@@ -244,6 +245,7 @@ def load_config(path: str | Path) -> HostConfig:
     cfg.repeater_behaviour = _opt(rep, "behaviour", cfg.repeater_behaviour, str, "repeater")
     cfg.dashboard_password = _opt(rep, "admin_password", "", str, "repeater")
     cfg.repeater_state_dir = _opt(rep, "state_dir", "", str, "repeater")
+    cfg.presets_file = _opt(rep, "presets_file", "", str, "repeater")
     if cfg.companion_on:
         if bool(cfg.key_file) == bool(cfg.key):
             raise ConfigError("[identity] exactly one of key_file or key must be set")
