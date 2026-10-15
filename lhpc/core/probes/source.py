@@ -77,7 +77,7 @@ def lhpc_patched_only(system: System, abs_path: str, patches) -> bool:
     return _numstat(want.stdout) == _numstat(have.stdout)
 
 
-def probe_source(system: System, spec: SourceSpec, abs_path: str) -> SourceProbe:
+def probe_source(system: System, spec: SourceSpec, abs_path: str, git: bool = True) -> SourceProbe:
     ev = {"path": abs_path}
     if system.fs.readlink(abs_path):
         # A symlink at the managed path is not a managed source (the ONE presence policy:
@@ -90,6 +90,9 @@ def probe_source(system: System, spec: SourceSpec, abs_path: str) -> SourceProbe
     if not system.fs.exists(f"{abs_path}/.git"):
         ev["state"] = "not-a-repo"
         return SourceProbe(SourceState.NOT_A_REPO, evidence=ev)
+    if not git:                     # presence only: a caller that reads run states, not the tree
+        ev["state"] = "not probed"
+        return SourceProbe(SourceState.UNKNOWN, evidence=ev)
 
     # ONE `git status --porcelain=v2 --branch` answers both questions in one call: `# branch.oid` is the
     # full HEAD commit, and every non-header line is a TRACKED-file change (-uno excludes

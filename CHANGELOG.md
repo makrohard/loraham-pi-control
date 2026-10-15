@@ -18,6 +18,8 @@ Fixed
   in the result and in the status it keeps.
 - Reading a stack's status (console pages, `lhpc status`) no longer takes git's index lock or rewrites the git
   index in the stack's source checkout.
+- The dashboard's and the log pages' background refresh no longer runs git for every installed source; what they
+  show is unchanged.
 
 ## 0.12.9
 

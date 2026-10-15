@@ -64,8 +64,9 @@ class StatusProber:
 
     def __init__(self, system: System, paths: Paths, profiles: dict | None = None,
                  binary_cover: dict | None = None,
-                 meshcore_mode: str = _meshcore_mode.DEFAULT_MODE) -> None:
+                 meshcore_mode: str = _meshcore_mode.DEFAULT_MODE, sources: bool = True) -> None:
         self._system = system
+        self._sources = sources                  # False: no git per source (`build_snapshot`)
         self._paths = paths
         self._profiles = profiles or {}
         # The MeshCore stack's effective mode (services.meshcore_mode()): decides which of the
@@ -247,7 +248,8 @@ class StatusProber:
         key = (abs_path, comp.source.pin_commit or "")
         probe = self._source_probes.get(key)
         if probe is None:
-            probe = self._source_probes[key] = probe_source(self._system, comp.source, abs_path)
+            probe = self._source_probes[key] = probe_source(self._system, comp.source, abs_path,
+                                                            git=self._sources)
         return probe
 
     def _profile_state(self, comp: Component, src) -> ProfileState:
