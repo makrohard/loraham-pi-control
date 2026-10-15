@@ -13,7 +13,7 @@ Base origin/dev 254bbae3 (all line numbers). Decisions D1–D4: the maintainer's
   (an empty list included) replaces the memo; a window without one reports the memo when it is at most
   `NMEA_STALE_S` (20 s, `gps.py:556`) old, else `[]` as today. No host or receiver clock is used; the request, the
   read window and `gps.js` are unchanged. Process memory: `/api/gps` uses it, a one-shot `lhpc gps --monitor` run
-  does not. Only caller: the Monitor (`service_params.py:1933`). Implemented: cons/field-fixes-p1-r1 1d3a34a1.
+  does not. Only caller: the Monitor (`service_params.py:1933`). Code in progress on cons/field-fixes-p1-r1 (not yet reviewed).
 - **Tests** (`tests/stacks/test_gps_monitor.py`, ordinary layer; the fake gpsd now serves every connection in turn):
   (a) satellites, then none → `[s["prn"] for s in r["satellites"]] == [3, 7, 12] and r["sats_seen"] == 3` (red: `[]`);
   (b) a DOP-only SKY keeps the memo (red); (c) older than `NMEA_STALE_S` → `[]`; (d) a new or empty list wins;
