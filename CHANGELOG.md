@@ -7,6 +7,8 @@ Fixed
 - The slow-target release check times the download of the Graywolf release the manifest pins and no longer asks
   GitHub's API for the newest one, so the API's rate limit can no longer stop a release candidate (the download itself
   still comes from GitHub).
+- Graywolf's update check now says why GitHub could not be reached: curl's exit code and the end of its message,
+  in the result and in the status it keeps.
 
 ## 0.12.9
 

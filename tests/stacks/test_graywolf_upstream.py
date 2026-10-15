@@ -153,6 +153,19 @@ def test_a_rollback_pin_still_surfaces_via_needs_build(tmp_path):
     assert "graywolf" in svc.unbuilt_components("graywolf")   # -> needs_build banner + Build
 
 
+def test_a_failed_check_keeps_curls_exit_code_and_message(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+
+    class R:
+        returncode = 22
+        stdout = ""
+        stderr = "curl: (22) The requested URL returned error: 403\n"
+    monkeypatch.setattr(svc._system.runner, "run", lambda a, timeout=None: R())
+    r = svc.graywolf_upstream_check("graywolf")
+    assert r.ok is False and r.data["curl_rc"] == 22
+    assert "403" in svc.graywolf_upstream_state("graywolf")["error"]
+
+
 def test_transient_check_preserves_the_last_known_version(tmp_path, monkeypatch):
     """REVIEW-FOUND #1: a flaky/rate-limited re-check must NOT wipe a previously found update."""
     svc = _svc(tmp_path, installed="0.14.12")

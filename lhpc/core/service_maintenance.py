@@ -886,12 +886,20 @@ class MaintenanceOpsMixin:
         r = self._system.runner.run(
             ["curl", "-fsSL", "--max-time", "12", "-H", "Accept: application/vnd.github+json",
              url], 15.0)
-        if getattr(r, "returncode", 1) != 0:
+        rc = getattr(r, "returncode", 1)
+        if rc != 0:
+            # curl's own reason (exit code + the end of its message, one line) — "unreachable",
+            # "rate-limited" and "timed out" need different answers.
+            why = f"curl rc {rc}"
+            said = " ".join(str(getattr(r, "stderr", "") or "").split())[-200:]
+            if said:
+                why += f": {said}"
             # A transient failure must NOT wipe a previously found version — keep
             # the last known `latest` so the pill/Update button survive a flaky/rate-limited check.
-            _write(_prev_latest(), "could not reach the GitHub releases API")
-            return ActionResult(False, f"upstream check failed for '{target}': network/API error",
-                                next_commands=[f"lhpc status {target}"])
+            _write(_prev_latest(), f"could not reach the GitHub releases API ({why})")
+            return ActionResult(False, f"upstream check failed for '{target}': network/API error "
+                                       f"({why})",
+                                next_commands=[f"lhpc status {target}"], data={"curl_rc": rc})
         try:
             tag = str(_json.loads(r.stdout or "{}").get("tag_name") or "").strip().lstrip("v")
         except ValueError:
