@@ -208,19 +208,20 @@ def _build(env: dict, component: str) -> None:
 
 
 def _deb_fetch(svc, component: str, tmp: Path) -> None:
+    """L6 times the upstream fetch of the release the manifest pins. The version is not asked of
+    the GitHub releases API: that call is not what L6 measures, and its availability is not under
+    test here (the check itself is tested in tests/stacks/test_graywolf_upstream.py)."""
     from lhpc.core.assets import asset_path
-    stack = _STACK_OF[component]
-    chk = svc.graywolf_upstream_check(stack)
-    assert chk.ok, f"the upstream release check of {stack} failed: {chk.summary}"
-    latest = svc.graywolf_upstream_state(stack).get("latest", "")
-    assert latest, f"no upstream release of {stack} is known after the check"
-    FETCHED[component] = latest
+    comp = next(c for c in svc.stack(_STACK_OF[component]).components if c.id == component)
+    version = stt._fetch_version(comp)
+    assert version, f"the manifest names no release for {component}'s fetch step"
+    FETCHED[component] = version
     t0 = time.monotonic()
     r = subprocess.run(["bash", str(asset_path("scripts/graywolf-fetch.sh")), str(tmp / "deb"),
-                        latest, "--from-upstream"], capture_output=True, text=True,
+                        version, "--from-upstream"], capture_output=True, text=True,
                        timeout=HARNESS_S, check=False)
     seconds = time.monotonic() - t0
-    _judged(f"the upstream fetch of {latest}", r)
+    _judged(f"the upstream fetch of {version}", r)
     _record(component, "deb-fetch", seconds)
 
 

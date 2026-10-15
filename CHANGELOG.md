@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+Fixed
+
+- The slow-target release check times the download of the Graywolf release the manifest pins and no longer asks
+  GitHub's API for the newest one, so the API's rate limit can no longer stop a release candidate (the download itself
+  still comes from GitHub).
+
 ## 0.12.9
 
 Fixed

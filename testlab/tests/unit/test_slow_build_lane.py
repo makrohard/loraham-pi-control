@@ -41,11 +41,18 @@ def step(monkeypatch):
 
 
 class _Svc:
-    def graywolf_upstream_check(self, stack):
-        return types.SimpleNamespace(ok=True, summary="")
+    """The service the lane reads the manifest through, whose GitHub releases API check fails
+    as it did on 2026-10-13. `asked` records every call of that check."""
+    def __init__(self):
+        self.asked = []
 
-    def graywolf_upstream_state(self, stack):
-        return {"latest": "1.2.3"}
+    def stack(self, stack_id):
+        return next(st for st in lane.STACKS if st.id == stack_id)
+
+    def graywolf_upstream_check(self, stack):
+        self.asked.append(stack)
+        return types.SimpleNamespace(
+            ok=False, summary=f"upstream check failed for '{stack}': network/API error")
 
 
 def _paths(tmp_path):
@@ -83,6 +90,23 @@ def test_a_non_zero_status_fails_every_path(step, path, tmp_path):
     step[0] = _done(rc=124, stdout="", stderr="killed\n")
     with pytest.raises(pytest.fail.Exception, match=r"failed \(rc 124\)"):
         _paths(tmp_path)[path]()
+
+
+def test_the_deb_fetch_times_the_pinned_release_and_asks_github_nothing(monkeypatch, tmp_path):
+    # The release the manifest pins, read from the build marker the fetch step stamps
+    # (`.lhpc-built-<version>`), not from the step argv the lane parses.
+    comp = next(c for st in lane.STACKS for c in st.components if c.id == GRAYWOLF)
+    pinned = comp.build_marker.rsplit("-", 1)[1]
+    argv = []
+    monkeypatch.setattr(lane, "subprocess", types.SimpleNamespace(
+        run=lambda a, **k: argv.append(a) or _done(), CompletedProcess=subprocess.CompletedProcess))
+    # `_record` refuses outside the throttled box; stubbed so the case reaches the fetch.
+    monkeypatch.setattr(lane, "_record", lambda *a, **k: None)
+    svc = _Svc()
+    lane._deb_fetch(svc, GRAYWOLF, tmp_path)
+    assert svc.asked == []
+    assert len(argv) == 1 and argv[0][-2:] == [pinned, "--from-upstream"]
+    assert lane.FETCHED[GRAYWOLF] == pinned
 
 
 @pytest.mark.parametrize("line", ["[fail] x", "[FAILED] x", "  [timeout]",

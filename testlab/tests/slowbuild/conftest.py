@@ -39,8 +39,8 @@ def env(lab):
 
 @pytest.fixture(scope="session")
 def svc(lab):
-    """An in-process ControllerService over the SAME lab root: reads the manifest and the
-    graywolf upstream state. Every build and install goes through the real executable."""
+    """An in-process ControllerService over the SAME lab root: reads the manifest. Every build
+    and install goes through the real executable."""
     from lhpc.core.paths import Paths
     from lhpc.core.services import ControllerService
 
