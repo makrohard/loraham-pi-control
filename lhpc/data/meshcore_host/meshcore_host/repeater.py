@@ -144,7 +144,7 @@ class _Host:
             spreading_factor=cfg.spreading_factor, coding_rate=cfg.coding_rate,
             txpower=cfg.txpower, txmaxpower=cfg.txmaxpower, crc=cfg.crc,
             preamble=cfg.preamble, syncword=cfg.syncword, ldro=cfg.ldro,
-            enable_tx=cfg.enable_tx, airtime_dutycycle=cfg.airtime,
+            enable_tx=cfg.enable_tx,
             rf_log_path=cfg.rf_log_path if cfg.rf_log else "",
         )
         self.gps: Optional[GpsFeed] = None

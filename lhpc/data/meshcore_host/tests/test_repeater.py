@@ -77,6 +77,26 @@ def test_a_missing_presets_source_neither_fails_the_start_nor_writes(tmp_path):
     assert not (state / "radio-presets.json").exists()
 
 
+@pytest.mark.parametrize("airtime, ok", [(0, False), (-1, False), (100.5, False), (0.5, True), (100, True)])
+def test_the_airtime_percentage_is_refused_outside_0_to_100(tmp_path, airtime, ok):
+    # openHop's budget is `airtime` x 600 ms per minute: 0 would be a repeater that never sends.
+    p = tmp_path / "c.toml"
+    p.write_text(f'''
+[companion]
+name = "Chat 1"
+[identity]
+key = "{SEED}"
+[radio]
+preset = "eu_uk_narrow"
+airtime = {airtime}
+''')
+    if ok:
+        assert load_config(p).airtime == airtime
+    else:
+        with pytest.raises(Exception, match="airtime must be between 0 and 100"):
+            load_config(p)
+
+
 def test_radio_status_follows_the_link_state():
     assert rep.radio_status(True, True, True) == "ok"
     assert rep.radio_status(True, False, True) == "degraded"       # TX enabled, handshake pending

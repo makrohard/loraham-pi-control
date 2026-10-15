@@ -361,13 +361,14 @@ async def test_link_state_observer(daemon):
     assert states[-1] == (False, False)
 
 
-async def test_duty_cycle_pacing_state(daemon, radio):
-    assert radio.transmit_wait() == 0.0
-    meta = await radio.send(b"x" * 50)
-    assert meta is not None
-    # One packet cannot exceed the duty budget over its own period alone;
-    # the accounting must at least have recorded it.
-    assert sum(radio._airtime_txtime) > 0
+async def test_back_to_back_frames_go_out_without_a_duty_wait(daemon, radio):
+    # The duty limit is openHop's (the repeater's 60 s budget), not the radio adapter's: six frames
+    # of about 0.54 s airtime each, sent back to back, all go out at once. A 10 % limit in the
+    # adapter would hold the sixth for about 27 s.
+    async def six():
+        return [await radio.send(b"x" * 50) for _ in range(6)]
+    metas = await asyncio.wait_for(six(), timeout=5.0)
+    assert [m is not None for m in metas] == [True] * 6
 
 
 async def test_get_radioconfig(daemon, radio):

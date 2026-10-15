@@ -4,6 +4,8 @@
 
 Fixed
 
+- MeshCore: LHPC's own transmit limit is gone, which delayed repeats by up to 27 s; in the repeater modes openHop's
+  budget at the configured percentage is the limit, and the chat mode has none unless client-repeat is on.
 - The GPS sky view no longer alternates with "no satellites reported" when gpsd reports the satellites only
   every few seconds: the console keeps each receiver's last satellite list for up to 20 s.
 - MeshCore repeater dashboard: a restart no longer signs everyone out; the login-signing secret is kept in

@@ -203,6 +203,8 @@ def load_config(path: str | Path) -> HostConfig:
     cfg.crc = _opt(radio, "crc", True, bool, "radio")
     cfg.enable_tx = _opt(radio, "enable_tx", True, bool, "radio")
     cfg.airtime = float(_opt(radio, "airtime", 10.0, (int, float), "radio"))
+    if not 0 < cfg.airtime <= 100:          # openHop's budget: airtime x 600 ms per minute
+        raise ConfigError("[radio] airtime must be between 0 and 100 percent")
     # The RF log switch is LHPC's enum (`"on"`/`"off"`), a hand-written bool is
     # accepted too; `on` without an absolute path is a config error, never a
     # silent off — the writer must not run unlogged when it was asked to log.

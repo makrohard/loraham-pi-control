@@ -2355,7 +2355,7 @@ main = "meshcore-node"
       default = "10"
       min = 0
       max = 100
-      label = "Duty-cycle limit %"
+      label = "Duty-cycle limit % (repeater modes; enforced by openHop over 60 s)"
       advanced = true
       # ----- Mode + the repeater's own settings (group "Repeater") -----------------------------
       # `mode` selects WHICH openhop program `python -m meshcore_host` runs; the chat rows above are
