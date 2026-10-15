@@ -246,7 +246,10 @@ def reset(svc) -> ActionResult:
     if not inst.ok:
         return ActionResult(False, "Reset failed installing the fake daemon.",
                             details=details + inst.details[:8])
-    _install_binary_stacks(svc, details)
+    failure = _install_binary_stacks(svc, details)
+    if failure:
+        return ActionResult(False, f"Reset failed installing a binary stack: {failure}",
+                            details=details)
     scenarios.log_event(svc._paths, "reset")
     return ActionResult(True, "Test lab reset to the healthy baseline.", details=details,
                         next_commands=["lhpc-testlab status", "lhpc status"])
@@ -629,11 +632,15 @@ def populate(svc) -> ActionResult:
     return ActionResult(True, summary, details=details)
 
 
-def _install_binary_stacks(svc, details: list) -> None:
+def _install_binary_stacks(svc, details: list) -> str:
     """On aarch64 (matching the Pi), pull meshcom and meshtastic from OUR binaries
     (lhpc-binaries) via the production binary channel — the real qemu-system-xtensa and
-    meshtasticd, no compile. Non-fatal: on a non-aarch64 host the channel is unavailable
-    and the stack is simply left uninstalled (its acceptance leg then skips)."""
+    meshtasticd, no compile. On a non-aarch64 host the channel is unavailable and the stack is
+    simply left uninstalled (its acceptance leg then skips). Where the channel IS available, a
+    download that fails is retried with the transfer backoff (`release.transfer`), and an install
+    that still fails is returned as the reset's failure — first line `EXTERNAL-UNAVAILABLE …`
+    when it was the transfer — instead of surfacing later as an unrelated start failure."""
+    from .release import transfer
     for sid in ("meshcom", "meshtastic"):
         try:
             avail, _why = svc.binary_available(sid)
@@ -643,11 +650,18 @@ def _install_binary_stacks(svc, details: list) -> None:
             details.append(f"  {sid}: binary channel unavailable (not aarch64) — skipped")
             continue
         try:
-            r = svc.install(sid, apply=True, source=svc.BINARY_CHANNEL)
-            details.append(f"  install {sid} (binary): {'ok' if r.ok else r.summary}")
+            r, ext = transfer(f"binary:{sid}",
+                              lambda sid=sid: svc.install(sid, apply=True,
+                                                          source=svc.BINARY_CHANNEL),
+                              decisive_text=lambda res: "\n".join([res.summary,
+                                                                    *(res.details or [])]),
+                              failed=lambda res: not res.ok)
         except Exception as exc:
-            details.append(f"  install {sid} (binary): error ({exc})")
-
+            return f"install {sid} (binary): error ({exc})"
+        details.append(f"  install {sid} (binary): {'ok' if r.ok else r.summary}")
+        if not r.ok:
+            return f"{ext}install {sid} (binary): {r.summary}"
+    return ""
 
 def _materialize_sources(svc) -> dict:
     import shutil

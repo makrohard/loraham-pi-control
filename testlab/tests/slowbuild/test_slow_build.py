@@ -34,7 +34,7 @@ import uuid
 from pathlib import Path
 
 import pytest
-from lhpc_testlab.release import on_binary
+from lhpc_testlab.release import external_unavailable, on_binary
 from lhpc_testlab.testing import LabServer, lab_env, run_lhpc
 
 from lhpc.core import slow_target as stt
@@ -105,8 +105,11 @@ def _judged(what: str, r) -> str:
     out = f"{r.stdout or ''}\n{r.stderr or ''}"
     _reject(what, out)
     if r.returncode != 0:
-        pytest.fail(f"{what} failed (rc {r.returncode}) — not evidence: {out[-2000:]}",
-                    pytrace=False)
+        # A step that failed on a transfer says so first (the bot's EXTERNAL-UNAVAILABLE
+        # contract); it is not retried here: P5 moves the timed transfers out of the lane.
+        token = "slowbuild:" + (re.sub(r"[^a-z0-9_.:-]+", "-", what.lower()).strip("-")[:60] or "step")
+        pytest.fail(f"{external_unavailable(token, out)}{what} failed (rc {r.returncode}) — "
+                    f"not evidence: {out[-2000:]}", pytrace=False)
     return out
 
 

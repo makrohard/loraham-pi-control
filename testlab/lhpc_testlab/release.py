@@ -18,6 +18,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+import warnings
 from pathlib import Path
 
 from lhpc.core import build_regression as br
@@ -323,24 +324,115 @@ def install_build(env, svc, stack: str, *, build: bool = True,
       typed before a step's log exists, and the pattern above needs that log to name a step.
     - an unknown shape: anything this lane cannot resolve to a declared step is not attributed.
     """
-    r = run_lhpc(env, "install", stack, "--yes", timeout=timeout)
+    r, ext = transfer(f"install:{stack}",
+                      lambda: run_lhpc(env, "install", stack, "--yes", timeout=timeout))
     assert r.returncode == 0, (
-        f"installing {stack} failed (rc {r.returncode}) — UNMARKED: an install clones and "
+        f"{ext}installing {stack} failed (rc {r.returncode}) — UNMARKED: an install clones and "
         f"downloads, so this is as likely to be the network as the stack: "
         f"{r.stdout[-2000:]}\n{r.stderr[-800:]}")
     if build and not on_binary(env, stack):
-        r = run_lhpc(env, "build", stack, "--yes", timeout=timeout)
         own = _own_recipe_step_logs(svc, stack)
-        typed = next((m for m in _TYPED_BUILD_FAILURE.finditer(r.stdout)
-                      if Path(m.group(2)).name in own), None)
+
+        def attributable(res):
+            return next((m for m in _TYPED_BUILD_FAILURE.finditer(res.stdout)
+                         if Path(m.group(2)).name in own), None)
+        r, ext = transfer(f"build:{stack}",
+                          lambda: run_lhpc(env, "build", stack, "--yes", timeout=timeout),
+                          decisive_text=lambda res: None if attributable(res) else _step_text(res))
+        typed = attributable(r)
         mark = f"{stack_regression(stack, 'build')}\n" if typed else ""
         why = (f"LHPC typed {typed.group(1)}'s own build as failed at {Path(typed.group(2)).name}"
                f", a step this recipe declares its own" if typed else
                "UNMARKED: no step this recipe declares its own (`attributable`) failed, so the "
                "cause is not provably the recipe — a fetch, a refusal or a timeout is not")
         assert r.returncode == 0, (
-            f"{mark}building {stack} failed (rc {r.returncode}) — {why}: "
+            f"{mark or ext}building {stack} failed (rc {r.returncode}) — {why}: "
             f"{r.stdout[-2000:]}\n{r.stderr[-800:]}")
+
+
+# --- a transfer that failed: the EXTERNAL-UNAVAILABLE line and the transfer backoff ------------
+#
+# The contract with the release bot (agreed 2026-10-16): the FIRST line of the assertion message
+# is exactly `EXTERNAL-UNAVAILABLE what=<token>`, <token> = [a-z0-9][a-z0-9_.:-]*, and the tool's
+# own error line follows. The bot SEARCHES for it in the JUnit failure; it never coexists with a
+# `STACK-REGRESSION` line.
+
+# The DECISIVE line of a failed step: the last error line its own output ends with.
+_DECISIVE = re.compile(r"^\s*(?:\[failed\]|ERR\b|ERROR:|error:|fatal:|curl: \(\d+\))"
+                       r"|download failed")
+# A decisive line that says WHY a transfer failed, and the why is the network or the server: a
+# name that does not resolve, a connection refused, reset or timed out, an HTTP 5xx. An HTTP 4xx
+# (a binary not yet published, a repository that is gone) is NOT a transfer: it is never retried.
+_TRANSPORT = re.compile(
+    r"Could not resolve host|Failed to connect|Connection (?:refused|reset|timed out)|timed out"
+    r"|Temporary failure in name resolution|Name or service not known|Network is unreachable"
+    r"|ConnectionError|ReadTimeoutError|ConnectTimeoutError|urlopen error \[Errno"
+    r"|(?:returned error|HTTP [Ee]rror):? 5\d\d|curl: \((?:5|6|7|28|35|52|56)\)")
+_CURL = re.compile(r"curl: \(\d+\)")
+# pip's outage shape: its retries ran out on a connection error, and only then it reports that
+# no version satisfies the requirement. A version that does not exist has no exhausted retry.
+_PIP_EXHAUSTED = re.compile(r"Retry\(total=0\b.*(?:NewConnectionError|ConnectTimeoutError"
+                            r"|ReadTimeoutError|name resolution)")
+_PIP_NOT_FOUND = "Could not find a version that satisfies the requirement"
+
+TRANSFER_WAITS = (0, 60, 120, 300, 600)      # then TRANSFER_WAITS[-1] again, while the total
+TRANSFER_TOTAL = 1800                        # of waits stays within this (docs/testlab.md)
+
+
+def external_unavailable(what: str, text: str) -> str:
+    """`EXTERNAL-UNAVAILABLE what=<what>` + the decisive line + a newline when the step's
+    DECISIVE line — its last error line — is a failed transfer, else "". A transfer error the
+    step recovered from earlier does not count: only the line the step ended with decides."""
+    lines = text.splitlines()
+    at = next((i for i in range(len(lines) - 1, -1, -1) if _DECISIVE.search(lines[i])), None)
+    if at is None:
+        return ""
+    line = lines[at].strip()
+    if "download failed" in line and not _TRANSPORT.search(line):
+        # graywolf-fetch.sh's own last word names no reason: curl's line before it does.
+        cause = next((x.strip() for x in reversed(lines[:at]) if _CURL.search(x)), "")
+        if _TRANSPORT.search(cause):
+            line = f"{line} ({cause})"
+    if not (_TRANSPORT.search(line)
+            or (_PIP_NOT_FOUND in line
+                and any(_PIP_EXHAUSTED.search(x) for x in lines[:at]))):
+        return ""
+    return f"EXTERNAL-UNAVAILABLE what={what}\n{' '.join(line.split())[:300]}\n"
+
+
+def _step_text(res) -> str:
+    """The text a failed build is judged by: the log of the step LHPC typed as failed when it
+    can be read (its own output), else what `lhpc build` printed."""
+    found = list(_TYPED_BUILD_FAILURE.finditer(res.stdout))
+    m = found[-1] if found else None
+    if m:
+        with contextlib.suppress(OSError):
+            return Path(m.group(2)).read_text(encoding="utf-8", errors="replace")[-20000:]
+    # LHPC's own `[failed] build …` summary is not the step's output: it would always be "last".
+    return "\n".join(ln for ln in f"{res.stdout}\n{res.stderr}".splitlines()
+                     if not _TYPED_BUILD_FAILURE.search(ln))
+
+
+def transfer(what: str, run, *, decisive_text=lambda res: f"{res.stdout}\n{res.stderr}",
+             failed=lambda res: res.returncode != 0, sleep=time.sleep):
+    """`run()` once; while it FAILS on a transfer (`external_unavailable` of `decisive_text(r)`;
+    None = not a transfer), repeat it with the transfer backoff, each wait warned. Returns
+    `(result, external line or "")`. Only a failed TRANSFER is repeated: any other failure, and a
+    success, returns at once. The callers repeat an install or a build, never an assertion."""
+    retries, spent = 0, 0
+    while True:
+        r = run()
+        text = decisive_text(r) if failed(r) else None
+        ext = external_unavailable(what, text) if text is not None else ""
+        if retries < len(TRANSFER_WAITS):
+            wait = TRANSFER_WAITS[retries]
+        else:                                   # past the list: its last wait, if it is one
+            wait = TRANSFER_WAITS[-1] or TRANSFER_TOTAL + 1
+        if not ext or spent + wait > TRANSFER_TOTAL:
+            return r, ext
+        warnings.warn(f"{what}: {ext.splitlines()[1]} — retrying in {wait} s", stacklevel=2)
+        sleep(wait)
+        spent, retries = spent + wait, retries + 1
 
 
 def on_binary(env: dict, stack: str) -> bool:

@@ -173,7 +173,14 @@ MARKER_IO = "  [failed] build loraham-kiss-tnc (rc 1, log )\\n"
 
 def _script(*results):
     it = iter(results)
-    rel.run_lhpc = lambda env, *a, **kw: next(it)
+    rel.run_lhpc = lambda env, *a, **kw: next(it, results[-1])   # a repeat sees the last again
+
+import pytest
+
+@pytest.fixture(autouse=True)
+def _one_retry_no_wait(monkeypatch):
+    monkeypatch.setattr(rel, "TRANSFER_WAITS", (0,))
+    monkeypatch.setattr(rel, "TRANSFER_TOTAL", 0)
 
 ENV = {'LHPC_RUNTIME_ROOT': '/nonexistent'}
 
@@ -834,3 +841,183 @@ def test_a_read_error_other_than_a_closed_terminal_propagates_unmarked(tmp_path,
                               ready_timeout=3, hold=0.2, stack="reticulum")
     assert exc.value.errno == errno.EBADF
     assert "STACK-REGRESSION" not in str(exc.value)
+
+
+# --- a failed transfer: the EXTERNAL-UNAVAILABLE line, the decisive step, the transfer backoff ----
+
+# The bot's search (the agreed contract): never anchored, so pytest's prefixes cannot hide it.
+_EXTERNAL = re.compile(r"EXTERNAL-UNAVAILABLE what=([a-z0-9][a-z0-9_.:-]*)(?=\s|$)")
+
+
+class _Done:
+    def __init__(self, rc, out=""):
+        self.returncode, self.stdout, self.stderr = rc, out, ""
+
+
+def _lhpc(monkeypatch, **by_verb):
+    """`lhpc <verb> …` answers from `by_verb[verb]`, a list consumed in order (the last one
+    repeats); returns the per-verb call counts. One retry with no wait: the schedule itself is
+    pinned in test_workflow_shell.py's twin and below."""
+    import lhpc_testlab.release as rel
+    calls = dict.fromkeys(by_verb, 0)
+
+    def run(env, verb, *a, **kw):
+        calls[verb] += 1
+        seq = by_verb[verb]
+        return seq[min(calls[verb], len(seq)) - 1]
+    monkeypatch.setattr(rel, "run_lhpc", run)
+    monkeypatch.setattr(rel, "on_binary", lambda env, stack: False)   # stub: no receipt read
+    monkeypatch.setattr(rel, "TRANSFER_WAITS", (0, 0), raising=False)
+    monkeypatch.setattr(rel, "TRANSFER_TOTAL", 0, raising=False)
+    return calls
+
+
+def _install_build_message(stack="kiss", build=True):
+    import warnings
+
+    import lhpc_testlab.release as rel
+
+    from lhpc.core.manifest import default_manifest_path, load_manifest
+
+    class Svc:
+        def stack(self, sid):
+            return next(s for s in load_manifest(default_manifest_path()) if s.id == sid)
+    with pytest.raises(AssertionError) as exc, warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rel.install_build({"LHPC_RUNTIME_ROOT": "/nonexistent"}, Svc(), stack, build=build)
+    return str(exc.value)
+
+
+CLONE_DNS = ("  [failed] clone loraham-kiss-tnc — fatal: unable to access "
+             "'https://h.invalid/k.git/': Could not resolve host: h.invalid\n")
+
+
+def test_an_install_that_failed_on_a_transfer_is_external_and_never_marked(monkeypatch):
+    calls = _lhpc(monkeypatch, install=[_Done(1, CLONE_DNS)])
+    msg = _install_build_message(build=False)
+    assert msg.splitlines()[0] == "EXTERNAL-UNAVAILABLE what=install:kiss"
+    assert "Could not resolve host" in msg.splitlines()[1]
+    assert "STACK-REGRESSION" not in msg and calls["install"] == 3      # 1 + 2 retries
+
+
+def test_a_transfer_that_recovers_passes_after_the_backoff(monkeypatch):
+    import warnings
+
+    import lhpc_testlab.release as rel
+    calls = _lhpc(monkeypatch, install=[_Done(1, CLONE_DNS), _Done(1, CLONE_DNS), _Done(0)])
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        rel.install_build({"LHPC_RUNTIME_ROOT": "/nonexistent"}, None, "kiss", build=False)
+    assert calls["install"] == 3
+    assert sum("retrying in 0 s" in str(w.message) for w in seen) == 2
+
+
+def test_a_failure_that_is_not_a_transfer_is_never_repeated(monkeypatch):
+    calls = _lhpc(monkeypatch, install=[
+        _Done(1, "  [failed] clone loraham-kiss-tnc — fatal: repository not found\n")])
+    msg = _install_build_message(build=False)
+    assert not _EXTERNAL.search(msg) and calls["install"] == 1
+
+
+def _meshcore_steps():
+    from lhpc.core.manifest import default_manifest_path, load_manifest
+    st = next(s for s in load_manifest(default_manifest_path()) if s.id == "meshcore")
+    node = next(c for c in st.components if c.build_steps
+                and any(s.get("attributable") for s in c.build_steps)
+                and any(str(s["argv"][0]).endswith("pip") and "install" in s["argv"]
+                        for s in c.build_steps))
+    net = next(i for i, s in enumerate(node.build_steps)
+               if str(s["argv"][0]).endswith("pip") and "install" in s["argv"])
+    own = next(i for i, s in enumerate(node.build_steps) if s.get("attributable"))
+    def typed(step):
+        return f"  [failed] build {node.id} (rc 1, log /nonexistent/logs/build-{node.id}-{step}.log)\n"
+    return typed(net), typed(own)
+
+
+@pytest.mark.parametrize("step_output, expect", [
+    # the decisive (last) error line of a fetching step is a transport failure → EXTERNAL
+    ("ERROR: Could not install packages due to an OSError: HTTPSConnectionPool(host='pypi.org',"
+     " port=443): Read timed out.\n", "external"),
+    # pip's outage shape: retries exhausted on name resolution, then "no version satisfies"
+    ("WARNING: Retrying (Retry(total=0, connect=None)) after connection broken by "
+     "'NewConnectionError(...: Temporary failure in name resolution)': /simple/pynacl/\n"
+     "ERROR: Could not find a version that satisfies the requirement pynacl\n", "external"),
+    # SAME-STEP TWIN: a transport hiccup pip recovered from, then a genuine resolution failure
+    ("WARNING: Retrying (Retry(total=4, connect=None)) after connection broken by "
+     "'ConnectionError(...)': /simple/pynacl/\n"
+     "ERROR: ResolutionImpossible: for help visit https://pip.pypa.io/\n", "unmarked"),
+    # a version that does not exist: no exhausted retry, so not a transfer
+    ("ERROR: Could not find a version that satisfies the requirement pynacl==99\n", "unmarked"),
+    ("something nobody classified\n", "unmarked"),
+])
+def test_a_fetching_build_step_is_judged_by_its_decisive_line(monkeypatch, step_output, expect):
+    net_typed, _ = _meshcore_steps()
+    calls = _lhpc(monkeypatch, install=[_Done(0)], build=[_Done(1, step_output + net_typed)])
+    msg = _install_build_message("meshcore")
+    assert "STACK-REGRESSION" not in msg
+    if expect == "external":
+        assert msg.splitlines()[0] == "EXTERNAL-UNAVAILABLE what=build:meshcore"
+        assert calls["build"] == 3
+    else:
+        assert not _EXTERNAL.search(msg) and calls["build"] == 1
+
+
+def test_an_attributable_step_is_marked_whatever_transport_text_the_output_carries(monkeypatch):
+    """The MIXED-LOG TWIN: the decisive step is the recipe's own, so it is the stack's
+    regression, even though an earlier step's output carries a transport error."""
+    _, own_typed = _meshcore_steps()
+    calls = _lhpc(monkeypatch, install=[_Done(0)], build=[_Done(
+        1, "ERROR: Could not install packages: Read timed out.\n"
+           "error: patch does not apply\n" + own_typed)])
+    msg = _install_build_message("meshcore")
+    assert msg.splitlines()[0] == "STACK-REGRESSION stack=meshcore phase=build"
+    assert not _EXTERNAL.search(msg) and calls["build"] == 1
+
+
+# A real failing install's output (release-verify run 37403409245, 2026-10-06): the summary is
+# the `ERR` line, then numbered advice and `Next:` — a refusal, not a transfer.
+REAL_INSTALL_REFUSAL = (
+    "ERR   Binary install of 'meshcom' refused: the published binary was built from different "
+    "commits than this lhpc pins (meshcom-firmware: binary e1e2acea6, pin 62095658c)\n"
+    "  1. Update LHPC first, then install again (about a minute): lhpc self-update --apply\n"
+    "  2. Or build from source: lhpc install meshcom --source pinned --yes\n"
+    "  Staying on the binary keeps meshcom exactly as it is.\n\nNext:\n  lhpc self-update --apply\n")
+
+
+@pytest.mark.parametrize("output", [
+    REAL_INSTALL_REFUSAL,
+    # an HTTP 4xx is not the network: a binary not yet published, a repository that is gone
+    "ERR   Binary install of 'meshcom' refused: download failed: HTTP Error 404: Not Found\n",
+    "  [failed] clone loraham-kiss-tnc — fatal: unable to access 'https://h.invalid/k.git/': "
+    "The requested URL returned error: 403\n",
+], ids=["real-refusal", "binary-404", "git-403"])
+def test_an_install_that_failed_for_a_reason_other_than_the_network_is_not_repeated(
+        monkeypatch, output):
+    calls = _lhpc(monkeypatch, install=[_Done(1, output)])
+    msg = _install_build_message(build=False)
+    assert not _EXTERNAL.search(msg) and calls["install"] == 1
+
+
+@pytest.mark.parametrize("log_tail, stdout_extra, expect", [
+    # the step's own log ends on a read timeout → EXTERNAL, though `lhpc build` printed nothing
+    ("Collecting pynacl\nERROR: Could not install packages due to an OSError: "
+     "HTTPSConnectionPool(host='pypi.org', port=443): Read timed out.\n", "", "external"),
+    # the log ends on a genuine resolution failure; a timeout in `lhpc build`'s own output
+    # (another step, a recovered hiccup) does not decide
+    ("ERROR: ResolutionImpossible: for help visit https://pip.pypa.io/\n",
+     "WARNING: Retrying after connection broken by ReadTimeoutError\n", "unmarked"),
+])
+def test_the_failed_steps_readable_log_decides(monkeypatch, tmp_path, log_tail, stdout_extra,
+                                               expect):
+    net_typed, _ = _meshcore_steps()
+    log = tmp_path / net_typed.split("log ", 1)[1].rstrip(")\n").rsplit("/", 1)[1]
+    log.write_text(log_tail)
+    typed = net_typed.replace(net_typed.split("log ", 1)[1].rstrip(")\n"), str(log))
+    calls = _lhpc(monkeypatch, install=[_Done(0)], build=[_Done(1, stdout_extra + typed)])
+    msg = _install_build_message("meshcore")
+    assert "STACK-REGRESSION" not in msg
+    if expect == "external":
+        assert msg.splitlines()[0] == "EXTERNAL-UNAVAILABLE what=build:meshcore"
+        assert calls["build"] == 3
+    else:
+        assert not _EXTERNAL.search(msg) and calls["build"] == 1

@@ -483,3 +483,32 @@ def test_the_disk_throttle_must_be_named(tmp_path, monkeypatch):
     monkeypatch.setenv("SLOW_WRITE_IOPS", "1")
     monkeypatch.setenv("SLOW_READ_IOPS", "1")
     assert lane._io_problems(tmp_path / "nowhere", REQUIRED)[0].startswith("io.max is unreadable")
+
+
+def test_a_step_that_failed_on_a_transfer_says_external_first():
+    """The bot reads slow-build's JUnit: a timed step that failed on a download leads with the
+    EXTERNAL-UNAVAILABLE line, and is never a STACK-REGRESSION."""
+    with pytest.raises(pytest.fail.Exception) as red:
+        lane._judged("the upstream fetch of 0.14.14", _done(
+            rc=22, stderr="[graywolf-fetch] download failed: curl: (6) Could not resolve host\n"))
+    lines = str(red.value).splitlines()
+    assert lines[0] == "EXTERNAL-UNAVAILABLE what=slowbuild:the-upstream-fetch-of-0.14.14"
+    assert "STACK-REGRESSION" not in str(red.value)
+
+
+def test_a_step_that_failed_otherwise_has_no_external_line():
+    with pytest.raises(pytest.fail.Exception) as red:
+        lane._judged("building meshcore-cli", _done(rc=1, stderr="error: compile failed\n"))
+    assert not str(red.value).startswith("EXTERNAL-UNAVAILABLE")
+
+
+@pytest.mark.parametrize("stderr, external", [
+    ("curl: (6) Could not resolve host: github.com\n[graywolf-fetch] download failed: "
+     "https://github.com/x.deb\n", True),
+    ("curl: (22) The requested URL returned error: 404\n[graywolf-fetch] download failed: "
+     "https://github.com/x.deb\n", False),
+], ids=["curl-dns", "curl-404"])
+def test_the_fetch_scripts_bare_download_failed_is_judged_by_curls_own_line(stderr, external):
+    with pytest.raises(pytest.fail.Exception) as red:
+        lane._judged("the upstream fetch of 0.14.14", _done(rc=1, stderr=stderr))
+    assert str(red.value).startswith("EXTERNAL-UNAVAILABLE what=") is external

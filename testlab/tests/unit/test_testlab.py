@@ -1102,3 +1102,58 @@ def test_meshtastic_dashboard_link_forwards_to_bridge(monkeypatch):
     assert "https://demo-cs-9080.app.github.dev/" in body      # 9443 -> 9080 bridge
     assert "demo-cs-9443" not in body                          # NOT the broken self-signed URL
     assert "https://demo-cs-8080.app.github.dev/" in body      # other lab ports unchanged
+
+
+# --- the reset's binary stacks: a failed download is the reset's failure, never hidden --------
+
+def _binary_svc(*, available, outcomes):
+    """A service whose binary channel is (un)available and whose installs answer `outcomes` in
+    order (the last repeats). Returns (svc, calls)."""
+    from types import SimpleNamespace
+    calls = []
+
+    class Svc:
+        BINARY_CHANNEL = "binary"
+
+        def binary_available(self, sid):
+            return (available, "")
+
+        def install(self, sid, apply=False, source="pinned"):
+            calls.append(sid)
+            ok, summary = outcomes[min(len(calls), len(outcomes)) - 1]
+            return SimpleNamespace(ok=ok, summary=summary, details=[])
+    return Svc(), calls
+
+
+_DL_FAILED = ("Binary install of 'meshcom' refused: download failed: "
+              "<urlopen error [Errno -3] Temporary failure in name resolution>")
+
+
+def test_a_binary_download_that_stays_unavailable_fails_the_reset_as_external(monkeypatch):
+    import warnings
+
+    import lhpc_testlab.release as rel
+    monkeypatch.setattr(rel, "TRANSFER_WAITS", (0, 0), raising=False)
+    monkeypatch.setattr(rel, "TRANSFER_TOTAL", 0, raising=False)
+    svc, calls = _binary_svc(available=True, outcomes=[(False, _DL_FAILED)])
+    details = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        failure = ops._install_binary_stacks(svc, details)
+    assert failure.splitlines()[0] == "EXTERNAL-UNAVAILABLE what=binary:meshcom"
+    assert calls == ["meshcom"] * 3                   # 1 + 2 retries, then the reset fails
+
+
+def test_a_binary_install_that_fails_otherwise_fails_the_reset_at_once(monkeypatch):
+    refused = ("Binary install of 'meshcom' refused: the published binary was built from "
+               "different commits")
+    svc, calls = _binary_svc(available=True, outcomes=[(False, refused)])
+    assert ops._install_binary_stacks(svc, []) == f"install meshcom (binary): {refused}"
+    assert calls == ["meshcom"]
+
+
+def test_without_a_binary_channel_the_reset_skips_the_binary_stacks():
+    svc, calls = _binary_svc(available=False, outcomes=[(True, "")])
+    details = []
+    assert ops._install_binary_stacks(svc, details) == "" and calls == []
+    assert sum("binary channel unavailable" in d for d in details) == 2

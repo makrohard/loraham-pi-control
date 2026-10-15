@@ -126,8 +126,12 @@ them. It is a file in `HOME` because the product's command runner passes `HOME` 
 `GIT_CONFIG_GLOBAL`. A step with no network proves every listed remote resolves locally, and the
 lane proves, through that runner, that each one resolves to its mirror before its tests start;
 the list is every manifest remote but the few that script names, each with its reason. A
-published binary, a pinned release download and a build step's packages are still fetched in
-the lane, as the product fetches them. A deterministic
+published binary, a pinned release download and a build step's packages are still fetched in the
+lane, as the product fetches them; an install, a build or the lab reset's binary install whose
+DECISIVE error line (the last one its step ended with) is a failed transfer is repeated with the
+same backoff, only that attempt, never a test. One still failing leads its failure with
+`EXTERNAL-UNAVAILABLE what=<token>` (`transfer` in `testlab/lhpc_testlab/release.py`), never with
+a stack-regression marker; a transfer error the step recovered from does not count. A deterministic
 failure of an acquisition (a broken Dockerfile, say) turns red only after the backoff's waits,
 about half an hour.
 
