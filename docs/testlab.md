@@ -136,7 +136,10 @@ subprocesses import `lhpc` from the editable install, i.e. whichever checkout wa
   - Only a failure at a genuine per-stack step carries the JUnit marker
     `STACK-REGRESSION stack=<id> phase=<install|build|start|readiness>` (grammar and unmarked
     sites: `lhpc_testlab.release.stack_regression`); a build only at a step the manifest marks
-    `attributable = true` (a compile, a patch, a check over fetched code), never at a fetch. An
+    `attributable = true` (a compile, a patch, a check over fetched code), never at a fetch. A
+    service whose port or page did not answer within its window is marked only when LHPC's status
+    reports the component stopped or failed; one still running, or a status that cannot be read,
+    is unmarked and carries the component's run-log tail (`readiness_failed`). An
     interactive program's readiness is marked only when it exited or drew a traceback or an
     exception line; a timeout without that evidence is unmarked and carries the tails of its logs.
     Such a timeout also captures the program's stack (SIGABRT with Python's faulthandler) and gets

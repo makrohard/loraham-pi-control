@@ -45,9 +45,12 @@ def stack_regression(stack: str, phase: str) -> str:
 
     It goes FIRST in a pytest assertion message, on a line of its own::
 
-        assert wait_tcp(KISS_TCP, 120), (
-            f"{stack_regression('kiss', 'readiness')}\n"
-            "kiss is not serving KISS/TCP on 8001")
+        assert rnstatus_lists_lora, (
+            f"{stack_regression('reticulum', 'readiness')}\n"
+            "rnstatus lists no LoRa interface")
+
+    A wait-based readiness check (a port or page that never answered) does not write it
+    itself: `readiness_failed` adds it only when LHPC reports the component gone.
 
     **Grammar — a separate program parses this, so do not reformat it:**
 
@@ -648,6 +651,32 @@ def alive(env: dict, component: str) -> bool:
     out = run_lhpc(env, "status", timeout=120).stdout
     m = re.search(rf"^\s+{re.escape(component)}\s+([a-z-]+)", out, re.MULTILINE)
     return bool(m) and m.group(1) == "running"
+
+
+# What LHPC's status calls a component that is GONE: the only readiness evidence a wait-based
+# check has against the stack (`RunState`, docs/architecture.md "Probes and status").
+_GONE = ("stopped", "failed")
+
+
+def readiness_failed(env: dict, stack: str, component: str, what: str) -> str:
+    """The message for a wait-based readiness check that did not pass: marked
+    `stack_regression(stack, 'readiness')` ONLY when LHPC's own status reports `component`
+    stopped or failed — its process is gone. A component still running while the window passed
+    (a slow runner looks exactly like that), any other state, and a status call that failed,
+    timed out or did not list the component are no evidence against the stack: UNMARKED. Either
+    way the message names the state it read and ends with the component's run-log tail.
+
+    Called only when the check failed (an assert message is built only then), so a passing
+    case pays nothing."""
+    try:
+        r = run_lhpc(env, "status", timeout=120)
+        m = re.search(rf"^\s+{re.escape(component)}\s+([a-z-]+)", r.stdout, re.MULTILINE)
+        state = m.group(1) if (r.returncode == 0 and m) else "unreadable"
+    except subprocess.TimeoutExpired:
+        state = "unreadable"
+    mark = f"{stack_regression(stack, 'readiness')}\n" if state in _GONE else ""
+    logs = sorted(Path(env["LHPC_RUNTIME_ROOT"], "logs").glob(f"start-{component}*.log"))
+    return f"{mark}{what} (LHPC reports {component}: {state}){_log_tails(logs)}"
 
 
 def gui_startable(svc, stack_id: str, comp_id: str) -> bool:

@@ -575,6 +575,65 @@ def test_the_log_names_the_rule_expects_are_the_ones_the_builder_writes(tmp_path
         f"silently disables every automatic freeze")
 
 
+# --- a wait-based readiness check: marked only when LHPC reports the component gone ------------
+
+_STATUS = """OK    Status collected (read-only; no network, no changes).
+[kiss] LoRaHAM KISS TNC  ({stack})
+  loraham-kiss-tnc         {state:<14} [service] band 433  tx disabled  src ok
+  loraham-kiss-serial      stopped        [service] band 433  tx disabled  src ok
+"""
+
+
+def _readiness_message(monkeypatch, tmp_path, status):
+    """`readiness_failed` for kiss with `lhpc status` answering `status` (a CompletedProcess,
+    or an exception to raise). The lane's executable is stubbed: the case is the reading of
+    its answer, not the process table."""
+    import lhpc_testlab.release as rel
+
+    def run(env, *args, timeout=300.0, check=False):
+        if isinstance(status, BaseException):
+            raise status
+        return status
+    monkeypatch.setattr(rel, "run_lhpc", run)
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    (tmp_path / "logs" / "start-loraham-kiss-tnc-433.log").write_text("KISS-RUN-LOG-LAST\n")
+    return rel.readiness_failed({"LHPC_RUNTIME_ROOT": str(tmp_path)}, "kiss",
+                                "loraham-kiss-tnc", "kiss is not serving KISS/TCP on 8001")
+
+
+def _done(stdout, rc=0):
+    return subprocess.CompletedProcess(["lhpc", "status"], rc, stdout, "")
+
+
+@pytest.mark.parametrize("state", ["running", "degraded", "unknown"])
+def test_a_window_that_passed_while_the_component_runs_blames_no_stack(monkeypatch, tmp_path,
+                                                                      state):
+    msg = _readiness_message(monkeypatch, tmp_path,
+                             _done(_STATUS.format(stack=state, state=state)))
+    assert not re.search(r"STACK-REGRESSION stack=", msg)
+    assert f"loraham-kiss-tnc: {state}" in msg and "KISS-RUN-LOG-LAST" in msg
+
+
+@pytest.mark.parametrize("state", ["stopped", "failed"])
+def test_a_component_lhpc_reports_gone_is_marked(monkeypatch, tmp_path, state):
+    msg = _readiness_message(monkeypatch, tmp_path,
+                             _done(_STATUS.format(stack=state, state=state)))
+    assert msg.startswith("STACK-REGRESSION stack=kiss phase=readiness\n")
+    assert "KISS-RUN-LOG-LAST" in msg
+
+
+@pytest.mark.parametrize("status", [
+    _done("ERR   status failed\n", rc=1),                                # the call failed
+    _done(_STATUS.format(stack="stopped", state="stopped"), rc=2),     # failed, whatever it printed
+    _done("OK    Status collected.\n"),                                 # the component not listed
+    subprocess.TimeoutExpired(["lhpc", "status"], 120),               # the call timed out
+], ids=["rc1", "rc2-with-stopped-text", "not-listed", "timeout"])
+def test_a_status_that_cannot_be_read_blames_no_stack(monkeypatch, tmp_path, status):
+    msg = _readiness_message(monkeypatch, tmp_path, status)
+    assert not re.search(r"STACK-REGRESSION stack=", msg)
+    assert "loraham-kiss-tnc: unreadable" in msg
+
+
 # --- an interactive program's readiness: only evidence of breaking blames the stack -------------
 
 def _readiness_failure(command, tmp_path, *, expect="NEVER-DRAWN", logs=(), record=None):

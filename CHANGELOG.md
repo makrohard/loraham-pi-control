@@ -12,6 +12,8 @@ Fixed
 - Graywolf's update check now says why GitHub could not be reached: curl's exit code and the end of its message,
   in the result and in the status it keeps.
 - CI runs the test suite in parallel processes, and the slow-build check starts only after the testlab job passed.
+- The release check no longer blames a stack when one of its services was still starting after its wait: a
+  readiness timeout names the stack only when LHPC reports the component stopped or failed.
 
 ## 0.12.9
 

@@ -25,6 +25,7 @@ from lhpc_testlab.release import (
     plugin_manager_marker,
     plugin_manager_pids,
     pty_readiness,
+    readiness_failed,
     require_prerequisite,
     required_release_cases,
     stack_regression,
@@ -110,11 +111,10 @@ def test_release_kiss(env, svc):
     """The KISS TNC over the fake daemon: its own TCP listener is the evidence."""
     install_build(env, svc, "kiss")
     _start(env, "kiss")
-    assert wait_tcp(KISS_TCP, 120), (f"{stack_regression('kiss', 'readiness')}\n"
-                                     "kiss is not serving KISS/TCP on 8001")
-    assert alive(env, "loraham-kiss-tnc"), (
-        f"{stack_regression('kiss', 'readiness')}\n"
-        "LHPC does not report loraham-kiss-tnc running")
+    assert wait_tcp(KISS_TCP, 120), readiness_failed(
+        env, "kiss", "loraham-kiss-tnc", "kiss is not serving KISS/TCP on 8001")
+    assert alive(env, "loraham-kiss-tnc"), readiness_failed(
+        env, "kiss", "loraham-kiss-tnc", "LHPC does not report loraham-kiss-tnc running")
 
 
 def test_release_graywolf(env, svc):
@@ -124,10 +124,9 @@ def test_release_graywolf(env, svc):
     _start(env, "graywolf", timeout=900)
     assert wait_http(f"http://127.0.0.1:{GRAYWOLF_UI}/", 120,
                      accept=(200, 401, 403)) in (200, 401, 403), \
-        (f"{stack_regression('graywolf', 'readiness')}\n"
-         "graywolf web UI never answered on 8080")
-    assert alive(env, "graywolf"), (f"{stack_regression('graywolf', 'readiness')}\n"
-                                    "LHPC does not report graywolf running")
+        readiness_failed(env, "graywolf", "graywolf", "graywolf web UI never answered on 8080")
+    assert alive(env, "graywolf"), readiness_failed(
+        env, "graywolf", "graywolf", "LHPC does not report graywolf running")
     stop(env, "graywolf")
 
 
@@ -163,9 +162,8 @@ def test_release_voice_gtk(env, svc):
         "LHPC's GUI predicate says the Voice GTK app cannot run here, but this lane owns a "
         "display: the capability it requires is missing, which is a release defect")
     _start(env, "voice", timeout=300)
-    assert alive(env, "loraham-voice"), (
-        f"{stack_regression('voice', 'readiness')}\n"
-        "the GTK variant is startable here but is not running")
+    assert alive(env, "loraham-voice"), readiness_failed(
+        env, "voice", "loraham-voice", "the GTK variant is startable here but is not running")
     stop(env, "voice")
 
 
@@ -240,17 +238,16 @@ def test_release_meshcore_chat(env, svc):
     install_build(env, svc, "meshcore", timeout=2400)
     _meshcore_mode(env, "chat")
     _start(env, "meshcore", timeout=900)
-    assert wait_tcp(MESHCORE_COMPANION, 180), (
-        f"{stack_regression('meshcore', 'readiness')}\n"
-        "MeshCore companion never opened TCP 5000")
-    assert alive(env, "meshcore-node"), (f"{stack_regression('meshcore', 'readiness')}\n"
-                                         "LHPC does not report meshcore-node running")
+    assert wait_tcp(MESHCORE_COMPANION, 180), readiness_failed(
+        env, "meshcore", "meshcore-node", "MeshCore companion never opened TCP 5000")
+    assert alive(env, "meshcore-node"), readiness_failed(
+        env, "meshcore", "meshcore-node", "LHPC does not report meshcore-node running")
     start_component(env, "meshcore-webui", stack="meshcore")
     assert wait_http(f"http://127.0.0.1:{MESHCORE_WEBUI}/", 180,
                      accept=(200, 401, 403)) in (200, 401, 403), \
-        (f"{stack_regression('meshcore', 'readiness')}\nMeshCore Web UI never answered")
-    assert alive(env, "meshcore-webui"), (f"{stack_regression('meshcore', 'readiness')}\n"
-                                          "LHPC does not report meshcore-webui running")
+        readiness_failed(env, "meshcore", "meshcore-webui", "MeshCore Web UI never answered")
+    assert alive(env, "meshcore-webui"), readiness_failed(
+        env, "meshcore", "meshcore-webui", "LHPC does not report meshcore-webui running")
     stop(env, "meshcore")
 
 
@@ -260,10 +257,9 @@ def test_release_meshcore_chat_repeater(env):
     _start(env, "meshcore", timeout=900)
     assert wait_http(f"http://127.0.0.1:{REPEATER_DASHBOARD}/", 240,
                      accept=(200, 401, 403)) in (200, 401, 403), \
-        (f"{stack_regression('meshcore', 'readiness')}\nrepeater dashboard silent")
-    assert wait_tcp(MESHCORE_COMPANION, 180), (
-        f"{stack_regression('meshcore', 'readiness')}\n"
-        "hosted companion never opened TCP 5000")
+        readiness_failed(env, "meshcore", "meshcore-node", "repeater dashboard silent")
+    assert wait_tcp(MESHCORE_COMPANION, 180), readiness_failed(
+        env, "meshcore", "meshcore-node", "hosted companion never opened TCP 5000")
     _assert_plugin_manager_running(env)
     stop(env, "meshcore")
     _assert_plugin_manager_gone(env)
@@ -279,7 +275,7 @@ def test_release_meshcore_repeater(env):
     _start(env, "meshcore", timeout=900)
     assert wait_http(f"http://127.0.0.1:{REPEATER_DASHBOARD}/", 240,
                      accept=(200, 401, 403)) in (200, 401, 403), \
-        (f"{stack_regression('meshcore', 'readiness')}\nrepeater dashboard silent")
+        readiness_failed(env, "meshcore", "meshcore-node", "repeater dashboard silent")
     # Unmarked: mode wiring between LHPC's config and the upstream repeater, not one of the
     # four phases — a freeze would be the wrong remedy.
     assert not wait_tcp(MESHCORE_COMPANION, 20), \
@@ -294,9 +290,8 @@ def test_release_meshcore_cli(env, svc, record_property):
     """The MeshCore CLI is an interactive component: proved on a terminal against the running
     companion, not by `--version`."""
     _start(env, "meshcore", timeout=900)
-    assert wait_tcp(MESHCORE_COMPANION, 180), (
-        f"{stack_regression('meshcore', 'readiness')}\n"
-        "MeshCore companion never opened TCP 5000")
+    assert wait_tcp(MESHCORE_COMPANION, 180), readiness_failed(
+        env, "meshcore", "meshcore-node", "MeshCore companion never opened TCP 5000")
     comp = next(c for c in svc.stack("meshcore").components if c.id == "meshcore-cli")
     try:
         pty_readiness(svc.manual_start_command(comp), env, MESHCLI_DRAWS, ready_timeout=90,
@@ -312,8 +307,8 @@ def test_release_reticulum(env, svc):
     """Reticulum's own client tool must list the LoRa interface this stack installed."""
     install_build(env, svc, "reticulum", timeout=3600)
     _start(env, "reticulum", timeout=900)
-    assert alive(env, "rns"), (f"{stack_regression('reticulum', 'readiness')}\n"
-                               "LHPC does not report rns running")
+    assert alive(env, "rns"), readiness_failed(
+        env, "reticulum", "rns", "LHPC does not report rns running")
     root = Path(env["LHPC_RUNTIME_ROOT"])
     # The venv lives in the node's own checkout (its `bin` and `build_marker` are declared
     # relative to it), so the tool's path follows the manifest's source path.
@@ -330,14 +325,13 @@ def test_release_reticulum(env, svc):
         out = r.stdout + r.stderr
         return "Interface" in out
 
-    assert wait_for(_rnstatus_lists_an_interface, 120), (f"{stack_regression('reticulum', 'readiness')}\n"
-                                f"rnstatus listed no interface:\n{out[-1500:]}")
+    assert wait_for(_rnstatus_lists_an_interface, 120), readiness_failed(
+        env, "reticulum", "rns", f"rnstatus listed no interface:\n{out[-1500:]}")
     assert "lora" in out.lower(), (f"{stack_regression('reticulum', 'readiness')}\n"
                                    f"rnstatus lists no LoRa interface:\n{out[-1500:]}")
     # Optional components of this stack: not started by the stack, so started by name.
     start_component(env, "lxmd", stack="reticulum")
-    assert alive(env, "lxmd"), (f"{stack_regression('reticulum', 'readiness')}\n"
-                                "lxmd did not come up")
+    assert alive(env, "lxmd"), readiness_failed(env, "reticulum", "lxmd", "lxmd did not come up")
     # MeshChat is a release deliverable too, and a stack start deliberately leaves it stopped —
     # so without starting it by name the lane shipped a browser client it never once ran. It
     # launches through the rns-client guard, which refuses unless the node above is really up,
@@ -347,9 +341,9 @@ def test_release_reticulum(env, svc):
     # 200, not "any answer": the bundled UI requires no authentication of its own — the proxy is
     # where auth lives — so a 401/403 here would mean something other than MeshChat replied.
     assert wait_http(f"http://127.0.0.1:{MESHCHAT_UI}/", 180, accept=(200,)) == 200, \
-        (f"{stack_regression('reticulum', 'readiness')}\nMeshChat did not serve its UI")
-    assert alive(env, "meshchat"), (f"{stack_regression('reticulum', 'readiness')}\n"
-                                    "LHPC does not report meshchat running")
+        readiness_failed(env, "reticulum", "meshchat", "MeshChat did not serve its UI")
+    assert alive(env, "meshchat"), readiness_failed(
+        env, "reticulum", "meshchat", "LHPC does not report meshchat running")
     # Sideband is a release deliverable of this stack, and the lane runs against a real X
     # display (the workflow starts Xvfb before it). So LHPC's GUI predicate dropping it here
     # means the GUI capability it needs is MISSING, not that this box is legitimately headless
@@ -359,8 +353,8 @@ def test_release_reticulum(env, svc):
         "LHPC's GUI predicate says Sideband cannot run here, but this lane has a display: the "
         "capability it requires is missing, which is a release defect")
     start_component(env, "sideband", stack="reticulum")
-    assert alive(env, "sideband"), (f"{stack_regression('reticulum', 'readiness')}\n"
-                                    "sideband is startable here but did not come up")
+    assert alive(env, "sideband"), readiness_failed(
+        env, "reticulum", "sideband", "sideband is startable here but did not come up")
 
 
 def test_release_reticulum_nomadnet(env, svc, record_property):
@@ -389,9 +383,8 @@ def test_release_meshtastic(env, svc):
     install_build(env, svc, "meshtastic", timeout=2400)
     _artifact_intact(svc, "meshtastic")
     _start(env, "meshtastic", timeout=900)
-    assert wait_tcp(MESHTASTIC_API, 180), (
-        f"{stack_regression('meshtastic', 'readiness')}\n"
-        "meshtasticd never opened its API port 4403")
+    assert wait_tcp(MESHTASTIC_API, 180), readiness_failed(
+        env, "meshtastic", "meshtastic", "meshtasticd never opened its API port 4403")
     info = run_lhpc(env, "meshtastic", "--info", timeout=300)
     assert info.returncode == 0, (f"{stack_regression('meshtastic', 'readiness')}\n"
                                   f"the node did not answer its own CLI (rc {info.returncode}): "
@@ -444,8 +437,8 @@ def test_release_meshcom(env, svc):
     _artifact_intact(svc, "meshcom")
     _start(env, "meshcom", timeout=1200)
     assert wait_http(f"http://127.0.0.1:{MESHCOM_UI}/", 900, accept=(200,)) == 200, \
-        (f"{stack_regression('meshcom', 'readiness')}\n"
-         "MeshCom web UI never reached 200 — the firmware did not finish booting")
+        readiness_failed(env, "meshcom", "meshcom-qemu",
+                         "MeshCom web UI never reached 200 — the firmware did not finish booting")
     stop(env, "meshcom")
 
 
