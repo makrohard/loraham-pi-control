@@ -882,3 +882,31 @@ def test_the_write_trace_catches_a_mutating_tty_ioctl(tmp_path, receiver, monkey
             os.close(fd)
     writes, err = _trace_writes(set_mode, root, receiver, fake, monkeypatch)
     assert err is None and writes == expected
+
+
+def test_a_snapshot_reads_the_process_table_once(tmp_path):
+    # Every process-matched component read ALL of /proc again (22 full scans per page on a Zero); a
+    # snapshot now takes one table, as it already does for the TCP listeners, and matches each
+    # component against it.
+    from lhpc.core.status import StatusProber
+    fake = FakeSystem()
+    paths = Paths(runtime_root=tmp_path)
+    svc = ControllerService(system=fake.system, paths=paths)
+    matched = [c for s in svc.stacks() for c in s.components if c.process is not None]
+    assert len(matched) >= 2                                   # precondition: several scans before
+    spec = matched[0].process
+    fake.cmdlines_data = {4242: [f"/usr/bin/{spec.exec_name}", *spec.all_args, *spec.any_args[:1]]}
+    reads = []
+    orig = fake.cmdlines
+    fake.cmdlines = lambda: (reads.append(1), orig())[1]
+    snap = StatusProber(fake.system, paths).assess_stacks(svc.stacks())
+    assert len(reads) == 1
+    pids = {c.id: st.pids for ss in snap.stacks for c in ss.stack.components
+            for st in [ss.components[c.id]] if c.process is not None}
+    assert pids[matched[0].id] == [4242]
+    assert all(p == [] for cid, p in pids.items()
+               if cid != matched[0].id and not _same_spec(svc, cid, spec))
+
+
+def _same_spec(svc, cid, spec):
+    return next(c for s in svc.stacks() for c in s.components if c.id == cid).process == spec
