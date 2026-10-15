@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import json
 import os
 import pathlib
 import re
@@ -17,7 +18,6 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-import warnings
 from pathlib import Path
 
 from lhpc.core import build_regression as br
@@ -418,7 +418,7 @@ def _log_tails(logs, size: int = 1500) -> str:
 
 def pty_readiness(command: str, env: dict, expect: str, *, ready_timeout: float = 60.0,
                   hold: float = 5.0, stack: str | None = None,
-                  logs=(), record=None) -> bytes:
+                  logs=(), on_timeout=None) -> bytes:
     # `logs` tails go in unfiltered: name lab-identity logs only
     """Run an INTERACTIVE component the way an operator does — on a real terminal — and prove
     it: it must draw its OWN screen, still be running afterwards, and exit CLEANLY when asked.
@@ -441,24 +441,19 @@ def pty_readiness(command: str, env: dict, expect: str, *, ready_timeout: float 
 
     `stack` names the stack this component belongs to, and marks a READINESS failure with
     `stack_regression` when the program shows it is broken: it exited on its own, or drew a
-    traceback or an exception line (`_DREW_AN_ERROR`). A timeout without that evidence — still running, drew nothing or
-    not what was expected — stays unmarked: see `stack_regression`. `stack` is validated before
-    the program is started, so a typo fails immediately instead of an hour in. `logs` are files
-    whose tails every readiness failure appends (the program's own log, its daemon's). The
-    SIGTERM escalation below stays unmarked on purpose.
+    traceback or an exception line (`_DREW_AN_ERROR`). A timeout without that evidence — still
+    running, drew nothing or not what was expected — stays unmarked: see `stack_regression`.
+    `stack` is validated before the program is started, so a typo fails immediately instead of
+    an hour in. `logs` are files whose tails every readiness failure appends (the program's own
+    log, its daemon's). The SIGTERM escalation below stays unmarked on purpose.
 
-    A readiness TIMEOUT captures where the program is stuck before anything else happens: it
-    runs with `PYTHONFAULTHANDLER=1`, and its process group is sent SIGABRT, whose thread dump is
-    drained from the terminal for ~3 s and appended. Whether it is broken, and whom that blames,
-    is still decided from what it drew BEFORE the abort.
-
-    ONE retry: a first start that times out with no evidence of breaking (still running,
-    nothing broken drawn) is stopped and started once more, the same command. Only a second
-    start that draws passes. Every retry, with the first start's dump and log tails, is
-    reported when it starts, as a warning and through `record(name, value)` — pytest's
-    `record_property` — into the JUnit, whether the second start then passes or fails. A start that hangs twice still fails; one that exits or draws an error is
-    never retried. A retried start's failure is never marked: it ran after an abort, against
-    whatever the first start left behind. The program runs without core dumps.
+    A readiness TIMEOUT is diagnosed, never retried: a test body is not re-run because it
+    failed. First `on_timeout()`, when given, runs while everything is still as it hung, and
+    its text is appended (what the program waits on may be another process). Then the program,
+    which runs with `PYTHONFAULTHANDLER=1`, gets SIGABRT on its process group, and the thread
+    dump it prints is drained from the terminal for ~3 s and appended. Whether it is broken,
+    and whom that blames, is decided from what it drew BEFORE either. The program runs
+    without core dumps.
     """
     mark = f"{stack_regression(stack, 'readiness')}\n" if stack else ""
     env = dict(env)
@@ -467,49 +462,97 @@ def pty_readiness(command: str, env: dict, expect: str, *, ready_timeout: float 
         env["TERM"] = "xterm-256color"
     env["LINES"], env["COLUMNS"] = "40", "120"
     env["PYTHONFAULTHANDLER"] = "1"            # SIGABRT then dumps every thread's stack
-    first = ""
-    for attempt in (1, 2):
-        proc, master = _pty_launch(command, env)
-        if attempt == 2:
-            # Reported once the retry is really running — after the first start was stopped
-            # and the second launched — and before it is judged, so a retry that fails is too.
-            note = f"{command!r} was started a second time{first}"
-            warnings.warn(note, stacklevel=2)
-            if record:
-                record("readiness-retry", note)
+    proc, master = _pty_launch(command, env)
+    try:
+        drawn, ended = _pty_read(master, proc, expect, ready_timeout)
+        if ended:
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=2)                # for its exit status in the message
+        tail = drawn[-600:].decode("utf-8", "replace")
+        # ENDED, not `poll()`: the terminal closes before the exit can be reaped, and a
+        # program read as still running there would be judged as a pure timeout.
+        broken = ended or proc.poll() is not None or bool(_DREW_AN_ERROR.search(drawn))
+        matched = _matches(drawn, expect)
+        dump = ""
+        if not (matched or broken):
+            dump = (on_timeout() if on_timeout else "") + _pty_abort(proc, master)
+        why = mark if broken else ""
+        assert drawn, (f"{why}{command!r} drew nothing on its terminal within "
+                       f"{ready_timeout} s{dump}{_log_tails(logs)}")
+        assert matched, (
+            f"{why}{command!r} did not draw anything matching {expect!r} within "
+            f"{ready_timeout} s. It drew: {tail!r}{dump}{_log_tails(logs)}")
+        time.sleep(hold)
+        assert proc.poll() is None, (
+            f"{mark}{command!r} exited on its own (rc={proc.returncode}) — not a running "
+            f"app. It drew: {tail!r}{_log_tails(logs)}")
+    finally:
+        killed = _pty_stop(proc, master)
+    assert not killed, (f"{command!r} ignored SIGTERM and had to be killed — it does not "
+                        f"exit cleanly")
+    return drawn
+
+
+# The Reticulum processes LHPC starts that talk to the shared instance's RPC.
+_RNS_PEERS = ("rns", "lxmd", "meshchat", "sideband")
+
+
+def reticulum_peers_snapshot(env: dict, drain: float = 3.0) -> str:
+    """A Reticulum client's readiness timeout, diagnosed while everything still hangs: what is
+    connected to the shared instance (`/proc/net/unix`, `/proc/net/tcp*`: the RPC and
+    local-interface sockets), then where every Reticulum process LHPC started stands — each
+    process group gets SIGABRT, and with `PYTHONFAULTHANDLER=1` (set for the release lane)
+    every thread's stack lands in its own run log, whose tail is returned. A record is acted on
+    only when its live process is still the one recorded (start time, pgid, sid).
+
+    Diagnosis only: it decides nothing and marks nothing. The processes it aborts are gone
+    afterwards, so the caller's stop must not require them."""
+    root = Path(env["LHPC_RUNTIME_ROOT"])
+    out = ["\n--- sockets of the Reticulum shared instance at the timeout ---"]
+    for table in ("unix", "tcp", "tcp6"):
         try:
-            drawn, ended = _pty_read(master, proc, expect, ready_timeout)
-            if ended:
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    proc.wait(timeout=2)            # for its exit status in the message
-            tail = drawn[-600:].decode("utf-8", "replace")
-            # ENDED, not `poll()`: the terminal closes before the exit can be reaped, and a
-            # program read as still running there would be retried as a pure timeout.
-            broken = ended or proc.poll() is not None or bool(_DREW_AN_ERROR.search(drawn))
-            matched = _matches(drawn, expect)
-            dump = "" if (matched or broken) else _pty_abort(proc, master)
-            if attempt == 1 and not matched and not broken:
-                first = (f"\n--- first start: timed out after {ready_timeout} s, retried once. "
-                         f"It drew: {tail!r}{dump}{_log_tails(logs)}\n--- end of first start")
-                continue                            # `finally` stops it; then the retry
-            # A timeout without evidence blames no stack; neither does a retried start, which
-            # runs against whatever the aborted first start left (a held connection, a lock).
-            why = mark if broken and not first else ""
-            assert drawn, (f"{why}{command!r} drew nothing on its terminal within "
-                           f"{ready_timeout} s{dump}{_log_tails(logs)}{first}")
-            assert matched, (
-                f"{why}{command!r} did not draw anything matching {expect!r} within "
-                f"{ready_timeout} s. It drew: {tail!r}{dump}{_log_tails(logs)}{first}")
-            time.sleep(hold)
-            assert proc.poll() is None, (
-                f"{mark if not first else ''}{command!r} exited on its own (rc={proc.returncode}) — not a running "
-                f"app. It drew: {tail!r}{_log_tails(logs)}{first}")
-        finally:
-            killed = _pty_stop(proc, master)
-        assert not killed, (f"{command!r} ignored SIGTERM and had to be killed — it does not "
-                            f"exit cleanly")
-        return drawn
-    raise AssertionError("unreachable")          # the second start returns or fails
+            rows = Path("/proc/net", table).read_text().splitlines()
+        except OSError as exc:
+            rows = [f"(/proc/net/{table}: {type(exc).__name__})"]
+        # unix: the abstract `@rns/<instance>/…` names; tcp: ports 37428/37429 (0x9234/0x9235)
+        out += [r for r in rows if "rns/" in r or ":9234 " in r or ":9235 " in r
+                or r.startswith("(")]
+    from lhpc.core.procident import proc_identity
+    aborted, skipped = [], []
+    for path in sorted((root / "state" / "owned").glob("*__*__*__*.json")):
+        comp = path.name.split("__", 1)[0]
+        if comp not in _RNS_PEERS:
+            continue
+        try:
+            rec = json.loads(path.read_text())
+            pid = int(rec["pid"])
+        except (OSError, ValueError, KeyError, TypeError):
+            skipped.append(f"{comp} (unreadable record)")
+            continue
+        # The product's ownership rule (`Lifecycle.verify_owned`): the live process has the
+        # recorded start time, pgid and sid, and its sid is its own pid. A stale record
+        # whose pid was reused is skipped, never signalled.
+        live = proc_identity(pid)
+        if (live is None or live.get("sid") != pid
+                or any(str(rec.get(k)) != str(live.get(k)) for k in ("starttime", "pgid", "sid"))):
+            skipped.append(f"{comp} (not the recorded process)")
+            continue
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(pid, signal.SIGABRT)
+            aborted.append(comp)
+    time.sleep(drain)
+    out.append(f"--- aborted for their stacks: {', '.join(aborted) or 'none'}"
+               + (f"; skipped: {', '.join(skipped)}" if skipped else "") + " ---")
+    for log in sorted(p for comp in set(aborted) for p in (root / "logs").glob(f"start-{comp}*.log")):
+        try:
+            text = log.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            text = f"(not readable: {type(exc).__name__})"
+        # From the dump's first line: it is followed by a C-level backtrace that a plain tail
+        # would keep instead of the Python stacks.
+        at = text.rfind("Fatal Python error")
+        out.append(f"--- {log} ---\n" + (text[at:at + 12000] if at >= 0 else text[-1500:]))
+    return "\n".join(out)
 
 
 def _pty_launch(command: str, env: dict):

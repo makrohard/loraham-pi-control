@@ -14,6 +14,8 @@ Fixed
 - CI runs the test suite in parallel processes, and the slow-build check starts only after the testlab job passed.
 - The release check no longer blames a stack when one of its services was still starting after its wait: a
   readiness timeout names the stack only when LHPC reports the component stopped or failed.
+- The release check no longer starts an interactive program a second time after a timeout: a hung start fails
+  (unmarked), and NomadNet's records the stacks of every Reticulum process and the shared instance's sockets.
 
 ## 0.12.9
 

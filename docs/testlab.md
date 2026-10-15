@@ -142,9 +142,11 @@ subprocesses import `lhpc` from the editable install, i.e. whichever checkout wa
     is unmarked and carries the component's run-log tail (`readiness_failed`). An
     interactive program's readiness is marked only when it exited or drew a traceback or an
     exception line; a timeout without that evidence is unmarked and carries the tails of its logs.
-    Such a timeout also captures the program's stack (SIGABRT with Python's faulthandler) and gets
-    ONE retry, since a flaky third-party UI start is not the stack's regression: the first start's
-    stack and log tails are kept as a warning in the JUnit, and only a second start that draws passes.
+    Such a timeout is never retried (a test body is not re-run because it failed): it captures the
+    program's stack (SIGABRT with Python's faulthandler) and fails. NomadNet's case also records,
+    before anything is stopped, the shared instance's sockets and every Reticulum process's stack
+    (`reticulum_peers_snapshot`; the release lane runs with `PYTHONFAULTHANDLER=1`), because its
+    first start has hung on a loaded runner for a cause not yet measured.
     A regression that only hangs is therefore unmarked: the release stops at its proof, nothing is
     released and nothing frozen (a deliberate trade). An automation may freeze a stack only on a
     marked failure.

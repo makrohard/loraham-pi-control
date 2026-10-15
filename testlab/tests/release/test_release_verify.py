@@ -28,6 +28,7 @@ from lhpc_testlab.release import (
     readiness_failed,
     require_prerequisite,
     required_release_cases,
+    reticulum_peers_snapshot,
     stack_regression,
     start_component,
     stop,
@@ -130,7 +131,7 @@ def test_release_graywolf(env, svc):
     stop(env, "graywolf")
 
 
-def test_release_chat(env, svc, record_property):
+def test_release_chat(env, svc):
     """Chat is interactive: the controller presents a command instead of starting it, so the
     proof is that command running on a real terminal against the fake daemon."""
     stop(env, "kiss", require=False)
@@ -139,8 +140,7 @@ def test_release_chat(env, svc, record_property):
     # — a broken fixture must never freeze chat.
     _start(env, "daemon", timeout=300, attribute=False)
     comp = next(c for c in svc.stack("chat").components if c.id == "loraham-chat")
-    pty_readiness(svc.manual_start_command(comp), env, CHAT_DRAWS, stack="chat",
-                  record=record_property)
+    pty_readiness(svc.manual_start_command(comp), env, CHAT_DRAWS, stack="chat")
 
 
 def test_release_voice_gtk(env, svc):
@@ -167,7 +167,7 @@ def test_release_voice_gtk(env, svc):
     stop(env, "voice")
 
 
-def test_release_voice_terminal(env, svc, headless_box, record_property):
+def test_release_voice_terminal(env, svc, headless_box):
     """The terminal variant on a box with NO graphical session — the box LHPC ships it for.
 
     Nothing here is faked into place. With the display gone, LHPC's own start typed-SKIPS the
@@ -189,8 +189,7 @@ def test_release_voice_terminal(env, svc, headless_box, record_property):
     _start(env, "voice", timeout=300)
     cli = next(c for c in svc.stack("voice").components if c.id == "loraham-voice-cli")
     try:
-        pty_readiness(svc.manual_start_command(cli), env, VOICE_CLI_DRAWS, stack="voice",
-                      record=record_property)
+        pty_readiness(svc.manual_start_command(cli), env, VOICE_CLI_DRAWS, stack="voice")
     finally:
         stop(env, "voice")
         stop(env, "daemon")
@@ -286,7 +285,7 @@ def test_release_meshcore_repeater(env):
     _meshcore_mode(env, "chat")
 
 
-def test_release_meshcore_cli(env, svc, record_property):
+def test_release_meshcore_cli(env, svc):
     """The MeshCore CLI is an interactive component: proved on a terminal against the running
     companion, not by `--version`."""
     _start(env, "meshcore", timeout=900)
@@ -295,7 +294,7 @@ def test_release_meshcore_cli(env, svc, record_property):
     comp = next(c for c in svc.stack("meshcore").components if c.id == "meshcore-cli")
     try:
         pty_readiness(svc.manual_start_command(comp), env, MESHCLI_DRAWS, ready_timeout=90,
-                      stack="meshcore", record=record_property)
+                      stack="meshcore")
     finally:
         stop(env, "meshcore")
 
@@ -357,10 +356,20 @@ def test_release_reticulum(env, svc):
         env, "reticulum", "sideband", "sideband is startable here but did not come up")
 
 
-def test_release_reticulum_nomadnet(env, svc, record_property):
-    """NomadNet is interactive: proved on a terminal against the running Reticulum."""
+def test_release_reticulum_nomadnet(env, svc):
+    """NomadNet is interactive: proved on a terminal against the running Reticulum.
+
+    Its first start has hung on a loaded runner (nothing drawn, the process alive), never
+    reproduced elsewhere. A timeout is not retried: it fails unmarked, and before anything is
+    stopped `reticulum_peers_snapshot` records who holds the shared instance's sockets and every
+    Reticulum process's stack, so the next occurrence names its cause."""
     require_prerequisite(env, "reticulum", left_by="test_release_reticulum")
     comp = next(c for c in svc.stack("reticulum").components if c.id == "nomadnet")
+    aborted = []
+
+    def _peers():
+        aborted.append(True)
+        return reticulum_peers_snapshot(env)
     try:
         root = Path(env["LHPC_RUNTIME_ROOT"])
         # NomadNet's own log, and the start logs (those that exist) of the Reticulum node it
@@ -369,9 +378,11 @@ def test_release_reticulum_nomadnet(env, svc, record_property):
                 *sorted(p for name in ("rns", "lxmd", "meshchat", "sideband")
                         for p in (root / "logs").glob(f"start-{name}-*.log")))
         pty_readiness(svc.manual_start_command(comp), env, NOMADNET_DRAWS, ready_timeout=90,
-                      stack="reticulum", logs=logs, record=record_property)
+                      stack="reticulum", logs=logs, on_timeout=_peers)
     finally:
-        stop(env, "reticulum")
+        # After a snapshot its processes were aborted on purpose: the stop then only tidies,
+        # and must not replace the case's own failure with its own.
+        stop(env, "reticulum", require=not aborted)
 
 
 # --------------------------------------------------------------------------- binary stacks

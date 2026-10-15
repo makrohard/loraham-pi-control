@@ -86,7 +86,12 @@ def lane_display(request):
 
 @pytest.fixture(scope="session")
 def env(lab):
-    return lab_env(lab.root)
+    env = lab_env(lab.root)
+    # Inherited by every Python program the lane starts through LHPC: a fatal signal, and the
+    # SIGABRT of a readiness timeout's diagnosis (`reticulum_peers_snapshot`), then prints every
+    # thread's stack into that program's own run log. It changes nothing else.
+    env["PYTHONFAULTHANDLER"] = "1"
+    return env
 
 
 @pytest.fixture(scope="session")

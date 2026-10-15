@@ -636,15 +636,14 @@ def test_a_status_that_cannot_be_read_blames_no_stack(monkeypatch, tmp_path, sta
 
 # --- an interactive program's readiness: only evidence of breaking blames the stack -------------
 
-def _readiness_failure(command, tmp_path, *, expect="NEVER-DRAWN", logs=(), record=None):
+def _readiness_failure(command, tmp_path, *, expect="NEVER-DRAWN", logs=(), on_timeout=None):
     import os
-    import warnings
 
     from lhpc_testlab.release import pty_readiness
-    with pytest.raises(AssertionError) as exc, warnings.catch_warnings():
-        warnings.simplefilter("ignore")             # a retry warns; its cases check `record`
+    extra = {"on_timeout": on_timeout} if on_timeout else {}
+    with pytest.raises(AssertionError) as exc:
         pty_readiness(command, dict(os.environ), expect, ready_timeout=1.5, hold=0.2,
-                      stack="reticulum", logs=logs, record=record)
+                      stack="reticulum", logs=logs, **extra)
     return str(exc.value)
 
 
@@ -677,7 +676,7 @@ def test_a_readiness_failure_carries_the_tails_of_the_named_logs(tmp_path):
     assert f"--- {daemon} (tail) ---" in msg and "not readable" in msg
 
 
-# --- a readiness timeout: its stack is captured, and a first one is retried once ----------------
+# --- a readiness timeout: diagnosed (its stack, and what it waits on), never retried -------------
 
 def _counted(tmp_path, first, then):
     """A shell command that appends one line per start to a counter file and runs `first` on
@@ -692,32 +691,76 @@ def _hang_in_python():
     return f"exec {sys.executable} -c 'import time; time.sleep(60)'"
 
 
-def test_a_first_start_that_times_out_is_retried_once_and_reported(tmp_path):
+def test_a_start_that_times_out_is_not_retried_and_carries_its_stack(tmp_path):
+    """A test body is never re-run because it failed: a hung first start fails, unmarked, with
+    the thread dump of where it hung — even when a second start would have drawn."""
+    command, counter = _counted(tmp_path, _hang_in_python(), "printf 'READY'; sleep 30")
+    msg = _readiness_failure(command, tmp_path, expect="READY")
+    assert counter.read_text().count("start") == 1
+    assert "STACK-REGRESSION" not in msg
+    assert "Fatal Python error" in msg and "time.sleep" in msg
+
+
+def test_the_timeout_diagnosis_runs_while_the_program_still_hangs(tmp_path):
+    """`on_timeout` runs BEFORE the abort: what a hung program waits on (another process, a
+    socket) is only visible while it still waits."""
     import os
 
-    from lhpc_testlab.release import pty_readiness
-    command, counter = _counted(tmp_path, _hang_in_python(), "printf 'READY'; sleep 30")
-    recorded = []
-    with pytest.warns(UserWarning) as warned:
-        drawn = pty_readiness(command, dict(os.environ), "READY", ready_timeout=1.5, hold=0.2,
-                              stack="reticulum", record=lambda k, v: recorded.append((k, v)))
-    assert b"READY" in drawn
-    assert counter.read_text().count("start") == 2
-    [(name, note)] = recorded
-    assert name == "readiness-retry" and "retried once" in note
-    assert "Fatal Python error" in note and "time.sleep" in note   # the first start's stack
-    assert any("retried once" in str(w.message) for w in warned)
+    pidfile = tmp_path / "pid"
+    seen = []
+
+    def diagnose():
+        pid = int(pidfile.read_text())
+        os.kill(pid, 0)                            # raises if it were already gone
+        seen.append(pid)
+        return "\n--- DIAGNOSIS-TEXT ---"
+    msg = _readiness_failure(f"echo $$ > {pidfile}; {_hang_in_python()}", tmp_path,
+                             on_timeout=diagnose)
+    assert len(seen) == 1
+    assert msg.index("DIAGNOSIS-TEXT") < msg.index("Fatal Python error")
+    assert "STACK-REGRESSION" not in msg
 
 
-def test_a_start_that_times_out_twice_fails_unmarked_with_both_stacks(tmp_path):
-    command, counter = _counted(tmp_path, _hang_in_python(), _hang_in_python())
-    recorded = []
-    msg = _readiness_failure(command, tmp_path, record=lambda k, v: recorded.append((k, v)))
-    assert counter.read_text().count("start") == 2
-    [(name, note)] = recorded                 # the failed retry is in the JUnit too
-    assert name == "readiness-retry" and "Fatal Python error" in note
-    assert "STACK-REGRESSION" not in msg      # a dump is drawn after the abort; it blames nobody
-    assert msg.count("Fatal Python error") == 2 and "first start" in msg
+def test_the_reticulum_snapshot_aborts_only_recorded_reticulum_processes(tmp_path):
+    """The snapshot SIGABRTs the process group of every Reticulum process LHPC owns, and returns
+    their faulthandler dumps from their run logs. A process of another stack, and a record whose
+    pid now belongs to a different process (a stale record after pid reuse), are left alone."""
+    import json
+    import os
+
+    from lhpc_testlab.release import reticulum_peers_snapshot
+
+    from lhpc.core.procident import proc_identity
+    (tmp_path / "logs").mkdir()
+    owned = tmp_path / "state" / "owned"
+    owned.mkdir(parents=True)
+    env = dict(os.environ, PYTHONFAULTHANDLER="1")
+    procs = {}
+    for comp, band in (("rns", "868"), ("loraham-kiss-tnc", "433"), ("lxmd", "868")):
+        # It says `ready` once its interpreter (and with it faulthandler) is up; the dump goes to
+        # its run log on stderr, as an LHPC-started component's does.
+        with open(tmp_path / "logs" / f"start-{comp}-{band}.log", "ab") as log:
+            procs[comp] = subprocess.Popen(
+                [sys.executable, "-c", "import time; print('ready', flush=True); time.sleep(60)"],
+                stdout=subprocess.PIPE, stderr=log, env=env, start_new_session=True, text=True)
+        rec = {"pid": procs[comp].pid, **proc_identity(procs[comp].pid)}
+        if comp == "lxmd":                          # stale: the pid's process started later
+            rec["starttime"] = int(rec["starttime"]) - 1
+        (owned / f"{comp}__{band}__{procs[comp].pid}__n1.json").write_text(json.dumps(rec))
+    try:
+        for p in procs.values():
+            assert p.stdout.readline() == "ready\n"
+        out = reticulum_peers_snapshot({"LHPC_RUNTIME_ROOT": str(tmp_path)}, drain=2.0)
+        assert procs["rns"].wait(timeout=10) != 0          # aborted
+        assert procs["loraham-kiss-tnc"].poll() is None    # another stack: untouched
+        assert procs["lxmd"].poll() is None                # a stale record: untouched
+        assert "aborted for their stacks: rns; skipped: lxmd (not the recorded process) ---" in out
+        assert "Fatal Python error: Aborted" in out and 'File "<string>", line 1' in out
+    finally:
+        for p in procs.values():
+            if p.poll() is None:
+                p.kill()
+                p.wait(timeout=10)
 
 
 @pytest.mark.parametrize("first", [
@@ -731,22 +774,6 @@ def test_a_start_that_shows_it_is_broken_is_never_retried(tmp_path, first):
     assert "STACK-REGRESSION stack=reticulum phase=readiness" in msg
 
 
-@pytest.mark.parametrize("then", [
-    "exit 3",                                                           # exited
-    "printf 'Traceback (most recent call last):\\n'; sleep 30",         # drew a traceback
-])
-def test_a_retried_start_that_breaks_blames_no_stack(tmp_path, then):
-    """The retry runs against what the aborted first start left behind, so its breakage may be
-    the harness's own doing: it fails, unmarked."""
-    command, counter = _counted(tmp_path, _hang_in_python(), then)
-    recorded = []
-    msg = _readiness_failure(command, tmp_path, expect="READY",
-                             record=lambda k, v: recorded.append((k, v)))
-    assert counter.read_text().count("start") == 2
-    assert [k for k, _v in recorded] == ["readiness-retry"]
-    assert "STACK-REGRESSION" not in msg and "first start" in msg
-
-
 def test_the_program_runs_without_core_dumps(tmp_path):
     import os
 
@@ -755,31 +782,6 @@ def test_the_program_runs_without_core_dumps(tmp_path):
     pty_readiness(f"ulimit -c > {limit}; printf 'READY'; sleep 30", dict(os.environ), "READY",
                   ready_timeout=5, hold=0.2)
     assert limit.read_text().strip() == "0"
-
-
-@pytest.mark.parametrize("fails", ["_pty_stop", "_pty_launch"])
-def test_a_retry_that_never_started_is_not_reported(tmp_path, monkeypatch, fails):
-    """The first start's cleanup, or the second launch, raises: no retry ran, so none is
-    reported, and the error is what the case fails on."""
-    import os
-
-    from lhpc_testlab import release
-    real, calls = getattr(release, fails), []
-
-    def once_then_raise(*a, **kw):
-        calls.append(1)
-        if (fails == "_pty_stop" and len(calls) == 1) or (fails == "_pty_launch"
-                                                          and len(calls) == 2):
-            if fails == "_pty_stop":
-                real(*a, **kw)                    # leave nothing running
-            raise OSError("injected")
-        return real(*a, **kw)
-    monkeypatch.setattr(release, fails, once_then_raise)
-    recorded = []
-    with pytest.raises(OSError, match="injected"):
-        release.pty_readiness(_hang_in_python(), dict(os.environ), "READY", ready_timeout=1.5,
-                              hold=0.2, record=lambda k, v: recorded.append((k, v)))
-    assert recorded == []
 
 
 def test_a_start_whose_terminal_closed_before_it_was_reaped_is_an_exit(tmp_path, monkeypatch):
