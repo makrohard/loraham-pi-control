@@ -8,6 +8,10 @@
                                                <dir>/gitconfig as ~/.gitconfig; exit 1 if any fails
     mirror-sources.py resolved <dir>           through lhpc's own command runner, every remote in
                                                <dir>/remotes.txt resolves to its mirror; exit 1 if not
+    mirror-sources.py graywolf-version <manifest>   the Graywolf release the manifest pins
+    mirror-sources.py cli-requirements <manifest>   the Meshtastic CLI venv's pip requirements
+
+The last two serve the slow-build job's acquisition of the timed operations' transfers.
 
 The workflow fetches each mirror before the lane (with the transfer backoff) and the lane copies
 <dir>/gitconfig to the lab user's ~/.gitconfig, so the product's own `git clone <remote>` resolves
@@ -73,6 +77,30 @@ def git_config(remotes: list[str], directory: str) -> str:
     return "".join(out)
 
 
+def _build_steps(manifest: Path):
+    for stack in tomllib.loads(manifest.read_text())["stack"]:
+        for comp in stack.get("component", ()):
+            for step in comp.get("build_steps", ()):
+                yield [str(a) for a in step.get("argv", ())]
+
+
+def graywolf_version(manifest: Path) -> str:
+    """The version argument of the manifest's `graywolf-fetch.sh <dest> <version>` step."""
+    for argv in _build_steps(manifest):
+        for i, tok in enumerate(argv):
+            if tok.endswith("graywolf-fetch.sh") and len(argv) > i + 2:
+                return argv[i + 2]
+    raise SystemExit(f"no graywolf-fetch.sh step in {manifest}")
+
+
+def cli_requirements(manifest: Path) -> str:
+    """The requirements of the `pip install … meshtastic==<v> …` build step, space-separated."""
+    for argv in _build_steps(manifest):
+        if "install" in argv and any(a.startswith("meshtastic==") for a in argv):
+            return " ".join(a for a in argv[argv.index("install") + 1:] if not a.startswith("-"))
+    raise SystemExit(f"no `pip install meshtastic==…` step in {manifest}")
+
+
 def _home_with(gitconfig: Path, home: str) -> dict:
     """The environment git sees in the lane: a $HOME whose .gitconfig is `gitconfig`."""
     Path(home, ".gitconfig").write_text(gitconfig.read_text())
@@ -119,6 +147,10 @@ def main(argv: list[str]) -> int:
         return verify(Path(args[0]))
     elif cmd == "resolved" and len(args) == 1:
         return resolved(Path(args[0]))
+    elif cmd == "graywolf-version" and len(args) == 1:
+        print(graywolf_version(Path(args[0])))
+    elif cmd == "cli-requirements" and len(args) == 1:
+        print(cli_requirements(Path(args[0])))
     else:
         print(__doc__, file=sys.stderr)
         return 2

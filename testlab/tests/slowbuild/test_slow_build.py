@@ -46,6 +46,11 @@ pytestmark = pytest.mark.slow
 REPO = next(p for p in Path(__file__).resolve().parents if (p / "lhpc" / "version.py").is_file())
 BASELINE = tomllib.loads((REPO / "tests" / "data" / "slow-target-builds.toml").read_text())
 OUT = Path(os.environ.get("LHPC_SLOW_BUILD_OUT", "/out"))
+# Decision (a): the wheels the timed pip operations (L5 the CLI venv, L4 the self-update's pip
+# sync, every timed build's `pip install`) install were fetched before the lane, and their
+# transfer time was recorded on its own (the workflow's transfers.toml). Those operations install
+# from them, offline, and the lane proves that before timing them (`_offline`).
+WHEELS = os.environ.get("LHPC_SLOW_BUILD_WHEELS", "")
 STACKS = load_manifest(default_manifest_path())
 PYPROJECT = (REPO / "pyproject.toml").read_text()
 # L8: the harness's own per-command limit. It must stay far above every product limit, or it
@@ -228,6 +233,40 @@ def _deb_fetch(svc, component: str, tmp: Path) -> None:
     _record(component, "deb-fetch", seconds)
 
 
+def _local_pip(env: dict, conf: Path) -> dict:
+    """`env` for a timed pip operation: pip reads `<conf>/pip/pip.conf` (the pre-fetched wheels,
+    no index) through XDG_CONFIG_HOME, which lhpc's command runner forwards to its children; it
+    drops PIP_* variables. Unchanged without wheels."""
+    if not WHEELS:
+        return env
+    (conf / "pip").mkdir(parents=True, exist_ok=True)
+    (conf / "pip" / "pip.conf").write_text(f"[global]\nno-index = true\nfind-links = {WHEELS}\n")
+    return {**env, "XDG_CONFIG_HOME": str(conf)}
+
+
+_RUNNER_PIP_CONFIG = ("import sys; from lhpc.core.probes.backends import RealCommandRunner; "
+                      "print(RealCommandRunner().run([sys.executable, '-m', 'pip', 'config', "
+                      "'list'], 120).stdout, end='')")
+
+
+def _pip_config_through_the_runner(env: dict) -> str:
+    """pip's configuration as a child of lhpc's command runner sees it, the way the timed pip
+    operations run: in a fresh interpreter, whose runner builds its fixed environment from
+    `env`."""
+    return subprocess.run([sys.executable, "-c", _RUNNER_PIP_CONFIG], env=env, check=True,
+                          capture_output=True, text=True, timeout=HARNESS_S).stdout
+
+
+def _offline(env: dict) -> dict:
+    """Fails unless a pip the runner starts under `env` has no index and the wheels: then the
+    timed operation cannot transfer, it can only fail on a wheel the acquisition missed."""
+    seen = _pip_config_through_the_runner(env)
+    assert ("global.no-index='true'" in seen.splitlines()
+            and f"global.find-links='{WHEELS}'" in seen.splitlines()), (
+        f"a timed pip operation would reach the index; pip's config under the runner:\n{seen}")
+    return env
+
+
 def _install(env: dict, stack: str):
     t0 = time.monotonic()
     r = run_lhpc(env, "install", stack, "--yes", timeout=HARNESS_S)
@@ -384,13 +423,16 @@ def test_slow_build_stack(env, svc, stack, tmp_path):
         # measures a first install, so it uninstalls that one first.
         _judged("uninstalling the lab's meshtastic",
                 run_lhpc(env, "uninstall", stack, "--yes", timeout=HARNESS_S))
-    r = _install(env, stack)
+    # The timed pip operations (the CLI venv inside the meshtastic install, every build's pip)
+    # install from the pre-fetched wheels with no index; the clones resolve to the mirrors.
+    local = _offline(_local_pip(env, tmp_path / "pipconf")) if WHEELS else env
+    r = _install(local if stack == "meshtastic" else env, stack)
     mine = [(c, o) for c, o in LANE_OPS if _STACK_OF.get(c) == stack]
     for component, op in mine:
         if op == "clone":
             _adoption(env, component)
         elif op == "build":
-            _build(env, component)
+            _build(local, component)
         elif op == "deb-fetch":
             _deb_fetch(svc, component, tmp_path)
     if stack == "meshtastic":
@@ -483,6 +525,8 @@ def test_slow_build_selfupdate(tmp_path):
         subprocess.run([*pip, "-e", str(target)], check=True, timeout=HARNESS_S)
     _install_units(venv / "bin" / "python", root, env)
     (root / "state" / "selfupdate.request").write_text("normal\n")
+    if WHEELS:
+        env = _offline(_local_pip(env, tmp_path / "pipconf"))
     seconds, out = _helper(venv / "bin" / "lhpc", env)
     assert _git("-C", str(co), "rev-parse", "HEAD") == cand, f"{prev} was not updated to {cand}"
     _record(stt.SELFUPDATE_COMPONENT, "selfupdate-helper", seconds)

@@ -187,7 +187,19 @@ about half an hour.
   each lane stack's install (clone, checkout, the Meshtastic CLI venv), every component's build
   (wall time and longest quiet gap), the graywolf upstream fetch and a self-update from the
   previous release tag, then checks them with `lhpc.core.slow_target` against
-  `tests/data/slow-target-builds.toml`.
+  `tests/data/slow-target-builds.toml`. The transfers of the timed clones, the graywolf fetch,
+  the Meshtastic CLI venv, the self-update's pip sync and every timed build's `pip install`
+  (`.github/scripts/build-wheels.py`) are made before the lane, in a step of their own with the
+  transfer backoff, and each one's wall time is written to `transfers.toml` in the evidence:
+  recorded, never judged. The lane times those operations against the local copies (the git
+  mirrors through `~/.gitconfig`, `GRAYWOLF_BASE_URL=file://…`, and for every pip a `pip.conf`
+  with no index and the wheel directory, through `XDG_CONFIG_HOME`; the product's command runner
+  forwards those two and drops `GIT_CONFIG_GLOBAL` and `PIP_*`), and checks through that runner,
+  before timing, that git and pip see them. So the budget judges local work, with one transfer
+  still under test inside a timed build: the graywolf build's `.deb`, which its only build step
+  (`graywolf-fetch.sh`, run through the runner, which drops `GRAYWOLF_BASE_URL`) fetches from
+  GitHub, so that build's time is that transfer. No timed build runs npm, and the build logs carry
+  no per-step timestamps.
   - `test_slow_build_env` fails unless the throttle is in force — `io.max` holds a tight line for
     the writable layer's disk the job measured (`SLOW_IO_ROOT_DISK`) and for the disk behind the
     calibration work dir, each by name — and no
@@ -200,7 +212,9 @@ about half an hour.
     (a skip is not a pass; the one exception is the
     [bootstrap state](maintenance.md#branches-and-releases)) and uploads
     `slow-build-evidence`: `slow-target-builds.toml` (`source = "throttled-ci"`), the JUnit and the
-    E/Z summary, which is also the job summary.
+    E/Z summary, which is also the job summary. The upload is a transfer after the verdict: it
+    is tried twice, two minutes apart, and never fails the job; a run whose upload failed twice
+    says so in a warning and in its summary, and has no evidence artifact (re-run the job for one).
 
 ## Codespaces costs
 

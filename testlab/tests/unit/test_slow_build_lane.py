@@ -7,7 +7,9 @@ helpers run in the ordinary unit lane."""
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
+import sys
 import types
 from pathlib import Path
 
@@ -512,3 +514,73 @@ def test_the_fetch_scripts_bare_download_failed_is_judged_by_curls_own_line(stde
     with pytest.raises(pytest.fail.Exception) as red:
         lane._judged("the upstream fetch of 0.14.14", _done(rc=1, stderr=stderr))
     assert str(red.value).startswith("EXTERNAL-UNAVAILABLE what=") is external
+
+
+def test_without_wheels_the_timed_pip_operations_run_unchanged(monkeypatch, tmp_path):
+    env = {"LHPC_RUNTIME_ROOT": "/r"}
+    monkeypatch.setattr(lane, "WHEELS", "")
+    assert lane._local_pip(env, tmp_path / "conf") == env
+    assert not (tmp_path / "conf").exists()
+
+
+@pytest.mark.parametrize("via", ["pip_conf", "pip_env"])
+def test_only_a_pip_conf_reaches_a_pip_the_products_runner_starts(monkeypatch, tmp_path, via):
+    """Decision (a): the timed pip operations install offline from the pre-fetched wheels. The
+    first version exported PIP_NO_INDEX / PIP_FIND_LINKS, which lhpc's command runner drops, so
+    those pips still used the index; `_offline` now refuses that before anything is timed."""
+    wheels = str(tmp_path / "wheels")
+    monkeypatch.setattr(lane, "WHEELS", wheels)
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "home"),
+           "PYTHONPATH": os.pathsep.join(sys.path)}
+    if via == "pip_conf":
+        env = lane._local_pip(env, tmp_path / "conf")
+        assert lane._offline(env) is env
+        seen = lane._pip_config_through_the_runner(env).splitlines()
+        assert "global.no-index='true'" in seen and f"global.find-links='{wheels}'" in seen
+    else:
+        env = {**env, "PIP_NO_INDEX": "1", "PIP_FIND_LINKS": wheels}
+        with pytest.raises(AssertionError, match="would reach the index"):
+            lane._offline(env)
+
+
+# ---- decision (a): a transfer is recorded, never judged (plan P5 tests a and c) -------------
+
+def _budget(monkeypatch, tmp_path, clone_s: float, transfer_s: float) -> tuple[str, str]:
+    """The budget case's verdict and summary for one timed clone of `clone_s` seconds, with the
+    acquisition's transfers.toml beside it recording that clone's transfer at `transfer_s`."""
+    out = tmp_path / f"{clone_s}-{transfer_s}"
+    out.mkdir()
+    (out / "transfers.toml").write_text(
+        '[[transfer]]\nwhat = "clone https://github.com/markqvist/Reticulum.git"\n'
+        f"seconds = {transfer_s}\n")
+    monkeypatch.setattr(lane, "OUT", out)
+    # Stubs the collaborators: git (the previous tag, not an introducing release) and the
+    # product's clone limit, so the margin rule is the only judge.
+    monkeypatch.setattr(lane, "_prev_tag", lambda: "v9.9.9")
+    monkeypatch.setattr(lane, "_introducing", lambda prev: False)
+    monkeypatch.setattr(lane.stt, "limit", lambda op: 600.0)
+    monkeypatch.setattr(lane, "LANE_OPS", [("rns", "clone")])
+    monkeypatch.setattr(lane, "BASELINE", {"measured": [
+        {"component": "rns", "op": "clone", "seconds": 100.0, "source": "zero2w", "key": "k",
+         "date": "2026-10-01"}]})
+    monkeypatch.setattr(lane, "EVIDENCE", {("rns", "clone"): {
+        "component": "rns", "op": "clone", "seconds": clone_s, "key": "k"}})
+    try:
+        lane.test_slow_build_budget()
+        verdict = "pass"
+    except AssertionError:
+        verdict = "fail"
+    return verdict, (out / "slow-build-summary.md").read_text()
+
+
+def test_a_transfer_however_slow_leaves_the_budget_verdict_unchanged(monkeypatch, tmp_path):
+    """(a) + (c): the acquisition 10^6 times slower changes neither the verdict nor the summary.
+    New invariant: the twin below shows the same instrument does turn on a slow LOCAL timing."""
+    fast = _budget(monkeypatch, tmp_path, clone_s=100.0, transfer_s=1.0)
+    slow = _budget(monkeypatch, tmp_path, clone_s=100.0, transfer_s=1e6)
+    assert fast == slow and fast[0] == "pass"
+
+
+def test_a_slow_local_timing_does_fail_the_budget(monkeypatch, tmp_path):
+    verdict, summary = _budget(monkeypatch, tmp_path, clone_s=400.0, transfer_s=1.0)
+    assert verdict == "fail" and "**FAIL** rns clone: limit 600 s < 2 x 400 s measured" in summary

@@ -308,9 +308,53 @@ jobs:
 
       - name: Build the lab image from THIS commit's Dockerfile
         run: |
+          . .github/scripts/retry.sh
           IMG=lhpc-testlab:ci
-          docker build -t "$IMG" -f .devcontainer/Dockerfile .devcontainer
+          backoff docker build -t "$IMG" -f .devcontainer/Dockerfile .devcontainer
           echo "IMG=$IMG" >> "$GITHUB_ENV"
+
+      - name: Acquire the timed operations' transfers (timed, recorded, never judged)
+        # Decision (a): a timed operation's transfer is measured as its own number and never
+        # fails a budget. The git sources (mirrors), the pinned Graywolf .deb with its
+        # checksums.txt, and the wheels of the Meshtastic CLI venv, of the self-update's pip
+        # sync and of every timed build's pip install are fetched here with the transfer
+        # backoff, each timed into transfers.toml; the lane then times those operations
+        # against these local copies. Still inside a timed build: the graywolf build's .deb.
+        run: |
+          . .github/scripts/retry.sh
+          mkdir -p srcmirror xfer/graywolf xfer/wheels slowevidence
+          timed() {  # timed <what> <argv...>: run it, append its wall time to transfers.toml
+            local what=$1 t0 t1; shift; t0=$(date +%s%N)
+            "$@"; t1=$(date +%s%N)
+            printf '[[transfer]]\nwhat = "%s"\nseconds = %s\n\n' "$what" \
+              "$(awk -v d=$((t1 - t0)) 'BEGIN { printf "%.1f", d / 1e9 }')" >> slowevidence/transfers.toml
+          }
+          python3 .github/scripts/mirror-sources.py list lhpc/data/manifest.example.toml > srcmirror/remotes.txt
+          while read -r remote; do
+            dir="srcmirror/$(python3 .github/scripts/mirror-sources.py name "$remote")"
+            timed "clone $remote" backoff sh -c 'rm -rf "$1" && git clone --quiet --mirror "$2" "$1"' _ "$dir" "$remote"
+          done < srcmirror/remotes.txt
+          python3 .github/scripts/mirror-sources.py config srcmirror/remotes.txt /srcmirror > srcmirror/gitconfig
+          gw=$(python3 .github/scripts/mirror-sources.py graywolf-version lhpc/data/manifest.example.toml)
+          base=https://github.com/chrissnell/graywolf/releases/download/v$gw
+          mkdir -p "xfer/graywolf/v$gw"
+          for f in "graywolf_${gw}_arm64.deb" checksums.txt; do
+            timed "graywolf $f" backoff curl -fsSL -o "xfer/graywolf/v$gw/$f" "$base/$f"
+          done
+          # In the lab image (the Python of the lane), as root: xfer/ belongs to the runner user.
+          cli=$(python3 .github/scripts/mirror-sources.py cli-requirements lhpc/data/manifest.example.toml)
+          timed "wheels: $cli setuptools>=68 ./ (this checkout)" docker run --rm --user root \
+            -e PIP_ROOT_USER_ACTION=ignore -v "$PWD":/repo:ro -v "$PWD/xfer":/xfer "$IMG" bash -lc \
+            ". /repo/.github/scripts/retry.sh && cp -r /repo /tmp/src && backoff python3 -m pip download -q -d /xfer/wheels $cli 'setuptools>=68' /tmp/src"
+          # The pip install of every timed build (build-wheels.py times each component itself).
+          # Both fetch from a COPY of the checkout: setuptools writes egg-info into a source tree
+          # it builds, and /repo is mounted read-only.
+          docker run --rm --user root -e PIP_ROOT_USER_ACTION=ignore -v "$PWD":/repo:ro \
+            -v "$PWD/srcmirror":/srcmirror:ro -v "$PWD/xfer":/xfer -v "$PWD/slowevidence":/out \
+            "$IMG" bash -lc "cp -r /repo /tmp/src && python3 /tmp/src/.github/scripts/build-wheels.py fetch \
+              /tmp/src/lhpc/data/manifest.example.toml /tmp/src/tests/data/slow-target-builds.toml \
+              /srcmirror /tmp/src/lhpc/data /xfer/wheels /out/transfers.toml"
+          cat slowevidence/transfers.toml
 
       # io.max takes whole disks. REQUIRED: the disk behind the container's writable layer,
       # where the calibration work dir under the lab user's home lives, and the disk behind
@@ -396,11 +440,18 @@ jobs:
           export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build
           python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
           . /tmp/repo/.github/scripts/retry.sh
-          retry 3 pip install -q -e .
-          retry 3 pip install -q -e ./testlab
-          retry 3 pip install -q pytest
+          backoff pip install -q -e .
+          backoff pip install -q -e ./testlab
+          backoff pip install -q pytest
+          # The timed operations take their transfers from the copies acquired above (decision a):
+          # the clones through ~/.gitconfig (HOME reaches the product runner, GIT_CONFIG_GLOBAL
+          # does not; mirror-sources.py), the fetch through its URL, the pip operations through
+          # a pip.conf the lane writes for them (LHPC_SLOW_BUILD_WHEELS).
+          cp /srcmirror/gitconfig ~/.gitconfig
+          python3 .github/scripts/mirror-sources.py resolved /srcmirror
+          export GRAYWOLF_BASE_URL=file:///xfer/graywolf
           # No -x: the budget case needs every measurement the run could make.
-          LHPC_SLOW_BUILD=1 LHPC_SLOW_BUILD_OUT=/out \
+          LHPC_SLOW_BUILD=1 LHPC_SLOW_BUILD_OUT=/out LHPC_SLOW_BUILD_WHEELS=/xfer/wheels \
             python -m pytest testlab/tests/slowbuild -q -rs \
               --junitxml=/out/junit-slow-build.xml
           LANE
@@ -410,6 +461,7 @@ jobs:
             -e SLOW_CPUS -e SLOW_MEM -e SLOW_WRITE_IOPS -e SLOW_READ_IOPS -e SLOW_IO_ROOT_DISK \
             -e LHPC_SLOW_BUILD_RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             -v "$PWD":/repo:ro -v lhpc_slow_tmp:/tmp -v "$PWD/slowevidence":/out \
+            -v "$PWD/srcmirror":/srcmirror:ro -v "$PWD/xfer":/xfer:ro \
             "$IMG" bash -lc '
               set -e
               cp -r /repo /tmp/repo && chown -R lhpclab /tmp/repo && chmod a+w /out
@@ -462,11 +514,39 @@ jobs:
             cat slowevidence/slow-build-summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      # The upload is a transfer after the verdict (class A): it is tried twice, and neither
+      # attempt can turn the job red. Run 38822953533 measured everything green, then went red
+      # on `CreateArtifact: … ETIMEDOUT` alone. A job whose evidence could not be uploaded says
+      # so in a warning and in its summary.
       - name: Upload the slow-build evidence
+        id: upload
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: slow-build-evidence
           path: slowevidence/**
           if-no-files-found: warn
           retention-days: 90
+
+      - name: Wait before the second upload attempt
+        if: always() && steps.upload.outcome == 'failure'
+        run: sleep 120
+
+      - name: Upload the slow-build evidence (second attempt)
+        id: upload2
+        if: always() && steps.upload.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: slow-build-evidence
+          path: slowevidence/**
+          if-no-files-found: warn
+          retention-days: 90
+          overwrite: true
+
+      - name: Report an evidence upload that failed twice
+        if: always() && steps.upload.outcome == 'failure' && steps.upload2.outcome == 'failure'
+        run: |
+          echo "::warning::the slow-build evidence could not be uploaded (two attempts); the verdict above stands"
+          echo "**Evidence upload failed twice: no slow-build-evidence artifact for this run.**" >> "$GITHUB_STEP_SUMMARY"

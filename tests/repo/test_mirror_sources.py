@@ -154,3 +154,22 @@ def test_only_a_gitconfig_in_home_redirects_a_clone_through_the_products_runner(
     expected = (f"ok  {remote}\n" if redirected
                 else f"NOT REDIRECTED  {remote}  (resolves to {remote})\n")
     assert (check.returncode, check.stdout) == (0 if redirected else 1, expected), check.stderr
+
+
+def test_the_slow_build_acquisition_reads_its_versions_from_the_manifest():
+    """New tooling (an invariant, a negative case below): the pinned Graywolf release and the
+    Meshtastic CLI venv's requirements, exactly as the manifest's build steps carry them."""
+    gw = _run("graywolf-version", MANIFEST)
+    cli = _run("cli-requirements", MANIFEST)
+    assert gw.returncode == 0 and gw.stdout.strip().count(".") == 2
+    assert f'"{gw.stdout.strip()}"' in MANIFEST.read_text()
+    reqs = cli.stdout.split()
+    assert cli.returncode == 0 and [r.split("==")[0] for r in reqs] == ["meshtastic", "pycryptodomex"]
+
+
+def test_a_manifest_without_those_steps_is_an_error(tmp_path):
+    manifest = tmp_path / "m.toml"
+    manifest.write_text('[[stack]]\nid = "s"\n[[stack.component]]\nid = "c"\n')
+    gw, cli = _run("graywolf-version", manifest), _run("cli-requirements", manifest)
+    assert gw.returncode == 1 and f"no graywolf-fetch.sh step in {manifest}" in gw.stderr
+    assert cli.returncode == 1 and f"no `pip install meshtastic==…` step in {manifest}" in cli.stderr

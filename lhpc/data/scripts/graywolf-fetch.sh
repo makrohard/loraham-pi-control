@@ -26,7 +26,8 @@ VERSION="${2:?usage: graywolf-fetch.sh <dest-dir> <version> [--from-upstream]}"
 FROM_UPSTREAM=""
 [ "${3:-}" = "--from-upstream" ] && FROM_UPSTREAM=1
 
-BASE_URL="https://github.com/chrissnell/graywolf/releases/download"
+# GRAYWOLF_BASE_URL: the test lab serves a pre-fetched copy (file://…); the sha256 check is unchanged.
+BASE_URL="${GRAYWOLF_BASE_URL:-https://github.com/chrissnell/graywolf/releases/download}"
 
 # sha256 of the upstream release assets, from the release's own checksums.txt.
 #   key: <version>/<debian-arch>
