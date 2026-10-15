@@ -5000,7 +5000,7 @@ class LifecycleOpsMixin:
         interactive apps are marked. The web polls this cheaply and only does a
         full reload when it changes, so live-monitor fields (RSSI/feed/…) update in
         place without the whole page reflowing. Excludes fast-changing telemetry."""
-        snap = self.build_snapshot()
+        snap = self.build_snapshot(sources=False)            # run states only: no git per poll
         up = (RunState.RUNNING, RunState.DEGRADED)
         running = sorted(cid for ss in snap.stacks for cid, st in ss.components.items()
                          if st.run_state in up)
@@ -5764,7 +5764,7 @@ class LifecycleOpsMixin:
                 return False
         s = self.stack(target)
         cid = s.main_component.id if (s and s.main_component) else target
-        for ss in self.build_snapshot().stacks:
+        for ss in self.build_snapshot(sources=False).stacks:     # a run state: no git per poll
             st = ss.components.get(cid)
             if st is not None:
                 return st.run_state in (RunState.RUNNING, RunState.DEGRADED)

@@ -594,7 +594,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     # ---- the single probing path (used by CLI and web) -------------------
 
-    def build_snapshot(self, *, fresh: bool = False) -> Snapshot:
+    def build_snapshot(self, *, fresh: bool = False, sources: bool = True) -> Snapshot:
         """Bounded, read-only assessment of every stack. Memoized WITHIN a single request/operation
         only: a page render calls this ~15× (one per stack helper) — recomputing all of it each time
         re-scans /proc and re-runs git for every source (seconds). The cache is dropped at the START of
@@ -603,14 +603,13 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         paths), so it is NEVER reused across a mutation or an HTTP request: a nested public `stop()`
         inside `start()` re-invalidates on exit, so the outer op's post-mutation read recomputes.
 
-        `fresh=True` FORCES a recompute (and refreshes the cache) — used by the authoritative
-        running-rechecks that run UNDER the operation locks, to bypass a snapshot this same op cached
-        before it acquired its lock (a concurrent op could have changed state in between). Never
-        memoize those.
+        `fresh=True` FORCES a recompute (and refreshes the cache) for the authoritative rechecks UNDER
+        the operation locks (a concurrent op could have changed state since this op's cached read).
+        `sources=False` (the polls, which read run states only) runs no git: this request's snapshot if
+        cached, else one that is never cached, its sources only missing/not-a-repo/binary/unknown.
 
-        The confirmed-working map comes from the OPERATOR-CONFIRMED known-working compositions (file
-        reads only): a component is confirmed-working when its clean source HEAD appears in a stored
-        composition of its stack."""
+        Confirmed-working = a component's clean source HEAD appears in an OPERATOR-CONFIRMED stored
+        known-working composition of its stack (file reads only)."""
         cached = getattr(self._snapshot_state, "cache", None)
         if cached is not None and not fresh:
             return cached
@@ -635,12 +634,13 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 for cid in spec.covers:
                     binary_cover[cid] = rec
         snap = StatusProber(self._system, self._paths, confirmed,
-                            binary_cover=binary_cover,
+                            binary_cover=binary_cover, sources=sources,
                             meshcore_mode=self.meshcore_running_mode()).assess_stacks(self.stacks())
         self._overlay_runtime_bands(snap)
         self._overlay_gui_unavailable(snap)
         self._overlay_licensed_tx_enabled(snap)
-        self._snapshot_state.cache = snap
+        if sources:
+            self._snapshot_state.cache = snap
         return snap
 
     def _overlay_licensed_tx_enabled(self, snap) -> None:

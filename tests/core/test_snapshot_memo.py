@@ -910,3 +910,85 @@ def test_a_snapshot_reads_the_process_table_once(tmp_path):
 
 def _same_spec(svc, cid, spec):
     return next(c for s in svc.stacks() for c in s.components if c.id == cid).process == spec
+
+
+_PIN = "c" * 40
+
+
+def _webui_world(tmp_path, state):
+    """The meshcore-webui source (a patched checkout) in one of seven source states, as FakeSystem
+    sees it: (system extras, binary_cover)."""
+    from lhpc.core.assets import asset_path
+    src = str(tmp_path / "src" / "meshcore-webui")
+    paths = {src, src + "/.git"} if state != "missing" else set()
+    if state == "not-a-repo":
+        paths = {src}
+    head = "d" * 40 if state == "differs" else _PIN
+    dirty = state in ("dirty", "patched")
+    status = f"# branch.oid {head}\n# branch.head main\n" + ("1 .M N... 100644 100644 100644 a b f\n"
+                                                             if dirty else "")
+    cmds = {("git", "-C", src, "status", "--porcelain=v2", "--branch", "--untracked-files=no"):
+            CR(0, status, ""), ("git", "-C", src, "describe", "--tags", "--always"): CR(0, "v1\n", "")}
+    if state == "patched":
+        return paths, cmds, None, src, asset_path
+    cover = None
+    if state == "binary":
+        cover = {"meshcore-webui": types.SimpleNamespace(
+            components={"meshcore-webui": _PIN}, artifact_sha256="e" * 64, filename="a.tar.zst")}
+    return paths, cmds, cover, src, None
+
+
+@pytest.mark.parametrize("running", [True, False])
+@pytest.mark.parametrize("state", ["match", "dirty", "differs", "patched", "missing", "not-a-repo",
+                                   "binary"])
+def test_a_snapshot_without_git_has_the_same_run_states(tmp_path, state, running):
+    # The polled reads (the dashboard signature, a log page's running flag) use run states only, and a
+    # run state reads the source only as present / not a repository / binary — which the filesystem
+    # checks decide before any git runs. Same run states, no git.
+    import dataclasses
+
+    from lhpc.core.status import StatusProber
+    probe_paths, cmds, cover, src, asset_path = _webui_world(tmp_path, state)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    stacks = svc.stacks()
+    webui = next(c for s in stacks for c in s.components if c.id == "meshcore-webui")
+    if asset_path is not None:                                    # patched: the patch is LHPC's own
+        files = [str(asset_path(p[len("{asset}/"):])) if p.startswith("{asset}/") else p
+                 for p in webui.source.patches]
+        cmds[("git", "-C", src, "apply", "--reverse", "--check", *files)] = CR(0, "", "")
+        cmds[("git", "-C", src, "apply", "--numstat", *files)] = CR(0, "1\t0\tf\n", "")
+        cmds[("git", "-C", src, "diff", "HEAD", "--numstat")] = CR(0, "1\t0\tf\n", "")
+    stacks = tuple(dataclasses.replace(s, components=tuple(
+        dataclasses.replace(c, source=dataclasses.replace(c.source, pin_commit=_PIN))
+        if c.id == "meshcore-webui" else c for c in s.components)) for s in stacks)
+    argv = [f"/opt/bin/{webui.process.exec_name}", *webui.process.all_args]
+    states = {}
+    for sources in (True, False):
+        fake = FakeSystem(paths=probe_paths, commands=cmds,
+                          cmdlines_data={77: argv} if running else {})
+        snap = StatusProber(fake.system, Paths(runtime_root=tmp_path), binary_cover=cover,
+                            sources=sources).assess_stacks(stacks)
+        states[sources] = {cid: st.run_state for ss in snap.stacks
+                           for cid, st in ss.components.items()}
+        git = [c for c in fake.calls if c[:1] == ["git"]]
+        assert bool(git) == (sources and state not in ("missing", "not-a-repo", "binary"))
+    assert states[False] == states[True]
+    assert states[True]["meshcore-webui"].value in (
+        ("running", "degraded") if running else
+        ("not-installed",) if state in ("missing", "not-a-repo") else ("stopped",))
+
+
+def test_the_dashboard_signature_and_a_log_running_flag_run_no_git(tmp_path):
+    probe_paths, cmds, _cover, _src, _ = _webui_world(tmp_path, "match")
+    fake = FakeSystem(paths=probe_paths, commands=cmds)
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    full_sig = (svc.build_snapshot(), svc.dash_signature())[1]    # the request's full snapshot
+    full_run = svc.log_running("meshcore")
+    calls = fake.calls
+    assert any(c[:1] == ["git"] for c in calls)                   # precondition: the full read runs git
+    svc.invalidate_snapshot()
+    before = len(calls)
+    assert svc.dash_signature() == full_sig
+    svc.invalidate_snapshot()
+    assert svc.log_running("meshcore") == full_run
+    assert [c for c in calls[before:] if c[:1] == ["git"]] == []
