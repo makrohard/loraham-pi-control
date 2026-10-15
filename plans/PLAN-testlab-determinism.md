@@ -1,147 +1,140 @@
-# PLAN testlab-determinism (v1)
+# PLAN testlab-determinism (v2)
 
-Base `origin/dev` = `eb9673a4` (0.12.9). Scope: `testlab/`, `.github/workflows/testlab.yml`, one product function (S1); a bot change on its own branch later (B1).
-Source: the flakiness analysis of 2026-10-15. Of 100 testlab runs, 21 jobs failed. 5 were flakes (1 network, 4 timing); 3 of them stopped bot proves and 1 stopped the 10-13 release.
-Rules: tests/README.md rules 1–10 and "Where a new test goes"; no waiver, no lane exclusion, no weakened assertion; red-before for every fix; a flake never freezes a stack.
+Base `origin/dev` = `eb9673a4` (0.12.9). Scope: `testlab/`, `.github/workflows/testlab.yml`, one product function (S1); a bot change only if decision c1 approves it (B1). Rules: tests/README.md rules 1–10 and "Where a new test goes"; no waiver, no lane exclusion, no weakened assertion; red-before for every fix; a flake never freezes a stack.
+
+## 0. Changes from v1 (round-1 findings, all accepted)
+
+| finding | change |
+|---|---|
+| 1 the rule contradicts itself (pre-acquired vs in-lane fetch; "never retries" vs `curl --retry`) | §1 now has three exclusive classes. A lane step is never repeated; a product's own transport retry is product behaviour and stays. The existing 146 readiness retry is named and becomes decision (c4) |
+| 2 M2 does not cover "drew its own error" | §1 narrowed: for wait-based checks the evidence is "process gone". The "drew an error" evidence stays where it is implemented (`pty_readiness`, `_DREW_AN_ERROR`, release.py:401). Failure of `lhpc status` ⇒ UNMARKED |
+| 3 `--network none` scope undefined | M3: the proof is a workflow step, not the lane. It clones every listed remote through the mirror config in a `--network none` container |
+| 4 M4: no slow-build proof, no fail-safe | M4 hooks slow-build's `_judged` too, and slow-build is in its lane proof. Precedence: EXTERNAL > marker; unrecognised ⇒ UNMARKED; tests for both |
+| 5 S2 has no lane proof | Phase 3 gets a `workflow_dispatch` input `inject` (none / binaries-unreachable / github-api-unreachable). It adds `--add-host` lines, so the testlab job's reset fails with the EXTERNAL line |
+| 6 decision (a) framed one-sidedly | §5 (a) states both options with both arguments and no recommendation (the maintainer's call) |
+| 7 B1 written as settled | B1 exists only if c1 approves it. If not, a typed external failure stays a red, unmarked failure with no re-run |
+| 8 P2/P4 share release.py | merged into one packet P2 (M2+M4+S2). P2 branches from dev only after P1 has landed (both touch test_slow_build.py) |
+| 9 classifications beyond the evidence | §6 carries the measured run rows. The "12 sites" claim is shown from the code; rows 10/11 are reworded to what the logs say |
+| BOT-STATE delta F3 | M1 also updates `docs/test-matrix.md:110` (row A `<latest>` → the pin). The key risk is resolved: the pinned key `deb:0.14.14` is the Zero row's key (tests/data/slow-target-builds.toml:350–355) |
 
 ## 1. The rule (one place: docs/testlab.md, "Running the verification lanes")
 
-> A lane depends on an external service only where that service is what the lane proves.
-> - Everything a lane needs from outside (container image, Python packages, upstream sources) is acquired BEFORE the lane, in a workflow step of its own that retries and names what it fetched. The lane then runs from what that step left.
-> - What a lane still has to fetch itself (a published binary, a release download, a build step's packages) fails with one `EXTERNAL-UNAVAILABLE <what>: <tool's error line>` line. It is never marked `STACK-REGRESSION` and never retried inside the lane.
-> - Readiness is marked `STACK-REGRESSION` only on evidence that the component broke: its process is gone, or it drew its own error. A timeout while the process still runs is UNMARKED and carries the run-log tail.
+> Every external access by a testlab job is in exactly one class.
+> **(A) Acquisition, before the lane.** The container image, the lab's Python packages, Chromium, and the upstream git sources the lanes clone (as mirrors). A workflow step of its own does it; it may retry (`retry.sh`) and names what failed.
+> **(B) Under test, inside the lane.** What a lane proves needs the real service: the published binaries and the pinned release downloads a stack installs, and a stack's build-step packages. These run exactly as the product runs them, including the product's own transport retries (`graywolf-fetch.sh`'s `curl --retry 3`, pip's own retries), which are product behaviour. The lane never repeats a test, a step or an assertion. A failure that the product's typed output shows to be transport is reported as one `EXTERNAL-UNAVAILABLE <what>: <line>` line, never marked `STACK-REGRESSION`.
+> **(C) Everything else is forbidden.** A lane reaches no other external service.
+> **Attribution.** `STACK-REGRESSION` needs typed evidence of the component itself: for a wait-based readiness check, its process is gone; for an interactive program (`pty_readiness`), it exited or drew a traceback/exception line; for a build, a failure at a step the recipe declares `attributable`. Without that evidence, a failure, including an unrecognised one, is UNMARKED.
 
-A lane never retries (run order 6: a test is never retried into green). "Retried once" lives in exactly two places: the acquisition step (`retry.sh`, as for pip today) and the bot's existing one re-run (B1, decision c1).
+Known exception, open: `pty_readiness` repeats a first start that timed out once (finding 146, release.py:416–509, recorded via `record_property`). That is a lane retry. Decision (c4).
 
-## 2. Items [packet]
+## 2. Items
 
-**M1 [P1] slow-build fetches the pinned graywolf.**
-- Today: `_deb_fetch` (testlab/tests/slowbuild/test_slow_build.py:210–224) calls `graywolf_upstream_check` (service_maintenance.py:884–893, unauthenticated api.github.com) only to pick "latest". It then times `graywolf-fetch.sh <latest> --from-upstream`.
-- What is under test is the fetch time: the timer starts at :218, after the check.
-- Change: take the version from the manifest's graywolf fetch step (manifest.example.toml:906, `0.14.14`, read via `svc`'s stack model), keep `--from-upstream`, and drop the check and its assert.
-- Risk: `FETCHED` (:217) feeds `stt.current_key(…, fetched=)` (:141), so the budget key changes from "latest" to the pin. Before coding, read the carried evidence keys; if one names a version, the code commit states the new key.
-- Red-before: testlab/tests/unit/test_slowbuild_fetch.py (new). A fake check returns ok=False; assert the runner argv carries `0.14.14` (rule 10: an argv token). On the parent this fails with "the upstream release check of graywolf failed".
-- Lane: `slow-build`.
+**M1 [P1] slow-build times the fetch of the pinned graywolf.**
+- Today `_deb_fetch` (test_slow_build.py:210–224) calls `graywolf_upstream_check` (service_maintenance.py:884–893, unauthenticated api.github.com) to pick "latest", then times `graywolf-fetch.sh <latest> --from-upstream` from :218.
+- The op is "L6 upstream .deb fetch", budgeted on its wall clock (slow_target.py:79–87, :107). The check's behaviour has its owner in tests/stacks/test_graywolf_upstream.py (:62, :156).
+- Change: the version comes from the manifest fetch step (manifest.example.toml:906, `0.14.14`). The check goes. `docs/test-matrix.md:110` names the pin.
+- Red-before: testlab/tests/unit/test_slowbuild_fetch.py. A fake check ok=False; the runner argv carries `0.14.14`. Parent: "the upstream release check of graywolf failed".
+- Lane: slow-build. Phase 3: `inject=github-api-unreachable` stays green.
 
-**M2 [P2] readiness is marked only on evidence.**
-- Today: 12 asserts in test_release_verify.py (:113, 125, 243, 249, 261, 264, 280, 297, 333, 349, 392, 446) put `stack_regression(<s>, 'readiness')` first on a pure timeout. A slow runner can therefore freeze a moved stack (the finding-139 class). `pty_readiness` (release.py:416–509) already follows the rule.
-- Change: one function in release.py, `readiness_mark(env, stack, component)`.
-  - It returns the marker line only when `lhpc status <stack>` shows the component not running, else "".
-  - When unmarked, the message appends the last 1500 characters of the run log.
-  - The 12 sites call it instead of the literal marker. Timeouts and checks are unchanged; only the attribution changes.
-- Red-before (testlab/tests/unit/test_release_attribution.py):
-  - (a) A component alive but never listening gives a message with no line matching the lane's own marker pattern (release.py:61). Red on the parent.
-  - (b) Twin: an exited component is marked `phase=readiness`. Green before and after.
-- Lane: `release-verify`.
+**M2 [P2] wait-based readiness is marked only when the process is gone.**
+- Today, 12 asserts mark a `False` from `wait_tcp`/`wait_http`/`wait_for`, and those return `False` only after their deadline (release.py:350–369). So the mark rides on a pure timeout. The sites in test_release_verify.py: :113, 125, 243, 249, 261, 264, 280, 297, 333, 349, 392, 446.
+- Change: one function `readiness_mark(env, stack, component)` in release.py; it returns the marker only when `lhpc status <stack>` reports that component stopped/failed; a status call that fails or cannot be parsed returns "" (UNMARKED); the unmarked message appends the run-log tail (1500 chars). Timeouts and checks are unchanged.
+- Red-before (test_release_attribution.py): (a) An alive, never-listening fake component gives no marker line (pattern release.py:61). Red on the parent; (b) An exited component is marked. That is the twin, green on both; (c) A failing status gives no marker.
+- Lane: release-verify (positive path); the unit lane in the testlab job (the three cases, real processes).
 
-**M3 [P3] sources come from a pre-fetched mirror.**
-- Today: every lane clones live (test_chain_roundtrip.py:37–38, 131–132; `install_build` release.py:322; slow-build `_install` :227–231).
-- The product runs a plain `git clone <remote>` (lhpc/core/install.py:2600–2690) in the process environment. So git's own `url.<mirror>.insteadOf` redirects it with no product change, as slow-build already does for self-update (test_slow_build.py:474–475).
-- `grep -rn GIT_CONFIG lhpc testlab` finds one use: ops.py:656, the lab's own fake sources. lhpc/ has none.
-- Change, per job: a step "Acquire upstream sources" before `docker run`.
-  - `retry 3 git clone --mirror` of every remote the manifest names, written by a new `.github/scripts/mirror-sources.py` that reads the manifest through `lhpc.core.manifest`.
-  - The mirrors and a `gitconfig` of `insteadOf` lines go to `srcmirror/`, mounted read-only; `GIT_CONFIG_GLOBAL` points at the gitconfig.
-  - Also: `docker build` under `retry 3`, and Xvfb waits for its socket.
-- The real clone code still runs, against a file remote. The pins stay under test: a mirror holds what pin-validation proved reachable.
-- Risk: a remote missing from the mirror silently goes to the network. Ruled out by the `--network none` proof below.
-- Red-before: test_mirror_sources.py (new). Over a two-stack test manifest, `--gitconfig` emits exactly one `insteadOf` per distinct remote (exact text; rule 2: a persisted format). Red: the script is absent.
-- Lane: all three jobs, and the acceptance lane once on `--network none` (Phase 3).
+**M3 [P3] the lanes clone from a pre-fetched mirror.**
+- The product's `git clone <remote>` (lhpc/core/install.py:2600–2690) honours git's `url.<m>.insteadOf`, as slow-build already uses (test_slow_build.py:474–475).
+- `grep -rn GIT_CONFIG lhpc testlab`: one use, ops.py:656 (the lab's fake sources only).
+- Change: a step "Acquire upstream sources" in the testlab and release-verify jobs; `retry 3 git clone --mirror` of the components the lanes install, listed in `.github/scripts/mirror-sources.py` and derived from the manifest by component id. That is 14 remotes, measured from green run 37426359349's adopt logs; a `gitconfig` of `insteadOf` lines; the lane exports `GIT_CONFIG_GLOBAL`; `docker build` goes under `retry 3`, and Xvfb waits for `/tmp/.X11-unix/X99`.
+- The `--network none` proof is a separate step after acquisition. A container with no network runs `git clone --no-checkout <remote>` for each listed remote with that gitconfig. It is green only if every clone resolves locally. It proves mirror completeness for the list, not the lane.
+- A unit test pins the list to the components the testlab and release-verify lanes install. A new stack that is not listed fails it.
+- Red-before (test_mirror_sources.py): over a two-stack test manifest, the gitconfig text is exact (rule 2). Red: the script is absent.
+- Slow-build uses the mirror only if decision (a) says so.
 
-**M4 [P4] what still fetches inside a lane says so.**
-- The binary channel (https only, binary_install.py:101–116; reset ops.py:632–649), graywolf's .deb (graywolf-fetch.sh:109, curl `--retry 3`) and build-step pip cannot be served locally without a product change (decision c2).
-- Change: `external_unavailable(output) -> str` in release.py.
-  - It matches only the product's typed transport lines: `download failed:` (BinaryInstallError), graywolf-fetch's `download failed`, git `Could not resolve host`/`Failed to connect`, pip `ConnectionError`/`ReadTimeoutError`/`HTTP error 5`.
-  - On a match it returns `EXTERNAL-UNAVAILABLE <what>: <line>`, which is printed as a `::error title=EXTERNAL-UNAVAILABLE::` annotation and goes first in the message.
-  - `install_build` (:322–340) consults it before any mark, so the two never coexist.
-- Red-before: a fake `lhpc install` printing `download failed: <urlopen error [Errno -3]>` gives a message that starts with `EXTERNAL-UNAVAILABLE` and has no marker. Red on the parent.
-- Lane: `testlab`, `release-verify`.
+**M4 [P2] class-B transport failures say so; unknown stays unmarked.**
+- Fetches inside lanes: the binary channel (https only, binary_install.py:101–116; reset ops.py:632–649), graywolf's .deb (graywolf-fetch.sh:109), and build-step pip.
+- Change: `external_unavailable(output) -> str` in release.py; it matches only typed product lines: `download failed:` (BinaryInstallError); graywolf-fetch `download failed`; git `Could not resolve host` / `Failed to connect`; pip `ConnectionError` / `ReadTimeoutError` / `HTTP error 5`; it is printed as a `::error title=EXTERNAL-UNAVAILABLE::` annotation and goes first in the message.
+- Precedence: a match ⇒ EXTERNAL and never a marker; no match ⇒ the existing evidence rules decide; no evidence ⇒ UNMARKED.
+- Called from `install_build` (release.py:322–340) and slow-build's `_judged` (test_slow_build.py:105–109).
+- Red-before: (a) a fake install printing `download failed: <urlopen error [Errno -3]>` ⇒ the message starts `EXTERNAL-UNAVAILABLE`, no marker; (b) a typed attributable build failure whose log also has a transport line ⇒ EXTERNAL, no marker; (c) unknown error text ⇒ neither line; (a) and (b) are red on the parent.
+- Lanes: testlab, release-verify, slow-build.
 
-**S2 [P4] reset no longer hides a failed binary download.**
-- Today: `_install_binary_stacks` (ops.py:632–649) notes a failure in `details` and reset returns ok. Meshcom then fails later with an unrelated message (test_chain_roundtrip.py:160–162).
-- Change: where the channel is available, a failed binary install fails reset with the M4 line. "Channel unavailable" (x86) stays a skip.
-- Red-before: fake `svc.install` ok=False for meshcom → `reset(...).ok is False`.
+**S2 [P2] reset no longer hides a failed binary download.**
+- Today `_install_binary_stacks` (ops.py:632–649) notes the failure and reset returns ok. Meshcom then fails later with an unrelated message (test_chain_roundtrip.py:160–162).
+- Change: where the channel is available, a failed binary install fails reset with the M4 line. "Unavailable" (x86) stays a skip.
+- Red-before: fake `svc.install` ok=False ⇒ `reset(...).ok is False`.
+- Lane: testlab green path. Phase 3: `inject=binaries-unreachable` ⇒ the testlab job is red with `EXTERNAL-UNAVAILABLE binary meshcom` and no marker.
 
 **S1 [P5, product] the Graywolf check keeps curl's reason.**
-- Today: service_maintenance.py:888–893 discards `returncode`/`stderr`.
-- Change: the summary and the cache `error` carry `curl rc <n>` and the last 200 characters of stderr, flattened to one line.
-- Red-before (tests/install): FakeSystem curl rc 22 with stderr `… 403` → `ActionResult.data["curl_rc"] == 22` (rule 2: a typed field).
+- service_maintenance.py:888–893: the summary and cache `error` carry `curl rc <n>` plus the last 200 chars of stderr, one line.
+- Red-before (tests/stacks/test_graywolf_upstream.py, the owner): FakeSystem curl rc 22 ⇒ `data["curl_rc"] == 22`.
 - CHANGELOG: "The Graywolf update check now says why GitHub could not be reached (curl's exit code and message)."
 
 **S5 [P6] the browser lane cannot go green having proved nothing.**
-- Today: testlab/tests/browser/conftest.py:12–39 skips every case when Chromium is unusable.
-- Change: under `CI`, an unusable Chromium ends the pytest run nonzero. Outside CI the skip stays.
-- Red-before: `CI=1` with a launcher that raises → nonzero exit.
-- Lane: `testlab`.
+- testlab/tests/browser/conftest.py:12–39: under `CI`, an unusable Chromium ends pytest nonzero; outside CI the skip stays.
+- Red-before: `CI=1` and a raising launcher ⇒ nonzero.
+- Lane: testlab.
 
-## 3. The 27 inventory rows
+## 3. The 27 inventory rows (analysis §2)
 
 | rows | disposition |
 |---|---|
-| 1 image+apt · 14 Xvfb | M3 step (`docker build` under retry; Xvfb socket wait) |
-| 2 workflow PyPI/Playwright | already safe: acquisition step under `retry 3` |
-| 3 reset downloads · 5 chain .deb | S2 + M4 |
-| 4 chain clones+pip · 6 release installs | M3 (git) + M4 (pip, binaries) |
-| 7 GitHub API · 8 "latest" deb | M1 (+ M4 for the download) |
+| 1 image+apt · 2 lab pip/Chromium · 14 Xvfb | class A (M3 step: retry; Xvfb socket wait) |
+| 3 reset downloads · 5 chain .deb · 6 release installs (binaries, .deb, pip) | class B → M4 (+ S2) |
+| 4 chain clones · 6 release clones | class A → M3 |
+| 7 GitHub API · 8 "latest" .deb | M1 (the .deb becomes a pinned class-B fetch) |
 | 9 budgets include network | decision (a) |
-| 10 calibration on runner hardware · 11 sudo/overlay | left: the lane's own proof, fails closed with a reason. Slow-build's failures before 10-13 were missing lane data (baselines, calibration, evidence lines): real, not flakes |
+| 10 calibration on runner hardware · 11 sudo/overlay | left: the lane's own proof, fails closed with a reason. The six slow-build failures before 10-13 (§6) report a non-positive measurement, missing baseline/evidence entries or a missing `[venv]` line, not a network or timing error |
 | 12 `cancel-in-progress` | left: the bot proves its own `pins/*` branch; a cancelled run is "unproven" to it |
 | 13 browser skip | S5 |
-| 15 `free_port` · 16 fixed ports · 21 fixture 30 s bounds | left: 0 failures in 100 runs; each fails loudly with a log tail |
+| 15 `free_port` · 16 fixed ports · 21 fixture 30 s bounds | left: 0 failures in the 100 runs; each fails loudly with a log tail |
 | 17 marked waits · 19 `wait_for` :333 | M2 |
-| 18 `pty_readiness` · 20 subprocess timeouts | already safe (146/149; a TimeoutExpired is unmarked) |
+| 18 `pty_readiness` | evidence rule kept; its retry → decision (c4) |
+| 20 subprocess timeouts | already unmarked (a TimeoutExpired carries no marker) |
 | 22 product bounds · 25 power/AX.25 windows · 26 1 Hz timer | under test |
 | 23 unit spawn/socket windows | 147 fixed; the rest 0 failures |
-| 24 pty 1.5 s cases | left: those cases EXPECT a timeout (`sleep 30`), so load cannot red them |
+| 24 pty 1.5 s cases | left: those cases expect a timeout (`sleep 30`), so load cannot red them |
 | 27 finding 106 (ci.yml) | fixed in f15c672b |
 
-## 4. Bot side (B1, lhpc-release-bot, after P3/P4 land)
+## 4. Bot side (B1): only if c1 approves it
 
-- Prove requires `testlab` and `release-verify` (bot/cli.py:67) but judges the whole run's conclusion, so slow-build gates releases (decision b).
-- An `EXTERNAL-UNAVAILABLE` red is unmarked, so it can never freeze (autofreeze.py:137–140). It only stops the release.
-- Smallest change: `RUNNER_LOST` (bot/gh.py:27–28) gets an `EXTERNAL = ("EXTERNAL-UNAVAILABLE",)` tuple, and `_said_runner_lost` (:232–238) accepts either. The existing one-time re-run (:185–230) then repeats such a job once; a second red stays an ordinary unmarked failure.
-- Test: tests/test_rerun.py, where an annotation with the word asks for a re-run (red before).
+- Facts: prove requires `testlab` and `release-verify` (bot/cli.py:67) and judges the whole run's conclusion. An EXTERNAL red is unmarked, so it cannot freeze (autofreeze.py:137–140).
+- If c1 = approved: `RUNNER_LOST` (bot/gh.py:27–28) gains `"EXTERNAL-UNAVAILABLE"` via a second tuple, and `_said_runner_lost` (:232–238) accepts it. The existing once-per-run re-run (:185–230) then repeats the job once; the second attempt is judged as it is. Test: tests/test_rerun.py (red before).
+- If c1 = rejected: no B1. An EXTERNAL red stops the release unmarked, and a person re-runs it.
 
 ## 5. Decisions for the human gate
 
-- **(a) slow-build budgets include network time.**
-  - *Keep (recommended):* a Zero really downloads what it fetches, so the budget must cover that. A budget failure on a slow mirror is then a real "timeout too tight", not a flake. Slow-build keeps live fetches for its timed operations (no mirror there), and a failed fetch says `EXTERNAL-UNAVAILABLE`.
-  - *Separate the network share:* slow-build uses the mirror too. That is deterministic, but the Zero budgets would then not cover a real download, and the per-operation network allowance is unmeasured.
-- **(b) slow-build gates releases through the whole-run conclusion.**
-  - *Add it to `REQUIRED_TESTLAB` deliberately (recommended):* it already blocks (10-13), and naming it also makes "did not run" a refusal.
-  - *Exclude it from prove:* a lane exclusion (run order 6), releasing without row C.
-  - *Keep as is:* it blocks without being named.
-- **(c1) where "retried once" lives.**
-  - *Recommended:* only in the acquisition step and the bot's one re-run (B1); never in a lane.
-  - *Alternative:* one in-lane retry of an install that failed before any build step, with the reason logged. Cheaper for push runs, but close to "retried into green".
-- **(c2) the fetches M4 cannot remove** (binary channel, .deb, build-step pip).
-  - *Recommended: attribute now (M4).* Serving them locally needs a lab https server trusted by `_http_get` (a product change at a security boundary) or a per-venv wheelhouse; each is its own item.
-  - *Alternative:* do it now, which roughly doubles this item.
-- **(c3) release-verify uses the mirror** (pins under test, transport not). *Recommended: yes.* CI `pin-validation` proves each pin is reachable on its branch.
+- **(a) slow-build budgets and network time.** Measured facts: The budgeted limits L5 (CLI venv), L6 (upstream .deb) and L7a (clone) are the product's own timeouts, which on a box include the transfer (slow_target.py:79–87, :102–110); the rule fails when `limit < 2 × max(Zero, past CI, this run)`; the runner's network is a datacentre's, not a Zero's Wi-Fi; *Option 1, keep live transfers in slow-build:* the timeout a box uses really has to cover a download, so the transfer is part of what the budget protects. The auditor's argument against: a slow but successful download can fail the budget without any EXTERNAL line, a release-gating red that this plan cannot make deterministic; *Option 2, slow-build times local work only:* it uses the mirror, and pre-acquired .deb/wheels (class A) where possible. That is deterministic, but the Zero budgets then cover no real download, and a per-op network allowance would be new, unmeasured data.
+- **(b) slow-build as a release gate.** *Name it in `REQUIRED_TESTLAB` (recommended):* it already blocks via the whole-run conclusion (10-13). *Exclude it:* a lane exclusion. *Keep:* it blocks unnamed.
+- **(c1) the bot re-runs a job that said EXTERNAL-UNAVAILABLE once (B1).**; *Approve:* fewer releases stopped by a passing outage. But it is a whole-job retry that can turn a run green; *Reject:* an EXTERNAL red stays red until a person re-runs it.
+- **(c2) class-B fetches stay in the lanes** (binaries, pinned .deb, build-step pip). *Recommended: yes for now.* Serving them locally needs a lab https server trusted by `_http_get` (a security-boundary change) or a per-venv wheelhouse, each its own item.
+- **(c3) release-verify clones from the mirror.** *Recommended: yes.* The pins stay under test; CI `pin-validation` proves reachability.
+- **(c4) the 146 readiness retry** (one repeat of a NomadNet first start that timed out, decided in the last run to unblock the bot); *Keep as the one named exception:* the 146 root cause (likely `rns.get_interface_stats` with no timeout) is unproven; *Remove:* a first-start hang fails, unmarked; it fits run order 6 strictly, at the cost of the bot proves it rescued on 10-06.
 
-## 6. Packets and landing
+## 6. Packets, landing, and the measured evidence
 
 | packet | files | lane proof |
 |---|---|---|
-| P1 M1 | test_slow_build.py; tests/unit/test_slowbuild_fetch.py (new) | slow-build |
-| P2 M2 | release.py (`readiness_mark`), test_release_verify.py, test_release_attribution.py | release-verify |
-| P3 M3 | testlab.yml; .github/scripts/mirror-sources.py (new); tests/unit/test_mirror_sources.py (new); docs/testlab.md (the rule) | all three + `--network none` acceptance |
-| P4 M4+S2 | release.py (`external_unavailable`), ops.py, test_chain_roundtrip.py, tests/unit/test_testlab.py | testlab + release-verify |
-| P5 S1 | lhpc/core/service_maintenance.py + its tests/install owner | CI |
+| P1 M1 | test_slow_build.py (`_deb_fetch`); tests/unit/test_slowbuild_fetch.py (new); docs/test-matrix.md:110 | slow-build |
+| P2 M2+M4+S2 (after P1 has landed; branched from that dev sha) | release.py, ops.py, test_release_verify.py, test_slow_build.py (`_judged`), test_chain_roundtrip.py, test_release_attribution.py, tests/unit/test_testlab.py | all three + `inject=binaries-unreachable` |
+| P3 M3 + `inject` input | testlab.yml; .github/scripts/mirror-sources.py (new); tests/unit/test_mirror_sources.py (new); docs/testlab.md (the rule) | testlab, release-verify, the `--network none` step |
+| P5 S1 | lhpc/core/service_maintenance.py; tests/stacks/test_graywolf_upstream.py | CI |
 | P6 S5 | tests/browser/conftest.py + its unit test | testlab |
 
-- P1, P2, P3, P5 and P6 are file-disjoint and run in parallel. P4 follows P2 (both edit release.py).
-- Each packet: branch `cons/testlab-det-<n>-r<round>` → gate-1 file ≤ 90 KB → dev after GREEN + CI.
-- Then one full testlab run + CI on the dev sha, and the Phase-3 injections: `--network none` acceptance (M3); the graywolf check stubbed down (M1/S1); a component that never listens (M2).
-- CHANGELOG lines go under the version the release fixes (0.12.10 if they land before it is cut). B1 follows P4.
+- P1, P3, P5 and P6 are file-disjoint and run in parallel; P2 follows P1. Each packet: `cons/testlab-det-<n>-r<round>` → gate-1 file ≤ 90 KB → dev after GREEN + CI.
+- Phase 3: one full testlab run + CI on the dev sha, plus the `inject` runs (github-api-unreachable: slow-build green; binaries-unreachable: an EXTERNAL red, no marker).
+- CHANGELOG lines go under the version the release fixes. B1 only if c1 approves it.
 
-## 7. Numbers, measured
+**Measured (logs: `gh run view <id> --log-failed`; history `gh run list --workflow testlab.yml --limit 100`, 2026-10-01T01:45Z → 10-13).**
 
-| figure | command | output |
-|---|---|---|
-| base | `git log --oneline -1 origin/dev` | `eb9673a4 0.12.9` |
-| marked readiness sites | `sed -n "<l>,<l+2>p" test_release_verify.py \| grep -c stack_regression` for the 12 lines | ≥ 1 at each of the 12 |
-| GIT_CONFIG uses | `grep -rn GIT_CONFIG lhpc testlab` | 1 (testlab/lhpc_testlab/ops.py:656) |
-| graywolf pin | `grep -n graywolf-fetch.sh lhpc/data/manifest.example.toml` | :906 `"0.14.14"` |
-| history | `gh run list --workflow testlab.yml --limit 100` + per-job tally | 21 failed jobs; 5 flakes |
-| bot required jobs | `git show origin/main:bot/cli.py \| grep -n REQUIRED_TESTLAB` | :67 `("testlab", "release-verify")` |
-| bot runner-loss lines | `git show origin/main:bot/gh.py \| grep -n "_said_runner_lost\|return any"` | :232, :238 |
+| run | job | decisive line | reading |
+|---|---|---|---|
+| 38338362029 | slow-build | `upstream check failed for 'graywolf': network/API error` | external dependency, cause unrecorded |
+| 37410182407 | testlab | `test_check_fails_when_the_aprs_is_sink_is_down … assert (False is True)` | spawn race (147), fixed 31ac0844 |
+| 37401912454, 37395375156 | release-verify | `did not draw anything matching 'Conversations' within 90 s` | first-start hang (146): the retry |
+| 37291605525 | release-verify | `STACK-REGRESSION stack=reticulum phase=readiness` | same hang, marked (finding 139) |
+| 37145791526 | slow-build | `['seconds must be a positive number']` | lane defect at introduction |
+| 37148794385, 37162748975, 37261689237, 37275585327 | slow-build | `N budget failure(s): no row C evidence … / no Zero baseline …` | missing lane data |
+| 37239771769 | slow-build | ``no `[venv] <n> s` line from the binary install`` | missing evidence line |
+
+Other figures: 21 failed jobs (job tally over the 100 runs); 12 marked readiness sites (`sed -n "<l>,<l+2>p" test_release_verify.py \| grep -c stack_regression` ≥ 1 at each); `GIT_CONFIG` uses: 1 (ops.py:656); 14 cloned remotes (`grep -rhoE '\[clone\] [^ ]+ from [^ ]+'` over run 37426359349's artifacts); bot `REQUIRED_TESTLAB` at cli.py:67, `_said_runner_lost` at gh.py:232.
