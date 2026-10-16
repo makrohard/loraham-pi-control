@@ -1,4 +1,4 @@
-# Plan v3.5 — Track F: install channels without nagging, the Meshtastic web client as its own component
+# Plan v3.6 — Track F: install channels without nagging, the Meshtastic web client as its own component
 
 Base `origin/dev` 816a2842 (post-C1; line numbers read on 254bbae3); analysis MT-WEB-CLIENT (61e18c6d). Repos:
 loraham-pi-control (C), lhpc-binaries (B), lhpc-release-bot (R). binary = prebuilt known-working; rest compiled/fetched.
@@ -11,7 +11,7 @@ loraham-pi-control (C), lhpc-binaries (B), lhpc-release-bot (R). binary = prebui
 | W2a F3: the web smoke is a real node-info exchange in a browser, with a broken-client control | F3 |
 | W2a F4: the tested meshtasticd commit is persisted; a daemon change re-checks the pairing | F3 |
 | W2a F5: RootPath migration specified (measured) and both upgrade paths proven live | F3, F5 |
-| C1 split off and LANDED on dev 816a2842 (gate 1 GREEN, Pi 5 row passed); v3.4: second-read wording; v3.5: base and migration wording | F2.1, F2.4, F3 |
+| C1 split off and LANDED on dev 816a2842 (gate 1 GREEN, Pi 5 row passed); v3.4: second-read wording; v3.5: base and migration wording; v3.6 (W3): the web smoke's "served + API reachable" fallback removed | F2.1, F2.4, F3 |
 
 ## F1 — The measured case: "I had to compile MeshCom by hand" (fixed by C1, on dev)
 
@@ -84,8 +84,8 @@ binary install replaces); static marker `.lhpc-built` (D3); `build_root`;
   `LHPC-SMOKE`), `RootPath` = the staged client; headless Chromium opens the client, connects over its
   HTTP transport to that daemon and must render the node's long name `LHPC-SMOKE` (a real want-config /
   node-info exchange) within 120 s. Control (B2's tests): the same client with its main bundle truncated
-  fails the smoke. If the headless exchange cannot be made reliable at B2, the claim is narrowed in the
-  docs to "served + API reachable" — the stable/dev trust anchor with it — and reported.
+  fails the smoke. Both are publication requirements, with no weaker fallback: an exchange that cannot run
+  reliably on the B runner moves to a testlab dispatch writing the same proof (F6 risk 2), never to a lesser check.
 - **Admission and pairing:** the entry records `components = {meshtastic-web: <web commit>,
   meshtastic: <meshtasticd commit>}`; the box takes it only when `meshtastic` equals its installed
   meshtasticd commit (receipt or ownership record), else a typed refusal naming `--source binary`.
