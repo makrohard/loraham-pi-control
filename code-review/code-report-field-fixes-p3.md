@@ -53,7 +53,7 @@ VERDICT      PASS  (hard 0, warn 0)
 
 ## Simplicity guardrails
 
-- Deletion only, apart from one docstring line, one label, one doc row and one CHANGELOG bullet. loraham_radio.py
+- Deletion, plus (v2) the host config loader's `0 < airtime <= 100` check (2 lines, moved from the removed adapter check) and its test, one docstring line, one label, one doc row and one CHANGELOG bullet. loraham_radio.py
   1022 → 974 (`git diff --stat`: 52 lines changed, 2 added, 50 removed); app.py 179 → 178; repeater.py 298 → 298 (a
   keyword removed from one line).
 - Removed (at c699bd16 line numbers): the `airtime_dutycycle` parameter and attribute, the two history deques and
