@@ -5890,7 +5890,7 @@ class LifecycleOpsMixin:
                 return bool(self.daemon_view(band).reachable)
             except Exception:
                 return False
-        for ss in self.build_snapshot().stacks:
+        for ss in self.build_snapshot(sources=False).stacks:     # a run state: no git per poll
             st = ss.components.get(e.writer)
             if st is not None:
                 return st.run_state in (RunState.RUNNING, RunState.DEGRADED)

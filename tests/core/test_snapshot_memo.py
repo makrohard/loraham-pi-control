@@ -992,3 +992,24 @@ def test_the_dashboard_signature_and_a_log_running_flag_run_no_git(tmp_path):
     svc.invalidate_snapshot()
     assert svc.log_running("meshcore") == full_run
     assert [c for c in calls[before:] if c[:1] == ["git"]] == []
+
+
+@pytest.mark.parametrize("running", [True, False])
+def test_the_rf_log_badge_runs_no_git(tmp_path, running):
+    # The RF-log page polls its writer's run state (every 5 s); like the process-log badge it needs run
+    # states only, so it builds no snapshot with git. The badge equals the full snapshot's answer.
+    src = str(tmp_path / "src" / "openhop-core")
+    cmds = {("git", "-C", src, "status", "--porcelain=v2", "--branch", "--untracked-files=no"):
+            CR(0, f"# branch.oid {_PIN}\n# branch.head main\n", ""),
+            ("git", "-C", src, "describe", "--tags", "--always"): CR(0, "v1\n", "")}
+    fake = FakeSystem(paths={src, src + "/.git"}, commands=cmds)
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    node = next(c for s in svc.stacks() for c in s.components if c.id == "meshcore-node")
+    if running:
+        fake.cmdlines_data = {77: [f"/opt/bin/{node.process.exec_name}", *node.process.all_args]}
+    full = (svc.build_snapshot(), svc.rflog_running("rf-meshcore.log"))[1]    # the request's full snapshot
+    assert any(c[:1] == ["git"] for c in fake.calls)                         # precondition: git ran
+    svc.invalidate_snapshot()
+    before = len(fake.calls)
+    assert svc.rflog_running("rf-meshcore.log") is full is running
+    assert [c for c in fake.calls[before:] if c[:1] == ["git"]] == []
