@@ -14,16 +14,8 @@ Fixed
   `config/secrets/` and is part of `lhpc secrets backup`.
 - MeshCore repeater dashboard: the radio presets list loads (it reported "Presets file not found"); radio settings
   are still changed in LHPC's Settings.
-- The slow-target release check times the download of the Graywolf release the manifest pins and no longer asks
-  GitHub's API for the newest one, so the API's rate limit can no longer stop a release candidate (the download itself
-  still comes from GitHub).
 - Graywolf's update check now says why GitHub could not be reached: curl's exit code and the end of its message,
   in the result and in the status it keeps.
-- CI runs the test suite in parallel processes, and the slow-build check starts only after the testlab job passed.
-- The release check no longer blames a stack when one of its services was still starting after its wait: a
-  readiness timeout names the stack only when LHPC reports the component stopped or failed.
-- The release check no longer starts an interactive program a second time after a timeout: a hung start fails
-  (unmarked), and NomadNet's records the stacks of every Reticulum process and the shared instance's sockets.
 
 ## 0.12.9
 
