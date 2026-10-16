@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Fixed
+
+- Adopting a local checkout keeps its local branches named `build`, `node_modules` or `__pycache__`; they were
+  dropped from the new source's `.git` as if they were build artifacts.
+
 ## 0.12.10
 
 Changed

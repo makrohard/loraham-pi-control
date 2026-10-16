@@ -56,8 +56,9 @@ _ADOPT_IGNORE = shutil.ignore_patterns(*_ADOPT_IGNORE_NAMES)
 # Inside `.git`, Git's own locks follow its lockfile convention (`<file>.lock`, created to write `<file>`,
 # then renamed into place or removed); one copied while held is a stale lock that makes git refuse in the
 # new source. No tool LHPC's stacks use is known to keep state as `*.lock` there. Only there: in the
-# working tree `yarn.lock` or `Cargo.lock` is content.
-_ADOPT_GIT_IGNORE = shutil.ignore_patterns(*_ADOPT_IGNORE_NAMES, "*.lock")
+# working tree `yarn.lock` or `Cargo.lock` is content. The working tree's artifact names are not ignored
+# there: inside `.git` a loose ref is named after its branch (`refs/heads/build`).
+_ADOPT_GIT_IGNORE = shutil.ignore_patterns("*.lock")
 
 _ENOENT_PREFIX = f"[Errno {errno.ENOENT}]"
 

@@ -3720,6 +3720,24 @@ def test_a_lock_of_a_running_git_command_is_not_copied_into_the_new_source(tmp_p
     git(dest, "add", "new.txt")                                        # git works in the new source
 
 
+def test_local_branches_named_like_build_artifacts_survive_the_copy(tmp_path, git, make_repo, installer):
+    """Inside `.git` a loose ref is a file or directory named after the branch, so the working tree's
+    artifact names (`build`, `node_modules`, `__pycache__`) are refs there, never artifacts. A branch
+    `build` or `build/x` must reach the new source with its commit."""
+    repo = tmp_path / "rt" / "local" / "app"
+    make_repo(repo)
+    head = git(repo, "rev-parse", "HEAD")
+    for branch in ("build", "node_modules", "build-x/build", "__pycache__"):
+        git(repo, "branch", branch)
+    assert (repo / ".git" / "refs" / "heads" / "build").is_file()       # loose, not packed
+    comp = _comp()
+    inst = installer(comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    dest = inst.paths.under("src", "app")
+    for branch in ("build", "node_modules", "build-x/build", "__pycache__"):
+        assert git(dest, "rev-parse", "--verify", f"refs/heads/{branch}") == head, branch
+
+
 def test_a_nested_added_file_survives_with_its_directories_and_mode(tmp_path, v2_update_env):
     """Nested paths are reproduced whole, and the file's own permission bits come with it —
     a stack that writes an executable helper still finds it executable."""
