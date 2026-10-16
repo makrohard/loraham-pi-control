@@ -20,7 +20,7 @@ CORE = repo_paths.REPO / "lhpc" / "core"
 
 # file: (max lines, max public methods) — measured on dev at 0.12.9, raised where a line says why
 BUDGETS = {
-    "services.py": (2967, 28),  # spi-doctor-mode: doctor's SPI line (+2); trackF-c3: the web client's status and doctor lines (+3); split-s1: the import of the new mixin; split-s2: the import and the bases line of the new mixin
+    "services.py": (2694, 23),
     "service_base.py": (166, 0),
     "service_auto_install.py": (1875, 16),
     "service_binary_channel.py": (299, 19),  # trackF-c3: the web client keeps its own selector
@@ -28,11 +28,12 @@ BUDGETS = {
     "service_boot_restore.py": (678, 2),
     "service_daemon_params.py": (508, 11),  # split-s2: split from service_params.py and service_lifecycle_ops.py
     "service_firewall.py": (1533, 19),
+    "service_gps.py": (893, 13),  # split-s3: split from service_params.py and services.py
     "service_hmac.py": (1016, 17),
     "service_lifecycle_ops.py": (5659, 56),
     "service_maintenance.py": (2892, 30),  # testlab-det-1: S1 keeps curl rc and message; trackF-c3: update routes the web client
     "service_network.py": (1183, 9),
-    "service_params.py": (3089, 47),
+    "service_params.py": (2485, 39),
     "service_rflog.py": (474, 13),  # split-s1: split from service_lifecycle_ops.py
     "service_secrets.py": (399, 2),
     "service_selfupdate.py": (1932, 22),
@@ -90,6 +91,23 @@ SPLITS = [
         "daemon_params_view",
         "reset_daemon_params",
         "save_daemon_params",
+    )),
+    ("service_gps", "GpsOpsMixin", "service_params", "ParamsConfigMixin", (
+        "gps_consumers_running",
+        "gps_liveness_blockers",
+        "gps_monitor",
+        "gps_nmea",
+        "gps_settings",
+        "gps_view",
+        "legacy_gps_values",
+        "set_gps",
+    )),
+    ("service_gps", "GpsOpsMixin", "services", "ControllerService", (
+        "gps_enabled_for",
+        "gps_owner_stack",
+        "gps_plan",
+        "optional_role",
+        "refresh_gps_auto",
     )),
 ]
 
