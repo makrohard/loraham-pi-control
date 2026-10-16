@@ -174,12 +174,12 @@ The radio claims:
 - `spi.bus.0` — the shared SPI bus, **cooperative** in group `spi.bus.0`: the daemon (and the
   Reticulum node) serialise every transfer through the daemon's fail-closed
   `<runtime>/state/loraham/spi0.lock` flock, so they may share the bus on opposite bands.
-- `spi.bus.0.unlocked` — meshtasticd drives `/dev/spidev0.0` without that lock and claims this key
+- `spi.bus.0.unlocked` — meshtasticd drives the bus without that lock and claims this key
   **exclusive**; so does the Reticulum node. `meshtastic + reticulum` is refused; `daemon +
   meshtastic` on opposite bands is allowed (the policy below).
 
-**SPI policy.** On the Pi 5 with the shipped trees there is one SPI node, `/dev/spidev0.0`
-(overlay `spi0-0cs`; the chip selects are driven from userspace as GPIOs): the daemon's 433 radio
+**SPI policy.** With soft chip selects there is one SPI node, `/dev/spidev0.0` (overlay `spi0-0cs`;
+the chip selects are driven from userspace as GPIOs); kernel chip selects are below. The daemon's 433 radio
 is CS 8, its 868 radio CS 7, and meshtasticd's 868 radio CS 7. The daemon and the Reticulum
 interface take `spi0.lock`; meshtasticd does not. LHPC refuses meshtastic + reticulum together and
 allows daemon + meshtastic on opposite bands.
@@ -193,8 +193,8 @@ tree agree on one of the two. A file edited but not rebooted is refused with "re
 other spi0 layout as unsupported. In kernel mode meshtasticd's generated YAML gets `spidev:` instead of `CS:`,
 and a bus user starts only when what it runs contains its `kernel_cs_since` commit (the daemon's, or a
 build dependency's such as the Reticulum driver): read from the binary receipt (files verified), else
-the `consumed` line of its completion marker, else the checkout's HEAD (the daemon's source build
-writes no marker). Any receipt that is present but not valid (unsafe, or superseded: faults
+the `consumed` line of its completion marker, or for a component that declares no marker (the daemon's
+source build) the checkout's HEAD. Any receipt that is present but not valid (unsafe, or superseded: faults
 `lhpc doctor` names with `lhpc install <stack>` as the way out) refuses. Limitation: a daemon source
 build is judged by its checkout's HEAD, so after a source update whose build failed, HEAD names the
 new commit while the old binary is still in place; that binary claims GPIO 8/7, which the kernel

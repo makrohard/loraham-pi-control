@@ -50,10 +50,11 @@ RMC date it reads `12:34:56 (date unavailable)`), satellites used of seen, a **S
 reads; reports are newline-framed in a bounded buffer and a truncated or malformed report is
 dropped, never guessed. Reports are correlated **per device**; an untagged report is attributed
 only when gpsd lists exactly one device. gpsd sends a satellite report only every few seconds, so
-a read that has a position but no satellite report waits up to 6 s for the next one (a receiver
-that sends none waits once per 30 s, not on every read), and the
-console keeps each device's last satellite list for up to 30 s and shows it when a read sees none;
-a single `lhpc gps --monitor` run shows only what its own read (with that wait) saw. The NMEA pane shows
+the console keeps each device's last satellite list for up to 30 s and shows it when a read sees
+none, and a read that has a position but neither a satellite report nor such a list waits up to
+6 s for the next one (a receiver that sends none waits once per 30 s, not on every read); a single
+`lhpc gps --monitor` run starts without a list, so it shows only what its own read (with that wait)
+saw. The NMEA pane shows
 **gpsd's NMEA output** (pseudo-NMEA for a receiver gpsd runs in binary mode), combined across
 devices. Watching may activate a receiver on a gpsd running without `-n`; LHPC's own time-source
 gpsd runs with `-n`.

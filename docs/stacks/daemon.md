@@ -10,7 +10,7 @@ one `loraham_daemon` process per served band (433/868 MHz). It never transmits o
 | Run | `loraham_daemon/loraham_daemon --radio <band> --hw <preset> --tx-mode managed\|direct --cad-monitor off\|on --cad-rssi <dBm> [--high-power] --rflog on\|off --rflog-path <runtime>/logs/rf-daemon-<band>.log` — one process per band; lhpc computes every value at spawn |
 | Sockets (per band) | `/tmp/loraconf<band>.sock` (CONF / status), `/tmp/lora<band>f.sock` (framed), `/tmp/lora<band>.sock` (raw) — `LORAHAM_SOCKET_DIR=/tmp` |
 | State | `<runtime>/state/loraham` (mode 0700, `LORAHAM_RUNTIME_DIR`) — the lock files, including `spi0.lock` |
-| Hardware | `/dev/spidev0.0` + GPIO (`/dev/gpiochip0`); the `--hw` preset comes from `lhpc hardware` |
+| Hardware | `/dev/spidev0.0` (soft chip selects) or `/dev/spidev0.0`/`0.1` (kernel chip selects, [deps](../cli.md#deps)) + GPIO (`/dev/gpiochip0`); the `--hw` preset comes from `lhpc hardware` |
 | Resources | `spi.bus.0` cooperative · `loraham.radio.433` / `.868` provider · `loraham.daemon-socket.433` / `.868` provider |
 | Install channel | **binary** by default (`lhpc install daemon`: a prebuilt replacing the daemon + RadioLib builds); `--source pinned\|dev\|stable` clones the sources and `lhpc build daemon` runs `loraham_daemon/build.sh` (needs `cmake`, `liblgpio-dev`, `build-essential`). Policy: [provenance](../provenance.md#the-binary-channel); operator consequences: [operations](../operations.md#install-channels) |
 
