@@ -8,6 +8,8 @@ Fixed
   dropped from the new source's `.git` as if they were build artifacts.
 - MeshCore: a restart no longer can leave plugins blocked until a reboot: the node's stop waits up to 2 s for the
   plugin manager's own shutdown before it signals it again.
+- Web console: with a stack web UI on plain http, the https listeners send HSTS `max-age=0`, which prevents new HSTS
+  lockouts and clears an already-cached policy on the next HTTPS visit; all-https boxes keep HSTS, the stack UIs too.
 
 ## 0.12.10
 

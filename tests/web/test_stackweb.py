@@ -218,6 +218,33 @@ def test_http_listener_has_no_tls_and_no_mtls():
     assert "ssl_verify_client" not in block
 
 
+# HSTS covers every port of the host. With every listener on TLS each one sends the policy; with a
+# plain-http listener beside, the TLS ones send max-age=0, which a browser obeys on its next https
+# visit by dropping a cached policy (RFC 6797 6.1.1), so no listener on the host stays refused.
+@pytest.mark.parametrize("console, schemes, sent, cleared", [
+    ("https", ("https",), 2, 0),
+    ("https", ("http",), 0, 1),             # the console clears a policy that would refuse the stack UI
+    ("https", ("https", "http"), 0, 2),
+    ("http", ("https",), 0, 1),             # the TLS stack UI clears a policy that would refuse the console
+    ("http", ("http",), 0, 0),              # no TLS listener: no HSTS header at all
+])
+def test_hsts_is_sent_only_when_every_listener_on_the_host_is_tls(console, schemes, sent, cleared):
+    conf = webserver.render_nginx_config(
+        _paths(), WebserverConfig(scheme=console),
+        [_proxy(f"s{i}", mode="lan", port=8444 + i, scheme=s, allowed_cidrs=("10.0.0.0/8",))
+         for i, s in enumerate(schemes)])
+    assert conf.count('add_header Strict-Transport-Security "max-age=31536000" always;') == sent
+    assert conf.count('add_header Strict-Transport-Security "max-age=0" always;') == cleared
+
+
+def test_a_disabled_http_stack_ui_does_not_withhold_hsts():
+    # A disabled stack UI (port 0) has no listener, so it cannot be locked out.
+    conf = webserver.render_nginx_config(_paths(), WebserverConfig(scheme="https"), [
+        _proxy("on", mode="lan", port=8444, scheme="https", allowed_cidrs=("10.0.0.0/8",)),
+        _proxy("off", mode="lan", port=0, scheme="http", allowed_cidrs=("10.0.0.0/8",))])
+    assert conf.count('add_header Strict-Transport-Security "max-age=31536000" always;') == 2
+
+
 def test_nginx_token_sanitizes_ids_unusable_as_nginx_variables():
     assert webserver.nginx_token("mesh-com") == "mesh_com"
     assert webserver.nginx_token("a.b@c") == "a_b_c"
