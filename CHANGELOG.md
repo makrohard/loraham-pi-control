@@ -15,6 +15,8 @@ Fixed
   box (a stack's web UI) is refused even with a valid token.
 - Web console: while the console runs, the client-CA CRL is renewed a week before it expires, so remote client
   certificates are no longer refused for up to five minutes every 30 days while it waited for the expiry.
+- The one-time .p12 passphrase no longer travels in the session cookie; a console restart before the page loads
+  loses it (issue the bundle again).
 
 Changed
 

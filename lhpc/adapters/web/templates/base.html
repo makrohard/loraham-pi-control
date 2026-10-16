@@ -27,6 +27,10 @@
         <p class="flash {{ flash_classes(category) }}">{{ msg }}</p>
       {% endfor %}
     {% endwith %}
+    {% if new_passphrase %}
+      <p class="flash {{ flash_classes('ok') }}">One-time passphrase (record it now; it is not shown again):
+        <code id="one-time-passphrase">{{ new_passphrase }}</code></p>
+    {% endif %}
     {# Persistent: the disk-space warning while the worst filesystem is low or critical. #}
     {% if disk_notice %}
       <p class="depnote {{ 'depnote-bad' if disk_notice.level == 'critical' else 'depnote-warn' }}"

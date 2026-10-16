@@ -1672,6 +1672,39 @@ def test_a_revoked_labels_leftover_p12_is_not_served(tmp_path, web, csrf):
     assert svc.webserver_cert_export_bytes("laptop") is None
 
 
+def test_the_p12_passphrase_never_enters_the_session_cookie_and_shows_once(tmp_path, web, csrf):
+    # Flask's session cookie is signed, not encrypted: anyone holding it can read it. The one-time
+    # passphrase goes to a process-local slot; the redirect carries its nonce, the page shows it once.
+    c, svc = _app_svc(web, tmp_path)
+    tok = csrf(c)
+    assert svc.webserver_init().ok
+    r = c.post("/webserver/cert", data={"_csrf": tok, "op": "issue", "label": "laptop"})
+    with c.session_transaction() as sess:
+        session_text = repr(dict(sess))
+    page = c.get(r.headers["Location"])
+    body = page.data.decode()
+    shown = (re.search(r'<code id="one-time-passphrase">([^<]+)</code>', body)
+             or re.search(r"passphrase \(record it now\): ([A-Za-z0-9_-]{20,})", body))
+    assert shown, "the passphrase is shown on the next page"
+    assert shown.group(1) not in session_text                       # never in the readable cookie
+    assert r.status_code == 302 and "pw=" in r.headers["Location"]
+    assert page.headers.get("Cache-Control") == "no-store"
+    again = c.get(r.headers["Location"]).data.decode()
+    assert shown.group(1) not in again and "one-time-passphrase" not in again   # shown once only
+
+
+def test_an_unread_passphrase_is_gone_after_its_ttl_at_the_next_slot_operation():
+    from lhpc.adapters.web.oneshot import OneShot
+    now = [100.0]
+    slot = OneShot(ttl_s=600.0, clock=lambda: now[0])
+    first = slot.put("never-read")
+    now[0] += 601.0
+    second = slot.put("fresh")                                    # any operation prunes the expired
+    assert len(slot) == 1                                         # the unread one is physically gone
+    assert slot.take(first) is None and slot.take(second) == "fresh" and slot.take(second) is None
+    assert slot.take("unknown") is None
+
+
 def test_webserver_reachable_from_stacks_and_not_a_managed_stack(tmp_path, web):
     # Reachable inline under the controller row on /stacks; the controller id is NOT a managed
     # stack (a bogus stack-detail 404s; it never enters build_snapshot).

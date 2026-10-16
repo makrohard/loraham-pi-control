@@ -31,6 +31,7 @@ from flask import (
     abort,
     flash,
     jsonify,
+    make_response,
     redirect,
     render_template,
     request,
@@ -38,6 +39,7 @@ from flask import (
     url_for,
 )
 
+from lhpc.adapters.web.oneshot import OneShot
 from lhpc.core import config as _config
 from lhpc.core import meshcore_mode as _meshcore_mode
 from lhpc.core import rflog as _rflog
@@ -250,6 +252,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     # interactive TCP mode / tests) so an http test client still round-trips the session.
     app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
                       SESSION_COOKIE_SECURE=False)
+    # The p12 passphrase, shown once: never in the session cookie (oneshot.py).
+    _passphrases = app.extensions["lhpc_passphrases"] = OneShot()
 
     def _csrf_token() -> str:
         if "_csrf" not in session:
@@ -1179,7 +1183,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         except (OSError, ValueError, AttributeError, KeyError):
             ctx.setdefault("network_view", None)        # never break the page over a view
         ctx.update(over)
-        return render_template("stacks.html", **ctx)
+        new_passphrase = _passphrases.take(request.args.get("pw", "")) if request.args.get("pw") else None
+        resp = make_response(render_template("stacks.html", new_passphrase=new_passphrase, **ctx))
+        if new_passphrase:
+            resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     @app.get("/stacks/<sid>/body")
     def stack_body(sid: str):
@@ -2389,14 +2397,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             pw = _secrets.token_urlsafe(18)     # one-time; shown once, never persisted/logged
             r = service.webserver_cert_issue(label, pw, _accept_unverified_clock())
             if r.ok:
-                flash(f"{r.summary}. One-time passphrase (record it now): {pw}", "ok")
+                # The passphrase never enters the (readable) session cookie: a one-shot slot, the
+                # redirect carries only its nonce, the next page shows it once.
+                flash(f"{r.summary}. The one-time passphrase is shown below; record it now.", "ok")
                 if peer_is_loopback():
                     flash("Bundle ready — download it now from this loopback session.", "info")
                 else:
                     flash("Bundle created; a NEW bundle can be downloaded only from a "
                           "loopback session (remote download is refused).", "warn")
-            else:
-                flash(r.summary, "err")
+                return redirect(url_for("stacks_overview", pw=_passphrases.put(pw)) + "#webserver-row")
+            flash(r.summary, "err")
         elif op == "revoke":
             # Typed confirmation: the operator must type the exact certificate label to revoke it.
             if f.get("confirm_phrase", "").strip() != label:
