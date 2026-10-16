@@ -16,6 +16,7 @@ import platform
 
 from . import binary_receipt as brx
 from .model import ComponentKind
+from .web_client import COMPONENT as WEB_CLIENT
 
 # The only target the builder publishes for today; the index entry is checked against this at
 # install time as well (a mismatch is a typed refusal, never a "try it and see").
@@ -81,6 +82,8 @@ class BinaryChannelMixin:
         """The channel a bare `update` uses, for a stack or a component: `binary` while the
         target's STACK is binary-installed, else `pinned`. Switching channels is an install,
         never a plain Update. One rule for the CLI and the web."""
+        if target == WEB_CLIENT:           # its own recorded selector (web_client)
+            return ""
         sid = self.stack_of(target) or target
         return self.BINARY_CHANNEL if sid and self.on_binary_channel(sid) else "pinned"
 

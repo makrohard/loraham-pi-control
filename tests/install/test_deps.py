@@ -973,7 +973,7 @@ def _mesh_svc_with(tmp_path, moved_text):
     return svc, _mesh(svc)
 
 
-@pytest.mark.parametrize("name", ["meshtastic-web", "meshtastic-cli"])
+@pytest.mark.parametrize("name", ["meshtastic-cli", "meshtastic-decoder-crypto"])
 def test_moving_one_input_alone_reads_not_built(tmp_path, manifest_with_moved_input, name):
     """The firmware pin has not moved, so the checkout and its marker are untouched. Before the
     marker recorded these values, the box kept serving the OLD client or running the OLD CLI and
@@ -988,7 +988,7 @@ def test_a_rebuild_at_the_new_inputs_reads_built_again(tmp_path, manifest_with_m
     """The remedy has to actually resolve: rewriting the marker at the new values is what a
     rebuild does, and the stack must then read built rather than staying stuck."""
     from lhpc.core.lifecycle import BUILD_MARKER_TEXT
-    svc, comp = _mesh_svc_with(tmp_path, manifest_with_moved_input("meshtastic", "meshtastic-web", "9.9.9")[0])
+    svc, comp = _mesh_svc_with(tmp_path, manifest_with_moved_input("meshtastic", "meshtastic-cli", "9.9.9")[0])
     marker = tmp_path / "src" / "meshtastic-firmware" / comp.build_marker
     marker.write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(comp))
     write_own_rev(svc, comp)

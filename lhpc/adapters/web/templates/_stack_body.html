@@ -138,8 +138,8 @@
                 {%- if request.args.get('comp') == comp.id %} open data-force-open="1" data-force-scroll="1"{% endif %}>
                 <summary>{{ comp.id }}
                   <span class="pill">{{ comp.kind.value }}{% if comp.band %} · {{ comp.band }} MHz{% endif %}</span>
-                  {% if comp.kind.value == 'library' %}<span class="pill" title="required to BUILD this stack (build_requires); never run on its own">build dependency</span>
-                  {% elif comp.optional %}<span class="pill">optional</span>{% endif %}
+                  {% if comp.kind.value == 'library' and comp.source %}<span class="pill" title="required to BUILD this stack (build_requires); never run on its own">build dependency</span>
+                  {% elif comp.optional and comp.kind.value != 'library' %}<span class="pill">optional</span>{% endif %}
                   <span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span>
                   {# Own components carry a cached freshness verdict; a CROSS-stack dependency is
                      owned by its own stack's row, so it has no entry here. #}
