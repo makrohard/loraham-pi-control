@@ -146,9 +146,10 @@ def stack_regression(stack: str, phase: str) -> str:
       the four phases.
     - `test_release_identity_matches_candidate_manifest`: ONE assertion over every stack; its
       message names as many stacks as drifted, so it can never mean "freeze this one".
-    - `test_release_lane_reports_exactly_the_required_cases` and
-      `test_release_gui_predicate_names_only_gui_components`: lane hygiene and a predicate over
-      all stacks — neither is a stack's own step.
+    - `test_release_lane_reports_exactly_the_required_cases`,
+      `test_release_every_binary_stack_has_a_binary_compatible_with_the_candidate` and
+      `test_release_gui_predicate_names_only_gui_components`: lane hygiene, the published index
+      and a predicate over all stacks — none is a stack's own step.
 
     **The one known coupling.** Graywolf is started over the RUNNING KISS chain, so a kiss
     regression can also show up as a marked graywolf start or readiness. It stays marked,

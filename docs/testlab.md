@@ -152,7 +152,10 @@ about half an hour.
   builds, starts and verifies it by its own state (port, client tool, node info); interactive
   components must draw, stay up and exit on a real terminal, GUI ones run where LHPC's GUI
   predicate allows. It ends by re-proving every managed checkout with the production identity
-  verifier against the candidate manifest's pin, and every artifact against its receipt.
+  verifier against the candidate manifest's pin, and every artifact against its receipt. Before
+  any install it checks that every binary stack of the packaged manifest (the daemon too, a lab
+  fixture in the later cases) has a published entry compatible with the candidate (built for the
+  candidate's pins and inputs).
   - Case names are the contract (`test_release_<stack>`); the required ones are listed in
     `testlab/lhpc_testlab/data/required-release-cases.json`, so an automated release requires
     the stack it moved to have PASSED (a skip or a count is not proof). The first case fails if

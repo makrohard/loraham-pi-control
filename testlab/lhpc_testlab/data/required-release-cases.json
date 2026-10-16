@@ -2,6 +2,7 @@
   "note": "The cases testlab/tests/release/test_release_verify.py MUST report. An automated release reads that lane's JUnit and requires every name listed here to have PASSED — counting cases is not enough, because fourteen renamed or replaced cases satisfy a count while the stack they proved stops being proved. test_release_lane_reports_exactly_the_required_cases keeps this file and the lane identical, so adding, dropping or renaming a case fails the lane until this list is updated with it.",
   "required_cases": [
     "test_release_lane_reports_exactly_the_required_cases",
+    "test_release_every_binary_stack_has_a_binary_compatible_with_the_candidate",
     "test_release_kiss",
     "test_release_graywolf",
     "test_release_chat",
