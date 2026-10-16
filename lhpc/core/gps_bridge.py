@@ -341,16 +341,37 @@ class PosJsonServerOutput(_Output):
             os.unlink(self.link)
         except FileNotFoundError:
             pass
+        # Bind, chmod and listen under a temp name, then rename onto the link: the link path
+        # appears only once the socket accepts, so no client finds a path that refuses it.
+        tmp = os.path.join(os.path.dirname(self.link), ".publish.sock")
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        server.bind(self.link)
-        os.chmod(self.link, 0o660)
-        server.listen(4)
-        server.settimeout(1.0)
-        self._server = server
-        self._accept_thread = threading.Thread(
-            target=self._accept_loop, name="posjson-accept", daemon=True
-        )
-        self._accept_thread.start()
+        published = False
+        try:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+            server.bind(tmp)
+            os.chmod(tmp, 0o660)
+            server.listen(4)
+            os.replace(tmp, self.link)
+            published = True
+            server.settimeout(1.0)
+            self._server = server
+            self._accept_thread = threading.Thread(
+                target=self._accept_loop, name="posjson-accept", daemon=True
+            )
+            self._accept_thread.start()
+        except BaseException:
+            # Any failure, before or after the rename, leaves no socket file and no open socket.
+            server.close()
+            self._server = self._accept_thread = None
+            for path in (tmp, self.link) if published else (tmp,):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            raise
         _log(f"serving position feed on {self.link}")
 
     def _accept_loop(self) -> None:

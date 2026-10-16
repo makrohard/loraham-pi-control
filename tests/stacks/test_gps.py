@@ -1191,9 +1191,9 @@ def test_the_bridge_serves_meshcore_a_position_feed(short_tmp_path, fake_gpsd, m
     import lhpc.core.gps_bridge as bridge_mod
     chmod = os.chmod
 
-    def slow_chmod(path, mode):          # publish() runs bind, chmod, listen: widen the gap
+    def slow_chmod(path, mode):          # publish() chmods its socket before listen: widen the gap
         chmod(path, mode)
-        if str(path).endswith("position.sock"):
+        if str(path).endswith(".sock"):
             time.sleep(listen_delay_s)
     monkeypatch.setattr(bridge_mod.os, "chmod", slow_chmod)
     (short_tmp_path / "config").mkdir(parents=True, exist_ok=True)
@@ -1271,6 +1271,77 @@ def test_no_fix_nmea_becomes_an_explicit_no_fix_record(short_tmp_path):
         client.close()
     finally:
         out.close()
+
+
+def test_the_position_socket_path_appears_only_once_it_accepts(short_tmp_path, monkeypatch):
+    """A client that finds the path must be able to connect at once: publish() binds and
+    listens under a temp name and renames it onto the link, so there is no moment where the
+    link exists but refuses. The chmod before listen is held open 0.5 s to make a gap visible."""
+    import socket as socket_mod
+    import threading
+    import time
+
+    import lhpc.core.gps_bridge as bridge_mod
+    from lhpc.core.gps_bridge import PosJsonServerOutput
+    chmod = os.chmod
+
+    def slow_chmod(path, mode):
+        chmod(path, mode)
+        time.sleep(0.5)
+    monkeypatch.setattr(bridge_mod.os, "chmod", slow_chmod)
+    link = str(short_tmp_path / "position.sock")
+    out = PosJsonServerOutput(link)
+    t = threading.Thread(target=out.publish, daemon=True)
+    t.start()
+    try:
+        deadline = time.time() + _FEED_UP_S
+        while not os.path.exists(link) and time.time() < deadline:
+            time.sleep(0.001)
+        assert os.path.exists(link), "the position socket must be published"
+        client = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
+        try:
+            client.connect(link)                   # no retry: the path means "listening"
+        finally:
+            client.close()
+    finally:
+        t.join(timeout=_FEED_UP_S)
+        out.close()
+
+
+def test_a_failed_position_socket_publish_leaves_no_path(short_tmp_path, monkeypatch):
+    """When publish() fails before the socket listens, neither the link nor the temp name
+    stays behind (the next start would otherwise find a dead socket file)."""
+    import lhpc.core.gps_bridge as bridge_mod
+    from lhpc.core.gps_bridge import PosJsonServerOutput
+
+    def failing_chmod(path, mode):
+        raise PermissionError("chmod refused")
+    monkeypatch.setattr(bridge_mod.os, "chmod", failing_chmod)
+    out = PosJsonServerOutput(str(short_tmp_path / "position.sock"))
+    with pytest.raises(PermissionError):
+        out.publish()
+    assert os.listdir(short_tmp_path) == []
+
+
+def test_a_position_socket_publish_failing_after_the_rename_leaves_no_path(short_tmp_path, monkeypatch):
+    """A failure after the socket is renamed onto the link (here: settimeout) must not leave a
+    published, live-looking position.sock behind: the link is removed and the socket closed."""
+    import socket as socket_mod
+
+    import lhpc.core.gps_bridge as bridge_mod
+    from lhpc.core.gps_bridge import PosJsonServerOutput
+    made = []
+
+    class FailingTimeout(socket_mod.socket):
+        def settimeout(self, value):
+            made.append(self)
+            raise OSError("settimeout refused")
+    monkeypatch.setattr(bridge_mod.socket, "socket", FailingTimeout)
+    out = PosJsonServerOutput(str(short_tmp_path / "position.sock"))
+    with pytest.raises(OSError, match="settimeout refused"):
+        out.publish()
+    assert os.listdir(short_tmp_path) == []
+    assert made and made[0].fileno() == -1, "the listening socket must be closed"
 
 
 @pytest.mark.parametrize("bad_lat", ["4875.000", "-1207.0", "487", "48nan"])

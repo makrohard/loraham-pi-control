@@ -17,6 +17,7 @@ Fixed
   certificates are no longer refused for up to five minutes every 30 days while it waited for the expiry.
 - The one-time .p12 passphrase no longer travels in the session cookie; a console restart before the page loads
   loses it (issue the bundle again).
+- The MeshCore position feed's socket appears only once it accepts connections; a client could find it and be refused.
 
 Changed
 
