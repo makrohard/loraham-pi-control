@@ -1172,7 +1172,8 @@ def _run_feed(paths, consumer, stop):
     return run(consumer, paths, stop=stop)
 
 
-def test_the_bridge_serves_meshcore_a_position_feed(short_tmp_path, fake_gpsd):
+@pytest.mark.parametrize("listen_delay_s", [0.0, 0.5])
+def test_the_bridge_serves_meshcore_a_position_feed(short_tmp_path, fake_gpsd, monkeypatch, listen_delay_s):
     """MeshCore's consumer is the openHop host app: it needs a normalized POSITION
     (line-JSON on a Unix server socket), not a simulated GPS chip. The bridge must
     accept the meshcore consumer, publish the position socket, convert a fixed NMEA
@@ -1187,6 +1188,14 @@ def test_the_bridge_serves_meshcore_a_position_feed(short_tmp_path, fake_gpsd):
     from lhpc.core.gps import bridge_endpoint_path, bridge_state_dir
     from lhpc.core.gps_bridge import EXIT_OK
     from lhpc.core.paths import Paths
+    import lhpc.core.gps_bridge as bridge_mod
+    chmod = os.chmod
+
+    def slow_chmod(path, mode):          # publish() runs bind, chmod, listen: widen the gap
+        chmod(path, mode)
+        if str(path).endswith("position.sock"):
+            time.sleep(listen_delay_s)
+    monkeypatch.setattr(bridge_mod.os, "chmod", slow_chmod)
     (short_tmp_path / "config").mkdir(parents=True, exist_ok=True)
     paths = Paths(runtime_root=short_tmp_path)
     # 52°31.2000'N 13°24.6000'E with a valid fix, then a no-fix GGA.
@@ -1201,14 +1210,21 @@ def test_the_bridge_serves_meshcore_a_position_feed(short_tmp_path, fake_gpsd):
     t.start()
     state = os.path.join(bridge_state_dir(short_tmp_path, "meshcore"), "readiness.json")
     sock_path = bridge_endpoint_path(short_tmp_path, "meshcore")
+    # The socket path exists from bind(), before listen(): a connect in between is refused. The
+    # product's readiness is the marker, not the path, so the test waits for a connect that is
+    # accepted (the 0.5 s case holds the gap open on purpose; a single connect raced it on CI).
     deadline = time.time() + _FEED_UP_S
-    while not os.path.exists(sock_path) and time.time() < deadline:
-        time.sleep(0.05)
-    assert os.path.exists(sock_path), "the position socket must be published"
-
-    client = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
+    client = None
+    while client is None and time.time() < deadline:
+        c = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
+        try:
+            c.connect(sock_path)
+            client = c
+        except (FileNotFoundError, ConnectionRefusedError):
+            c.close()
+            time.sleep(0.05)
+    assert client is not None, f"the position socket must accept a connect (waited {_FEED_UP_S}s)"
     client.settimeout(_FEED_UP_S)
-    client.connect(sock_path)
     buf = b""
     while b"\n" not in buf and time.time() < deadline:
         buf += client.recv(4096)
