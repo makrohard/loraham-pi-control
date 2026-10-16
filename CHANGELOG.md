@@ -33,6 +33,8 @@ Changed
   own (the plan then names `lhpc self-update --apply`); the binaries are listed in `index-v3.json`.
 - The Meshtastic web client is its own component: Known working, Latest stable or Development, switched in seconds
   without touching meshtasticd (`lhpc update meshtastic-web --source …`); meshtastic is reinstalled or rebuilt once.
+- Graywolf: `lhpc update graywolf --source stable` installs the latest upstream release (`--upstream` still works);
+  a bare update is the pinned release (`--source binary`); `pinned`/`dev` are refused.
 
 Removed
 

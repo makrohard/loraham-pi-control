@@ -67,25 +67,24 @@ class BinaryChannelMixin:
         return ((self.BINARY_CHANNEL, *self.SOURCE_CHOICES)) if ok else self.SOURCE_CHOICES
 
     def default_channel(self, stack_id: str) -> str:
-        """The channel a bare `install`/`update` uses. Binary WHERE AVAILABLE (that is the
-        feature: a fresh Pi should not compile for hours), else `pinned`.
-
-        `pinned` — not the branch tip — because a default install must land on a composition
-        this release actually proved: the operator's newest known-working entry, else the
-        manifest pin. The image builder runs the same bare `auto-install`, so a fresh image
-        ships the release's pins instead of whatever upstream happened to push that morning.
-        `dev` stays available, as an explicit selector."""
+        """The channel a bare `install` uses (`update`: `update_default_channel`). Binary WHERE
+        AVAILABLE (a fresh Pi should not compile for hours), else `pinned` — not the branch tip —
+        because a default install must land on a composition this release actually proved: the
+        operator's newest known-working entry, else the manifest pin. The image builder runs the
+        same bare `auto-install`, so a fresh image ships the release's pins instead of whatever
+        upstream happened to push that morning. `dev` stays available, as an explicit selector."""
         ok, _why = self.binary_available(stack_id)
         return self.BINARY_CHANNEL if ok else "pinned"
 
     def update_default_channel(self, target: str) -> str:
-        """The channel a bare `update` uses, for a stack or a component: `binary` while the
-        target's STACK is binary-installed, else `pinned`. Switching channels is an install,
-        never a plain Update. One rule for the CLI and the web."""
+        """A bare `update`: `binary` while binary-installed and for a fetched release (graywolf: its
+        pinned release; `stable` is always explicit), else `pinned`. CLI and web alike."""
         if target == WEB_CLIENT:           # its own recorded selector (web_client)
             return ""
         sid = self.stack_of(target) or target
-        return self.BINARY_CHANNEL if sid and self.on_binary_channel(sid) else "pinned"
+        if sid and (self.fetched_version_state(sid) or self.on_binary_channel(sid)):
+            return self.BINARY_CHANNEL
+        return "pinned"
 
     def channel_error(self, stack_id: str, channel: str) -> str:
         """"" when `channel` is usable for this stack, else the typed refusal reason."""
