@@ -1,4 +1,4 @@
-# Plan v3.6 — Track F: install channels without nagging, the Meshtastic web client as its own component
+# Plan v3.7 — Track F: install channels without nagging, the Meshtastic web client as its own component
 
 Base `origin/dev` 816a2842 (post-C1; line numbers read on 254bbae3); analysis MT-WEB-CLIENT (61e18c6d). Repos:
 loraham-pi-control (C), lhpc-binaries (B), lhpc-release-bot (R). binary = prebuilt known-working; rest compiled/fetched.
@@ -11,7 +11,7 @@ loraham-pi-control (C), lhpc-binaries (B), lhpc-release-bot (R). binary = prebui
 | W2a F3: the web smoke is a real node-info exchange in a browser, with a broken-client control | F3 |
 | W2a F4: the tested meshtasticd commit is persisted; a daemon change re-checks the pairing | F3 |
 | W2a F5: RootPath migration specified (measured) and both upgrade paths proven live | F3, F5 |
-| C1 split off and LANDED on dev 816a2842 (gate 1 GREEN, Pi 5 row passed); v3.4: second-read wording; v3.5: base and migration wording; v3.6 (W3): the web smoke's "served + API reachable" fallback removed | F2.1, F2.4, F3 |
+| C1 split off and LANDED on dev 816a2842 (gate 1 GREEN, Pi 5 row passed); v3.4: second-read wording; v3.5: base and migration wording; v3.6 (W3): the web smoke's "served + API reachable" fallback removed; v3.7 (5b r1): B1 live proof = bootstrap ref K + the blocking C2 release_verify | F2.1, F2.4, F3, F5 |
 
 ## F1 — The measured case: "I had to compile MeshCom by hand" (fixed by C1, on dev)
 
@@ -145,7 +145,7 @@ B1/B2 `publish.sh`, `lib_index.py`. Order: C1 (also fit for 0.12.10) → B1 → 
 | # | repo | packet | lane proof | live proof |
 |---|---|---|---|---|
 | C1 | C | stale clean clone adopted under the held locks; the row names the refusal's command | CI `test` | Pi 5: auto-install over a meshcom-qemu clone reset to an older pin → `[ok]`, clone at pin |
-| B1 | B | schema-3 index, newest entry per composition, `inputs`, publish into the index the `lhpc_ref` names | B `tests.yml` | dispatch daemon, meshtastic, meshcom for the C2 ref → `index-v3.json` read back, each compatible with C2; `index.json` byte-unchanged |
+| B1 | B | schema-3 index, newest entry per composition, `inputs`, publish into the index the `lhpc_ref` names | B `tests.yml` | bootstrap: a controller topic K that names index-v3.json (cut only after the 0.12.10 pin bump lands), the three dispatches run with K's ref; C2's release_verify then blocks on the real entries |
 | C2 | C | index-v3 reader, newest compatible, `none_compatible`, D1 | CI + `release_verify` (every binary stack via `select_compatible`, blocking) | Pi 5: `install daemon --source binary` from v3 picks the matching entry |
 | B2 | B | `meshtastic-web` builder (HEAD) + lab smoke | B `tests.yml` | dispatch → entry with both commits, smoke passed |
 | R1 | R | index named by the manifest; web move no republish; stable + weekly dev dispatch | R CI | `release.yml` mode `dry-run` on the R1 ref → plan names index-v3, no meshtastic rebuild for a web move |
