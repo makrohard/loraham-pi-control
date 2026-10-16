@@ -18,6 +18,12 @@ ENV = {
     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e", "GIT_COMMITTER_NAME": "t",
     "GIT_COMMITTER_EMAIL": "t@e", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
     "GIT_TERMINAL_PROMPT": "0", "HOME": "/nonexistent",
+    # Git's automatic maintenance after a commit runs DETACHED by default (git 2.55): it outlives the
+    # command and holds `.git/objects/maintenance.lock`, so a copy of the repository taken right
+    # after a fixture commit could list that lock and then find it gone (a CI failure in
+    # test_prev_dirty_during_recovery_cleanup_is_retained). In the foreground it still runs, and
+    # it has finished when the command returns.
+    "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "maintenance.autoDetach", "GIT_CONFIG_VALUE_0": "false",
 }
 
 

@@ -3523,6 +3523,20 @@ def v2_update_env(tmp_path, git, make_repo, installer):
     return comp, inst, inst.paths.under("src", "app"), v2_head
 
 
+def test_a_fixture_commit_leaves_no_maintenance_running(tmp_path, git, make_repo):
+    # A test copies its fixture repository right after committing (`shutil.copytree` of a live
+    # `.git`). Git's automatic maintenance must have finished by then: run detached it still holds
+    # `objects/maintenance.lock` after the commit returned (measured: 108 of 200 commits), and a
+    # copy that lists the lock and then finds it gone fails the test.
+    repo = tmp_path / "app"
+    make_repo(repo)
+    for i in range(20):
+        (repo / "file.txt").write_text(f"v{i}\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", f"v{i}")
+        assert not (repo / ".git" / "objects" / "maintenance.lock").exists(), f"commit {i}"
+
+
 # ---- local additions survive a source update ---------------------------------------------------
 # The rule: files the operator or the STACK ITSELF adds to a managed checkout are carried into
 # the new source; changes to files that belong to UPSTREAM still refuse. Regenerable artifacts
