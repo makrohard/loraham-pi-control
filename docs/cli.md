@@ -44,7 +44,12 @@ shows source/pin status instead.
 
 ### doctor
 `lhpc doctor` — bounded health checks; local except one bounded gpsd query when the position
-source is `gpsd` ([gps](gps.md#health-and-what-the-console-shows)).
+source is `gpsd` ([gps](gps.md#health-and-what-the-console-shows)). It names the SPI chip-select mode that
+config.txt asks for and the one the running kernel booted with, and the refusal SPI stacks get while
+the two disagree or either is unsupported ([deps](#deps)). One line per installed SPI user built
+from a component with a `kernel_cs_since` commit (the daemon, Reticulum's `rns`) says whether its
+build contains that commit, or names the refusal its start gets with kernel chip selects; on a soft or
+off box the line adds that this is checked at start only with kernel chip selects.
 
 ### deps
 `lhpc deps [--script]` — list every declared system prerequisite (apt packages, the

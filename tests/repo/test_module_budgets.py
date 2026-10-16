@@ -19,7 +19,7 @@ CORE = repo_paths.REPO / "lhpc" / "core"
 
 # file: (max lines, max public methods) — measured on dev at 0.12.9, raised where a line says why
 BUDGETS = {
-    "services.py": (2960, 28),  # efficiency-a1: the source-probe cache argument of build_snapshot
+    "services.py": (2962, 28),  # spi-doctor-mode: doctor's SPI chip-select line (import + one call)
     "service_base.py": (166, 0),
     "service_auto_install.py": (1875, 16),
     "service_binary_channel.py": (297, 19),

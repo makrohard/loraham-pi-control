@@ -25,6 +25,8 @@ Changed
   full TLS handshake (it logged failures only).
 - Configured trusted signers are enforced: with `[provenance].trusted_signers` set, a source install or update
   whose pin carries no trusted signature is refused (it was installed with a `signature-unavailable` label).
+- `lhpc doctor` names the SPI chip-select mode (config.txt, running kernel), the refusal SPI stacks get while the two disagree,
+  and for each installed daemon and Reticulum node whether its build supports kernel chip selects.
 
 ## 0.12.10
 

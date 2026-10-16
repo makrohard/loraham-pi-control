@@ -91,6 +91,27 @@ def refusal(boot: str, live: str) -> str:
     return ""
 
 
+def doctor_lines(paths, stacks, source_dir) -> list[str]:
+    """`lhpc doctor`'s read-only SPI report: what config.txt asks for, what the running kernel
+    booted with, and the start gate's refusal while the two disagree or either is unsupported; then
+    one line per installed SPI bus user built from a `kernel_cs_since` component: built with kernel
+    chip selects, or the provenance refusal its start gets once the kernel owns them."""
+    boot, live = boot_mode(read_config_txt()), live_mode()
+    why = refusal(boot, live)
+    lines = [f"SPI chip selects: config.txt {boot}, running kernel {live} — "
+             + (f"SPI stacks are refused: {why}" if why else "they agree")]
+    note = "" if live == KERNEL else " (checked at start only with kernel chip selects)"
+    for stack in stacks:
+        by_id = {c.id: c for c in stack.components}
+        for comp in stack.components:
+            owners = [comp] + [by_id[d] for d in (comp.build_requires or ()) if d in by_id]
+            if (drives_spi(comp) and any(getattr(o, "kernel_cs_since", "") for o in owners)
+                    and Path(source_dir(comp)).is_dir()):
+                state = provenance_refusal(paths, stack, comp, source_dir) or "built with kernel chip selects"
+                lines.append(f"SPI user {stack.id}/{comp.id}: {state}{note}")
+    return lines
+
+
 def installed_commit(paths, stack, comp, owner, src, owner_src) -> str:
     """The commit of `owner` (the SPI user itself or one of its build dependencies) that `comp`
     will run, from the provenance LHPC already keeps: the binary channel's receipt (valid, its

@@ -23,6 +23,7 @@ from . import binary_install as binary_install_mod
 from . import binary_receipt as binary_receipt_mod
 from . import manifest as manifest_mod
 from . import meshcore_mode as _meshcore_mode
+from . import spi_mode
 from .config import (
     HW_SETUPS,
     Config,
@@ -1235,6 +1236,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         for dev in (_SPI_DEV, _GPIO_DEV):
             chk = hardware.check_char_device(sys, dev)
             details.append(f"  {dev}: {chk.detail}")
+        details.extend(f"  {x}" for x in spi_mode.doctor_lines(self._paths, self.stacks(), self._lifecycle().source_dir))
 
         # Configured source paths present?
         present = missing = covered = 0
