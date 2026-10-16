@@ -2537,6 +2537,19 @@ def run_server(host: str = "127.0.0.1", port: int = 8770, socket: bool = False) 
             "     (or a documented trusted reverse proxy)."
         )
         return 1
+    # Productive serving needs Waitress. Refuse FIRST, like the host check above: before the
+    # runtime lock, the app, the post-update reconcile or any watchdog thread, so a refused
+    # start writes nothing and leaves nothing running.
+    try:
+        from waitress import serve as _waitress_serve
+    except ImportError:
+        _waitress_serve = None
+    if socket and _waitress_serve is None:
+        print("ERR  waitress is required for productive (Unix-socket) serving but is "
+              "not installed — refusing to start (productive serving must not fall back "
+              "to the Flask development server). Install the declared 'waitress' "
+              "dependency in the venv.")
+        return 1
     # Controller-runtime lock (B6): acquire it SHARED, NON-BLOCKING, BEFORE the startup
     # self-check or binding the socket, and hold it for the ENTIRE serving lifetime. If a
     # self-update holds it EXCLUSIVE, fail CLOSED here — never serve with unlocked source
@@ -2633,18 +2646,9 @@ def run_server(host: str = "127.0.0.1", port: int = 8770, socket: bool = False) 
 
         threading.Thread(target=_network_watch_loop, name="lhpc-network-watch",
                          daemon=True).start()
-        try:
-            from waitress import serve as _waitress_serve
-        except ImportError:
-            _waitress_serve = None
         if socket:
-            # PRODUCTIVE: Unix socket only, Waitress MANDATORY. No TCP, no dev-server fallback.
-            if _waitress_serve is None:
-                print("ERR  waitress is required for productive (Unix-socket) serving but is "
-                      "not installed — refusing to start (productive serving must not fall back "
-                      "to the Flask development server). Install the declared 'waitress' "
-                      "dependency in the venv.")
-                return 1
+            # PRODUCTIVE: Unix socket only, Waitress MANDATORY (checked first, at the top).
+            # No TCP, no dev-server fallback.
             from lhpc.core import runtime_fs as _rfs
             from lhpc.core.webserver import WAITRESS_SOCK as _SOCK
             paths = _resolve_paths()

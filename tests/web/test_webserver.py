@@ -6,6 +6,7 @@ import os
 import pytest
 import re
 import sys
+import threading
 from lhpc.core import webserver, pki, runtime_fs, validators, config
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult, FakeSystem, Listener, CommandResult as CR
@@ -1869,8 +1870,15 @@ def test_socket_mode_fail_closed_without_waitress(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
     (tmp_path / "config").mkdir()
     (tmp_path / "state" / "locks").mkdir(parents=True)
+    before = {t for t in threading.enumerate() if t.name.startswith("lhpc-")}
+    files = sorted(tmp_path.rglob("*"))
     rc = run_server(socket=True)
     assert rc == 1        # refused; no dev-server fallback on the productive path
+    # ...and a refused start leaves no watchdog behind (a leaked lhpc-network-watch thread built a
+    # ControllerService from the then-current $LHPC_RUNTIME_ROOT and wrote into another test's root)
+    # and writes nothing: no lock, no `web_session.key`, no firewall reconcile.
+    assert {t for t in threading.enumerate() if t.name.startswith("lhpc-")} == before
+    assert sorted(tmp_path.rglob("*")) == files
 
 
 def _svc_webserver_service(tmp_path: Path, fake: FakeSystem | None = None) -> ControllerService:

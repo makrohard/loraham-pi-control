@@ -14,6 +14,8 @@ Changed
 
 Fixed
 
+- A refused socket-mode start of the console (no Waitress) no longer leaves its watchdog threads running, and
+  writes nothing.
 - Adopting a local checkout while a git command runs in it no longer copies that command's lock into the new
   source, where git then refused to run.
 - Auto-install of MeshCom from its published binary moves a clean MeshCom run-script checkout to its pin itself
