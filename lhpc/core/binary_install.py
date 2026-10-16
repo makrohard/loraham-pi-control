@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -42,6 +43,7 @@ from . import runtime_fs, validators
 from .paths import PathContainmentError, Paths
 
 INDEX_SCHEMA = 2
+INDEX_SCHEMAS = (2, 3)            # 3 = index-v3: a list of entries per stack, newest first
 _INDEX_MAX_BYTES = 1 << 20            # index.json is a few KiB; 1 MiB is a generous ceiling
 _ARTIFACT_MAX_BYTES = 512 << 20       # meshtastic (web assets) is the big one at ~53 MB
 _HTTP_TIMEOUT_S = 60.0
@@ -72,6 +74,7 @@ class IndexEntry:
     runtime_deps: tuple[str, ...]
     target: str
     provenance: dict            # the index's own metadata (built_from, target, os, …), verbatim
+    inputs: dict | None = None  # index-v3: {component: sha256 of its build-input sidecar}; v2: None
 
 
 # --- index ---------------------------------------------------------------------------------
@@ -117,25 +120,48 @@ def _http_get(url: str, max_bytes: int) -> bytes:
 
 
 def fetch_index(index_url: str) -> dict:
-    """Bounded fetch + STRICT parse of the schema-2 index."""
+    """Bounded fetch + STRICT parse of a schema-2 or schema-3 (index-v3) index."""
     raw = _http_get(index_url, _INDEX_MAX_BYTES)
     try:
         idx = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
         raise BinaryInstallError(f"binary index is not valid JSON ({exc})") from None
-    if not isinstance(idx, dict) or idx.get("schema") != INDEX_SCHEMA:
+    if not isinstance(idx, dict) or idx.get("schema") not in INDEX_SCHEMAS:
         raise BinaryInstallError(
             f"binary index schema {idx.get('schema') if isinstance(idx, dict) else '?'} is not "
-            f"supported (this lhpc expects schema {INDEX_SCHEMA}) — update lhpc or use --source")
+            f"supported (this lhpc reads schemas {INDEX_SCHEMAS}) — update lhpc or use --source")
     if not isinstance(idx.get("stacks"), dict):
         raise BinaryInstallError("binary index has no stacks table")
+    if idx["schema"] == 3 and set(idx) != {"schema", "stacks"}:     # index-v3 names no other key
+        raise BinaryInstallError("binary index (schema 3) has keys other than schema and stacks")
     return idx
 
 
 def index_entry(idx: dict, stack_id: str) -> IndexEntry:
+    """The one entry of a schema-2 index."""
     e = idx["stacks"].get(stack_id)
     if not isinstance(e, dict):
         raise BinaryInstallError(f"no binary is published for {stack_id!r}")
+    return _parse_entry(stack_id, e)
+
+
+def index_entries(idx: dict, stack_id: str) -> list:
+    """Every published entry for `stack_id`, newest first: index-v3's list (each entry validated;
+    a malformed one refuses the whole read, never a silent skip), or a schema-2 index's one entry."""
+    if idx.get("schema") == INDEX_SCHEMA:
+        return [index_entry(idx, stack_id)]
+    lst = idx["stacks"].get(stack_id)
+    if not isinstance(lst, list) or not lst:
+        raise BinaryInstallError(f"no binary is published for {stack_id!r}")
+    if not all(isinstance(e, dict) for e in lst):
+        raise BinaryInstallError(f"binary index list for {stack_id!r} is malformed")
+    return [_parse_entry(stack_id, e, v3=True) for e in lst]
+
+
+def _parse_entry(stack_id: str, e: dict, v3: bool = False) -> IndexEntry:
+    # dict() would turn `[]` into {} and an array of pairs into a map: the schema says object.
+    if not isinstance(e.get("components"), dict) or (v3 and not isinstance(e.get("inputs"), dict)):
+        raise BinaryInstallError(f"binary index entry for {stack_id!r} is invalid (components/inputs not an object)")
     try:
         entry = IndexEntry(
             stack=stack_id, filename=str(e["filename"]), url=str(e["url"]),
@@ -146,6 +172,7 @@ def index_entry(idx: dict, stack_id: str) -> IndexEntry:
             provenance={k: e.get(k) for k in
                         ("lhpc_commit", "builder_commit", "container_digest", "smoke",
                          "built_from", "target", "os")},
+            inputs=dict(e["inputs"]) if v3 else None,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise BinaryInstallError(f"binary index entry for {stack_id!r} is invalid ({exc})") from None
@@ -157,11 +184,27 @@ def index_entry(idx: dict, stack_id: str) -> IndexEntry:
         raise BinaryInstallError("binary index entry filename is not content-addressed")
     if not all(isinstance(k, str) and isinstance(v, str) for k, v in entry.components.items()):
         raise BinaryInstallError("binary index components map is malformed")
+    if v3 and not all(k in entry.components and validators.is_hex(v, 64)
+                      for k, v in entry.inputs.items()):
+        raise BinaryInstallError("binary index inputs map is malformed")
+    if v3 and not _utc_stamp(e.get("published_at")):
+        raise BinaryInstallError("binary index entry has a malformed published_at")
     smoke = entry.provenance.get("smoke")
     if smoke != {"mode": "mandatory", "result": "passed"}:
         raise BinaryInstallError(
             f"binary artifact for {stack_id!r} did not pass a mandatory smoke test — refusing")
     return entry
+
+
+def _utc_stamp(v) -> bool:
+    """index-v3's `published_at`: UTC `YYYY-MM-DDTHH:MM:SSZ` exactly, and a real date and time."""
+    if not isinstance(v, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", v):
+        return False
+    try:
+        time.strptime(v, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return False
+    return True
 
 
 class BinaryPinMismatch(BinaryInstallError):
@@ -201,6 +244,51 @@ def check_pins(entry: IndexEntry, pins: dict) -> None:
         raise BinaryPinMismatch(
             f"the published binary was built from different commits than this lhpc pins "
             f"({detail}); the index serves the latest release's binary", mismatch=lagging)
+
+
+def input_digests(stack, covers, inputs_text) -> dict:
+    """{component: sha256 of the build-input sidecar this lhpc would write} for each covered component
+    that records build inputs — what an index-v3 entry's `inputs` must equal exactly."""
+    try:
+        return {c.id: hashlib.sha256(inputs_text(c).encode("utf-8")).hexdigest()
+                for c in stack.components if c.id in covers and (c.build_inputs or c.asset_inputs)}
+    except OSError as exc:                       # a packaged asset this lhpc cannot read
+        raise BinaryInstallError(f"this lhpc's build inputs cannot be read ({exc})") from None
+
+
+def select_compatible(entries: list, target: str, pins: dict, inputs: dict):
+    """THE choice: the FIRST entry (newest first) built for this lhpc — its target, its commit for every
+    covered component and (index-v3) its build-input digests exactly this lhpc's. Returns (entry,
+    newer_published). None compatible: the newest entry's own refusal (target, pins, then inputs), so
+    every refusal names what differs and the commits are never accepted "close enough". Only another
+    target or a lagging commit skips an entry; a malformed one refuses the index (`check_pins`), and a
+    malformed covered commit in ANY entry refuses it before one is chosen or skipped."""
+    for e in entries:
+        bad = sorted(cid for cid in pins
+                     if cid in e.components and not validators.is_hex(e.components[cid], 40))
+        if bad:
+            raise BinaryInstallError(
+                f"the published binary records a malformed commit for {', '.join(bad)} — refusing")
+
+    def fits(e):
+        try:
+            check_target(e, target)                # raises only for another target
+            check_pins(e, pins)
+        except BinaryPinMismatch:                  # a lagging commit, not a malformed entry
+            return False
+        except BinaryInstallError:
+            if e.target == target:                 # malformed: refuse the index, never skip
+                raise
+            return False
+        return e.inputs is None or e.inputs == inputs
+    for i, e in enumerate(entries):
+        if fits(e):
+            return e, i > 0
+    newest = entries[0]
+    check_target(newest, target)
+    check_pins(newest, pins)
+    raise BinaryInstallError("no published binary was built with this lhpc's build inputs "
+                             f"({', '.join(sorted(inputs)) or 'none'}) — update LHPC or use --source")
 
 
 def canonical_mismatch(mismatch: dict) -> str:

@@ -117,7 +117,7 @@ def test_index_and_entry_round_trip(tmp_path, monkeypatch):
 @pytest.mark.parametrize("payload,msg", [
     (b"{not json", "not valid JSON"),
     (json.dumps({"schema": 1, "stacks": {}}).encode(), "schema 1 is not supported"),
-    (json.dumps({"schema": 3, "stacks": {}}).encode(), "not supported"),
+    (json.dumps({"schema": 4, "stacks": {}}).encode(), "not supported"),
     (json.dumps({"schema": 2}).encode(), "no stacks table"),
 ])
 def test_index_rejections(monkeypatch, payload, msg):
