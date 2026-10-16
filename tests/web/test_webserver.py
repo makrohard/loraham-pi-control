@@ -1645,6 +1645,22 @@ def test_p12_download_is_loopback_only(tmp_path, web, csrf):
 
 @pytest.mark.contract
 @pytest.mark.safety("exposure-fail-closed")
+def test_without_the_nginx_header_only_a_loopback_socket_peer_is_loopback(tmp_path, web, csrf):
+    # Bare TCP mode (no nginx, no X-LHPC-Peer): the socket's own peer address decides, never
+    # the header's absence alone.
+    c, svc = _app_svc(web, tmp_path)
+    tok = csrf(c)
+    assert svc.webserver_init().ok
+    c.post("/webserver/cert", data={"_csrf": tok, "op": "issue", "label": "laptop"})
+    far = c.get("/webserver/cert/laptop/download", environ_base={"REMOTE_ADDR": "203.0.113.5"})
+    assert far.status_code == 403
+    for near in ("127.0.0.1", "::1"):
+        assert c.get("/webserver/cert/laptop/download",
+                     environ_base={"REMOTE_ADDR": near}).status_code == 200
+
+
+@pytest.mark.contract
+@pytest.mark.safety("exposure-fail-closed")
 def test_a_revoked_labels_leftover_p12_is_not_served(tmp_path, web, csrf):
     c, svc = _app_svc(web, tmp_path)
     tok = csrf(c)
@@ -1695,9 +1711,11 @@ def test_peer_is_loopback_trusts_only_nginx_header(tmp_path):
         assert webapp.peer_is_loopback() is False
     with app.test_request_context(headers={"X-LHPC-Peer": "loopback"}):
         assert webapp.peer_is_loopback() is True
-    # A client-supplied spoof cannot help: only the nginx-set value is read; absent => not remote.
-    with app.test_request_context():
+    # No header (bare TCP mode): the socket's peer decides; an unknown peer is not loopback.
+    with app.test_request_context(environ_base={"REMOTE_ADDR": "127.0.0.1"}):
         assert webapp.peer_is_loopback() is True
+    with app.test_request_context():
+        assert webapp.peer_is_loopback() is False
 
 
 def _render(tmp_path, **kw):

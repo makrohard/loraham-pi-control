@@ -68,14 +68,14 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
 def peer_is_loopback() -> bool:
     """Loopback-vs-remote decision for loopback-only actions (e.g. a new `.p12` download).
 
-    Trusts ONLY the nginx-set `X-LHPC-Peer` header — nginx strips any client-supplied copy
-    and sets it from the real `$remote_addr`. When the header is absent the app is not behind
-    nginx (bare interactive loopback-TCP mode / tests), which is loopback by construction, so
-    treat it as loopback. A REMOTE client always traverses nginx, which always sets the header
-    to `remote`, so a remote peer can never appear loopback here."""
+    Behind nginx, trusts ONLY the nginx-set `X-LHPC-Peer` header — nginx strips any
+    client-supplied copy and sets it from the real `$remote_addr`. When the header is absent the
+    app is not behind nginx (bare interactive TCP mode / tests): the socket's own peer address
+    decides, so the header's absence alone never reads as loopback. A REMOTE client always
+    traverses nginx, which always sets the header to `remote`."""
     from flask import request
     hdr = request.headers.get("X-LHPC-Peer", "")
-    return hdr == "loopback" if hdr else True
+    return hdr == "loopback" if hdr else request.remote_addr in _LOOPBACK_HOSTS
 
 
 def served_via_nginx() -> bool:
