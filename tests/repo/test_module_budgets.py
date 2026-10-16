@@ -10,6 +10,7 @@ A repository invariant, not behaviour: it reads the production files to measure 
 rule 1 otherwise forbids; nothing it asserts is about what the code does.
 """
 import ast
+import importlib
 
 import pytest
 
@@ -27,10 +28,11 @@ BUDGETS = {
     "service_boot_restore.py": (678, 2),
     "service_firewall.py": (1533, 19),
     "service_hmac.py": (1016, 17),
-    "service_lifecycle_ops.py": (6315, 73),
+    "service_lifecycle_ops.py": (5850, 60),
     "service_maintenance.py": (2891, 30),  # testlab-det-1: S1 keeps curl rc and message
     "service_network.py": (1183, 9),
     "service_params.py": (3379, 54),
+    "service_rflog.py": (474, 13),  # split-s1: split from service_lifecycle_ops.py
     "service_secrets.py": (399, 2),
     "service_selfupdate.py": (1932, 22),
     "service_system.py": (759, 2),
@@ -53,6 +55,34 @@ def family(services_source: str) -> set:
     return {"services.py"} | {f"{node.module}.py" for node in ast.walk(ast.parse(services_source))
                               if isinstance(node, ast.ImportFrom) and node.level == 1
                               and (node.module or "").startswith("service_")}
+
+
+# A split moves a group of methods to its own mixin: (new module, its class, old module, old class, the
+# group's public methods). Each one lives on the new mixin and no longer on the old one.
+SPLITS = [
+    ("service_rflog", "RflogOpsMixin", "service_lifecycle_ops", "LifecycleOpsMixin", (
+        "rflog_clear",
+        "rflog_clear_all",
+        "rflog_decode",
+        "rflog_job",
+        "rflog_logging_state",
+        "rflog_records",
+        "rflog_roll_native_all",
+        "rflog_running",
+        "rflog_switch",
+        "rflog_switcher",
+        "rflog_tail",
+        "set_rflog",
+        "set_rflog_all",
+    )),
+]
+
+
+@pytest.mark.parametrize("new, new_cls, old, old_cls, names", SPLITS)
+def test_a_split_group_lives_on_its_own_mixin(new, new_cls, old, old_cls, names):
+    moved = vars(getattr(importlib.import_module(f"lhpc.core.{new}"), new_cls))
+    stayed = vars(getattr(importlib.import_module(f"lhpc.core.{old}"), old_cls))
+    assert ([n for n in names if n not in moved], [n for n in names if n in stayed]) == ([], [])
 
 
 def test_the_table_covers_the_whole_family():
