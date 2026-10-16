@@ -1,4 +1,4 @@
-# Plan v3.3 — Track F: install channels without nagging, the Meshtastic web client as its own component
+# Plan v3.4 — Track F: install channels without nagging, the Meshtastic web client as its own component
 
 Base `origin/dev` 254bbae3; analysis MT-WEB-CLIENT (61e18c6d). Repos: loraham-pi-control (C),
 lhpc-binaries (B), lhpc-release-bot (R). binary = prebuilt known-working, no questions; rest compiled/fetched.
@@ -11,15 +11,15 @@ lhpc-binaries (B), lhpc-release-bot (R). binary = prebuilt known-working, no que
 | W2a F3: the web smoke is a real node-info exchange in a browser, with a broken-client control | F3 |
 | W2a F4: the tested meshtasticd commit is persisted; a daemon change re-checks the pairing | F3 |
 | W2a F5: RootPath migration specified (measured) and both upgrade paths proven live | F3, F5 |
-| C1 landed as its own packet (gate 1 v2, live row on the Pi 5) | F2.1 |
+| C1 split off and LANDED on dev 816a2842 (gate 1 GREEN, Pi 5 row passed); v3.4: second-read wording | F2.1, F2.4, F3 |
 
-## F1 — The measured case: "I had to compile MeshCom by hand" (fixed by C1)
+## F1 — The measured case: "I had to compile MeshCom by hand" (fixed by C1, on dev)
 
 e293 (0.12.9), `auto-install-11c3b495.log`: `[blocked] meshcom: … src/meshcom-qemu-raspi is at 3c30c07e4,
 the pin is c2335d12f … — install from source with: …`, then the compile. Not the index pin check but
 the `clone_required` stale-checkout refusal, reached because the auto-install run calls `binary_install(
 …, locked=True)` and so skips the CLI's pre-lock move; the row hid the refusal's own way out. Reproduced
-on the Pi 5 (0.12.9) and fixed by C1 (F2.1). Second nag class, for C2: an older controller after a bot
+on the Pi 5 (0.12.9); C1 (F2.1) passes the same row. Second nag class, for C2: an older controller after a bot
 release → `BinaryPinMismatch` (`binary_install.py:179-204`); MeshCom refuses the override outright.
 
 ## F2 — Binary without nagging
@@ -28,11 +28,10 @@ release → `BinaryPinMismatch` (`binary_install.py:179-204`); MeshCom refuses t
 exact) AND whose build-input digest equals `sha256(build_inputs_text(comp))` computed here (the
 byte-exact sidecar `is_built` compares, `service_lifecycle_ops.py:5148-5170`).
 
-1. **C1, his case (DONE, its own packet):** inside an auto-install run (`locked`), a clean, proven
-   run-script checkout at another commit is re-adopted at the manifest pin by the loop's existing
-   `adopt_source` (`force=True`); dirty/unproven refused, the CLI path unchanged; the blocked row names
-   the refusal's own command. Packet gate1-CODE-trackF-c1-v2 (8c7b1112), live row on the Pi 5: 0.12.9
-   `[blocked]` → C1 `[ok]`, checkout at c2335d12f.
+1. **C1 (on dev 816a2842, ships with 0.12.10):** in an auto-install run (`locked`) a clean, proven run-script
+   checkout at another commit is re-adopted at the pin (`adopt_source`, `force=True`); dirty/unproven
+   refused; CLI path unchanged; the blocked row names the refusal's command. gate1-CODE-trackF-c1-v2
+   (8c7b1112, GREEN round 4); Pi 5: 0.12.9 `[blocked]` → C1 `[ok]`, checkout at c2335d12f.
 2. **Newest compatible (C2 + B1):** the publisher keeps, per stack, the newest entry of every DISTINCT
    composition (components map + inputs digests); a rebuild of a composition replaces its older entry, so
    the history grows by one entry per release composition and is never cut by a count (assets are
@@ -42,8 +41,9 @@ byte-exact sidecar `is_built` compares, `service_lifecycle_ops.py:5148-5170`).
    published for a newer LHPC (lhpc self-update --apply)". Override flag: D1; index format: D2.
 4. **Before C2 reaches `main` (blocking):** index-v3 holds, for EVERY shipped binary stack (daemon,
    meshtastic, meshcom), an entry compatible with the release sha. Enforced where `main` already
-   gates: `release_verify` installs each binary stack through `select_compatible` (`none_compatible`
-   = red), a required check on the pushed sha. R1's bot check stays as ongoing enforcement.
+   gates: `release_verify=true` is dispatched on the C2 candidate sha and must be green BEFORE the ff
+   to `main`; it installs each binary stack through `select_compatible` (`none_compatible` = red). R1's
+   bot check stays as ongoing enforcement.
 5. **0.3.12 guarantee:** nothing is installed whose commits differ from the pins (D1 removes the
    only exception); the inputs digest adds web/CLI/asset inputs to the pre-download gate; the launch
    gate (`is_built`) is unchanged behind it.
@@ -85,16 +85,16 @@ binary install replaces); static marker `.lhpc-built` (D3); `build_root`;
   HTTP transport to that daemon and must render the node's long name `LHPC-SMOKE` (a real want-config /
   node-info exchange) within 120 s. Control (B2's tests): the same client with its main bundle truncated
   fails the smoke. If the headless exchange cannot be made reliable at B2, the claim is narrowed in the
-  docs to "served + API reachable" and reported — never kept wider than the proof.
+  docs to "served + API reachable" — the stable/dev trust anchor with it — and reported.
 - **Admission and pairing:** the entry records `components = {meshtastic-web: <web commit>,
   meshtastic: <meshtasticd commit>}`; the box takes it only when `meshtastic` equals its installed
   meshtasticd commit (receipt or ownership record), else a typed refusal naming `--source binary`.
   `web.provenance` persists that tested meshtasticd commit. A plain status function compares it with
   the installed meshtasticd; on a daemon change (binary reinstall, source update) status and doctor
-  read "web client unproven for this meshtasticd", and `lhpc update meshtastic` re-resolves the web
+  read "web client unproven for this meshtasticd"; the update that moves meshtasticd re-resolves the web
   entry for the KEPT selector against the new daemon (`binary`: the manifest pin, lane-proven; `stable`/
   `dev`: the newest entry naming the new daemon; none → the installed client stays, named as unproven,
-  with `--source binary` as the way). Tests: a web-pin-only move (a `binary` client reads *behind*, a
+  with `--source binary` as the way), in that same run. Tests: a web-pin-only move (a `binary` client reads *behind*, a
   `stable` one untouched) apart from a daemon replacement (`stable` reads unproven, the update re-pairs
   and keeps `stable`).
 - **Known-working moves by the bot after the lanes:** the bot moves the web pin (version + sha256,
