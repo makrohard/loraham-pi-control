@@ -30,7 +30,7 @@ BUDGETS = {
     "service_lifecycle_ops.py": (6315, 73),
     "service_maintenance.py": (2891, 30),  # testlab-det-1: S1 keeps curl rc and message
     "service_network.py": (1183, 9),
-    "service_params.py": (3380, 54),
+    "service_params.py": (3379, 54),
     "service_secrets.py": (399, 2),
     "service_selfupdate.py": (1932, 22),
     "service_system.py": (759, 2),
