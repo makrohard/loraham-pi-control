@@ -575,6 +575,19 @@ lhpc = "release/0.11.12-bundle (3d0943a1)"
 date = 2026-10-03
 evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records); wall 3 s from second-resolution file times; longest quiet 3.2 s from the log"
 
+# meshtastic-web build (Track F C3: the web client's own fetch step, formerly inside meshtastic's build)
+[[measured]]
+component = "meshtastic-web"
+op = "build"
+seconds = 2
+quiet_s = 1.1
+key = "deb:2.7.2"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "v0.12.9 (eb9673a)"
+date = 2026-10-16
+evidence = "row A 2026-10-16 08:23Z: meshtastic-web-assets.sh (byte-identical in C3) v2.7.2 into /tmp, rc 0; wall 1.6 s, longest quiet 1.1 s from per-line timestamps"
+
 [[calibration]]
 workload = "sha256:17b2f7159232d268a932c0c043f63d0e72bfe365d9873560661012f2c123ba4f"
 source = "zero2w"

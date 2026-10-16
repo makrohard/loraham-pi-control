@@ -35,6 +35,8 @@ Changed
 - The binary channel installs the newest binary published for this LHPC, also after a newer LHPC has published its
   own (the plan then names `lhpc self-update --apply`); the binaries are listed in `index-v3.json`.
 - MeshCore repeater modes: the host's radio marker is `external` (was `loraham`); no change with the pinned openHop.
+- The Meshtastic web client is its own component: Known working, Latest stable or Development, switched in seconds
+  without touching meshtasticd (`lhpc update meshtastic-web --source …`); meshtastic is reinstalled or rebuilt once.
 
 Removed
 

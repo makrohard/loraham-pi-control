@@ -268,15 +268,17 @@ build step and its `build_marker` name, plus a new sha256 in the fetch script's 
 release version + sha256 of its `build.tar`) and the Meshtastic CLI (a pip version in a build
 step). By hand: download the release's `build.tar`, `sha256sum` it, put version and digest into the
 `meshtastic-web-assets.sh` step, and open the UI through the proxy on the box before tagging.
-Either move also requires:
+The web client is its own component (`meshtastic-web`, [provenance](provenance.md#the-web-client)):
+its move changes only that step, republishes nothing, and a box on `binary` reads *behind* until
+`lhpc update meshtastic-web`. A CLI move also requires:
 
-- **Republishing the meshtastic binary** (step 4); the artifact ships the client and the marker.
+- **Republishing the meshtastic binary** (step 4); the artifact ships the CLI's marker.
 - **Moving the matching `build_inputs` entry** on the meshtastic component. Each entry names the
-  build step that consumes it (`command = "pip"`, `command = "meshtastic-web-assets.sh"`) and the
-  argv token it fills (`token = "meshtastic=={value}"`, or `"{value}"`); the loader requires
-  exactly one such token in that command's steps, so moving one without the other fails to load.
-  The values are recorded in a sidecar file beside the completion marker, so a built box reads
-  *Build required* (binary channel: reinstall the artifact).
+  build step that consumes it (`command = "pip"`) and the argv token it fills
+  (`token = "meshtastic=={value}"`); the loader requires exactly one such token in that command's
+  steps, so moving one without the other fails to load. The values are recorded in a sidecar file
+  beside the completion marker, so a built box reads *Build required* (binary channel: reinstall
+  the artifact).
 
 **Packaged assets in build steps are build inputs too.** Every `{asset}/…` token in a component's
 `build_steps` is recorded in the same sidecar as `asset <rel> <sha256>`, so an lhpc update that

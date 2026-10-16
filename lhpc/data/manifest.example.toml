@@ -1179,9 +1179,6 @@ main = "meshtastic"
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pio", "run", "--environment", "native"], env = { PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", PLATFORMIO_RUN_JOBS = "1" }, attributable = true, announce = "[build] meshtasticd (upstream env: native — server-only, no TFT/SDL/X11) — a full C++ build; slow on a Zero 2W; progress: watch {source}/.pio/build/native grow" },
     { argv = ["install", "-D", "-m", "0755", "{source}/.pio/build/native/meshtasticd", "{runtime}/build/tools/meshtasticd/meshtasticd"] },
     { argv = ["bash", "{asset}/scripts/meshtastic-link-gate.sh", "{runtime}/build/tools/meshtasticd/meshtasticd"], attributable = true },
-    # The web client is LHPC's own pin (the newest meshtastic/web release, verified by sha256 on every
-    # install), not the firmware's bin/web.version — see the script header and docs/stacks/meshtastic.md.
-    { argv = ["bash", "{asset}/scripts/meshtastic-web-assets.sh", "{runtime}/build/tools/meshtasticd/web", "2.7.2", "62657b85b4c24af4d44da2932b64143abdbf6e65a79fcb51fd0801d9540616e2"], announce = "[fetch] Meshtastic web client v2.7.2 (LHPC pin, sha256-verified) into {runtime}/build/tools/meshtasticd/web" },
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/meshtastic-cli/.venv"] },
     # pycryptodomex is for the RF-log decoder (`lhpc rflog meshtastic --decrypt`, the page's Decrypt
     # toggle): it runs under this venv and decrypts channel traffic with the node's own AES-CTR.
@@ -1208,7 +1205,6 @@ main = "meshtastic"
   # Matching a token anywhere in the recipe did not: it accepted a recorded "2.7.11" while the
   # pip step installed the 2.7.110 wheel, because a decoy token elsewhere carried "2.7.11".
   build_inputs = [
-    { name = "meshtastic-web", value = "2.7.2", command = "meshtastic-web-assets.sh", token = "{value}" },
     { name = "meshtastic-cli", value = "2.7.11", command = "pip", token = "meshtastic=={value}" },
     { name = "meshtastic-decoder-crypto", value = "3.23.0", command = "pip", token = "pycryptodomex=={value}" },
   ]
@@ -1414,16 +1410,16 @@ main = "meshtastic"
       label = "SSL cert path (writable, for rootless web)"
       advanced = true
       [[stack.component.config_file.param]]
-      # The browser UI is a RUNTIME-OWNED artifact provisioned by the build from this checkout's
-      # bin/web.version — never /usr/share/meshtasticd/web, which only exists if the OBS package
-      # we replaced is installed and would serve a UI from an unrelated revision.
+      # The browser UI is the RUNTIME-OWNED `meshtastic-web` component — never
+      # /usr/share/meshtasticd/web, which only exists if the OBS package we replaced is installed
+      # and would serve a UI from an unrelated revision.
       name = "web_root"
       key = "RootPath"
       section = "Webserver"
       kind = "str"
-      default = "{runtime}/build/tools/meshtasticd/web"
+      default = "{runtime}/build/tools/meshtastic-web/web"
       validator = "path"
-      label = "Web UI root (provisioned by the build)"
+      label = "Web UI root (the meshtastic-web component)"
       advanced = true
       # TX power CAP (dBm), read by meshtasticd at every radio init BEFORE the first frame: the chip
       # clamps whatever the node's own `lora.tx_power` asks for to this value. Without it a fresh
@@ -1562,6 +1558,28 @@ main = "meshtastic"
     key = "spi.bus.0.unlocked"
     kind = "spi-bus"
     mode = "exclusive"
+
+  # The browser UI meshtasticd serves (`RootPath`), as its OWN component (lhpc/core/web_client.py):
+  # outside build/tools/meshtasticd, which a binary install replaces, so switching the client never
+  # touches meshtasticd. The build step is the `binary` selector (LHPC's pin: the newest
+  # meshtastic/web release, verified by sha256 on every install, not the firmware's
+  # bin/web.version); `lhpc update meshtastic-web --source stable|dev` installs a lab-smoked
+  # index-v3 client instead, and a bare update or rebuild keeps the recorded selector. The marker is
+  # static: a pin move leaves a stable/dev client as it is and makes a binary one read behind.
+  [[stack.component]]
+  id = "meshtastic-web"
+  name = "Meshtastic web client"
+  kind = "library"
+  purpose = "The browser UI meshtasticd serves: Known working (binary), Latest stable or Development."
+  # `optional` = not runnable, not started with the stack (like RadioLib); the stack's build
+  # fetches it, and meshtastic's binary install installs it in the same run.
+  optional = true
+  build_steps = [
+    { argv = ["bash", "{asset}/scripts/meshtastic-web-assets.sh", "{runtime}/build/tools/meshtastic-web/web", "2.7.2", "62657b85b4c24af4d44da2932b64143abdbf6e65a79fcb51fd0801d9540616e2"], announce = "[fetch] Meshtastic web client v2.7.2 (LHPC pin, sha256-verified) into {runtime}/build/tools/meshtastic-web/web" },
+  ]
+  bin = "build/tools/meshtastic-web/web"
+  build_marker = "build/tools/meshtastic-web/.lhpc-built"
+  build_root = "build/tools/meshtastic-web"
 
   # The managed Meshtastic CLI (`lhpc meshtastic …`, see docs/stacks/meshtastic.md) as an
   # ON-DEMAND component: the Dashboard lists it under the running stack with the copyable

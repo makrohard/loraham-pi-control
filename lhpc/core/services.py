@@ -116,6 +116,7 @@ def _qemu_boots_extradio(toks) -> bool:
     return False
 
 
+from . import web_client
 from .service_auto_install import AutoInstallOpsMixin
 from .service_binary_channel import BinaryChannelMixin
 from .service_binary_ops import BinaryOpsMixin
@@ -965,6 +966,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             for comp in ss.stack.components:
                 st = ss.components[comp.id]
                 details.extend(_render_component(comp, st))
+                if comp.id == web_client.COMPONENT and (_wl := web_client.status(self)):
+                    details.append(f"    {_wl}")
                 if comp.id in _ov:
                     _b, _p = _ov[comp.id]
                     details.append(f"    installed over the pin check: built from {_b[:9]}, "
@@ -1302,6 +1305,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     + "; it may not work with this LHPC")
                 details.append("    | run yourself: lhpc self-update --apply")
                 _add_cmd("lhpc self-update --apply")
+        if (_wl := web_client.status(self)) and "unproven" in _wl:
+            details.append(f"  meshtastic: {_wl}")      # a daemon change since the pairing
 
         # The console's maintenance pass (`maintenance.py`): each task's last success and last
         # failure. Informational, like the clock line — but a task whose last pass failed, or a
