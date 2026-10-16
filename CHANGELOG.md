@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Changed
+
+- The dashboard checks for changes made elsewhere every 10 s (was 4 s; still 2 s while a start is pending), and log
+  pages fetch new lines every 5 s (was 2 s).
+
 Fixed
 
 - The GPS sky view no longer alternates with "no satellites reported" when gpsd reports the satellites only

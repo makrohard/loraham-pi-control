@@ -47,6 +47,6 @@
   }
 
   box.scrollTop = box.scrollHeight;     // start at the newest line
-  setInterval(poll, 2000);
+  setInterval(poll, 5000);
   poll();
 })();
