@@ -26,12 +26,13 @@ BUDGETS = {
     "service_binary_channel.py": (297, 19),
     "service_binary_ops.py": (1077, 5),
     "service_boot_restore.py": (678, 2),
+    "service_daemon_params.py": (508, 11),  # split-s2: split from service_params.py and service_lifecycle_ops.py
     "service_firewall.py": (1533, 19),
     "service_hmac.py": (1016, 17),
-    "service_lifecycle_ops.py": (5850, 60),
+    "service_lifecycle_ops.py": (5650, 56),
     "service_maintenance.py": (2891, 30),  # testlab-det-1: S1 keeps curl rc and message
     "service_network.py": (1183, 9),
-    "service_params.py": (3379, 54),
+    "service_params.py": (3086, 47),
     "service_rflog.py": (474, 13),  # split-s1: split from service_lifecycle_ops.py
     "service_secrets.py": (399, 2),
     "service_selfupdate.py": (1932, 22),
@@ -74,6 +75,21 @@ SPLITS = [
         "rflog_tail",
         "set_rflog",
         "set_rflog_all",
+    )),
+    ("service_daemon_params", "DaemonParamsMixin", "service_params", "ParamsConfigMixin", (
+        "chip_family_for_band",
+        "clear_daemon_feed",
+        "daemon_feed",
+        "daemon_set",
+        "high_power_for_band",
+        "high_power_state",
+        "set_high_power",
+    )),
+    ("service_daemon_params", "DaemonParamsMixin", "service_lifecycle_ops", "LifecycleOpsMixin", (
+        "apply_daemon_params",
+        "daemon_params_view",
+        "reset_daemon_params",
+        "save_daemon_params",
     )),
 ]
 

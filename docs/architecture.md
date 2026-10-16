@@ -63,7 +63,8 @@ lhpc/
     service_selfupdate.py  # controller self-update + updater integration
     service_auto_install.py  # auto-install driver
     service_maintenance.py # source update, uninstall, clean, known-working, upstream tracking, power
-    service_params.py      # params, config saves and generation, identity, daemon parameters
+    service_params.py      # params, config saves and generation, identity
+    service_daemon_params.py # daemon radio parameters, power, TX mode and feed, per stack and band
     service_lifecycle_ops.py # start/stop/restart/build/test, jobs, dashboards
     service_rflog.py       # the RF-log console: switches, clearing, records, decoding
     service_binary_ops.py  # binary install/retire/recover; service_binary_channel.py resolves it
