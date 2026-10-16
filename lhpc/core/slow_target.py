@@ -146,11 +146,11 @@ def deps_key(pyproject_text: str) -> str:
 
 def _fetch_version(comp) -> str:
     """The release version a fetched component's build step downloads (the argument after the
-    destination of its `*-fetch.sh` step)."""
+    destination of its `*-fetch.sh` step, or of the web client's `meshtastic-web-assets.sh`)."""
     for step in comp.build_steps or ():
         argv = [str(a) for a in step.get("argv") or ()]
         for i, tok in enumerate(argv):
-            if tok.endswith("-fetch.sh") and len(argv) > i + 2:
+            if tok.endswith(("-fetch.sh", "/meshtastic-web-assets.sh")) and len(argv) > i + 2:
                 return argv[i + 2]
     return ""
 

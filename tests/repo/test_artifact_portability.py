@@ -61,8 +61,9 @@ def _members_this_release_adds(stack: str) -> list:
     for st in svc.stacks():
         if st.id != stack:
             continue
+        covers = set(svc.binary_spec(stack).covers)     # only these ship in the artifact
         for c in st.components:
-            if c.build_inputs or c.asset_inputs:
+            if c.id in covers and (c.build_inputs or c.asset_inputs):
                 out.append(str(svc.build_inputs_path(c)).removeprefix(root + "/"))
     return out
 

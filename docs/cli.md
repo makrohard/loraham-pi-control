@@ -282,6 +282,9 @@ is a host test too; it runs against the pinned upstream in the built environment
 - Switching channels is an `install`, and the CLI says so.
 - `--upstream` (fetched packages, i.e. graywolf) — the latest upstream release, verified against
   its `checksums.txt`.
+- For a fetched package (`meshtastic-web`) `--source` picks the release, not a checkout:
+  `binary` (default), `stable` or `dev`; a bare update keeps the recorded one
+  ([the web client](provenance.md#the-web-client)).
 
 ### uninstall
 `lhpc uninstall [<target>] [--yes]` — uninstall a stack/component; settings, state and identities stay.
