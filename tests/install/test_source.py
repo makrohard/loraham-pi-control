@@ -5031,14 +5031,14 @@ def test_a_left_over_prior_refuses_naming_it_and_the_move(tmp_path, v2_update_en
 
 
 @pytest.mark.parametrize("apply", [False, True])
-def test_update_of_a_stack_without_a_source_names_its_build_and_upstream(tmp_path, apply):
-    """graywolf is a listed stack whose release is fetched by its build: `update graywolf`
-    refuses with nothing changed and names the two commands that move it, never *Unknown
+def test_a_pinned_update_of_a_fetched_release_names_its_two_lanes(tmp_path, apply):
+    """graywolf is a listed stack whose release is fetched: `update graywolf --source pinned`
+    refuses with nothing changed and names the two selectors that move it, never *Unknown
     stack*."""
-    res = _svc(tmp_path).update("graywolf", apply=apply)
-    assert not res.ok
-    assert res.next_commands == ["lhpc build graywolf --yes",
-                                 "lhpc update graywolf --upstream --yes"]
+    res = _svc(tmp_path).update("graywolf", apply=apply, source="pinned")
+    assert not res.ok and res.data["refusal"] == "no_compiled_lane"
+    assert res.next_commands == ["lhpc update graywolf --source binary --yes",
+                                 "lhpc update graywolf --source stable --yes"]
     assert not (tmp_path / "state" / "source-txn").exists()
 
 

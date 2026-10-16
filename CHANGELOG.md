@@ -37,6 +37,8 @@ Changed
 - MeshCore repeater modes: the host's radio marker is `external` (was `loraham`); no change with the pinned openHop.
 - The Meshtastic web client is its own component: Known working, Latest stable or Development, switched in seconds
   without touching meshtasticd (`lhpc update meshtastic-web --source …`); meshtastic is reinstalled or rebuilt once.
+- Graywolf: `lhpc update graywolf --source stable` installs the latest upstream release (`--upstream` still works);
+  a bare update is the pinned release (`--source binary`); `pinned`/`dev` are refused.
 
 Removed
 

@@ -20,7 +20,7 @@ APRS-IS <-> graywolf <-> KISS/TCP 8001 <-> loraham-kiss-tnc <-> framed DATA <-> 
 | Password file | `<runtime>/state/graywolf/graywolf-admin.txt` (0600), user `admin` |
 | Resources | `tcp.port.8080` exclusive · `tcp.port.8001` consumer |
 | Depends on | `loraham-kiss-tnc` + `loraham-daemon`, `requires_daemon_tx = MANAGED` |
-| Install channel | the release fetch above. `lhpc clean graywolf --purge` removes `build/tools/graywolf` and `state/graywolf` (the whole station configuration, beacons included, and the UI password). `lhpc update graywolf --upstream` (*Check upstream*) installs the latest `chrissnell/graywolf` release, verified against that release's own `checksums.txt`. Moving the pin: [maintenance](../maintenance.md#moving-a-pin) |
+| Install channel | the release fetch above. `lhpc clean graywolf --purge` removes `build/tools/graywolf` and `state/graywolf` (the whole station configuration, beacons included, and the UI password). `lhpc update graywolf --source stable` (*Check upstream*; formerly `--upstream`) installs the latest `chrissnell/graywolf` release, verified against that release's own `checksums.txt`; `--source binary` is the pinned release its build fetches; a bare `lhpc update graywolf` installs the pinned build — if the installed version is newer than the pin, that is a downgrade; use `--source stable` to stay on upstream; `pinned`/`dev` are refused, graywolf has no compiled lane. Moving the pin: [maintenance](../maintenance.md#moving-a-pin) |
 
 ## Contents
 
