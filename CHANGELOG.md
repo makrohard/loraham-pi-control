@@ -20,6 +20,8 @@ Changed
 
 - Web console: the access log records each client-certificate login with the certificate's name, one line per
   full TLS handshake (it logged failures only).
+- Configured trusted signers are enforced: with `[provenance].trusted_signers` set, a source install or update
+  whose pin carries no trusted signature is refused (it was installed with a `signature-unavailable` label).
 
 ## 0.12.10
 

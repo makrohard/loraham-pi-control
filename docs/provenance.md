@@ -98,7 +98,7 @@ which compiles exactly the pin. Operating a binary install:
 
 - **`pinned-verified`**: `HEAD` is exactly the pin (or known-working) commit.
 - **`signature-verified`**: pin verified **and** signed by a configured trusted signer.
-- **`signature-unavailable`**: pin verified, signers configured, but no valid trusted signature.
+- **`signature-unavailable`**: pin verified, signers configured, but no valid trusted signature: refused.
 - **`mutable-dev` / `mutable-stable`**: explicit mutable selection (not production-safe).
 - **`unverified-blocked`**: no pin, or `HEAD != pin`, and no explicit mutable choice.
 - **`artifact-head`**: a declared artifact source.
@@ -110,7 +110,9 @@ commit, else `git verify-commit --raw` on the pinned commit, and parses the GPG 
 signature on anything but the pin never counts.
 A signature counts **only** when git exits 0 **and** a `VALIDSIG` fingerprint matches a
 configured trusted signer (full GPG fingerprints). Without configured signers the status stays
-`pinned-verified`.
+`pinned-verified`. With signers configured the signature is enforced: a source install or update whose
+pin carries no trusted signature is refused before activation; installed sources keep running, and the
+binary channel is not affected.
 
 ## Remote overrides
 

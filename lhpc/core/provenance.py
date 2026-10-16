@@ -7,7 +7,8 @@ configured trusted signer:
   * ``pinned-verified``       HEAD is exactly the configured immutable pin commit.
   * ``signature-verified``    ...AND the pin is signed by a configured trusted signer.
   * ``signature-unavailable`` pin verified, but no valid trusted-signer signature was
-                              obtained (signers were configured but verification failed).
+                              obtained (signers were configured but verification failed):
+                              REFUSED — configured signers are enforced.
   * ``mutable-dev`` / ``mutable-stable``  explicit operator opt-in to a MUTABLE branch
                               (clearly non-default, not production-safe).
   * ``unverified-blocked``    no pin exists (or HEAD != pin) and no explicit mutable
@@ -209,5 +210,7 @@ def evaluate(runner, dest: str, spec, source: str,
     if signed:
         return ProvenanceResult(SIGNATURE_VERIFIED, True, True,
                                 f"at {label} {pin[:12]}; {why}")
-    return ProvenanceResult(SIGNATURE_UNAVAILABLE, True, True,
-                            f"at {label} {pin[:12]}; signature NOT verified ({why})")
+    return ProvenanceResult(SIGNATURE_UNAVAILABLE, False, True,
+                            f"at {label} {pin[:12]}; signature NOT verified ({why}) — trusted signers "
+                            "are configured, so the source is refused: sign the pin, or remove "
+                            "[provenance].trusted_signers")

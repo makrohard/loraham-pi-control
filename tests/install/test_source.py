@@ -2519,6 +2519,22 @@ def test_provenance_not_ok_blocks_activation_prior_intact(tmp_path, monkeypatch,
     assert (active / "OLD").read_text() == "keep"        # prior active source UNTOUCHED
 
 
+def test_configured_signers_refuse_an_unsigned_pin_before_activation(tmp_path, make_repo, installer):
+    # An operator who lists trusted signers expects an unsigned source to be refused, not installed
+    # with a label: the candidate never activates and nothing appears at the destination.
+    from lhpc.core import provenance
+    head = make_repo(tmp_path / "rt" / "app-src", {"f": "x"})
+    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
+                     source=SourceSpec(path="src/app", local_dir="app-src", pin_commit=head))
+    inst = installer(comp, search_root=tmp_path / "rt",
+                     values={"provenance": {"trusted_signers": ["A" * 40]}})
+    action = inst.adopt_source(comp, source="pinned")
+    assert action.status == "failed" and "provenance blocked before activation" in action.detail
+    assert action.provenance == provenance.SIGNATURE_UNAVAILABLE
+    assert "trusted_signers" in action.detail
+    assert not (inst.paths.runtime_root / "src" / "app").exists()
+
+
 def test_signer_config_diagnostics_reach_result(tmp_path, make_repo, installer):
     # Trusted-signer config diagnostics are surfaced in the install/adopt result.
     head = make_repo(tmp_path / "rt" / "app-src", {"f": "x"})

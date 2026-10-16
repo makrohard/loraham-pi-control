@@ -72,6 +72,7 @@ def test_signature_unavailable_when_untrusted_key():
     r = pv.evaluate(_Runner(head=PIN, verify=other), "/d", _Spec(pin_commit=PIN), "pinned",
                     trusted_fingerprints=[FPR])
     assert r.status == pv.SIGNATURE_UNAVAILABLE and r.production_safe and not r.signed
+    assert not r.ok and "trusted_signers" in r.detail          # configured signers are enforced
 
 
 def test_signature_unavailable_when_verify_fails():
