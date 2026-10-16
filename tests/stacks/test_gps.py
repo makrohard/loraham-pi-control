@@ -1386,6 +1386,7 @@ def test_run_serves_a_fixed_position_without_any_source(tmp_path):
         t.join(timeout=_FEED_UP_S)
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_a_device_sending_binary_is_reported_not_waited_on(tmp_path):
     """Found on hardware: gpsd switches u-blox receivers into UBX BINARY mode, and they stay
     there after gpsd stops. The feed read 434 bytes and forwarded none, sitting at "waiting
@@ -2215,6 +2216,7 @@ def _run_gpsd_pump(tmp_path, srv, seconds=1.2):
     return ready
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_a_gpsd_that_sends_nothing_never_admits_a_start(tmp_path, fake_gpsd):
     """gpsd accepts connections whether or not it owns a receiver — after a restart it commonly
     reports `devices: []` and streams nothing (hit exactly this on hardware). Announcing
@@ -2693,6 +2695,7 @@ def _admission_svc(tmp_path, feed_marker_text):
     return svc, _feed_comp(svc, "meshtastic", "meshtastic-gps")
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_auto_admits_a_stack_whose_gpsd_vanished_or_delivers_nothing(tmp_path, fake_gpsd,
                                                                       monkeypatch):
     """AUDIT-FOUND: freezing the auto verdict was not enough. gpsd disappearing (or owning no
@@ -2733,6 +2736,7 @@ def test_auto_admits_a_stack_whose_gpsd_vanished_or_delivers_nothing(tmp_path, f
     assert svc3._gps_feed_admission(comp3)[0] is False
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_explicit_gpsd_with_an_empty_gpsd_still_refuses_the_start(tmp_path, fake_gpsd):
     """The soft rule is `auto`-only: an operator who NAMED gpsd gets today's fail-closed
     refusal for a gpsd that streams nothing — starting position-blind would hide breakage

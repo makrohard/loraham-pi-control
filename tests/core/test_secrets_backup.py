@@ -165,7 +165,8 @@ def test_backup_is_refused_while_an_included_stack_runs(tmp_path, monkeypatch):
     assert not (tmp_path / "b.tar").exists()
 
 
-@pytest.mark.parametrize("held", ["admission", "config", "pki"])
+@pytest.mark.parametrize("held", ["admission", pytest.param("config", marks=pytest.mark.slow),  # timed wait (M0)
+                                  "pki"])
 def test_backup_is_refused_while_a_lock_is_held(tmp_path, held):
     a = _root(tmp_path, "a")
     svc = _seed(a)
@@ -285,6 +286,7 @@ def test_a_root_without_config_tls_lists_it_absent_and_restores_so(tmp_path):
 
 # ---- the console's session key ------------------------------------------------------------
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_the_session_key_write_takes_the_config_lock_and_is_ephemeral_while_it_is_busy(tmp_path):
     a = _root(tmp_path, "a")
     p = Paths(runtime_root=a)

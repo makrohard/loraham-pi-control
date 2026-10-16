@@ -115,6 +115,7 @@ def _timeout_env(monkeypatch):
     monkeypatch.setenv("LHPC_BUILD_STEP_TIMEOUT_S", "0.3")
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_unverified_timeout_step_records_unsafe(tmp_path, monkeypatch):
     from lhpc.core import proctree
     _timeout_env(monkeypatch)
@@ -129,6 +130,7 @@ def test_unverified_timeout_step_records_unsafe(tmp_path, monkeypatch):
     assert jobresult._read_raw(svc._paths, _LOG)["state"] == "unsafe"     # cessation UNPROVEN → unsafe
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_proven_terminated_timeout_step_records_failed(tmp_path, monkeypatch):
     from lhpc.core import proctree
     _timeout_env(monkeypatch)

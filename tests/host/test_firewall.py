@@ -580,6 +580,7 @@ def test_secure_default_aborts_on_unresolvable_ssh_compat_proceeds(tmp_path):
     assert fh.op_apply(sysx, str(p2), etc_dir=etc, run_dir=run) == fh.EXIT_OK
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_check_verdicts_and_busy_leaves_receipt_untouched(tmp_path):
     import json as _json
     from lhpc.core import firewall_helper as fh

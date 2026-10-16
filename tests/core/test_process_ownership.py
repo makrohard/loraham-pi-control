@@ -285,6 +285,7 @@ def test_start_fails_when_ownership_record_cannot_persist(tmp_path, monkeypatch)
 
 # --- truthful cleanup + complete-identity ownership ---------------------
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_incomplete_identity_blocks_ownership(tmp_path, reaper, monkeypatch):
     # An OBSERVED process whose /proc identity is incomplete must not be recorded.
     life = _life(tmp_path)
@@ -295,6 +296,7 @@ def test_incomplete_identity_blocks_ownership(tmp_path, reaper, monkeypatch):
     assert life.owned_records("loraham-daemon") == []
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_terminate_unobserved_returns_false_when_still_alive(tmp_path, reaper, monkeypatch):
     # If the residual process does NOT cease, cleanup must report False (not a lie).
     life = _life(tmp_path)
@@ -322,6 +324,7 @@ def test_record_launch_rejects_none_identity(tmp_path, reaper, monkeypatch):
     assert life.record_launch(STACK, COMP, p.pid, band="433") is False
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_record_launch_rejects_empty_exec(tmp_path, reaper, monkeypatch):
     life = _life(tmp_path)
     p = _leader(reaper)
@@ -344,6 +347,7 @@ def test_proc_ceased_transient_read_failure_is_not_cessation(tmp_path, reaper, m
     assert life._proc_ceased(p.pid) is False     # transient failure != ceased
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_empty_cmdline_argv_rejected_despite_nonempty_digest(tmp_path, reaper, monkeypatch):
     import hashlib
     life = _life(tmp_path)
@@ -988,6 +992,7 @@ def test_an_identity_that_completes_late_is_still_captured_complete(tmp_path, re
     assert life._identity_complete(life._capture_identity(p.pid))
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_an_identity_that_never_completes_is_returned_weak_within_the_bound(tmp_path, reaper):
     life = _life(tmp_path)
     p = _leader(reaper)

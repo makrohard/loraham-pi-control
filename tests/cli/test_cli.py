@@ -1323,6 +1323,7 @@ def test_plumbing_flag_runs_with_invocation_id(argv, method, unit, use, tmp_path
 
 
 @pytest.mark.safety("config-transaction")
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_a_pending_config_journal_is_cleaned_up_when_lhpc_starts(capsys):
     """EAGER CLEANUP, not the invariant (that is `config_lock`, tests/core/test_config.py): a
     journal a crashed process left behind is finished and reported when the next `lhpc` process

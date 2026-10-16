@@ -112,6 +112,7 @@ def test_clean_rechecks_running_after_locks(tmp_path, monkeypatch):
     assert _snapshot_state(tmp_path, paths) == before      # even config/log/markers untouched
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_multi_source_update_holds_locks_across_groups(tmp_path, monkeypatch):
     # daemon stack updates TWO source groups (loraham-daemon + RadioLib). A Start injected
     # BETWEEN the groups contends on the still-held source locks: typed refusal, nothing

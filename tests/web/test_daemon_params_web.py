@@ -429,6 +429,7 @@ def test_a_start_applies_the_saved_daemon_params_and_nothing_else(tmp_path):
     assert svc._daemon_param_applies("daemon", "868")["CADIDLE"] == "222"
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_crafted_start_post_fields_are_ignored_not_applied(tmp_path, web):
     # A crafted web POST carrying the OLD per-launch fields (dp_<band>_<PARAM>, p_<name>) changes
     # nothing: the start runs the saved configuration, the saved daemon params stay untouched,

@@ -115,23 +115,27 @@ def _two_polls(fake_gpsd, first, second):
     return _gps.gpsd_snapshot("127.0.0.1", srv.port, timeout=1.2)
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_a_window_without_a_satellite_report_keeps_the_last_list(fake_gpsd):
     r = _two_polls(fake_gpsd, [_sky([_sat(3), _sat(7), _sat(12)])], [])
     assert [s["prn"] for s in r["satellites"]] == [3, 7, 12] and r["sats_seen"] == 3
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_a_dop_only_report_does_not_replace_the_last_list(fake_gpsd):
     r = _two_polls(fake_gpsd, [_sky([_sat(3)])],
                    [(json.dumps({"class": "SKY", "device": "/dev/ttyACM0", "hdop": 1.1}) + "\n").encode()])
     assert [s["prn"] for s in r["satellites"]] == [3]
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_a_list_older_than_the_stale_bound_is_not_used(fake_gpsd, monkeypatch):
     monkeypatch.setattr(_gps, "NMEA_STALE_S", 0.0)
     r = _two_polls(fake_gpsd, [_sky([_sat(3)])], [])
     assert r["satellites"] == [] and r["sats_seen"] is None
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_the_age_bound_counts_from_the_start_of_the_read_that_saw_the_list(fake_gpsd, monkeypatch):
     # Each poll reads for its whole 1.2 s budget. The list may have arrived at the first read's
     # start, so at the second read's end it can be ~2.4 s old: a 1.5 s bound must refuse it (a stamp
@@ -143,11 +147,13 @@ def test_the_age_bound_counts_from_the_start_of_the_read_that_saw_the_list(fake_
 
 @pytest.mark.parametrize("second, prns", [([_sky([_sat(5)])], [5]), ([_sky([])], [])],
                          ids=["a new list wins", "an empty list is the truth"])
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_a_satellite_report_in_the_window_replaces_the_last_list(fake_gpsd, second, prns):
     r = _two_polls(fake_gpsd, [_sky([_sat(3)])], second)
     assert [s["prn"] for s in r["satellites"]] == prns
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_the_last_list_belongs_to_one_gpsd(fake_gpsd):
     _snap(fake_gpsd, DEV_A, _tpv(3), _sky([_sat(3)]))
     r = _snap(fake_gpsd, DEV_A, _tpv(3))                      # another fake gpsd: another port
@@ -191,6 +197,7 @@ def test_untagged_tpv_with_one_device_is_attributed(fake_gpsd):
     assert r["state"] == "3d" and r["device"] == "/dev/ttyACM0" and r["nmea_ok"]
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_untagged_tpv_beside_several_devices_keeps_the_ambiguity(fake_gpsd):
     r = _snap(fake_gpsd, DEV_AB, _tpv(3, device="/dev/ttyACM0"), _tpv(3, device=None))
     assert r["state"] == "3d" and r["device"] == "/dev/ttyACM0"
@@ -208,6 +215,7 @@ def test_non_gps_device_in_the_list_does_not_become_a_receiver(fake_gpsd):
 
 # --- fields, framing, finiteness ---------------------------------------------------------------
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_altitude_datum_order_and_legacy_fallback(fake_gpsd):
     assert _snap(fake_gpsd, DEV_A, _tpv(3, altHAE=50.0))["alt_kind"] == "hae"
     r = _snap(fake_gpsd, DEV_A, _tpv(3, alt=33.0))

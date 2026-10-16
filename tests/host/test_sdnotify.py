@@ -78,6 +78,7 @@ def test_socket_errors_are_swallowed(monkeypatch, tmp_path):
 
 # --- sanitation: the payload is a protocol ------------------------------------------------------
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_embedded_nul_is_rejected_never_truncated(sock):
     # A NUL truncates the datagram at the C boundary — half a status would read as a whole one.
     assert sdnotify.notify("STATUS=good\x00EVIL") is False

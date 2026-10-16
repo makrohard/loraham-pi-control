@@ -508,6 +508,7 @@ def test_pending_config_journal(entry):
         assert cfgmod.load_stack_config(Paths(runtime_root=r["root"]), "kiss") == PENDING_SAVED
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_damaged_client_index(entry):
     """intended: a damaged client-certificate index gates certificate operations only — no start
     path decides on it, so every path starts alike."""
@@ -529,6 +530,7 @@ def test_interactive_launch(entry):
     assert _renders(res) == SUCCEEDED
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_unverified_termination(entry):
     """intended: a TNC that is alive but never opens its endpoint is cleaned up and reported
     UNVERIFIED on every path; each renders it as a failure — the CLI and the web's child exit 1,
@@ -540,6 +542,7 @@ def test_unverified_termination(entry):
     assert _renders(res) == FAILED_AFTER_ADMISSION
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_restart_of_an_interactive_stack(entry):
     """intended: a restart of an interactive stack ends like its start (above): the CLI, the web
     and the job runner count a MANUAL_REQUIRED-only result as success (exit 0, job done).

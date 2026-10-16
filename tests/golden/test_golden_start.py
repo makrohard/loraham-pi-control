@@ -153,6 +153,7 @@ def test_refused_when_the_band_owner_does_not_stop(kiss_box, run_op):
     assert run.files == NOTHING
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_unverified_termination_is_cleaned_up(kiss_box, run_op):
     """intended: a TNC that is alive but never opens its ready endpoint (observed absent through
     the whole bounded wait) is stopped again (identity-verified) and reported UNVERIFIED; no

@@ -148,6 +148,7 @@ def test_refused_before_the_hook_stays_pending(kiss_box, prior_boot, run_op,
     assert run.files == {"added": ["state/boot-restore.json"], "removed": [], "changed": []}
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_failed_after_the_hook_consumes_the_evidence(kiss_box, prior_boot, run_op):
     """intended: a start that fails after its hook (the endpoint never came up — UNVERIFIED,
     cleaned up) settles the item `failed` with the component outcome, and consumes the

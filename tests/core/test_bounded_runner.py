@@ -60,6 +60,7 @@ def _dead_or_zombie(pid: int) -> bool:
         return True                                       # /proc gone -> dead
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_timeout_kills_term_ignoring_child_that_outlives_parent():
     # The parent spawns a child that IGNORES SIGTERM and, on its own SIGTERM, the parent
     # exits immediately — so the leader dies but the child survives in the original session.
@@ -309,6 +310,7 @@ def _kill(pid_text):
         pass
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_run_returns_while_an_escaped_descendant_holds_stdout():
     # Closing the pipe used to wait for the drain thread's buffer lock, i.e. for the escapee to
     # exit: the bounded joins did not bound the call.
@@ -321,6 +323,7 @@ def test_run_returns_while_an_escaped_descendant_holds_stdout():
         _kill(r.stdout)
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_streaming_run_returns_and_flags_unverified_output(tmp_path):
     log = tmp_path / "job.log"
     t0 = time.time()

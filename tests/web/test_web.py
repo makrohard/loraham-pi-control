@@ -691,6 +691,7 @@ def test_install_confirm_shows_missing_system_deps(web, csrf):
 
 
 @pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_install_runs_as_live_logged_job(web, csrf):
     c = web()
     token = csrf(c)

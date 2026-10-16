@@ -93,6 +93,7 @@ def _kiss_svc(tmp_path):
 
 
 @pytest.mark.needs_session
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_start_required_post_start_failure_is_unverified(tmp_path, monkeypatch, set_call, real_spawn):
     # Drives ControllerService.start() and exercises the CALLER's handling of the typed
     # required-post-start result (the bug was the caller using a nonexistent Outcome.ok).
@@ -337,6 +338,7 @@ def test_optional_retry_all_fail_exits_zero():
                            "optional": True, "repeat": 3, "interval": 0}]) == 0   # optional never gates
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_retry_later_listener_accepts_exits_zero():
     port = _free_port()
     _serve_once(port, delay=1.5)
@@ -344,6 +346,7 @@ def test_retry_later_listener_accepts_exits_zero():
                            "required": True, "repeat": 8, "interval": 1}]) == 0
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_first_success_then_failed_repeats_exits_zero():
     port = _free_port()
     _serve_once(port, delay=0.0, accepts=1)                          # serves ONE then stops
@@ -725,16 +728,19 @@ def _run_bound(binding, port, data="P\n", repeat=4, interval=1, timeout=18):
 
 
 @pytest.mark.needs_session
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_bound_runner_sends_when_main_matches():
     assert _run_bound(_self_binding(), _free_port()) == b"P\n"
 
 
 @pytest.mark.needs_session
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_bound_runner_skips_send_when_main_starttime_changed():
     # main pid reused with a NEW start time (crash + later launch) -> old runner must not send.
     assert _run_bound(_self_binding(main_starttime=1), _free_port()) == b""
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_bound_runner_skips_send_when_main_gone():
     dead = {"main_launch_id": "x", "main_pid": 2 ** 31 - 1, "main_starttime": 1,
             "main_pgid": 1, "main_sid": 1}
@@ -933,6 +939,7 @@ def test_main_exit_before_post_scheduling_yields_no_unbound_runner(tmp_path):
     assert life.owned_records("pr", role="post") == []
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_record_write_failure_delivers_no_payload(tmp_path, monkeypatch):
     import socket
     life = _real_life(tmp_path)
@@ -954,6 +961,7 @@ def test_record_write_failure_delivers_no_payload(tmp_path, monkeypatch):
 
 
 @pytest.mark.needs_session
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_bound_runner_skips_send_when_main_zombie(tmp_path):
     import subprocess
     z = subprocess.Popen(["true"])                                   # exits immediately -> zombie
@@ -978,6 +986,7 @@ def test_bound_runner_skips_send_when_main_zombie(tmp_path):
 
 
 @pytest.mark.needs_session
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_bound_runner_skips_send_when_session_or_group_changed():
     assert _run_bound(_self_binding(main_sid=999999), _free_port()) == b""
     assert _run_bound(_self_binding(main_pgid=999999), _free_port()) == b""
@@ -1010,6 +1019,7 @@ def test_render_rejects_malformed_binding_and_nonstring_skip_values():
     commands.render_post_launcher([ok], _C(), {}, _Op(), "/rt", "/src", "")   # valid -> no raise
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_tcp_send_spaces_successful_deliveries_by_interval(tmp_path):
     # Three SUCCESSFUL deliveries (listener accepts every attempt) are measurably spaced by the
     # validated interval — the sleep applies after a success, not only after a failure.
@@ -1044,6 +1054,7 @@ def test_tcp_send_spaces_successful_deliveries_by_interval(tmp_path):
 
 
 @pytest.mark.needs_session
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_arm_write_exception_is_not_scheduled(tmp_path, monkeypatch):
     # os.write raising AFTER a durable record: no payload, not scheduled, record removed once
     # cessation is proven.
@@ -1553,6 +1564,7 @@ def test_exec_detail_is_bounded_and_traceback_free(tmp_path):
     assert '"' not in st["detail"] and "`" not in st["detail"]
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_tcp_wait_records_ready_and_timeout(tmp_path):
     import json
     import socket as _socket
@@ -2139,6 +2151,7 @@ def test_no_config_lock_is_held_while_required_post_start_runs(
 
 
 @pytest.mark.needs_session
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_the_start_waits_for_real_config_stability_after_post_start(
         tmp_path, monkeypatch, set_call, real_spawn):
     """AUDIT-FOUND: the release used to give up re-acquiring after a timeout and CONTINUE, leaving

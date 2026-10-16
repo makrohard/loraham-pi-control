@@ -390,6 +390,7 @@ def test_global_change_marking_is_band_aware(tmp_path, monkeypatch):
     assert "lhpc stack restart chat" in (r.next_commands or [])
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_global_change_is_atomic_and_lock_serialized(tmp_path, monkeypatch):
     # the [operator] patch and the restart markers are ONE all-or-recoverable
     # transaction inside ONE config-lock critical section.
@@ -1017,6 +1018,7 @@ def test_an_identity_no_op_writes_no_restart_marker(tmp_path, monkeypatch):
     m = svc.restart_required("chat")
     assert m["mode"] == "build" and m["params"] == ["firmware env", "call"], m
     assert m["band"] == "433", m
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_save_only_rechecks_the_identity_inside_its_write(tmp_path, monkeypatch):
     # REVIEW-FOUND: Save-only is the one panel path that does NOT defer the identity to a launch,
     # so its `_identity_guard=True` in-transaction recheck is what stops a raced blank from
@@ -1456,6 +1458,7 @@ def test_web_restart_identity_refusal_happens_before_any_stop(tmp_path, monkeypa
     assert stops == []                                         # refused BEFORE any stop
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_web_bandless_restart_is_one_band_end_to_end(tmp_path, monkeypatch):
     # A bandless Web restart of a stack running on 868 runs on 868 — the 433 store is untouched.
     svc = _svc(tmp_path)

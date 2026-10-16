@@ -293,6 +293,7 @@ def test_ack_archives_marker_no_follow(tmp_path):
 # ---- lease boundary blocks concurrent ops ------------------------------------------------
 
 @pytest.mark.needs_session
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_boundary_blocks_concurrent_update_and_start(tmp_path):
     svc = _svc(tmp_path)
     src_paths = ["src/loraham-kiss-tnc", "src/loraham-daemon", "src/RadioLib"]
@@ -779,6 +780,7 @@ def _dead_ident():
 
 
 @pytest.mark.needs_session
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_child_death_before_claim_is_ackable_while_spawner_lives(tmp_path, monkeypatch):
     # The reservation is bound to the CHILD after spawn: a child that dies before claiming
     # becomes DEAD and acknowledgeable even though the web-server/spawner process (this
@@ -1216,6 +1218,7 @@ def test_unverified_tracking_is_orphan_risk_whatever_its_message_says(tmp_path, 
 
 
 @pytest.mark.needs_session
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_rebind_write_failure_yields_orphan_risk(tmp_path, monkeypatch):
     # bind persistence fails AND cessation is unproven (SIGTERM-ignoring child):
     # orphan-risk evidence with the pid; recovery only through the confirmed path.

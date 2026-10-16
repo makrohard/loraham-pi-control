@@ -57,6 +57,7 @@ def test_plan_is_read_only(kiss_box, run_op):
     assert plan.files == NOTHING
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_restart_a_running_stack(kiss_box, run_op):
     """intended: all locks and rechecks first, then a verified stop, then a verified start; the
     old ownership record is replaced by the new one."""

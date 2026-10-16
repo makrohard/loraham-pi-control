@@ -804,6 +804,7 @@ def test_a_holder_that_never_releases_still_fails_within_the_deadline(tmp_path):
         child.wait(5)
 
 
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_only_gps_keys_during_start_get_the_wait(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     child = _hold_in_child(tmp_path, "claim.loraham.radio.433", "published", 1.0)
