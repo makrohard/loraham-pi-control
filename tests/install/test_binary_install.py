@@ -171,8 +171,9 @@ def test_check_pins_rejects_lagging_component(tmp_path):
 
 def test_check_pins_rejects_missing_component(tmp_path):
     e = _entry(_make_tar(tmp_path, {"src/demo/bin/demo": b"X"}))
-    with pytest.raises(bi.BinaryInstallError, match="does not record commits"):
+    with pytest.raises(bi.BinaryNoneCompatible, match="does not record commits") as exc:
         bi.check_pins(e, {"demo-main": "c" * 40, "demo-lib": "a" * 40})
+    assert exc.value.mismatch == {}                         # another composition, not a lag
 
 
 def test_check_target_mismatch(tmp_path):
@@ -1768,7 +1769,8 @@ def test_update_to_the_installed_artifact_downloads_nothing(
 def test_update_without_a_published_binary_names_the_source_channel(
         tmp_path, monkeypatch, binary_receipt, stub_pipeline, missing):
     """The release has no artifact for this stack, or only one for another target: the update
-    changes nothing and names the source-channel install."""
+    changes nothing and names the source-channel install (another target: the typed
+    `none_compatible` refusal, self-update first)."""
     import dataclasses
     svc = _svc(tmp_path, monkeypatch)
     rec = binary_receipt(svc)
@@ -1781,7 +1783,8 @@ def test_update_without_a_published_binary_names_the_source_channel(
                             lambda idx, sid: dataclasses.replace(entry(sid), target="armv6-other"))
     res = svc.update("daemon", apply=True, source="binary")
     assert not res.ok
-    assert res.next_commands == ["lhpc install daemon --source pinned --yes"]
+    assert res.next_commands == (["lhpc install daemon --source pinned --yes"] if missing == "no asset for the stack"
+                                 else ["lhpc self-update --apply", "lhpc install daemon --source pinned --yes"])
     assert brx.receipt_state(svc._paths, "daemon")[0] == "valid"        # nothing changed
     assert (tmp_path / rec.proof_paths[0]).read_bytes() == b"ELF"
     assert bi.read_journal(svc._paths)[1] == "absent"

@@ -113,7 +113,7 @@ refreshes only `state/stackupdates.json`).
 `lhpc bootstrap [--yes]` — create the runtime root and a starter config.
 
 ### install
-`lhpc install [<stack>] [--check] [--source binary|pinned|dev|stable] [--accept-pin-mismatch] [--yes]`
+`lhpc install [<stack>] [--check] [--source binary|pinned|dev|stable] [--yes]`
 — download the published **binary** artifact, or adopt/verify managed sources into the runtime
 root. Channels and defaults: [provenance](provenance.md#selections); the binary channel in
 operation: [operations](operations.md#install-channels).
@@ -123,8 +123,8 @@ operation: [operations](operations.md#install-channels).
 - A failed binary install asks whether to build from source; it never falls back silently.
 - `--check` — dry run: the plan plus missing mandatory system dependencies (the apply refuses
   until they are installed). Never prompts or applies.
-- `--accept-pin-mismatch` (binary channel; also on `update`) — install the published binary
-  although it was built from other commits than this lhpc pins; exactly the pairs the plan shows
+- The binary channel installs the newest published binary built for this lhpc's pins; when a
+  newer LHPC has published since, the plan says so and names `lhpc self-update --apply`
   ([provenance](provenance.md#the-binary-channel)).
 
 ### auto-install
@@ -273,13 +273,12 @@ is a host test too; it runs against the pinned upstream in the built environment
 ([policy](maintenance.md#running-on-a-pi)).
 
 ### update
-`lhpc update [<target>] [--source binary|pinned|dev|stable] [--accept-pin-mismatch] [--upstream] [--yes]`
+`lhpc update [<target>] [--source binary|pinned|dev|stable] [--upstream] [--yes]`
 — update a stack/component. Which command for which situation:
 [keeping stacks current](operations.md#keeping-stacks-current).
 
-- When the published binary lags this lhpc's pins, the update refuses and names the ways forward
-  (self-update, a source build, `--accept-pin-mismatch` where allowed); cancelling keeps the
-  working binary.
+- When no published binary was built for this lhpc's pins, the update refuses and names the ways
+  forward (self-update, then a source build); cancelling keeps the working binary.
 - Switching channels is an `install`, and the CLI says so.
 - `--upstream` (fetched packages, i.e. graywolf) — the latest upstream release, verified against
   its `checksums.txt`.

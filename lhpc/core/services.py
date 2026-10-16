@@ -1562,8 +1562,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     @invalidates_snapshot
     def install(self, stack_id: str | None = None, apply: bool = False,
-                source: str = "pinned", auto_install_ctx=None, on_admit=None,
-                accept_pin_mismatch: str = "") -> ActionResult:
+                source: str = "pinned", auto_install_ctx=None, on_admit=None) -> ActionResult:
         if (_r := self._controller_refusal(stack_id)) is not None:
             return _r
         if stack_id and self.stack(stack_id) is None:
@@ -1573,8 +1572,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             if not stack_id:
                 return ActionResult(False, "The binary channel installs ONE stack at a time.",
                                     next_commands=["lhpc install <stack> --source binary"])
-            return self.binary_install(stack_id, apply=apply,
-                                       accept_pin_mismatch=accept_pin_mismatch)
+            return self.binary_install(stack_id, apply=apply)
         # A SOURCE install over a binary install must not be silently skipped ("destination
         # already exists") — the artifact is retired, but LATER: only once the runtime root,
         # shared-remote coherence and the adoption plan have all validated, and inside the

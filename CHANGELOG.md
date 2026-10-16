@@ -29,6 +29,13 @@ Changed
   whose pin carries no trusted signature is refused (it was installed with a `signature-unavailable` label).
 - `lhpc doctor` names the SPI chip-select mode (config.txt, running kernel), the refusal SPI stacks get while the two disagree,
   and for each installed daemon and Reticulum node whether its build supports kernel chip selects.
+- The binary channel installs the newest binary published for this LHPC, also after a newer LHPC has published its
+  own (the plan then names `lhpc self-update --apply`); the binaries are listed in `index-v3.json`.
+
+Removed
+
+- `--accept-pin-mismatch` and the console's "install anyway" checkbox: a binary is installed only when it was built
+  for this LHPC's pins; an acceptance recorded by an earlier version is still shown while it is in force.
 
 ## 0.12.10
 

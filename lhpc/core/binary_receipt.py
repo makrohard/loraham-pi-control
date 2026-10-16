@@ -64,7 +64,8 @@ class BinaryReceipt:
     owned_dirs: tuple[str, ...] = ()
     installed_at: float = field(default_factory=time.time)
     version: int = RECEIPT_VERSION
-    # The operator's recorded acceptance of a pin mismatch (`--accept-pin-mismatch`):
+    # The operator's recorded acceptance of a pin mismatch (the removed `--accept-pin-mismatch`;
+    # receipts written before its removal are still read):
     # {"at": epoch, "lhpc_version": str, "mismatch": {cid: [binary, pin]}}, or None. OPTIONAL and
     # outside `_valid`: a malformed value is dropped (None), so the receipt stays valid and gate 2
     # refuses the mismatch (fail closed). An older lhpc ignores the extra key.

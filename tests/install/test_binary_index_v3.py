@@ -145,16 +145,30 @@ def test_no_entry_built_for_this_lhpc_is_refused_before_any_download(tmp_path, m
     assert "lhpc self-update --apply" in res.next_commands
 
 
+@pytest.mark.parametrize("listed", ["missing", "empty", "other-target"])
+def test_nothing_published_for_this_box_is_the_typed_refusal(tmp_path, monkeypatch, listed):
+    # §F2.2: every zero-candidate outcome is `none_compatible`, before any download.
+    svc = _svc(tmp_path, monkeypatch)
+    pins, inputs = svc._binary_pins("daemon"), _inputs(svc, "daemon")
+    other = dict(_entry("daemon", "8" * 64, pins, inputs), target="armhf-trixie")
+    stacks = {"missing": {}, "empty": {"daemon": []}, "other-target": {"daemon": [other]}}[listed]
+    _serve(monkeypatch, {"schema": 3, "stacks": stacks})
+    monkeypatch.setattr(bi, "download_artifact", lambda *a: pytest.fail("must refuse first"))
+    res = svc.binary_install("daemon", apply=True)
+    assert not res.ok and res.data["binary_refusal"] == "none_compatible"
+    assert res.data["pin_mismatch"] == {}
+    assert res.next_commands == ["lhpc self-update --apply", "lhpc install daemon --source pinned --yes"]
+
+
 @pytest.mark.parametrize("stacks", [
     {"daemon": {}},                                             # a v2 entry under schema 3
-    {"daemon": []},                                             # nothing published
     {"daemon": ["not an entry"]},
-], ids=["not-a-list", "empty", "not-an-object"])
+], ids=["not-a-list", "not-an-object"])
 def test_a_malformed_v3_stack_list_is_a_refusal(tmp_path, monkeypatch, stacks):
     svc = _svc(tmp_path, monkeypatch)
     _serve(monkeypatch, {"schema": 3, "stacks": stacks})
     res = svc.binary_install("daemon", apply=False)
-    assert not res.ok and res.data.get("binary_failed")
+    assert not res.ok and res.data.get("binary_failed") and "binary_refusal" not in res.data
 
 
 def test_inputs_naming_a_component_outside_the_entry_are_a_refusal_not_a_skip(tmp_path, monkeypatch):
@@ -233,6 +247,23 @@ def test_a_malformed_newer_entry_refuses_the_index_not_skipped_for_an_older_one(
     res = svc.binary_install("daemon", apply=True)
     assert not res.ok and res.data.get("binary_failed") and "binary_refusal" not in res.data
     assert "malformed commit" in res.summary
+
+
+def test_an_older_composition_lacking_a_covered_component_is_skipped_not_a_refusal(tmp_path, monkeypatch):
+    # A later lhpc covers more: older history entries lack the new component. Such an entry is
+    # another composition (skipped, like a lagging commit), never a malformed index.
+    svc = _svc(tmp_path, monkeypatch)
+    pins, inputs = svc._binary_pins("daemon"), _inputs(svc, "daemon")
+    _serve(monkeypatch, {"schema": 3, "stacks": {"daemon": [
+        _entry("daemon", "6" * 64, {}, inputs, "2026-10-17T08:00:00Z"),
+        _entry("daemon", "7" * 64, pins, inputs)]}})
+    plan = svc.binary_install("daemon", apply=False)
+    assert plan.ok and any(f"daemon-{'7' * 64}.tar.zst" in d for d in plan.details)
+    _serve(monkeypatch, {"schema": 3, "stacks": {"daemon": [_entry("daemon", "6" * 64, {}, inputs)]}})
+    monkeypatch.setattr(bi, "download_artifact", lambda *a: pytest.fail("must refuse first"))
+    res = svc.binary_install("daemon", apply=True)
+    assert not res.ok and res.data["binary_refusal"] == "none_compatible"
+    assert res.next_commands[0] == "lhpc self-update --apply"
 
 
 @pytest.mark.parametrize("where", ["with-a-missing-one", "behind-a-compatible-one"])

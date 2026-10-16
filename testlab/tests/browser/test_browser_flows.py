@@ -528,9 +528,9 @@ def test_an_identity_refusal_lands_on_a_visibly_marked_callsign_row(page):
     assert page.locator("#operator-callsign tr.field-bad").count() == 0
 
 
-def test_the_install_confirm_offers_no_pin_override_before_a_refusal(page):
-    """A3 (E), the stub-free half: the normal install confirmation of a stack carries no
-    `accept_pin_mismatch` control."""
+def test_the_install_confirm_offers_no_pin_override(page):
+    """The normal install confirmation of a stack carries no `accept_pin_mismatch` control (the
+    override is removed; a page an older console served must not bring it back)."""
     page.goto(page.lab_base + "/stacks?open=kiss&inst=kiss", wait_until="networkidle")
     page.locator('#stack-install-kiss form:has(input[name="op"][value="install"]) button').first.click()
     page.wait_for_load_state("networkidle")

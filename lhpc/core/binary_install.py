@@ -8,9 +8,10 @@ descriptor-safe runtime_fs discipline.
 
 Ordering is the security contract:
 
-  1. index.json is fetched bounded + parsed STRICTLY (schema 2 only);
+  1. the index is fetched bounded + parsed STRICTLY (schema 2, or 3 = index-v3);
   2. the entry's target/os must match this box, and its `components` map must equal the
      manifest pins for EVERY covered component (`built_from` is display-only, never the gate);
+     under index-v3 the first such entry whose build-input digests are this lhpc's is taken;
   3. the tarball is downloaded bounded, then sha256 AND size are verified BEFORE any
      extraction — nothing untrusted is unpacked on an unverified byte stream;
   4. members are validated while streaming (`zstd -dc | tarfile`): regular files/dirs only, no
@@ -147,12 +148,13 @@ def index_entry(idx: dict, stack_id: str) -> IndexEntry:
 
 def index_entries(idx: dict, stack_id: str) -> list:
     """Every published entry for `stack_id`, newest first: index-v3's list (each entry validated;
-    a malformed one refuses the whole read, never a silent skip), or a schema-2 index's one entry."""
+    a malformed one refuses the whole read, never a silent skip; none published = []), or a
+    schema-2 index's one entry."""
     if idx.get("schema") == INDEX_SCHEMA:
         return [index_entry(idx, stack_id)]
-    lst = idx["stacks"].get(stack_id)
-    if not isinstance(lst, list) or not lst:
-        raise BinaryInstallError(f"no binary is published for {stack_id!r}")
+    lst = idx["stacks"].get(stack_id, [])
+    if not isinstance(lst, list):
+        raise BinaryInstallError(f"binary index list for {stack_id!r} is malformed")
     if not all(isinstance(e, dict) for e in lst):
         raise BinaryInstallError(f"binary index list for {stack_id!r} is malformed")
     return [_parse_entry(stack_id, e, v3=True) for e in lst]
@@ -207,12 +209,12 @@ def _utc_stamp(v) -> bool:
     return True
 
 
-class BinaryPinMismatch(BinaryInstallError):
-    """The published binary's commits differ from this lhpc's pins (the index serves the latest
-    release only). The caller names the ways out in order: self-update first, source second.
-    `mismatch` is THE one map {component id: (binary commit, pin)} every consumer reads — the
-    refusal's data, the override rule, the consent token and the receipt; nothing parses the
-    message."""
+class BinaryNoneCompatible(BinaryInstallError):
+    """No published binary was built for this lhpc: (index-v3) none published or none for this
+    target, the newest entry's commits differ from the pins, or every entry's build inputs differ.
+    The caller names the ways out in order: self-update first, source second. `mismatch` is
+    {component id: (binary commit, pin)} of the newest entry for this target, empty when the
+    commits are not what differs; nothing parses the message."""
 
     def __init__(self, message: str, *, mismatch: dict):
         super().__init__(message)
@@ -223,12 +225,14 @@ def check_pins(entry: IndexEntry, pins: dict) -> None:
     """THE acceptance gate: the index components map must match the manifest pins for EVERY
     covered component. `built_from` is never consulted (display only). A lagging pair whose
     binary commit or pin is not a full lowercase commit id is a plain refusal, not a mismatch:
-    a malformed index (or pin) is not a version lag, so it can never be offered for override."""
+    a malformed index (or pin) is not a version lag, and is refused as such. A covered component
+    the entry does not record is another composition (an older lhpc covered less): typed, too."""
     missing = [cid for cid in pins if cid not in entry.components]
     if missing:
-        raise BinaryInstallError(
+        raise BinaryNoneCompatible(
             "the published binary does not record commits for " + ", ".join(sorted(missing)) +
-            " — it cannot be matched against the manifest pins")
+            " (built for an lhpc that did not cover them), and no other one was built for this lhpc",
+            mismatch={})
     lagging = {cid: (entry.components[cid], want)
                for cid, want in pins.items() if entry.components[cid] != want}
     for cid, (got, want) in sorted(lagging.items()):
@@ -241,9 +245,9 @@ def check_pins(entry: IndexEntry, pins: dict) -> None:
     if lagging:
         detail = "; ".join(f"{cid}: binary {got[:9]}, pin {want[:9]}"
                            for cid, (got, want) in sorted(lagging.items()))
-        raise BinaryPinMismatch(
-            f"the published binary was built from different commits than this lhpc pins "
-            f"({detail}); the index serves the latest release's binary", mismatch=lagging)
+        raise BinaryNoneCompatible(
+            f"the newest published binary was built from different commits than this lhpc pins "
+            f"({detail}), and no older one was built for this lhpc", mismatch=lagging)
 
 
 def input_digests(stack, covers, inputs_text) -> dict:
@@ -259,10 +263,11 @@ def input_digests(stack, covers, inputs_text) -> dict:
 def select_compatible(entries: list, target: str, pins: dict, inputs: dict):
     """THE choice: the FIRST entry (newest first) built for this lhpc — its target, its commit for every
     covered component and (index-v3) its build-input digests exactly this lhpc's. Returns (entry,
-    newer_published). None compatible: the newest entry's own refusal (target, pins, then inputs), so
-    every refusal names what differs and the commits are never accepted "close enough". Only another
-    target or a lagging commit skips an entry; a malformed one refuses the index (`check_pins`), and a
-    malformed covered commit in ANY entry refuses it before one is chosen or skipped."""
+    newer_published). None compatible is always `BinaryNoneCompatible`, naming what differs for the
+    newest entry for this target (nothing for it, its pins, then inputs); the commits are never
+    accepted "close enough". Only another target or a lagging commit skips an entry; a malformed one
+    refuses the index (`check_pins`), and a malformed covered commit in ANY entry refuses it before one
+    is chosen or skipped."""
     for e in entries:
         bad = sorted(cid for cid in pins
                      if cid in e.components and not validators.is_hex(e.components[cid], 40))
@@ -274,7 +279,7 @@ def select_compatible(entries: list, target: str, pins: dict, inputs: dict):
         try:
             check_target(e, target)                # raises only for another target
             check_pins(e, pins)
-        except BinaryPinMismatch:                  # a lagging commit, not a malformed entry
+        except BinaryNoneCompatible:               # a lagging commit, not a malformed entry
             return False
         except BinaryInstallError:
             if e.target == target:                 # malformed: refuse the index, never skip
@@ -284,25 +289,12 @@ def select_compatible(entries: list, target: str, pins: dict, inputs: dict):
     for i, e in enumerate(entries):
         if fits(e):
             return e, i > 0
-    newest = entries[0]
-    check_target(newest, target)
-    check_pins(newest, pins)
-    raise BinaryInstallError("no published binary was built with this lhpc's build inputs "
-                             f"({', '.join(sorted(inputs)) or 'none'}) — update LHPC or use --source")
-
-
-def canonical_mismatch(mismatch: dict) -> str:
-    """The byte-exact form both processes hash: 2-element lists, sorted keys, no whitespace."""
-    return json.dumps({cid: [b, p] for cid, (b, p) in mismatch.items()},
-                      sort_keys=True, separators=(",", ":"))
-
-
-def consent_token(artifact_sha256: str, mismatch: dict) -> str:
-    """The operator's consent, bound to exactly the artifact and the pairs that were shown. A
-    public value, not a secret: the apply recomputes it from its OWN fresh index entry and
-    requires equality, so a token for another artifact or other pairs is refused."""
-    return hashlib.sha256(("lhpc-pin-override/1\n" + artifact_sha256 + "\n"
-                           + canonical_mismatch(mismatch)).encode()).hexdigest()
+    mine = [e for e in entries if e.target == target]
+    if not mine:
+        raise BinaryNoneCompatible(f"no binary is published for {target!r}", mismatch={})
+    check_pins(mine[0], pins)
+    raise BinaryNoneCompatible("no published binary was built with this lhpc's build inputs "
+                               f"({', '.join(sorted(inputs)) or 'none'})", mismatch={})
 
 
 def check_target(entry: IndexEntry, target: str) -> None:
@@ -728,7 +720,7 @@ def run_probe(paths: Paths, argv) -> str:
 # --- receipt ----------------------------------------------------------------------------------
 
 def build_receipt(paths: Paths, stack_id: str, entry: IndexEntry, files, proof_paths,
-                  registry_baseline: dict, probe: str, owned_dirs=(), override=None):
+                  registry_baseline: dict, probe: str, owned_dirs=()):
     """Build the receipt for a completed transaction. Every listed file gets a hash (the
     receipt validator requires the two sets to match exactly)."""
     from . import binary_receipt as brx
@@ -738,4 +730,4 @@ def build_receipt(paths: Paths, stack_id: str, entry: IndexEntry, files, proof_p
         filename=entry.filename, url=entry.url, components=dict(entry.components),
         provenance=dict(entry.provenance), files=tuple(files), file_hashes=hashes,
         proof_paths=tuple(proof_paths), registry_baseline=dict(registry_baseline),
-        probe=probe, owned_dirs=tuple(owned_dirs), override=override)
+        probe=probe, owned_dirs=tuple(owned_dirs))

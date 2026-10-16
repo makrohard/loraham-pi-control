@@ -602,14 +602,12 @@ class DemoService(ControllerService):
                             else f"Would restart {sid} (simulated).{note}",
                             data={} if apply else plan_data)
 
-    def spawn_web_job(self, op: str, target: str, source: str = "pinned",
-                      accept_pin_mismatch: str = ""):
+    def spawn_web_job(self, op: str, target: str, source: str = "pinned"):
         """The web routes install/build/test through here as DETACHED jobs — which Pyodide
         cannot run, so they no-op yet reported "started". Run the simulated op SYNCHRONOUSLY
         (mutating the model) and return the (None, 'blocked', reason) shape, so the web flashes
         the real result and returns to the stack instead of an empty live-log view."""
-        fn = {"install": lambda: self.install(target, apply=True, source=source,
-                                              accept_pin_mismatch=accept_pin_mismatch),
+        fn = {"install": lambda: self.install(target, apply=True, source=source),
               "build": lambda: self.build(target, apply=True),
               "test": lambda: self.test(target, apply=True)}.get(op)
         if fn is None:

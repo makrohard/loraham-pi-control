@@ -174,11 +174,6 @@ def test_no_admission_refusal_is_built_by_hand():
 # differs from its entry, an entry with no computed site left, or a named test that does not exist
 # fails.
 DYNAMIC = {
-    ("lhpc/core/service_binary_ops.py", "_binary_pin_refusal"): (2,
-        "the ways list is built only inside `if lag_clone and accept:` with at least one way; the "
-        "override command is appended to `cmds` before the other refusal",
-        ("tests/cli/test_cli_pin_override.py::test_cli_meshcom_pin_refusal_with_flag_is_refused_typed",
-         "tests/cli/test_cli_pin_override.py::test_cli_meshcom_pin_refusal_without_flag_offers_no_override")),
     ("lhpc/core/service_selfupdate.py", "self_update_apply"): (1,
         "`_identity_remedy` returns the remedy commands, or the refusal's details say nothing to run",
         ("tests/core/test_controller.py::test_self_update_apply_blocked_by_unsafe_identity",)),

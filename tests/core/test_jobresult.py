@@ -201,31 +201,31 @@ def test_start_and_restart_are_job_ops(tmp_path):
     assert jobresult.read_one(paths, "web-start-kiss.log")["op"] == "start"
 
 
-# ---- the typed pin refusal (the `refusal` field) ----------------------------------------------
+# ---- the typed none_compatible refusal (the `refusal` field) ----------------------------------------------
 
 def test_jobresult_refusal_field_roundtrip_and_malformed_ignored(tmp_path):
     p = _p(tmp_path)
     log, aid = "install-daemon.log", "d" * 32
     assert jobresult.reserve(p, log, aid, "install", "daemon", "daemon", [])
-    ref = {"pin_mismatch": {"loraham-daemon": [_SHA_A, _SHA_B]}, "override_refused": "consent_stale"}
+    ref = {"pin_mismatch": {"loraham-daemon": [_SHA_A, _SHA_B]}}
     assert jobresult.terminalize(p, log, aid, "failed", detail="install failed",
                                  refusal=ref)
     assert jobresult.read_one(p, log)["refusal"] == ref
     # a hand-edited, malformed field is ignored on read (the record itself stays readable)
     f = p.under("state", "jobresults", log + ".json")
     d = json.loads(f.read_text())
-    d["refusal"] = {"pin_mismatch": {"x": ["short", _SHA_B]}, "override_refused": "consent_stale"}
+    d["refusal"] = {"pin_mismatch": {"x": ["short", _SHA_B]}}
     f.write_text(json.dumps(d))
     back = jobresult.read_one(p, log)
     assert back is not None and "refusal" not in back
 
 
 @pytest.mark.parametrize("bad", [
-    None, "x", {"pin_mismatch": {}, "override_refused": ""},
-    {"pin_mismatch": {"x": [_SHA_A, _SHA_B]}, "override_refused": "other"},
-    {"pin_mismatch": {"x": [_SHA_A, _SHA_B]}, "override_refused": "", "extra": 1},
-    {"pin_mismatch": {"x": [_SHA_A]}, "override_refused": ""},
-    {"pin_mismatch": {"daemon\n": [_SHA_A, _SHA_B]}, "override_refused": ""},
+    None, "x", {"pin_mismatch": []},
+    {"pin_mismatch": {"x": [_SHA_A, _SHA_B]}, "override_refused": ""},   # written before D1
+    {"pin_mismatch": {"x": [_SHA_A, _SHA_B]}, "extra": 1},
+    {"pin_mismatch": {"x": [_SHA_A]}},
+    {"pin_mismatch": {"daemon\n": [_SHA_A, _SHA_B]}},
 ])
 def test_invalid_refusals_are_not_stored(tmp_path, bad):
     p = _p(tmp_path)
@@ -235,15 +235,16 @@ def test_invalid_refusals_are_not_stored(tmp_path, bad):
     assert "refusal" not in jobresult.read_one(p, log)
 
 
-def test_refusal_from_reads_only_a_failed_pin_mismatch():
-    ok = ActionResult(True, "x", data={"pin_mismatch": {"x": [_SHA_A, _SHA_B]}})
+def test_refusal_from_reads_only_a_failed_none_compatible():
+    nc = {"binary_refusal": "none_compatible", "pin_mismatch": {"x": [_SHA_A, _SHA_B]}}
+    ok = ActionResult(True, "x", data=nc)
     other = ActionResult(False, "x", data={"binary_failed": True})
-    pin = ActionResult(False, "x", data={"pin_mismatch": {"x": [_SHA_A, _SHA_B]},
-                                         "override_refused": "clone_required"})
+    untyped = ActionResult(False, "x", data={"pin_mismatch": {"x": [_SHA_A, _SHA_B]}})
+    pin = ActionResult(False, "x", data=nc)
     assert jobresult.refusal_from(None) is None
     assert jobresult.refusal_from(ok) is None and jobresult.refusal_from(other) is None
-    assert jobresult.refusal_from(pin) == {"pin_mismatch": {"x": [_SHA_A, _SHA_B]},
-                                           "override_refused": "clone_required"}
+    assert jobresult.refusal_from(untyped) is None
+    assert jobresult.refusal_from(pin) == {"pin_mismatch": {"x": [_SHA_A, _SHA_B]}}
 
 
 @pytest.mark.parametrize("settle", ["raises", "refused", "ok"])

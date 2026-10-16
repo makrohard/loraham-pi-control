@@ -2941,14 +2941,14 @@ def test_an_inline_update_that_needs_a_build_starts_the_detached_build(web, csrf
     from lhpc.core.service_base import ActionResult
     seen = {}
 
-    def _update(self, target="", apply=False, source="pinned", accept_pin_mismatch="",
+    def _update(self, target="", apply=False, source="pinned",
                 build=True, **_kw):
         if apply:
             seen["build"] = build
             return ActionResult(True, "Update applied for 'kiss'.", data={"needs_build": ["kiss"]})
         return ActionResult(True, "plan", data={"changes": 1})
 
-    def _spawn(self, op, target, source="pinned", accept_pin_mismatch=""):
+    def _spawn(self, op, target, source="pinned"):
         seen["spawn"] = (op, target)
         return "build-kiss.log", "admitted", ""
     monkeypatch.setattr(ControllerService, "update", _update)
@@ -2967,14 +2967,14 @@ def test_an_inline_update_whose_build_job_is_refused_ends_as_the_clis_failed_bui
     success."""
     from lhpc.core.service_base import ActionResult
 
-    def _update(self, target="", apply=False, source="pinned", accept_pin_mismatch="",
+    def _update(self, target="", apply=False, source="pinned",
                 build=True, **_kw):
         if apply:
             return ActionResult(True, "Update applied for 'kiss'.", data={"needs_build": ["kiss"]})
         return ActionResult(True, "plan", data={"changes": 1})
     monkeypatch.setattr(ControllerService, "update", _update)
     monkeypatch.setattr(ControllerService, "spawn_web_job",
-                        lambda self, op, target, source="pinned", accept_pin_mismatch="":
+                        lambda self, op, target, source="pinned":
                         ("", "blocked", "an uninstall is pending"))
     c = web()
     body = c.post("/action", data={"_csrf": csrf(c), "op": "update", "target": "kiss",
