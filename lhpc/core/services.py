@@ -613,7 +613,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         cached = getattr(self._snapshot_state, "cache", None)
         if cached is not None and not fresh:
             return cached
-        from . import known_working
+        from . import known_working, source_cache
         confirmed: dict = {}
         for s in self.stacks():
             comps = known_working.load(self._paths, s.id)
@@ -635,6 +635,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     binary_cover[cid] = rec
         snap = StatusProber(self._system, self._paths, confirmed,
                             binary_cover=binary_cover, sources=sources,
+                            cache=None if fresh else source_cache.SHARED,
                             meshcore_mode=self.meshcore_running_mode()).assess_stacks(self.stacks())
         self._overlay_runtime_bands(snap)
         self._overlay_gui_unavailable(snap)

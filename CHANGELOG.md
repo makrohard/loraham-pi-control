@@ -8,6 +8,8 @@ Changed
   pages fetch new lines every 5 s (was 2 s).
 - The Apps page loads faster: a closed stack's settings are prepared only when the stack is opened; the page itself
   is unchanged.
+- The console reuses a source's git status for up to 30 s while its git metadata and the directories of its
+  tracked files are unchanged, so pages load faster; a hand edit of an existing file can take up to 30 s to show.
 
 Fixed
 

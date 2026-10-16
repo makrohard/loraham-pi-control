@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from . import gps, procident
+from . import gps, procident, source_cache
 from .model import (
     Component,
     ComponentKind,
@@ -64,9 +64,11 @@ class StatusProber:
 
     def __init__(self, system: System, paths: Paths, profiles: dict | None = None,
                  binary_cover: dict | None = None,
-                 meshcore_mode: str = _meshcore_mode.DEFAULT_MODE, sources: bool = True) -> None:
+                 meshcore_mode: str = _meshcore_mode.DEFAULT_MODE, sources: bool = True,
+                 cache=None) -> None:
         self._system = system
         self._sources = sources                  # False: no git per source (`build_snapshot`)
+        self._cache = cache                      # a `source_cache.SourceCache` for the git part, or None
         self._paths = paths
         self._profiles = profiles or {}
         # The MeshCore stack's effective mode (services.meshcore_mode()): decides which of the
@@ -248,8 +250,8 @@ class StatusProber:
         key = (abs_path, comp.source.pin_commit or "")
         probe = self._source_probes.get(key)
         if probe is None:
-            probe = self._source_probes[key] = probe_source(self._system, comp.source, abs_path,
-                                                            git=self._sources)
+            probe = self._source_probes[key] = source_cache.probe_cached(
+                self._cache, self._system, comp.source, abs_path, git=self._sources, probe=probe_source)
         return probe
 
     def _profile_state(self, comp: Component, src) -> ProfileState:

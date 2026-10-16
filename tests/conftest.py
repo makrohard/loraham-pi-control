@@ -166,6 +166,16 @@ def short_tmp_path():
 
 
 @pytest.fixture(autouse=True)
+def _empty_source_cache():
+    """ISOLATION: the process keeps cached source probes across service instances
+    (`lhpc/core/source_cache.py`); each test starts with none, as a CLI command does."""
+    from lhpc.core import source_cache
+    source_cache.SHARED.clear()
+    yield
+    source_cache.SHARED.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolated_runtime_root(monkeypatch, tmp_path_factory):
     """HERMETIC: never let a test resolve the operator's REAL deployment root. Tests that call the
     CLI `main()` without constructing Paths themselves fall back to the LHPC_RUNTIME_ROOT /

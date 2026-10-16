@@ -20,16 +20,21 @@ from __future__ import annotations
 
 import functools
 
+from . import source_cache
+
 
 def invalidates_snapshot(fn):
-    """Decorate a public mutating service entry: drop the memoized snapshot on entry and exit."""
+    """Decorate a public mutating service entry: drop the memoized snapshot, and the process's cached
+    source probes (a mutation may change a checkout), on entry and exit."""
     @functools.wraps(fn)
     def _wrap(self, *args, **kwargs):
         self.invalidate_snapshot()
+        source_cache.SHARED.clear()
         try:
             return fn(self, *args, **kwargs)
         finally:
             self.invalidate_snapshot()
+            source_cache.SHARED.clear()
     _wrap.invalidates_snapshot = True        # the marker tests check (`__wrapped__` is any wraps)
     return _wrap
 
