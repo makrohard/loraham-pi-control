@@ -11,9 +11,11 @@ def _svc_with_index(tmp_path, monkeypatch, error):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
     monkeypatch.setattr(bi, "require_zstd", lambda: None)
-    monkeypatch.setattr(bi, "fetch_index", lambda url: {})
+    monkeypatch.setattr(bi, "fetch_index", lambda url: {"schema": 2, "stacks": {}})
     monkeypatch.setattr(bi, "index_entry",
-                        lambda idx, sid: type("E", (), {"sha256": "a" * 64})())
+                        lambda idx, sid: type("E", (), {"sha256": "a" * 64,
+                                                         "target": "aarch64-trixie",
+                                                         "components": {}})())
     monkeypatch.setattr(bi, "check_target", lambda e, t: None)
 
     def _pins(entry, pins):

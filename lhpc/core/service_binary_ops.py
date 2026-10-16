@@ -43,6 +43,9 @@ from .snapshot_memo import invalidates_snapshot
 CLI_VENV_TIMEOUT_S = 900.0
 
 
+_NEWER_NOTE = "  a newer binary is published for a newer LHPC (lhpc self-update --apply)"
+
+
 def _override_command(stack_id: str) -> str:
     """The one command that installs the published binary over the pin check (option 3)."""
     return f"lhpc install {stack_id} --source binary --accept-pin-mismatch --yes"
@@ -96,18 +99,13 @@ class BinaryOpsMixin:
     @invalidates_snapshot
     def binary_install(self, stack_id: str, apply: bool = False, *,
                        locked: bool = False, accept_pin_mismatch: str = "") -> ActionResult:
-        """Install `stack_id` from its published artifact. Every refusal is typed and offers
-        the source channel explicitly (never a silent fallback).
-
-        `accept_pin_mismatch` lifts ONLY the commit comparison of gate 1 (`--accept-pin-mismatch`):
-        "" = not given; "yes" = given bare (a dry run returns the consent token); a 64-hex consent
-        token (the apply, or the console's re-post) must equal the token recomputed from THIS
-        fetch of the index, else the install is refused before any download or write.
-
-        The APPLY path holds the same boundary a source install does — task admission plus the
-        covered source paths — so a concurrent install/update/uninstall of the same stack cannot
-        interleave with the publish. `locked=True` means an OUTER boundary (the auto-install
-        run) already holds them."""
+        """Install `stack_id` from the newest published artifact built for this lhpc
+        (`bi.select_compatible`). Every refusal is typed and offers the source channel explicitly.
+        `accept_pin_mismatch` lifts ONLY gate 1's commit comparison: "" not given, "yes" bare (a dry
+        run returns the consent token), a 64-hex token that must equal the one recomputed from THIS
+        index fetch. The APPLY path holds a source install's boundary (task admission + the covered
+        source paths), so a concurrent install/update/uninstall of the stack cannot interleave with
+        the publish; `locked=True` means an OUTER boundary (the auto-install run) holds them."""
         spec = self.binary_spec(stack_id)
         ok, why = self.binary_available(stack_id)
         if not ok:
@@ -116,10 +114,10 @@ class BinaryOpsMixin:
         src_cmd = f"lhpc install {stack_id} --source pinned --yes"
         try:
             bi.require_zstd()
-            idx = bi.fetch_index(spec.index_url)
-            entry = bi.index_entry(idx, stack_id)
-            bi.check_target(entry, self.binary_target())
-            bi.check_pins(entry, self._binary_pins(stack_id))
+            entries = bi.index_entries(bi.fetch_index(spec.index_url), stack_id)
+            entry = entries[0]                    # the newest, named by a refusal
+            entry, newer = bi.select_compatible(entries, self.binary_target(), self._binary_pins(
+                stack_id), bi.input_digests(self.stack(stack_id), spec.covers, self.build_inputs_text))
         except bi.BinaryPinMismatch as exc:
             _refused = self._binary_pin_refusal(stack_id, spec, entry, exc, src_cmd,
                                                 accept_pin_mismatch, apply)
@@ -149,7 +147,8 @@ class BinaryOpsMixin:
                           "override_refused": "consent_stale"})
         _ov_data = ({"pin_mismatch": override_rec["mismatch"],
                      "consent": bi.consent_token(entry.sha256, override_rec["mismatch"])}
-                    if override_rec else {})
+                    if override_rec else {"newer_published": True} if newer else {})
+        _newer = [_NEWER_NOTE] if _ov_data.get("newer_published") else []
         missing = bi.missing_runtime_deps(entry, self._dpkg_installed)
         if missing:
             # lhpc never installs system packages itself — name the exact command.
@@ -165,14 +164,14 @@ class BinaryOpsMixin:
                 and bi.read_journal(self._paths)[1] == "absent"
                 and self._binary_installed_is(stack_id, entry)):
             # A HINT for the plan only: the apply decides under its locks, after recovery.
-            return self._binary_already_installed(stack_id, entry, [])
+            return self._binary_already_installed(stack_id, entry, [], _newer)
         size_mb = entry.size / (1024 * 1024)
         if not apply:
             details = [f"  download {entry.filename} ({size_mb:.1f} MB, sha256-verified)",
                        f"  from {entry.url}",
                        "  components: " + ", ".join(f"{k}@{v[:9]}"
                                                     for k, v in sorted(entry.components.items())),
-                       "  replaces: " + ", ".join(spec.publish_roots)]
+                       "  replaces: " + ", ".join(spec.publish_roots), *_newer]
             if spec.clone_required:
                 details.append("  keeps the pinned source clone for: "
                                + ", ".join(spec.clone_required))
@@ -333,7 +332,7 @@ class BinaryOpsMixin:
             # AUTHORITATIVE "already installed": after recovery, under the locks, with the
             # required clones proven above — an open transaction is never read as installed.
             if override_rec is None and self._binary_installed_is(stack_id, entry):
-                return self._binary_already_installed(stack_id, entry, clone_notes)
+                return self._binary_already_installed(stack_id, entry, clone_notes, _newer)
 
             baseline, berr = self._binary_registry_baseline(stack_id)
             if berr:
@@ -485,16 +484,17 @@ class BinaryOpsMixin:
             self.invalidate_snapshot()
             return ActionResult(
                 True, f"Installed '{stack_id}' from the published binary ({size_mb:.1f} MB).",
-                details=[*clone_notes, "  open auth (binary channel): the published firmware has no mesh " "password" if _auth_restore is not None else f"  {probe_out}" if probe_out else "  installed", "  provenance: " + ", ".join(f"{k}@{v[:9]}" for k, v in sorted(entry.components.items())), f"  artifact sha256 {entry.sha256[:12]}…"],
+                details=[*clone_notes, "  open auth (binary channel): the published firmware has no mesh " "password" if _auth_restore is not None else f"  {probe_out}" if probe_out else "  installed", "  provenance: " + ", ".join(f"{k}@{v[:9]}" for k, v in sorted(entry.components.items())), f"  artifact sha256 {entry.sha256[:12]}…", *_newer],
                 next_commands=[f"lhpc status {stack_id}", f"lhpc stack start {stack_id}"],
                 data={"channel": "binary", "changes": 1, **_ov_data})
 
     @staticmethod
-    def _binary_already_installed(stack_id: str, entry, notes: list) -> ActionResult:
+    def _binary_already_installed(stack_id: str, entry, notes: list, newer=()) -> ActionResult:
         return ActionResult(True, f"'{stack_id}' already has the published binary "
                                   f"{entry.filename} installed — nothing to download.",
-                            details=list(notes), next_commands=[f"lhpc status {stack_id}"],
-                            data={"changes": 1 if notes else 0, "channel": "binary"})
+                            details=[*notes, *newer], next_commands=[f"lhpc status {stack_id}"],
+                            data={"changes": 1 if notes else 0, "channel": "binary",
+                                  **({"newer_published": True} if newer else {})})
 
     def _binary_installed_is(self, stack_id: str, entry) -> bool:
         """The installed artifact IS `entry`: a valid receipt of its sha256 with no recorded
