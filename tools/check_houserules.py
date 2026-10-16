@@ -44,6 +44,10 @@ WARN_PATTERNS = {"source-read": re.compile(r"""(read_text|open)\(.*["']lhpc/[^"'
 EXEMPT = "# rule-1 exception"
 RED_BEFORE = re.compile(r"red[- ]before", re.IGNORECASE)
 RAISE_REASON = re.compile(r"#\s*\S+:\s*\S")
+# A new family file whose budget row says `# <item>: split from <file>`: the moved code cancels out in the
+# family net, which may then grow only by the new file's header and, per split, the facade's import and bases.
+SPLIT_FROM = re.compile(r"#\s*\S+:\s*split from (\S+\.py)\b")
+FACADE = "services.py"
 
 
 def git(*args: str) -> str:
@@ -83,6 +87,33 @@ def measure(source: str) -> tuple[int, int]:
                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                  and not node.name.startswith("_"))
     return len(source.splitlines()), public
+
+
+def first_class(source: str) -> ast.ClassDef | None:
+    return next((n for n in ast.parse(source).body if isinstance(n, ast.ClassDef)), None)
+
+
+def header_lines(source: str) -> int:
+    """The lines up to and including the module's first `class` line: docstring, imports, constants."""
+    first = first_class(source)
+    return len(source.splitlines()) if first is None else first.lineno
+
+
+def facade_edits(base: str, head: str, classes: dict[str, str]) -> int:
+    """The facade lines the splits add: per split class (`{module: class}`), its one-line
+    `from .<module> import <class>` and at most one more line in the bases of a class that now inherits it."""
+    tree = ast.parse(head)
+    imported = {n.module for n in tree.body if isinstance(n, ast.ImportFrom) and n.level == 1
+                and n.lineno == n.end_lineno and [a.name for a in n.names] == [classes.get(n.module)]}
+    lines = len(imported)
+    old = {n.name: n for n in ast.parse(base).body if isinstance(n, ast.ClassDef)}
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name in old:
+            bases = {getattr(b, "id", None) for b in node.bases}
+            added = sum(classes[m] in bases for m in imported)
+            grown = (node.body[0].lineno - node.lineno) - (old[node.name].body[0].lineno - old[node.name].lineno)
+            lines += min(max(0, grown), added)
+    return lines
 
 
 def budgets(source: str | None) -> dict | None:
@@ -208,19 +239,25 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     if table is None:
         rows.append(("modules", "N/A (budget table absent)", "OK"))
         return rows
-    parts, over, net, excused, raised_bad, raised_ok = [], False, 0, 0, [], set()
+    parts, over, net, excused, raised_bad, raised_ok, splits, sizes = [], False, 0, 0, [], set(), {}, {}
+    split_bad = []
     net_public, excused_public = 0, 0
     head_budget_lines = (show(head, BUDGET_FILE) or "").splitlines()
     for name, value in table.items():
         if name in before and any(v > b for v, b in zip(value, before[name], strict=True)):
             line = next((ln for ln in head_budget_lines if f'"{name}"' in ln), "")
             (raised_ok.add(name) if RAISE_REASON.search(line) else raised_bad.append(name))
+        elif name not in before:
+            line = next((ln for ln in head_budget_lines if f'"{name}"' in ln), "")
+            if m := SPLIT_FROM.search(line):
+                splits[name] = m.group(1)
     for name in sorted(table):
         path = FAMILY_DIR + name
         if path not in changed:
             continue
         a = measure(show(base, path) or "")
         b = measure(show(head, path) or "")
+        sizes[name] = (a[0], b[0])
         net += b[0] - a[0]
         excused += max(0, b[0] - a[0]) if name in raised_ok else 0
         net_public += b[1] - a[1]
@@ -228,12 +265,24 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
         over = over or b[0] > table[name][0] or b[1] > table[name][1]
         parts.append(f"{name} {a[0]}->{b[0]} lines (budget {table[name][0]}), "
                      f"{a[1]}->{b[1]} public (budget {table[name][1]})")
+    for name, source in splits.items():
+        # A split counts only when the file it names is a family file that shrank in this range.
+        if name in sizes and source in sizes and sizes[source][1] < sizes[source][0]:
+            excused += header_lines(show(head, FAMILY_DIR + name) or "")
+        else:
+            split_bad.append(name)
+    # The facade excuse covers only the edits that wire a split in, never other growth of the facade.
+    classes = {name[:-3]: c.name for name in splits
+               if name not in split_bad and (c := first_class(show(head, FAMILY_DIR + name) or ""))}
+    if classes and FACADE in sizes:
+        excused += facade_edits(show(base, FAMILY_DIR + FACADE) or "", show(head, FAMILY_DIR + FACADE) or "", classes)
     # Only a raised file's own growth is excused, for lines and for public methods alike.
     grown_unexcused = net - excused > 0 or net_public - excused_public > 0
-    v = ("HARD" if over or grown_unexcused or raised_bad
+    v = ("HARD" if over or grown_unexcused or raised_bad or split_bad
          else "WARN" if net > 0 or net_public > 0 else "OK")
     rows.append(("modules", "; ".join(parts or ["no family file touched"])
-                 + f"; family net {net:+d} lines, {net_public:+d} public" + (f"; raised without reason {','.join(raised_bad)}" if raised_bad else ""), v))
+                 + f"; family net {net:+d} lines, {net_public:+d} public" + (f"; raised without reason {','.join(raised_bad)}" if raised_bad else "")
+                 + (f"; split from a file that did not shrink {','.join(split_bad)}" if split_bad else ""), v))
     return rows
 
 
