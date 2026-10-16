@@ -214,10 +214,10 @@ repositories.
   both require it.
 - **A release reaches `main` only with its binaries findable.** `testlab.yml` with
   `release_verify=true` is dispatched on the candidate sha and must be green before the
-  fast-forward to `main`; its release-verify lane installs meshtastic and meshcom through the
-  binary channel's newest-compatible selection, so a missing entry built for the candidate is
-  red. The daemon is the lab's fixture there: its entry is checked with `lhpc install daemon
-  --source binary --check` on a box before the fast-forward.
+  fast-forward to `main`; its release-verify lane first runs the binary channel's
+  newest-compatible selection for every binary stack of the packaged manifest against the
+  published index, so a stack with no entry compatible with the candidate (built for its pins and
+  inputs) is red.
 - **Every release is followed by an image.** `loraham-images` is tagged with the same version once
   the binaries a moved pin needs are published ([binary channel](provenance.md#the-binary-channel)).
 - **The release bot** runs the pin patch (watch, repin, binaries, proof, release, image) and opens

@@ -76,6 +76,42 @@ def test_release_lane_reports_exactly_the_required_cases():
         f"lhpc_testlab/data/required-release-cases.json and this module move together")
 
 
+
+def test_release_every_binary_stack_has_a_binary_compatible_with_the_candidate(tmp_path):
+    """Every stack with a binary channel in the REAL packaged manifest has a published entry
+    compatible with the candidate (built for the candidate's pins and inputs; `lhpc_commit` is not
+    compared, so a bootstrap entry of the same composition passes): the `select_compatible` a
+    box's install runs, against the index the manifest names. The daemon is the lab's fixture in
+    the cases below, so this is where its entry is checked. None compatible (`none_compatible`) is
+    red: the release would leave its boxes without a binary. Runs before the installs, so a gap
+    fails in seconds.
+    """
+    from lhpc.core import binary_install as bi
+    from lhpc.core.paths import Paths
+    from lhpc.core.services import ControllerService
+
+    svc = ControllerService(manifest_path=default_manifest_path(),
+                            paths=Paths(runtime_root=tmp_path))
+    target = svc.binary_target()
+    assert target, "the release lane runs on an aarch64 box with an os-release codename"
+    chosen, refused = [], []
+    for stack in svc.stacks():
+        spec = svc.binary_spec(stack.id)
+        if spec is None:
+            continue
+        try:
+            entries = bi.index_entries(bi.fetch_index(spec.index_url), stack.id)
+            entry, _newer = bi.select_compatible(
+                entries, target, svc._binary_pins(stack.id),
+                bi.input_digests(stack, spec.covers, svc.build_inputs_text))
+        except bi.BinaryInstallError as exc:
+            refused.append(f"{stack.id}: {exc.message}")
+            continue
+        chosen.append(f"{stack.id}: {entry.filename}")
+    print("binaries compatible with the candidate: " + (", ".join(chosen) or "none"))
+    assert not refused, "no published binary compatible with the candidate:\n  " + "\n  ".join(refused)
+    assert chosen, "the packaged manifest names no binary stack — the check proved nothing"
+
 def _artifact_intact(svc, stack: str) -> None:
     """Every file of the installed artifact still hashes as its receipt records — checked while
     the stack is still STOPPED.
