@@ -1017,10 +1017,14 @@ def _altitude(tpv: dict) -> tuple[float | None, str | None]:
 
 # The last satellite list of each gpsd device: (host, port, device path) -> (monotonic start of the
 # read that saw it, satellites, sats_used, sats_seen). Stamped at the read's start, so the list is
-# never older than its stamp says. gpsd sends a SKY with satellites only every few seconds (5 s
-# measured with an NMEA receiver), so one 2.5 s read can miss it; a list at most `NMEA_STALE_S` old
-# fills that gap. Its own monotonic clock, no host or receiver time; process memory, so a one-shot
-# CLI run starts without it.
+# never older than its stamp says. gpsd sends a SKY with satellites only every few seconds (5.0 s
+# measured on the field box, DOP-only SKYs between), so one 2.5 s read can miss it. A read without
+# a list and without a fresh one here reads on for up to `SKY_WAIT_S` (one list period plus margin)
+# for the next list; a list at most `SKY_MEMO_S` old fills the rest (a 2.5 s read every 3 s drifts
+# against the 5 s period and missed it for up to ~27 s in a row). Its own monotonic clock, no host
+# or receiver time; process memory, so a one-shot CLI run starts without it.
+SKY_WAIT_S = 6.0
+SKY_MEMO_S = 30.0
 _SKY_MEMO: dict = {}
 
 
@@ -1033,10 +1037,12 @@ def gpsd_snapshot(host: str, port: int, timeout: float = 2.5) -> dict:
     keeps the ambiguity visible (`nmea_ok` false). Early exit only on `DEVICES=[]` or a
     connection failure. Missing optional fields neither refresh nor clear a value, except that
     losing a usable fix clears lat, lon and altitude. A window without a satellite SKY for the
-    resolved device reports that device's last list if it is at most `NMEA_STALE_S` old.
+    resolved device reports that device's last list if it is at most `SKY_MEMO_S` old; without
+    one, the read goes on for up to `SKY_WAIT_S` until a satellite SKY arrives.
     """
     started = time.monotonic()                      # a SKY in this read arrived after this
     deadline = started + max(0.05, timeout)
+    wait_until = started + max(0.05, timeout, SKY_WAIT_S)
     out = {"ok": False, "error": "", "state": "unavailable", "devices": [], "device": None,
            "mode": None, "lat": None, "lon": None, "alt": None, "alt_kind": None,
            "time": None, "time_has_date": False, "sats_used": None, "sats_seen": None,
@@ -1059,7 +1065,32 @@ def gpsd_snapshot(host: str, port: int, timeout: float = 2.5) -> dict:
                                         "sats_used": None, "sats_seen": None,
                                         "satellites": None})
 
-    for kind, payload in _gpsd_lines(host, port, req, deadline):
+    def lines():
+        """The budget's read, then, when its ONE positioning device (the snapshot's resolved
+        device) has no satellite SKY and none remembered, one more read until `wait_until` that
+        ends with the first message after that device's satellite SKY (gpsd sends the list as a
+        burst of growing SKYs: ending at the first would show part of it), or quietly at an
+        error: the first read's state stands. Another device's list neither skips nor ends it."""
+        yield from _gpsd_lines(host, port, req, deadline)
+        with_pos = [d for d, r in records.items() if r["tpv"]]
+        if len(with_pos) != 1:
+            return                                  # no position, or ambiguous: no list is shown
+        dev = with_pos[0]
+        memo = _SKY_MEMO.get((host, port, dev))
+        if records[dev]["satellites"] is not None \
+                or (memo is not None and time.monotonic() - memo[0] <= SKY_MEMO_S):
+            return
+        for kind, payload in _gpsd_lines(host, port, req, wait_until):
+            if kind == "error":
+                return
+            if records[dev]["satellites"] is not None and not (
+                    kind == "json" and payload.get("class") == "SKY"
+                    and isinstance(payload.get("satellites"), list)
+                    and payload.get("device") in (dev, None)):
+                return                              # the device's burst is over
+            yield kind, payload
+
+    for kind, payload in lines():
         if kind == "error":
             out["error"] = payload
             return out
@@ -1168,7 +1199,7 @@ def gpsd_snapshot(host: str, port: int, timeout: float = 2.5) -> dict:
     if r["satellites"] is not None:                 # a satellite SKY in this window, even an empty one
         _SKY_MEMO[key] = (started, [dict(s_) for s_ in r["satellites"]],
                           r["sats_used"], r["sats_seen"])
-    elif key in _SKY_MEMO and time.monotonic() - _SKY_MEMO[key][0] <= NMEA_STALE_S:
+    elif key in _SKY_MEMO and time.monotonic() - _SKY_MEMO[key][0] <= SKY_MEMO_S:
         _at, sats, r["sats_used"], r["sats_seen"] = _SKY_MEMO[key]
         r["satellites"] = [dict(s_) for s_ in sats]
     out["sats_used"], out["sats_seen"] = r["sats_used"], r["sats_seen"]

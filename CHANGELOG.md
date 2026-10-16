@@ -20,7 +20,7 @@ Fixed
 - An `lhpc` command stopped with Ctrl-C prints one line naming `lhpc status` instead of a Python traceback (exit
   status 130, as before).
 - The GPS sky view no longer alternates with "no satellites reported" when gpsd reports the satellites only
-  every few seconds: the console keeps each receiver's last satellite list for up to 20 s.
+  every few seconds: a read waits up to 6 s for the next list, and the console keeps the last one for up to 30 s.
 - MeshCore repeater dashboard: a restart no longer signs everyone out; the login-signing secret is kept in
   `config/secrets/` and is part of `lhpc secrets backup`.
 - MeshCore repeater dashboard: the radio presets list loads (it reported "Presets file not found"); radio settings

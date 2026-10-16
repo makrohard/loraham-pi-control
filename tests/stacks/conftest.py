@@ -67,6 +67,9 @@ class _FakeGpsd:
                     return
                 if self.json_lines is not None:
                     for chunk in self.json_lines:
+                        if isinstance(chunk, float):     # a pause in the stream, in seconds
+                            time.sleep(chunk)
+                            continue
                         try:
                             conn.sendall(chunk)
                         except OSError:
@@ -106,10 +109,12 @@ class _FakeGpsd:
 
 
 @pytest.fixture(autouse=True)
-def _no_satellite_memo():
+def _no_satellite_memo(monkeypatch):
     """Isolation: `gps.gpsd_snapshot` remembers each gpsd device's last satellite list in the
-    process; every test starts and ends without one."""
+    process; every test starts and ends without one. Its wait for a satellite SKY is off here, so
+    a read ends at its budget; the tests of that wait set `SKY_WAIT_S` themselves."""
     from lhpc.core import gps
+    monkeypatch.setattr(gps, "SKY_WAIT_S", 0.0)
     gps._SKY_MEMO.clear()
     yield
     gps._SKY_MEMO.clear()

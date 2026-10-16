@@ -130,7 +130,7 @@ def test_a_dop_only_report_does_not_replace_the_last_list(fake_gpsd):
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_a_list_older_than_the_stale_bound_is_not_used(fake_gpsd, monkeypatch):
-    monkeypatch.setattr(_gps, "NMEA_STALE_S", 0.0)
+    monkeypatch.setattr(_gps, "SKY_MEMO_S", 0.0)
     r = _two_polls(fake_gpsd, [_sky([_sat(3)])], [])
     assert r["satellites"] == [] and r["sats_seen"] is None
 
@@ -140,7 +140,7 @@ def test_the_age_bound_counts_from_the_start_of_the_read_that_saw_the_list(fake_
     # Each poll reads for its whole 1.2 s budget. The list may have arrived at the first read's
     # start, so at the second read's end it can be ~2.4 s old: a 1.5 s bound must refuse it (a stamp
     # taken at the first read's END would make it look 1.2 s old and serve it).
-    monkeypatch.setattr(_gps, "NMEA_STALE_S", 1.5)
+    monkeypatch.setattr(_gps, "SKY_MEMO_S", 1.5)
     r = _two_polls(fake_gpsd, [_sky([_sat(3)])], [])
     assert r["satellites"] == [] and r["sats_seen"] is None
 
