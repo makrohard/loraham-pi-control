@@ -370,10 +370,12 @@ runtime load.
 - **Wi-Fi under build load.** With power-save on, the Zero's brcmfmac firmware drops the interface
   until a reboot; `bootstrap-deps.sh` disables Wi-Fi power-save when the install runs over Wi-Fi.
   `lhpc build` is idempotent, so a drop mid-build costs a reconnect, not the build.
-- **The journal is volatile.** Raspberry Pi OS ships
-  `/usr/lib/systemd/journald.conf.d/40-rpi-volatile-storage.conf` (`Storage=volatile`), so a reboot
-  loses the previous boot's journal; LHPC leaves that alone. To keep it on a box being debugged, add
-  a drop-in that sorts after it, capped because the journal then writes to the SD card:
+- **The journal across reboots.** On the LoRaHAM images released after v0.12.9 the system journal is
+  persistent and capped at 128 MiB (`sudo journalctl -b -1` shows the previous boot). Raspberry Pi OS's
+  `/usr/lib/systemd/journald.conf.d/40-rpi-volatile-storage.conf` (`Storage=volatile`) keeps it in RAM
+  on other installs that carry that drop-in, so a reboot loses the previous boot's journal; LHPC
+  itself does not change it. To keep it there, add a drop-in that sorts after it, capped because the
+  journal then writes to the SD card:
   ```sh
   sudo mkdir -p /etc/systemd/journald.conf.d
   printf '[Journal]\nStorage=persistent\nSystemMaxUse=200M\n' | sudo tee /etc/systemd/journald.conf.d/90-persistent.conf
