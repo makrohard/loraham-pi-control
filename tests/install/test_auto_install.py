@@ -2398,6 +2398,28 @@ def test_a_refused_binary_row_names_the_real_source_command(tmp_path, monkeypatc
     assert ("update LHPC first (lhpc self-update --apply)" in detail) is pin_mismatch
 
 
+def test_a_refused_binary_row_names_the_refusals_own_command_first(tmp_path, monkeypatch):
+    # e293 (0.12.9): the refusal named a checkout move (`lhpc update meshcom-qemu --source pinned`),
+    # the row only "install from source with: …", and the operator compiled MeshCom by hand.
+    _happy_ops(monkeypatch)
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    own = "lhpc update meshcom-qemu --source pinned --yes"
+    monkeypatch.setattr(ControllerService, "binary_install",
+                        lambda self, sid, apply=False, locked=False:
+                        ActionResult(False, f"Binary install of '{sid}' blocked: x",
+                                     next_commands=[own] if sid == "meshtastic" else [],
+                                     data={"binary_failed": True}))
+    svc = _svc(tmp_path)
+    scope = svc._auto_install_scope()
+    sel = {st.id: {"install": True, "version": "pinned", "tests": False, "tx": False}
+           for st, _ in scope}
+    sel["meshtastic"]["version"] = "binary"
+    assert not svc.auto_install(apply=True, tests=False, selection=sel, emit=lambda s: None).ok
+    detail = {x["id"]: x for x in svc.auto_install_status()["stacks"]}["meshtastic"]["detail"]
+    assert f"run `{own}`, or " in detail                      # the refusal's own way out, first
+    assert detail.index(own) < detail.index("lhpc install meshtastic --source pinned --yes")
+
+
 @pytest.mark.parametrize("overridable", [True, False])
 def test_auto_install_pin_mismatch_row_names_the_manual_command(tmp_path, monkeypatch, overridable):
     """A3: an auto-install pin refusal row. An overridable row's detail ENDS with the manual

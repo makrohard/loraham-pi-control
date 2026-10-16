@@ -1509,7 +1509,7 @@ def _stale_clone_fixture(tmp_path, monkeypatch, dirty):
     comp = next(c for st in svc.stacks() if st.id == "meshcom"
                 for c in st.components if c.id == "meshcom-qemu")
     svc._paths.resolve_source(comp.source.path).mkdir(parents=True)
-    state = {"commit": "0" * 40, "updated": []}
+    state = {"commit": "0" * 40, "updated": [], "adopted": []}
 
     class _Rec:
         @property
@@ -1519,6 +1519,14 @@ def _stale_clone_fixture(tmp_path, monkeypatch, dirty):
     class _FakeInstaller:
         def dirty_report(self, d, path):
             return DirtyReport(untracked=("notes.txt",)) if dirty else DirtyReport()
+        def adopt_source(self, c, *, force=False, source="pinned", pinned_expected=None,
+                         locked=False):
+            state["adopted"].append((c.id, source, force, locked, (pinned_expected or ("",))[0]))
+            state["commit"] = c.source.pin_commit             # the real adoption moves it
+
+            class _Done:
+                status, detail = "done", "moved to the pin"
+            return _Done()
         def _index_key(self):
             return "source-txn-index"
         def _recover_scan(self):
@@ -1551,12 +1559,41 @@ def test_a_clean_clone_at_an_older_pin_is_moved_to_the_pin(tmp_path, monkeypatch
     assert "the pin is" not in res.summary, res.summary        # got past the old refusal
 
 
-def test_a_dirty_clone_at_an_older_pin_is_still_refused_not_moved(tmp_path, monkeypatch, stub_pipeline):
+@pytest.mark.parametrize("locked", [False, True])
+def test_a_dirty_clone_at_an_older_pin_is_still_refused_not_moved(tmp_path, monkeypatch, stub_pipeline,
+                                                                  locked):
     svc, comp, state = _stale_clone_fixture(tmp_path, monkeypatch, dirty=True)
     stub_pipeline(svc, download=lambda e, d: pytest.fail("must refuse BEFORE downloading anything"))
-    res = svc.binary_install("meshcom", apply=True)
-    assert state["updated"] == []                              # never moved
+    res = svc.binary_install("meshcom", apply=True, locked=locked)
+    assert state["updated"] == [] and state["adopted"] == []   # never moved
     assert not res.ok and "the pin is" in res.summary          # the old refusal, unchanged
+
+
+def test_outside_an_auto_install_run_a_clean_clone_left_at_an_older_pin_is_refused_as_before(
+        tmp_path, monkeypatch, stub_pipeline):
+    """The CLI path is unchanged: its own pre-lock update moves the checkout; if that update
+    leaves it where it was, the loop refuses as before and never force-re-adopts it."""
+    svc, comp, state = _stale_clone_fixture(tmp_path, monkeypatch, dirty=False)
+    monkeypatch.setattr(ControllerService, "update", lambda self, target="", **kw: (
+        state["updated"].append(target), ActionResult(True, "nothing moved"))[1])
+    stub_pipeline(svc, download=lambda e, d: pytest.fail("must refuse BEFORE downloading anything"))
+    res = svc.binary_install("meshcom", apply=True)
+    assert state["updated"] == ["meshcom-qemu"] and state["adopted"] == []
+    assert not res.ok and "the pin is" in res.summary
+
+
+def test_inside_an_auto_install_run_a_clean_clone_at_an_older_pin_is_moved_to_the_pin(
+        tmp_path, monkeypatch, stub_pipeline):
+    """The e293 field case (0.12.9): an auto-install run (`locked=True`, its own locks held)
+    refused MeshCom's binary because src/meshcom-qemu-raspi sat at the previous install's pin, and
+    the row sent the operator to a source build. Under the held locks the clean checkout of ours
+    is now moved to the manifest pin by the same adoption a missing checkout gets."""
+    svc, comp, state = _stale_clone_fixture(tmp_path, monkeypatch, dirty=False)
+    stub_pipeline(svc)                                         # stops at DOWNLOAD-REACHED
+    res = svc.binary_install("meshcom", apply=True, locked=True)
+    assert state["adopted"] == [("meshcom-qemu", "pinned", True, True, comp.source.pin_commit)]
+    assert state["updated"] == []                              # no generic update inside the run
+    assert "DOWNLOAD-REACHED" in res.summary, res.summary      # past the clone gate
 
 
 def _older_known_working(svc, commit="7" * 40):

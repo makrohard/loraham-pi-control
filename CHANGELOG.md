@@ -13,6 +13,8 @@ Changed
 
 Fixed
 
+- Auto-install of MeshCom from its published binary moves a clean MeshCom run-script checkout to its pin itself
+  when an earlier install left it at another one, instead of asking for a source build.
 - MeshCore: LHPC's own transmit limit is gone, which delayed repeats by up to 27 s; in the repeater modes openHop's
   budget at the configured percentage is the limit, and the chat mode has none unless client-repeat is on.
 - An `lhpc` command stopped with Ctrl-C prints one line naming `lhpc status` instead of a Python traceback (exit

@@ -1268,10 +1268,10 @@ class AutoInstallOpsMixin:
                         if not br.ok:
                             r["status"] = "blocked"
                             src = f"lhpc install {st.id} --source pinned --yes"
-                            # A pin mismatch names self-update first (P1.15); its next_commands
-                            # start with it, so the source command is not next_commands[0] there.
-                            first = ("update LHPC first (lhpc self-update --apply), or "
-                                     if br.data.get("pin_mismatch") else "")
+                            # The refusal's own first way out leads (a pin mismatch: self-update).
+                            own = br.next_commands[0] if br.next_commands else src
+                            first = ("update LHPC first (lhpc self-update --apply), or " if br.data.get(
+                                "pin_mismatch") else "" if own == src else f"run `{own}`, or ")
                             r["detail"] = f"{br.summary} — {first}install from source with: {src}"
                             # Auto-install never overrides; for an overridable stack the row
                             # names the manual command (the refusal's own `override_command`).
