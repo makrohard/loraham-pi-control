@@ -1,7 +1,7 @@
-# Plan v3.4 — Track F: install channels without nagging, the Meshtastic web client as its own component
+# Plan v3.5 — Track F: install channels without nagging, the Meshtastic web client as its own component
 
-Base `origin/dev` 254bbae3; analysis MT-WEB-CLIENT (61e18c6d). Repos: loraham-pi-control (C),
-lhpc-binaries (B), lhpc-release-bot (R). binary = prebuilt known-working, no questions; rest compiled/fetched.
+Base `origin/dev` 816a2842 (post-C1; line numbers read on 254bbae3); analysis MT-WEB-CLIENT (61e18c6d). Repos:
+loraham-pi-control (C), lhpc-binaries (B), lhpc-release-bot (R). binary = prebuilt known-working; rest compiled/fetched.
 
 | change | where |
 |---|---|
@@ -11,7 +11,7 @@ lhpc-binaries (B), lhpc-release-bot (R). binary = prebuilt known-working, no que
 | W2a F3: the web smoke is a real node-info exchange in a browser, with a broken-client control | F3 |
 | W2a F4: the tested meshtasticd commit is persisted; a daemon change re-checks the pairing | F3 |
 | W2a F5: RootPath migration specified (measured) and both upgrade paths proven live | F3, F5 |
-| C1 split off and LANDED on dev 816a2842 (gate 1 GREEN, Pi 5 row passed); v3.4: second-read wording | F2.1, F2.4, F3 |
+| C1 split off and LANDED on dev 816a2842 (gate 1 GREEN, Pi 5 row passed); v3.4: second-read wording; v3.5: base and migration wording | F2.1, F2.4, F3 |
 
 ## F1 — The measured case: "I had to compile MeshCom by hand" (fixed by C1, on dev)
 
@@ -104,7 +104,7 @@ binary install replaces); static marker `.lhpc-built` (D3); `build_root`;
   dispatches the builder for the release tag, so `stable` stays lab-proven.
 - **Status:** version + selector from `web.provenance` (`stable`/`dev` read `differs`): no claimed
   client that is not served (0.3.12 (a)); the lane proves (c). Pin move: D3 (a `binary` client reads *behind*).
-- **Migration (measured on the Pi 5, 0.12.9):** saved settings do not carry `web_root`
+- **Migration (box state measured on the Pi 5, 0.12.9; the migration is proved in C3):** saved settings do not carry `web_root`
   (`config/stacks/meshtastic@868.toml` has no such key); `RootPath` is rendered into
   `config/files/meshtasticd.yaml` from the default at every start, so the new default reaches every box at
   its next start. A saved `web_root` equal to the OLD managed path (`{runtime}/build/tools/meshtasticd/web`,
