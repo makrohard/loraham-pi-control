@@ -307,8 +307,9 @@ def test_probe_refused_while_a_direct_radio_stack_owns_the_band(tmp_path):
 
 # ---- M5: dashboard states -----------------------------------------------------------------------
 
-def _body_class(html):
-    return html.split("<body", 1)[1].split(">", 1)[0]
+def _body_has_class(html, name):
+    import htmlq
+    return htmlq.parse(html).find("body")[0].has_class(name)
 
 
 def test_dashboard_unconfigured_shows_configure_banner(tmp_path):
@@ -395,6 +396,6 @@ def test_dashboard_narrows_in_single_radio_setup(tmp_path):
     app = create_app(service_factory=lambda: svc)
     app.config["SESSION_COOKIE_SECURE"] = False
     c = app.test_client()
-    assert "dash-narrow" not in _body_class(c.get("/").get_data(as_text=True))   # dual -> full width
+    assert not _body_has_class(c.get("/").get_data(as_text=True), "dash-narrow")   # dual -> full width
     _setup(svc, "waveshare-433")
-    assert "dash-narrow" in _body_class(c.get("/").get_data(as_text=True))       # single -> narrowed
+    assert _body_has_class(c.get("/").get_data(as_text=True), "dash-narrow")       # single -> narrowed

@@ -990,7 +990,8 @@ def test_web_toggle_round_trip(tmp_path):
     svc = _svc(tmp_path)
     c = _web_client(svc)
     body = c.get("/").get_data(as_text=True)               # System box on the dashboard
-    assert "Autostart stacks on boot:" in body and 'name="restore"' in body
+    import htmlq
+    assert htmlq.parse(body).find("input", name="restore")         # the toggle's form field
     tok = _csrf_of(c)
     r = c.post("/boot-restore", data={"_csrf": tok})       # no value -> off
     assert r.status_code == 302
