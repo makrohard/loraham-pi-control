@@ -200,3 +200,54 @@ def test_a_fact_is_looked_up_at_head_not_in_the_working_copy(repo):
     (repo / "docs" / "b.md").write_text("Beta.\nGamma.\n")
     rc, rows = _run(repo, "--fact", "Gamma.")
     assert (rc, rows["docs"]) == (0, "OK")
+
+
+SPLIT_BASE = {"lhpc/core/service_x.py": "class X:\n    def a(self):\n        pass\n    def b(self):\n        pass\n",
+              "tests/repo/test_module_budgets.py": BUDGET.format(x="(5, 2)")}
+SPLIT = {"lhpc/core/service_x.py": "class X:\n    def a(self):\n        pass\n",
+         "lhpc/core/service_y.py": '"""Y."""\nimport os\n\nclass Y:\n    def b(self):\n        pass\n',
+         "lhpc/core/services.py": "from .service_x import X\nfrom .service_y import Y\n\nclass S(X, Y):\n"
+                                  "    def run(self):\n        pass\n",
+         "tests/repo/test_module_budgets.py": BUDGET.format(x="(3, 1),\n    \"service_y.py\": (6, 1),  # s1: split from service_x.py")}
+
+
+@pytest.mark.parametrize("case, change, verdict", [
+    ("split", {}, "WARN"),
+    ("split-with-wrapped-bases", {"lhpc/core/services.py": "from .service_x import X\nfrom .service_y import Y\n\n"
+                                  "class S(X,\n        Y):\n    def run(self):\n        pass\n"}, "WARN"),
+    # The facade excuse covers the import and the bases of the split class, not other facade growth.
+    ("split-and-facade-growth", {"lhpc/core/services.py": SPLIT["lhpc/core/services.py"] + "\n"}, "HARD"),
+    # Only the bases span counts as bases growth, not a comment between the class line and the body.
+    ("split-and-header-comment", {"lhpc/core/services.py": SPLIT["lhpc/core/services.py"].replace(
+        "class S(X, Y):\n", "class S(X, Y):\n    # note\n")}, "HARD"),
+    # The header excuse does not cover growth elsewhere, nor a split whose named source did not shrink.
+    ("split-and-growth", {"lhpc/core/service_x.py": SPLIT["lhpc/core/service_x.py"] + "\n"}, "HARD"),
+    ("split-from-a-file-that-did-not-shrink", {"tests/repo/test_module_budgets.py": BUDGET.format(
+        x="(3, 1),\n    \"service_y.py\": (6, 1),  # s1: split from services.py")}, "HARD"),
+])
+def test_a_split_grows_the_family_only_by_the_new_header_and_the_facade_lines(repo, case, change, verdict):
+    _commit(repo, SPLIT_BASE)
+    _git(repo, "tag", "-f", "base")
+    _commit(repo, {**SPLIT, **change})
+    rc, rows = _run(repo)
+    assert (rc, rows["modules"]) == ((0, "WARN") if verdict == "WARN" else (1, "HARD"))
+
+
+TRY_Y = "try:\n    from .other import Y\nexcept ImportError:\n    Y = object\n"
+CLASS_S = "\nclass S(X, Y):\n    pass\n"
+
+
+@pytest.mark.parametrize("case, base, head", [
+    # Y was a base already (bound under `try`): wrapping the bases is not a facade edit of the split.
+    ("split-class-was-already-a-base", TRY_Y + "from .service_x import X\n" + CLASS_S,
+     TRY_Y + "from .service_x import X\nfrom .service_y import Y\n" + CLASS_S.replace("(X, Y)", "(X,\n        Y)")),
+    # The base bound Y at top level: an import that rebinds it is not a new line of the split.
+    ("split-import-rebinds-a-name-the-base-bound", "from .other import Y\nfrom .service_x import X\n" + CLASS_S,
+     "from .service_x import X\nfrom .service_y import Y\nZZ = 1\n" + CLASS_S),
+])
+def test_a_facade_edit_counts_only_for_a_name_the_split_adds(repo, case, base, head):
+    _commit(repo, {**SPLIT_BASE, "lhpc/core/services.py": base})
+    _git(repo, "tag", "-f", "base")
+    _commit(repo, {**SPLIT, "lhpc/core/services.py": head})
+    rc, rows = _run(repo)
+    assert (rc, rows["modules"]) == (1, "HARD")
