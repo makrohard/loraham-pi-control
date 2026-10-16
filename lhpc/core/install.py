@@ -53,6 +53,11 @@ _ADOPT_IGNORE_NAMES = (
     ".pio", ".venv", "build", ".work", ".run", "__pycache__", "node_modules",
 )
 _ADOPT_IGNORE = shutil.ignore_patterns(*_ADOPT_IGNORE_NAMES)
+# Inside `.git`, Git's own locks follow its lockfile convention (`<file>.lock`, created to write `<file>`,
+# then renamed into place or removed); one copied while held is a stale lock that makes git refuse in the
+# new source. No tool LHPC's stacks use is known to keep state as `*.lock` there. Only there: in the
+# working tree `yarn.lock` or `Cargo.lock` is content.
+_ADOPT_GIT_IGNORE = shutil.ignore_patterns(*_ADOPT_IGNORE_NAMES, "*.lock")
 
 _ENOENT_PREFIX = f"[Errno {errno.ENOENT}]"
 
@@ -862,8 +867,9 @@ class Installer:
             if s.is_symlink():
                 os.symlink(os.readlink(s), d)
             elif s.is_dir():
+                ignore = _ADOPT_GIT_IGNORE if entry == ".git" else _ADOPT_IGNORE
                 try:
-                    shutil.copytree(s, d, ignore=_ADOPT_IGNORE, symlinks=True)
+                    shutil.copytree(s, d, ignore=ignore, symlinks=True)
                 except shutil.Error as err:
                     # A live `.git` can repack mid-copy: git packs loose objects and prunes
                     # their fan-out directories between `copytree`'s listing and its read, so
@@ -878,7 +884,7 @@ class Installer:
                         shutil.rmtree(d, ignore_errors=True)   # `copytree` left a partial copy
                         _sleep(delay)
                         try:
-                            shutil.copytree(s, d, ignore=_ADOPT_IGNORE, symlinks=True)
+                            shutil.copytree(s, d, ignore=ignore, symlinks=True)
                             break
                         except shutil.Error as again:
                             if not _every_failure_is_enoent(again):

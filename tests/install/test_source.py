@@ -3697,6 +3697,29 @@ def test_an_ignored_file_survives_an_update(tmp_path, git, make_repo, installer)
     assert (dest / "settings.json").read_text() == '{"mine": true}'
 
 
+def test_a_lock_of_a_running_git_command_is_not_copied_into_the_new_source(tmp_path, git, make_repo,
+                                                                          installer):
+    """A git command running in the local checkout during the adoption holds `.git/index.lock` (or
+    `objects/maintenance.lock`). Copied, it is a stale lock in the new source, and git there refuses
+    ("Another git process seems to be running"). A `*.lock` in the working tree is content."""
+    repo = tmp_path / "rt" / "local" / "app"
+    make_repo(repo)
+    (repo / "yarn.lock").write_text("pinned\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "lockfile")
+    (repo / ".git" / "index.lock").write_text("")                     # a command in flight
+    (repo / ".git" / "objects" / "maintenance.lock").write_text("")
+    comp = _comp()
+    inst = installer(comp)
+    assert inst.adopt_source(comp, source="dev").status == "done"
+    dest = inst.paths.under("src", "app")
+    assert not (dest / ".git" / "index.lock").exists()
+    assert not (dest / ".git" / "objects" / "maintenance.lock").exists()
+    assert (dest / "yarn.lock").read_text() == "pinned\n"
+    (dest / "new.txt").write_text("x\n")
+    git(dest, "add", "new.txt")                                        # git works in the new source
+
+
 def test_a_nested_added_file_survives_with_its_directories_and_mode(tmp_path, v2_update_env):
     """Nested paths are reproduced whole, and the file's own permission bits come with it —
     a stack that writes an executable helper still finds it executable."""

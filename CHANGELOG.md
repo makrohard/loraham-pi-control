@@ -13,6 +13,8 @@ Changed
 
 Fixed
 
+- Adopting a local checkout while a git command runs in it no longer copies that command's lock into the new
+  source, where git then refused to run.
 - Auto-install of MeshCom from its published binary moves a clean MeshCom run-script checkout to its pin itself
   when an earlier install left it at another one, instead of asking for a source build.
 - MeshCore: LHPC's own transmit limit is gone, which delayed repeats by up to 27 s; in the repeater modes openHop's
