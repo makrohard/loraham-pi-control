@@ -21,3 +21,36 @@ def test_a_write_moved_outside_its_lock_is_caught(tmp_path, run_op, phases, monk
     assert run.fields == SAVED and run.phases == WRITES
     assert phases.outside == WRITES[2:]
     phases.outside.clear()
+
+
+def test_a_foreign_loopback_listener_is_never_the_tncs_endpoint(kiss_box):
+    """intended: the box's TNC endpoint is a listener the box's own TNC process holds. Another
+    process listening on 127.0.0.1 — on the port the box would use, if it keeps one — is not it,
+    so a parallel test's socket can neither make a start ready nor keep a stop from ceasing."""
+    import socket
+    box = kiss_box()
+    foreign = socket.socket()
+    try:
+        foreign.bind(("127.0.0.1", getattr(box, "port", 0)))
+        foreign.listen()
+        assert list(box.fake.listeners) == []
+    finally:
+        foreign.close()
+
+
+def test_a_later_spawn_is_refused_while_an_earlier_tnc_of_the_box_lives(kiss_box, tmp_path):
+    """intended: an old TNC that still listens can never make a later spawn of the same box read
+    ready: the box refuses that spawn (a new invariant of the harness; its negative case)."""
+    import pytest
+    box = kiss_box()
+    procs: list = []
+    spawn = box.spawn(procs)
+    try:
+        spawn(["loraham-kiss-tnc"], tmp_path / "a.log")
+        with pytest.raises(AssertionError, match="second TNC"):
+            spawn(["loraham-kiss-tnc"], tmp_path / "b.log")
+        assert len(procs) == 1
+    finally:
+        for p in procs:
+            p.kill()
+            p.wait(timeout=5)

@@ -15,7 +15,7 @@ the kernel), its cessation the real one. The substitutions, every one by name:
 - `ControllerService._lifecycle` (`kiss_box`): the real `Lifecycle` with the box's spawn
   callable, which launches the TNC process instead of the component binary;
 - the `System`: a `FakeSystem` (daemon CONF socket answering READY; `listeners` =
-  `_TncEndpoint`, the kernel's table filtered to the TNC's port, reported as 8001), and the
+  `_TncEndpoint`, the kernel's table filtered to the box's own TNC sockets, reported as 8001), and the
   host data a scenario puts into it: process-table entries (`cmdlines_data`: a band owner, an
   unowned TNC, a running chat) and the build steps' command results (`commands`, build);
 - two bounded waits, shortened: `ControllerService.ENDPOINT_VERIFY_TIMEOUT_S` 3 s (production
@@ -42,7 +42,6 @@ import json
 import os
 import re
 import signal
-import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -290,16 +289,17 @@ def _tagged(request):
 
 _READY = b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90\n"
 
-# The TNC process the box spawns: argv[1] is the loopback port it listens on (0: it never opens
-# one), argv[2] "ignore" makes it ignore SIGTERM (a process that really outlives its stop signal).
+# The TNC process the box spawns: argv[1] "listen" opens a loopback listener on a port the kernel
+# picks (anything else: it never opens one), argv[2] "ignore" makes it ignore SIGTERM (a process
+# that really outlives its stop signal), argv[3] is the box's token (its runtime root), by which
+# `_TncEndpoint` finds the box's own TNC processes.
 _TNC = ("import signal, socket, sys, time\n"
-        "port, term = int(sys.argv[1]), sys.argv[2]\n"
+        "listen, term = sys.argv[1], sys.argv[2]\n"
         "if term == 'ignore':\n"
         "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        "if port:\n"
+        "if listen == 'listen':\n"
         "    s = socket.socket()\n"
-        "    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
-        "    s.bind(('127.0.0.1', port))\n"
+        "    s.bind(('127.0.0.1', 0))\n"
         "    s.listen()\n"
         "time.sleep(300)\n")
 
@@ -321,35 +321,55 @@ def _starttime(pid: int) -> str | None:
         return None
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+def _tnc_socket_inodes(token: str) -> set[int]:
+    """The socket inodes held by the live TNC processes of the box `token` names (found by their
+    argv: the `_TNC` program with that token), from `/proc/<pid>/fd`."""
+    inodes: set[int] = set()
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                argv = fh.read().split(b"\0")
+            if len(argv) < 6 or argv[2] != _TNC.encode() or argv[5] != token.encode():
+                continue
+            for fd in os.listdir(f"/proc/{pid}/fd"):
+                m = re.fullmatch(r"socket:\[(\d+)\]", os.readlink(f"/proc/{pid}/fd/{fd}"))
+                if m:
+                    inodes.add(int(m.group(1)))
+        except OSError:                              # gone meanwhile, or not ours to read
+            continue
+    return inodes
 
 
 class _TncEndpoint:
     """The TNC's ready listener as the kernel reports it: the host's real `/proc/net/tcp` table
     (ipv4 — the endpoint is 127.0.0.1), parsed by the production parser `parse_proc_net_tcp` (the
-    suite's `_no_host_processes` blanks `RealProcFs.tcp_listeners` itself), keeping only the LISTEN
-    socket on the loopback port this box's TNC process binds — no other host listener is seen.
-    The manifest pins the endpoint to 127.0.0.1:8001 and a test cannot own a fixed host port, so
-    that one port number is reported as 8001 — the only translation; whether the listener exists,
-    its host and its LISTEN state are observed. A TNC that never opens its port, or one whose
-    socket closed with its process, is simply absent."""
+    suite's `_no_host_processes` blanks `RealProcFs.tcp_listeners` itself), keeping only a LISTEN
+    socket on 127.0.0.1 that one of this box's own TNC processes holds (its inode is in that
+    process's fds) — no other host listener is seen, whatever its port. The manifest pins the
+    endpoint to 127.0.0.1:8001 and a test cannot own a fixed host port, so the TNC listens on a
+    port the kernel picks and it is reported as 8001 — the only translation; whether the listener
+    exists, its host and its LISTEN state are observed. A TNC that never opens its port, or one
+    whose socket closed with its process, is simply absent.
 
-    def __init__(self, port: int):
-        self.port = port
+    Ownership is per box, not per spawn, as in production, where readiness is an address check
+    (whatever process listens on 127.0.0.1:8001 counts). Two TNCs of one box never run at once:
+    `KissBox.spawn` refuses a spawn while an earlier TNC of the box still lives, so the listener
+    seen is always the one live TNC's."""
+
+    def __init__(self, token: str):
+        self.token = token
 
     def __iter__(self):
         with open("/proc/net/tcp", encoding="ascii", errors="replace") as fh:
             table = parse_proc_net_tcp(fh.read(), "ipv4")
+        own = _tnc_socket_inodes(self.token)
         return iter([dataclasses.replace(lst, port=8001) for lst in table
-                     if (lst.family, lst.ip, lst.port) == ("ipv4", "127.0.0.1", self.port)])
+                     if (lst.family, lst.ip) == ("ipv4", "127.0.0.1") and lst.inode in own])
 
 
 class KissBox:
-    def __init__(self, root: Path, fake: FakeSystem, svc: ControllerService, port: int):
-        self.root, self.fake, self.svc, self.port = root, fake, svc, port
+    def __init__(self, root: Path, fake: FakeSystem, svc: ControllerService):
+        self.root, self.fake, self.svc = root, fake, svc
         self.listens, self.term = True, "default"
         self.spawned: list[tuple[int, str | None, str]] = []   # (pid, start time, component)
 
@@ -366,9 +386,13 @@ class KissBox:
         session, so it is an LHPC-ownable session leader); the log path is created so callers
         that read it work."""
         def _spawn(argv, log, cwd=None, env=None):
+            live = [pid for pid, start, _c in self.spawned if _alive(pid) and _starttime(pid) == start]
+            assert not live, (f"the box would run a second TNC while {live} still lives: its "
+                              "listener would read as the new spawn's (one TNC per box)")
             open(str(log), "a").close()
             p = subprocess.Popen(
-                [sys.executable, "-c", _TNC, str(self.port if self.listens else 0), self.term],
+                [sys.executable, "-c", _TNC, "listen" if self.listens else "no", self.term,
+                 str(self.root)],
                 start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             procs.append(p)
             self.spawned.append((p.pid, _starttime(p.pid), Path(argv[0]).name))
@@ -419,12 +443,11 @@ def kiss_box(tmp_path, monkeypatch, set_call):
         (root / "src" / "loraham-kiss-tnc").mkdir(parents=True)
         (root / "src" / "loraham-kiss-tnc" / "loraham-kiss-tnc").write_text("#bin")
         fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": _READY})
-        port = _free_port()
-        fake.listeners = _TncEndpoint(port)
+        fake.listeners = _TncEndpoint(str(root))
         svc = ControllerService(system=fake.system, paths=Paths(runtime_root=root))
         seeded = svc.bootstrap(apply=True)
         assert seeded.ok, f"seeding: bootstrap failed: {seeded.summary}"
-        box = KissBox(root, fake, svc, port)
+        box = KissBox(root, fake, svc)
         spawn = box.spawn(procs)
         monkeypatch.setattr(ControllerService, "_lifecycle", lambda s: Lifecycle(
             s._paths, s.stacks(), s.config(), s._system, spawn=spawn))

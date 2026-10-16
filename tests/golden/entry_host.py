@@ -63,7 +63,7 @@ def describe(box, out_dir: Path) -> Path:
     from lhpc.core.services import ControllerService
     out_dir.mkdir(parents=True, exist_ok=True)
     fw = ControllerService._fw_integration_state(box.svc)
-    desc = {"root": str(box.root), "port": box.port, "listens": box.listens, "term": box.term,
+    desc = {"root": str(box.root), "listens": box.listens, "term": box.term,
             "cmdlines": {str(k): v for k, v in box.fake.cmdlines_data.items()},
             "manifest": str(box.manifest) if box.manifest else None,
             "waits": {"endpoint": ControllerService.ENDPOINT_VERIFY_TIMEOUT_S,
@@ -187,8 +187,8 @@ def _rebuilt(d):
     _install(d)
     fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": golden._READY},
                       cmdlines_data={int(k): v for k, v in d["cmdlines"].items()})
-    fake.listeners = golden._TncEndpoint(d["port"])
-    box = golden.KissBox(Path(d["root"]), fake, None, d["port"])
+    fake.listeners = golden._TncEndpoint(d["root"])
+    box = golden.KissBox(Path(d["root"]), fake, None)
     box.listens, box.term = d["listens"], d["term"]
     procs: list = []
     tnc = box.spawn(procs)
