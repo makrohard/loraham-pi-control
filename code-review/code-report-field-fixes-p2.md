@@ -117,7 +117,7 @@ VERDICT      PASS  (hard 0, warn 0)
 | figure | command | output |
 |---|---|---|
 | base | `git rev-parse --short 642224c4~1` | 78c9fac7 |
-| commits | `git log --format=%h origin/dev..HEAD` | 642224c4, c699bd16 |
+| commits | `git log --reverse --format=%h 78c9fac7..c699bd16` | 642224c4, c699bd16 |
 | diff | `git diff --stat 78c9fac7 c699bd16 \| tail -1` | 11 files changed, 129 insertions(+), 18 deletions(-) |
 | D3 / D4 | `git diff --stat` per commit | 7 files, +59 −2 / 11 files, +70 −16 |
 | service_params.py | `wc -l`; checker modules line | 3380 → 3379 (budget 3380) |
