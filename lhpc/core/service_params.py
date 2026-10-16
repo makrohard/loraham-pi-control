@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import ClassVar
 
-from . import config_save, daemon_control, runtime_fs, validators
+from . import config_save, daemon_control, runtime_fs, spi_mode, validators
 from . import meshcore_identity as _meshcore_identity
 from . import meshcore_mode as _meshcore_mode
 from . import restart_required as _rr
@@ -3051,7 +3051,7 @@ class ParamsConfigMixin:
                 updater = {"toml-update": update_toml, "yaml-update": update_yaml,
                            "ini-update": update_ini}[fc.fmt]
                 try:
-                    text = updater(base_text, fc.params, values, subst)
+                    text = spi_mode.render(fc.fmt, updater(base_text, fc.params, values, subst))
                 except ValueError as exc:
                     written.append(ConfigWrite(c.id, str(out_path), "failed", str(exc)))
                     continue

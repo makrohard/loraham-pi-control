@@ -29,7 +29,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import commands, procident, progress, runtime_fs, validators
+from . import commands, procident, progress, runtime_fs, spi_mode, validators
 from .config import Config
 from .jobs import JobResult, JobState, run_job, tail_log
 from .model import Component, Stack
@@ -461,6 +461,11 @@ class Lifecycle:
         runtime = str(self.paths.runtime_root)
         if not comp.run_argv:
             return StartLaunch(False, str(log), "no structured run command (run_argv)")
+        # SPI bus users start only when config.txt and the booted kernel agree on the chip-select
+        # mode, and only in one of the two supported ones (spi_mode).
+        if spi_mode.drives_spi(comp) and (why := spi_mode.refusal(
+                spi_mode.boot_mode(spi_mode.read_config_txt()), spi_mode.live_mode())):
+            return StartLaunch(False, str(log), why)
         op = self.config.operator
         try:
             commands.run_pre_steps(comp.pre_steps, runtime, src, band)

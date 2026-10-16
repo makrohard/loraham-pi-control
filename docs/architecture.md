@@ -184,6 +184,14 @@ is CS 8, its 868 radio CS 7, and meshtasticd's 868 radio CS 7. The daemon and th
 interface take `spi0.lock`; meshtasticd does not. LHPC refuses meshtastic + reticulum together and
 allows daemon + meshtastic on opposite bands.
 
+Chip-select mode (`lhpc/core/spi_mode.py`). Two boot configurations are supported:
+- soft: `dtparam=spi=on` + `dtoverlay=spi0-0cs`;
+- kernel: `dtparam=spi=on` alone. spi0's `cs-gpios` is `<&gpio 8 1>, <&gpio 7 1>`, so a radio on GPIO 8 uses
+  `/dev/spidev0.0`, one on GPIO 7 `/dev/spidev0.1`, and the kernel holds CS for each transfer.
+A component that claims an `spi-bus` resource starts only when config.txt and the booted device
+tree agree on one of the two. A file edited but not rebooted is refused with "reboot required", and any
+other spi0 layout as unsupported. In kernel mode meshtasticd's generated YAML gets `spidev:` instead of `CS:`.
+
 Measured (dual-TX soak, 2026-10-03, Pi 5: 15 min of non-overlapping transmissions as control, then
 1 h with 16 forced overlaps; the records are kept outside this repository): no frame was
 corrupted on either band — 433: 8/8 control and 15/16 soak frames received intact; 868: 10/10 and
