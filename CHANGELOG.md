@@ -10,6 +10,7 @@ Changed
   is unchanged.
 - The console reuses a source's git status for up to 30 s while its git metadata and the directories of its
   tracked files are unchanged, so pages load faster; a hand edit of an existing file can take up to 30 s to show.
+- When reuse does not apply, the console probes sources in parallel, up to four at a time.
 
 Fixed
 

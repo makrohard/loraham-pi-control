@@ -10,6 +10,7 @@ The status state rules are implemented in `_run_state_for_service`.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from . import gps, procident, source_cache
@@ -32,6 +33,7 @@ from .probes.process import probe_process
 from .probes.source import SourceProbe, probe_source
 
 _NA_SOURCE = SourceProbe(state=SourceState.NOT_APPLICABLE)
+SOURCE_WORKERS = 4      # checkouts probed at a time when a snapshot misses the source cache
 from . import meshcore_mode as _meshcore_mode
 from . import resources as resources_mod
 from .probes.systemd import UnitState, probe_unit
@@ -130,6 +132,7 @@ class StatusProber:
         except Exception:
             self._cmdlines = None
         try:
+            self._prefetch_sources([c for s in stacks for c in s.components])
             for stack in stacks:
                 ss = StackStatus(stack=stack)
                 for comp in stack.components:
@@ -246,13 +249,40 @@ class StatusProber:
                 version=f"binary@{rec.artifact_sha256[:9]}",
                 evidence={"artifact": rec.filename, "sha256": rec.artifact_sha256,
                           "built_from": commit, "channel": "binary"})
-        abs_path = str(self._paths.resolve_source(comp.source.path))
-        key = (abs_path, comp.source.pin_commit or "")
+        key = self._source_key(comp)
         probe = self._source_probes.get(key)
         if probe is None:
             probe = self._source_probes[key] = source_cache.probe_cached(
-                self._cache, self._system, comp.source, abs_path, git=self._sources, probe=probe_source)
+                self._cache, self._system, comp.source, key[0], git=self._sources, probe=probe_source)
         return probe
+
+    def _source_key(self, comp: Component):
+        """(checkout path, pin) of a component's git probe; None without a source or under a binary."""
+        if comp.source is None or self._binary_cover.get(comp.id) is not None:
+            return None
+        return (str(self._paths.resolve_source(comp.source.path)), comp.source.pin_commit or "")
+
+    def _prefetch_sources(self, comps) -> None:
+        """Probe a snapshot's distinct checkouts side by side, `SOURCE_WORKERS` at a time: git mostly waits
+        on the disk, so a page with a cache miss pays for the slowest checkout instead of the sum. Each
+        answer is the one `_assess_source` computes for the same (path, pin); a probe that raises stores
+        nothing, so `_assess_source` runs it again and its error surfaces exactly as before."""
+        if not self._sources:
+            return
+        todo = {}
+        for comp in comps:
+            key = self._source_key(comp)
+            if key is not None and key not in self._source_probes:
+                todo.setdefault(key, comp.source)
+        if len(todo) < 2:
+            return
+        with ThreadPoolExecutor(max_workers=SOURCE_WORKERS) as pool:
+            futures = {key: pool.submit(source_cache.probe_cached, self._cache, self._system, spec, key[0],
+                                        git=True, probe=probe_source)
+                       for key, spec in todo.items()}
+        for key, fut in futures.items():
+            if fut.exception() is None:
+                self._source_probes[key] = fut.result()
 
     def _profile_state(self, comp: Component, src) -> ProfileState:
         # confirmed-working only when the CLEAN source's HEAD appears in an operator-confirmed

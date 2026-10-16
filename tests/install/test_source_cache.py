@@ -8,6 +8,7 @@ and the clock is the cache's own, injected.
 from __future__ import annotations
 
 import os
+import threading
 
 import pytest
 
@@ -250,3 +251,87 @@ def test_a_hit_read_across_a_mutation_is_not_served(world, monkeypatch):
     now[0] += 1.0
     assert probe().state is SourceState.DIRTY                      # not the old MATCH: git ran
     assert _status_runs(counted) == 2
+
+
+# -- a snapshot that misses the cache probes its checkouts side by side (efficiency A4) ------------------
+
+def _service(tmp_path, system):
+    from lhpc.core.paths import Paths
+    from lhpc.core.services import ControllerService
+    return ControllerService(system=system, paths=Paths(runtime_root=tmp_path))
+
+
+def _two_checkouts(tmp_path, make_repo):
+    make_repo(tmp_path / "src" / "meshcore-webui", {"app/main.py": "x = 1\n"})
+    make_repo(tmp_path / "src" / "loraham-daemon", {"d.c": "int x;\n"})
+    (tmp_path / "src" / "loraham-daemon" / "d.c").write_text("int y;\n")       # a tracked edit: DIRTY
+
+
+def _sources(snap):
+    return {cid: (c.source_state, c.source_head, c.source_version)
+            for ss in snap.stacks for cid, c in ss.components.items()}
+
+
+def test_a_snapshot_probes_two_checkouts_at_the_same_time(tmp_path, make_repo):
+    # Each `git status` waits until a second one runs: probed one after the other, the first waits out the
+    # barrier's 5 s and breaks it; side by side, both pass at once.
+    _two_checkouts(tmp_path, make_repo)
+    system, meeting = RealSystem(), threading.Barrier(2, timeout=5)
+    real = system.runner.run
+
+    def run(argv, timeout, cwd=None, env=None):
+        if argv[:1] == ["git"] and "status" in argv:
+            meeting.wait()
+        return real(argv, timeout, cwd=cwd, env=env)
+    system.runner.run = run
+    _service(tmp_path, system).build_snapshot(fresh=True)
+    assert not meeting.broken
+
+
+def test_the_snapshot_reports_what_each_checkout_says_with_or_without_the_cache(tmp_path, make_repo):
+    # The answers do not depend on probing side by side: a fresh recheck (no cache), a page read (the
+    # shared cache) and a second page read (cache hits) report the same source state, head and version.
+    _two_checkouts(tmp_path, make_repo)
+    svc = _service(tmp_path, RealSystem())
+    fresh = _sources(svc.build_snapshot(fresh=True))
+    svc.invalidate_snapshot()
+    page = _sources(svc.build_snapshot())
+    svc.invalidate_snapshot()
+    assert fresh == page == _sources(svc.build_snapshot())
+    # ... and each checkout's answer is the one the probe gives on its own, one checkout at a time.
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.source import probe_source
+    paths, alone = Paths(runtime_root=tmp_path), {}
+    for stack in svc.stacks():
+        for comp in stack.components:
+            path = paths.resolve_source(comp.source.path) if comp.source else None
+            if path is not None and (path / ".git").is_dir():
+                got = probe_source(RealSystem(), comp.source, str(path))
+                alone[comp.id] = (got.state, got.head, got.version)
+    assert {cid: fresh[cid] for cid in alone} == alone
+    assert {state for state, _head, _version in alone.values()} >= {SourceState.DIRTY}
+    assert len({head for _state, head, _version in alone.values()}) == 2      # both checkouts probed
+
+
+def test_a_probe_that_raises_still_fails_the_snapshot(tmp_path, make_repo):
+    # A failure inside the side-by-side probes is not swallowed: the component's own probe runs it again
+    # and its error leaves the snapshot as it did when every probe ran in turn.
+    _two_checkouts(tmp_path, make_repo)
+    system = RealSystem()
+    real = system.runner.run
+
+    def run(argv, timeout, cwd=None, env=None):
+        if argv[:1] == ["git"] and "status" in argv and argv[2].endswith("loraham-daemon"):
+            raise OSError("no git here")
+        return real(argv, timeout, cwd=cwd, env=env)
+    system.runner.run = run
+    with pytest.raises(OSError, match="no git here"):
+        _service(tmp_path, system).build_snapshot(fresh=True)
+
+
+def test_a_snapshot_without_sources_runs_no_git(tmp_path, make_repo):
+    _two_checkouts(tmp_path, make_repo)
+    counted = _Counting()
+    _service(tmp_path, counted.system).build_snapshot(sources=False)
+    assert counted.git == []
+
