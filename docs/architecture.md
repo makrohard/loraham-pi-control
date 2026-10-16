@@ -65,6 +65,7 @@ lhpc/
     service_maintenance.py # source update, uninstall, clean, known-working, upstream tracking, power
     service_params.py      # params, config saves and generation, identity, daemon parameters
     service_lifecycle_ops.py # start/stop/restart/build/test, jobs, dashboards
+    service_rflog.py       # the RF-log console: switches, clearing, records, decoding
     service_binary_ops.py  # binary install/retire/recover; service_binary_channel.py resolves it
     service_firewall.py    # firewall candidates, apply/verify; service_hmac.py the MeshCom password
     service_network.py     # Wi-Fi client / AP fallback panel (NetworkManager)
