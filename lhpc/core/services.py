@@ -34,7 +34,6 @@ from .config import (
     load_stack_config,
 )
 from .daemon_control import ALLOWED_BANDS
-from .gps import USE_GPS_PARAM
 from .install import Installer, Plan
 from .lifecycle import GUI_MISSING_HINT, Lifecycle
 from .model import (
@@ -122,6 +121,7 @@ from .service_binary_ops import BinaryOpsMixin
 from .service_boot_restore import BootRestoreOpsMixin
 from .service_daemon_params import DaemonParamsMixin
 from .service_firewall import FirewallOpsMixin
+from .service_gps import GpsOpsMixin
 from .service_hmac import HmacOpsMixin
 from .service_lifecycle_ops import LifecycleOpsMixin
 from .service_maintenance import MaintenanceOpsMixin
@@ -164,7 +164,7 @@ def _load_system_provider(paths):
 
 class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMixin, MaintenanceOpsMixin, ParamsConfigMixin, LifecycleOpsMixin, HmacOpsMixin, SystemStatsMixin, FirewallOpsMixin, BootRestoreOpsMixin,
                         BinaryChannelMixin, BinaryOpsMixin, NetworkOpsMixin, SecretsOpsMixin, RflogOpsMixin,
-                        DaemonParamsMixin):
+                        DaemonParamsMixin, GpsOpsMixin):
     """Facade over the core: composes the service_* mixins into ONE object. Construct once per
     process and share it (the web app does, across threads) — it carries the manifest and
     config caches, the config lock, and per-thread re-entrancy bookkeeping for the on-disk
@@ -1976,256 +1976,6 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         owner = self._owner_stack(target)
         return owner is not None and owner.main == self.DAEMON_ID
 
-    def gps_plan(self, target: str = ""):
-        """THE resolved GPS plan. One object, computed from `[gps]` PLUS the target stack's
-        persisted `use_gps` switch, shared by run order, claims, config rendering, post-steps,
-        status, stop and boot restore — so no two of them can act on a different idea of where
-        position comes from, or of whether this stack uses it at all.
-
-        Without `target` the GLOBAL source is reported as-is (what `lhpc gps` shows).
-        """
-        from .gps import plan_from_config
-        plan = plan_from_config(self.config())
-        if target and plan.enabled and not self.gps_enabled_for(target):
-            # The stack opted out: it opens nothing, claims nothing, renders no device and
-            # pushes "no GPS" to its node. Same shape as a global `off`, scoped to one stack.
-            return plan.disabled_for_stack()
-        return plan
-
-    def refresh_gps_auto(self) -> None:
-        """Request-boundary freshness for the `auto` GPS verdict.
-
-        The verdict is FROZEN into each loaded config (one operation = one decision), which a
-        long-lived console would otherwise hold forever — a gpsd installed later would never
-        be noticed until an unrelated save dropped the cache. Called per web request (like
-        `invalidate_snapshot`): re-probe, and if the verdict changed, drop the cached config
-        so THIS request loads a fresh one. Skips silently while any transition or save holds
-        the config lock — an applied start keeps its frozen verdict to the end.
-        """
-        cfg = self._config
-        g = getattr(cfg, "gps", None) if cfg is not None else None
-        if g is None or g.source != "auto":
-            return
-        from .gps import local_gpsd_listening
-        if bool(g.auto_listening) == local_gpsd_listening():
-            return
-        import fcntl
-
-        from . import runtime_fs
-        try:
-            fh = runtime_fs.open_lock(self._paths, self._paths.under("config", ".lock"))
-        except (OSError, PathContainmentError):
-            return
-        try:
-            try:
-                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                return                  # a transition/save is running — its verdict stands
-            self._invalidate_config()
-        finally:
-            fh.close()
-
-    def gps_enabled_for(self, target: str) -> bool:
-        """The stack's PERSISTED `use_gps` switch (default = the manifest's, which is "on").
-
-        Stored and read BANDLESSLY. "Does this box report its position" is a property of the
-        stack, not of the frequency it happens to be on. Reading it per band made the switch
-        revert on a band change; reading "on if ANY band says on" then made turning it OFF on
-        one band ineffective. One value, one answer.
-
-        `target` may be a component id — it is normalized to its owner stack, so a direct
-        component start is gated exactly like a stack start.
-
-        A saved setting only (as every setting is): a per-launch value would let a launch differ
-        from the saved state that claims and generated config were derived from.
-        """
-        stack_id = self.gps_owner_stack(target)
-        if not stack_id:
-            return False
-        try:
-            cfg = self._stack_config_cached(stack_id)          # bandless
-        except (OSError, ValueError, KeyError, ConfigError):
-            return False
-        raw = str(cfg.get("use_gps", "")).strip().lower()
-        if raw in ("on", "off"):
-            return raw == "on"
-        # Unset = the MANIFEST default, not a hardcoded "off": the switch defaults to "on"
-        # (position via `auto` when a gpsd exists), and the Settings page already
-        # renders that default — reading unset as off here would make the pages show "on"
-        # while every start behaved as off.
-        from .gps import use_gps_default
-        return use_gps_default(self.stacks(), stack_id) == "on"
-
-    # The GPS switch param. A stack is GPS-capable IFF one of its components declares it —
-    # see _gps_stacks(); there is deliberately no second list to keep in sync.
-    GPS_PARAM: ClassVar[str] = USE_GPS_PARAM
-
-    def _gps_stacks(self) -> frozenset:
-        """Stacks whose components can consume a position: those declaring the `use_gps` param.
-
-        DERIVED, never hardcoded. A literal list drifted the moment a stack gained the param:
-        graywolf declared `use_gps`, the list did not name it, so `gps_enabled_for` answered
-        False for a box whose saved value was "on" — the start form's honest echo of "on" then
-        looked like a per-start change and EVERY start was refused. The manifest is the only
-        place that knows, so it is the only place that decides.
-
-        Cached for the life of `self._stacks` (memoized, never invalidated): this sits under
-        `gps_enabled_for`/`gps_plan`, which run dozens of times per page render and several
-        times per start — a per-call manifest scan turned an O(1) membership test into the
-        hottest loop on a Pi Zero.
-        """
-        if self._gps_stacks_cache is None:
-            self._gps_stacks_cache = frozenset(
-                s.id for s in self.stacks()
-                for c in s.components
-                if any(p.name == self.GPS_PARAM for p in c.run_params))
-        return self._gps_stacks_cache
-
-    def gps_owner_stack(self, target: str) -> str:
-        """The GPS-capable stack a target belongs to, or "".
-
-        A start may name a COMPONENT (`sideband`, `meshcom-qemu`, `meshtastic-gps`). Without
-        normalizing, every GPS decision — feed admission, the start gate, the receiver claim —
-        silently did nothing for those targets.
-        """
-        if not target:
-            return ""
-        gps_stacks = self._gps_stacks()
-        if target in gps_stacks:
-            return target
-        try:
-            owner = self._owner_stack_id(target)
-        except (KeyError, AttributeError):
-            owner = ""
-        return owner if owner in gps_stacks else ""
-
-    def _gps_components_for(self, target: str) -> set:
-        """GPS feed components this stack must run under the current plan.
-
-        Empty unless the stack has a consumer that needs a device-shaped stream: Meshtastic
-        only for `source = gpsd` (it reads `nmea` straight off the real device and uses its
-        own fixed-position support), MeshCom whenever GPS is on (its pinned relay speaks only
-        to a LOCAL gpsd and cannot serve remote gpsd, direct NMEA, or a fixed position).
-        """
-        # Accepts a stack OR a component id: a direct consumer start resolves the same feed set
-        # as its stack, so both paths describe one plan.
-        target = self.gps_owner_stack(target)
-        if not target:
-            return set()
-        if not self._meshcore_consumes_position(target):
-            return set()
-        plan = self.gps_plan(target)
-        if not plan.enabled:
-            return set()
-        cid = self._production_feeds().get(target)
-        if not cid or not plan.needs_bridge(target):
-            return set()
-        # Only admit a component the stack actually declares — a manifest without the feed
-        # must not silently gain one.
-        s = self.stack(target)
-        return {cid} if s and any(c.id == cid for c in s.components) else set()
-
-    def _production_feeds(self) -> dict:
-        """Stack id -> the component that carries its PRODUCTION position feed."""
-        from .gps import FEED_COMPONENTS
-        return dict(FEED_COMPONENTS)
-
-    def _all_gps_feed_ids(self) -> set:
-        """Every production feed component id — what a direct start must be checked against."""
-        return set(self._production_feeds().values())
-
-    def _gps_consumer_ids(self) -> frozenset:
-        """Components that actually READ a position — `reads_position = true` in the manifest.
-
-        A GPS stack contains plenty that does not: `meshcom-bridge` is a TCP relay to the
-        daemon and `meshcom-firmware` is a build artifact. Treating "belongs to a GPS stack"
-        as "consumes position" started a feed — and claimed the receiver — for components that
-        never read one.
-
-        DERIVED, like `_gps_stacks()`, and for the same reason: this was a hardcoded set, and
-        it drifted the same way — graywolf became a consumer and the set did not name it, so
-        `gps_block()` returned early and graywolf started position-blind past the very gate
-        built to refuse that. The flag lives on the component because the `use_gps` param
-        cannot say who reads: reticulum declares it on `rns`, but `sideband` is the reader.
-        """
-        if self._gps_consumers_cache is None:
-            self._gps_consumers_cache = frozenset(
-                c.id for s in self.stacks() for c in s.components if c.reads_position)
-        return self._gps_consumers_cache
-
-    def _gps_run_order_uses_position(self, target: str) -> bool:
-        """Does what this start would ACTUALLY bring up read a position, or feed one?
-
-        The owner stack is the wrong unit. `meshcom-bridge` and `meshcom-firmware` belong to a
-        GPS stack and read nothing; the fixture relay replays a checked-in file; and a Reticulum
-        start whose run order is just `rns` — Sideband not selected — touches no receiver either.
-        Gating and claiming on stack membership refused those starts over settings they never
-        use, and took the receiver away from something that would have used it.
-        """
-        order = self._run_order(target)
-        if not order:
-            return False
-        ids = {c.id for _s, c in order}
-        consumers = self._gps_consumer_ids()
-        if not self._meshcore_consumes_position(self.gps_owner_stack(target)):
-            consumers = consumers - {_meshcore_mode.NODE_ID}
-        return bool(ids & (consumers | self._all_gps_feed_ids()))
-
-    def _meshcore_consumes_position(self, stack_id: str, mode: str | None = None) -> bool:
-        """False only for the MeshCore stack in repeater-only mode (the SAVED mode, which is
-        what a start renders; pass the RUNNING mode for questions about a live process).
-        `reads_position` on the node is static; the mode decides whether anything reads it."""
-        if stack_id != _meshcore_mode.STACK_ID:
-            return True
-        return _meshcore_mode.position_consumed(
-            self.meshcore_mode() if mode is None else mode)
-
-    # The MeshCom fixture relay replays a CHECKED-IN synthetic NMEA file. It is a test
-    # facility, never a position source, and it writes to the same UART socket as the
-    # production feed.
-    _FIXTURE_FEEDS: ClassVar[dict] = {"meshcom": "meshcom-gps-relay"}
-
-    def optional_role(self, c) -> str:
-        """THE single rule for an optional component's place on the operator's surfaces —
-        "hidden" | "listed" | "tickable":
-          * hidden   — nothing an operator runs: a library/firmware (nothing to run), a production
-                       GPS feed (the resolved position plan is its only admitter) or a `test_fixture`
-                       (runs deliberately, by name, never with the stack);
-          * listed   — shown on the Settings card as "run on demand": a one-shot/interactive
-                       CLIENT (the MeshCore CLI, a REPL in the operator's terminal) is run by name,
-                       never "with the stack";
-          * tickable — a SERVICE the operator may auto-start with the stack (`autostart_<id>`;
-                       an INTERACTIVE service such as nomadnet stays a choice: the start plans it
-                       and prints its launch line, MANUAL_REQUIRED, instead of spawning it).
-        A saved `autostart_<id>` flag counts ONLY for a tickable component — the Settings list
-        and the run-order admission both derive it from here (one rule, so a stale FIXTURE tick
-        can never replay a synthetic position and no surface offers a tick another never shows).
-        Non-optional -> "hidden"."""
-        from .model import ComponentKind
-        if (not c.optional or c.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE)
-                or c.test_fixture or c.id in self._all_gps_feed_ids()):
-            return "hidden"
-        return "tickable" if c.kind == ComponentKind.SERVICE else "listed"
-
-    def _gps_components_excluded(self, target: str) -> set:
-        """Feed components that must not run under the current plan.
-
-        The fixture relay runs only when named directly (`lhpc stack start meshcom-gps-relay`)
-        — that explicitness is what makes it "test-only"; it is never an auto-start choice
-        (see `optional_role`). What it must never do is run BESIDE the production
-        feed: both write the same UART socket, so the node would receive a synthetic position
-        interleaved with the real one and there would be no way to tell which it beaconed.
-
-        When the global source is configured, production wins. Kept as a belt even though the
-        fixture can no longer enter `allowed_optional` — the rule is about the UART socket,
-        not about how the fixture got into the order.
-        """
-        target = self.gps_owner_stack(target)                 # stack OR component id
-        cid = self._FIXTURE_FEEDS.get(target)
-        if not cid:
-            return set()
-        return {cid} if self._gps_components_for(target) else set()
-
     def _run_order(self, target: str):
         """Ordered (stack, component) list to bring `target` up: the target's
         non-optional components plus their transitive dependencies, deps first."""
@@ -2491,29 +2241,6 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         if gps_key:
             keys.add(gps_key)
         return sorted(keys)
-
-    def _gps_device_claim(self, target: str) -> str:
-        """The exclusive resource key for the local receiver this stack would open, or "".
-
-        Empty for every source that opens no local device (off / fixed / remote gpsd) and for
-        stacks with no GPS consumer — claiming a device they never touch would refuse
-        combinations that are perfectly valid.
-        """
-        raw, target = target, self.gps_owner_stack(target)
-        if not target:
-            return ""
-        # Claim only what this start actually brings up. Stack membership is not enough: a
-        # Reticulum start without Sideband, or a `meshcom-bridge`/`meshcom-firmware`/fixture run,
-        # reads no position and must not take the receiver from something that would.
-        if not self._gps_run_order_uses_position(raw):
-            return ""
-        try:
-            plan = self.gps_plan(target)
-        except (OSError, ValueError, AttributeError):
-            return ""
-        if not plan.enabled or not plan.claims_device or not plan.device_key:
-            return ""
-        return f"gps.{plan.device_key}"
 
     def _operation_source_paths(self, target: str) -> list[str]:
         """Distinct managed source paths a start touches (generated config, command
