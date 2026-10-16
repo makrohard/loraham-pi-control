@@ -13,6 +13,8 @@ Changed
 
 Fixed
 
+- Web console: a form or request the browser marks as sent from another site or from another port of the
+  box (a stack's web UI) is refused even with a valid token.
 - Auto-install of MeshCom from its published binary moves a clean MeshCom run-script checkout to its pin itself
   when an earlier install left it at another one, instead of asking for a source build.
 - MeshCore: LHPC's own transmit limit is gone, which delayed repeats by up to 27 s; in the repeater modes openHop's
