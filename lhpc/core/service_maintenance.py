@@ -957,11 +957,9 @@ class MaintenanceOpsMixin:
         if not apply:
             return ActionResult(True, f"Update plan for '{target}': fetch upstream {version} "
                                       "(verified against its checksums.txt) and restart.",
-                                next_commands=[f"lhpc update {target} --upstream --yes"])
-        # This mutates and replaces the installed tree, so it MUST hold the same
-        # task admission every peer op takes (build/update/uninstall/clean/self-update) — a
-        # concurrent build or clean would otherwise race the fetch. RE-VALIDATE under the lock:
-        # another op may have moved the version or the running state while we waited.
+                                next_commands=[f"lhpc update {target} --source stable --yes"])
+        # It replaces the installed tree: the task admission every peer op takes, so a build or
+        # clean cannot race the fetch; re-validated under the lock (the version may have moved).
         from . import reslock
         try:
             with self._admission_guard("graywolf-upstream-update", target):
@@ -969,11 +967,10 @@ class MaintenanceOpsMixin:
         except AdmissionRefused as _adm:
             return admission_refusal(_adm)
         except reslock.ResourceBusy as busy:
-            # Admission contention with ANOTHER process raises ResourceBusy, not
-            # AdmissionRefused — return the same typed refusal every peer op gives.
+            # Another process's admission raises ResourceBusy: the same typed refusal as peers.
             return ActionResult(False, f"Cannot update '{target}': {busy}",
                                 details=[busy_remedy(busy)],
-                                next_commands=[f"lhpc update {target} --upstream --yes"])
+                                next_commands=[f"lhpc update {target} --source stable --yes"])
 
     def _graywolf_upstream_update_locked(self, target: str, main) -> ActionResult:
         from .assets import asset_path
@@ -1011,14 +1008,12 @@ class MaintenanceOpsMixin:
         except (OSError, PathContainmentError) as exc:
             return ActionResult(False, f"fetched {version} but could not re-mark built: {exc}",
                                 details=[f"  the build fetches the pinned release again; run "
-                                         f"`lhpc update {target} --upstream --yes` after it for "
+                                         f"`lhpc update {target} --source stable --yes` after it for "
                                          f"{version}"],
                                 next_commands=[f"lhpc build {target} --yes"])
         notes = [f"  [ok] fetched upstream {version} (verified vs checksums.txt)"]
         restart_ok = True
-        # `was_running` was sampled BEFORE a fetch that can run for minutes; an
-        # operator stop during the fetch (stop needs no task admission) was then overridden by
-        # the restart. Re-sample: restart only what is STILL running now.
+        # Re-sampled after a fetch of minutes: an operator stop meanwhile (no admission) stays.
         if was_running and not self.stack_running(target):
             notes.append("  [restart] skipped — the stack was stopped during the fetch "
                          "(operator stop preserved)")
@@ -1026,8 +1021,7 @@ class MaintenanceOpsMixin:
             res = self.restart(target, apply=True)
             restart_ok = res.ok
             notes.append(f"  [restart] {'ok' if res.ok else 'FAILED — restart manually'}")
-        # a failed restart leaves the station OFFLINE — report it as NOT ok so
-        # the CLI exits non-zero and the console flashes a warning, not a green success.
+        # A failed restart leaves the station OFFLINE: not ok (non-zero exit, a console warning).
         return ActionResult(
             restart_ok,
             (f"'{target}' updated to {version}." if restart_ok
@@ -1799,6 +1793,21 @@ class MaintenanceOpsMixin:
             return _r
         if target == web_client.COMPONENT:     # a fetched release by selector
             return web_client.install(self, source, apply=apply)
+        if target and self.graywolf_upstream_state(target):
+            # A fetched release (graywolf) has no checkout: `binary` = the pinned release its build
+            # fetches, `stable` = the newest upstream one; `pinned`/`dev` name a lane it lacks.
+            if source == "stable":
+                return self.graywolf_upstream_update(target, apply=apply)
+            if source == self.BINARY_CHANNEL:
+                return (self.build(target, apply=apply) if build or not apply else ActionResult(
+                    True, f"'{target}' needs its build.", data={"needs_build": [target]}))
+            return ActionResult(
+                False, f"'{target}' has no compiled lane — its release is fetched, not built from "
+                       "a checkout.", data={"refusal": "no_compiled_lane"},
+                details=["  the pinned release: --source binary; the newest upstream release: "
+                         "--source stable"],
+                next_commands=[f"lhpc update {target} --source binary --yes",
+                               f"lhpc update {target} --source stable --yes"])
         # ---- BINARY channel dispatch ----------------------------------------------------
         # Moving a SOURCE-installed stack (back) onto the published artifact is an install, and
         # must be routed as one: the source planners only understand pinned/dev/stable, so a "binary" selector must never reach them.
@@ -1827,16 +1836,6 @@ class MaintenanceOpsMixin:
                 next_commands=[f"lhpc install {target} --source {source} --yes"],
                 data={"channel": "binary"})
         all_items = self._with_source(target)
-        if not all_items and target and self.stack(target) is not None:
-            # A stack with no managed source (graywolf: a fetched release) has nothing to
-            # update here: its pinned release comes with its build, a newer one by --upstream.
-            return ActionResult(
-                False, f"'{target}' has no managed source to update — its release is fetched "
-                       "by its build.",
-                details=["  the pinned release: lhpc build; the newest upstream release: "
-                         "lhpc update --upstream"],
-                next_commands=[f"lhpc build {target} --yes",
-                               f"lhpc update {target} --upstream --yes"])
         if not all_items:
             return self._unknown_stack(target) if target else ActionResult(
                 False, "No sources.",
