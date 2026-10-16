@@ -1347,7 +1347,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             details.append("  ! BOOT RESTORE WILL BE SKIPPED — " + why)
             details.append("    stacks will NOT come back after a reboot until this is repaired:")
             details.append("      lhpc self-update --repair-integration")
-        elif why:                               # proven on a newer release's units: say so
+        elif why:                               # proven on another release's units: say so
             details.append("")
             details.append(f"  ! {why}")
 

@@ -34,9 +34,8 @@ NotifyAccess=main
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-# runtime root + /tmp for lhpc itself; %h/.meshcore_nm because a stack GUI started under this
-# unit (meshcore-nodegui) keeps its sessions/settings/favourites there. %h expanded by systemd.
-ReadWritePaths=%h/loraham-pi-control -%h/.meshcore_nm /tmp
+# runtime root + /tmp for lhpc itself.
+ReadWritePaths=%h/loraham-pi-control /tmp
 Environment=PLATFORMIO_CORE_DIR=%h/loraham-pi-control/build/tool-cache/platformio
 Environment=IDF_TOOLS_PATH=%h/loraham-pi-control/build/tool-cache/espressif
 Environment=XDG_CACHE_HOME=%h/loraham-pi-control/build/tool-cache/cache

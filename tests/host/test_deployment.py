@@ -45,11 +45,10 @@ def test_unit_has_least_privilege_hardening():
                       "ProtectKernelModules=true", "RestrictNamespaces=true", "PrivateTmp=false"):
         assert directive in active, directive
     assert "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_BLUETOOTH" in active
-    # Writable areas: the runtime root, /tmp, and the optional -%h/.meshcore_nm entry ONLY
-    # (no shipped component uses it) — never broad $HOME or /var.
+    # Writable areas: the runtime root and /tmp ONLY — never broad $HOME or /var.
     rw = [ln for ln in active if ln.startswith("ReadWritePaths=")]
     assert len(rw) == 1 and "%h/loraham-pi-control" in rw[0] and "/tmp" in rw[0]
-    assert "%h/.meshcore_nm" in rw[0]
+    assert "%h/.meshcore_nm" not in rw[0]
     assert "/var" not in rw[0] and "%h " not in rw[0] and not rw[0].rstrip().endswith("%h")
 
 

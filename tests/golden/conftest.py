@@ -448,19 +448,19 @@ def prior_boot(monkeypatch, tmp_path_factory):
     `LHPC_BOOT_ID_FILE` (the production override every reader honours), restore enabled by the
     default `[boot] restore = true` (no `[boot]` table is written), and the web integration proven
     by the canonical `lhpc-web.service` (`updater_units.render`) with its `default.target.wants`
-    link in the test's isolated HOME, rendered for `root` (`next_unit=True`: the next release's
-    unit, `updater_units.render_next`, which this version verifies as `compatible`)."""
+    link in the test's isolated HOME, rendered for `root` (`compatible=True`: the other release's
+    unit, `updater_units.render_compatible`, which this version verifies as `compatible`)."""
     from lhpc.core import updater_units
     boot = tmp_path_factory.mktemp("boot") / "boot_id"
     boot.write_text("CURBOOT\n")
     monkeypatch.setenv("LHPC_BOOT_ID_FILE", str(boot))
 
     def _plant(root, stack="kiss", comp="loraham-kiss-tnc", band="433", pid=999999,
-               evidence=True, next_unit=False):
+               evidence=True, compatible=False):
         units = Path(os.environ["HOME"]) / ".config" / "systemd" / "user"
         (units / "default.target.wants").mkdir(parents=True, exist_ok=True)
         _r, checkout, venv = updater_units.deployment_paths(str(root))
-        render = updater_units.render_next if next_unit else updater_units.render
+        render = updater_units.render_compatible if compatible else updater_units.render
         (units / updater_units.WEB_UNIT).write_text(
             render(updater_units.WEB_UNIT, str(root), checkout, venv))
         link = units / "default.target.wants" / updater_units.WEB_UNIT

@@ -483,8 +483,7 @@ class SelfUpdateOpsMixin:
                 ours = all(v in (updater_units.OK, updater_units.MISSING,
                                  updater_units.MODIFIED_OURS) for v in integ["per_unit"].values())
             verdicts = (integ.get("per_unit") or {}).values()
-            # A newer release's units, alone or beside missing / changed units of this deployment:
-            # ours, but this code's render must not be written over the newer ones.
+            # Another release's units (alone or beside missing / changed ones): ours, never rewritten here.
             newer = (updater_units.COMPATIBLE in verdicts
                      and all(v in (updater_units.OK, updater_units.COMPATIBLE, updater_units.MISSING,
                                    updater_units.MODIFIED_OURS) for v in verdicts))
@@ -500,8 +499,7 @@ class SelfUpdateOpsMixin:
         if not _op_exists(py):
             py = _sys.executable
         try:
-            # A newer release's units are not rewritten with this code's render (it would put
-            # the older bytes back); the verify-set below still decides.
+            # Another release's units are not rewritten here; the verify-set below decides.
             rep = (None if helper or newer
                    else self.self_update_repair_integration(restart=False))
         except Exception as exc:
@@ -515,11 +513,11 @@ class SelfUpdateOpsMixin:
             return True, "units canonical"
         detail = (chk.stdout or chk.stderr or "").strip()[:140]
         if mixed:
-            return False, ("units of a newer release beside missing or changed ones — left as they "
+            return False, ("units of another release beside missing or changed ones — left as they "
                            "are; repair them from an operator shell with `lhpc self-update "
                            f"--repair-integration`: {detail}")[:240]
         if newer:
-            return False, f"units of a newer release — left as they are: {detail}"
+            return False, f"units of another release — left as they are: {detail}"
         if rep is None:
             return False, f"units not canonical: {detail}"
         return False, f"units still not canonical after repair ({rep.summary[:60]}): {detail}"
@@ -614,6 +612,9 @@ class SelfUpdateOpsMixin:
                                 "`lhpc self-update --apply` from an interactive operator shell",
                                 data={"reason": "managed-unit"},
                                 next_commands=["lhpc self-update --apply"])
+        if (why := updater_units.update_refusal(self.updater_integration())):
+            return ActionResult(False, why, data={"integration": "compatible"},
+                                next_commands=["lhpc self-update --repair-integration"])
         _S = 30.0
         act = self._system.runner.run(
             ["systemctl", "--user", "is-active", "--quiet", updater_units.WEB_UNIT], _S)
@@ -1869,9 +1870,8 @@ class SelfUpdateOpsMixin:
         per = integ.get("per_unit", {})
         bad = {k: v for k, v in per.items() if v not in fixable_set}
         if bad and all(v == updater_units.COMPATIBLE for v in bad.values()):
-            # A newer release's units: ours, but only the shell repair rewrites them (this
-            # console's service cannot write the user unit folder).
-            return ActionResult(False, "The units are a newer release's (compatible): run "
+            # Another release's units: ours, but only the shell repair rewrites them.
+            return ActionResult(False, "The units are another release's (compatible): run "
                                 "`lhpc self-update --repair-integration` from an operator shell, "
                                 "then update.", data={"integration": status, "compatible": True},
                                 next_commands=["lhpc self-update --repair-integration"])

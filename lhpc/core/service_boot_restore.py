@@ -45,7 +45,7 @@ class BootRestoreOpsMixin:
         """BOTH proofs, bus-free and descriptor-safe: the enablement symlink resolves to the
         expected managed unit path, AND lhpc-web.service verifies byte-exact/no-drop-in via the
         PER-UNIT canonical verifier (never the aggregate verdict, never unrelated units) — this
-        version's unit, or the next release's (`compatible`: proven, with a note as the reason)."""
+        version's unit, or another release's (`compatible`: proven, with a note as the reason)."""
         user_dir = self._user_unit_dir()
         root = Path(self._paths.runtime_root)
         _root, checkout, venv = updater_units.deployment_paths(str(root))

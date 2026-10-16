@@ -1313,8 +1313,8 @@ def test_web_integration_proven_real_function(tmp_path, monkeypatch):
     assert ok is False and "wants symlink points at" in why
 
 
-def test_the_next_releases_web_unit_proves_the_console_with_a_note(tmp_path, monkeypatch):
-    # The REAL gate: the next release's web unit (updater_units.render_next) is `compatible` —
+def test_the_other_releases_web_unit_proves_the_console_with_a_note(tmp_path, monkeypatch):
+    # The REAL gate: the other release's web unit (updater_units.render_compatible) is `compatible` —
     # proven, the reason being the units-compatible note naming the shell repair.
     from lhpc.core import updater_units as U
     home = tmp_path / "home"
@@ -1322,11 +1322,37 @@ def test_the_next_releases_web_unit_proves_the_console_with_a_note(tmp_path, mon
     (ud / "default.target.wants").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     _r, checkout, venv = U.deployment_paths(str(tmp_path))
-    (ud / U.WEB_UNIT).write_text(U.render_next(U.WEB_UNIT, str(tmp_path), checkout, venv))
+    (ud / U.WEB_UNIT).write_text(U.render_compatible(U.WEB_UNIT, str(tmp_path), checkout, venv))
     (ud / "default.target.wants" / U.WEB_UNIT).symlink_to(ud / U.WEB_UNIT)
     ok, why = _svc(tmp_path)._web_integration_proven()
     assert ok is True
     assert "units-compatible:" in why and "lhpc self-update --repair-integration" in why
+
+
+_CHANGED = ("lhpc-web.service", "lhpc-nginx.service", "lhpc-boot-restore.service")
+
+
+@pytest.mark.parametrize("previous", [tuple(u for i, u in enumerate(_CHANGED) if m >> i & 1)
+                                      for m in range(8)], ids=lambda p: "+".join(p) or "none")
+def test_every_mix_of_the_previous_and_current_units_restores(tmp_path, monkeypatch, previous):
+    # Each changed unit is either this release's or the previous release's (an interrupted repair,
+    # an update not yet repaired): boot restore is proven on every mix; its note follows the web
+    # unit (the per-unit gate), and the set reads `compatible` until all three are current.
+    from lhpc.core import updater_units as U
+    home = tmp_path / "home"
+    ud = home / ".config" / "systemd" / "user"
+    (ud / "default.target.wants").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    root = str(tmp_path)
+    _r, checkout, venv = U.deployment_paths(root)
+    for k in U.ALL_UNITS:
+        render = U.render_compatible if k in previous else U.render
+        (ud / k).write_text(render(k, root, checkout, venv))
+    (ud / "default.target.wants" / U.WEB_UNIT).symlink_to(ud / U.WEB_UNIT)
+    ok, why = _svc(tmp_path)._web_integration_proven()
+    assert ok is True
+    assert why == (U.COMPATIBLE_NOTE if U.WEB_UNIT in previous else "")
+    assert U.integration(ud, root)["status"] == ("compatible" if previous else "ok")
 
 
 def test_driver_defect_is_clean_integrity_failure(tmp_path, monkeypatch):
