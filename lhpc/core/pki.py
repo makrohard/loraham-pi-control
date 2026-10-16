@@ -633,9 +633,14 @@ def list_client_certs(paths: Paths) -> list:
 
 
 def read_export(paths: Paths, label: str) -> bytes | None:
-    """Return the raw `.p12` export bytes for a label, or None if absent/unsafe. The caller
-    (web route) is responsible for the loopback-only gate before serving these bytes."""
+    """Return the raw `.p12` export bytes for an ACTIVE label, or None if absent/unsafe. A revoked
+    or revocation-pending certificate's leftover bundle is not handed out: the copyboxes list
+    only active labels, and this is the one reader behind the download and the CLI export. The
+    caller (web route) is responsible for the loopback-only gate before serving these bytes."""
     label = validators.path_component(label, field="cert label")
+    if not any(c.get("label") == label and c.get("state") == "active"
+               for c in list_client_certs(paths)):
+        return None
     from . import runtime_fs
     try:
         return runtime_fs.read_bytes(paths, _p(paths, _EXPORTS, f"{label}.p12"))

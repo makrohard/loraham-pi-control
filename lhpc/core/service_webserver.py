@@ -1895,8 +1895,8 @@ class WebserverOpsMixin:
             return None
 
     def webserver_cert_export_bytes(self, label) -> bytes | None:
-        """Raw `.p12` bytes for a label (or None). The WEB route must gate this on a
-        loopback-origin session; the CLI locates the file directly."""
+        """Raw `.p12` bytes for an ACTIVE label (or None). The WEB route must gate this on a
+        loopback peer; `lhpc webserver cert export` writes the same bytes to a file."""
         from . import pki as _pki
         return _pki.read_export(self._paths, label)
 

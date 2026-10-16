@@ -1643,6 +1643,19 @@ def test_p12_download_is_loopback_only(tmp_path, web, csrf):
     assert r.headers["Content-Disposition"].endswith('laptop.p12"')
 
 
+@pytest.mark.contract
+@pytest.mark.safety("exposure-fail-closed")
+def test_a_revoked_labels_leftover_p12_is_not_served(tmp_path, web, csrf):
+    c, svc = _app_svc(web, tmp_path)
+    tok = csrf(c)
+    assert svc.webserver_init().ok
+    c.post("/webserver/cert", data={"_csrf": tok, "op": "issue", "label": "laptop"})
+    svc.webserver_cert_revoke("laptop", accept_unverified=True)
+    assert (svc._paths.runtime_root / "config/tls/exports/laptop.p12").exists()   # the leftover
+    assert c.get("/webserver/cert/laptop/download").status_code == 404
+    assert svc.webserver_cert_export_bytes("laptop") is None
+
+
 def test_webserver_reachable_from_stacks_and_not_a_managed_stack(tmp_path, web):
     # Reachable inline under the controller row on /stacks; the controller id is NOT a managed
     # stack (a bogus stack-detail 404s; it never enters build_snapshot).

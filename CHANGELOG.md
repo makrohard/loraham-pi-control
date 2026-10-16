@@ -9,7 +9,8 @@ Fixed
 - MeshCore: a restart no longer can leave plugins blocked until a reboot: the node's stop waits up to 2 s for the
   plugin manager's own shutdown before it signals it again.
 - Web console: with a stack web UI on plain http, the https listeners send HSTS `max-age=0`, which prevents new HSTS
-  lockouts and clears an already-cached policy on the next HTTPS visit; all-https boxes keep HSTS, the stack UIs too.
+  lockouts and clears an already-cached policy on the next HTTPS visit (all-https boxes keep HSTS, stack UIs too); a
+  revoked certificate's leftover `.p12` is no longer handed out, by the download or `lhpc webserver cert export`.
 
 ## 0.12.10
 
