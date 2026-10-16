@@ -156,6 +156,28 @@ def test_a_remembered_list_ends_the_read_at_its_budget(fake_gpsd, monkeypatch):
 # Two receivers on one gpsd: only the device whose position the snapshot shows decides the wait.
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
+def test_a_receiver_without_satellite_reports_waits_once_per_memo_window(script_gpsd,
+                                                                         monkeypatch):
+    # NMEA without GSV: positions and DOP-only SKYs, never a list. Waiting on every read would
+    # slow every poll by the whole wait; one wait per memo window finds out, then reads are short.
+    monkeypatch.setattr(_gps, "SKY_WAIT_S", 0.8)
+    monkeypatch.setattr(_gps, "SKY_MEMO_S", 2.5)
+    srv = script_gpsd([VERSION, DEV_A, _tpv(), _dop_sky()])
+
+    def read():
+        t0 = time.monotonic()
+        r = _gps.gpsd_snapshot("127.0.0.1", srv.port, timeout=0.3)
+        assert r["state"] == "3d" and r["satellites"] == [] and r["sats_seen"] is None
+        return time.monotonic() - t0
+
+    first = time.monotonic()
+    assert read() >= 0.7                            # the one wait
+    assert read() < 0.6                             # stamped: no wait
+    time.sleep(max(0.0, first + 2.6 - time.monotonic()))
+    assert read() >= 0.7                            # the stamp expired: one wait again
+
+
+@pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_another_devices_fresh_list_does_not_skip_the_wait(script_gpsd, monkeypatch):
     monkeypatch.setattr(_gps, "SKY_WAIT_S", 1.5)
     srv = script_gpsd([VERSION, DEV_AB, _tpv(A), _sky(3, 7, device=A), _tpv(A)],   # A remembered

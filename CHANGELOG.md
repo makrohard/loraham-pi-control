@@ -18,6 +18,8 @@ Fixed
 - The one-time .p12 passphrase no longer travels in the session cookie; a console restart before the page loads
   loses it (issue the bundle again).
 - The MeshCore position feed's socket appears only once it accepts connections; a client could find it and be refused.
+- GPS Monitor: a receiver that reports no satellites waits for a satellite list once per 30 s, not on every
+  read, so its polls are no longer slowed by up to 6 s each.
 
 Changed
 
