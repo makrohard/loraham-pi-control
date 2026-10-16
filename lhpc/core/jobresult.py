@@ -118,22 +118,18 @@ def _valid(d, log: str) -> bool:
     return not (di is not None and not isinstance(di, dict))
 
 
-_REFUSED = ("", "clone_required", "consent_stale")
 _CID_RE = re.compile(r"[0-9A-Za-z._-]{1,64}")
 _MAX_PAIRS = 16
 
 
 def valid_refusal(v) -> bool:
-    """The optional typed `refusal` of a binary install (`--accept-pin-mismatch`): bounded and
+    """The optional typed `refusal` of a binary install (no published binary built for this
+    lhpc: the newest entry's lagging pairs, empty when the commits are not what differs): bounded and
     structurally checked. A record that fails it is read WITHOUT the field (never trusted)."""
-    if not isinstance(v, dict) or set(v) != {"pin_mismatch", "override_refused"}:
-        return False
-    if v["override_refused"] not in _REFUSED:
+    if not isinstance(v, dict) or set(v) != {"pin_mismatch"}:
         return False
     pm = v["pin_mismatch"]
-    # Empty only for a stale consent whose mismatch has gone (the binary now matches the pins).
-    if (not isinstance(pm, dict) or len(pm) > _MAX_PAIRS
-            or (not pm and v["override_refused"] != "consent_stale")):
+    if not isinstance(pm, dict) or len(pm) > _MAX_PAIRS:
         return False
     return all(isinstance(k, str) and _CID_RE.fullmatch(k) and isinstance(p, list) and len(p) == 2
                and all(validators.is_hex(x, 40) for x in p)
@@ -141,16 +137,15 @@ def valid_refusal(v) -> bool:
 
 
 def refusal_from(res) -> dict | None:
-    """The typed refusal a binary install's ActionResult carries (a pin mismatch, with how an
-    override was refused), or None: no result, a success, or any other failure."""
+    """The typed refusal a binary install's ActionResult carries (`none_compatible`, with its lagging
+    commits), or None: no result, a success, or any other failure."""
     data = getattr(res, "data", None) if res is not None else None
     if getattr(res, "ok", True) or not isinstance(data, dict):
         return None
     pm = data.get("pin_mismatch")
-    if not isinstance(pm, dict):
+    if data.get("binary_refusal") != "none_compatible" or not isinstance(pm, dict):
         return None
-    ref = {"pin_mismatch": {k: list(v) for k, v in pm.items()},
-           "override_refused": data.get("override_refused", "")}
+    ref = {"pin_mismatch": {k: list(v) for k, v in pm.items()}}
     return ref if valid_refusal(ref) else None
 
 

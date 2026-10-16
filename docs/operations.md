@@ -62,9 +62,9 @@ On the binary channel:
 - **Switching to source is transactional** — a dirty, foreign or wrong-remote checkout refuses the
   switch with the artifact untouched.
 - **No binary rollback**: going back means installing from source.
-- **Only the latest release has binaries**: the index holds one per stack and it must match this
-  lhpc's pins; otherwise install from source, self-update first, or (where allowed) accept the
-  mismatch ([provenance](provenance.md#the-binary-channel)).
+- **Each LHPC finds its own binaries**: the index keeps the newest artifact of every published
+  composition, and lhpc installs the newest one built for its pins and build inputs. None built for
+  it: self-update first, else install from source ([provenance](provenance.md#the-binary-channel)).
 - **meshcom keeps its pinned clone** (its run scripts live there), and **meshtastic provisions its
   CLI virtualenv locally** after extraction (it embeds absolute paths); lhpc owns that virtualenv
   as a whole directory.

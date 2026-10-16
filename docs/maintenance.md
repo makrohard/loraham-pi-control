@@ -212,6 +212,12 @@ repositories.
   test reports the L4 pair as waived, not missing, and the lane's budget case waives its missing
   evidence and Zero baseline when the previous tag lacks the line too. From the next release on
   both require it.
+- **A release reaches `main` only with its binaries findable.** `testlab.yml` with
+  `release_verify=true` is dispatched on the candidate sha and must be green before the
+  fast-forward to `main`; its release-verify lane installs meshtastic and meshcom through the
+  binary channel's newest-compatible selection, so a missing entry built for the candidate is
+  red. The daemon is the lab's fixture there: its entry is checked with `lhpc install daemon
+  --source binary --check` on a box before the fast-forward.
 - **Every release is followed by an image.** `loraham-images` is tagged with the same version once
   the binaries a moved pin needs are published ([binary channel](provenance.md#the-binary-channel)).
 - **The release bot** runs the pin patch (watch, repin, binaries, proof, release, image) and opens

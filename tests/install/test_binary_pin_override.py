@@ -1,10 +1,9 @@
-"""A3: `--accept-pin-mismatch`, the override of the binary pin check (plan rev 9).
-
-The operator accepts ONE exact mismatch, once, on a manual install or update; the consent is
-bound to the artifact and the pairs that were shown; the receipt records it; gate 2 honours it
-only while it is exact and the component is not clone_required now (B1); a malformed commit is
-refused before anything is offered (B2). A lag in MeshCom's `meshcom-qemu` (clone_required)
-cannot be accepted."""
+"""A binary install never goes over the pin check (`--accept-pin-mismatch` is removed, decision D1):
+no published binary built for this lhpc is ONE typed refusal (`none_compatible`) with the newest
+entry's lagging pairs, self-update first and source second; a malformed commit is refused before
+anything is offered. Receipts written by an older lhpc with a recorded acceptance are still READ:
+gate 2 honours one only while it is exact and the component is not clone_required now; status,
+doctor and boot restore name it while it is in force."""
 import dataclasses
 
 import pytest
@@ -42,96 +41,53 @@ def _never_download(*a, **k):
     raise AssertionError("must not download")
 
 
-# ---- gate 1: the one map, the refusal, the offer ------------------------------------------------
+# ---- gate 1: the one map, the typed refusal ------------------------------------------------------
 
 def test_check_pins_raises_the_structured_mismatch():
     entry = type("E", (), {})()
     entry.components = {"x": A, "y": B}
-    with pytest.raises(bi.BinaryPinMismatch) as ei:
+    with pytest.raises(bi.BinaryNoneCompatible) as ei:
         bi.check_pins(entry, {"x": C, "y": B})
     assert ei.value.mismatch == {"x": (A, C)}          # only the lagging pair, (binary, pin)
 
 
 @pytest.mark.parametrize("apply", [False, True])
-def test_refusal_offers_three_ways_in_order_with_the_map(tmp_path, monkeypatch, stub_pipeline, apply):
+@pytest.mark.parametrize("op", ["install", "update"])
+@pytest.mark.parametrize("stack,cid", [("daemon", None), ("meshcom", "meshcom-qemu")])
+def test_none_compatible_is_one_typed_refusal_self_update_first(tmp_path, monkeypatch, stub_pipeline,
+                                                                apply, op, stack, cid):
+    """Every stack, clone_required or not, gets the same two ways and no third: nothing is
+    installed over the pin check, nothing is downloaded, no receipt is written."""
     svc = _svc(tmp_path, monkeypatch)
-    cid = _daemon_cid(svc)
-    monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "daemon", cid, A, stub_pipeline,
+    cid = cid or _daemon_cid(svc)
+    monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, stack, cid, A, stub_pipeline,
                                                           download=_never_download))
-    r = svc.binary_install("daemon", apply=apply)
-    assert not r.ok
-    assert [d.strip()[:2] for d in r.details[:3]] == ["1.", "2.", "3."]
-    cmd = "lhpc install daemon --source binary --accept-pin-mismatch --yes"
+    r = (svc.install if op == "install" else svc.update)(stack, apply=apply, source="binary")
+    assert not r.ok and r.data["binary_refusal"] == "none_compatible"
+    assert r.data["pin_mismatch"] == {cid: [A, svc._binary_pins(stack)[cid]]}
     assert r.next_commands == ["lhpc self-update --apply",
-                               "lhpc install daemon --source pinned --yes", cmd]
-    assert "may not work with this LHPC" in r.details[2]
-    assert r.data["pin_mismatch"] == {cid: [A, svc._binary_pins("daemon")[cid]]}
-    assert r.data["override_command"] == cmd
-
-
-def test_override_command_only_when_overridable(tmp_path, monkeypatch, stub_pipeline):
-    """A daemon lag's flag-less refusal carries option (3)'s command; MeshCom's lagging
-    `meshcom-qemu` is clone_required: its refusal keeps P1.15's two ways and names no flag."""
-    svc = _svc(tmp_path, monkeypatch)
-    monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "daemon", _daemon_cid(svc), A,
-                                                          stub_pipeline, download=_never_download))
-    assert svc.binary_install("daemon", apply=False).data["override_command"] == \
-        "lhpc install daemon --source binary --accept-pin-mismatch --yes"
-    monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "meshcom", "meshcom-qemu", A,
-                                                          stub_pipeline, download=_never_download))
-    r = svc.binary_install("meshcom", apply=False)
-    assert not r.ok and "override_command" not in r.data and "consent" not in r.data
-    assert r.next_commands == ["lhpc self-update --apply",
-                               "lhpc install meshcom --source pinned --yes"]
-    assert r.details[0].strip().startswith("1. Update LHPC first")
-    assert not any("--accept-pin-mismatch" in x for x in [*r.details, *r.next_commands])
+                               f"lhpc install {stack} --source pinned --yes"]
+    assert [d.strip()[:2] for d in r.details[:2]] == ["1.", "2."]
+    assert not any("accept-pin-mismatch" in x for x in [r.summary, *r.details, *r.next_commands])
+    assert not (tmp_path / "state" / "binary").exists()
 
 
 def test_the_manifest_clone_required_list_is_meshcom_qemu_only(tmp_path, monkeypatch):
-    """The B1 rule reads the spec, not a name; a new clone_required entry shows up here."""
+    """The receipt reader's B1 rule reads the spec, not a name; a new clone_required entry shows up here."""
     svc = _svc(tmp_path, monkeypatch)
     listed = sorted(c for st in svc.stacks() if svc.binary_spec(st.id)
                     for c in svc.binary_spec(st.id).clone_required)
     assert listed == ["meshcom-qemu"]
 
 
-@pytest.mark.parametrize("apply", [False, True])
-@pytest.mark.parametrize("op", ["install", "update"])
-def test_override_refused_for_a_lagging_clone_required_component(tmp_path, monkeypatch,
-                                                                 stub_pipeline, op, apply):
-    svc = _svc(tmp_path, monkeypatch)
-    monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "meshcom", "meshcom-qemu", A,
-                                                          stub_pipeline, download=_never_download))
-    call = (svc.install if op == "install" else svc.update)
-    r = call("meshcom", apply=apply, source="binary", accept_pin_mismatch="yes")
-    assert not r.ok and r.data["override_refused"] == "clone_required"
-    assert "refused even with --accept-pin-mismatch" in r.summary
-    assert r.details[0].strip().startswith("1. Update LHPC first")
-    assert r.next_commands == ["lhpc self-update --apply",
-                               "lhpc install meshcom --source pinned --yes"]
-    assert not (tmp_path / "state" / "binary" / "meshcom.json").exists()
-
-
-def test_a_stack_whose_lag_is_outside_clone_required_stays_overridable(tmp_path, monkeypatch,
-                                                                      stub_pipeline):
-    svc = _svc(tmp_path, monkeypatch)
-    other = next(c for c in svc._binary_pins("meshcom") if c != "meshcom-qemu")
-    monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "meshcom", other, A,
-                                                          stub_pipeline, download=_never_download))
-    r = svc.binary_install("meshcom", apply=False, accept_pin_mismatch="yes")
-    assert r.ok and r.data["consent"]
-
-
 # ---- B2: a malformed commit is refused, not reported as a mismatch -------------------------------
 
 @pytest.mark.parametrize("bad", ["abc123", "A" * 40, "g" * 40])
 @pytest.mark.parametrize("side", ["binary", "pin"])
-@pytest.mark.parametrize("flag", ["", "yes"])
 @pytest.mark.parametrize("apply", [False, True])
 @pytest.mark.parametrize("op", ["install", "update"])
-def test_malformed_commit_refused_before_download_even_with_the_flag(tmp_path, monkeypatch,
-                                                                     stub_pipeline, bad, side,
-                                                                     flag, op, apply):
+def test_malformed_commit_refused_before_download(tmp_path, monkeypatch, stub_pipeline, bad, side,
+                                                  op, apply):
     svc = _svc(tmp_path, monkeypatch)
     cid = _daemon_cid(svc)
     if side == "binary":
@@ -145,95 +101,13 @@ def test_malformed_commit_refused_before_download_even_with_the_flag(tmp_path, m
                             lambda self, sid: {**pins, cid: bad})
         monkeypatch.setattr(bi, "index_entry", lambda idx, sid: fixed)
     call = (svc.install if op == "install" else svc.update)
-    r = call("daemon", apply=apply, source="binary", accept_pin_mismatch=flag)
+    r = call("daemon", apply=apply, source="binary")
     assert not r.ok and ("malformed" in r.summary or "not a full commit id" in r.summary)
-    assert "pin_mismatch" not in r.data and "override_command" not in r.data
-    assert "consent" not in r.data
+    assert "pin_mismatch" not in r.data and "binary_refusal" not in r.data
     assert not (tmp_path / "state" / "binary").exists()
 
 
-# ---- the consent token (§2b) ------------------------------------------------------------------
-
-def test_consent_token_is_order_independent():
-    one = {"x": (A, B), "y": (B, C)}
-    two = {"y": [B, C], "x": [A, B]}
-    assert bi.consent_token("f" * 64, one) == bi.consent_token("f" * 64, two)
-    assert bi.consent_token("f" * 64, one) != bi.consent_token("e" * 64, one)
-
-
-def test_override_consent_token_matches_same_entry(tmp_path, monkeypatch, stub_pipeline):
-    """The dry run's token equals the one the apply recomputes from the SAME entry: the apply
-    passes the gate and reaches the download."""
-    svc = _svc(tmp_path, monkeypatch)
-    cid = _daemon_cid(svc)
-    monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "daemon", cid, A, stub_pipeline))
-    plan = svc.binary_install("daemon", apply=False, accept_pin_mismatch="yes")
-    assert plan.ok and plan.data["changes"] == 1
-    assert plan.data["pin_mismatch"] == {cid: [A, svc._binary_pins("daemon")[cid]]}
-    assert any("OVER THE PIN CHECK" in d for d in plan.details)
-    r = svc.binary_install("daemon", apply=True, accept_pin_mismatch=plan.data["consent"])
-    assert not r.ok and "DOWNLOAD-REACHED" in r.summary
-
-
-@pytest.mark.parametrize("op", ["install", "update"])
-def test_override_refused_when_index_moved_between_consent_and_start(tmp_path, monkeypatch,
-                                                                     stub_pipeline, op):
-    """Consent for artifact A; the index now serves artifact B: refused before any download or
-    write, typed `consent_stale`, with the NEW map."""
-    svc = _svc(tmp_path, monkeypatch)
-    cid = _daemon_cid(svc)
-    monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "daemon", cid, A, stub_pipeline))
-    token = svc.binary_install("daemon", apply=False, accept_pin_mismatch="yes").data["consent"]
-    monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "daemon", cid, B, stub_pipeline,
-                                                          sha="b" * 64,
-                                                          download=_never_download))
-    call = (svc.install if op == "install" else svc.update)
-    r = call("daemon", apply=True, source="binary", accept_pin_mismatch=token)
-    assert not r.ok and r.data["override_refused"] == "consent_stale"
-    assert r.data["pin_mismatch"] == {cid: [B, svc._binary_pins("daemon")[cid]]}
-    assert "review the install again" in r.summary
-    assert not (tmp_path / "state" / "binary").exists()
-
-
-@pytest.mark.parametrize("op", ["install", "update"])
-def test_the_flagged_plan_names_the_command_that_repeats_the_acceptance(tmp_path, monkeypatch,
-                                                                         stub_pipeline, op):
-    """Found in release 3's box row: the dry run WITH the flag named `lhpc install <stack> --yes`,
-    which is refused again. It now names option 3's command; an unflagged plan keeps its line."""
-    svc = _svc(tmp_path, monkeypatch)
-    call = (svc.install if op == "install" else svc.update)
-    stub_pipeline(svc, download=_never_download)            # the entry matches the pins
-    plain = call("daemon", apply=False, source="binary")
-    assert plain.ok and plain.next_commands == ["lhpc install daemon --yes"]
-    monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "daemon", _daemon_cid(svc), A,
-                                                          stub_pipeline, download=_never_download))
-    plan = call("daemon", apply=False, source="binary", accept_pin_mismatch="yes")
-    assert plan.ok and plan.next_commands == [
-        "lhpc install daemon --source binary --accept-pin-mismatch --yes"]
-
-
-@pytest.mark.parametrize("op", ["install", "update"])
-def test_a_consent_token_is_refused_when_the_mismatch_has_gone(tmp_path, monkeypatch,
-                                                             stub_pipeline, op):
-    """Gate 2's P2: consent for mismatching artifact A; the index now serves artifact B, which
-    matches the pins. A's token matches nothing now: refused `consent_stale` with an empty map,
-    before any download or write (B was downloaded before)."""
-    svc = _svc(tmp_path, monkeypatch)
-    cid = _daemon_cid(svc)
-    monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "daemon", cid, A, stub_pipeline))
-    token = svc.binary_install("daemon", apply=False, accept_pin_mismatch="yes").data["consent"]
-    stub_pipeline(svc, download=_never_download)                  # B: the entry matches the pins
-    call = (svc.install if op == "install" else svc.update)
-    r = call("daemon", apply=True, source="binary", accept_pin_mismatch=token)
-    assert not r.ok and r.data["override_refused"] == "consent_stale"
-    assert r.data["pin_mismatch"] == {}
-    assert "review the install again" in r.summary
-    assert "The published binary or LHPC's pins changed since you confirmed" in r.summary
-    assert r.next_commands == ["lhpc install daemon --source binary --yes"]
-    assert not (tmp_path / "state" / "binary").exists()
-    # the bare flag (a human's dry run) with nothing to accept stays an ordinary plan
-    assert call("daemon", apply=False, source="binary", accept_pin_mismatch="yes").ok
-
+# ---- gate 2: the start, against a receipt an older lhpc may have written -------------------------
 
 def test_a_lagging_covered_library_does_not_block_the_start(tmp_path, monkeypatch, binary_receipt):
     """The daemon's artifact also covers RadioLib, a library that never runs. Its lag, with or
@@ -320,67 +194,8 @@ def test_only_a_covered_service_blocks_the_start(short_tmp_path, monkeypatch, bi
         assert res["meshcom-qemu"].summary.startswith("start failed: stubbed spawn")
 
 
-def test_a_bare_flag_does_not_apply_without_the_dry_runs_token(tmp_path, monkeypatch, stub_pipeline):
-    svc = _svc(tmp_path, monkeypatch)
-    monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "daemon", _daemon_cid(svc), A,
-                                                          stub_pipeline,
-                                                          download=_never_download))
-    r = svc.binary_install("daemon", apply=True, accept_pin_mismatch="yes")
-    assert not r.ok and r.data["override_refused"] == "consent_stale"
-
-
-# ---- the flag lifts ONLY the commit comparison ----------------------------------------------------
-
-def test_the_flag_does_not_lift_the_runtime_deps(tmp_path, monkeypatch, stub_pipeline):
-    svc = _svc(tmp_path, monkeypatch)
-    monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "daemon", _daemon_cid(svc), A,
-                                                          stub_pipeline,
-                                                          download=_never_download))
-    monkeypatch.setattr(bi, "missing_runtime_deps", lambda e, f: ["libfoo1"])
-    r = svc.binary_install("daemon", apply=False, accept_pin_mismatch="yes")
-    assert not r.ok and r.data.get("missing_runtime_deps") == ["libfoo1"]
-
-
-def test_the_flag_does_not_lift_the_target_or_the_smoke_record(tmp_path, monkeypatch, stub_pipeline):
-    svc = _svc(tmp_path, monkeypatch)
-    stub_pipeline(svc, download=_never_download)
-    monkeypatch.setattr(bi, "check_target", lambda e, t: (_ for _ in ()).throw(
-        bi.BinaryInstallError("built for another target")))
-    r = svc.binary_install("daemon", apply=False, accept_pin_mismatch="yes")
-    assert not r.ok and "another target" in r.summary and "consent" not in r.data
-    monkeypatch.setattr(bi, "index_entry", lambda idx, sid: (_ for _ in ()).throw(
-        bi.BinaryInstallError("did not pass a mandatory smoke test")))
-    r = svc.binary_install("daemon", apply=False, accept_pin_mismatch="yes")
-    assert not r.ok and "smoke" in r.summary
-
-
-def test_the_apply_records_the_accepted_pairs_in_the_receipt(tmp_path, monkeypatch, stub_pipeline):
-    """The override reaches `build_receipt` with the accepted pairs, the time and the version."""
-    svc = _svc(tmp_path, monkeypatch)
-    cid = _daemon_cid(svc)
-    spec = svc.binary_spec("daemon")
-    files = sorted({*spec.proof_paths, *(next(iter(a)) for a in spec.probes)})
-    monkeypatch.setattr(bi, "index_entry", _lagging_entry(svc, "daemon", cid, A, stub_pipeline,
-                                                          download=lambda e, d: None))
-    monkeypatch.setattr(bi, "validate_and_extract", lambda tar, stage, roots: files)
-    monkeypatch.setattr(bi, "publish", lambda *a, **k: None)
-    monkeypatch.setattr(bi, "run_probe", lambda paths, argv: "ok")
-    monkeypatch.setattr(ControllerService, "_binary_provision", lambda self, *a: [])
-    seen = {}
-
-    def _capture(*a, **k):
-        seen.update(k)
-        raise bi.BinaryInstallError("CAPTURED")
-    monkeypatch.setattr(bi, "build_receipt", _capture)
-    token = svc.binary_install("daemon", apply=False, accept_pin_mismatch="yes").data["consent"]
-    r = svc.binary_install("daemon", apply=True, accept_pin_mismatch=token)
-    assert "CAPTURED" in r.summary
-    ov = seen["override"]
-    assert ov["mismatch"] == {cid: [A, svc._binary_pins("daemon")[cid]]}
-    assert isinstance(ov["at"], int) and ov["lhpc_version"]
-
-
-def test_without_the_flag_no_override_is_recorded(tmp_path, monkeypatch, stub_pipeline):
+def test_an_install_never_records_an_override(tmp_path, monkeypatch, stub_pipeline):
+    """The receipt writer has no override any more: `build_receipt` is called without one."""
     svc = _svc(tmp_path, monkeypatch)
     spec = svc.binary_spec("daemon")
     files = sorted({*spec.proof_paths, *(next(iter(a)) for a in spec.probes)})
@@ -397,7 +212,7 @@ def test_without_the_flag_no_override_is_recorded(tmp_path, monkeypatch, stub_pi
     monkeypatch.setattr(bi, "build_receipt", _capture)
     r = svc.binary_install("daemon", apply=True)
     assert not r.ok and r.data["rolled_back"] is True
-    assert seen["override"] is None
+    assert "override" not in seen
 
 
 # ---- the receipt ------------------------------------------------------------------------------

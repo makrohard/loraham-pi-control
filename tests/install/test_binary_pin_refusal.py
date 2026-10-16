@@ -1,4 +1,5 @@
-"""P1.15: the pin-mismatch refusal of a binary install names self-update first, source second."""
+"""P1.15: no published binary built for this lhpc (`none_compatible`) names self-update first,
+source second, and nothing else."""
 import pytest
 
 from lhpc.core import binary_install as bi
@@ -26,16 +27,15 @@ def _svc_with_index(tmp_path, monkeypatch, error):
 
 @pytest.mark.parametrize("apply", [False, True])
 def test_a_pin_mismatch_names_self_update_first_then_source(tmp_path, monkeypatch, apply):
-    svc = _svc_with_index(tmp_path, monkeypatch, bi.BinaryPinMismatch(
-        "the published binary was built from different commits than this lhpc pins (x); "
-        "the index serves the latest release's binary",
+    svc = _svc_with_index(tmp_path, monkeypatch, bi.BinaryNoneCompatible(
+        "the newest published binary was built from different commits than this lhpc pins (x)",
         mismatch={"loraham-daemon": ("1" * 40, "2" * 40)}))
     r = svc.binary_install("daemon", apply=apply)
     assert not r.ok and "different commits" in r.summary
-    # A3 adds a third way (the override) AFTER the two P1.15 named, in the same order.
-    assert r.next_commands[:2] == ["lhpc self-update --apply",
-                                   "lhpc install daemon --source pinned --yes"]
+    assert r.next_commands == ["lhpc self-update --apply",
+                               "lhpc install daemon --source pinned --yes"]
     assert r.data.get("pin_mismatch") == {"loraham-daemon": ["1" * 40, "2" * 40]}
+    assert r.data.get("binary_refusal") == "none_compatible"
     assert r.details[0].strip().startswith("1. Update LHPC first")
     assert r.details[1].strip().startswith("2. Or build from source")
 
@@ -44,11 +44,11 @@ def test_other_refusals_keep_the_source_offer_only(tmp_path, monkeypatch):
     svc = _svc_with_index(tmp_path, monkeypatch, bi.BinaryInstallError("the index is unreachable"))
     r = svc.binary_install("daemon", apply=False)
     assert not r.ok and r.next_commands == ["lhpc install daemon --source pinned --yes"]
-    assert "pin_mismatch" not in r.data
+    assert "pin_mismatch" not in r.data and "binary_refusal" not in r.data
 
 
 def test_check_pins_raises_the_typed_mismatch():
     class _E:
         components = {"a": "1" * 40}
-    with pytest.raises(bi.BinaryPinMismatch):
+    with pytest.raises(bi.BinaryNoneCompatible):
         bi.check_pins(_E(), {"a": "2" * 40})

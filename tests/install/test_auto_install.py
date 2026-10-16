@@ -2383,7 +2383,8 @@ def test_a_refused_binary_row_names_the_real_source_command(tmp_path, monkeypatc
                         lambda self, sid, apply=False, locked=False:
                         ActionResult(False, f"Binary install of '{sid}' refused: x",
                                      next_commands=cmds if sid == "meshtastic" else [],
-                                     data={"binary_failed": True, "pin_mismatch": pin_mismatch}))
+                                     data={"binary_failed": True, **({"binary_refusal": "none_compatible"}
+                                                                     if pin_mismatch else {})}))
     svc = _svc(tmp_path)
     scope = svc._auto_install_scope()
     sel = {st.id: {"install": True, "version": "pinned", "tests": False, "tx": False}
@@ -2420,17 +2421,14 @@ def test_a_refused_binary_row_names_the_refusals_own_command_first(tmp_path, mon
     assert detail.index(own) < detail.index("lhpc install meshtastic --source pinned --yes")
 
 
-@pytest.mark.parametrize("overridable", [True, False])
-def test_auto_install_pin_mismatch_row_names_the_manual_command(tmp_path, monkeypatch, overridable):
-    """A3: an auto-install pin refusal row. An overridable row's detail ENDS with the manual
-    command the refusal carries (`override_command`); a MeshCom-style refusal (none) leads with
-    "update LHPC first" and names no flag."""
+def test_auto_install_none_compatible_row_leads_with_self_update_and_names_no_override(tmp_path,
+                                                                                    monkeypatch):
+    """No published binary built for this LHPC: the row leads with "update LHPC first", then the
+    source command, and offers no way over the pin check (decision D1)."""
     _happy_ops(monkeypatch)
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
-    cmd = "lhpc install meshtastic --source binary --accept-pin-mismatch --yes"
-    data = {"binary_failed": True, "pin_mismatch": {"meshtastic": ["a" * 40, "b" * 40]}}
-    if overridable:
-        data["override_command"] = cmd
+    data = {"binary_failed": True, "binary_refusal": "none_compatible",
+            "pin_mismatch": {"meshtastic": ["a" * 40, "b" * 40]}}
     monkeypatch.setattr(ControllerService, "binary_install",
                         lambda self, sid, apply=False, locked=False, **_k:
                         ActionResult(False, f"Binary install of '{sid}' refused: x",
@@ -2445,10 +2443,8 @@ def test_auto_install_pin_mismatch_row_names_the_manual_command(tmp_path, monkey
     assert not svc.auto_install(apply=True, tests=False, selection=sel, emit=lambda s: None).ok
     detail = {x["id"]: x for x in svc.auto_install_status()["stacks"]}["meshtastic"]["detail"]
     assert detail.split(" — ", 1)[1].startswith("update LHPC first (lhpc self-update --apply)")
-    if overridable:
-        assert detail.endswith(f"or install the published binary anyway by hand: {cmd}")
-    else:
-        assert "--accept-pin-mismatch" not in detail
+    assert detail.endswith("install from source with: lhpc install meshtastic --source pinned --yes")
+    assert "--accept-pin-mismatch" not in detail
 
 
 def test_auto_install_build_uses_build_limits(tmp_path, monkeypatch):

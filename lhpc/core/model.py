@@ -375,9 +375,9 @@ class BinarySpec:
 
     STACK-level by design: artifacts are per-stack tarballs, and shared-source coherence
     forbids per-SourceSpec divergence. The artifact FILENAME is deliberately absent — the
-    content-addressed name comes from the validated index (schema 2), never the manifest."""
+    content-addressed name comes from the validated index (schema 2 or 3), never the manifest."""
 
-    index_url: str                        # trusted index.json location (manifest-only —
+    index_url: str                        # trusted index location (manifest-only —
                                           # config can never redirect the download source)
     covers: tuple[str, ...]               # component ids whose source/build the artifact replaces
     publish_roots: tuple[str, ...]        # runtime-root-relative dirs/files the artifact OWNS —

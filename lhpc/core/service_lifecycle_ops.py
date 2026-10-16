@@ -3727,8 +3727,7 @@ class LifecycleOpsMixin:
         return ""
 
     @invalidates_snapshot
-    def spawn_web_job(self, op: str, target: str, source: str = "pinned",
-                      accept_pin_mismatch: str = ""):
+    def spawn_web_job(self, op: str, target: str, source: str = "pinned"):
         """Spawn detached build/test/install job(s) for `target`. Returns `(job_log_name, admission, reason)`
         with `admission ∈ {"admitted","blocked","pending"}` — the web adapter flashes per that and NEVER
         infers "started" from a returned log. PRIMARY-FIRST: the main job's admission is handshaked before
@@ -3821,8 +3820,6 @@ class LifecycleOpsMixin:
                 with jobresult.settle_on_raise(self._paths, log, aid):
                     argv = [sys.executable, "-m", "lhpc", "install", target, "--yes", "--source", source,
                             "--web-result", log, "--attempt-id", aid]
-                    if accept_pin_mismatch:              # the confirm page's consent token only
-                        argv.append(f"--accept-pin-mismatch={accept_pin_mismatch}")
                     ln, pid = life.spawn_job(name, argv, runtime)
                     if not ln or not pid:
                         jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
@@ -6247,20 +6244,16 @@ class LifecycleOpsMixin:
     @invalidates_snapshot
     def run_action(self, op: str, target: str, apply: bool = False, source: str = "pinned",
                    stop_owners: bool = False, cascade: bool = False,
-                   band: str = "", purge: bool = False,
-                   accept_pin_mismatch: str = "") -> ActionResult:
-        """Dispatch a named action to its service method (plan when apply=False).
-        `accept_pin_mismatch` (a consent token) reaches only a binary install/update."""
+                   band: str = "", purge: bool = False) -> ActionResult:
+        """Dispatch a named action to its service method (plan when apply=False)."""
         # An invalid source selector is a typed failure — NEVER silently rewritten to 'dev'.
         if op in ("install", "update") and source not in self.CHANNEL_CHOICES:
             return ActionResult(False, f"Invalid source '{source}' (choose "
                                 f"{', '.join(self.SOURCE_CHOICES)}).",
                                 next_commands=[f"lhpc {op} {target} --source pinned"])
         ops = {
-            "install": lambda: self.install(target, apply=apply, source=source,
-                                            accept_pin_mismatch=accept_pin_mismatch),
+            "install": lambda: self.install(target, apply=apply, source=source),
             "update": lambda: self.update(target, apply=apply, source=source,
-                                          accept_pin_mismatch=accept_pin_mismatch,
                                           build=False),     # the console builds it detached
             "uninstall": lambda: self.uninstall(target, apply=apply),
             "start": lambda: self.start(target, apply=apply, stop_owners=stop_owners, band=band),

@@ -1780,8 +1780,7 @@ class MaintenanceOpsMixin:
     @invalidates_snapshot
     def update(self, target: str = "", apply: bool = False,
                source: str = "pinned", auto_install_ctx=None,
-               exact_pin: bool = False, accept_pin_mismatch: str = "",
-               build: bool = True) -> ActionResult:
+               exact_pin: bool = False, build: bool = True) -> ActionResult:
         """Refresh the managed source(s) from the remote (version per `source`:
         dev/stable/pinned); a failed `dev` adoption retries once at the known-working (else
         manifest-pin) identity, disclosed. A stack (or "all") updates its required sources,
@@ -1809,16 +1808,14 @@ class MaintenanceOpsMixin:
                 return ActionResult(False, f"Cannot update '{target}' from binary: {err}",
                                     next_commands=[f"lhpc update {target} --source pinned "
                                                    "--yes"])
-            return self.binary_install(target, apply=apply,
-                                       accept_pin_mismatch=accept_pin_mismatch)
+            return self.binary_install(target, apply=apply)
         # A binary-installed stack updates binary→binary: whether the PUBLISHED artifact has
         # caught up with the manifest pins is decided by the install's pin check against the
         # index (the installed receipt lagging the pins says nothing about the publisher).
         # A lagging artifact is refused there: self-update first, the source channel second.
         if target and self.on_binary_channel(target):
             if source == self.BINARY_CHANNEL:
-                return self.binary_install(target, apply=apply,
-                                           accept_pin_mismatch=accept_pin_mismatch)
+                return self.binary_install(target, apply=apply)
             # An EXPLICIT source selector is an intentional channel switch: install handles the
             # retirement + clone, so point there rather than half-updating a binary tree.
             return ActionResult(

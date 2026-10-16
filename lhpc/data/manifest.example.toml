@@ -36,7 +36,7 @@ main = "loraham-daemon"
   # Prebuilt-binary channel (lhpc-binaries, schema-2 index): the artifact replaces the
   # daemon+RadioLib source builds. The content-addressed filename comes from the index.
   [stack.binary]
-  index_url = "https://github.com/makrohard/lhpc-binaries/releases/download/binaries/index.json"
+  index_url = "https://github.com/makrohard/lhpc-binaries/releases/download/binaries/index-v3.json"
   covers = ["loraham-daemon", "radiolib"]
   # The daemon binary sits INSIDE its source tree, next to tracked sources — the root is the
   # exact file, never the directory (publishing merges, but a narrow root is the real guard).
@@ -1091,7 +1091,7 @@ main = "meshtastic"
   # Prebuilt-binary channel: replaces the multi-hour PlatformIO native build. The artifact
   # ships build/tools/meshtasticd (binary + web assets) and the source-local build marker.
   [stack.binary]
-  index_url = "https://github.com/makrohard/lhpc-binaries/releases/download/binaries/index.json"
+  index_url = "https://github.com/makrohard/lhpc-binaries/releases/download/binaries/index-v3.json"
   covers = ["meshtastic"]
   publish_roots = ["build/tools/meshtasticd", "src/meshtastic-firmware/.lhpc-build-complete"]
   proof_paths = ["build/tools/meshtasticd/meshtasticd"]
@@ -1599,7 +1599,7 @@ main = "meshcom-qemu"
   # NOTE: the published firmware is built with an EMPTY XR password — the binary channel
   # runs the stack OPEN-AUTH and disables HMAC password changes.
   [stack.binary]
-  index_url = "https://github.com/makrohard/lhpc-binaries/releases/download/binaries/index.json"
+  index_url = "https://github.com/makrohard/lhpc-binaries/releases/download/binaries/index-v3.json"
   # `meshcom-firmware` IS covered: the artifact ships its built `flash.bin`, so the pin gate must
   # verify the firmware commit too. Without it the gate compared only qemu+bridge, and an artifact
   # whose firmware came from a DIFFERENT (here: rebased-away) commit was accepted silently — the

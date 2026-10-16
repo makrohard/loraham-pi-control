@@ -69,9 +69,12 @@ Three long-compiling stacks (daemon, meshtastic, meshcom) can be installed as a 
 artifact** instead of a source build:
 
 - trust anchor: **HTTPS + sha256 + size**, checked **before** anything is unpacked;
-- the artifact's per-component commits must equal this lhpc's **manifest pins**; a lagging
-  artifact is refused unless the operator accepts that exact mismatch
-  ([`--accept-pin-mismatch`](cli.md#install));
+- the index (`index-v3.json`) keeps, per stack, the newest artifact of every published
+  composition, newest first; lhpc installs the first one whose per-component commits equal its
+  **manifest pins** and whose build-input digests equal the ones it computes itself. When that is
+  not the newest, the plan adds "a newer binary is published for a newer LHPC (lhpc self-update
+  --apply)". None built for this lhpc is one refusal: self-update first, the source channel second;
+  nothing is installed over the pin check;
 - it must match this platform and record a passed mandatory builder smoke test;
 - the install is recorded in `state/binary/<stack>.json` and shown as `binary@<sha>` by
   `lhpc status --versions`.
@@ -80,7 +83,8 @@ artifact** instead of a source build:
 |---|---|
 | is this checkout the commit it claims? | the ownership record plus its live `HEAD` (`source_registry.verify_identity`) |
 | is this stack installed from an artifact at all? | the receipt's four-state read (`receipt_state`), no hashing |
-| is that artifact the right COMMITS? | the receipt's `components` map against the manifest pins, as at install. A start refuses while the started component, or another covered runnable component, is behind its pin without an acceptance in force (a new published artifact never updates an installed copy): `lhpc update <stack>`. A covered library or firmware image (the daemon's RadioLib, MeshCom's firmware) never blocks a start; its lag shows in the update status |
+| is that artifact the right COMMITS? | the receipt's `components` map against the manifest pins, as at install. A start refuses while the started component, or another covered runnable component, is behind its pin without an acceptance in force (one an earlier lhpc recorded with the removed
+`--accept-pin-mismatch`; a new published artifact never updates an installed copy): `lhpc update <stack>`. A covered library or firmware image (the daemon's RadioLib, MeshCom's firmware) never blocks a start; its lag shows in the update status |
 | are the artifact's FILES still as installed? | `verify_files`, which hashes them |
 
 `verify_files` is an integrity check, not provenance, and time-sensitive: an emulated node writes

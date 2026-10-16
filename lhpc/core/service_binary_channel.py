@@ -168,9 +168,9 @@ class BinaryChannelMixin:
         return brx.active_override(rec, self._binary_pins(stack_id), spec.clone_required)
 
     def binary_install_refusal(self, stack_id: str) -> dict | None:
-        """The typed pin refusal of this stack's last FAILED console install job, from its job
-        result only (no index fetch on a GET), while its banner is not dismissed:
-        {"refused": ""|"clone_required"|"consent_stale", "lagging": [(cid, binary, pin)]}."""
+        """The typed refusal of this stack's last FAILED console install job (no published binary
+        built for this lhpc), from its job result only (no index fetch on a GET), while its banner
+        is not dismissed: {"lagging": [(cid, binary, pin)]}."""
         from . import jobresult
         log = f"install-{stack_id}.log"
         rec = jobresult.read_one(self._paths, log)
@@ -179,8 +179,7 @@ class BinaryChannelMixin:
         if log in self._task_dismissed_ids():
             return None
         ref = rec["refusal"]
-        return {"refused": ref["override_refused"],
-                "lagging": [(c, p[0], p[1]) for c, p in sorted(ref["pin_mismatch"].items())]}
+        return {"lagging": [(c, p[0], p[1]) for c, p in sorted(ref["pin_mismatch"].items())]}
 
     def binary_capable(self, component_id: str) -> bool:
         """True when a binary artifact CAN provide this component (its stack's spec covers it),
