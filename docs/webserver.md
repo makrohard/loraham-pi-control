@@ -292,6 +292,17 @@ Without the console running, nothing rebuilds it and after 30 days nginx refuses
 client certificate ("400 The SSL certificate error"). Beyond this and normalisation, nothing
 is regenerated automatically.
 
+**The access log** (`logs/nginx-access.log`) records every non-2xx/3xx request and, on the console
+and on the stack web UIs, the first request of each TLS connection that made a full handshake with a
+verified client certificate, with that certificate's subject (`CN=<label>`) as the user in nginx's
+`combined` layout. Later requests on the same connection are not logged, and neither is a connection
+that resumes an earlier one's TLS parameters (within `ssl_session_timeout`, 10 minutes, of the same
+nginx process), although nginx knows its certificate there. A visit logs a line whenever a new
+connection needs a full handshake (after 10 minutes, after an nginx reload or restart); a connection
+that resumes a valid earlier handshake (within 10 minutes) is not logged again. The user field is
+the certificate's whole subject; LHPC's labels are filename-safe, but a certificate whose subject
+contains spaces would break a parser that expects one token there.
+
 ## Verifying effective state
 
 ```

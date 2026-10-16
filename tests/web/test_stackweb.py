@@ -85,19 +85,43 @@ def test_lan_proxy_reuses_the_console_client_ca():
     assert conf.count("/GOLDEN/config/tls/client-ca/crl.pem") == 2
 
 
-def test_only_non_2xx_3xx_reaches_the_access_log():
+def _loggable(conf, status, verify, reused, nreq):
+    """Evaluate the rendered `$lhpc_loggable` map the way nginx does: its source string, then the
+    regex entries in order (the first match wins), else the default."""
+    head, body = conf.split(" $lhpc_loggable {")[0], conf.split(" $lhpc_loggable {")[1].split("}")[0]
+    source = head.rsplit("map ", 1)[1].strip().strip('"')
+    value = (source.replace("$status", status).replace("$ssl_client_verify", verify)
+             .replace("$ssl_session_reused", reused).replace("$connection_requests", nreq))
+    default = None
+    for line in body.strip().splitlines():
+        key, result = line.strip().rstrip(";").rsplit(None, 1)
+        if key == "default":
+            default = result
+        elif re.search(key.strip('"')[1:], value):
+            return result
+    return default
+
+
+def test_the_access_log_keeps_failures_and_one_line_per_cert_login():
     """The goldens are regenerated whenever this render changes, so they cannot be this change's
     proof — a wrong output would simply be blessed. Assert the mechanism directly.
 
     Polarity matters and is easy to invert: nginx SKIPS a request when the condition is "0" or
-    empty, so 2xx/3xx must map to 0 and everything else to 1. `combined` must also be named
-    explicitly — `access_log path if=...` without a format is a config error."""
+    empty. A console page polls continuously, so routine success stays out; a failure is logged;
+    a client-certificate login (the first request after a full TLS handshake with a verified cert) is
+    logged once, with the certificate's subject in the user field."""
     conf = webserver.render_nginx_config(_paths(), WebserverConfig())
-    assert "map $status $lhpc_loggable {" in conf
-    body = conf.split("map $status $lhpc_loggable {")[1].split("}")[0]
-    assert "~^[23]" in body and "0;" in body          # success is NOT logged
-    assert "default 1;" in body                       # everything else IS
-    assert "access_log /GOLDEN/logs/nginx-access.log combined if=$lhpc_loggable;" in conf
+    assert _loggable(conf, "200", "SUCCESS", ".", "1") == "1"     # a login: full handshake, verified
+    assert _loggable(conf, "302", "SUCCESS", ".", "1") == "1"
+    assert _loggable(conf, "200", "SUCCESS", "r", "1") == "0"     # a resumed handshake: no new login
+    assert _loggable(conf, "200", "SUCCESS", ".", "2") == "0"     # the same connection's next request
+    assert _loggable(conf, "200", "NONE", ".", "1") == "0"        # loopback without a cert
+    assert _loggable(conf, "200", "", "", "1") == "0"             # plain http
+    assert _loggable(conf, "403", "FAILED:certificate revoked", ".", "1") == "1"
+    assert _loggable(conf, "404", "SUCCESS", "r", "7") == "1"
+    fmt = conf.split("log_format lhpc ")[1].split(";")[0]
+    assert "$ssl_client_s_dn" in fmt and "$remote_user" not in fmt
+    assert "access_log /GOLDEN/logs/nginx-access.log lhpc if=$lhpc_loggable;" in conf
     # exactly one access_log: a nested one would cancel this inherited directive outright
     assert conf.count("access_log ") == 1
 

@@ -775,15 +775,19 @@ error_log {_abs(paths, _ERR_LOG)} warn;
 worker_processes 1;
 events {{ worker_connections 256; }}
 http {{
-    # Non-2xx/3xx only. A console page polls continuously, so routine success is the bulk of the
-    # traffic and none of the evidence (6,836 of 6,919 lines on 2026-09-15), and nothing rotates
-    # this file — the rootless nginx is outside /etc/logrotate.d/nginx's reach.
-    # This REDUCES growth, it does not bound it: 4xx/5xx still log without limit.
-    map $status $lhpc_loggable {{
-        ~^[23]  0;
+    # Non-2xx/3xx, plus one line per client-certificate login (the first request after a full TLS
+    # handshake with a verified cert). A console page polls continuously, so routine success is the
+    # bulk of the traffic and none of the evidence (6,836 of 6,919 lines on 2026-09-15). The
+    # console's controller-logs pass caps the file (updater_units.CONTROLLER_LOGS). The format is
+    # `combined` with the certificate's subject as the user.
+    log_format lhpc '$remote_addr - $ssl_client_s_dn [$time_local] "$request" $status '
+                    '$body_bytes_sent "$http_referer" "$http_user_agent"';
+    map "$status:$ssl_client_verify:$ssl_session_reused:$connection_requests" $lhpc_loggable {{
+        "~^[23][0-9][0-9]:SUCCESS:\\.:1$"  1;
+        "~^[23]"  0;
         default 1;
     }}
-    access_log {_abs(paths, _ACC_LOG)} combined if=$lhpc_loggable;
+    access_log {_abs(paths, _ACC_LOG)} lhpc if=$lhpc_loggable;
     client_body_temp_path {_abs(paths, NGINX_TEMP)}/body;
     proxy_temp_path {_abs(paths, NGINX_TEMP)}/proxy;
     fastcgi_temp_path {_abs(paths, NGINX_TEMP)}/fastcgi;

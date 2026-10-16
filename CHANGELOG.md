@@ -16,6 +16,11 @@ Fixed
 - Web console: while the console runs, the client-CA CRL is renewed a week before it expires, so remote client
   certificates are no longer refused for up to five minutes every 30 days while it waited for the expiry.
 
+Changed
+
+- Web console: the access log records each client-certificate login with the certificate's name, one line per
+  full TLS handshake (it logged failures only).
+
 ## 0.12.10
 
 Changed
