@@ -68,7 +68,9 @@ through `interrupts.py`: its module pins the operation's durable writes and fail
 1. **Behaviour, not implementation.** No `inspect.getsource`, no reading production `.py`/`.js`/`.css`
    to assert its contents, no pinning statement order or helper names. Exception: a whole-module
    negative invariant ("this file spawns nothing") no driven path can prove, saying so in its
-   docstring and with a behavioural twin.
+   docstring and with a behavioural twin. Second exception: a documentation-integrity test may
+   assert that a symbol named by `docs/` is defined in its file; it asserts existence, never
+   behaviour or source text.
 2. **Exact where exactness is the contract.** Systemd units, nginx config, firewall rules, generated
    argv, config rendering, persisted schemas, receipts, permissions and canonical paths are compared
    byte for byte. Human sentences are not: assert the typed field, the state, or the command token
