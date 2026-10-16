@@ -406,7 +406,7 @@ def _set_call(svc, callsign="XX0XXA"):
 
 # Real-but-harmless spawn shim: ownership recording now requires a COMPLETE /proc
 # identity, so tests that "start" something must spawn a real process (a detached
-# `sleep`) rather than a fake pid. All spawned sleepers are reaped at session end.
+# `sleep`) rather than a fake pid. Every spawned sleeper is reaped after its test (`_reap_real_spawns`).
 _SPAWNED: list = []
 
 
@@ -433,6 +433,8 @@ def _real_spawn(argv, log, cwd=None, env=None):
 
 @pytest.fixture(autouse=True)
 def _reap_real_spawns():
+    """Isolates the host from the real processes `real_spawn` starts: after every test, each
+    detached `sleep` it spawned is killed and reaped, so none outlives the test that made it."""
     yield
     while _SPAWNED:
         p = _SPAWNED.pop()

@@ -17,6 +17,8 @@ _FLOOR = 1_735_689_600.0                              # 2025-01-01T00:00:00Z
 
 @pytest.fixture(autouse=True)
 def _probe_must_not_be_read(monkeypatch):
+    """Isolates the policy from the host clock: `service_system.read_kernel_time_state` raises in
+    every test here, so a case passes only on the kernel state it hands the policy itself."""
     def boom():
         raise AssertionError("the policy read the kernel itself")
     monkeypatch.setattr(service_system, "read_kernel_time_state", boom)
