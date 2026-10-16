@@ -94,7 +94,7 @@ repositories.
 ## Policy
 
 - **Freeze the config, float the tool.** Dev tools are unpinned (`pytest`, `ruff`, `bandit`,
-  `pytest-cov`, `zstandard`); ruff's rules are pinned in `[tool.ruff.lint] select`/`ignore`,
+  `pytest-cov`, `pytest-xdist`, `zstandard`); ruff's rules are pinned in `[tool.ruff.lint] select`/`ignore`,
   bandit runs `-lll`. When a tool complains, fix the code or change the config with a reason;
   never re-pin the tool.
 - **`-m contract` states what LHPC promises; the full suite protects it.** What to tag:
