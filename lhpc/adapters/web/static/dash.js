@@ -157,7 +157,7 @@
           }
         })
         .catch(function () { /* transient */ });
-    }, pending ? 2000 : 4000);
+    }, pending ? 2000 : 10000);
   }
 
   // "Scan now": ONE real CAD measurement, on explicit click only.

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Changed
+
+- The dashboard checks for changes made elsewhere every 10 s (was 4 s; still 2 s while a start is pending), and log
+  pages fetch new lines every 5 s (was 2 s).
+
 Fixed
 
 - MeshCore: LHPC's own transmit limit is gone, which delayed repeats by up to 27 s; in the repeater modes openHop's
