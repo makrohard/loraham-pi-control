@@ -55,6 +55,7 @@ def test_default_channel_is_never_the_branch_tip(tmp_path, monkeypatch):
     only by asking for it, so upstream pushing to a branch can never change what a fresh box
     installs."""
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert svc.stacks() and svc.auto_install_rows()                  # something is checked
     for st in svc.stacks():
         assert svc.default_channel(st.id) in (svc.BINARY_CHANNEL, "pinned")
     # every stack the auto-install (and so the image builder) plans for

@@ -51,6 +51,7 @@ def test_every_baseline_entry_is_well_formed():
 
 
 def test_every_calibration_entry_is_well_formed():
+    assert BASELINE.get("calibration")                                # something is checked
     for c in BASELINE.get("calibration", []):
         assert re.fullmatch(r"sha256:[0-9a-f]{64}", str(c.get("workload", ""))), c
         assert c.get("source") in stt.SOURCES, c

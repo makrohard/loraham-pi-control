@@ -47,7 +47,9 @@ def test_the_scan_finds_the_blocks_it_is_meant_to_check():
 
 @pytest.mark.parametrize("workflow", WORKFLOWS, ids=lambda w: w.name)
 def test_every_workflow_shell_block_parses(workflow):
-    for line_no, script in _run_blocks(workflow.read_text()):
+    blocks = list(_run_blocks(workflow.read_text()))
+    assert blocks                                                     # something is checked
+    for line_no, script in blocks:
         r = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True,
                            check=False)
         assert r.returncode == 0, (
@@ -122,6 +124,7 @@ def test_the_helper_does_not_wrap_a_verdict():
     pip-audit` installs the auditor and is fine, while `retry 3 pip-audit .` would run it and is
     not. A substring match cannot tell those apart.
     """
+    assert WORKFLOWS                                                  # something is checked
     for wf in WORKFLOWS:
         for lineno, line in enumerate(wf.read_text().splitlines(), 1):
             stripped = line.strip()

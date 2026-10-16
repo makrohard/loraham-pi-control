@@ -376,7 +376,9 @@ def test_deps_script_service_has_every_category_and_no_venv_pip(tmp_path):
 def test_bootstrap_script_runs_no_sudo(tmp_path):
     """The script is root: `sudo` may survive only in comments and inside quoted (echoed) text."""
     import re
-    for ln in _svc(tmp_path).deps_script().splitlines():
+    lines = _svc(tmp_path).deps_script().splitlines()
+    assert lines                                                      # something is checked
+    for ln in lines:
         code = "" if ln.lstrip().startswith("#") else ln.split("#", 1)[0]
         assert "sudo" not in re.sub(r'"[^"]*"|\'[^\']*\'', "", code), ln
 

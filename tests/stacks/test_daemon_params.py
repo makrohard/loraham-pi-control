@@ -42,13 +42,12 @@ def test_meshcom_and_meshcore_868_defaults():
 
 def test_all_default_values_are_daemon_valid():
     # Every displayed default must pass the daemon's own validator (no mismatch/typo).
-    for s in dp.CLIENT_STACKS:
-        for band in ("433", "868"):
-            for name in dp.RADIO_PARAMS + dp.LBT_PARAMS:
-                v = dp.default_value(s, band, name)
-                if v == "":
-                    continue
-                assert daemon_control.validate_set(name, v) is None, f"{s}/{band}/{name}={v}"
+    defaults = [(s, band, name, dp.default_value(s, band, name)) for s in dp.CLIENT_STACKS
+                for band in ("433", "868") for name in dp.RADIO_PARAMS + dp.LBT_PARAMS]
+    defaults = [d for d in defaults if d[3] != ""]
+    assert defaults                                                   # something is checked
+    for s, band, name, v in defaults:
+        assert daemon_control.validate_set(name, v) is None, f"{s}/{band}/{name}={v}"
 
 
 def test_radio_params_greyed_lbt_not():

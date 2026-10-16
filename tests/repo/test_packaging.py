@@ -47,6 +47,8 @@ def test_every_shipped_asset_tree_is_in_the_package_data_allow_list():
     patterns = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["setuptools"][
         "package-data"]["lhpc"]
     data = root / "lhpc" / "data"
+    assert any(p.is_dir() and p.name.endswith("-dist") for p in data.iterdir())
+    assert any(data.glob("*constraints.txt"))                         # something is checked
 
     for tree in sorted(p for p in data.iterdir() if p.is_dir() and p.name.endswith("-dist")):
         assert f"data/{tree.name}/**/*" in patterns, (
@@ -77,6 +79,7 @@ def test_every_file_in_a_shipped_asset_tree_is_tracked_by_git():
     and the wheel built from the working tree still contained them — so only a box installing
     from a clone would have found the UI incomplete. Compare tracked files against the disk."""
     root = repo_paths.REPO
+    assert any(p.is_dir() and p.name.endswith("-dist") for p in (root / "lhpc" / "data").iterdir())
     for tree in sorted(p for p in (root / "lhpc" / "data").iterdir()
                        if p.is_dir() and p.name.endswith("-dist")):
         rel = tree.relative_to(root)

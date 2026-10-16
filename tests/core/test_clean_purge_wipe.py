@@ -247,6 +247,7 @@ def test_no_other_stack_uses_a_state_root_or_secret_a_purge_removes(tmp_path):
     a declared root or secret file belongs to the stack that declares it."""
     svc = _svc(tmp_path)
     decl = _declared(svc)
+    assert svc.stacks() and any(s or r for s, r in decl.values())     # something is checked
     for st in svc.stacks():
         for c in st.components:
             tokens = _path_tokens(c)

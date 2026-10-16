@@ -177,17 +177,16 @@ def test_every_tcp_listener_endpoint_carries_its_port_claim():
     import re
 
     from lhpc.core.manifest import load_manifest
-    for s in load_manifest():
-        for c in s.components:
-            claimed = {r.key for r in c.resources}
-            for e in c.endpoints:
-                if e.kind != "tcp" or getattr(e, "external", False) \
-                        or getattr(e, "role", "") != "listener":
-                    continue
-                m = re.search(r":(\d+)$", str(e.address))
-                assert m, (c.id, e.address)
-                assert f"tcp.port.{m.group(1)}" in claimed, (
-                    f"{s.id}/{c.id}: endpoint {e.address} has no tcp.port.{m.group(1)} claim")
+    listeners = [(s, c, e) for s in load_manifest() for c in s.components for e in c.endpoints
+                 if e.kind == "tcp" and not getattr(e, "external", False)
+                 and getattr(e, "role", "") == "listener"]
+    assert listeners                                                  # something is checked
+    for s, c, e in listeners:
+        claimed = {r.key for r in c.resources}
+        m = re.search(r":(\d+)$", str(e.address))
+        assert m, (c.id, e.address)
+        assert f"tcp.port.{m.group(1)}" in claimed, (
+            f"{s.id}/{c.id}: endpoint {e.address} has no tcp.port.{m.group(1)} claim")
 
 
 def test_meshcore_webui_and_cli_force_both_dashboard_links():

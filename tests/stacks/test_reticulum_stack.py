@@ -489,17 +489,14 @@ def test_a_stack_without_secrets_is_unaffected(monkeypatch):
 
     monkeypatch.setattr(service_params, "load_secrets", refuse)
     svc = ControllerService()
-    for stack in load_manifest():
-        if stack.id == "reticulum":
-            continue
-        has_secret = any(getattr(p, "secret_ref", "")
-                         for c in stack.components if c.config_file
-                         for p in c.config_file.params)
-        if has_secret:
-            continue
-        for w in svc.write_config_files(stack.id):
-            assert not (w.status == "failed" and "refused" in (w.detail or "")), \
-                f"{stack.id} broke on a secrets file it does not use"
+    plain = [stack for stack in load_manifest() if stack.id != "reticulum"
+             and not any(getattr(p, "secret_ref", "") for c in stack.components if c.config_file
+                         for p in c.config_file.params)]
+    writes = [(stack.id, w) for stack in plain for w in svc.write_config_files(stack.id)]
+    assert writes                                                     # something is checked
+    for sid, w in writes:
+        assert not (w.status == "failed" and "refused" in (w.detail or "")), \
+            f"{sid} broke on a secrets file it does not use"
 
 
 # ---- headless GUI skip ----------------------------------------------------

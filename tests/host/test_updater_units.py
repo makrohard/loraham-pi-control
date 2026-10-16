@@ -350,6 +350,7 @@ def test_verify_pct_h_same_root_is_modified_ours(tmp_path):
     home = os.path.expanduser("~"); root = f"{home}/loraham-pi-control"
     _, co, venv = U.deployment_paths(root)
     ud = _install(tmp_path, **_pct_units())
+    assert len(U.ALL_UNITS) == 7                                      # the seven canonical units
     for k in U.ALL_UNITS:
         assert U.verify(ud, k, root, co, venv) == U.MODIFIED_OURS, k
 

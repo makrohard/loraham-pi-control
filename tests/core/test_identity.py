@@ -212,8 +212,10 @@ def test_global_card_renders_and_never_marked_required(tmp_path):
     html = app.test_client().get("/stacks").get_data(as_text=True)
     assert "Global operator callsign" in html
     assert "Licensed stacks (chat," in html
-    card = html.split("Global operator callsign", 1)[1].split("</details>", 1)[0]
-    assert "field-bad" not in card and 'class="req"' not in card
+    import htmlq
+    doc = htmlq.parse(html)
+    card = doc.within(doc.by_id("operator-callsign"))
+    assert not card.find("tr", class_="field-bad") and not card.find("span", class_="req")
 
 
 # ===== audit-found launch/materialization regressions =====

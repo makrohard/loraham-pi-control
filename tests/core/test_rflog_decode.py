@@ -334,6 +334,7 @@ def test_the_decoder_scripts_ship_and_take_no_key_on_argv():
     `test_stdin_carries_key_and_raw_only_and_stdout_is_capped_per_field` (what actually crosses
     the process boundary) plus the argv tests above (paths only)."""
     d = repo_paths.REPO / "lhpc" / "data" / "rfdecode"
+    assert any(e.decoder for e in rflog.REGISTRY)                     # something is checked
     for e in rflog.REGISTRY:
         if e.decoder:
             src = (d / f"decode_{e.decoder}.py").read_text()

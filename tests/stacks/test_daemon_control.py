@@ -272,6 +272,7 @@ def test_no_verify_entry_uses_the_scanning_channel_read():
 
     Guards the whole table, not just MODE: a future confirmable key that needs a CHANNEL field
     must use NOSCAN, or it silently reintroduces this defect on every SET of that key."""
+    assert dc._VERIFY                                                 # something is checked
     for key, (command, _field) in dc._VERIFY.items():
         assert command != b"GET CHANNEL\n", f"{key} read-back would run a CAD scan"
 
