@@ -463,9 +463,13 @@ class Lifecycle:
             return StartLaunch(False, str(log), "no structured run command (run_argv)")
         # SPI bus users start only when config.txt and the booted kernel agree on the chip-select
         # mode, and only in one of the two supported ones (spi_mode).
-        if spi_mode.drives_spi(comp) and (why := spi_mode.refusal(
-                spi_mode.boot_mode(spi_mode.read_config_txt()), spi_mode.live_mode())):
-            return StartLaunch(False, str(log), why)
+        if spi_mode.drives_spi(comp):
+            live = spi_mode.live_mode()
+            why = spi_mode.refusal(spi_mode.boot_mode(spi_mode.read_config_txt()), live)
+            if not why and live == spi_mode.KERNEL:
+                why = spi_mode.provenance_refusal(self.paths, stack, comp, self.source_dir)
+            if why:
+                return StartLaunch(False, str(log), why)
         op = self.config.operator
         try:
             commands.run_pre_steps(comp.pre_steps, runtime, src, band)

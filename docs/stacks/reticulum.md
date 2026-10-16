@@ -13,7 +13,7 @@ packet. The driver is [loraham-rns-interface](https://github.com/makrohard/lorah
 | Endpoints | shared instance `127.0.0.1:37428` · instance control `:37429` · client access `:4242` · optional outbound TCP to an internet peer (no listener) · MeshChat `127.0.0.1:8790` (via the LHPC proxy) · readiness = the `ready` file, written only after the node owns the instance **and** the radio is online |
 | Config | `<runtime>/state/reticulum/config` (0400) from `lhpc/data/bases/reticulum.conf`, regenerated on every start — change it through lhpc. Read-only even to its owner, so a client that offers to edit interfaces cannot; lhpc replaces it by rename |
 | Resources | `loraham.radio.868` + `.433` exclusive · `spi.bus.0` cooperative · `spi.bus.0.unlocked` exclusive · `tcp.port.37428` / `.37429` / `.4242` / `.8790` exclusive |
-| System | `/dev/spidev0.0` (`dtoverlay=spi0-0cs`); `spi` + `gpio` groups; `python3-libgpiod`, `python3-spidev` |
+| System | `/dev/spidev0.0` (soft chip selects) or `/dev/spidev0.0`/`0.1` (kernel chip selects, [deps](../cli.md#deps)); `spi` + `gpio` groups; `python3-libgpiod`, `python3-spidev` |
 | State | `state/reticulum` (transport identity, path tables, config), `state/meshchat`, `state/nomadnet`, `state/lxmd`, `state/sideband` (their LXMF identities = the addresses contacts know). Updates and `uninstall` keep them; `lhpc clean reticulum --purge` removes them, so a reinstall gets new addresses |
 | Install channel | source only |
 

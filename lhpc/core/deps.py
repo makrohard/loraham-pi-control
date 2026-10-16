@@ -864,11 +864,11 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         " [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls]",
         "#   bootstrap-deps.sh --dry-run        PRE-FLIGHT: simulate only, change nothing",
         "#     soft-cs      software CS (/dev/spidev0.0): dtparam=spi=on + dtoverlay="
-        + spi_overlay + "  (LoRaHAM Pi / Uputronics rigs, single-radio AND dual Uputronics:"
-        " daemon + meshtasticd drive CS7/CS8 as GPIOs — the kernel must NOT claim CE0/CE1)",
-        "#     hardware-cs  kernel-driven CE0+CE1, no overlay: dtparam=spi=on only  (only for boards"
-        " that really use kernel chip-selects; NOT for Uputronics — CE0/CE1=GPIO7/8 would collide"
-        " with the daemon's GPIO chip-selects)",
+        + spi_overlay + "  (every board; each radio drives its CS as a GPIO, the kernel does not"
+        " claim CE0/CE1)",
+        "#     hardware-cs  kernel chip selects, no overlay: dtparam=spi=on only  (LoRaHAM / Uputronics:"
+        " radios on CE0 = GPIO 8 and CE1 = GPIO 7; the kernel serialises every transfer. Not for"
+        " Waveshare, CS 21)",
         "#     skip         no boot-config change (SPI already configured)",
         "#     --no-swapfile      do NOT provision the small-RAM disk swapfile (see below)",
         "#     --swap-size <MB>   swapfile size when provisioned (default 768)",

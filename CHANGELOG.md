@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Changed
+
+- Kernel chip selects (`bootstrap-deps.sh --spi-mode hardware-cs`, then a reboot) serialise the SPI bus for the daemon,
+  Reticulum and meshtastic; a box whose boot file and running kernel disagree refuses SPI stacks until it is rebooted.
+
 Fixed
 
 - MeshCore: LHPC's own transmit limit is gone, which delayed repeats by up to 27 s; in the repeater modes openHop's

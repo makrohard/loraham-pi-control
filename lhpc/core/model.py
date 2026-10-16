@@ -467,6 +467,8 @@ class Component:
                                  # raise it for a slow build on modest hardware (e.g. a venv + pip
                                  # install of many packages on a Pi Zero 2W)
     test_timeout: float = 0.0    # per-component host-test timeout in seconds (0 = the service default)
+    kernel_cs_since: str = ""    # an SPI bus user's first commit that supports kernel chip selects;
+                                 # with kernel chip selects its installed build must contain it
     build_marker: str = ""       # relative path of a completion marker written ONLY after the LAST
                                  # build step succeeds; when set, `is_built` gates on IT (not `bin`),
                                  # so a build killed mid-way (e.g. a half-populated venv whose

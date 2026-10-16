@@ -12,7 +12,7 @@ Rootless `meshtasticd` driving the RF95 radio **directly over SPI**, on 868 (def
 | Config | `<runtime>/config/files/meshtasticd.yaml`, regenerated per band from `lhpc/data/bases/meshtasticd.yaml` at every start (per-band LoRa pins, web root, TLS paths, log level) |
 | Artifacts | `build/tools/meshtasticd/meshtasticd`, its web UI at `build/tools/meshtasticd/web`, the managed CLI venv `build/tools/meshtastic-cli/.venv` (`meshtastic==2.7.11`, `pycryptodomex==3.23.0` for the RF-log decoder) |
 | Resources | `loraham.radio.868` + `.433` exclusive · `spi.bus.0.unlocked` exclusive · `tcp.port.4403` + `.9443` exclusive |
-| System | `/dev/spidev0.0` (`dtoverlay=spi0-0cs`), `spi` + `gpio` group membership, the packaged root `meshtasticd.service` must be disabled (`sudo systemctl disable --now meshtasticd`) |
+| System | `/dev/spidev0.0` (soft chip selects) or `/dev/spidev0.0`/`0.1` (kernel chip selects, [deps](../cli.md#deps)), `spi` + `gpio` group membership, the packaged root `meshtasticd.service` must be disabled (`sudo systemctl disable --now meshtasticd`) |
 | Install channel | **binary** by default (binary + web assets); `--source pinned\|dev\|stable` builds natively. Policy: [provenance](../provenance.md#the-binary-channel) |
 
 ## Contents

@@ -183,7 +183,15 @@ Chip-select mode (`lhpc/core/spi_mode.py`). Two boot configurations are supporte
   `/dev/spidev0.0`, one on GPIO 7 `/dev/spidev0.1`, and the kernel holds CS for each transfer.
 A component that claims an `spi-bus` resource starts only when config.txt and the booted device
 tree agree on one of the two. A file edited but not rebooted is refused with "reboot required", and any
-other spi0 layout as unsupported. In kernel mode meshtasticd's generated YAML gets `spidev:` instead of `CS:`.
+other spi0 layout as unsupported. In kernel mode meshtasticd's generated YAML gets `spidev:` instead of `CS:`,
+and a bus user starts only when what it runs contains its `kernel_cs_since` commit (the daemon's, or a
+build dependency's such as the Reticulum driver): read from the binary receipt (files verified), else
+the `consumed` line of its completion marker, else the checkout's HEAD (the daemon's source build
+writes no marker). Any receipt that is present but not valid (unsafe, or superseded: faults
+`lhpc doctor` names with `lhpc install <stack>` as the way out) refuses. Limitation: a daemon source
+build is judged by its checkout's HEAD, so after a source update whose build failed, HEAD names the
+new commit while the old binary is still in place; that binary claims GPIO 8/7, which the kernel
+owns, and fails at its GPIO claim, so the box still ends closed.
 
 Measured (dual-TX soak, 2026-10-03, Pi 5: 15 min of non-overlapping transmissions as control, then
 1 h with 16 forced overlaps; the records are kept outside this repository): no frame was
@@ -199,9 +207,8 @@ warning where it is admitted: "daemon 433 and meshtastic 868 share one SPI bus; 
 same moment can crash meshtasticd (measured) — avoid simultaneous transmission". The warning is
 shown where the start is admitted: a `[warning]` line in the start's plan and in its result (the
 console's start and restart banner shows it too), in both directions (meshtastic on 868 while the daemon serves 433, or the daemon on 433 while
-meshtasticd runs on 868). Serialising the
-two through kernel-owned chip selects (overlay `spi0-2cs`, each radio its own spidev node) is
-planned for 0.13.0; it is not present.
+meshtasticd runs on 868). Kernel chip selects (`dtparam=spi=on` alone, above) serialise every
+transfer in the kernel; the warning is shown in both modes.
 
 Each stack document lists its claims; a band, a TCP port and a serial device are claimed the same
 way. A claim marked `advisory = true` (the single MeshCore companion-client slot,
