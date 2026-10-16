@@ -26,6 +26,14 @@ The marker protocol (fail-closed; the controller reads the same file through
     marker write fails         -> do not spawn (a manager never runs without its crash guard)
     manager rc == 0            -> clear the marker (upstream's SIGTERM path returns 0 after
                                   `stop_all()`); a failed unlink keeps it, conservatively
+    rc == -SIGTERM in our stop -> clear it too: the stack's group SIGTERM and this host's own
+                                  terminate() both reach the manager, and the second one can land
+                                  after upstream's main() returned, when the interpreter has
+                                  restored SIGTERM's default action. Upstream's handler is
+                                  installed before `manager.start()` and stays until main()
+                                  returns after `stop_all()`, so a -SIGTERM exit owns no more
+                                  plugins than an rc 0 does (stop_all() logs a failure and
+                                  main() still returns 0: the trust rc 0 already carries)
     manager rc != 0 / signal   -> keep the marker
 """
 from __future__ import annotations
@@ -176,6 +184,7 @@ class PluginManagerChild:
         self._boot_id = boot_id_fn
         self.proc: Optional[subprocess.Popen] = None
         self._reaped = False
+        self._stopping = False                 # set by stop(): a -SIGTERM exit from then on is ours
 
     # ---- start ---------------------------------------------------------------------------
     def start(self) -> bool:
@@ -217,8 +226,9 @@ class PluginManagerChild:
         if self._reaped:
             return
         self._reaped = True
-        if rc == 0:
-            # upstream's SIGTERM/SIGINT path: stop flag -> server.stop() -> stop_all() -> return 0
+        if rc == 0 or (self._stopping and rc == -signal.SIGTERM):
+            # upstream's SIGTERM/SIGINT path: stop flag -> server.stop() -> stop_all() -> return 0,
+            # or our second SIGTERM after that return (see the marker protocol above)
             logger.info("Plugin manager stopped")
             clear_marker(self.marker)
         else:
@@ -241,6 +251,7 @@ class PluginManagerChild:
         proc = self.proc
         if proc is None:
             return
+        self._stopping = True
         if proc.poll() is None:
             try:
                 proc.terminate()

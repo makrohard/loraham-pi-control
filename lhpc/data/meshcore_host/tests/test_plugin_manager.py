@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import subprocess
+import time
 
 import pytest
 
@@ -21,8 +22,9 @@ class FakeProc:
     """A Popen stand-in: `rc` is what poll()/wait() will report once `finish()` was called or
     after the given number of polls; `on_terminate` decides whether SIGTERM ends it."""
 
-    def __init__(self, pid=4242, *, rc=None, exits_on_terminate=True, dies_on_kill=True):
+    def __init__(self, pid=4242, *, rc=None, exits_on_terminate=True, dies_on_kill=True, wait_s=0.0):
         self.pid = pid
+        self._wait_s = wait_s                 # wait() returns this much later than the exit
         self.returncode = None
         self._rc = rc
         self._exits_on_terminate = exits_on_terminate
@@ -48,6 +50,7 @@ class FakeProc:
 
     def wait(self, timeout=None):
         self.waits.append(timeout)
+        time.sleep(self._wait_s)
         if self.returncode is None:
             raise subprocess.TimeoutExpired(cmd="fake", timeout=timeout)
         return self.returncode
@@ -221,6 +224,33 @@ def test_nonzero_exit_keeps_the_marker(tmp_path, monkeypatch, caplog):
     assert child.start()
     child.stop()
     assert child.marker.exists() and "code 3" in caplog.text
+
+
+def test_our_second_sigterm_after_the_clean_shutdown_clears_the_marker(tmp_path, monkeypatch, caplog):
+    # The stack's group SIGTERM ends upstream's loop; this host's own terminate() then lands after
+    # upstream's main() returned, when the interpreter has restored SIGTERM's default action: the
+    # manager dies "of" SIGTERM although its plugins were already stopped (seen on the Zero 2 W).
+    proc = FakeProc(rc=-15)
+    child, _, _ = _child(tmp_path, monkeypatch, proc=proc)
+    assert child.start()
+    child.stop()
+    assert proc.signals == ["TERM"] and not child.marker.exists() and "rebooted" not in caplog.text
+
+
+def test_the_watcher_reaping_our_stop_first_applies_the_stop_rule(tmp_path, monkeypatch, caplog):
+    # The watch task polls while stop() waits in its thread; whichever sees the exit first, an exit
+    # by our SIGTERM is judged as ours.
+    proc = FakeProc(rc=-15, wait_s=0.2)
+    child, _, _ = _child(tmp_path, monkeypatch, proc=proc)
+    assert child.start()
+    monkeypatch.setattr(pm, "WATCH_POLL_S", 0.001)
+
+    async def go():
+        watcher = asyncio.get_running_loop().create_task(child.watch())
+        await asyncio.to_thread(child.stop)
+        await asyncio.wait_for(watcher, 2)
+    asyncio.run(go())
+    assert not child.marker.exists() and "rebooted" not in caplog.text
 
 
 def test_an_exit_the_watcher_sees_applies_the_same_rule(tmp_path, monkeypatch, caplog):
