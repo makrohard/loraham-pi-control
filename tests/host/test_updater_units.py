@@ -90,18 +90,15 @@ def test_web_and_helper_carry_the_bus_block_and_sandbox():
     for t in (web, helper):
         assert "InaccessiblePaths=%t/bus %t/systemd/private" in t
         assert "ProtectHome=read-only" in t and "ProtectSystem=strict" in t
-    # web also grants an OPTIONAL -%h/.meshcore_nm entry (no shipped component uses it); the helper
-    # (no stack GUIs) stays minimal. The `-` prefix makes the path OPTIONAL — an absent
-    # non-prefixed ReadWritePaths entry fails namespace setup (226/NAMESPACE) and would
-    # hard-fail the web console on a box where that app has never run.
+    # Both grant only the runtime root and /tmp (the dead optional -%h/.meshcore_nm entry is gone).
     #
     # Sideband is NOT granted %h/.kivy: KIVY_HOME redirects its state into
     # {root}/state/sideband/kivy, which is already writable. Granting it here would
     # change the unit bytes and strand every installed box — see
     # tests/repo/test_unit_templates_frozen.py.
-    assert f"ReadWritePaths={ROOT} -%h/.meshcore_nm /tmp" in web
+    assert f"ReadWritePaths={ROOT} /tmp" in web
     assert f"ReadWritePaths={ROOT} /tmp" in helper
-    assert "%h/.meshcore_nm" not in helper and "%h/.kivy" not in helper
+    assert "%h/.meshcore_nm" not in web + helper and "%h/.kivy" not in helper
     assert "%h/.kivy" not in web
     # helper: no QEMU -> W^X; no systemctl; declarative restart; refuse manual start
     assert "MemoryDenyWriteExecute=true" in helper
@@ -457,11 +454,11 @@ def test_verify_and_integration_cover_the_restart_units(tmp_path):
     assert U.integration(ud, ROOT)["status"] == "overridden"
 
 
-# --- the next release's units (the staged migration's expand step) ---------------------------
+# --- the other release's units (the staged migration: `compatible`) ---------------------------
 
 def _next_set(root, co, venv):
-    """The unit set as the next release installs it: its three changed units, the rest current."""
-    return {k: U.render_next(k, root, co, venv) or U.render(k, root, co, venv) for k in U.ALL_UNITS}
+    """The unit set as the other release installs it: its three changed units, the rest current."""
+    return {k: U.render_compatible(k, root, co, venv) or U.render(k, root, co, venv) for k in U.ALL_UNITS}
 
 
 @pytest.mark.parametrize("root", [
@@ -469,7 +466,7 @@ def _next_set(root, co, venv):
     "/srv/lhpc",                             # a custom --target outside $HOME
     "/tmp",                                  # a root that is also other text in the unit
 ])
-def test_the_next_releases_units_read_compatible_for_any_root(tmp_path, root):
+def test_the_other_releases_units_read_compatible_for_any_root(tmp_path, root):
     co, venv = f"{root}/src/loraham-pi-control", f"{root}/venv/lhpc"
     ud = _install(tmp_path, **_next_set(root, co, venv))
     changed = {U.WEB_UNIT, U.NGINX_UNIT, U.BOOT_RESTORE_UNIT}
@@ -478,19 +475,19 @@ def test_the_next_releases_units_read_compatible_for_any_root(tmp_path, root):
     assert U.integration(ud, root)["status"] == "compatible"
 
 
-def test_a_changed_next_unit_is_modified_ours_and_a_dropin_still_overrides(tmp_path):
-    ud = _install(tmp_path, **{U.WEB_UNIT: U.render_next(U.WEB_UNIT, ROOT, CO, VENV) + "# x\n"})
+def test_a_changed_compatible_unit_is_modified_ours_and_a_dropin_still_overrides(tmp_path):
+    ud = _install(tmp_path, **{U.WEB_UNIT: U.render_compatible(U.WEB_UNIT, ROOT, CO, VENV) + "# x\n"})
     assert U.verify(ud, U.WEB_UNIT, ROOT, CO, VENV) == U.MODIFIED_OURS
-    (ud / U.WEB_UNIT).write_text(U.render_next(U.WEB_UNIT, ROOT, CO, VENV))
+    (ud / U.WEB_UNIT).write_text(U.render_compatible(U.WEB_UNIT, ROOT, CO, VENV))
     d = ud / f"{U.WEB_UNIT}.d"; d.mkdir()
     (d / "override.conf").write_text("[Service]\nExecStart=\nExecStart=/usr/bin/evil\n")
     assert U.verify(ud, U.WEB_UNIT, ROOT, CO, VENV) == U.OVERRIDDEN
 
 
 def test_a_broken_next_render_never_raises_in_verify(tmp_path, monkeypatch):
-    ud = _install(tmp_path, **{U.WEB_UNIT: U.render_next(U.WEB_UNIT, ROOT, CO, VENV)})
+    ud = _install(tmp_path, **{U.WEB_UNIT: U.render_compatible(U.WEB_UNIT, ROOT, CO, VENV)})
     # Stubs the collaborator, the next template table: its web entry cannot be formatted.
-    monkeypatch.setitem(U._NEXT_TEMPLATES, U.WEB_UNIT, "{no_such_field}")
+    monkeypatch.setitem(U._COMPATIBLE_TEMPLATES, U.WEB_UNIT, "{no_such_field}")
     assert U.verify(ud, U.WEB_UNIT, ROOT, CO, VENV) == U.MODIFIED_OURS
 
 
@@ -502,9 +499,47 @@ def test_write_set_rewrites_a_compatible_set_to_this_versions_units(tmp_path):
     assert U.integration(ud, ROOT)["status"] == "ok"
 
 
+@pytest.mark.parametrize("k", [1, 2, 3])
+def test_a_repair_interrupted_after_any_unit_leaves_a_set_that_restores_and_completes(
+        tmp_path, monkeypatch, k):
+    # The forward write: the repair replaces the units one at a time (atomic per unit). A failure on
+    # the k-th replacement leaves the earlier units current and the rest the previous release's:
+    # every unit still reads ok or compatible (boot restore runs), and a rerun completes the set.
+    ud = _install(tmp_path, **_next_set(ROOT, CO, VENV))
+    real, calls = U.os.replace, []
+
+    def replace(src, dst):            # fails exactly the k-th unit replacement
+        calls.append(dst)
+        if len(calls) == k:
+            raise OSError("injected")
+        return real(src, dst)
+    monkeypatch.setattr(U.os, "replace", replace)
+    with pytest.raises(OSError, match="injected"):
+        U.write_set(ud, ROOT)
+    monkeypatch.setattr(U.os, "replace", real)
+    changed = [u for u in U.ALL_UNITS if u in (U.WEB_UNIT, U.NGINX_UNIT, U.BOOT_RESTORE_UNIT)]
+    assert [Path(d).name for d in calls] == changed[:k]          # the branch under test ran
+    verdicts = {u: U.verify(ud, u, ROOT, CO, VENV) for u in changed}
+    assert verdicts == {u: (U.OK if i < k - 1 else U.COMPATIBLE) for i, u in enumerate(changed)}
+    assert U.integration(ud, ROOT)["status"] == "compatible"
+    U.write_set(ud, ROOT)
+    assert U.integration(ud, ROOT)["status"] == "ok"
+
+
+@pytest.mark.parametrize("status, units, refused", [
+    ("compatible", (U.COMPATIBLE, U.OK), True),
+    ("incomplete", (U.COMPATIBLE, U.MISSING), True),       # beside a missing or changed unit too
+    ("incomplete", (U.COMPATIBLE, U.MODIFIED_OURS), True),
+    ("ok", (U.OK, U.OK), False), ("incomplete", (U.OK, U.MISSING), False), (None, (), False)])
+def test_an_update_refuses_to_start_from_another_releases_units(status, units, refused):
+    why = U.update_refusal({"status": status, "per_unit": dict(zip(("a", "b"), units))})
+    assert (why is not None) is refused
+    assert not refused or "lhpc self-update --repair-integration" in why
+
+
 def test_verify_file_reads_one_file_as_verify_does(tmp_path):
     f = tmp_path / "lhpc-web.service.uninstall-staged"
-    f.write_text(U.render_next(U.WEB_UNIT, ROOT, CO, VENV))
+    f.write_text(U.render_compatible(U.WEB_UNIT, ROOT, CO, VENV))
     assert U.verify_file(f, U.WEB_UNIT, ROOT) == U.COMPATIBLE
     f.write_text(U.render(U.WEB_UNIT, ROOT, CO, VENV))
     assert U.verify_file(f, U.WEB_UNIT, ROOT) == U.OK
@@ -516,12 +551,12 @@ def test_verify_file_reads_one_file_as_verify_does(tmp_path):
     assert U.verify_file(tmp_path / "absent", U.WEB_UNIT, ROOT) == U.MISSING
 
 
-def test_the_module_cli_renders_the_next_unit_and_verifies_a_file(tmp_path, capsys):
-    assert U._main(["x", "render-next", U.NGINX_UNIT, ROOT, CO, VENV]) == 0
-    assert capsys.readouterr().out == U.render_next(U.NGINX_UNIT, ROOT, CO, VENV)
-    assert U._main(["x", "render-next", U.HELPER_UNIT, ROOT, CO, VENV]) == 1   # unchanged unit
+def test_the_module_cli_renders_the_compatible_unit_and_verifies_a_file(tmp_path, capsys):
+    assert U._main(["x", "render-compatible", U.NGINX_UNIT, ROOT, CO, VENV]) == 0
+    assert capsys.readouterr().out == U.render_compatible(U.NGINX_UNIT, ROOT, CO, VENV)
+    assert U._main(["x", "render-compatible", U.HELPER_UNIT, ROOT, CO, VENV]) == 1   # unchanged unit
     f = tmp_path / "u"
-    f.write_text(U.render_next(U.NGINX_UNIT, ROOT, CO, VENV))
+    f.write_text(U.render_compatible(U.NGINX_UNIT, ROOT, CO, VENV))
     capsys.readouterr()
     assert U._main(["x", "verify-file", U.NGINX_UNIT, str(f), ROOT]) == 0
     assert capsys.readouterr().out == "compatible\n"

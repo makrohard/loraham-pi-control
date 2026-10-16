@@ -1706,8 +1706,8 @@ def test_fw_update_preflight_gates_nginx_unit(tmp_path, monkeypatch):
     assert svc.firewall_update_nginx_preflight() is None
 
 
-def test_fw_a_newer_releases_nginx_unit_carries_the_gate(tmp_path, monkeypatch):
-    # The next release's nginx unit (`compatible`) differs from this one only in a comment: the
+def test_fw_another_releases_nginx_unit_carries_the_gate(tmp_path, monkeypatch):
+    # The other release's nginx unit (`compatible`) differs from this one only in a comment: the
     # boot gate is in it, so neither the preflight nor the after-advance step touches it.
     from lhpc.core import updater_units as uu
     svc = _svc(tmp_path)

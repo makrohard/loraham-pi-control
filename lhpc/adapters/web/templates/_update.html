@@ -100,7 +100,7 @@
           and not ((updater.per_unit or {}).values()
                    | select('in', ['foreign', 'ambiguous', 'overridden', 'unsafe', 'unreadable'])
                    | list) %}
-    <p class="depnote depnote-warn">The units are a newer release's (compatible): run
+    <p class="depnote depnote-warn">The units are another release's (compatible): run
       <code>lhpc self-update --repair-integration</code> from an operator shell, then update.</p>
   {% elif updater and updater.status != 'ok' and st.update_available and not updater.fixable %}
     <p class="depnote depnote-warn">One-click update needs attention ({{ updater.status }} web/updater

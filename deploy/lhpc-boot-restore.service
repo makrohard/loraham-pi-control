@@ -41,7 +41,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 # Same write set as lhpc-web.service: the restored stacks are the SAME workloads.
-ReadWritePaths=%h/loraham-pi-control -%h/.meshcore_nm /tmp
+ReadWritePaths=%h/loraham-pi-control /tmp
 Environment=PLATFORMIO_CORE_DIR=%h/loraham-pi-control/build/tool-cache/platformio
 Environment=IDF_TOOLS_PATH=%h/loraham-pi-control/build/tool-cache/espressif
 Environment=XDG_CACHE_HOME=%h/loraham-pi-control/build/tool-cache/cache

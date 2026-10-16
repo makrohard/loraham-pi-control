@@ -139,10 +139,10 @@ def _run(script: Path, args, home: Path, fakebin: Path, *, real_first=False):
 
 def _deployment(root: Path, *, unit_home: Path, unit_target: Path | None = None,
                 link_target: Path | None = None, marker: bool = True, canonical_units: bool = True,
-                next_units: bool = False):
+                compatible: bool = False):
     """A fake installed layout with a WORKING venv/python (symlinked to this interpreter, which
     has lhpc importable) so uninstall's byte-exact unit render works, plus CANONICAL web+updater
-    units and a root marker (`next_units`: the next release's units where it changes one, read
+    units and a root marker (`compatible`: the other release's units where it changes one, read
     `compatible`). `unit_target`/`link_target` default to this root; point them elsewhere to model
     another deployment's integration that must be left untouched."""
     import sys as _sys
@@ -179,7 +179,7 @@ def _deployment(root: Path, *, unit_home: Path, unit_target: Path | None = None,
     if canonical_units:
         r, co, venv = _U.deployment_paths(str(ut))
         for k in _U.ALL_UNITS:
-            nxt = _U.render_next(k, r, co, venv) if next_units else None
+            nxt = _U.render_compatible(k, r, co, venv) if compatible else None
             (unit_dir / k).write_text(nxt or _U.render(k, r, co, venv))
     else:
         (unit_dir / "lhpc-web.service").write_text(
@@ -817,10 +817,10 @@ def test_uninstall_retry_recovers_leftover_staged_units_then_completes(tmp_path)
 
 
 def test_uninstall_removes_a_newer_releases_unit_set(tmp_path):
-    # units of the next release (`compatible`) are this deployment's: removed, not "CUSTOMIZED"
+    # units of the other release (`compatible`) are this deployment's: removed, not "CUSTOMIZED"
     home = tmp_path / "home"; home.mkdir()
     root = home / "loraham-pi-control"
-    _deployment(root, unit_home=home, next_units=True)
+    _deployment(root, unit_home=home, compatible=True)
     ud = _unit_dir(home)
     r = _run(UNINSTALL, ["--target", str(root), "--yes"], home, _fake_bin(tmp_path, systemctl="ok"))
     assert r.returncode == 0, r.stdout + r.stderr
@@ -830,10 +830,10 @@ def test_uninstall_removes_a_newer_releases_unit_set(tmp_path):
 
 def test_uninstall_retry_recovers_a_newer_releases_staged_units(tmp_path):
     # the staged-recovery path reads the same verdict: a leftover `*.uninstall-staged` unit of the
-    # next release is restored and the retry completes
+    # other release is restored and the retry completes
     home = tmp_path / "home"; home.mkdir()
     root = home / "loraham-pi-control"
-    _deployment(root, unit_home=home, next_units=True)
+    _deployment(root, unit_home=home, compatible=True)
     ud = _unit_dir(home)
     r1 = _run(UNINSTALL, ["--target", str(root), "--yes"], home,
               _fake_bin(tmp_path, systemctl="reloadfail", break_restore=True))

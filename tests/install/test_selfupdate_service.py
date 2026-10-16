@@ -529,7 +529,7 @@ def test_repair_and_trigger_names_the_shell_repair_for_a_newer_releases_units(tm
     _seed_available(tmp_path, ok=True, status="ok", reason="ok", checked_at=1)
     ud, root = svc._user_unit_dir(), str(tmp_path)
     _r, co, venv = U.deployment_paths(root)
-    (ud / U.WEB_UNIT).write_text(U.render_next(U.WEB_UNIT, root, co, venv))
+    (ud / U.WEB_UNIT).write_text(U.render_compatible(U.WEB_UNIT, root, co, venv))
     res = svc.self_update_repair_and_trigger()
     assert not res.ok and res.data.get("compatible") is True
     assert res.next_commands == ["lhpc self-update --repair-integration"]
@@ -675,7 +675,7 @@ def test_the_unit_refresh_runs_out_of_process(op_svc, monkeypatch):
 
 
 def test_the_refresh_leaves_a_newer_releases_units_as_they_are(op_svc, monkeypatch):
-    """A `compatible` set is the next release's units: the running code must not write its own
+    """A `compatible` set is the other release's units: the running code must not write its own
     (older) render over them; the out-of-process verifier still runs and decides."""
     from lhpc.core.probes.backends import CommandResult as CR
     from lhpc.core.services import ControllerService
@@ -694,12 +694,12 @@ def test_the_refresh_leaves_a_newer_releases_units_as_they_are(op_svc, monkeypat
     ok, why = svc._refresh_units_post_update()  # the private IS the seam under test
     assert repaired == []                                       # no in-process write
     assert any("verify-set" in str(a) for a in seen[-1])
-    assert not ok and why.startswith("units of a newer release — left as they are")
+    assert not ok and why.startswith("units of another release — left as they are")
 
 
 @pytest.mark.parametrize("other", ["missing", "modified_ours"])
 def test_the_refresh_keeps_a_mixed_set_with_newer_units_and_verifies_it(op_svc, monkeypatch, other):
-    """A newer release's unit beside a missing or changed one of this deployment is still ours:
+    """Another release's unit beside a missing or changed one of this deployment is still ours:
     nothing is written in process, the verifier runs, and the result names the shell repair."""
     from lhpc.core.probes.backends import CommandResult as CR
     from lhpc.core.services import ControllerService
@@ -718,7 +718,7 @@ def test_the_refresh_keeps_a_mixed_set_with_newer_units_and_verifies_it(op_svc, 
     ok, why = svc._refresh_units_post_update()  # the private IS the seam under test
     assert repaired == []                                       # no in-process write
     assert seen and any("verify-set" in str(a) for a in seen[-1])
-    assert not ok and "newer release" in why and "lhpc self-update --repair-integration" in why
+    assert not ok and "another release" in why and "lhpc self-update --repair-integration" in why
 
 
 def test_the_one_click_helper_verifies_the_units_it_refreshed(tmp_path, op_svc, monkeypatch):

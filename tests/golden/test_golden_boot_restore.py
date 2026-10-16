@@ -76,12 +76,12 @@ def test_nothing_to_restore(kiss_box, prior_boot, run_op):
     assert run.files == {"added": ["state/boot-restore.json"], "removed": [], "changed": []}
 
 
-def test_restores_on_the_next_releases_web_unit_and_says_so(kiss_box, prior_boot, run_op):
-    """intended: a web unit of the next release (`compatible`) proves the console as the current
+def test_restores_on_the_other_releases_web_unit_and_says_so(kiss_box, prior_boot, run_op):
+    """intended: a web unit of the other release (`compatible`) proves the console as the current
     one does; the restore runs exactly as on a current unit, and its result carries the
     units-compatible note."""
     box = kiss_box()
-    prior_boot(box.root, next_unit=True)
+    prior_boot(box.root, compatible=True)
     run = run_op(box.root, box.svc.boot_restore_run)
     assert run.fields == _fields("Boot restore: 1 restored.")
     assert _noted(run.res.details)
@@ -90,10 +90,10 @@ def test_restores_on_the_next_releases_web_unit_and_says_so(kiss_box, prior_boot
     assert box.owned() == ["loraham-kiss-tnc"]
 
 
-def test_nothing_to_restore_on_the_next_releases_web_unit_says_so(kiss_box, prior_boot, run_op):
+def test_nothing_to_restore_on_the_other_releases_web_unit_says_so(kiss_box, prior_boot, run_op):
     """intended: the note is carried on the no-plan exit too."""
     box = kiss_box()
-    prior_boot(box.root, evidence=False, next_unit=True)
+    prior_boot(box.root, evidence=False, compatible=True)
     run = run_op(box.root, box.svc.boot_restore_run)
     assert run.fields == _fields("Boot restore: nothing to restore.")
     assert _noted(run.res.details)

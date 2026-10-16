@@ -71,17 +71,15 @@ _MAX_UNIT_BYTES = 64 * 1024
 # cannot write at all (ProtectHome=read-only). So a template edit silently strands every box that
 # already has the old unit installed.
 #
-# A changed unit ships in two releases (docs/backlog.md, the staged unit migration): first the
-# release that ACCEPTS the new bytes (`_NEXT_EDITS` below: `verify` reads them `compatible`, and
-# boot restore runs on them), then the release that ships them. Until then these strings stay as
-# they are. If a stack needs a new writable path, redirect it into {root} with an environment
+# A changed unit ships in two releases (docs/maintenance.md, *Changing a unit*): first the release
+# that ACCEPTS the new bytes, then the release that ships them and accepts the previous ones
+# (`_COMPATIBLE_EDITS` below: `verify` reads them `compatible`, and boot restore runs on them).
+# Outside such a migration these strings stay as they are. If a stack needs a new writable path, redirect it into {root} with an environment
 # variable instead — that is why Sideband's Kivy state goes to KIVY_HOME={root}/state/sideband/kivy
 # rather than ~/.kivy.
 #
 # tests/repo/test_unit_templates_frozen.py enforces this.
 
-# The ReadWritePaths comment inside _WEB names a `meshcore-nodegui` component that does not exist;
-# no shipped component uses ~/.meshcore_nm. `_NEXT_EDITS` removes both in the next release's units.
 _WEB = """\
 # LoRaHAM Pi Control web console — CANONICAL managed unit (generated; do not hand-edit).
 # Rendered by lhpc.core.updater_units; the one-click updater proves this file BYTE-EXACT.
@@ -119,9 +117,8 @@ NotifyAccess=main
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-# runtime root + /tmp for lhpc itself; %h/.meshcore_nm because a stack GUI started under this
-# unit (meshcore-nodegui) keeps its sessions/settings/favourites there. %h expanded by systemd.
-ReadWritePaths={root} -%h/.meshcore_nm /tmp
+# runtime root + /tmp for lhpc itself.
+ReadWritePaths={root} /tmp
 Environment=PLATFORMIO_CORE_DIR={root}/build/tool-cache/platformio
 Environment=IDF_TOOLS_PATH={root}/build/tool-cache/espressif
 Environment=XDG_CACHE_HOME={root}/build/tool-cache/cache
@@ -238,7 +235,8 @@ ExecStartPre=/usr/sbin/nginx -t -c {root}/config/nginx/lhpc.conf
 # remote listener, this refuses to bind that listener ahead of a verified current-boot firewall
 # receipt — regenerating the active config LOOPBACK-ONLY instead (recovery via SSH tunnel; the
 # desired remote intent in local.toml is untouched and never marked applied). No-op when the
-# firewall is absent or nothing remote is desired. Always exits 0 so nginx still starts.
+# firewall is absent or nothing remote is desired. Exits non-zero (nginx then does not
+# start) only when that loopback-only config cannot be established.
 ExecStartPre={venv}/bin/lhpc webserver --firewall-boot-gate
 ExecStart=/usr/sbin/nginx -c {root}/config/nginx/lhpc.conf
 ExecReload=/usr/sbin/nginx -s reload -c {root}/config/nginx/lhpc.conf
@@ -376,7 +374,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 # Same write set as lhpc-web.service: the restored stacks are the SAME workloads.
-ReadWritePaths={root} -%h/.meshcore_nm /tmp
+ReadWritePaths={root} /tmp
 Environment=PLATFORMIO_CORE_DIR={root}/build/tool-cache/platformio
 Environment=IDF_TOOLS_PATH={root}/build/tool-cache/espressif
 Environment=XDG_CACHE_HOME={root}/build/tool-cache/cache
@@ -402,33 +400,34 @@ _TEMPLATES = {WEB_UNIT: _WEB, HELPER_UNIT: _HELPER, PATH_UNIT: _PATH, NGINX_UNIT
               RESTART_UNIT: _NGINX_RESTART, RESTART_PATH_UNIT: _NGINX_RESTART_PATH,
               BOOT_RESTORE_UNIT: _BOOT_RESTORE}
 
-# --------------------------------------------------------------------------- the next release's units
-# The units the next release will ship, as exact edits of the templates above (old, new). An
-# installed unit equal to their render for this deployment reads `compatible`: boot restore runs on
-# it, so a box that goes back from that release to this one still restores. No replacement text
-# contains a brace (the template is formatted after the edits), and each edit matches its template
-# exactly once; an edit that does not is left out of `_NEXT_TEMPLATES` here, never raised, and
-# tests/repo/test_unit_templates_frozen.py fails on it.
-_NEXT_EDITS = {
+# --------------------------------------------------------------------------- another release's units
+# The units of the release on the other side of a unit migration, as exact edits of the templates
+# above (old, new): here the previous release's (0.12.0/0.12.1). An installed unit equal to their
+# render for this deployment reads `compatible`: boot restore runs on it, so a box updated from that
+# release restores before `lhpc self-update --repair-integration` rewrites this version's. No
+# replacement text contains a brace (the template is formatted after the edits), and each edit
+# matches its template exactly once; an edit that does not is left out of `_COMPATIBLE_TEMPLATES`
+# here, never raised, and tests/repo/test_unit_templates_frozen.py fails on it.
+_COMPATIBLE_EDITS = {
     WEB_UNIT: (
-        ("# runtime root + /tmp for lhpc itself; %h/.meshcore_nm because a stack GUI started under "
+        ("# runtime root + /tmp for lhpc itself.\n",
+         "# runtime root + /tmp for lhpc itself; %h/.meshcore_nm because a stack GUI started under "
          "this\n# unit (meshcore-nodegui) keeps its sessions/settings/favourites there. %h expanded "
-         "by systemd.\n",
-         "# runtime root + /tmp for lhpc itself.\n"),
-        (" -%h/.meshcore_nm /tmp\n", " /tmp\n")),
+         "by systemd.\n"),
+        (" /tmp\n", " -%h/.meshcore_nm /tmp\n")),
     NGINX_UNIT: (
-        ("# firewall is absent or nothing remote is desired. Always exits 0 so nginx still starts.\n",
-         "# firewall is absent or nothing remote is desired. Exits non-zero (nginx then does not\n"
-         "# start) only when that loopback-only config cannot be established.\n"),),
-    BOOT_RESTORE_UNIT: ((" -%h/.meshcore_nm /tmp\n", " /tmp\n"),),
+        ("# firewall is absent or nothing remote is desired. Exits non-zero (nginx then does not\n"
+         "# start) only when that loopback-only config cannot be established.\n",
+         "# firewall is absent or nothing remote is desired. Always exits 0 so nginx still starts.\n"),),
+    BOOT_RESTORE_UNIT: ((" /tmp\n", " -%h/.meshcore_nm /tmp\n"),),
 }
 
 
-def _next_template(kind: str):
-    """The next release's template for `kind`, or None (no edits, or an edit that does not match
+def _compatible_template(kind: str):
+    """The other release's template for `kind`, or None (no edits, or an edit that does not match
     its template exactly once, or a replacement with a brace)."""
     text = _TEMPLATES.get(kind)
-    edits = _NEXT_EDITS.get(kind)
+    edits = _COMPATIBLE_EDITS.get(kind)
     if text is None or not edits:
         return None
     for old, new in edits:
@@ -438,12 +437,12 @@ def _next_template(kind: str):
     return text
 
 
-_NEXT_TEMPLATES = {k: t for k in _NEXT_EDITS if (t := _next_template(k)) is not None}
+_COMPATIBLE_TEMPLATES = {k: t for k in _COMPATIBLE_EDITS if (t := _compatible_template(k)) is not None}
 
 
-def render_next(kind: str, root: str, checkout: str, venv: str):
-    """The next release's unit text for `kind` (as `render`), or None when it ships none."""
-    tmpl = _NEXT_TEMPLATES.get(kind)
+def render_compatible(kind: str, root: str, checkout: str, venv: str):
+    """The other release's unit text for `kind` (as `render`), or None when there is none."""
+    tmpl = _COMPATIBLE_TEMPLATES.get(kind)
     if tmpl is None:
         return None
     return tmpl.format(root=root, checkout=checkout, venv=venv,
@@ -451,11 +450,11 @@ def render_next(kind: str, root: str, checkout: str, venv: str):
                        guard=UNINSTALL_GUARD)
 
 
-def _is_next(kind: str, text: str, root: str, checkout: str, venv: str) -> bool:
-    """`text` is the next release's unit for this deployment. Never raises: any problem with the
-    next render reads as no match (the caller then classifies as before)."""
+def _is_compatible(kind: str, text: str, root: str, checkout: str, venv: str) -> bool:
+    """`text` is the other release's unit for this deployment. Never raises: any problem with
+    that render reads as no match (the caller then classifies as before)."""
     try:
-        nxt = render_next(kind, root, checkout, venv)
+        nxt = render_compatible(kind, root, checkout, venv)
     except Exception:
         return False
     return nxt is not None and text == nxt
@@ -483,9 +482,9 @@ def deployment_paths(root: str) -> tuple[str, str, str]:
 OK = "ok"                 # byte-exact canonical, no drop-in, no symlinked dir
 MISSING = "missing"
 MODIFIED_OURS = "modified_ours"   # not byte-exact but carries THIS root's provenance
-COMPATIBLE = "compatible"  # byte-exact the NEXT release's unit for this deployment (_NEXT_EDITS)
+COMPATIBLE = "compatible"  # byte-exact another release's unit for this deployment (_COMPATIBLE_EDITS)
 # The one line every surface prints for a `compatible` set (boot restore, doctor, status).
-COMPATIBLE_NOTE = ("units-compatible: the managed units are a newer release's — boot restore runs "
+COMPATIBLE_NOTE = ("units-compatible: the managed units are another release's — boot restore runs "
                    "on them; `lhpc self-update --repair-integration` rewrites this version's")
 FOREIGN = "foreign"       # provenance names another runtime root
 AMBIGUOUS = "ambiguous"   # neither clearly ours nor clearly foreign
@@ -640,7 +639,7 @@ def verify(user_dir: Path, kind: str, root: str, checkout: str, venv: str) -> st
         return OVERRIDDEN
     if text == render(kind, root, checkout, venv):
         return OK
-    if _is_next(kind, text, root, checkout, venv):
+    if _is_compatible(kind, text, root, checkout, venv):
         return COMPATIBLE
     return _classify_mismatch(kind, text, root)
 
@@ -659,7 +658,7 @@ def verify_file(path: Path, kind: str, root: str) -> str:
         return UNSAFE if getattr(exc, "errno", None) == _errno.ELOOP else UNREADABLE
     if text == render(kind, root, checkout, venv):
         return OK
-    if _is_next(kind, text, root, checkout, venv):
+    if _is_compatible(kind, text, root, checkout, venv):
         return COMPATIBLE
     return _classify_mismatch(kind, text, root)
 
@@ -675,10 +674,21 @@ def integration(user_dir: Path, root: str) -> dict:
     elif all(v == OK for v in per.values()):
         status = "ok"
     elif all(v in (OK, COMPATIBLE) for v in per.values()):
-        status = "compatible"             # a newer release's units: boot restore runs on them
+        status = "compatible"             # another release's units: boot restore runs on them
     else:
         status = "incomplete"
     return {"status": status, "per_unit": per}
+
+
+def update_refusal(integ: dict):
+    """Why an operator update may not start from this `integration()` result, or None. Units of
+    another release (`compatible`, alone or beside missing / changed ones) are repaired first: a
+    later release that changes a unit accepts only this release's units and the 0.12.0/0.12.1 ones
+    (docs/maintenance.md, *Changing a unit*), and every release keeps this rule."""
+    if integ.get("status") == COMPATIBLE or COMPATIBLE in (integ.get("per_unit") or {}).values():
+        return ("the managed units are another release's (compatible) — run `lhpc self-update "
+                "--repair-integration` first, then update")
+    return None
 
 
 def write_set(user_dir: Path, root: str) -> list[tuple[str, str]]:
@@ -744,10 +754,10 @@ def _main(argv: list[str]) -> int:
         import sys
         sys.stdout.write(render(argv[2], argv[3], argv[4], argv[5]))
         return 0
-    # `... render-next <kind> <root> <checkout> <venv>` — the next release's unit (exit 1: none).
-    if len(argv) == 6 and argv[1] == "render-next":
+    # `... render-compatible <kind> <root> <checkout> <venv>` — the other release's unit (exit 1: none).
+    if len(argv) == 6 and argv[1] == "render-compatible":
         import sys
-        text = render_next(argv[2], argv[3], argv[4], argv[5])
+        text = render_compatible(argv[2], argv[3], argv[4], argv[5])
         if text is None:
             return 1
         sys.stdout.write(text)
@@ -778,7 +788,7 @@ def _main(argv: list[str]) -> int:
         return 0
     import sys
     sys.stderr.write("usage: python -m lhpc.core.updater_units "
-                     "render <kind> <root> <checkout> <venv> | render-next <kind> <root> "
+                     "render <kind> <root> <checkout> <venv> | render-compatible <kind> <root> "
                      "<checkout> <venv> | verify-file <kind> <file> <root> | verify-set <root>\n")
     return 2
 

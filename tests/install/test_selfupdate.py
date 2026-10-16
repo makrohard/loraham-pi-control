@@ -325,6 +325,31 @@ def test_the_venv_sync_installs_the_locked_dependencies_hash_checked_then_lhpc_w
                      str(root)]]
 
 
+def test_operator_apply_refuses_while_the_units_are_another_releases(op_svc, monkeypatch):
+    # The update gate (docs/maintenance.md, *Changing a unit*): another release's units are repaired
+    # before any update, so a later unit change meets only units it accepts. Nothing is fetched,
+    # stopped or synced; with this release's units the same apply proceeds (the control).
+    from lhpc.core import updater_units as U
+    from lhpc.core.services import ActionResult, ControllerService
+    applied = []
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False: (
+        applied.append(force), ActionResult(True, "already", data={"already": True}))[1])
+    svc, fake = op_svc(dict(_WEB_INACTIVE), units=True, invocation=False)
+    ud, root = svc._user_unit_dir(), str(svc._paths.runtime_root)
+    _r, co, venv = U.deployment_paths(root)
+    (ud / U.WEB_UNIT).write_text(U.render_compatible(U.WEB_UNIT, root, co, venv))
+    r = svc.self_update_apply_operator()
+    assert r.ok is False and r.data == {"integration": "compatible"}
+    assert r.next_commands == ["lhpc self-update --repair-integration"]
+    assert applied == [] and not any(c[0] in ("systemctl", "git") for c in fake.calls)
+    (ud / U.HELPER_UNIT).unlink()                           # beside a missing unit: `incomplete`
+    assert svc.updater_integration()["status"] == "incomplete"
+    assert svc.self_update_apply_operator().data == {"integration": "compatible"} and applied == []
+    (ud / U.HELPER_UNIT).write_text(U.render(U.HELPER_UNIT, root, co, venv))
+    (ud / U.WEB_UNIT).write_text(U.render(U.WEB_UNIT, root, co, venv))
+    assert svc.self_update_apply_operator().ok and applied == [False]
+
+
 def test_operator_inactive_real_advance_syncs_venv(op_svc, monkeypatch):
     # web inactive + a REAL advance still synchronizes the editable venv (no service control).
     from lhpc.core.services import ActionResult
@@ -962,6 +987,6 @@ def test_status_names_a_newer_releases_units_and_the_shell_repair(op_svc, tmp_pa
     svc, _fake = op_svc(units=True)
     _r, co, venv = U.deployment_paths(str(tmp_path))
     assert not any("units-compatible:" in d for d in svc.status().details)          # control
-    (svc._user_unit_dir() / U.WEB_UNIT).write_text(U.render_next(U.WEB_UNIT, str(tmp_path), co, venv))
+    (svc._user_unit_dir() / U.WEB_UNIT).write_text(U.render_compatible(U.WEB_UNIT, str(tmp_path), co, venv))
     assert any("units-compatible:" in d and "lhpc self-update --repair-integration" in d
                for d in svc.status().details), svc.status().details

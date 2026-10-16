@@ -20,7 +20,8 @@ ExecStartPre=/usr/sbin/nginx -t -c %h/loraham-pi-control/config/nginx/lhpc.conf
 # remote listener, this refuses to bind that listener ahead of a verified current-boot firewall
 # receipt — regenerating the active config LOOPBACK-ONLY instead (recovery via SSH tunnel; the
 # desired remote intent in local.toml is untouched and never marked applied). No-op when the
-# firewall is absent or nothing remote is desired. Always exits 0 so nginx still starts.
+# firewall is absent or nothing remote is desired. Exits non-zero (nginx then does not
+# start) only when that loopback-only config cannot be established.
 ExecStartPre=%h/loraham-pi-control/venv/lhpc/bin/lhpc webserver --firewall-boot-gate
 ExecStart=/usr/sbin/nginx -c %h/loraham-pi-control/config/nginx/lhpc.conf
 ExecReload=/usr/sbin/nginx -s reload -c %h/loraham-pi-control/config/nginx/lhpc.conf

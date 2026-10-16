@@ -881,7 +881,7 @@ class FirewallOpsMixin:
         integ = self.updater_integration()
         verdict = integ.get("per_unit", {}).get(updater_units.NGINX_UNIT)
         if verdict in (updater_units.OK, updater_units.COMPATIBLE):
-            return None                    # unit current (or the next release's) -> gate present
+            return None                    # unit current (or another release's) -> gate present
         owned_stale = verdict in (updater_units.MISSING, updater_units.MODIFIED_OURS)
         managed = bool(integ.get("managed"))
         # Foreign/ambiguous unit (cannot be safely replaced), OR a managed (bus-blocked) updater
