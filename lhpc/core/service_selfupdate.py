@@ -560,8 +560,8 @@ class SelfUpdateOpsMixin:
         res = _dc.replace(res, data={**res.data, "update_applied": True})   # a real source advance
         root = selfupdate.repo_root()
         if root is not None:
-            pip = self._system.runner.run(
-                [_sys.executable, "-m", "pip", "install", "-e", str(root)], self._PIP_SYNC_TIMEOUT_S)
+            pip = selfupdate.venv_sync(self._system.runner, _sys.executable, root,
+                                       self._PIP_SYNC_TIMEOUT_S)
             if pip.returncode != 0:
                 detail = selfupdate._summarize_output(pip.stderr or pip.stdout)
                 # Named and recorded, or — the record not written — the cause and the command
@@ -1172,9 +1172,8 @@ class SelfUpdateOpsMixin:
                 root = selfupdate.repo_root()
                 if root is not None:
                     t0 = _time.monotonic()
-                    pip = self._system.runner.run(
-                        [sys.executable, "-m", "pip", "install", "-e", str(root)],
-                        timeout=self._PIP_SYNC_TIMEOUT_S)
+                    pip = selfupdate.venv_sync(self._system.runner, sys.executable, root,
+                                               self._PIP_SYNC_TIMEOUT_S)
                     # The slow-target budget's L4 quantity; the unit appends stderr to
                     # logs/lhpc-selfupdate.log (docs/test-matrix.md#slow-target-baseline).
                     print(f"[selfupdate] pip sync {_time.monotonic() - t0:.1f} s",
@@ -1520,7 +1519,7 @@ class SelfUpdateOpsMixin:
         import sys as _sys
 
         from . import selfupdate
-        return f"{_sys.executable} -m pip install -e {selfupdate.repo_root() or '<checkout>'}"
+        return selfupdate.venv_sync_command(_sys.executable, selfupdate.repo_root() or "<checkout>")
 
     def _incomplete_remedy(self, state: str) -> str:
         if state in self._INCOMPLETE_REMEDY:

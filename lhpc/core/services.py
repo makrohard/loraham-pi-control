@@ -13,7 +13,6 @@ from __future__ import annotations
 import contextlib
 import os
 import secrets
-import shlex
 import threading
 import time
 from contextlib import contextmanager
@@ -478,8 +477,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         root = self._paths.runtime_root
         python_bin = root / "venv" / "lhpc" / "bin" / "python"
         checkout = root.joinpath(*Path(spec.source_path).parts)
-        return (f"{shlex.quote(str(python_bin))} -m pip install -e "
-                f"{shlex.quote(str(checkout))}")
+        from . import selfupdate
+        return selfupdate.venv_sync_command(str(python_bin), str(checkout))
 
     def _controller_refusal(self, target) -> ActionResult | None:
         """CENTRAL guard: a generic verb (install/update/uninstall/clean/build/test/

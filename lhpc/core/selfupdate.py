@@ -20,6 +20,7 @@ import fcntl
 import json
 import os
 import re
+import shlex
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -925,18 +926,44 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, branch: s
 # The request/service path's summary; the operator flow replaces it (it restarted the console itself).
 APPLIED_RESTART_MESSAGE = "Update applied — restart the web console to load it."
 
+LOCK_FILE = "requirements.lock"
+
+
+def venv_sync_argvs(python: str, root) -> list[list[str]]:
+    """The venv sync of a checkout: its locked runtime dependencies and build backend, every file
+    hash-checked, then LHPC itself without dependencies and without build isolation (the backend
+    comes from the lock), so pip takes nothing from the index that the lock does not name."""
+    root = str(root)
+    return [[python, "-m", "pip", "install", "--require-hashes", "--no-deps", "-r",
+             os.path.join(root, LOCK_FILE)],
+            [python, "-m", "pip", "install", "--no-deps", "--no-build-isolation", "-e", root]]
+
+
+def venv_sync_command(python: str, root) -> str:
+    """`venv_sync_argvs` as one shell line an operator can paste."""
+    return " && ".join(shlex.join(argv) for argv in venv_sync_argvs(python, root))
+
+
+def venv_sync(runner, python: str, root, timeout: float):
+    """Run the venv sync's steps in order; the first failing result, else the last one."""
+    for argv in venv_sync_argvs(python, root):
+        result = runner.run(argv, timeout)
+        if result.returncode != 0:
+            break
+    return result
+
 def restart_instructions(deps_changed: bool = False, deps_sync_cmd: str = "") -> dict:
     """How the operator restarts the web console after an update (lhpc never restarts itself).
     Detects a systemd user-service context via `INVOCATION_ID`. When dependencies changed,
     `deps_sync_cmd` (if given by the caller) is the EXACT editable-install command for the
     deployment — the self-hosted controller passes its deployment interpreter + checkout,
-    already shell-quoted. With no controller declared, the dev fallback `pip install -e .`
-    is used."""
+    already shell-quoted. With no controller declared, the dev fallback (`venv_sync_command` with
+    `python` in the checkout `.`) is used."""
     under_systemd = bool(os.environ.get("INVOCATION_ID"))
     cmds: list[str] = []
     note = ""
     if deps_changed:
-        sync = deps_sync_cmd or "pip install -e ."
+        sync = deps_sync_cmd or venv_sync_command("python", ".")
         cmds.append(f"{sync}    # sync the venv FIRST — dependencies changed (LHPC never installs "
                     "packages for you)")
         note = ("Dependencies changed in this update — run the venv sync command before (or with) the "

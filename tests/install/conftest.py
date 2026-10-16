@@ -103,8 +103,8 @@ def op_svc(tmp_path, monkeypatch):
         (checkout / "lhpc").mkdir(parents=True, exist_ok=True)
         (checkout / "lhpc" / "version.py").write_text(f'__version__ = "{selfupdate.__version__}"\n')
         monkeypatch.setattr(selfupdate, "repo_root", staticmethod(lambda: checkout))
-        table = {(sys.executable, "-m", "pip", "install", "-e", str(checkout)):
-                 CommandResult(0, "", "")}
+        table = {tuple(argv): CommandResult(0, "", "")
+                 for argv in selfupdate.venv_sync_argvs(sys.executable, checkout)}
         table.update(cmds or {})
         fake = FakeSystem(commands=table)
         svc = ControllerService(system=fake.system, paths=Paths(runtime_root=rt))

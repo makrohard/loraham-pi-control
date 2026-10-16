@@ -9,6 +9,8 @@ asked to consent to nothing. The two behaviours that grew out of this one live n
 """
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 import gitrepo
@@ -286,8 +288,11 @@ def test_self_update_apply_operator_stops_and_restarts_web(op_svc, monkeypatch):
 
 
 def _pip_key(root):
+    # The venv sync's first step (the locked dependencies): a failure there fails the sync.
     import sys
-    return (sys.executable, "-m", "pip", "install", "-e", str(root))
+
+    from lhpc.core import selfupdate
+    return tuple(selfupdate.venv_sync_argvs(sys.executable, root)[0])
 
 
 _WEB_INACTIVE = WEB_INACTIVE
@@ -303,6 +308,21 @@ def _op_inactive(op_svc, monkeypatch, apply_result, *, pip=None):
     if pip is not None:
         fake.commands[_pip_key(root)] = pip
     return svc, fake, root
+
+
+def test_the_venv_sync_installs_the_locked_dependencies_hash_checked_then_lhpc_without_deps(op_svc, monkeypatch):
+    # A real advance syncs the venv in two steps: the runtime dependencies from requirements.lock with
+    # every file hash-checked, then LHPC itself with --no-deps, so pip takes nothing from the index
+    # that the lock does not name.
+    from lhpc.core.services import ActionResult
+    svc, fake, root = _op_inactive(op_svc, monkeypatch, ActionResult(True, "advanced", data={}))
+    monkeypatch.setattr(type(svc), "_refresh_units_post_update", lambda self: (True, "n/a"))
+    svc.self_update_apply_operator(force=True)
+    pips = [c for c in fake.calls if c[1:4] == ["-m", "pip", "install"]]
+    assert pips == [[sys.executable, "-m", "pip", "install", "--require-hashes", "--no-deps", "-r",
+                     f"{root}/requirements.lock"],
+                    [sys.executable, "-m", "pip", "install", "--no-deps", "--no-build-isolation", "-e",
+                     str(root)]]
 
 
 def test_operator_inactive_real_advance_syncs_venv(op_svc, monkeypatch):
@@ -461,7 +481,8 @@ def test_a_named_state_whose_record_cannot_be_written_fails_with_the_command_to_
         return real(paths, path, text, *a, **kw)
     monkeypatch.setattr(runtime_fs, "write_marker", full_disk)
     r = svc.self_update_apply_operator()
-    cmds = ([" ".join(_pip_key(root)), "lhpc self-update --repair-integration"]
+    cmds = ([selfupdate.venv_sync_command(sys.executable, root),
+             "lhpc self-update --repair-integration"]
             if state == "venv-unsynced" else ["lhpc self-update --repair-integration"])
     assert r.ok is False and "state" not in r.data, r.data
     assert r.summary.startswith("recovery-required: the update was applied"), r.summary

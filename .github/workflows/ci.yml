@@ -62,6 +62,20 @@ jobs:
           retry 3 python -m pip install --upgrade pip
           retry 3 pip install .[dev] pip-audit
 
+      - name: requirements.lock is complete (a clean venv from the lock alone)
+        # The installer and self-update install the runtime dependencies and the build backend from the lock,
+        # hash-checked and without resolving (--no-deps). LHPC's own install runs with --no-index, the proof
+        # that nothing else is fetched; `pip check` fails on any requirement of an installed package the lock
+        # omitted (a missing transitive dependency); the import and `lhpc --version` prove it runs.
+        run: |
+          . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
+          python -m venv "$RUNNER_TEMP/lockvenv"
+          retry 3 "$RUNNER_TEMP/lockvenv/bin/python" -m pip install -q --require-hashes --no-deps -r requirements.lock
+          "$RUNNER_TEMP/lockvenv/bin/python" -m pip install -q --no-index --no-deps --no-build-isolation .
+          "$RUNNER_TEMP/lockvenv/bin/python" -m pip check
+          "$RUNNER_TEMP/lockvenv/bin/python" -c "import lhpc.adapters.web.app"
+          "$RUNNER_TEMP/lockvenv/bin/lhpc" --version
+
       - name: Byte-compile production code
         run: python -m compileall -q lhpc
 

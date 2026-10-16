@@ -208,7 +208,10 @@ step "2/4  Create the venv (outside the checkout) + install"
 mkdir -p "$(dirname "$VENV")"
 "$PY" -m venv "$VENV"
 "${VENV}/bin/python" -m pip install --quiet --upgrade pip
-"${VENV}/bin/pip" install --quiet -e "$CHECKOUT"
+# The runtime dependencies and the build backend come from the lock, every file hash-checked; LHPC itself
+# without deps and without build isolation, so nothing else is fetched.
+"${VENV}/bin/python" -m pip install --quiet --require-hashes --no-deps -r "$CHECKOUT/requirements.lock"
+"${VENV}/bin/python" -m pip install --quiet --no-deps --no-build-isolation -e "$CHECKOUT"
 # waitress + cryptography are DECLARED dependencies (installed by the editable install above);
 # waitress is required for productive serving (no dev-server fallback on the socket path).
 "${VENV}/bin/python" -c 'import waitress, cryptography' 2>/dev/null || \

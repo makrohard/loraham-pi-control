@@ -209,7 +209,8 @@ Everything but the `~/.local/bin/lhpc` link and the systemd user units lands und
 mkdir -p ~/loraham-pi-control/src
 git clone https://github.com/makrohard/loraham-pi-control.git ~/loraham-pi-control/src/loraham-pi-control
 python3 -m venv ~/loraham-pi-control/venv/lhpc
-~/loraham-pi-control/venv/lhpc/bin/pip install -e ~/loraham-pi-control/src/loraham-pi-control
+~/loraham-pi-control/venv/lhpc/bin/pip install --require-hashes --no-deps -r ~/loraham-pi-control/src/loraham-pi-control/requirements.lock
+~/loraham-pi-control/venv/lhpc/bin/pip install --no-deps --no-build-isolation -e ~/loraham-pi-control/src/loraham-pi-control
 ~/loraham-pi-control/venv/lhpc/bin/lhpc bootstrap --yes
 export PATH="$HOME/loraham-pi-control/venv/lhpc/bin:$PATH"
 ```
