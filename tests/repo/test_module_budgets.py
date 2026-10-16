@@ -20,8 +20,9 @@ CORE = repo_paths.REPO / "lhpc" / "core"
 
 # file: (max lines, max public methods) — measured on dev at 0.12.9, raised where a line says why
 BUDGETS = {
-    "services.py": (2694, 23),
+    "services.py": (2251, 23),
     "service_base.py": (166, 0),
+    "service_admission.py": (459, 0),  # split-s4: split from services.py
     "service_auto_install.py": (1875, 16),
     "service_binary_channel.py": (299, 19),  # trackF-c3: the web client keeps its own selector
     "service_binary_ops.py": (1078, 5),  # trackF-c3: the web client follows meshtastic's binary install
@@ -108,6 +109,23 @@ SPLITS = [
         "gps_plan",
         "optional_role",
         "refresh_gps_auto",
+    )),
+    # The admission group has no public method: its private methods are listed.
+    ("service_admission", "AdmissionOpsMixin", "services", "ControllerService", (
+        "_acquire_key",
+        "_admission_guard",
+        "_admit",
+        "_admit_raw",
+        "_admit_release",
+        "_held_counts",
+        "_keys_guard",
+        "_lifecycle_guard",
+        "_lifecycle_lock_keys",
+        "_operation_bands",
+        "_operation_resource_keys",
+        "_operation_source_paths",
+        "_source_operation_guard",
+        "_web_source_precheck",
     )),
 ]
 
