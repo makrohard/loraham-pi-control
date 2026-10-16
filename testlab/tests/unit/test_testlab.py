@@ -350,14 +350,16 @@ def test_resolve_req_path_multiarch(tmp_path, monkeypatch):
 # --- fake daemon protocol conformance ----------------------------------------------------
 
 
-def _spawn_fake_daemon(tmp_path, band="433", radio="READY"):
+def _spawn_fake_daemon(tmp_path, band="433", radio="READY", air=()):
     sockdir = tmp_path / "socks"
     sockdir.mkdir(exist_ok=True)
     root = tmp_path / "droot"
     (root / "state" / "testlab" / "rx-queue" / band).mkdir(parents=True, exist_ok=True)
-    (root / "state" / "testlab" / "scenario.json").write_text(json.dumps(
-        {"name": "t", "applied_boottime": 0, "auto_revert_s": None,
-         "flags": {f"radio_{band}": radio}}))
+    scenario = {"name": "t", "applied_boottime": 0, "auto_revert_s": None,
+                "flags": {f"radio_{band}": radio}}
+    if air:                                  # absent, not empty: the pre-air scenario format
+        scenario["air"] = list(air)
+    (root / "state" / "testlab" / "scenario.json").write_text(json.dumps(scenario))
     env = dict(os.environ, LORAHAM_SOCKET_DIR=str(sockdir),
                LORAHAM_RUNTIME_DIR=str(root / "state" / "loraham"))
     from lhpc_testlab import data_path
@@ -467,6 +469,36 @@ def test_fake_daemon_framed_tx_result_and_rx_injection(tmp_path):
         assert not list((root / "state" / "testlab" / "rx-queue" / "433").glob("*"))
         tx = (root / "state" / "testlab" / "tx.jsonl").read_text()
         assert '"result": "OK"' in tx and '"band": "433"' in tx
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("air", [("433",), ()])
+def test_fake_daemon_air_carries_a_transmission_to_the_other_clients_only(tmp_path, air):
+    """The virtual air for two radio clients on one band: a TX from one arrives once, as
+    RX, at the other — never back at the sender. Without "air" nothing is forwarded."""
+    import socket as _s
+    import struct as _st
+    proc, sockdir, _root = _spawn_fake_daemon(tmp_path, air=air)
+    try:
+        a, b = _s.socket(_s.AF_UNIX), _s.socket(_s.AF_UNIX)
+        for s in (a, b):
+            s.settimeout(2)
+            s.connect(str(sockdir / "lora433f.sock"))
+        b.sendall(b"\x09" + _st.pack("<H", 0))         # its 0x03 reply proves b is accepted
+        assert _frame(b)[0] == 0x03
+        a.sendall(b"\x02" + _st.pack("<H", 5) + b"hello")
+        if air:
+            rx = _frame(b)
+            assert rx[0] == 0x01 and rx[7:] == b"hello"
+        else:
+            with pytest.raises(_s.timeout):
+                _frame(b)
+        a.settimeout(1)
+        with pytest.raises(_s.timeout):                  # the sender hears nothing
+            _frame(a)
     finally:
         proc.terminate()
         proc.wait(timeout=5)

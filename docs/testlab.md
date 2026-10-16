@@ -87,6 +87,9 @@ after 60 s). Running fakes poll the scenario file and follow within a second.
 
 - `lhpc-testlab inject <433|868> <preset>` queues an RX frame the fake daemon delivers to the
   real chain (watch it arrive in graywolf).
+- A top-level `"air": ["433"]` in the scenario file makes that band a virtual air: a frame one radio
+  client transmits reaches every other client of the band once, as RX, and never the sender. This is
+  how two emulated MeshCom nodes talk to each other without a radio.
 - `lhpc-testlab reset` returns to the deterministic healthy baseline.
 - `lhpc-testlab check` reports the fakes (gpsd, the APRS-IS sink; a fake that is down fails it)
   and per-stack readiness through the production gates;

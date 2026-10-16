@@ -16,7 +16,9 @@ SOCK_STREAM sockets and speaks the daemon's protocol:
 Scenario coupling (state/testlab/ under the runtime root, derived from
 LORAHAM_RUNTIME_DIR): scenario.json's radio_{band} drives RADIO=READY|FAILED per reply;
 rx-queue/{band}/*.json files are delivered EXACTLY ONCE, in name order, to all
-connected data clients; every TX is appended to tx.jsonl. Deliberately NOT emitted:
+connected data clients; every TX is appended to tx.jsonl. scenario.json's "air" (a list of
+bands) makes this band a virtual air: a TX that succeeds is also delivered once, as RX, to every
+OTHER data client of the band (never back to the sender). Deliberately NOT emitted:
 unsolicited CONF broadcasts (TX=/CAD=/RSSI=) — lhpc's one-shot CONF clients read only
 the first line, and the kiss-tnc always upgrades to TXRESULT.
 """
@@ -59,6 +61,7 @@ class Fake:
         self.last = "NONE"
         self.scn_read = 0.0
         self.radio = "READY"
+        self.air = False
 
     # -- scenario / queue ------------------------------------------------------------
 
@@ -77,8 +80,10 @@ class Fake:
                         - float(rec.get("applied_boottime") or 0) >= float(rev)):
                     flags = {}
                 self.radio = str(flags.get(f"radio_{self.band}", "READY"))
+                self.air = self.band in (rec.get("air") or [])
             except Exception:
                 self.radio = "READY"
+                self.air = False
         return self.radio
 
     def queue_dir(self):
@@ -273,11 +278,11 @@ def serve(band):
                 sock.close()
                 continue
             c.buf += data
-            _consume(fake, c)
+            _consume(fake, c, conns)
         _deliver_queue(fake, conns)
 
 
-def _consume(fake, c):
+def _consume(fake, c, conns):
     if c.kind == "conf":
         while b"\n" in c.buf:
             line, _, c.buf = c.buf.partition(b"\n")
@@ -294,13 +299,14 @@ def _consume(fake, c):
                 _send(c, b"\x03" + struct.pack("<H", 18) + b"unknown frame type")
                 continue
             status = fake.transmit(payload)
+            _air(fake, conns, c, payload, status)
             if fake.set_["TXRESULT"] == "1":
                 body = struct.pack("<BBH", status, 0x01, fake.seq)
                 _send(c, b"\x04" + struct.pack("<H", len(body)) + body)
     else:                                   # raw: every <=255-byte chunk = one TX
         data, c.buf = c.buf, b""
         for i in range(0, len(data), 255):
-            fake.transmit(data[i:i + 255])
+            _air(fake, conns, c, data[i:i + 255], fake.transmit(data[i:i + 255]))
 
 
 _MAX_OUT = 1 << 20                          # a reader stalled past 1 MiB is dropped
@@ -345,16 +351,25 @@ def _deliver_queue(fake, conns):
                              rf_hex=rec.get("rf_hex"))
         if not rf:
             continue
-        fake.n["RX"] += 1
-        fake.n["RXBYTES"] += len(rf)
-        rssi, snr = -9500, 800              # centi-dBm / centi-dB, int16 LE
-        frame = b"\x01" + struct.pack("<H", 4 + len(rf)) \
-            + struct.pack("<hh", rssi, snr) + rf
-        for c in conns:
-            if c.kind == "raw":
-                _send(c, rf)
-            elif c.kind == "framed":
-                _send(c, frame)
+        _receive(fake, [c for c in conns if c.kind in ("raw", "framed")], rf)
+
+
+def _receive(fake, clients, rf):
+    """Deliver one received frame to these data clients: raw bytes verbatim, framed as 0x01."""
+    fake.n["RX"] += 1
+    fake.n["RXBYTES"] += len(rf)
+    rssi, snr = -9500, 800                  # centi-dBm / centi-dB, int16 LE
+    frame = b"\x01" + struct.pack("<H", 4 + len(rf)) + struct.pack("<hh", rssi, snr) + rf
+    for c in clients:
+        _send(c, rf if c.kind == "raw" else frame)
+
+
+def _air(fake, conns, sender, payload, status):
+    """Virtual air: a transmitted frame reaches the band's other data clients, as on real
+    air the sender never hears itself. Only when scenario.json names this band in "air"."""
+    others = [c for c in conns if c is not sender and c.kind in ("raw", "framed")]
+    if status == 0 and others and fake.air:
+        _receive(fake, others, payload)
 
 
 def main(argv):

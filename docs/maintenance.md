@@ -145,6 +145,9 @@ repositories.
 
   A patch is the tag plus its changelog section, with CI and testlab green on the released SHA; no
   GitHub Release.
+  For MeshCom, the test lab's virtual row is enough unless `tools/release-row-check.py <last tag>
+  <candidate>` prints `real-row` (a daemon, RadioLib or runner pin, the radio configuration, or the
+  bridge's hardware backend moved); then one real row runs on the Zero.
   - **Where the line runs.** Adding, removing or changing a selector, a CLI verb, a refusal, a
     unit template or the manifest model is a minor. Changing a **default** (what happens when the
     operator names nothing) is a patch if every explicit selector keeps its meaning and the
