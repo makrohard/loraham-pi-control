@@ -13,6 +13,8 @@ Fixed
   revoked certificate's leftover `.p12` is no longer handed out, by the download or `lhpc webserver cert export`.
 - Web console: a form or request the browser marks as sent from another site or from another port of the
   box (a stack's web UI) is refused even with a valid token.
+- Web console: while the console runs, the client-CA CRL is renewed a week before it expires, so remote client
+  certificates are no longer refused for up to five minutes every 30 days while it waited for the expiry.
 
 ## 0.12.10
 

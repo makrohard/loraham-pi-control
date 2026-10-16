@@ -228,6 +228,42 @@ def test_a_future_dated_crl_is_repaired(tmp_path, monkeypatch):
     assert lu <= now, "still dated in the future"
 
 
+def test_a_crl_within_a_week_of_its_next_update_is_renewed_early(tmp_path, monkeypatch):
+    # Renewing only AFTER nextUpdate meant nginx refused every client certificate until the next
+    # watchdog pass (up to 300 s every 30 days). A week ahead, nginx never sees an expired CRL.
+    _init_pki(tmp_path)
+    now = _dt.datetime.now(_dt.UTC)
+    _stale_crl(tmp_path, last_update=now - _dt.timedelta(days=24),
+               next_update=now + _dt.timedelta(days=6))
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert svc.crl_refresh_if_expired() is True
+    assert _crl_window(_crl(tmp_path))[1] > now + _dt.timedelta(days=20)
+
+
+def test_a_crl_far_from_its_next_update_is_left_alone(tmp_path, monkeypatch):
+    _init_pki(tmp_path)
+    now = _dt.datetime.now(_dt.UTC)
+    _stale_crl(tmp_path, last_update=now - _dt.timedelta(days=1),
+               next_update=now + _dt.timedelta(days=29))
+    before = _tls(tmp_path, "client-ca", "crl.pem").read_bytes()
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert svc.crl_refresh_if_expired() is False
+    assert _tls(tmp_path, "client-ca", "crl.pem").read_bytes() == before
+
+
+def test_an_unverified_clock_does_not_renew_a_valid_crl_early(tmp_path, monkeypatch):
+    # "A week before nextUpdate" means nothing without a trusted clock: only a CRL already past it
+    # is rebuilt there (provisionally), as before.
+    _init_pki(tmp_path)
+    now = _dt.datetime.now(_dt.UTC)
+    _stale_crl(tmp_path, last_update=now - _dt.timedelta(days=24),
+               next_update=now + _dt.timedelta(days=6))
+    before = _tls(tmp_path, "client-ca", "crl.pem").read_bytes()
+    svc = _svc(tmp_path, synced=False, monkeypatch=monkeypatch)
+    assert svc.crl_refresh_if_expired() is False
+    assert _tls(tmp_path, "client-ca", "crl.pem").read_bytes() == before
+
+
 def test_a_pending_marker_does_not_shortcut_an_invalid_crl(tmp_path, monkeypatch):
     # The ordering bug. The pending-reload early return ran BEFORE the CRL was ever loaded, so a
     # marker left by a failed reload retried forever against a file that was itself invalid and

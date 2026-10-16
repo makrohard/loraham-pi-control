@@ -1913,7 +1913,7 @@ class WebserverOpsMixin:
 
     @invalidates_snapshot
     def crl_refresh_if_expired(self) -> bool:
-        """Rebuild the client-CA CRL when it is stale — nextUpdate in the past, OR lastUpdate in
+        """Rebuild the client-CA CRL when it is stale — nextUpdate near or past, OR lastUpdate in
         the FUTURE (minted while the clock was wrong; nginx rejects it the moment the clock is
         corrected, and it would never expire on its own) — then reload nginx
         via the normal apply. An AP-isolated box gets NTP the
@@ -1959,8 +1959,8 @@ class WebserverOpsMixin:
             # lastUpdate in the FUTURE is the case a pure nextUpdate check cannot see: a CRL
             # minted while the clock was wrong is rejected by nginx from the moment the clock is
             # corrected, and its nextUpdate is even further out -- so it would never expire and
-            # never be rebuilt.
-            stale = nu <= now or lu > now
+            # never be rebuilt. A verified clock renews a week ahead: nginx never meets an expired CRL.
+            stale = nu - _dt.timedelta(days=7 if clock_ok else 0) <= now or lu > now
 
             # Ordering fix: the pending-reload early return used to run BEFORE the CRL was ever
             # loaded, so a marker left by a failed reload retried forever against a file that was

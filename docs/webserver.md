@@ -285,8 +285,8 @@ message says if that retry could not be scheduled). Do not revoke again: run
 `lhpc webserver apply`. `verify` does not test revocation.
 
 **The CRL** is valid for 30 days. The console's watchdog (every 60 s on a box with the Wi-Fi
-feature or with work pending, else every 300 s) rebuilds it when `nextUpdate` has passed or
-`lastUpdate` is in the future, keeping the CA and every revoked serial, and reloads nginx.
+feature or with work pending, else every 300 s) rebuilds it a week before `nextUpdate` (under an
+unverified clock: once it has passed) or when `lastUpdate` is in the future, keeping the CA and every revoked serial, and reloads nginx.
 Under an unverified clock the rebuild uses the provisional window and is normalised later.
 Without the console running, nothing rebuilds it and after 30 days nginx refuses **every**
 client certificate ("400 The SSL certificate error"). Beyond this and normalisation, nothing
