@@ -364,7 +364,19 @@ def test_the_marker_check_rejects_an_added_field():
     assert _marker_problems(m) == ["lat"]
 
 
-def test_monitor_socket_answers_the_feeds_snapshot_and_is_private(short_tmp_path):
+@pytest.mark.parametrize("marker_delay_s", [0.0, 0.3])
+def test_monitor_socket_answers_the_feeds_snapshot_and_is_private(short_tmp_path, monkeypatch, marker_delay_s):
+    # The monitor socket and the readiness marker are written by the same pump, in that order: the
+    # socket can already hold the sentences while the marker still says "starting". The test waits for
+    # the marker too (the 0.3 s case writes it late on purpose; a single read raced it on a slow runner).
+    from lhpc.core.gps_bridge import Readiness
+    write = Readiness.write
+
+    def late_write(self):
+        if self.state == "ready":
+            time.sleep(marker_delay_s)
+        write(self)
+    monkeypatch.setattr(Readiness, "write", late_write)
     paths, fifo, out, ready, monitor, stop, t = _fifo_bridge(short_tmp_path)
     try:
         assert monitor.enabled
@@ -377,8 +389,9 @@ def test_monitor_socket_answers_the_feeds_snapshot_and_is_private(short_tmp_path
         assert oct(os.stat(monitor.path).st_mode & 0o777) == "0o600"
         assert oct(os.stat(os.path.dirname(monitor.path)).st_mode & 0o777) == "0o700"
         assert GGA_3D + b"\r\n" in out.data                    # the consumer got its bytes
-        marker = (short_tmp_path / "state" / "gps" / "meshcom" / "readiness.json").read_text()
-        m = json.loads(marker)
+        marker = short_tmp_path / "state" / "gps" / "meshcom" / "readiness.json"
+        _until(lambda: marker.exists() and json.loads(marker.read_text())["state"] == "ready")
+        m = json.loads(marker.read_text())
         assert _marker_problems(m) == [] and m["state"] == "ready" and m["detail"] == ""
     finally:
         stop.set()
