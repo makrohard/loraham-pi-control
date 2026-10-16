@@ -217,6 +217,21 @@ _SECURITY_HEADERS = {
 ServiceFactory = Callable[[], ControllerService]
 
 
+def _row_inline(sid: str, jobs, restored_open, args) -> bool:
+    """Whether the Stacks page renders `sid`'s settings body inline (open at first paint): a running
+    job, the remembered-open cookie (unless another row is named), or `open`/`cfg`/`dp`/`inst`
+    naming it. Every other row's body is fetched when it is opened (stacklazy.js)."""
+    named = args.get("open") or args.get("cfg") or args.get("dp") or args.get("inst")
+    return bool(jobs or (sid in restored_open and (not named or named == sid))
+                or sid in (args.get("open"), args.get("cfg"), args.get("dp"), args.get("inst")))
+
+
+def _row_needs_body(inline: bool, only_sid) -> bool:
+    """Whether a Stacks row gets its settings-body fields built: only a row the page renders inline,
+    or the one row a lazy body request asks for."""
+    return inline or only_sid is not None
+
+
 def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     """Build the Flask app. `service_factory` is injectable for tests."""
     app = Flask(__name__)
@@ -850,14 +865,17 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             lis = None
         return fw, lis
 
-    def _stack_groups(band="", only_sid=None, cfg_sid="", *, fw_status=None, listeners=None):
+    def _stack_groups(band="", only_sid=None, cfg_sid="", *, fw_status=None, listeners=None,
+                      restored_open=frozenset()):
         """Per-stack overview rows for the Stacks page. Each row now carries the FULL per-stack
         detail: component statuses/evidence, system+build+runtime
         dependency diagnosis, needs-build, daemon parameters, known-working offer, restart-required
         and stack-scoped conflicts — all read-only, GET-safe. `band` is threaded (as the detail page
         did) into the band-aware views. `only_sid` limits the heavy per-stack build to ONE row (the
         lazy-body partial) — the holistic snapshot/conflicts are still computed, but the ~14 per-stack
-        service calls run for just that stack instead of all of them."""
+        service calls run for just that stack instead of all of them. On the whole page those calls
+        run only for the rows rendered inline (`_row_inline`); a closed row carries what its summary
+        and row actions show, and its body comes from the lazy route when it is opened."""
         snapshot = service.build_snapshot()  # fresh, read-only evidence each load
         rollup = rollup_states(snapshot)
         stack_deps = stack_dependencies([ss.stack for ss in snapshot.stacks])
@@ -871,6 +889,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # reads `unchecked`, not a stale green/yellow.
         _fresh = service.source_check_view()
         _fresh_comps = _fresh.get("components", {})
+        jobs_by_stack = {}
+        for job in service.active_jobs():
+            jobs_by_stack.setdefault(job.get("stack"), []).append(job)
 
         groups = []
         for ss in snapshot.stacks:
@@ -906,14 +927,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             buildable = bool(main and not main.source and main.build_steps)
             installed = bool(has_source and main_status and main_status.source_state.value
                              in ("match", "dirty", "differs", "unknown", "not-a-repo", "binary"))
-            _unbuilt = service.unbuilt_components(stack.id)
             # A fetched-binary stack has no clone, so the source-gated Uninstall/Clean line never
             # rendered for it — yet `lhpc uninstall graywolf` works and DOES remove the fetched
             # artifact. The console has to offer the removal the CLI already accepts, otherwise a
             # stack can be installed from the console but only removed from a shell. Gated on
             # anything removable being ON DISK — not on "fully built", which hid the buttons for
             # an interrupted fetch or a stale pin, exactly the states where removal is the fix.
-            removable = bool(buildable and service.fetched_artifacts_present(stack.id))
             interactive = bool(main and main.interactive)
             member_ids = {c.id for c in stack.components}
             # Freshness, resolved per component against the head the verdict was computed from.
@@ -933,10 +952,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 _upd_comp, _upd_is_main = _behind[0], False
             else:
                 _upd_comp, _upd_is_main = None, False
-            groups.append({
+            _jobs = jobs_by_stack.get(stack.id, [])
+            inline = _row_inline(stack.id, _jobs, restored_open, request.args)
+            g = {
                 "stack": stack,
-                "hardware_block": service.hardware_block(stack.id),  # "" unless no hardware configured
-                "radio_block": service.radio_mode_block(stack.id),   # "" unless the mode excludes it
                 "main": index.get(main.id) if main else None,
                 "main_status": main_status,
                 "statuses": ss.components,            # dict[comp_id -> ComponentStatus] (evidence etc.)
@@ -946,13 +965,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "update_component": _upd_comp,            # the behind component to deep-link to
                 "update_component_is_main": _upd_is_main,  # main -> Install section; dep -> #comp-<id>
                 "update_checked_ago": _checked_ago(_fresh.get("checked_at", 0)),
-                # [] for a stack with no web UI -> no Webserver sub-section; else one entry per
-                # proxied PAGE (component with a client http/https endpoint).
-                "stack_webs": service.stack_web_views(stack.id, listeners=listeners,
-                                                      fw_status=fw_status),
-                # One Password sub-section per component that declares where its self-generated
-                # UI password lives — independent of web pages.
-                "ui_creds_list": service.ui_credentials_list(stack.id),
                 # The MeshCore stack's Mode switch on the stack body and its pill on the Apps row
                 # ("" elsewhere): the saved mode, the choices, and the mode the running launch was
                 # generated with (shown only while the stack runs and differs from the saved one).
@@ -964,11 +976,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 # A3: an install over the pin check still in force (the pill and the warning), and
                 # the typed pin refusal of the last failed console install job.
                 "pin_override": service.binary_active_override(stack.id),
-                "pin_refusal": service.binary_install_refusal(stack.id),
                 "installed": installed,
                 "has_source": has_source,
                 "buildable": buildable,
-                "removable": removable,
                 "fetched_ver": (_fv := (service.fetched_version_state(stack.id)
                                         if buildable else {})),
                 # Reuse _fv's installed instead of a second fetched_version_state read.
@@ -980,29 +990,41 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "dep_stacks": [(d, rollup.get(d, "unknown")) for d in stack_deps[stack.id]],
                 "bands": sorted({c.band for c in stack.components if c.band}),
                 "interactive": interactive,
-                "command": service.manual_start_command(main) if interactive else "",
-                # Per-stack Settings section rendered inline on the Apps list (same data the
-                # stack-detail Settings uses): operator, component-scoped params, sources, autostart.
-                "view": service.config_view(stack.id, sband),
-                "config_groups": service.config_param_groups(stack.id, sband),
-                # Folded-in detail sections (all read-only / GET-safe):
-                "system_deps": service.system_deps(stack.id),
-                "deps_report": service.deps_report(stack.id),
-                "needs_build": _unbuilt,
-                "needs_build_deps": service.unbuilt_build_deps(stack.id),   # must build BEFORE the main
-                "daemon_params": service.daemon_params_view(stack.id, band),
-                "kw_offer": service.known_working_offer(stack.id, snapshot),
-                # None when HMAC does not apply here (no flag/row); else whether it is ENABLED.
-                "hmac_enabled": service.hmac_status(stack.id),
-                "restart_required": service.restart_required(stack.id),
                 "conflicts": [c for c in all_conflicts
                               if any(h in member_ids for h in c.holders)],
-            })
-        jobs_by_stack = {}
-        for job in service.active_jobs():
-            jobs_by_stack.setdefault(job.get("stack"), []).append(job)
-        for g in groups:
-            g["jobs"] = jobs_by_stack.get(g["stack"].id, [])
+                "jobs": _jobs,
+                "inline": inline,
+            }
+            if _row_needs_body(inline, only_sid):
+                g.update({
+                    "hardware_block": service.hardware_block(stack.id),  # "" unless no hardware configured
+                    "radio_block": service.radio_mode_block(stack.id),   # "" unless the mode excludes it
+                    # [] for a stack with no web UI -> no Webserver sub-section; else one entry per
+                    # proxied PAGE (component with a client http/https endpoint).
+                    "stack_webs": service.stack_web_views(stack.id, listeners=listeners,
+                                                          fw_status=fw_status),
+                    # One Password sub-section per component that declares where its self-generated
+                    # UI password lives — independent of web pages.
+                    "ui_creds_list": service.ui_credentials_list(stack.id),
+                    "pin_refusal": service.binary_install_refusal(stack.id),
+                    "removable": bool(buildable and service.fetched_artifacts_present(stack.id)),
+                    "command": service.manual_start_command(main) if interactive else "",
+                    # Per-stack Settings section rendered inline on the Apps list (same data the
+                    # stack-detail Settings uses): operator, component-scoped params, sources, autostart.
+                    "view": service.config_view(stack.id, sband),
+                    "config_groups": service.config_param_groups(stack.id, sband),
+                    # Folded-in detail sections (all read-only / GET-safe):
+                    "system_deps": service.system_deps(stack.id),
+                    "deps_report": service.deps_report(stack.id),
+                    "needs_build": service.unbuilt_components(stack.id),
+                    "needs_build_deps": service.unbuilt_build_deps(stack.id),   # must build BEFORE the main
+                    "daemon_params": service.daemon_params_view(stack.id, band),
+                    "kw_offer": service.known_working_offer(stack.id, snapshot),
+                    # None when HMAC does not apply here (no flag/row); else whether it is ENABLED.
+                    "hmac_enabled": service.hmac_status(stack.id),
+                    "restart_required": service.restart_required(stack.id),
+                })
+            groups.append(g)
         groups.sort(key=lambda g: (not g["running"], len(g["dep_stacks"]), g["stack"].id))
         return groups, snapshot
 
@@ -1072,14 +1094,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         it inline; the lazy partial passes None — the transient belongs to the whole-page render).
         `only_sid` (lazy partial) builds just that stack's group — the page-wide ctx below is O(1)."""
         fw_status, listeners = _render_wide_reads()
-        groups, snapshot = _stack_groups(band, only_sid, cfg_sid, fw_status=fw_status,
-                                         listeners=listeners)
         # Rows the operator had open on their last visit (mirrored to the `lhpc_open` cookie by
         # stacks_state.js). Rendering them already-open with their body inline — like a ?open= row —
         # means a restored-open row is present at FIRST PAINT, so re-opening it never shifts the page
         # (CLS). One general mechanism: any top-level row id (a stack sid, or "controller-row").
         from urllib.parse import unquote as _unquote
         restored_open = {s for s in _unquote(request.cookies.get("lhpc_open", "")).split(",") if s}
+        groups, snapshot = _stack_groups(band, only_sid, cfg_sid, fw_status=fw_status,
+                                         listeners=listeners, restored_open=restored_open)
         # Controller-owned Webserver component, rendered INLINE in the controller row. Cached
         # evidence only (monitor_view: no probing/mutation) — fail-safe so it never breaks /stacks.
         from lhpc.core.config import WEBSERVER_ACCESS_MODES as _WS_MODES

@@ -4,6 +4,7 @@ the body server-side, so the settings are always reachable."""
 
 from __future__ import annotations
 
+import pytest
 from htmlq import parse
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -78,3 +79,59 @@ def test_closed_placeholder_has_noscript_fallback_link(tmp_path, web):
     body = c.get("/stacks").get_data(as_text=True)
     # A no-JS / fetch-failure fallback: a link that opens the stack server-side.
     assert "<noscript>" in body and "?open=" in body
+
+
+_JOB = {"stack": "kiss", "log": "build-loraham-kiss-tnc.log", "op": "build", "target": "kiss"}
+_SCENARIOS = {"closed": "/stacks", "jobs": "/stacks", "cookie": "/stacks", "open": "/stacks?open=kiss",
+              "cfg": "/stacks?cfg=kiss", "dp": "/stacks?dp=kiss", "inst": "/stacks?inst=kiss"}
+
+
+def _scenario(c, svc, how):
+    """The URL of one way a row renders: all closed, or `kiss` forced open by a running job, the
+    remembered-open cookie, or one of the four query arguments."""
+    if how == "jobs":
+        svc.active_jobs = lambda: [dict(_JOB)]
+    if how == "cookie":
+        c.set_cookie("lhpc_open", "kiss")
+    return _SCENARIOS[how]
+
+
+def test_a_closed_row_builds_no_settings_body(tmp_path, web):
+    # The page built every row's settings body (config views, dependency reports, …: about half of a
+    # Stacks render on a Zero) although a closed row's body is fetched only when it is opened.
+    c, svc = _client(web, tmp_path)
+    calls = []
+    orig = svc.config_view
+    svc.config_view = lambda sid, *a, **k: (calls.append(sid), orig(sid, *a, **k))[1]
+    c.get("/stacks?open=kiss")
+    assert set(calls) == {"kiss"}
+
+
+@pytest.mark.parametrize("how", list(_SCENARIOS))
+def test_the_stacks_page_is_the_same_byte_for_byte(tmp_path, web, monkeypatch, how):
+    """The whole response equals the one the page gives when every row builds its body (what it did
+    before), for every way a row renders; one test client, nothing normalised."""
+    from lhpc.adapters.web import app as app_mod
+    c, svc = _client(web, tmp_path)
+    url = _scenario(c, svc, how)
+    lazy = c.get(url).get_data(as_text=True)
+    monkeypatch.setattr(app_mod, "_row_needs_body", lambda inline, only_sid: True)
+    full = c.get(url).get_data(as_text=True)
+    first = next((i for i, (a, b) in enumerate(zip(lazy.splitlines(), full.splitlines())) if a != b), None)
+    assert lazy == full, (first, lazy.splitlines()[first] if first is not None else len(lazy) - len(full))
+
+
+@pytest.mark.parametrize("jobs, cookie, args, inline", [
+    ([], set(), {}, False),                                     # nothing names it: lazy
+    ([_JOB], set(), {}, True),                                  # a running job
+    ([], {"kiss"}, {}, True),                                   # remembered open
+    ([], {"kiss"}, {"open": "chat"}, False),                    # remembered, but another row is named
+    ([], {"kiss"}, {"cfg": "kiss"}, True),                      # remembered and named
+    ([], set(), {"open": "kiss"}, True), ([], set(), {"cfg": "kiss"}, True),
+    ([], set(), {"dp": "kiss"}, True), ([], set(), {"inst": "kiss"}, True),
+    ([], set(), {"open": "chat", "dp": "kiss"}, True),          # any of the four naming it
+    ([], set(), {"open": "chat"}, False),                       # another row named
+])
+def test_which_rows_render_their_body_inline(jobs, cookie, args, inline):
+    from lhpc.adapters.web.app import _row_inline
+    assert _row_inline("kiss", jobs, cookie, args) is inline

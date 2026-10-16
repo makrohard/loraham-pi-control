@@ -182,7 +182,7 @@
       {% for g in groups %}
         {# `restored_open` (from the lhpc_open cookie) makes a remembered-open row render inline+open at
            first paint, so re-opening it on reload causes no layout shift — same effect as a ?open= row. #}
-        {% set _forced = g.jobs or (g.stack.id in restored_open and (not _explicit_row or _explicit_row == g.stack.id)) or request.args.get('open') == g.stack.id or request.args.get('cfg') == g.stack.id or request.args.get('dp') == g.stack.id or request.args.get('inst') == g.stack.id %}
+        {% set _forced = g.inline %}{# the forced-open rule: app.py `_row_inline` #}
         <div class="stackrow-wrap">
           <details class="stackrow" id="stackrow-{{ g.stack.id }}"{% if _forced %} open data-force-open="1"{% endif %}>
             <summary>{{ stack_summary(g) }}</summary>

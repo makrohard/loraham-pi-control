@@ -6,6 +6,8 @@ Changed
 
 - The dashboard checks for changes made elsewhere every 10 s (was 4 s; still 2 s while a start is pending), and log
   pages fetch new lines every 5 s (was 2 s).
+- The Apps page loads faster: a closed stack's settings are prepared only when the stack is opened; the page itself
+  is unchanged.
 
 Fixed
 
