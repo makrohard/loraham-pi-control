@@ -200,3 +200,27 @@ def test_a_fact_is_looked_up_at_head_not_in_the_working_copy(repo):
     (repo / "docs" / "b.md").write_text("Beta.\nGamma.\n")
     rc, rows = _run(repo, "--fact", "Gamma.")
     assert (rc, rows["docs"]) == (0, "OK")
+
+
+SPLIT_BASE = {"lhpc/core/service_x.py": "class X:\n    def a(self):\n        pass\n    def b(self):\n        pass\n",
+              "tests/repo/test_module_budgets.py": BUDGET.format(x="(5, 2)")}
+SPLIT = {"lhpc/core/service_x.py": "class X:\n    def a(self):\n        pass\n",
+         "lhpc/core/service_y.py": '"""Y."""\nimport os\n\nclass Y:\n    def b(self):\n        pass\n',
+         "lhpc/core/services.py": "from .service_x import X\nfrom .service_y import Y\n\nclass S(X, Y):\n"
+                                  "    def run(self):\n        pass\n",
+         "tests/repo/test_module_budgets.py": BUDGET.format(x="(3, 1),\n    \"service_y.py\": (6, 1),  # s1: split from service_x.py")}
+
+
+@pytest.mark.parametrize("case, change, verdict", [
+    ("split", {}, "WARN"),
+    # The header excuse does not cover growth elsewhere, nor a split whose named source did not shrink.
+    ("split-and-growth", {"lhpc/core/service_x.py": SPLIT["lhpc/core/service_x.py"] + "\n"}, "HARD"),
+    ("split-from-a-file-that-did-not-shrink", {"tests/repo/test_module_budgets.py": BUDGET.format(
+        x="(3, 1),\n    \"service_y.py\": (6, 1),  # s1: split from services.py")}, "HARD"),
+])
+def test_a_split_grows_the_family_only_by_the_new_header_and_the_facade_lines(repo, case, change, verdict):
+    _commit(repo, SPLIT_BASE)
+    _git(repo, "tag", "-f", "base")
+    _commit(repo, {**SPLIT, **change})
+    rc, rows = _run(repo)
+    assert (rc, rows["modules"]) == ((0, "WARN") if verdict == "WARN" else (1, "HARD"))
