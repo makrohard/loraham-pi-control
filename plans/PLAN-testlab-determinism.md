@@ -86,6 +86,12 @@ v3 and v2 change tables: see the frozen copies PLAN-testlab-determinism-v2.md / 
   - (c) slowing the acquisition (a stub transfer + 60 s) leaves the budget verdict unchanged.
 - Lane: slow-build.
 
+**P5 scope after round 13 (the maintainer's ruling under decision a, "the cheap way"; 2026-10-16):**
+- Separated, as above, plus every timed build's `pip install`: its wheels are fetched before the lane (`.github/scripts/build-wheels.py`) and the build's pip reads a `pip.conf` with no index through `XDG_CONFIG_HOME`.
+- The channels are ones lhpc's command runner forwards to its children: `~/.gitconfig` (via `HOME`) for git, `XDG_CONFIG_HOME` for pip. The runner drops `GIT_CONFIG_GLOBAL` and `PIP_*`. Each is checked through that runner before anything is timed.
+- Under test, inside a timed build, NOT pre-acquired (no registry mirror): the graywolf build's `.deb` (its only build step, `graywolf-fetch.sh`, runs through the runner, which drops `GRAYWOLF_BASE_URL`). No timed build runs npm. The build logs carry no per-step timestamps, so no transfer share is recorded apart; the graywolf build's time is that transfer.
+- Tests (a) and (c) are kept as written: the budget's verdict and summary do not change when the acquisition is 10^6 times slower, and a slow local timing does fail it (the twin).
+
 **c4 step 2 (after the first recorded hang):** the fix follows the measured cause. If it is the RPC hold, the smallest real fix is a socket timeout on the shared instance's RPC listener in our `loraham-rns-node`. The reproducer: a peer that holds the RPC connection while NomadNet starts, red before the fix.
 
 ## 3. The 27 inventory rows
