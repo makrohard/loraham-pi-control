@@ -1835,8 +1835,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "c2335d12f59b2f59c76274cc7c4708c8b7ed7616"
-    pin_tag = "c2335d1"
+    pin_commit = "8692acd6952638c0f711508e2c7cd12100d4e128"
+    pin_tag = "8692acd"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2076,8 +2076,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "c2335d12f59b2f59c76274cc7c4708c8b7ed7616"
-    pin_tag = "c2335d1"
+    pin_commit = "8692acd6952638c0f711508e2c7cd12100d4e128"
+    pin_tag = "8692acd"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2127,16 +2127,17 @@ main = "meshcom-qemu"
     # Fetched BY REF by meshcom-qemu's `setup.sh --src <remote> --ref {pin:src/MeshCom-Firmware}` step: the argv
     # token is resolved to THIS pin_commit at manifest parse time (0.9.2; before that the step
     # carried a hardcoded 674413c and this pin was a label). The QEMU overlay in
-    # makrohard/meshcom-qemu-raspi must apply to exactly this commit — moving this pin without
-    # rebasing the overlay fails the meshcom build, which is the intended signal. The overlay bounds the per-loop GPS UART drain under
-    # QEMU (an unpaced socket UART starves loop() and leaves the net-console deaf) and now builds at
-    # TX_OUTPUT_POWER 17: the daemon accepts 2..17 dBm on SX127x since 1.0.0 and refuses the old 20,
-    # which left the bridge unable to configure the radio at all.
+    # makrohard/meshcom-qemu-raspi adds new files only (a build variant and the emulated-network
+    # code) and changes no MeshCom file; its apply-overlay.sh refuses the build when a tracked
+    # MeshCom file is modified, so a pin move needs no overlay rebase unless upstream adds a file
+    # at the overlay's paths. The variant builds at TX_OUTPUT_POWER 17: the daemon accepts
+    # 2..17 dBm on SX127x since 1.0.0 and refuses the old 20, which left the bridge unable to
+    # configure the radio at all.
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
     # The setup step fetches from this remote (--src), and a repo test keeps the two identical.
     path = "src/MeshCom-Firmware"
-    pin_commit = "e1e2acea6a18285301b57f32caacd0beb62638f2"
-    pin_tag = "v4.40a"
+    pin_commit = "f2b3a3496a76f327abec8b7228bce436cafe9606"
+    pin_tag = "f2b3a34"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 
