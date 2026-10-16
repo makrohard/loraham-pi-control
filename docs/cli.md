@@ -66,11 +66,24 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs --with-gui   # ONLY on a machine 
 - `--dry-run` — simulate the default apt transaction; exit 0 only if it resolves cleanly and pulls
   nothing graphical, 5 if unresolved, 6 if it would install a GUI/display package or an audio
   server such as PulseAudio (ALSA is in the default set). Run it first on a fresh image.
-- `--spi-mode soft-cs|hardware-cs|skip` (**required**) — `soft-cs`: software CS for LoRaHAM
-  Pi/Uputronics rigs, single-radio and dual Uputronics (daemon + meshtasticd drive CS7/CS8 as
-  GPIOs; the kernel must not claim CE0/CE1). `hardware-cs`: SPI on, no overlay, kernel-driven
-  CE0/CE1 — only for boards that use them, not Uputronics. `skip`: no boot-config change.
-  Idempotent; fails closed on a conflicting `config.txt`.
+- `--spi-mode soft-cs|hardware-cs|skip` (**required**) — `soft-cs`: `dtoverlay=spi0-0cs`, every
+  board, each radio drives its chip select as a GPIO. `hardware-cs`: SPI on, no overlay: the kernel
+  owns CE0 = GPIO 8 and CE1 = GPIO 7 and serialises every transfer, so the daemon, Reticulum and
+  meshtastic cannot interleave on the bus (LoRaHAM / Uputronics; Waveshare, CS 21, needs `soft-cs`).
+  `skip`: no boot-config change. Idempotent; fails closed on a conflicting `config.txt`. A change
+  takes effect after a reboot. Until then, and on any other spi0 layout, every SPI stack refuses to
+  start:
+  - *reboot required: config.txt asks for … SPI chip selects, but the running kernel booted with …*:
+    reboot (`sudo reboot`);
+  - *unsupported SPI boot configuration*: keep `dtparam=spi=on` alone or with `dtoverlay=spi0-0cs`,
+    remove any other `dtoverlay=spi0-…` line, then reboot;
+  - *the kernel owns the chip selects … CS is GPIO <n>*: this board needs `soft-cs`;
+  - *<component> was built from <commit>, which predates kernel chip selects*, or *… has no recorded
+    commit to check against kernel chip selects*: `lhpc update <stack>` (the daemon and the
+    Reticulum driver support kernel chip selects from their pinned commits on).
+  `config.txt`'s conditional sections (`[pi4]`, `[cm4]`, `[all]` …) are not read: an spi line under a
+  filter that does not apply to this board is counted anyway and reads as *reboot required*. Keep
+  the spi lines outside conditional sections.
 - `--operator-user <name>` — who gets the group grants when run as root directly (default
   `$SUDO_USER`, else the invoking user; never root).
 - `--with-gui` — GUI application libraries only, never a desktop.

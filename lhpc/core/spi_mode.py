@@ -91,6 +91,57 @@ def refusal(boot: str, live: str) -> str:
     return ""
 
 
+def installed_commit(paths, stack, comp, owner, src, owner_src) -> str:
+    """The commit of `owner` (the SPI user itself or one of its build dependencies) that `comp`
+    will run, from the provenance LHPC already keeps: the binary channel's receipt (valid, its
+    files verified); else a `consumed <owner> <sha>` line in `comp`'s completion marker or its
+    `.rev` side file (both written only after every build step); else the owner's checkout HEAD
+    (the daemon's source build writes no marker). "" when none can be read."""
+    import subprocess
+
+    from . import binary_receipt
+    state, rec, _ = binary_receipt.receipt_state(paths, stack.id)
+    if state == "valid" and rec is not None:
+        return rec.components.get(owner.id, "") if binary_receipt.verify_files(paths, rec)[0] else ""
+    if state != "absent":
+        return ""          # unsafe or superseded (both faults lhpc doctor names): refused
+    if comp.build_marker:
+        for name in (comp.build_marker, comp.build_marker + ".rev"):
+            try:
+                for line in (Path(src) / name).read_text().splitlines():
+                    f = line.split()
+                    if len(f) == 3 and f[0] == "consumed" and f[1] == owner.id:
+                        return f[2]
+            except OSError:
+                continue
+        return ""
+    r = subprocess.run(["git", "-C", str(owner_src), "rev-parse", "HEAD"], capture_output=True,
+                       text=True, check=False)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def provenance_refusal(paths, stack, comp, source_dir) -> str:
+    """With kernel chip selects, what `comp` runs must contain the `kernel_cs_since` commit of
+    every component it is built from that declares one (itself or a build dependency); an older
+    build would claim GPIO 8/7 the kernel owns."""
+    import subprocess
+    by_id = {c.id: c for c in stack.components}
+    for owner in [comp] + [by_id[d] for d in (comp.build_requires or ()) if d in by_id]:
+        since = getattr(owner, "kernel_cs_since", "")
+        if not since:
+            continue
+        built = installed_commit(paths, stack, comp, owner, source_dir(comp), source_dir(owner))
+        if built == since or (built and subprocess.run(
+                ["git", "-C", str(source_dir(owner)), "merge-base", "--is-ancestor", since, built],
+                capture_output=True, check=False).returncode == 0):
+            continue
+        what = (f"was built from {built[:9]}, which predates kernel chip selects" if built else
+                "has no recorded commit to check against kernel chip selects")
+        return (f"{owner.id} {what} ({since[:9]}): update it "
+                f"(`lhpc update {stack.id} --yes`) before starting it with kernel chip selects")
+    return ""
+
+
 def drives_spi(comp) -> bool:
     return any(getattr(r.kind, "value", r.kind) == "spi-bus" for r in comp.resources)
 
@@ -111,9 +162,9 @@ def meshtasticd_yaml(text: str, live: str) -> str:
         if m:
             cs = m.group(3)
             if cs not in ("8", "7"):
-                raise ValueError(f"the kernel owns the SPI chip selects (GPIO 8 and 7) and "
+                raise ValueError(f"the kernel owns the chip selects (GPIO 8 and 7) and "
                                  f"meshtastic's CS is GPIO {cs}: use soft chip selects "
-                                 f"(dtoverlay=spi0-0cs) or CS 8/7")
+                                 f"(dtoverlay=spi0-0cs, then reboot) or CS 8/7")
             out.append(f"{m.group(1)}spidev: spidev0.{CE_PINS.index(int(cs))}\n")
             continue
         out.append(line)

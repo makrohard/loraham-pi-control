@@ -47,6 +47,7 @@ main = "loraham-daemon"
   [[stack.component]]
   id = "loraham-daemon"
   name = "LoRaHAM Daemon"
+  kernel_cs_since = "709bb99b273f6dfb28d3c0d13b80f6f8f6e93f78"   # its first commit with kernel chip selects (docs/cli.md#deps)
   kind = "service"
   purpose = "Device driver for the LoRa radios; provides raw/framed/CONF sockets per band."
   tx_capable = true
@@ -212,8 +213,8 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/loraham-daemon"
-    pin_commit = "1f1baf26372328a25c229c43cbb0f9a6721c24fe"
-    pin_tag = "v1.2.0"
+    pin_commit = "74763114a04bcf67ad44db8e352a7aaf9ae3fc07"
+    pin_tag = "v1.2.1"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "loraham-daemon-hardening"
@@ -247,7 +248,7 @@ main = "loraham-daemon"
     key = "spi.bus.0"
     kind = "spi-bus"
     mode = "cooperative"
-    note = "Shared SPI bus; serialized via spi0.lock in LORAHAM_RUNTIME_DIR. Different modules use different CS."
+    note = "Shared SPI bus; serialized via spi0.lock in LORAHAM_RUNTIME_DIR, and with kernel chip selects also by the kernel. Different modules use different CS."
     [[stack.component.resource]]
     key = "loraham.radio.433"
     kind = "radio-band"
@@ -1335,7 +1336,7 @@ main = "meshtastic"
     [[stack.component.require]]
     check_file = "/dev/spidev0.0"
     install = "printf 'dtparam=spi=on\\ndtoverlay=spi0-0cs\\n' | sudo tee -a /boot/firmware/config.txt"
-    note = "SPI device (RF95 on SPI0). REBOOT after enabling. The spi0-0cs overlay exposes ONLY /dev/spidev0.0 (zero kernel chip-selects — correct for LoRaHAM Pi / Uputronics rigs INCLUDING dual Uputronics: daemon + meshtasticd drive CS7/CS8 as GPIOs, field-verified). Only a board that really uses kernel-driven CE0/CE1 uses plain 'dtparam=spi=on' WITHOUT the overlay (NOT Uputronics — kernel CE0/CE1=GPIO7/8 would collide with the daemon's GPIO chip-selects)."
+    note = "SPI device (RF95 on SPI0). REBOOT after enabling. Soft chip selects (dtparam=spi=on + dtoverlay=spi0-0cs): only /dev/spidev0.0, each radio drives its CS as a GPIO (every board). Kernel chip selects (dtparam=spi=on alone): /dev/spidev0.0 = CE0 = GPIO 8 and /dev/spidev0.1 = CE1 = GPIO 7, the kernel serialises every transfer (LoRaHAM / Uputronics; not Waveshare, CS 21). See docs/cli.md#deps."
     [[stack.component.require]]
     groups = ["spi", "gpio"]
     install = "sudo usermod -aG spi,gpio $USER"
@@ -1557,6 +1558,7 @@ main = "meshtastic"
     # exclusively blocks `meshtastic + reticulum` (both drive the bus) while leaving
     # `daemon + meshtastic` allowed: that combination ships and is field-verified, and
     # its identical hazard predates this stack (docs/architecture.md, the SPI-lock fact).
+    # Kernel chip selects remove that hazard; the refusal of the pair stays.
     key = "spi.bus.0.unlocked"
     kind = "spi-bus"
     mode = "exclusive"
@@ -2826,6 +2828,7 @@ main = "rns"
 [[stack.component]]
 id = "rns-lora-interface"
 name = "LoRa SPI interface (library)"
+kernel_cs_since = "f0281cc9937a84dad1b966b04246dc5ea4919e8b"   # its first commit with kernel chip selects (docs/cli.md#deps)
 kind = "library"
 optional = true
 purpose = "Direct-SPI LoRa driver + RNS interface + the fail-closed service runner. Build-time dependency of `rns`; never started on its own."
@@ -2835,8 +2838,8 @@ readiness = "manual"
 path = "src/loraham-rns-interface"
 remote = "https://github.com/makrohard/loraham-rns-interface.git"
 branch = "main"
-pin_commit = "6bd0282bf6e8edf37ab6b57c0c29a43c800666c0"
-pin_tag = "6bd0282"
+pin_commit = "f0281cc9937a84dad1b966b04246dc5ea4919e8b"
+pin_tag = "f0281cc"
 
 [[stack.component]]
 id = "rns"
@@ -2954,7 +2957,8 @@ mode = "cooperative"
 # interleaved safely with any other bus user. Both it and this node claim this key
 # exclusively, which blocks that pair while leaving `daemon + meshtastic` — a
 # shipped, field-verified combination whose identical hazard predates this stack and
-# is recorded in docs/architecture.md — untouched.
+# is recorded in docs/architecture.md — untouched. Kernel chip selects remove that hazard;
+# the refusal of the pair stays.
 key = "spi.bus.0.unlocked"
 kind = "spi-bus"
 mode = "exclusive"

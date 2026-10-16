@@ -154,8 +154,8 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs
 ```
 
 - **Root required** (`sudo bash …`); the script itself never calls sudo.
-- **`--spi-mode` is required** — `soft-cs` (LoRaHAM Pi / Uputronics / Waveshare, incl. dual) ·
-  `hardware-cs` (kernel CE0/CE1) · `skip`. Which one, and the optional flags: [deps](docs/cli.md#deps).
+- **`--spi-mode` is required** — `soft-cs` (every board) ·
+  `hardware-cs` (kernel chip selects: LoRaHAM / Uputronics) · `skip`. Which one, and the optional flags: [deps](docs/cli.md#deps).
 - **Beyond apt it** disables the root `nginx.service` ([why](docs/webserver.md#first-time-bootstrap)) ·
   adds a swapfile on small-RAM boards and turns off Wi-Fi power-save during a Wi-Fi install
   ([Running on a Pi](docs/maintenance.md#running-on-a-pi)) · installs `polkitd` and two polkit rules

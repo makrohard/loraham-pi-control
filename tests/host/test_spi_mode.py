@@ -165,3 +165,144 @@ def test_a_bus_user_is_refused_on_a_booted_unsupported_layout(tmp_path, monkeypa
 def test_a_component_off_the_bus_is_never_gated(tmp_path, monkeypatch):
     got = _start(tmp_path, monkeypatch, "dtparam=spi=on\n", "unsupported", spi=False)
     assert "SPI" not in (got.detail or "")
+
+
+# --- provenance: with kernel chip selects, what runs must contain kernel_cs_since --------------
+
+def _clone(tmp_path):
+    """A clone with three commits: old -> since -> newer."""
+    import subprocess
+    repo = tmp_path / "src"
+    repo.mkdir()
+
+    def git(*a):
+        return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c",
+                               "user.email=t@example.invalid", *a], check=True,
+                              capture_output=True, text=True).stdout.strip()
+    git("init", "-q")
+    shas = []
+    for n in ("old", "since", "newer"):
+        (repo / "f").write_text(n)
+        git("add", "f")
+        git("commit", "-qm", n)
+        shas.append(git("rev-parse", "HEAD"))
+    return repo, dict(zip(("old", "since", "newer"), shas, strict=True)), git
+
+
+def _no_receipt(monkeypatch):
+    from lhpc.core import binary_receipt
+    monkeypatch.setattr(binary_receipt, "receipt_state", lambda paths, sid: ("absent", None, ""))
+
+
+@pytest.mark.parametrize("head, refused", [("old", True), ("since", False), ("newer", False)])
+def test_a_daemon_source_checkout_must_contain_the_kernel_cs_commit(tmp_path, monkeypatch, head,
+                                                                     refused):
+    _no_receipt(monkeypatch)
+    repo, sha, git = _clone(tmp_path)
+    git("checkout", "-q", sha[head])
+    comp = Component(id="loraham-daemon", name="d", kind=ComponentKind.SERVICE,
+                     kernel_cs_since=sha["since"])
+    why = spi_mode.provenance_refusal(None, Stack(id="daemon", name="d", components=(comp,)), comp,
+                                      lambda c: repo)
+    assert bool(why) is refused
+    if refused:
+        assert why.startswith("loraham-daemon was built from") and "lhpc update daemon" in why
+
+
+@pytest.mark.parametrize("verified, built, refused", [
+    (True, "since", False), (True, "old", True), (False, "since", True)])
+def test_the_binary_channel_reads_its_verified_receipt(tmp_path, monkeypatch, verified, built,
+                                                       refused):
+    from types import SimpleNamespace
+
+    from lhpc.core import binary_receipt
+    repo, sha, _git = _clone(tmp_path)
+    rec = SimpleNamespace(components={"loraham-daemon": sha[built]})
+    monkeypatch.setattr(binary_receipt, "receipt_state", lambda paths, sid: ("valid", rec, ""))
+    monkeypatch.setattr(binary_receipt, "verify_files", lambda paths, r: (verified, []))
+    comp = Component(id="loraham-daemon", name="d", kind=ComponentKind.SERVICE,
+                     kernel_cs_since=sha["since"])
+    why = spi_mode.provenance_refusal(None, Stack(id="daemon", name="d", components=(comp,)), comp,
+                                      lambda c: repo)
+    assert bool(why) is refused
+
+
+@pytest.mark.parametrize("state, refused", [("unsafe", True), ("superseded", True)])
+def test_a_receipt_that_is_present_but_not_valid_refuses(tmp_path, monkeypatch, state, refused):
+    """A binary daemon with a broken or superseded receipt is never judged by a clone that may
+    already sit at the new pin: both are faults lhpc doctor names, not a source install."""
+    from lhpc.core import binary_receipt
+    repo, sha, git = _clone(tmp_path)
+    git("checkout", "-q", sha["since"])
+    monkeypatch.setattr(binary_receipt, "receipt_state", lambda paths, sid: (state, None, "x"))
+    comp = Component(id="loraham-daemon", name="d", kind=ComponentKind.SERVICE,
+                     kernel_cs_since=sha["since"])
+    why = spi_mode.provenance_refusal(None, Stack(id="daemon", name="d", components=(comp,)), comp,
+                                      lambda c: repo)
+    assert bool(why) is refused
+    if refused:
+        assert "has no recorded commit to check against kernel chip selects" in why
+
+
+@pytest.mark.parametrize("consumed, refused", [("since", False), ("old", True), (None, True)])
+def test_a_build_dependency_is_read_from_the_users_completion_marker(tmp_path, monkeypatch,
+                                                                     consumed, refused):
+    """Reticulum: the SPI driver is a library built into `rns`; the marker names its commit."""
+    _no_receipt(monkeypatch)
+    lib_repo, sha, _git = _clone(tmp_path)
+    rns_src = tmp_path / "rns"
+    (rns_src / ".venv").mkdir(parents=True)
+    if consumed:
+        (rns_src / ".venv" / "done").write_text(
+            f"lhpc build complete\nconsumed rns-lora-interface {sha[consumed]}\n")
+    lib = Component(id="rns-lora-interface", name="l", kind=ComponentKind.LIBRARY,
+                    kernel_cs_since=sha["since"])
+    rns = Component(id="rns", name="r", kind=ComponentKind.SERVICE, build_marker=".venv/done",
+                    build_requires=("rns-lora-interface",))
+    why = spi_mode.provenance_refusal(None, Stack(id="reticulum", name="r", components=(rns, lib)),
+                                      rns, lambda c: lib_repo if c is lib else rns_src)
+    assert bool(why) is refused
+
+
+def test_the_start_gate_refuses_an_old_build_only_with_kernel_chip_selects(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(spi_mode, "provenance_refusal",
+                        lambda *a: calls.append(a) or "rns-lora-interface was built from …")
+    got = _start(tmp_path, monkeypatch, "dtparam=spi=on\n", "kernel")
+    assert not got.ok and got.detail.startswith("rns-lora-interface was built from")
+    calls.clear()
+    got = _start(tmp_path, monkeypatch, "dtparam=spi=on\ndtoverlay=spi0-0cs\n", "soft")
+    assert calls == []                              # soft mode: no provenance check at all
+
+
+def test_a_real_source_adoption_turns_an_admitted_binary_into_a_refused_one(tmp_path):
+    """Through the real receipt and registry: a verified binary install is judged by its receipt
+    (admitted); once the source is adopted over it, binary_receipt.receipt_state reads
+    "superseded" (a fault `lhpc doctor` names) and the gate refuses."""
+    import hashlib
+
+    from lhpc.core import binary_receipt, source_registry
+    repo, sha, _git = _clone(tmp_path)
+    rt = tmp_path / "rt"
+    paths = Paths(runtime_root=rt)
+    rel = "src/loraham-daemon/loraham_daemon/loraham_daemon"
+    (rt / rel).parent.mkdir(parents=True)
+    (rt / rel).write_bytes(b"daemon")
+    assert binary_receipt.write_receipt(paths, binary_receipt.BinaryReceipt(
+        stack="daemon", artifact_sha256="a" * 64, artifact_size=6,
+        filename="daemon-" + "a" * 64 + ".tar.zst", url="https://example.invalid/d.tar.zst",
+        components={"loraham-daemon": sha["since"]}, provenance={}, files=(rel,),
+        file_hashes={rel: hashlib.sha256(b"daemon").hexdigest()}, proof_paths=(rel,),
+        registry_baseline={"src/loraham-daemon": ""}, probe="d"))
+    comp = Component(id="loraham-daemon", name="d", kind=ComponentKind.SERVICE,
+                     kernel_cs_since=sha["since"])
+    stack = Stack(id="daemon", name="d", components=(comp,))
+    assert binary_receipt.receipt_state(paths, "daemon")[0] == "valid"
+    assert spi_mode.provenance_refusal(paths, stack, comp, lambda c: repo) == ""
+    assert source_registry.write_record(paths, source_registry.RegistryRecord(
+        source_rel="src/loraham-daemon", remote="https://example.invalid/d.git",
+        selector="pinned", resolved_commit=sha["since"], adopted_at=1.0, txn_id="txn-adopt",
+        components=("loraham-daemon",)))
+    assert binary_receipt.receipt_state(paths, "daemon")[0] == "superseded"
+    why = spi_mode.provenance_refusal(paths, stack, comp, lambda c: repo)
+    assert "has no recorded commit to check against kernel chip selects" in why

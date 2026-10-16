@@ -82,6 +82,8 @@ Every component executes [**shell-free**](architecture.md#safety-model):
 a build step is stopped when it stalls (10 minutes with no CPU, output or disk/network activity) or
 at a 24-hour runaway guard; `build_timeout` raises that guard for a build that needs longer;
 `build_marker` names a file written only by a completed build.
+An SPI bus user (or a library it is built from) declares `kernel_cs_since`: its first commit that
+supports kernel chip selects. With kernel chip selects, an installed build older than it is refused.
 
 ```toml
   build_steps = [

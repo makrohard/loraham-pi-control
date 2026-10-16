@@ -6,6 +6,8 @@ Changed
 
 - MeshCom runs the stock firmware under QEMU (meshcom-qemu-raspi c2335d12f -> 8692acd69, MeshCom-Firmware
   e1e2acea6 -> f2b3a3496): the overlay adds files only and no longer patches the firmware.
+- Kernel chip selects (`bootstrap-deps.sh --spi-mode hardware-cs`, then a reboot) serialise the SPI bus for the daemon,
+  Reticulum and meshtastic; a box whose boot file and running kernel disagree refuses SPI stacks until it is rebooted.
 - The dashboard checks for changes made elsewhere every 10 s (was 4 s; still 2 s while a start is pending), and log
   pages fetch new lines every 5 s (was 2 s).
 - The Apps page loads faster: a closed stack's settings are prepared only when the stack is opened; the page itself
