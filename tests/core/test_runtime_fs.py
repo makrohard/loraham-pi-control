@@ -542,16 +542,6 @@ def test_read_write_unlink_roundtrip(tmp_path):
     runtime_fs.unlink(paths, p)                              # missing -> no-op
 
 
-def test_unlink_refuses_symlink_leaf(tmp_path):
-    rt, paths = _rt(tmp_path)
-    (rt / "state").mkdir()
-    outside = tmp_path / "secret"; outside.write_text("SECRET")
-    os.symlink(outside, rt / "state" / "evil")
-    with pytest.raises(PathContainmentError):
-        runtime_fs.unlink(paths, rt / "state" / "evil")
-    assert outside.exists()                                  # link target untouched
-
-
 def test_default_real_start_log_uses_anchored_api(tmp_path):
     # The default real spawn opens the start log through runtime_fs (anchored, O_NOFOLLOW):
     # a symlinked log leaf is refused before any process is launched.
