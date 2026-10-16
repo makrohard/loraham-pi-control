@@ -169,17 +169,38 @@ def test_intent_hash_refuses_invalid_candidates():
 
 def test_helper_imports_stdlib_only():
     """TRUST BOUNDARY: the installed helper must never import lhpc checkout code. Assert the
-    module source imports only an allowlisted stdlib set."""
+    module source imports only an allowlisted stdlib set. A whole-module negative invariant
+    (tests/README.md rule 1 exception: no driven path proves an import that is never made); its
+    behavioural twin is `test_the_helper_runs_alone_with_the_standard_library_only`."""
     import ast
-    src = (repo_paths.REPO / "lhpc" / "core" / "firewall_helper.py").read_text()
+    src = (repo_paths.REPO / "lhpc" / "core" / "firewall_helper.py").read_text()  # rule-1 exception
     allowed = {"hashlib", "ipaddress", "json", "re", "os", "sys", "fcntl", "subprocess",
                "time", "tempfile", "ctypes", "errno", "stat", "__future__"}
-    for node in ast.walk(ast.parse(src)):
+    imports = [n for n in ast.walk(ast.parse(src)) if isinstance(n, (ast.Import, ast.ImportFrom))]
+    assert imports                                                    # something is checked
+    for node in imports:
         if isinstance(node, ast.Import):
             for a in node.names:
                 assert a.name.split(".")[0] in allowed, a.name
         elif isinstance(node, ast.ImportFrom):
             assert (node.module or "").split(".")[0] in allowed, node.module
+
+
+@pytest.mark.needs_nonroot
+def test_the_helper_runs_alone_with_the_standard_library_only(tmp_path):
+    """The behavioural twin of `test_helper_imports_stdlib_only`: the helper copied alone into an
+    empty directory and run by an interpreter without site-packages (`-I -S`: no lhpc, no
+    third-party package) reaches its own first decision, the root refusal (`EXIT_INTERNAL`), which
+    `main()` makes only after every module-level import resolved."""
+    import shutil
+    import subprocess
+    import sys
+    from lhpc.core import firewall_helper as fh
+    copy = tmp_path / "firewall-helper.py"
+    shutil.copyfile(repo_paths.REPO / "lhpc" / "core" / "firewall_helper.py", copy)
+    r = subprocess.run([sys.executable, "-I", "-S", str(copy)], cwd=tmp_path, capture_output=True,
+                       text=True, timeout=30, env={"PATH": "/usr/bin:/bin"}, check=False)
+    assert (r.returncode, r.stderr) == (fh.EXIT_INTERNAL, ""), r.stderr
 
 
 def test_helper_validator_agrees_with_controller_validator():
