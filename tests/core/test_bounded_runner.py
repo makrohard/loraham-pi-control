@@ -41,11 +41,13 @@ def test_timeout_terminates_child_tree():
     r = RealCommandRunner().run(["python3", "-c", prog], timeout=0.6)
     assert r.timed_out
     child_pid = int(r.stdout.strip().splitlines()[0])
-    time.sleep(0.3)
     # The grandchild was killed with the group. Use the PRODUCTION liveness predicate, which reads
     # /proc/<pid>/stat and treats a reaped-pending zombie (Z/X) as ceased — `kill -0` would call a
     # zombie "alive", so it fails on any non-reaping init (containers/some CI).
     from lhpc.core import procident
+    deadline = time.monotonic() + 5.0                  # a 5 s deadline, polled every 0.1 s
+    while procident.proc_alive(child_pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
     assert not procident.proc_alive(child_pid)
 
 
@@ -264,8 +266,11 @@ def test_sleeping_step_is_stalled(tmp_path, controlled):
                                               timeout=60, log_fh=fh, stall_s=1, sample_s=0.2, **kw)
     assert r.timed_out and r.returncode == 124 and r.stop_reason == "stalled"
     assert time.time() - t0 < 5.0
-    time.sleep(0.3)
-    assert _dead_or_zombie(int(log.read_text().split()[0]))    # the background sleep is gone too
+    bg = int(log.read_text().split()[0])
+    deadline = time.monotonic() + 5.0                  # a 5 s deadline, polled every 0.1 s
+    while not _dead_or_zombie(bg) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert _dead_or_zombie(bg)                            # the background sleep is gone too
 
 
 @pytest.mark.slow

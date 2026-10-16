@@ -137,7 +137,9 @@ def test_identity_mismatch_leaves_no_record_and_terminates(tmp_path, reaper):
     assert ok != "ok"                                          # not owned
     assert ok in ("ceased", "unverified")                      # typed cleanup status
     assert life.owned_records("racer") == []
-    time.sleep(0.3)
+    deadline = time.monotonic() + 5.0                  # a 5 s deadline, polled every 0.1 s
+    while life._proc_alive(p.pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
     assert not life._proc_alive(p.pid)                          # session terminated
 
 

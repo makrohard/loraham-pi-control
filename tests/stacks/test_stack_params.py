@@ -197,7 +197,9 @@ def test_component_booting_tracks_live_post_runner(tmp_path):
         assert svc._component_booting("meshcom-qemu") is True          # runner alive -> booting
     finally:
         p.terminate(); p.wait()
-    time.sleep(0.3)
+    deadline = time.monotonic() + 5.0                  # a 5 s deadline, polled every 0.1 s
+    while svc._component_booting("meshcom-qemu") is not False and time.monotonic() < deadline:
+        time.sleep(0.1)
     assert svc._component_booting("meshcom-qemu") is False             # runner gone -> ready
 
 
