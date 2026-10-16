@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Changed
+
+- The web, nginx and boot-restore systemd units change (a dead `.meshcore_nm` path removed, a corrected comment).
+  Run `lhpc self-update --repair-integration` once after this update: boot restore runs on the old units meanwhile,
+  but `lhpc self-update --apply` refuses until then: an update starts only from this release's units.
+- Going back to 0.12.0 or older afterwards restores at boot only after that release's repair.
+
 Fixed
 
 - The GPS sky view no longer alternates with "no satellites reported" when gpsd reports the satellites only
