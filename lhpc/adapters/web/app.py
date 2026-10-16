@@ -257,6 +257,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return session["_csrf"]
 
     def _csrf_ok() -> bool:
+        # The stack web UIs are other ports of this host: the browser sends them this console's
+        # (signed, readable) cookie and calls a form from them `same-site`, so the token alone does
+        # not prove this console's page sent it. Without the header (the CLI, curl): token only.
+        if request.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
+            return False
         sent = request.form.get("_csrf", "")
         return bool(sent) and _secrets.compare_digest(sent, session.get("_csrf", ""))
 

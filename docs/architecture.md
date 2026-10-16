@@ -304,7 +304,8 @@ leaves on disk and which test proves it: the [invariant table](#invariant-table)
   response carries `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: no-referrer` and a `Content-Security-Policy` locked to `'self'` (with
   `base-uri`/`frame-ancestors` `'none'`); per-stack config paths stay inside `config/stacks/`.
-  No GET route runs a network or git-remote command. Network exposure is the nginx front end ([serving model](deployment.md#serving-model)).
+  A POST the browser marks as sent from another site or another port of the box (`Sec-Fetch-Site`)
+  is refused even with the token. No GET route runs a network or git-remote command. Network exposure is the nginx front end ([serving model](deployment.md#serving-model)).
 - **Evidence once per request.** A page render reads each piece of evidence once (status
   snapshot, per-(stack, band) config, consumed-source SHAs, firewall status, listeners, git state
   per distinct checkout) through a thread-local request memo dropped at every request start and

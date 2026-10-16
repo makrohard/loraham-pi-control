@@ -11,6 +11,8 @@ Fixed
 - Web console: with a stack web UI on plain http, the https listeners send HSTS `max-age=0`, which prevents new HSTS
   lockouts and clears an already-cached policy on the next HTTPS visit (all-https boxes keep HSTS, stack UIs too); a
   revoked certificate's leftover `.p12` is no longer handed out, by the download or `lhpc webserver cert export`.
+- Web console: a form or request the browser marks as sent from another site or from another port of the
+  box (a stack's web UI) is refused even with a valid token.
 
 ## 0.12.10
 
