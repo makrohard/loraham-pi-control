@@ -6,6 +6,8 @@ Fixed
 
 - Adopting a local checkout keeps its local branches named `build`, `node_modules` or `__pycache__`; they were
   dropped from the new source's `.git` as if they were build artifacts.
+- MeshCore: a restart no longer can leave plugins blocked until a reboot: the node's stop waits up to 2 s for the
+  plugin manager's own shutdown before it signals it again.
 
 ## 0.12.10
 

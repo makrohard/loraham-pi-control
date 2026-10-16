@@ -27,7 +27,7 @@ from .config import DASHBOARD_PORT, HostConfig, ConfigError
 from .gps_feed import GpsFeed
 from .identity import IdentityError, load_identity_hex
 from .loraham_radio import LoRaHAMRadio
-from .plugin_manager import KILL_GRACE_S, TERM_GRACE_S, PluginManagerChild
+from .plugin_manager import KILL_GRACE_S, SELF_EXIT_S, TERM_GRACE_S, PluginManagerChild
 
 logger = logging.getLogger("meshcore-host.repeater")
 
@@ -252,11 +252,14 @@ class _Host:
                     except (asyncio.CancelledError, Exception):
                         pass
                 if self.plugins is not None:
-                    # blocking by design (SIGTERM, 8 s, SIGKILL, 2 s): bounded by construction,
-                    # so its step bound is that worst case plus a second, never less
+                    # blocking by design (its own exit 2 s, SIGTERM, 8 s, SIGKILL, 2 s): bounded by
+                    # construction, so its step bound is that worst case plus a second, never less
+                    # Shutdown budget: this 13 s + GPS feed 10 s + radio close 10 s + upstream's watchdog 5 s
+                    # = 38 s of the node's 40 s stop_timeout; a new step here must fit the 2 s left or raise
+                    # stop_timeout.
                     await self._bounded("plugin manager stop",
                                         asyncio.to_thread(self.plugins.stop),
-                                        TERM_GRACE_S + KILL_GRACE_S + 1.0)
+                                        SELF_EXIT_S + TERM_GRACE_S + KILL_GRACE_S + 1.0)
                 if self.gps is not None:
                     await self._bounded("GPS feed stop", self.gps.stop())
                 await self._bounded("radio close", self.radio.aclose())

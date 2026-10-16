@@ -21,8 +21,9 @@ class FakeProc:
     """A Popen stand-in: `rc` is what poll()/wait() will report once `finish()` was called or
     after the given number of polls; `on_terminate` decides whether SIGTERM ends it."""
 
-    def __init__(self, pid=4242, *, rc=None, exits_on_terminate=True, dies_on_kill=True):
+    def __init__(self, pid=4242, *, rc=None, exits_on_terminate=True, dies_on_kill=True, self_exit_rc=None):
         self.pid = pid
+        self._self_exit_rc = self_exit_rc     # exits by itself during the first wait (group SIGTERM)
         self.returncode = None
         self._rc = rc
         self._exits_on_terminate = exits_on_terminate
@@ -48,6 +49,8 @@ class FakeProc:
 
     def wait(self, timeout=None):
         self.waits.append(timeout)
+        if self.returncode is None and self._self_exit_rc is not None:
+            self.returncode = self._self_exit_rc
         if self.returncode is None:
             raise subprocess.TimeoutExpired(cmd="fake", timeout=timeout)
         return self.returncode
@@ -202,7 +205,7 @@ def test_clean_exit_under_our_sigterm_clears_the_marker(tmp_path, monkeypatch):
     child, _, _ = _child(tmp_path, monkeypatch, proc=proc)
     assert child.start()
     child.stop()
-    assert proc.signals == ["TERM"] and proc.waits == [pm.TERM_GRACE_S]
+    assert proc.signals == ["TERM"] and proc.waits == [pm.SELF_EXIT_S, pm.TERM_GRACE_S]
     assert not child.marker.exists()
 
 
@@ -211,7 +214,7 @@ def test_timeout_kill_keeps_the_marker(tmp_path, monkeypatch, caplog):
     child, _, _ = _child(tmp_path, monkeypatch, proc=proc)
     assert child.start()
     child.stop()
-    assert proc.signals == ["TERM", "KILL"] and proc.waits == [pm.TERM_GRACE_S, pm.KILL_GRACE_S]
+    assert proc.signals == ["TERM", "KILL"] and proc.waits == [pm.SELF_EXIT_S, pm.TERM_GRACE_S, pm.KILL_GRACE_S]
     assert child.marker.exists() and "rebooted" in caplog.text
 
 
@@ -221,6 +224,27 @@ def test_nonzero_exit_keeps_the_marker(tmp_path, monkeypatch, caplog):
     assert child.start()
     child.stop()
     assert child.marker.exists() and "code 3" in caplog.text
+
+
+def test_a_manager_the_stack_stop_already_signalled_exits_by_itself_without_our_sigterm(tmp_path, monkeypatch):
+    # The stack stop signals the whole group: the manager has its SIGTERM and shuts down by itself. A
+    # second SIGTERM from us could land after its main() returned (default action: exit -15, marker kept,
+    # plugins blocked until a reboot; seen on a Pi Zero 2 W), so stop() waits for that exit first.
+    proc = FakeProc(self_exit_rc=0)
+    child, _, _ = _child(tmp_path, monkeypatch, proc=proc)
+    assert child.start()
+    child.stop()
+    assert proc.signals == [] and proc.waits == [pm.SELF_EXIT_S] and not child.marker.exists()
+
+
+def test_an_exit_by_sigterm_keeps_the_marker_even_during_our_stop(tmp_path, monkeypatch, caplog):
+    # No new trust: an exit by a signal is unclean whoever sent it (upstream may have run without its
+    # handler, and then without stop_all()).
+    proc = FakeProc(rc=-15)
+    child, _, _ = _child(tmp_path, monkeypatch, proc=proc)
+    assert child.start()
+    child.stop()
+    assert proc.signals == ["TERM"] and child.marker.exists() and "code -15" in caplog.text
 
 
 def test_an_exit_the_watcher_sees_applies_the_same_rule(tmp_path, monkeypatch, caplog):

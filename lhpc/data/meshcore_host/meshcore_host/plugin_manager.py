@@ -45,6 +45,7 @@ logger = logging.getLogger("meshcore-host.plugins")
 
 MARKER_NAME = ".lhpc-plugin-manager-active"
 MARKER_VERSION = 1
+SELF_EXIT_S = 2.0         # the stack stop already signalled the manager (same group): its own exit first
 TERM_GRACE_S = 8.0        # upstream's container supervisor: SIGTERM, then this long, then SIGKILL
 KILL_GRACE_S = 2.0
 WATCH_POLL_S = 0.5        # an LHPC choice (upstream's supervisor polls at 0.2 s)
@@ -236,11 +237,23 @@ class PluginManagerChild:
 
     # ---- stop ----------------------------------------------------------------------------
     def stop(self) -> None:
-        """SIGTERM, wait TERM_GRACE_S, SIGKILL, wait KILL_GRACE_S — upstream's shutdown numbers,
-        applied to the process (not a group). Blocking by design; bounded by construction."""
+        """Wait SELF_EXIT_S for the manager's own exit, then SIGTERM, wait TERM_GRACE_S, SIGKILL, wait
+        KILL_GRACE_S — upstream's shutdown numbers, applied to the process (not a group). Blocking by
+        design; bounded by construction.
+
+        The stack stop signals the whole group, so the manager usually has its SIGTERM already and
+        exits by itself well within SELF_EXIT_S. A second SIGTERM sent at once could land after
+        upstream's main() returned, when the interpreter has restored SIGTERM's default action: the
+        manager would then die with -15 after a clean shutdown, and keep the marker (seen on a Pi
+        Zero 2 W). Only a manager still running after SELF_EXIT_S gets our own SIGTERM."""
         proc = self.proc
         if proc is None:
             return
+        if proc.poll() is None:
+            try:
+                proc.wait(timeout=SELF_EXIT_S)
+            except subprocess.TimeoutExpired:
+                pass
         if proc.poll() is None:
             try:
                 proc.terminate()

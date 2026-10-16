@@ -108,7 +108,8 @@ manager is **not restarted** after a crash (the repeater keeps running; the bann
 Plugins run in their own sessions, so an unclean death may leave plugins running unseen. Then (marker `state/openhop/.lhpc-plugin-manager-active`, cleared only by a clean
 stop) lhpc refuses a **replacement** manager in the same boot, and `lhpc build/update/uninstall/clean
 meshcore` and the controller uninstall refuse until the box is rebooted — the recovery. A stop
-that had to kill the manager after its 8 s grace counts as unclean. `plugins = off` cannot
+that had to kill the manager after its 8 s grace counts as unclean. A stop first gives the manager up to 2 s to finish
+the shutdown the stack's stop signal started, and only then sends its own SIGTERM. `plugins = off` cannot
 terminate plugins an earlier unclean failure orphaned.
 
 ## Position (GPS)
