@@ -3291,8 +3291,7 @@ argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
 [[stack.component.build_steps]]
 # RNS FROM THE PINNED CHECKOUT, before the client's own install, so the client's `rns`
 # requirement is already satisfied and PyPI never picks the version: the client and the
-# shared instance it attaches to run the same Reticulum. LXMF is not taken from src/lxmf:
-# its git (795fdaa = 1.1.0) lags PyPI 1.1.1, which carries the LXMPeer sync backoff fix.
+# shared instance it attaches to run the same Reticulum.
 argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "{runtime}/src/reticulum"]
 announce = "[install] Reticulum from the pinned checkout into {source}/.venv"
 [[stack.component.build_steps]]
@@ -3336,8 +3335,7 @@ argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
 [[stack.component.build_steps]]
 # RNS FROM THE PINNED CHECKOUT, before the client's own install, so the client's `rns`
 # requirement is already satisfied and PyPI never picks the version: the client and the
-# shared instance it attaches to run the same Reticulum. LXMF is not taken from src/lxmf:
-# its git (795fdaa = 1.1.0) lags PyPI 1.1.1, which carries the LXMPeer sync backoff fix.
+# shared instance it attaches to run the same Reticulum.
 argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "{runtime}/src/reticulum"]
 announce = "[install] Reticulum from the pinned checkout into {source}/.venv"
 [[stack.component.build_steps]]
@@ -3397,8 +3395,7 @@ argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
 [[stack.component.build_steps]]
 # RNS FROM THE PINNED CHECKOUT, before the client's own install, so the client's `rns`
 # requirement is already satisfied and PyPI never picks the version: the client and the
-# shared instance it attaches to run the same Reticulum. LXMF is not taken from src/lxmf:
-# its git (795fdaa = 1.1.0) lags PyPI 1.1.1, which carries the LXMPeer sync backoff fix.
+# shared instance it attaches to run the same Reticulum.
 argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "{runtime}/src/reticulum"]
 announce = "[install] Reticulum from the pinned checkout into {source}/.venv"
 [[stack.component.build_steps]]
