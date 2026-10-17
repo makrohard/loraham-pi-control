@@ -233,7 +233,7 @@ def _same_operation(fn: str) -> str:
     """The command a busy/blocked refusal in `fn` must name to run the same operation again."""
     if fn.startswith(("self_update", "_self_update", "_recover")):
         return "lhpc self-update"
-    if fn.startswith("binary") or fn == "install":
+    if fn.lstrip("_").startswith("binary") or fn == "install":
         return "lhpc install"
     return "lhpc build" if fn == "build" else "lhpc update"
 

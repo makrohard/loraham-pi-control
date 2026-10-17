@@ -442,17 +442,19 @@ def test_release_meshtastic(env, svc):
 
 
 def _web_client_is_the_pinned_one(env) -> None:
-    """The browser UI is LHPC's OWN pin, moved independently of the firmware, and it ships
-    inside the published artifact. So the version that ends up installed must be the version the
-    manifest names — otherwise a moved web pin could leave the artifact serving the old client
-    while the manifest claimed the new one, and nothing else in this lane would notice.
+    """The browser UI is LHPC's OWN pin, moved independently of the firmware: the binary install
+    of meshtastic fetches it as the `meshtastic-web` component (selector `binary`). So the version
+    that ends up installed must be the version the manifest names — otherwise a moved web pin
+    could leave the box serving the old client while the manifest claimed the new one, and
+    nothing else in this lane would notice.
 
     The fetch script writes its own provenance beside the assets; that file is the artifact's
     statement of what it carries.
 
     Version, digest and destination are read from the fetch step the packaged manifest declares
     (`meshtastic-web-assets.sh <dest> <version> <sha256>` is the script's own usage line), and
-    the version is cross-checked against the `build_inputs` the completion marker records.
+    the step belongs to the `meshtastic-web` component (its own component since Track F C3,
+    with a static marker: the provenance file is the one statement of the installed version).
     """
     comps = [c for s in load_manifest(default_manifest_path()) for c in s.components]
     steps = [st for c in comps for st in c.build_steps
@@ -463,9 +465,7 @@ def _web_client_is_the_pinned_one(env) -> None:
     assert len(argv) == 5, f"the web-client fetch step's argv changed shape: {argv}"
     dest, want_version, want_sha = str(argv[2]), str(argv[3]), str(argv[4])
     owner = next(c for c in comps if steps[0] in c.build_steps)
-    recorded = dict(owner.build_inputs).get("meshtastic-web")
-    assert recorded == want_version, (
-        f"the fetch step pins web client {want_version} but build_inputs records {recorded}")
+    assert owner.id == "meshtastic-web", f"the web-client fetch step moved to {owner.id}"
 
     prov = Path(dest.replace("{runtime}", env["LHPC_RUNTIME_ROOT"])).parent / "web.provenance"
     assert prov.exists(), f"no web-client provenance at {prov}"

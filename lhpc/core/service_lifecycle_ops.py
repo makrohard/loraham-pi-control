@@ -19,6 +19,7 @@ from . import (
     procident,
     runtime_fs,
     validators,
+    web_client,
 )
 from . import meshcore_mode as _meshcore_mode
 from . import resources as resources_mod
@@ -3388,7 +3389,7 @@ class LifecycleOpsMixin:
         # A binary-installed stack has no source tree to build FROM (and its artifacts would be
         # overwritten by a half-built one). Refuse with the switch-back command, never attempt it.
         _sid = self.stack_of(target) or target
-        if (_blk := self.binary_block_reason(_sid, "build")):
+        if target != web_client.COMPONENT and (_blk := self.binary_block_reason(_sid, "build")):
             return ActionResult(False, f"Refusing to build '{target}': {_blk}",
                                 next_commands=[f"lhpc install {_sid} --source pinned --yes"],
                                 data={"binary_channel": True})
@@ -3544,6 +3545,10 @@ class LifecycleOpsMixin:
                 run_id = getattr(auto_install_ctx, "run_id", "") if auto_install_ctx else ""
                 build_meta: dict = {}
                 for _, comp in buildable:
+                    if comp.id == web_client.COMPONENT and (_w := web_client.kept_index_install(self)):
+                        ok = ok and _w.ok                 # a kept stable/dev client (D3)
+                        details += [f"  [{'done' if _w.ok else 'failed'}] {_w.summary}", *_w.details]
+                        continue
                     # auto-install / HMAC: run-specific log base + DURABLE ordered registration BEFORE the
                     # build runs, so the live stream shows only this run's own logs (the file does not
                     # yet exist under a run-specific name -> no prior content).
@@ -3564,11 +3569,15 @@ class LifecycleOpsMixin:
                         build_plan.consumed_sources(comp, by_all, life.source_dir,
                                                     self.binary_capable(comp.id)), self._git_out)
                     rev = self._own_rev(comp)
-                    res = life.build(comp, log_base=log_base,
-                                     redactor=redactor, should_cancel=should_cancel,
-                                     on_log_open=self._log_announcer(comp.id, details),
-                                     marker_extra=receipt,
-                                     inputs=self._build_inputs_to_record(comp), rev=rev)
+                    with (web_client.lock(self._paths) if comp.id == web_client.COMPONENT
+                          else contextlib.nullcontext()):
+                        res = life.build(comp, log_base=log_base,
+                                         redactor=redactor, should_cancel=should_cancel,
+                                         on_log_open=self._log_announcer(comp.id, details),
+                                         marker_extra=receipt,
+                                         inputs=self._build_inputs_to_record(comp), rev=rev)
+                        if res.ok and comp.id == web_client.COMPONENT:
+                            web_client.record_binary(self)     # under the same lock as the swap
                     ok = ok and res.ok
                     if res.ok:                  # a console build's failure of it is now stale
                         jobresult.supersede(self._paths, f"build-{comp.id}.log")

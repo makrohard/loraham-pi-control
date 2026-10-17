@@ -16,6 +16,7 @@ from . import meshcore_mode as _meshcore_mode
 from . import restart_required as _rr
 from . import reticulum_interfaces as _reticulum_interfaces
 from . import rflog as _rflog
+from . import web_client as _web_client
 from .config import (
     REMOVE,
     ConfigError,
@@ -3016,6 +3017,8 @@ class ParamsConfigMixin:
                             target, "run", c.id, _rflog.RF_LOG_PARAM, band)))
                     continue
                 raw = over.get(p.name, stored.get(p.name, p.default))
+                if c.id == _web_client.DAEMON and p.key == "RootPath":     # Track F C3
+                    raw = _web_client.current_root(raw, runtime, p.default)
                 try:
                     values[p.name] = validators.validate_param(p, raw)
                 except validators.ValidationError:

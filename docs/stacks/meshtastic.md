@@ -5,15 +5,15 @@ Rootless `meshtasticd` driving the RF95 radio **directly over SPI**, on 868 (def
 
 | | |
 |---|---|
-| Components | `meshtastic` (main) · `meshtastic-gps` (feed, admitted by the global GPS plan) · `meshtastic-cli` (on-demand, `lhpc meshtastic …`) |
+| Components | `meshtastic` (main) · `meshtastic-gps` (feed, admitted by the global GPS plan) · `meshtastic-web` (the browser UI, [its own selectors](../provenance.md#the-web-client)) · `meshtastic-cli` (on-demand, `lhpc meshtastic …`) |
 | Source / pin | `src/meshtastic-firmware` ← `meshtastic/firmware`, a managed git source |
 | Run | `build/tools/meshtasticd/meshtasticd -c <runtime>/config/files/meshtasticd.yaml -d <runtime>/state/meshtasticd` |
 | Endpoints | TCP API `:4403` · web UI `:9443` (HTTPS; rootless cannot bind 443) — both bind all interfaces with no auth; containment: [firewall](../firewall.md#what-actually-listens) |
 | Config | `<runtime>/config/files/meshtasticd.yaml`, regenerated per band from `lhpc/data/bases/meshtasticd.yaml` at every start (per-band LoRa pins, web root, TLS paths, log level) |
-| Artifacts | `build/tools/meshtasticd/meshtasticd`, its web UI at `build/tools/meshtasticd/web`, the managed CLI venv `build/tools/meshtastic-cli/.venv` (`meshtastic==2.7.11`, `pycryptodomex==3.23.0` for the RF-log decoder) |
+| Artifacts | `build/tools/meshtasticd/meshtasticd`, the web UI at `build/tools/meshtastic-web/web`, the managed CLI venv `build/tools/meshtastic-cli/.venv` (`meshtastic==2.7.11`, `pycryptodomex==3.23.0` for the RF-log decoder) |
 | Resources | `loraham.radio.868` + `.433` exclusive · `spi.bus.0.unlocked` exclusive · `tcp.port.4403` + `.9443` exclusive |
 | System | `/dev/spidev0.0` (soft chip selects) or `/dev/spidev0.0`/`0.1` (kernel chip selects, [deps](../cli.md#deps)), `spi` + `gpio` group membership, the packaged root `meshtasticd.service` must be disabled (`sudo systemctl disable --now meshtasticd`) |
-| Install channel | **binary** by default (binary + web assets); `--source pinned\|dev\|stable` builds natively. Policy: [provenance](../provenance.md#the-binary-channel) |
+| Install channel | **binary** by default (then the web client, `binary`, in the same run); `--source pinned\|dev\|stable` builds natively. Policy: [provenance](../provenance.md#the-binary-channel) |
 
 ## Contents
 
@@ -47,14 +47,14 @@ A hand edit of the generated YAML is lost at the next start; change a setting wi
 `meshtasticd` is built with upstream's **`native`** PlatformIO environment — not `native-tft`
 (the OBS package's), which links X11/libinput/xkbcommon for an on-device UI. Steps: a managed PlatformIO 6.1.19 venv → `pio run -e
 native` → the **link gate** (`meshtastic-link-gate.sh`: `readelf -d` + `ldd` must show no SDL, X11,
-Wayland, Mesa/GL, LLVM, PulseAudio, ALSA, libinput, xkbcommon or GTK; fail-closed) → the **web
-client** (`meshtastic-web-assets.sh`: the meshtastic/web release LHPC pins by version and sha256,
-verified on every install — v2.7.2, independent of the firmware's `bin/web.version`, which is
-upstream's ESP32 last-known-good) → the CLI venv. The completion marker lives in the checkout and
+Wayland, Mesa/GL, LLVM, PulseAudio, ALSA, libinput, xkbcommon or GTK; fail-closed) → the CLI venv.
+The stack's build then fetches the **web client** as its own component (`meshtastic-web-assets.sh`:
+the meshtastic/web release LHPC pins by version and sha256, verified on every install — v2.7.2,
+independent of the firmware's `bin/web.version`, which is upstream's ESP32 last-known-good). The completion marker lives in the checkout and
 is written after the last step, so an updated checkout reads *Build required* until rebuilt. A
 native build takes about 2¾ h on a Pi Zero 2W.
 
-The web-client and CLI versions are recorded beside the marker (`build_inputs`), so moving either
+The CLI and decoder versions are recorded beside the marker (`build_inputs`), so moving either
 also reads *Build required*; a binary-channel box is pointed at
 `lhpc install meshtastic --source binary --yes`. Moving these pins:
 [maintenance](../maintenance.md#moving-a-pin).
