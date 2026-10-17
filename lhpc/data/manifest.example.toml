@@ -1837,8 +1837,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "8692acd6952638c0f711508e2c7cd12100d4e128"
-    pin_tag = "8692acd"
+    pin_commit = "4369e529f0d56725100c93c22afc2dc132db6c49"
+    pin_tag = "4369e52"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2078,8 +2078,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "8692acd6952638c0f711508e2c7cd12100d4e128"
-    pin_tag = "8692acd"
+    pin_commit = "4369e529f0d56725100c93c22afc2dc132db6c49"
+    pin_tag = "4369e52"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 

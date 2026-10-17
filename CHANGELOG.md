@@ -4,6 +4,9 @@
 
 Fixed
 
+- The MeshCom runner pin → 4369e529f: on a Raspberry Pi Zero 2 W, 0.12.10 could not provision a fresh MeshCom node
+  (its firmware rebooted mid-list); the runner now paces the commands on the firmware's echo. Provisioned nodes were
+  not affected; the runner repository is self-contained.
 - Adopting a local checkout keeps its local branches named `build`, `node_modules` or `__pycache__`; they were
   dropped from the new source's `.git` as if they were build artifacts.
 - MeshCore: a restart no longer can leave plugins blocked until a reboot: the node's stop waits up to 2 s for the
