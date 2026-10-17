@@ -1,17 +1,19 @@
 # meshcore-cli dependency constraints — the RESOLVED closure of `pip install .` for meshcore-cli
-# a43041f (v1.6.5, needs meshcore >= 2.3.15), frozen (`pip freeze`, minus pip/setuptools and
-# meshcore-cli itself) from a clean venv on 2026-10-05 (Python 3.11 and 3.13; typing_extensions is
+# dfcc74e (v1.6.6, needs meshcore >= 2.3.16), frozen (`pip freeze`, minus pip/setuptools and
+# meshcore-cli itself) from a clean venv on 2026-10-17 (Python 3.11 and 3.13; typing_extensions is
 # the 3.11-only extra). Pins EVERY package so a new upstream release cannot change what the build
 # installs, complementing the source pin_commit. dbus-fast is held at the same version as
 # meshcore-webui-constraints.txt (the freeze had 5.2.0), so one cached wheel serves both venvs; a
-# second clean install against this file resolved exactly this set, for a43041f (v1.6.5) and for
-# d4eac61 (v1.6.4). Regenerate deliberately when the pinned meshcore-cli SHA moves.
+# second clean install against this file resolved exactly this set, for dfcc74e (v1.6.6) and for
+# a43041f (v1.6.5). Release-minimal: pycryptodome stays at 3.24.0 (the freeze had 4.0.0, a new major
+# nothing requires); meshcore is 2.3.17, not the floor 2.3.16, whose messaging.py does not parse on
+# Python 3.11. Regenerate deliberately when the pinned meshcore-cli SHA moves.
 bleak==3.0.2
 certifi==2026.7.22
 charset-normalizer==3.5.2
 dbus-fast==5.0.22
 idna==3.20
-meshcore==2.3.15
+meshcore==2.3.17
 prompt_toolkit==3.0.53
 pycayennelpp==2.4.0
 pycryptodome==3.24.0
