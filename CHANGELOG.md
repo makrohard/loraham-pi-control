@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.12.11
+
+- openhop-core: 6e6dcf65f -> bef702148 (v1.0.10-449-gbef7021), used by meshcore-node
+- meshcore-cli: a43041fff -> dfcc74ee2 (v1.6.6), used by meshcore-cli
+- openhop-repeater: 9c958e311 -> 85fc14a6b (1.1.4-171-g85fc14a), used by openhop-repeater-src
 
 Changed
 
