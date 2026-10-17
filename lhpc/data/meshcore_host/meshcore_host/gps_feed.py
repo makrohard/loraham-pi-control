@@ -39,8 +39,12 @@ _MAX_LINE = 1024
 
 
 class GpsFeed:
-    def __init__(self, companion, *, socket_path: str, stale_after_s: float = 60.0):
+    def __init__(self, companion, *, socket_path: str, stale_after_s: float = 60.0,
+                 listener=None):
+        # `companion` may be None (the pure repeater has no Companion); `listener(lat, lon)` is
+        # told every position and `listener(None, None)` every removal (the repeater's NMEA file).
         self._companion = companion
+        self._listener = listener
         self._socket_path = socket_path
         self._stale_after_s = stale_after_s
         self._task: Optional[asyncio.Task] = None
@@ -74,16 +78,24 @@ class GpsFeed:
         if not is_valid_lat_lon(lat, lon):
             logger.warning("Feed position out of range; ignored")
             return
-        prefs = self._companion.prefs
-        prefs.latitude = lat
-        prefs.longitude = lon
-        if prefs.advert_loc_policy != ADVERT_LOC_SHARE:
-            prefs.advert_loc_policy = ADVERT_LOC_SHARE
-            logger.info("Live position acquired; advert location enabled")
+        if self._listener is not None:
+            self._listener(lat, lon)
+        if self._companion is not None:
+            prefs = self._companion.prefs
+            prefs.latitude = lat
+            prefs.longitude = lon
+            if prefs.advert_loc_policy != ADVERT_LOC_SHARE:
+                prefs.advert_loc_policy = ADVERT_LOC_SHARE
+                logger.info("Live position acquired; advert location enabled")
         self._have_position = True
         self._arm_stale_timer()
 
     def _clear_position(self, why: str) -> None:
+        if self._listener is not None:
+            self._listener(None, None)
+        if self._companion is None:
+            self._have_position = False
+            return
         prefs = self._companion.prefs
         if prefs.advert_loc_policy != ADVERT_LOC_NONE or self._have_position:
             prefs.advert_loc_policy = ADVERT_LOC_NONE

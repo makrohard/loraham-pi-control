@@ -239,6 +239,12 @@ OTA_LOGIN_MAX = 15          # the longest password a MeshCore over-the-air login
 _ALNUM = string.ascii_letters + string.digits
 
 
+def password_normalizer(ui_password_file: str):
+    """The openHop repeater password has a shape (15–128 printable ASCII, no spaces); anything
+    else that LHPC or an app minted is one non-empty line (None: the default rule)."""
+    return _normalize_password if ui_password_file.endswith(REPEATER_ADMIN_FILENAME) else None
+
+
 def _normalize_password(raw: object) -> str:
     """The stored dashboard password, or "" when the file holds nothing usable: one line of
     15..128 printable, non-blank ASCII characters."""
@@ -264,3 +270,30 @@ def ensure_password(paths: Paths, filename: str) -> str:
         return stored
     minted = "".join(_secrets.choice(_ALNUM) for _ in range(_MINTED_LENGTH[filename]))
     return _store(paths, minted, filename, normalize=_normalize_password, what=what)
+
+
+# ----- issue #5: the repeater's identity and password move into openHop's own file -------------
+# (core/openhop_store.py). These are the only operations it needs on the legacy secret files.
+
+def mint_identity() -> str:
+    """A fresh repeater identity (hex), minted by the same rule as `ensure_identity`."""
+    return _mint()
+
+
+def mint_password(filename: str = REPEATER_ADMIN_FILENAME) -> str:
+    return "".join(_secrets.choice(_ALNUM) for _ in range(_MINTED_LENGTH[filename]))
+
+
+def read_secret(paths: Paths, filename: str) -> str:
+    """A legacy repeater secret's value, or "" when absent; a lax or garbled file raises."""
+    normalize = _normalize_password if filename in _MINTED_LENGTH else None
+    return _read_secret(paths, filename, normalize=normalize)
+
+
+def remove_secret(paths: Paths, filename: str) -> None:
+    """Remove a legacy secret file once its value is durable elsewhere (absent is fine)."""
+    try:
+        secret_path(paths, filename).unlink()
+    except FileNotFoundError:
+        pass
+

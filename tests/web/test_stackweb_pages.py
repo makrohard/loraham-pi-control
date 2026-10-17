@@ -437,3 +437,35 @@ def test_a_password_file_declared_outside_the_runtime_root_is_never_read(tmp_pat
     body = web(service_factory=lambda: svc).get("/stacks?open=two").get_data(as_text=True)
     assert "outside the runtime root" in body and "never-read" not in body
     assert str(outside) not in body                        # never the path either
+
+
+# --- the deny answer (issue #5, plan DELTA-3: option 1) -------------------------------------------
+
+def test_deny_notice_is_off_by_default_and_a_flagged_endpoint_carries_it(tmp_path):
+    assert _svc(tmp_path).web_page("two-b").deny_notice is False
+    flagged = tmp_path / "flagged"
+    flagged.mkdir()
+    m = flagged / "pages.toml"
+    m.write_text(_TWO_PAGES.replace('proxy_deny_paths = [', 'proxy_deny_notice = true\n  proxy_deny_paths = ['))
+    (flagged / "config").mkdir()
+    svc = ControllerService(manifest_path=m, system=FakeSystem().system, paths=Paths(runtime_root=flagged))
+    assert svc.web_page("two-b").deny_notice is True
+    assert svc.web_page("two").deny_notice is False
+
+
+def test_deny_notice_must_be_a_bool():
+    from lhpc.core.manifest import _parse_deny_notice
+    assert _parse_deny_notice(True) is True and _parse_deny_notice(False) is False
+    for raw in ("true", 1, None):
+        with pytest.raises(ManifestError, match="proxy_deny_notice"):
+            _parse_deny_notice(raw)
+
+
+def test_denied_routes_answer_200_notice_on_a_flagged_page_else_404():
+    from types import SimpleNamespace
+    plain = webserver._stack_deny_locations(SimpleNamespace(deny_paths=("/api/x",)))
+    flagged = webserver._stack_deny_locations(SimpleNamespace(deny_paths=("/api/x",), deny_notice=True))
+    assert "return 404;" in plain and "return 200" not in plain
+    assert "403" not in plain + flagged
+    assert ("default_type application/json; return 200 "
+            "'{\"success\": false, \"error\": \"Managed by LoRaHAM Pi Control\"}';") in flagged

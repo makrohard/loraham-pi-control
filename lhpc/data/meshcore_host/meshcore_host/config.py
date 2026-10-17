@@ -8,6 +8,8 @@ so the manifest's `preset` enum keeps one meaning across releases.
 from __future__ import annotations
 
 import ipaddress
+import re
+import shlex
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -79,7 +81,6 @@ class HostConfig:
     ldro: bool = False
     crc: bool = True
     enable_tx: bool = True
-    airtime: float = 10.0
     rf_log: bool = False
     rf_log_path: str = ""
 
@@ -94,15 +95,18 @@ class HostConfig:
     gps_stale_s: float = 60.0
 
     # [repeater] — `mode` selects the program; the rest is used only when it is not "chat".
+    # The repeater's name, behaviour, dashboard password, identity and duty cycle are NOT here:
+    # they live only in openHop's own file (`<state_dir>/config.yaml`, openhop_file.ONE_STORE).
     mode: str = "chat"
-    repeater_name: str = ""
-    repeater_key: str = ""
-    repeater_behaviour: str = "forward"
-    dashboard_password: str = ""
     jwt_secret: str = ""             # the dashboard's login-signing secret, minted by LHPC
     repeater_state_dir: str = ""
     presets_file: str = ""           # upstream's radio-presets.json in the pinned checkout
     plugins_on: bool = True          # the plugin manager runs beside the repeater
+    use_gps: bool = True             # on: openHop's `gps` section is LHPC's (file source below)
+    gps_file: str = ""               # the NMEA file LHPC writes for openHop (runtime tmpfs)
+    cli_lock: str = ""               # the companion slot's lock (meshcore-cli's)
+    chat_node_id: str = ""           # pure repeater: the chat key's handle (openhop_file.key_id)
+    restart_argv: list = field(default_factory=list)   # LHPC's own restart of this stack
 
     extra: dict = field(default_factory=dict)
 
@@ -216,9 +220,6 @@ def load_config(path: str | Path) -> HostConfig:
     cfg.ldro = radio_value("ldro", False, bool)
     cfg.crc = _opt(radio, "crc", True, bool, "radio")
     cfg.enable_tx = _opt(radio, "enable_tx", True, bool, "radio")
-    cfg.airtime = float(_opt(radio, "airtime", 10.0, (int, float), "radio"))
-    if not 0 < cfg.airtime <= 100:          # openHop's budget: airtime x 600 ms per minute
-        raise ConfigError("[radio] airtime must be between 0 and 100 percent")
     # The RF log switch is LHPC's enum (`"on"`/`"off"`), a hand-written bool is
     # accepted too; `on` without an absolute path is a config error, never a
     # silent off — the writer must not run unlogged when it was asked to log.
@@ -257,10 +258,6 @@ def load_config(path: str | Path) -> HostConfig:
     cfg.mode = _opt(rep, "role", cfg.mode, str, "repeater")
     if cfg.mode not in MODES:
         raise ConfigError("[repeater] role must be one of: " + ", ".join(MODES))
-    cfg.repeater_name = _opt(rep, "name", "", str, "repeater").strip()
-    cfg.repeater_key = _opt(rep, "key", "", str, "repeater")
-    cfg.repeater_behaviour = _opt(rep, "behaviour", cfg.repeater_behaviour, str, "repeater")
-    cfg.dashboard_password = _opt(rep, "admin_password", "", str, "repeater")
     cfg.jwt_secret = _opt(rep, "jwt_secret", "", str, "repeater")
     cfg.repeater_state_dir = _opt(rep, "state_dir", "", str, "repeater")
     cfg.presets_file = _opt(rep, "presets_file", "", str, "repeater")
@@ -271,16 +268,8 @@ def load_config(path: str | Path) -> HostConfig:
         raise ConfigError("[identity] key/key_file are not used in the repeater role — "
                           "the pure repeater runs no Companion; remove them")
     if cfg.repeater_on:
-        # The repeater is a DISTINCT MeshCore node with its own identity and login; in the chat
-        # role these rows are simply ignored (the same file feeds every role).
-        if not cfg.repeater_name or len(cfg.repeater_name.encode("utf-8")) > 31:
-            raise ConfigError("[repeater] name is required in the repeater roles (1-31 UTF-8 bytes)")
-        if not cfg.repeater_key:
-            raise ConfigError("[repeater] key is required in the repeater roles")
-        if cfg.repeater_behaviour not in BEHAVIOURS:
-            raise ConfigError("[repeater] behaviour must be one of: " + ", ".join(BEHAVIOURS))
-        if not cfg.dashboard_password:
-            raise ConfigError("[repeater] admin_password is required in the repeater roles")
+        # The repeater is a DISTINCT MeshCore node; its name, key, password, behaviour and duty
+        # cycle are read from openHop's own file at start (repeater.check_one_store).
         if not cfg.jwt_secret:
             raise ConfigError("[repeater] jwt_secret is required in the repeater roles")
         if not cfg.repeater_state_dir:
@@ -291,5 +280,22 @@ def load_config(path: str | Path) -> HostConfig:
         if plugins not in ("on", "off"):
             raise ConfigError("[repeater] plugins must be on or off")
         cfg.plugins_on = plugins == "on"
+        use_gps = _opt(rep, "use_gps", "on", str, "repeater")
+        if use_gps not in ("on", "off"):
+            raise ConfigError("[repeater] use_gps must be on or off")
+        cfg.use_gps = use_gps == "on"
+        cfg.gps_file = _opt(rep, "gps_file", "", str, "repeater")
+        if cfg.use_gps and not cfg.gps_file.startswith("/"):
+            raise ConfigError("[repeater] use_gps = on needs an absolute gps_file")
+        cfg.cli_lock = _opt(rep, "cli_lock", "", str, "repeater")
+        cfg.chat_node_id = _opt(rep, "chat_node_id", "", str, "repeater").strip().lower()
+        if cfg.chat_node_id and not re.fullmatch(r"[0-9a-f]{16}", cfg.chat_node_id):
+            raise ConfigError("[repeater] chat_node_id must be 16 hex characters or empty")
+        try:
+            cfg.restart_argv = shlex.split(_opt(rep, "restart_cmd", "", str, "repeater"))
+        except ValueError as exc:
+            raise ConfigError(f"[repeater] restart_cmd: {exc}") from None
+        if not cfg.restart_argv:
+            raise ConfigError("[repeater] restart_cmd is required in the repeater roles")
 
     return cfg

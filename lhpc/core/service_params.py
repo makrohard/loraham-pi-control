@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 
 from . import config_save, daemon_control, runtime_fs, spi_mode, validators
 from . import meshcore_identity as _meshcore_identity
 from . import meshcore_mode as _meshcore_mode
+from . import openhop_store as _openhop_store
 from . import restart_required as _rr
 from . import reticulum_interfaces as _reticulum_interfaces
 from . import rflog as _rflog
@@ -398,11 +400,13 @@ class ParamsConfigMixin:
         k = "r" if kind == "run" else "f"
         count = (rc if kind == "run" else fc).get(name, 0)
         val, _amb = self._resolve_stored(stored, k, comp_id, name, count)
-        if val is not None:
-            return str(val)
-        _c, p, _e = self._param_ref(target, kind, f"{comp_id}.{name}")
-        bd = dict(p.band_defaults).get(cfg_band or band, p.default) if p is not None else ""
-        return self._op_subst(bd)
+        if val is None:
+            _c, p, _e = self._param_ref(target, kind, f"{comp_id}.{name}")
+            bd = dict(p.band_defaults).get(cfg_band or band, p.default) if p is not None else ""
+            val = self._op_subst(bd)
+        if kind == "file" and comp_id == MESHCORE_COMPONENT and name in _openhop_store.ROWS:
+            return _openhop_store.row_value(self, name, str(val))    # issue #5: the file wins
+        return str(val)
 
     def _param_default_canon(self, p, cfg_band: str, band: str) -> str:
         """The canonical (validated, operator-substituted) DEFAULT for a run/file param on a band —
@@ -945,8 +949,9 @@ class ParamsConfigMixin:
         errors += remote_errors
         if errors:                                  # reject the whole bundle — zero mutation
             return ActionResult(False, f"Config not saved for '{target}'.", details=errors)
-
-        targets: list = []
+        _no, clean_params, targets = _openhop_store.split_saves(self, target, clean_params)  # issue #5
+        if _no is not None:
+            return _no
         local_path = self._paths.runtime_root / "config" / "local.toml"
         if remotes is not None:
             def _render_local(p, patch=remote_patch):
@@ -1060,10 +1065,12 @@ class ParamsConfigMixin:
                 if (_again := self.identity_refusal_for_values(target, band, values or {})):
                     raise ConfigError(_again.summary)
             _gps_recheck(pth)               # no-op unless this save touches the switch
-            merged = config_save.overlay(_load_runtime_toml(pth, _stack_config_path(pth, tgt, b)),
-                                         setv, rmv)
-            if sid == _meshcore_mode.STACK_ID and (_why := self._meshcore_mode_save_refusal(merged)):
+            current = _load_runtime_toml(pth, _stack_config_path(pth, tgt, b))
+            merged = config_save.overlay(current, setv, rmv)
+            if sid == _meshcore_mode.STACK_ID and (_why := _meshcore_mode.save_refusal(self, merged)):
                 raise ConfigError(_why, reason=_meshcore_mode.REASON_REPEATER_NAME_REQUIRED)   # rolls the submission back, like identity
+            if sid == _meshcore_mode.STACK_ID and (_why := _openhop_store.chat_name_refusal(self, current, merged)):
+                raise ConfigError(_why)                                    # issue #5, same rollback
             if sid == _reticulum_interfaces.STACK_ID and (
                     _why := self._reticulum_internet_save_refusal(merged)):
                 raise ConfigError(_why, reason=_reticulum_interfaces.REASON_ENDPOINT_INCOMPLETE)   # same rollback
@@ -1493,11 +1500,7 @@ class ParamsConfigMixin:
         if name == meshcore_identity.IDENTITY_FILENAME:
             return meshcore_identity.ensure_identity(self._paths,
                                                      self.meshcore_identity_candidates())
-        if name == meshcore_identity.REPEATER_IDENTITY_FILENAME:
-            # The repeater is a DISTINCT MeshCore node: its own key, minted once, never adopted
-            # from anywhere (nothing before this feature could hold one).
-            return meshcore_identity.ensure_identity(self._paths, (), filename=name)
-        if name in (meshcore_identity.REPEATER_ADMIN_FILENAME, meshcore_identity.REPEATER_JWT_FILENAME):
+        if name == meshcore_identity.REPEATER_JWT_FILENAME:
             return meshcore_identity.ensure_password(self._paths, name)
         raise ValueError(f"unknown controller secret {name!r}")
 
@@ -1691,7 +1694,7 @@ class ParamsConfigMixin:
         if (any(r["comp"] == _mm.NODE_ID for r in out)
                 and not _mm.chat_identity_required(self.meshcore_mode())):
             # Repeater-only: no Companion runs, so the chat node's name is not an identity to
-            # enforce (the repeater's own name is checked by `_meshcore_mode_refusal`).
+            # enforce (the repeater's own name is checked by `meshcore_mode.start_refusal`).
             out = [r for r in out if not (r["comp"] == _mm.NODE_ID and r["name"] == "node_name")]
         out.sort(key=lambda r: r["enforce"] != "licensed")
         return out
@@ -1741,24 +1744,6 @@ class ParamsConfigMixin:
             return self.meshcore_mode()
         except ConfigError:
             return ""
-
-    def _meshcore_mode_save_refusal(self, merged: dict) -> str:
-        """Why a MeshCore config save must be refused ("" = fine): a repeater mode needs the
-        repeater's own node name IN THE SAME saved state — a saved repeater mode without a name
-        would refuse every later start (boot restore included). Same rule the host applies."""
-        from . import meshcore_mode as _mm
-        mode, _ = self._resolve_stored(merged, "f", _mm.NODE_ID, "mode", 1)
-        if not _mm.repeater_on(mode):
-            return ""
-        name, _ = self._resolve_stored(merged, "f", _mm.NODE_ID, "repeater_name", 1)
-        try:
-            validators.node_name(name or "", field="repeater name")
-        except validators.ValidationError as exc:
-            return (f"mode '{_mm.normalize(mode)}' needs the repeater's own node name — {exc} "
-                    f"(set a repeater name: in the console under Settings → Repeater, "
-                    f"'Repeater node name'; from the CLI `lhpc config meshcore repeater_name "
-                    f"<name>` first, then the mode — or keep mode chat)")
-        return ""
 
     def _reticulum_internet_save_refusal(self, merged: dict) -> str:
         """Why a Reticulum config save must be refused ("" = fine): an enabled Internet
@@ -2138,7 +2123,8 @@ class ParamsConfigMixin:
             out = (text.replace("{callsign}", call)
                        .replace("{runtime}", runtime)
                        .replace("{hardware}", hardware)
-                       .replace("{band}", cfg_band))    # for per-band config keys
+                       .replace("{band}", cfg_band)     # for per-band config keys
+                       .replace("{lhpc_python}", sys.executable))
             if "{gps_" in out:
                 for token, value in gps_values.items():
                     out = out.replace(token, value)
@@ -2194,6 +2180,9 @@ class ParamsConfigMixin:
                     # stack config put a position on the air that the global plan never
                     # authorised. Empty -> `omit_if_empty` drops the key (and any stale one).
                     values[p.name] = str((position or {}).get(p.name, "") or "")
+                    continue
+                if c.id == MESHCORE_COMPONENT and (_oh := _openhop_store.rendered(self, p.name, target)) is not None:
+                    values[p.name] = _oh                # issue #5: one-store rows, derived use_gps
                     continue
                 if getattr(p, "secret_file", ""):
                     # CONTROLLER-managed secret (vs secret_ref's operator-authored

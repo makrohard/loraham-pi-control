@@ -1750,7 +1750,7 @@ _JOURNAL_VERSION = 1
 # Only these logical config targets may ever appear in a transaction journal. Recovery
 # maps a logical kind + a validated runtime-relative path through the safe path API —
 # it never trusts or touches an arbitrary absolute path from journal content.
-_ALLOWED_KINDS = {"local", "stack", "state"}
+_ALLOWED_KINDS = {"local", "stack", "state", "openhop"}
 
 
 def _resolve_journal_target(paths: Paths, rec) -> Path:
@@ -1781,6 +1781,9 @@ def _resolve_journal_target(paths: Paths, rec) -> Path:
         # The ONLY state marker written through the config transaction: the durable
         # restart-required flag, atomic WITH the config change that caused it.
         raise ConfigError("state journal target must be state/restart-required/<name>.json")
+    if kind == "openhop" and parts != ["state", "openhop", "config.yaml"]:
+        # openHop's own settings file (issue #5): its one-store rows commit WITH the stack config.
+        raise ConfigError("openhop journal target must be state/openhop/config.yaml")
     try:
         p = paths.under(*parts)        # lexical + symlink-parent containment
     except PathContainmentError as exc:
@@ -2112,6 +2115,18 @@ def save_stack_config(paths: Paths, stack_id: str, values: dict, band: str = "")
     with config_lock(paths):
         _atomic_write(paths, path, _render_stack_config(stack_id, values), mode=0o644)
     return path
+
+
+def remove_stack_keys(paths: Paths, stack_id: str, comp_id: str, names) -> None:
+    """Drop params `names` of `comp_id` from the stack's band-less config, in both stored forms
+    (component-scoped and flat). MUST be called inside `config_lock` (it does not take it)."""
+    path = _stack_config_path(paths, stack_id)
+    current = dict(_load_runtime_toml(paths, path))
+    keys = {f"file_{n}" for n in names} | {f"__f__{comp_id}__{n}" for n in names}
+    if keys & set(current):
+        for k in keys:
+            current.pop(k, None)
+        _atomic_write(paths, path, _render_stack_config(stack_id, current), mode=0o644)
 
 
 def merge_stack_values(paths: Paths, stack_id: str, band: str, updates: dict,

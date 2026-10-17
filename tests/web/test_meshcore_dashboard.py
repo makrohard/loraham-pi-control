@@ -131,45 +131,33 @@ def test_the_deny_regex_refuses_spelling_variants_and_sub_paths():
     assert rx3.search("/ws/companion_frame/anything")
 
 
-def test_repeater_dashboard_proxy_denies_every_config_mutating_route(tmp_path):
-    """Source-derived (see the manifest comment, inventory at openhop_repeater b846c79): every route
-    that mutates upstream configuration, the mesh CLI, identities, OTA and the companion-frame
-    websocket is denied, EXCEPT two allowed by the maintainer's decision (0.10.0): the plugin manager
-    (/api/plugins/*, including a wheel upload) and /api/sensors_config_update. This guard fails if a
-    manifest edit or a repin drops a denied route, or quietly denies a decided exception."""
+def test_repeater_dashboard_proxy_denies_only_the_hard_reason_routes(tmp_path):
+    """Issue #5: openHop's own file holds every setting LHPC does not own, so the dashboard keeps
+    upstream's routes (LHPC's values are guarded in the host). Exactly the hard-reason routes stay
+    denied: the setup wizard, CAD, OTA, the chat node's name and position. This guard fails if a
+    manifest edit drops one of them, or denies a route the user must keep."""
     svc = _svc(tmp_path)
     required = {
-        "/api/setup_wizard", "/api/config_import", "/api/config_export",
-        "/api/update_web_config", "/api/update_mqtt_config", "/api/update_duty_cycle_config",
-        "/api/update_advert_rate_limit_config", "/api/set_duty_cycle", "/api/set_mode",
-        "/api/restart_service", "/api/policy", "/api/policy_groups", "/api/policy_group_entries",
-        "/api/transport_keys", "/api/transport_key", "/api/default_region",
-        "/api/unscoped_flood_policy", "/api/update_radio_config", "/api/save_cad_settings",
-        "/api/cad_calibration_start", "/api/cad_calibration_stop", "/api/cad_manual_check",
-        "/api/cli", "/api/identities", "/api/identity", "/api/create_identity",
-        "/api/update_identity", "/api/delete_identity", "/api/generate_vanity_key",
-        "/api/identity_export", "/api/companion/set_advert_name",
-        "/api/companion/set_advert_location", "/api/update/install", "/api/update/check",
-        "/api/update/set_channel", "/auth/change_password", "/ws/companion_frame",
+        "/api/setup_wizard", "/api/save_cad_settings", "/api/cad_calibration_start",
+        "/api/cad_calibration_stop", "/api/cad_manual_check", "/api/update/install",
+        "/api/update/check", "/api/update/set_channel", "/api/companion/set_advert_name",
+        "/api/companion/set_advert_location",
     }
     deny = set(_web_deny(svc, "meshcore-meshcore-node"))
-    missing = required - deny
-    assert not missing, f"repeater dashboard proxy no longer denies: {sorted(missing)}"
-    assert "/api/auth/tokens" in deny                             # a second credential
-    # The decided exceptions: they write, and they stay reachable ON PURPOSE. Denying one of them
-    # (or the whole /api/plugins prefix) would silently break the plugin system or the decision.
-    decided = {"/api/sensors_config_update", "/api/plugins/install",
-               "/api/plugins/catalogue_install", "/api/plugins/update", "/api/plugins/uninstall",
-               "/api/plugins/settings", "/api/plugins/enable", "/api/plugins/disable",
-               "/api/plugins/restart"}
-    assert not (decided & deny), f"a decided exception is denied: {sorted(decided & deny)}"
-    assert not any(d.startswith("/api/plugins") for d in deny), "the plugin manager is denied"
-    allowed = {"/api/stats", "/api/logs", "/api/send_advert", "/auth/login", "/ws/packets",
-               "/api/needs_setup", "/api/recent_packets"}
-    assert not (allowed & deny)
+    assert deny == required
+    users = {"/api/default_region", "/api/unscoped_flood_policy", "/api/policy", "/api/policy_groups",
+             "/api/policy_group_entries", "/api/transport_keys", "/api/transport_key",
+             "/api/update_advert_rate_limit_config", "/api/update_mqtt_config",
+             "/api/update_radio_config", "/api/cli", "/api/identities", "/api/identity",
+             "/api/create_identity", "/api/update_identity", "/api/delete_identity",
+             "/api/config_import", "/api/config_export", "/api/set_mode",
+             "/api/update_duty_cycle_config", "/api/set_duty_cycle", "/auth/change_password",
+             "/api/identity_export", "/api/generate_vanity_key", "/api/update_web_config",
+             "/api/auth/tokens", "/api/restart_service", "/ws/companion_frame",
+             "/api/sensors_config_update", "/api/plugins/install", "/api/stats", "/auth/login"}
+    assert not (users & deny), sorted(users & deny)
     # and the MeshCore Web UI's own list is untouched by the sibling page
     assert "/api/device/reset" in _web_deny(svc, "meshcore")
-    assert "/api/set_mode" not in _web_deny(svc, "meshcore")
     up = _web_upstream(svc, "meshcore-meshcore-node")
 
     class _SWC:
@@ -178,9 +166,12 @@ def test_repeater_dashboard_proxy_denies_every_config_mutating_route(tmp_path):
 
     out = ws.render_nginx_config(
         svc._paths, svc.config().webserver,
-        [StackWebProxy(_SWC(), up[0], up[1], _web_deny(svc, "meshcore-meshcore-node"))])
+        [StackWebProxy(_SWC(), up[0], up[1], _web_deny(svc, "meshcore-meshcore-node"), True)])
     for p in required:
-        assert f"location ~ {ws.deny_location_regex(p)} {{ return 404; }}" in out, p
+        # never 403 (it logs the dashboard user out): 200 with openHop's own error shape
+        assert (f"location ~ {ws.deny_location_regex(p)} {{ default_type application/json; "
+                f"return 200 '{ws.DENY_NOTICE_BODY}'; }}") in out, p
+    assert not [ln for ln in out.splitlines() if "location ~" in ln and "return 403" in ln]
     stack_block = out.split("# meshcore-meshcore-node web UI")[1]
     # Deny rules must never be exact-match — `location = /api/x` is bypassed by a trailing slash or
     # any suffix, so they are emitted as regexes. Assert that PER DENY PATH rather than banning

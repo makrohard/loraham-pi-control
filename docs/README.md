@@ -42,6 +42,7 @@ The `lhpc` docs by task; the top-level README covers install. Start with Archite
 - [meshtastic](stacks/meshtastic.md) — rootless `meshtasticd`.
 - [meshcom](stacks/meshcom.md) — MeshCom firmware in QEMU.
 - [meshcore](stacks/meshcore.md) — MeshCore chat node and/or repeater.
+- [openHop on LHPC](openhop-on-lhpc.md) — using the openHop repeater under LHPC: what is yours, what LHPC owns.
 - [reticulum](stacks/reticulum.md) — Reticulum node over SPI.
 
 ## Verify

@@ -238,6 +238,10 @@ class EndpointSpec:
     # factory-reset / radio / GPS mutations). Server-side enforcement at LHPC's perimeter, not
     # JS: the backend is loopback-only, so the proxy is the reachable path. Empty = deny nothing.
     proxy_deny_paths: tuple = ()
+    # How a denied path answers: False = 404 (the route is simply absent); True = HTTP 200 with the
+    # backend's own error shape and LHPC's notice, for a dashboard that logs the operator out on a
+    # 403 and shows `error` texts (openHop's: docs/openhop-on-lhpc.md).
+    proxy_deny_notice: bool = False
 
 
 @dataclass(frozen=True)
@@ -565,6 +569,7 @@ class WebPage:
     address: str                 # upstream "127.0.0.1:8788"
     scheme: str                  # upstream "http" | "https"
     deny_paths: tuple = ()
+    deny_notice: bool = False
 
     @property
     def primary(self) -> bool:
@@ -605,7 +610,8 @@ def web_pages(stack: Stack) -> tuple:
                     stack_id=stack.id, component_id=comp.id, name=shown,
                     label=stack.name if first else f"{stack.name} · {shown}",
                     address=ep.address, scheme=ep.scheme,
-                    deny_paths=tuple(getattr(ep, "proxy_deny_paths", ()) or ())))
+                    deny_paths=tuple(getattr(ep, "proxy_deny_paths", ()) or ()),
+                    deny_notice=bool(getattr(ep, "proxy_deny_notice", False))))
                 break
     return tuple(out)
 

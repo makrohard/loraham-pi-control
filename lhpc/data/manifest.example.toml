@@ -2220,7 +2220,7 @@ main = "meshcore-node"
   # stack page's Password section (value + edit command); a lax or malformed file shows a reason.
   ui_user = "admin"
   ui_password_file = "config/secrets/openhop_repeater_admin.txt"
-  ui_password_note = "LHPC mints this password when a repeater mode first starts and hands it to the repeater on every start; the dashboard's own password change is refused at the proxy. To change it, edit that file (15–128 printable ASCII characters, no spaces; at most 15 for an over-the-air admin login from a MeshCore client) and restart the stack."
+  ui_password_note = "LHPC mints this password when a repeater mode first starts; it lives in openHop's own config file (state/openhop/config.yaml). Change it in the openHop dashboard or with the CLI `password` while the repeater runs (at most 15 characters for an over-the-air admin login from a MeshCore client)."
   requires_daemon_tx = "MANAGED"
   start_order = 1
   run = ".venv/bin/python -m meshcore_host {runtime}/config/files/meshcore.toml"
@@ -2376,7 +2376,7 @@ main = "meshcore-node"
       default = "10"
       min = 0
       max = 100
-      label = "Duty-cycle limit % (repeater modes; enforced by openHop over 60 s)"
+      label = "Duty-cycle limit % (repeater modes; enforced by openHop over 60 s) (kept in openHop's file: while the repeater runs, change it in openHop)"
       advanced = true
       # ----- Mode + the repeater's own settings (group "Repeater") -----------------------------
       # `mode` selects WHICH openhop program `python -m meshcore_host` runs; the chat rows above are
@@ -2400,7 +2400,7 @@ main = "meshcore-node"
       kind = "str"
       default = ""
       group = "Repeater"
-      label = "Repeater node name (max 31 bytes) — required in chat+repeater / repeater; its own, never the operator callsign"
+      label = "Repeater node name (max 31 bytes) — required in chat+repeater / repeater; its own, never the operator callsign (kept in openHop's file: while the repeater runs, change it in openHop)"
       [[stack.component.config_file.param]]
       name = "repeater_mode"
       key = "behaviour"
@@ -2409,21 +2409,19 @@ main = "meshcore-node"
       choices = ["forward", "monitor", "no_tx"]
       default = "forward"
       group = "Repeater"
-      label = "Repeater behaviour — forward: relay packets; monitor: listen and advertise, never relay; no_tx: receive only"
+      label = "Repeater behaviour — forward: relay packets; monitor: listen and advertise, never relay; no_tx: receive only (kept in openHop's file: while the repeater runs, change it in openHop)"
       [[stack.component.config_file.param]]
       name = "repeater_key"
       key = "key"
       section = "repeater"
       kind = "str"
       hidden = true
-      secret_file = "openhop_repeater_identity.key"
       [[stack.component.config_file.param]]
       name = "dashboard_password"
       key = "admin_password"
       section = "repeater"
       kind = "str"
       hidden = true
-      secret_file = "openhop_repeater_admin.txt"
       [[stack.component.config_file.param]]
       name = "dashboard_jwt_secret"
       key = "jwt_secret"
@@ -2438,6 +2436,44 @@ main = "meshcore-node"
       kind = "str"
       hidden = true
       default = "{runtime}/state/openhop"
+      # Issue #5, controller-owned, for the host: whether openHop's `gps` section is LHPC's (derived
+      # from `use_gps`), the NMEA file LHPC writes for openHop's file source (tmpfs, never the SD
+      # card), the chat node key's non-secret handle (derived; the pure repeater removes LHPC's
+      # chat-node entry by it), the companion slot's lock (meshcore-cli's), and LHPC's own restart
+      # of this stack (every upstream restart request becomes this, detached).
+      [[stack.component.config_file.param]]
+      name = "openhop_use_gps"
+      key = "use_gps"
+      section = "repeater"
+      kind = "str"
+      hidden = true
+      [[stack.component.config_file.param]]
+      name = "gps_file"
+      key = "gps_file"
+      section = "repeater"
+      kind = "str"
+      hidden = true
+      default = "/dev/shm/lhpc-meshcore-gps.nmea"
+      [[stack.component.config_file.param]]
+      name = "chat_node_id"
+      key = "chat_node_id"
+      section = "repeater"
+      kind = "str"
+      hidden = true
+      [[stack.component.config_file.param]]
+      name = "cli_lock"
+      key = "cli_lock"
+      section = "repeater"
+      kind = "str"
+      hidden = true
+      default = "{runtime}/state/meshcore-cli.lock"
+      [[stack.component.config_file.param]]
+      name = "restart_cmd"
+      key = "restart_cmd"
+      section = "repeater"
+      kind = "str"
+      hidden = true
+      default = "env LHPC_RUNTIME_ROOT={runtime} {lhpc_python} -m lhpc stack restart meshcore --yes"
       # Upstream's radio presets (the dashboard's preset picker), copied by the host into the state
       # dir at each start, where upstream's own installer would put them.
       [[stack.component.config_file.param]]
@@ -2526,35 +2562,20 @@ main = "meshcore-node"
     # last), reached through the LHPC TLS/mTLS proxy like every stack UI; the login is the admin
     # password LHPC minted (ui_password_file above).
     #
-    # DENY LIST — the invariant: every dashboard route that MUTATES UPSTREAM CONFIGURATION is
-    # refused at LHPC's perimeter, EXCEPT the two allowed by decision below (the plugin manager and
-    # /api/sensors_config_update) (upstream gets no config path, so a save aims at
-    # /etc/openhop_repeater/config.yaml, which the rootless unit cannot create — but the
-    # in-memory mutation before it would still change the running repeater and vanish on
-    # restart). Classified from a full inventory of the exposed methods (153 at the pinned
-    # openhop_repeater b846c79, repeater/web/*_endpoints.py):
-    #   config/setup/import/export (setup wizard, config import/export, web/mqtt/duty-cycle/advert
-    #   rate-limit config, policy editor, transport keys, default region, flood policy),
-    #   radio/CAD (update_radio_config, save_cad_settings, cad_* calibration),
-    #   repeater mode + restart (set_mode, set_duty_cycle, restart_service), the mesh CLI,
-    #   identities (create/update/delete/list, vanity keys, identity export),
-    #   the hosted companion's LHPC-owned name/position, the password stored in config,
-    #   OTA/channel switch (update install/check/set_channel), and the companion-frame websocket
-    #   (a binary bridge INTO the Companion, i.e. a write path to the mesh).
-    # Also denied: API-token minting (/api/auth/tokens — a second credential accepted on every
-    # /api route). Allowed: statistics, packets, neighbours, logs, hardware, noise floor,
-    # login/verify/refresh, /ws/packets (read-only stream), and the OPERATIONAL actions of a
-    # logged-in admin (send advert/text, ping, discovery, ACL, room messages, purge) — the scope
-    # here is configuration, identities and LHPC-owned state, not everything a repeater does.
-    # Allowed BY DECISION (0.10.0), although they write: the plugin manager (/api/plugins/*,
-    # including install of an uploaded wheel) and /api/sensors_config_update (rewrites the
-    # sensors section and can set auto_install_packages; with no config file on the box it
-    # currently fails before changing anything).
+    # openHop keeps its own config file (state/openhop/config.yaml) and every setting LHPC does not
+    # own works here the upstream way (docs/openhop-on-lhpc.md). LHPC's own values are guarded in
+    # the host (meshcore_host/guards.py: a CHANGE of an LHPC value is refused at upstream's entry
+    # points; the start overlay restores them). This list keeps only what a hard reason blocks:
+    #   the setup wizard (first-run only; its mandatory step is the radio hardware; LHPC completes
+    #   the first run and sets setup_completed), CAD (channel access is the daemon's job), OTA
+    #   install/check/channel (installing and updating is LHPC's job), and the chat node's name and
+    #   position (in `chat` mode that node is LHPC's own host, so its store is LHPC's).
+    # proxy_deny_notice: a denied route answers 200 with openHop's own error shape and LHPC's
+    # notice, never 403 (the dashboard logs the operator out on a 403; webserver.py).
     # A path denied for writes is denied for reads too (one nginx location per path, no method
-    # split): the Policy, transport-key, region and identity pages of the dashboard do not load
-    # through the proxy; LHPC owns those settings. Each entry renders as a spelling-tolerant
-    # regex location (webserver.deny_location_regex): punctuation variants, trailing slash and
-    # positional sub-paths are refused with it.
+    # split). Each entry renders as a spelling-tolerant regex location
+    # (webserver.deny_location_regex): punctuation variants, trailing slash and positional
+    # sub-paths are refused with it.
     [[stack.component.endpoint]]
     kind = "tcp"
     address = "127.0.0.1:8000"
@@ -2564,24 +2585,13 @@ main = "meshcore-node"
     client = true
     scheme = "http"
     firewall = { auth = "password" }
+    proxy_deny_notice = true
     proxy_deny_paths = [
-      "/api/setup_wizard", "/api/config_import", "/api/config_export",
-      "/api/update_web_config", "/api/update_mqtt_config", "/api/update_duty_cycle_config",
-      "/api/update_advert_rate_limit_config", "/api/set_duty_cycle", "/api/set_mode",
-      "/api/restart_service",
-      "/api/policy", "/api/policy_groups", "/api/policy_group_entries",
-      "/api/transport_keys", "/api/transport_key", "/api/default_region",
-      "/api/unscoped_flood_policy",
-      "/api/update_radio_config", "/api/save_cad_settings",
-      "/api/cad_calibration_start", "/api/cad_calibration_stop", "/api/cad_manual_check",
-      "/api/cli",
-      "/api/identities", "/api/identity", "/api/create_identity", "/api/update_identity",
-      "/api/delete_identity", "/api/generate_vanity_key", "/api/identity_export",
-      "/api/companion/set_advert_name", "/api/companion/set_advert_location",
+      "/api/setup_wizard",
+      "/api/save_cad_settings", "/api/cad_calibration_start", "/api/cad_calibration_stop",
+      "/api/cad_manual_check",
       "/api/update/install", "/api/update/check", "/api/update/set_channel",
-      "/api/auth/tokens",
-      "/auth/change_password",
-      "/ws/companion_frame",
+      "/api/companion/set_advert_name", "/api/companion/set_advert_location",
     ]
 
     [[stack.component.resource]]

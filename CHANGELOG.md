@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Changed
+
+- MeshCore repeater: openHop keeps its own settings (`state/openhop/config.yaml`; guide docs/openhop-on-lhpc.md);
+  name, behaviour, password, identity and duty cycle move there at the first start, so 0.12 no longer finds them.
+
 Fixed
 
 - MeshCore: the Companion (TCP 5000, no authentication) bound every interface for a loopback allow-list other than

@@ -422,6 +422,7 @@ class StackWebProxy:
     upstream_address: str            # "127.0.0.1:18083"
     upstream_scheme: str             # "http" | "https"
     deny_paths: tuple = ()           # request paths this proxy refuses (rendered as 404 regex locations)
+    deny_notice: bool = False        # refuse with a 200 + the backend's error shape (see below)
 
 
 def nginx_token(stack_id: str) -> str:
@@ -619,6 +620,9 @@ def deny_location_regex(path: str) -> str:
     return f"^{pat}(/.*)?$"
 
 
+DENY_NOTICE_BODY = '{"success": false, "error": "Managed by LoRaHAM Pi Control"}'
+
+
 def _stack_deny_locations(s) -> str:
     """`location ~` blocks that refuse LHPC-owned operations a proxied web-UI backend exposes
     (factory reset, radio/GPS mutation, configuration, …) — one per declared deny path (a
@@ -633,11 +637,15 @@ def _stack_deny_locations(s) -> str:
         if base in seen:
             continue
         seen.add(base)
-        # 404, not 403: single-page dashboards (openHop's) treat a 403 on ANY call as "session
-        # gone" and log the operator out the moment they touch a denied feature (on
-        # e293: the first call after login was a denied /api/update/check). A denied route is
-        # simply absent through this proxy — the app then reports one failed feature.
-        out.append(f"        location ~ {deny_location_regex(base)} {{ return 404; }}")
+        # Never 403: single-page dashboards (openHop's) treat a 403 on ANY call as a lost
+        # login and log the operator out the moment they touch a denied feature (on a box: the
+        # first call after login was a denied /api/update/check). Default 404: the route is
+        # simply absent and the app reports one failed feature. `deny_notice` pages answer 200
+        # with the backend's own error shape, so the dashboard shows LHPC's notice like any of
+        # its own errors.
+        answer = (f"default_type application/json; return 200 '{DENY_NOTICE_BODY}';"
+                  if getattr(s, "deny_notice", False) else "return 404;")
+        out.append(f"        location ~ {deny_location_regex(base)} {{ {answer} }}")
     return "\n".join(out)
 
 

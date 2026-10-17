@@ -340,14 +340,14 @@ def _host_with_fakes(monkeypatch, tmp_path, *, radio_hangs=False, gps_raises=Fal
     monkeypatch.setattr(rep, "CLEANUP_STEP_S", 0.05)
     cfg = HostConfig(name="Chat 1", allow="127.0.0.1", bind="127.0.0.1", port=5000, key="11" * 32,
                      frequency=869618000, bandwidth=62500, spreading_factor=8, coding_rate=8,
-                     txpower=14, preamble=16, airtime=10.0, mode="chat+repeater",
-                     repeater_name="Relay 1", repeater_key="22" * 64, repeater_behaviour="forward",
-                     dashboard_password="x" * 24, repeater_state_dir=str(tmp_path / "openhop"),
-                     plugins_on=plugins)
+                     txpower=14, preamble=16, mode="chat+repeater",
+                     repeater_state_dir=str(tmp_path / "openhop"), plugins_on=plugins)
     host = rep._Host.__new__(rep._Host)
     host.cfg = cfg
     host.radio = FakeRadio()
     host.gps = FakeGps()
+    host.nmea = None
+    host.conf = {"repeater": {"node_name": "Relay 1"}}
     host.plugins = FakeChild() if plugins else None
     host.daemon = FakeDaemon()
 
@@ -405,8 +405,14 @@ def test_the_subclass_defers_upstreams_watchdog(tmp_path):
     pytest.importorskip("repeater.main")
     from meshcore_host import repeater as rep
     from repeater.main import RepeaterDaemon
-    from test_repeater import _cfg
-    host = rep._Host(_cfg(repeater_state_dir=str(tmp_path / "openhop"), plugins_on=False))
+    import yaml
+    from meshcore_host import openhop_file
+    from test_repeater import _cfg, _user_file
+    state = tmp_path / "openhop"
+    state.mkdir()
+    openhop_file.path_in(state).write_text(yaml.safe_dump(_user_file()))
+    host = rep._Host(_cfg(repeater_state_dir=str(state), plugins_on=False,
+                          gps_file=str(tmp_path / "gps.nmea"), cli_lock=str(tmp_path / "cli.lock")))
     assert host.daemon.lhpc_watchdog_deferred is False
     host.daemon._arm_exit_watchdog()
     assert host.daemon.lhpc_watchdog_deferred is True
@@ -419,7 +425,6 @@ def test_the_subclass_defers_upstreams_watchdog(tmp_path):
 @pytest.mark.parametrize("value,expect", [('"on"', True), ('"off"', False), (None, True)])
 def test_plugins_switch_on_off_absent(tmp_path, value, expect):
     from meshcore_host.config import load_config
-    from test_repeater import KEY64
     line = f"plugins = {value}\n" if value is not None else ""
     p = tmp_path / "c.toml"
     p.write_text(f'''
@@ -430,12 +435,10 @@ name = "Chat 1"
 preset = "eu_uk_narrow"
 [repeater]
 role = "repeater"
-name = "Relay 1"
-key = "{KEY64}"
-behaviour = "forward"
-admin_password = "{'x' * 24}"
 jwt_secret = "{'j' * 64}"
 state_dir = "/rt/state/openhop"
+use_gps = "off"
+restart_cmd = "lhpc stack restart meshcore --yes"
 {line}''')
     assert load_config(p).plugins_on is expect
 
@@ -443,7 +446,6 @@ state_dir = "/rt/state/openhop"
 @pytest.mark.parametrize("value", ['"ON"', '"yes"', "1", "true", '"off "'])
 def test_plugins_switch_refuses_anything_but_the_two_literals(tmp_path, value):
     from meshcore_host.config import ConfigError, load_config
-    from test_repeater import KEY64
     p = tmp_path / "c.toml"
     p.write_text(f'''
 [companion]
@@ -453,12 +455,10 @@ name = "Chat 1"
 preset = "eu_uk_narrow"
 [repeater]
 role = "repeater"
-name = "Relay 1"
-key = "{KEY64}"
-behaviour = "forward"
-admin_password = "{'x' * 24}"
 jwt_secret = "{'j' * 64}"
 state_dir = "/rt/state/openhop"
+use_gps = "off"
+restart_cmd = "lhpc stack restart meshcore --yes"
 plugins = {value}
 ''')
     with pytest.raises(ConfigError, match="plugins"):

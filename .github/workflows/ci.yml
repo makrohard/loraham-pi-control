@@ -296,17 +296,31 @@ jobs:
                       src = c["source"]
                       print(f"REMOTE={shlex.quote(src['remote'])}")
                       print(f"PIN={shlex.quote(src['pin_commit'])}")
+                  if c["id"] == "openhop-repeater-src":
+                      src = c["source"]
+                      print(f"REP_REMOTE={shlex.quote(src['remote'])}")
+                      print(f"REP_PIN={shlex.quote(src['pin_commit'])}")
           PY
           )"
           test -n "${PIN:-}" || { echo "::error::no meshcore-node pin in the manifest"; exit 1; }
+          test -n "${REP_PIN:-}" || { echo "::error::no openhop-repeater-src pin in the manifest"; exit 1; }
           git clone -q "$REMOTE" /tmp/openhop-core
           git -C /tmp/openhop-core checkout -q "$PIN"
+          git clone -q "$REP_REMOTE" /tmp/openhop-repeater
+          git -C /tmp/openhop-repeater checkout -q "$REP_PIN"
           # No patch is applied: LHPC builds openhop_core pristine. This job exists to prove the
           # meshcore_host adapter against the upstream the product actually installs, so it must
           # install exactly that — an unmodified checkout at the manifest pin.
           . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
           retry 3 python -m pip install -q --upgrade pip
           retry 3 python -m pip install -q /tmp/openhop-core meshcore pytest pytest-asyncio
+          # The repeater the same way the node build installs it (manifest build steps): its
+          # pinned dependency closure, then the pinned checkout without deps, so the guard
+          # coupling tests (issue #5) bind to the upstream names the product runs.
+          retry 3 python -m pip install -q -c lhpc/data/openhop-repeater-constraints.txt cherrypy \
+            cherrypy-cors paho-mqtt psutil pyserial pyjwt ws4py pyyaml setuptools wheel setuptools_scm
+          retry 3 python -m pip install -q --no-deps --no-build-isolation /tmp/openhop-repeater
+          python -c 'import repeater.main'   # fail here, never as a silent importorskip in the tests
           retry 3 python -m pip install -q --no-deps ./lhpc/data/meshcore_host
       - name: LHPC MeshCore host tests
         run: pytest -q -rs lhpc/data/meshcore_host/tests
