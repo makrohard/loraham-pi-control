@@ -34,6 +34,7 @@ Changed
   and for each installed daemon and Reticulum node whether its build supports kernel chip selects.
 - The binary channel installs the newest binary published for this LHPC, also after a newer LHPC has published its
   own (the plan then names `lhpc self-update --apply`); the binaries are listed in `index-v3.json`.
+- MeshCore repeater modes: the host's radio marker is `external` (was `loraham`); no change with the pinned openHop.
 
 Removed
 

@@ -89,8 +89,10 @@ def build_upstream_config(cfg: HostConfig) -> dict:
             "security": {"admin_password": cfg.dashboard_password, "jwt_secret": cfg.jwt_secret},
         },
         # A non-disabled marker: upstream never builds a radio (ours is injected), but its setup
-        # wizard reads `radio_type` and would flag a missing one as "setup needed".
-        "radio_type": "loraham",
+        # wizard reads `radio_type` and would flag a missing one as "setup needed". "external" is
+        # the type proposed upstream for a radio passed to RepeaterDaemon(radio=...); the pinned
+        # openHop knows neither this nor the old "loraham", so nothing changes until the pin moves.
+        "radio_type": "external",
         "radio": {
             "frequency": cfg.frequency,
             "bandwidth": cfg.bandwidth,

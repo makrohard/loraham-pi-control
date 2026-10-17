@@ -38,7 +38,7 @@ def test_upstream_config_is_translated_from_lhpcs_one_file():
     assert conf["repeater"]["node_name"] == "Relay 1"
     assert conf["repeater"]["mode"] == "forward"
     assert conf["repeater"]["security"] == {"admin_password": "x" * 24, "jwt_secret": "j" * 64}
-    assert conf["radio_type"] == "loraham"                        # non-disabled: no setup wizard
+    assert conf["radio_type"] == "external"                       # upstream's type for an injected radio
     assert conf["radio"]["preamble_length"] == 16                 # upstream's name for `preamble`
     assert conf["radio"]["frequency"] == 869618000 and conf["radio"]["tx_power"] == 14
     assert conf["duty_cycle"]["max_airtime_per_minute"] == 6000   # 10 % of a minute, in ms
