@@ -2488,8 +2488,8 @@ main = "meshcore-node"
     # openhop_core — so what is known-working is the upstream revision itself.
     [stack.component.source]
     path = "src/openhop-core"
-    pin_commit = "6e6dcf65f8207bc23729bfc8ae01fcf8b2218fe0"
-    pin_tag = "v1.0.10-441-g6e6dcf6"
+    pin_commit = "bef70214863f797ecb5ba956d06fc364537d285a"
+    pin_tag = "v1.0.10-449-gbef7021"
     remote = "https://github.com/openhop-dev/openhop_core.git"
     branch = "dev"
 
@@ -2811,8 +2811,8 @@ main = "meshcore-node"
     # (-t -p -j -D) are all present; it byte-compiles under Python 3.11 (LHPC supports >=3.11),
     # and the byte-compile build step above fails the BUILD with file+line if a future pin
     # regresses on 3.11.
-    pin_commit = "a43041fff80223033f4eaad0f6b5882e3d0677e2"
-    pin_tag = "v1.6.5"
+    pin_commit = "dfcc74ee2a1f15e5484a636725e5e7e7c3b1e02e"
+    pin_tag = "v1.6.6"
     remote = "https://github.com/meshcore-dev/meshcore-cli.git"
     branch = "main"
 
@@ -2834,8 +2834,8 @@ main = "meshcore-node"
     path = "src/openhop-repeater"
     remote = "https://github.com/openhop-dev/openhop_repeater.git"
     branch = "dev"
-    pin_commit = "9c958e3111604aca5ab664c9feead8c8bc5e4240"
-    pin_tag = "1.1.4-151-g9c958e3"
+    pin_commit = "85fc14a6b212f149e31a680453aa2ba707cd7d67"
+    pin_tag = "1.1.4-171-g85fc14a"
 
 [[stack]]
 id = "reticulum"
