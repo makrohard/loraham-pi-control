@@ -116,8 +116,9 @@ replaces, so switching the client never touches meshtasticd.
 `lhpc update meshtastic-web --source binary|stable|dev --yes` switches it in seconds; a bare
 `lhpc update meshtastic-web` and a rebuild keep the recorded choice. A `stable`/`dev` entry is taken
 only when its smoke ran against the installed meshtasticd commit; none is a refusal naming
-`--source binary`. An entry without a `stable`/`dev` channel, an `x.y.z` version or both commits
-fails the whole index read before anything is downloaded. `build/tools/meshtastic-web/web.provenance` records the version, sha256,
+`--source binary`. An entry without a `stable`/`dev` channel, a valid version label (letters, digits
+and `.@+_-`, at most 64 characters) or both 40-hex commits fails the web client's index read before
+anything is downloaded. `build/tools/meshtastic-web/web.provenance` records the version, sha256,
 selector and the meshtasticd commit it was paired with, and `lhpc status meshtastic` shows it:
 
 - `binary` reads *current*, or *behind* after a pin move until `lhpc update meshtastic-web`;
