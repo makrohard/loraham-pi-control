@@ -77,12 +77,12 @@ class FirewallOpsMixin:
             return {"id": eid, "proto": "tcp", "family": family, "addr": addr, "port": port,
                     "allow_cidrs": cidrs, "deny": False, "auth": _auth, "loopback": _is_loopback(bind)}
         if meta.allow_param:
-            # A source-allow-list listener with NO bind knob (meshcore wifi.allow): binds
-            # LOOPBACK by default and only 0.0.0.0 once the allow-list admits a non-loopback
-            # source — so its static loopback address is NOT authoritative for exposure.
+            # A source-allow-list listener with NO bind knob (meshcore wifi.allow): binds 0.0.0.0 (IPv4,
+            # as kiss's 0.0.0.0) once the list admits a non-loopback source, /0 too (no narrowing).
+            from .webserver import cidr_set_is_public
             non_lo = [c for c in cidrs if not _cidr_is_loopback(c)]
-            exposed = bool(non_lo)
-            return {"id": eid, "proto": "tcp", "family": "dual", "addr": "*", "port": port,
+            exposed = bool(non_lo) or cidr_set_is_public(str(allow).replace(",", " ").split())
+            return {"id": eid, "proto": "tcp", "family": "ipv4", "addr": "*", "port": port,
                     "allow_cidrs": non_lo, "deny": False, "auth": _auth, "loopback": not exposed}
         family, addr = _classify_bind(static_host)
         return {"id": eid, "proto": "tcp", "family": family, "addr": addr, "port": port,

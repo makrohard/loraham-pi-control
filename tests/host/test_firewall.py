@@ -2643,6 +2643,23 @@ def test_meshcore_file_param_allow_derives_endpoint(tmp_path):
     assert mc and mc[0]["port"] == 5000 and "192.168.178.0/24" in mc[0]["allow_cidrs"]
 
 
+@pytest.mark.parametrize("allow, row", [
+    ("0.0.0.0/0", []),                    # everyone: one unrestricted accept, as the host binds wide
+    ("10.0.0.0/8", ["10.0.0.0/8"]),
+    ("127.0.0.1", None),                  # loopback only: no row
+])
+def test_meshcore_allow_everyone_is_one_unrestricted_row(tmp_path, allow, row):
+    from lhpc.core import config as cfgmod
+    svc = _svc(tmp_path)
+    band = svc._config_band("meshcore", "")
+    cfgmod.save_stack_config(svc._paths, "meshcore", {"meshcore_allow": allow}, band)
+    svc._invalidate_config()
+    mc = [e for e in svc.firewall_candidate()["endpoints"] if "meshcore" in e["id"]]
+    assert ([e["allow_cidrs"] for e in mc] or [None]) == [row]
+    # The host binds IPv4 0.0.0.0: an unrestricted row must not open IPv6 (kiss's 0.0.0.0 alike).
+    assert all((e["family"], e["addr"]) == ("ipv4", "*") for e in mc)
+
+
 def test_endpoints_carry_auth_metadata(tmp_path):
     svc = _svc(tmp_path)
     auths = {e["id"]: e["auth"] for e in svc.firewall_candidate()["endpoints"]}
