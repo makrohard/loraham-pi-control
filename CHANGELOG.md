@@ -2,18 +2,36 @@
 
 ## Unreleased
 
+Changed
+
+- Web console: the access log records each client-certificate login with the certificate's name, one line per
+  full TLS handshake (it logged failures only).
+- Configured trusted signers are enforced: with `[provenance].trusted_signers` set, a source install or update
+  whose pin carries no trusted signature is refused (it was installed with a `signature-unavailable` label).
+- Install and self-update take LHPC's Python dependencies only from `requirements.lock`, every file hash-checked
+  (`--require-hashes`); the README's manual install does the same.
+- `lhpc doctor` names the SPI chip-select mode (config.txt, running kernel), the refusal SPI stacks get while the two
+  disagree, and for each installed daemon and Reticulum node whether its build supports kernel chip selects.
+- The binary channel installs the newest binary published for this LHPC, also after a newer LHPC has published its
+  own (the plan then names `lhpc self-update --apply`); the binaries are listed in `index-v3.json`.
+- MeshCore repeater modes: the host's radio marker is `external` (was `loraham`); no change with the pinned openHop.
+- The Meshtastic web client is its own component: Known working, Latest stable or Development, switched in seconds
+  without touching meshtasticd (`lhpc update meshtastic-web --source …`); meshtastic is reinstalled or rebuilt once.
+- Graywolf: `lhpc update graywolf --source stable` installs the latest upstream release (`--upstream` still works);
+  a bare update is the pinned release (`--source binary`); `pinned`/`dev` are refused.
+
 Fixed
 
 - The MeshCom runner pin → 4369e529f: on a Raspberry Pi Zero 2 W, 0.12.10 could not provision a fresh MeshCom node
-  (its firmware rebooted mid-list); the runner now paces the commands on the firmware's echo. Provisioned nodes were
-  not affected; the runner repository is self-contained.
+  (the firmware rebooted mid-list; provisioned nodes were not affected); the runner now waits for each command's echo.
 - Adopting a local checkout keeps its local branches named `build`, `node_modules` or `__pycache__`; they were
   dropped from the new source's `.git` as if they were build artifacts.
-- MeshCore: a restart no longer can leave plugins blocked until a reboot: the node's stop waits up to 2 s for the
+- MeshCore: a restart can no longer leave plugins blocked until a reboot: the node's stop waits up to 2 s for the
   plugin manager's own shutdown before it signals it again.
 - Web console: with a stack web UI on plain http, the https listeners send HSTS `max-age=0`, which prevents new HSTS
-  lockouts and clears an already-cached policy on the next HTTPS visit (all-https boxes keep HSTS, stack UIs too); a
-  revoked certificate's leftover `.p12` is no longer handed out, by the download or `lhpc webserver cert export`.
+  lockouts and clears an already-cached policy on the next HTTPS visit (all-https boxes keep HSTS, stack UIs too).
+- Web console: a revoked certificate's leftover `.p12` is no longer handed out, by the download or
+  `lhpc webserver cert export`.
 - Web console: a form or request the browser marks as sent from another site or from another port of the
   box (a stack's web UI) is refused even with a valid token.
 - Web console: while the console runs, the client-CA CRL is renewed a week before it expires, so remote client
@@ -23,22 +41,6 @@ Fixed
 - The MeshCore position feed's socket appears only once it accepts connections; a client could find it and be refused.
 - GPS Monitor: a receiver that reports no satellites waits for a satellite list once per 30 s, not on every
   read, so its polls are no longer slowed by up to 6 s each.
-
-Changed
-
-- Web console: the access log records each client-certificate login with the certificate's name, one line per
-  full TLS handshake (it logged failures only).
-- Configured trusted signers are enforced: with `[provenance].trusted_signers` set, a source install or update
-  whose pin carries no trusted signature is refused (it was installed with a `signature-unavailable` label).
-- `lhpc doctor` names the SPI chip-select mode (config.txt, running kernel), the refusal SPI stacks get while the two disagree,
-  and for each installed daemon and Reticulum node whether its build supports kernel chip selects.
-- The binary channel installs the newest binary published for this LHPC, also after a newer LHPC has published its
-  own (the plan then names `lhpc self-update --apply`); the binaries are listed in `index-v3.json`.
-- MeshCore repeater modes: the host's radio marker is `external` (was `loraham`); no change with the pinned openHop.
-- The Meshtastic web client is its own component: Known working, Latest stable or Development, switched in seconds
-  without touching meshtasticd (`lhpc update meshtastic-web --source …`); meshtastic is reinstalled or rebuilt once.
-- Graywolf: `lhpc update graywolf --source stable` installs the latest upstream release (`--upstream` still works);
-  a bare update is the pinned release (`--source binary`); `pinned`/`dev` are refused.
 
 Removed
 
