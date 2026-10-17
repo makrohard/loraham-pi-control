@@ -51,7 +51,7 @@ pytestmark = pytest.mark.contract
 SCOPES = {
     "lhpc/core/service_binary_ops.py": None,
     "lhpc/core/service_selfupdate.py": None,
-    "lhpc/core/service_lifecycle_ops.py": {"build"},
+    "lhpc/core/service_build.py": {"build"},
     "lhpc/core/service_maintenance.py": {"update", "graywolf_upstream_update",
                                          "_graywolf_upstream_update_locked"},
     "lhpc/core/services.py": {"install"},
@@ -188,7 +188,7 @@ DYNAMIC = {
     ("lhpc/core/service_selfupdate.py", "_self_update_run_service_locked"): (1,
         "`_incomplete_outcome` / `_units_stale_outcome` return at least one command",
         ("tests/install/test_selfupdate_migration.py::test_a_helper_changing_update_keeps_the_reapply_warning_on_every_path",)),
-    ("lhpc/core/service_lifecycle_ops.py", "build"): (2,
+    ("lhpc/core/service_build.py", "build"): (2,
         "built only inside `if _deps_absent:` and `if _refused:`, from their stacks",
         ("tests/install/test_deps.py::test_direct_build_of_an_uninstalled_component_says_so",
          "tests/golden/test_golden_build.py::test_refused_not_installed")),

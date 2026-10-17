@@ -20,19 +20,20 @@ CORE = repo_paths.REPO / "lhpc" / "core"
 
 # file: (max lines, max public methods) — measured on dev at 0.12.9, raised where a line says why
 BUDGETS = {
-    "services.py": (2253, 23),  # split-s6: the import of the new mixin; split-s7: the import of the new mixin
+    "services.py": (2254, 23),  # split-s6: the import of the new mixin; split-s7: the import of the new mixin; split-s5: the import of the new mixin
     "service_base.py": (166, 0),
     "service_admission.py": (459, 0),  # split-s4: split from services.py
     "service_auto_install.py": (1875, 16),
     "service_binary_channel.py": (299, 19),  # trackF-c3: the web client keeps its own selector
     "service_binary_ops.py": (1078, 5),  # trackF-c3: the web client follows meshtastic's binary install
     "service_boot_restore.py": (678, 2),
+    "service_build.py": (797, 10),  # split-s5: split from service_lifecycle_ops.py
     "service_daemon_params.py": (508, 11),  # split-s2: split from service_params.py and service_lifecycle_ops.py
     "service_firewall.py": (1533, 19),
     "service_gps.py": (893, 13),  # split-s3: split from service_params.py and services.py
     "service_hmac.py": (1016, 17),
     "service_jobs.py": (765, 9),  # split-s6: split from service_lifecycle_ops.py
-    "service_lifecycle_ops.py": (4134, 42),
+    "service_lifecycle_ops.py": (3357, 32),
     "service_maintenance.py": (2892, 30),  # testlab-det-1: S1 keeps curl rc and message; trackF-c3: update routes the web client
     "service_network.py": (1183, 9),
     "service_params.py": (2485, 39),
@@ -146,6 +147,18 @@ SPLITS = [
         "restart",
         "stop",
         "stop_dependents",
+    )),
+    ("service_build", "BuildOpsMixin", "service_lifecycle_ops", "LifecycleOpsMixin", (
+        "build",
+        "build_inputs_path",
+        "build_inputs_text",
+        "fetched_artifacts_present",
+        "install_blocker",
+        "is_built",
+        "run_params_for",
+        "test",
+        "unbuilt_build_deps",
+        "unbuilt_components",
     )),
 ]
 
