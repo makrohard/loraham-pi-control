@@ -200,3 +200,63 @@ def test_a_fact_is_looked_up_at_head_not_in_the_working_copy(repo):
     (repo / "docs" / "b.md").write_text("Beta.\nGamma.\n")
     rc, rows = _run(repo, "--fact", "Gamma.")
     assert (rc, rows["docs"]) == (0, "OK")
+
+
+SPLIT_BASE = {"lhpc/core/service_x.py": "class X:\n    def a(self):\n        pass\n    def b(self):\n        pass\n",
+              "tests/repo/test_module_budgets.py": BUDGET.format(x="(5, 2)")}
+SPLIT_BUDGET = ('BUDGETS = {{\n    "services.py": {facade},\n    "service_x.py": (3, 1),\n'
+                '    "service_y.py": (6, 1),  # s1: split from {sources}\n}}\n')
+SPLIT = {"lhpc/core/service_x.py": "class X:\n    def a(self):\n        pass\n",
+         "lhpc/core/service_y.py": '"""Y."""\nimport os\n\nclass Y:\n    def b(self):\n        pass\n',
+         "lhpc/core/services.py": "from .service_x import X\nfrom .service_y import Y\n\nclass S(X, Y):\n"
+                                  "    def run(self):\n        pass\n",
+         "tests/repo/test_module_budgets.py": SPLIT_BUDGET.format(
+             facade="(11, 3),  # s1: the import of the new mixin", sources="service_x.py")}
+
+
+@pytest.mark.parametrize("case, change, verdict", [
+    # The facade's import line is paid by its own budget row, raised with a reason.
+    ("split", {}, "WARN"),
+    # The header excuse does not cover growth elsewhere: not in the facade without a raise, not in the source,
+    # and not a split whose named sources did not all shrink.
+    ("split-and-unpaid-facade-growth", {"tests/repo/test_module_budgets.py": SPLIT_BUDGET.format(
+        facade="(10, 3)", sources="service_x.py")}, "HARD"),
+    ("split-and-growth", {"lhpc/core/service_x.py": SPLIT["lhpc/core/service_x.py"] + "\n"}, "HARD"),
+    ("split-from-a-file-that-did-not-shrink", {"tests/repo/test_module_budgets.py": SPLIT_BUDGET.format(
+        facade="(11, 3),  # s1: the import of the new mixin", sources="services.py")}, "HARD"),
+    ("split-file-without-a-class", {"lhpc/core/service_y.py": '"""Y."""\nimport os\n\n\ndef b():\n    pass\n'}, "HARD"),
+    # The header excuse covers only the new file's docstring and imports, not code or comments above its class
+    # (each with the file's budget row sized to fit).
+    ("split-file-with-code-before-its-class", {
+        "lhpc/core/service_y.py": '"""Y."""\nimport os\n\n\ndef _extra():\n    return 1\n\n\n'
+                                  'class Y:\n    def b(self):\n        pass\n',
+        "tests/repo/test_module_budgets.py": SPLIT["tests/repo/test_module_budgets.py"].replace(
+            '"service_y.py": (6, 1)', '"service_y.py": (11, 1)')}, "HARD"),
+    ("split-file-with-a-comment-block-before-its-class", {
+        "lhpc/core/service_y.py": '"""Y."""\nimport os\n# one\n# two\n# three\n\nclass Y:\n    def b(self):\n'
+                                  '        pass\n',
+        "tests/repo/test_module_budgets.py": SPLIT["tests/repo/test_module_budgets.py"].replace(
+            '"service_y.py": (6, 1)', '"service_y.py": (9, 1)')}, "HARD"),
+    # Above the class only the docstring and imports count, as AST nodes (not a statement sharing an import's
+    # line), and the class line carries no body.
+    ("split-file-with-code-on-an-import-line", {
+        "lhpc/core/service_y.py": '"""Y."""\nimport os; _extra = 1\n\nclass Y:\n    def b(self):\n        pass\n'},
+     "HARD"),
+    ("split-file-with-a-body-on-its-class-line", {
+        "lhpc/core/service_y.py": '"""Y."""\nimport os\n\nclass Y: _extra = 1\n'}, "HARD"),
+    # The class line is bare, `class Name:`: no bases, no keywords (each row sized to fit).
+    ("split-file-with-a-call-in-its-bases", {
+        "lhpc/core/service_y.py": '"""Y."""\nimport os\n\nclass Y(type("B", (), {})):\n    def b(self):\n'
+                                  '        pass\n'}, "HARD"),
+    ("split-file-with-a-keyword-on-its-class-line", {
+        "lhpc/core/service_y.py": '"""Y."""\nimport os\n\nclass Y(metaclass=type):\n'
+                                  '    def b(self):\n        pass\n'}, "HARD"),
+    ("split-from-two-files-where-the-second-grew", {"tests/repo/test_module_budgets.py": SPLIT_BUDGET.format(
+        facade="(11, 3),  # s1: the import of the new mixin", sources="service_x.py and services.py")}, "HARD"),
+])
+def test_a_split_grows_the_family_only_by_the_new_header(repo, case, change, verdict):
+    _commit(repo, SPLIT_BASE)
+    _git(repo, "tag", "-f", "base")
+    _commit(repo, {**SPLIT, **change})
+    rc, rows = _run(repo)
+    assert (rc, rows["modules"]) == ((0, "WARN") if verdict == "WARN" else (1, "HARD"))

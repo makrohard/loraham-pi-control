@@ -44,6 +44,12 @@ WARN_PATTERNS = {"source-read": re.compile(r"""(read_text|open)\(.*["']lhpc/[^"'
 EXEMPT = "# rule-1 exception"
 RED_BEFORE = re.compile(r"red[- ]before", re.IGNORECASE)
 RAISE_REASON = re.compile(r"#\s*\S+:\s*\S")
+# A new family file whose budget row says `# <item>: split from <file> [and <file>...]`: the moved code cancels
+# out in the family net, which may then grow only by the new file's header: above the first class only the
+# docstring and imports, as AST nodes; the class line is bare (`class Name:`: no bases, no keywords, no type
+# parameters) and carries no body.
+# Facade growth is not excused; it is paid by the budget row.
+SPLIT_FROM = re.compile(r"#\s*\S+:\s*split from (\S+\.py(?:\s+and\s+\S+\.py)*)")
 
 
 def git(*args: str) -> str:
@@ -83,6 +89,26 @@ def measure(source: str) -> tuple[int, int]:
                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                  and not node.name.startswith("_"))
     return len(source.splitlines()), public
+
+
+def header_lines(source: str) -> int | None:
+    """The lines up to and including the module's first `class` line, when above it there are only the docstring
+    and imports, as AST nodes, every other line is blank, and the class line is bare (`class Name:`: no bases, no
+    keywords, no type parameters) and carries no body. None otherwise (code or comments above the class, code on
+    the class line, or no class)."""
+    body = ast.parse(source).body
+    first = next((n for n in body if isinstance(n, ast.ClassDef)), None)
+    if (first is None or first.bases or first.keywords or getattr(first, "type_params", None)
+            or first.body[0].lineno == first.lineno):
+        return None
+    above = body[:body.index(first)]
+    if not all(isinstance(n, (ast.Import, ast.ImportFrom)) or (k == 0 and isinstance(n, ast.Expr)
+               and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str))
+               for k, n in enumerate(above)):
+        return None
+    allowed = {i for n in above for i in range(n.lineno, n.end_lineno + 1)}
+    lines = source.splitlines()
+    return None if any(lines[i - 1].strip() and i not in allowed for i in range(1, first.lineno)) else first.lineno
 
 
 def budgets(source: str | None) -> dict | None:
@@ -208,19 +234,24 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     if table is None:
         rows.append(("modules", "N/A (budget table absent)", "OK"))
         return rows
-    parts, over, net, excused, raised_bad, raised_ok = [], False, 0, 0, [], set()
+    parts, over, net, excused, raised_bad, raised_ok, splits, sizes = [], False, 0, 0, [], set(), {}, {}
     net_public, excused_public = 0, 0
     head_budget_lines = (show(head, BUDGET_FILE) or "").splitlines()
     for name, value in table.items():
         if name in before and any(v > b for v, b in zip(value, before[name], strict=True)):
             line = next((ln for ln in head_budget_lines if f'"{name}"' in ln), "")
             (raised_ok.add(name) if RAISE_REASON.search(line) else raised_bad.append(name))
+        elif name not in before:
+            line = next((ln for ln in head_budget_lines if f'"{name}"' in ln), "")
+            if m := SPLIT_FROM.search(line):
+                splits[name] = re.findall(r"\S+\.py", m.group(1))
     for name in sorted(table):
         path = FAMILY_DIR + name
         if path not in changed:
             continue
         a = measure(show(base, path) or "")
         b = measure(show(head, path) or "")
+        sizes[name] = (a[0], b[0])
         net += b[0] - a[0]
         excused += max(0, b[0] - a[0]) if name in raised_ok else 0
         net_public += b[1] - a[1]
@@ -228,12 +259,19 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
         over = over or b[0] > table[name][0] or b[1] > table[name][1]
         parts.append(f"{name} {a[0]}->{b[0]} lines (budget {table[name][0]}), "
                      f"{a[1]}->{b[1]} public (budget {table[name][1]})")
+    # A split counts only when every file it names is a family file that shrank in this range and the new file's
+    # header is valid (`header_lines`).
+    heads = {name: header_lines(show(head, FAMILY_DIR + name) or "") for name in splits}
+    split_bad = [name for name, sources in splits.items() if name not in sizes or heads[name] is None
+                 or not all(s in sizes and sizes[s][1] < sizes[s][0] for s in sources)]
+    excused += sum(heads[name] for name in splits if name not in split_bad)
     # Only a raised file's own growth is excused, for lines and for public methods alike.
     grown_unexcused = net - excused > 0 or net_public - excused_public > 0
-    v = ("HARD" if over or grown_unexcused or raised_bad
+    v = ("HARD" if over or grown_unexcused or raised_bad or split_bad
          else "WARN" if net > 0 or net_public > 0 else "OK")
     rows.append(("modules", "; ".join(parts or ["no family file touched"])
-                 + f"; family net {net:+d} lines, {net_public:+d} public" + (f"; raised without reason {','.join(raised_bad)}" if raised_bad else ""), v))
+                 + f"; family net {net:+d} lines, {net_public:+d} public" + (f"; raised without reason {','.join(raised_bad)}" if raised_bad else "")
+                 + (f"; invalid split (a named file did not shrink, no class, more than docstring and imports above it, or code on its class line) {','.join(split_bad)}" if split_bad else ""), v))
     return rows
 
 
