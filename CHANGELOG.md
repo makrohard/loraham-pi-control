@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Fixed
+
+- MeshCore: the Companion (TCP 5000, no authentication) bound every interface for a loopback allow-list other than
+  `127.0.0.1` (`127.0.0.1/32`, `127.0.0.0/8`); it now binds loopback for each, and an unreadable allow-list refuses.
+
 ## 0.12.11
 
 - openhop-core: 6e6dcf65f -> bef702148 (v1.0.10-449-gbef7021), used by meshcore-node

@@ -230,7 +230,8 @@ def bind(value, *, field: str = "bind") -> str:
     """A source-IP allow-list for a no-authentication service port: a bare IPv4 address
     (treated as a single host, /32) OR an IPv4 CIDR. `127.0.0.1` (the default) keeps the
     port on loopback; a LAN CIDR or `0.0.0.0/0` exposes it (the app derives the bind
-    address and filters connecting peers by this list). IPv4 only — the consumers
+    address; the KISS TNC also filters connecting peers by this list, the MeshCore host does
+    not: the managed firewall does). IPv4 only — the consumers
     (loraham-kiss-tnc `--bind`, meshcore `wifi.allow`) reject IPv6, so we do too. A CIDR is
     normalized to its network (`192.168.0.5/24` -> `192.168.0.0/24`); a bare address is
     kept bare. `0.0.0.0/0` parses (the DANGER of a public bind is surfaced by the dashboard

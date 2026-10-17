@@ -7,6 +7,7 @@ so the manifest's `preset` enum keeps one meaning across releases.
 
 from __future__ import annotations
 
+import ipaddress
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -130,6 +131,19 @@ def _opt(table: dict, key: str, default, types, section: str):
     return value
 
 
+def _loopback_only(allow: str) -> bool:
+    """True when `allow` admits loopback sources only. Classed as LHPC's firewall classes it
+    (`ip_network(...).is_loopback`): the firewall opens no row for such a list, so the
+    Companion must then bind loopback. A value that is not an address or network refuses."""
+    s = allow.strip()
+    if not s:
+        return True
+    try:
+        return ipaddress.IPv4Network(s, strict=False).is_loopback
+    except ValueError as exc:
+        raise ConfigError(f"[companion] allow is not an IPv4 address or CIDR: {s!r}") from exc
+
+
 def load_config(path: str | Path) -> HostConfig:
     try:
         raw = Path(path).read_bytes()
@@ -151,7 +165,7 @@ def load_config(path: str | Path) -> HostConfig:
         # (enforced by the managed firewall). Loopback-only allow keeps the bind
         # on loopback; anything wider requires a wide bind for the firewall to
         # have something to gate.
-        cfg.bind = "127.0.0.1" if cfg.allow.strip() in ("", "127.0.0.1") else "0.0.0.0"
+        cfg.bind = "127.0.0.1" if _loopback_only(cfg.allow) else "0.0.0.0"
     cfg.port = _opt(companion, "port", cfg.port, int, "companion")
     if not 1 <= cfg.port <= 65535:
         raise ConfigError("[companion] port out of range")
