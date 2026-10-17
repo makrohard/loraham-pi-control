@@ -20,7 +20,7 @@ CORE = repo_paths.REPO / "lhpc" / "core"
 
 # file: (max lines, max public methods) — measured on dev at 0.12.9, raised where a line says why
 BUDGETS = {
-    "services.py": (2252, 23),  # split-s6: the import of the new mixin
+    "services.py": (2253, 23),  # split-s6: the import of the new mixin; split-s7: the import of the new mixin
     "service_base.py": (166, 0),
     "service_admission.py": (459, 0),  # split-s4: split from services.py
     "service_auto_install.py": (1875, 16),
@@ -32,13 +32,14 @@ BUDGETS = {
     "service_gps.py": (893, 13),  # split-s3: split from service_params.py and services.py
     "service_hmac.py": (1016, 17),
     "service_jobs.py": (765, 9),  # split-s6: split from service_lifecycle_ops.py
-    "service_lifecycle_ops.py": (4907, 47),
+    "service_lifecycle_ops.py": (4134, 42),
     "service_maintenance.py": (2892, 30),  # testlab-det-1: S1 keeps curl rc and message; trackF-c3: update routes the web client
     "service_network.py": (1183, 9),
     "service_params.py": (2485, 39),
     "service_rflog.py": (474, 13),  # split-s1: split from service_lifecycle_ops.py
     "service_secrets.py": (399, 2),
     "service_selfupdate.py": (1932, 22),
+    "service_stop.py": (791, 5),  # split-s7: split from service_lifecycle_ops.py
     "service_system.py": (759, 2),
     "service_webserver.py": (2388, 42),
 }
@@ -138,6 +139,13 @@ SPLITS = [
         "prune_logs",
         "spawn_start_job",
         "spawn_web_job",
+    )),
+    ("service_stop", "StopOpsMixin", "service_lifecycle_ops", "LifecycleOpsMixin", (
+        "owner_stop_commands",
+        "owner_stops",
+        "restart",
+        "stop",
+        "stop_dependents",
     )),
 ]
 
