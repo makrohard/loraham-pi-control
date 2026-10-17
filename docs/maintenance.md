@@ -33,7 +33,8 @@ What CI enforces, branches and releases, the pin-bump recipe, and the gotchas on
     against the real signature (`tests/conftest.py`, `tests/repo/test_fake_signatures.py`);
   - the ten systemd unit templates render to the hashes in `tests/data/unit-templates.sha256`; every
     current digest is in the append-only history `tests/data/unit-templates-released.sha256`, and the
-    next release's units (`updater_units._NEXT_EDITS`) render to `tests/data/unit-templates-next.sha256`
+    other release's units (`updater_units._COMPATIBLE_EDITS`) render to
+    `tests/data/unit-templates-compatible.sha256`, which always holds the 0.12.0/0.12.1 units
     (`tests/repo/test_unit_templates_frozen.py`; the procedure: *Changing a unit* below).
 - `pin-validation`: every pinned source has a rule in the release bot's policy, and every pin is
   an ancestor of its live branch with its referenced scripts present
@@ -160,23 +161,27 @@ repositories.
     introduces the narrower range, so controller and daemon agree; a refusal change still needs a
     minor's justification. 0.12.1, by the maintainer's decision, shipped the first half of a unit
     change as a patch: the verifier accepts the next release's three units as `compatible`, while
-    no installed unit byte changes; going back below 0.12.1 after the release that ships those units
-    restores at boot only after the older release's `lhpc self-update --repair-integration`.
+    no installed unit byte changes; 0.13.0 ships them. Going back below 0.12.1 after 0.13.0 restores
+    at boot only after the older release's `lhpc self-update --repair-integration`.
     0.12.2, by the maintainer's decision, changed a refusal and added a selector as a patch: the
     start refusal for a band the daemon holds names the narrower, correct remedy, and
     `lhpc stack stop daemon` takes `--band` (that remedy; daemon only); no format or default
     changes.
   - **Changing a unit** takes two releases, so a box restores at boot after an update and after a
-    downgrade between them. First a release that only ACCEPTS the new bytes: `_NEXT_EDITS` in
-    `lhpc/core/updater_units.py`, its digests in `unit-templates-next.sha256`; `verify` reads an
-    installed unit equal to them as `compatible`, and boot restore runs on it. Then the release that
-    ships them: the edits become the templates, their digests are appended to the released history,
-    and the previous bytes are accepted the same way (that release runs the forward and mixed unit
-    proof and shows its current renders equal the earlier `unit-templates-next.sha256`). Accepted
-    digests are append-only within a minor line; a minor may prune them, with a CHANGELOG note naming
-    the releases whose units then need `lhpc self-update --repair-integration` after the update. A
-    downgrade to a release older than the accepting one (also skipping over it) does not restore at
-    boot until that older release's `lhpc self-update --repair-integration` rewrites its own units.
+    downgrade between them. First a release that only ACCEPTS the new bytes: edits in
+    `_COMPATIBLE_EDITS` (`lhpc/core/updater_units.py`), pinned in `unit-templates-compatible.sha256`;
+    `verify` reads an installed unit equal to their render as `compatible`, and boot restore runs on
+    it. Then the release that ships them: the edits become the templates, their digests are appended
+    to the released history, and the table is inverted so the previous bytes read `compatible`
+    (0.13.0 did this for 0.12.1's three units). Two rules bind every later release: the operator
+    `lhpc self-update --apply` refuses while any unit reads `compatible`, naming
+    `lhpc self-update --repair-integration` (one-click already needs `ok` units), and the
+    0.12.0/0.12.1 units stay `compatible` (the guard enforces it), so a box that went back to 0.12.1
+    and then straight to a later release still restores. Other accepted digests are append-only
+    within a minor line; a minor may prune them, with a CHANGELOG note naming the releases whose units
+    then need the repair after the update. A downgrade to a release older than the accepting one
+    (also skipping over it) does not restore at boot until that older release's repair rewrites its
+    own units.
   - **The proof a patch needs** is what its change calls for. A pin move: the binary builder's
     smoke and clean-runtime test plus the
     [release-verification lane](testlab.md#running-the-verification-lanes), no box. That lane

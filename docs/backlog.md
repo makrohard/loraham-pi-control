@@ -15,24 +15,16 @@ Known gaps reviewed and left for a later change. Each entry says what holds the 
 
 ## Two-stage unit-template migration
 
-**The first half exists:** the verifier accepts the next release's units as `compatible`
-(`updater_units._NEXT_EDITS`): the nginx unit with a true comment on its firewall boot gate, and the
-web and boot-restore units without the dead `-%h/.meshcore_nm` path. Boot restore runs on them, so
-a box that goes back from the release that ships them still restores
-([maintenance](maintenance.md), *Changing a unit*; `tests/repo/test_unit_templates_frozen.py`).
+The procedure exists and ran once (0.12.1 accepted, 0.13.0 ships the web, nginx and boot-restore
+units; [maintenance](maintenance.md), *Changing a unit*; `tests/repo/test_unit_templates_frozen.py`).
 
-**Open — the release that ships them:**
-
-* the edits become the templates, their digests join `tests/data/unit-templates-released.sha256`,
-  and the previous bytes are accepted the same way;
-* the update path still cannot write new units: `service_selfupdate._refresh_units_post_update()`
-  repairs **in process** with the pre-update templates, and the systemd helper cannot write units
-  at all (`ProtectHome=read-only`, writable paths limited to the runtime root and `/tmp`). The
-  operator path is to run the repair through the new checkout's CLI; a failure leaves the units as
-  they are, recorded *units-stale*. Until then an update that brings new bytes ends *units-stale*
-  and `lhpc self-update --repair-integration` finishes it;
-* that release proves the forward and mixed unit states on a box. A downgrade below the accepting
-  release does not restore at boot until that release's own repair runs.
+**Deferred:** the update path cannot write new units itself.
+`service_selfupdate._refresh_units_post_update()` repairs **in process** with the pre-update
+templates, and the systemd helper cannot write units at all (`ProtectHome=read-only`, writable paths
+limited to the runtime root and `/tmp`). So an update that brings new unit bytes ends with the units
+`compatible`, and the operator runs `lhpc self-update --repair-integration` once. What holds the line:
+boot restore runs on `compatible` units, status and doctor name the repair, and `lhpc self-update
+--apply` refuses to start the next update until it ran.
 
 **Workaround for new writable paths:** redirect the state into the runtime root with an
 environment variable instead of granting a HOME path (Sideband:
