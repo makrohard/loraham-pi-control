@@ -124,6 +124,7 @@ from .service_daemon_params import DaemonParamsMixin
 from .service_firewall import FirewallOpsMixin
 from .service_gps import GpsOpsMixin
 from .service_hmac import HmacOpsMixin
+from .service_jobs import JobsOpsMixin
 from .service_lifecycle_ops import LifecycleOpsMixin
 from .service_maintenance import MaintenanceOpsMixin
 from .service_network import NetworkOpsMixin
@@ -165,7 +166,7 @@ def _load_system_provider(paths):
 
 class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMixin, MaintenanceOpsMixin, ParamsConfigMixin, LifecycleOpsMixin, HmacOpsMixin, SystemStatsMixin, FirewallOpsMixin, BootRestoreOpsMixin,
                         BinaryChannelMixin, BinaryOpsMixin, NetworkOpsMixin, SecretsOpsMixin, RflogOpsMixin,
-                        DaemonParamsMixin, GpsOpsMixin, AdmissionOpsMixin):
+                        DaemonParamsMixin, GpsOpsMixin, AdmissionOpsMixin, JobsOpsMixin):
     """Facade over the core: composes the service_* mixins into ONE object. Construct once per
     process and share it (the web app does, across threads) — it carries the manifest and
     config caches, the config lock, and per-thread re-entrancy bookkeeping for the on-disk
