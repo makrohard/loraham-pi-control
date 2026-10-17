@@ -7,7 +7,6 @@ Which source commit or artifact lhpc may install, and what it records about it.
 - [Selections](#selections)
 - [Ownership records](#ownership-records)
 - [The binary channel](#the-binary-channel)
-- [The web client](#the-web-client)
 - [Verification status](#verification-status)
 - [Signed commits/tags](#signed-commitstags)
 - [Remote overrides](#remote-overrides)
@@ -30,9 +29,6 @@ A component with no configured pin cannot be installed as `pinned` (`unverified-
 `dev` or `stable` explicitly. lhpc never fabricates a missing pin or signature. An **artifact**
 source (`artifact = true`) resolves every selector to the same declared artifact
 (`artifact-head`); no shipped component declares it.
-
-For a fetched package (the Meshtastic web client) `--source` picks the release, not a checkout:
-[the web client](#the-web-client).
 
 Every source lives under the runtime root as a managed clone. `lhpc status --versions` reads
 `match` only while the checked-out commit equals the pin: a `dev` checkout reads `differs` once
@@ -99,38 +95,6 @@ Any failed check is a typed refusal that offers the source channel, never a sile
 Artifacts are built and published by [lhpc-binaries](https://github.com/makrohard/lhpc-binaries),
 which compiles exactly the pin. Operating a binary install:
 [operations.md](operations.md#install-channels).
-
-## The web client
-
-The Meshtastic browser UI is its own component, `meshtastic-web`, served by meshtasticd from
-`build/tools/meshtastic-web/web`: outside `build/tools/meshtasticd`, which a binary install
-replaces, so switching the client never touches meshtasticd.
-
-| `--source` | what is installed | trust anchor |
-|---|---|---|
-| `binary` (default, Known working) | the manifest pin's meshtastic/web release `build.tar` | the manifest's sha256 |
-| `stable` | the newest upstream release, republished by lhpc-binaries | the index-v3 sha256 and the entry's lab smoke against that meshtasticd |
-| `dev` | the latest lab-built snapshot of upstream `main` (it may trail `main` by one weekly build) | as `stable` |
-| `pinned` | refused: the web client has no compiled lane | — |
-
-`lhpc update meshtastic-web --source binary|stable|dev --yes` switches it in seconds; a bare
-`lhpc update meshtastic-web` and a rebuild keep the recorded choice. A `stable`/`dev` entry is taken
-only when its smoke ran against the installed meshtasticd commit; none is a refusal naming
-`--source binary`. An entry without a `stable`/`dev` channel, an `x.y.z` version or both commits
-fails the whole index read before anything is downloaded. `build/tools/meshtastic-web/web.provenance` records the version, sha256,
-selector and the meshtasticd commit it was paired with, and `lhpc status meshtastic` shows it:
-
-- `binary` reads *current*, or *behind* after a pin move until `lhpc update meshtastic-web`;
-- `stable`/`dev` read *differs* (not the known-working client); a pin move leaves them as they are;
-- *unproven for this meshtasticd* once meshtasticd changed since the pairing (also in `lhpc doctor`).
-  The binary install or update that moves meshtasticd re-pairs the kept choice in the same run;
-  with no paired entry the installed client stays, named unproven;
-- *not served* while an operator's own `web_root` makes meshtasticd serve another directory.
-
-A switch is recorded only once it succeeded: a failed `--source binary` fetch leaves the installed
-client and its record as they were. A saved `web_root` equal to the old managed root
-(`build/tools/meshtasticd/web`, literal or rendered) serves from the new one at the next start; any
-other saved value is the operator's.
 
 ## Verification status
 

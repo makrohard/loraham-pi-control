@@ -28,8 +28,7 @@ from seams import readable_heads
 # over the file missed it, the parsed recipe must not.
 EXPECTED = {
     "graywolf": ("scripts/graywolf-fetch.sh",),
-    "meshtastic": ("scripts/meshtastic-link-gate.sh",),
-    "meshtastic-web": ("scripts/meshtastic-web-assets.sh",),
+    "meshtastic": ("scripts/meshtastic-link-gate.sh", "scripts/meshtastic-web-assets.sh"),
     "meshcom-qemu": ("scripts/meshtastic-link-gate.sh",),
     "meshcore-node": ("meshcore_host", "openhop-repeater-constraints.txt"),
     "meshcore-cli": ("meshcore-cli-constraints.txt",),

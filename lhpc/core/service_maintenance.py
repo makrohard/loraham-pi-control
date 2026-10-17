@@ -18,7 +18,6 @@ from . import (
     source_fs,
     source_registry,
     validators,
-    web_client,
 )
 from .model import RunState
 from .paths import PathContainmentError
@@ -1797,8 +1796,6 @@ class MaintenanceOpsMixin:
         """
         if (_r := self._controller_refusal(target)) is not None:
             return _r
-        if target == web_client.COMPONENT:     # a fetched release by selector
-            return web_client.install(self, source, apply=apply)
         # ---- BINARY channel dispatch ----------------------------------------------------
         # Moving a SOURCE-installed stack (back) onto the published artifact is an install, and
         # must be routed as one: the source planners only understand pinned/dev/stable, so a "binary" selector must never reach them.

@@ -59,8 +59,7 @@ def test_meshtastic_builds_the_server_only_env_and_never_native_tft(tmp_path):
     assert "native-tft" not in blob                             # the X11/TFT build, never built here
     # The link gate is a BUILD STEP: a binary that links a display stack must not be publishable.
     assert any("meshtastic-link-gate.sh" in a for a in argvs)
-    # The web client is its own component (Track F C3): meshtasticd's build no longer fetches it.
-    assert not any("meshtastic-web-assets.sh" in a for a in argvs)
+    assert any("meshtastic-web-assets.sh" in a for a in argvs)
     # Serialised compile: a parallel native build is what OOMs a 512 MB Zero 2W.
     run_step = next(s for s in steps if "run" in s.get("argv", []) and "--environment" in s["argv"])
     env = dict(run_step.get("env") or {})
@@ -68,8 +67,7 @@ def test_meshtastic_builds_the_server_only_env_and_never_native_tft(tmp_path):
     assert env.get("PLATFORMIO_CORE_DIR") == "{runtime}/build/tools/platformio/core"
     # The web client is LHPC's own pin: the step names a release version and the sha256 of its
     # build.tar (verified on every install), and no longer depends on the firmware checkout.
-    web_comp = _svc(tmp_path).stack("meshtastic").component("meshtastic-web")
-    web = next(s for s in web_comp.build_steps if "meshtastic-web-assets.sh" in " ".join(s.get("argv", [])))
+    web = next(s for s in steps if "meshtastic-web-assets.sh" in " ".join(s.get("argv", [])))
     assert re.fullmatch(r"\d+\.\d+\.\d+", web["argv"][-2]) and re.fullmatch(r"[0-9a-f]{64}", web["argv"][-1])
     assert "{source}" not in " ".join(web["argv"])
 
@@ -81,8 +79,7 @@ def test_meshtastic_runs_the_runtime_owned_binary_and_web_root(tmp_path):
     assert "/usr/bin/meshtasticd" not in " ".join(c.run_argv)
     assert c.bin == "build/tools/meshtasticd/meshtasticd"       # the server IS the artifact
     root = next(p for p in c.config_file.params if p.key == "RootPath")
-    # The meshtastic-web component's root, outside the tree a binary install replaces; never /usr/share
-    assert root.default == "{runtime}/build/tools/meshtastic-web/web"
+    assert root.default == "{runtime}/build/tools/meshtasticd/web"   # never /usr/share
 
 
 def test_meshtastic_declares_no_graphical_or_audio_dependency(tmp_path):

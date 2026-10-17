@@ -25,7 +25,7 @@ import traceback
 
 from . import binary_install as bi
 from . import binary_receipt as brx
-from . import reslock, runtime_fs, source_registry, web_client
+from . import reslock, runtime_fs, source_registry
 from .best_effort import best_effort
 from .paths import PathContainmentError
 from .service_base import (
@@ -92,15 +92,8 @@ class BinaryOpsMixin:
     # ---- install -----------------------------------------------------------------------------
 
     @invalidates_snapshot
-    def binary_install(self, stack_id: str, apply: bool = False, **kw) -> ActionResult:
-        """`_binary_install`; meshtastic's web client then follows the daemon in the same run,
-        outside the install's locks (web_client.after_daemon)."""
-        res = self._binary_install(stack_id, apply, **kw)
-        return web_client.after_daemon(self, res) if apply and stack_id == web_client.DAEMON else res
-
-    @invalidates_snapshot
-    def _binary_install(self, stack_id: str, apply: bool = False, *,
-                        locked: bool = False) -> ActionResult:
+    def binary_install(self, stack_id: str, apply: bool = False, *,
+                       locked: bool = False) -> ActionResult:
         """Install `stack_id` from the newest published artifact built for this lhpc
         (`bi.select_compatible`); none built for it is ONE typed refusal (`none_compatible`). Every
         refusal offers the source channel explicitly. The APPLY path holds a source install's

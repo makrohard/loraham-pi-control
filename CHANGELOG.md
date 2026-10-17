@@ -31,8 +31,6 @@ Changed
   and for each installed daemon and Reticulum node whether its build supports kernel chip selects.
 - The binary channel installs the newest binary published for this LHPC, also after a newer LHPC has published its
   own (the plan then names `lhpc self-update --apply`); the binaries are listed in `index-v3.json`.
-- The Meshtastic web client is its own component: Known working, Latest stable or Development, switched in seconds
-  without touching meshtasticd (`lhpc update meshtastic-web --source …`); meshtastic is reinstalled or rebuilt once.
 
 Removed
 

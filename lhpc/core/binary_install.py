@@ -173,7 +173,7 @@ def _parse_entry(stack_id: str, e: dict, v3: bool = False) -> IndexEntry:
             target=str(e["target"]),
             provenance={k: e.get(k) for k in
                         ("lhpc_commit", "builder_commit", "container_digest", "smoke",
-                         "built_from", "target", "os", "channel", "web_version")},
+                         "built_from", "target", "os")},
             inputs=dict(e["inputs"]) if v3 else None,
         )
     except (KeyError, TypeError, ValueError) as exc:
@@ -195,23 +195,7 @@ def _parse_entry(stack_id: str, e: dict, v3: bool = False) -> IndexEntry:
     if smoke != {"mode": "mandatory", "result": "passed"}:
         raise BinaryInstallError(
             f"binary artifact for {stack_id!r} did not pass a mandatory smoke test — refusing")
-    if stack_id == WEB_STACK and not _web_fields_ok(entry):
-        raise BinaryInstallError("binary index entry for the web client lacks a valid channel, "
-                                 "web_version or component commit")
     return entry
-
-
-WEB_STACK = "meshtastic-web"
-_WEB_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?")
-
-
-def _web_fields_ok(entry: IndexEntry) -> bool:
-    """A web-client entry (`select_web`) names its channel (stable|dev), a semver `web_version` and
-    40-hex commits for the client and the meshtasticd its smoke ran against; missing = malformed."""
-    v = entry.provenance.get("web_version")
-    return (entry.provenance.get("channel") in ("stable", "dev")
-            and isinstance(v, str) and bool(_WEB_VERSION.fullmatch(v))
-            and all(validators.is_hex(entry.components.get(c), 40) for c in (WEB_STACK, "meshtastic")))
 
 
 def _utc_stamp(v) -> bool:
@@ -235,11 +219,6 @@ class BinaryNoneCompatible(BinaryInstallError):
     def __init__(self, message: str, *, mismatch: dict):
         super().__init__(message)
         self.mismatch = dict(mismatch)
-
-
-class BinaryNonePaired(BinaryInstallError):
-    """No `stable`/`dev` web client of that channel was smoked against the installed meshtasticd
-    (`select_web`): the one typed refusal; an unreachable or malformed index stays plain."""
 
 
 def check_pins(entry: IndexEntry, pins: dict) -> None:
@@ -316,18 +295,6 @@ def select_compatible(entries: list, target: str, pins: dict, inputs: dict):
     check_pins(mine[0], pins)
     raise BinaryNoneCompatible("no published binary was built with this lhpc's build inputs "
                                f"({', '.join(sorted(inputs)) or 'none'})", mismatch={})
-
-
-def select_web(entries: list, channel: str, daemon_commit: str) -> IndexEntry:
-    """THE web-client choice (`meshtastic-web`, index-v3): the FIRST entry (newest first) of the
-    selector's `channel` whose smoke ran against the INSTALLED meshtasticd commit. Its web commit is
-    never compared with a pin (a `stable`/`dev` client is by definition not the known-working one)."""
-    for e in entries:
-        if e.provenance.get("channel") == channel and e.components.get("meshtastic") == daemon_commit:
-            return e
-    raise BinaryNonePaired(
-        f"no {channel} web client is published for this meshtasticd ({daemon_commit[:9] or 'none'}) "
-        "— the known-working one: lhpc update meshtastic-web --source binary --yes")
 
 
 def check_target(entry: IndexEntry, target: str) -> None:
