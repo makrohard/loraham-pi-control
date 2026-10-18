@@ -242,7 +242,7 @@ else
 fi
 
 sysctl_ok() { command -v systemctl >/dev/null 2>&1; }
-is_canonical() {                          # $1=kind $2=file — this version's unit or the next release's
+is_canonical() {                          # $1=kind $2=file — this version's unit or another release's (compatible)
 	[ -f "$2" ] && [ ! -L "$2" ] || return 1
 	[ -x "${VENV}/bin/python" ] || return 1
 	case "$("${VENV}/bin/python" -m lhpc.core.updater_units verify-file "$1" "$2" "$TARGET_DIR" 2>/dev/null)" in
