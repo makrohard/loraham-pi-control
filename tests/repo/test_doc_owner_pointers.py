@@ -1,6 +1,7 @@
 """The invariant table in docs/architecture.md names each owner as `path` `symbol` (continued by
 `, `symbol`` in the same file). Each named symbol must still be defined in its file, so a rename
-or a removal fails here instead of leaving the doc pointing at nothing.
+or a removal fails here instead of leaving the doc pointing at nothing. The same holds for each named
+test, `path::test` (continued by `, `::test`` in the same file).
 
 A documentation-integrity test (tests/README.md, rule 1's second exception): it reads the
 production files only to find each name's definition, never behaviour or source text.
@@ -43,3 +44,22 @@ def test_every_named_owner_is_defined_in_its_file():
 def test_owner_pointers_carry_no_line_numbers():
     numbered = [row[:60] for row in _table_rows() if re.search(r"\.py:\d+`|`:\d+`", row)]
     assert not numbered, f"a `path:N` pointer drifts and escapes the check above: {numbered}"
+
+
+_TEST_POINTER = re.compile(r"`((?:tests|testlab)/[\w/]+\.py)::(\w+)`|`::(\w+)`")
+
+
+def test_every_named_test_is_defined_in_its_file():
+    # `path::test` names its file; a following `::test` continues the same file.
+    named, missing = 0, []
+    for row in _table_rows():
+        path = None
+        for m in _TEST_POINTER.finditer(row):
+            path = m.group(1) or path
+            name = m.group(2) or m.group(3)
+            assert path, f"`::{name}` with no file before it: {row[:60]}"
+            named += 1
+            if not re.search(rf"^\s*(async\s+)?def\s+{name}\b", (ROOT / path).read_text(), re.MULTILINE):
+                missing.append(f"{path}::{name}")
+    assert named
+    assert not missing, f"docs/architecture.md names tests not defined there: {', '.join(missing)}"
