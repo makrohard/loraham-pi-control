@@ -25,6 +25,8 @@ Fixed
 - The GPS Monitor's socket (`monitor.sock`) appears only once it accepts connections, as the position feed's does.
 - The meshcore-cli build also byte-compiles its installed dependencies, so one that does not parse on this Python
   fails the build (meshcore 2.3.16 on Python 3.11 installed and failed only at first run).
+- Kernel chip selects: a binary or image-installed daemon at its pinned release was refused as predating them; it
+  starts now. A build whose history cannot be checked (a shallow `dev` clone) is refused as such.
 
 ## 0.12.11
 

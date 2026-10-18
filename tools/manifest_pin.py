@@ -16,12 +16,15 @@ Prints shell-eval'able assignments and exits 0:
     PIN=<full 40-hex commit>
     TAG=<pin_tag>
     SCRIPTS=<space-separated repo-relative scripts referenced by build_steps/run/test/build/pre>
+    KCS=<the consumers' kernel_cs_since commit, or empty>: the pin must contain it (a box judges
+        a build at the pin by the pin, spi_mode.provenance_refusal)
 
 `--shell` quotes every value so the whole block is safe to `eval` (SCRIPTS is space-separated and
 may be empty — a pinned repo that references no scripts is still validated for pin + ancestry).
 
 Exits nonzero if there are no pinned consumers of the path, the consumers disagree on
-pin_commit/pin_tag/remote/branch, or the pin is not a full 40-hex SHA.
+pin_commit/pin_tag/remote/branch/kernel_cs_since, or the pin or kernel_cs_since is not a full 40-hex
+SHA.
 """
 import pathlib
 import re
@@ -71,6 +74,7 @@ def main(argv) -> int:
     m = _load_manifest()
     consumers = []
     scripts: set = set()
+    kcs: set = set()
     for st in m["stack"]:
         for c in st.get("component", []):
             src = c.get("source") or {}
@@ -78,6 +82,8 @@ def main(argv) -> int:
                 continue
             consumers.append((c["id"], src["pin_commit"], src.get("pin_tag", ""),
                               src.get("remote", ""), src.get("branch", "main")))
+            if c.get("kernel_cs_since"):
+                kcs.add(c["kernel_cs_since"])
             for step in c.get("build_steps", []):
                 for tok in step.get("argv", []):
                     if _TOKEN.match(str(tok)):
@@ -103,6 +109,9 @@ def main(argv) -> int:
     if not _SHA.match(pin):
         print(f"pin is not a full 40-hex SHA: {pin!r}", file=sys.stderr)
         return 1
+    if len(kcs) > 1 or not all(_SHA.match(k) for k in kcs):
+        print(f"kernel_cs_since split or not a full 40-hex SHA for {want}: {sorted(kcs)}", file=sys.stderr)
+        return 1
     q = shlex.quote if quote else (lambda s: s)
     print(f"CONSUMERS={q(str(len(consumers)))}")
     print(f"REMOTE={q(next(iter(remotes)))}")
@@ -110,6 +119,7 @@ def main(argv) -> int:
     print(f"PIN={q(pin)}")
     print(f"TAG={q(next(iter(tags)))}")
     print(f"SCRIPTS={q(' '.join(sorted(scripts)))}")
+    print(f"KCS={q(next(iter(kcs), ''))}")
     return 0
 
 

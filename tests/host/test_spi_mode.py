@@ -12,6 +12,7 @@ from lhpc.core.model import (
     ResourceClaim,
     ResourceKind,
     ResourceMode,
+    SourceSpec,
     Stack,
 )
 from lhpc.core.paths import Paths
@@ -225,6 +226,54 @@ def test_the_binary_channel_reads_its_verified_receipt(tmp_path, monkeypatch, ve
     why = spi_mode.provenance_refusal(None, Stack(id="daemon", name="d", components=(comp,)), comp,
                                       lambda c: repo)
     assert bool(why) is refused
+
+
+def _binary_at(monkeypatch, commit):
+    from types import SimpleNamespace
+
+    from lhpc.core import binary_receipt
+    rec = SimpleNamespace(components={"loraham-daemon": commit})
+    monkeypatch.setattr(binary_receipt, "receipt_state", lambda paths, sid: ("valid", rec, ""))
+    monkeypatch.setattr(binary_receipt, "verify_files", lambda paths, r: (True, []))
+
+
+@pytest.mark.parametrize("built, admitted", [("pin", True), ("other", False)])
+def test_a_binary_box_without_history_admits_the_pinned_build_only(tmp_path, monkeypatch, built,
+                                                                   admitted):
+    """The shipped layout: a verified binary receipt, a source dir that is no git repository. A
+    build at the manifest's pin is admitted (CI proves the pin contains kernel_cs_since); any other
+    commit cannot be checked there and is refused as such, never as "predates"."""
+    _repo, sha, _git = _clone(tmp_path)
+    nogit = tmp_path / "binary-tree"
+    nogit.mkdir()
+    _binary_at(monkeypatch, sha["newer"] if built == "pin" else "e" * 40)
+    comp = Component(id="loraham-daemon", name="d", kind=ComponentKind.SERVICE,
+                     kernel_cs_since=sha["since"],
+                     source=SourceSpec(path="src/loraham-daemon", pin_commit=sha["newer"]))
+    why = spi_mode.provenance_refusal(None, Stack(id="daemon", name="d", components=(comp,)), comp,
+                                      lambda c: nogit)
+    assert (why == "") is admitted
+    if not admitted:
+        assert "cannot be checked here" in why and "predates" not in why
+        assert "lhpc update daemon --source pinned --yes" in why
+
+
+def test_a_shallow_dev_checkout_is_refused_as_unverifiable(tmp_path, monkeypatch):
+    """A `dev` install is a --depth 1 clone: its history does not hold kernel_cs_since."""
+    import subprocess
+    _no_receipt(monkeypatch)
+    repo, sha, _git = _clone(tmp_path)
+    shallow = tmp_path / "shallow"
+    subprocess.run(["git", "clone", "-q", "--depth", "1", f"file://{repo}", str(shallow)], check=True)
+    comp = Component(id="loraham-daemon", name="d", kind=ComponentKind.SERVICE,
+                     kernel_cs_since=sha["since"],
+                     source=SourceSpec(path="src/loraham-daemon", pin_commit=sha["old"]))
+    why = spi_mode.provenance_refusal(None, Stack(id="daemon", name="d", components=(comp,)), comp,
+                                      lambda c: shallow)
+    assert why == (f"loraham-daemon was built from {sha['newer'][:9]}, which cannot be checked here against "
+                   "kernel chip selects (its checkout holds no history to compare) "
+                   f"({sha['since'][:9]}): update it (`lhpc update daemon --source pinned --yes`) "
+                   "before starting it with kernel chip selects")
 
 
 @pytest.mark.parametrize("state, refused", [("unsafe", True), ("superseded", True)])

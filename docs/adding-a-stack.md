@@ -84,6 +84,7 @@ at a 24-hour runaway guard; `build_timeout` raises that guard for a build that n
 `build_marker` names a file written only by a completed build.
 An SPI bus user (or a library it is built from) declares `kernel_cs_since`: its first commit that
 supports kernel chip selects. With kernel chip selects, an installed build older than it is refused.
+CI's pin validation fails a pin that does not contain it.
 
 ```toml
   build_steps = [

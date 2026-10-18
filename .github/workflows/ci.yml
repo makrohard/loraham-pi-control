@@ -240,6 +240,10 @@ jobs:
               || { echo "::error::$path: pinned commit ${PIN} not found on ${BRANCH} (orphaned pin?)"; exit 1; }
             git -C "$dir" merge-base --is-ancestor "$PIN" "origin/${BRANCH}" \
               || { echo "::error::$path: pinned commit ${PIN} is not an ancestor of origin/${BRANCH}"; exit 1; }
+            if [ -n "${KCS:-}" ]; then        # a box judges a build at the pin by the pin (kernel chip selects)
+              git -C "$dir" merge-base --is-ancestor "$KCS" "$PIN" \
+                || { echo "::error::$path: pinned commit ${PIN} does not contain kernel_cs_since ${KCS}"; exit 1; }
+            fi
             git -C "$dir" checkout -q "$PIN"
             # Referenced scripts are an ADDITIONAL layer — a pinned repo that references none is
             # still fully validated above (pin resolves + is an ancestor).

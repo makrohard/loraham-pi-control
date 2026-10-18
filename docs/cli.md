@@ -85,7 +85,11 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs --with-gui   # ONLY on a machine 
   - *the kernel owns the chip selects … CS is GPIO <n>*: this board needs `soft-cs`;
   - *<component> was built from <commit>, which predates kernel chip selects*, or *… has no recorded
     commit to check against kernel chip selects*: `lhpc update <stack>` (the daemon and the
-    Reticulum driver support kernel chip selects from their pinned commits on).
+    Reticulum driver support kernel chip selects from their pinned commits on). A build at the pin
+    (source or binary) passes without its history, since CI checks each pin contains that commit;
+  - *… which cannot be checked here against kernel chip selects*: another commit, and its checkout
+    holds no history to compare (a binary for another pin, a shallow `dev` clone):
+    `lhpc update <stack> --source pinned`.
   `config.txt`'s conditional sections (`[pi4]`, `[cm4]`, `[all]` …) are not read: an spi line under a
   filter that does not apply to this board is counted anyway and reads as *reboot required*. Keep
   the spi lines outside conditional sections.

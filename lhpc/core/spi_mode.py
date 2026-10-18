@@ -144,7 +144,10 @@ def installed_commit(paths, stack, comp, owner, src, owner_src) -> str:
 def provenance_refusal(paths, stack, comp, source_dir) -> str:
     """With kernel chip selects, what `comp` runs must contain the `kernel_cs_since` commit of
     every component it is built from that declares one (itself or a build dependency); an older
-    build would claim GPIO 8/7 the kernel owns."""
+    build would claim GPIO 8/7 the kernel owns. A build at the manifest's pin passes: CI's pin
+    validation proves each such pin contains its `kernel_cs_since` (a binary box has no history
+    to ask). Any other commit is asked of the owner's checkout; where that has no history holding
+    `since` (no repository, a shallow `dev` clone) the start is refused as unverifiable."""
     import subprocess
     by_id = {c.id: c for c in stack.components}
     for owner in [comp] + [by_id[d] for d in (comp.build_requires or ()) if d in by_id]:
@@ -152,14 +155,21 @@ def provenance_refusal(paths, stack, comp, source_dir) -> str:
         if not since:
             continue
         built = installed_commit(paths, stack, comp, owner, source_dir(comp), source_dir(owner))
-        if built == since or (built and subprocess.run(
-                ["git", "-C", str(source_dir(owner)), "merge-base", "--is-ancestor", since, built],
-                capture_output=True, check=False).returncode == 0):
+        pin = owner.source.pin_commit if owner.source else ""
+        if built and built in (since, pin):
             continue
-        what = (f"was built from {built[:9]}, which predates kernel chip selects" if built else
-                "has no recorded commit to check against kernel chip selects")
+        rc = subprocess.run(
+            ["git", "-C", str(source_dir(owner)), "merge-base", "--is-ancestor", since, built],
+            capture_output=True, check=False).returncode if built else 1
+        if rc == 0:
+            continue
+        what = ("has no recorded commit to check against kernel chip selects" if not built else
+                f"was built from {built[:9]}, which predates kernel chip selects" if rc == 1 else
+                f"was built from {built[:9]}, which cannot be checked here against kernel chip "
+                "selects (its checkout holds no history to compare)")
+        how = f"lhpc update {stack.id} --yes" if rc == 1 else f"lhpc update {stack.id} --source pinned --yes"
         return (f"{owner.id} {what} ({since[:9]}): update it "
-                f"(`lhpc update {stack.id} --yes`) before starting it with kernel chip selects")
+                f"(`{how}`) before starting it with kernel chip selects")
     return ""
 
 
