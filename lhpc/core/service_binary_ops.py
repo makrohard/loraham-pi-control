@@ -43,7 +43,7 @@ from .snapshot_memo import invalidates_snapshot
 CLI_VENV_TIMEOUT_S = 900.0
 
 
-_NEWER_NOTE = "  a newer binary is published for a newer LHPC (lhpc self-update --apply)"
+_NEWER_NOTE = "  a binary built for another LHPC was published later (lhpc self-update --apply, if that LHPC is newer)"
 
 
 class BinaryOpsMixin:

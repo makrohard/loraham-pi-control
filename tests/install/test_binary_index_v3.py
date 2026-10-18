@@ -28,11 +28,11 @@ def _inputs(svc, sid):
             for c in st.components if c.id in covers and (c.build_inputs or c.asset_inputs)}
 
 
-def _entry(sid, sha, components, inputs, published="2026-10-16T08:00:00Z"):
+def _entry(sid, sha, components, inputs, published="2026-10-16T08:00:00Z", lhpc="c" * 40, target="aarch64-trixie"):
     filename = f"{sid}-{sha}.tar.zst"
     return {"filename": filename, "url": f"https://example.invalid/{filename}", "sha256": sha,
             "size": 10, "built_from": "b" * 40, "components": dict(components),
-            "lhpc_commit": "c" * 40, "builder_commit": "d" * 40, "target": "aarch64-trixie",
+            "lhpc_commit": lhpc, "builder_commit": "d" * 40, "target": target,
             "os": "trixie", "container_digest": "debian@sha256:" + "e" * 64, "runtime_deps": [],
             "smoke": {"mode": "mandatory", "result": "passed"}, "extract_to": "runtime-root",
             "inputs": dict(inputs), "published_at": published}
@@ -52,7 +52,7 @@ def test_an_older_entry_built_for_this_lhpc_is_installed_and_the_newer_one_named
     svc = _svc(tmp_path, monkeypatch)
     pins, inputs = svc._binary_pins("daemon"), _inputs(svc, "daemon")
     _serve(monkeypatch, {"schema": 3, "stacks": {"daemon": [
-        _entry("daemon", "1" * 64, _lagging(pins), inputs, "2026-10-17T08:00:00Z"),
+        _entry("daemon", "1" * 64, _lagging(pins), inputs, "2026-10-17T08:00:00Z", lhpc="a" * 40),
         _entry("daemon", "2" * 64, pins, inputs)]}})
     plan = svc.binary_install("daemon", apply=False)
     assert plan.ok, plan.summary
@@ -67,7 +67,7 @@ def test_an_installed_older_binary_still_names_the_newer_one(tmp_path, monkeypat
     svc = _svc(tmp_path, monkeypatch)
     pins, inputs = svc._binary_pins("daemon"), _inputs(svc, "daemon")
     _serve(monkeypatch, {"schema": 3, "stacks": {"daemon": [
-        _entry("daemon", "1" * 64, _lagging(pins), inputs, "2026-10-17T08:00:00Z"),
+        _entry("daemon", "1" * 64, _lagging(pins), inputs, "2026-10-17T08:00:00Z", lhpc="a" * 40),
         _entry("daemon", "2" * 64, pins, inputs)]}})
     monkeypatch.setattr(ControllerService, "_binary_installed_is",
                         lambda self, sid, e: e.sha256 == "2" * 64)
@@ -85,7 +85,7 @@ def test_the_older_entry_is_what_an_apply_installs_and_records(tmp_path, monkeyp
     sha = {name: hashlib.sha256(data).hexdigest() for name, data in arts.items()}
     by_sha = {sha[name]: data for name, data in arts.items()}
     _serve(monkeypatch, {"schema": 3, "stacks": {"daemon": [
-        _entry("daemon", sha["newer"], _lagging(pins), inputs, "2026-10-17T08:00:00Z"),
+        _entry("daemon", sha["newer"], _lagging(pins), inputs, "2026-10-17T08:00:00Z", lhpc="a" * 40),
         _entry("daemon", sha["older"], pins, inputs)]}})
     binary = "src/loraham-daemon/loraham_daemon/loraham_daemon"
     monkeypatch.setattr(bi, "download_artifact", lambda e, path: Path(path).write_bytes(by_sha[e.sha256]))
@@ -114,6 +114,25 @@ def test_the_newest_entry_built_for_this_lhpc_is_taken_without_a_note(tmp_path, 
     plan = svc.binary_install("daemon", apply=False)
     assert plan.ok and any(f"daemon-{'3' * 64}.tar.zst" in d for d in plan.details)
     assert not plan.data.get("newer_published")
+
+
+@pytest.mark.parametrize("ahead", [
+    {"target": "x86_64-trixie"},                    # another platform's binary
+    {"published": "2026-10-15T08:00:00Z"},          # listed first, published before the chosen one
+    {"lhpc": "c" * 40},                             # a later build for this same lhpc
+])
+def test_an_entry_listed_first_is_named_only_when_another_lhpc_published_it_later(tmp_path, monkeypatch, ahead):
+    # The note says "built for another LHPC ... published later": list position proves neither.
+    svc = _svc(tmp_path, monkeypatch)
+    pins, inputs = svc._binary_pins("daemon"), _inputs(svc, "daemon")
+    first = {"published": "2026-10-17T08:00:00Z", "lhpc": "a" * 40, **ahead}
+    _serve(monkeypatch, {"schema": 3, "stacks": {"daemon": [
+        _entry("daemon", "1" * 64, _lagging(pins), inputs, **first),
+        _entry("daemon", "2" * 64, pins, inputs)]}})
+    plan = svc.binary_install("daemon", apply=False)
+    assert plan.ok and any(f"daemon-{'2' * 64}.tar.zst" in d for d in plan.details)
+    assert not plan.data.get("newer_published")
+    assert not any("lhpc self-update --apply" in d for d in plan.details)
 
 
 def test_an_entry_with_other_build_inputs_is_never_taken(tmp_path, monkeypatch):

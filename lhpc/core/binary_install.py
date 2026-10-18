@@ -76,6 +76,7 @@ class IndexEntry:
     target: str
     provenance: dict            # the index's own metadata (built_from, target, os, …), verbatim
     inputs: dict | None = None  # index-v3: {component: sha256 of its build-input sidecar}; v2: None
+    published_at: str | None = None  # index-v3: UTC YYYY-MM-DDTHH:MM:SSZ (sorts as text); v2: None
 
 
 # --- index ---------------------------------------------------------------------------------
@@ -175,6 +176,7 @@ def _parse_entry(stack_id: str, e: dict, v3: bool = False) -> IndexEntry:
                         ("lhpc_commit", "builder_commit", "container_digest", "smoke",
                          "built_from", "target", "os", "channel", "web_version")},
             inputs=dict(e["inputs"]) if v3 else None,
+            published_at=e.get("published_at") if v3 else None,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise BinaryInstallError(f"binary index entry for {stack_id!r} is invalid ({exc})") from None
@@ -284,7 +286,8 @@ def input_digests(stack, covers, inputs_text) -> dict:
 def select_compatible(entries: list, target: str, pins: dict, inputs: dict):
     """THE choice: the FIRST entry (newest first) built for this lhpc — its target, its commit for every
     covered component and (index-v3) its build-input digests exactly this lhpc's. Returns (entry,
-    newer_published). None compatible is always `BinaryNoneCompatible`, naming what differs for the
+    newer_published): an entry for this target and another lhpc was published after the chosen one
+    (by `published_at`, never by list position). None compatible is always `BinaryNoneCompatible`, naming what differs for the
     newest entry for this target (nothing for it, its pins, then inputs); the commits are never
     accepted "close enough". Only another target or a lagging commit skips an entry; a malformed one
     refuses the index (`check_pins`), and a malformed covered commit in ANY entry refuses it before one
@@ -307,9 +310,12 @@ def select_compatible(entries: list, target: str, pins: dict, inputs: dict):
                 raise
             return False
         return e.inputs is None or e.inputs == inputs
-    for i, e in enumerate(entries):
+    for e in entries:
         if fits(e):
-            return e, i > 0
+            return e, any(o.target == target and o.published_at and e.published_at
+                          and o.published_at > e.published_at
+                          and o.provenance.get("lhpc_commit") != e.provenance.get("lhpc_commit")
+                          for o in entries)
     mine = [e for e in entries if e.target == target]
     if not mine:
         raise BinaryNoneCompatible(f"no binary is published for {target!r}", mismatch={})

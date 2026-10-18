@@ -124,7 +124,7 @@ operation: [operations](operations.md#install-channels).
 - `--check` — dry run: the plan plus missing mandatory system dependencies (the apply refuses
   until they are installed). Never prompts or applies.
 - The binary channel installs the newest published binary built for this lhpc's pins; when a
-  newer LHPC has published since, the plan says so and names `lhpc self-update --apply`
+  binary for another LHPC was published after it, the plan says so and names `lhpc self-update --apply`
   ([provenance](provenance.md#the-binary-channel)).
 
 ### auto-install

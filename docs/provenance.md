@@ -76,8 +76,9 @@ artifact** instead of a source build:
 - the index (`index-v3.json`) keeps, per stack, the newest artifact of every published
   composition, newest first; lhpc installs the first one whose per-component commits equal its
   **manifest pins** and whose build-input digests equal the ones it computes itself. When that is
-  not the newest, the plan adds "a newer binary is published for a newer LHPC (lhpc self-update
-  --apply)". None built for this lhpc is one refusal: self-update first, the source channel second;
+  not the newest and an entry for this platform built for another LHPC was published after it
+  (`published_at`, not the list position), the plan adds "a binary built for another LHPC was published
+  later (lhpc self-update --apply, if that LHPC is newer)". None built for this lhpc is one refusal: self-update first, the source channel second;
   nothing is installed over the pin check;
 - it must match this platform and record a passed mandatory builder smoke test;
 - the install is recorded in `state/binary/<stack>.json` and shown as `binary@<sha>` by

@@ -20,6 +20,8 @@ Fixed
   `127.0.0.1` (`127.0.0.1/32`, `127.0.0.0/8`); it now binds loopback for each, and an unreadable allow-list refuses.
 - Firewall: `meshcore_allow = 0.0.0.0/0` (everyone) got no row, so the default-drop firewall dropped the Companion for
   everyone while the dashboard showed it public; it is now one unrestricted accept, as for `kiss_bind`.
+- Binary channel: the "newer binary" line followed the index's list order (another platform's binary or an earlier one
+  listed first showed it); it now shows only when another LHPC's binary for this box was published later.
 
 ## 0.12.11
 
