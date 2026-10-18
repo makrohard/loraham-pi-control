@@ -7,6 +7,15 @@ import subprocess
 
 import pytest
 
+# Every git a test starts runs its automatic maintenance in the FOREGROUND: detached (git 2.55's
+# default) it outlives `git commit` and can still hold its lock when the next git command runs
+# (75e7972f measured it; CI 39085927348). Inherited by every helper that passes os.environ on; a
+# helper that builds its env from scratch adds the same three keys (gitrepo.ENV, the _GIT_ENVs);
+# one that sets GIT_CONFIG_COUNT itself keeps its own.
+if "GIT_CONFIG_COUNT" not in os.environ:
+    os.environ.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "maintenance.autoDetach",
+                       "GIT_CONFIG_VALUE_0": "false"})
+
 
 def pytest_collection_modifyitems(config, items):
     # Skip (with a reason) in degenerate environments so the product's CORRECT strictness
