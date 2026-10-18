@@ -185,6 +185,15 @@ repositories.
     then need the repair after the update. A downgrade to a release older than the accepting one
     (also skipping over it) does not restore at boot until that older release's repair rewrites its
     own units.
+  - **Before the next unit change** (a prerequisite of that change, not a defect of 0.13.0, which
+    accepts only the two families above): the renderer holds one `compatible` variant per unit, but
+    the next change must keep both families accepted and add its own, never-shipped bytes. Its
+    accepting release first extends the machinery: `_COMPATIBLE_EDITS` maps a unit to several edit
+    sets and `verify` accepts any of their renders; `unit-templates-compatible.sha256` pins one line
+    per variant, marked `released` or `staged`; the released-history check applies to `released`
+    lines only (a `staged` line must render and differ from the current unit, and turns `released`
+    in the release that ships it); and both families are checked against current-or-any-compatible.
+    Until then the guard fails on any change of the three units, naming the family it would lose.
   - **The proof a patch needs** is what its change calls for. A pin move: the binary builder's
     smoke and clean-runtime test plus the
     [release-verification lane](testlab.md#running-the-verification-lanes), no box. That lane
