@@ -71,6 +71,7 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             advanced=p.get("advanced", False), apply_mode=p.get("apply_mode", "restart"),
             min=p.get("min"), max=p.get("max"),
             band_defaults=tuple((str(k), str(v)) for k, v in p.get("band_defaults", {}).items()),
+            preset_defaults=tuple((str(k), str(v)) for k, v in p.get("preset_defaults", {}).items()),
             hidden=p.get("hidden", False),
             validator=p.get("validator", ""),
             group=p.get("group", ""),

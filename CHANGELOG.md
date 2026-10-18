@@ -27,6 +27,8 @@ Fixed
   fails the build (meshcore 2.3.16 on Python 3.11 installed and failed only at first run).
 - Kernel chip selects: a binary or image-installed daemon at its pinned release was refused as predating them; it
   starts now. A build whose history cannot be checked (a shallow `dev` clone) is refused as such.
+- Meshtastic on an Uputronics dual board with crossed modules (`uputronics-x`) used the 433 module's CS and IRQ for
+  868; its pin defaults now follow the hardware setup.
 
 ## 0.12.11
 

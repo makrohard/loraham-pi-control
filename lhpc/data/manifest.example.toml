@@ -1472,6 +1472,8 @@ main = "meshtastic"
       kind = "int"
       default = "7"
       band_defaults = { "433" = "8", "868" = "7" }
+      # The board decides, not the band: on Uputronics' crossed setup 868 sits on CE0 (the daemon's presets).
+      preset_defaults = { "uputronics-ce0" = "8", "uputronics-ce1" = "7" }
       label = "Lora CS pin"
       advanced = true
       [[stack.component.config_file.param]]
@@ -1481,6 +1483,7 @@ main = "meshtastic"
       kind = "int"
       default = "16"
       band_defaults = { "433" = "25", "868" = "16" }
+      preset_defaults = { "uputronics-ce0" = "25", "uputronics-ce1" = "16" }
       label = "Lora IRQ pin (DIO0)"
       advanced = true
       # OPTIONAL-ABSENT (no default, no band_defaults). The Uputronics RF95 boards have NO reset line

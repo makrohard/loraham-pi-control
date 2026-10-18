@@ -385,3 +385,42 @@ def test_web_port_is_fixed_at_9443_and_not_a_parameter(tmp_path):
     assert "Port: 443 " not in generated and "Port: 443\n" not in generated
     ep = [e.address for e in comp.endpoints if e.scheme == "https"]
     assert ep == ["127.0.0.1:9443"], ep          # config and declaration agree
+
+
+@pytest.mark.parametrize("setup, band, cs, irq", [
+    ("uputronics-x", "868", "8", "25"),      # crossed: 868 sits on CE0
+    ("uputronics-x", "433", "7", "16"),
+    ("uputronics", "868", "7", "16"),        # straight: CE1 868, as the band defaults
+    ("loraham", "868", "7", "16"),
+    ("loraham", "433", "8", "25"),
+    ("unset", "868", "7", "16"),             # no board chosen: the band defaults
+])
+def test_meshtastics_pins_follow_the_hardware_setup(tmp_path, setup, band, cs, irq):
+    """The CS/IRQ default is the board's pin for the band (the daemon's --hw preset), not the band's:
+    on Uputronics' crossed setup the band default (868 -> CE1) drove the 433 module."""
+    from lhpc.core.config import save_hardware_setup
+    svc, _ = _svc(tmp_path)
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    if setup != "unset":
+        save_hardware_setup(svc._paths, setup)
+    svc._invalidate_config()
+    vals = svc.file_config_values("meshtastic", band)
+    assert (vals["cs"], vals["irq"]) == (cs, irq)
+
+
+def test_preset_defaults_name_the_daemons_preset_pins():
+    """The manifest's preset_defaults restate the daemon's pins (hardware_profile.cpp at the pin:
+    uputronics-ce0 CS 8 / IRQ 25, uputronics-ce1 CS 7 / IRQ 16); every key is a preset LHPC can launch."""
+    from lhpc.core.config import HW_PRESETS
+    fp = {p.name: p for p in _meshtastic_comp(_svc(Path("/nonexistent"))[0]).config_file.params}
+    assert dict(fp["cs"].preset_defaults) == {"uputronics-ce0": "8", "uputronics-ce1": "7"}
+    assert dict(fp["irq"].preset_defaults) == {"uputronics-ce0": "25", "uputronics-ce1": "16"}
+    assert set(dict(fp["cs"].preset_defaults)) <= HW_PRESETS
+
+
+def test_preset_defaults_is_a_file_param_key_only():
+    """A pin lives in an app's config file; CI's check_preset_pins walks file params, so a run param
+    must not carry preset_defaults unchecked: the manifest refuses it as an unknown key."""
+    from lhpc.core.manifest import ManifestError, _parse_param
+    with pytest.raises(ManifestError, match="preset_defaults"):
+        _parse_param({"name": "cs", "kind": "int", "preset_defaults": {"uputronics-ce0": "8"}}, "c")

@@ -310,6 +310,7 @@ class FileParam:
     min: int | None = None
     max: int | None = None
     band_defaults: tuple = ()    # ((band, value), …) — per-band default overrides
+    preset_defaults: tuple = ()  # ((--hw preset, value), …) — the band's board preset wins over band_defaults
     hidden: bool = False         # written to the file but not shown on the Config page
     validator: str = ""          # named validator for kind="str" (callsign/freq/host/port/band/node)
     group: str = ""              # settings sub-section title (see RunParam.group)
@@ -677,3 +678,13 @@ class ResourceConflict:
     observed: bool               # True = both components currently running
     message: str = ""
     advisory: bool = False       # a holder's claim is advisory: show it, but do not block a start
+
+
+def band_default(p, band: str, radio) -> str:
+    """A run/file param's default on `band`: the hardware setup's `--hw` preset for that band first
+    (`preset_defaults`: a pin follows the board, e.g. Uputronics CE0/CE1), then `band_defaults`,
+    then `default`. `radio` is the config's RadioConfig. Only a file param (a pin in an app's config
+    file) has `preset_defaults`; a run param with one fails to load."""
+    pd = getattr(p, "preset_defaults", ())
+    preset = radio.hw_preset(band) if pd else ""
+    return dict(pd).get(preset) or dict(p.band_defaults).get(band, p.default)

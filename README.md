@@ -248,7 +248,8 @@ lhpc hardware loraham                     # pick your radio setup from the catal
 | `waveshare-868` | Waveshare SX1262 (868) | 868 → waveshare-sx1262 |
 <!-- test:hw-table:end -->
 
-Uputronics: CE0 carries 433, CE1 carries 868 (`uputronics-x` for crossed modules).
+Uputronics: CE0 carries 433, CE1 carries 868 (`uputronics-x` for crossed modules). Meshtastic's CS and IRQ follow the
+setup (CE0: CS 8, IRQ 25; CE1: CS 7, IRQ 16); set them by hand only for a board not listed here.
 </details>
 
 `lhpc hardware` alone prints the catalog. Which stacks inherit the callsign:

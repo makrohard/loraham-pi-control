@@ -34,7 +34,7 @@ from .config import (
 )
 from .gps import USE_GPS_PARAM, use_gps_default
 from .lifecycle import GROUP_MISSING_HINT, GROUP_RESTART_HINT
-from .model import RunState
+from .model import RunState, band_default
 from .paths import PathContainmentError
 from .service_base import ActionResult, ConfigWrite
 from .snapshot_memo import invalidates_snapshot
@@ -246,8 +246,7 @@ class ParamsConfigMixin:
                                if not getattr(p, "hidden", False)]):
                 idrec = id_rows.get((c.id, kind, p.name))
                 default = ("" if idrec else
-                           self._op_subst(dict(p.band_defaults).get(cfg_band or band,
-                                                                    p.default)))
+                           self._op_subst(band_default(p, cfg_band or band, self.config().radio)))
                 value = (self._stored_param_value(target, kind, c.id, p.name, cfg_band)
                          if idrec else
                          self._resolved_param_value(target, kind, c.id, p.name, cfg_band))
@@ -401,7 +400,7 @@ class ParamsConfigMixin:
         if val is not None:
             return str(val)
         _c, p, _e = self._param_ref(target, kind, f"{comp_id}.{name}")
-        bd = dict(p.band_defaults).get(cfg_band or band, p.default) if p is not None else ""
+        bd = band_default(p, cfg_band or band, self.config().radio) if p is not None else ""
         return self._op_subst(bd)
 
     def _param_default_canon(self, p, cfg_band: str, band: str) -> str:
@@ -409,7 +408,7 @@ class ParamsConfigMixin:
         used by `save_config_bundle` to store OVERRIDES ONLY (a submitted value equal to this is not
         persisted, so it always follows the current/updated manifest default). Fail-soft: a
         non-validating default is compared as its raw substituted string."""
-        eff = self._op_subst(dict(p.band_defaults).get(cfg_band or band, p.default))
+        eff = self._op_subst(band_default(p, cfg_band or band, self.config().radio))
         if p.kind == "int" and eff.strip() == "":
             return ""                                   # an unset optional int
         try:
@@ -653,7 +652,7 @@ class ParamsConfigMixin:
                 if val is not None:
                     out[p.name] = str(val)                    # saved value (scoped/unique), verbatim
                 else:
-                    bd = dict(p.band_defaults).get(cfg_band or band, p.default)
+                    bd = band_default(p, cfg_band or band, self.config().radio)
                     out[p.name] = _op_subst(bd)               # default with operator tokens
         return out
 
@@ -1640,7 +1639,7 @@ class ParamsConfigMixin:
         out = {}
         for c in self._file_config_components(target):
             for p in c.config_file.params:
-                bd = dict(p.band_defaults).get(cfg_band or band, p.default)
+                bd = band_default(p, cfg_band or band, self.config().radio)
                 val, _amb = self._resolve_stored(
                     bandless if p.name in _BANDLESS_STACK_PARAMS else stored, "f", c.id, p.name,
                     file_counts.get(p.name, 0))

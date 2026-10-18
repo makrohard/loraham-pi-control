@@ -252,6 +252,10 @@ jobs:
               case "$s" in *.sh) bash -n "$dir/$s" ;; esac
               scripts_validated=$((scripts_validated + 1))
             done
+            # preset_defaults in the manifest (meshtastic CS/IRQ per board) restate the daemon presets.
+            if [ "$path" = "src/loraham-daemon" ]; then
+              python tools/check_preset_pins.py "$dir/loraham_daemon/hardware_profile.cpp"
+            fi
             # Repo-specific contracts (managed PIO + runtime-owned PLATFORMIO_CORE_DIR, and the
             # external fetch-qemu tests) apply only to the QEMU source.
             if [ "$path" = "src/meshcom-qemu-raspi" ]; then
