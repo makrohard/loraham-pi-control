@@ -535,6 +535,7 @@ class MonitorServer:
         self.snapshot = NmeaSnapshot()
         self.path = os.path.join(bridge_state_dir(paths.runtime_root, consumer), "monitor.sock") \
             if paths is not None else ""
+        self._tmp = os.path.join(os.path.dirname(self.path), ".monitor.new") if self.path else ""
         self._server: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -562,16 +563,15 @@ class MonitorServer:
                 os.fchmod(dfd, 0o700)          # descriptor-anchored: never follows a swapped link
             finally:
                 os.close(dfd)
-            try:
-                runtime_fs.unlink(self.paths, Path(self.path))
-            except (OSError, runtime_fs.PathContainmentError):
-                pass
-            server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            server.bind(self.path)
-            os.chmod(self.path, 0o600)
+            self._unlink_paths()
+            # Bind, chmod and listen under a temp name, then rename onto the path: the path
+            # appears only once the socket accepts (as the position socket's publish).
+            self._server = server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            server.bind(self._tmp)
+            os.chmod(self._tmp, 0o600)
             server.listen(4)
+            os.replace(self._tmp, self.path)
             server.settimeout(1.0)
-            self._server = server
             self._thread = threading.Thread(target=self._serve, name="gps-monitor", daemon=True)
             self._thread.start()
             self.enabled = True
@@ -583,6 +583,17 @@ class MonitorServer:
             except OSError:
                 pass
             self._server = None
+            self._unlink_paths()                       # neither name outlives a failed publish
+
+    def _unlink_paths(self) -> None:
+        from pathlib import Path
+
+        from . import runtime_fs
+        for p in (self.path, self._tmp):
+            try:
+                runtime_fs.unlink(self.paths, Path(p))
+            except (OSError, runtime_fs.PathContainmentError):
+                pass
 
     def feed(self, line: bytes) -> None:
         """The tee. `NmeaSnapshot.feed` never raises; this guards the guard."""

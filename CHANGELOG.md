@@ -22,6 +22,7 @@ Fixed
   everyone while the dashboard showed it public; it is now one unrestricted accept, as for `kiss_bind`.
 - Binary channel: the "newer binary" line followed the index's list order (another platform's binary or an earlier one
   listed first showed it); it now shows only when another LHPC's binary for this box was published later.
+- The GPS Monitor's socket (`monitor.sock`) appears only once it accepts connections, as the position feed's does.
 
 ## 0.12.11
 

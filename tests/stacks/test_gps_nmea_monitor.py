@@ -832,3 +832,43 @@ def test_only_gps_keys_during_start_get_the_wait(tmp_path):
             _acquire(svc, "claim.gps.serial.dev.4:64", "stop")
     finally:
         child.wait(5)
+
+
+def test_the_monitor_path_appears_only_once_it_accepts(short_tmp_path, monkeypatch):
+    """A console that finds monitor.sock must connect at once: publish() listens under a temp
+    name and renames it onto the path. Probed at the chmod before listen, the latest moment a
+    bind-on-the-path publish would show a path that refuses."""
+    import lhpc.core.gps_bridge as bridge_mod
+    from lhpc.core.gps_bridge import MonitorServer
+    monitor = MonitorServer("meshcom", Paths(runtime_root=short_tmp_path))
+    chmod, refused = os.chmod, []
+
+    def probing_chmod(path, mode):
+        chmod(path, mode)
+        if os.path.exists(monitor.path):
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                try:
+                    s.connect(monitor.path)
+                except ConnectionRefusedError:
+                    refused.append(path)
+    monkeypatch.setattr(bridge_mod.os, "chmod", probing_chmod)
+    try:
+        monitor.publish()
+        assert monitor.enabled and not refused
+        assert _ask_monitor(monitor.path)["nmea"] == []
+        assert not os.path.exists(monitor._tmp)
+    finally:
+        monitor.close()
+
+
+def test_a_failed_monitor_publish_leaves_neither_name(short_tmp_path, monkeypatch):
+    import lhpc.core.gps_bridge as bridge_mod
+    from lhpc.core.gps_bridge import MonitorServer
+    monitor = MonitorServer("meshcom", Paths(runtime_root=short_tmp_path))
+
+    def failing_listen(self, backlog):
+        raise OSError("listen failed")
+    monkeypatch.setattr(bridge_mod.socket.socket, "listen", failing_listen)
+    monitor.publish()                                   # never raises
+    assert not monitor.enabled
+    assert not os.path.exists(monitor.path) and not os.path.exists(monitor._tmp)
