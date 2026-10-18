@@ -172,6 +172,18 @@ def test_product_tokens_are_not_attribution_words(repo):
     assert (rc, rows["attribution"]) == (0, "OK")
 
 
+def test_flasks_request_object_in_code_is_not_an_attribution_word(repo):
+    # Quoted console code (`session["_csrf"]`, `session.pop(...)`) is the product's object; a
+    # sentence that ends in the word is still counted.
+    word = "ses" + "sion"
+    _commit(repo, _test(f'\ndef helper(s):\n    {word}["_csrf"] = s\n    return {word}.pop("x", None)\n'))
+    rc, rows = _run(repo)
+    assert (rc, rows["attribution"]) == (0, "OK")
+    _commit(repo, {"docs/a.md": f"Alpha fact.\nWritten in one {word}.\n"})
+    rc, rows = _run(repo, "--fact", "Alpha fact.")
+    assert rows["attribution"] == "WARN"
+
+
 def test_an_indented_line_after_a_gap_does_not_lengthen_a_bullet(repo):
     # A continuation is contiguous: three indented lines after an unindented one are not the bullet's.
     _commit(repo, {"CHANGELOG.md": CHANGELOG.replace(

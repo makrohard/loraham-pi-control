@@ -48,9 +48,11 @@ ATTRIBUTION = ("Clau" + "de", "Chat" + "GPT", "Anthro" + "pic", "Generated " + "
 TRAILER = re.compile("^" + "Co-" + "Authored-By:", re.IGNORECASE | re.MULTILINE)
 WORDS = re.compile(r"\b(" + "ag" + "ent" + "|" + "ses" + "sion" + r")\b", re.IGNORECASE)
 # Product tokens that contain those words and are not attribution: an HTTP header, pytest's fixture
-# scope, the suite's marker and the POSIX process term.
+# scope, the suite's marker, the POSIX process term and Flask's request object used as code (an
+# index or a dict method call; a sentence ending in the word stays counted).
 WORD_EXEMPT = re.compile(r"user[-_]" + "ag" + "ent" + r'|scope="' + "ses" + 'sion"|needs_' + "ses" + "sion"
-                         + r"|\b" + "ses" + r"sion leader", re.IGNORECASE)
+                         + r"|\b" + "ses" + r"sion leader"
+                         + r"|\b" + "ses" + r"sion(?=\[|\.(?:get|pop|clear|setdefault)\()", re.IGNORECASE)
 HARD_PATTERNS = {"getsource": re.compile(r"inspect\.getsource\("),
                  "assert-True": re.compile(r"^\s*assert True\b")}
 WARN_PATTERNS = {"source-read": re.compile(r"""(read_text|open)\(.*["']lhpc/[^"']+\.(py|js|css)["']"""),
