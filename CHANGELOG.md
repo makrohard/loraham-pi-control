@@ -6,9 +6,8 @@ Changed
 
 - `tools/check_houserules.py` reads a repository's own `.houserules.toml` (its test layout, changelog and budget
   file), so the other own repositories can run it.
-- The web, nginx and boot-restore systemd units change (a dead `.meshcore_nm` path removed, a corrected comment).
-  Run `lhpc self-update --repair-integration` once after this update: boot restore runs on the old units meanwhile,
-  but further updates (`lhpc self-update --apply`) are refused while any managed unit is marked `compatible`.
+- The web, nginx and boot-restore systemd units change: run `lhpc self-update --repair-integration` once after this
+  update; until then boot restore runs on the old units and `lhpc self-update --apply` is refused.
 - Going back to 0.12.0 or older afterwards restores at boot only after that release's repair.
 
 Fixed
