@@ -4,6 +4,7 @@ range with that line HARD, each WARN condition passes it with that line WARN, a 
 The checker is a new invariant, so these are negative and positive fixture tests; no parent tree
 existed for a red-before. Assertions read the exit code and each line's verdict token, never prose.
 """
+import os
 import subprocess
 import sys
 
@@ -188,8 +189,9 @@ def test_an_indented_test_method_is_not_a_new_test(repo):
 
 
 def test_without_a_budget_table_the_modules_line_is_not_applicable(repo):
-    _commit(repo, {"tests/repo/test_module_budgets.py": None,
-                   "lhpc/core/services.py": BASE["lhpc/core/services.py"] + "\n"})
+    _commit(repo, {"tests/repo/test_module_budgets.py": None}, msg="no table\n")
+    _git(repo, "tag", "-f", "base")                       # a repository without one (removing it is HARD)
+    _commit(repo, {"lhpc/core/services.py": BASE["lhpc/core/services.py"] + "\n"})
     rc, rows = _run(repo)
     assert (rc, rows["modules"]) == (0, "OK")
 
@@ -260,3 +262,109 @@ def test_a_split_grows_the_family_only_by_the_new_header(repo, case, change, ver
     _commit(repo, {**SPLIT, **change})
     rc, rows = _run(repo)
     assert (rc, rows["modules"]) == ((0, "WARN") if verdict == "WARN" else (1, "HARD"))
+
+
+# ---- a profile per repository (`.houserules.toml`, read at <base>) ----------------------------------
+def _profiled(repo, text):
+    """The profile committed and `base` moved onto it: the rules a later range is checked by."""
+    _commit(repo, {".houserules.toml": text}, msg="profile\n")
+    _git(repo, "tag", "-f", "base")
+
+
+def test_a_profile_layers_a_flat_tests_directory(repo):
+    """A repository whose tests sit directly in tests/ names that layer; red before: unlayered, HARD."""
+    _profiled(repo, 'layers = [["tests/", "unit"]]\n')
+    _commit(repo, {"tests/test_flat.py": "def test_flat():\n    assert 1\n"})
+    rc, rows = _run(repo)
+    assert rc == 0 and rows["tests"] == "OK"
+
+
+def test_a_profile_counts_its_own_test_files_and_definitions(repo):
+    """C++ tests are counted by the profile's globs and definition pattern: a commit adding one without
+    "red-before" in its message is a WARN; red before: not a test file, OK."""
+    _profiled(repo, 'layers = [["src/tests/", "unit"]]\ntest_files = ["test_*.cpp"]\ntest_def = "static void test_"\n')
+    _commit(repo, {"src/tests/test_a.cpp": "static void test_a(void)\n{\n}\n"}, msg="item\n")
+    rc, rows = _run(repo)
+    assert rc == 0 and rows["tests"] == "WARN"
+
+
+def test_a_profile_without_a_changelog_or_budget_turns_those_rules_off(repo):
+    """Three bullets are HARD under the default; a profile with no changelog and no budget file reads
+    neither. Red before: changelog HARD."""
+    _profiled(repo, 'changelog = ""\nbudget_file = ""\n')
+    _commit(repo, {"CHANGELOG.md": CHANGELOG.replace("## Unreleased\n", "## Unreleased\n\n- a\n- b\n- c\n")})
+    rc, rows = _run(repo)
+    assert rc == 0 and rows["changelog"] == "OK" and rows["modules"] == "OK"
+
+
+def test_a_profile_replaces_the_warn_patterns(repo):
+    """The profile's own warn pattern applies in the test layers; red before: the default set, OK."""
+    _profiled(repo, 'warn_patterns = { shell-sleep = "sleep [0-9]" }\n')
+    _commit(repo, _test("\ndef test_two():\n    run('sleep 5')\n"))
+    rc, rows = _run(repo)
+    assert rc == 0 and rows["patterns"] == "WARN"
+
+
+@pytest.mark.parametrize("budget", [None, "BUDGETS = {\n", "BUDGETS = f()\n", "BUDGETS = {[]: 1}\n", "BUDGETS = []\n",
+                                    'BUDGETS = {"services.py": 10}\n'])
+def test_a_budget_table_cannot_vanish_in_the_range_it_gates(repo, budget):
+    """A range that deletes the budget table <base> had, breaks it, or makes it a non-literal or another shape,
+    and grows a family module, is HARD on modules; red before: "N/A (budget table absent)", OK, or a traceback."""
+    _commit(repo, {"tests/repo/test_module_budgets.py": budget,
+                   "lhpc/core/service_x.py": BASE["lhpc/core/service_x.py"] + "\n    def b(self):\n        pass\n"})
+    rc, rows = _run(repo)
+    assert rc == 1 and rows["modules"] == "HARD"
+
+
+def test_a_range_cannot_relax_its_own_rules(repo):
+    """A range that turns the changelog rule off in the same commit as three bullets is checked by
+    <base>'s rules, and the profile change itself is HARD; red before: a clean PASS."""
+    _commit(repo, {".houserules.toml": 'changelog = ""\n',
+                   "CHANGELOG.md": CHANGELOG.replace("## Unreleased\n", "## Unreleased\n\n- a\n- b\n- c\n")})
+    rc, rows = _run(repo)
+    assert rc == 1 and rows["profile"] == "HARD" and rows["changelog"] == "HARD"
+
+
+def test_a_range_adding_a_malformed_profile_exits_2(repo):
+    """<head>'s profile is checked too, so a profile-only range cannot hand the next range a broken one;
+    red before: WARN, 0."""
+    _commit(repo, {".houserules.toml": 'test_files = "x"\n'}, msg="profile\n")
+    rc, _rows = _run(repo)
+    assert rc == 2
+
+
+def test_a_profile_only_range_is_a_warning(repo):
+    """A range that changes only the profile is reviewed on its own (WARN), so a repository can add one."""
+    _commit(repo, {".houserules.toml": 'layers = [["tests/", "unit"]]\n'}, msg="profile\n")
+    rc, rows = _run(repo)
+    assert rc == 0 and rows["profile"] == "WARN"
+
+
+@pytest.mark.parametrize("profile", ["layers = [", 'unknown = "x"\n', 'test_def = "("\n', "changelog = 3\n",
+                                     'test_files = "x"\n', 'layers = [["tests/"]]\n', "warn_patterns = { a = 1 }\n",
+                                     'layers = "tests/"\n'])
+def test_a_malformed_profile_exits_2(repo, profile):
+    """A profile that cannot be read is a usage error, never a silent default; red before: ignored, 0."""
+    _profiled(repo, profile)
+    _commit(repo, _test("\ndef test_two():\n    assert 1\n"))
+    rc, _rows = _run(repo)
+    assert rc == 2
+
+
+@pytest.mark.parametrize("env", [{}, {"HOUSERULES_BASE_RUN": "1"}])
+def test_a_range_cannot_weaken_the_checker_that_judges_it(repo, env):
+    """<base> holds the checker; the range removes its assert-True rule and commits that violation. The
+    program the range carries is anchored to <base>'s, which still finds it: rc 1, also with the former
+    recursion stop exported in the caller's environment. Red before: the weakened program alone, rc 0."""
+    real = CHECKER.read_text()
+    weak = real.replace('"assert-True": re.compile(r"^\\s*assert True\\b")', "")
+    assert weak != real
+    _commit(repo, {"tools/check_houserules.py": real}, msg="checker\n")
+    _git(repo, "tag", "-f", "base")
+    _commit(repo, {"tools/check_houserules.py": weak, **_test("\ndef test_two():\n    assert True\n")})
+    p = subprocess.run([sys.executable, str(repo / "tools" / "check_houserules.py"), "base..HEAD"], cwd=repo,
+                       capture_output=True, text=True, check=False, env={**os.environ, **env})
+    base_part = p.stdout.split("THIS PROGRAM", 1)[0]
+    assert p.returncode == 1 and "BASE PROGRAM" in base_part
+    rows = {line.split()[0]: line.split()[-1] for line in base_part.splitlines()[1:] if line.strip()}
+    assert rows["patterns"] == "HARD"

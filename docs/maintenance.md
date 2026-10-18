@@ -110,7 +110,25 @@ repositories.
   `--correction`. `python tools/check_houserules.py <base>..<head> [--fact <literal>]` prints the
   item's HOUSE RULES KEPT block (CHANGELOG, docs, tests, patterns, markers, attribution, module
   budgets); a HARD line fails it. It checks form, not truth: a PASS says nothing about whether a
-  stated red-before ran, a CHANGELOG line is precise or a claim in a report holds.
+  stated red-before ran, a CHANGELOG line is precise or a claim in a report holds. Another own
+  repository runs the same tool; its `.houserules.toml` at `<base>` names its layers, test files and
+  test definitions, changelog and budget file (empty: that rule off) and warn patterns. Without one,
+  LHPC's layout applies; a malformed one exits 2. A range that changes it is HARD unless it changes
+  nothing else; that WARN is the reviewer's to judge: no rule the repository needs may be relaxed. The
+  gate is two runs, the checker at `<base>` first; its exit code is the worse of the two (without a checker at
+  `<base>`, the head run alone is the gate; the head run repeats the first itself when they differ):
+
+  ```sh
+  T=$(mktemp -d)
+  if git show <base>:tools/check_houserules.py > "$T/c.py" 2>/dev/null; then
+    python -I "$T/c.py" <base>..<head>; b=$?
+  else
+    echo "no checker at <base>: the head run is the gate"; b=0
+  fi
+  rm -rf "$T"
+  python tools/check_houserules.py <base>..<head>; h=$?
+  r=$b; [ "$h" -le "$r" ] || r=$h; (exit "$r")
+  ```
 
 ## Branches and releases
 

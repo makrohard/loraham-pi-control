@@ -7,14 +7,27 @@ One line per rule (changelog, docs, tests, patterns, markers, attribution, modul
 OK, WARN or HARD, then `VERDICT PASS|FAIL`. Exit 1 when a line is HARD, 2 on a usage or git error.
 The exact conditions: tests/README.md rule 13 and the plan of this tool. WARN lines are judged by
 the reviewer; HARD lines block.
+
+A repository may carry `.houserules.toml` with its own layout (layers, test_files, test_def, budget_file,
+family_dir, changelog, warn_patterns), read at <base> so a range cannot relax its own rules: a range that
+changes it is a `profile` HARD line, a WARN when it changes nothing else. Without it the constants below apply. Attribution, markers and the
+HARD patterns are the same for every repository. A malformed profile exits 2.
+
+The gate is two runs, the program at <base> first (docs/maintenance.md has the command); the exit code is
+the worse of the two, so a range cannot weaken the checker that judges it. A direct run does the same itself
+when <base> holds a different tools/check_houserules.py (its output first, under its own heading).
 """
 from __future__ import annotations
 
 import argparse
 import ast
+import fnmatch
+import os
 import re
 import subprocess
 import sys
+import tempfile
+import tomllib
 
 LAYERS = (
     ("tests/core/", "core"), ("tests/stacks/", "stacks"), ("tests/web/", "web"),
@@ -27,6 +40,9 @@ LAYERS = (
 )
 BUDGET_FILE = "tests/repo/test_module_budgets.py"
 FAMILY_DIR = "lhpc/core/"
+CHANGELOG = "CHANGELOG.md"
+TEST_FILES = ("test_*.py",)            # globs on the file name, or on the path when they hold a "/"
+TEST_DEF = re.compile(r"(async )?def test_")
 # Assembled from fragments so that no committed file spells the names it looks for.
 ATTRIBUTION = ("Clau" + "de", "Chat" + "GPT", "Anthro" + "pic", "Generated " + "with")
 TRAILER = re.compile("^" + "Co-" + "Authored-By:", re.IGNORECASE | re.MULTILINE)
@@ -76,7 +92,51 @@ def added_lines(diff: str) -> list[tuple[str, int, str]]:
 
 
 def is_test_file(path: str) -> bool:
-    return path.rsplit("/", 1)[-1].startswith("test_") and path.endswith(".py")
+    return any(fnmatch.fnmatchcase(path if "/" in g else path.rsplit("/", 1)[-1], g) for g in TEST_FILES)
+
+
+class ProfileError(Exception):
+    pass
+
+
+def _as(p: dict, key: str, kind: type):
+    """`p[key]` when it is a `kind` (an absent key: empty); any other type is a ProfileError."""
+    v = p.get(key, kind())
+    if not isinstance(v, kind):
+        raise ProfileError(f"{key} must be a {kind.__name__}")
+    return v
+
+
+def load_profile(rev: str, apply: bool = True) -> None:
+    """Check `rev`'s `.houserules.toml` and apply it over the constants above (one run, one repository);
+    `apply=False` only checks it (<head>'s copy: a range must not hand the next range a broken profile)."""
+    global LAYERS, TEST_FILES, TEST_DEF, BUDGET_FILE, FAMILY_DIR, CHANGELOG, WARN_PATTERNS
+    text = show(rev, ".houserules.toml")
+    if text is None:
+        return
+    try:
+        p = tomllib.loads(text)
+        if unknown := set(p) - {"layers", "test_files", "test_def", "budget_file", "family_dir", "changelog",
+                                "warn_patterns"}:
+            raise ProfileError(f"unknown keys {sorted(unknown)}")
+        if (any(not isinstance(p[k], str) for k in ("test_def", "budget_file", "family_dir", "changelog") if k in p)
+                or not all(isinstance(x, list) and len(x) == 2 and all(isinstance(y, str) for y in x)
+                           for x in _as(p, "layers", list))
+                or not all(isinstance(g, str) for g in _as(p, "test_files", list))
+                or not all(isinstance(v, str) for v in _as(p, "warn_patterns", dict).values())):
+            raise ProfileError("layers is a list of [prefix, name] pairs, test_files a list of strings, "
+                               "warn_patterns a table of strings, the other keys strings")
+        [re.compile(v) for v in [p.get("test_def", ""), *_as(p, "warn_patterns", dict).values()]]
+        if not apply:
+            return
+        LAYERS = tuple((str(a), str(b)) for a, b in p.get("layers", LAYERS))
+        TEST_FILES = tuple(str(g) for g in p.get("test_files", TEST_FILES))
+        TEST_DEF = re.compile(p.get("test_def", TEST_DEF.pattern))
+        BUDGET_FILE, FAMILY_DIR = p.get("budget_file", BUDGET_FILE), p.get("family_dir", FAMILY_DIR)
+        CHANGELOG = p.get("changelog", CHANGELOG)
+        WARN_PATTERNS = {str(k): re.compile(v) for k, v in p.get("warn_patterns", WARN_PATTERNS).items()}
+    except (tomllib.TOMLDecodeError, re.error, TypeError, ValueError, AttributeError) as exc:
+        raise ProfileError(str(exc)) from None
 
 
 def layer_of(path: str) -> str | None:
@@ -114,9 +174,21 @@ def header_lines(source: str) -> int | None:
 def budgets(source: str | None) -> dict | None:
     if source is None:
         return None
-    for node in ast.parse(source).body:
+    try:
+        body = ast.parse(source).body
+    except SyntaxError:
+        return None
+    for node in body:
         if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "BUDGETS" for t in node.targets):
-            return ast.literal_eval(node.value)
+            try:
+                table = ast.literal_eval(node.value)
+            except (ValueError, TypeError):    # not a literal (a call, a name, an unhashable key)
+                return None
+            # The only shape the rule reads: {"module.py": (lines, public)}; anything else is no table.
+            ok = isinstance(table, dict) and all(
+                isinstance(k, str) and isinstance(v, (tuple, list)) and len(v) == 2
+                and all(isinstance(n, int) and not isinstance(n, bool) for n in v) for k, v in table.items())
+            return table if ok else None
     return None
 
 
@@ -130,14 +202,18 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
                for c in git("log", "--format=%H%x00%an%x00%B%x1e", rng).split("\x1e") if c.strip()]
     rows = []
 
+    if ".houserules.toml" in changed:      # alone: reviewed on its own; with other files: it would gate itself
+        rows.append(("profile", ".houserules.toml changed in this range (rules read at <base>)",
+                     "WARN" if changed == {".houserules.toml"} else "HARD"))
+
     # changelog
-    head_cl = (show(head, "CHANGELOG.md") or "").splitlines()
+    head_cl = (show(head, CHANGELOG) or "").splitlines() if CHANGELOG else []
     heads = [i + 1 for i, line in enumerate(head_cl) if line.startswith("## ")]
     second = heads[1] if len(heads) > 1 else len(head_cl) + 1
     top = (second - heads[0] - 1) if heads else 0
     bullets, below, active, last = [], False, False, None
     for path, n, text in added:
-        if path != "CHANGELOG.md":
+        if path != CHANGELOG:
             continue
         if text.startswith("- "):
             bullets.append(1)
@@ -176,10 +252,10 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     with_tests = stated = 0
     for sha, _, msg in commits:
         own = added_lines(git("show", "--unified=0", "--format=", sha))
-        if any(is_test_file(p) and re.match(r"(async )?def test_", t) for p, _, t in own):
+        if any(is_test_file(p) and TEST_DEF.match(t) for p, _, t in own):
             with_tests += 1
             stated += bool(RED_BEFORE.search(msg))
-    n_new = sum(1 for p, _, t in added if is_test_file(p) and re.match(r"(async )?def test_", t))
+    n_new = sum(1 for p, _, t in added if is_test_file(p) and TEST_DEF.match(t))
     v = "HARD" if unlayered else "WARN" if stated < with_tests else "OK"
     rows.append(("tests", f"{n_new} new tests; layers {' '.join(layers) or '-'}; "
                           f"red-before {stated}/{with_tests}" + (f"; unlayered {' '.join(unlayered)}" if unlayered else ""), v))
@@ -203,7 +279,7 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
         by_file.setdefault(p, []).append((n, t))
     for lines in by_file.values():
         for i, (_, t) in enumerate(lines):
-            if not re.match(r"(async )?def test_", t):
+            if not TEST_DEF.match(t):
                 continue
             body = []
             for _, b in lines[i + 1:]:
@@ -230,9 +306,11 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     rows.append(("attribution", f"authors {','.join(authors) or '-'}; trailers {trailers}; words {words}", v))
 
     # modules
-    table, before = budgets(show(head, BUDGET_FILE)), budgets(show(base, BUDGET_FILE)) or {}
-    if table is None:
-        rows.append(("modules", "N/A (budget table absent)", "OK"))
+    table, base_table = (budgets(show(head, BUDGET_FILE)), budgets(show(base, BUDGET_FILE))) if BUDGET_FILE else (None, None)
+    before = base_table or {}
+    if table is None:                      # a table <base> had cannot vanish in the range it would gate
+        rows.append(("modules", f"{BUDGET_FILE} has no budget table at <head>" if base_table is not None
+                     else "N/A (budget table absent)", "HARD" if base_table is not None else "OK"))
         return rows
     parts, over, net, excused, raised_bad, raised_ok, splits, sizes = [], False, 0, 0, [], set(), {}, {}
     net_public, excused_public = 0, 0
@@ -275,6 +353,25 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     return rows
 
 
+def base_program(base: str, argv: list[str]) -> int | None:
+    """Run <base>'s checker on the same arguments when it differs from this one; its exit code, or None
+    (no checker at <base>, or the same program). No marker stops the recursion, so nothing a caller sets can
+    skip the base run: in the base run `__file__` is <base>'s program, which equals itself."""
+    theirs = show(base, "tools/check_houserules.py")
+    with open(__file__, encoding="utf-8") as fh:
+        if theirs is None or theirs == fh.read():
+            return None
+    with tempfile.TemporaryDirectory() as d:
+        prog = os.path.join(d, "check_houserules.py")
+        with open(prog, "w", encoding="utf-8") as fh:
+            fh.write(theirs)
+        p = subprocess.run([sys.executable, "-I", prog, *argv], capture_output=True, text=True, check=False)
+    print(f"BASE PROGRAM  tools/check_houserules.py at {base} (authoritative)")
+    print(p.stdout + p.stderr, end="")
+    print("THIS PROGRAM  (forward check)")
+    return p.returncode
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("range", help="<base>..<head>")
@@ -285,10 +382,21 @@ def main(argv: list[str]) -> int:
     if ".." not in args.range:
         ap.error("the range must be <base>..<head>")
     base, head = args.range.split("..", 1)
+    base_rc = base_program(base, argv)
+    rc = _check(args, base, head)
+    return rc if base_rc is None else max(rc, base_rc)
+
+
+def _check(args, base: str, head: str) -> int:
     try:
+        load_profile(head, apply=False)
+        load_profile(base)
         rows = check(base, head, args.fact, args.correction)
     except subprocess.CalledProcessError as exc:
         print(f"git failed: {' '.join(exc.cmd)}: {exc.stderr.strip()}", file=sys.stderr)
+        return 2
+    except ProfileError as exc:
+        print(f".houserules.toml: {exc}", file=sys.stderr)
         return 2
     hard = sum(v == "HARD" for _, _, v in rows)
     warn = sum(v == "WARN" for _, _, v in rows)
