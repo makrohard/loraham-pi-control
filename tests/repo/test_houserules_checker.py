@@ -84,8 +84,8 @@ HARD = {
     "changelog-three-bullets": ({"CHANGELOG.md": CHANGELOG.replace("## Unreleased\n",
                                  "## Unreleased\n\n- a\n- b\n- c\n")}, RED, "changelog"),
     "changelog-below-top": ({"CHANGELOG.md": CHANGELOG + "- late\n"}, RED, "changelog"),
-    "changelog-bullet-over-three-lines": ({"CHANGELOG.md": CHANGELOG.replace(
-        "## Unreleased\n", "## Unreleased\n\n- a\n  b\n  c\n  d\n")}, RED, "changelog"),
+    "changelog-bullet-over-two-lines": ({"CHANGELOG.md": CHANGELOG.replace(   # the maintainer's "one or two lines"
+        "## Unreleased\n", "## Unreleased\n\n- a\n  b\n  c\n")}, RED, "changelog"),
     # One line fewer, one public method more, within every cap: only the method growth is wrong.
     "family-public-growth": ({"lhpc/core/services.py": "from .service_x import X\nclass S(X):\n"
                               "    def run(self): pass\n    def more(self): pass\n"},

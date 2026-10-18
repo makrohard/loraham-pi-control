@@ -226,12 +226,12 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
         else:
             active = False
         last = n
-    long_bullet = any(b > 3 for b in bullets)
+    long_bullet = any(b > 2 for b in bullets)
     # `--correction`: an item that only corrects a released section says so, and its bullets
     # below the top section are shown (WARN), not refused.
     v = ("HARD" if len(bullets) > 2 or long_bullet or (below and not correction)
          else "WARN" if below else "OK")
-    rows.append(("changelog", f"+{len(bullets)} bullets (limit 2, each ≤ 3 lines; longest "
+    rows.append(("changelog", f"+{len(bullets)} bullets (limit 2, each ≤ 2 lines; longest "
                               f"{max(bullets, default=0)}), top section {top} lines", v))
 
     # docs
