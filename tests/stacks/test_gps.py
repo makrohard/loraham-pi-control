@@ -1172,6 +1172,159 @@ def _run_feed(paths, consumer, stop):
     return run(consumer, paths, stop=stop)
 
 
+@pytest.mark.parametrize("state", ["silent-gpsd", "connect-hangs"])
+def test_a_stop_signal_ends_the_feed_at_once_while_it_blocks(short_tmp_path, monkeypatch, state):
+    """The lifecycle stops a feed with SIGTERM and waits `stop_timeout` (5 s) for it to exit. A
+    gpsd that accepts but sends nothing (no fix) left the feed in a 5 s `recv`, a connect to an
+    unreachable gpsd in a 10 s connect, and Python resumes such a call after the handler: the feed
+    outlived the wait and a clean stop reported rc 1. Red before: 5 s and 10 s. Here run() is on
+    the main thread, as in the feed process, and the signal comes while it blocks."""
+    import select
+    import signal
+    import socket as socket_mod
+    import threading
+    import time
+    from lhpc.core.config import save_gps
+    from lhpc.core.gps import bridge_endpoint_path
+    from lhpc.core.gps_bridge import EXIT_OK, run
+    from lhpc.core.paths import Paths
+    import lhpc.core.gps_bridge as bridge_mod
+    (short_tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    paths = Paths(runtime_root=short_tmp_path)
+    blocked = threading.Event()
+    srv = socket_mod.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    held = []                            # the accepted connection stays open (closing it ends the recv)
+    if state == "silent-gpsd":           # accepts, reads the WATCH, sends nothing
+        def silent():
+            conn, _ = srv.accept()
+            held.append(conn)
+            conn.recv(1024)
+            blocked.set()
+        threading.Thread(target=silent, daemon=True).start()
+    else:                                 # the connect never completes on its own within the wait
+        def hanging_connect(*_a, **_k):
+            blocked.set()
+            select.select([], [], [], 10.0)
+            raise TimeoutError
+        monkeypatch.setattr(bridge_mod.socket, "create_connection", hanging_connect)
+    save_gps(paths, source="gpsd", host="127.0.0.1", port=srv.getsockname()[1])
+    saved = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    sent = {}
+
+    def stop_when_blocked():
+        if blocked.wait(_FEED_UP_S):
+            threading.Event().wait(0.3)  # into the blocking call
+            sent["at"] = time.monotonic()
+            signal.pthread_kill(threading.main_thread().ident, signal.SIGTERM)
+    threading.Thread(target=stop_when_blocked, daemon=True).start()
+    try:
+        rc = run("meshcore", paths)
+    finally:
+        for sig, h in saved.items():
+            signal.signal(sig, h)
+        for c in [*held, srv]:
+            c.close()
+    assert rc == EXIT_OK and "at" in sent
+    assert time.monotonic() - sent["at"] < 2.5          # the blocking call's own timeout is 5 s / 10 s
+    assert not os.path.exists(bridge_endpoint_path(short_tmp_path, "meshcore"))   # the teardown ran
+
+
+def test_a_stop_signal_during_the_teardown_leaves_no_endpoint_or_marker(short_tmp_path, monkeypatch):
+    """A pump that returns without a stop (an error path) reaches run()'s teardown with the stop event
+    unset; a SIGTERM arriving inside that teardown must not cut it short (an endpoint or a readiness
+    marker left behind reads as a live GPS). Red before: the handler raised inside the teardown."""
+    import signal
+    import threading
+    from lhpc.core.config import save_gps
+    from lhpc.core.gps import bridge_endpoint_path, bridge_state_dir
+    from lhpc.core.paths import Paths
+    import lhpc.core.gps_bridge as bridge_mod
+    (short_tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    paths = Paths(runtime_root=short_tmp_path)
+    save_gps(paths, source="gpsd", host="127.0.0.1", port=9)
+    monkeypatch.setattr(bridge_mod, "_pump_gpsd", lambda *_a, **_k: None)      # returns, no stop set
+    clear = bridge_mod.Readiness.clear
+
+    def clear_under_signal(self):
+        signal.pthread_kill(threading.main_thread().ident, signal.SIGTERM)    # handled on this thread, here
+        clear(self)
+    monkeypatch.setattr(bridge_mod.Readiness, "clear", clear_under_signal)
+    saved = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        rc = bridge_mod.run("meshcore", paths)
+    finally:
+        for sig, h in saved.items():
+            signal.signal(sig, h)
+    assert rc == bridge_mod.EXIT_OK
+    assert not os.path.exists(bridge_endpoint_path(short_tmp_path, "meshcore"))
+    assert not os.path.exists(os.path.join(bridge_state_dir(short_tmp_path, "meshcore"), "readiness.json"))
+
+
+def test_a_stop_signal_as_the_teardown_begins_is_ignored(short_tmp_path, monkeypatch):
+    """A SIGTERM at the teardown's very first step (the stop event not yet set: the pump returned
+    without a stop) must only set the event; outside a pump the handler never raises. Red before:
+    it raised there and skipped the teardown."""
+    import signal
+    import threading
+    from lhpc.core.config import save_gps
+    from lhpc.core.gps import bridge_endpoint_path, bridge_state_dir
+    from lhpc.core.paths import Paths
+    import lhpc.core.gps_bridge as bridge_mod
+    (short_tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    paths = Paths(runtime_root=short_tmp_path)
+    save_gps(paths, source="gpsd", host="127.0.0.1", port=9)
+    monkeypatch.setattr(bridge_mod, "_pump_gpsd", lambda *_a, **_k: None)      # returns, no stop set
+
+    class SignalOnFirstSet(threading.Event):
+        fired = False
+
+        def set(self):
+            if not self.fired:          # the teardown's first statement: the signal lands here
+                self.fired = True
+                signal.pthread_kill(threading.main_thread().ident, signal.SIGTERM)
+            super().set()
+    saved = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        rc = bridge_mod.run("meshcore", paths, stop=SignalOnFirstSet())
+    finally:
+        for sig, h in saved.items():
+            signal.signal(sig, h)
+    assert rc == bridge_mod.EXIT_OK
+    assert not os.path.exists(bridge_endpoint_path(short_tmp_path, "meshcore"))
+    assert not os.path.exists(os.path.join(bridge_state_dir(short_tmp_path, "meshcore"), "readiness.json"))
+
+
+def test_a_stop_signal_right_after_the_endpoint_appears_leaves_nothing(short_tmp_path):
+    """The handler is in place before the endpoint is published, so a SIGTERM right after it appears
+    ends in the teardown, not in Python's default exit. A separate process: the default action
+    would end this one. Red before: killed by the signal, the endpoint left."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    from lhpc.core.config import save_gps
+    from lhpc.core.gps import bridge_endpoint_path
+    from lhpc.core.paths import Paths
+    (short_tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    save_gps(Paths(runtime_root=short_tmp_path), source="gpsd", host="127.0.0.1", port=9)
+    code = (
+        "import os, pathlib, signal, sys\n"
+        "import lhpc.core.gps_bridge as b\n"
+        "from lhpc.core.paths import Paths\n"
+        "pub = b.PosJsonServerOutput.publish\n"
+        "def publish(self):\n"
+        "    pub(self)\n"
+        "    os.kill(os.getpid(), signal.SIGTERM)\n"
+        "b.PosJsonServerOutput.publish = publish\n"
+        "sys.exit(b.run('meshcore', Paths(runtime_root=pathlib.Path(sys.argv[1]))))\n")
+    repo = Path(__file__).resolve().parents[2]
+    p = subprocess.run([sys.executable, "-c", code, str(short_tmp_path)], capture_output=True, text=True,
+                       env={**os.environ, "PYTHONPATH": str(repo)}, timeout=_FEED_UP_S, check=False)
+    assert p.returncode == 0, (p.returncode, p.stdout, p.stderr)
+    assert not os.path.exists(bridge_endpoint_path(short_tmp_path, "meshcore"))
+
+
 @pytest.mark.parametrize("listen_delay_s", [0.0, 0.5])
 def test_the_bridge_serves_meshcore_a_position_feed(short_tmp_path, fake_gpsd, monkeypatch, listen_delay_s):
     """MeshCore's consumer is the openHop host app: it needs a normalized POSITION

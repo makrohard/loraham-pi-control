@@ -911,16 +911,39 @@ def _pump_fixed(lat: float, lon: float, alt: float | None, out: _Output,
 
 # ---------------------------------------------------------------- entry point
 
-def _install_stop_signals(stop) -> None:
-    """Turn SIGTERM/SIGINT into a normal shutdown. Best-effort: signal handlers can only be
-    installed on the main thread, and a caller driving `run()` from a worker (tests) already
-    owns the stop event."""
+class _Stopped(BaseException):
+    """Raised by the stop signal so a blocking call (a silent gpsd's recv, a connect to an
+    unreachable host) ends at once instead of after its own timeout: Python retries an
+    interrupted call when the handler returns, and the lifecycle waits only `stop_timeout`."""
+
+
+def _install_stop_signals(stop, pumping) -> None:
+    """Turn SIGTERM/SIGINT into a normal shutdown: set the stop event and, only while a pump runs
+    (`pumping`), abandon the call it blocks in. Outside a pump (setup, publishing, the teardown) a
+    signal only sets the event, so it can never cut a teardown short. Best-effort: signal handlers
+    can only be installed on the main thread, and a caller driving `run()` from a worker (tests)
+    already owns the stop event."""
     import signal
+
+    def handler(_s, _f):
+        stop.set()
+        if pumping.is_set():
+            pumping.clear()            # once: the teardown that follows is never interrupted
+            raise _Stopped()
     try:
         for sig in (signal.SIGTERM, signal.SIGINT):
-            signal.signal(sig, lambda _s, _f: stop.set())
+            signal.signal(sig, handler)
     except (ValueError, OSError):
         pass
+
+
+def _pump(pumping, fn, *args, **kwargs) -> None:
+    """Run one source pump with the stop signal allowed to end its blocking call."""
+    pumping.set()
+    try:
+        fn(*args, **kwargs)
+    finally:
+        pumping.clear()
 
 
 def run(consumer: str, paths, stop=None) -> int:
@@ -959,24 +982,25 @@ def run(consumer: str, paths, stop=None) -> int:
     else:
         out = UnixClientOutput(link, paths)
 
+    stop = stop or threading.Event()
+    pumping = threading.Event()
+    # SIGTERM is how the lifecycle stops us. Python's default handler exits the process
+    # OUTRIGHT, so `finally` never runs and we would leave behind a live-looking endpoint
+    # and a readiness marker still saying "ready" — a stopped GPS that reads healthy.
+    # Translating the signal into the stop event lets the normal teardown happen. Installed
+    # BEFORE the first thing that persists (the endpoint): an earlier stop leaves nothing behind.
+    _install_stop_signals(stop, pumping)
     try:
         out.publish()
     except OSError as exc:
         _log(f"cannot publish {kind} endpoint: {type(exc).__name__}: {exc}")
         return EXIT_OUTPUT
 
-    stop = stop or threading.Event()
-    # SIGTERM is how the lifecycle stops us. Python's default handler exits the process
-    # OUTRIGHT, so `finally` never runs and we would leave behind a live-looking endpoint
-    # and a readiness marker still saying "ready" — a stopped GPS that reads healthy.
-    # Translating the signal into the stop event lets the normal teardown happen.
-    _install_stop_signals(stop)
-
-    ready.degrade("starting", f"source={plan.source}")
-    _log(f"serving {consumer} via {kind} from source={plan.source}")
     try:
+        ready.degrade("starting", f"source={plan.source}")
+        _log(f"serving {consumer} via {kind} from source={plan.source}")
         if plan.source == "gpsd":
-            _pump_gpsd(plan.host, plan.port, out, ready, stop)
+            _pump(pumping, _pump_gpsd, plan.host, plan.port, out, ready, stop)
         elif plan.source == "nmea":
             # Only this branch gets the monitor: the feed owns a serial receiver the console
             # cannot safely read itself. gpsd and fixed feeds are untouched (the console is its
@@ -984,19 +1008,20 @@ def run(consumer: str, paths, stop=None) -> int:
             monitor = MonitorServer(consumer, paths)
             monitor.publish()
             try:
-                _pump_nmea(plan.device, plan.nmea_baud, out, ready, stop,
-                           expect_key=plan.device_key, monitor=monitor)
+                _pump(pumping, _pump_nmea, plan.device, plan.nmea_baud, out, ready, stop,
+                      expect_key=plan.device_key, monitor=monitor)
             finally:
                 monitor.close()
         elif plan.source == "fixed":
             alt = float(plan.fixed_alt) if plan.fixed_alt else None
-            _pump_fixed(float(plan.fixed_lat), float(plan.fixed_lon), alt, out, ready, stop)
+            _pump(pumping, _pump_fixed, float(plan.fixed_lat), float(plan.fixed_lon), alt, out, ready, stop)
         else:
             _log(f"unsupported source {plan.source!r}")
             return EXIT_CONFIG
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, _Stopped):
         pass
     finally:
+        stop.set()
         # Readiness and the endpoint disappear together: a stopped bridge must never leave
         # a path or a marker that reads as a live GPS.
         ready.clear()
