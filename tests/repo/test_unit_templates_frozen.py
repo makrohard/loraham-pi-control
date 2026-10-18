@@ -21,8 +21,11 @@ The staged migration's data is guarded here too: `unit-templates-released.sha256
 append-only history of every digest a release shipped (it only grows, and every current digest is
 in it), and `unit-templates-compatible.sha256` pins the other release's units
 (`updater_units._COMPATIBLE_EDITS`) both ways, none equal to its current unit and every one released.
-The 0.12.0/0.12.1 units stay in it in every later release (docs/maintenance.md, *Changing a unit*): a
-box that went back to 0.12.1 and then straight to a later release still restores at boot.
+Two byte families of the three changed units stay accepted, current or `compatible`, in every later
+release (docs/maintenance.md, *Changing a unit*): the 0.12.0/0.12.1 units and the 0.13.0 units. No
+0.12.x has the update gate, and 0.12.1–0.12.11 read 0.13.0's units `compatible`, so a box can carry
+either family into any later release: back to 0.12.1 after 0.13.0, or repaired on 0.13.0, back to any
+0.12.x and then straight on with that release's updater.
 """
 from __future__ import annotations
 
@@ -38,11 +41,18 @@ COMPATIBLE = repo_paths.TESTS / "data" / "unit-templates-compatible.sha256"
 MESSAGE = ("a unit's bytes change only through the staged unit migration (docs/maintenance.md): first "
            "a release that accepts the new bytes (updater_units._COMPATIBLE_EDITS), then the one that "
            "ships them, its digests added to the released history")
-# The 0.12.0/0.12.1 units: every later release keeps them `compatible` (docs/maintenance.md).
-PRE_CONTRACT = {"lhpc-web.service": "67ee9e95fa5f14b3f1e0c7c2ab8a76671f3b5521963438f5980c08110eab267e",
-                "lhpc-nginx.service": "101d941f78e321c87340ed5dba74c93a910f642a662dc5de709241a8367fcf61",
-                "lhpc-boot-restore.service":
-                    "ecb2dde6c6f48476acc0d6f216fb30d3d9ef8087a530607b1e876448382c3652"}
+# The byte families an ungated 0.12.x updater can carry forward: every later release accepts each one,
+# current or `compatible` (docs/maintenance.md).
+PERMANENT = {
+    "lhpc-web.service": {
+        "0.12.0/0.12.1": "67ee9e95fa5f14b3f1e0c7c2ab8a76671f3b5521963438f5980c08110eab267e",
+        "0.13.0": "00e6e592fe51dd2588771cc79cd5bbbd9b30c325b9809e09de805986bc2cb844"},
+    "lhpc-nginx.service": {
+        "0.12.0/0.12.1": "101d941f78e321c87340ed5dba74c93a910f642a662dc5de709241a8367fcf61",
+        "0.13.0": "f4e25da2b90bd029d0fbb3618b1a7646d7a1b6fd781fa746a6d11c8f246734de"},
+    "lhpc-boot-restore.service": {
+        "0.12.0/0.12.1": "ecb2dde6c6f48476acc0d6f216fb30d3d9ef8087a530607b1e876448382c3652",
+        "0.13.0": "4c02be609b12fe82715b863b817004b2dadbc32dedbac4d5735bbb690124b539"}}
 # The released history as 0.12.0 left it: the history only grows, so every one of these stays.
 SEED = """67ee9e95fa5f14b3f1e0c7c2ab8a76671f3b5521963438f5980c08110eab267e  lhpc-web.service  0.5.0-0.12.0
 c10ab4d516da4b38824c9af955ba2cd012d0de4d6d776fcd297bade33108813e  lhpc-selfupdate.service  0.5.0-0.12.0
@@ -120,8 +130,9 @@ def _guard(current: dict, history: list, pinned: dict, rendered: dict) -> list[s
                for name, digest in rendered.items() if current.get(name) == digest]
     errors += [f"compatible digest not in the released history: {name}"
                for name, digest in pinned.items() if digest not in held.get(name, set())]
-    errors += [f"0.12.0/0.12.1 unit no longer compatible: {name}"
-               for name, digest in PRE_CONTRACT.items() if pinned.get(name) != digest]
+    errors += [f"permanently accepted unit neither current nor compatible: {name} ({family})"
+               for name, families in PERMANENT.items() for family, digest in families.items()
+               if digest not in (current.get(name), pinned.get(name))]
     return errors
 
 
@@ -134,10 +145,11 @@ def test_the_released_history_and_the_compatible_units_agree_with_the_templates(
 def test_a_byte_change_without_its_history_line_fails():
     current = _pairs(FROZEN)
     history = _history(RELEASED.read_text())
-    current[U.WEB_UNIT] = "0" * 64                              # a changed template's new digest
+    current[U.HELPER_UNIT] = "0" * 64                           # a changed template's new digest
     assert _guard(current, history, _pairs(COMPATIBLE), _pairs(COMPATIBLE)) == [
-        f"current digest not in the released history: {U.WEB_UNIT}"]
-    assert _guard(current, history + [("0" * 64, U.WEB_UNIT)], _pairs(COMPATIBLE), _pairs(COMPATIBLE)) == []
+        f"current digest not in the released history: {U.HELPER_UNIT}"]
+    assert _guard(current, history + [("0" * 64, U.HELPER_UNIT)], _pairs(COMPATIBLE),
+                  _pairs(COMPATIBLE)) == []
 
 
 def test_a_released_line_removed_from_the_history_fails():
@@ -161,10 +173,21 @@ def test_a_compatible_unit_never_released_or_the_pre_contract_units_dropped_fail
     unreleased = dict(_pairs(COMPATIBLE), **{U.NGINX_UNIT: "2" * 64})
     errors = _guard(current, history, unreleased, unreleased)
     assert f"compatible digest not in the released history: {U.NGINX_UNIT}" in errors
-    assert f"0.12.0/0.12.1 unit no longer compatible: {U.NGINX_UNIT}" in errors
+    lost = "permanently accepted unit neither current nor compatible"
+    assert f"{lost}: {U.NGINX_UNIT} (0.12.0/0.12.1)" in errors
     dropped = {k: v for k, v in _pairs(COMPATIBLE).items() if k != U.BOOT_RESTORE_UNIT}
-    assert f"0.12.0/0.12.1 unit no longer compatible: {U.BOOT_RESTORE_UNIT}" in _guard(
+    assert f"{lost}: {U.BOOT_RESTORE_UNIT} (0.12.0/0.12.1)" in _guard(
         current, history, dropped, dropped)
+
+
+def test_the_next_unit_change_must_keep_the_0_13_0_units_accepted():
+    # Repaired on 0.13.0, back to any 0.12.x (no update gate; it reads 0.13.0's units `compatible`),
+    # then straight to a later release: that release must still accept 0.13.0's bytes.
+    current, history = _pairs(FROZEN), _history(RELEASED.read_text())
+    current[U.WEB_UNIT] = "0" * 64                              # the next change of the web unit
+    errors = _guard(current, history + [("0" * 64, U.WEB_UNIT)], _pairs(COMPATIBLE),
+                    _pairs(COMPATIBLE))
+    assert errors == [f"permanently accepted unit neither current nor compatible: {U.WEB_UNIT} (0.13.0)"]
 
 
 def test_every_compatible_edit_matches_its_template_once_and_has_no_brace():

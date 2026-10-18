@@ -175,9 +175,12 @@ repositories.
     to the released history, and the table is inverted so the previous bytes read `compatible`
     (0.13.0 did this for 0.12.1's three units). Two rules bind every later release: the operator
     `lhpc self-update --apply` refuses while any unit reads `compatible`, naming
-    `lhpc self-update --repair-integration` (one-click already needs `ok` units), and the
-    0.12.0/0.12.1 units stay `compatible` (the guard enforces it), so a box that went back to 0.12.1
-    and then straight to a later release still restores. Other accepted digests are append-only
+    `lhpc self-update --repair-integration` (one-click already needs `ok` units), and two byte
+    families of the three changed units stay accepted, current or `compatible` (the guard enforces
+    it): the 0.12.0/0.12.1 units and the 0.13.0 units. No 0.12.x has the update gate and 0.12.1 or
+    later reads the 0.13.0 units `compatible`, so a box can carry either family into any later
+    release: back to 0.12.1 after 0.13.0, or repaired on 0.13.0, back to any 0.12.x and then
+    straight on with that release's updater. Other accepted digests are append-only
     within a minor line; a minor may prune them, with a CHANGELOG note naming the releases whose units
     then need the repair after the update. A downgrade to a release older than the accepting one
     (also skipping over it) does not restore at boot until that older release's repair rewrites its
