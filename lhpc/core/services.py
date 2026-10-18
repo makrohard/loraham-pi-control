@@ -228,7 +228,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
           * SHARED (default) — a read lock for the duration of an applied lifecycle transition. Config
             MUTATIONS take the EXCLUSIVE `config_lock`, so a concurrent save WAITS for the transition and a
             start WAITS for an in-progress save; independent starts share and never serialise.
-          * EXCLUSIVE — the auto-install boundary holds `LOCK_EX` for the WHOLE run, so an atomic config
+          * EXCLUSIVE — auto-install, uninstall and clean hold `LOCK_EX` for the WHOLE run, so an atomic config
             write inside the boundary reuses this held lock (see `save_config_bundle`) instead of contending
             on a second descriptor. Acquired BOUNDED (an auto-install run must not hang on a stuck holder) → typed
             `SourceTxnBlocked` on timeout.

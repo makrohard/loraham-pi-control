@@ -900,6 +900,43 @@ def test_uninstall_retires_binary(tmp_path, monkeypatch, binary_receipt):
     assert any("binary" in d for d in res.details)
 
 
+def _interrupted_meshcom_install(svc, monkeypatch, binary_receipt):
+    """A MeshCom binary install interrupted after it journalled the previous mesh password and
+    blanked the setting; every `binary_recover()` result is recorded."""
+    from lhpc.core import binary_install as bi
+    binary_receipt(svc, "meshcom")
+    bi.open_txn(svc._paths, "meshcom", "txn-h4", old_receipt=None,
+                auth={"param": "password_file", "previous": "config/secrets/prev_pw"})
+    assert svc.save_config_bundle("meshcom", values={"password_file": ""},
+                                  _allow_managed_params=frozenset({"password_file"})).ok
+    seen, real = [], ControllerService.binary_recover
+    monkeypatch.setattr(ControllerService, "binary_recover",
+                        lambda self: seen.append(real(self)) or seen[-1])
+    return seen
+
+
+def test_uninstall_recovering_an_interrupted_install_restores_the_mesh_password(
+        tmp_path, monkeypatch, binary_receipt):
+    """H4 (red before: the recovery's save met uninstall's own SHARED config guard, ConfigLockBusy
+    after 15 s, and the forced retire then dropped the journal with the password still blank)."""
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    seen = _interrupted_meshcom_install(svc, monkeypatch, binary_receipt)
+    svc.uninstall("meshcom", apply=True)
+    assert seen == [(True, "")]
+    svc._invalidate_config()
+    hc = svc._hmac_component("meshcom")
+    assert svc._resolved_param_value("meshcom", "run", hc.id, "password_file") == "config/secrets/prev_pw"
+
+
+def test_clean_purge_recovering_an_interrupted_install_recovers_under_its_own_lock(
+        tmp_path, monkeypatch, binary_receipt):
+    """H4 (red before: the same ConfigLockBusy under clean's SHARED config guard)."""
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    seen = _interrupted_meshcom_install(svc, monkeypatch, binary_receipt)
+    svc.clean("meshcom", apply=True, purge=True)
+    assert seen == [(True, "")]
+
+
 def test_clean_keeps_the_binary_when_a_component_started_mid_flight(tmp_path, monkeypatch, binary_receipt):
     """`clean` retires the artifact FORCEFULLY, so it must happen only after the authoritative
     post-lock running recheck — otherwise a start that slipped in loses its binary and the

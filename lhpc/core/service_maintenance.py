@@ -2472,7 +2472,7 @@ class MaintenanceOpsMixin:
         all_paths = sorted({c.source.path for _, c in items})
         try:
             # LOCK ORDER #1: admission OUTSIDE config-stability (inner source guard reuses reentrantly).
-            with (self._admission_guard("uninstall", target or ""), self._config_stable(),
+            with (self._admission_guard("uninstall", target or ""), self._config_stable(exclusive=True),
                   self._source_operation_guard(all_paths, op="uninstall")):
                 self._op_seam("uninstall-locked")
                 # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
@@ -2688,7 +2688,7 @@ class MaintenanceOpsMixin:
                            | set(orphans)) or [sid]
         try:
             # LOCK ORDER #1: admission OUTSIDE config-stability (inner source guard reuses reentrantly).
-            with (self._admission_guard("clean", sid), self._config_stable(),
+            with (self._admission_guard("clean", sid), self._config_stable(exclusive=True),
                   self._source_operation_guard(all_paths, op="clean")):
                 self._op_seam("clean-locked")
                 # AUTHORITATIVE running recheck AFTER all locks are held: a Start that

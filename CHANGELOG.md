@@ -11,6 +11,8 @@ Changed
 
 Fixed
 
+- `lhpc uninstall` and `lhpc clean` no longer stall 15 s and drop the mesh password setting while recovering an
+  interrupted MeshCom binary install.
 - MeshCore: the Companion (TCP 5000, no authentication) bound every interface for a loopback allow-list other than
   `127.0.0.1` (`127.0.0.1/32`, `127.0.0.0/8`); it now binds loopback for each, and an unreadable allow-list refuses.
 - Firewall: `meshcore_allow = 0.0.0.0/0` (everyone) got no row, so the default-drop firewall dropped the Companion for
