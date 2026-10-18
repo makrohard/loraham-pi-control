@@ -472,3 +472,35 @@ def test_the_868_voice_profile_is_fast_enough_for_real_time_speech():
         assert airtime_ms + EXTRA_MS < audio_ms, (
             f"{b}: a voice packet needs {airtime_ms:.0f} ms on the air for {audio_ms} ms of audio "
             f"(SF{sf}/BW{bw:.0f}) — the app would mark this mode forbidden")
+
+
+def test_an_already_running_start_warns_while_config_txt_waits_for_a_reboot(tmp_path, monkeypatch, set_call, real_spawn):
+    """Live row L4.5: a start of a running stack answers "already running" before the SPI gate; with
+    config.txt edited to the other chip-select mode and no reboot, the running daemon is named."""
+    from lhpc.core import spi_mode
+    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
+    _config_written(monkeypatch, svc)
+    set_call(svc)
+    assert svc.start("voice", apply=True).ok
+    monkeypatch.setattr(spi_mode, "read_config_txt", lambda paths=None: "dtparam=spi=on\ndtoverlay=spi0-0cs\n")
+    monkeypatch.setattr(spi_mode, "live_mode", lambda dt=None: "kernel")
+    second = svc.start("voice", apply=True)
+    assert second.ok is True and "already healthy" in second.summary, outcomes(second)
+    assert ("  [warning] loraham-daemon: running, but its next start is refused: reboot required: config.txt asks "
+            "for soft SPI chip selects, but the running kernel booted with kernel") in second.details
+
+
+def test_a_start_that_keeps_a_running_daemon_warns_while_config_txt_waits_for_a_reboot(tmp_path, monkeypatch, set_call, real_spawn):
+    """A start that launches the voice app but finds the daemon already serving runs through the
+    whole start ("Run applied"), not the already-healthy answer: the kept daemon is named too."""
+    from lhpc.core import spi_mode
+    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
+    _config_written(monkeypatch, svc)
+    set_call(svc)
+    monkeypatch.setattr(spi_mode, "read_config_txt", lambda paths=None: "dtparam=spi=on\ndtoverlay=spi0-0cs\n")
+    monkeypatch.setattr(spi_mode, "live_mode", lambda dt=None: "kernel")
+    res = svc.start("voice", apply=True)
+    assert res.ok and res.summary == "Run applied for 'voice'.", res.summary
+    assert [d for d in res.details if "[warning]" in d] == [
+        "  [warning] loraham-daemon: running, but its next start is refused: reboot required: config.txt asks for "
+        "soft SPI chip selects, but the running kernel booted with kernel"], res.details

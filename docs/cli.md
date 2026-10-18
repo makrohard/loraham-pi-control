@@ -79,7 +79,9 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs --with-gui   # ONLY on a machine 
   takes effect after a reboot. Until then, and on any other spi0 layout, every SPI stack refuses to
   start:
   - *reboot required: config.txt asks for … SPI chip selects, but the running kernel booted with …*:
-    reboot (`sudo reboot`);
+    reboot (`sudo reboot`). A stack that is already running keeps running: a start that leaves it as it
+    was adds a `[warning]` naming the refusal its next start gets, whether the start answers
+    "already running" or "Run applied";
   - *unsupported SPI boot configuration*: keep `dtparam=spi=on` alone or with `dtoverlay=spi0-0cs`,
     remove any other `dtoverlay=spi0-…` line, then reboot;
   - *the kernel owns the chip selects … CS is GPIO <n>*: this board needs `soft-cs`;

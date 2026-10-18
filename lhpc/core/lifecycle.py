@@ -438,6 +438,16 @@ class Lifecycle:
         return last
 
 
+    @staticmethod
+    def spi_running_warnings(order) -> list[str]:
+        """For the components a start finds running and leaves as they are (no launch, so the gate
+        below is not reached): one `[warning]` per SPI bus user among them while config.txt and the
+        booted kernel disagree, since its next start is refused until a reboot. Nothing is stopped."""
+        why = (spi_mode.refusal(spi_mode.boot_mode(spi_mode.read_config_txt()), spi_mode.live_mode())
+               if any(spi_mode.drives_spi(c) for _s, c in order) else "")
+        return [f"  [warning] {c.id}: running, but its next start is refused: {why}"
+                for _s, c in order if why and spi_mode.drives_spi(c)]
+
     def start(self, stack: Stack, comp: Component, params: dict | None = None,
               band: str = "", *, requested_target: str = "",
               start_scope: str = "") -> StartLaunch:

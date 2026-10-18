@@ -1466,6 +1466,24 @@ def test_a_running_stack_whose_auto_feed_has_no_source_starts_idempotently(tmp_p
     assert not any("meshtasticd" in " ".join(c) for c in calls)            # nothing launched
 
 
+
+def test_a_running_meshtastic_started_through_the_run_warns_while_config_txt_waits_for_a_reboot(tmp_path, monkeypatch):
+    """Live row E3 (`lhpc stack start meshtastic --yes`, the Pi 5): with the feed DEGRADED the start is not the
+    already-healthy no-op but a run ("Run applied") that keeps meshtastic as it is; with config.txt edited to
+    the other chip-select mode and no reboot, that run names meshtastic's refused next start too."""
+    from lhpc.core import spi_mode
+    from lhpc.core.model import RunState
+    monkeypatch.setattr(spi_mode, "read_config_txt", lambda paths=None: "dtparam=spi=on\ndtoverlay=spi0-0cs\n")
+    monkeypatch.setattr(spi_mode, "live_mode", lambda dt=None: "kernel")
+    by, res, _calls = _start_meshtastic_with(tmp_path, monkeypatch, {
+        "meshtastic-gps": RunState.DEGRADED, "meshtastic": RunState.RUNNING},
+        source="auto", feed={"state": "source-lost", "detail": "no gpsd"})
+    assert res.ok and res.summary == "Run applied for 'meshtastic'.", res.summary
+    assert by["meshtastic"].outcome.value == "already_healthy"
+    assert [d for d in res.details if "[warning]" in d] == [
+        "  [warning] meshtastic: running, but its next start is refused: reboot required: config.txt asks for soft "
+        "SPI chip selects, but the running kernel booted with kernel"]
+
 def test_an_explicit_gpsd_feed_without_its_source_still_blocks_the_start(tmp_path, monkeypatch):
     """Control: with an EXPLICIT gpsd source, a feed whose gpsd is gone is refused, as a fresh
     start refuses it."""

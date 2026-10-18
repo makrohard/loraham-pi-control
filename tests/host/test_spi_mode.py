@@ -168,6 +168,48 @@ def test_a_component_off_the_bus_is_never_gated(tmp_path, monkeypatch):
     assert "SPI" not in (got.detail or "")
 
 
+SOFT_TXT, KERNEL_TXT = "dtparam=spi=on\ndtoverlay=spi0-0cs\n", "dtparam=spi=on\n"
+
+
+def _real_spi_users():
+    from lhpc.core.manifest import load_manifest
+    by_id = {c.id: (s, c) for s in load_manifest() for c in s.components}
+    return [by_id["loraham-daemon"], by_id["meshtastic"]]
+
+
+@pytest.mark.parametrize("boot, live", [(SOFT_TXT, "kernel"), (KERNEL_TXT, "soft")])
+@pytest.mark.parametrize("who", [0, 1])                     # the daemon, meshtastic
+def test_both_stacks_are_refused_in_both_directions_until_a_reboot(tmp_path, monkeypatch, boot, live, who):
+    asks = "soft" if boot == SOFT_TXT else "kernel"
+    stack, comp = _real_spi_users()[who]
+    monkeypatch.setattr(spi_mode, "read_config_txt", lambda paths=None: boot)
+    monkeypatch.setattr(spi_mode, "live_mode", lambda dt=None: live)
+    life = Lifecycle(Paths(runtime_root=tmp_path), (), Config(operator=OperatorConfig()), FakeSystem().system)
+    got = life.start(stack, comp)
+    assert not got.ok and got.detail == (f"reboot required: config.txt asks for {asks} SPI chip selects, but the "
+                                         f"running kernel booted with {live}")
+
+
+@pytest.mark.parametrize("boot, live, want", [(SOFT_TXT, "kernel", "asks for soft SPI chip selects, but the running kernel "
+                                                                    "booted with kernel"),
+                                             (KERNEL_TXT, "soft", "asks for kernel SPI chip selects, but the running kernel "
+                                                                  "booted with soft"),
+                                             (KERNEL_TXT, "kernel", None)])
+def test_a_running_spi_user_is_warned_when_config_txt_now_disagrees(monkeypatch, boot, live, want):
+    """`stack start` on a running stack answers "already running" without reaching the start gate
+    (live row L4.5): each running bus user then gets a warning that its next start is refused."""
+    monkeypatch.setattr(spi_mode, "read_config_txt", lambda paths=None: boot)
+    monkeypatch.setattr(spi_mode, "live_mode", lambda dt=None: live)
+    order = _real_spi_users()
+    got = Lifecycle.spi_running_warnings(order)
+    if want is None:
+        assert got == []
+    else:
+        assert [line.split(":", 1)[0] for line in got] == ["  [warning] loraham-daemon", "  [warning] meshtastic"]
+        assert all("running, but its next start is refused: reboot required: config.txt " + want in line
+                   for line in got)
+
+
 # --- provenance: with kernel chip selects, what runs must contain kernel_cs_since --------------
 
 def _clone(tmp_path):

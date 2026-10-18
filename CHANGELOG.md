@@ -29,6 +29,8 @@ Fixed
   starts now. A build whose history cannot be checked (a shallow `dev` clone) is refused as such.
 - Meshtastic on an Uputronics dual board with crossed modules (`uputronics-x`) used the 433 module's CS and IRQ for
   868; its pin defaults now follow the hardware setup.
+- A start of a running SPI stack after config.txt changed the chip-select mode (no reboot yet) answered only
+  "already running"; it now warns that the next start is refused until a reboot.
 
 ## 0.12.11
 

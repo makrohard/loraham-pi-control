@@ -1027,12 +1027,11 @@ class LifecycleOpsMixin:
         # never stop owners (even with stop_owners=True), never launch/write config/apply params/
         # CONF SET/touch markers for an already-healthy target.
         if self._order_already_healthy(order, radio):
-            # Only components the health predicate actually JUDGED may be reported
-            # 'already running': a non-main interactive component was satisfied by its
-            # marker (its command was presented — nothing is running under lhpc), and a
-            # GUI-skipped gui_optional component is not runnable here at all. Fabricating
-            # ALREADY_HEALTHY for either is a lie; they are simply omitted (matching
-            # _all_components_healthy, which skipped them).
+            # Only components the health predicate actually JUDGED may be reported 'already running':
+            # a non-main interactive component was satisfied by its marker (its command was presented —
+            # nothing is running under lhpc), and a GUI-skipped gui_optional component is not runnable
+            # here at all. Fabricating ALREADY_HEALTHY for either is a lie; they are simply omitted
+            # (matching _all_components_healthy, which skipped them).
             def _judged(stack, comp):
                 if comp.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE):
                     return False
@@ -1045,7 +1044,8 @@ class LifecycleOpsMixin:
                                 outcome=Outcome.ALREADY_HEALTHY, summary="already running")
                      for stack, comp in order if _judged(stack, comp)]
             return ActionResult(True, f"'{target}' already healthy — nothing to start.",
-                details=[f"  [already_healthy] {r.component}: already running" for r in _hres],
+                details=[f"  [already_healthy] {r.component}: already running" for r in _hres]
+                + self._lifecycle().spi_running_warnings(order),
                 results=tuple(_hres), next_commands=[f"lhpc status {target}"])
 
         # FW-R8 exposure gate: if the managed firewall is installed and this start would bind a
@@ -1642,27 +1642,27 @@ class LifecycleOpsMixin:
                        f"{', '.join(required_manual)} — see the dashboard.")
         else:
             summary = f"Run applied for '{target}'."
-        # HEALTHY STACK START: persist the last-start CANDIDATE composition (durable, written
-        # here in the mutation path so GET pages never need git). It is NOT a known-working
-        # record — the operator confirms it explicitly ("Confirm this stack as working").
-        # A successful start also satisfies any restart-required flag: the processes now
-        # run the saved config.
+        # HEALTHY STACK START: persist the last-start CANDIDATE composition (durable, written here in the
+        # mutation path so GET pages never need git). It is NOT a known-working record — the operator confirms
+        # it ("Confirm this stack as working"). It also satisfies any restart-required flag (saved config runs).
         if ok and prep.target_is_stack:
             self._capture_start_composition(target, prep.cfg_band)
             # Clear ONLY a marker this launch actually satisfied. Two ways it can fail to:
             #   * CREATED or CHANGED while the required post-start ran unguarded — it describes
             #     configuration this launch never applied;
-            # * a component of THIS stack was ALREADY_HEALTHY, so it was never
-            #     relaunched and still runs the OLD configuration. A partly-up stack (main
-            #     healthy, a sidecar down) reported ok=True and erased the warning its own
-            #     identity save had just written — the node kept transmitting the previous
-            #     callsign with nothing to say so. A DEPENDENCY left running (the shared daemon)
-            #     is not this stack's consumer and must not keep the marker alive.
+            #   * a component of THIS stack was ALREADY_HEALTHY, so it still runs the OLD configuration. A
+            #     partly-up stack (main healthy, a sidecar down) reported ok=True and erased the warning its own
+            #     identity save had just written — the node kept transmitting the previous callsign with nothing
+            #     to say so. A DEPENDENCY left running (the shared daemon) must not keep the marker alive.
             _kept_old = any(r.outcome == Outcome.ALREADY_HEALTHY
                             and (self.stack_of(r.component) or r.stack) == target
                             for r in results)
             if not _kept_old and self.restart_required(target) == run.pre_marker:
                 _rr.clear_marker(self._paths, target)
+        # What this start left running as it was gets the SPI warning of the already-healthy answer.
+        _kept = {r.component for r in results if r.outcome == Outcome.ALREADY_HEALTHY or (r.component
+                 == self.DAEMON_ID and r.outcome == Outcome.VERIFIED and not run.daemon_launched)}
+        out = [*out, *run.life.spi_running_warnings([(s, c) for s, c in prep.order if c.id in _kept])]
         if prep.position_note:
             # `auto` could not get a fix. Never gating, but never silent either: the node is
             # on the air without a position and the operator has to be able to see that.
