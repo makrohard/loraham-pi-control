@@ -299,6 +299,11 @@ may move, with the release-verification lane in place of step 6.
 **Graywolf is a fetched release, not a commit pin.** A bump changes the version in the manifest
 build step and its `build_marker` name, plus a new sha256 in the fetch script's table.
 
+**openHop moves** (the meshcore core and repeater): the node's stop relies on upstream's plugin-manager SIGTERM
+handler ending the loop, running `stop_all()` and returning 0 (`meshcore_host/plugin_manager.py`, `SELF_EXIT_S`).
+After a move, `lhpc stack restart meshcore` on a box must log "Plugin manager stopped" (exit 0, marker cleared);
+"Plugin manager exited (code -15)" means the handler changed, and plugins stay blocked until a reboot.
+
 **Two pins are not commits**, and the bot moves both: the Meshtastic web client (meshtastic/web
 release version + sha256 of its `build.tar`) and the Meshtastic CLI (a pip version in a build
 step). By hand: download the release's `build.tar`, `sha256sum` it, put version and digest into the
