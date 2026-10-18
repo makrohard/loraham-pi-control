@@ -23,6 +23,8 @@ Fixed
 - Binary channel: the "newer binary" line followed the index's list order (another platform's binary or an earlier one
   listed first showed it); it now shows only when another LHPC's binary for this box was published later.
 - The GPS Monitor's socket (`monitor.sock`) appears only once it accepts connections, as the position feed's does.
+- The meshcore-cli build also byte-compiles its installed dependencies, so one that does not parse on this Python
+  fails the build (meshcore 2.3.16 on Python 3.11 installed and failed only at first run).
 
 ## 0.12.11
 

@@ -2832,6 +2832,29 @@ def test_meshcore_cli_build_byte_compiles_the_pinned_source():
     assert compile_steps[0]["argv"][0] == ".venv/bin/python"  # the venv the code will run in
 
 
+def test_meshcore_clis_byte_compile_step_also_fails_on_a_dependency(tmp_path):
+    """0.12.11: meshcore 2.3.16's messaging.py did not parse on Python 3.11, yet the build passed:
+    pip skips a file it cannot byte-compile, and the step compiled meshcore-cli's own `src` only.
+    The manifest's step, run as written (its venv python = this interpreter), on a tree whose
+    installed dependency does not parse."""
+    import subprocess
+    import sys
+
+    from lhpc.core.manifest import load_manifest
+    mc = next(c for s in load_manifest() for c in s.components if c.id == "meshcore-cli")
+    argv = next(st["argv"] for st in mc.build_steps if "compileall" in st["argv"])
+    (tmp_path / "src" / "meshcore_cli").mkdir(parents=True)
+    (tmp_path / "src" / "meshcore_cli" / "__init__.py").write_text("x = 1\n")
+    dep = tmp_path / ".venv" / "lib" / "python3.11" / "site-packages" / "meshcore"
+    dep.mkdir(parents=True)
+    (dep / "messaging.py").write_text("def (:\n")              # what 3.11 makes of 3.12-only syntax
+    run = [sys.executable, *argv[1:]]
+    p = subprocess.run(run, cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert p.returncode != 0 and "messaging.py" in p.stdout + p.stderr
+    (dep / "messaging.py").write_text("y = 2\n")
+    assert subprocess.run(run, cwd=tmp_path, capture_output=True, check=False).returncode == 0
+
+
 def test_the_auto_probe_accepts_only_listeners_reachable_at_the_advertised_endpoint():
     """AUDIT-FOUND: the parser matched LISTEN + port only, so an ::1-only, a 192.168.x-bound,
     or a non-gpsd 2947 listener activated `auto` — and every consumer was then pointed at

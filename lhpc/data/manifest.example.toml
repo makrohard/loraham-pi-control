@@ -2755,8 +2755,11 @@ main = "meshcore-node"
     # Upstream has shipped Python-3.12-only f-string syntax (PEP 701)
     # while LHPC supports >=3.11 — the pin below avoids it, and this step keeps it avoided:
     # a future pin that regresses fails the BUILD with the exact file and line, instead of
-    # installing fine and dying with a SyntaxError at first run.
-    { argv = [".venv/bin/python", "-m", "compileall", "-q", "src"], attributable = true, announce = "[check] byte-compile meshcore-cli (guards the >=3.11 support this pin restores)" },
+    # installing fine and dying with a SyntaxError at first run. The venv's installed
+    # dependencies too (.venv/lib): pip skips a file it cannot byte-compile without failing, so
+    # meshcore 2.3.16 (3.12-only syntax) installed fine under 3.11 (0.12.11). Files pip compiled
+    # are up to date, so this costs only the ones it could not.
+    { argv = [".venv/bin/python", "-m", "compileall", "-q", "src", ".venv/lib"], attributable = true, announce = "[check] byte-compile meshcore-cli and its dependencies (guards the >=3.11 support)" },
   ]
   # `pip install .` places the meshcli console script in the venv — that IS the build artifact.
   bin = ".venv/bin/meshcli"
