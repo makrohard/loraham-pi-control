@@ -9,8 +9,8 @@ Changed
 - The web, nginx and boot-restore systemd units change: run `lhpc self-update --repair-integration` once after this
   update; until then boot restore runs on the old units and `lhpc self-update --apply` is refused.
 - Going back to 0.12.0 or older afterwards restores at boot only after that release's repair.
-- MeshCore repeater: openHop keeps its own settings (`state/openhop/config.yaml`; guide docs/openhop-on-lhpc.md);
-  name, behaviour, password, identity and duty cycle move there at the first start, so 0.12 no longer finds them.
+- MeshCore repeater: openHop keeps its own settings (guide docs/openhop-on-lhpc.md), moved at the first start (0.12 no
+  longer finds them); routes LHPC owns answer "Managed by LoRaHAM Pi Control"; the repeater also gets the GPS position.
 
 Fixed
 
