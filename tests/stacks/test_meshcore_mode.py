@@ -3,8 +3,6 @@ expected endpoints for start readiness AND ongoing status, chat-identity enforce
 Companion clients, the repeater's own name, and the two controller-minted repeater secrets."""
 from __future__ import annotations
 
-import os
-
 import stat
 
 import pytest
@@ -223,8 +221,9 @@ def test_a_stored_password_of_14_characters_is_refused(tmp_path):
 
 
 def test_generation_renders_the_repeater_table_from_one_file(tmp_path):
-    # The generated meshcore.toml carries the role, the repeater's key + password (minted) and its
-    # state dir alongside the chat rows — one file, one card, every role.
+    # The generated meshcore.toml carries the role, the login secret and the state dir alongside
+    # the chat rows. Issue #5: the repeater's name, behaviour, key and password live only in
+    # openHop's own file (core/openhop_store) and are never rendered or minted here.
     svc = _svc(tmp_path)
     _set_mode(svc, "chat+repeater", name="Relay 1")
     r = svc.save_config(mm.STACK_ID, {"file_node_name": "Chat 1"})
@@ -233,11 +232,30 @@ def test_generation_renders_the_repeater_table_from_one_file(tmp_path):
     import tomllib
     doc = tomllib.loads((tmp_path / "config" / "files" / "meshcore.toml").read_text())
     rep = doc["repeater"]
-    assert rep["role"] == "chat+repeater" and rep["name"] == "Relay 1"
-    assert rep["behaviour"] == "forward"
-    assert len(rep["key"]) == 64 and rep["key"] != doc["identity"]["key"]
-    assert len(rep["admin_password"]) == 15
+    assert rep["role"] == "chat+repeater"
+    assert not {"name", "behaviour", "key", "admin_password"} & set(rep)
+    assert "airtime" not in doc["radio"]
+    assert not (tmp_path / "config" / "secrets" / mi.REPEATER_IDENTITY_FILENAME).exists()
+    assert not (tmp_path / "config" / "secrets" / mi.REPEATER_ADMIN_FILENAME).exists()
     assert rep["state_dir"] == str(tmp_path / "state" / "openhop")
+    assert rep["use_gps"] == "on" and rep["gps_file"] == "/dev/shm/lhpc-meshcore-gps.nmea"
+    assert rep["cli_lock"] == str(tmp_path / "state" / "meshcore-cli.lock")
+    import shlex, sys
+    assert shlex.split(rep["restart_cmd"]) == ["env", f"LHPC_RUNTIME_ROOT={tmp_path}", sys.executable,
+                                               "-m", "lhpc", "stack", "restart", "meshcore", "--yes"]
+    import hashlib
+    assert rep["chat_node_id"] == hashlib.sha256(doc["identity"]["key"].lower().encode()).hexdigest()[:16]
+    (tmp_path / "config" / "secrets" / mi.IDENTITY_FILENAME).unlink()
+    _set_mode(svc, "repeater", name="Relay 1")
+    svc.write_config_files(mm.STACK_ID)                           # no chat key: an empty handle
+    assert "chat_node_id" not in tomllib.loads(
+        (tmp_path / "config" / "files" / "meshcore.toml").read_text())["repeater"]
+    _set_mode(svc, "chat+repeater", name="Relay 1")
+    assert svc.save_stack_config(mm.STACK_ID, {"use_gps": "off"}).ok    # derived, never stored
+    svc._invalidate_config()
+    svc.write_config_files(mm.STACK_ID)
+    doc = tomllib.loads((tmp_path / "config" / "files" / "meshcore.toml").read_text())
+    assert doc["repeater"]["use_gps"] == "off"
     assert rep["presets_file"] == str(tmp_path / "src" / "openhop-repeater" / "radio-presets.json")
     assert doc["companion"]["name"] == "Chat 1"
 
@@ -261,54 +279,28 @@ def test_the_dashboard_login_secret_survives_every_regeneration(tmp_path):
 
 # --- the box's position ------------------------------------------------------------------------------
 
-def test_repeater_only_consumes_no_position(tmp_path, monkeypatch):
-    """The Companion is the only reader of the box's position; the repeater's config pins GPS
-    off. So the feed, the receiver claim, the GPS gate and the start's position snapshot all
-    follow the mode: chat and chat+repeater keep today's behaviour, repeater-only touches none
-    of it — it must not start a `meshcore-gps` it never reads, take the receiver from a stack
-    that would, or be refused over a position setting it does not consult."""
+def test_every_mode_consumes_the_position(tmp_path, monkeypatch):
+    """Issue #5: the repeater reads the box's position too (openHop's own GPS file source, written
+    by the host from the same feed), so the feed, the receiver claim and the GPS gate follow
+    `use_gps` in every mode."""
     from lhpc.core.config import save_gps
     from lhpc.core.model import RunState
     svc = _svc(tmp_path)
     save_gps(svc._paths, source="nmea", device="/dev/null")      # a live source that claims
     svc._invalidate_config()
-    assert mm.position_consumed("chat") and mm.position_consumed("chat+repeater")
-    assert not mm.position_consumed("repeater")
-    for mode in ("chat", "chat+repeater"):
+    assert all(mm.position_consumed(m) for m in mm.MODES)
+    for mode in mm.MODES:
         _set_mode(svc, mode)
         assert svc._gps_components_for(mm.STACK_ID) == {"meshcore-gps"}
         assert "meshcore-gps" in [c.id for _s, c in svc._run_order(mm.STACK_ID)]
         assert svc._gps_run_order_uses_position(mm.STACK_ID)
-        st = os.stat("/dev/null")
-        assert svc._gps_device_claim(mm.STACK_ID) == \
-            f"gps.serial.dev.{os.major(st.st_rdev)}:{os.minor(st.st_rdev)}"
     _set_mode(svc, "repeater")
-    assert svc._gps_components_for(mm.STACK_ID) == set()
-    order = [c.id for _s, c in svc._run_order(mm.STACK_ID)]
-    assert mm.NODE_ID in order and "meshcore-gps" not in order
-    assert not svc._gps_run_order_uses_position(mm.STACK_ID)
-    assert svc._gps_device_claim(mm.STACK_ID) == ""
-    assert svc.gps_block(mm.STACK_ID) == ("", [])
-    assert not [b for b in svc.run_blockers(mm.STACK_ID)
-                if str(b.get("resource", "")).startswith("gps.")]
-    # an unusable [gps] table refuses a Companion start, never a repeater-only one
-    (tmp_path / "config" / "local.toml").write_text('[gps]\nsource = "banana"\n')
-    svc._invalidate_config()
-    assert svc.meshcore_position(mm.STACK_ID) == ({}, "")
-    _set_mode(svc, "chat")
-    position, why = svc.meshcore_position(mm.STACK_ID)
-    assert position is None and "position source" in why
-    # a LIVE repeater-only node does not block a change of the global position source
-    _set_mode(svc, "repeater")
-    svc.write_config_files(mm.STACK_ID)                  # the running launch's mode
+    svc.write_config_files(mm.STACK_ID)
     snap = svc.build_snapshot()
     for ss in snap.stacks:
         if ss.stack.id == mm.STACK_ID:
             ss.components[mm.NODE_ID].run_state = RunState.RUNNING
     monkeypatch.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
-    assert svc.gps_liveness_blockers([mm.STACK_ID]) == []
-    _set_mode(svc, "chat")
-    svc.write_config_files(mm.STACK_ID)
     assert svc.gps_liveness_blockers([mm.STACK_ID]) == [mm.NODE_ID]
 
 
@@ -334,7 +326,6 @@ def test_repeater_only_neither_mints_nor_depends_on_the_chat_identity(tmp_path):
     assert all(w.status != "failed" for w in writes), [(w.component, w.status, w.detail) for w in writes]
     assert not key.exists(), "a pure repeater must not mint the Companion's key"
     assert identity_line() == [], "no [identity] key is written for the pure repeater"
-    assert (tmp_path / "config" / "secrets" / mi.REPEATER_IDENTITY_FILENAME).exists()
     # a damaged, world-readable Companion key: irrelevant to the pure repeater ...
     key.parent.mkdir(parents=True, exist_ok=True)
     key.write_text("not-a-key\n")

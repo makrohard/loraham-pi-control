@@ -11,7 +11,7 @@ from .model import ComponentKind, RunState
 from .outcomes import CompResult, Outcome, applied_ok
 from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
-from .service_lifecycle_ops import _daemon_presence
+from .service_lifecycle_ops import _daemon_presence, _ohs
 from .snapshot_memo import invalidates_snapshot
 
 
@@ -491,7 +491,7 @@ class StopOpsMixin:
                 # maps the primary choice to its CONCRETE band, so "" never travels onward for a
                 # band-switchable stack and no inner frame can reinterpret it; "" survives only for a
                 # genuinely bandless stack, which nothing downstream can reinterpret either.
-                _rband = self.operation_band(target, band)
+                _rband = self._restart_ensure_band(target, band)   # issue #5: before the shared guard
                 with self._config_stable():
                     # PREFLIGHT the saved identity BEFORE lock planning, the guard, owner handling
                     # or any stop: a restart must never stop a running stack only to be refused by
@@ -523,7 +523,7 @@ class StopOpsMixin:
                                                   cascade=cascade, position=_position,
                                                   position_note=_pos_note)
         except (AdmissionRefused, reslock.ResourceBusy, SourceTxnBlocked, OSError,
-                PathContainmentError) as exc:
+                PathContainmentError, _ohs.OneStoreError) as exc:
             return self._guard_refusal("restart", target, exc)
 
     def owner_stops(self, blockers) -> list[tuple[str, str]]:
@@ -611,7 +611,7 @@ class StopOpsMixin:
                                 next_commands=[f"lhpc status {target}"])
         time.sleep(1.0)  # let sockets/locks release before re-starting
         res = self.start(target, apply=True, stop_owners=stop_owners, band=band,
-                         position=position, position_note=position_note)
+                         position=position, position_note=position_note, _ensured=True)
         return self._restore_optional(target, band, stopped, res, _optional_up)
 
     def _restart_preflight(self, target: str, band: str, stop_owners: bool, cascade: bool,

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import dataclasses as _dc
 
+from . import openhop_store as _openhop_store
 from .paths import PathContainmentError
 from .service_base import ActionResult
 from .snapshot_memo import invalidates_snapshot
@@ -633,7 +634,7 @@ class WebserverOpsMixin:
         for p in self.web_pages():
             swc = cfgs.get(p.page_id)
             if swc is not None and swc.enabled:
-                out.append(_ws.StackWebProxy(swc, p.address, p.scheme, p.deny_paths))
+                out.append(_ws.StackWebProxy(swc, p.address, p.scheme, p.deny_paths, p.deny_notice))
         return out
 
     def _stack_listen_scope(self, swc, listeners=None) -> str:
@@ -743,10 +744,9 @@ class WebserverOpsMixin:
                 continue
             if not c.ui_password_file:
                 continue
-            # The openHop repeater password has a shape (15–128 printable ASCII, no spaces);
-            # anything else that LHPC or an app minted is one non-empty line.
-            normalize = (_mci._normalize_password
-                         if c.ui_password_file.endswith(_mci.REPEATER_ADMIN_FILENAME) else None)
+            if (_oh := _openhop_store.password_view(self, c)) is not None:
+                return _oh                                  # issue #5: openHop's own file
+            normalize = _mci.password_normalizer(c.ui_password_file)
             path, exists, value, reason = self._read_stored_password(
                 tuple(p for p in c.ui_password_file.split("/") if p), normalize)
             return {"user": c.ui_user or "admin",

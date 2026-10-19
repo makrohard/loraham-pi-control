@@ -19,6 +19,8 @@ from . import (
     runtime_fs,
     validators,
 )
+from . import meshcore_mode as _meshcore_mode
+from . import openhop_store as _ohs
 from . import resources as resources_mod
 from . import restart_required as _rr
 from . import reticulum_interfaces as _ri
@@ -231,36 +233,7 @@ class LifecycleOpsMixin:
         return False
 
     def _meshcore_mode_refusal(self, target: str):
-        """What the MeshCore mode rules out, refused BEFORE any mutation: a Companion client
-        (webui / cli) while the stack runs repeater-only — there is no TCP 5000 to connect to —
-        and a repeater mode without the repeater's own node name. One rule set
-        (`meshcore_mode`); the host re-checks the same at startup. None = nothing to refuse."""
-        from . import meshcore_mode as _mm
-        from . import validators
-        if target not in (_mm.STACK_ID, _mm.NODE_ID, *_mm.CLIENT_IDS):
-            return None
-        mode = self.meshcore_mode()
-        if target in _mm.CLIENT_IDS and self._meshcore_node_live():
-            # TCP 5000 exists per the launch that is RUNNING, not per a saved-but-not-restarted
-            # mode (status and stop verification judge by the same running mode).
-            mode = self.meshcore_running_mode()
-        if target in _mm.CLIENT_IDS and not _mm.clients_available(mode):
-            return ActionResult(
-                False, f"Cannot start '{target}': the MeshCore stack is in repeater-only mode — "
-                       f"there is no Companion on TCP {_mm.COMPANION_PORT} to connect to",
-                details=[f"lhpc config {_mm.STACK_ID} mode chat+repeater   # keep the repeater, "
-                         "run the chat node inside it"])
-        if target in (_mm.STACK_ID, _mm.NODE_ID) and _mm.repeater_on(mode):
-            name = self._resolved_param_value(_mm.STACK_ID, "file", _mm.NODE_ID, "repeater_name")
-            try:
-                validators.node_name(name, field="repeater name")
-            except validators.ValidationError as exc:
-                return ActionResult(
-                    False, f"Cannot start '{target}': mode '{mode}' needs the repeater's own node "
-                           f"name — {exc}",
-                    details=[f"lhpc config {_mm.STACK_ID} repeater_name <name>"],
-                    data={"reason": _mm.REASON_REPEATER_NAME_REQUIRED})
-        return None
+        return _meshcore_mode.start_refusal(self, target)      # the rules: meshcore_mode.py
 
     def _ready_endpoints_present(self, comp) -> tuple[bool, list[str]]:
         """Probe a component's `ready = true` endpoints (bounded). Returns
@@ -681,7 +654,7 @@ class LifecycleOpsMixin:
     @invalidates_snapshot
     def start(self, target: str, apply: bool = False, stop_owners: bool = False,
               band: str = "", auto_install_ctx=None, *,
-              _before_start_locked=None, _operator: bool = True,
+              _before_start_locked=None, _operator: bool = True, _ensured: bool = False,
               position: dict | None = None, position_note: str = "") -> ActionResult:
         """Public, LOCKED entry — acquires the full lifecycle lock bundle (incl. owners
         when stop_owners) so a DIRECT call gets the same coordination as CLI/web.
@@ -725,8 +698,8 @@ class LifecycleOpsMixin:
         # mutation, so a start refused by a pending self-update/uninstall changes NOTHING), then
         # config stability, then the lifecycle/resource bundle.
         try:
-            with self._admit_and_acquire_guards("start", target, band,
-                                                stop_owners) as (_op_band, _order, _radio):
+            with self._admit_and_acquire_guards("start", target, band, stop_owners,
+                                                _ensured) as (_op_band, _order, _radio):
                 # The outer recheck under every lock: identity enforcement
                 # FIRST, then the MeshCore position snapshot (the one position decision of this
                 # start, passed down rather than re-queried, so a restart asks exactly once) —
@@ -751,11 +724,18 @@ class LifecycleOpsMixin:
                     self._clear_stop_intent(target)
                 return _res
         except (AdmissionRefused, reslock.ResourceBusy, SourceTxnBlocked, OSError,
-                PathContainmentError) as exc:
+                PathContainmentError, _ohs.OneStoreError) as exc:
             return self._guard_refusal("start", target, exc)
 
+    def _restart_ensure_band(self, target: str, band: str) -> str:
+        """A restart's band, resolved under admission, after the openHop-file step that must run before
+        the restart's shared config-stability guard (`openhop_store.restart_ensure`)."""
+        _ohs.restart_ensure(self, target)
+        return self.operation_band(target, band)
+
     @contextlib.contextmanager
-    def _admit_and_acquire_guards(self, op: str, target: str, band: str, stop_owners: bool):
+    def _admit_and_acquire_guards(self, op: str, target: str, band: str, stop_owners: bool,
+                                  ensured: bool = False):
         """The guards of an applied start: task admission → config stability → the lifecycle/
         resource bundle (LOCK ORDER), yielding `(op_band, order, radio)` resolved between them.
         ONE effective band for the WHOLE operation, resolved ONCE under admission and never
@@ -765,6 +745,8 @@ class LifecycleOpsMixin:
         (`_guard_refusal` types it)."""
         with self._admission_guard(op, target):
             op_band = self.operation_band(target, band)
+            if not ensured:                              # issue #5: admitted, before the shared guard
+                _ohs.start_ensure(self, target, nested=bool(getattr(self._cfg_stable_state, "depth", 0)))
             with self._config_stable():
                 order, radio = self._order_radio(target, op_band)
                 with self._lifecycle_guard(op, target, op_band, stop_owners=stop_owners,
@@ -1131,6 +1113,7 @@ class LifecycleOpsMixin:
                            f"'{bl['holder_stack']}' ({bl['holder']})")
         if not blockers and (_spi := self._spi_shared_warning(target, band, radio)):
             details.append(f"  [warning] {_spi}")
+        details += [f"  [warning] {w}" for w in _ohs.start_warnings(self, target)]
         return ActionResult(True, f"Run plan for '{target}': {len(order)} component(s) in order.",
                             details=details,
                             next_commands=[f"lhpc stack start {target}"
@@ -1671,6 +1654,9 @@ class LifecycleOpsMixin:
         if ok and (_spi := self._spi_shared_warning(target, band, radio)):
             out = [*out, f"  [warning] {_spi}"]   # only once the new side came up
             warned = {"spi_warning": _spi}        # the console's start banner shows it too
+        if ok and (_ohw := _ohs.start_warnings(self, target)):
+            out = [*out, *(f"  [warning] {w}" for w in _ohw)]
+            warned = {**warned, "openhop_warnings": _ohw}   # the stack page's start note too
         return ActionResult(ok, summary, details=out, results=tuple(results), data=warned,
                             next_commands=[f"lhpc status {target}", f"lhpc logs {target}",
                                            f"lhpc stack stop {target}"])
@@ -3288,6 +3274,7 @@ class LifecycleOpsMixin:
                     out.append(c.start_note)
         if (result.data or {}).get("spi_warning"):
             out.append(result.data["spi_warning"])
+        out += list((result.data or {}).get("openhop_warnings") or ())
         return out
 
     @invalidates_snapshot

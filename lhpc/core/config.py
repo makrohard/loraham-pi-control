@@ -21,6 +21,8 @@ import json
 import math
 import os
 import re
+import sys
+import threading
 import tomllib
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -48,6 +50,42 @@ class ConfigError(Exception):
 class ConfigLockBusy(ConfigError):
     """The exclusive config lock could not be acquired within the bounded timeout —
     a long-running operation holds it; the mutation should be retried shortly."""
+
+
+class ConfigLockHeld(ConfigLockBusy):
+    """`config_lock` was asked for by a thread that holds the config-stability guard on the same
+    file: a second descriptor would wait for this thread's own lock (flock), so it is refused at
+    once instead of after the bounded wait. A config write runs before the guard, or reuses an
+    EXCLUSIVE guard (`save_config_bundle`). `caller` names the call site ("module.function")."""
+
+    def __init__(self, caller: str):
+        super().__init__(f"config lock requested by {caller} while this thread holds the "
+                         "config-stability guard: it would wait for itself")
+        self.caller = caller
+
+
+def _caller_id() -> str:
+    """'module.qualname' of the first frame outside this module and contextlib (the call site)."""
+    f = sys._getframe(1)
+    while f is not None and f.f_globals.get("__name__") in (__name__, "contextlib"):
+        f = f.f_back
+    return f"{f.f_globals.get('__name__')}.{f.f_code.co_qualname}" if f is not None else "?"
+
+
+# The lock files this thread holds the config-stability guard on (`ControllerService._config_stable`
+# marks them; `config_lock` refuses them).
+_GUARD = threading.local()
+
+
+def guard_take(fh, paths: Paths, op: int = fcntl.LOCK_SH) -> None:
+    """flock for the config-stability guard; on success this thread's guard record names the file."""
+    fcntl.flock(fh, op)
+    _GUARD.__dict__.setdefault("paths", set()).add(str(paths.under("config", ".lock")))
+
+
+def guard_release(fh, paths: Paths) -> None:
+    fcntl.flock(fh, fcntl.LOCK_UN)
+    _GUARD.__dict__.setdefault("paths", set()).discard(str(paths.under("config", ".lock")))
 
 
 class ConfigRecoveryRequired(ConfigLockBusy):
@@ -102,9 +140,12 @@ def _config_flock(paths: Paths, timeout: float = CONFIG_LOCK_TIMEOUT_S):
     import time as _time
 
     from . import runtime_fs
+    lock_path = paths.under("config", ".lock")
+    if str(lock_path) in getattr(_GUARD, "paths", ()):
+        raise ConfigLockHeld(_caller_id())
     # Single safe API: contained path + O_NOFOLLOW open (a symlinked .lock leaf or an
     # escaping parent raises here, blocking mutation rather than being bypassed).
-    fh = runtime_fs.open_lock(paths, paths.under("config", ".lock"))
+    fh = runtime_fs.open_lock(paths, lock_path)
     deadline = _time.monotonic() + max(0.0, timeout)
     try:
         while True:
@@ -1750,7 +1791,7 @@ _JOURNAL_VERSION = 1
 # Only these logical config targets may ever appear in a transaction journal. Recovery
 # maps a logical kind + a validated runtime-relative path through the safe path API —
 # it never trusts or touches an arbitrary absolute path from journal content.
-_ALLOWED_KINDS = {"local", "stack", "state"}
+_ALLOWED_KINDS = {"local", "stack", "state", "openhop"}
 
 
 def _resolve_journal_target(paths: Paths, rec) -> Path:
@@ -1781,6 +1822,9 @@ def _resolve_journal_target(paths: Paths, rec) -> Path:
         # The ONLY state marker written through the config transaction: the durable
         # restart-required flag, atomic WITH the config change that caused it.
         raise ConfigError("state journal target must be state/restart-required/<name>.json")
+    if kind == "openhop" and parts != ["state", "openhop", "config.yaml"]:
+        # openHop's own settings file (issue #5): its one-store rows commit WITH the stack config.
+        raise ConfigError("openhop journal target must be state/openhop/config.yaml")
     try:
         p = paths.under(*parts)        # lexical + symlink-parent containment
     except PathContainmentError as exc:
@@ -2112,6 +2156,18 @@ def save_stack_config(paths: Paths, stack_id: str, values: dict, band: str = "")
     with config_lock(paths):
         _atomic_write(paths, path, _render_stack_config(stack_id, values), mode=0o644)
     return path
+
+
+def remove_stack_keys(paths: Paths, stack_id: str, comp_id: str, names) -> None:
+    """Drop params `names` of `comp_id` from the stack's band-less config, in both stored forms
+    (component-scoped and flat). MUST be called inside `config_lock` (it does not take it)."""
+    path = _stack_config_path(paths, stack_id)
+    current = dict(_load_runtime_toml(paths, path))
+    keys = {f"file_{n}" for n in names} | {f"__f__{comp_id}__{n}" for n in names}
+    if keys & set(current):
+        for k in keys:
+            current.pop(k, None)
+        _atomic_write(paths, path, _render_stack_config(stack_id, current), mode=0o644)
 
 
 def merge_stack_values(paths: Paths, stack_id: str, band: str, updates: dict,

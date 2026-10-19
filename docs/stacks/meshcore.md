@@ -12,9 +12,9 @@ persistence, readiness and lifecycle. The node never drives SPI or GPIO itself.
 | Build | `lhpc build meshcore`: `.venv` (`--system-site-packages`) → openHop Core → `meshcore_host` → the repeater's closure (`openhop-repeater-constraints.txt`) and checkout. Web UI: a backend venv from `meshcore-webui-constraints.txt`; the frontend is prebuilt package data (no npm). All headless |
 | Run | `.venv/bin/python -m meshcore_host <runtime>/config/files/meshcore.toml` — the same command in every mode |
 | Config | `<runtime>/config/files/meshcore.toml` (0600 — it carries the private key), rendered from `lhpc/data/bases/meshcore.toml` on every start |
-| Identity | `<runtime>/config/secrets/meshcore_identity.key` (0600) → the config's `[identity] key`; repeater: `openhop_repeater_identity.key` + `openhop_repeater_admin.txt` + `openhop_repeater_jwt.txt` (the dashboard's login-signing secret). Updates and `uninstall` keep them; `lhpc clean meshcore --purge` removes them, so a reinstall is a new node |
+| Identity | `<runtime>/config/secrets/meshcore_identity.key` (0600) → the config's `[identity] key`; repeater: its key and dashboard password live in openHop's own file `state/openhop/config.yaml` (0600; a pre-0.13 `openhop_repeater_identity.key` / `openhop_repeater_admin.txt` is moved there at the first repeater-mode start), the dashboard's login-signing secret in `openhop_repeater_jwt.txt`. Updates and `uninstall` keep them; `lhpc clean meshcore --purge` removes them, so a reinstall is a new node |
 | Endpoints | Companion TCP `:5000` (chat modes; binds loopback while `meshcore_allow` is a loopback address or network (inside 127.0.0.0/8), else `0.0.0.0` (IPv4); with its direct-access row ticked a LAN CIDR is restricted in secure-default and open in compatibility mode, `0.0.0.0/0` is open in both; unticked, the firewall drops it) · repeater dashboard `127.0.0.1:8000` (repeater modes) · Web UI backend `127.0.0.1:8788` — reached through the LHPC proxy or an [SSH tunnel](../ssh-tunnel.md) |
-| Persistence | chat: `<runtime>/state/meshcore/companion.db` (contacts, channels, routes, prefs, queued messages) · repeater modes: `<runtime>/state/openhop/` (the repeater's own SQLite/RRD; the hosted Companion persists there) · Web UI: `<runtime>/state/meshcore-webui/` (a display cache, never the identity) |
+| Persistence | chat: `<runtime>/state/meshcore/companion.db` (contacts, channels, routes, prefs, queued messages) · repeater modes: `<runtime>/state/openhop/` (openHop's own `config.yaml` and `policy.yaml`, its SQLite/RRD, Glass certificates, plugins; the hosted Companion persists there) · Web UI: `<runtime>/state/meshcore-webui/` (a display cache, never the identity) |
 | Resources | `tcp.port.5000` / `.8000` / `.8788` exclusive · `loraham.daemon-socket.868` consumer · `loraham.profile.868` requirement `MANAGED` · `meshcore.companion-client` exclusive, advisory (webui and cli) |
 | Depends on | `loraham-daemon` (868, MANAGED), `meshcore-gps`; the hardware setup must serve 868 |
 | Install channel | source only |
@@ -39,16 +39,26 @@ persistence, readiness and lifecycle. The node never drives SPI or GPIO itself.
 | `meshcore_allow` | `127.0.0.1` | who may connect to TCP 5000 (no auth); drives the managed firewall |
 | `txpower` | 14 dBm | advanced (0–20) |
 | `frequency` | blank = the preset's | Hz; an explicit value overrides the preset frequency |
-| `airtime` | 10 % | duty-cycle limit of the repeater modes, enforced by openHop over a 60 s window; the chat mode has none unless client-repeat is on (upstream's design) |
+| `airtime` | 10 % | duty-cycle limit of the repeater modes, enforced by openHop over a 60 s window. Kept in openHop's file (below) |
 | `use_gps` | on | use the global position source |
 | `rf_log` | on | `logs/rf-meshcore.log`, written by the host's radio adapter in every mode: frames received (RSSI/SNR) or sent (`ok` after `TX_RESULT_STATUS_OK`; `unconfirmed` when the result was never learned; a refused send writes nothing). Read at the next start; Decrypt: [maintenance](../maintenance.md#rf-logs) |
 | `mode` | `chat` | see [Mode](#mode) |
-| `repeater_name` | *(empty)* | required in the repeater modes; the repeater's own name, never the operator callsign |
-| `repeater_mode` | `forward` | upstream's behaviour: `forward` relays, `monitor` listens and advertises without relaying, `no_tx` only receives |
+| `repeater_name` | *(empty)* | required in the repeater modes; the repeater's own name, never the operator callsign. Kept in openHop's file (below) |
+| `repeater_mode` | `forward` | upstream's behaviour: `forward` relays, `monitor` listens and advertises without relaying, `no_tx` only receives. Kept in openHop's file (below) |
 | `plugins` | on | the repeater's plugin manager — see *Plugins* under [Mode](#mode) |
 
-Controller-owned, not settings rows: the private keys, the dashboard password (Password section), `db`, the GPS
-socket/coordinates, `state_dir`, `presets_file`. The daemon-side radio parameters live in [daemon](daemon.md).
+Controller-owned, not settings rows: the chat node's private key, `db`, the GPS socket/coordinates, `state_dir`,
+`presets_file`, and in the repeater modes the GPS file, the companion-slot lock and the restart command. The
+daemon-side radio parameters live in [daemon](daemon.md).
+
+**Kept in openHop's file (one store).** In the repeater modes the repeater name, its behaviour, the duty cycle
+(`airtime`), the dashboard password (Password section) and the repeater's identity live only in openHop's own
+`state/openhop/config.yaml`. While the repeater is stopped LHPC Settings writes them there; while it runs a save is
+refused ("the repeater is running: change it in openHop") and the dashboard or Glass changes them. Before the
+first repeater-mode start they stay where they were; that start moves them into the file. A repeater name equal to
+the operator callsign, or a dashboard password outside LHPC's rule (15-128 printable ASCII characters, no spaces),
+set in openHop is kept and shown as a `[warning]` line of the start. Full ownership list:
+[openHop on LHPC](../openhop-on-lhpc.md).
 
 ## Mode
 
@@ -61,26 +71,36 @@ meshcore` prints the saved mode plus "restart to apply" while another one runs.
 |---|---|---|---|---|---|
 | `chat` | `meshcore_host` Companion | yes | no | available | as configured |
 | `chat+repeater` | upstream `openhop_repeater` hosting the same Companion | yes | yes | available | as configured |
-| `repeater` | `openhop_repeater` alone | no — its identity is neither required nor minted | yes | refused | none: no feed, no receiver claim, no GPS refusal |
+| `repeater` | `openhop_repeater` alone | no — its identity is neither required nor minted | yes | refused | as configured (openHop's GPS, below) |
 
 The chat node is the same node (name, key) in `chat` and `chat+repeater`; only the contact store
 differs (`companion.db` vs the repeater's database under `state/openhop/`), and nothing is copied
 between them. The repeater is a distinct MeshCore node: its key, the dashboard password and the
 dashboard's login-signing secret are minted on the first repeater-mode start and reused, so a
-restart does not sign a dashboard login out. LHPC owns its radio settings, version and
-configuration: it gets no config path (an upstream save would aim at
-`/etc/openhop_repeater/config.yaml`, which it cannot create); MQTT, Glass and time-sync are off. Its dashboard shows the daemon link *ok* only while the daemon connection
-is up and, with TX enabled, the MANAGED-TX handshake is complete.
+restart does not sign a dashboard login out. The repeater keeps its configuration in its own
+file `state/openhop/config.yaml`, saved the upstream way (dashboard, Glass);
+at every start the host reads it with upstream's loader, puts LHPC's values over the keys LHPC
+owns (radio, HTTP bind, storage, GPS while `use_gps` is on, the chat node's entry, …) and writes
+it back with an `lhpc_managed` block on top that lists them. MQTT, Glass, sensors, room servers
+and further companions are openHop's, set there. What LHPC owns, what it refuses and why:
+[openHop on LHPC](../openhop-on-lhpc.md). Its dashboard shows the daemon link *ok* only while
+the daemon connection is up and, with TX enabled, the MANAGED-TX handshake is complete.
 
 **Repeater dashboard** — `127.0.0.1:8000`, proxied as the page `meshcore-meshcore-node`
 (`lhpc webserver proxy meshcore-meshcore-node`; the page `meshcore` is the Web UI); in `chat` the
 proxy answers 502 for it. Login `admin` + the minted password, shown in the stack page's Password
-section. The proxy refuses (404, reads included) every route that changes upstream configuration,
-identities, radio settings or LHPC-owned state (`proxy_deny_paths` on the 8000 endpoint). Statistics, packets, neighbours, logs, login and a logged-in
-admin's operational actions pass, and, deliberately, two writing routes: the plugin manager
-(`/api/plugins/…`, including an uploaded wheel) and `/api/sensors_config_update`, which fails
-without change because the repeater has no config file. The radio presets come from the pinned checkout and are
-copied into `state/openhop/` at each start; a picked preset cannot be saved there (radio settings are LHPC's:
+section (read from openHop's file once it exists). The proxy refuses only the routes with a hard
+reason (`proxy_deny_paths` on the 8000 endpoint): the setup wizard, the four CAD routes, upstream's
+own update routes and the chat node's advert name/location. A refused route answers 200 with
+openHop's own error shape, `{"success": false, "error": "Managed by LoRaHAM Pi Control"}`, so the
+dashboard keeps the login; its Radio and Repeater settings
+pages show their generic "Failed to update settings", the reason is in the API answer, the CLI and
+the Terminal. Everything else
+passes; inside the repeater the host's guards refuse a change of an LHPC-owned value with the
+same notice (radio settings, the CLI's `set radio`/`set freq`/`set tx`/`tempradio`/`http`, the
+chat node's identity entry, an import changing an owned key). A restart from the dashboard, the
+CLI or Glass runs LHPC's own `lhpc stack restart meshcore`. The radio presets come from the pinned
+checkout and are copied into `state/openhop/` at each start (radio settings are LHPC's:
 Settings).
 
 The pinned openhop_core logs each decrypted over-the-air login, password included, at INFO
@@ -130,6 +150,12 @@ With a feed running no `lat`/`lon` are written, so no start-time position surviv
 The node drops its position when the feed delivers no valid fix for the stale interval and
 resumes by itself. Neither side logs coordinates. Model: [GPS](../gps.md).
 
+In the repeater modes `use_gps on` makes openHop's `gps` section LHPC's: openHop reads a file
+of NMEA sentences on tmpfs (`/dev/shm/lhpc-meshcore-gps.nmea`) that the host rewrites every 2 s
+with the current fix (live) or the coordinates (fixed), and empties while there is none. openHop
+may still change the advertised position the upstream way. `use_gps off` leaves `gps` to openHop
+(time sync stays off: the clock is LHPC's).
+
 ## Web UI
 
 `meshcore-webui` is a Companion client (5000): a FastAPI/uvicorn backend plus a prebuilt SPA on loopback, published through the LHPC proxy ([webserver](../webserver.md#stack-web-ui-proxies)).
@@ -143,7 +169,10 @@ adverts pass.
 
 `meshcore-cli` (`meshcli`, params `host`/`port`/`json`/`debug`) is interactive — you run it. The
 node serves one Companion client at a time: the CLI wrapper holds `state/meshcore-cli.lock` while
-it runs and the Web UI waits on it instead of reconnecting. A one-shot `meshcli` invocation evicts
+it runs and the Web UI waits on it instead of reconnecting. In `chat+repeater` a browser chat with
+LHPC's chat node on the repeater dashboard (`/ws/companion_frame`, e.g. Waev Outpost) takes the
+same lock (further companions set up in openHop take none); while
+`meshcli` holds it the browser is refused with "Companion in use by meshcore-cli". A one-shot `meshcli` invocation evicts
 the previous session and its pending confirmation, so it can report an error for work the node
 did, and a read right after an arrival can return nothing — use the REPL for send-and-read; the
 node log is the truth.

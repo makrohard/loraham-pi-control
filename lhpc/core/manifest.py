@@ -957,6 +957,7 @@ def _parse_endpoint(raw: dict) -> EndpointSpec:
         scheme=raw.get("scheme", ""),
         firewall=_parse_firewall_meta(raw.get("firewall")),
         proxy_deny_paths=_parse_proxy_deny_paths(raw.get("proxy_deny_paths")),
+        proxy_deny_notice=_parse_deny_notice(raw.get("proxy_deny_notice", False)),
     )
 
 
@@ -982,6 +983,12 @@ def _parse_venv_packages(raw, cid: str) -> tuple:
         raise ManifestError(f"component {cid!r} venv_packages must be a list of Python "
                             f"distribution names, got {raw!r}")
     return tuple(raw)
+
+
+def _parse_deny_notice(raw) -> bool:
+    if not isinstance(raw, bool):
+        raise ManifestError("proxy_deny_notice must be true or false")
+    return raw
 
 
 def _parse_proxy_deny_paths(raw) -> tuple:

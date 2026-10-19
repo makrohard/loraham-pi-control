@@ -56,10 +56,10 @@ def clients_available(mode) -> bool:
 
 
 def position_consumed(mode) -> bool:
-    """Only the Companion reads the box's position (the `meshcore-gps` feed, or fixed
-    coordinates); the repeater's own config pins GPS off. So a repeater-only start must run
-    no feed, claim no receiver and never be refused over a GPS setting it does not consult."""
-    return chat_identity_required(mode)
+    """Every mode reads the box's position (issue #5): the Companion through the `meshcore-gps`
+    feed or fixed coordinates, the repeater through openHop's own GPS file source, which the host
+    writes from the same feed (docs/openhop-on-lhpc.md). `use_gps` off opts the stack out."""
+    return normalize(mode) in MODES
 
 
 def _port(ep) -> int | None:
@@ -87,3 +87,57 @@ def expected_endpoints(comp, mode) -> list:
             continue
         out.append(ep)
     return out
+
+
+def start_refusal(svc, target: str):
+    """What the MeshCore mode rules out, refused BEFORE any mutation: a Companion client
+    (webui / cli) while the stack runs repeater-only — there is no TCP 5000 to connect to —
+    and a repeater mode without the repeater's own node name. One rule set (this module); the
+    host re-checks the same at startup. None = nothing to refuse."""
+    from . import validators
+    from .service_base import ActionResult
+    if target not in (STACK_ID, NODE_ID, *CLIENT_IDS):
+        return None
+    mode = svc.meshcore_mode()
+    if target in CLIENT_IDS and svc._meshcore_node_live():
+        # TCP 5000 exists per the launch that is RUNNING, not per a saved-but-not-restarted
+        # mode (status and stop verification judge by the same running mode).
+        mode = svc.meshcore_running_mode()
+    if target in CLIENT_IDS and not clients_available(mode):
+        return ActionResult(
+            False, f"Cannot start '{target}': the MeshCore stack is in repeater-only mode — "
+                   f"there is no Companion on TCP {COMPANION_PORT} to connect to",
+            details=[f"lhpc config {STACK_ID} mode chat+repeater   # keep the repeater, "
+                     "run the chat node inside it"])
+    if target in (STACK_ID, NODE_ID) and repeater_on(mode):
+        name = svc._resolved_param_value(STACK_ID, "file", NODE_ID, "repeater_name")
+        try:
+            validators.node_name(name, field="repeater name")
+        except validators.ValidationError as exc:
+            return ActionResult(
+                False, f"Cannot start '{target}': mode '{mode}' needs the repeater's own node "
+                       f"name — {exc}",
+                details=[f"lhpc config {STACK_ID} repeater_name <name>"],
+                data={"reason": REASON_REPEATER_NAME_REQUIRED})
+    return None
+
+
+def save_refusal(svc, merged: dict, pending: dict | None = None) -> str:
+    """Why a MeshCore config save must be refused ("" = fine): a repeater mode needs the
+    repeater's own node name IN THE SAME saved state — a saved repeater mode without a name
+    would refuse every later start (boot restore included). Same rule the host applies."""
+    from . import openhop_store, validators
+    mode, _ = svc._resolve_stored(merged, "f", NODE_ID, "mode", 1)
+    if not repeater_on(mode):
+        return ""
+    name = (pending or {}).get("repeater_name") or svc._resolve_stored(merged, "f", NODE_ID, "repeater_name", 1)[0]
+    if not name:                                       # issue #5: it may live in openHop's file
+        name = openhop_store.row_value(svc, "repeater_name", "")
+    try:
+        validators.node_name(name or "", field="repeater name")
+    except validators.ValidationError as exc:
+        return (f"mode '{normalize(mode)}' needs the repeater's own node name — {exc} "
+                f"(set a repeater name: in the console under Settings → Repeater, "
+                f"'Repeater node name'; from the CLI `lhpc config meshcore repeater_name "
+                f"<name>` first, then the mode — or keep mode chat)")
+    return ""

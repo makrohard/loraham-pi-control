@@ -21,6 +21,7 @@ from typing import ClassVar
 
 from . import binary_install as binary_install_mod
 from . import binary_receipt as binary_receipt_mod
+from . import config as _cfgmod
 from . import manifest as manifest_mod
 from . import meshcore_mode as _meshcore_mode
 from . import spi_mode
@@ -257,7 +258,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 deadline = time.monotonic() + timeout
                 while True:
                     try:
-                        fcntl.flock(fh, lock_op)
+                        _cfgmod.guard_take(fh, self._paths, lock_op)
                         break
                     except OSError:
                         if time.monotonic() >= deadline:
@@ -281,7 +282,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             if st.depth == 0:
                 try:
                     try:
-                        fcntl.flock(st.fh, fcntl.LOCK_UN)
+                        _cfgmod.guard_release(st.fh, self._paths)
                     finally:
                         st.fh.close()
                 finally:
@@ -306,18 +307,16 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         and the one long-lived holder, the auto-install boundary, can never overlap — it takes the
         same task-admission flock this operation holds, and takes it BEFORE config-exclusive, so no
         holder of this lock ever waits on us."""
-        import fcntl
-
         st = self._cfg_stable_state
         if getattr(st, "depth", 0) == 0 or getattr(st, "exclusive", False):
             yield
             return
         fh = st.fh
-        fcntl.flock(fh, fcntl.LOCK_UN)
+        _cfgmod.guard_release(fh, self._paths)
         try:
             yield
         finally:
-            fcntl.flock(fh, fcntl.LOCK_SH)
+            _cfgmod.guard_take(fh, self._paths)
 
     def _holds_config_exclusive(self) -> bool:
         """True iff THIS thread currently holds the config-stability guard in EXCLUSIVE mode — the only

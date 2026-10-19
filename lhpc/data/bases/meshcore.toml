@@ -16,7 +16,6 @@ preset = "eu_uk_narrow"
 data_socket = "/tmp/lora868f.sock"
 config_socket = "/tmp/loraconf868.sock"
 enable_tx = true
-airtime = 10
 
 [persistence]
 # db path is rendered by the controller.
@@ -27,10 +26,9 @@ airtime = 10
 
 [repeater]
 # Which openhop program the host runs (`role`: chat, chat+repeater or repeater). The other keys
-# are used only in the repeater roles: the repeater's OWN MeshCore identity (`name`, `key`),
-# its behaviour (forward, monitor or no_tx), the dashboard login LHPC minted (`admin_password`)
-# and its own storage directory for SQLite/RRD under the runtime root (`state_dir`).
+# are used only in the repeater roles: the dashboard's login-signing secret, the repeater's own
+# state directory (openHop's own config.yaml lives there and holds its name, behaviour, password,
+# identity and duty cycle), GPS hand-over, the companion slot lock and LHPC's own restart.
 # NOTE for editors of this template: never write `<key> =` in a comment here — the renderer
 # updates the FIRST line carrying a declared key, commented or not.
 role = "chat"
-behaviour = "forward"
