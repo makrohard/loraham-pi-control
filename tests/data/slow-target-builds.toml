@@ -52,118 +52,118 @@
 [[measured]]
 component = "rns"
 op = "build"
-seconds = 63
-quiet_s = 5.3
-key = "pin:d5962d14eb4fbf4a34a0b83e6942534a4965dd17"
+seconds = 60
+quiet_s = 1.9
+key = "pin:e40191b3d193b46b7f2d8a44424a594cd758839b"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 
 [[measured]]
 component = "lxmd"
 op = "build"
-seconds = 49
-quiet_s = 11.1
-key = "pin:e52016c20fbbd0bb9082a6e6d5177f5f4eeff1c7"
+seconds = 48
+quiet_s = 12.1
+key = "pin:c3ff2d6dc2f256daab896dadc044dd5a913ecbb7"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 
 [[measured]]
 component = "nomadnet"
 op = "build"
-seconds = 60
-quiet_s = 7.5
-key = "pin:cfe23af68dfea725f4d88d95ffe9a4ef0e188941"
+seconds = 57
+quiet_s = 7.2
+key = "pin:b2f852c9e0efc68d89d9185939f42ec0c2fee125"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 
 [[measured]]
 component = "meshchat"
 op = "build"
-seconds = 73
-quiet_s = 6.2
+seconds = 21
+quiet_s = 0.2
 key = "pin:45f89a8fca79f63501659d192577e880380e6cc0"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 
 [[measured]]
 component = "meshcore-node"
 op = "build"
-seconds = 152
-quiet_s = 11.3
-key = "pin:cedb26b4b5c687856bcf6bdd74dc945597d7fc8b"
+seconds = 92
+quiet_s = 7.8
+key = "pin:bef70214863f797ecb5ba956d06fc364537d285a"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 
 [[measured]]
 component = "meshcore-webui"
 op = "build"
-seconds = 175
-quiet_s = 4.6
+seconds = 39
+quiet_s = 7.0
 key = "pin:94dcc3d845dd09be03896694de2190e39a020086"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 
 [[measured]]
 component = "meshcore-cli"
 op = "build"
-seconds = 63
-quiet_s = 11.2
-key = "pin:d4eac61bd30b9f919143499fa669fb40fd869b5d"
+seconds = 32
+quiet_s = 1.4
+key = "pin:dfcc74ee2a1f15e5484a636725e5e7e7c3b1e02e"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03 (RELEASE-0.11.12-rowA-records)"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 
 # clone / checkout ([git] lines of logs/adopt-<component>.log)
 [[measured]]
 component = "rns"
 op = "clone"
-seconds = 39.1
-key = "pin:d5962d14eb4fbf4a34a0b83e6942534a4965dd17"
+seconds = 39.6
+key = "pin:e40191b3d193b46b7f2d8a44424a594cd758839b"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 [[measured]]
 component = "rns"
 op = "checkout"
-seconds = 0.7
-key = "pin:d5962d14eb4fbf4a34a0b83e6942534a4965dd17"
+seconds = 0.1
+key = "pin:e40191b3d193b46b7f2d8a44424a594cd758839b"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 [[measured]]
 component = "lxmd"
 op = "clone"
 seconds = 1.7
-key = "pin:e52016c20fbbd0bb9082a6e6d5177f5f4eeff1c7"
+key = "pin:c3ff2d6dc2f256daab896dadc044dd5a913ecbb7"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 [[measured]]
 component = "lxmd"
 op = "checkout"
@@ -177,33 +177,33 @@ evidence = "row A 2026-10-03"
 [[measured]]
 component = "nomadnet"
 op = "clone"
-seconds = 2.6
-key = "pin:cfe23af68dfea725f4d88d95ffe9a4ef0e188941"
+seconds = 2.7
+key = "pin:b2f852c9e0efc68d89d9185939f42ec0c2fee125"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 [[measured]]
 component = "nomadnet"
 op = "checkout"
 seconds = 0.1
-key = "pin:cfe23af68dfea725f4d88d95ffe9a4ef0e188941"
+key = "pin:b2f852c9e0efc68d89d9185939f42ec0c2fee125"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 [[measured]]
 component = "meshchat"
 op = "clone"
-seconds = 3.3
+seconds = 4.2
 key = "pin:45f89a8fca79f63501659d192577e880380e6cc0"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 [[measured]]
 component = "meshchat"
 op = "checkout"
@@ -211,9 +211,9 @@ seconds = 0.2
 key = "pin:45f89a8fca79f63501659d192577e880380e6cc0"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 [[measured]]
 component = "sideband"
 op = "clone"
@@ -257,33 +257,33 @@ evidence = "row A 2026-10-03"
 [[measured]]
 component = "meshcore-node"
 op = "clone"
-seconds = 3.5
-key = "pin:cedb26b4b5c687856bcf6bdd74dc945597d7fc8b"
+seconds = 4.4
+key = "pin:bef70214863f797ecb5ba956d06fc364537d285a"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 [[measured]]
 component = "meshcore-node"
 op = "checkout"
-seconds = 0.1
-key = "pin:cedb26b4b5c687856bcf6bdd74dc945597d7fc8b"
+seconds = 0.2
+key = "pin:bef70214863f797ecb5ba956d06fc364537d285a"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 [[measured]]
 component = "meshcore-webui"
 op = "clone"
-seconds = 2.6
+seconds = 3.0
 key = "pin:94dcc3d845dd09be03896694de2190e39a020086"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 [[measured]]
 component = "meshcore-webui"
 op = "checkout"
@@ -291,19 +291,19 @@ seconds = 0.1
 key = "pin:94dcc3d845dd09be03896694de2190e39a020086"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 [[measured]]
 component = "meshcore-cli"
 op = "clone"
-seconds = 1.9
-key = "pin:d4eac61bd30b9f919143499fa669fb40fd869b5d"
+seconds = 2.0
+key = "pin:dfcc74ee2a1f15e5484a636725e5e7e7c3b1e02e"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 [[measured]]
 component = "meshcore-cli"
 op = "checkout"
@@ -317,35 +317,35 @@ evidence = "row A 2026-10-03"
 [[measured]]
 component = "openhop-repeater-src"
 op = "clone"
-seconds = 16.2
-key = "pin:b846c79123c21c08424f5d62cd9dbf2bedfa6e0d"
+seconds = 18.0
+key = "pin:85fc14a6b212f149e31a680453aa2ba707cd7d67"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 [[measured]]
 component = "openhop-repeater-src"
 op = "checkout"
-seconds = 0.5
-key = "pin:b846c79123c21c08424f5d62cd9dbf2bedfa6e0d"
+seconds = 0.7
+key = "pin:85fc14a6b212f149e31a680453aa2ba707cd7d67"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 
 # row 8: meshtastic binary install, the largest [venv] line
 [[measured]]
 component = "meshtastic-cli-venv"
 op = "cli-venv"
-seconds = 34.4
+seconds = 35.6
 key = "pin:54e0d8d0ab2ff56b3a9ce967e53f79e49af560fb"
 source = "zero2w"
 host = "lhpc-e293"
-lhpc = "release/0.11.12-bundle (3d0943a1)"
-date = 2026-10-03
-evidence = "row A 2026-10-03"
+lhpc = "release/0.13.0 (19f82b7)"
+date = 2026-10-19
+evidence = "docs/live-tests/live-test.md#rows"
 
 # graywolf deb-fetch (graywolf-fetch.sh /tmp/gw 0.14.14 --from-upstream)
 [[measured]]
