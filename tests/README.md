@@ -74,7 +74,9 @@ through `interrupts.py`: its module pins the operation's durable writes and fail
 2. **Exact where exactness is the contract.** Systemd units, nginx config, firewall rules, generated
    argv, config rendering, persisted schemas, receipts, permissions and canonical paths are compared
    byte for byte. Human sentences are not: assert the typed field, the state, or the command token
-   an operator is told to run.
+   an operator is told to run. A sentence assert beside a typed assert is allowed: it checks the
+   message, not the decision. The CLI layer's only output is text: there the exit code and the
+   command tokens are the typed fields.
 3. **One canonical owner per behaviour** (above). Fold true permutations into `parametrize`; never
    merge cases that cross a safety boundary, mutate versus not, or hold different locks.
 4. **No ambient host or repository dependencies.** A test must not care which sibling repositories are

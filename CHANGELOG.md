@@ -4,13 +4,15 @@
 
 Changed
 
-- `tools/check_houserules.py` reads a repository's own `.houserules.toml` (its test layout, changelog and budget
-  file), so the other own repositories can run it.
 - The web, nginx and boot-restore systemd units change: run `lhpc self-update --repair-integration` once after this
   update; until then boot restore runs on the old units and `lhpc self-update --apply` is refused.
 - Going back to 0.12.0 or older afterwards restores at boot only after that release's repair.
 - MeshCore repeater: openHop keeps its own settings (guide docs/openhop-on-lhpc.md), moved at the first start (0.12 no
   longer finds them); routes LHPC owns answer "Managed by LoRaHAM Pi Control"; the repeater also gets the GPS position.
+- Updating from 0.12.10 or older re-downloads meshtasticd and installs the Meshtastic web client (its own component
+  since 0.12.11); if meshtastic then shows "not built", run `lhpc install meshtastic --source binary` once.
+- `tools/check_houserules.py` reads a repository's own `.houserules.toml` (its test layout, changelog and budget
+  file), so the other own repositories can run it.
 
 Fixed
 

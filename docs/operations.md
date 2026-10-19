@@ -35,6 +35,8 @@ a `kill` hint instead ([safety model](architecture.md#safety-model)).
 - It refuses to act unless the web console unit is enabled and byte-exact canonical (this
   version's, or another release's: `compatible`, which it names with the repair), and honours
   `[boot] restore` in `local.toml` (strictly boolean; anything else disables restore).
+- A start cut short (a power loss, say) before LHPC recorded the launch is not restored: nothing
+  records it as LHPC-owned. Start it again after the reboot.
 - An explicit `lhpc stack stop` is the last word: the stack stays down across reboots even when
   the stop could not verify the process gone; the next `stack start` makes it restorable again.
 - An optional service that was started on its own (e.g. the MeshCore web UI without its
