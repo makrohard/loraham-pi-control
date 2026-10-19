@@ -11,8 +11,10 @@ Fixed
 
 Changed
 
-- The web, nginx and boot-restore systemd units change: run `lhpc self-update --repair-integration` once after this
-  update; until then boot restore runs on the old units and `lhpc self-update --apply` is refused.
+- The web, nginx and boot-restore systemd units change, and the MeshCore dashboard's managed routes move to the
+  nginx proxy: after this update run, in this order, `lhpc self-update --repair-integration` (the units; until then
+  boot restore runs on the old units and `lhpc self-update --apply` is refused), then `lhpc webserver apply` (the
+  proxy rules; until then the dashboard's settings tabs answer 404 as before the update).
 - Going back to 0.12.0 or older afterwards restores at boot only after that release's repair.
 - MeshCore repeater: openHop keeps its own settings (guide docs/openhop-on-lhpc.md), moved at the first start (0.12 no
   longer finds them); routes LHPC owns answer "Managed by LoRaHAM Pi Control"; the repeater also gets the GPS position.
