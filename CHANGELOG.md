@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Fixed
+
+- Demo page: the stack pages answered 500 since 0.12.10 (the browser cannot start the thread pool a status
+  snapshot uses); the demo now runs those probes one after another.
+
 ## 0.13.0
 
 Changed
