@@ -1858,8 +1858,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "4369e529f0d56725100c93c22afc2dc132db6c49"
-    pin_tag = "4369e52"
+    pin_commit = "647c2b59b0a26b225f063783b48170112cd95c1a"
+    pin_tag = "647c2b5"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2099,8 +2099,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "4369e529f0d56725100c93c22afc2dc132db6c49"
-    pin_tag = "4369e52"
+    pin_commit = "647c2b59b0a26b225f063783b48170112cd95c1a"
+    pin_tag = "647c2b5"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2159,8 +2159,8 @@ main = "meshcom-qemu"
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
     # The setup step fetches from this remote (--src), and a repo test keeps the two identical.
     path = "src/MeshCom-Firmware"
-    pin_commit = "f2b3a3496a76f327abec8b7228bce436cafe9606"
-    pin_tag = "f2b3a34"
+    pin_commit = "05b842a28791c9478190f6cea0fcd547545d1873"
+    pin_tag = "v4.40a.hbserver-12-g05b842a2"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 
@@ -2527,8 +2527,8 @@ main = "meshcore-node"
     # openhop_core — so what is known-working is the upstream revision itself.
     [stack.component.source]
     path = "src/openhop-core"
-    pin_commit = "bef70214863f797ecb5ba956d06fc364537d285a"
-    pin_tag = "v1.0.10-449-gbef7021"
+    pin_commit = "141d94492bd313e908b44379ace213cd2cf8e3f2"
+    pin_tag = "v1.0.10-457-g141d944"
     remote = "https://github.com/openhop-dev/openhop_core.git"
     branch = "dev"
 

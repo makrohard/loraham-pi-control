@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.2
+
+- meshcom-qemu-raspi: 4369e529f -> 647c2b59b (647c2b5), used by meshcom-gps-relay, meshcom-qemu
+- MeshCom-Firmware: f2b3a3496 -> 05b842a28 (v4.40a.hbserver-12-g05b842a2), used by meshcom-firmware
+- openhop-core: bef702148 -> 141d94492 (v1.0.10-457-g141d944), used by meshcore-node
+
 ## 0.13.1
 
 Fixed
