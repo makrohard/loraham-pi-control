@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Fixed
+
+- Status: where no thread can start (the demo page, a box at its thread limit) a snapshot probes its
+  checkouts one after another instead of failing; the demo's own workaround is removed.
+
 ## 0.13.3
 
 Fixed
