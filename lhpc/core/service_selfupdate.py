@@ -657,15 +657,13 @@ class SelfUpdateOpsMixin:
 
     @staticmethod
     def _operator_outcome(res: ActionResult, *, restarted: bool) -> ActionResult:
-        """The operator flow has already synced the venv and (when the console was running)
-        restarted it, so the request path's advice — "restart the web console", the venv-sync
-        command, the dependencies note — would describe steps already taken. Replace it with what
-        happened; every other line (migrations, firewall) stays. Only a successful real advance."""
+        """Replace the request path's advice with what this flow did; a named state keeps its command."""
         import dataclasses as _dc
 
         from . import selfupdate
         partial = bool(res.data.get("cleanup_failed"))
-        if not ((res.ok or partial) and res.data.get("update_applied")):
+        finished = res.ok or partial
+        if not res.data.get("update_applied") or (not finished and res.data.get("venv_sync_failed")):
             return res
         instr = res.data.get("restart") or {}
         done = {instr.get("note", ""), "Restart the web console to load the new version:",
@@ -674,6 +672,8 @@ class SelfUpdateOpsMixin:
         details = [d for d in res.details if d and d not in done]
         details.append("The web console was restarted on the new version." if restarted else
                        "The web console is not running; it loads the new version when started.")
+        if not finished:
+            return _dc.replace(res, details=tuple(details))
         summary = "Update applied." if res.summary == selfupdate.APPLIED_RESTART_MESSAGE else res.summary
         if partial and res.summary == res.data.get("message"):
             # The restart advice in apply_update's partial message is already done here.

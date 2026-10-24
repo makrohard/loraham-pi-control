@@ -8,6 +8,8 @@ Fixed
   available.
 - Self-update: a units-stale result says whether boot restore runs on the old units (another release's
   web unit: it does) instead of always "skipped".
+- `lhpc self-update --apply` ending units-stale no longer asks to sync the venv and restart the console:
+  it had done both.
 
 ## 0.13.3
 
