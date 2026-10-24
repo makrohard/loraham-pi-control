@@ -6,6 +6,8 @@ Fixed
 
 - Update view: the note to repair another release's units says "then update" only when an update is
   available.
+- Self-update: a units-stale result says whether boot restore runs on the old units (another release's
+  web unit: it does) instead of always "skipped".
 
 ## 0.13.3
 
