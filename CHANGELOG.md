@@ -13,6 +13,8 @@ Fixed
   checkouts one after another instead of failing; the demo's own workaround is removed.
 - GPS feed: a stop signal that arrived while the feed was inside its own stop event's lock hung the
   feed until it was killed (endpoint and marker left behind); the signal handler now takes no lock.
+- Update view: the note to repair another release's units says "then update" only when an update is
+  available.
 
 ## 0.13.3
 
