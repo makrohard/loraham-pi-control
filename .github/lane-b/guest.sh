@@ -42,11 +42,31 @@ offline_user() {
 }
 
 boot() {
-  qemu-system-aarch64 -M virt -accel tcg -cpu max -smp 4 -m 4G -kernel "$WORK/vmlinuz" -initrd "$WORK/initrd" \
+  qemu-system-aarch64 -M virt -accel tcg -cpu max -smp 3 -m 4G -kernel "$WORK/vmlinuz" -initrd "$WORK/initrd" \
     -append "root=PARTUUID=$(cat "$WORK/partuuid") rw rootwait console=ttyAMA0" \
     -drive "file=$WORK/pios.img,format=raw,if=virtio" \
     -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0 \
     -display none -serial "file:$EV/console-$1.log" -daemonize -pidfile "$WORK/qemu.pid"
+}
+
+# Diagnostics (the observation, not the install): in the guest as root, the systemctl call bootstrap-deps relies
+# on (unit_present), sampled every 15 s with its rc, duration, stderr and the load; on the runner, load, memory
+# and QEMU's CPU share every 15 s. Both run in the background until collect_samples.
+start_samplers() {
+  gcp "$GITHUB_WORKSPACE/.github/lane-b/sampler.sh" sampler.sh
+  g 'sudo nohup bash sampler.sh > sampler.log 2> sampler.err < /dev/null & true'
+  ( while :; do printf '%s load=%s mem_avail_mb=%s qemu_cpu=%s\n' "$(date -u +%FT%TZ)" "$(cut -d' ' -f1-3 /proc/loadavg)" \
+      "$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)" "$(ps -o %cpu= -p "$(cat "$WORK/qemu.pid")" 2>/dev/null | tr -d ' ')"
+      sleep 15; done ) >> "$EV/runner-load.txt" 2>&1 &
+  echo $! > "$WORK/runner-sampler.pid"
+}
+
+# The guest's samples and journal around the install (also after a failure), and the runner sampler stopped.
+collect_samples() {
+  g 'sudo pkill -f "bash sampler.sh"; cat sampler.err 2>/dev/null; true' > "$EV/guest/sampler-stop.txt" 2>&1 || true
+  g 'sudo journalctl -b --no-pager -o short-iso -u dbus.service -u systemd-logind.service -u polkit.service -p warning; true' > "$EV/guest/journal-warnings.txt" 2>&1 || true
+  g 'sudo journalctl -b --no-pager -o short-iso _PID=1 | tail -n 300; true' > "$EV/guest/journal-pid1.txt" 2>&1 || true
+  kill "$(cat "$WORK/runner-sampler.pid" 2>/dev/null)" 2>/dev/null || true
 }
 
 halt() { kill "$(cat "$WORK/qemu.pid")" 2>/dev/null || true; local i; for i in $(seq 1 60); do kill -0 "$(cat "$WORK/qemu.pid")" 2>/dev/null || return 0; sleep 1; done; return 1; }

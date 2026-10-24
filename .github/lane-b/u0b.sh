@@ -36,7 +36,11 @@ python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" identity "$(uname -r)" "$E
 
 # README steps 4 and 5 at FROM (the stated reset), then step 6 (reboot), then step 8's units line for a manual install.
 gcp "$LB/guest-install.sh" guest-install.sh
-t0=$(date +%s); g "bash guest-install.sh $FROM" > "$EV/install.txt" 2>&1 || fail "the install at $FROM (see install.txt)"
+start_samplers
+t0=$(date +%s); irc=0; g "bash guest-install.sh $FROM" > "$EV/install.txt" 2>&1 || irc=$?
+g 'cat sampler.log 2>/dev/null; true' > "$EV/guest/systemctl-samples.txt" 2>&1 || true
+collect_samples
+[ "$irc" -eq 0 ] || fail "the install at $FROM, rc $irc (see install.txt; guest/systemctl-samples.txt, runner-load.txt)"
 m install_s $(( $(date +%s) - t0 )); grep -E '^t_' "$EV/install.txt" | tee -a "$EV/measurements.txt"
 b0=$(g cat /proc/sys/kernel/random/boot_id) && [ -n "$b0" ] || fail "the boot id before the reboot could not be read"
 # The reboot's own rc says nothing (ssh drops as the guest goes down); a new boot id says it happened.
