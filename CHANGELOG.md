@@ -10,6 +10,8 @@ Fixed
   web unit: it does) instead of always "skipped".
 - `lhpc self-update --apply` ending units-stale no longer asks to sync the venv and restart the console:
   it had done both.
+- Docs: after an update from 0.12.10 or older, one venv sync to `requirements.lock` (that release synced
+  without it).
 
 ## 0.13.3
 
