@@ -1325,6 +1325,90 @@ def test_a_stop_signal_right_after_the_endpoint_appears_leaves_nothing(short_tmp
     assert not os.path.exists(bridge_endpoint_path(short_tmp_path, "meshcore"))
 
 
+@pytest.mark.parametrize("where", ["pump", "teardown"])
+def test_a_stop_signal_while_the_main_thread_holds_the_stop_events_lock_ends_the_feed(short_tmp_path, where):
+    """Python runs a signal handler on the main thread between two bytecodes, so it can land while that
+    thread is inside the stop Event's own set/is_set/wait and holds its (non-reentrant) lock: in a pump's
+    loop, or in run()'s teardown. A handler that takes the same lock waits for itself forever; the feed then
+    ignores every further SIGTERM until it is killed, and a kill skips the teardown. A separate process, so
+    a hang is a timeout here. Red before: hung in both places (the handler called stop.set())."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    from lhpc.core.config import save_gps
+    from lhpc.core.gps import bridge_endpoint_path
+    from lhpc.core.paths import Paths
+    (short_tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    save_gps(Paths(runtime_root=short_tmp_path), source="fixed", fixed_lat="48.1", fixed_lon="11.5")
+    code = (
+        "import os, pathlib, signal, sys, threading\n"
+        "import lhpc.core.gps_bridge as b\n"
+        "from lhpc.core.paths import Paths\n"
+        "where = sys.argv[2]\n"
+        "class Stop(threading.Event):\n"
+        "    fired = False\n"
+        "    def _signal_inside_the_lock(self):\n"
+        "        Stop.fired = True\n"
+        "        with self._cond:\n"
+        "            os.kill(os.getpid(), signal.SIGTERM)\n"
+        "            for _ in range(3):\n"
+        "                pass\n"
+        "    def is_set(self):\n"
+        "        if where == 'pump' and not Stop.fired:\n"
+        "            self._signal_inside_the_lock()\n"
+        "        return super().is_set()\n"
+        "    def set(self):\n"
+        "        if where == 'teardown' and not Stop.fired:\n"
+        "            self._signal_inside_the_lock()\n"
+        "        super().set()\n"
+        "if where == 'teardown':\n"
+        "    b._pump_fixed = lambda *a, **k: None\n"
+        "rc = b.run('meshcore', Paths(runtime_root=pathlib.Path(sys.argv[1])), stop=Stop())\n"
+        "print('fired', Stop.fired)\n"
+        "sys.exit(rc)\n")
+    repo = Path(__file__).resolve().parents[2]
+    try:
+        p = subprocess.run([sys.executable, "-c", code, str(short_tmp_path), where], capture_output=True,
+                           text=True, env={**os.environ, "PYTHONPATH": str(repo)}, timeout=_FEED_UP_S,
+                           check=False)
+    except subprocess.TimeoutExpired:
+        pytest.fail("the handler waited for a lock its own thread holds")
+    assert (p.returncode, p.stdout.strip()) == (0, "fired True"), (p.returncode, p.stdout, p.stderr)
+    assert not os.path.exists(bridge_endpoint_path(short_tmp_path, "meshcore"))
+
+
+def test_a_stop_signal_before_the_pump_starts_skips_the_pump(short_tmp_path, monkeypatch):
+    """A SIGTERM during the setup (before a pump runs) only records the stop, so the pump must then not start:
+    the pumps loop on the stop event, which the handler no longer sets. Red before: the pump ran."""
+    import signal
+    import threading
+    from lhpc.core.config import save_gps
+    from lhpc.core.gps import bridge_endpoint_path
+    from lhpc.core.paths import Paths
+    import lhpc.core.gps_bridge as bridge_mod
+    (short_tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    paths = Paths(runtime_root=short_tmp_path)
+    save_gps(paths, source="gpsd", host="127.0.0.1", port=9)
+    pumped = []
+    monkeypatch.setattr(bridge_mod, "_pump_gpsd", lambda *_a, **_k: pumped.append(1))
+    degrade = bridge_mod.Readiness.degrade
+
+    def degrade_under_signal(self, *a, **k):        # run()'s first step after the publish: setup
+        if not pumped and not getattr(self, "_signalled", False):
+            self._signalled = True
+            signal.pthread_kill(threading.main_thread().ident, signal.SIGTERM)
+        degrade(self, *a, **k)
+    monkeypatch.setattr(bridge_mod.Readiness, "degrade", degrade_under_signal)
+    saved = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        rc = bridge_mod.run("meshcore", paths)
+    finally:
+        for sig, h in saved.items():
+            signal.signal(sig, h)
+    assert rc == bridge_mod.EXIT_OK and pumped == []
+    assert not os.path.exists(bridge_endpoint_path(short_tmp_path, "meshcore"))
+
+
 @pytest.mark.parametrize("listen_delay_s", [0.0, 0.5])
 def test_the_bridge_serves_meshcore_a_position_feed(short_tmp_path, fake_gpsd, monkeypatch, listen_delay_s):
     """MeshCore's consumer is the openHop host app: it needs a normalized POSITION

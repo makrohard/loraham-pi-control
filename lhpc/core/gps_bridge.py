@@ -35,6 +35,7 @@ import threading
 import time
 from typing import ClassVar
 
+from .abortflag import AbortFlag
 from .gps import (  # noqa: F401 -- the classifier names are re-exported for the tests
     _NAV_SENTENCES,
     FEED_COMPONENTS,
@@ -928,33 +929,47 @@ class _Stopped(BaseException):
     interrupted call when the handler returns, and the lifecycle waits only `stop_timeout`."""
 
 
-def _install_stop_signals(stop, pumping) -> None:
-    """Turn SIGTERM/SIGINT into a normal shutdown: set the stop event and, only while a pump runs
-    (`pumping`), abandon the call it blocks in. Outside a pump (setup, publishing, the teardown) a
-    signal only sets the event, so it can never cut a teardown short. Best-effort: signal handlers
-    can only be installed on the main thread, and a caller driving `run()` from a worker (tests)
+class _StopSignal:
+    """What the SIGTERM/SIGINT handler touches: two plain attributes, never a lock. Python runs the handler
+    on the main thread between two bytecodes, so it can land while that thread holds an Event's lock (inside
+    `set`, `is_set`'s callers, `wait`); a handler that took the same lock would wait for itself forever.
+    `abort` records the stop; `pumping` says a pump runs, whose blocking call the handler may abandon."""
+    __slots__ = ("abort", "pumping")
+
+    def __init__(self):
+        self.abort = AbortFlag()
+        self.pumping = False
+
+    def handle(self, _s, _f):
+        self.abort.request()
+        if self.pumping:
+            self.pumping = False       # once: the teardown that follows is never interrupted
+            raise _Stopped()
+
+
+def _install_stop_signals(sig: _StopSignal) -> None:
+    """Turn SIGTERM/SIGINT into a normal shutdown: record it and, only while a pump runs, abandon the call it
+    blocks in. Outside a pump (setup, publishing, the teardown) a signal is only recorded, so it can never cut
+    a teardown short; a pump that was not yet entered then does not start (`_pump`). Best-effort: signal
+    handlers can only be installed on the main thread, and a caller driving `run()` from a worker (tests)
     already owns the stop event."""
     import signal
-
-    def handler(_s, _f):
-        stop.set()
-        if pumping.is_set():
-            pumping.clear()            # once: the teardown that follows is never interrupted
-            raise _Stopped()
     try:
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            signal.signal(sig, handler)
+        for s in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(s, sig.handle)
     except (ValueError, OSError):
         pass
 
 
-def _pump(pumping, fn, *args, **kwargs) -> None:
-    """Run one source pump with the stop signal allowed to end its blocking call."""
-    pumping.set()
+def _pump(sig: _StopSignal, fn, *args, **kwargs) -> None:
+    """Run one source pump with the stop signal allowed to end its blocking call. `pumping` is set BEFORE the
+    check: a signal before the check is seen by it, a signal after it raises inside the pump."""
+    sig.pumping = True
     try:
-        fn(*args, **kwargs)
+        if not sig.abort.requested():
+            fn(*args, **kwargs)
     finally:
-        pumping.clear()
+        sig.pumping = False
 
 
 def run(consumer: str, paths, stop=None) -> int:
@@ -994,13 +1009,13 @@ def run(consumer: str, paths, stop=None) -> int:
         out = UnixClientOutput(link, paths)
 
     stop = stop or threading.Event()
-    pumping = threading.Event()
+    sig = _StopSignal()
     # SIGTERM is how the lifecycle stops us. Python's default handler exits the process
     # OUTRIGHT, so `finally` never runs and we would leave behind a live-looking endpoint
     # and a readiness marker still saying "ready" — a stopped GPS that reads healthy.
     # Translating the signal into the stop event lets the normal teardown happen. Installed
     # BEFORE the first thing that persists (the endpoint): an earlier stop leaves nothing behind.
-    _install_stop_signals(stop, pumping)
+    _install_stop_signals(sig)
     try:
         out.publish()
     except OSError as exc:
@@ -1011,7 +1026,7 @@ def run(consumer: str, paths, stop=None) -> int:
         ready.degrade("starting", f"source={plan.source}")
         _log(f"serving {consumer} via {kind} from source={plan.source}")
         if plan.source == "gpsd":
-            _pump(pumping, _pump_gpsd, plan.host, plan.port, out, ready, stop)
+            _pump(sig, _pump_gpsd, plan.host, plan.port, out, ready, stop)
         elif plan.source == "nmea":
             # Only this branch gets the monitor: the feed owns a serial receiver the console
             # cannot safely read itself. gpsd and fixed feeds are untouched (the console is its
@@ -1019,13 +1034,13 @@ def run(consumer: str, paths, stop=None) -> int:
             monitor = MonitorServer(consumer, paths)
             monitor.publish()
             try:
-                _pump(pumping, _pump_nmea, plan.device, plan.nmea_baud, out, ready, stop,
+                _pump(sig, _pump_nmea, plan.device, plan.nmea_baud, out, ready, stop,
                       expect_key=plan.device_key, monitor=monitor)
             finally:
                 monitor.close()
         elif plan.source == "fixed":
             alt = float(plan.fixed_alt) if plan.fixed_alt else None
-            _pump(pumping, _pump_fixed, float(plan.fixed_lat), float(plan.fixed_lon), alt, out, ready, stop)
+            _pump(sig, _pump_fixed, float(plan.fixed_lat), float(plan.fixed_lon), alt, out, ready, stop)
         else:
             _log(f"unsupported source {plan.source!r}")
             return EXIT_CONFIG
