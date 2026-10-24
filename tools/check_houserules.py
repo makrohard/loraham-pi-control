@@ -194,6 +194,32 @@ def budgets(source: str | None) -> dict | None:
     return None
 
 
+def changelog_sections(rev: str) -> tuple[int, int]:
+    """(the line of the second `## ` heading, the top section's length) of CHANGELOG at `rev`."""
+    lines = (show(rev, CHANGELOG) or "").splitlines() if CHANGELOG else []
+    heads = [i + 1 for i, line in enumerate(lines) if line.startswith("## ")]
+    second = heads[1] if len(heads) > 1 else len(lines) + 1
+    return second, (second - heads[0] - 1) if heads else 0
+
+
+def changelog_bullets(added: list, second: int) -> tuple[list[int], bool]:
+    """The lines of each added CHANGELOG bullet, and whether one sits below the top section (at `second`)."""
+    bullets, below, active, last = [], False, False, None
+    for path, n, text in added:
+        if path != CHANGELOG:
+            continue
+        if text.startswith("- "):
+            bullets.append(1)
+            below = below or n >= second
+            active = True
+        elif text.startswith("  ") and active and n == last + 1:
+            bullets[-1] += 1                 # a continuation: directly below its bullet, indented
+        else:
+            active = False
+        last = n
+    return bullets, below
+
+
 def check(base: str, head: str, facts: list[str], correction: bool = False) -> list[tuple[str, str, str]]:
     rng = f"{base}..{head}"
     added = added_lines(git("diff", "--unified=0", rng))
@@ -208,31 +234,19 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
         rows.append(("profile", ".houserules.toml changed in this range (rules read at <base>)",
                      "WARN" if changed == {".houserules.toml"} else "HARD"))
 
-    # changelog
-    head_cl = (show(head, CHANGELOG) or "").splitlines() if CHANGELOG else []
-    heads = [i + 1 for i, line in enumerate(head_cl) if line.startswith("## ")]
-    second = heads[1] if len(heads) > 1 else len(head_cl) + 1
-    top = (second - heads[0] - 1) if heads else 0
-    bullets, below, active, last = [], False, False, None
-    for path, n, text in added:
-        if path != CHANGELOG:
-            continue
-        if text.startswith("- "):
-            bullets.append(1)
-            below = below or n >= second
-            active = True
-        elif text.startswith("  ") and active and n == last + 1:
-            bullets[-1] += 1                 # a continuation: directly below its bullet, indented
-        else:
-            active = False
-        last = n
+    # changelog: the count per commit (one item each); each bullet's length and place over the range, against
+    # <head>'s sections, so a bullet grown over two commits is still one bullet
+    second, top = changelog_sections(head)
+    bullets, below = changelog_bullets(added, second)
+    most = max((len(changelog_bullets(added_lines(git("show", "--unified=0", "--format=", sha)), second)[0])
+                for sha, _, _ in commits), default=0) if CHANGELOG else 0
     long_bullet = any(b > 2 for b in bullets)
     # `--correction`: an item that only corrects a released section says so, and its bullets
     # below the top section are shown (WARN), not refused.
-    v = ("HARD" if len(bullets) > 2 or long_bullet or (below and not correction)
+    v = ("HARD" if most > 2 or long_bullet or (below and not correction)
          else "WARN" if below else "OK")
-    rows.append(("changelog", f"+{len(bullets)} bullets (limit 2, each ≤ 2 lines; longest "
-                              f"{max(bullets, default=0)}), top section {top} lines", v))
+    rows.append(("changelog", f"+{len(bullets)} bullets, at most {most} in a commit (limit 2 per commit, each "
+                              f"≤ 2 lines; longest {max(bullets, default=0)}), top section {top} lines", v))
 
     # docs
     docs = sorted(p for p in changed if (p.startswith("docs/") and p.endswith(".md")) or p == "README.md")
