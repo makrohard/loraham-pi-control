@@ -375,7 +375,9 @@ main = "loraham-chat"
   name = "LoRaHAM Chat"
   kind = "service"
   band = "433"
-  # 433-only: the source hard-codes /tmp/lora433.sock + /tmp/loraconf433.sock.
+  # 433-only. The daemon LHPC runs serves its sockets in /tmp (LORAHAM_SOCKET_DIR): chat is
+  # given both on its command line (chat >= daemon 1.3.0 takes --data-socket/--conf-socket and uses
+  # them at every open), so it talks to that daemon, and the data socket names its instance.
   purpose = "Interactive APRS/chat TUI using the daemon (manual-first)."
   tx_capable = true
   interactive = true
@@ -388,8 +390,8 @@ main = "loraham-chat"
   bin = "loraham_chat"
   # Run from the runtime config dir so the TUI reads the lhpc-seeded lorachat.conf
   # (and its in-app Ctrl-K saves persist there too) — never written into the repo.
-  run = 'cd "{runtime}/config/files" && exec "{source}/loraham_chat"'
-  run_argv = ["{source}/loraham_chat"]
+  run = 'cd "{runtime}/config/files" && exec "{source}/loraham_chat" {data_socket} {conf_socket}'
+  run_argv = ["{source}/loraham_chat", "{param:data_socket}", "{param:conf_socket}"]
   run_cwd = "{runtime}/config/files"
   readiness = "manual"
   note = "Interactive ncurses TUI (needs a real TTY; no headless mode). lhpc seeds lorachat.conf (callsign + TX/RX freq + APRS dest/path) from the Config page; the in-app Ctrl-K menu still works and saves back to it. One daemon client per band: it holds 433 like every daemon-backed stack."
@@ -442,8 +444,25 @@ main = "loraham-chat"
       default = "APRS,WIDE1-1"
       label = "APRS path"
 
+    [[stack.component.param]]
+    name = "data_socket"
+    kind = "str"
+    validator = "path"
+    arg = "--data-socket"
+    default = "/tmp/lora433.sock"
+    label = "Daemon raw data socket"
+    advanced = true
+    [[stack.component.param]]
+    name = "conf_socket"
+    kind = "str"
+    validator = "path"
+    arg = "--conf-socket"
+    default = "/tmp/loraconf433.sock"
+    label = "Daemon config socket"
+    advanced = true
     [stack.component.process]
     exec_name = "loraham_chat"
+    instance_arg = ["--data-socket", "{param:data_socket}"]   # A §2.3: this instance's exact argv token pair
 
 # =====================================================================
 # Stack: voice — daemon-backed voice (GTK app + terminal variant)
@@ -847,6 +866,7 @@ main = "loraham-kiss-tnc"
     branch = "main"
 
     [stack.component.process]
+    instance_arg = ["--data-socket", "{param:data_socket}"]   # A §2.3: this instance's exact argv token pair
     # Must match the ACTUAL binary basename (run_argv[0]/bin = "loraham-kiss-tnc", hyphens): with
     # a wrong name probe_process never matches the running TNC, status reads "stopped" and
     # known-working refuses to confirm it.
@@ -1014,6 +1034,7 @@ main = "graywolf"
     # REQUIRED and unconditional: provisioning is what makes the station work, so a failed
     # push must fail the start instead of leaving graywolf up with an empty config.
     [stack.component.process]
+    instance_arg = ["-config", "{runtime}/state/graywolf/graywolf.db"]   # A §2.3: this instance's exact argv token pair
     # The unpacked artifact's basename — LHPC runs build/tools/graywolf/usr/bin/graywolf, never
     # a /usr/bin/graywolf from a system package (there is deliberately no such package). The
     # basename ALONE is not enough: an operator who once installed the .deb by hand still has a
@@ -1173,10 +1194,11 @@ main = "meshtastic"
   # `{controller_python}` is controller-derived (like {runtime}/{source}) — the bridge is
   # lhpc's OWN internal service, so it must run through this controller's interpreter and
   # never whatever python3/lhpc happens to be on PATH.
-  run_argv = ["{controller_python}", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshtastic"]
+  run_argv = ["{controller_python}", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshtastic", "--state", "{runtime}/state/gps/meshtastic"]
   note = "Starts automatically when the global position source needs it (see `lhpc gps`) — not a manual choice."
 
     [stack.component.process]
+    instance_arg = ["--state", "{runtime}/state/gps/meshtastic"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python3"
     all_args = ["_gps-bridge", "meshtastic"]
 
@@ -1357,6 +1379,7 @@ main = "meshtastic"
     local_dir = "meshtastic-firmware"
 
     [stack.component.process]
+    instance_arg = ["-d", "{runtime}/state/meshtasticd"]   # A §2.3: this instance's exact argv token pair
     exec_name = "meshtasticd"
 
     [[stack.component.require]]
@@ -1806,6 +1829,7 @@ main = "meshcom-qemu"
     branch = "main"
 
     [stack.component.process]
+    instance_arg = ["--port", "{param:port}"]   # A §2.3: this instance's exact argv token pair
     exec_name = "meshcom-loraham-bridge"
 
     [[stack.component.endpoint]]
@@ -1852,10 +1876,11 @@ main = "meshcom-qemu"
   tx_capable = false
   optional = true
   start_order = 2
-  run_argv = ["{controller_python}", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshcom"]
+  run_argv = ["{controller_python}", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshcom", "--state", "{runtime}/state/gps/meshcom"]
   note = "Starts automatically when the global position source needs it (see `lhpc gps`) — not a manual choice."
 
     [stack.component.process]
+    instance_arg = ["--state", "{runtime}/state/gps/meshcom"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python3"
     all_args = ["_gps-bridge", "meshcom"]
 
@@ -1920,6 +1945,7 @@ main = "meshcom-qemu"
     branch = "main"
 
     [stack.component.process]
+    instance_arg = ["--uart", ".run/gps-uart1.sock"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python3"
     all_args = ["gps-relay.py"]
 
@@ -2161,6 +2187,7 @@ main = "meshcom-qemu"
     branch = "main"
 
     [stack.component.process]
+    instance_arg = ["-drive", "file={runtime}/state/meshcom/node-flash.bin,if=mtd,format=raw"]   # A §2.3: this instance's exact argv token pair
     exec_name = "qemu-system-xtensa"
 
     [[stack.component.endpoint]]
@@ -2240,10 +2267,11 @@ main = "meshcore-node"
   start_order = 0
   # `{controller_python}` is controller-derived — the bridge is lhpc's OWN internal service
   # and must run through this controller's interpreter, never whatever python3 is on PATH.
-  run_argv = ["{controller_python}", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshcore"]
+  run_argv = ["{controller_python}", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshcore", "--state", "{runtime}/state/gps/meshcore"]
   note = "Starts automatically when the global position source is live (see `lhpc gps`) — not a manual choice."
 
     [stack.component.process]
+    instance_arg = ["--state", "{runtime}/state/gps/meshcore"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python3"
     all_args = ["_gps-bridge", "meshcore"]
 
@@ -2600,6 +2628,7 @@ main = "meshcore-node"
     label = "Use the global position source (Position (GPS) card on the Stacks page)"
 
     [stack.component.process]
+    instance_arg = ["meshcore_host", "{runtime}/config/files/meshcore.toml"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python"
     all_args = ["meshcore_host"]
 
@@ -2725,6 +2754,7 @@ main = "meshcore-node"
   start_note = "Open the MeshCore Web UI via the LHPC Webserver page (enable its proxy for the meshcore stack)."
 
     [stack.component.process]
+    instance_arg = ["--port", "8788"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python"
     all_args = ["uvicorn", "app.main:app"]
 
@@ -2846,6 +2876,7 @@ main = "meshcore-node"
     advisory = true
 
     [stack.component.process]
+    instance_arg = ["-p", "{param:port}"]   # A §2.3: this instance's exact argv token pair
     exec_name = "meshcli"
 
     # meshcli connects to the MeshCore companion server (default port 5000).

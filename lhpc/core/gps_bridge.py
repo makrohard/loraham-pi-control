@@ -972,16 +972,22 @@ def _pump(sig: _StopSignal, fn, *args, **kwargs) -> None:
         sig.pumping = False
 
 
-def run(consumer: str, paths, stop=None) -> int:
+def run(consumer: str, paths, stop=None, state: str = "") -> int:
     """Serve one consumer until stopped. Reads `[gps]` DIRECTLY — no rendered string, so
-    no saved or ephemeral user value can become the source."""
+    no saved or ephemeral user value can become the source. `state` is the instance's state
+    dir from its argv (`--state`, its process identity, A §2.3); it must be the dir this
+    consumer's state lives in, so the token names the bridge truthfully."""
     from .config import load_config
-    from .gps import plan_from_config
+    from .gps import bridge_state_dir, plan_from_config
 
     # DERIVED from the one feed mapping — a private list here is exactly how a declared,
     # selected, running feed was still refused as an unknown consumer.
     if consumer not in FEED_COMPONENTS:
         _log(f"unknown consumer {consumer!r}")
+        return EXIT_CONFIG
+    if state and os.path.normpath(state) != os.path.normpath(bridge_state_dir(paths.runtime_root,
+                                                                               consumer)):
+        _log(f"--state {state!r} is not {consumer}'s state dir")
         return EXIT_CONFIG
 
     # Under `auto`, honor the CONTROLLER's frozen verdict (it admitted this feed from it) —
