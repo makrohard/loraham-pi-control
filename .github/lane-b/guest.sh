@@ -69,6 +69,15 @@ collect_samples() {
   kill "$(cat "$WORK/runner-sampler.pid" 2>/dev/null)" 2>/dev/null || true
 }
 
+# Diagnostics after a failed units line (the observation, not a fix): the user unit's status and journal, then one
+# timed `systemctl --user start` purely as a measurement of how long the start takes under TCG.
+observe_nginx() {
+  g 'systemctl --user status --no-pager lhpc-nginx.service; true' > "$EV/guest/nginx-status.txt" 2>&1 || true
+  g 'journalctl --user --no-pager -o short-iso -u lhpc-nginx.service; true' > "$EV/guest/nginx-journal.txt" 2>&1 || true
+  g 's=$(date +%s%N); systemctl --user start lhpc-nginx.service; r=$?; echo "rc=$r ms=$(( ($(date +%s%N) - s) / 1000000 ))"; systemctl --user is-active lhpc-nginx.service; true' \
+    > "$EV/guest/nginx-start-timed.txt" 2>&1 || true
+}
+
 halt() { kill "$(cat "$WORK/qemu.pid")" 2>/dev/null || true; local i; for i in $(seq 1 60); do kill -0 "$(cat "$WORK/qemu.pid")" 2>/dev/null || return 0; sleep 1; done; return 1; }
 
 # Polls until ssh answers; returns 1 at the bound.

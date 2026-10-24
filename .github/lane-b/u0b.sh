@@ -52,7 +52,9 @@ line=$(g "grep -m1 '# installs the units' ~/loraham-pi-control/src/loraham-pi-co
 printf '%s\n' "$line" > "$EV/units-line.txt"
 case "$line" in "lhpc self-update --repair-integration"*) ;; *) fail "the README at $FROM has no units line" ;; esac
 g 'bash -lc "command -v lhpc"' > "$EV/command-v.txt" 2>&1 || fail "lhpc is not on the login PATH (see command-v.txt)"
-g "bash -lc $(printf %q "$line")" > "$EV/units.txt" 2>&1 || fail "the units line (see units.txt)"
+t0=$(date +%s); urc=0; g "bash -lc $(printf %q "$line")" > "$EV/units.txt" 2>&1 || urc=$?
+m units_line_rc "$urc"; m units_line_s "$(( $(date +%s) - t0 ))"
+[ "$urc" -eq 0 ] || { observe_nginx; fail "the units line (see units.txt, guest/nginx-*.txt)"; }
 g 'stat -c "%Y %y %n" ~/.config/systemd/user/lhpc-*; systemctl --user cat lhpc-web.service lhpc-nginx.service lhpc-boot-restore.service; true' > "$EV/units-before.txt" 2>&1
 
 # U0 as written: the runsheet's prelude and U0 block (their shas checked by the workflow); the transport Hx is the
