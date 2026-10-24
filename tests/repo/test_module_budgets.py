@@ -20,7 +20,7 @@ CORE = repo_paths.REPO / "lhpc" / "core"
 
 # file: (max lines, max public methods) — measured on dev at 0.12.9, raised where a line says why
 BUDGETS = {
-    "services.py": (2254, 23),  # split-s6: the import of the new mixin; split-s7: the import of the new mixin; split-s5: the import of the new mixin
+    "services.py": (2266, 23),  # co-16: doctor names an AP the firewall drops; split-s6: the import of the new mixin; split-s7: the import of the new mixin; split-s5: the import of the new mixin
     "service_base.py": (166, 0),
     "service_admission.py": (459, 0),  # split-s4: split from services.py
     "service_auto_install.py": (1875, 16),
@@ -35,7 +35,7 @@ BUDGETS = {
     "service_jobs.py": (765, 9),  # split-s6: split from service_lifecycle_ops.py
     "service_lifecycle_ops.py": (3357, 32),
     "service_maintenance.py": (2892, 30),  # testlab-det-1: S1 keeps curl rc and message; trackF-c3: update routes the web client
-    "service_network.py": (1183, 9),
+    "service_network.py": (1272, 10),  # co-16: the check that the firewall's AP rules cover the AP
     "service_params.py": (2485, 39),
     "service_rflog.py": (474, 13),  # split-s1: split from service_lifecycle_ops.py
     "service_secrets.py": (399, 2),

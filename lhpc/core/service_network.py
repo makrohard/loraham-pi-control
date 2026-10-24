@@ -174,6 +174,78 @@ class NetworkOpsMixin:
         self._net_cap_cache = (ok, now)
         return ok
 
+    def ap_firewall_gap(self) -> dict | None:
+        """CO-16: the AP profile is served by NM (`ipv4.method shared`: DHCP + DNS on the box) but
+        the managed firewall's AP rules do not cover it, so secure-default drops its clients'
+        DHCP/DNS — a visible AP nobody can join. None when there is no managed firewall, no
+        lhpc-ap profile, a non-shared profile, or AP rules for exactly this interface + subnet
+        that are both saved and live. Else {interface, cidr, saved, live, line, commands}; an
+        interface or subnet the profile does not name stays "" (no guessed wlan0), and a profile
+        whose details cannot be read is a gap too (fail closed: nothing proves the rules); nmcli's
+        "no such connection" (exit 10) means it was deleted since the listing: no profile."""
+        if not self._fw_integration_present() or not self.network_supported():
+            return None
+        rc, out, _err = self._nmcli(["-g", "connection.interface-name,ipv4.method,ipv4.addresses",
+                                     "connection", "show", self.AP_PROFILE])
+        if rc == 10:                                # nmcli: no such connection — the profile is gone
+            return None
+        if rc != 0:
+            return {"interface": "", "cidr": "", "saved": False, "live": False, "commands": [],
+                    "line": f"AP profile {self.AP_PROFILE} present but its settings could not be "
+                            f"read (nmcli rc {rc}): the firewall's AP rules cannot be checked"}
+        iface, method, addrs = [*out.splitlines(), "", "", ""][:3]
+        if method.strip() != "shared":
+            return None
+        try:
+            first = addrs.replace("\\", "").split(",")[0].strip()
+            cidr = (str(ipaddress.ip_interface(first).network) if first
+                    else "10.42.0.0/24")                  # NM's own address for a shared profile
+        except ValueError:
+            cidr = ""
+        iface = iface.strip()
+        fw = self.config().firewall
+        saved = bool(fw.ap_enabled and iface and cidr and fw.ap_interface == iface
+                     and fw.ap_cidr == cidr)
+        live = bool(iface and cidr) and self._fw_ap_live(iface, cidr)
+        if saved and live:
+            return None
+        if not iface or not cidr:
+            line = (f"AP profile {self.AP_PROFILE} names no interface or subnet the firewall can "
+                    "allow: AP clients get no DHCP/DNS (set connection.interface-name)")
+            cmds: list = []
+        elif live:
+            line = (f"AP profile {self.AP_PROFILE}: the firewall's AP rules are live but not saved "
+                    f"({iface}, {cidr}): the next firewall apply drops them")
+            cmds = [f"lhpc firewall --ap on --ap-interface {iface} --ap-cidr {cidr}"]
+        else:
+            line = (f"AP profile {self.AP_PROFILE} present but the firewall's AP rules are "
+                    f"{'saved, not applied' if saved else 'off'} ({iface}, {cidr}): AP clients "
+                    "get no DHCP/DNS")
+            cmds = ([] if saved else
+                    [f"lhpc firewall --ap on --ap-interface {iface} --ap-cidr {cidr}"])
+            cmds += self._fw_apply_lines()
+        return {"interface": iface, "cidr": cidr, "saved": saved, "live": live, "line": line,
+                "commands": cmds}
+
+    def _fw_ap_live(self, iface: str, cidr: str) -> bool:
+        """The AP rules for (iface, cidr) are in force: the root helper's fresh, verified receipt
+        is for the candidate it accepted, and that candidate enables exactly this AP. Unrelated
+        firewall changes (a saved intent not yet applied, a stale helper revision) do not count
+        against the AP, and every unreadable or mismatched piece reads as not live."""
+        import json as _json
+
+        from . import firewall as _fw
+        receipt = self._fw_read_receipt()
+        if not receipt or receipt.get("verdict") != "verified" or not self._fw_receipt_fresh(receipt):
+            return False
+        try:
+            accepted = _json.loads(self._system.fs.read_text(_fw.CANDIDATE_DEST, 256 * 1024) or "")
+            if _fw.intent_hash(accepted) != receipt.get("intent_hash"):
+                return False
+        except (OSError, ValueError, TypeError, AttributeError):
+            return False
+        return accepted.get("ap") == {"enabled": True, "interface": iface, "cidr": cidr}
+
     def _network_authorized(self) -> bool:
         """Cached logind-style verdict on `nmcli general permissions`: both required NM
         actions report `yes` for this process's user. Bounded TTL both ways."""
@@ -295,6 +367,7 @@ class NetworkOpsMixin:
         act = self._nm_active(listed := self._nmcli(self._NM_ACTIVE)[:2])   # one answer, both rows
         view["mode"] = ("ap" if act.get("name") == self.AP_PROFILE
                         else ("client" if act else "off"))
+        view["ap_firewall"] = self.ap_firewall_gap()        # CO-16: an AP nobody can join
         view["active"] = act
         view["ethernet"] = self._nm_ethernet(listed)
         if view["mode"] == "ap":
@@ -838,11 +911,27 @@ class NetworkOpsMixin:
             if self._net_preferred().get("uuid"):
                 details.append("  [note] the preferred-network flag is CLEARED — the box "
                                "stays on its AP until you join a network again")
+            if (gap := self.ap_firewall_gap()) is not None and not gap["live"]:
+                details.append(f"  [warn] {gap['line']} — the switch is refused until the "
+                               "firewall's AP rules are live")
             return ActionResult(True, "Switch back to AP mode?", details=details)
         if not (self.network_supported() and self._network_authorized()):
             return ActionResult(False, "network controls are not available on this box")
         if ap is None:
             return ActionResult(False, "no AP profile found on this box")
+        # CO-16: an AP its clients cannot join strands the operator. Save the AP rules for this
+        # profile (unprivileged); they go live only with the root apply, so refuse until then.
+        gap = self.ap_firewall_gap()
+        if gap is not None and not gap["saved"] and gap["interface"] and gap["cidr"]:
+            self.firewall_configure(ap_enabled=True, ap_interface=gap["interface"],
+                                    ap_cidr=gap["cidr"])
+            gap = self.ap_firewall_gap()
+        if gap is not None and not gap["live"]:
+            return ActionResult(False, f"Cannot switch to AP: {gap['line']} — the box stays on "
+                                       "its current network",
+                                details=["Make the firewall's AP rules live, then switch:"]
+                                + [f"  {c}" for c in gap["commands"]],
+                                next_commands=gap["commands"])
         from .lifecycle import current_boot_id
         boot_id = current_boot_id()
         if not boot_id:

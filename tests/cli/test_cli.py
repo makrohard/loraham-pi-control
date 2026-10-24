@@ -1061,6 +1061,28 @@ def test_firewall_cli_points_at_the_deferred_webserver_apply(tmp_path, monkeypat
     assert "the running console completes it automatically" in out
 
 
+def test_firewall_cli_names_an_ap_the_firewall_drops(tmp_path, monkeypatch, capsys):
+    """CO-16 (round 1 F4): `lhpc firewall` prints the AP gap and the commands that close it, and
+    nothing about the AP when there is none."""
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    assert main(["bootstrap", "--yes"]) == 0
+    capsys.readouterr()
+    line = ("AP profile lhpc-ap present but the firewall's AP rules are off (wlan0, 10.42.0.0/24): "
+            "AP clients get no DHCP/DNS")
+    gap = {"interface": "wlan0", "cidr": "10.42.0.0/24", "saved": False, "live": False, "line": line,
+           "commands": ["lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.42.0.0/24",
+                        "sudo bash /x/firewall-apply.sh"]}
+    monkeypatch.setattr(ControllerService, "ap_firewall_gap", lambda self: gap, raising=False)
+    assert main(["firewall"]) == 0
+    out = capsys.readouterr().out
+    assert f"\nWARN  {line}\n" in out
+    assert ("To make the AP usable:\n  lhpc firewall --ap on --ap-interface wlan0 --ap-cidr "
+            "10.42.0.0/24\n  sudo bash /x/firewall-apply.sh") in out
+    monkeypatch.setattr(ControllerService, "ap_firewall_gap", lambda self: None, raising=False)
+    assert main(["firewall"]) == 0
+    assert "AP profile" not in capsys.readouterr().out
+
+
 def test_explain_models_the_meshtastic_cli_as_tx_capable(tmp_path, monkeypatch, capsys):
     # the manifest is the capability model — the managed CLI can transmit through the
     # node, so `lhpc explain` must not call it RX-only (as the MeshCore CLI is not).

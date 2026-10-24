@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Fixed
+
+- Wi-Fi access point: an `lhpc-ap` profile without the firewall's AP rules (clients got no address) is named
+  by doctor, `lhpc firewall` and the Network panel; Back to AP mode saves the rules and waits for their apply.
+
 ## 0.13.2
 
 - meshcom-qemu-raspi: 4369e529f -> 647c2b59b (647c2b5), used by meshcom-gps-relay, meshcom-qemu

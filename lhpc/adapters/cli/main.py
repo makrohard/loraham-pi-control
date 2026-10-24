@@ -1560,6 +1560,12 @@ def _run(argv: list[str] | None = None) -> int:
             print("\nA Webserver Apply is still waiting for this firewall step — once the firewall "
                   "is verified,\nthe running console completes it automatically. To finish it now:"
                   "\n\nNext:\n  lhpc webserver apply")
+        ap_gap = svc.ap_firewall_gap()
+        if ap_gap:
+            print(f"\nWARN  {ap_gap['line']}")
+            if ap_gap["commands"]:
+                print(f"\nTo {'keep the AP rules' if ap_gap['live'] else 'make the AP usable'}:\n  "
+                      + "\n  ".join(ap_gap["commands"]))
         return 0
     if args.command == "build":
         return _apply_flow(lambda a: svc.build(args.target, apply=a), yes=args.yes)

@@ -1295,6 +1295,19 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             details.append("    run, before you reboot:")
             details.extend(f"      {c}" for c in fw_note["commands"])
 
+        # CO-16: an AP profile whose clients the firewall drops (no DHCP/DNS) is a visible AP
+        # nobody can join — the field failure. Name it with the commands that make it usable.
+        try:
+            ap_gap = self.ap_firewall_gap()
+        except Exception:                       # never let a diagnostic break doctor
+            ap_gap = None
+        if ap_gap:
+            details.append("")
+            details.append(f"  ! {ap_gap['line']}")
+            if ap_gap["commands"]:
+                details.append("    run:")
+                details.extend(f"      {c}" for c in ap_gap["commands"])
+
         # GPS: a malformed [gps] has already disabled position (fail closed), and stale
         # per-stack values are inert but misleading. Both are quiet failures otherwise —
         # the operator believes a stack is reporting position when it is not.

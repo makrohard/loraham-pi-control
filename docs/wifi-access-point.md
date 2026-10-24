@@ -71,6 +71,21 @@ sudo nmcli connection up lhpc-ap
 `ipv4.method shared` gives the box `10.42.0.1/24`. Use WPA2: the Pi's chip has inconsistent WPA3
 AP support. Remove the AP with `sudo nmcli connection delete lhpc-ap` (the panel disappears).
 
+With the managed firewall, the AP's clients get an address only once its AP rules allow DHCP and
+DNS on that interface (the Lite image sets them at first boot):
+
+```bash
+lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.42.0.0/24
+sudo bash ~/loraham-pi-control/config/files/firewall/firewall-apply.sh   # the path lhpc firewall prints
+```
+
+Until they are live, `lhpc doctor`, `lhpc firewall` and the Network panel say so, and **Back to AP
+mode** is refused (it saves the AP rules, the apply above makes them live). AP rules that are live
+but not saved (the next firewall apply would drop them) are named too, with the `lhpc firewall --ap
+on …` that keeps them; the switch then goes on and saves them. With the AP rules on,
+the console and stack proxy ports are open to every source address, as on the Lite image; the
+console's allow-list and client certificates still decide who gets in.
+
 ## Reaching the console over the AP
 
 The AP only puts the phone on the box's network. Certificate, SANs, allow-list and the

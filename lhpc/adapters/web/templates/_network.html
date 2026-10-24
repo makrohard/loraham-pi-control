@@ -21,6 +21,15 @@
     <p>Current: <strong>{% if nv.mode == 'client' %}{{ nv.active.name }} ({{ nv.active.address }})
       {% elif nv.mode == 'ap' %}own AP{% else %}no active Wi-Fi{% endif %}</strong>
       — reachable as <code>https://{{ nv.hostname }}.local:{{ ws_mon.desired.port if ws_mon else 8443 }}</code> on a joined network.</p>
+    {% if nv.ap_firewall %}
+      <div class="depnote depnote-warn" id="network-ap-firewall">
+        {% if nv.ap_firewall.live %}<strong>AP rules not saved:</strong> {{ nv.ap_firewall.line }}{% else %}
+        <strong>AP not usable:</strong> {{ nv.ap_firewall.line }}. Switching to the AP is refused
+        until the firewall's AP rules are live{% endif %}{% if nv.ap_firewall.commands %} — run these on the box
+        (any privileged step over SSH):
+        {{ cmdbox('network-ap-firewall', nv.ap_firewall.commands|join('\n')) }}{% else %}.{% endif %}
+      </div>
+    {% endif %}
     {% if nv.authorized and nv.mode == 'client' %}
       <form method="post" action="{{ url_for('network_action', op='ap') }}" class="act">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">

@@ -1297,3 +1297,208 @@ def test_the_network_view_lists_the_active_connections_once(tmp_path):
         ("ap", "lhpc-ap", "10.42.0.1/24")
     assert view["ethernet"] == {"name": "Wired connection 1", "device": "eth0",
                                 "address": "10.42.0.1/24"}
+
+
+# --- CO-16: an AP whose clients the firewall drops --------------------------------------------------
+
+AP_PROFILE_Q = "connection.interface-name,ipv4.method,ipv4.addresses connection show lhpc-ap"
+
+
+def _ap_fw_svc(tmp_path, monkeypatch, *, installed=True, live=False, profile="wlan0\nshared\n\n",
+               active="CL-UUID-2:HomeNet:802-11-wireless:wlan0\n"):
+    """An AP-managed box with the managed firewall installed (or not); `live` = the root helper's
+    verified receipt is for an accepted candidate whose AP rules are (wlan0, 10.42.0.0/24) — the
+    AP-specific check itself is tested on its own below. The AP profile reads back
+    interface/method/addresses (`profile` None = that read fails)."""
+    svc = _svc(tmp_path)
+    detail = (0, profile, "") if profile is not None else (1, "", "Error: could not read")
+    calls = _fake_nmcli(svc, {AP_PROFILE_Q: detail,
+                              **_std_replies(active=active), "connection modify": (0, "", "")})
+    monkeypatch.setattr(svc, "_fw_integration_present", lambda: installed)
+    monkeypatch.setattr(svc, "firewall_status", lambda: {"config_ok": False, "live_ok": False})
+    monkeypatch.setattr(svc, "_fw_ap_live",
+                        lambda iface, cidr: live and (iface, cidr) == ("wlan0", "10.42.0.0/24"))
+    monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-1")
+    return svc, calls
+
+
+def test_an_ap_without_the_firewall_ap_rules_is_named_by_doctor_and_the_panel(tmp_path, monkeypatch):
+    """CO-16: the AP came up, phone and PC got no address: secure-default dropped
+    their DHCP/DNS because the firewall's AP option was off. Doctor and the Network view say so,
+    with the commands that make the AP usable."""
+    svc, _ = _ap_fw_svc(tmp_path, monkeypatch, active="AP-UUID-1:lhpc-ap:802-11-wireless:wlan0\n")
+    line = ("AP profile lhpc-ap present but the firewall's AP rules are off (wlan0, 10.42.0.0/24): "
+            "AP clients get no DHCP/DNS")
+    assert f"  ! {line}" in svc.doctor().details
+    gap = svc.network_view()["ap_firewall"]
+    assert gap["line"] == line and gap["saved"] is False
+    assert gap["commands"][0] == "lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.42.0.0/24"
+    assert any(c.startswith("sudo bash ") and c.endswith("firewall-apply.sh")
+               for c in gap["commands"])
+
+
+def test_back_to_ap_saves_the_ap_rules_and_refuses_until_they_are_live(tmp_path, monkeypatch):
+    """CO-16: an AP nobody can join strands the operator -> the switch is refused while the rules
+    are not live. The unprivileged half (the saved intent + rendered scripts) is done for the
+    operator; the box stays on its current network and no helper is spawned."""
+    svc, _ = _ap_fw_svc(tmp_path, monkeypatch)
+    spawned = []
+    monkeypatch.setattr(lcmod.Lifecycle, "_real_spawn",
+                        lambda self, argv, log, cwd=None, env=None: spawned.append(argv) or 4242)
+    dr = svc.network_ap_now(apply=False)
+    assert any(d.startswith("  [warn] AP profile lhpc-ap present") for d in dr.details)
+    res = svc.network_ap_now(apply=True)
+    assert not res.ok and res.summary.startswith("Cannot switch to AP: ")
+    assert "saved, not applied (wlan0, 10.42.0.0/24)" in res.summary
+    fw = svc.config().firewall
+    assert (fw.ap_enabled, fw.ap_interface, fw.ap_cidr) == (True, "wlan0", "10.42.0.0/24")
+    assert any(c.startswith("sudo bash ") for c in res.next_commands)
+    assert spawned == [] and not svc._net_pending_path().exists()
+
+
+def test_live_ap_rules_for_the_profile_let_the_switch_go_on(tmp_path, monkeypatch):
+    from lhpc.core import config as cfgmod
+    svc, _ = _ap_fw_svc(tmp_path, monkeypatch, live=True,
+                        profile="wlan0\nshared\n10.42.0.1/24\n")
+    cfgmod.save_firewall_config(svc._paths, ap_enabled=True, ap_interface="wlan0",
+                                ap_cidr="10.42.0.0/24")
+    svc._invalidate_config()
+    assert svc.ap_firewall_gap() is None
+    spawned = []
+    monkeypatch.setattr(lcmod.Lifecycle, "_real_spawn",
+                        lambda self, argv, log, cwd=None, env=None: spawned.append(argv) or 4242)
+    assert svc.network_ap_now(apply=True).ok and spawned
+
+
+@pytest.mark.parametrize("profile, iface, cidr", [("wlan1\nshared\n\n", "wlan1", "10.42.0.0/24"),
+                                                  ("wlan0\nshared\n192.168.4.1/24\n", "wlan0",
+                                                   "192.168.4.0/24")])
+def test_rules_for_another_interface_or_subnet_do_not_cover_the_profile(tmp_path, monkeypatch,
+                                                                        profile, iface, cidr):
+    """round 1 N1: saved AND live AP rules for wlan0 / 10.42.0.0/24 leave a profile on another
+    interface or subnet without DHCP/DNS: a gap for the profile's own pair, the switch refused."""
+    from lhpc.core import config as cfgmod
+    svc, _ = _ap_fw_svc(tmp_path, monkeypatch, live=True, profile=profile)
+    cfgmod.save_firewall_config(svc._paths, ap_enabled=True, ap_interface="wlan0",
+                                ap_cidr="10.42.0.0/24")
+    svc._invalidate_config()
+    gap = svc.ap_firewall_gap()
+    assert (gap["interface"], gap["cidr"], gap["live"]) == (iface, cidr, False)
+    assert not svc.network_ap_now(apply=True).ok
+
+
+@pytest.mark.parametrize("profile", [None, "\nshared\n\n"])
+def test_an_unreadable_profile_or_one_without_an_interface_refuses_the_switch(tmp_path, monkeypatch,
+                                                                              profile):
+    """round 1 F1 (fail closed) + N1: the profile is listed but its settings cannot be read, or
+    it names no interface. Nothing proves the AP rules, so nothing is guessed or saved and the
+    switch is refused."""
+    svc, _ = _ap_fw_svc(tmp_path, monkeypatch, profile=profile)
+    spawned = []
+    monkeypatch.setattr(lcmod.Lifecycle, "_real_spawn",
+                        lambda self, argv, log, cwd=None, env=None: spawned.append(argv) or 4242)
+    gap = svc.ap_firewall_gap()
+    assert gap is not None and gap["live"] is False and gap["commands"] == []
+    assert ("could not be read (nmcli rc 1)" in gap["line"]) == (profile is None)
+    res = svc.network_ap_now(apply=True)
+    assert not res.ok and res.summary.startswith("Cannot switch to AP: ")
+    assert svc.config().firewall.ap_enabled is False                # nothing saved on a guess
+    assert spawned == [] and not svc._net_pending_path().exists()
+
+
+def test_a_profile_deleted_since_the_listing_is_no_profile(tmp_path, monkeypatch):
+    """The listing (cached) still named lhpc-ap, the detail read says "no such connection"
+    (nmcli exit 10): the profile is gone, so there is no AP to flag."""
+    svc, _ = _ap_fw_svc(tmp_path, monkeypatch)
+    _fake_nmcli(svc, {AP_PROFILE_Q: (10, "", "Error: lhpc-ap - no such connection profile."),
+                      **_std_replies()})
+    assert svc.ap_firewall_gap() is None
+    assert not any("AP profile" in d for d in svc.doctor().details)
+
+
+def test_live_ap_rules_not_yet_saved_let_the_switch_go_on_and_get_saved(tmp_path, monkeypatch):
+    """round 1 F2: the AP rules are live (the accepted candidate) while the saved intent and the
+    whole-firewall status disagree; the AP is usable, so the switch goes on, and the rules are
+    saved so the next apply keeps them."""
+    svc, _ = _ap_fw_svc(tmp_path, monkeypatch, live=True)
+    assert svc.ap_firewall_gap()["live"] is True                   # live, not saved: still named
+    spawned = []
+    monkeypatch.setattr(lcmod.Lifecycle, "_real_spawn",
+                        lambda self, argv, log, cwd=None, env=None: spawned.append(argv) or 4242)
+    assert svc.network_ap_now(apply=True).ok and spawned
+    fw = svc.config().firewall
+    assert (fw.ap_enabled, fw.ap_interface, fw.ap_cidr) == (True, "wlan0", "10.42.0.0/24")
+    assert svc.ap_firewall_gap() is None
+
+
+def _accepted(svc, ap):
+    from lhpc.core import firewall as fw
+    from lhpc.core.config import FirewallConfig
+    cand = svc.firewall_candidate(fwcfg=FirewallConfig(ap_enabled=bool(ap), ap_interface=ap[0] if ap else "",
+                                                       ap_cidr=ap[1] if ap else ""))
+    return cand, fw.intent_hash(cand)
+
+
+@pytest.mark.parametrize("case, live", [("match", True), ("other-cidr", False), ("ap-off", False),
+                                        ("stale", False), ("not-verified", False),
+                                        ("hash-mismatch", False), ("unreadable", False)])
+def test_the_ap_rules_are_live_only_by_the_accepted_candidate_and_a_fresh_verified_receipt(
+        tmp_path, monkeypatch, case, live):
+    """round 1 F2: what makes the AP rules live is the candidate the root helper accepted (its
+    AP pair) under a fresh, verified receipt for exactly that candidate — not the whole
+    firewall's saved-vs-applied state."""
+    import json as _json
+    from lhpc.core import firewall as fw
+    svc = _svc(tmp_path)
+    ap = {"other-cidr": ("wlan0", "192.168.4.0/24"), "ap-off": None}.get(case, ("wlan0", "10.42.0.0/24"))
+    cand, h = _accepted(svc, ap)
+    receipt = {"verdict": "not-verified" if case == "not-verified" else "verified",
+               "intent_hash": "0" * 64 if case == "hash-mismatch" else h}
+    monkeypatch.setattr(svc, "_fw_read_receipt", lambda: receipt)
+    monkeypatch.setattr(svc, "_fw_receipt_fresh", lambda r: case != "stale")
+    files = {} if case == "unreadable" else {fw.CANDIDATE_DEST: _json.dumps(cand)}
+    monkeypatch.setattr(svc._system.fs, "read_text",
+                        lambda path, n=None: files[path] if path in files else (_ for _ in ()).throw(OSError(path)))
+    assert svc._fw_ap_live("wlan0", "10.42.0.0/24") is live
+
+
+@pytest.mark.parametrize("installed, profile", [(False, "wlan0\nshared\n\n"),
+                                                (True, "wlan0\nmanual\n10.0.0.1/24\n")])
+def test_no_managed_firewall_or_no_shared_ap_means_no_flag(tmp_path, monkeypatch, installed, profile):
+    svc, _ = _ap_fw_svc(tmp_path, monkeypatch, installed=installed, profile=profile)
+    assert svc.ap_firewall_gap() is None
+    assert not any("AP profile lhpc-ap" in d for d in svc.doctor().details)
+
+
+def test_the_saved_ap_rules_render_dhcp_and_dns_for_the_profile(tmp_path, monkeypatch):
+    """The intent Back to AP saves is exactly what the root helper turns into the DHCP server
+    (udp 67 on the interface, no source condition) and DNS (udp + tcp 53 from the subnet) rules."""
+    from lhpc.core import firewall_helper as fh
+    svc, _ = _ap_fw_svc(tmp_path, monkeypatch)
+    svc.network_ap_now(apply=True)
+    cand = svc.firewall_candidate()
+    assert cand["ap"] == {"enabled": True, "interface": "wlan0", "cidr": "10.42.0.0/24"}
+    rules = fh.resolve_model(cand, ownership_id="t", ssh_scopes=[])["rules"]
+    dhcp = [r for r in rules if r.get("match") == "ap-dhcp-server"]
+    dns = [r for r in rules if r.get("match") == "ap-dns"]
+    assert dhcp and all(r["iif"] == "wlan0" and "saddr" not in r for r in dhcp)
+    assert {(r["proto"], r["iif"], r["saddr"]) for r in dns} == {("udp", "wlan0", "10.42.0.0/24"),
+                                                                ("tcp", "wlan0", "10.42.0.0/24")}
+
+
+def test_the_network_panel_shows_the_unusable_ap_banner(web, tmp_path):
+    from unittest.mock import patch
+    _, c = _web(web, tmp_path)
+    gap = {"interface": "wlan0", "cidr": "10.42.0.0/24", "saved": False,
+           "line": "AP profile lhpc-ap present but the firewall's AP rules are off (wlan0, "
+                   "10.42.0.0/24): AP clients get no DHCP/DNS",
+           "commands": ["lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.42.0.0/24",
+                        "sudo bash /x/firewall-apply.sh"]}
+    with patch.object(ControllerService, "network_view",
+                      lambda self: {**VIEW, "ap_firewall": gap}), \
+         patch.object(ControllerService, "network_supported", lambda self: True):
+        body = c.get("/stacks").get_data(as_text=True)
+        assert 'id="network-ap-firewall"' in body and "AP not usable:" in body
+        assert "lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.42.0.0/24" in body
+        with patch.object(ControllerService, "network_view", lambda self: dict(VIEW)):
+            assert 'id="network-ap-firewall"' not in c.get("/stacks").get_data(as_text=True)

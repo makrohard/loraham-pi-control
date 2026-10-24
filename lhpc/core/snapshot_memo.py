@@ -70,6 +70,7 @@ SNAPSHOT_NEUTRAL: dict[str, str] = {
     "active_bands": "read-only",
     "active_config_consumer": "read-only",
     "allowed_channels": "read-only",
+    "ap_firewall_gap": "read-only",
     "auto_install_check_selection": "read-only",
     "auto_install_component_log_chunk": "read-only",
     "auto_install_component_log_seed": "read-only",
