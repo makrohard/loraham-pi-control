@@ -51,3 +51,26 @@ def test_a_guest_passes(tmp_path):
 def test_a_guest_that_is_not_the_pi_os_guest_fails(tmp_path, change, why):
     p = _identity(tmp_path, **change)
     assert p.returncode == 1 and why in p.stderr
+
+
+def _live(tmp_path, apply_rc, apply_text, repaired):
+    d = tmp_path / "live"
+    d.mkdir()
+    (d / "U0-apply.txt").write_text(f"{apply_text}\nrc={apply_rc}\n")
+    if repaired:
+        (d / "U0-repair.txt").write_text("OK    Web + one-click updater integration installed/repaired.\nrc=0\n")
+    return d
+
+
+_STALE = ("ERR   Update applied — units-stale: the managed systemd units could NOT be refreshed", 1, True)
+_CLEAN = ("OK    Update applied.", 0, False)
+
+
+@pytest.mark.parametrize("want, case, ok", [
+    ("units-stale", _STALE, True), ("rc0", _CLEAN, True),
+    ("units-stale", _CLEAN, False), ("rc0", _STALE, False),      # the other branch ran: the job fails
+])
+def test_each_u0_job_requires_the_branch_it_exists_for(tmp_path, want, case, ok):
+    text, rc, repaired = case
+    p = _run("branch", want, _live(tmp_path, rc, text, repaired))
+    assert (p.returncode == 0) is ok, p.stderr
