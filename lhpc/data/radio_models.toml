@@ -1,0 +1,88 @@
+# Radio models: one row per board or stick model (lhpc/core/radio_models.py loads and validates it).
+# A new model within the supported chips and transports is one row here plus its daemon preset; no code.
+#
+# Per row: `id`, `label`, `short` (<= 7 characters, for default radio names), `transport` (spi | usb-ch341),
+# `chip` (sx127x | sx1262), `bands`, `power_max_dbm` (the daemon's continuous POWER window's top) and
+# `high_power_switch` (the daemon's `--high-power` +20 dBm permission applies), `direct` (meshtastic's
+# YAML `Module` when meshtasticd drives the radio itself), `usb` ({vid, pid} and an optional
+# `product`; USB rows only; the Meshstick's bridge reports no product string).
+# Each `variant` is one daemon `--hw` preset with the lines it uses, named as the daemon's profile fields (BCM
+# lines on SPI; on a USB stick the bridge's D-lines, no Pi line claimed); `band` fixes the band (a board with
+# one module per band), absent = either band.
+# tests/core/test_radio_models.py holds the presets, pins and chips to the daemon source at the manifest pin.
+
+[[model]]
+id = "loraham"
+label = "LoRaHAM dual-module (SX1278 + RFM95)"
+short = "loraham"
+transport = "spi"
+chip = "sx127x"
+bands = ["433", "868"]
+power_max_dbm = 17
+high_power_switch = true
+direct = { module = "RF95" }
+
+  [[model.variant]]
+  key = "433"
+  band = "433"
+  preset = "loraham"
+  pins = { cs = 8, irq = 25, rst = 5, gpio = 24, led_pin = 13 }
+
+  [[model.variant]]
+  key = "868"
+  band = "868"
+  preset = "loraham"
+  pins = { cs = 7, irq = 16, rst = 6, gpio = 12, led_pin = 19 }
+
+[[model]]
+id = "uputronics"
+label = "Uputronics LoRa (RFM95/98W)"
+short = "uputron"
+transport = "spi"
+chip = "sx127x"
+bands = ["433", "868"]
+power_max_dbm = 17
+high_power_switch = true
+direct = { module = "RF95" }
+
+  [[model.variant]]
+  key = "ce0"
+  preset = "uputronics-ce0"
+  pins = { cs = 8, irq = 25, aux = 24, led_pin = 6 }
+
+  [[model.variant]]
+  key = "ce1"
+  preset = "uputronics-ce1"
+  pins = { cs = 7, irq = 16, aux = 12, led_pin = 13 }
+
+[[model]]
+id = "waveshare-sx1262"
+label = "Waveshare SX1262 LoRa HAT"
+short = "wavesh"
+transport = "spi"
+chip = "sx1262"
+bands = ["433", "868"]
+power_max_dbm = 20
+high_power_switch = false
+
+  [[model.variant]]
+  key = "default"
+  preset = "waveshare-sx1262"
+  pins = { cs = 21, irq = 16, rst = 18, gpio = 20, txen = 6 }
+
+[[model]]
+id = "meshstick-1262"
+label = "ELECROW Meshstick (SX1262, USB)"
+short = "mstick"
+transport = "usb-ch341"
+chip = "sx1262"
+bands = ["868"]
+power_max_dbm = 22
+high_power_switch = false
+usb = { vid = "1a86", pid = "5512" }
+direct = { module = "sx1262", spidev = "ch341" }
+
+  [[model.variant]]
+  key = "default"
+  preset = "meshstick-1262"
+  pins = { cs = 0, irq = 6, rst = 2, gpio = 4, rxen = 1 }
