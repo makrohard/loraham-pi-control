@@ -102,7 +102,13 @@ def blocked(svc) -> str:
     svc.build_snapshot(fresh=True)
     if svc.stack_running(STACK_ID):
         return RUNNING
-    if svc._lifecycle().owned_records(NODE_ID):
+    # A record stamped with an EARLIER boot has no live process: it is a reboot's leftover (the very
+    # evidence boot restore claims), not an unverified stop. Unstamped records, an unreadable boot id
+    # and same-boot records still count (the rule of boot restore's evidence, fail closed).
+    from .lifecycle import current_boot_id
+    boot = current_boot_id()
+    if any(not (boot and rec.get("boot_id") and rec["boot_id"] != boot)
+           for rec in svc._lifecycle().owned_records(NODE_ID)):
         return UNVERIFIED
     return ""
 

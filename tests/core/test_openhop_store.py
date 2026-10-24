@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from lhpc.core import config as cfgmod
+from lhpc.core import lifecycle as lcmod
 from lhpc.core import meshcore_identity as mi
 from lhpc.core import meshcore_mode as mm
 from lhpc.core import openhop_store as ops
@@ -200,7 +201,9 @@ def test_writes_are_refused_while_running_or_with_an_unverified_stop(env, monkey
     with pytest.raises(ops.OneStoreError, match="running"):
         ops.ensure(svc, {}, "10")
     monkeypatch.setattr(svc, "stack_running", lambda sid: False)
-    monkeypatch.setattr(type(svc._lifecycle()), "owned_records", lambda self, cid: ["rec"])
+    monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-now")
+    monkeypatch.setattr(type(svc._lifecycle()), "owned_records",
+                        lambda self, cid: [{"component": cid, "boot_id": "boot-now"}])
     assert ops.save_rows(svc, {"repeater_name": "New"}).endswith(ops.UNVERIFIED)
     assert helper.file()["repeater.node_name"] == "Relay"
 
@@ -698,3 +701,31 @@ def test_a_nested_repeater_start_without_the_restarts_step_is_refused(env, monke
         res = svc.start(mm.STACK_ID, apply=True)
     assert not res.ok and "before the config-stability guard" in " ".join([res.summary, *res.details])
     assert calls == []
+
+
+def _records(svc, monkeypatch, recs, boot="boot-now"):
+    monkeypatch.setattr(lcmod, "current_boot_id", lambda: boot)
+    monkeypatch.setattr(type(svc._lifecycle()), "owned_records", lambda self, cid: list(recs))
+
+
+def test_a_record_of_an_earlier_boot_does_not_block_the_start(env, monkeypatch):
+    """CO-18: after a reboot the repeater's record of the earlier boot is boot restore's
+    evidence; counting it as an unverified stop refused every restore and every start of a
+    repeater-mode node until it was removed by hand."""
+    svc, helper = env
+    _records(svc, monkeypatch, [{"component": mm.NODE_ID, "boot_id": "boot-before"}])
+    assert ops.blocked(svc) == ""
+    ops.ensure(svc, {"repeater_name": "Relay"}, "10")
+    assert helper.file()["repeater.node_name"] == "Relay"
+
+
+@pytest.mark.parametrize("rec, boot", [({"boot_id": "boot-now"}, "boot-now"),    # same boot: unverified stop
+                                       ({"boot_id": ""}, "boot-now"),            # unstamped: unprovable
+                                       ({}, "boot-now"),
+                                       ({"boot_id": "boot-before"}, "")])         # boot id unreadable
+def test_records_that_may_still_be_live_keep_blocking(env, monkeypatch, rec, boot):
+    svc, helper = env
+    _records(svc, monkeypatch, [{"component": mm.NODE_ID, **rec}], boot=boot)
+    assert ops.blocked(svc) == ops.UNVERIFIED
+    with pytest.raises(ops.OneStoreError, match="not verified"):
+        ops.ensure(svc, {"repeater_name": "Relay"}, "10")

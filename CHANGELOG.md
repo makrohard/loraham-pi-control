@@ -6,6 +6,8 @@ Fixed
 
 - Wi-Fi access point: an `lhpc-ap` profile without the firewall's AP rules (clients got no address) is named
   by doctor, `lhpc firewall` and the Network panel; Back to AP mode saves the rules and waits for their apply.
+- MeshCore repeater: after a reboot it is restored again (and starts again); a record of the earlier boot
+  no longer reads as an unverified stop.
 
 ## 0.13.2
 
