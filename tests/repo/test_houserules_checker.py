@@ -139,6 +139,29 @@ def test_an_ambient_git_identity_does_not_mask_a_foreign_author(repo, monkeypatc
     assert (rc, rows["attribution"]) == (1, "HARD")
 
 
+@pytest.mark.parametrize("per_commit, verdict", [((1, 1, 1), "OK"), ((1, 1), "OK"), ((3,), "HARD")])
+def test_changelog_bullets_are_counted_per_commit(repo, per_commit, verdict):
+    """A topic of several items adds a bullet per item: the limit of two holds per commit, not over the range
+    (0.13.0's precheck failed a clean three-item range). Red before: three commits of one bullet each, HARD."""
+    entries = []
+    for n, count in enumerate(per_commit):
+        entries += [f"- item {n} line {k}" for k in range(count)]
+        text = CHANGELOG.replace("## Unreleased\n", "## Unreleased\n\n" + "\n".join(entries) + "\n")
+        _commit(repo, {"CHANGELOG.md": text})
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (int(verdict == "HARD"), verdict)
+
+
+def test_a_bullet_grown_over_two_commits_past_two_lines_fails(repo):
+    """The per-commit count must not lose a bullet's length: commit 2's lone continuation line has no bullet
+    of its own, so the length is read over the range. Red before: OK (the line was dropped)."""
+    two = CHANGELOG.replace("## Unreleased\n", "## Unreleased\n\n- item\n  line two\n")
+    _commit(repo, {"CHANGELOG.md": two})
+    _commit(repo, {"CHANGELOG.md": two.replace("  line two\n", "  line two\n  line three\n")})
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (1, "HARD")
+
+
 WARN = {
     "correction-of-a-released-section": ({"CHANGELOG.md": CHANGELOG + "- late\n"}, RED,
                                          ("--correction",), "changelog"),
