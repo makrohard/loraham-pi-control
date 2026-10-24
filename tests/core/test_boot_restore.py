@@ -1906,3 +1906,54 @@ def test_parts_all_start_before_the_one_settle_write(tmp_path, monkeypatch):
     order = [e["target"] for e in events]
     assert order[:4] == ["meshcore", "meshcore-webui", "PRUNE", "SETTLE-WRITE"]
     assert events[3]["parts"][0]["component"] == "meshcore-webui"
+
+
+# --- CO-18/CO-19: the repeater after a reboot, and the reason of a refused start -------------------
+
+def _start_after_the_openhop_check(record):
+    """start() as far as boot restore sees it: the openHop store check (`start_ensure` -> blocked())
+    runs under admission BEFORE the claim hook, and its refusal returns without the hook."""
+    from lhpc.core import openhop_store as ohs
+
+    def stub(self, target, apply=False, stop_owners=False, band="", auto_install_ctx=None, *,
+             _before_start_locked=None, _operator=True, position=None, position_note=""):
+        record.append(target)
+        why = ohs.blocked(self) if target == "meshcore" else ""
+        if why:
+            return ActionResult(False, f"Cannot start {target}: {why}")
+        refusal = _before_start_locked() if _before_start_locked is not None else None
+        return refusal if refusal is not None else ActionResult(True, "started")
+    return stub
+
+
+def test_a_repeater_of_the_earlier_boot_is_restored(tmp_path, monkeypatch):
+    """CO-18: the earlier boot's meshcore-node record is the restore's evidence; the
+    openHop store check counted it as an unverified stop, so the restore never reached its claim."""
+    svc = _drv(tmp_path, monkeypatch)
+    monkeypatch.setattr(lifecycle_mod, "current_boot_id", lambda: "CURBOOT")
+    _write_record(tmp_path, _v1(stack="meshcore", comp="meshcore-node", band="868"))
+    calls = []
+    monkeypatch.setattr(ControllerService, "start", _start_after_the_openhop_check(calls))
+    res = svc.boot_restore_run()
+    assert res.ok, res.summary
+    assert [i["state"] for i in _journal_on_disk(tmp_path)["items"]] == ["succeeded"]
+
+
+def test_a_start_refused_before_the_claim_names_its_reason(tmp_path, monkeypatch):
+    """CO-19: the refusal of a start that never reached the claim hook was dropped; the run said
+    only "1 pending (run truncated …)". The item keeps it, and the run's summary (round 1 F3: the
+    summary itself, not only its details) and the status name it."""
+    svc = _drv(tmp_path, monkeypatch)
+    _write_record(tmp_path, _v1())
+    calls = []
+    monkeypatch.setattr(ControllerService, "start",
+                        _stub_start(calls, ok=False, call_hook=False, summary="Cannot start kiss: busy"))
+    res = svc.boot_restore_run()
+    assert not res.ok and res.summary == ("Boot restore: 0 restored, 1 pending (run truncated — "
+                                          "restart the unit to continue; kiss not attempted — "
+                                          "Cannot start kiss: busy).")
+    (item,) = _journal_on_disk(tmp_path)["items"]
+    assert item["state"] == "pending" and item["result"] == {"ok": False,
+                                                             "summary": "Cannot start kiss: busy"}
+    st = svc.boot_restore_status()
+    assert st["state"] == "truncated" and st["reason"] == "kiss: not attempted — Cannot start kiss: busy"

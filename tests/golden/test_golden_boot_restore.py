@@ -135,13 +135,16 @@ def test_operator_stop_intent_is_honoured(kiss_box, prior_boot, run_op):
 def test_refused_before_the_hook_stays_pending(kiss_box, prior_boot, run_op,
                                                interrupted_install):
     """intended: a start refused before its hook (here an interrupted install, decided under the
-    index lock) leaves the item `pending` and the evidence in place; the run reads truncated."""
+    index lock) leaves the item `pending` and the evidence in place; the run reads truncated and
+    names the refusal (CO-19)."""
     box = kiss_box()
     prior_boot(box.root)
     interrupted_install(box.root)
     run = run_op(box.root, box.svc.boot_restore_run)
     assert run.fields == _fields("Boot restore: 0 restored, 1 pending (run truncated — restart "
-                                 "the unit to continue).", ok=False)
+                                 "the unit to continue; kiss not attempted — Cannot start 'kiss': "
+                                 "an unresolved source-transaction journal is present — resolve it "
+                                 "before starting).", ok=False)
     assert run.phases == DRIVER + ["journal:running[kiss=pending]", "config-stable",
                                    "lock:source-txn-index", "journal:failed[kiss=pending]"]
     assert _journal(box.root)[:2] == ("failed", [("kiss", "433", "pending")])

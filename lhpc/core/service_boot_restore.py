@@ -423,7 +423,10 @@ class BootRestoreOpsMixin:
         if cancelled:
             bits.append(f"{len(cancelled)} cancelled by current state")
         if pending:
-            bits.append(f"{len(pending)} pending (run truncated — restart the unit to continue)")
+            refused = [f"{i['target']} not attempted — {i['result']['summary']}"
+                       for i in pending if (i.get("result") or {}).get("summary")]
+            bits.append(f"{len(pending)} pending (run truncated — restart the unit to continue"
+                        + (f"; {'; '.join(refused)}" if refused else "") + ")")
         if plan.skipped:
             bits.append(f"{len(plan.skipped)} skipped")
         parts_left = [(i, p) for i in journal["items"]
@@ -547,6 +550,8 @@ class BootRestoreOpsMixin:
         return bool(res.ok or manual_required_only(getattr(res, "results", ()) or ()))
 
     def _boot_settle_item(self, journal, item, res, parts=None) -> None:
+        if item["state"] == "pending":               # refused before the claim hook ran: keep why
+            item["result"] = {"ok": False, "summary": res.summary}
         if item["state"] != "attempting":
             return                                   # cancelled by the hook (already durable)
         ok = self._boot_start_ok(res)
@@ -675,4 +680,8 @@ class BootRestoreOpsMixin:
             # A COMPLETED run that left pending items (pre-hook lock failure) is a truncation:
             # nothing was consumed for those items and a unit restart restores the remainder.
             out["state"] = "truncated"
+            refused = next((i for i in journal["items"] if i["state"] == "pending"
+                            and (i.get("result") or {}).get("summary")), None)
+            if refused and not out["reason"]:
+                out["reason"] = f"{refused['target']}: not attempted — {refused['result']['summary']}"
         return out

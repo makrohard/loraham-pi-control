@@ -26,7 +26,7 @@ BUDGETS = {
     "service_auto_install.py": (1875, 16),
     "service_binary_channel.py": (299, 19),  # trackF-c3: the web client keeps its own selector
     "service_binary_ops.py": (1078, 5),  # trackF-c3: the web client follows meshtastic's binary install
-    "service_boot_restore.py": (678, 2),
+    "service_boot_restore.py": (687, 2),  # co-19: a start refused before the claim keeps its reason
     "service_build.py": (797, 10),  # split-s5: split from service_lifecycle_ops.py
     "service_daemon_params.py": (508, 11),  # split-s2: split from service_params.py and service_lifecycle_ops.py
     "service_firewall.py": (1533, 19),

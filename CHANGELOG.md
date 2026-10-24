@@ -8,6 +8,8 @@ Fixed
   by doctor, `lhpc firewall` and the Network panel; Back to AP mode saves the rules and waits for their apply.
 - MeshCore repeater: after a reboot it is restored again (and starts again); a record of the earlier boot
   no longer reads as an unverified stop.
+- Boot restore: a stack it could not start names the reason (`lhpc autostart`, the run's summary) instead
+  of only "run truncated".
 
 ## 0.13.2
 
