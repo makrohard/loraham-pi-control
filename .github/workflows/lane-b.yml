@@ -1,0 +1,134 @@
+# Lane B: the Pi OS arm64 guest in QEMU on the arm64 runner (the H16 second environment for the
+# operator texts). QB-1, the spike: boot the guest without KVM and measure it. Dispatch (and a push
+# to a spike branch); no other lane changes. The guest is QEMU virt with Debian 13's generic arm64 kernel, initrd and
+# modules on the unchanged Raspberry Pi OS Lite (Trixie) root filesystem: a full VM with its own
+# kernel, systemd, udev, apt and a real filesystem.
+name: lane-b
+
+on:
+  workflow_dispatch:
+  # A workflow file dispatches only once it exists on main; until then the spike branch runs it.
+  push:
+    branches: [cons/lane-b-spike-*]
+
+permissions:
+  contents: read
+
+jobs:
+  qb1:
+    runs-on: ubuntu-24.04-arm   # native aarch64: same-architecture TCG, no nested emulation
+    # The boot bound is 20 min; downloads, preparation and captures fit in the rest.
+    timeout-minutes: 60
+    env:
+      PIOS_URL: https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-10-06/2026-10-06-raspios-trixie-arm64-lite.img.xz
+      PIOS_SHA256: 483db18a48da399b5b7022ffae9a07bc6d99daab30e593aedac09b69ff422843
+      DEB_URL: https://cloud.debian.org/images/cloud/trixie/20261021-2638/debian-13-generic-arm64-20261021-2638.qcow2
+      DEB_SHA512: 0720988fd560dfa1d2975c4a1e4c39e3903ffd0f68e75be9e171f889cdbb53b7763dc9c54e951afc34055c6110b3b415196778e468a50bf26d294730a7f8eabe
+      BOOT_BOUND_S: "1200"
+      EV: ${{ github.workspace }}/qb1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: The runner (M1)
+        run: |
+          set -euo pipefail
+          echo "WORK=$RUNNER_TEMP/laneb" >> "$GITHUB_ENV"
+          mkdir -p "$EV" "$RUNNER_TEMP/laneb"
+          { uname -a; nproc; free -m; ls -l /dev/kvm 2>&1 || true; } | tee "$EV/runner.txt"
+          uname -r > "$EV/runner-kernel.txt"
+          echo "kvm=$([ -e /dev/kvm ] && echo present || echo absent)" | tee -a "$EV/runner.txt"
+
+      - name: QEMU from the runner OS
+        run: |
+          set -euo pipefail
+          . .github/scripts/retry.sh
+          retry 3 sudo -n apt-get update -q
+          retry 3 sudo -n apt-get install -y -q qemu-system-arm qemu-utils
+          qemu-system-aarch64 --version | tee "$EV/qemu-version.txt"
+
+      - name: The pinned images (M2), verified before any use
+        run: |
+          set -euo pipefail
+          . .github/scripts/retry.sh
+          cd "$WORK"
+          retry 3 curl -fsSL -o pios.img.xz "$PIOS_URL"
+          retry 3 curl -fsSL -o deb.qcow2 "$DEB_URL"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" verify pios.img.xz sha256 "$PIOS_SHA256"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" verify deb.qcow2 sha512 "$DEB_SHA512"
+          s=$(date +%s); xz -d pios.img.xz; echo "decompress_s=$(( $(date +%s) - s ))" | tee "$EV/image.txt"
+          qemu-img convert -O raw deb.qcow2 deb.raw
+          printf 'pios=%s\npios_sha256=%s\ndeb=%s\ndeb_sha512=%s\n' "$PIOS_URL" "$PIOS_SHA256" "$DEB_URL" "$DEB_SHA512" >> "$EV/image.txt"
+
+      - name: Prepare the guest (test-only; stated in the self-audit)
+        # The Debian kernel, initrd and modules go into the Pi OS root filesystem; a user with a per-run
+        # key and ssh enabled. No Pi firmware runs under QEMU virt, so the Pi OS first-boot files are
+        # recorded, not used.
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          ssh-keygen -q -t ed25519 -N '' -f key
+          pl=$(sudo -n losetup -fP --show pios.img); dl=$(sudo -n losetup -fP --show deb.raw)
+          mkdir -p pboot proot droot
+          sudo -n mount "${pl}p1" pboot; sudo -n mount "${pl}p2" proot; sudo -n mount "${dl}p1" droot
+          { echo "bootfs:"; ls pboot; echo "cloud-init: $([ -e proot/usr/bin/cloud-init ] && echo present || echo absent)"; } | tee "$EV/first-boot.txt"
+          ver=$(basename "$(ls -d droot/lib/modules/* | head -1)")
+          sudo -n cp "droot/boot/vmlinuz-$ver" vmlinuz; sudo -n cp "droot/boot/initrd.img-$ver" initrd
+          sudo -n chmod 0644 vmlinuz initrd
+          sudo -n cp -a "droot/lib/modules/$ver" proot/lib/modules/
+          echo "guest_kernel=$ver" | tee -a "$EV/image.txt"
+          sudo -n chroot proot useradd -m -s /bin/bash -G sudo lhpc
+          u=$(sudo -n chroot proot id -u lhpc); gid=$(sudo -n chroot proot id -g lhpc)
+          sudo -n install -d -m 0700 -o "$u" -g "$gid" proot/home/lhpc/.ssh
+          sudo -n install -m 0600 -o "$u" -g "$gid" key.pub proot/home/lhpc/.ssh/authorized_keys
+          echo 'lhpc ALL=(ALL) NOPASSWD:ALL' | sudo -n tee proot/etc/sudoers.d/010-lane-b >/dev/null
+          sudo -n chroot proot systemctl enable ssh
+          sudo -n blkid -s PARTUUID -o value "${pl}p2" > partuuid
+          sudo -n umount pboot proot droot
+          sudo -n losetup -d "$pl" "$dl"
+          test -s partuuid
+
+      - name: Boot without KVM to ssh (M3)
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          t0=$(date +%s)
+          qemu-system-aarch64 -M virt -accel tcg -cpu max -smp 4 -m 4G \
+            -kernel vmlinuz -initrd initrd \
+            -append "root=PARTUUID=$(cat partuuid) rw rootwait console=ttyAMA0" \
+            -drive file=pios.img,format=raw,if=virtio \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0 \
+            -display none -serial "file:$EV/console.log" -daemonize -pidfile qemu.pid
+          until ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -o ConnectTimeout=5 -i key -p 2222 lhpc@127.0.0.1 true; do
+            if [ $(( $(date +%s) - t0 )) -ge "$BOOT_BOUND_S" ]; then
+              echo "no ssh within ${BOOT_BOUND_S} s" | tee "$EV/boot.txt"; exit 1
+            fi
+            sleep 5
+          done
+          echo "boot_s=$(( $(date +%s) - t0 ))" | tee "$EV/boot.txt"
+
+      - name: The guest is the guest (M4)
+        run: |
+          set -euo pipefail
+          cd "$WORK"
+          g() { ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i key -p 2222 lhpc@127.0.0.1 "$@"; }
+          mkdir -p "$EV/guest"
+          g uname -m > "$EV/guest/machine"
+          g uname -r > "$EV/guest/kernel"
+          g cat /etc/os-release > "$EV/guest/os_release"
+          g 'test -f /etc/rpi-issue && echo yes || echo no' > "$EV/guest/rpi_issue"
+          { g uname -a; g 'systemctl is-system-running || true'; g free -m; g nproc; } > "$EV/guest/facts.txt"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" identity "$(cat "$EV/runner-kernel.txt")" "$EV/guest"
+
+      - name: Stop the guest, checksum the evidence
+        if: always()
+        run: |
+          set -uo pipefail
+          [ -f "$WORK/qemu.pid" ] && kill "$(cat "$WORK/qemu.pid")" 2>/dev/null || true
+          cd "$EV" && find . -type f ! -name SHA256SUMS | sort | xargs -r sha256sum > SHA256SUMS
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: qb1-spike
+          path: qb1
