@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# Runs IN the guest as root while the install runs (the observation only): every 15 s the call bootstrap-deps'
-# unit_present relies on, `systemctl list-unit-files --no-legend`, with its rc, its duration in ms, its stderr
-# and the load average. One line per sample on stdout.
+# Runs IN the guest as root while the install runs (the observation only): every 15 s the three systemctl calls
+# a unit-presence check can use, each with its rc, its duration in ms and its stderr, and the load average:
+# `full` = the unfiltered `list-unit-files --no-legend` (bootstrap-deps' queryability probe today),
+# `unit` = the filtered listing of one unit, `light` = `show -p Version --value` (a single property). One line per call.
+probe() {
+  local name=$1 s e r ms; shift
+  s=$(date +%s%N); e=$("$@" 2>&1 > /dev/null); r=$?; ms=$(( ($(date +%s%N) - s) / 1000000 ))
+  printf '%s %s rc=%s ms=%s load=%s err=%s\n' "$(date -u +%FT%TZ)" "$name" "$r" "$ms" "$(cut -d' ' -f1-3 /proc/loadavg)" "${e//$'\n'/ | }"
+}
 while :; do
-  s=$(date +%s%N)
-  e=$(systemctl list-unit-files --no-legend 2>&1 > /dev/null); r=$?
-  ms=$(( ($(date +%s%N) - s) / 1000000 ))
-  printf '%s rc=%s ms=%s load=%s err=%s\n' "$(date -u +%FT%TZ)" "$r" "$ms" "$(cut -d' ' -f1-3 /proc/loadavg)" "${e//$'\n'/ | }"
+  probe full systemctl list-unit-files --no-legend
+  probe unit systemctl list-unit-files --no-legend nginx.service
+  probe light systemctl show -p Version --value
   sleep 15
 done
