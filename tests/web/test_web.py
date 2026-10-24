@@ -2213,6 +2213,27 @@ def test_update_ui_names_the_shell_repair_for_a_newer_releases_units(tmp_path, m
     assert "resolve them manually" not in b
 
 
+@pytest.mark.parametrize("available", [False, True])
+def test_update_ui_says_then_update_only_when_an_update_is_available(tmp_path, monkeypatch, web,
+                                                                     available):
+    # Seen on a box after 0.12.10 -> 0.13.3: "Up to date." beside "run lhpc self-update
+    # --repair-integration from an operator shell, then update." There was nothing to update.
+    from lhpc.core.services import ControllerService
+    up = "b" * 40 if available else "a" * 40
+    _write_selfcache(tmp_path,
+                     {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa", "branch": "main"},
+                     {"ok": True, "upstream_version": "9.9", "upstream_head": up,
+                      "upstream_head_short": up[:9]})
+    monkeypatch.setattr(ControllerService, "updater_integration",
+                        lambda self: {"status": "compatible", "fixable": False, "managed": True,
+                                      "per_unit": {"lhpc-web.service": "compatible"},
+                                      "request": "absent"})
+    b = web().get("/stacks").get_data(as_text=True)
+    assert "lhpc self-update --repair-integration</code> from an operator shell" in b
+    assert ("Up to date." in b) is not available
+    assert ("then update." in b) is available
+
+
 @pytest.mark.parametrize("other", ["missing", "modified_ours"])
 def test_update_ui_names_the_shell_repair_for_a_mixed_set_with_newer_units(tmp_path, monkeypatch,
                                                                            web, other):
