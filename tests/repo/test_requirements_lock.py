@@ -38,3 +38,12 @@ def test_every_declared_dependency_is_locked_at_an_admitted_version_with_a_hash(
 
 def test_every_lock_entry_carries_a_hash():
     assert all(hashes for _version, hashes in _lock().values())
+
+
+def test_deployment_docs_name_the_lock_sync_for_an_update_from_0_12_10():
+    """An update from 0.12.10 or older is run by that release's code, which synced the venv without the
+    lock; docs/deployment.md gives the one sync to run afterwards. It must be the command self-update
+    runs (`venv_sync_command`) at the deployment's paths, relative to the runtime root."""
+    from lhpc.core.selfupdate import venv_sync_command
+    docs = (repo_paths.REPO / "docs" / "deployment.md").read_text()
+    assert venv_sync_command("venv/lhpc/bin/python", "src/loraham-pi-control") in docs
