@@ -6,6 +6,8 @@ Fixed
 
 - Status: where no thread can start (the demo page, a box at its thread limit) a snapshot probes its
   checkouts one after another instead of failing; the demo's own workaround is removed.
+- GPS feed: a stop signal that arrived while the feed was inside its own stop event's lock hung the
+  feed until it was killed (endpoint and marker left behind); the signal handler now takes no lock.
 
 ## 0.13.3
 
