@@ -111,7 +111,8 @@ def test_set_ocp_takes_only_what_the_bands_chip_represents(tmp_path, setup, band
         assert dc.OCP_LEGAL_TEXT[svc.chip_family_for_band(band)] in r.summary
 
 
-@pytest.mark.parametrize("value", ["", "abc", "-5", "100.0", "0100", " 100", "AUTO", "²", "١٠٠", "+100"])
+@pytest.mark.parametrize("value", ["", "abc", "-5", "100.0", "0100", " 100", "AUTO", "²", "١٠٠", "+100",
+                                   pytest.param("1" * 5000, id="5000-digits")])
 def test_set_ocp_refuses_junk(tmp_path, value):
     svc = _svc(tmp_path)
     assert not svc.set_ocp("433", value).ok
@@ -124,7 +125,7 @@ def test_set_ocp_refuses_an_unknown_band(tmp_path):
 
 # --- T5: a stored value the chip cannot represent refuses that band's start -------------------------
 
-@pytest.mark.parametrize("raw", ["150", "abc", "0100", "²", "١٠٠"])
+@pytest.mark.parametrize("raw", ["150", "abc", "0100", "²", "١٠٠", pytest.param("1" * 5000, id="5000-digits")])
 def test_an_illegal_stored_value_refuses_the_start_and_sends_no_ocp(tmp_path, monkeypatch, raw):
     svc = _svc(tmp_path, setup="waveshare-433", stored=f'ocp_433 = "{raw}"\n')
     assert svc.ocp_for_band("433") is None

@@ -103,8 +103,9 @@ OCP_LEGAL_TEXT = {"sx127x": "0 (off), 45..120 in steps of 5, 130..240 in steps o
 
 def ocp_ma(value) -> int | None:
     """The mA a saved or typed `--ocp` value names: a canonical decimal (ASCII digits only, no leading
-    zero, no sign or space), else None. `str.isdigit` alone admits "²", which `int` refuses."""
-    if not (isinstance(value, str) and value and value.isascii() and value.isdigit()):
+    zero, no sign or space, at most 3 digits: the largest legal value is 240), else None.
+    `str.isdigit` alone admits "²", which `int` refuses; a very long string makes `int` raise too."""
+    if not (isinstance(value, str) and 0 < len(value) <= 3 and value.isascii() and value.isdigit()):
         return None
     return int(value) if str(int(value)) == value else None
 
