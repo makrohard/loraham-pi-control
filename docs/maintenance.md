@@ -114,7 +114,9 @@ repositories.
   repository runs the same tool; its `.houserules.toml` at `<base>` names its layers, test files and
   test definitions, changelog and budget file (empty: that rule off) and warn patterns. Without one,
   LHPC's layout applies; a malformed one exits 2. A range that changes it is HARD unless it changes
-  nothing else; that WARN is the reviewer's to judge: no rule the repository needs may be relaxed. The
+  nothing else, and HARD when it relaxes or deletes a profile `<base>` has (a layer added, a test glob or
+  warn pattern dropped or changed, another key changed); a first profile or a tightening is a WARN, the
+  reviewer's to judge. The
   gate is two runs, the checker at `<base>` first; its exit code is the worse of the two (without a checker at
   `<base>`, the head run alone is the gate; the head run repeats the first itself when they differ):
 

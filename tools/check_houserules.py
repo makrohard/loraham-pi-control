@@ -10,8 +10,10 @@ the reviewer; HARD lines block.
 
 A repository may carry `.houserules.toml` with its own layout (layers, test_files, test_def, budget_file,
 family_dir, changelog, warn_patterns), read at <base> so a range cannot relax its own rules: a range that
-changes it is a `profile` HARD line, a WARN when it changes nothing else. Without it the constants below apply. Attribution, markers and the
-HARD patterns are the same for every repository. A malformed profile exits 2.
+changes it is a `profile` HARD line; changing nothing else it is a WARN, unless it relaxes or deletes a profile
+<base> has (a layer added, a test glob or warn pattern dropped or changed, any other key changed): HARD.
+Without it the constants below apply. Attribution, markers and the HARD patterns are the same for every
+repository. A malformed profile exits 2.
 
 The gate is two runs, the program at <base> first (docs/maintenance.md has the command); the exit code is
 the worse of the two, so a range cannot weaken the checker that judges it. A direct run does the same itself
@@ -68,6 +70,10 @@ RAISE_REASON = re.compile(r"#\s*\S+:\s*\S")
 # parameters) and carries no body.
 # Facade growth is not excused; it is paid by the budget row.
 SPLIT_FROM = re.compile(r"#\s*\S+:\s*split from (\S+\.py(?:\s+and\s+\S+\.py)*)")
+# The rules without a profile, in the profile's terms: what `relaxed` compares an existing profile against.
+DEFAULTS = {"layers": LAYERS, "test_files": TEST_FILES, "test_def": TEST_DEF.pattern, "budget_file": BUDGET_FILE,
+            "family_dir": FAMILY_DIR, "changelog": CHANGELOG,
+            "warn_patterns": {k: v.pattern for k, v in WARN_PATTERNS.items()}}
 
 
 def git(*args: str) -> str:
@@ -109,13 +115,12 @@ def _as(p: dict, key: str, kind: type):
     return v
 
 
-def load_profile(rev: str, apply: bool = True) -> None:
-    """Check `rev`'s `.houserules.toml` and apply it over the constants above (one run, one repository);
-    `apply=False` only checks it (<head>'s copy: a range must not hand the next range a broken profile)."""
-    global LAYERS, TEST_FILES, TEST_DEF, BUDGET_FILE, FAMILY_DIR, CHANGELOG, WARN_PATTERNS
+def profile(rev: str) -> dict | None:
+    """`rev`'s `.houserules.toml` as the rules it sets over the defaults (patterns as their source text),
+    None without one; a malformed profile is a ProfileError."""
     text = show(rev, ".houserules.toml")
     if text is None:
-        return
+        return None
     try:
         p = tomllib.loads(text)
         if unknown := set(p) - {"layers", "test_files", "test_def", "budget_file", "family_dir", "changelog",
@@ -129,16 +134,36 @@ def load_profile(rev: str, apply: bool = True) -> None:
             raise ProfileError("layers is a list of [prefix, name] pairs, test_files a list of strings, "
                                "warn_patterns a table of strings, the other keys strings")
         [re.compile(v) for v in [p.get("test_def", ""), *_as(p, "warn_patterns", dict).values()]]
-        if not apply:
-            return
-        LAYERS = tuple((str(a), str(b)) for a, b in p.get("layers", LAYERS))
-        TEST_FILES = tuple(str(g) for g in p.get("test_files", TEST_FILES))
-        TEST_DEF = re.compile(p.get("test_def", TEST_DEF.pattern))
-        BUDGET_FILE, FAMILY_DIR = p.get("budget_file", BUDGET_FILE), p.get("family_dir", FAMILY_DIR)
-        CHANGELOG = p.get("changelog", CHANGELOG)
-        WARN_PATTERNS = {str(k): re.compile(v) for k, v in p.get("warn_patterns", WARN_PATTERNS).items()}
     except (tomllib.TOMLDecodeError, re.error, TypeError, ValueError, AttributeError) as exc:
         raise ProfileError(str(exc)) from None
+    return {**DEFAULTS, **{k: v for k, v in p.items() if k not in ("layers", "test_files")},
+            **({"layers": tuple(tuple(x) for x in p["layers"])} if "layers" in p else {}),
+            **({"test_files": tuple(p["test_files"])} if "test_files" in p else {})}
+
+
+def relaxed(old: dict, new: dict | None) -> list[str]:
+    """The keys in which `new` is more lenient than `old`: a layer added (more paths count as layered), a test
+    glob or warn pattern dropped or changed, any other key changed; every key when the profile is deleted.
+    Tightening only removes layers or adds globs and patterns."""
+    if new is None:
+        return ["deleted"]
+    out = [k for k in ("test_def", "budget_file", "family_dir", "changelog") if new[k] != old[k]]
+    out += ["layers"] * bool(set(new["layers"]) - set(old["layers"]))
+    out += ["test_files"] * bool(set(old["test_files"]) - set(new["test_files"]))
+    out += ["warn_patterns"] * any(new["warn_patterns"].get(k) != v for k, v in old["warn_patterns"].items())
+    return out
+
+
+def load_profile(rev: str, apply: bool = True) -> None:
+    """Check `rev`'s `.houserules.toml` and apply it over the constants above (one run, one repository);
+    `apply=False` only checks it (<head>'s copy: a range must not hand the next range a broken profile)."""
+    global LAYERS, TEST_FILES, TEST_DEF, BUDGET_FILE, FAMILY_DIR, CHANGELOG, WARN_PATTERNS
+    p = profile(rev)
+    if p is None or not apply:
+        return
+    LAYERS, TEST_FILES, TEST_DEF = p["layers"], p["test_files"], re.compile(p["test_def"])
+    BUDGET_FILE, FAMILY_DIR, CHANGELOG = p["budget_file"], p["family_dir"], p["changelog"]
+    WARN_PATTERNS = {str(k): re.compile(v) for k, v in p["warn_patterns"].items()}
 
 
 def layer_of(path: str) -> str | None:
@@ -231,8 +256,11 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     rows = []
 
     if ".houserules.toml" in changed:      # alone: reviewed on its own; with other files: it would gate itself
-        rows.append(("profile", ".houserules.toml changed in this range (rules read at <base>)",
-                     "WARN" if changed == {".houserules.toml"} else "HARD"))
+        old = profile(base)
+        loose = relaxed(old, profile(head)) if old is not None else []
+        rows.append(("profile", ".houserules.toml changed in this range (rules read at <base>)"
+                     + (f"; relaxes {', '.join(loose)}" if loose else ""),
+                     "WARN" if changed == {".houserules.toml"} and not loose else "HARD"))
 
     # changelog: the count per commit (one item each); each bullet's length and place over the range, against
     # <head>'s sections, so a bullet grown over two commits is still one bullet
