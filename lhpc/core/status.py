@@ -266,7 +266,9 @@ class StatusProber:
         """Probe a snapshot's distinct checkouts side by side, `SOURCE_WORKERS` at a time: git mostly waits
         on the disk, so a page with a cache miss pays for the slowest checkout instead of the sum. Each
         answer is the one `_assess_source` computes for the same (path, pin); a probe that raises stores
-        nothing, so `_assess_source` runs it again and its error surfaces exactly as before."""
+        nothing, so `_assess_source` runs it again and its error surfaces exactly as before. Where no thread
+        can start (Pyodide, a box at its thread limit) the pool raises RuntimeError: nothing is stored and
+        `_assess_source` probes every checkout in turn."""
         if not self._sources:
             return
         todo = {}
@@ -276,10 +278,13 @@ class StatusProber:
                 todo.setdefault(key, comp.source)
         if len(todo) < 2:
             return
-        with ThreadPoolExecutor(max_workers=SOURCE_WORKERS) as pool:
-            futures = {key: pool.submit(source_cache.probe_cached, self._cache, self._system, spec, key[0],
-                                        git=True, probe=probe_source)
-                       for key, spec in todo.items()}
+        try:
+            with ThreadPoolExecutor(max_workers=SOURCE_WORKERS) as pool:
+                futures = {key: pool.submit(source_cache.probe_cached, self._cache, self._system, spec, key[0],
+                                            git=True, probe=probe_source)
+                           for key, spec in todo.items()}
+        except RuntimeError:
+            return
         for key, fut in futures.items():
             if fut.exception() is None:
                 self._source_probes[key] = fut.result()

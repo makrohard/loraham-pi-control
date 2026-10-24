@@ -7,6 +7,11 @@
 - Daemon: the binary carries the Meshstick library (`lib/`, pine64 libch341-spi-userspace). Source builds need
   `libusb-1.0-0-dev`, and once `lhpc install daemon` to fetch the pine64 source before `lhpc build daemon`.
 
+Fixed
+
+- Status: where no thread can start (the demo page, a box at its thread limit) a snapshot probes its
+  checkouts one after another instead of failing; the demo's own workaround is removed.
+
 ## 0.13.3
 
 Fixed

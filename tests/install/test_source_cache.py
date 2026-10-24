@@ -329,6 +329,31 @@ def test_a_probe_that_raises_still_fails_the_snapshot(tmp_path, make_repo):
         _service(tmp_path, system).build_snapshot(fresh=True)
 
 
+@pytest.mark.parametrize("started", [0, 1])
+def test_a_snapshot_where_no_thread_can_start_probes_one_after_the_other(tmp_path, make_repo, monkeypatch,
+                                                                           started):
+    # Pyodide (the Pages demo) cannot start a thread, and a box at its thread limit can start some but not
+    # all: the pool's submit raises RuntimeError. The snapshot then probes each checkout in turn and reports
+    # what the side-by-side probes report. Red before: the RuntimeError left the snapshot (`/` answered 500).
+    from concurrent.futures import ThreadPoolExecutor
+
+    from lhpc.core import status
+    _two_checkouts(tmp_path, make_repo)
+    threaded = _sources(_service(tmp_path, RealSystem()).build_snapshot(fresh=True))
+
+    class NoThreads(ThreadPoolExecutor):
+        submitted = 0
+
+        def submit(self, fn, /, *args, **kwargs):
+            NoThreads.submitted += 1
+            if NoThreads.submitted > started:
+                raise RuntimeError("can't start new thread")
+            return super().submit(fn, *args, **kwargs)
+    monkeypatch.setattr(status, "ThreadPoolExecutor", NoThreads)
+    assert _sources(_service(tmp_path, RealSystem()).build_snapshot(fresh=True)) == threaded
+    assert NoThreads.submitted == started + 1
+
+
 def test_a_snapshot_without_sources_runs_no_git(tmp_path, make_repo):
     _two_checkouts(tmp_path, make_repo)
     counted = _Counting()
