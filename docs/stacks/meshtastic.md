@@ -37,7 +37,9 @@ Rootless `meshtasticd` driving the RF95 radio **directly over SPI**, on 868 (def
 
 Region, node identity, GPS mode and fixed position are device settings applied through the
 managed CLI after start (post-start steps, re-runnable with `lhpc stack poststart meshtastic`).
-The web port is fixed at 9443.
+The web port is fixed at 9443 and serves HTTPS only. Upstream meshtastic/web #1464, merged after the
+pinned v2.7.2, makes the Add Connection dialog default a local address to HTTP in Chromium-based
+browsers; if it shows HTTP, switch it to HTTPS for this box.
 
 A hand edit of the generated YAML is lost at the next start; change a setting with
 `lhpc config meshtastic <param> <value>` or the stack's Settings (effective at the next start).
