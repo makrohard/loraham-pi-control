@@ -67,7 +67,7 @@ class StatusProber:
     def __init__(self, system: System, paths: Paths, profiles: dict | None = None,
                  binary_cover: dict | None = None,
                  meshcore_mode: str = _meshcore_mode.DEFAULT_MODE, sources: bool = True,
-                 cache=None) -> None:
+                 cache=None, owned_running: dict | None = None) -> None:
         self._system = system
         self._sources = sources                  # False: no git per source (`build_snapshot`)
         self._cache = cache                      # a `source_cache.SourceCache` for the git part, or None
@@ -80,6 +80,11 @@ class StatusProber:
         # artifact. Passed in by the service (which owns the receipt read) so status stays a
         # pure, bounded assessor.
         self._binary_cover = binary_cover or {}
+        # {component_id: [pid, ...]} of processes named by a VERIFIED ownership record (the same
+        # verification stop uses), passed in by the service like `binary_cover`. Such a process is
+        # running even when the spec no longer matches its argv: one started by an older LHPC,
+        # before its argv gained an instance token (A §2.3 "across the update", T-R6).
+        self._owned_running = owned_running or {}
         # ONE /proc/net/tcp read and ONE /proc cmdline table per whole-snapshot assessment (set by
         # `assess_stacks`); None outside it, so a standalone `assess_component` still reads fresh.
         self._listeners = None
@@ -195,6 +200,10 @@ class StatusProber:
             proc_matched = pm.matched
             status.pids = pm.pids
             status.evidence.update({f"process.{k}": v for k, v in pm.evidence.items()})
+        if not proc_matched and self._owned_running.get(comp.id):
+            proc_matched = True
+            status.pids = list(self._owned_running[comp.id])
+            status.evidence["process.owned"] = "verified ownership record"
 
         endpoints, all_ready, has_expected = self._assess_endpoints(comp)
         status.endpoints = endpoints

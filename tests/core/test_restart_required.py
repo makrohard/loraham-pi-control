@@ -226,6 +226,9 @@ def _candidate(tmp_path):
 
 class _StoppedLife:
     """The stop leg reports every component stopped (the observed process table is the test's)."""
+    def owned_running(self):
+        return {}                                        # no ownership records (status reads them)
+
     def stop(self, comp, band=None):
         from lhpc.core.outcomes import CompResult, Outcome
         return CompResult(component=comp.id, action="stop", outcome=Outcome.STOPPED,
