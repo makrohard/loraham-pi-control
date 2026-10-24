@@ -2129,6 +2129,15 @@ class LifecycleOpsMixin:
                 # through the permissive flag emitter (the daemon is skipped by the generic
                 # saved-launch refusal; this is its gate).
                 dparams["hipower"] = "on" if self.high_power_for_band(b) else "off"
+                # The PA over-current limit (daemon 1.3.0 `--ocp`): a saved value this band's chip
+                # cannot represent is refused here, never sent or clamped.
+                ocp = self.ocp_for_band(b)
+                if ocp is None:
+                    lines.append(f"  [BLOCKED] daemon on {b}: ocp_{b} = "
+                                 f"{dparams.get(f'ocp_{b}')!r} is not a PA limit this band's chip "
+                                 f"can represent — set it with: lhpc hardware --ocp {b} auto|MA")
+                    return lines, False, ""
+                dparams["ocp"] = str(ocp)
                 # The RF-log switch is STACK-level (band-less) while the file it names is per
                 # band (`{band}` in the run line); the path itself is never a stored value.
                 dparams[_rflog.RF_LOG_PARAM] = self._resolved_param_value(

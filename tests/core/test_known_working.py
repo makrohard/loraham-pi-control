@@ -480,7 +480,7 @@ def test_update_plan_is_frozen_against_concurrent_confirmation(tmp_path, monkeyp
     # the already-planned resolution: both adoptions use the ORIGINAL frozen composition.
     from lhpc.core.install import Installer, PlanAction
     paths = Paths(runtime_root=tmp_path)
-    # daemon stack: loraham-daemon + radiolib (two distinct source paths)
+    # daemon stack: loraham-daemon + radiolib + libch341 (three distinct source paths)
     known_working.record(paths, "daemon", {
         "loraham-daemon": {"commit": "1" * 40, "selector": "pinned", "remote":
                            "https://github.com/makrohard/LoRaHAM_Daemon.git",
@@ -488,6 +488,9 @@ def test_update_plan_is_frozen_against_concurrent_confirmation(tmp_path, monkeyp
         "radiolib": {"commit": "2" * 40, "selector": "pinned",
                      "remote": "https://github.com/jgromes/RadioLib",
                      "source_rel": "src/RadioLib", "strategy": ""},
+        "libch341": {"commit": "3" * 40, "selector": "pinned",
+                     "remote": "https://github.com/pine64/libch341-spi-userspace",
+                     "source_rel": "src/libch341-spi-userspace", "strategy": ""},
     }, {"confirmed_at": 1.0})
     seen = []
     def fake_adopt(self, comp, force=False, source="pinned", pinned_expected=None,
@@ -501,15 +504,20 @@ def test_update_plan_is_frozen_against_concurrent_confirmation(tmp_path, monkeyp
             "radiolib": {"commit": "9" * 40, "selector": "pinned",
                          "remote": "https://github.com/jgromes/RadioLib",
                          "source_rel": "src/RadioLib", "strategy": ""},
+            "libch341": {"commit": "7" * 40, "selector": "pinned",
+                         "remote": "https://github.com/pine64/libch341-spi-userspace",
+                         "source_rel": "src/libch341-spi-userspace", "strategy": ""},
         }, {"confirmed_at": 2.0})
         return PlanAction("adopt", "", f"adopt {comp.id}", status="done", detail="(fake)")
     monkeypatch.setattr(Installer, "adopt_source", fake_adopt)
+    (tmp_path / "src" / "libch341-spi-userspace").mkdir(parents=True)   # optional: updated when present
     svc = _svc(tmp_path)
     assert svc.update("daemon", apply=True, source="pinned").ok
-    assert len(seen) == 2
+    assert len(seen) == 3
     commits = {cid: exp[0] for cid, exp in seen}
     assert commits["loraham-daemon"] == "1" * 40          # ORIGINAL plan, not 8…
     assert commits["radiolib"] == "2" * 40                # ORIGINAL plan, not 9…
+    assert commits["libch341"] == "3" * 40                # ORIGINAL plan, not 7…
 
 
 def test_incompatible_known_working_across_shared_consumers_blocks(tmp_path):

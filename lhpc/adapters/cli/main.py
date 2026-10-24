@@ -744,6 +744,10 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Allow POWER=20 on an SX127x board for BAND (433|868), off|on. Takes "
                            "effect at the band's next daemon start. At +20 dBm: duty cycle <= 1 %%, "
                            "VSWR <= 3:1, cooling; nothing enforces it; warranty void if disregarded")
+    p_hw.add_argument("--ocp", nargs=2, metavar=("BAND", "auto|MA"),
+                      help="PA over-current limit for BAND (433|868): auto (140 mA with high power, "
+                           "else 100) or mA the band's chip can represent. Takes effect at the "
+                           "band's next daemon start")
 
     # Guarded passthrough to the managed Meshtastic CLI (parsed by _cmd_meshtastic, not here — it
     # forwards arbitrary upstream argv). Registered only so it appears in the command list.
@@ -1467,7 +1471,15 @@ def _run(argv: list[str] | None = None) -> int:
             if args.setup:
                 print("ERR   --high-power and a hardware setup are separate settings — one at a time")
                 return 2
+            if args.ocp:
+                print("ERR   --high-power and --ocp are separate settings — one at a time")
+                return 2
             return _render(svc.set_high_power(args.high_power[0], args.high_power[1]))
+        if args.ocp:
+            if args.setup:
+                print("ERR   --ocp and a hardware setup are separate settings — one at a time")
+                return 2
+            return _render(svc.set_ocp(args.ocp[0], args.ocp[1]))
         return _render(svc.set_hardware_setup(args.setup))
     if args.command == "gps":
         if args.monitor or args.sats:

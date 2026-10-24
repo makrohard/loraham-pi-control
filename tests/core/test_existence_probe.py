@@ -123,7 +123,12 @@ def _retire_keeps_the_receipt_for_a_file(tmp_path, monkeypatch, fail, restore, b
     res = svc.binary_retire("daemon", force=True)
     assert not res.ok and f"  still present: {rec.files[0]}" in res.details
     restore()
-    assert brx.receipt_state(svc._paths, "daemon")[0] == "valid" and victim.read_bytes() == b"ELF"
+    # The receipt is KEPT and the unexaminable file untouched. The daemon artifact has more than
+    # one file (the binary and the Meshstick library): the others were removed, so the kept
+    # receipt reports the install as incomplete rather than valid.
+    assert len(rec.files) > 1
+    state, _rec, why = brx.receipt_state(svc._paths, "daemon")
+    assert state == "unsafe" and "is gone" in why and victim.read_bytes() == b"ELF"
 
 
 def _retire_keeps_the_receipt_for_an_owned_dir(tmp_path, monkeypatch, fail, restore, binary_receipt):

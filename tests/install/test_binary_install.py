@@ -1236,6 +1236,7 @@ DAEMON_PATH = "src/loraham-daemon"
 
 
 RADIOLIB_PATH = "src/RadioLib"
+LIBCH341_PATH = "src/libch341-spi-userspace"
 
 
 def _svc_binary_switch_selector(tmp_path, monkeypatch):
@@ -1360,7 +1361,7 @@ def test_second_group_failing_restores_the_binary_and_undoes_what_it_created(tmp
     seen = stub_adopt(svc, fail_paths=(RADIOLIB_PATH,))
     res = svc.install("daemon", apply=True, source="pinned")
     assert not res.ok and "FAILED" in res.summary
-    assert {p for p, _s, _f in seen} == {DAEMON_PATH, RADIOLIB_PATH}
+    assert {p for p, _s, _f in seen} == {DAEMON_PATH, RADIOLIB_PATH, LIBCH341_PATH}
     assert brx.receipt_state(svc._paths, "daemon")[0] == "valid"      # the binary is back
     assert (tmp_path / rec.proof_paths[0]).read_bytes() == b"ELF"
     assert source_registry.record_state(svc._paths, DAEMON_PATH)[0] == "absent"

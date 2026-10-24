@@ -462,6 +462,28 @@ date = 2026-10-03
 evidence = "row A part 2 2026-10-03 (RELEASE-0.11.12-rowA-records)"
 
 [[measured]]
+component = "libch341"
+op = "clone"
+seconds = 1.9
+key = "pin:b0694ec84091b293cb1e97e00a821ff88353274f"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "v0.13.3 (9f18f26c)"
+date = 2026-10-24
+evidence = "row A 2026-10-24 (D row-a-libch341): adopt sequence replayed outside LHPC (component not in 0.13.3)"
+
+[[measured]]
+component = "libch341"
+op = "checkout"
+seconds = 0.1  # below log resolution
+key = "pin:b0694ec84091b293cb1e97e00a821ff88353274f"
+source = "zero2w"
+host = "lhpc-e293"
+lhpc = "v0.13.3 (9f18f26c)"
+date = 2026-10-24
+evidence = "row A 2026-10-24 (D row-a-libch341): adopt sequence replayed outside LHPC (component not in 0.13.3)"
+
+[[measured]]
 component = "loraham-chat"
 op = "clone"
 seconds = 3.0

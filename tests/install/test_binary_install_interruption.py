@@ -27,6 +27,8 @@ from lhpc.core.services import ControllerService
 pytestmark = pytest.mark.safety("binary-transaction")
 
 BIN = "src/loraham-daemon/loraham_daemon/loraham_daemon"
+LIB = "src/loraham-daemon/loraham_daemon/lib/libloraham-ch341.so"   # the Meshstick library
+LIB_LOG = "src/loraham-daemon/loraham_daemon/lib/libloraham-ch*.so"  # as the write log spells it
 RECEIPT = "state/binary/daemon.json"
 RAW = [(bi, "os.replace"), (bi, "os.makedirs"), (bi, "os.unlink"), (bi, "shutil.rmtree")]
 LOCKS = ("state/locks",)
@@ -35,6 +37,7 @@ POINTS = [
     ("write_marker", "state/locks/controller-task-admission.owner"),
     ("write_marker", "state/locks/source-txn-index.owner"),
     ("write_marker", "state/locks/source.src-radiolib.owner"),
+    ("write_marker", "state/locks/source.src-libch*-spi-userspace.owner"),
     ("write_marker", "state/locks/source.src-loraham-daemon.owner"),
     ("unlink", "state/locks/source-txn-index.owner"),
     ("mkdir", "state"),
@@ -43,9 +46,13 @@ POINTS = [
     ("mkdir", "state/binary"),
     ("write_marker", "state/binary/install.journal.json"),            # publishing
     ("os.makedirs", "state/binary/.backup-*"),
+    ("os.replace", LIB_LOG),                                          # live -> backup
+    ("os.makedirs", "state/binary/.backup-*"),
     ("os.replace", BIN),                                              # live -> backup
     ("os.makedirs", "src/loraham-daemon/loraham_daemon"),
     ("os.replace", "state/lhpc-binary-*/stage/" + BIN),               # staged -> live
+    ("os.makedirs", "src/loraham-daemon/loraham_daemon/lib"),
+    ("os.replace", "state/lhpc-binary-*/stage/" + LIB_LOG),           # staged -> live
     ("mkdir", "state/binary"),
     ("write_marker", RECEIPT),
     ("mkdir", "state/binary"),
@@ -53,6 +60,7 @@ POINTS = [
     ("shutil.rmtree", "state/binary/.backup-*"),
     ("unlink", "state/binary/install.journal.json"),                  # cleared
     ("unlink", "state/locks/source.src-loraham-daemon.owner"),
+    ("unlink", "state/locks/source.src-libch*-spi-userspace.owner"),
     ("unlink", "state/locks/source.src-radiolib.owner"),
     ("unlink", "state/locks/controller-task-admission.owner"),
 ]
@@ -67,10 +75,11 @@ def box(monkeypatch, stub_pipeline):
     version = ["v1"]
 
     def stage(tar, stage_dir, roots):
-        os.makedirs(os.path.dirname(os.path.join(stage_dir, BIN)), exist_ok=True)
-        with open(os.path.join(stage_dir, BIN), "w") as fh:
-            fh.write(version[0])
-        return [BIN]
+        for rel in (BIN, LIB):
+            os.makedirs(os.path.dirname(os.path.join(stage_dir, rel)), exist_ok=True)
+            with open(os.path.join(stage_dir, rel), "w") as fh:
+                fh.write(version[0])
+        return [BIN, LIB]
     monkeypatch.setattr(bi, "validate_and_extract", stage)
 
     def make(root):

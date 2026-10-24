@@ -54,6 +54,7 @@ DAEMON_BRANCH = "main"
 
 
 RADIOLIB_REMOTE = "https://github.com/jgromes/RadioLib"
+LIBCH341_REMOTE = "https://github.com/pine64/libch341-spi-userspace"
 
 
 A = "a" * 40
@@ -106,24 +107,26 @@ def test_all_unknown_never_reports_up_to_date(tmp_path):
 
 
 def test_mixed_up_to_date_and_unknown_is_qualified_and_not_green(tmp_path):
-    # daemon installed and current; radiolib never installed -> unknown.
+    # daemon installed and current; radiolib and libch341 never installed -> unknown.
     ds = _install(tmp_path, "src/loraham-daemon")
     cmds = {**_ls_remote(DAEMON_REMOTE, DAEMON_BRANCH, A), **_git_src(ds, A)}
     res = _svc(tmp_path, cmds).source_check("daemon")
     assert not res.ok                                       # a partial comparison is not a green
-    assert res.data["counts"][su.UP_TO_DATE] == 1 and res.data["counts"][su.UNKNOWN] == 1
-    assert res.data["checked"] == 2
+    assert res.data["counts"][su.UP_TO_DATE] == 1 and res.data["counts"][su.UNKNOWN] == 2
+    assert res.data["checked"] == 3
     assert "All checked sources are up to date" not in res.summary
 
 
 def test_unqualified_up_to_date_requires_every_source_comparable(tmp_path):
     ds = _install(tmp_path, "src/loraham-daemon")
     rl = _install(tmp_path, "src/RadioLib")
+    lc = _install(tmp_path, "src/libch341-spi-userspace")
     cmds = {**_ls_remote(DAEMON_REMOTE, DAEMON_BRANCH, A), **_git_src(ds, A),
-            **_ls_remote(RADIOLIB_REMOTE, "master", A), **_git_src(rl, A)}
+            **_ls_remote(RADIOLIB_REMOTE, "master", A), **_git_src(rl, A),
+            **_ls_remote(LIBCH341_REMOTE, "main", A), **_git_src(lc, A)}
     res = _svc(tmp_path, cmds).source_check("daemon")
     assert res.ok
-    assert res.data["counts"][su.UP_TO_DATE] == res.data["checked"] == 2
+    assert res.data["counts"][su.UP_TO_DATE] == res.data["checked"] == 3
     assert res.data["counts"][su.UNKNOWN] == 0
     assert "up to date" in res.summary                      # the token that means green
 
@@ -132,7 +135,9 @@ def test_behind_with_an_unknown_sibling_is_qualified_and_not_green(tmp_path):
     ds = _install(tmp_path, "src/loraham-daemon")           # radiolib absent -> unknown
     cmds = {**_ls_remote(DAEMON_REMOTE, DAEMON_BRANCH, B), **_git_src(ds, A)}
     res = _svc(tmp_path, cmds).source_check("daemon")
-    assert "1 of 2 source(s) behind" in res.summary and "1 not comparable" in res.summary
+    # libch341 is optional and not adopted: excused, not "not comparable"
+    assert "1 of 3 source(s) behind" in res.summary and "1 not comparable" in res.summary
+    assert res.data["excused"] == ["libch341"]
     assert not res.ok
 
 
@@ -181,12 +186,15 @@ def test_stack_sweep_covers_non_runnable_library_components(tmp_path):
     # radiolib has a remote but no run_argv — `_resolve` would drop it; the sweep must not.
     ds = _install(tmp_path, "src/loraham-daemon")
     rl = _install(tmp_path, "src/RadioLib")
+    lc = _install(tmp_path, "src/libch341-spi-userspace")   # a pure checkout, no run_argv either
     cmds = {**_ls_remote(DAEMON_REMOTE, DAEMON_BRANCH, A), **_git_src(ds, A),
-            **_ls_remote(RADIOLIB_REMOTE, "master", B), **_git_src(rl, A)}
+            **_ls_remote(RADIOLIB_REMOTE, "master", B), **_git_src(rl, A),
+            **_ls_remote(LIBCH341_REMOTE, "main", A), **_git_src(lc, A)}
     assert _svc(tmp_path, cmds).source_check("daemon").ok
     comps = su.view(Paths(runtime_root=tmp_path))["components"]
     assert comps["loraham-daemon"]["status"] == su.UP_TO_DATE
     assert comps["radiolib"]["status"] == su.BEHIND
+    assert comps["libch341"]["status"] == su.UP_TO_DATE
 
 
 def test_unknown_target_errors_without_network(tmp_path):
@@ -2226,6 +2234,7 @@ def test_malformed_journal_blocks_build_and_uninstall(tmp_path):
     paths = Paths(runtime_root=tmp_path)
     svc = ControllerService(system=FakeSystem().system, paths=paths)
     src = paths.under("src", "loraham-daemon"); src.mkdir(parents=True)
+    paths.under("src", "libch341-spi-userspace").mkdir(parents=True)   # the optional pine64 checkout, adopted by default
     d = paths.under("state", "source-txn"); d.mkdir(parents=True, exist_ok=True)
     (d / "garbage.json").write_text("{ not valid")        # unresolved -> blocks all mutation
     rb = svc.build("daemon", apply=True)
@@ -2238,6 +2247,7 @@ def test_retained_journal_blocks_every_source_op(tmp_path):
     paths = Paths(runtime_root=tmp_path)
     svc = ControllerService(system=FakeSystem().system, paths=paths)
     paths.under("src", "loraham-daemon").mkdir(parents=True)
+    paths.under("src", "libch341-spi-userspace").mkdir(parents=True)   # the optional pine64 checkout, adopted by default
     paths.under("src", "LoRaHAM_Daemon").mkdir(parents=True)
     d = paths.under("state", "source-txn"); d.mkdir(parents=True, exist_ok=True)
     (d / "garbage.json").write_text("{ retained")        # unresolved -> blocks all source ops
@@ -2257,6 +2267,7 @@ def test_source_guard_holds_index_during_handoff(tmp_path):
     paths = Paths(runtime_root=tmp_path)
     svc = ControllerService(system=FakeSystem().system, paths=paths)
     paths.under("src", "loraham-daemon").mkdir(parents=True)
+    paths.under("src", "libch341-spi-userspace").mkdir(parents=True)   # the optional pine64 checkout, adopted by default
     with reslock.operation_lock(paths, "source-txn-index", "adopt", "x"):
         res = svc.build("daemon", apply=True)
     assert not res.ok and "blocked" in res.summary.lower()
