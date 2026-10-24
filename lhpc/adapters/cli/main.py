@@ -671,6 +671,12 @@ def build_parser() -> argparse.ArgumentParser:
                             help="Stop the daemon on this band only (daemon only)")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
 
+    # The operator's hard stop (A §2.12): SIGTERM, 5 s, SIGKILL over one instance's processes.
+    p_kill = sub.add_parser("kill", help="Hard-stop a stack, or one component of it (SIGKILL after 5 s)")
+    p_kill.add_argument("target", metavar="stack[@band]", help="Stack id, optionally @433 or @868")
+    p_kill.add_argument("component", nargs="?", default="", help="Only this component of the stack")
+    p_kill.add_argument("--yes", action="store_true", help="Apply without confirmation")
+
     # Per-stack settings (callsign/params/daemon params) and the global operator identity.
     p_cfg = sub.add_parser("config", help="View or set stack settings and operator identity")
     p_cfg.add_argument("stack", help="Stack id, or 'operator' for the global callsign")
@@ -1421,6 +1427,10 @@ def _run(argv: list[str] | None = None) -> int:
               "lhpc stack: an action is required (start|stop|restart|poststart)",
               file=sys.stderr)
         return 2
+    if args.command == "kill":
+        from lhpc.core import kill as _kill
+        return _apply_flow(lambda a: _kill.kill(svc, args.target, args.component, apply=a),
+                           yes=args.yes)
     if args.command == "config":
         return _cmd_config(svc, args)
     if args.command == "autostart":

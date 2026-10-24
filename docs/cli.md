@@ -10,7 +10,7 @@ the same service layer ([architecture](architecture.md#package-layout)).
 
 ## Conventions
 
-- Plan-first commands (`bootstrap`, `install`, `auto-install`, `stack`, `build`, `test`, `update`,
+- Plan-first commands (`bootstrap`, `install`, `auto-install`, `stack`, `kill`, `build`, `test`, `update`,
   `uninstall`, `clean`, `daemon --set`) print a **dry-run plan** and apply only after a `[y/N]`
   confirmation, or at once with `--yes`.
 - Setting commands (`config <stack> <param> <value>`, `hardware`, `gps`, `autostart on|off`,
@@ -25,7 +25,7 @@ the same service layer ([architecture](architecture.md#package-layout)).
 - [list](#list) · [status](#status) · [explain](#explain) · [doctor](#doctor) · [deps](#deps) · [source-check](#source-check)
 - [bootstrap](#bootstrap) · [install](#install) · [auto-install](#auto-install)
 - [config](#config) · [hardware](#hardware) · [gps](#gps) · [autostart](#autostart) · [firewall](#firewall) · [hmac](#hmac) · [meshtastic](#meshtastic)
-- [stack](#stack) · [build](#build) · [test](#test) · [update](#update) · [uninstall](#uninstall) · [clean](#clean) · [known-working](#known-working)
+- [stack](#stack) · [kill](#kill) · [build](#build) · [test](#test) · [update](#update) · [uninstall](#uninstall) · [clean](#clean) · [known-working](#known-working)
 - [daemon](#daemon) · [logs](#logs) · [rflog](#rflog)
 - [web](#web) · [webserver](#webserver)
 - [secrets](#secrets) · [self-update](#self-update) · [help](#help)
@@ -269,6 +269,17 @@ stack that already runs changes nothing; a GPS feed running without a position s
 restarting it (any live retry runner is cancelled first). Use it when `lhpc status <stack>` shows
 "post-start: … NOT applied", e.g. a MeshCom callsign push that outlived its retry window after a
 slow QEMU boot.
+
+### kill
+`lhpc kill <stack>[@<band>] [<component>] [--yes]` — the hard stop of one stack instance, or of one
+component of it, when a stop failed or hangs. The plan names the processes. Each gets SIGTERM, and
+SIGKILL after 5 s if it is still running; unsaved data in them is lost. The targets are the
+processes whose argv names this instance, including one you started by hand, and those LHPC's
+ownership records name. A component kill leaves the rest of the stack running, and a client stack's
+kill never ends the shared daemon (`lhpc kill daemon@<band>` does). A start of the same stack that
+is still running is ended first; any other task in progress refuses the kill, naming it. Nothing
+else runs a kill. In the console: **Kill** beside each component's Stop, and the whole-stack Kill
+on a stop that failed.
 
 ### build
 `lhpc build <target> [--yes]` — build a stack/component.

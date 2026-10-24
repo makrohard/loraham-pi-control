@@ -152,6 +152,11 @@
                     <a class="logslink" href="{{ url_for('logs_view', target=comp.id) }}" aria-label="{{ comp.id }} logs">logs</a>
                     {% if comp.kind.value == 'service' %}
                       {{ action_btn('start', comp.id, 'Start') }}{{ action_btn('stop', comp.id, 'Stop') }}
+                      {# The operator's hard stop of this component only (A §2.12): a confirm page
+                         that names its processes first. #}
+                      {% if comp.process and comp.id in g.stack.components|map(attribute='id')|list %}
+                        <a class="act" href="{{ url_for('kill_page', sid=g.stack.id, component=comp.id) }}"><button type="button">Kill</button></a>
+                      {% endif %}
                     {% endif %}
                     {# Source: `update` on a component clones its source when missing (adopt_source)
                        and refreshes it when present — one button covers first-install and update. #}

@@ -41,6 +41,7 @@ from flask import (
 
 from lhpc.adapters.web.oneshot import OneShot
 from lhpc.core import config as _config
+from lhpc.core import kill as _kill
 from lhpc.core import meshcore_mode as _meshcore_mode
 from lhpc.core import rflog as _rflog
 from lhpc.core import validators
@@ -1755,7 +1756,32 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # marker detail (banner hint) since the start became detached.
         flash(f"{result.summary} {' '.join(result.details[:6])}",
               "ok" if result.ok else "warn")
+        if op == "stop" and not result.ok and service.stack(target) is not None:
+            # A failed, timed-out or refused stop offers the whole-stack Kill (A §2.12, W44).
+            return _render_kill(target, "", failed=result)
         return _redirect_for(target)
+
+    def _render_kill(sid: str, component: str, failed=None):
+        # The kill confirm: one click, with the processes the kill would signal named first.
+        plan = _kill.kill(service, sid, component)
+        return render_template("kill_confirm.html", version=__version__, sid=sid,
+                               component=component, plan=plan, failed=failed)
+
+    @app.get("/kill/<sid>")
+    def kill_page(sid: str):
+        if service.stack(sid) is None:
+            abort(404)
+        return _render_kill(sid, request.args.get("component", ""))
+
+    @app.post("/kill/<sid>")
+    def kill_action(sid: str):
+        if not _csrf_ok():
+            abort(400)
+        if service.stack(sid) is None:
+            abort(404)
+        res = _kill.kill(service, sid, request.form.get("component", ""), apply=True)
+        flash(f"{res.summary} {' '.join(res.details[:6])}", "ok" if res.ok else "warn")
+        return _redirect_for(sid)
 
     def _safe_job(value):
         # only a plain logs/<name>.log filename, never a path

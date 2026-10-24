@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Kill {{ component or sid }} — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  {# The operator's hard stop (A §2.12): SIGTERM, then SIGKILL after 5 s to whatever is left. One
+     confirm that names the processes; data loss is accepted. #}
+  <div class="card">
+    <header><h2>Kill {{ component ~ ' of ' ~ sid if component else sid }}?</h2></header>
+    <div class="body">
+      {% if failed %}
+        <p class="depnote depnote-warn" id="stop-failed">The stop did not complete: {{ failed.summary }}</p>
+      {% endif %}
+      <p>{{ plan.summary }} Each gets SIGTERM, and SIGKILL after 5 s if it is still running.
+        Unsaved data in them is lost.</p>
+      {% if plan.details %}
+        <pre class="next" id="kill-processes">{% for d in plan.details %}{{ d }}
+{% endfor %}</pre>
+      {% endif %}
+      <form method="post" action="{{ url_for('kill_action', sid=sid) }}" class="act" id="kill-form">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="component" value="{{ component }}">
+        <button type="submit" class="warnbtn">Yes, kill {{ component or sid }}</button>
+        <a class="btnlink" href="{{ url_for('stacks_overview', open=sid) }}">Cancel</a>
+      </form>
+    </div>
+  </div>
+{% endblock %}

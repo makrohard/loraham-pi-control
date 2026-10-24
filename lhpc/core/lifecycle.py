@@ -629,12 +629,15 @@ class Lifecycle:
         state = data[rp + 2:rp + 3] if rp != -1 else ""
         return state in ("Z", "X", "x")
 
-    def _terminate_unobserved(self, pid: int, launch_ident: dict | None = None) -> bool:
+    def _terminate_unobserved(self, pid: int, launch_ident: dict | None = None,
+                              kill_after: float = 0.0, sleep=time.sleep) -> bool:
         """SIGTERM a just-spawned but unobserved session — ONLY if the pid STILL has the
         complete identity we captured at launch. Never signal on PID/session leadership
         alone: without a COMPLETE captured launch identity (or on ANY field mismatch) we
         refuse to signal and report cessation only if it is independently PROVEN.
-        Returns True only when cessation is verified (no SIGKILL)."""
+        Returns True only when cessation is verified. No SIGKILL by default; `kill_after` > 0
+        (the operator's kill, A §2.12 Q-K1) waits that grace, re-checks the identity, and
+        SIGKILLs the process group if it is still the same one. `sleep` is the injected clock."""
         # No complete captured identity -> we cannot prove this pid is ours -> never
         # signal; "ceased" only if the process is provably gone.
         if not self._identity_complete(launch_ident):
@@ -648,20 +651,46 @@ class Lifecycle:
         # exec (e.g. `#!/usr/bin/env bash`: env → bash) changes exec/argv but NOT start time, so
         # those are advisory — a matching start time already proves it is our launched process.
         # A changed start time / pgid / sid means it is NOT ours: do NOT signal, NOT proven ceased.
+        if not self._same_session(pid, now, launch_ident):
+            return False
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except OSError:
+            return False
+        if not kill_after:                      # NO SIGKILL — bounded wait for SIGTERM
+            return self._await_proc_ceased(pid, 2.5, sleep)   # True ONLY if cessation is PROVEN
+        if self._await_proc_ceased(pid, kill_after, sleep):
+            return True
+        # The KILL leg: the identity is read again, so a pid that died and was reused during
+        # the grace is never signalled.
+        now = self._proc_identity(pid)
+        if now is None or not self._same_session(pid, now, launch_ident):
+            return self._proc_ceased(pid)
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except OSError:
+            return self._proc_ceased(pid)
+        return self._await_proc_ceased(pid, 2.5, sleep)
+
+    @staticmethod
+    def _same_session(pid: int, now: dict, launch_ident: dict) -> bool:
+        """Whether `now` (the pid's identity read just now) is still the launched process: same
+        start time, pgid and sid, and still the leader of its own process group."""
         for k in ("starttime", "pgid", "sid"):
             if str(now.get(k)) != str(launch_ident.get(k)):
                 return False
         try:
-            if os.getpgid(pid) != pid:          # must still be its own session leader
-                return False
-            os.killpg(pid, signal.SIGTERM)
+            return os.getpgid(pid) == pid       # must still lead its own process group
         except OSError:
             return False
-        for _ in range(25):                     # NO SIGKILL — bounded wait for SIGTERM
+
+    def _await_proc_ceased(self, pid: int, seconds: float, sleep=time.sleep) -> bool:
+        """Bounded wait, in 0.1 s steps of `sleep`, for PROVEN cessation of `pid`."""
+        for _ in range(round(seconds / 0.1)):
             if self._proc_ceased(pid):
                 return True
-            time.sleep(0.1)
-        return self._proc_ceased(pid)           # True ONLY if cessation is PROVEN
+            sleep(0.1)
+        return self._proc_ceased(pid)
 
     def _verified_main_record(self, comp_id: str, band: str):
         """The currently VERIFIED main (role="") ownership record for this component+band, or None.
