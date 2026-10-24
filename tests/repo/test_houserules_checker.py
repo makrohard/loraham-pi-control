@@ -28,8 +28,10 @@ RED = "item\n\nred-before: AssertionError on the parent\n"
 
 
 def _git(repo, *args, author="makrohard"):
+    # An exported GIT_AUTHOR_*/GIT_COMMITTER_* overrides `-c user.name`: the fixture's identity is the one given.
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_"))}
     subprocess.run(["git", "-c", f"user.name={author}", "-c", "user.email=dev@example.invalid",
-                    "-c", "commit.gpgsign=false", *args], cwd=repo, check=True, capture_output=True)
+                    "-c", "commit.gpgsign=false", *args], cwd=repo, env=env, check=True, capture_output=True)
 
 
 def _write(repo, files):
@@ -121,6 +123,17 @@ def test_each_hard_condition_fails_the_range(repo, case):
 
 
 def test_a_foreign_author_fails_the_range(repo):
+    _commit(repo, {"docs/a.md": "Alpha fact.\nMore.\n"}, author="someone")
+    rc, rows = _run(repo, "--fact", "More.")
+    assert (rc, rows["attribution"]) == (1, "HARD")
+
+
+def test_an_ambient_git_identity_does_not_mask_a_foreign_author(repo, monkeypatch):
+    """The release shell exports its identity; git's GIT_AUTHOR_*/GIT_COMMITTER_* override `-c user.name`, so
+    the fixture's foreign commit was made by makrohard and the HARD never showed. Red before: attribution OK."""
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "makrohard")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "dev@example.invalid")
     _commit(repo, {"docs/a.md": "Alpha fact.\nMore.\n"}, author="someone")
     rc, rows = _run(repo, "--fact", "More.")
     assert (rc, rows["attribution"]) == (1, "HARD")
