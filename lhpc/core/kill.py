@@ -1,0 +1,264 @@
+"""`kill`, the operator's hard stop (A §2.12, stage L3-K): its final state is the only promise, no process of
+the stack (or of the one component) is left; data loss and inconsistent states are accepted (W45); nothing else
+calls it (T-K6). Functions over the controller service: the CLI and the console call `kill(service, …)`."""
+from __future__ import annotations
+
+import contextlib
+import os
+import posixpath
+import signal
+import time
+from pathlib import Path
+
+from . import procident
+from .daemon_control import ALLOWED_BANDS
+from .outcomes import CompResult, Outcome
+from .service_base import ActionResult
+from .snapshot_memo import invalidates_snapshot
+
+GRACE_S = 5.0          # W47a: SIGTERM, then SIGKILL after 5 s to whatever is left
+sleep = time.sleep     # the injected clock (H3); tests replace it
+
+
+def _parse(svc, target: str, component: str):
+    """`<stack>[@<band>]` and an optional component of that stack → (stack, band, comps) or an
+    error. At L3 the instance value is the band."""
+    sid, _, band = target.partition("@")
+    stk = svc.stack(sid)
+    if stk is None:
+        return None, "", [], f"Unknown stack '{sid}' (kill takes a stack id)."
+    if band and band not in ALLOWED_BANDS:
+        return None, "", [], f"Unknown band '{band}' (one of {', '.join(ALLOWED_BANDS)})."
+    comps = [c for c in stk.components if c.process is not None]
+    if component:
+        comps = [c for c in comps if c.id == component]
+        if not comps:
+            return None, "", [], f"'{component}' is no process component of '{sid}'."
+    return stk, band, comps, ""
+
+
+def _targets(svc, stk, band: str, comps) -> list[dict]:
+    """The instance's processes: the exact matcher's hits over /proc (incl. a user-started
+    component, W46) plus the processes its verified ownership records name (T-R6, W88), scoped
+    to `comps`. Each target carries the identity read now, so nothing reused is signalled."""
+    from . import commands
+    from .probes.process import matches
+    life = svc._lifecycle()
+    hint = svc._launch_band_hint(stk.id, band)
+    cfg_band = svc._config_band(stk.id, hint)
+    runtime = str(svc._paths.runtime_root)
+    table = svc._system.procfs.cmdlines()
+    found: dict[int, dict] = {}
+    for comp in comps:
+        if comp.id == svc.DAEMON_ID:
+            # The daemon goes per band by its exact --radio parse until L5 (NO_INSTANCE_ARG).
+            pids = (svc._daemon_pids_for_band(band) if band else
+                    [p for p, a in table.items()
+                     if a and posixpath.basename(a[0]) == "loraham_daemon"])
+        else:
+            # A spec exempt in NO_INSTANCE_ARG (voice, voice_cli, kiss-serial) matches by its
+            # stack identity, i.e. any instance: sound only while today's one-band rule allows
+            # one instance per box, until L5 gives them a socket token (W98).
+            instance = None
+            if comp.process.instance_arg:
+                opt, tpl = comp.process.instance_arg
+                src = (str(svc._paths.resolve_source(comp.source.path)) if comp.source
+                       else runtime)
+                with contextlib.suppress(Exception):   # an unresolvable value: records only
+                    instance = (opt, commands.instance_value(
+                        tpl, comp, svc.stack_config(comp.id, hint), runtime, src,
+                        cfg_band or comp.band))
+            pids = ([] if comp.process.instance_arg and instance is None else
+                    [p for p, a in sorted(table.items()) if matches(comp.process, a, instance)])
+        for pid in pids:
+            found.setdefault(pid, {"pid": pid, "component": comp.id, "group": False,
+                                   "argv": " ".join(table.get(pid, []))})
+        for rec in life.owned_records(comp.id, hint or None):
+            if life.verify_owned(rec)[0]:
+                found[rec["pid"]] = {"pid": rec["pid"], "component": comp.id, "group": True,
+                                     "pgid": rec["pgid"], "record": rec,
+                                     "argv": " ".join(table.get(rec["pid"], []))}
+    out = []
+    for t in found.values():
+        ident = procident.proc_identity(t["pid"])
+        if ident is not None:
+            out.append({**t, "ident": ident})
+    return out
+
+
+def _holder(svc, holder, sid: str) -> tuple[int, dict | None, str]:
+    """Q-K2: the admission flock's holder from its own owner record, verified against /proc.
+    → (pid, identity to terminate, "") for a start of this stack, else (pid or 0, None, why).
+    No record, or a corrupt one, is an unverifiable holder: refused, never waited on."""
+    if not isinstance(holder, dict) or not holder:      # ResourceBusy gives {} for none
+        return 0, None, "unverifiable holder (no readable owner record)"
+    pid = holder.get("pid")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return 0, None, "unverifiable holder (corrupt owner record)"
+    try:
+        argv = [t for t in Path(f"/proc/{pid}/cmdline").read_bytes().decode(
+            "utf-8", "replace").split("\0") if t]
+    except OSError:
+        argv = []
+    named = (f"pid {pid} ({' '.join(argv) or 'cmdline unreadable'}; "
+             f"{holder.get('operation', '?')} {holder.get('target', '')})")
+    if (holder.get("operation") not in ("start", "restart")
+            or svc.stack_of(str(holder.get("target", ""))) != sid):
+        return pid, None, f"the task admission is held by {named}"
+    # A web start of this stack: its job marker carries the identity of its process.
+    for job in svc.active_jobs(cleanup=False):
+        raw = svc._read_job_marker(job.get("log") or "")
+        if (raw and raw.get("pid") == pid and job.get("stack") == sid
+                and procident.identity_matches(raw, pid)):
+            return pid, raw, ""
+    # A CLI `lhpc stack start|restart <stack>`: named by its own cmdline, identity read now.
+    verb = argv[argv.index("stack") + 1:argv.index("stack") + 3] if "stack" in argv else []
+    if (any(posixpath.basename(t) == "lhpc" for t in argv[:3]) and len(verb) == 2
+            and verb[0] in ("start", "restart") and svc.stack_of(verb[1]) == sid):
+        ident = procident.proc_identity(pid)
+        if ident is not None:
+            return pid, ident, ""
+    return pid, None, f"the task admission is held by {named}, not verifiable as a start of {sid}"
+
+
+def _admission(svc, stack, sid: str, notes: list) -> str:
+    """Flock first, bounded by exactly `_SELF_LOCK_WAIT_S` (A §2.12): take the admission
+    flock; a start of this stack holding it is ended through the identity-verified terminate
+    with its KILL leg; anything else is refused by name. "" once held, else the refusal."""
+    from . import reslock
+    steps = round(svc._SELF_LOCK_WAIT_S / 0.1)
+    ended: set[int] = set()
+    for _ in range(steps + 1):
+        try:
+            stack.enter_context(reslock.operation_lock(
+                svc._paths, svc.ADMISSION_KEY, "kill", sid))
+        except reslock.ResourceBusy as busy:
+            if isinstance(busy.holder, dict) and busy.holder.get("pid") == os.getpid():
+                sleep(0.1)      # our own overlapping op releases shortly
+                continue
+            pid, ident, why = _holder(svc, busy.holder, sid)
+            if why:
+                return f"refused: {why}"
+            if pid not in ended:
+                if not svc._lifecycle()._terminate_unobserved(
+                        pid, ident, kill_after=GRACE_S, sleep=sleep):
+                    return (f"refused: the start holding the task admission (pid {pid}) "
+                            "could not be ended")
+                ended.add(pid)
+                notes.append(f"pid {pid}: the in-flight start of {sid} ended")
+                svc.active_jobs(cleanup=True)      # clears the dead start's job marker
+            sleep(0.1)          # the kernel frees the flock with the process
+            continue
+        counts = svc._held_counts()
+        counts[svc.ADMISSION_KEY] = counts.get(svc.ADMISSION_KEY, 0) + 1
+        stack.callback(svc._admit_release)
+        return ""
+    return "refused: the task admission was not freed in time"
+
+
+def _signal(svc, targets: list[dict]) -> list[dict]:
+    """SIGTERM every target, the 5 s grace, then SIGKILL each survivor; returns those not proven gone.
+    Every signal follows an identity read: a target whose pid now runs another process is never sent one."""
+    life = svc._lifecycle()
+
+    def matches(t, now):
+        # The identity the scan captured, against `now` (read just now): a pid target by its start time; a group
+        # target (an ownership record's process group) by start time, pgid and sid, as `_terminate_unobserved`
+        # checks it.
+        if t["group"]:
+            return life._same_session(t["pid"], now, t["ident"])
+        return now["starttime"] == t["ident"]["starttime"]
+
+    def same(t):                       # the guard for signalling: an unreadable identity is not ours (fail closed)
+        now = procident.proc_identity(t["pid"])
+        return now is not None and matches(t, now)
+
+    def left_of(t):                    # a survivor unless provably gone or provably another process; an unreadable
+        if life._proc_ceased(t["pid"]):    # read is not proof of either, so it keeps the target
+            return False
+        now = procident.proc_identity(t["pid"])
+        return now is None or matches(t, now)
+
+    def send(t, sig):
+        if not same(t):
+            return
+        with contextlib.suppress(OSError):
+            if t["group"]:
+                os.killpg(t["pgid"], sig)
+            else:
+                os.kill(t["pid"], sig)
+
+    for t in targets:
+        send(t, signal.SIGTERM)
+    left = targets
+    for leg in (signal.SIGKILL, None):
+        for _ in range(round((GRACE_S if leg else 2.5) / 0.1)):
+            left = [t for t in left if left_of(t)]
+            if not left:
+                return []
+            sleep(0.1)
+        left = [t for t in left if left_of(t)]
+        if leg is not None:
+            for t in left:
+                send(t, leg)
+    return [t for t in left if left_of(t)]
+
+
+@invalidates_snapshot
+def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionResult:
+    """`lhpc kill <stack>[@<band>] [<component>]`: SIGTERM, 5 s, SIGKILL over the instance's
+    processes, under the admission flock. A dry run names the processes (the confirm)."""
+    stk, band, comps, err = _parse(svc, target, component)
+    if err:
+        return ActionResult(False, err, next_commands=["lhpc list"])
+    what = f"{component} of {target}" if component else target
+    if not apply:
+        targets = _targets(svc, stk, band, comps)
+        return ActionResult(True, f"Kill {what}: {len(targets)} process(es).",
+                            details=[f"  [kill] pid {t['pid']} {t['component']}: {t['argv']}"
+                                     for t in targets],
+                            data={"changes": len(targets),
+                                  "pids": [t["pid"] for t in targets]})
+    notes: list[str] = []
+    with contextlib.ExitStack() as stack:
+        refused = _admission(svc, stack, stk.id, notes)
+        if refused:
+            return ActionResult(False, f"Cannot kill {what}: {refused}", details=notes,
+                                next_commands=[f"lhpc status {stk.id}"])
+        targets = _targets(svc, stk, band, comps)
+        left = _signal(svc, targets)
+        gone = {t["pid"] for t in targets} - {t["pid"] for t in left}
+        life = svc._lifecycle()
+        for t in targets:
+            if t["pid"] in gone and "record" in t:
+                life._remove_record(t["record"])
+        hint = svc._launch_band_hint(stk.id, band)
+        for comp in comps:
+            _log(svc, life, comp, hint)
+        if not component:
+            svc._safe_unlink(svc._band_marker(stk.id))
+            svc.dismiss_interactive(stk.id)
+            svc._write_stop_intent([stk.id])
+    results = tuple(CompResult(
+        component=c.id, stack=stk.id, action="kill",
+        outcome=(Outcome.STILL_RUNNING if any(t["component"] == c.id for t in left)
+                 else Outcome.STOPPED),
+        summary="killed by operator") for c in comps)
+    details = notes + [f"  pid {t['pid']} {t['component']}: "
+                       f"{'still running' if t in left else 'gone'}" for t in targets]
+    if left:
+        return ActionResult(False, f"Kill {what}: {len(left)} process(es) still running "
+                            f"after SIGKILL: {', '.join(str(t['pid']) for t in left)}",
+                            details=details, results=results)
+    return ActionResult(True, f"Killed {what}: no process of it is left.",
+                        details=details, results=results)
+
+
+def _log(svc, life, comp, band: str) -> None:
+    """'killed by operator' in the component's start log (best effort)."""
+    from . import runtime_fs
+    log = life.start_log(comp, band)
+    if log is None:
+        return
+    with contextlib.suppress(Exception), runtime_fs.open_log_append(svc._paths, log) as fh:
+        fh.write(b"[lhpc] killed by operator\n")
