@@ -63,11 +63,9 @@ class BootRestoreOpsMixin:
             return False, f"cannot inspect the enablement symlink: {exc}"
         verdict = updater_units.verify(Path(user_dir), updater_units.WEB_UNIT,
                                        str(root), checkout, venv)
-        if verdict == updater_units.COMPATIBLE:
-            return True, updater_units.COMPATIBLE_NOTE
-        if verdict != updater_units.OK:
+        if not updater_units.boot_restore_runs(verdict):
             return False, f"lhpc-web.service is not canonical ({verdict})"
-        return True, ""
+        return True, updater_units.COMPATIBLE_NOTE if verdict == updater_units.COMPATIBLE else ""
 
     # ---- evidence classification ---------------------------------------------------------------
 
