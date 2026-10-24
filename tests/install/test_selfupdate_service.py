@@ -879,6 +879,51 @@ def test_operator_apply_prints_what_it_did_not_steps_it_already_took(op_svc, mon
         assert "The web console is not running; it loads the new version when started." in res.details
 
 
+def test_operator_apply_ending_units_stale_drops_the_advice_for_steps_it_took(op_svc, monkeypatch):
+    """The same advice was still printed when the units refresh failed: on a box after 0.12.10 ->
+    0.13.3 the units-stale result also said "run the venv sync command" and "stop the console (Ctrl-C)
+    and re-run: lhpc web", although that command had synced the venv and restarted the console. The
+    named state and its one command stay."""
+    from lhpc.core import selfupdate
+    from lhpc.core.service_base import ActionResult
+    from lhpc.core.services import ControllerService
+
+    svc, _fake = op_svc(_WEB_ACTIVE, invocation=False)
+    instr = selfupdate.restart_instructions(True, "/venv/bin/python -m pip install -e /repo")
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False: ActionResult(
+        True, selfupdate.APPLIED_RESTART_MESSAGE,
+        details=(instr["note"], "Restart the web console to load the new version:",
+                 *("  " + c for c in instr["commands"])),
+        next_commands=list(instr["commands"]), data={"restart": instr, "deps_changed": True}))
+    monkeypatch.setattr(ControllerService, "_refresh_units_post_update",
+                        lambda self: (False, _BOX_UNITS_DETAIL))
+    res = svc.self_update_apply_operator()
+    text = "\n".join((res.summary, *res.details, *res.next_commands))
+    assert res.ok is False and "units-stale" in res.summary, text
+    assert "pip install" not in text and "Dependencies changed" not in text, text
+    assert "Restart the web console" not in text and "lhpc web" not in text, text
+    assert "The web console was restarted on the new version." in res.details
+    assert res.next_commands == ["lhpc self-update --repair-integration"]
+
+
+def test_operator_apply_whose_venv_sync_failed_keeps_the_sync_advice(op_svc, monkeypatch):
+    """The other side of the rule above: a sync that FAILED was not a step taken, so its advice stays."""
+    from lhpc.core import selfupdate
+    from lhpc.core.probes.backends import CommandResult as CR
+    from lhpc.core.service_base import ActionResult
+    from lhpc.core.services import ControllerService
+
+    svc, _fake = op_svc(_WEB_ACTIVE, invocation=False)
+    instr = selfupdate.restart_instructions(True, "/venv/bin/python -m pip install -e /repo")
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False: ActionResult(
+        True, selfupdate.APPLIED_RESTART_MESSAGE, details=(instr["note"],),
+        data={"restart": instr, "deps_changed": True}))
+    monkeypatch.setattr(selfupdate, "venv_sync", lambda *a, **k: CR(1, "", "no index"))
+    res = svc.self_update_apply_operator()
+    assert res.ok is False and res.data.get("venv_sync_failed"), res.summary
+    assert instr["note"] in res.details
+
+
 # --- the one-click helper and the reset+clean-failed partial (audit P1.3 round 1, finding 1) -----
 
 def _partial_svc(tmp_path, monkeypatch, op_svc):
