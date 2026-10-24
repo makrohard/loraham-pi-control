@@ -101,7 +101,7 @@
                    | select('in', ['foreign', 'ambiguous', 'overridden', 'unsafe', 'unreadable'])
                    | list) %}
     <p class="depnote depnote-warn">The units are another release's (compatible): run
-      <code>lhpc self-update --repair-integration</code> from an operator shell, then update.</p>
+      <code>lhpc self-update --repair-integration</code> from an operator shell{% if st.update_available %}, then update{% endif %}.</p>
   {% elif updater and updater.status != 'ok' and st.update_available and not updater.fixable %}
     <p class="depnote depnote-warn">One-click update needs attention ({{ updater.status }} web/updater
       units). The systemd units aren't safely this deployment's — resolve them manually

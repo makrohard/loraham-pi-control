@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Fixed
+
+- Update view: the note to repair another release's units says "then update" only when an update is
+  available.
+
 ## 0.13.3
 
 Fixed
