@@ -937,10 +937,15 @@ def _parse_unit(raw: dict) -> UnitRef:
 def _parse_process(raw: dict | None) -> ProcessSpec | None:
     if not raw:
         return None
+    inst = raw.get("instance_arg", [])
+    if inst and not (isinstance(inst, list) and len(inst) == 2
+                     and all(isinstance(t, str) and t for t in inst)):
+        raise ManifestError(f"process.instance_arg must be [<option>, <value>], got {inst!r}")
     return ProcessSpec(
         exec_name=raw["exec_name"],
         all_args=tuple(raw.get("all_args", [])),
         any_args=tuple(raw.get("any_args", [])),
+        instance_arg=tuple(inst),
     )
 
 

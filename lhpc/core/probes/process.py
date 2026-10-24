@@ -13,6 +13,7 @@ from __future__ import annotations
 import posixpath
 import re
 from dataclasses import dataclass
+from itertools import pairwise
 
 from ..model import ProcessSpec
 from .backends import System
@@ -29,10 +30,23 @@ def _token_contains(argv: list[str], pattern: str) -> bool:
     return any(pattern in token for token in argv)
 
 
+def has_instance_token(argv: list[str], option: str, value: str) -> bool:
+    """Whether argv names this instance: the token `option` immediately followed by the token
+    `value`, or the single token `option=value`, each compared WHOLE. Never a substring, so
+    `--port 18788` is not `--port 8788` and `…-r12.sock` is not `…-r1.sock`."""
+    if any(t == f"{option}={value}" for t in argv):
+        return True
+    return any(a == option and b == value for a, b in pairwise(argv))
+
+
 _PY_INTERP = re.compile(r"^python[0-9.]*$")
 
 
-def matches(spec: ProcessSpec, argv: list[str]) -> bool:
+def matches(spec: ProcessSpec, argv: list[str], instance: tuple[str, str] | None = None) -> bool:
+    """The stack identity (exec, all_args/any_args substrings); with `instance` (the spec's
+    resolved instance_arg) also that exact instance token."""
+    if instance is not None and not has_instance_token(argv, *instance):
+        return False
     if not argv:
         return False
     exec_basename = posixpath.basename(argv[0])

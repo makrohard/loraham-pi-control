@@ -192,6 +192,9 @@ class ProcessSpec:
     exec_name: str
     all_args: tuple[str, ...] = ()
     any_args: tuple[str, ...] = ()
+    # The instance's identity in argv: (option, value-template), resolved per instance and matched
+    # as WHOLE tokens only (`probes.process.has_instance_token`); () = none declared.
+    instance_arg: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
