@@ -1145,6 +1145,15 @@ class Lifecycle:
         # confirmed PID reuse -> original ceased
         return bool(live is not None and str(live.get("starttime")) != str(rec.get("starttime")))
 
+    def owned_running(self) -> dict:
+        """{component: pids} of the main launches whose ownership record still verifies, as stop
+        verifies it (`verify_owned`): status counts them running even when the spec misses them."""
+        out: dict = {}
+        for rec in self.owned_inventory()[0]:
+            if rec.get("role", "") == "" and self.verify_owned(rec)[0]:
+                out.setdefault(rec.get("component", ""), []).append(rec["pid"])
+        return out
+
     def verify_owned(self, rec: dict) -> tuple[bool, str]:
         """All-or-nothing identity check before any signal is sent.
 
