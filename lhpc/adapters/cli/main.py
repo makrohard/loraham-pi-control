@@ -782,6 +782,7 @@ def build_parser() -> argparse.ArgumentParser:
     # (same underscore convention as _hmac-apply).
     p_gpsb = sub.add_parser("_gps-bridge", help=argparse.SUPPRESS)
     p_gpsb.add_argument("consumer", help=argparse.SUPPRESS)
+    p_gpsb.add_argument("--state", default="", help=argparse.SUPPRESS)
 
     # Mirrors config.FIREWALL_MODES exactly, like _WS_MODES below — the CLI never invents policy
     # vocabulary of its own.
@@ -1504,7 +1505,7 @@ def _run(argv: list[str] | None = None) -> int:
         return _render(svc.set_gps(**fields))
     if args.command == "_gps-bridge":
         from lhpc.core import gps_bridge as _gpsb
-        return _gpsb.run(args.consumer, svc._paths)
+        return _gpsb.run(args.consumer, svc._paths, state=args.state)
     if args.command == "firewall":
         import json as _json
 

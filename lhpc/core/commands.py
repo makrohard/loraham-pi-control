@@ -127,6 +127,20 @@ def expand_argv(tokens, comp, params, op, runtime: str, source: str,
     return out
 
 
+def instance_value(template: str, comp, params, runtime: str, source: str, band: str = "") -> str:
+    """The value of a process spec's `instance_arg` for one instance: `{param:NAME}` is the
+    param's validated VALUE (without the option `expand_argv` emits beside it), anything else
+    takes the controller paths, as a literal argv token does."""
+    if template.startswith("{param:") and template.endswith("}"):
+        name = template[len("{param:"):-1]
+        p = {x.name: x for x in comp.run_params}.get(name)
+        if p is None:
+            raise CommandError(f"unknown run-param token {template}")
+        raw = str((params or {}).get(name, p.default)).replace("{runtime}", runtime)
+        return str(validators.validate_param(p, raw.replace("{source}", source)))
+    return _paths_subst(template, runtime, source, band)
+
+
 def build_env(env_items, runtime: str, source: str, band: str = "") -> dict:
     """Build an environment dict from typed items. A value of `@file:PATH` reads
     that file's first line (used for the MeshCom HMAC password) — no `$(cat)`.

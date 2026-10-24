@@ -1,0 +1,233 @@
+{
+ "graywolf": [
+  "/rt/build/tools/graywolf/usr/bin/graywolf",
+  "-config",
+  "/rt/state/graywolf/graywolf.db",
+  "-http",
+  "127.0.0.1:8080"
+ ],
+ "loraham-chat": [
+  "/rt/src/LoRaHAM_Daemon/loraham_chat"
+ ],
+ "loraham-daemon": [
+  "loraham_daemon/loraham_daemon",
+  "--radio",
+  "433",
+  "--hw",
+  "loraham",
+  "--tx-mode",
+  "managed",
+  "--cad-monitor",
+  "off",
+  "--cad-rssi",
+  "-90",
+  "--ocp",
+  "100",
+  "--rflog",
+  "on",
+  "--rflog-path",
+  "/rt/logs/rf-daemon-.log"
+ ],
+ "loraham-kiss-serial": [
+  "socat",
+  "-d",
+  "-d",
+  "PTY,link=/rt/state/loraham_kiss,raw,echo=0,waitslave,mode=666",
+  "TCP:127.0.0.1:8001"
+ ],
+ "loraham-kiss-tnc": [
+  "./loraham-kiss-tnc",
+  "--config",
+  "loraham_kiss_tnc.conf.example",
+  "--kiss-port",
+  "8001",
+  "--kiss-host",
+  "127.0.0.1",
+  "--bind",
+  "127.0.0.1",
+  "--rx-freq",
+  "433.775",
+  "--tx-freq",
+  "433.775",
+  "--data-socket",
+  "/tmp/lora433f.sock",
+  "--conf-socket",
+  "/tmp/loraconf433.sock",
+  "--rflog",
+  "on",
+  "--rflog-path",
+  "/rt/logs/rf-kiss.log"
+ ],
+ "loraham-voice": [
+  "/rt/config/files/loraham_voice"
+ ],
+ "loraham-voice-cli": [
+  "/rt/config/files/loraham_voice_cli"
+ ],
+ "lxmd": [
+  "/rt/src/reticulum/.venv/bin/loraham-rns-client",
+  "--configdir",
+  "/rt/state/reticulum",
+  "--wait",
+  "10",
+  "--",
+  ".venv/bin/lxmd",
+  "--rnsconfig",
+  "/rt/state/reticulum",
+  "--config",
+  "/rt/state/lxmd"
+ ],
+ "meshchat": [
+  "/rt/src/reticulum/.venv/bin/loraham-rns-client",
+  "--configdir",
+  "/rt/state/reticulum",
+  "--wait",
+  "10",
+  "--",
+  ".venv/bin/python",
+  "meshchat.py",
+  "--headless",
+  "--host",
+  "127.0.0.1",
+  "--port",
+  "8790",
+  "--storage-dir",
+  "/rt/state/meshchat",
+  "--reticulum-config-dir",
+  "/rt/state/reticulum"
+ ],
+ "meshcom-bridge": [
+  "build/meshcom-loraham-bridge",
+  "--bind",
+  "127.0.0.1",
+  "--port",
+  "7000",
+  "--backend",
+  "loraham",
+  "--ping-interval-ms",
+  "30000",
+  "--pong-timeout-ms",
+  "90000",
+  "--rflog",
+  "on",
+  "--rflog-path",
+  "/rt/logs/rf-meshcom.log"
+ ],
+ "meshcom-gps": [
+  "<python>",
+  "-m",
+  "lhpc.adapters.cli.main",
+  "_gps-bridge",
+  "meshcom"
+ ],
+ "meshcom-gps-relay": [
+  "python3",
+  "scripts/gps-relay.py",
+  "--mode",
+  "fixture",
+  "--fixture",
+  "fixtures/gps/valid_fix.nmea",
+  "--uart",
+  ".run/gps-uart1.sock",
+  "--rate",
+  "5",
+  "--loop"
+ ],
+ "meshcom-qemu": [
+  "scripts/run.sh",
+  "--env",
+  "qemu-headless-extradio-gpsd",
+  "--qemu",
+  "/rt/build/tool-cache/qemu-xtensa/esp_develop_9.2.2_20260417_cache_iommu/qemu/bin/qemu-system-xtensa",
+  "--node-image",
+  "/rt/state/meshcom/node-flash.bin"
+ ],
+ "meshcore-cli": [
+  "<lhpc>/data/scripts/meshcli-run.sh",
+  "/rt/state/meshcore-cli.lock",
+  ".venv/bin/meshcli",
+  "-t",
+  "127.0.0.1",
+  "-p",
+  "5000"
+ ],
+ "meshcore-gps": [
+  "<python>",
+  "-m",
+  "lhpc.adapters.cli.main",
+  "_gps-bridge",
+  "meshcore"
+ ],
+ "meshcore-node": [
+  ".venv/bin/python",
+  "-m",
+  "meshcore_host",
+  "/rt/config/files/meshcore.toml"
+ ],
+ "meshcore-webui": [
+  "<lhpc>/data/scripts/meshcore-webui-run.sh",
+  "/rt/src/meshcore-webui",
+  "/rt",
+  "<lhpc>/data/meshcore-webui-dist",
+  "127.0.0.1",
+  "5000",
+  "127.0.0.1",
+  "8788"
+ ],
+ "meshtastic": [
+  "/rt/build/tools/meshtasticd/meshtasticd",
+  "-c",
+  "/rt/config/files/meshtasticd.yaml",
+  "-d",
+  "/rt/state/meshtasticd"
+ ],
+ "meshtastic-cli": [
+  "lhpc",
+  "meshtastic",
+  "--help"
+ ],
+ "meshtastic-gps": [
+  "<python>",
+  "-m",
+  "lhpc.adapters.cli.main",
+  "_gps-bridge",
+  "meshtastic"
+ ],
+ "nomadnet": [
+  "/rt/src/reticulum/.venv/bin/loraham-rns-client",
+  "--configdir",
+  "/rt/state/reticulum",
+  "--wait",
+  "10",
+  "--",
+  ".venv/bin/nomadnet",
+  "--rnsconfig",
+  "/rt/state/reticulum",
+  "--config",
+  "/rt/state/nomadnet"
+ ],
+ "rns": [
+  ".venv/bin/loraham-rns-node",
+  "--config",
+  "/rt/state/reticulum",
+  "--interface",
+  "LoRa",
+  "--ready-file",
+  "/rt/state/reticulum/ready",
+  "--client-allow",
+  "127.0.0.1"
+ ],
+ "sideband": [
+  "/rt/src/reticulum/.venv/bin/loraham-rns-client",
+  "--configdir",
+  "/rt/state/reticulum",
+  "--wait",
+  "10",
+  "--",
+  ".venv/bin/sideband",
+  "--rnsconfig",
+  "/rt/state/reticulum",
+  "--config",
+  "/rt/state/sideband"
+ ]
+}

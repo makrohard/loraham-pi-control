@@ -39,6 +39,20 @@ def has_instance_token(argv: list[str], option: str, value: str) -> bool:
     return any(a == option and b == value for a, b in pairwise(argv))
 
 
+# The process specs that carry NO `instance_arg`, by component id, each with its reason (A §2.3,
+# r17): the daemon keeps its exact `--radio <band>` parse until L5's `--id`; Reticulum is one
+# node; the three argv-less daemon clients are named by their verified ownership record until
+# L5 gives them a socket argument (W98, W99).
+NO_INSTANCE_ARG = {
+    "loraham-daemon": "the exact --radio <band> parse until L5's --id",
+    "loraham-voice": "argv names no instance before L5: the verified ownership record",
+    "loraham-voice-cli": "argv names no instance before L5: the verified ownership record",
+    "loraham-kiss-serial": "argv names no instance before L5: the verified ownership record",
+    "rns": "Reticulum is one node", "nomadnet": "Reticulum is one node",
+    "lxmd": "Reticulum is one node", "sideband": "Reticulum is one node",
+    "meshchat": "Reticulum is one node",
+}
+
 _PY_INTERP = re.compile(r"^python[0-9.]*$")
 
 

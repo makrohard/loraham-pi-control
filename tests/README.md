@@ -58,6 +58,8 @@ in a file named after when or how a defect was found:
   Its helper `golden/entry_host.py` is the `LHPC_SYSTEM_PROVIDER` that hands every process —
   the console's detached child included, a separate process — the test's box.
   `golden/test_harness.py` checks the harness itself: a write moved outside its lock is reported.
+  `golden/test_golden_argv_slot0.py` holds every component's resolved slot-0 argv to the base
+  recorded in `golden/argv_slot0_0af1d413.json`, except for the tokens its `EXCEPTIONS` names.
 
 A transaction whose state another run must recover (a journal, receipt or marker) is also driven
 through `interrupts.py`: its module pins the operation's durable writes and fails each one in turn
