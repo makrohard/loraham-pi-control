@@ -343,6 +343,11 @@ jobs:
           done
           # In the lab image (the Python of the lane), as root: xfer/ belongs to the runner user.
           cli=$(python3 .github/scripts/mirror-sources.py cli-requirements lhpc/data/manifest.example.toml)
+          # The self-update sync installs requirements.lock with no index: these wheels are the files the
+          # lock names, hash-checked. The download below resolves the newest versions, which drift from it.
+          timed "wheels: requirements.lock" docker run --rm --user root \
+            -e PIP_ROOT_USER_ACTION=ignore -v "$PWD":/repo:ro -v "$PWD/xfer":/xfer "$IMG" bash -lc \
+            ". /repo/.github/scripts/retry.sh && backoff python3 -m pip download -q --require-hashes --no-deps -r /repo/requirements.lock -d /xfer/wheels"
           timed "wheels: $cli setuptools>=68 ./ (this checkout)" docker run --rm --user root \
             -e PIP_ROOT_USER_ACTION=ignore -v "$PWD":/repo:ro -v "$PWD/xfer":/xfer "$IMG" bash -lc \
             ". /repo/.github/scripts/retry.sh && cp -r /repo /tmp/src && backoff python3 -m pip download -q -d /xfer/wheels $cli 'setuptools>=68' /tmp/src"
