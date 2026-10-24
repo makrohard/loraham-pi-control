@@ -484,8 +484,9 @@ MISSING = "missing"
 MODIFIED_OURS = "modified_ours"   # not byte-exact but carries THIS root's provenance
 COMPATIBLE = "compatible"  # byte-exact another release's unit for this deployment (_COMPATIBLE_EDITS)
 # The one line every surface prints for a `compatible` set (boot restore, doctor, status).
-COMPATIBLE_NOTE = ("units-compatible: the managed units are another release's — boot restore runs "
-                   "on them; `lhpc self-update --repair-integration` rewrites this version's")
+BOOT_RESTORE_RUNS = "boot restore runs on them"
+COMPATIBLE_NOTE = (f"units-compatible: the managed units are another release's — {BOOT_RESTORE_RUNS}; "
+                   "`lhpc self-update --repair-integration` rewrites this version's")
 FOREIGN = "foreign"       # provenance names another runtime root
 AMBIGUOUS = "ambiguous"   # neither clearly ours nor clearly foreign
 OVERRIDDEN = "overridden"  # a <unit>.d/ drop-in exists somewhere in the search path
@@ -678,6 +679,26 @@ def integration(user_dir: Path, root: str) -> dict:
     else:
         status = "incomplete"
     return {"status": status, "per_unit": per}
+
+
+def boot_restore_runs(web_verdict: str) -> bool:
+    """THE boot-restore gate on the web unit (`_web_integration_proven`): this release's unit or
+    another release's."""
+    return web_verdict in (OK, COMPATIBLE)
+
+
+def boot_restore_effect(detail: str) -> str:
+    """What boot restore does with the units a `verify-set` line names (`<unit>: <verdict>; ...`; a unit
+    not named is ok): it runs while the web unit passes its gate and its own unit is this deployment's.
+    A detail without verdicts (the verifier did not run) cannot say."""
+    import re
+    verdicts = dict(re.findall(r"(lhpc-[\w-]+\.(?:service|path)): (\w+)", detail))
+    if not verdicts:
+        return "boot restore may be skipped until this is repaired (`lhpc doctor` names the units)"
+    if (boot_restore_runs(verdicts.get(WEB_UNIT, OK))
+            and verdicts.get(BOOT_RESTORE_UNIT, OK) in (OK, COMPATIBLE, MODIFIED_OURS)):
+        return f"{BOOT_RESTORE_RUNS} until then"
+    return "boot restore is skipped until this is repaired"
 
 
 def update_refusal(integ: dict):

@@ -1633,9 +1633,9 @@ class SelfUpdateOpsMixin:
                 cmds, {"state_record_error": err})
 
     def _units_stale_outcome(self, res: ActionResult, detail: str) -> tuple[str, list, dict]:
-        return self._incomplete_outcome(
-            res, "units-stale", f"the managed systemd units could NOT be refreshed ({detail}); "
-                                "boot restore is skipped until this is repaired")
+        from .updater_units import boot_restore_effect
+        return self._incomplete_outcome(res, "units-stale", "the managed systemd units could NOT be "
+                                        f"refreshed ({detail}); {boot_restore_effect(detail)}")
 
     def _resumes_sync(self, res: ActionResult) -> bool:
         """An apply that found the checkout current while `venv-unsynced` is recorded — or while

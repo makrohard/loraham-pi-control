@@ -802,6 +802,42 @@ def test_stale_units_after_an_applied_update_are_the_named_state_units_stale(
 
 
 
+# The refresh detail a box printed after `lhpc self-update --apply` from 0.12.10 to 0.13.3: the old
+# code's repair left the 0.12.x units, the new code's verify-set read them as another release's.
+_BOX_UNITS_DETAIL = ("units still not canonical after repair (Web + one-click updater integration "
+                     "installed/repaired.): lhpc-boot-restore.service: compatible; lhpc-nginx.service: "
+                     "compatible; lhpc-web.service: compatible")
+
+
+_RUNS, _SKIPPED = "boot restore runs on them until then", "boot restore is skipped until this is repaired"
+
+
+@pytest.mark.parametrize("detail, says", [
+    (_BOX_UNITS_DETAIL, _RUNS),
+    ("units not canonical: lhpc-nginx.service: missing", _RUNS),        # the gate reads the web unit
+    ("units not canonical: lhpc-web.service: modified_ours", _SKIPPED),
+    ("units not canonical: lhpc-boot-restore.service: missing; lhpc-web.service: compatible", _SKIPPED),
+    ("units not canonical: lhpc-boot-restore.service: foreign; lhpc-web.service: compatible", _SKIPPED),
+    ("unit verification could not run: timed out", "boot restore may be skipped until this is repaired"),
+])
+def test_units_stale_says_what_boot_restore_does_with_those_units(op_svc, monkeypatch, detail, says):
+    """units-stale said "boot restore is skipped until this is repaired" for every cause. Boot restore
+    refuses only a web unit that is neither this release's nor another release's (the units-compatible
+    gate), and cannot run without its own unit: on the box above it ran. Red before: "skipped" for all."""
+    from lhpc.core.service_base import ActionResult
+    from lhpc.core.services import ControllerService
+
+    svc, _fake = op_svc(_WEB_INACTIVE, invocation=False)
+    monkeypatch.setattr(ControllerService, "self_update_apply",
+                        lambda self, *, force=False: ActionResult(True, "applied", data={}))
+    monkeypatch.setattr(ControllerService, "_refresh_units_post_update", lambda self: (False, detail))
+    res = svc.self_update_apply_operator()
+    assert res.ok is False and "units-stale" in res.summary, res.summary
+    assert says in res.summary, res.summary
+    assert sum(s in res.summary for s in (_RUNS, _SKIPPED, "may be skipped")) == 1, res.summary
+    assert res.next_commands == ["lhpc self-update --repair-integration"]
+
+
 _WEB_ACTIVE = {("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service"):
                CommandResult(0, "", ""),
                ("systemctl", "--user", "stop", "lhpc-web.service"): CommandResult(0, "", ""),
