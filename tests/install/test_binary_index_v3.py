@@ -88,13 +88,16 @@ def test_the_older_entry_is_what_an_apply_installs_and_records(tmp_path, monkeyp
         _entry("daemon", sha["newer"], _lagging(pins), inputs, "2026-10-17T08:00:00Z", lhpc="a" * 40),
         _entry("daemon", sha["older"], pins, inputs)]}})
     binary = "src/loraham-daemon/loraham_daemon/loraham_daemon"
+    files = list(svc.binary_spec("daemon").proof_paths)     # the binary and the Meshstick library
+    assert files[0] == binary
     monkeypatch.setattr(bi, "download_artifact", lambda e, path: Path(path).write_bytes(by_sha[e.sha256]))
 
     def stage(tar, stage_dir, roots):
-        out = Path(stage_dir, binary)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(Path(tar).read_bytes())
-        return [binary]
+        for rel in files:
+            out = Path(stage_dir, rel)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(Path(tar).read_bytes())
+        return files
     monkeypatch.setattr(bi, "validate_and_extract", stage)
     monkeypatch.setattr(bi, "run_probe", lambda paths, argv: "ok")
     res = svc.binary_install("daemon", apply=True)

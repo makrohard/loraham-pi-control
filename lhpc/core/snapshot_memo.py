@@ -202,6 +202,7 @@ SNAPSHOT_NEUTRAL: dict[str, str] = {
     "needs_rebuild_result": "read-only",
     "network_supported": "read-only",
     "observed_conflicts": "read-only",
+    "ocp_for_band": "read-only",
     "on_binary_channel": "read-only",
     "operation_band": "read-only",
     "operator_callsign_correction": "read-only",

@@ -95,6 +95,19 @@ _POWER_EXTRA: dict[str, frozenset] = {
     "sx127x": frozenset({20}),
 }
 
+# Daemon 1.3.0 `--ocp MA`: the PA over-current limits each chip can represent (the daemon refuses
+# anything else, nothing is rounded). SX127x 0 = protection off.
+OCP_LEGAL_TEXT = {"sx127x": "0 (off), 45..120 in steps of 5, 130..240 in steps of 10",
+                  "sx1262": "5..140 in steps of 5"}
+
+
+def ocp_valid(ma: int, family: str = "") -> bool:
+    """Whether `ma` is a `--ocp` value the family's chip can represent; "" = either family's."""
+    sx1262 = 5 <= ma <= 140 and ma % 5 == 0
+    sx127x = ma == 0 or (45 <= ma <= 120 and ma % 5 == 0) or (130 <= ma <= 240 and ma % 10 == 0)
+    return {"sx127x": sx127x, "sx1262": sx1262}.get(family, sx127x or sx1262)
+
+
 # The daemon's own spelling of its chip family in `STATUS CHIPFAMILY=` (daemon 1.2.0,
 # `daemon_chip_family_name()`), normalised to the family keys used here.
 _STATUS_FAMILY = {"SX127X": "sx127x", "SX1262": "sx1262"}

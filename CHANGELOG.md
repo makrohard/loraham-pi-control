@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- LoRaHAM daemon v1.3.1 (660be550, daemon + chat): every start passes the PA over-current limit, `auto` = 140 mA
+  with high power, else 100 mA; set per band with `lhpc hardware --ocp`.
+- Daemon: the binary carries the Meshstick library (`lib/`, pine64 libch341-spi-userspace). Source builds need
+  `libusb-1.0-0-dev`, and once `lhpc install daemon` to fetch the pine64 source before `lhpc build daemon`.
+
 ## 0.13.3
 
 Fixed

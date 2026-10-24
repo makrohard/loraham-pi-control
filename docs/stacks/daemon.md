@@ -5,14 +5,14 @@ one `loraham_daemon` process per served band (433/868 MHz). It never transmits o
 
 | | |
 |---|---|
-| Components | `loraham-daemon` (main) · `radiolib` — the RadioLib static library, a build-time dependency (`build_requires`), never started |
-| Source / pin | `src/loraham-daemon` ← `makrohard/LoRaHAM_Daemon` · `src/RadioLib` ← `jgromes/RadioLib` |
-| Run | `loraham_daemon/loraham_daemon --radio <band> --hw <preset> --tx-mode managed\|direct --cad-monitor off\|on --cad-rssi <dBm> [--high-power] --rflog on\|off --rflog-path <runtime>/logs/rf-daemon-<band>.log` — one process per band; lhpc computes every value at spawn |
+| Components | `loraham-daemon` (main) · `radiolib` — the RadioLib static library, a build-time dependency (`build_requires`), never started · `libch341` — pine64's CH341 library, which the daemon's build turns into `lib/libloraham-ch341.so` for the ELECROW Meshstick; an optional build input (source checkout), adopted by default; never started |
+| Source / pin | `src/loraham-daemon` ← `makrohard/LoRaHAM_Daemon` · `src/RadioLib` ← `jgromes/RadioLib` · `src/libch341-spi-userspace` ← `pine64/libch341-spi-userspace` (the commit in the daemon's `.github/ci/libpinedio.lock`) |
+| Run | `loraham_daemon/loraham_daemon --radio <band> --hw <preset> --tx-mode managed\|direct --cad-monitor off\|on --cad-rssi <dBm> [--high-power] --ocp <mA> --rflog on\|off --rflog-path <runtime>/logs/rf-daemon-<band>.log` — one process per band; lhpc computes every value at spawn |
 | Sockets (per band) | `/tmp/loraconf<band>.sock` (CONF / status), `/tmp/lora<band>f.sock` (framed), `/tmp/lora<band>.sock` (raw) — `LORAHAM_SOCKET_DIR=/tmp` |
 | State | `<runtime>/state/loraham` (mode 0700, `LORAHAM_RUNTIME_DIR`) — the lock files, including `spi0.lock` |
 | Hardware | `/dev/spidev0.0` (soft chip selects) or `/dev/spidev0.0`/`0.1` (kernel chip selects, [deps](../cli.md#deps)) + GPIO (`/dev/gpiochip0`); the `--hw` preset comes from `lhpc hardware` |
 | Resources | `spi.bus.0` cooperative · `loraham.radio.433` / `.868` provider · `loraham.daemon-socket.433` / `.868` provider |
-| Install channel | **binary** by default (`lhpc install daemon`: a prebuilt replacing the daemon + RadioLib builds); `--source pinned\|dev\|stable` clones the sources and `lhpc build daemon` runs `loraham_daemon/build.sh` (needs `cmake`, `liblgpio-dev`, `build-essential`). Policy: [provenance](../provenance.md#the-binary-channel); operator consequences: [operations](../operations.md#install-channels) |
+| Install channel | **binary** by default (`lhpc install daemon`: a prebuilt replacing the daemon + RadioLib builds); `--source pinned\|dev\|stable` clones the sources and `lhpc build daemon` runs `loraham_daemon/build.sh` (needs `cmake`, `liblgpio-dev`, `build-essential`, `libusb-1.0-0-dev`). The binary carries `loraham_daemon/lib/libloraham-ch341.so` beside the daemon, which loads it from there for the Meshstick; running it needs `libusb-1.0-0`. A source build without the pine64 clone has no Meshstick support until `lhpc install daemon` adopts it; with the clone it needs `libusb-1.0-0-dev`, and the build stops naming it when the headers are missing. Policy: [provenance](../provenance.md#the-binary-channel); operator consequences: [operations](../operations.md#install-channels) |
 
 ## Contents
 
@@ -39,6 +39,7 @@ until a setup is chosen.
 | `cadmon_433` / `cadmon_868` | `off` | continuous channel-activity monitor |
 | `cadrssi_433` / `cadrssi_868` | `-90` | channel-busy RSSI threshold, dBm (−130…0) |
 | `hipower_433` / `hipower_868` | `off` | +20 dBm permission per band, strict `off`/`on`: `on` adds `--high-power` at the band's next daemon start, admitting exactly `POWER=20` on SX127x (inert on SX1262). Saving marks the daemon restart-required and restarts nothing; a running daemon keeps the permission it started with. Datasheet limits for +20 dBm: duty cycle ≤ 1 %, VSWR ≤ 3:1, VDD 2.4–3.7 V — nothing measures or enforces them; keep the chip cooled, **warranty void if disregarded**. LoRaHAM 433 RFM98PW: no sustained +20 dBm — unvalidated with the module's external PA; the release test matrix sends no +20 dBm on it |
+| `ocp_433` / `ocp_868` | `auto` | PA over-current limit per band, `auto` or mA; every start passes `--ocp`. `auto` = 140 mA with the band's `hipower` on, else 100 mA. A value must be one the band's chip represents (SX127x: 0 = off, 45..120 in steps of 5, 130..240 in steps of 10; SX1262: 5..140 in steps of 5) — `lhpc hardware --ocp <band> auto\|<mA>` refuses others, and a hand-edited one blocks that band's start. Saving marks the daemon restart-required and restarts nothing |
 | `rf_log` | `on` | RF log, one file per band (`logs/rf-daemon-433.log`, `-868.log`): every frame received (RSSI/SNR) or sent (after `transmit()` returned OK — a CAD-refused send writes nothing), raw hex + ASCII. Switch semantics: [maintenance](../maintenance.md#rf-logs) |
 
 Each client stack's `requires_daemon_tx` (DIRECT for voice, MANAGED for the rest) is applied live

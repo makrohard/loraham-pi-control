@@ -28,12 +28,12 @@ BUDGETS = {
     "service_binary_ops.py": (1078, 5),  # trackF-c3: the web client follows meshtastic's binary install
     "service_boot_restore.py": (687, 2),  # co-19: a start refused before the claim keeps its reason
     "service_build.py": (797, 10),  # split-s5: split from service_lifecycle_ops.py
-    "service_daemon_params.py": (508, 11),  # split-s2: split from service_params.py and service_lifecycle_ops.py
+    "service_daemon_params.py": (545, 13),  # split-s2: split from service_params.py and service_lifecycle_ops.py; co-17: the per-band PA over-current limit (ocp_for_band, set_ocp)
     "service_firewall.py": (1533, 19),
     "service_gps.py": (893, 13),  # split-s3: split from service_params.py and services.py
     "service_hmac.py": (1016, 17),
     "service_jobs.py": (765, 9),  # split-s6: split from service_lifecycle_ops.py
-    "service_lifecycle_ops.py": (3357, 32),
+    "service_lifecycle_ops.py": (3366, 32),  # co-17: a stored OCP the band's chip cannot represent blocks that band's start
     "service_maintenance.py": (2892, 30),  # testlab-det-1: S1 keeps curl rc and message; trackF-c3: update routes the web client
     "service_network.py": (1272, 10),  # co-16: the check that the firewall's AP rules cover the AP
     "service_params.py": (2485, 39),

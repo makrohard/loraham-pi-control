@@ -60,6 +60,13 @@ def test_daemon_reports_radiolib_build_dep(tmp_path):
     assert all(d.satisfied for d in g2["build"])       # present once the checkout exists
 
 
+def test_the_pine64_source_is_no_build_dependency_of_the_daemon(tmp_path):
+    # USB support on a source build is optional (default: adopted by `lhpc install daemon`): the
+    # daemon builds without the pine64 clone, so it is never a build dependency to satisfy.
+    g = _svc(tmp_path).deps_report("daemon")
+    assert not [d for d in g["build"] if "libch341" in d.label]
+
+
 def test_system_deps_carry_operator_commands(tmp_path):
     g = _svc(tmp_path).deps_report("voice")
     assert g["system"] and all(not d.satisfied for d in g["system"])

@@ -118,6 +118,43 @@ class DaemonParamsMixin:
         # a normaliser here would quietly widen what the enum refused at save time (audit P1).
         return self.stack_config("daemon").get(f"hipower_{band}") == "on"
 
+    def ocp_for_band(self, band: str) -> int | None:
+        """The `--ocp` (mA) this band's daemon is started with: the saved `ocp_<band>`, or for
+        `auto` 140 under the band's high-power switch and 100 otherwise. None = a saved value the
+        band's chip cannot represent (a hand edit, or the hardware changed since): the start
+        refuses it rather than send or clamp it."""
+        raw = self.stack_config("daemon").get(f"ocp_{band}", "auto")
+        if raw == "auto":
+            return 140 if self.high_power_for_band(band) else 100
+        if not (isinstance(raw, str) and raw.isdigit() and str(int(raw)) == raw):
+            return None
+        ma = int(raw)
+        return ma if daemon_control.ocp_valid(ma, self.chip_family_for_band(band)) else None
+
+    @invalidates_snapshot
+    def set_ocp(self, band: str, value: str) -> ActionResult:
+        """Save the band's PA over-current limit (`ocp_<band>` = `auto` or mA) through the same
+        `save_config_bundle()` transaction as the high-power switch: restart-required, restarts
+        nothing. A value is accepted only where the band's chip can represent it (the daemon's
+        own rule, 0 = protection off on SX127x included)."""
+        if band not in daemon_control.ALLOWED_BANDS:
+            return ActionResult(False, f"Invalid band '{band}' (allowed: "
+                                f"{', '.join(daemon_control.ALLOWED_BANDS)}).")
+        fam = self.chip_family_for_band(band)
+        if value != "auto" and not (value.isdigit() and str(int(value)) == value
+                                    and daemon_control.ocp_valid(int(value), fam)):
+            legal = daemon_control.OCP_LEGAL_TEXT.get(fam) or " or ".join(
+                f"{k.upper()} {v}" for k, v in daemon_control.OCP_LEGAL_TEXT.items())
+            return ActionResult(False, f"OCP for {band} MHz must be 'auto' or mA the chip can "
+                                       f"represent ({legal}), not {value!r}")
+        r = self.save_config_bundle("daemon", values={f"ocp_{band}": value})
+        if not r.ok:
+            return r
+        return ActionResult(True, f"OCP for {band} MHz: {value} "
+                                  f"({self.ocp_for_band(band)} mA) — saved; takes effect when the "
+                                  "daemon on this band is next started (restart it)",
+                            details=list(r.details or []), data=dict(r.data or {}))
+
     def high_power_state(self, band: str, view=None) -> dict:
         """What the console shows for a band's high-power permission — saved intent beside the
         RUNNING daemon's own report, never one masquerading as the other:

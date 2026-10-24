@@ -187,6 +187,7 @@ lhpc hardware uputronics-868 # Uputronics 868 only (CE1)
 lhpc hardware waveshare-433  # Waveshare SX1262 (433)
 lhpc hardware waveshare-868  # Waveshare SX1262 (868)
 lhpc hardware --high-power 433 on|off  # allow POWER=20 on an SX127x band; takes effect at that band's next daemon start
+lhpc hardware --ocp 433 auto|<mA>     # the band's PA over-current limit (auto: 140 with high power, else 100); next daemon start
 ```
 
 Web: the loraham daemon stack's **Hardware** settings, which add a **Detect** probe (starts the

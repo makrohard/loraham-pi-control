@@ -37,11 +37,13 @@ main = "loraham-daemon"
   # daemon+RadioLib source builds. The content-addressed filename comes from the index.
   [stack.binary]
   index_url = "https://github.com/makrohard/lhpc-binaries/releases/download/binaries/index-v3.json"
-  covers = ["loraham-daemon", "radiolib"]
+  covers = ["loraham-daemon", "radiolib", "libch341"]
   # The daemon binary sits INSIDE its source tree, next to tracked sources — the root is the
   # exact file, never the directory (publishing merges, but a narrow root is the real guard).
-  publish_roots = ["src/loraham-daemon/loraham_daemon/loraham_daemon"]
-  proof_paths = ["src/loraham-daemon/loraham_daemon/loraham_daemon"]
+  # The Meshstick library the daemon dlopen()s from its own directory (daemon >= 1.3.0) ships beside
+  # it; the binary stays the first proof path.
+  publish_roots = ["src/loraham-daemon/loraham_daemon/loraham_daemon", "src/loraham-daemon/loraham_daemon/lib/libloraham-ch341.so"]
+  proof_paths = ["src/loraham-daemon/loraham_daemon/loraham_daemon", "src/loraham-daemon/loraham_daemon/lib/libloraham-ch341.so"]
   probes = [["src/loraham-daemon/loraham_daemon/loraham_daemon", "--version"]]
 
   [[stack.component]]
@@ -59,14 +61,14 @@ main = "loraham-daemon"
   # leader and stop() can identity-verify it before signalling.
   # v112+ daemon: ONE radio per process. `--radio` is mandatory; `--hw` selects the board preset;
   # the plain (NON band-suffixed) --tx-mode/--cad-monitor/--cad-rssi apply to this process's band.
-  # lhpc injects `radio`/`hw`/`txmode`/`cadmon`/`cadrssi`/`hipower` per band at spawn (see _ensure_daemon).
+  # lhpc injects `radio`/`hw`/`txmode`/`cadmon`/`cadrssi`/`hipower`/`ocp` per band at spawn (see _ensure_daemon).
   # `{hipower}` is a FLAG-kind param: it renders the bare `--high-power` when this band's saved
   # `hipower_<band>` switch is on and NOTHING when it is off (daemon 1.2.0: the +20 dBm permission).
   # `{rf_log}` renders `--rflog on|off` (the STACK-level switch, injected per band like the rest);
   # the file is per band and named by lhpc — the daemon never derives a path itself.
-  run = "loraham_daemon/loraham_daemon --radio {radio} --hw {hw} --tx-mode {txmode} --cad-monitor {cadmon} --cad-rssi {cadrssi} {hipower} {rf_log} --rflog-path {runtime}/logs/rf-daemon-{band}.log"
+  run = "loraham_daemon/loraham_daemon --radio {radio} --hw {hw} --tx-mode {txmode} --cad-monitor {cadmon} --cad-rssi {cadrssi} {hipower} --ocp {ocp} {rf_log} --rflog-path {runtime}/logs/rf-daemon-{band}.log"
   # Structured (shell-free) execution — preferred over `run`/`pre` above.
-  run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "--hw", "{param:hw}", "--tx-mode", "{param:txmode}", "--cad-monitor", "{param:cadmon}", "--cad-rssi", "{param:cadrssi}", "{param:hipower}", "{param:rf_log}", "--rflog-path", "{runtime}/logs/rf-daemon-{band}.log"]
+  run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "--hw", "{param:hw}", "--tx-mode", "{param:txmode}", "--cad-monitor", "{param:cadmon}", "--cad-rssi", "{param:cadrssi}", "{param:hipower}", "--ocp", "{param:ocp}", "{param:rf_log}", "--rflog-path", "{runtime}/logs/rf-daemon-{band}.log"]
   run_cwd = "{source}"
   # v112 sockets default to /run/loraham (systemd, tmpfiles-provisioned). lhpc runs the daemon DIRECT
   # as a user, so point its sockets at /tmp — the daemon has no /tmp fallback of its own, and all
@@ -81,6 +83,11 @@ main = "loraham-daemon"
   # itself. The release-verification lane freezes a stack's pins only on such a step (see
   # `lhpc_testlab.release.install_build`), because every fetching step — pip, git, a package
   # mirror — fails the same typed way when the network does, and a wrong freeze costs weeks.
+  # The Meshstick library is optional on a source build (default: included): build.sh finds the
+  # pine64 clone itself — the managed one is its sibling `../libch341-spi-userspace` — and builds the
+  # daemon without the library when there is none. It accepts a tree only at exactly the locked
+  # commit, unmodified, so a copy elsewhere ($HOME/libch341-spi-userspace is tried first) is the same
+  # content. No PINEDIO_DIR: a set one that is absent fails the build.
   build_steps = [ { argv = ["loraham_daemon/build.sh"], env = { RADIOLIB_DIR = "{runtime}/src/RadioLib" }, attributable = true } ]
   build_requires = ["radiolib"]
   pre_steps = [ { kind = "mkdir", path = "{runtime}/state/loraham", mode = "700" } ]
@@ -137,6 +144,15 @@ main = "loraham-daemon"
     flag = "--high-power"
     default = "off"
     label = "High-power +20 dBm permission (this process)"
+    # The PA over-current limit for THIS process (daemon 1.3.0 `--ocp`, mA), computed at spawn from
+    # the band's `ocp_<band>` below: the saved value, or for `auto` 140 with high power, else 100.
+    [[stack.component.param]]
+    name = "ocp"
+    kind = "int"
+    default = "100"
+    min = 0
+    max = 240
+    label = "PA over-current limit (this process, mA)"
     # RF log: what this band's radio heard and sent, one line per frame, kept across restarts.
     # STACK-level (band-less) switch — the FILES are per band, the switch is not. The daemon's
     # log page is its only web surface for it (`config_param_fields` is empty here: no Settings form).
@@ -194,6 +210,22 @@ main = "loraham-daemon"
     default = "off"
     label = "High-power +20 dBm permission 868 (SX127x; restart the daemon; duty cycle <= 1 %, cooling, warranty void if disregarded)"
     advanced = true
+    # The saved per-band PA over-current limit (daemon 1.3.0 `--ocp`). The enum is the union of the
+    # two chips' legal values; `set_ocp` and the spawn narrow it to the band's own chip.
+    [[stack.component.param]]
+    name = "ocp_433"
+    kind = "enum"
+    choices = ["auto", "0", "5", "10", "15", "20", "25", "30", "35", "40", "45", "50", "55", "60", "65", "70", "75", "80", "85", "90", "95", "100", "105", "110", "115", "120", "125", "130", "135", "140", "150", "160", "170", "180", "190", "200", "210", "220", "230", "240"]
+    default = "auto"
+    label = "PA over-current limit 433 (mA; auto = 140 with high power, else 100; restart the daemon; the chip's legal values only)"
+    advanced = true
+    [[stack.component.param]]
+    name = "ocp_868"
+    kind = "enum"
+    choices = ["auto", "0", "5", "10", "15", "20", "25", "30", "35", "40", "45", "50", "55", "60", "65", "70", "75", "80", "85", "90", "95", "100", "105", "110", "115", "120", "125", "130", "135", "140", "150", "160", "170", "180", "190", "200", "210", "220", "230", "240"]
+    default = "auto"
+    label = "PA over-current limit 868 (mA; auto = 140 with high power, else 100; restart the daemon; the chip's legal values only)"
+    advanced = true
     [[stack.component.param]]
     name = "cadrssi_433"
     kind = "int"
@@ -213,8 +245,8 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/loraham-daemon"
-    pin_commit = "74763114a04bcf67ad44db8e352a7aaf9ae3fc07"
-    pin_tag = "v1.2.1"
+    pin_commit = "660be550e3af762120f41a02d48b53af45ad109c"
+    pin_tag = "v1.3.1"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "loraham-daemon-hardening"
@@ -305,6 +337,30 @@ main = "loraham-daemon"
     remote = "https://github.com/jgromes/RadioLib"
     branch = "master"
 
+  [[stack.component]]
+  id = "libch341"
+  name = "libch341-spi-userspace"
+  kind = "library"
+  purpose = "pine64's CH341 USB-to-SPI library; the daemon's build.sh builds it into lib/libloraham-ch341.so (the ELECROW Meshstick)."
+  tx_capable = false
+  # A pure checkout (no build steps of its own) the daemon's build.sh compiles when it is present
+  # (the source channel's USB support: optional, adopted by default), from exactly the commit in the
+  # daemon's .github/ci/libpinedio.lock — keep this pin equal to that lock at the daemon pin
+  # (build.sh refuses any other commit; the daemon refuses a library of another one).
+  optional = true
+
+    [[stack.component.require]]
+    check_file = "/usr/include/libusb-1.0/libusb.h"
+    install = "sudo apt install -y libusb-1.0-0-dev"
+    note = "libusb development headers (the Meshstick library)"
+
+    [stack.component.source]
+    path = "src/libch341-spi-userspace"
+    # pine64 tags no release: the commit alone is the pin.
+    pin_commit = "b0694ec84091b293cb1e97e00a821ff88353274f"
+    remote = "https://github.com/pine64/libch341-spi-userspace"
+    branch = "main"
+
 # =====================================================================
 # Stack: chat — daemon-backed APRS/chat client
 # =====================================================================
@@ -345,8 +401,8 @@ main = "loraham-chat"
 
     [stack.component.source]
     path = "src/LoRaHAM_Daemon"
-    pin_commit = "1f1baf26372328a25c229c43cbb0f9a6721c24fe"
-    pin_tag = "v1.2.0"
+    pin_commit = "660be550e3af762120f41a02d48b53af45ad109c"
+    pin_tag = "v1.3.1"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "LoRaHAM_Daemon"
