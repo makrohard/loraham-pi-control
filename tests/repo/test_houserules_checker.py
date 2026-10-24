@@ -388,6 +388,36 @@ def test_a_profile_only_range_is_a_warning(repo):
     assert rc == 0 and rows["profile"] == "WARN"
 
 
+_PROFILE = ('layers = [["tests/core/", "core"], ["tests/repo/", "repo"]]\ntest_files = ["test_*.py"]\n'
+            'warn_patterns = { sleep = "time\\\\.sleep\\\\(" }\n')
+
+
+@pytest.mark.parametrize("change, verdict", [
+    (('["tests/repo/", "repo"]]', '["tests/repo/", "repo"], ["tests/", "misc"]]'), "HARD"),   # a layer added
+    (('test_files = ["test_*.py"]', 'test_files = []'), "HARD"),                             # a glob dropped
+    (('{ sleep = "time\\\\.sleep\\\\(" }', "{}"), "HARD"),                                  # a pattern dropped
+    (("", 'changelog = ""\n'), "HARD"),                                                     # a rule turned off
+    (('["tests/core/", "core"], ', ""), "WARN"),                                             # a layer removed
+    (('test_files = ["test_*.py"]', 'test_files = ["test_*.py", "*_test.py"]'), "WARN"),     # a glob added
+])
+def test_a_profile_only_range_that_relaxes_an_existing_profile_is_hard(repo, change, verdict):
+    """An existing profile is the base later ranges are judged by: relaxing it alone (a layer or rule more
+    lenient, a glob or a pattern dropped, a rule turned off) is HARD; tightening it alone stays the
+    reviewer's WARN. Red before: every profile-only range was WARN."""
+    _profiled(repo, _PROFILE)
+    _commit(repo, {".houserules.toml": _PROFILE.replace(*change) if change[0] else _PROFILE + change[1]},
+            msg="profile\n")
+    rc, rows = _run(repo)
+    assert (rc, rows["profile"]) == (int(verdict == "HARD"), verdict)
+
+
+def test_deleting_an_existing_profile_is_hard(repo):
+    _profiled(repo, _PROFILE)
+    _commit(repo, {".houserules.toml": None}, msg="profile\n")
+    rc, rows = _run(repo)
+    assert (rc, rows["profile"]) == (1, "HARD")
+
+
 @pytest.mark.parametrize("profile", ["layers = [", 'unknown = "x"\n', 'test_def = "("\n', "changelog = 3\n",
                                      'test_files = "x"\n', 'layers = [["tests/"]]\n', "warn_patterns = { a = 1 }\n",
                                      'layers = "tests/"\n'])
