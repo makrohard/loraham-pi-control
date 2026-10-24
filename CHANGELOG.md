@@ -6,6 +6,8 @@
   with high power, else 100 mA; set per band with `lhpc hardware --ocp`.
 - Daemon: the binary carries the Meshstick library (`lib/`, pine64 libch341-spi-userspace). Source builds need
   `libusb-1.0-0-dev`, and once `lhpc install daemon` to fetch the pine64 source before `lhpc build daemon`.
+- README: the manual install block links `~/.local/bin/lhpc` as install.sh does, so `lhpc` is on the PATH
+  after the reboot; the German block installs from the lock file like the English one.
 
 ## 0.13.3
 
