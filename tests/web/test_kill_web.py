@@ -51,3 +51,31 @@ def test_a_stop_that_succeeds_offers_no_kill(web, csrf):
 
 def test_the_kill_post_needs_the_csrf_token(web):
     assert web().post("/kill/kiss", data={"component": ""}).status_code == 400
+
+
+def test_the_confirm_names_an_in_flight_start(web, tmp_path):
+    # C27: the console's confirm lists the start a kill would end, not "0 process(es)".
+    # Red-before at e7d24171: the page said "Kill kiss: 0 process(es)." and named nothing.
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from lhpc.core import jobs, procident
+    from lhpc.core.paths import Paths
+    hold = ("import signal, sys\nfrom pathlib import Path\nfrom lhpc.core import reslock\n"
+            "from lhpc.core.paths import Paths\n"
+            "with reslock.operation_lock(Paths(runtime_root=Path(sys.argv[1])),"
+            " 'controller-task-admission', 'start', 'kiss'):\n"
+            "    print('held', flush=True)\n    signal.pause()\n")
+    repo = Path(__file__).resolve().parents[2]
+    p = subprocess.Popen([sys.executable, "-c", hold, str(tmp_path)], cwd=repo, start_new_session=True,
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        assert p.stdout.readline().strip() == b"held"
+        assert jobs.write_job_marker(Paths(runtime_root=tmp_path), "start-kiss-1", p.pid, "kiss", "start",
+                                     ident=procident.proc_identity(p.pid))
+        page = web().get("/kill/kiss").get_data(as_text=True)
+        assert f"pid {p.pid}" in page and "in-flight start" in page and "1 process(es)" in page
+    finally:
+        p.kill()
+        p.wait(timeout=5)

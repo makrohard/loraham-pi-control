@@ -347,3 +347,41 @@ def test_k6_no_other_operation_calls_kill():
     call = re.compile(r"\b_?kill\.kill\(")
     callers = sorted(str(f.relative_to(REPO)) for f in pkg.rglob("*.py") if call.search(f.read_text()))
     assert callers == ["lhpc/adapters/cli/main.py", "lhpc/adapters/web/app.py"], callers
+
+
+def _web_start(svc, procs, tmp_path):
+    """A web start of kiss in flight: a real process holding the admission flock, with its job
+    marker, and no process of the stack yet."""
+    job = _holder(procs, tmp_path, "start", "kiss")
+    assert jobs.write_job_marker(svc._paths, "start-kiss-1", job.pid, "kiss", "start",
+                                 ident=procident.proc_identity(job.pid))
+    return job
+
+
+def test_the_plan_counts_an_in_flight_start_of_the_stack(tmp_path, clock, procs):
+    # C27 (docs/cli.md: "A start of the same stack that is still running is ended first"): with no
+    # process of the stack yet, the dry run still names the start, so the apply runs.
+    # Red-before at e7d24171: "Kill kiss: 0 process(es)." with changes 0.
+    svc = _svc(tmp_path, {})
+    job = _web_start(svc, procs, tmp_path)
+    plan = kill.kill(svc, "kiss")
+    assert plan.ok and plan.data["changes"] == 1, plan.summary
+    assert any(f"pid {job.pid}" in d and "in-flight start" in d for d in plan.details), plan.details
+
+
+def test_the_cli_kill_ends_an_in_flight_start_with_nothing_else_running(tmp_path, clock, procs,
+                                                                        capsys):
+    # Red-before at e7d24171: `lhpc kill kiss --yes` printed "Nothing to do." and the start ran on.
+    from lhpc.adapters.cli.main import _apply_flow
+    svc = _svc(tmp_path, {})
+    job = _web_start(svc, procs, tmp_path)
+    rc = _apply_flow(lambda a: kill.kill(svc, "kiss", apply=a), yes=True)
+    assert "Nothing to do." not in capsys.readouterr().out
+    assert rc == 0 and _gone(job) and job.returncode == -signal.SIGKILL
+
+
+def test_another_task_holding_the_flock_is_not_counted(tmp_path, clock, procs):
+    # A holder that is not a start of this stack is no target: the plan does not claim to end it.
+    svc = _svc(tmp_path, {})
+    _holder(procs, tmp_path, "build", "graywolf")
+    assert kill.kill(svc, "kiss").data["changes"] == 0
