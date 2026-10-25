@@ -122,15 +122,29 @@ jobs:
           { g uname -a; g 'systemctl is-system-running || true'; g free -m; g nproc; } > "$EV/guest/facts.txt"
           python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" identity "$(cat "$EV/runner-kernel.txt")" "$EV/guest"
 
-      - name: Stop the guest, checksum the evidence
+      - name: Stop the guest, redaction check, checksum the evidence
+        id: evidence
         if: always()
         run: |
           set -uo pipefail
-          [ -f "$WORK/qemu.pid" ] && kill "$(cat "$WORK/qemu.pid")" 2>/dev/null || true
+          # Every writer into the evidence (the QEMU console, the runner sampler) is gone before the scan and the sums;
+          # one that cannot be shown stopped blocks the upload.
+          . "$GITHUB_WORKSPACE/.github/lane-b/guest.sh"
+          for w in "$WORK/qemu.pid" "$WORK/runner-sampler.pid"; do
+            stop_writer "$w" || { echo "evidence: a writer still runs or cannot be checked ($w)"; exit 1; }
+          done
+          # The runner runs this step with bash -e: a bare grep exiting 1 (no hit) would end it.
+          if grep -rlE 'PRIVATE KEY-----|SSHPASS=' "$EV"; then rc=0; else rc=$?; fi
+          case $rc in
+            0) echo "redaction: a key or a password form in the evidence"; exit 1 ;;
+            1) ;;
+            *) echo "redaction: the check itself failed (grep rc $rc)"; exit 1 ;;
+          esac
           cd "$EV" && find . -type f ! -name SHA256SUMS | sort | xargs -r sha256sum > SHA256SUMS
 
+      # Uploads also after a failed run, never after a failed redaction check.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
+        if: always() && steps.evidence.outcome == 'success'
         with:
           name: qb1-spike
           path: qb1
@@ -198,15 +212,28 @@ jobs:
         run: bash .github/lane-b/u0b.sh "${{ matrix.want }}" "${{ matrix.from }}"
 
       - name: Stop the guest, redaction check, checksum the evidence
+        id: evidence
         if: always()
         run: |
           set -uo pipefail
-          [ -f "$WORK/qemu.pid" ] && kill "$(cat "$WORK/qemu.pid")" 2>/dev/null || true
-          if grep -rlE 'PRIVATE KEY-----|SSHPASS=' "$EV"; then echo "redaction: a key or a password form in the evidence"; exit 1; fi
+          # Every writer into the evidence (the QEMU console, the runner sampler) is gone before the scan and the sums;
+          # one that cannot be shown stopped blocks the upload.
+          . "$GITHUB_WORKSPACE/.github/lane-b/guest.sh"
+          for w in "$WORK/qemu.pid" "$WORK/runner-sampler.pid"; do
+            stop_writer "$w" || { echo "evidence: a writer still runs or cannot be checked ($w)"; exit 1; }
+          done
+          # The runner runs this step with bash -e: a bare grep exiting 1 (no hit) would end it.
+          if grep -rlE 'PRIVATE KEY-----|SSHPASS=' "$EV"; then rc=0; else rc=$?; fi
+          case $rc in
+            0) echo "redaction: a key or a password form in the evidence"; exit 1 ;;
+            1) ;;
+            *) echo "redaction: the check itself failed (grep rc $rc)"; exit 1 ;;
+          esac
           cd "$EV" && find . -type f ! -name SHA256SUMS | sort | xargs -r sha256sum > SHA256SUMS
 
+      # Uploads also after a failed run, never after a failed redaction check.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
+        if: always() && steps.evidence.outcome == 'success'
         with:
           name: u0b-${{ matrix.name }}
           path: u0b

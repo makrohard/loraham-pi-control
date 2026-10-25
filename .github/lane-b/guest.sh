@@ -55,10 +55,11 @@ boot() {
 start_samplers() {
   gcp "$GITHUB_WORKSPACE/.github/lane-b/sampler.sh" sampler.sh
   g 'sudo nohup bash sampler.sh > sampler.log 2> sampler.err < /dev/null & true'
-  ( while :; do printf '%s load=%s mem_avail_mb=%s qemu_cpu=%s\n' "$(date -u +%FT%TZ)" "$(cut -d' ' -f1-3 /proc/loadavg)" \
-      "$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)" "$(ps -o %cpu= -p "$(cat "$WORK/qemu.pid")" 2>/dev/null | tr -d ' ')"
-      sleep 15; done ) >> "$EV/runner-load.txt" 2>&1 &
-  echo $! > "$WORK/runner-sampler.pid"
+  # Its own process group (setsid), so that stop_writer ends it with every child that holds the file open.
+  WORK=$WORK setsid bash -c 'while :; do printf "%s load=%s mem_avail_mb=%s qemu_cpu=%s\n" "$(date -u +%FT%TZ)" "$(cut -d" " -f1-3 /proc/loadavg)" \
+      "$(awk "/MemAvailable/{print int(\$2/1024)}" /proc/meminfo)" "$(ps -o %cpu= -p "$(cat "$WORK/qemu.pid")" 2>/dev/null | tr -d " ")"
+      sleep 15; done' >> "$EV/runner-load.txt" 2>&1 &
+  echo "-$!" > "$WORK/runner-sampler.pid"
 }
 
 # The guest's samples and journal around the install (also after a failure), and the runner sampler stopped.
@@ -78,7 +79,17 @@ observe_nginx() {
     > "$EV/guest/nginx-start-timed.txt" 2>&1 || true
 }
 
-halt() { kill "$(cat "$WORK/qemu.pid")" 2>/dev/null || true; local i; for i in $(seq 1 60); do kill -0 "$(cat "$WORK/qemu.pid")" 2>/dev/null || return 0; sleep 1; done; return 1; }
+# Stops a writer into the evidence that a pidfile names (a pid, or -pgid for a process group) and waits until no
+# such process is left. Returns 0 when it is gone (or never started: no pidfile); 1 when the pidfile holds no pid,
+# when the liveness check itself fails, or at the 60 s bound.
+stop_writer() { local f=$1 t i r; [ -e "$f" ] || return 0; t=$(cat "$f") || return 1
+  case "$t" in ''|-|*[!0-9-]*|?*-*) echo "$f: not a pid: '$t'" >&2; return 1;; esac
+  kill -- "$t" 2>/dev/null || true
+  for i in $(seq 1 60); do
+    r=0; if [ "${t#-}" = "$t" ]; then ps -p "$t" > /dev/null || r=$?; else pgrep -g "${t#-}" > /dev/null || r=$?; fi
+    case $r in 1) return 0;; 0) sleep 1;; *) echo "$f: the liveness check failed (rc $r)" >&2; return 1;; esac
+  done; echo "$f: still runs after 60 s" >&2; return 1; }
+halt() { stop_writer "$WORK/qemu.pid"; }
 
 # Polls until ssh answers; returns 1 at the bound.
 wait_ssh() { local t0; t0=$(date +%s); until g true; do [ $(( $(date +%s) - t0 )) -lt "$1" ] || return 1; sleep 5; done; echo $(( $(date +%s) - t0 )); }
