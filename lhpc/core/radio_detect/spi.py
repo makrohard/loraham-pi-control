@@ -2,7 +2,10 @@
 
 - Chip select: with kernel chip selects (`/dev/spidev0.1` exists, as the daemon decides) a radio on BCM 8
   uses `spidev0.0` and one on BCM 7 `spidev0.1` with the CS line the kernel's; any other CS line is refused.
-  Otherwise the radio's CS line is driven as a GPIO on `spidev0.0`.
+  Otherwise the radio's CS line is driven as a GPIO on `spidev0.0`, and the controller must not assert a
+  chip select of its own, as the Reticulum interface proves it: SPI_NO_CS where the controller accepts it;
+  where it does not (the Pi 5's RP1 answers EINVAL), the held CS line and a controller that declares no
+  chip select (`cs-gpios` empty, `dtoverlay=spi0-0cs`); else Detect is refused.
 - Lines: only the radio's own are requested (RESET, its CS in soft mode, BUSY for an SX1262); a radio with
   none (an Uputronics board on a kernel chip select) requests no lines. A line another process holds (the
   other radio's daemon) refuses Detect with the reason; nothing else is requested.
@@ -41,7 +44,7 @@ class SpiBus:
     """One radio's bus (`chips.Bus`). `pins` are the model variant's (cs, rst, gpio = BUSY on an SX1262)."""
 
     def __init__(self, pins: dict, chip: str, lock_path: Path, *, dev: Path = Path("/dev"),
-                 gpiochip: str = "/dev/gpiochip0", spi_factory=None, gpio_request=None):
+                 gpiochip: str = "/dev/gpiochip0", spi_factory=None, gpio_request=None, sys: Path = Path("/sys")):
         self._kernel = kernel_cs(dev)
         node = device_for(pins["cs"], self._kernel, dev)
         self._rst, self._cs = pins.get("rst"), None if self._kernel else pins["cs"]
@@ -55,6 +58,14 @@ class SpiBus:
             raise DetectRefused(f"GPIO line(s) {outputs + inputs} "
                                 + ("held by another process" if held else f"unavailable: {exc}")) from exc
         self._spi = (spi_factory or _spidev_open)(node)
+        if not self._kernel:
+            try:
+                _no_kernel_cs(self._spi, sys / "class/spidev" / Path(node).name)
+            except DetectRefused:
+                self._spi.close()
+                if self._lines is not None:
+                    self._lines.release()
+                raise
         self._lock = os.open(str(lock_path), os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
 
     def reset(self, level: int) -> None:
@@ -88,6 +99,25 @@ class SpiBus:
         if self._lines is not None:
             self._lines.release()
         os.close(self._lock)
+
+
+def _no_kernel_cs(spi, spidev: Path) -> None:
+    """The controller asserts no chip select beside the GPIO one (the Reticulum interface's rule)."""
+    try:
+        spi.no_cs = True
+        if spi.no_cs:
+            return
+    except OSError as exc:
+        if exc.errno not in (errno.EINVAL, errno.ENOTTY, errno.EOPNOTSUPP):
+            raise DetectRefused(f"setting SPI_NO_CS failed: {exc}") from exc
+    try:
+        size = (Path(os.path.realpath(spidev / "device/..")) / "of_node/cs-gpios").stat().st_size
+    except OSError as exc:
+        raise DetectRefused("SPI_NO_CS is unsupported and the controller's chip-select configuration could not "
+                            f"be read ({exc}); boot with dtoverlay=spi0-0cs") from exc
+    if size:
+        raise DetectRefused(f"the SPI controller still declares {size // 12} hardware chip-select(s); it can "
+                            "assert one during this transfer. Boot with dtoverlay=spi0-0cs")
 
 
 def _spidev_open(node: str):

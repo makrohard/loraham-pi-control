@@ -101,6 +101,14 @@ def test_kernel_chip_selects_follow_the_daemons_rule(tmp_path):
         spi.device_for(21, True, tmp_path)
 
 
+class _Echo:
+    def xfer2(self, data):
+        return data
+
+    def close(self):
+        pass
+
+
 class _Lines:
     def __init__(self, outputs, inputs, held=False):
         if held:
@@ -129,7 +137,7 @@ def test_only_the_radios_own_lines_are_requested(tmp_path, pins, chip, kernel, o
     seen = []
     bus = spi.SpiBus(pins, chip, tmp_path / "spi0.lock", dev=tmp_path,
                      gpio_request=lambda chip_, o, i: seen.append(_Lines(o, i)) or seen[-1],
-                     spi_factory=lambda node: None)
+                     spi_factory=lambda node: _Echo())
     assert seen[0].requested == (outputs, inputs) and bus.busy() is False
 
 
@@ -148,12 +156,45 @@ def test_an_uputronics_board_on_kernel_chip_selects_requests_no_lines(tmp_path, 
     assert requests == []
 
 
-class _Echo:
-    def xfer2(self, data):
-        return data
+
+class _NoCsRefused(_Echo):
+    """An spidev on a controller that rejects SPI_NO_CS (the Pi 5's RP1: EINVAL)."""
+    closed = False
+
+    @property
+    def no_cs(self):
+        return False
+
+    @no_cs.setter
+    def no_cs(self, value):
+        raise OSError(errno.EINVAL, "Invalid argument")
 
     def close(self):
-        pass
+        self.closed = True
+
+
+@pytest.mark.parametrize("spidev, cs_gpios, refused", [
+    (_Echo, None, None),                                          # SPI_NO_CS accepted
+    (_NoCsRefused, b"", None),                                    # rejected, the controller declares no CS
+    (_NoCsRefused, bytes(24), "declares 2 hardware chip-select"),  # rejected, the controller has two
+])
+def test_a_software_chip_select_runs_only_where_the_controller_asserts_none(tmp_path, spidev, cs_gpios, refused):
+    # Soft CS on spidev0.0: the controller must not also assert CE0 (another radio's select).
+    node = tmp_path / "sys/class/spidev/spidev0.0"
+    (node / "device").mkdir(parents=True)
+    if cs_gpios is not None:
+        (node / "of_node").mkdir()
+        (node / "of_node/cs-gpios").write_bytes(cs_gpios)
+    dev, lines = spidev(), []
+    kw = dict(dev=tmp_path, sys=tmp_path / "sys", spi_factory=lambda n: dev,
+              gpio_request=lambda c, o, i: lines.append(_Lines(o, i)) or lines[-1])
+    if refused is None:
+        spi.SpiBus({"cs": 21, "rst": 18}, "sx127x", tmp_path / "spi0.lock", **kw).close()
+        assert spidev is _NoCsRefused or dev.no_cs is True
+    else:
+        with pytest.raises(DetectRefused, match=refused):
+            spi.SpiBus({"cs": 21, "rst": 18}, "sx127x", tmp_path / "spi0.lock", **kw)
+        assert dev.closed
 
 def test_a_line_another_process_holds_refuses_and_opens_nothing(tmp_path):
     opened = []
