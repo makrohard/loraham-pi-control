@@ -80,6 +80,7 @@ Back up `config/`, `profiles/` and the app data under `state/` first
   `requirements.lock`. After `lhpc self-update --repair-integration`, sync it to the lock once,
   from the runtime root (`cd ~/loraham-pi-control`):
   `venv/lhpc/bin/python -m pip install --require-hashes --no-deps -r src/loraham-pi-control/requirements.lock && venv/lhpc/bin/python -m pip install --no-deps --no-build-isolation -e src/loraham-pi-control`
+  A running console keeps the packages it loaded until it restarts: `systemctl --user restart lhpc-web`.
 
 ### Recovery
 
