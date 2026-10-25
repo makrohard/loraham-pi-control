@@ -460,8 +460,10 @@ def _c_budgeted(repo, lines=6):
 
 
 def _modules_line(repo):
+    """The checker's rc and its modules row; a traceback fails the test even when the row was printed first."""
     p = subprocess.run([sys.executable, str(CHECKER), "base..HEAD"], cwd=repo,
                        capture_output=True, text=True, check=False)
+    assert "Traceback" not in p.stderr, p.stderr
     return p.returncode, next((ln for ln in p.stdout.splitlines() if ln.startswith("modules")), p.stderr)
 
 
