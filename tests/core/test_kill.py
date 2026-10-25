@@ -400,3 +400,39 @@ def test_another_task_holding_the_flock_is_not_counted(tmp_path, clock, procs):
     svc = _svc(tmp_path, {})
     _holder(procs, tmp_path, "build", "graywolf")
     assert kill.kill(svc, "kiss").data["changes"] == 0
+
+
+class _Ident:
+    """kill's procident with scripted identity reads: `reads(pid)` gives the next of `seq`, then its last."""
+    def __init__(self, seq):
+        self.seq, self.identity_matches = list(seq), procident.identity_matches
+
+    def proc_identity(self, pid):
+        return self.seq.pop(0) if len(self.seq) > 1 else self.seq[0]
+
+
+def test_a_record_target_keeps_the_records_identity_not_a_later_read(tmp_path, clock, procs, signals,
+                                                                      monkeypatch):
+    # G2-B2 F1: the record was verified, then its pid was reused before the target's identity was read. The
+    # target keeps the record's identity, so the replacement is never signalled. Red-before at dd086a20: the
+    # target took the replacement's identity and the replacement's group got the SIGTERM.
+    p = procs()                                             # the process now at the recorded pid
+    svc = _svc(tmp_path, {})
+    stk = svc.stack("meshcom")
+    svc._lifecycle().record_launch(stk, stk.component("meshcom-bridge"), p.pid, band="433")
+    now = procident.proc_identity(p.pid)
+    monkeypatch.setattr(kill, "procident", _Ident([{**now, "starttime": now["starttime"] + 1}]))
+    assert kill.kill(svc, "meshcom", "meshcom-bridge", apply=True).ok
+    assert [s for s in signals if s[0] == p.pid] == []
+
+
+def test_a_matcher_hit_whose_identity_changes_during_collection_is_no_target(tmp_path, procs, monkeypatch):
+    # G2-B2 F1: a matcher hit is bound to one identity: read, then the argv re-read, then read again. Another
+    # start time on the second read is another process, so it is not taken. Red-before at dd086a20: taken.
+    p = procs()
+    svc = _svc(tmp_path, {})
+    svc = _svc(tmp_path, {p.pid: _argv(svc, "loraham-chat", "433")})
+    now = procident.proc_identity(p.pid)
+    monkeypatch.setattr(kill, "procident", _Ident([now, {**now, "starttime": now["starttime"] + 1}]))
+    stk, band, comps, _err = kill._parse(svc, "chat", "")
+    assert [t for t in kill._targets(svc, stk, band, comps) if t["pid"] == p.pid] == []

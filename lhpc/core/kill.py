@@ -78,10 +78,17 @@ def _targets(svc, stk, band: str, comps) -> list[dict]:
                 found[rec["pid"]] = {"pid": rec["pid"], "component": comp.id, "group": True,
                                      "pgid": rec["pgid"], "record": rec,
                                      "argv": " ".join(table.get(rec["pid"], []))}
-    out = []
-    for t in found.values():
-        ident = procident.proc_identity(t["pid"])
-        if ident is not None:
+    # G2-B2 F1: a record target keeps the identity its record was verified against, never a later read. A
+    # matcher hit is bound to one identity: read, the argv re-read, read again, the same start time.
+    out = [{**t, "ident": {k: t["record"][k] for k in ("starttime", "pgid", "sid")}}
+           for t in found.values() if "record" in t]
+    hits = [t for t in found.values() if "record" not in t]
+    first = {t["pid"]: procident.proc_identity(t["pid"]) for t in hits}
+    again = svc._system.procfs.cmdlines() if hits else {}
+    for t in hits:
+        ident, pid = first[t["pid"]], t["pid"]
+        if (ident is not None and again.get(pid) == table.get(pid)
+                and (procident.proc_identity(pid) or {}).get("starttime") == ident["starttime"]):
             out.append({**t, "ident": ident})
     return out
 
