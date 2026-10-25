@@ -205,8 +205,10 @@ def test_a_line_another_process_holds_refuses_and_opens_nothing(tmp_path):
     assert opened == []
 
 
-def test_each_transfer_holds_spi0_lock_from_cs_low_to_cs_high(tmp_path):
-    # T-X4: the daemon's lock, exclusive for the transaction and free between transactions.
+@pytest.mark.parametrize("fails", [False, True])
+def test_each_transfer_holds_spi0_lock_from_cs_low_to_cs_high(tmp_path, fails):
+    # T-X4: the daemon's lock, exclusive for the transaction (both CS edges inside it, also when the
+    # transfer fails) and free between transactions.
     lock = tmp_path / "spi0.lock"
     probe = os.open(lock, os.O_RDWR | os.O_CREAT)
 
@@ -218,21 +220,32 @@ def test_each_transfer_holds_spi0_lock_from_cs_low_to_cs_high(tmp_path):
         fcntl.flock(probe, fcntl.LOCK_UN)
         return False
 
-    class Spi:
+    class Spi(_Echo):
         def xfer2(self, data):
             assert held() and lines.levels[7] == 0          # inside: locked, CS low
+            if fails:
+                raise OSError(errno.EIO, "transfer failed")
             return data
 
-    lines = None
+    class Lines(_Lines):
+        def set(self, line, level):
+            super().set(line, level)
+            edges.append((line, level, held()))
+
+    lines, edges = None, []
 
     def request(c, o, i):
         nonlocal lines
-        lines = _Lines(o, i)
+        lines = Lines(o, i)
         return lines
     bus = spi.SpiBus({"cs": 7, "rst": 6}, "sx127x", lock, dev=tmp_path, gpio_request=request,
                      spi_factory=lambda node: Spi())
-    assert bus.transfer(b"\x42\x00") == b"\x42\x00"
-    assert not held() and lines.levels[7] == 1
+    if fails:
+        with pytest.raises(OSError):
+            bus.transfer(b"\x42\x00")
+    else:
+        assert bus.transfer(b"\x42\x00") == b"\x42\x00"
+    assert edges == [(7, 0, True), (7, 1, True)] and not held()
     os.close(probe)
 
 
