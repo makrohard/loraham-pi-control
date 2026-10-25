@@ -4,8 +4,9 @@
 # Step 4 as written (the curl fetches main, as the README says). Step 5: the README's manual block, with
 # the first stated test-only deviation of the plan (RUN QEMU-B): `git reset --hard FROM` right after the clone,
 # so the rest of the block is read from the README AT FROM and run as written there. Prints t_<step>=<s>.
-# FROM a commit sha (the from-topic job, a stated deviation): the clone and reset come first, and step 4 runs
-# that commit's own bootstrap-deps.sh instead of main's, so the install is the topic's, not a release's.
+# FROM a commit sha (the from-topic job, a stated deviation): step 4 fetches that commit's own bootstrap-deps.sh
+# (the same curl, the sha in place of main), so the install is the topic's, not a release's; the order is the
+# README's (step 4 installs git, which the clone in step 5 needs).
 set -euo pipefail
 FROM=$1
 SRC=$HOME/loraham-pi-control/src/loraham-pi-control
@@ -13,8 +14,8 @@ TOPIC=0; [[ $FROM =~ ^[0-9a-f]{40}$ ]] && TOPIC=1
 t() { local name=$1 s; shift; s=$(date +%s); "$@"; echo "t_$name=$(( $(date +%s) - s ))"; }
 
 deps() {
-  if [ "$TOPIC" = 1 ]; then cp "$SRC/bootstrap-deps.sh" bootstrap-deps.sh
-  else curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/bootstrap-deps.sh -o bootstrap-deps.sh; fi
+  local ref=main; [ "$TOPIC" = 0 ] || ref=$FROM
+  curl -fsSL "https://raw.githubusercontent.com/makrohard/loraham-pi-control/$ref/bootstrap-deps.sh" -o bootstrap-deps.sh
   bash bootstrap-deps.sh --dry-run
   sudo bash bootstrap-deps.sh --spi-mode soft-cs < /dev/null
 }
@@ -40,7 +41,6 @@ lhpc_install() {
   [ "$TOPIC" = 1 ] || grep -q 'ln -sfn' "$HOME/manual-block.sh" || { mkdir -p ~/.local/bin && ln -sfn ~/loraham-pi-control/venv/lhpc/bin/lhpc ~/.local/bin/lhpc; }
 }
 
-[ "$TOPIC" = 0 ] || t clone clone
 t deps deps
 t install lhpc_install
 echo "HEAD=$(git -C "$SRC" rev-parse HEAD) branch=$(git -C "$SRC" rev-parse --abbrev-ref HEAD)"
