@@ -5,9 +5,11 @@ Selection (A §2.11, F2) opens only the configured stick, identified before any 
   equal the radio's is opened and claimed (interface 0), then its serial and port are read again and must
   still match;
 - serial-less: the device on the stored port must exist with no serial, and be the only serial-less one.
-Refused, writing to no device: none found, more than one match, the target claimed by another process
-(its daemon), a re-check mismatch, the stick removed during selection. After a claim, the release and the
-kernel driver's re-attach always run.
+A device with no serial descriptor has no serial; one whose descriptor cannot be read, or that cannot be
+opened, has an unknown identity, and then no device is selected.
+Refused, writing to no device: none found, more than one match, a matching device of unknown identity, the
+target claimed by another process (its daemon), a re-check mismatch, the stick removed during selection.
+After a claim, the release and the kernel driver's re-attach always run.
 
 The bridge: D-lines are set with a UIO stream (`0xAB`, `0x80|state`, `0x40|mode`, `0x20`), read with `0xA0`
 (6 bytes, D-line n = bit n of the first); SPI goes in 32-byte packets (`0xA8` + up to 31 bytes), every byte
@@ -29,7 +31,7 @@ UIO_STREAM, UIO_OUT, UIO_DIR, UIO_END = 0xAB, 0x80, 0x40, 0x20
 SCK, MOSI = 3, 5                             # D-lines the SPI stream drives
 SPI_STREAM, GET_INPUT, PACKET = 0xA8, 0xA0, 0x20
 WRITE_EP, READ_EP, TIMEOUT_MS = 0x02, 0x82, 1000
-ERROR_NO_DEVICE, ERROR_NOT_FOUND, ERROR_BUSY = -4, -5, -6
+ERROR_IO, ERROR_NO_DEVICE, ERROR_NOT_FOUND, ERROR_BUSY = -1, -4, -5, -6
 
 
 def reverse_byte(x: int) -> int:
@@ -40,10 +42,12 @@ def reverse_byte(x: int) -> int:
 
 @dataclass(frozen=True)
 class Found:
-    """A vid:pid device as listed, before any claim: its serial (None: the stick reports none) and port."""
+    """A vid:pid device as listed, before any claim: its serial (None: the stick reports none) and port;
+    `readable` False: it could not be opened or its serial not read, so its identity is unknown."""
     serial: str | None
     port: tuple
     ref: object = None
+    readable: bool = True
 
 
 class UsbError(OSError):
@@ -55,6 +59,9 @@ class UsbError(OSError):
 def select(usb, vid: int, pid: int, *, serial: str = "", port: tuple = ()):
     """The claimed handle of the configured stick, or DetectRefused. `usb` lists, claims and releases."""
     listed = usb.devices(vid, pid)
+    if any(not d.readable for d in listed):
+        raise DetectRefused("a connected stick's identity cannot be read (no access, or its serial failed); "
+                            "unplug it or fix its access")
     if serial:
         hits = [d for d in listed if d.serial and d.serial[:8] == serial[:8]]
         what = f"serial {serial[:8]}"
@@ -137,8 +144,8 @@ class Ch341Bus:
 class Libusb:
     """`select`'s USB side on libusb-1.0 through ctypes (loaded when Detect runs)."""
 
-    def __init__(self):
-        lib = ctypes.CDLL(ctypes.util.find_library("usb-1.0") or "libusb-1.0.so.0")
+    def __init__(self, lib=None):
+        lib = lib or ctypes.CDLL(ctypes.util.find_library("usb-1.0") or "libusb-1.0.so.0")
         self._lib, self._ctx = lib, ctypes.c_void_p()
         self._check(lib.libusb_init(ctypes.byref(self._ctx)))
 
@@ -159,11 +166,14 @@ class Libusb:
         return (self._lib.libusb_get_bus_number(dev), *ports[:n])
 
     def _serial(self, handle, index: int) -> str | None:
+        """None: no serial descriptor. A descriptor that cannot be read raises UsbError."""
         if not index:
             return None
         buf = ctypes.create_string_buffer(64)
         n = self._lib.libusb_get_string_descriptor_ascii(handle, index, buf, 64)
-        return buf.value.decode("ascii", "replace") if n > 0 else None
+        if n <= 0:
+            raise UsbError(n or ERROR_IO)
+        return buf.value.decode("ascii", "replace")
 
     def devices(self, vid: int, pid: int) -> list:
         lst = ctypes.POINTER(ctypes.c_void_p)()
@@ -174,12 +184,15 @@ class Libusb:
             desc = self._descriptor(dev)
             if (desc[8] | desc[9] << 8, desc[10] | desc[11] << 8) != (vid, pid):
                 continue
-            handle = ctypes.c_void_p()
+            handle, serial, readable = ctypes.c_void_p(), None, False
             if self._lib.libusb_open(dev, ctypes.byref(handle)) == 0:          # reads only; no claim
-                serial = self._serial(handle, desc[16])
+                try:
+                    serial, readable = self._serial(handle, desc[16]), True
+                except UsbError:
+                    pass
                 self._lib.libusb_close(handle)
-                self._lib.libusb_ref_device(dev)
-                found.append(Found(serial, self._port(dev), dev))
+            self._lib.libusb_ref_device(dev)
+            found.append(Found(serial, self._port(dev), dev, readable))
         self._lib.libusb_free_device_list(lst, 1)
         return found
 

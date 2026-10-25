@@ -3,6 +3,7 @@ clock, the SPI backend on fake spidev/gpiod and the real spi0.lock, the CH341 se
 framing on a fake libusb. One medium per test (PROOF T-X1-T-X4, T-X7, T-X8)."""
 from __future__ import annotations
 
+import ctypes
 import errno
 import fcntl
 import os
@@ -295,3 +296,94 @@ def test_ch341_framing_is_libpinedios():
     assert packets[0] == 0xA8 and packets[32] == 0xA8 and len(packets) == 32 + 1 + 9
     assert packets[1:3] == bytes([ch341.reverse_byte(0), ch341.reverse_byte(1)]) == b"\x00\x80"
     assert h.reads == [31, 9]
+
+
+class _Libusb:
+    """libusb-1.0 as `ch341.Libusb` calls it through ctypes: matching devices by (serial, port, how); `how`
+    "ok", "unopenable" (open fails) or "serial-fails" (the descriptor read fails). Counts what is held."""
+
+    def __init__(self, sticks):
+        self.sticks = {i + 1: s for i, s in enumerate(sticks)}
+        self.writes, self.held = [], {"ctx": 0, "refs": 0, "open": 0, "claimed": 0}
+
+    def libusb_init(self, ctx):
+        self.held["ctx"] += 1
+        return 0
+
+    def libusb_get_device_list(self, ctx, out):
+        self._list = (ctypes.c_void_p * (len(self.sticks) + 1))(*self.sticks, None)
+        ptr = ctypes.cast(self._list, ctypes.POINTER(ctypes.c_void_p))
+        ctypes.memmove(ctypes.addressof(out._obj), ctypes.addressof(ptr), ctypes.sizeof(ptr))
+        return len(self.sticks)
+
+    def libusb_free_device_list(self, lst, unref):
+        return None
+
+    def libusb_get_device_descriptor(self, dev, desc):
+        desc[8:12] = [0x86, 0x1A, 0x12, 0x55]
+        desc[16] = 0 if self.sticks[dev.value][0] is None else 3
+        return 0
+
+    def libusb_open(self, dev, out):
+        if self.sticks[dev.value][2] == "unopenable":
+            return -3
+        out._obj.value = dev.value
+        self.held["open"] += 1
+        return 0
+
+    def libusb_close(self, handle):
+        self.held["open"] -= 1
+
+    def libusb_get_string_descriptor_ascii(self, handle, index, buf, n):
+        serial, _port, how = self.sticks[handle.value if hasattr(handle, "value") else handle]
+        if how == "serial-fails":
+            return -9
+        buf.value = serial.encode()
+        return len(serial)
+
+    def libusb_ref_device(self, dev):
+        self.held["refs"] += 1
+
+    def libusb_unref_device(self, dev):
+        self.held["refs"] -= 1
+
+    def libusb_exit(self, ctx):
+        self.held["ctx"] -= 1
+
+    def libusb_get_bus_number(self, dev):
+        return self.sticks[dev.value][1][0]
+
+    def libusb_get_port_numbers(self, dev, ports, n):
+        rest = self.sticks[dev.value][1][1:]
+        ports[:len(rest)] = rest
+        return len(rest)
+
+    def libusb_detach_kernel_driver(self, handle, iface):
+        return -5
+
+    def libusb_attach_kernel_driver(self, handle, iface):
+        return 0
+
+    def libusb_claim_interface(self, handle, iface):
+        self.held["claimed"] += 1
+        return 0
+
+    def libusb_release_interface(self, handle, iface):
+        self.held["claimed"] -= 1
+
+    def libusb_bulk_transfer(self, handle, ep, buf, n, done, timeout):
+        self.writes.append(bytes(buf[:n]))
+        return 0
+
+
+@pytest.mark.parametrize("sticks, kw", [
+    ([("A1B2C3D4E5", (1, 3), "ok"), ("Q9R8S7T6", (1, 4), "serial-fails")], {"serial": "A1B2C3D4"}),
+    ([("A1B2C3D4E5", (1, 3), "ok"), ("Q9R8S7T6", (1, 4), "unopenable")], {"serial": "A1B2C3D4"}),
+    ([("Q9R8S7T6", (1, 3), "serial-fails")], {"port": (1, 3)}),
+])
+def test_a_stick_of_unknown_identity_refuses_the_selection(sticks, kw):
+    # A serial that cannot be read is not "no serial", and an unopenable stick still counts: no claim, no write.
+    lib = _Libusb(sticks)
+    with pytest.raises(DetectRefused, match="identity cannot be read"):
+        ch341.select(ch341.Libusb(lib), 0x1A86, 0x5512, **kw)
+    assert lib.writes == [] and lib.held["claimed"] == lib.held["open"] == 0
