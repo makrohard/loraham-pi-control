@@ -729,3 +729,30 @@ def test_records_that_may_still_be_live_keep_blocking(env, monkeypatch, rec, boo
     assert ops.blocked(svc) == ops.UNVERIFIED
     with pytest.raises(ops.OneStoreError, match="not verified"):
         ops.ensure(svc, {"repeater_name": "Relay"}, "10")
+
+
+def _repeater_start(svc, monkeypatch, recs):
+    _secret(svc, mi.REPEATER_IDENTITY_FILENAME, KEY)
+    assert svc.save_config(mm.STACK_ID, {"file_mode": "repeater", "file_repeater_name": "Relay"}).ok
+    svc._invalidate_config()
+    monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-now")
+    monkeypatch.setattr(type(svc._lifecycle()), "owned_records",          # the node's records only
+                        lambda self, cid, band=None, role="": list(recs) if cid == mm.NODE_ID else [])
+    res = svc.start(mm.STACK_ID, apply=True)
+    return res, " ".join([res.summary, *res.details])
+
+
+def test_co12_an_earlier_boots_record_does_not_refuse_the_instances_start(env, monkeypatch):
+    """T-CO12 (A §2.3, RK12): 0.13.3's rule (CO-18) holds on the start path at L3, where the
+    instance is the band: a record of an earlier boot is boot restore's evidence, not a block."""
+    svc, _helper = env
+    _res, text = _repeater_start(svc, monkeypatch, [{"component": mm.NODE_ID, "band": "868",
+                                                     "boot_id": "boot-before"}])
+    assert "not verified" not in text, text
+
+
+def test_co12_a_same_boot_record_refuses_the_instances_start(env, monkeypatch):
+    svc, _helper = env
+    res, text = _repeater_start(svc, monkeypatch, [{"component": mm.NODE_ID, "band": "868",
+                                                    "boot_id": "boot-now"}])
+    assert not res.ok and "not verified" in text, text
