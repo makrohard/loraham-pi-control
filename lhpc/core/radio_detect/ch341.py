@@ -198,6 +198,12 @@ class Libusb:
     def devices(self, vid: int, pid: int) -> list:
         lst = ctypes.POINTER(ctypes.c_void_p)()
         count = self._check(self._lib.libusb_get_device_list(self._ctx, ctypes.byref(lst)))
+        try:
+            return self._matching(lst, count, vid, pid)
+        finally:
+            self._lib.libusb_free_device_list(lst, 1)
+
+    def _matching(self, lst, count: int, vid: int, pid: int) -> list:
         found = []
         for i in range(count):
             dev = ctypes.c_void_p(lst[i])
@@ -214,7 +220,6 @@ class Libusb:
             self._lib.libusb_ref_device(dev)
             self._refs.append(dev)
             found.append(Found(serial, self._port(dev), dev, readable))
-        self._lib.libusb_free_device_list(lst, 1)
         return found
 
     def claim(self, found: Found):

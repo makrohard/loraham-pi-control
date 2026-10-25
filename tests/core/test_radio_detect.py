@@ -380,7 +380,7 @@ class _Libusb:
 
     def __init__(self, sticks):
         self.sticks = {i + 1: s for i, s in enumerate(sticks)}
-        self.writes, self.held = [], {"ctx": 0, "refs": 0, "open": 0, "claimed": 0}
+        self.writes, self.held = [], {"ctx": 0, "list": 0, "refs": 0, "open": 0, "claimed": 0}
 
     def libusb_init(self, ctx):
         self.held["ctx"] += 1
@@ -390,12 +390,15 @@ class _Libusb:
         self._list = (ctypes.c_void_p * (len(self.sticks) + 1))(*self.sticks, None)
         ptr = ctypes.cast(self._list, ctypes.POINTER(ctypes.c_void_p))
         ctypes.memmove(ctypes.addressof(out._obj), ctypes.addressof(ptr), ctypes.sizeof(ptr))
+        self.held["list"] += 1
         return len(self.sticks)
 
     def libusb_free_device_list(self, lst, unref):
-        return None
+        self.held["list"] -= 1
 
     def libusb_get_device_descriptor(self, dev, desc):
+        if self.sticks[dev.value][2] == "descriptor-fails":
+            return -1
         desc[8:12] = [0x86, 0x1A, 0x12, 0x55]
         desc[16] = 0 if self.sticks[dev.value][0] is None else 3
         return 0
@@ -477,4 +480,15 @@ def test_the_usb_side_gives_back_everything_it_took(how, refused):
         with pytest.raises(DetectRefused, match=refused):
             ch341.select(usb, 0x1A86, 0x5512, serial="A1B2C3D4")
         usb.close()
-    assert lib.held == {"ctx": 0, "refs": 0, "open": 0, "claimed": 0}
+    assert lib.held == {"ctx": 0, "list": 0, "refs": 0, "open": 0, "claimed": 0}
+
+
+def test_an_enumeration_that_fails_gives_back_the_device_list():
+    # A device whose descriptor cannot be read ends the enumeration with UsbError; the list is freed and,
+    # after close, nothing is held.
+    lib = _Libusb([("A1B2C3D4E5", (1, 3), "ok"), ("Q9R8S7T6", (1, 4), "descriptor-fails")])
+    usb = ch341.Libusb(lib)
+    with pytest.raises(ch341.UsbError):
+        ch341.select(usb, 0x1A86, 0x5512, serial="A1B2C3D4")
+    usb.close()
+    assert lib.held == {"ctx": 0, "list": 0, "refs": 0, "open": 0, "claimed": 0}
