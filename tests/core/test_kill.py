@@ -8,7 +8,6 @@ import select
 import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -46,6 +45,21 @@ def clock(monkeypatch):
     c = Clock()
     monkeypatch.setattr(kill, "sleep", c)
     return c
+
+
+@pytest.fixture
+def signals(monkeypatch):
+    """Every os.kill / os.killpg call as (pid or pgid, signal), recorded, then passed through."""
+    sent, real_kill, real_killpg = [], os.kill, os.killpg
+
+    def rec(real):
+        def call(pid, sig):
+            sent.append((pid, sig))
+            real(pid, sig)
+        return call
+    monkeypatch.setattr(os, "kill", rec(real_kill))
+    monkeypatch.setattr(os, "killpg", rec(real_killpg))
+    return sent
 
 
 @pytest.fixture
@@ -211,14 +225,15 @@ def test_k7_a_cli_start_group_leader_is_ended(tmp_path, clock, procs):
 
 
 def test_k7_a_cli_start_that_cannot_be_ended_is_refused_by_name_and_never_hangs(tmp_path, clock,
-                                                                                  procs):
+                                                                                  procs, signals):
+    # G2-B2 F5: the stand-in ignores SIGTERM, so its being alive proves nothing; the send point and the
+    # injected clock do. Red-before: a TERM sent to the holder before the refusal passed the earlier form.
     cli = procs(argv=[str(_lhpc_script(tmp_path)), "stack", "start", "kiss", str(tmp_path)],
                 leader=False)                        # in our process group: no group leader
     svc = _svc(tmp_path, {})
-    t0 = time.monotonic()
     res = kill.kill(svc, "kiss", apply=True)
     assert not res.ok and f"(pid {cli.pid})" in res.summary and "could not be ended" in res.summary
-    assert cli.poll() is None and time.monotonic() - t0 < 5     # never signalled, never waited
+    assert signals == [] and clock.t == 0            # never signalled, never waited
 
 
 def test_q_k2_a_holder_of_another_operation_is_refused_by_name(tmp_path, clock, procs):
