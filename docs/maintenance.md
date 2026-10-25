@@ -112,7 +112,8 @@ repositories.
   budgets); a HARD line fails it. It checks form, not truth: a PASS says nothing about whether a
   stated red-before ran, a CHANGELOG line is precise or a claim in a report holds. Another own
   repository runs the same tool; its `.houserules.toml` at `<base>` names its layers, test files and
-  test definitions, changelog and budget file (empty: that rule off) and warn patterns. Without one,
+  test definitions, changelog and budget file (empty: that rule off; a budgeted file that is not Python, a
+  `.c` file, is held to its lines only, its public-method column N/A) and warn patterns. Without one,
   LHPC's layout applies; a malformed one exits 2. A range that changes it is HARD unless it changes
   nothing else, and HARD when it relaxes or deletes a profile `<base>` has (a layer added, a test glob or
   warn pattern dropped or changed, another key changed); a first profile or a tightening is a WARN, the

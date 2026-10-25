@@ -446,3 +446,66 @@ def test_a_range_cannot_weaken_the_checker_that_judges_it(repo, env):
     assert p.returncode == 1 and "BASE PROGRAM" in base_part
     rows = {line.split()[0]: line.split()[-1] for line in base_part.splitlines()[1:] if line.strip()}
     assert rows["patterns"] == "HARD"
+
+
+# ---- CO-26: a budget row may name a file that is not Python (lines only) ---------------------------
+VOICE = "int main(void)\n{\n    return 0;\n}\n"
+
+
+def _c_budgeted(repo, lines=6):
+    """A C repository's profile: its family is src/, its budget table names voice.c (lines, public)."""
+    _commit(repo, {"src/voice.c": VOICE,
+                   "tools/budgets.py": f'BUDGETS = {{\n    "voice.c": ({lines}, 0),\n}}\n'}, msg="c base\n")
+    _profiled(repo, 'family_dir = "src/"\nbudget_file = "tools/budgets.py"\n')
+
+
+def _modules_line(repo):
+    p = subprocess.run([sys.executable, str(CHECKER), "base..HEAD"], cwd=repo,
+                       capture_output=True, text=True, check=False)
+    return p.returncode, next((ln for ln in p.stdout.splitlines() if ln.startswith("modules")), p.stderr)
+
+
+def test_a_c_file_in_its_budget_is_measured_by_lines(repo):
+    """CO-26; red before at 0af1d413: `ast.parse` of voice.c raised SyntaxError, the checker crashed (rc 1, a
+    traceback, no modules line)."""
+    _c_budgeted(repo)
+    _commit(repo, {"src/voice.c": VOICE.replace("return 0;", "return 1;")})
+    rc, line = _modules_line(repo)
+    assert rc == 0 and line.split()[0] == "modules" and line.split()[-1] == "OK", line
+    assert "voice.c 4->4 lines (budget 6), public N/A (not Python)" in line
+
+
+def test_a_c_file_over_its_line_budget_is_hard(repo):
+    # The budget row is raised with a reason in the same range, so the growth itself is excused: only the line
+    # budget (7) makes this HARD; within it the same range would be a WARN.
+    _c_budgeted(repo)
+    _commit(repo, {"src/voice.c": VOICE + "/* a */\n/* b */\n/* c */\n/* d */\n",
+                   "tools/budgets.py": 'BUDGETS = {\n    "voice.c": (7, 0),  # co26: the test needs room\n}\n'})
+    rc, line = _modules_line(repo)
+    assert rc == 1 and line.split()[0] == "modules" and line.split()[-1] == "HARD", line
+    assert "voice.c 4->8 lines (budget 7)" in line
+
+
+def test_a_c_file_growing_within_its_budget_counts_in_the_family_net(repo):
+    # The same rule as for a .py family file ("family-net-growth" above): growth with no raised row is unexcused,
+    # HARD, though within the line budget.
+    _c_budgeted(repo)
+    _commit(repo, {"src/voice.c": VOICE + "/* a */\n"})
+    rc, line = _modules_line(repo)
+    assert rc == 1 and line.split()[0] == "modules" and line.split()[-1] == "HARD", line
+    assert "voice.c 4->5 lines (budget 6)" in line and "family net +1 lines" in line
+
+
+def test_a_split_into_a_c_file_is_an_invalid_split(repo):
+    """CO-26; red before at 535286cc: the checker parsed the split's C target as Python and crashed (a traceback,
+    no modules line). A file that is not Python has no header to read, so a split into it is never valid."""
+    old = '"""Old."""\n\n\nclass Old:\n    def a(self):\n        pass\n\n    def b(self):\n        pass\n'
+    _commit(repo, {"src/old.py": old, "tools/budgets.py": 'BUDGETS = {\n    "old.py": (12, 2),\n}\n'},
+            msg="c base\n")
+    _profiled(repo, 'family_dir = "src/"\nbudget_file = "tools/budgets.py"\n')
+    _commit(repo, {"src/old.py": old[:old.index("\n    def b")] + "\n", "src/voice_part.c": VOICE,
+                   "tools/budgets.py": 'BUDGETS = {\n    "old.py": (12, 2),\n'
+                                       '    "voice_part.c": (4, 0),  # co26: split from old.py\n}\n'})
+    rc, line = _modules_line(repo)
+    assert rc == 1 and line.split()[0] == "modules" and line.split()[-1] == "HARD", line
+    assert "invalid split" in line and line.split()[-2] == "voice_part.c", line

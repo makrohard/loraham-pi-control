@@ -9,11 +9,11 @@ The exact conditions: tests/README.md rule 13 and the plan of this tool. WARN li
 the reviewer; HARD lines block.
 
 A repository may carry `.houserules.toml` with its own layout (layers, test_files, test_def, budget_file,
-family_dir, changelog, warn_patterns), read at <base> so a range cannot relax its own rules: a range that
-changes it is a `profile` HARD line; changing nothing else it is a WARN, unless it relaxes or deletes a profile
-<base> has (a layer added, a test glob or warn pattern dropped or changed, any other key changed): HARD.
-Without it the constants below apply. Attribution, markers and the HARD patterns are the same for every
-repository. A malformed profile exits 2.
+family_dir, changelog, warn_patterns; a budgeted file that is not Python is held to its lines only), read at
+<base> so a range cannot relax its own rules: a range that changes it is a `profile` HARD line; changing nothing
+else it is a WARN, unless it relaxes or deletes a profile <base> has (a layer added, a test glob or warn pattern
+dropped or changed, any other key changed): HARD. Without it the constants below apply. Attribution, markers and
+the HARD patterns are the same for every repository. A malformed profile exits 2.
 
 The gate is two runs, the program at <base> first (docs/maintenance.md has the command); the exit code is
 the worse of the two, so a range cannot weaken the checker that judges it. A direct run does the same itself
@@ -170,7 +170,10 @@ def layer_of(path: str) -> str | None:
     return next((layer for prefix, layer in LAYERS if path.startswith(prefix)), None)
 
 
-def measure(source: str) -> tuple[int, int]:
+def measure(source: str, path: str = ".py") -> tuple[int, int | None]:
+    """(lines, public methods); a budgeted file that is not Python is measured by its lines only (public None)."""
+    if not path.endswith(".py"):
+        return len(source.splitlines()), None
     tree = ast.parse(source)
     public = sum(1 for cls in tree.body if isinstance(cls, ast.ClassDef) for node in cls.body
                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -371,19 +374,24 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
         path = FAMILY_DIR + name
         if path not in changed:
             continue
-        a = measure(show(base, path) or "")
-        b = measure(show(head, path) or "")
+        a = measure(show(base, path) or "", path)
+        b = measure(show(head, path) or "", path)
         sizes[name] = (a[0], b[0])
         net += b[0] - a[0]
         excused += max(0, b[0] - a[0]) if name in raised_ok else 0
+        over = over or b[0] > table[name][0]
+        if b[1] is None:                   # not Python: no public-method count, its column not applied
+            parts.append(f"{name} {a[0]}->{b[0]} lines (budget {table[name][0]}), public N/A (not Python)")
+            continue
         net_public += b[1] - a[1]
         excused_public += max(0, b[1] - a[1]) if name in raised_ok else 0
-        over = over or b[0] > table[name][0] or b[1] > table[name][1]
+        over = over or b[1] > table[name][1]
         parts.append(f"{name} {a[0]}->{b[0]} lines (budget {table[name][0]}), "
                      f"{a[1]}->{b[1]} public (budget {table[name][1]})")
     # A split counts only when every file it names is a family file that shrank in this range and the new file's
     # header is valid (`header_lines`).
-    heads = {name: header_lines(show(head, FAMILY_DIR + name) or "") for name in splits}
+    heads = {name: header_lines(show(head, FAMILY_DIR + name) or "") if name.endswith(".py") else None
+             for name in splits}
     split_bad = [name for name, sources in splits.items() if name not in sizes or heads[name] is None
                  or not all(s in sizes and sizes[s][1] < sizes[s][0] for s in sources)]
     excused += sum(heads[name] for name in splits if name not in split_bad)
