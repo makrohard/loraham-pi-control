@@ -280,6 +280,7 @@ main = "loraham-daemon"
     key = "spi.bus.0"
     kind = "spi-bus"
     mode = "cooperative"
+    claims_if = "spi"
     note = "Shared SPI bus; serialized via spi0.lock in LORAHAM_RUNTIME_DIR, and with kernel chip selects also by the kernel. Different modules use different CS."
     [[stack.component.resource]]
     key = "loraham.radio.433"

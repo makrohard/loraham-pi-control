@@ -227,7 +227,8 @@ transfer in the kernel; the warning is shown in both modes.
 Each stack document lists its claims; a band, a TCP port and a serial device are claimed the same
 way. A claim marked `advisory = true` (the single MeshCore companion-client slot,
 [meshcore](stacks/meshcore.md#command-line-client)) is reported as a conflict but never blocks a
-start.
+start. A claim marked `claims_if = "spi"` or `"usb"` is made only on a radio with that transport (the
+daemon's `spi.bus.0` is `"spi"`); every radio LHPC configures today is an SPI HAT.
 
 ## Daemon control
 

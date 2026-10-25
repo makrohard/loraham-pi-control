@@ -127,6 +127,9 @@ class ResourceClaim:
     # node's single Companion slot to a running meshcore-cli via a lock), so admission must not
     # refuse the start. Non-advisory EXCLUSIVE claims (SPI, TCP ports, …) still block.
     advisory: bool = False
+    # "" = made on any transport; "spi" | "usb": made only when the radio's transport is that one
+    # (A §2.3; the daemon's `spi.bus.0` is "spi"). Until L5 every radio is SPI (manifest.py).
+    claims_if: str = ""
 
 
 
