@@ -42,10 +42,10 @@ _ACC_LOG = ("logs", "nginx-access.log")
 _UPDATING_PAGE = ("config", "nginx", "_lhpc_updating.html")
 
 _NGINX_VALIDATE_TIMEOUT_S = 15.0
-# A restart is ExecStop (`nginx -s quit`, draining workers) + ExecStart. On a loaded Pi Zero
-# that is not a 20-second operation, and our own expiring budget must not be reported as an
-# indistinguishable 'restart failed'.
-_NGINX_RESTART_TIMEOUT_S = 60.0
+# Starting the unit runs its ExecStartPre (`nginx -t`, `lhpc webserver --firewall-boot-gate`) and,
+# for a restart, ExecStop first: about 4 s on a Pi Zero 2 W, about 20 s under emulation. An upper
+# limit against a frozen start, not a speed check; every start and restart of the unit uses it.
+NGINX_START_TIMEOUT_S = 120.0
 
 # Declared SYSTEM (apt) dependencies of the production webserver. LHPC never installs system
 # packages itself — each is surfaced with the exact operator command (matching deps.py's model).
@@ -990,7 +990,7 @@ def restart(system, paths: Paths) -> tuple:
     the ONLY way a BIND CHANGE (loopback 127.0.0.1 <-> 0.0.0.0) actually takes effect. Returns one
     of ('restarted'|'failed', message)."""
     r = system.runner.run(["systemctl", "--user", "restart", "lhpc-nginx.service"],
-                          _NGINX_RESTART_TIMEOUT_S)
+                          NGINX_START_TIMEOUT_S)
     if getattr(r, "not_found", False):
         return "failed", "systemctl not found"
     if r.returncode == 0:
@@ -1000,7 +1000,7 @@ def restart(system, paths: Paths) -> tuple:
         # systemctl CAN fail without a word (notably when our own budget expires). Say which of
         # the two it was and what the unit ended up as — a bare "restart failed" sent the operator
         # to the nginx log for a problem that was never nginx's.
-        why = (f"our restart budget of {_NGINX_RESTART_TIMEOUT_S:.0f}s expired"
+        why = (f"our restart budget of {NGINX_START_TIMEOUT_S:.0f}s expired"
                if getattr(r, "timed_out", False)
                else f"systemctl exited {r.returncode} without a message")
         act = system.runner.run(["systemctl", "--user", "is-active", "lhpc-nginx.service"], 5.0)

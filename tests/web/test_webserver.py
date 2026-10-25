@@ -453,7 +453,7 @@ def test_restart_without_output_names_the_reason_and_the_resulting_state(tmp_pat
         ("systemctl", "--user", "is-active", "lhpc-nginx.service"): CommandResult(0, "active\n", "")})
     state, msg = webserver.restart(timed.system, Paths(runtime_root=tmp_path))
     assert state == "failed"
-    assert "budget of 60s expired" in msg and "the unit is now active" in msg
+    assert "budget of 120s expired" in msg and "the unit is now active" in msg
     assert "lhpc webserver apply" in msg               # active -> a retry proves the listener
 
     quiet = FakeSystem(commands={
@@ -1297,10 +1297,10 @@ def test_start_service_enables_and_starts(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("result, says", [
     (CR(1, "", "Created symlink 'x' -> 'y'.\nJob for lhpc-nginx.service failed."), "systemctl rc 1"),
-    (CR(124, "", "Created symlink 'x' -> 'y'.", timed_out=True), "timed out after 20 s"),
+    (CR(124, "", "Created symlink 'x' -> 'y'.", timed_out=True), "timed out after 120 s"),
 ])
 def test_a_failed_start_says_how_systemctl_failed(monkeypatch, tmp_path, result, says):
-    # T-LB3: a slow guest's start ran past the bound and the message showed only enable's
+    # T-LB3: a slow guest's start ran past its bound and the message showed only enable's
     # "Created symlink" line, so a timeout read like a unit failure. The summary now names it.
     monkeypatch.delenv("INVOCATION_ID", raising=False)
     svc0 = _svc_webserver_corrections(tmp_path); assert svc0.webserver_init(dns_sans=["pi.local"]).ok
@@ -1313,6 +1313,30 @@ def test_a_failed_start_says_how_systemctl_failed(monkeypatch, tmp_path, result,
     r = ControllerService(system=fake.system, paths=paths).webserver_start_service()
     assert not r.ok
     assert "could not enable/start lhpc-nginx.service" in r.summary and says in r.summary
+
+
+@pytest.mark.parametrize("site", ["start-service enable --now", "restart"])
+def test_starting_lhpc_nginx_is_bounded_generously(monkeypatch, tmp_path, site):
+    # T-LB4: the unit's ExecStartPre runs `nginx -t` and `lhpc webserver --firewall-boot-gate`; on a
+    # slow guest the start took longer than the 20 s bound and succeeded behind it. A bound is an
+    # upper limit against a frozen run, not a speed check: every start/restart of the unit gets 120 s.
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    svc0 = _svc_webserver_corrections(tmp_path); assert svc0.webserver_init(dns_sans=["pi.local"]).ok
+    paths = svc0._paths
+    argv = (["systemctl", "--user", "enable", "--now", "lhpc-nginx.service"] if site != "restart"
+            else ["systemctl", "--user", "restart", "lhpc-nginx.service"])
+    fake = FakeSystem(commands={
+        ("nginx", "-v"): CR(0, "", ""),
+        ("nginx", "-t", "-c", _staged_webserver_corrections(paths)): CR(0, "", "ok"),
+        tuple(argv): CR(0, "", ""),
+    }, listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8443, inode=1)])
+    seen, run = {}, fake.run
+    monkeypatch.setattr(fake, "run", lambda a, timeout, *x, **k: (seen.setdefault(tuple(a), timeout), run(a, timeout, *x, **k))[1])
+    if site == "restart":
+        assert webserver.restart(fake.system, paths)[0] == "restarted"
+    else:
+        assert ControllerService(system=fake.system, paths=paths).webserver_start_service().ok
+    assert seen[tuple(argv)] == 120.0
 
 
 def test_evidence_absent_and_roundtrip(tmp_path):

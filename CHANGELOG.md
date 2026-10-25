@@ -12,6 +12,8 @@
   packaged meshtasticd" (left running); it refuses, names systemd's error and says to re-run.
 - `lhpc webserver start-service`: a failed start of lhpc-nginx says whether systemctl timed out or which
   rc it returned, instead of only its last output line.
+- Webserver: starting or restarting lhpc-nginx waits up to 120 s (was 20 s / 60 s), so a slow box's start is
+  not reported as failed while it still completes.
 
 ## 0.13.3
 
