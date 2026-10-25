@@ -16,6 +16,8 @@
   after the reboot; the German block installs from the lock file like the English one.
 - `lhpc webserver start-service`: a failed start of lhpc-nginx says whether systemctl timed out or which
   rc it returned, instead of only its last output line.
+- Webserver: starting or restarting lhpc-nginx waits up to 120 s (was 20 s / 60 s), so a slow box's start is
+  not reported as failed while it still completes.
 
 Fixed
 

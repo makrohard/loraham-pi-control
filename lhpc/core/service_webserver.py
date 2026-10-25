@@ -2336,10 +2336,10 @@ class WebserverOpsMixin:
             return ActionResult(False, f"nginx config invalid — not starting ({msg})")
         _ws.promote_config(self._paths)
         was_running = _ws.nginx_master_active(self._paths)
-        r = self._system.runner.run(
-            ["systemctl", "--user", "enable", "--now", "lhpc-nginx.service"], 20.0)
+        bound = _ws.NGINX_START_TIMEOUT_S
+        r = self._system.runner.run(["systemctl", "--user", "enable", "--now", "lhpc-nginx.service"], bound)
         if getattr(r, "not_found", False) or r.returncode != 0:
-            how = "timed out after 20 s" if getattr(r, "timed_out", False) else f"systemctl rc {r.returncode}"
+            how = f"timed out after {bound:g} s" if getattr(r, "timed_out", False) else f"systemctl rc {r.returncode}"
             return ActionResult(False, f"could not enable/start lhpc-nginx.service ({how})",
                                 details=[((r.stderr or r.stdout).strip().splitlines() or ["systemctl failed"])[-1]],
                                 next_commands=["systemctl --user enable --now lhpc-nginx.service"])
