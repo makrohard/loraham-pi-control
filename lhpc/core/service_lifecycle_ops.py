@@ -2095,7 +2095,7 @@ class LifecycleOpsMixin:
             ok_all = False
             lines.append(f"  [fail] daemon on {b}: CONF socket unreachable but a daemon process "
                          f"still holds the radio — not relaunched (resolve the stuck instance first)")
-        started: set = set()
+        failed: set = set()
         if absent:
             if comp.source and not self._source_present(comp):
                 lines.append("  [BLOCKED] daemon: not installed (lhpc install daemon)")
@@ -2113,6 +2113,7 @@ class LifecycleOpsMixin:
             # Start ONE per-band instance for EACH missing band — lhpc NEVER launches `--radio
             # both` (a mode the operator may still start manually); it runs an independent
             # `--radio <band>` per band. The TX mode is applied LIVE once the socket is up.
+            # I5 (A §1): one at a time, each READY or failed before the next; a failure stops no other.
             for b in sorted(absent):
                 dparams = dict(self.stack_config("daemon"))
                 dparams["radio"] = b
@@ -2136,7 +2137,8 @@ class LifecycleOpsMixin:
                     lines.append(f"  [BLOCKED] daemon on {b}: ocp_{b} = "
                                  f"{dparams.get(f'ocp_{b}')!r} is not a PA limit this band's chip "
                                  f"can represent — set it with: lhpc hardware --ocp {b} auto|MA")
-                    return lines, False, ""
+                    failed.add(b)
+                    continue
                 dparams["ocp"] = str(ocp)
                 # The RF-log switch is STACK-level (band-less) while the file it names is per
                 # band (`{band}` in the run line); the path itself is never a stored value.
@@ -2148,21 +2150,19 @@ class LifecycleOpsMixin:
                 base = f"start daemon --radio {b}"
                 if not res.ok:
                     lines.append(f"  [fail] {base}: {res.detail}")
-                    return lines, False, ""
+                    failed.add(b)
+                    continue
                 lines.append(f"  [ok] {base}")
-                started.add(b)
-        # Verify + apply, once per band that should now be READY (retained or freshly started;
-        # not-ready bands were already failed above and are skipped).
-        for b in needed:
-            if b in not_ready or b in claimed_down:
-                continue                      # failed bands: no retain, no CONF SET
-            if b in started:
                 if not self._verify_band_up(b):
-                    ok_all = False
+                    failed.add(b)
                     lines.append(f"  [fail] {b} CONF socket never came up — the daemon failed "
                                  f"to init on {b} (radio/SPI busy or a stale lock); see its log.")
-                    continue
-            else:
+        # Apply, once per band that is now READY (retained, or started and verified above; the
+        # failed bands were reported above and are skipped).
+        for b in needed:
+            if b in not_ready or b in claimed_down or b in failed:
+                continue                      # failed bands: no retain, no CONF SET
+            if b not in absent:               # retained; a started band was verified above
                 lines.append(f"  [ok] daemon already serving {b}")
                 # A band already serving ANOTHER running stack must NOT be reconfigured — a daemon
                 # (re)start in a new mode (e.g. FSK) must never disrupt a client already using this
@@ -2191,7 +2191,7 @@ class LifecycleOpsMixin:
                 gate = gate or pgate            # the stack's config, not the daemon: not a failure here
             else:
                 ok_all = ok_all and tx_ok
-        return lines, ok_all, gate
+        return lines, ok_all and not failed, gate
 
     def _verify_band_up(self, band: str) -> bool:
         """Poll a band's CONF socket until the daemon reports RADIO=READY, up to the
