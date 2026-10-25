@@ -45,3 +45,33 @@ def test_the_reboot_step_reads_the_boot_id_before_and_waits_for_a_new_one():
         'b0=$(g cat /proc/sys/kernel/random/boot_id) && [ -n "$b0" ] || fail', "t0=$(date +%s); g 'sudo systemctl reboot'",
         'b1=$(wait_reboot "$BOUND" "$b0") || fail')]
     assert at == sorted(at) and at[2] == at[1] + 1
+
+
+def _guest_install(tmp_path, frm, block):
+    """guest-install.sh as the guest runs it, against stubs: curl writes a no-op bootstrap, sudo runs its command, the
+    clone already exists, and the README's manual block is `block` (after its clone line)."""
+    home, bin_ = tmp_path / "home", tmp_path / "bin"
+    src = home / "loraham-pi-control" / "src" / "loraham-pi-control"
+    (src / ".git").mkdir(parents=True)
+    (src / "bootstrap-deps.sh").write_text("true\n")             # where an earlier form of step 4 read it
+    (src / "README.md").write_text("### Manual — clone / venv / bootstrap\n\n```bash\n"
+                                   "git clone https://github.com/makrohard/loraham-pi-control.git x\n" + block + "\n```\n")
+    bin_.mkdir()
+    stubs = {"curl": 'while [ $# -gt 1 ]; do [ "$1" = -o ] && echo true > "$2"; shift; done',
+             "sudo": 'exec "$@"', "git": 'echo stub'}
+    for name, body in stubs.items():
+        (bin_ / name).write_text(f"#!/bin/bash\n{body}\n")
+        (bin_ / name).chmod(0o755)
+    p = subprocess.run(["bash", str(LANE / "guest-install.sh"), frm], capture_output=True, text=True, check=False,
+                       cwd=home, env={"HOME": str(home), "PATH": f"{bin_}:/usr/bin:/bin"})
+    return p, (home / ".local" / "bin" / "lhpc").is_symlink()
+
+
+@pytest.mark.parametrize("frm, block, linked", [
+    ("v0.13.2", "true", True),                                  # a released tag's block lacks the link: the lane adds it
+    ("7da3c7dff23f9bc5ad7dbf61b53dfa857ebd56be", "true", False),   # a topic's block lacks it: its defect stays visible
+])
+def test_the_cli_link_is_added_only_for_a_released_tag(tmp_path, frm, block, linked):
+    p, is_link = _guest_install(tmp_path, frm, block)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert is_link is linked

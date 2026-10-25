@@ -147,6 +147,9 @@ jobs:
         include:
           - { name: from-0-12-10, from: v0.12.10, want: units-stale }
           - { name: from-0-13-2, from: v0.13.2, want: rc0 }
+          # The from-topic job (a stated lane deviation): the install from cons/laneb-findings-r1 at its sha, that
+          # commit's own bootstrap-deps.sh and manual block, then the units line; it proves the topic's fixes on Pi OS.
+          - { name: from-topic, from: 8785dc577bf7ee4237703d05f1538462b7b888ea, want: install-only }
     env:
       PIOS_URL: https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-10-06/2026-10-06-raspios-trixie-arm64-lite.img.xz
       PIOS_SHA256: 483db18a48da399b5b7022ffae9a07bc6d99daab30e593aedac09b69ff422843

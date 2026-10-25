@@ -56,6 +56,13 @@ t0=$(date +%s); urc=0; g "bash -lc $(printf %q "$line")" > "$EV/units.txt" 2>&1 
 m units_line_rc "$urc"; m units_line_s "$(( $(date +%s) - t0 ))"
 [ "$urc" -eq 0 ] || { observe_nginx; fail "the units line (see units.txt, guest/nginx-*.txt)"; }
 g 'stat -c "%Y %y %n" ~/.config/systemd/user/lhpc-*; systemctl --user cat lhpc-web.service lhpc-nginx.service lhpc-boot-restore.service; true' > "$EV/units-before.txt" 2>&1
+# The from-topic job ends here: it proves the topic's install (bootstrap, the manual block, the units line) on the
+# guest; U0 is the update path from a released tag and runs only in the released-tag jobs.
+if [ "$WANT" = install-only ]; then
+  g 'systemctl --user is-active lhpc-web.service lhpc-nginx.service; true' > "$EV/units-active.txt" 2>&1
+  grep -qx active <(sed -n 2p "$EV/units-active.txt") || fail "lhpc-nginx is not active after the units line (see units-active.txt)"
+  echo "ROW TOPIC: PASS"; exit 0
+fi
 
 # U0 as written: the runsheet's prelude and U0 block (their shas checked by the workflow); the transport Hx is the
 # ssh into the guest, as v5's Hx is the ssh into box H.
