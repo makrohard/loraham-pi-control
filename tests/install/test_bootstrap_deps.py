@@ -53,6 +53,9 @@ def _fakebin(tmp_path, *, no_sudo=False):
     # that a one-line fake hid. Enabling, disabling or restarting a unit not listed FAILS (exit 1) like
     # a clean image, so a restart of a service that was never installed cannot pass unnoticed.
     w("systemctl", 'units="${FAKE_SYSTEMCTL_UNITS:-}"\n[ -n "${FAKE_SYSTEMCTL_BROKEN:-}" ] && { echo "Failed to connect to bus: No such file or directory" >&2; exit 1; }\nunit_query() {\n  [ -n "${FAKE_UNIT_QUERY_SKIP:-}" ] && [ "$2" = "$FAKE_UNIT_QUERY_SKIP" ] && return 0\n  if [ -n "${FAKE_UNIT_QUERY_FAILS_ONCE:-}" ] && [ ! -e "$FAKE_UNIT_QUERY_FAILS_ONCE" ]; then\n    : > "$FAKE_UNIT_QUERY_FAILS_ONCE"; echo "$1: Connection timed out" >&2; exit 1\n  fi\n  [ -n "${FAKE_UNIT_QUERY_FAILS:-}" ] && { echo "$1: Connection timed out" >&2; exit 1; }\n  [ -n "${FAKE_UNIT_QUERY_EMPTY:-}" ] && exit 0\n  return 0\n}\nif [ "$1" = "show" ]; then\n  [ -n "${FAKE_SHOW_STDERR_NOISE:-}" ] && echo "Warning: The unit file changed on disk." >&2\n  prop=""; unit=""; prev=""\n  for a in "$@"; do\n    if [ "$prev" = "-p" ]; then prop="$a"; elif [ "$a" != "show" ] && [ "${a#-}" = "$a" ]; then unit="$a"; fi; prev="$a"\n  done\n  if [ "$prop" = "Version" ]; then\n    [ -n "${FAKE_VERSION_FAILS:-}" ] && { echo "Failed to get properties: Connection timed out" >&2; exit 1; }\n    [ -n "${FAKE_VERSION_EMPTY:-}" ] || echo "257"\n    exit 0\n  fi\n  unit_query "Failed to get properties" "$unit"\n  for u in $units; do [ "$u" = "$unit" ] && { echo loaded; exit 0; }; done\n  echo not-found\n  [ -n "${FAKE_SHOW_STDERR_NOISE:-}" ] && echo "Warning: The unit file changed on disk." >&2\n  exit 0\nfi\nif [ "$1" = "list-unit-files" ]; then\n  shift\n  pattern=""\n  for a in "$@"; do case "$a" in --*) ;; *) pattern="$a" ;; esac; done\n  if [ -n "$pattern" ]; then\n    unit_query "Failed to list unit files"\n    for u in $units; do [ "$u" = "$pattern" ] && echo "$u enabled enabled"; done\n    exit 0\n  fi\n  echo "aaa-first-decoy.service enabled enabled"\n  for u in $units; do echo "$u enabled enabled"; done\n  exec seq 1 200000\nfi\nif [ "$1" = "is-enabled" ] || [ "$1" = "is-active" ]; then\n  last=""; for a in "$@"; do case "$a" in --*) ;; *) last="$a" ;; esac; done\n  case " ${FAKE_SYSTEMCTL_DISABLED:-} " in *" $last "*|*" ${last%.service} "*) exit 1 ;; esac\n  case " $units " in *" $last "*|*" $last.service "*) exit 0 ;; esac\n  exit 1\nfi\nif [ "$1" = "disable" ] || [ "$1" = "enable" ] || [ "$1" = "restart" ]; then\n  last=""; for a in "$@"; do last="$a"; done\n  case " ${FAKE_SYSTEMCTL_FAIL:-} " in\n    *" $last "*) echo "Failed to disable unit: $last" >&2; exit 1 ;;\n  esac\n  case " $units " in\n    *" $last.service "*|*" $last "*) exit 0 ;;\n  esac\n  echo "Failed to $1 unit: Unit file $last.service does not exist." >&2\n  exit 1\nfi\nexit 0\n')
+    # mktemp with no arguments is unit_present's stderr file; FAKE_MKTEMP_FAILS makes exactly that call fail.
+    w("mktemp", '[ "$#" -eq 0 ] && [ -n "${FAKE_MKTEMP_FAILS:-}" ] && { echo "mktemp: failed" >&2; exit 1; }\n'
+                'exec /usr/bin/mktemp "$@"\n')
     w("curl", "exit 0\n")
     w("gpg", "cat >/dev/null 2>&1 || true; exit 0\n")
     # install: keyring dirs stay a no-op; the polkit RULE writes (targets under
@@ -1262,6 +1265,18 @@ def test_a_warning_on_stderr_does_not_change_the_answer(tmp_path, units, empty, 
     r, *_ = _run(tmp_path, ["--spi-mode", "soft-cs"], systemctl_units=units, fake_env=env)
     assert r.returncode == rc, r.stderr
     assert says in (r.stderr if rc else r.stdout)
+
+
+def test_a_unit_query_whose_temp_file_fails_refuses_and_says_so(tmp_path):
+    # unit_present keeps systemctl's stderr in a temp file; when mktemp fails, the query is not run and the
+    # unit reads "could not inspect" with the reason, never absent.
+    r, *_ = _run(tmp_path, ["--spi-mode", "soft-cs"], systemctl_units="nginx.service",
+                 fake_env={"FAKE_MKTEMP_FAILS": "1"})
+    assert r.returncode == 8, r.stderr
+    assert "could not query systemd for nginx.service (mktemp failed)" in r.stderr
+    assert "Re-run bootstrap-deps.sh." in r.stderr
+    assert "nothing to disable" not in r.stdout
+    assert _DONE not in r.stdout
 
 
 def test_a_packaged_unit_whose_query_fails_refuses_and_says_why(tmp_path):
