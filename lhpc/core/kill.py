@@ -129,22 +129,27 @@ def _holder(svc, holder, sid: str) -> tuple[int, dict | None, str]:
         argv = []
     named = (f"pid {pid} ({' '.join(argv) or 'cmdline unreadable'}; "
              f"{holder.get('operation', '?')} {holder.get('target', '')})")
+    # The owner record names the identity of the process that took the admission; only that process is ever ended,
+    # never a later one at the same pid (G1-B2-RG N1). A record without it (an earlier writer) proves nothing.
+    took = holder.get("ident")
+    if not procident.identity_complete(took):
+        return pid, None, f"unverifiable holder {named}: its owner record carries no process identity"
+    if not procident.identity_matches(took, pid):
+        return pid, None, f"the task admission's owner record names another process than pid {named} now"
     if (holder.get("operation") not in ("start", "restart")
             or svc.stack_of(str(holder.get("target", ""))) != sid):
         return pid, None, f"the task admission is held by {named}"
     # A web start of this stack: its job marker carries the identity of its process.
     for job in svc.active_jobs(cleanup=False):
         raw = svc._read_job_marker(job.get("log") or "")
-        if (raw and raw.get("pid") == pid and job.get("stack") == sid
-                and procident.identity_matches(raw, pid)):
-            return pid, raw, ""
+        if (raw and raw.get("pid") == pid and job.get("stack") == sid and raw.get("op") in ("start", "restart")
+                and procident.identity_matches(raw, pid)):       # the marker's operation agrees (G2-B2 N1)
+            return pid, took, ""
     # A CLI `lhpc stack start|restart <stack>`: named by its own cmdline, identity read now.
     verb = argv[argv.index("stack") + 1:argv.index("stack") + 3] if "stack" in argv else []
     if (any(posixpath.basename(t) == "lhpc" for t in argv[:3]) and len(verb) == 2
             and verb[0] in ("start", "restart") and svc.stack_of(verb[1]) == sid):
-        ident = procident.proc_identity(pid)
-        if ident is not None:
-            return pid, ident, ""
+        return pid, took, ""
     return pid, None, f"the task admission is held by {named}, not verifiable as a start of {sid}"
 
 

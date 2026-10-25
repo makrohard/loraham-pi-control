@@ -21,7 +21,7 @@ import threading
 import time
 from contextlib import contextmanager
 
-from . import runtime_fs
+from . import procident, runtime_fs
 from .paths import Paths
 
 _KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -124,6 +124,8 @@ def operation_lock(paths: Paths, resource_key: str, operation: str,
     owner = json.dumps({
         "resource": key, "operation": operation, "target": target,
         "pid": os.getpid(), "acquired": stamp if stamp is not None else time.time(),
+        # the holder's own process identity, so a reader can tell it from a later process at the same pid (G1-B2-RG N1)
+        "ident": procident.proc_identity(os.getpid()),
     })
     try:
         if blocking:

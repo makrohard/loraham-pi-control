@@ -9,6 +9,7 @@ import select
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -212,7 +213,10 @@ def _lhpc_script(tmp_path):
     s = tmp_path / "bin" / "lhpc"
     s.parent.mkdir()
     # argv `lhpc stack start kiss <runtime root>`: the op and target are argv 2 and 3.
-    s.write_text(f"#!{sys.executable}\n" + HOLD.replace("sys.argv[1]", "sys.argv[4]"))
+    # The repository under test first on its path: a script's own folder, not the cwd, is sys.path[0], so it would
+    # otherwise import whichever lhpc the interpreter has installed (G1-B2-RG N1: its owner record).
+    s.write_text(f"#!{sys.executable}\nimport sys\nsys.path.insert(0, {str(REPO)!r})\n"
+                 + HOLD.replace("sys.argv[1]", "sys.argv[4]"))
     s.chmod(0o755)
     return s
 
@@ -568,3 +572,50 @@ def test_an_unreadable_member_keeps_its_group_alive(tmp_path, clock, procs, monk
         assert kill._signal(_svc(tmp_path, {}), [target]) == [target]
     finally:
         _end(child)
+
+
+def test_a_web_marker_of_another_operation_does_not_verify_a_start_holder(tmp_path, clock, procs, signals):
+    # G2-B2 N1: the owner record says start, the job marker of the same pid says build: contradictory evidence
+    # verifies nothing, so the holder is refused by name and never signalled. Red-before at 30eb012f: ended.
+    svc = _svc(tmp_path, {})
+    h = _holder(procs, tmp_path, "start", "kiss")
+    assert jobs.write_job_marker(svc._paths, "build-kiss-1", h.pid, "kiss", "build",
+                                 ident=procident.proc_identity(h.pid))
+    res = kill.kill(svc, "kiss", apply=True)
+    assert not res.ok and f"pid {h.pid} (" in res.summary and h.poll() is None and signals == []
+
+
+def _owner(tmp_path, **fields):
+    """The admission's owner record, with `fields` replaced (None removes one)."""
+    owner = reslock._owner_path(Paths(runtime_root=tmp_path), "controller-task-admission")
+    rec = json.loads(owner.read_text())
+    rec.update(fields)
+    owner.write_text(json.dumps({k: v for k, v in rec.items() if v is not None}))
+    return rec
+
+
+def _wall_start(pid):
+    up = float(Path("/proc/uptime").read_text().split()[0])
+    return time.time() - up + procident.proc_identity(pid)["starttime"] / os.sysconf("SC_CLK_TCK")
+
+
+def test_a_cli_holder_whose_identity_is_not_the_one_that_took_the_admission_is_refused(tmp_path, clock, procs,
+                                                                                      signals):
+    # G1-B2-RG N1: the owner record names the process that took the admission; the one at its pid now started
+    # 0.5 s after that acquisition, inside any tick slack, so only the recorded identity tells them apart: refused,
+    # never signalled. Red-before at 30eb012f: ended.
+    cli = procs(argv=[str(_lhpc_script(tmp_path)), "stack", "start", "kiss", str(tmp_path)])
+    took = procident.proc_identity(cli.pid)
+    _owner(tmp_path, ident={**took, "starttime": took["starttime"] - 1}, acquired=_wall_start(cli.pid) - 0.5)
+    res = kill.kill(_svc(tmp_path, {}), "kiss", apply=True)
+    assert not res.ok and f"pid {cli.pid}" in res.summary and cli.poll() is None and signals == []
+
+
+def test_an_owner_record_without_an_identity_is_an_unverifiable_holder(tmp_path, clock, procs, signals):
+    # G1-B2-RG N1: an owner record written before the identity was recorded proves nothing about the pid: refused
+    # by name, never ended. Red-before at 30eb012f: ended.
+    cli = procs(argv=[str(_lhpc_script(tmp_path)), "stack", "start", "kiss", str(tmp_path)])
+    _owner(tmp_path, ident=None)
+    res = kill.kill(_svc(tmp_path, {}), "kiss", apply=True)
+    assert not res.ok and "carries no process identity" in res.summary and cli.poll() is None and signals == []
+
