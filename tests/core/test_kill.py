@@ -465,3 +465,30 @@ def test_an_unresolved_instance_value_with_a_candidate_running_is_not_an_empty_p
     monkeypatch.setattr(commands, "instance_value", broken)
     plan = kill.kill(svc, "chat@433")
     assert not plan.ok and "loraham-chat" in "\n".join(plan.details)
+
+
+def test_an_exempt_component_under_another_band_is_refused_not_taken(tmp_path, procs):
+    # G2-B2 F4: voice's argv names no band, so under @868 a running voice process proves nothing about 868:
+    # without a verified 868 ownership record it is refused by name, not taken. Red-before at 63a8376c: the 433
+    # process was planned for voice@868.
+    p = procs()
+    svc = _svc(tmp_path, {})
+    svc = _svc(tmp_path, {p.pid: _argv(svc, "loraham-voice", "433")})
+    plan = kill.kill(svc, "voice@868")
+    assert not plan.ok and p.pid not in plan.data["pids"] and "cannot verify band 868" in "\n".join(plan.details)
+
+
+def test_an_exempt_component_with_a_verified_record_of_the_band_is_taken(tmp_path, procs):
+    # G2-B2 F4, the positive side: a verified ownership record of the requested band names it.
+    p = procs()
+    svc = _svc(tmp_path, {})
+    svc = _svc(tmp_path, {p.pid: _argv(svc, "loraham-voice", "433")})
+    stk = svc.stack("voice")
+    svc._lifecycle().record_launch(stk, stk.component("loraham-voice"), p.pid, band="433")
+    plan = kill.kill(svc, "voice@433", "loraham-voice")
+    assert plan.ok and plan.data["pids"] == [p.pid]
+
+
+def test_the_band_by_record_set_is_the_exemptions_owned_by_their_record():
+    from lhpc.core.probes.process import NO_INSTANCE_ARG
+    assert {k for k, why in NO_INSTANCE_ARG.items() if "ownership record" in why} == kill.BAND_BY_RECORD

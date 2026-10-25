@@ -17,6 +17,9 @@ from .service_base import ActionResult
 from .snapshot_memo import invalidates_snapshot
 
 GRACE_S = 5.0          # W47a: SIGTERM, then SIGKILL after 5 s to whatever is left
+# The NO_INSTANCE_ARG exemptions whose argv names no instance before L5, so only their verified ownership record
+# says which band they serve (G2-B2 F4).
+BAND_BY_RECORD = {"loraham-voice", "loraham-voice-cli", "loraham-kiss-serial"}
 sleep = time.sleep     # the injected clock (H3); tests replace it
 
 
@@ -78,6 +81,13 @@ def _targets(svc, stk, band: str, comps) -> tuple[list[dict], list[str]]:
                                for p, a in sorted(table.items()) if matches(comp.process, a, None)]
             else:
                 pids = [p for p, a in sorted(table.items()) if matches(comp.process, a, instance)]
+            if band and comp.id in BAND_BY_RECORD:
+                # Under an explicit band a bare hit proves no band: only its verified record of that band can
+                # name it (below), anything else is refused by name (G2-B2 F4).
+                bands = {r["pid"] for r in life.owned_records(comp.id, band) if life.verify_owned(r)[0]}
+                unresolved += [f"pid {p} {comp.id}: cannot verify band {band} (no verified ownership record of it)"
+                               for p in pids if p not in bands]
+                pids = []
         for pid in pids:
             found.setdefault(pid, {"pid": pid, "component": comp.id, "group": False,
                                    "argv": " ".join(table.get(pid, []))})
