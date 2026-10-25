@@ -14,6 +14,8 @@
   `libusb-1.0-0-dev`, and once `lhpc install daemon` to fetch the pine64 source before `lhpc build daemon`.
 - README: the manual install block links `~/.local/bin/lhpc` as install.sh does, so `lhpc` is on the PATH
   after the reboot; the German block installs from the lock file like the English one.
+- `lhpc webserver start-service`: a failed start of lhpc-nginx says whether systemctl timed out or which
+  rc it returned, instead of only its last output line.
 
 Fixed
 

@@ -2339,9 +2339,9 @@ class WebserverOpsMixin:
         r = self._system.runner.run(
             ["systemctl", "--user", "enable", "--now", "lhpc-nginx.service"], 20.0)
         if getattr(r, "not_found", False) or r.returncode != 0:
-            detail = (r.stderr or r.stdout or "systemctl failed").strip().splitlines()
-            return ActionResult(False, "could not enable/start lhpc-nginx.service",
-                                details=[detail[-1] if detail else "systemctl failed"],
+            how = "timed out after 20 s" if getattr(r, "timed_out", False) else f"systemctl rc {r.returncode}"
+            return ActionResult(False, f"could not enable/start lhpc-nginx.service ({how})",
+                                details=[((r.stderr or r.stdout).strip().splitlines() or ["systemctl failed"])[-1]],
                                 next_commands=["systemctl --user enable --now lhpc-nginx.service"])
         if was_running:
             # `enable --now` neither restarts nor reloads a running unit: restart it so the config
