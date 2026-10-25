@@ -41,10 +41,15 @@ def test_matches_needs_the_stack_identity_and_the_instance_token():
 
 
 @pytest.mark.parametrize("bad", [["--port"], ["--port", ""], ["--port", 8788], "--port 8788",
-                                 ["-a", "b", "c"]])
+                                 ["-a", "b", "c"], "", {}, 0, False, None])    # falsey ones too (G2-B2 N4)
 def test_a_malformed_instance_arg_is_refused(bad):
     with pytest.raises(ManifestError, match="instance_arg"):
         _parse_process({"exec_name": "x", "instance_arg": bad})
+
+
+def test_no_instance_arg_is_the_absent_key_or_an_empty_list():
+    for raw in ({"exec_name": "x"}, {"exec_name": "x", "instance_arg": []}):
+        assert _parse_process(raw).instance_arg == ()
 
 
 def test_the_instance_arg_is_parsed():
