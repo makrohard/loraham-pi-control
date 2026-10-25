@@ -8,6 +8,7 @@ written by the start's own code."""
 
 import json
 import re
+import types
 
 import pytest
 
@@ -33,7 +34,21 @@ def _text(root, rel):
 def _clean(box, run):
     for rel in _touched(run):
         assert not OTHER.search(rel), rel
-        assert not re.search(r"lora(f|conf)?868\.sock", _text(box.root, rel)), rel
+        assert not re.search(r"lora(f|conf)?868f?\.sock", _text(box.root, rel)), rel     # raw, framed, conf
+
+
+@pytest.mark.parametrize("sock", ["/tmp/lora868.sock", "/tmp/lora868f.sock", "/tmp/loraconf868.sock"])
+def test_the_clean_check_names_each_868_socket_spelling_in_a_touched_file(tmp_path, sock):
+    """intended: the raw, the framed and the conf socket of 868, written into a touched file, each fail the check
+    (G2-B2 N3); 433's own socket passes."""
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "x.json").write_text(f'{{"socket": "{sock}"}}')
+    box, run = types.SimpleNamespace(root=tmp_path), types.SimpleNamespace(files={"added": ["state/x.json"],
+                                                                                    "changed": []})
+    with pytest.raises(AssertionError):
+        _clean(box, run)
+    (tmp_path / "state" / "x.json").write_text('{"socket": "/tmp/lora433f.sock"}')
+    _clean(box, run)                                       # 433's own socket passes
 
 
 def _band(box, rel):
