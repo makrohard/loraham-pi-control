@@ -838,6 +838,20 @@ def test_units_stale_says_what_boot_restore_does_with_those_units(op_svc, monkey
     assert res.next_commands == ["lhpc self-update --repair-integration"]
 
 
+
+def test_the_operations_row_states_the_rule_the_units_stale_message_follows():
+    """docs/operations.md's units-stale row said boot restore is skipped unless the web unit is
+    `compatible`; the cases above run it with only nginx missing and skip it with the web unit
+    `compatible` but its own unit foreign. The row now names boot_restore_effect()'s verdicts.
+    Red before: the row named `compatible` alone."""
+    from pathlib import Path
+    from lhpc.core.updater_units import COMPATIBLE, MODIFIED_OURS, OK
+    row = next(line for line in (Path(__file__).resolve().parents[2] / "docs/operations.md").read_text()
+               .splitlines() if line.startswith("| *units-stale* |"))
+    assert f"while the web unit is `{OK}` or `{COMPATIBLE}`" in row
+    assert f"its own unit is `{OK}`, `{COMPATIBLE}` or `{MODIFIED_OURS}`" in row
+    assert "could not be checked it may be skipped" in row
+
 _WEB_ACTIVE = {("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service"):
                CommandResult(0, "", ""),
                ("systemctl", "--user", "stop", "lhpc-web.service"): CommandResult(0, "", ""),
