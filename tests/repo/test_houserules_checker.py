@@ -509,3 +509,35 @@ def test_a_split_into_a_c_file_is_an_invalid_split(repo):
     rc, line = _modules_line(repo)
     assert rc == 1 and line.split()[0] == "modules" and line.split()[-1] == "HARD", line
     assert "invalid split" in line and line.split()[-2] == "voice_part.c", line
+
+
+def test_a_budgeted_file_that_git_cannot_read_stops_the_check(repo, tmp_path):
+    """A read error is not an absent file: before, `show()` gave None for any failure, so the file measured 0 lines."""
+    _c_budgeted(repo)
+    _commit(repo, {"src/voice.c": VOICE.replace("return 0;", "return 1;")})
+    fake = tmp_path / "fakegit"
+    fake.mkdir()
+    real = subprocess.run(["sh", "-c", "command -v git"], capture_output=True, text=True, check=True).stdout.strip()
+    (fake / "git").write_text(f'#!/bin/sh\ncase "$1 $2" in "show base:src/voice.c") echo "fatal: unable to read 0123" >&2; '
+                              f'exit 128;; esac\nexec {real} "$@"\n')
+    (fake / "git").chmod(0o755)
+    p = subprocess.run([sys.executable, str(CHECKER), "base..HEAD"], cwd=repo, capture_output=True, text=True,
+                       check=False, env={**os.environ, "PATH": f"{fake}:{os.environ['PATH']}"})
+    assert p.returncode == 2, (p.stdout, p.stderr)
+    assert "git failed: git show base:src/voice.c: fatal: unable to read 0123" in p.stderr
+    assert "VERDICT" not in p.stdout
+
+
+@pytest.mark.parametrize("lang", ["C", "de_DE.UTF-8"])
+def test_a_range_without_a_profile_reads_the_same_in_any_locale(repo, lang):
+    """git's "path does not exist" message is localised (de: "Pfad … existiert nicht in"); absence is decided by
+    `git ls-tree`'s exit code and output, so a range without a profile reads the same in every locale. Red before at
+    741199ce under de_DE.UTF-8: rc 2, "git failed: … Schwerwiegend: Pfad '.houserules.toml' existiert nicht in …"."""
+    if lang != "C" and lang.replace("UTF-8", "utf8") not in subprocess.run(["locale", "-a"], capture_output=True,
+                                                                          text=True, check=False).stdout:
+        pytest.skip(f"the {lang} locale is not installed")
+    _commit(repo, {"lhpc/core/services.py": BASE["lhpc/core/services.py"] + "\n"})
+    p = subprocess.run([sys.executable, str(CHECKER), "base..HEAD"], cwd=repo, capture_output=True, text=True,
+                       check=False, env={**os.environ, "LC_ALL": lang, "LANG": lang})
+    assert p.returncode in (0, 1) and "VERDICT" in p.stdout, (p.returncode, p.stderr)
+    assert "git failed" not in p.stderr

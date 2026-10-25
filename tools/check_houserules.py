@@ -81,8 +81,11 @@ def git(*args: str) -> str:
 
 
 def show(rev: str, path: str) -> str | None:
-    r = subprocess.run(["git", "show", f"{rev}:{path}"], capture_output=True, text=True, check=False)
-    return r.stdout if r.returncode == 0 else None
+    """The file at rev; None only when rev has no such path. Decided by `git ls-tree`'s exit code and output (an absent
+    path: rc 0, no line), never by git's message, which is localised; any failure is a git error (exit 2)."""
+    if not git("ls-tree", rev, "--", path).strip():
+        return None
+    return git("show", f"{rev}:{path}")
 
 
 def added_lines(diff: str) -> list[tuple[str, int, str]]:
