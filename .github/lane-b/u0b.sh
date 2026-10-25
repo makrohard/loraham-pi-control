@@ -60,7 +60,8 @@ g 'stat -c "%Y %y %n" ~/.config/systemd/user/lhpc-*; systemctl --user cat lhpc-w
 # guest; U0 is the update path from a released tag and runs only in the released-tag jobs.
 if [ "$WANT" = install-only ]; then
   g 'systemctl --user is-active lhpc-web.service lhpc-nginx.service; true' > "$EV/units-active.txt" 2>&1
-  grep -qx active <(sed -n 2p "$EV/units-active.txt") || fail "lhpc-nginx is not active after the units line (see units-active.txt)"
+  python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" active 2 "$EV/units-active.txt" \
+    || fail "lhpc-web and lhpc-nginx are not both active after the units line (see units-active.txt)"
   echo "ROW TOPIC: PASS"; exit 0
 fi
 

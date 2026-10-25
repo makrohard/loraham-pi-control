@@ -74,3 +74,18 @@ def test_each_u0_job_requires_the_branch_it_exists_for(tmp_path, want, case, ok)
     text, rc, repaired = case
     p = _run("branch", want, _live(tmp_path, rc, text, repaired))
     assert (p.returncode == 0) is ok, p.stderr
+
+
+@pytest.mark.parametrize("text, ok", [
+    ("active\nactive\n", True), ("inactive\nactive\n", False), ("active\ninactive\n", False),
+    ("active\n", False), ("", False), ("active\nactive\nactive\n", False),
+])
+def test_the_topic_job_passes_only_when_both_units_are_active(tmp_path, text, ok):
+    f = tmp_path / "units-active.txt"
+    f.write_text(text)
+    assert (_run("active", 2, f).returncode == 0) == ok
+
+
+def test_the_topic_job_asks_the_check_for_both_units():
+    u0b = (repo_paths.REPO / ".github" / "lane-b" / "u0b.sh").read_text()
+    assert 'lane_b.py" active 2 "$EV/units-active.txt"' in u0b
