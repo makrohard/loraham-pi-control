@@ -21,6 +21,8 @@ GRACE_S = 5.0          # W47a: SIGTERM, then SIGKILL after 5 s to whatever is le
 # says which band they serve (G2-B2 F4).
 BAND_BY_RECORD = {"loraham-voice", "loraham-voice-cli", "loraham-kiss-serial"}
 sleep = time.sleep     # the injected clock (H3); tests replace it
+monotonic = time.monotonic     # its reading, for the admission deadline; tests replace it with the same clock
+_TERM_BUDGET_S = GRACE_S + 2.5  # one admission holder's termination: the SIGTERM grace, then the SIGKILL wait
 
 
 def _parse(svc, target: str, component: str):
@@ -154,38 +156,43 @@ def _holder(svc, holder, sid: str) -> tuple[int, dict | None, str]:
 
 
 def _admission(svc, stack, sid: str, notes: list) -> str:
-    """Flock first, bounded by exactly `_SELF_LOCK_WAIT_S` (A §2.12): take the admission
-    flock; a start of this stack holding it is ended through the identity-verified terminate
-    with its KILL leg; anything else is refused by name. "" once held, else the refusal."""
+    """Flock first (A §2.12), on one deadline of the injected clock (G2-B2 N2): `_SELF_LOCK_WAIT_S` of waiting
+    for the admission flock, extended by `_TERM_BUDGET_S` for the one start of this stack that may be ended
+    while holding it (through the identity-verified terminate with its KILL leg). A second start taking it
+    after that, or any other holder, is refused by name. "" once held, else the refusal."""
     from . import reslock
-    steps = round(svc._SELF_LOCK_WAIT_S / 0.1)
+    deadline = monotonic() + svc._SELF_LOCK_WAIT_S
     ended: set[int] = set()
-    for _ in range(steps + 1):
+    while True:
         try:
             stack.enter_context(reslock.operation_lock(
                 svc._paths, svc.ADMISSION_KEY, "kill", sid))
         except reslock.ResourceBusy as busy:
-            if isinstance(busy.holder, dict) and busy.holder.get("pid") == os.getpid():
-                sleep(0.1)      # our own overlapping op releases shortly
-                continue
-            pid, ident, why = _holder(svc, busy.holder, sid)
-            if why:
-                return f"refused: {why}"
-            if pid not in ended:
-                if not svc._lifecycle()._terminate_unobserved(
-                        pid, ident, kill_after=GRACE_S, sleep=sleep):
-                    return (f"refused: the start holding the task admission (pid {pid}) "
-                            "could not be ended")
-                ended.add(pid)
-                notes.append(f"pid {pid}: the in-flight start of {sid} ended")
-                svc.active_jobs(cleanup=True)      # clears the dead start's job marker
-            sleep(0.1)          # the kernel frees the flock with the process
+            own = isinstance(busy.holder, dict) and busy.holder.get("pid") == os.getpid()
+            if not own:                     # our own overlapping op releases shortly
+                pid, ident, why = _holder(svc, busy.holder, sid)
+                if why:
+                    return f"refused: {why}"
+                if pid not in ended:
+                    if ended:               # turnover: no second grace
+                        return (f"refused: another start (pid {pid}) took the task admission after pid "
+                                f"{min(ended)} was ended")
+                    deadline += _TERM_BUDGET_S
+                    if not svc._lifecycle()._terminate_unobserved(
+                            pid, ident, kill_after=GRACE_S, sleep=sleep):
+                        return (f"refused: the start holding the task admission (pid {pid}) "
+                                "could not be ended")
+                    ended.add(pid)
+                    notes.append(f"pid {pid}: the in-flight start of {sid} ended")
+                    svc.active_jobs(cleanup=True)      # clears the dead start's job marker
+            if deadline - monotonic() < 0.05:          # less than half a poll step left
+                return "refused: the task admission was not freed in time"
+            sleep(0.1)                  # the kernel frees the flock with the process
             continue
         counts = svc._held_counts()
         counts[svc.ADMISSION_KEY] = counts.get(svc.ADMISSION_KEY, 0) + 1
         stack.callback(svc._admit_release)
         return ""
-    return "refused: the task admission was not freed in time"
 
 
 def _signal(svc, targets: list[dict]) -> list[dict]:

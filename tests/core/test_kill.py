@@ -46,6 +46,7 @@ class Clock:
 def clock(monkeypatch):
     c = Clock()
     monkeypatch.setattr(kill, "sleep", c)
+    monkeypatch.setattr(kill, "monotonic", lambda: c.t)    # the same injected clock (H3)
     return c
 
 
@@ -619,3 +620,30 @@ def test_an_owner_record_without_an_identity_is_an_unverifiable_holder(tmp_path,
     res = kill.kill(_svc(tmp_path, {}), "kiss", apply=True)
     assert not res.ok and "carries no process identity" in res.summary and cli.poll() is None and signals == []
 
+
+def _busy(holder):
+    def lock(*_a, **_k):
+        raise reslock.ResourceBusy("controller-task-admission", holder())
+    return lock
+
+
+def test_a_second_start_taking_the_admission_gets_no_second_grace(tmp_path, clock, monkeypatch):
+    # G2-B2 N2: holder turnover. Each acquire finds another start of the stack holding the admission; the first is
+    # ended within the one termination budget, the next is refused by name instead of getting its own grace.
+    # Red-before at d65d782b: every new holder was terminated in turn (51 terminations).
+    svc, pids, ended = _svc(tmp_path, {}), iter(range(4_000_001, 4_000_100)), []
+    monkeypatch.setattr(reslock, "operation_lock", _busy(lambda: {"pid": next(pids)}))
+    monkeypatch.setattr(kill, "_holder", lambda _svc, h, _sid: (h["pid"], {"starttime": 1}, ""))
+    monkeypatch.setattr(svc._lifecycle().__class__, "_terminate_unobserved",
+                        lambda _self, pid, *_a, **_k: ended.append(pid) or True)
+    res = kill.kill(svc, "kiss", apply=True)
+    assert not res.ok and "took the task admission" in res.summary and len(ended) == 1
+
+
+def test_the_admission_wait_is_its_deadline_on_the_injected_clock(tmp_path, clock, monkeypatch):
+    # G2-B2 N2: our own overlapping operation holds the admission throughout: refused once _SELF_LOCK_WAIT_S has
+    # passed on the injected clock, not after an extra poll step. Red-before at d65d782b: 5.1 s.
+    svc = _svc(tmp_path, {})
+    monkeypatch.setattr(reslock, "operation_lock", _busy(lambda: {"pid": os.getpid()}))
+    res = kill.kill(svc, "kiss", apply=True)
+    assert not res.ok and "not freed in time" in res.summary and clock.t < svc._SELF_LOCK_WAIT_S + 0.05
