@@ -37,10 +37,11 @@ def _parse(svc, target: str, component: str):
     return stk, band, comps, ""
 
 
-def _targets(svc, stk, band: str, comps) -> list[dict]:
+def _targets(svc, stk, band: str, comps) -> tuple[list[dict], list[str]]:
     """The instance's processes: the exact matcher's hits over /proc (incl. a user-started
     component, W46) plus the processes its verified ownership records name (T-R6, W88), scoped
-    to `comps`. Each target carries the identity read now, so nothing reused is signalled."""
+    to `comps`. Each target carries the identity it was verified by, so nothing reused is signalled.
+    → (targets, unresolved): a candidate that cannot be verified is named, never dropped (G2-B2 F3)."""
     from . import commands
     from .probes.process import matches
     life = svc._lifecycle()
@@ -49,6 +50,7 @@ def _targets(svc, stk, band: str, comps) -> list[dict]:
     runtime = str(svc._paths.runtime_root)
     table = svc._system.procfs.cmdlines()
     found: dict[int, dict] = {}
+    unresolved: list[str] = []
     for comp in comps:
         if comp.id == svc.DAEMON_ID:
             # The daemon goes per band by its exact --radio parse until L5 (NO_INSTANCE_ARG).
@@ -68,8 +70,14 @@ def _targets(svc, stk, band: str, comps) -> list[dict]:
                     instance = (opt, commands.instance_value(
                         tpl, comp, svc.stack_config(comp.id, hint), runtime, src,
                         cfg_band or comp.band))
-            pids = ([] if comp.process.instance_arg and instance is None else
-                    [p for p, a in sorted(table.items()) if matches(comp.process, a, instance)])
+            if comp.process.instance_arg and instance is None:
+                # The value cannot be resolved, so the matcher cannot scope this component: a process of
+                # its spec that runs is a gap, not a non-target (G2-B2 F3).
+                pids = []
+                unresolved += [f"pid {p} {comp.id}: its instance value cannot be resolved"
+                               for p, a in sorted(table.items()) if matches(comp.process, a, None)]
+            else:
+                pids = [p for p, a in sorted(table.items()) if matches(comp.process, a, instance)]
         for pid in pids:
             found.setdefault(pid, {"pid": pid, "component": comp.id, "group": False,
                                    "argv": " ".join(table.get(pid, []))})
@@ -90,7 +98,9 @@ def _targets(svc, stk, band: str, comps) -> list[dict]:
         if (ident is not None and again.get(pid) == table.get(pid)
                 and (procident.proc_identity(pid) or {}).get("starttime") == ident["starttime"]):
             out.append({**t, "ident": ident})
-    return out
+        else:
+            unresolved.append(f"pid {pid} {t['component']}: its identity cannot be read or changed while read")
+    return out, unresolved
 
 
 def _holder(svc, holder, sid: str) -> tuple[int, dict | None, str]:
@@ -220,7 +230,7 @@ def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionRe
         return ActionResult(False, err, next_commands=["lhpc list"])
     what = f"{component} of {target}" if component else target
     if not apply:
-        targets = _targets(svc, stk, band, comps)
+        targets, unresolved = _targets(svc, stk, band, comps)
         details = [f"  [kill] pid {t['pid']} {t['component']}: {t['argv']}" for t in targets]
         pids = [t["pid"] for t in targets]
         # A start of this stack holding the admission flock is ended first (the apply's
@@ -232,6 +242,11 @@ def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionRe
             if not why:
                 details.append(f"  [kill] pid {pid} the in-flight start of {stk.id}")
                 pids.append(pid)
+        if unresolved:          # never a successful plan while a candidate is unverifiable (G2-B2 F3)
+            return ActionResult(False, f"Kill {what}: {len(unresolved)} candidate(s) cannot be verified; "
+                                "nothing is signalled until they can.",
+                                details=details + [f"  [unverifiable] {u}" for u in unresolved],
+                                data={"changes": len(pids), "pids": pids, "unresolved": unresolved})
         return ActionResult(True, f"Kill {what}: {len(pids)} process(es).", details=details,
                             data={"changes": len(pids), "pids": pids})
     notes: list[str] = []
@@ -240,7 +255,7 @@ def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionRe
         if refused:
             return ActionResult(False, f"Cannot kill {what}: {refused}", details=notes,
                                 next_commands=[f"lhpc status {stk.id}"])
-        targets = _targets(svc, stk, band, comps)
+        targets, unresolved = _targets(svc, stk, band, comps)
         left = _signal(svc, targets)
         gone = {t["pid"] for t in targets} - {t["pid"] for t in left}
         life = svc._lifecycle()
@@ -261,6 +276,9 @@ def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionRe
         summary="killed by operator") for c in comps)
     details = notes + [f"  pid {t['pid']} {t['component']}: "
                        f"{'still running' if t in left else 'gone'}" for t in targets]
+    if unresolved:              # an unverifiable candidate gets no signal, and no "none left" (G2-B2 F3)
+        return ActionResult(False, f"Kill {what}: {len(unresolved)} candidate(s) could not be verified: "
+                            f"{'; '.join(unresolved)}", details=details, results=results)
     if left:
         return ActionResult(False, f"Kill {what}: {len(left)} process(es) still running "
                             f"after SIGKILL: {', '.join(str(t['pid']) for t in left)}",

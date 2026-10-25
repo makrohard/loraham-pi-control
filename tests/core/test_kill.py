@@ -435,4 +435,33 @@ def test_a_matcher_hit_whose_identity_changes_during_collection_is_no_target(tmp
     now = procident.proc_identity(p.pid)
     monkeypatch.setattr(kill, "procident", _Ident([now, {**now, "starttime": now["starttime"] + 1}]))
     stk, band, comps, _err = kill._parse(svc, "chat", "")
-    assert [t for t in kill._targets(svc, stk, band, comps) if t["pid"] == p.pid] == []
+    assert [t for t in kill._targets(svc, stk, band, comps)[0] if t["pid"] == p.pid] == []
+
+
+def test_an_unreadable_identity_during_collection_blocks_an_empty_success(tmp_path, clock, procs, signals,
+                                                                          monkeypatch):
+    # G2-B2 F3: a matcher hit whose identity cannot be read is not dropped: the plan names it and is not ok, the
+    # apply sends it nothing and does not report "no process of it is left". Red-before at 00c9d891: the plan
+    # said 0 processes, ok, and the apply reported none left.
+    p = procs()
+    svc = _svc(tmp_path, {})
+    svc = _svc(tmp_path, {p.pid: _argv(svc, "loraham-chat", "433")})
+    monkeypatch.setattr(kill, "procident", _Ident([None]))
+    plan = kill.kill(svc, "chat")
+    assert not plan.ok and f"pid {p.pid}" in "\n".join(plan.details)
+    res = kill.kill(svc, "chat", apply=True)
+    assert not res.ok and "no process of it is left" not in res.summary and signals == []
+
+
+def test_an_unresolved_instance_value_with_a_candidate_running_is_not_an_empty_plan(tmp_path, procs, monkeypatch):
+    # G2-B2 F3: the component's instance value cannot be resolved while a process of its spec runs: the matcher
+    # cannot scope it, so the plan reports the gap instead of 0 changes. Red-before at 00c9d891: 0 changes, ok.
+    p = procs()
+    svc = _svc(tmp_path, {})
+    svc = _svc(tmp_path, {p.pid: _argv(svc, "loraham-chat", "433")})
+
+    def broken(*_a, **_k):
+        raise ValueError("no such parameter")
+    monkeypatch.setattr(commands, "instance_value", broken)
+    plan = kill.kill(svc, "chat@433")
+    assert not plan.ok and "loraham-chat" in "\n".join(plan.details)
