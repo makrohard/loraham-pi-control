@@ -9,7 +9,7 @@ A device with no serial descriptor has no serial; one whose descriptor cannot be
 opened, has an unknown identity, and then no device is selected.
 Refused, writing to no device: none found, more than one match, a matching device of unknown identity, the
 target claimed by another process (its daemon), a re-check mismatch, the stick removed during selection.
-After a claim, the release and the kernel driver's re-attach always run.
+After a claim, the release and the kernel driver's re-attach always run, also when the re-check raises.
 
 The bridge: D-lines are set with a UIO stream (`0xAB`, `0x80|state`, `0x40|mode`, `0x20`), read with `0xA0`
 (6 bytes, D-line n = bit n of the first); SPI goes in 32-byte packets (`0xA8` + up to 31 bytes), every byte
@@ -82,7 +82,15 @@ def select(usb, vid: int, pid: int, *, serial: str = "", port: tuple = ()):
         if exc.code == ERROR_NO_DEVICE:
             raise DetectRefused("the stick was removed during selection") from exc
         raise DetectRefused(f"the stick cannot be opened: {exc}") from exc
-    if (handle.serial() or None, handle.port()) != (hits[0].serial, hits[0].port):
+    try:
+        same = (handle.serial() or None, handle.port()) == (hits[0].serial, hits[0].port)
+    except UsbError as exc:
+        usb.release(handle)
+        raise DetectRefused(f"the stick cannot be re-checked: {exc}") from exc
+    except BaseException:
+        usb.release(handle)
+        raise
+    if not same:
         usb.release(handle)
         raise DetectRefused("the stick changed during selection (serial or port re-check)")
     return handle
@@ -138,16 +146,28 @@ class Ch341Bus:
         return time.monotonic()
 
     def close(self) -> None:
-        self._usb.release(self._h)
+        try:
+            self._usb.release(self._h)
+        finally:
+            self._usb.close()
 
 
 class Libusb:
-    """`select`'s USB side on libusb-1.0 through ctypes (loaded when Detect runs)."""
+    """`select`'s USB side on libusb-1.0 through ctypes (loaded when Detect runs). It owns its context and
+    the device references it lists: `close()` drops both (Ch341Bus.close() calls it; after a refused select,
+    the caller does)."""
 
     def __init__(self, lib=None):
         lib = lib or ctypes.CDLL(ctypes.util.find_library("usb-1.0") or "libusb-1.0.so.0")
-        self._lib, self._ctx = lib, ctypes.c_void_p()
+        self._lib, self._ctx, self._refs = lib, ctypes.c_void_p(), []
         self._check(lib.libusb_init(ctypes.byref(self._ctx)))
+
+    def close(self) -> None:
+        while self._refs:
+            self._lib.libusb_unref_device(self._refs.pop())
+        if self._ctx is not None:
+            self._lib.libusb_exit(self._ctx)
+            self._ctx = None
 
     @staticmethod
     def _check(code: int) -> int:
@@ -192,12 +212,13 @@ class Libusb:
                     pass
                 self._lib.libusb_close(handle)
             self._lib.libusb_ref_device(dev)
+            self._refs.append(dev)
             found.append(Found(serial, self._port(dev), dev, readable))
         self._lib.libusb_free_device_list(lst, 1)
         return found
 
     def claim(self, found: Found):
-        handle = ctypes.c_void_p()
+        index, handle = self._descriptor(found.ref)[16], ctypes.c_void_p()
         self._check(self._lib.libusb_open(found.ref, ctypes.byref(handle)))
         detached = self._lib.libusb_detach_kernel_driver(handle, 0) == 0
         code = self._lib.libusb_claim_interface(handle, 0)
@@ -206,7 +227,7 @@ class Libusb:
                 self._lib.libusb_attach_kernel_driver(handle, 0)
             self._lib.libusb_close(handle)
             raise UsbError(code)
-        return _Handle(self, handle, found.ref, self._descriptor(found.ref)[16], detached)
+        return _Handle(self, handle, found.ref, index, detached)
 
     def release(self, h: _Handle) -> None:
         self._lib.libusb_release_interface(h.handle, 0)

@@ -336,7 +336,7 @@ class _Libusb:
 
     def libusb_get_string_descriptor_ascii(self, handle, index, buf, n):
         serial, _port, how = self.sticks[handle.value if hasattr(handle, "value") else handle]
-        if how == "serial-fails":
+        if how == "serial-fails" or (how == "recheck-fails" and self.held["claimed"]):
             return -9
         buf.value = serial.encode()
         return len(serial)
@@ -387,3 +387,18 @@ def test_a_stick_of_unknown_identity_refuses_the_selection(sticks, kw):
     with pytest.raises(DetectRefused, match="identity cannot be read"):
         ch341.select(ch341.Libusb(lib), 0x1A86, 0x5512, **kw)
     assert lib.writes == [] and lib.held["claimed"] == lib.held["open"] == 0
+
+
+@pytest.mark.parametrize("how, refused", [("ok", None), ("recheck-fails", "cannot be re-checked")])
+def test_the_usb_side_gives_back_everything_it_took(how, refused):
+    # Context, device references, open handles and the claim: all released, on success (Ch341Bus.close)
+    # and when the re-check raises (select refuses; the caller closes the Libusb).
+    lib = _Libusb([("A1B2C3D4E5", (1, 3), how), ("Q9R8S7T6", (1, 4), "ok")])
+    usb = ch341.Libusb(lib)
+    if refused is None:
+        ch341.Ch341Bus(usb, ch341.select(usb, 0x1A86, 0x5512, serial="A1B2C3D4"), {"cs": 0}).close()
+    else:
+        with pytest.raises(DetectRefused, match=refused):
+            ch341.select(usb, 0x1A86, 0x5512, serial="A1B2C3D4")
+        usb.close()
+    assert lib.held == {"ctx": 0, "refs": 0, "open": 0, "claimed": 0}
