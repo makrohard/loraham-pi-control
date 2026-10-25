@@ -214,11 +214,19 @@ def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionRe
     what = f"{component} of {target}" if component else target
     if not apply:
         targets = _targets(svc, stk, band, comps)
-        return ActionResult(True, f"Kill {what}: {len(targets)} process(es).",
-                            details=[f"  [kill] pid {t['pid']} {t['component']}: {t['argv']}"
-                                     for t in targets],
-                            data={"changes": len(targets),
-                                  "pids": [t["pid"] for t in targets]})
+        details = [f"  [kill] pid {t['pid']} {t['component']}: {t['argv']}" for t in targets]
+        pids = [t["pid"] for t in targets]
+        # A start of this stack holding the admission flock is ended first (the apply's
+        # `_admission`), so the plan names it too: with no process yet it is the one change.
+        from . import reslock
+        owner = reslock.read_owner(svc._paths, svc.ADMISSION_KEY)
+        if owner:
+            pid, _ident, why = _holder(svc, owner, stk.id)
+            if not why:
+                details.append(f"  [kill] pid {pid} the in-flight start of {stk.id}")
+                pids.append(pid)
+        return ActionResult(True, f"Kill {what}: {len(pids)} process(es).", details=details,
+                            data={"changes": len(pids), "pids": pids})
     notes: list[str] = []
     with contextlib.ExitStack() as stack:
         refused = _admission(svc, stack, stk.id, notes)
