@@ -120,13 +120,11 @@ class AdmissionOpsMixin:
         if is_daemon:
             if op == "stop":
                 if band in ALLOWED_BANDS:
-                    bands = {band}
-                    other = "868" if band == "433" else "433"
-                    # dual-band collateral: the SAME process also serves the other band -> lock
-                    # it too, regardless of that band's CONF socket state (topology, not reachability).
-                    if set(self._daemon_pids_for_band(band)) & set(self._daemon_pids_for_band(other)):
-                        bands.add(other)
-                    return bands
+                    # Collateral: every other band the SAME process also serves is locked too,
+                    # regardless of that band's CONF socket state (topology, not reachability).
+                    own = set(self._daemon_pids_for_band(band))
+                    return {band} | {b for b in ALLOWED_BANDS
+                                     if b != band and own & set(self._daemon_pids_for_band(b))}
                 # Whole-daemon stop: every band an owned/observed daemon PROCESS claims.
                 return self._daemon_claimed_bands()
             # START: clamp to the active radio mode (M-1) — never lock/serve an excluded band, never
