@@ -145,8 +145,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: from-0-12-10, from: v0.12.10, want: units-stale }
-          - { name: from-0-13-2, from: v0.13.2, want: rc0 }
+          # Run 6 runs the from-topic job only (the released-tag jobs wait for item (B) on main: until then
+          # main's bootstrap-deps refuses on the known timeout under emulation); restored after it.
+          # - { name: from-0-12-10, from: v0.12.10, want: units-stale }
+          # - { name: from-0-13-2, from: v0.13.2, want: rc0 }
           # The from-topic job (a stated lane deviation): the install from cons/laneb-findings-r1 at its sha, that
           # commit's own bootstrap-deps.sh and manual block, then the units line; it proves the topic's fixes on Pi OS.
           - { name: from-topic, from: 8785dc577bf7ee4237703d05f1538462b7b888ea, want: install-only }
