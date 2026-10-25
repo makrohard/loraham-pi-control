@@ -3,8 +3,9 @@
 - Chip select: with kernel chip selects (`/dev/spidev0.1` exists, as the daemon decides) a radio on BCM 8
   uses `spidev0.0` and one on BCM 7 `spidev0.1` with the CS line the kernel's; any other CS line is refused.
   Otherwise the radio's CS line is driven as a GPIO on `spidev0.0`.
-- Lines: only the radio's own are requested (RESET, its CS in soft mode, BUSY for an SX1262). A line another
-  process holds (the other radio's daemon) refuses Detect with the reason; nothing else is requested.
+- Lines: only the radio's own are requested (RESET, its CS in soft mode, BUSY for an SX1262); a radio with
+  none (an Uputronics board on a kernel chip select) requests no lines. A line another process holds (the
+  other radio's daemon) refuses Detect with the reason; nothing else is requested.
 - The bus: each transfer holds the daemon's `spi0.lock` (an exclusive flock from before CS low to after
   CS high), so it never interleaves with a daemon's transaction. 2 MHz, mode 0, the daemon's settings.
 spidev and gpiod are imported only when a bus opens.
@@ -48,7 +49,7 @@ class SpiBus:
         outputs = [line for line in (self._rst, self._cs) if line is not None]
         inputs = [self._busy] if self._busy is not None else []
         try:
-            self._lines = (gpio_request or _gpiod_request)(gpiochip, outputs, inputs)
+            self._lines = (gpio_request or _gpiod_request)(gpiochip, outputs, inputs) if outputs or inputs else None
         except OSError as exc:
             held = exc.errno == errno.EBUSY
             raise DetectRefused(f"GPIO line(s) {outputs + inputs} "
@@ -84,7 +85,8 @@ class SpiBus:
 
     def close(self) -> None:
         self._spi.close()
-        self._lines.release()
+        if self._lines is not None:
+            self._lines.release()
         os.close(self._lock)
 
 

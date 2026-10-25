@@ -133,6 +133,28 @@ def test_only_the_radios_own_lines_are_requested(tmp_path, pins, chip, kernel, o
     assert seen[0].requested == (outputs, inputs) and bus.busy() is False
 
 
+
+@pytest.mark.parametrize("variant", ["ce0", "ce1"])
+def test_an_uputronics_board_on_kernel_chip_selects_requests_no_lines(tmp_path, variant):
+    # The table's Uputronics rows have no RESET and no BUSY; on kernel CS there is no line to request.
+    from lhpc.core import radio_models
+    (tmp_path / "spidev0.1").touch()
+    pins = radio_models.load()["uputronics"].variant(variant).pins
+    requests = []
+    bus = spi.SpiBus(pins, "sx127x", tmp_path / "spi0.lock", dev=tmp_path,
+                     gpio_request=lambda c, o, i: requests.append((o, i)), spi_factory=lambda node: _Echo())
+    assert bus.transfer(b"\x42\x00") == b"\x42\x00"
+    bus.close()
+    assert requests == []
+
+
+class _Echo:
+    def xfer2(self, data):
+        return data
+
+    def close(self):
+        pass
+
 def test_a_line_another_process_holds_refuses_and_opens_nothing(tmp_path):
     opened = []
     with pytest.raises(DetectRefused, match="held by another process"):
