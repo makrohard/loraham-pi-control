@@ -10,6 +10,8 @@
   after the reboot; the German block installs from the lock file like the English one.
 - bootstrap-deps.sh: a systemd query that times out under load no longer reads as "no system nginx /
   packaged meshtasticd" (left running); it refuses, names systemd's error and says to re-run.
+- `lhpc webserver start-service`: a failed start of lhpc-nginx says whether systemctl timed out or which
+  rc it returned, instead of only its last output line.
 
 ## 0.13.3
 

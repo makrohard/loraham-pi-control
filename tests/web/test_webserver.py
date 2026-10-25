@@ -1295,6 +1295,26 @@ def test_start_service_enables_and_starts(monkeypatch, tmp_path):
     assert (tmp_path / "logs").is_dir()                     # nginx error/access log parent
 
 
+@pytest.mark.parametrize("result, says", [
+    (CR(1, "", "Created symlink 'x' -> 'y'.\nJob for lhpc-nginx.service failed."), "systemctl rc 1"),
+    (CR(124, "", "Created symlink 'x' -> 'y'.", timed_out=True), "timed out after 20 s"),
+])
+def test_a_failed_start_says_how_systemctl_failed(monkeypatch, tmp_path, result, says):
+    # T-LB3: a slow guest's start ran past the bound and the message showed only enable's
+    # "Created symlink" line, so a timeout read like a unit failure. The summary now names it.
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    svc0 = _svc_webserver_corrections(tmp_path); assert svc0.webserver_init(dns_sans=["pi.local"]).ok
+    paths = svc0._paths
+    fake = FakeSystem(commands={
+        ("nginx", "-v"): CR(0, "", ""),
+        ("nginx", "-t", "-c", _staged_webserver_corrections(paths)): CR(0, "", "ok"),
+        ("systemctl", "--user", "enable", "--now", "lhpc-nginx.service"): result,
+    })
+    r = ControllerService(system=fake.system, paths=paths).webserver_start_service()
+    assert not r.ok
+    assert "could not enable/start lhpc-nginx.service" in r.summary and says in r.summary
+
+
 def test_evidence_absent_and_roundtrip(tmp_path):
     paths = _paths(tmp_path)
     assert webserver.read_evidence(paths) == {}
