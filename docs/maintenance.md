@@ -139,7 +139,7 @@ repositories.
   and only to a commit whose checks are green, by one of the three paths below.
 - **`dev` is the integration branch.** Every change lands as one complete commit, squash-merged
   from a topic branch rebased on `dev`; `dev` is not rewritten during a cycle. The reference box
-  runs it (its self-update identity check reports `unsafe: checkout branch 'dev' != 'main'`:
+  runs it (`lhpc status` reports its identity as `identity UNSAFE (checkout branch 'dev' != 'main')`:
   expected there, wrong on an operator's box).
 - **During a minor's cycle `dev` carries the last released version**; changes go under a
   `## Unreleased` changelog heading; the release commit sets `pyproject.toml`,
