@@ -1331,8 +1331,9 @@ def test_a_stop_signal_while_the_main_thread_holds_the_stop_events_lock_ends_the
     thread is inside the stop Event's own set/is_set/wait and holds its (non-reentrant) lock: in a pump's
     loop, or in run()'s teardown. A handler that takes the same lock waits for itself forever; the feed then
     ignores every further SIGTERM until it is killed, and a kill skips the teardown. A separate process, so
-    a hang is a timeout here; the child prints "injecting" first, so a timeout before it is a slow start,
-    not the hang. Red before: hung in both places (the handler called stop.set())."""
+    a hang is a timeout here. A test-only wrapper around the feed's handler writes "entered" when the handler
+    is actually entered, so only a timeout after that is the lock; any other is a slow start or a stall.
+    Red before: hung in both places (the handler called stop.set())."""
     import subprocess
     import sys
     from pathlib import Path
@@ -1350,7 +1351,11 @@ def test_a_stop_signal_while_the_main_thread_holds_the_stop_events_lock_ends_the
         "    fired = False\n"
         "    def _signal_inside_the_lock(self):\n"
         "        Stop.fired = True\n"
-        "        print('injecting', flush=True)\n"
+        "        handler = signal.getsignal(signal.SIGTERM)\n"
+        "        def entered(signum, frame):\n"
+        "            os.write(1, b'entered\\n')\n"
+        "            handler(signum, frame)\n"
+        "        signal.signal(signal.SIGTERM, entered)\n"
         "        with self._cond:\n"
         "            os.kill(os.getpid(), signal.SIGTERM)\n"
         "            for _ in range(3):\n"
@@ -1374,10 +1379,10 @@ def test_a_stop_signal_while_the_main_thread_holds_the_stop_events_lock_ends_the
                            text=True, env={**os.environ, "PYTHONPATH": str(repo)}, timeout=_FEED_UP_S,
                            check=False)
     except subprocess.TimeoutExpired as exc:
-        injected = b"injecting" in (exc.stdout or b"")      # the partial output of a timeout is bytes
-        pytest.fail("the handler waited for a lock its own thread holds" if injected
-                    else f"the feed did not reach the signal within {_FEED_UP_S} s (a slow start, not the lock)")
-    assert (p.returncode, p.stdout.split()) == (0, ["injecting", "fired", "True"]), (p.returncode, p.stdout, p.stderr)
+        entered = b"entered" in (exc.stdout or b"")         # the partial output of a timeout is bytes
+        pytest.fail("the handler was entered and waited for a lock its own thread holds" if entered
+                    else f"no handler entry within {_FEED_UP_S} s (a slow start or a stall, not the lock)")
+    assert (p.returncode, p.stdout.split()) == (0, ["entered", "fired", "True"]), (p.returncode, p.stdout, p.stderr)
     assert not os.path.exists(bridge_endpoint_path(short_tmp_path, "meshcore"))
 
 
