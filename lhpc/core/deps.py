@@ -1169,11 +1169,11 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "")
 
     if any(pkg == "nginx" or pkg.startswith("nginx-") for pkg in apt_pkgs) or disable_blocks:
-        out("# systemd must be queryable NOW (a broken/absent manager aborts BEFORE ~70 packages land,",
-            "# not after): the disable steps below need it to find a competing system nginx.service and",
-            "# any packaged meshtasticd.service. Fail CLOSED, up front, system untouched.",
-            "if ! systemctl list-unit-files --no-legend >/dev/null 2>&1; then",
-            '\techo "ERROR: cannot inspect systemd unit files (is this a systemd system, and is it'
+        out("# systemd must answer NOW (a broken/absent manager aborts BEFORE ~70 packages land, not",
+            "# after): the disable steps below need it to find a competing system nginx.service and any",
+            "# packaged meshtasticd.service. One light question, its Version. Fail CLOSED, up front.",
+            'if ! _sd_version=$(systemctl show -p Version --value 2>/dev/null) || [ -z "$_sd_version" ]; then',
+            '\techo "ERROR: cannot query systemd (is this a systemd system, and is it'
             " reachable?). Bootstrap must check for a competing system nginx.service (and any packaged"
             " meshtasticd.service) before it can safely proceed — refusing to continue so the system"
             ' stays untouched. Resolve systemd access and re-run." >&2',
@@ -1218,16 +1218,28 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
     #      is used; presence is read from command-substitution OUTPUT.
     #
     #  (2) FAIL-OPEN INSPECTION: `list-unit-files UNIT` exits 1 for BOTH 'no match' AND its own
-    #      errors, so the filtered exit code cannot tell 'genuinely absent' from 'could not inspect'.
-    #      Treating an inspection FAILURE as 'absent' would fail OPEN — skipping the disable and
-    #      reporting success while a competing root service (nginx / packaged meshtasticd) is still
-    #      active. So systemd is first probed for queryability (an unfiltered listing); if THAT
-    #      fails we return 2 (inspection failed) and the caller ABORTS rather than assuming absence.
+    #      errors (a D-Bus timeout under load), so it cannot tell 'genuinely absent' from 'could not
+    #      inspect'; read as 'absent', a failure skips the disable while a competing root service
+    #      (nginx / packaged meshtasticd) is still active. One `show -p LoadState` per unit answers
+    #      both in a single light call: `not-found` is absent, any other state present, and a failed
+    #      call or an empty answer is 'could not inspect', so the caller ABORTS. No retry; the
+    #      refusal prints systemctl's own last stderr line (UNIT_QUERY_ERR) and says to re-run.
     #
     # Returns: 0 present · 1 genuinely absent · 2 inspection failed.
+    # The answer is stdout alone (a warning on stderr with rc 0 must not change it); stderr is kept in
+    # a temp file and read only when the call fails.
     out("unit_present() {",
-        '\tsystemctl list-unit-files --no-legend >/dev/null 2>&1 || return 2   # systemd not queryable',
-        '\t[ -n "$(systemctl list-unit-files --no-legend "$1" 2>/dev/null)" ]  # 0 present, 1 absent',
+        "\tlocal out err",
+        '\terr=$(mktemp) || { UNIT_QUERY_ERR="mktemp failed"; return 2; }',
+        '\tif ! out=$(systemctl show -p LoadState --value "$1" 2>"$err"); then',
+        '\t\tUNIT_QUERY_ERR=$(tail -n 1 "$err"); UNIT_QUERY_ERR=${UNIT_QUERY_ERR:-systemctl failed}; rm -f "$err"; return 2',
+        "\tfi",
+        '\trm -f "$err"',
+        '\tcase "$out" in',
+        "\t\t'') UNIT_QUERY_ERR=\"systemd gave no answer\"; return 2 ;;",
+        "\t\tnot-found) return 1 ;;     # genuinely absent",
+        "\t\t*) return 0 ;;             # loaded, masked, bad-setting, error: a unit file exists",
+        "\tesac",
         "}",
         "")
 
@@ -1283,9 +1295,9 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
                 '\t\t\techo "[bootstrap-deps] system nginx.service is already disabled — nothing to change."',
                 "\t\tfi ;;",
                 '\t1) echo "[bootstrap-deps] no system nginx.service present — nothing to disable." ;;',
-                '\t2) echo "ERROR: could not inspect systemd unit files — cannot confirm the system'
-                ' nginx.service is stopped. Refusing to continue with a possibly-active root nginx'
-                ' holding the web ports." >&2; exit 8 ;;',
+                '\t2) echo "ERROR: could not query systemd for nginx.service ($UNIT_QUERY_ERR) — cannot confirm'
+                ' the system nginx.service is stopped. Refusing to continue with a possibly-active root nginx'
+                ' holding the web ports. Re-run bootstrap-deps.sh." >&2; exit 8 ;;',
                 "esac",
                 "")
 
@@ -1768,8 +1780,8 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
                 "\t\t\t_DISABLE_FAILED=1",
                 "\t\tfi ;;",
                 f'\t1) echo "[bootstrap-deps] no packaged {unit} service present — nothing to disable." ;;',
-                f'\t2) echo "ERROR: could not inspect systemd unit files — cannot confirm a packaged'
-                f' {unit} is stopped. Refusing to continue." >&2; exit 9 ;;',
+                f'\t2) echo "ERROR: could not query systemd for {svc_unit} ($UNIT_QUERY_ERR) — cannot confirm'
+                f' a packaged {unit} is stopped. Refusing to continue. Re-run bootstrap-deps.sh." >&2; exit 9 ;;',
                 "esac", "")
         else:
             # Unparseable disable command: never leave it bare under `set -e`.

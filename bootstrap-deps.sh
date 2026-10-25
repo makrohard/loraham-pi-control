@@ -267,11 +267,11 @@ case "$SPI_MODE" in
 		fi ;;
 esac
 
-# systemd must be queryable NOW (a broken/absent manager aborts BEFORE ~70 packages land,
-# not after): the disable steps below need it to find a competing system nginx.service and
-# any packaged meshtasticd.service. Fail CLOSED, up front, system untouched.
-if ! systemctl list-unit-files --no-legend >/dev/null 2>&1; then
-	echo "ERROR: cannot inspect systemd unit files (is this a systemd system, and is it reachable?). Bootstrap must check for a competing system nginx.service (and any packaged meshtasticd.service) before it can safely proceed — refusing to continue so the system stays untouched. Resolve systemd access and re-run." >&2
+# systemd must answer NOW (a broken/absent manager aborts BEFORE ~70 packages land, not
+# after): the disable steps below need it to find a competing system nginx.service and any
+# packaged meshtasticd.service. One light question, its Version. Fail CLOSED, up front.
+if ! _sd_version=$(systemctl show -p Version --value 2>/dev/null) || [ -z "$_sd_version" ]; then
+	echo "ERROR: cannot query systemd (is this a systemd system, and is it reachable?). Bootstrap must check for a competing system nginx.service (and any packaged meshtasticd.service) before it can safely proceed — refusing to continue so the system stays untouched. Resolve systemd access and re-run." >&2
 	exit 8
 fi
 
@@ -292,8 +292,17 @@ if [ "$(id -u "$OP")" -eq 0 ]; then
 fi
 
 unit_present() {
-	systemctl list-unit-files --no-legend >/dev/null 2>&1 || return 2   # systemd not queryable
-	[ -n "$(systemctl list-unit-files --no-legend "$1" 2>/dev/null)" ]  # 0 present, 1 absent
+	local out err
+	err=$(mktemp) || { UNIT_QUERY_ERR="mktemp failed"; return 2; }
+	if ! out=$(systemctl show -p LoadState --value "$1" 2>"$err"); then
+		UNIT_QUERY_ERR=$(tail -n 1 "$err"); UNIT_QUERY_ERR=${UNIT_QUERY_ERR:-systemctl failed}; rm -f "$err"; return 2
+	fi
+	rm -f "$err"
+	case "$out" in
+		'') UNIT_QUERY_ERR="systemd gave no answer"; return 2 ;;
+		not-found) return 1 ;;     # genuinely absent
+		*) return 0 ;;             # loaded, masked, bad-setting, error: a unit file exists
+	esac
 }
 
 # --- APT packages (merged; installed FIRST so curl/etc. exist before the blocks below) ----
@@ -357,7 +366,7 @@ case "$nginx_rc" in
 			echo "[bootstrap-deps] system nginx.service is already disabled — nothing to change."
 		fi ;;
 	1) echo "[bootstrap-deps] no system nginx.service present — nothing to disable." ;;
-	2) echo "ERROR: could not inspect systemd unit files — cannot confirm the system nginx.service is stopped. Refusing to continue with a possibly-active root nginx holding the web ports." >&2; exit 8 ;;
+	2) echo "ERROR: could not query systemd for nginx.service ($UNIT_QUERY_ERR) — cannot confirm the system nginx.service is stopped. Refusing to continue with a possibly-active root nginx holding the web ports. Re-run bootstrap-deps.sh." >&2; exit 8 ;;
 esac
 
 # --- GUI-only dependencies (opt-in: --with-gui) ---------------------------------------------
@@ -1007,7 +1016,7 @@ case "$unit_rc" in
 			_DISABLE_FAILED=1
 		fi ;;
 	1) echo "[bootstrap-deps] no packaged meshtasticd service present — nothing to disable." ;;
-	2) echo "ERROR: could not inspect systemd unit files — cannot confirm a packaged meshtasticd is stopped. Refusing to continue." >&2; exit 9 ;;
+	2) echo "ERROR: could not query systemd for meshtasticd.service ($UNIT_QUERY_ERR) — cannot confirm a packaged meshtasticd is stopped. Refusing to continue. Re-run bootstrap-deps.sh." >&2; exit 9 ;;
 esac
 
 if [ -n "$_GROUPS_FAILED" ]; then

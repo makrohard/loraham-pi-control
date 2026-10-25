@@ -52,7 +52,7 @@ def _fakebin(tmp_path, *, no_sudo=False):
     # early downstream `grep -q` match SIGPIPEs the fake to 141 — reproducing the pipefail inversion
     # that a one-line fake hid. Enabling, disabling or restarting a unit not listed FAILS (exit 1) like
     # a clean image, so a restart of a service that was never installed cannot pass unnoticed.
-    w("systemctl", 'units="${FAKE_SYSTEMCTL_UNITS:-}"\n[ -n "${FAKE_SYSTEMCTL_BROKEN:-}" ] && { echo "Failed to connect to bus: No such file or directory" >&2; exit 1; }\nif [ "$1" = "list-unit-files" ]; then\n  shift\n  pattern=""\n  for a in "$@"; do case "$a" in --*) ;; *) pattern="$a" ;; esac; done\n  if [ -n "$pattern" ]; then\n    for u in $units; do [ "$u" = "$pattern" ] && echo "$u enabled enabled"; done\n    exit 0\n  fi\n  echo "aaa-first-decoy.service enabled enabled"\n  for u in $units; do echo "$u enabled enabled"; done\n  exec seq 1 200000\nfi\nif [ "$1" = "is-enabled" ] || [ "$1" = "is-active" ]; then\n  last=""; for a in "$@"; do case "$a" in --*) ;; *) last="$a" ;; esac; done\n  case " ${FAKE_SYSTEMCTL_DISABLED:-} " in *" $last "*|*" ${last%.service} "*) exit 1 ;; esac\n  case " $units " in *" $last "*|*" $last.service "*) exit 0 ;; esac\n  exit 1\nfi\nif [ "$1" = "disable" ] || [ "$1" = "enable" ] || [ "$1" = "restart" ]; then\n  last=""; for a in "$@"; do last="$a"; done\n  case " ${FAKE_SYSTEMCTL_FAIL:-} " in\n    *" $last "*) echo "Failed to disable unit: $last" >&2; exit 1 ;;\n  esac\n  case " $units " in\n    *" $last.service "*|*" $last "*) exit 0 ;;\n  esac\n  echo "Failed to $1 unit: Unit file $last.service does not exist." >&2\n  exit 1\nfi\nexit 0\n')
+    w("systemctl", 'units="${FAKE_SYSTEMCTL_UNITS:-}"\n[ -n "${FAKE_SYSTEMCTL_BROKEN:-}" ] && { echo "Failed to connect to bus: No such file or directory" >&2; exit 1; }\nunit_query() {\n  [ -n "${FAKE_UNIT_QUERY_SKIP:-}" ] && [ "$2" = "$FAKE_UNIT_QUERY_SKIP" ] && return 0\n  if [ -n "${FAKE_UNIT_QUERY_FAILS_ONCE:-}" ] && [ ! -e "$FAKE_UNIT_QUERY_FAILS_ONCE" ]; then\n    : > "$FAKE_UNIT_QUERY_FAILS_ONCE"; echo "$1: Connection timed out" >&2; exit 1\n  fi\n  [ -n "${FAKE_UNIT_QUERY_FAILS:-}" ] && { echo "$1: Connection timed out" >&2; exit 1; }\n  [ -n "${FAKE_UNIT_QUERY_EMPTY:-}" ] && exit 0\n  return 0\n}\nif [ "$1" = "show" ]; then\n  [ -n "${FAKE_SHOW_STDERR_NOISE:-}" ] && echo "Warning: The unit file changed on disk." >&2\n  prop=""; unit=""; prev=""\n  for a in "$@"; do\n    if [ "$prev" = "-p" ]; then prop="$a"; elif [ "$a" != "show" ] && [ "${a#-}" = "$a" ]; then unit="$a"; fi; prev="$a"\n  done\n  if [ "$prop" = "Version" ]; then\n    [ -n "${FAKE_VERSION_FAILS:-}" ] && { echo "Failed to get properties: Connection timed out" >&2; exit 1; }\n    [ -n "${FAKE_VERSION_EMPTY:-}" ] || echo "257"\n    exit 0\n  fi\n  unit_query "Failed to get properties" "$unit"\n  for u in $units; do [ "$u" = "$unit" ] && { echo loaded; exit 0; }; done\n  echo not-found\n  [ -n "${FAKE_SHOW_STDERR_NOISE:-}" ] && echo "Warning: The unit file changed on disk." >&2\n  exit 0\nfi\nif [ "$1" = "list-unit-files" ]; then\n  shift\n  pattern=""\n  for a in "$@"; do case "$a" in --*) ;; *) pattern="$a" ;; esac; done\n  if [ -n "$pattern" ]; then\n    unit_query "Failed to list unit files"\n    for u in $units; do [ "$u" = "$pattern" ] && echo "$u enabled enabled"; done\n    exit 0\n  fi\n  echo "aaa-first-decoy.service enabled enabled"\n  for u in $units; do echo "$u enabled enabled"; done\n  exec seq 1 200000\nfi\nif [ "$1" = "is-enabled" ] || [ "$1" = "is-active" ]; then\n  last=""; for a in "$@"; do case "$a" in --*) ;; *) last="$a" ;; esac; done\n  case " ${FAKE_SYSTEMCTL_DISABLED:-} " in *" $last "*|*" ${last%.service} "*) exit 1 ;; esac\n  case " $units " in *" $last "*|*" $last.service "*) exit 0 ;; esac\n  exit 1\nfi\nif [ "$1" = "disable" ] || [ "$1" = "enable" ] || [ "$1" = "restart" ]; then\n  last=""; for a in "$@"; do last="$a"; done\n  case " ${FAKE_SYSTEMCTL_FAIL:-} " in\n    *" $last "*) echo "Failed to disable unit: $last" >&2; exit 1 ;;\n  esac\n  case " $units " in\n    *" $last.service "*|*" $last "*) exit 0 ;;\n  esac\n  echo "Failed to $1 unit: Unit file $last.service does not exist." >&2\n  exit 1\nfi\nexit 0\n')
     w("curl", "exit 0\n")
     w("gpg", "cat >/dev/null 2>&1 || true; exit 0\n")
     # install: keyring dirs stay a no-op; the polkit RULE writes (targets under
@@ -151,7 +151,7 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
          systemctl_broken=False, systemctl_disabled="", wifi_iw_fail=False,
          wifi_iw_absent=False, fake_hwclock_absent=False, nm_devs=None, defroute_dev=None,
          chrony_conf=None, gpsd_default=None, lhpc_gps_source=None, runtime_root_env=True,
-         operator_home=None, systemd_running=True):
+         operator_home=None, systemd_running=True, fake_env=None):
     fb, apt, um = _fakebin(tmp_path, no_sudo=no_sudo)
     if operator_home is not None:
         # The operator's home from `getent passwd` — a tmp dir, never a real user's home.
@@ -236,6 +236,7 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
     if systemctl_broken:
         env["FAKE_SYSTEMCTL_BROKEN"] = "1"             # systemd unqueryable — inspection fails
     env["FAKE_SYSTEMCTL_DISABLED"] = systemctl_disabled  # units that are already disabled+inactive
+    env.update(fake_env or {})                          # the per-unit query and Version failure modes
     env.pop("SUDO_USER", None)
     if sudo_user is _SUDO_BASH:
         env["SUDO_USER"] = _USER            # the documented `sudo bash` invocation (default scenario)
@@ -1109,10 +1110,10 @@ def test_no_unguarded_command_can_abort_before_the_summary(tmp_path):
     # Both guards go through the tri-state helper, capturing its code without tripping `set -e`.
     assert "unit_present nginx.service || nginx_rc=$?" in text
     assert "unit_present meshtasticd.service || unit_rc=$?" in text
-    # FAIL-CLOSED: the helper probes systemd queryability first and returns 2 on inspection failure,
-    # and every caller has a `2)` branch that ABORTS — never a fall-through to "nothing to disable".
-    assert "|| return 2" in text
-    assert text.count("could not inspect systemd unit files") == 2     # one per guard, both abort
+    # FAIL-CLOSED: the helper returns 2 when its query fails or answers nothing, and every caller
+    # has a `2)` branch that ABORTS — never a fall-through to "nothing to disable".
+    assert 'rm -f "$err"; return 2' in text and "systemd gave no answer\"; return 2" in text
+    assert text.count("could not query systemd for") == 2              # one per guard, both abort
     for line in text.splitlines():
         assert not ("systemctl" in line and "| grep" in line), \
             f"pipefail-inverting unit guard: {line!r}"
@@ -1226,10 +1227,60 @@ def test_inspection_failure_aborts_up_front_with_nothing_mutated(tmp_path):
     r, _cfg, apt, um = _run(tmp_path, ["--spi-mode", "soft-cs"],
                             systemctl_units="nginx.service", systemctl_broken=True)
     assert r.returncode == 8
-    assert "cannot inspect systemd unit files" in r.stderr
+    assert "cannot query systemd" in r.stderr
     assert apt == "" and um == ""                         # NOTHING mutated (no apt, no group grant)
     assert "nothing to disable" not in r.stdout           # the fail-open symptom
     assert _DONE not in r.stdout                           # never a false success
+
+
+@pytest.mark.parametrize("mode", ["fails", "empty", "fails-once"])
+def test_a_unit_query_that_fails_or_answers_nothing_refuses_never_reads_absent(tmp_path, mode):
+    # T-LB2 (a), (d), (e): a unit's own query fails (timed out, no output), returns nothing, or
+    # times out once, after systemd itself answered. That is "could not inspect", never "absent":
+    # reading it as absent would skip the disable of a root nginx that may be running. No retry.
+    env = {"fails": {"FAKE_UNIT_QUERY_FAILS": "1"}, "empty": {"FAKE_UNIT_QUERY_EMPTY": "1"},
+           "fails-once": {"FAKE_UNIT_QUERY_FAILS_ONCE": str(tmp_path / "failed-once")}}[mode]
+    r, *_ = _run(tmp_path, ["--spi-mode", "soft-cs"], systemctl_units="nginx.service", fake_env=env)
+    assert r.returncode == 8, r.stderr
+    assert "cannot confirm the system nginx.service is stopped" in r.stderr
+    # the refusal names what systemd said (or that it said nothing) and the step that follows
+    why = "systemd gave no answer" if mode == "empty" else "Failed to get properties: Connection timed out"
+    assert f"could not query systemd for nginx.service ({why})" in r.stderr
+    assert "Re-run bootstrap-deps.sh." in r.stderr
+    assert "nothing to disable" not in r.stdout
+    assert _DONE not in r.stdout
+
+
+@pytest.mark.parametrize("units, empty, rc, says", [
+    ("nginx.service", True, 8, "could not query systemd for nginx.service (systemd gave no answer)"),
+    ("", False, 0, "no system nginx.service present"),
+])
+def test_a_warning_on_stderr_does_not_change_the_answer(tmp_path, units, empty, rc, says):
+    # T-LB2: systemctl may print a warning on stderr and still exit 0; only its stdout is the answer.
+    # An empty answer still refuses, and "not-found" still reads absent.
+    env = {"FAKE_SHOW_STDERR_NOISE": "1", **({"FAKE_UNIT_QUERY_EMPTY": "1"} if empty else {})}
+    r, *_ = _run(tmp_path, ["--spi-mode", "soft-cs"], systemctl_units=units, fake_env=env)
+    assert r.returncode == rc, r.stderr
+    assert says in (r.stderr if rc else r.stdout)
+
+
+def test_a_packaged_unit_whose_query_fails_refuses_and_says_why(tmp_path):
+    # The second guard (a packaged meshtasticd) gives the same account: systemd's line, then re-run.
+    r, *_ = _run(tmp_path, ["--spi-mode", "soft-cs"], systemctl_units="nginx.service meshtasticd.service",
+                 fake_env={"FAKE_UNIT_QUERY_FAILS_ONCE": str(tmp_path / "x"), "FAKE_UNIT_QUERY_SKIP": "nginx.service"})
+    assert r.returncode == 9, r.stderr
+    assert ("could not query systemd for meshtasticd.service (Failed to get properties: Connection timed out)"
+            in r.stderr) and "Re-run bootstrap-deps.sh." in r.stderr
+
+
+@pytest.mark.parametrize("env", [{"FAKE_VERSION_FAILS": "1"}, {"FAKE_VERSION_EMPTY": "1"}])
+def test_the_up_front_check_refuses_when_systemd_does_not_answer(tmp_path, env):
+    # T-LB2 (f): the up-front check asks systemd one light question (its Version); a failure or an
+    # empty answer aborts before anything is installed.
+    r, _cfg, apt, um = _run(tmp_path, ["--spi-mode", "soft-cs"], fake_env=env)
+    assert r.returncode == 8, r.stderr
+    assert "cannot query systemd" in r.stderr
+    assert apt == "" and um == ""
 
 
 def test_swap_stale_fstab_missing_file_recreates_without_a_scary_error(tmp_path):
@@ -1268,7 +1319,7 @@ def test_readonly_failclosed_checks_run_before_any_mutation(tmp_path):
     # The real first mutation is the apt-get update COMMAND (newline-bounded — not the dry-run
     # block's echo that merely mentions "sudo apt-get update").
     first_mutation = text.index("\napt-get update\n")
-    for marker in ('exit 3', 'if ! systemctl list-unit-files --no-legend >/dev/null 2>&1; then'):
+    for marker in ('exit 3', 'if ! _sd_version=$(systemctl show -p Version --value 2>/dev/null) || [ -z "$_sd_version" ]; then'):
         idx = text.index(marker)
         assert idx < first_mutation, f"{marker!r} is evaluated mid-mutation (after apt)"
     # and the SPI mutation section no longer carries its own exit-3 conflict abort
