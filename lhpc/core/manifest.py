@@ -822,7 +822,8 @@ def _parse_component(raw: dict) -> Component:
         purpose=raw.get("purpose", ""),
         band=str(raw.get("band", "")),
         tx_capable=raw.get("tx_capable", False),
-        resources=tuple(_parse_resource(r) for r in raw.get("resource", [])),
+        resources=tuple(r for r in map(_parse_resource, raw.get("resource", []))
+                        if r.claims_if in ("", TRANSPORT_UNTIL_L5)),
         units=tuple(_parse_unit(u) for u in raw.get("unit", [])),
         process=_parse_process(raw.get("process")),
         endpoints=tuple(_parse_endpoint(e) for e in raw.get("endpoint", [])),
@@ -919,7 +920,18 @@ def _parse_param(p: dict, cid: str) -> RunParam:
     )
 
 
+# A claim's `claims_if` transports. Until L5 every radio is an SPI HAT (config.HW_SETUPS names SPI
+# presets only), so a claim for another transport is never made: it is dropped at load. From L5 the
+# check runs per radio at resolve time (A §2.3).
+TRANSPORTS = ("spi", "usb")
+TRANSPORT_UNTIL_L5 = "spi"
+
+
 def _parse_resource(raw: dict) -> ResourceClaim:
+    claims_if = raw.get("claims_if")
+    if claims_if is not None and claims_if not in TRANSPORTS:
+        raise ManifestError(f"resource {raw.get('key')!r}: claims_if must be one of {TRANSPORTS}, "
+                            f"got {claims_if!r}")
     return ResourceClaim(
         key=raw["key"],
         kind=ResourceKind(raw["kind"]),
@@ -927,6 +939,7 @@ def _parse_resource(raw: dict) -> ResourceClaim:
         requirement=raw.get("requirement", ""),
         note=raw.get("note", ""),
         advisory=bool(raw.get("advisory", False)),
+        claims_if=claims_if or "",
     )
 
 
