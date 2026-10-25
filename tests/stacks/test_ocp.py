@@ -24,19 +24,19 @@ def _svc(tmp_path, setup="uputronics", stored=None):
 
 
 def _spawned(svc, monkeypatch, band="433"):
-    """Start the daemon through the real per-band spawn path; return (lines, the params the
-    spawn was given, or None when it was never reached)."""
+    """Start the daemon through the real per-band spawn path; return (lines, the params `band`'s
+    spawn was given, or None when it was never reached). Every band is spawned (I5)."""
     seen = {}
 
     def start(self, stack, comp, params, band=None, **_kw):
-        seen["params"] = dict(params)
+        seen[band] = dict(params)
         return StartLaunch(False, "", "captured (no process)")
     monkeypatch.setattr(Lifecycle, "start", start)
     monkeypatch.setattr(ControllerService, "is_built", lambda self, c: True)
     monkeypatch.setattr(ControllerService, "_source_present", lambda self, c: True)
     monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")
     res = svc.start("daemon", apply=True)
-    return "\n".join((res.summary, *res.details)), seen.get("params")
+    return "\n".join((res.summary, *res.details)), seen.get(band)
 
 
 # --- the rule: the daemon's own representable sets ----------------------------------------------
