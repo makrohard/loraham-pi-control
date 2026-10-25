@@ -201,12 +201,25 @@ def _signal(svc, targets: list[dict]) -> list[dict]:
         return now is not None and matches(t, now)
 
     def left_of(t):                    # a survivor unless provably gone or provably another process; an unreadable
-        if life._proc_ceased(t["pid"]):    # read is not proof of either, so it keeps the target
+        if t["group"]:                 # read is not proof of either, so it keeps the target. A group lives while a
+            if reused(t):              # member does (G2-B2 F2); its leader's pid in another process proves it gone
+                return False
+            members = life._group_members(t["pgid"], int(t["ident"]["sid"]))
+            return members is None or bool(members)
+        if life._proc_ceased(t["pid"]):
             return False
         now = procident.proc_identity(t["pid"])
         return now is None or matches(t, now)
 
+    def reused(t):                     # the leader's pid now runs another process: Linux reuses a pid only once no
+        now = procident.proc_identity(t["pid"])    # live process has it as its pgid or sid, so the group is gone
+        return now is not None and str(now["starttime"]) != str(t["ident"]["starttime"])
+
     def send(t, sig):
+        if t["group"] and not same(t):  # the leader is gone: the group is reached by its members (G2-B2 F2)
+            if not reused(t):
+                life._signal_members(t["pgid"], int(t["ident"]["sid"]), sig)
+            return
         if not same(t):
             return
         with contextlib.suppress(OSError):

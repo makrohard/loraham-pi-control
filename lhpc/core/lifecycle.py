@@ -659,18 +659,22 @@ class Lifecycle:
             return False
         if not kill_after:                      # NO SIGKILL — bounded wait for SIGTERM
             return self._await_proc_ceased(pid, 2.5, sleep)   # True ONLY if cessation is PROVEN
-        if self._await_proc_ceased(pid, kill_after, sleep):
+        # With the KILL leg (the operator's kill) the whole group must cease, not only its leader: a
+        # member that ignores SIGTERM outlives a leader that exits on it (G2-B2 F2).
+        sid = int(launch_ident["sid"])
+        if self._await_group_ceased(pid, sid, kill_after, sleep):
             return True
         # The KILL leg: the identity is read again, so a pid that died and was reused during
-        # the grace is never signalled.
+        # the grace is never signalled; once the leader is gone, each member by its own identity.
         now = self._proc_identity(pid)
-        if now is None or not self._same_session(pid, now, launch_ident):
-            return self._proc_ceased(pid)
-        try:
-            os.killpg(pid, signal.SIGKILL)
-        except OSError:
-            return self._proc_ceased(pid)
-        return self._await_proc_ceased(pid, 2.5, sleep)
+        if now is not None and str(now["starttime"]) != str(launch_ident.get("starttime")):
+            return self._proc_ceased(pid)       # another process holds the pid: not ours, never signalled
+        if now is not None and self._same_session(pid, now, launch_ident):
+            with contextlib.suppress(OSError):
+                os.killpg(pid, signal.SIGKILL)
+        else:
+            self._signal_members(pid, sid, signal.SIGKILL)
+        return self._await_group_ceased(pid, sid, 2.5, sleep)
 
     @staticmethod
     def _same_session(pid: int, now: dict, launch_ident: dict) -> bool:
@@ -683,6 +687,52 @@ class Lifecycle:
             return os.getpgid(pid) == pid       # must still lead its own process group
         except OSError:
             return False
+
+    @staticmethod
+    def _group_members(pgid: int, sid: int) -> list[dict] | None:
+        """The live (not zombie) processes of process group `pgid` and sid `sid`, each with its start
+        time; None when /proc cannot be listed or a process's stat cannot be read for another reason than
+        its being gone (not proof that none is left, C29). Linux does not reuse a pid while a live process
+        still has it as its pgid or sid, so these are the group's own members."""
+        try:
+            names = os.listdir("/proc")
+        except OSError:
+            return None
+        out = []
+        for name in names:
+            if not name.isdigit():
+                continue
+            try:
+                stat = Path(f"/proc/{name}/stat").read_text()
+            except (FileNotFoundError, ProcessLookupError):
+                continue                        # gone while listed: not a member now
+            except OSError:
+                return None                     # unreadable is no proof that it ended
+            try:
+                rest = stat[stat.rindex(")") + 2:].split()
+                state, pg, se, start = rest[0], int(rest[2]), int(rest[3]), int(rest[19])
+            except (ValueError, IndexError):
+                return None
+            if pg == pgid and se == sid and state not in ("Z", "X", "x"):
+                out.append({"pid": int(name), "starttime": start})
+        return out
+
+    def _signal_members(self, pgid: int, sid: int, sig) -> None:
+        """`sig` to each live member of the group, each only after its own identity is read again (the
+        group's leader is gone, so the group is reached by its members, never by a bare pgid)."""
+        for m in self._group_members(pgid, sid) or []:
+            now = self._proc_identity(m["pid"])
+            if now is not None and (now["pgid"], now["sid"], now["starttime"]) == (pgid, sid, m["starttime"]):
+                with contextlib.suppress(OSError):
+                    os.kill(m["pid"], sig)
+
+    def _await_group_ceased(self, pgid: int, sid: int, seconds: float, sleep=time.sleep) -> bool:
+        """Bounded wait, in 0.1 s steps of `sleep`, until no live member of the group is left (proven)."""
+        for _ in range(round(seconds / 0.1)):
+            if self._group_members(pgid, sid) == []:
+                return True
+            sleep(0.1)
+        return self._group_members(pgid, sid) == []
 
     def _await_proc_ceased(self, pid: int, seconds: float, sleep=time.sleep) -> bool:
         """Bounded wait, in 0.1 s steps of `sleep`, for PROVEN cessation of `pid`."""

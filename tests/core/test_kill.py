@@ -1,6 +1,7 @@
 """The `kill` verb, stage L3-K (A §2.12; PROOF T-K1–T-K4, T-K6, T-K7; Q-K1, Q-K2). Real processes
 that ignore SIGTERM stand in for a stuck stack; /proc's argv for them comes from the fake procfs,
 their identity from the real /proc. The 5 s grace runs on the injected clock (H3)."""
+import contextlib
 import json
 import os
 import re
@@ -492,3 +493,78 @@ def test_an_exempt_component_with_a_verified_record_of_the_band_is_taken(tmp_pat
 def test_the_band_by_record_set_is_the_exemptions_owned_by_their_record():
     from lhpc.core.probes.process import NO_INSTANCE_ARG
     assert {k for k, why in NO_INSTANCE_ARG.items() if "ownership record" in why} == kill.BAND_BY_RECORD
+
+
+# A group leader (its own pgid and sid) that dies on SIGTERM and a child of its group that ignores SIGTERM; "up" only once the
+# child's handler is installed, then the child's pid (G2-B2 F2).
+LEADER = """
+import os, signal, subprocess, sys
+r, w = os.pipe()
+code = "import os, signal, sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); os.write(int(sys.argv[1]), b'x'); signal.pause()"
+child = subprocess.Popen([sys.executable, "-c", code, str(w)], pass_fds=(w,))
+os.read(r, 1)
+print("up", flush=True)
+print(child.pid, flush=True)
+signal.pause()
+"""
+
+
+def _leader_and_child(procs):
+    leader = procs(code=LEADER)
+    return leader, int(leader.stdout.readline())
+
+
+def _end(child):
+    with contextlib.suppress(ProcessLookupError):
+        os.kill(child, signal.SIGKILL)
+
+
+def test_a_group_whose_leader_dies_on_sigterm_keeps_its_surviving_member_a_target(tmp_path, clock, procs):
+    # G2-B2 F2: the leader exits on SIGTERM, its child ignores it. The group is not gone while a member lives:
+    # the child gets the SIGKILL and the kill reports none left only then. Red-before at 30c010a4: the leader's
+    # exit ended the target, the child survived, and the kill said "no process of it is left".
+    leader, child = _leader_and_child(procs)
+    try:
+        svc = _svc(tmp_path, {})
+        stk = svc.stack("meshcom")
+        svc._lifecycle().record_launch(stk, stk.component("meshcom-bridge"), leader.pid, band="433")
+        res = kill.kill(svc, "meshcom", "meshcom-bridge", apply=True)
+        assert res.ok and not procident.proc_alive(child)
+    finally:
+        _end(child)
+
+
+def test_the_admission_terminate_waits_for_the_whole_group(tmp_path, procs):
+    # G2-B2 F2, the admission path: _terminate_unobserved with its KILL leg reports cessation only once no member
+    # of the group is left. Red-before at 30c010a4: True with the SIGTERM-ignoring child still running.
+    leader, child = _leader_and_child(procs)
+    try:
+        life = _svc(tmp_path, {})._lifecycle()
+        assert life._terminate_unobserved(leader.pid, procident.proc_identity(leader.pid), kill_after=5.0,
+                                          sleep=Clock()) is True
+        assert not procident.proc_alive(child)
+    finally:
+        _end(child)
+
+
+def test_an_unreadable_member_keeps_its_group_alive(tmp_path, clock, procs, monkeypatch):
+    # G2-B2 F2, C29's rule for members: the leader is gone and its child's stat cannot be read for another reason
+    # than its being gone. That is no proof the group ended, so the target stays a survivor. Red-before at
+    # 30c010a4: _signal returned [], the group taken as gone with its member alive.
+    leader, child = _leader_and_child(procs)
+    try:
+        ident = procident.proc_identity(leader.pid)
+        target = {"pid": leader.pid, "component": "meshcom-bridge", "group": True, "pgid": leader.pid,
+                  "argv": "", "ident": {k: ident[k] for k in ("starttime", "pgid", "sid")}}
+        os.kill(leader.pid, signal.SIGKILL)                   # the leader gone, the child left
+        leader.wait(timeout=5)
+        real = Path.read_text
+
+        def flaky(self, *a, **k):
+            if str(self) == f"/proc/{child}/stat":
+                raise PermissionError(13, "Permission denied")
+            return real(self, *a, **k)
+        monkeypatch.setattr(Path, "read_text", flaky)
+        assert kill._signal(_svc(tmp_path, {}), [target]) == [target]
+    finally:
+        _end(child)
