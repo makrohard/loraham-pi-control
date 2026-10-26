@@ -16,8 +16,9 @@ import subprocess
 import pytest
 
 from lhpc.core import build_launcher_runtime as blr
-from lhpc.core import progress, reslock
+from lhpc.core import build_plan, progress, reslock
 from lhpc.core.lifecycle import Lifecycle
+from lhpc.core.manifest import load_manifest
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult, FakeSystem
 from lhpc.core.services import ControllerService
@@ -225,7 +226,7 @@ def test_the_console_builds_a_component_as_the_cli_does(tmp_path, monkeypatch):
     for sp in ("src/reticulum", "src/loraham-rns-interface", "src/nomadnet"):
         (root / sp).mkdir(parents=True, exist_ok=True)
     steps = [["python3", "-m", "venv", "--system-site-packages", ".venv"],
-             [".venv/bin/pip", "install", "--disable-pip-version-check", "{runtime}/src/reticulum"],
+             [".venv/bin/pip", "install", "--disable-pip-version-check", "git+file://{runtime}/src/reticulum"],
              [".venv/bin/pip", "install", "--disable-pip-version-check", "."]]
     plan = svc.build("nomadnet")
     assert plan.ok and plan.details == [
@@ -284,3 +285,31 @@ def test_parallel_jobs_share_a_dependency(tmp_path, monkeypatch):
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
     assert ran == ["beside a shared holder"]
+
+
+def _local_pip_dirs(comp) -> list:
+    """The local directories `comp`'s build steps pip-install (`.` is its own checkout)."""
+    out = []
+    for argv in (st.get("argv") or [] for st in comp.build_steps):
+        if argv and "pip" in argv[0] and "install" in argv:
+            out += [f"{{runtime}}/{comp.source.path}" if a == "." and comp.source else a
+                    for a in argv if a == "." or a.startswith("{runtime}/")]
+    return out
+
+
+def test_no_console_round_installs_one_local_directory_twice():
+    """The console builds one round's components in parallel. pip builds a local directory
+    in-tree, so two installs of the same one in a round share its build/ and break each other
+    (nomadnet, lxmd and Sideband on src/reticulum: "Failed building wheel for rns")."""
+    for stack in load_manifest():
+        ordered, built = build_plan.order(build_plan.select(list(stack.components), stack)), set()
+
+        def is_built(c, built=built):
+            return c.id in built
+        while True:
+            comps, again = build_plan.web_round(ordered, is_built)
+            dirs = [d for c in comps for d in _local_pip_dirs(c)]
+            assert len(dirs) == len(set(dirs)), (stack.id, dirs)
+            built.update(c.id for c in comps)
+            if not again:
+                break
