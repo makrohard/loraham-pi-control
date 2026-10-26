@@ -410,7 +410,7 @@ def test_clients_take_rns_from_the_pinned_checkout(cid):
     comp = _comp(cid)
     pips = [st["argv"] for st in comp.build_steps
             if st.get("argv") and "pip" in st["argv"][0] and "install" in st["argv"]]
-    assert pips and pips[0][-1] == "{runtime}/src/reticulum", pips
+    assert pips and pips[0][-1] == "git+file://{runtime}/src/reticulum", pips
     assert "rns" in comp.build_requires
     assert _comp("rns").source.path == "src/reticulum"
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.4
+
+Fixed
+
+- Reticulum: a console Build of nomadnet, lxmd and Sideband no longer fails with "Failed building wheel
+  for rns"; each installs RNS from its own clone of the pinned checkout.
+
 ## 0.13.3
 
 Fixed

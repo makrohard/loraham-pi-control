@@ -3325,8 +3325,10 @@ argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
 [[stack.component.build_steps]]
 # RNS FROM THE PINNED CHECKOUT, before the client's own install, so the client's `rns`
 # requirement is already satisfied and PyPI never picks the version: the client and the
-# shared instance it attaches to run the same Reticulum.
-argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "{runtime}/src/reticulum"]
+# shared instance it attaches to run the same Reticulum. `git+file://` builds from pip's own
+# clone of the checkout's committed pin: the console builds these clients in one parallel
+# round, and a plain directory install builds in-tree, in the one shared build/ directory.
+argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "git+file://{runtime}/src/reticulum"]
 announce = "[install] Reticulum from the pinned checkout into {source}/.venv"
 [[stack.component.build_steps]]
 argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "."]
@@ -3369,8 +3371,10 @@ argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
 [[stack.component.build_steps]]
 # RNS FROM THE PINNED CHECKOUT, before the client's own install, so the client's `rns`
 # requirement is already satisfied and PyPI never picks the version: the client and the
-# shared instance it attaches to run the same Reticulum.
-argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "{runtime}/src/reticulum"]
+# shared instance it attaches to run the same Reticulum. `git+file://` builds from pip's own
+# clone of the checkout's committed pin: the console builds these clients in one parallel
+# round, and a plain directory install builds in-tree, in the one shared build/ directory.
+argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "git+file://{runtime}/src/reticulum"]
 announce = "[install] Reticulum from the pinned checkout into {source}/.venv"
 [[stack.component.build_steps]]
 argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "."]
@@ -3429,8 +3433,10 @@ argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
 [[stack.component.build_steps]]
 # RNS FROM THE PINNED CHECKOUT, before the client's own install, so the client's `rns`
 # requirement is already satisfied and PyPI never picks the version: the client and the
-# shared instance it attaches to run the same Reticulum.
-argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "{runtime}/src/reticulum"]
+# shared instance it attaches to run the same Reticulum. `git+file://` builds from pip's own
+# clone of the checkout's committed pin: the console builds these clients in one parallel
+# round, and a plain directory install builds in-tree, in the one shared build/ directory.
+argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "git+file://{runtime}/src/reticulum"]
 announce = "[install] Reticulum from the pinned checkout into {source}/.venv"
 [[stack.component.build_steps]]
 # VERSION-PINNED PyPI install, deliberately not `pip install .` from the checkout.
