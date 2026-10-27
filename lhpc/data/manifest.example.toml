@@ -2243,8 +2243,8 @@ main = "meshcom-qemu"
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
     # The setup step fetches from this remote (--src), and a repo test keeps the two identical.
     path = "src/MeshCom-Firmware"
-    pin_commit = "05b842a28791c9478190f6cea0fcd547545d1873"
-    pin_tag = "v4.40a.hbserver-12-g05b842a2"
+    pin_commit = "10203967d50065ecfa3832b05418dab9001ddd21"
+    pin_tag = "v4.40a.spserver-24-g10203967"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 
