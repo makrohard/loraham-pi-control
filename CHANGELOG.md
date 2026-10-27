@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.5
+
+- MeshCom-Firmware: 05b842a28 -> 10203967d (v4.40a.spserver-24-g10203967), used by meshcom-firmware
+
 ## 0.13.4
 
 Fixed
