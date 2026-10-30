@@ -403,16 +403,28 @@ def test_sideband_is_built_from_its_pinned_checkout():
 
 
 @pytest.mark.parametrize("cid", ["lxmd", "nomadnet", "sideband"])
-def test_clients_take_rns_from_the_pinned_checkout(cid):
-    """A client that let pip resolve `rns` got PyPI's newest while the shared instance ran the
-    pin. The checkout is installed FIRST, so the client's own install finds `rns` satisfied,
-    and `build_requires` makes a moved Reticulum pin mark the client for a rebuild."""
-    comp = _comp(cid)
-    pips = [st["argv"] for st in comp.build_steps
-            if st.get("argv") and "pip" in st["argv"][0] and "install" in st["argv"]]
-    assert pips and pips[0][-1] == "git+file://{runtime}/src/reticulum", pips
-    assert "rns" in comp.build_requires
+def test_clients_take_rns_from_the_nodes_wheel(cid):
+    """A client that let pip resolve `rns` got PyPI's newest while the shared instance ran the pin. Its first
+    build step installs the wheel the node built from the pinned checkout (rns-wheel.sh), before its own
+    install, and `build_requires` builds the node (and its wheel) in an earlier round."""
+    argvs = [st.get("argv") or [] for st in _comp(cid).build_steps]
+    wheel = [i for i, a in enumerate(argvs) if a[:3] == ["bash", "{asset}/scripts/rns-wheel.sh", "install"]]
+    pips = [i for i, a in enumerate(argvs) if a and "pip" in a[0] and "install" in a]
+    assert len(wheel) == 1 and argvs[wheel[0]][3] == "{runtime}/src/reticulum/.venv/lhpc-wheel", argvs
+    assert pips and wheel[0] < pips[0], argvs
+    # every pip install after the wheel is constrained to the node's rns (rns-wheel.sh writes the file)
+    assert all(argvs[i][2:4] == ["-c", ".venv/lhpc-rns-constraint.txt"] for i in pips if i > wheel[0]), argvs
+    assert "rns" in _comp(cid).build_requires
     assert _comp("rns").source.path == "src/reticulum"
+
+
+def test_the_node_builds_the_one_wheel_the_clients_take():
+    """The node builds the wheel of its checkout after its own install (rns-wheel.sh build: the old
+    directory removed, exactly one wheel, installed into the node too)."""
+    argvs = [st.get("argv") or [] for st in _comp("rns").build_steps]
+    own = argvs.index([".venv/bin/pip", "install", "--disable-pip-version-check", "."])
+    built = [i for i, a in enumerate(argvs) if a == ["bash", "{asset}/scripts/rns-wheel.sh", "build", ".venv/lhpc-wheel"]]
+    assert len(built) == 1 and own < built[0], argvs
 
 
 def test_status_versions_names_a_package_that_differs(tmp_path):
@@ -741,6 +753,9 @@ def test_changing_a_consumed_source_invalidates_the_completed_receipt(tmp_path, 
     marker.parent.mkdir(parents=True, exist_ok=True)
     # A completed build: the marker is written with the SHAs consumed at build time.
     marker.write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(sideband))
+    side = svc.build_inputs_path(sideband)       # and the recorded assets its steps ran (rns-wheel.sh)
+    side.parent.mkdir(parents=True, exist_ok=True)
+    side.write_text(svc.build_inputs_text(sideband))
     assert svc.is_built(sideband) is True, "a freshly written receipt must read built"
 
     # The driver moves underneath the finished build — the exact race the lock gap
@@ -765,6 +780,10 @@ def _marker_service(tmp_path):
         marker = paths.resolve_source(comp.source.path) / comp.build_marker
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(text)
+        if comp.asset_inputs:            # a real build also records the assets its steps ran (rns-wheel.sh)
+            side = svc.build_inputs_path(comp)
+            side.parent.mkdir(parents=True, exist_ok=True)
+            side.write_text(svc.build_inputs_text(comp))
         return svc.is_built(comp)
     return svc, built_with
 

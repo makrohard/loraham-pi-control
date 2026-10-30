@@ -226,8 +226,8 @@ def test_the_console_builds_a_component_as_the_cli_does(tmp_path, monkeypatch):
     for sp in ("src/reticulum", "src/loraham-rns-interface", "src/nomadnet"):
         (root / sp).mkdir(parents=True, exist_ok=True)
     steps = [["python3", "-m", "venv", "--system-site-packages", ".venv"],
-             [".venv/bin/pip", "install", "--disable-pip-version-check", "git+file://{runtime}/src/reticulum"],
-             [".venv/bin/pip", "install", "--disable-pip-version-check", "."]]
+             ["bash", "{asset}/scripts/rns-wheel.sh", "install", "{runtime}/src/reticulum/.venv/lhpc-wheel"],
+             [".venv/bin/pip", "install", "-c", ".venv/lhpc-rns-constraint.txt", "--disable-pip-version-check", "."]]
     plan = svc.build("nomadnet")
     assert plan.ok and plan.details == [
         "  [build] nomadnet: " + " ; ".join(" ".join(argv) for argv in steps)]

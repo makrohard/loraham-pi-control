@@ -3020,6 +3020,14 @@ argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
 argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "."]
 announce = "[install] Reticulum into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow"
 [[stack.component.build_steps]]
+# The clients (nomadnet, lxmd, Sideband) install RNS from this one wheel: the console builds them in one
+# parallel round, and a clone or an in-tree build per client raced (0.13.3) or starved a small box (0.13.4).
+# Inside .venv it is a regenerable artifact, never an operator's file, and it goes with the venv. The
+# script removes the old directory strictly, builds exactly one wheel and installs it here too, so the
+# node runs the same file as its clients.
+argv = ["bash", "{asset}/scripts/rns-wheel.sh", "build", ".venv/lhpc-wheel"]
+announce = "[build] the Reticulum wheel the clients install, into {source}/.venv/lhpc-wheel"
+[[stack.component.build_steps]]
 argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "{runtime}/src/loraham-rns-interface"]
 announce = "[install] the direct-SPI LoRa interface + loraham-rns-node"
 [[stack.component.build_steps]]
@@ -3413,13 +3421,15 @@ argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
 [[stack.component.build_steps]]
 # RNS FROM THE PINNED CHECKOUT, before the client's own install, so the client's `rns`
 # requirement is already satisfied and PyPI never picks the version: the client and the
-# shared instance it attaches to run the same Reticulum. `git+file://` builds from pip's own
-# clone of the checkout's committed pin: the console builds these clients in one parallel
-# round, and a plain directory install builds in-tree, in the one shared build/ directory.
-argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "git+file://{runtime}/src/reticulum"]
-announce = "[install] Reticulum from the pinned checkout into {source}/.venv"
+# shared instance it attaches to run the same Reticulum. The wheel is the one the node built
+# from its checkout (`rns`'s build steps); nothing is cloned or built here, so the console's
+# parallel round of clients shares nothing that changes. The script installs that one FILE, with
+# no index and no pip configuration, over any rns the venv already sees; the client's own install
+# below pulls RNS's dependencies.
+argv = ["bash", "{asset}/scripts/rns-wheel.sh", "install", "{runtime}/src/reticulum/.venv/lhpc-wheel"]
+announce = "[install] Reticulum from the node's wheel into {source}/.venv"
 [[stack.component.build_steps]]
-argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "."]
+argv = [".venv/bin/pip", "install", "-c", ".venv/lhpc-rns-constraint.txt", "--disable-pip-version-check", "."]
 announce = "[install] NomadNet into {source}/.venv — pip is quiet off-TTY"
 
 [[stack.component]]
@@ -3459,13 +3469,15 @@ argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
 [[stack.component.build_steps]]
 # RNS FROM THE PINNED CHECKOUT, before the client's own install, so the client's `rns`
 # requirement is already satisfied and PyPI never picks the version: the client and the
-# shared instance it attaches to run the same Reticulum. `git+file://` builds from pip's own
-# clone of the checkout's committed pin: the console builds these clients in one parallel
-# round, and a plain directory install builds in-tree, in the one shared build/ directory.
-argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "git+file://{runtime}/src/reticulum"]
-announce = "[install] Reticulum from the pinned checkout into {source}/.venv"
+# shared instance it attaches to run the same Reticulum. The wheel is the one the node built
+# from its checkout (`rns`'s build steps); nothing is cloned or built here, so the console's
+# parallel round of clients shares nothing that changes. The script installs that one FILE, with
+# no index and no pip configuration, over any rns the venv already sees; the client's own install
+# below pulls RNS's dependencies.
+argv = ["bash", "{asset}/scripts/rns-wheel.sh", "install", "{runtime}/src/reticulum/.venv/lhpc-wheel"]
+announce = "[install] Reticulum from the node's wheel into {source}/.venv"
 [[stack.component.build_steps]]
-argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "."]
+argv = [".venv/bin/pip", "install", "-c", ".venv/lhpc-rns-constraint.txt", "--disable-pip-version-check", "."]
 announce = "[install] LXMF into {source}/.venv — pip is quiet off-TTY"
 
 [[stack.component]]
@@ -3521,11 +3533,13 @@ argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
 [[stack.component.build_steps]]
 # RNS FROM THE PINNED CHECKOUT, before the client's own install, so the client's `rns`
 # requirement is already satisfied and PyPI never picks the version: the client and the
-# shared instance it attaches to run the same Reticulum. `git+file://` builds from pip's own
-# clone of the checkout's committed pin: the console builds these clients in one parallel
-# round, and a plain directory install builds in-tree, in the one shared build/ directory.
-argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "git+file://{runtime}/src/reticulum"]
-announce = "[install] Reticulum from the pinned checkout into {source}/.venv"
+# shared instance it attaches to run the same Reticulum. The wheel is the one the node built
+# from its checkout (`rns`'s build steps); nothing is cloned or built here, so the console's
+# parallel round of clients shares nothing that changes. The script installs that one FILE, with
+# no index and no pip configuration, over any rns the venv already sees; the client's own install
+# below pulls RNS's dependencies.
+argv = ["bash", "{asset}/scripts/rns-wheel.sh", "install", "{runtime}/src/reticulum/.venv/lhpc-wheel"]
+announce = "[install] Reticulum from the node's wheel into {source}/.venv"
 [[stack.component.build_steps]]
 # VERSION-PINNED PyPI install, deliberately not `pip install .` from the checkout.
 # Sideband's own setup.py looks for `kivymd` beside setup.py while the repo keeps it
@@ -3535,14 +3549,14 @@ announce = "[install] Reticulum from the pinned checkout into {source}/.venv"
 # symlinks), and patching upstream is out of scope. Pinning the VERSION keeps the
 # installed artefact deterministic; it must match the pinned checkout's __version__
 # (tests/test_reticulum_stack.py enforces that).
-argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "sbapp==1.9.2"]
+argv = [".venv/bin/pip", "install", "-c", ".venv/lhpc-rns-constraint.txt", "--disable-pip-version-check", "sbapp==1.9.2"]
 
 [[stack.component.build_steps]]
 # Idempotence guard: pip treats an already-present 1.9.2 as satisfied and skips it, so a
 # venv carrying a BROKEN build of the same version (e.g. an earlier `pip install .`, which
 # drops every .kv layout) survives a rebuild untouched and the app dies at window creation.
 # --no-deps keeps this to the package itself; the step above resolved the dependency tree.
-argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "--force-reinstall", "--no-deps", "sbapp==1.9.2"]
+argv = [".venv/bin/pip", "install", "-c", ".venv/lhpc-rns-constraint.txt", "--disable-pip-version-check", "--force-reinstall", "--no-deps", "sbapp==1.9.2"]
 
 [[stack.component.build_steps]]
 argv = ["install", "-d", "-m", "0700", "{runtime}/state/sideband/kivy"]
