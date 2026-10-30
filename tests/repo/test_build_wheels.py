@@ -35,7 +35,8 @@ def test_every_pip_step_of_a_timed_build_is_covered_and_no_excluded_one():
                     want.append(f"{comp['id']} {' '.join(argv[2:])}")
     r = subprocess.run([sys.executable, str(SCRIPT), "steps", MANIFEST, BASELINE],
                        capture_output=True, text=True, check=True)
-    assert r.stdout.splitlines() == want and len(want) == 13
+    assert r.stdout.splitlines() == want and len(want) == 11
+    # nomadnet's and lxmd's Reticulum step is the node's wheel through rns-wheel.sh: no pip step to fetch for.
     # sideband's build installs with pip too, but the row excludes it (GTK/Kivy only).
     assert "sideband" in excluded and not any(s.startswith("sideband ") for s in want)
 
@@ -98,3 +99,47 @@ def test_a_build_step_becomes_pip_wheel_from_its_pinned_source(tmp_path, monkeyp
         assert head == pins[name]
     assert re.fullmatch(r'\[\[transfer\]\]\nwhat = "wheels for the build of a"\nseconds = '
                         r"\d+\.\d\n\n", transfers.read_text())
+
+
+def test_the_node_and_a_client_get_their_constraint_before_their_replay(tmp_path, monkeypatch):
+    """The node (rns-wheel.sh build) and a client (rns-wheel.sh install) run their later pip installs with
+    `-c .venv/lhpc-rns-constraint.txt`; the prefetch writes that file in both checkouts (`rns @ file://` a wheel it
+    builds once from the node's checkout) before replaying them, so they resolve as in the timed build."""
+    bw = _module()
+    mirrors = tmp_path / "mirrors"
+    mirrors.mkdir()
+    pins = {}
+    for name in ("node", "client"):
+        pins[name] = _repo(tmp_path / f"up-{name}", {"setup.py": ""})
+        remote = f"https://example.invalid/x/{name}.git"
+        subprocess.run(["git", "clone", "-q", "--mirror", str(tmp_path / f"up-{name}"),
+                        str(mirrors / bw.mirror_sources.mirror_name(remote))], check=True)
+    manifest = tmp_path / "m.toml"
+    manifest.write_text(
+        '[[stack]]\nid = "s"\n'
+        '[[stack.component]]\nid = "node"\n'
+        '[stack.component.source]\npath = "src/node"\nremote = "https://example.invalid/x/node.git"\n'
+        f'pin_commit = "{pins["node"]}"\n'
+        '[[stack.component.build_steps]]\nargv = [".venv/bin/pip", "install", "."]\n'
+        '[[stack.component.build_steps]]\nargv = ["bash", "{asset}/scripts/rns-wheel.sh", "build", ".venv/lhpc-wheel"]\n'
+        '[[stack.component.build_steps]]\nargv = [".venv/bin/pip", "install", "-c", ".venv/lhpc-rns-constraint.txt", "iface"]\n'
+        '[[stack.component]]\nid = "client"\n'
+        '[stack.component.source]\npath = "src/client"\nremote = "https://example.invalid/x/client.git"\n'
+        f'pin_commit = "{pins["client"]}"\n'
+        '[[stack.component.build_steps]]\nargv = ["bash", "{asset}/scripts/rns-wheel.sh", "install", '
+        '"{runtime}/src/node/.venv/lhpc-wheel"]\n'
+        '[[stack.component.build_steps]]\nargv = [".venv/bin/pip", "install", "-c", ".venv/lhpc-rns-constraint.txt", "."]\n')
+    baseline = tmp_path / "b.toml"
+    baseline.write_text("[excluded]\n")
+    rt, calls, seen = tmp_path / "rt", [], []
+    wheel = tmp_path / "built" / "rns-1.5.5-py3-none-any.whl"
+    # Stubs the collaborators: the network fetch (records it) and the node's wheel (no build here).
+    monkeypatch.setattr(bw, "_run", lambda argv, cwd=None: calls.append((argv, cwd)))
+    monkeypatch.setattr(bw.tempfile, "mkdtemp", lambda prefix: str(rt))
+    monkeypatch.setattr(bw, "_node_wheel", lambda project, scratch: seen.append(project) or wheel)
+    bw.fetch(manifest, baseline, mirrors, tmp_path / "asset", tmp_path / "w", tmp_path / "transfers.toml")
+    assert seen == [rt / "src" / "node"]                                  # built once for both
+    for name in ("node", "client"):
+        assert (rt / "src" / name / ".venv" / "lhpc-rns-constraint.txt").read_text() == f"rns @ {wheel.resolve().as_uri()}\n"
+    w = [sys.executable, "-m", "pip", "wheel", "-q", "-w", str(tmp_path / "w"), "-c", ".venv/lhpc-rns-constraint.txt"]
+    assert (w + ["iface"], rt / "src" / "node") in calls and (w + ["."], rt / "src" / "client") in calls

@@ -11,6 +11,8 @@ Fixed
 
 - Reticulum: a console Build of nomadnet, lxmd and Sideband no longer fails with "Failed building wheel
   for rns"; each installs RNS from its own clone of the pinned checkout.
+- Reticulum: nomadnet, lxmd and Sideband install and keep the node's RNS (its wheel, no clone), so a console Build no
+  longer exhausts a 512 MB box, and a newer RNS from PyPI no longer replaces it.
 - Status: where no thread can start (the demo page, a box at its thread limit) a snapshot probes its
   checkouts one after another instead of failing; the demo's own workaround is removed.
 - GPS feed: a stop signal that arrived while the feed was inside its own stop event's lock hung the

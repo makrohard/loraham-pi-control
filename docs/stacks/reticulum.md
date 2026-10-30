@@ -121,10 +121,11 @@ The frontend is **shipped prebuilt** as package data (no npm on the box); the ba
 from `meshchat-constraints.txt`, an exact closure re-checked at each bump; its `rns` must match the node's.
 
 **Versions.** lxmd, nomadnet and Sideband install RNS from the `src/reticulum` checkout, so they run
-the node's Reticulum; a moved pin marks them for a rebuild. They install the checkout's committed pin
-(pip clones it), while the node builds from its working tree. LXMF comes from PyPI (1.1.1) for
-nomadnet, Sideband and MeshChat, while lxmd runs the `src/lxmf` checkout (1.1.0): that pinned
-commit lacks PyPI 1.1.1's LXMPeer sync-backoff fix.
+the node's Reticulum; a moved pin marks them for a rebuild. They install the wheel the node
+builds from its checkout, and their own installs (and the node's later one) are held to that wheel
+file: nomadnet and Sideband take LXMF 1.2.0 from PyPI (1.2.1 needs a newer RNS), and lxmd runs the
+`src/lxmf` checkout (1.2.0).
+MeshChat installs its own pinned LXMF and RNS from `meshchat-constraints.txt`.
 `lhpc status --versions` shows each client's `rns`/`lxmf` and names a package that differs.
 
 MeshChat's own **propagation-node** switch (off by default) lives in its SQLite settings and is
