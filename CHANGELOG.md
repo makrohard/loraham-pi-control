@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Console: a stack's Build on a box with less than 256 MiB available (a Pi Zero 2 W) runs its component jobs
+  one at a time instead of all at once, so the console keeps answering during the build.
+
 ## 0.13.6
 
 Fixed

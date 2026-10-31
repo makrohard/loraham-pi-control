@@ -964,7 +964,8 @@ def render_build_launcher(steps: list, runtime: str, source: str,
                           step_timeout: float | None = None,
                           shared_lock_paths: list | tuple = (),
                           consumed: list | tuple = (),
-                          rev_path: str = "", rev_consumed: list | tuple = ()) -> str:
+                          rev_path: str = "", rev_consumed: list | tuple = (),
+                          round_lock_path: str = "") -> str:
     """A self-contained Python launcher that runs build/test steps sequentially with
     NO shell: it resolves `{pkgconfig:NAME}` via pkg-config and runs each argv with
     its env and cwd, streaming output. Returns nonzero on the first failing step.
@@ -1015,6 +1016,9 @@ def render_build_launcher(steps: list, runtime: str, source: str,
             "lock_names": sorted(_P(p).name for p in lock_paths),
             "shared_lock_names": sorted(_P(p).name for p in shared_lock_paths),
             "index_lock_name": (_P(index_lock).name if index_lock else ""),
+            # A serial console round's lock (build_plan.round_lock): held for the job's whole run,
+            # waited for before any other lock. "" = the round runs in parallel.
+            "round_lock_name": (_P(round_lock_path).name if round_lock_path else ""),
             # Web-job attempt identity (all plain identity strings — no secrets) so the child can
             # gate on its job marker and record a terminal green/red result. "" for non-web builds.
             "result_name": result_name, "attempt_id": attempt_id,
