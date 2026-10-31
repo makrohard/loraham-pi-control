@@ -40,27 +40,32 @@ def test_the_reboot_counts_only_with_a_new_boot_id(tmp_path, answers, bound, aft
         assert p.returncode == 0 and f"after={after}" in p.stdout, p.stdout + p.stderr
 
 
-def _wait_up(tmp_path, state, rc):
+def _wait_up(tmp_path, state, rc, shifting_clock=False):
     """guest.sh's wait_up against a stubbed guest whose remote shell runs the job's own command with a systemctl that
-    prints `state` and exits `rc`; bound 0, so a state it does not accept fails at once."""
+    prints `state` and exits `rc`; bound 0, so a state it does not accept fails at once. `shifting_clock`: `date`
+    answers 1000, then 1001 (a second boundary between wait_up's two reads; a file counter, as date runs in $( ))."""
+    clock = (f"""date() {{ local n; n=$(cat {tmp_path}/clock 2>/dev/null || echo 0); echo $((n + 1)) > {tmp_path}/clock
+          [ "$n" = 0 ] && echo 1000 || echo 1001; }}""" if shifting_clock else "")
     script = f"""set -euo pipefail
 WORK={tmp_path}; EV={tmp_path}; . {LANE / "guest.sh"}
 sleep() {{ :; }}
+{clock}
 g() {{ bash -c 'systemctl() {{ echo {state}; return {rc}; }}; '"$*"; }}
 u=$(wait_up 0); echo "up=$u"
 """
     return subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
 
 
-@pytest.mark.parametrize("state, rc, up", [
-    ("running", 0, True), ("degraded", 1, True),    # what systemctl is-system-running answers when up
-    ("running", 7, False),                          # it printed "running" but failed: not up (G1-LBS-2 B1)
-    ("degraded", 0, False), ("starting", 1, False), ("", 255, False),
+@pytest.mark.parametrize("state, rc, up, shifting_clock", [
+    ("running", 0, True, False), ("degraded", 1, True, False),   # what systemctl is-system-running answers when up
+    ("running", 0, True, True),                     # the elapsed seconds are not what this proves (G1-LBS-3 B5)
+    ("running", 7, False, False),                   # it printed "running" but failed: not up (G1-LBS-2 B1)
+    ("degraded", 0, False, False), ("starting", 1, False, False), ("", 255, False, False),
 ])
-def test_the_guest_is_up_only_on_the_status_systemctl_gives_with_that_state(tmp_path, state, rc, up):
-    p = _wait_up(tmp_path, state, rc)
+def test_the_guest_is_up_only_on_the_status_systemctl_gives_with_that_state(tmp_path, state, rc, up, shifting_clock):
+    p = _wait_up(tmp_path, state, rc, shifting_clock)
     if up:
-        assert p.returncode == 0 and f"up=0 {state}" in p.stdout, p.stdout + p.stderr
+        assert p.returncode == 0 and re.search(rf"^up=\d+ {state}$", p.stdout, re.M), p.stdout + p.stderr
     else:
         assert p.returncode != 0 and "up=" not in p.stdout, p.stdout + p.stderr
 
