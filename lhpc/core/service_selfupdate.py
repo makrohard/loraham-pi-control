@@ -9,6 +9,7 @@ from os.path import exists as _op_exists
 from os.path import join as _op_join
 from typing import ClassVar
 
+from . import proxy_rerender
 from .paths import PathContainmentError
 from .service_base import ActionResult, _proc_ceased, _proc_start_time, _StopRun
 from .snapshot_memo import invalidates_snapshot
@@ -579,7 +580,8 @@ class SelfUpdateOpsMixin:
         # provably ours; no restart here (the update flow owns that).
         ok_units, unit_detail = self._refresh_units_post_update()
         res = _dc.replace(res, data={**res.data, "units_refreshed": ok_units,
-                                     "units_refresh_detail": unit_detail})
+                                     "units_refresh_detail": unit_detail,
+                                     "proxies_rerender": proxy_rerender.after_update(self._paths)})
         if not ok_units:
             # VISIBLE, not buried in data: a successful-looking update that left stale
             # units disables boot restore, and the operator has no reason to suspect it.
@@ -771,6 +773,11 @@ class SelfUpdateOpsMixin:
                     data={"fw_mark_failed": True}, next_commands=["lhpc self-update --apply"],
                     details=[f"  state/firewall-postupdate.pending could not be written ({cause}); "
                              "fix that, then run the update again"]))
+            if (cause := proxy_rerender.mark(self._paths)):         # CO-14: the proxies' re-render
+                raise _FWAbort(ActionResult(
+                    False, "Could not record the proxies' re-render — nothing changed.",
+                    data={"render_mark_failed": True}, next_commands=["lhpc self-update --apply"],
+                    details=[f"  {cause}; fix that, then run the update again"]))
             intent = self._stamp(new_candidates, from_head)
             hook.update(**{"from": from_head, "to": to_head, "branch": branch, "intent": intent})
             if not intent:
@@ -1196,7 +1203,8 @@ class SelfUpdateOpsMixin:
                         # then reads its own integration as non-canonical, one-click
                         # updating goes away and boot restore is skipped.
                         ok_u, det_u = self._refresh_units_post_update()
-                        refreshed = {"units_refreshed": ok_u, "units_refresh_detail": det_u}
+                        refreshed = {"units_refreshed": ok_u, "units_refresh_detail": det_u,
+                                     "proxies_rerender": proxy_rerender.after_update(self._paths)}
                         # `venv-unsynced` is cleared only now, with the units refreshed (as in
                         # `_apply_and_sync`): an interruption in between keeps it recorded.
                         uncleared = self._clear_incomplete_states(

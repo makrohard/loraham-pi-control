@@ -177,7 +177,9 @@ class WebserverOpsMixin:
         was promoted, the reload/restart succeeded, and the listener-match gate passed. Fail-soft —
         a policy record that cannot be written must not turn a successful apply into a failure
         (the stale snapshot then keeps the posture conservative, which is the safe direction)."""
+        from . import proxy_rerender
         from . import webserver as _ws
+        proxy_rerender.clear(self._paths)              # CO-14: this release's render is live
         try:
             _ws.record_applied(self._paths, cfg, proxies)
         except Exception:

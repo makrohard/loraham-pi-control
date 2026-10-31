@@ -288,10 +288,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # A Webserver Apply the firewall gate deferred leaves a durable marker until the watchdog
         # completes it after the firewall is verified. Every page shows a persistent notice with
         # the click path while that marker exists: one `stat`, no network, fail-safe.
+        # CO-14: a self-update whose re-render of the stack proxies has not completed.
+        from lhpc.core import proxy_rerender
         try:
-            return {"ws_apply_pending": bool(service.webserver_apply_pending())}
+            return {"ws_apply_pending": bool(service.webserver_apply_pending()),
+                    "ws_render_pending": proxy_rerender.pending(service._paths)}
         except Exception:
-            return {"ws_apply_pending": False}
+            return {"ws_apply_pending": False, "ws_render_pending": None}
 
     @app.context_processor
     def _inject_disk_notice():

@@ -448,6 +448,11 @@ Internal — `lhpc _stack-start <target> --web-result web-<start|restart>-<targe
 the detached runner behind a web Start/Restart
 ([operations](operations.md#operating-the-console)).
 
+### _webserver-rerender
+Internal — `lhpc _webserver-rerender --root <dir>`: run by `lhpc self-update` in the new checkout,
+it renders the nginx config, applies it when it differs from the deployed one, and exits 1 when
+*Apply needed* stays ([deployment](deployment.md)).
+
 ### _controller-uninstall-prep
 Internal — `lhpc _controller-uninstall-prep [--root <dir>]`: `uninstall.sh`'s quiescence gate; exit
 0 = safe to remove ([operations → backup](operations.md#backup--restore)).

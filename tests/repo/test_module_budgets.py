@@ -39,10 +39,10 @@ BUDGETS = {
     "service_params.py": (2485, 39),
     "service_rflog.py": (474, 13),  # split-s1: split from service_lifecycle_ops.py
     "service_secrets.py": (399, 2),
-    "service_selfupdate.py": (1932, 22),
+    "service_selfupdate.py": (1939, 22),  # b3-c6: the proxies' re-render marked before the checkout moves, handed to the new interpreter after
     "service_stop.py": (791, 5),  # split-s7: split from service_lifecycle_ops.py
     "service_system.py": (759, 2),
-    "service_webserver.py": (2389, 42),  # b3-c3: a stack's own listeners in the stack-web port refusal
+    "service_webserver.py": (2391, 42),  # b3-c3: a stack's own listeners in the stack-web port refusal; b3-c6: a proven Apply clears the re-render marker
 }
 
 
