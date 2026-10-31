@@ -776,7 +776,7 @@ main = "loraham-kiss-tnc"
     name = "kiss_port"
     kind = "int"
     arg = "--kiss-port"
-    default = "8001"
+    default = "{port:8001}"
     min = 1
     max = 65535
     label = "KISS TCP port"
@@ -875,7 +875,7 @@ main = "loraham-kiss-tnc"
 
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:8001"
+    address = "127.0.0.1:{port:8001}"
     ready = true
     role = "listener"
     description = "KISS over TCP"
@@ -886,7 +886,7 @@ main = "loraham-kiss-tnc"
     firewall = { port_param = "kiss_port", bind_param = "kiss_host", allow_param = "kiss_bind", auth = "none" }
 
     [[stack.component.resource]]
-    key = "tcp.port.8001"
+    key = "tcp.port.{port:8001}"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
@@ -905,7 +905,7 @@ main = "loraham-kiss-tnc"
   optional = true
   depends_on = ["loraham-kiss-tnc"]
   start_order = 2
-  run_argv = ["socat", "-d", "-d", "PTY,link={runtime}/state/loraham_kiss,raw,echo=0,waitslave,mode=666", "TCP:127.0.0.1:8001"]
+  run_argv = ["socat", "-d", "-d", "PTY,link={runtime}/state/loraham_kiss,raw,echo=0,waitslave,mode=666", "TCP:127.0.0.1:{port:8001}"]
   note = "Optional socat PTY <-> KISS/TCP(127.0.0.1:8001) bridge; exposes <runtime>/state/loraham_kiss (in-root; point external tools there). Runs socat DIRECTLY (not the wrapper script, which traps SIGTERM and respawns socat) so lhpc owns the socat process and stops it cleanly. Needs socat."
 
     [stack.component.source]
@@ -1005,7 +1005,7 @@ main = "graywolf"
   ui_user = "admin"
   ui_password_file = "state/graywolf/graywolf-admin.txt"
   ui_password_note = "graywolf generates this password itself on first start. LHPC owns the account: it signs in on every start to apply the settings, so if you change the password in the app's own UI, write the new one into that file or the next start will fail."
-  run_argv = ["{runtime}/build/tools/graywolf/usr/bin/graywolf", "-config", "{runtime}/state/graywolf/graywolf.db", "-http", "127.0.0.1:8080"]
+  run_argv = ["{runtime}/build/tools/graywolf/usr/bin/graywolf", "-config", "{runtime}/state/graywolf/graywolf.db", "-http", "127.0.0.1:{port:8080}"]
   # `-http` is deliberately NOT a param: LHPC never merges a user value into a longer token
   # (host:port is ONE argv token), and the UI is password-authenticated operator surface that
   # belongs on loopback. Reach it through this stack's web proxy, or an SSH tunnel; exposing it
@@ -1017,7 +1017,7 @@ main = "graywolf"
   post_steps = [
     { kind = "exec", label = "provision", required = true, argv = [
         "{controller_python}", "{asset}/scripts/graywolf-provision.py",
-        "--api-addr", "127.0.0.1:8080",
+        "--api-addr", "127.0.0.1:{port:8080}",
         "--state-dir", "{runtime}/state/graywolf",
         "--channel-name", "LoRaHAM KISS",
         "{param:tnc_host}", "{param:tnc_port}", "{param:call}",
@@ -1048,7 +1048,7 @@ main = "graywolf"
 
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:8080"
+    address = "127.0.0.1:{port:8080}"
     ready = true
     role = "listener"
     description = "Graywolf web UI"
@@ -1062,14 +1062,14 @@ main = "graywolf"
     firewall = { auth = "password" }
 
     [[stack.component.resource]]
-    key = "tcp.port.8080"
+    key = "tcp.port.{port:8080}"
     kind = "tcp-port"
     mode = "exclusive"
     # The KISS listener belongs to loraham-kiss-tnc; graywolf only dials it. Recorded as a
     # CONSUMER so the dependency is visible without falsely conflicting with the TNC's own
     # exclusive claim on the same port.
     [[stack.component.resource]]
-    key = "tcp.port.8001"
+    key = "tcp.port.{port_of:kiss:8001}"
     kind = "tcp-port"
     mode = "consumer"
 
@@ -1085,7 +1085,7 @@ main = "graywolf"
     name = "tnc_port"
     kind = "int"
     arg = "--tnc-port"
-    default = "8001"
+    default = "{port_of:kiss:8001}"
     min = 1
     max = 65535
     label = "KISS TNC port"
@@ -1591,7 +1591,7 @@ main = "meshtastic"
 
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:4403"
+    address = "127.0.0.1:{port:4403}"
     ready = true
     role = "listener"
     # Managed Firewall DENY-DEFAULT: binds 0.0.0.0 unconditionally with NO auth and no
@@ -1603,7 +1603,7 @@ main = "meshtastic"
     scheme = "tcp"
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:9443"
+    address = "127.0.0.1:{port:9443}"
     # Managed Firewall DENY-DEFAULT (see 4403): the stack web proxy (suggested :8447) is the sanctioned path.
     firewall = { auth = "none", deny = true }
     role = "listener"
@@ -1615,11 +1615,11 @@ main = "meshtastic"
     # with a claim; these were the only two without one, so a future stack wanting 4403/9443
     # would have been admitted with no conflict shown.
     [[stack.component.resource]]
-    key = "tcp.port.4403"
+    key = "tcp.port.{port:4403}"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
-    key = "tcp.port.9443"
+    key = "tcp.port.{port:9443}"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
@@ -1758,7 +1758,7 @@ main = "meshcom-qemu"
     name = "port"
     kind = "int"
     arg = "--port"
-    default = "7000"
+    default = "{port:7000}"
     min = 0
     max = 65535
     label = "Control TCP port (= firmware XR_PORT)"
@@ -1835,7 +1835,7 @@ main = "meshcom-qemu"
 
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:7000"
+    address = "127.0.0.1:{port:7000}"
     ready = true
     role = "listener"
     description = "MeshCom firmware client port."
@@ -1844,7 +1844,7 @@ main = "meshcom-qemu"
     firewall = { port_param = "port", bind_param = "bind", auth = "password" }
 
     [[stack.component.resource]]
-    key = "tcp.port.7000"
+    key = "tcp.port.{port:7000}"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
@@ -2052,7 +2052,7 @@ main = "meshcom-qemu"
   # command, so re-send over a window until it lands (idempotent). `skip_if_param` sends NO
   # --setcall for an empty / N0CALL callsign (the structured equivalent of the old shell guard).
   post_steps = [
-    { kind = "tcp_wait", port = 12323, timeout = 180 },
+    { kind = "tcp_wait", port = "{port:12323}", timeout = 180 },
     # ACK-AWARE + IDEMPOTENT (17 blind connects starved the node's heap and killed its web UI):
     # probe `--info` first; `probe_value` captures the node's current call from --info's DISPLAY
     # format `...Call: <N0CALL-1>` and `probe_expect` is ours. Equal -> no send (the call
@@ -2067,7 +2067,7 @@ main = "meshcom-qemu"
     # warm boots), then 15 s, then a 30 s cap: a ~13 min window, which is a clock — a slow probe
     # uses it up and no attempt starts after it. `lhpc stack poststart meshcom` re-runs this
     # against a running stack if the window ever expires.
-    { kind = "tcp_send", port = 12323, label = "callsign", required = true, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_value = "Call: <([^>]*)>", probe_expect = "{param:mc_callsign}", stop_on = "Call:{param:mc_callsign}", schedule = [[8, 8], [6, 15], [22, 30]], skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
+    { kind = "tcp_send", port = "{port:12323}", label = "callsign", required = true, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_value = "Call: <([^>]*)>", probe_expect = "{param:mc_callsign}", stop_on = "Call:{param:mc_callsign}", schedule = [[8, 8], [6, 15], [22, 30]], skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
   ]
 
     # PERSISTED per-stack GPS switch — see the same param on the Meshtastic component. The
@@ -2193,7 +2193,7 @@ main = "meshcom-qemu"
 
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:18083"
+    address = "127.0.0.1:{port:18083}"
     firewall = { auth = "none" }
     role = "listener"
     description = "MeshCom web UI"
@@ -2201,18 +2201,18 @@ main = "meshcom-qemu"
     scheme = "http"
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:12323"
+    address = "127.0.0.1:{port:12323}"
     firewall = { auth = "none" }
     ready = true
     role = "listener"
     description = "net-console."
 
     [[stack.component.resource]]
-    key = "tcp.port.18083"
+    key = "tcp.port.{port:18083}"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
-    key = "tcp.port.12323"
+    key = "tcp.port.{port:12323}"
     kind = "tcp-port"
     mode = "exclusive"
 
@@ -2635,7 +2635,7 @@ main = "meshcore-node"
 
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:5000"
+    address = "127.0.0.1:{port:5000}"
     ready = true
     role = "listener"
     description = "MeshCore companion TCP"
@@ -2667,7 +2667,7 @@ main = "meshcore-node"
     # sub-paths are refused with it.
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:8000"
+    address = "127.0.0.1:{port:8000}"
     ready = true
     role = "listener"
     description = "openHop repeater dashboard"
@@ -2684,11 +2684,11 @@ main = "meshcore-node"
     ]
 
     [[stack.component.resource]]
-    key = "tcp.port.5000"
+    key = "tcp.port.{port:5000}"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
-    key = "tcp.port.8000"
+    key = "tcp.port.{port:8000}"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
@@ -2721,8 +2721,8 @@ main = "meshcore-node"
   # dependency, so it installs and runs on a headless Pi. The backend binds LOOPBACK; LHPC's
   # nginx reverse proxy is the only public path (TLS + optional mTLS + CIDR gate), and the
   # proxy REFUSES the endpoints that would mutate LHPC-owned state (see proxy_deny_paths).
-  run = "{asset}/scripts/meshcore-webui-run.sh {source} {runtime} {asset}/meshcore-webui-dist 127.0.0.1 5000 127.0.0.1 8788"
-  run_argv = ["{asset}/scripts/meshcore-webui-run.sh", "{source}", "{runtime}", "{asset}/meshcore-webui-dist", "127.0.0.1", "5000", "127.0.0.1", "8788"]
+  run = "{asset}/scripts/meshcore-webui-run.sh {source} {runtime} {asset}/meshcore-webui-dist 127.0.0.1 {port:5000} 127.0.0.1 {port:8788}"
+  run_argv = ["{asset}/scripts/meshcore-webui-run.sh", "{source}", "{runtime}", "{asset}/meshcore-webui-dist", "127.0.0.1", "{port:5000}", "127.0.0.1", "{port:8788}"]
   # The React frontend is PREBUILT and shipped WITH lhpc as package data ({asset}/
   # meshcore-webui-dist): a Pi Zero 2 W cannot run the Node 20+/Vite build, and LHPC never
   # runs npm at runtime. Only the Python backend is built on the target.
@@ -2755,7 +2755,7 @@ main = "meshcore-node"
   start_note = "Open the MeshCore Web UI via the LHPC Webserver page (enable its proxy for the meshcore stack)."
 
     [stack.component.process]
-    instance_arg = ["--port", "8788"]   # A §2.3: this instance's exact argv token pair
+    instance_arg = ["--port", "{port:8788}"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python"
     all_args = ["uvicorn", "app.main:app"]
 
@@ -2764,7 +2764,7 @@ main = "meshcore-node"
     # the raw backend port is never exposed directly; the sanctioned path is the stack web proxy.
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:8788"
+    address = "127.0.0.1:{port:8788}"
     ready = true
     role = "listener"
     client = true
@@ -2801,7 +2801,7 @@ main = "meshcore-node"
     ]
 
     [[stack.component.resource]]
-    key = "tcp.port.8788"
+    key = "tcp.port.{port:8788}"
     kind = "tcp-port"
     mode = "exclusive"
 
@@ -2892,7 +2892,7 @@ main = "meshcore-node"
     name = "port"
     kind = "int"
     arg = "-p"
-    default = "5000"
+    default = "{port:5000}"
     min = 1
     max = 65535
     label = "Companion TCP port"

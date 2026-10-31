@@ -215,9 +215,10 @@ def _require_module(value, cid: str) -> str:
 
 def _check_token(cid: str, tok: str, names: set) -> None:
     """Validate one argv token's grammar: a whole placeholder must reference a known
-    param/operator/controller name; a literal may embed only {runtime}/{source}/{band}
-    and must contain no other stray braces."""
-    if tok.startswith("{") and tok.endswith("}") and tok.count("{") == 1:
+    param/operator/controller name; a literal may embed only {runtime}/{source}/{band} and the
+    instance tokens ({port:…}, {port_of:…}, {instance_dir}), and must contain no other stray braces."""
+    instance_free = commands.SLOT0.subst(tok)     # the instance tokens resolve; a bad base raises
+    if tok.startswith("{") and tok.endswith("}") and tok.count("{") == 1 and instance_free == tok:
         inner = tok[1:-1]
         kind, _, name = inner.partition(":")
         if kind == "param":
@@ -237,7 +238,7 @@ def _check_token(cid: str, tok: str, names: set) -> None:
         return
     # `{asset}/...` — a packaged-data path (build steps and run commands both resolve it via
     # commands._asset_token, which validates each path segment). Allow it in literal tokens.
-    stripped = (tok.replace("{runtime}", "").replace("{source}", "").replace("{band}", "")
+    stripped = (instance_free.replace("{runtime}", "").replace("{source}", "").replace("{band}", "")
                    .replace("{controller_python}", "").replace("{asset}", ""))
     if "{" in stripped or "}" in stripped:
         raise ManifestError(f"{cid}: malformed command token {tok!r} (stray brace)")
