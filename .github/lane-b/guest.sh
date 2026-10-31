@@ -87,7 +87,9 @@ wait_reboot() { local t0 b; t0=$(date +%s)
   until b=$(g cat /proc/sys/kernel/random/boot_id) && [ -n "$b" ] && [ "$b" != "$2" ]; do
     [ $(( $(date +%s) - t0 )) -lt "$1" ] || return 1; sleep 5; done; echo "$b"; }
 
-# Polls until the guest's systemd is up (running or degraded); returns 1 at the bound.
-wait_up() { local t0 s; t0=$(date +%s)
-  while :; do s=$(g 'systemctl is-system-running || true'); case "$s" in running|degraded) echo "$(( $(date +%s) - t0 )) $s"; return 0;; esac
-    [ $(( $(date +%s) - t0 )) -lt "$1" ] || { echo "still $s" >&2; return 1; }; sleep 5; done; }
+# Polls until the guest's systemd is up (running or degraded); returns 1 at the bound. Up is only the state with
+# the status systemctl gives it: 0 with running, 1 (its failure status for every other state) with degraded.
+wait_up() { local t0 s r; t0=$(date +%s)
+  while :; do r=0; s=$(g 'systemctl is-system-running') || r=$?
+    case "$r $s" in "0 running"|"1 degraded") echo "$(( $(date +%s) - t0 )) $s"; return 0;; esac
+    [ $(( $(date +%s) - t0 )) -lt "$1" ] || { echo "still rc $r: $s" >&2; return 1; }; sleep 5; done; }

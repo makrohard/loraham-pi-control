@@ -40,6 +40,31 @@ def test_the_reboot_counts_only_with_a_new_boot_id(tmp_path, answers, bound, aft
         assert p.returncode == 0 and f"after={after}" in p.stdout, p.stdout + p.stderr
 
 
+def _wait_up(tmp_path, state, rc):
+    """guest.sh's wait_up against a stubbed guest whose remote shell runs the job's own command with a systemctl that
+    prints `state` and exits `rc`; bound 0, so a state it does not accept fails at once."""
+    script = f"""set -euo pipefail
+WORK={tmp_path}; EV={tmp_path}; . {LANE / "guest.sh"}
+sleep() {{ :; }}
+g() {{ bash -c 'systemctl() {{ echo {state}; return {rc}; }}; '"$*"; }}
+u=$(wait_up 0); echo "up=$u"
+"""
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+
+
+@pytest.mark.parametrize("state, rc, up", [
+    ("running", 0, True), ("degraded", 1, True),    # what systemctl is-system-running answers when up
+    ("running", 7, False),                          # it printed "running" but failed: not up (G1-LBS-2 B1)
+    ("degraded", 0, False), ("starting", 1, False), ("", 255, False),
+])
+def test_the_guest_is_up_only_on_the_status_systemctl_gives_with_that_state(tmp_path, state, rc, up):
+    p = _wait_up(tmp_path, state, rc)
+    if up:
+        assert p.returncode == 0 and f"up=0 {state}" in p.stdout, p.stdout + p.stderr
+    else:
+        assert p.returncode != 0 and "up=" not in p.stdout, p.stdout + p.stderr
+
+
 def test_the_reboot_step_reads_the_boot_id_before_and_waits_for_a_new_one():
     lines = (LANE / "topic.sh").read_text().splitlines()
     at = [next(i for i, ln in enumerate(lines) if ln.startswith(s)) for s in (
@@ -104,7 +129,10 @@ g() {{ local c="$*" f={fault!r}
     "cat /proc/sys/kernel/random/boot_id") [ "$f" = bootid ] && return 255; echo {_B0};;
     *"# installs the units"*) [ "$f" = unitsline ] && return 255; echo "lhpc self-update --repair-integration   # installs the units";;
     *"command -v lhpc"*) [ "$f" = commandv ] && return 255; echo /home/lhpc/.local/bin/lhpc;;
-    *"is-active lhpc-web.service lhpc-nginx.service"*) echo active; echo active; if [ "$f" = isactive ]; then return 255; fi;;
+    *"is-active lhpc-web.service lhpc-nginx.service"*)
+      if [ "$f" = isactive-rc ]; then   # the remote shell runs the job's own command; its systemctl prints both lines, rc 7
+        bash -c 'systemctl() {{ echo active; echo active; return 7; }}; '"$c"; return; fi
+      echo active; echo active; if [ "$f" = isactive ]; then return 255; fi;;
     *) [ "$f" = "${{c%% *}}" ] && return 255; :;;
   esac; }}
 """)
@@ -115,9 +143,10 @@ g() {{ local c="$*" f={fault!r}
                                                        "WORK": str(work), "EV": str(ev)})
 
 
-@pytest.mark.parametrize("fault", ["", "bootid", "unitsline", "commandv", "isactive"])
+@pytest.mark.parametrize("fault", ["", "bootid", "unitsline", "commandv", "isactive", "isactive-rc"])
 def test_a_failed_observation_is_never_a_pass(tmp_path, fault):
-    # G2-LBS F5's class in the lane's own job: an ssh call that fails is a failure, whatever it printed first.
+    # G2-LBS F5's class in the lane's own job: an ssh call that fails is a failure, whatever it printed first; and
+    # (isactive-rc) a remote systemctl that prints both lines but fails is a failure too (G1-LBS-2 B1).
     p = _topic(tmp_path, fault)
     if fault:
         assert p.returncode != 0 and "ROW TOPIC: PASS" not in p.stdout, p.stdout + p.stderr

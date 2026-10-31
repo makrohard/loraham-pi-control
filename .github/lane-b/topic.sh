@@ -47,7 +47,10 @@ t0=$(date +%s); urc=0; g "bash -lc $(printf %q "$line")" > "$EV/units.txt" 2>&1 
 m units_line_rc "$urc"; m units_line_s "$(( $(date +%s) - t0 ))"
 [ "$urc" -eq 0 ] || { observe_nginx; fail "the units line (see units.txt, guest/nginx-*.txt)"; }
 g 'stat -c "%Y %y %n" ~/.config/systemd/user/lhpc-*; systemctl --user cat lhpc-web.service lhpc-nginx.service lhpc-boot-restore.service; true' > "$EV/units-installed.txt" 2>&1
-g 'systemctl --user is-active lhpc-web.service lhpc-nginx.service; true' > "$EV/units-active.txt" 2>&1
+# is-active exits 0 only when every named unit is active: its status is the second witness beside the two lines.
+arc=0; g 'systemctl --user is-active lhpc-web.service lhpc-nginx.service' > "$EV/units-active.txt" 2>&1 || arc=$?
+m units_active_rc "$arc"
+[ "$arc" -eq 0 ] || fail "lhpc-web and lhpc-nginx are not both active: is-active rc $arc (see units-active.txt)"
 python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" active 2 "$EV/units-active.txt" \
   || fail "lhpc-web and lhpc-nginx are not both active after the units line (see units-active.txt)"
 echo "ROW TOPIC: PASS"
