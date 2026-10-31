@@ -72,6 +72,8 @@ observe_nginx() {
 # when the liveness check itself fails, or at the 60 s bound.
 stop_writer() { local f=$1 t i r; [ -e "$f" ] || return 0; t=$(cat "$f") || return 1
   case "$t" in ''|-|*[!0-9-]*|?*-*) echo "$f: not a pid: '$t'" >&2; return 1;; esac
+  # 0 is the caller's own group, -1 every process it may signal, 1 is init: none names a writer (10# reads 007 as 7).
+  [ "$(( 10#${t#-} ))" -gt 1 ] || { echo "$f: not a pid: '$t'" >&2; return 1; }
   kill -- "$t" 2>/dev/null || true
   for i in $(seq 1 60); do
     r=0; if [ "${t#-}" = "$t" ]; then ps -p "$t" > /dev/null || r=$?; else pgrep -g "${t#-}" > /dev/null || r=$?; fi

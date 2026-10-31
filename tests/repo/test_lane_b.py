@@ -126,11 +126,12 @@ def test_the_redaction_check_fails_closed(tmp_path, case, rc):
 LANE = repo_paths.REPO / ".github" / "lane-b"
 
 
-def _evidence(tmp_path, writer=None, pidfile_text=None, path_extra=None):
+def _evidence(tmp_path, writer=None, pidfile_text=None, path_extra=None, kill_log=None):
     """Each job's evidence step as the runner runs it, with an optional live writer into the evidence (a process
     group that appends; on TERM it writes `writer` once more and exits) named by runner-sampler.pid. The writer is
     an orphan, as the job's writers are when the step runs (their starter has exited), so nothing here holds it as
-    an unreaped child."""
+    an unreaped child. With `kill_log`, the step's shell has `kill` replaced by a recorder (BASH_ENV): no signal is
+    sent, and each call is a line in that file."""
     ev, work = tmp_path / "ev", tmp_path / "work"
     ev.mkdir(exist_ok=True)
     work.mkdir(exist_ok=True)
@@ -152,9 +153,12 @@ def _evidence(tmp_path, writer=None, pidfile_text=None, path_extra=None):
             (work / "runner-sampler.pid").write_text(pidfile_text)
         step = next(s for s in steps if "id: evidence" in s)
         path = (f"{path_extra}:" if path_extra else "") + "/usr/bin:/bin"
+        env = {"EV": str(ev), "WORK": str(work), "PATH": path, "GITHUB_WORKSPACE": str(repo_paths.REPO)}
+        if kill_log is not None:
+            (tmp_path / "kill-recorder.sh").write_text(f'kill() {{ echo "kill $*" >> {kill_log}; }}\n')
+            env["BASH_ENV"] = str(tmp_path / "kill-recorder.sh")
         p = subprocess.run(["bash", "-e", "-c", _run_block(step)], capture_output=True, text=True, check=False,
-                           env={"EV": str(ev), "WORK": str(work), "PATH": path,
-                                "GITHUB_WORKSPACE": str(repo_paths.REPO)})
+                           env=env)
         alive = pgid is not None and subprocess.run(["pgrep", "-g", str(pgid)], capture_output=True,
                                                     check=False).returncode == 0
         if alive:
@@ -199,6 +203,22 @@ def test_no_upload_when_a_writer_cannot_be_shown_stopped(tmp_path, pidfile_text,
     for job, p, _alive, sums in results:
         assert p.returncode == 1 and "evidence: a writer" in p.stdout and why in p.stderr and not sums, \
             (job, p.stdout, p.stderr)
+
+
+@pytest.mark.parametrize("pidfile_text", ["0\n", "-0\n", "1\n", "-1\n", "00\n", "-01\n"])
+def test_no_writer_id_that_names_no_single_writer_is_ever_signalled(tmp_path, pidfile_text):
+    # G1-LBS-2 B2: `kill -- 0` is the caller's own group and `kill -- -1` every process it may signal; neither (nor
+    # pid 1, nor a zero-padded form) names the writer. Refused before any signal, and no upload.
+    stub = tmp_path / "stub"
+    stub.mkdir()
+    (stub / "sleep").write_text("#!/bin/bash\nexit 0\n")
+    (stub / "sleep").chmod(0o755)
+    log = tmp_path / "kills"
+    _ev, results = _evidence(tmp_path, pidfile_text=pidfile_text, path_extra=stub, kill_log=log)
+    for job, p, _alive, sums in results:
+        assert p.returncode == 1 and "evidence: a writer" in p.stdout and "not a pid" in p.stderr and not sums, \
+            (job, p.stdout, p.stderr)
+    assert not log.exists(), log.read_text()
 
 
 def test_the_runner_sampler_is_a_process_group_the_stop_ends(tmp_path):
