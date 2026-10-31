@@ -130,6 +130,8 @@ class ResourceClaim:
     # "" = made on any transport; "spi" | "usb": made only when the radio's transport is that one
     # (A §2.3; the daemon's `spi.bus.0` is "spi"). Until L5 every radio is SPI (manifest.py).
     claims_if: str = ""
+    # The manifest's key when it carries instance tokens ({port:…}); `key` is its slot-0 value. "" = none.
+    key_template: str = ""
 
 
 
@@ -248,6 +250,8 @@ class EndpointSpec:
     # backend's own error shape and LHPC's notice, for a dashboard that logs the operator out on a
     # 403 and shows `error` texts (openHop's: docs/openhop-on-lhpc.md).
     proxy_deny_notice: bool = False
+    # The manifest's address when it carries instance tokens; `address` is its slot-0 value. "" = none.
+    address_template: str = ""
 
 
 @dataclass(frozen=True)
@@ -279,6 +283,8 @@ class RunParam:
     validator: str = ""          # named validator for kind="str" (callsign/freq/host/port/band/node)
     group: str = ""              # settings sub-section title; params sharing a group render as their
                                  # own titled block (e.g. "Network exposure") in the config panel
+    # The manifest's default when it carries instance tokens; `default` is its slot-0 value. "" = none.
+    default_template: str = ""
 
 
 def emit_param(p: RunParam, value) -> list[str]:

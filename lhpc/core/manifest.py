@@ -905,10 +905,11 @@ def _parse_param(p: dict, cid: str) -> RunParam:
             f"{cid}: param {p.get('name', '?')!r} has unknown key(s) "
             f"{sorted(stray)} — a component-level key placed after a [[…param]] table "
             f"binds to that table; move it above the param tables.")
+    default, default_t = _slot0(p.get("default", ""))
     return RunParam(
         name=p["name"], kind=p.get("kind", "enum"),
         choices=tuple(str(c) for c in p.get("choices", [])),
-        default=str(p.get("default", "")),
+        default=default, default_template=default_t,
         flag=p.get("flag", ""), label=p.get("label", ""),
         min=p.get("min"), max=p.get("max"),
         advanced=p.get("advanced", False),
@@ -927,13 +928,21 @@ TRANSPORTS = ("spi", "usb")
 TRANSPORT_UNTIL_L5 = "spi"
 
 
+def _slot0(text: str) -> tuple[str, str]:
+    """(the slot-0 value, the template or "") of a manifest value that may carry instance tokens:
+    every consumer reads the slot-0 value, which is today's; the template is kept for the other slots."""
+    v = commands.SLOT0.subst(str(text))
+    return v, ("" if v == str(text) else str(text))
+
+
 def _parse_resource(raw: dict) -> ResourceClaim:
     claims_if = raw.get("claims_if")
     if claims_if is not None and claims_if not in TRANSPORTS:
         raise ManifestError(f"resource {raw.get('key')!r}: claims_if must be one of {TRANSPORTS}, "
                             f"got {claims_if!r}")
+    key, key_t = _slot0(raw["key"])
     return ResourceClaim(
-        key=raw["key"],
+        key=key, key_template=key_t,
         kind=ResourceKind(raw["kind"]),
         mode=ResourceMode(raw.get("mode", "exclusive")),
         requirement=raw.get("requirement", ""),
@@ -963,9 +972,10 @@ def _parse_process(raw: dict | None) -> ProcessSpec | None:
 
 
 def _parse_endpoint(raw: dict) -> EndpointSpec:
+    address, address_t = _slot0(raw["address"])
     return EndpointSpec(
         kind=raw["kind"],
-        address=raw["address"],
+        address=address, address_template=address_t,
         role=raw.get("role", "listener"),
         readiness=raw.get("readiness", "none"),
         ready=raw.get("ready", False),

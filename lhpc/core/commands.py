@@ -137,7 +137,7 @@ def expand_argv(tokens, comp, params, op, runtime: str, source: str,
                 p = by_name.get(name)
                 if p is None:
                     raise CommandError(f"unknown run-param token {tok}")
-                raw = str((params or {}).get(name, p.default))
+                raw = str((params or {}).get(name, p.default_template or p.default))
                 # A param default may reference operator identity / paths (e.g. chat
                 # `call` defaults to "{callsign}"). Resolve those controller-derived
                 # templates BEFORE validating the value.
@@ -181,7 +181,7 @@ def instance_value(template: str, comp, params, runtime: str, source: str, band:
         p = {x.name: x for x in comp.run_params}.get(name)
         if p is None:
             raise CommandError(f"unknown run-param token {template}")
-        raw = inst.subst(str((params or {}).get(name, p.default))).replace("{runtime}", runtime)
+        raw = inst.subst(str((params or {}).get(name, p.default_template or p.default))).replace("{runtime}", runtime)
         return str(validators.validate_param(p, raw.replace("{source}", source)))
     return _paths_subst(template, runtime, source, band, inst)
 
