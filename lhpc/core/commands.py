@@ -1107,8 +1107,8 @@ def render_build_launcher(steps: list, runtime: str, source: str,
             "lock_names": sorted(_P(p).name for p in lock_paths),
             "shared_lock_names": sorted(_P(p).name for p in shared_lock_paths),
             "index_lock_name": (_P(index_lock).name if index_lock else ""),
-            # A serial console round's lock (build_plan.round_lock): held for the job's whole run,
-            # waited for before any other lock. "" = the round runs in parallel.
+            # The box-wide lock of a box that runs its console jobs one at a time (build_plan.round_lock):
+            # held for the job's whole run, waited for before any other lock. "" = parallel.
             "round_lock_name": (_P(round_lock_path).name if round_lock_path else ""),
             # Web-job attempt identity (all plain identity strings — no secrets) so the child can
             # gate on its job marker and record a terminal green/red result. "" for non-web builds.

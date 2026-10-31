@@ -301,11 +301,12 @@ self-update, or another task starting at that moment, refuses it before anything
 start synchronously.
 
 **A web Build on a small box builds one job at a time.** A stack's Build starts one detached job per
-component. Before the first one, the console reads `MemAvailable` once: below 256 MiB (a Pi Zero 2 W
-at rest) the jobs of that Build run one at a time, each waiting until the running one ends (its log
-says `waiting for memory`); at or above it they run side by side, as on a Pi 5. Swap does not count:
-on the Zero it is compressed RAM, and running out of it starved the console's own pages. The page
-still returns at once.
+component. On a box with less than 1 GiB of RAM (`MemTotal`; a Pi Zero 2 W has 415 MiB) every
+build or test job the console starts waits until no other one runs (its log says `waiting for
+memory`), across Builds too; a box with more (a Pi 5) runs them side by side. Swap is not counted:
+zram is itself compressed RAM, and once it is full a swap file on the SD card thrashes the box until
+the console stops answering, which is what parallel jobs did on the Zero. The page still returns at
+once.
 
 **Maintenance pass.** While the console runs, it does the box's housekeeping every 60 s (300 s on
 a box without the access point and with no web-server Apply or PKI normalisation pending): it

@@ -272,9 +272,9 @@ def run(spec: dict) -> None:
         held = []            # file objects held for the whole job lifetime
         idx = None
         try:
-            # A serial console round (build_plan.round_lock): one job at a time, so this one WAITS for
-            # the round lock (no bound) and holds it for its whole run. Taken BEFORE every other lock,
-            # so a waiting job holds nothing another operation needs.
+            # A box that runs its console jobs one at a time (build_plan.round_lock): this one WAITS for
+            # the box-wide lock (no bound) and holds it for its whole run. Taken BEFORE every other
+            # lock, so a waiting job holds nothing another operation needs.
             if round_name:
                 try:
                     held.append(_open(round_name))
@@ -284,9 +284,13 @@ def run(spec: dict) -> None:
                     raise SystemExit(3) from None
                 try:
                     fcntl.flock(held[-1].fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except OSError:
-                    print("waiting for memory: this box builds one job of the round at a time", flush=True)
+                except BlockingIOError:      # EAGAIN/EWOULDBLOCK: another job holds it -> wait
+                    print("waiting for memory: this box runs one build job at a time", flush=True)
                     fcntl.flock(held[-1].fileno(), fcntl.LOCK_EX)
+                except OSError as e:
+                    detail[0] = "blocked: round lock failed"
+                    sys.stderr.write(f"round lock failed ({round_name}): {e}\n")
+                    raise SystemExit(3) from None
             # Index-to-source handoff: hold the INDEX lock, verify NO unresolved journal, THEN
             # take the source lock(s); release the index lock only afterwards.
             if index_name:
