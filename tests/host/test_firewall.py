@@ -1598,7 +1598,7 @@ def test_candidate_represents_divergent_bands(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_fw_listener_endpoints", lambda: ([(stk, comp, ep)], []))
     monkeypatch.setattr(svc, "stack_bands", lambda t: ("433", "868"))
 
-    def _scope(_s, _c, _e, overrides=None, band=None):
+    def _scope(_s, _c, _e, overrides=None, band=None, inst=None):
         port = 9001 if band == "433" else 9002            # diverge per band
         return {"id": "kiss.kc.tcp-8001", "proto": "tcp", "family": "ipv4",
                 "addr": "0.0.0.0", "port": port, "allow_cidrs": [], "deny": False,
