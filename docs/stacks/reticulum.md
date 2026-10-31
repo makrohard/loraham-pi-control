@@ -118,7 +118,9 @@ attempt it — the component's `proxy_deny_paths`; re-audit that list at every v
 Reading works: the Interfaces page lists what lhpc configured.
 
 The frontend is **shipped prebuilt** as package data (no npm on the box); the backend is installed
-from `meshchat-constraints.txt`, an exact closure re-checked at each bump; its `rns` must match the node's.
+from `meshchat-constraints.txt`, an exact closure re-checked at each bump. Its `rns` and `lxmf` are
+MeshChat's own pins in its own venv (RNS 1.5.4 while the node runs 1.5.5), re-checked against the node's
+shared instance at each bump.
 
 **Versions.** lxmd, nomadnet and Sideband install RNS from the `src/reticulum` checkout, so they run
 the node's Reticulum; a moved pin marks them for a rebuild. They install the wheel the node
