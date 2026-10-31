@@ -55,29 +55,6 @@ def test_a_guest_that_is_not_the_pi_os_guest_fails(tmp_path, change, why):
     assert p.returncode == 1 and why in p.stderr
 
 
-def _live(tmp_path, apply_rc, apply_text, repaired):
-    d = tmp_path / "live"
-    d.mkdir()
-    (d / "U0-apply.txt").write_text(f"{apply_text}\nrc={apply_rc}\n")
-    if repaired:
-        (d / "U0-repair.txt").write_text("OK    Web + one-click updater integration installed/repaired.\nrc=0\n")
-    return d
-
-
-_STALE = ("ERR   Update applied — units-stale: the managed systemd units could NOT be refreshed", 1, True)
-_CLEAN = ("OK    Update applied.", 0, False)
-
-
-@pytest.mark.parametrize("want, case, ok", [
-    ("units-stale", _STALE, True), ("rc0", _CLEAN, True),
-    ("units-stale", _CLEAN, False), ("rc0", _STALE, False),      # the other branch ran: the job fails
-])
-def test_each_u0_job_requires_the_branch_it_exists_for(tmp_path, want, case, ok):
-    text, rc, repaired = case
-    p = _run("branch", want, _live(tmp_path, rc, text, repaired))
-    assert (p.returncode == 0) is ok, p.stderr
-
-
 @pytest.mark.parametrize("text, ok", [
     ("active\nactive\n", True), ("inactive\nactive\n", False), ("active\ninactive\n", False),
     ("active\n", False), ("", False), ("active\nactive\nactive\n", False),
@@ -89,8 +66,8 @@ def test_the_topic_job_passes_only_when_both_units_are_active(tmp_path, text, ok
 
 
 def test_the_topic_job_asks_the_check_for_both_units():
-    u0b = (repo_paths.REPO / ".github" / "lane-b" / "u0b.sh").read_text()
-    assert 'lane_b.py" active 2 "$EV/units-active.txt"' in u0b
+    topic = (repo_paths.REPO / ".github" / "lane-b" / "topic.sh").read_text()
+    assert 'lane_b.py" active 2 "$EV/units-active.txt"' in topic
 
 
 WORKFLOW = repo_paths.REPO / ".github" / "workflows" / "lane-b.yml"
@@ -112,7 +89,7 @@ def test_an_artifact_uploads_only_after_its_redaction_guard_passed():
             assert guard, (job, up.splitlines()[:3])
             owner = [s for s in steps if f"id: {guard.group(1)}" in s]
             assert len(owner) == 1 and "PRIVATE KEY-----|SSHPASS=" in owner[0] and "exit 1" in owner[0], job
-    assert uploaded == 2                                       # QB-1 and U0-B
+    assert uploaded == 2                                       # QB-1 and the from-topic job
 
 
 def _run_block(step: str) -> str:

@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   qb1:
-    # QB-1 has run (its evidence is recorded); a push to the spike branch runs the U0-B jobs only.
+    # QB-1 has run (its evidence is recorded); a push to the spike branch runs the from-topic job only.
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04-arm   # native aarch64: same-architecture TCG, no nested emulation
     # The boot bound is 20 min; downloads, preparation and captures fit in the rest.
@@ -149,42 +149,30 @@ jobs:
           name: qb1-spike
           path: qb1
 
-  # U0-B (QB-3): two fresh guests, the documented install at FROM, then runsheet D-L1 v5's U0 block as written;
-  # each job requires the branch it exists for.
-  u0b:
-    name: ${{ matrix.name }}
+  # The from-topic job (a stated lane deviation): a fresh guest, the install from cons/laneb-findings-r1 at its sha
+  # (that commit's own bootstrap-deps.sh and manual block), the reboot, then the units line; it proves the topic's
+  # fixes on Pi OS. U0 (the update from a released tag) is not in this lane: a later plan item, with its target as
+  # an input, once (B) and (D) are released.
+  topic:
+    name: from-topic
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 300
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: from-0-12-10, from: v0.12.10, want: units-stale }
-          - { name: from-0-13-2, from: v0.13.2, want: rc0 }
-          # The from-topic job (a stated lane deviation): the install from cons/laneb-findings-r1 at its sha, that
-          # commit's own bootstrap-deps.sh and manual block, then the units line; it proves the topic's fixes on Pi OS.
-          - { name: from-topic, from: 7da3c7dff23f9bc5ad7dbf61b53dfa857ebd56be, want: install-only }
     env:
+      FROM: a57974e3bd7b2f853c5adeec74c3b0103de6bb6d
       PIOS_URL: https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-10-06/2026-10-06-raspios-trixie-arm64-lite.img.xz
       PIOS_SHA256: 483db18a48da399b5b7022ffae9a07bc6d99daab30e593aedac09b69ff422843
       DEB_URL: https://cloud.debian.org/images/cloud/trixie/20261021-2638/debian-13-generic-arm64-20261021-2638.qcow2
       DEB_SHA512: 0720988fd560dfa1d2975c4a1e4c39e3903ffd0f68e75be9e171f889cdbb53b7763dc9c54e951afc34055c6110b3b415196778e468a50bf26d294730a7f8eabe
-      # The runsheet blocks, verbatim from RUNSHEET-D-L1-lhpc-v5 (c9bbefc3): the prelude and the U0 block.
-      PRELUDE_SHA256: 1cc271eac4b529d0d200603783bcc6453b6d67bfbbea5b0e542bdbb98ba43b2a
-      U0_SHA256: e677f04c12be9f2613f959c264d01f1fcb883953cbb7f6e788d7da30ee56e8e3
-      EV: ${{ github.workspace }}/u0b
+      EV: ${{ github.workspace }}/topic
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: The runner (M1) and the runsheet blocks
+      - name: The runner (M1)
         run: |
           set -euo pipefail
           echo "WORK=$RUNNER_TEMP/laneb" >> "$GITHUB_ENV"
           mkdir -p "$EV" "$RUNNER_TEMP/laneb"
           { uname -a; nproc; free -m; echo "kvm=$([ -e /dev/kvm ] && echo present || echo absent)"; } | tee "$EV/runner.txt"
-          python3 .github/scripts/lane_b.py verify .github/lane-b/u0-prelude.sh sha256 "$PRELUDE_SHA256"
-          python3 .github/scripts/lane_b.py verify .github/lane-b/u0-block.sh sha256 "$U0_SHA256"
-          printf 'prelude_sha256=%s\nu0_block_sha256=%s\nrunsheet=RUNSHEET-D-L1-lhpc-v5 c9bbefc3\n' "$PRELUDE_SHA256" "$U0_SHA256" > "$EV/blocks.txt"
 
       - name: QEMU from the runner OS
         run: |
@@ -208,8 +196,8 @@ jobs:
           ssh-keygen -q -t ed25519 -N '' -f key
           printf 'pios=%s\npios_sha256=%s\ndeb=%s\ndeb_sha512=%s\n' "$PIOS_URL" "$PIOS_SHA256" "$DEB_URL" "$DEB_SHA512" > "$EV/image.txt"
 
-      - name: U0-B from ${{ matrix.from }}, expecting ${{ matrix.want }}
-        run: bash .github/lane-b/u0b.sh "${{ matrix.want }}" "${{ matrix.from }}"
+      - name: The install from the topic at ${{ env.FROM }}
+        run: bash .github/lane-b/topic.sh "$FROM"
 
       - name: Stop the guest, redaction check, checksum the evidence
         id: evidence
@@ -235,5 +223,5 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always() && steps.evidence.outcome == 'success'
         with:
-          name: u0b-${{ matrix.name }}
-          path: u0b
+          name: topic-from-topic
+          path: topic

@@ -1,4 +1,5 @@
-# Sourced by lane-b.yml's U0-B jobs (bash, set -euo pipefail): the Pi OS guest's preparation, boot and waits.
+# Sourced by lane-b.yml's from-topic job (bash, set -euo pipefail) and its evidence steps: the Pi OS guest's
+# preparation, boot and waits, and the stop of every writer into the evidence.
 # Needs WORK (pios.img, deb.raw, key, key.pub there) and EV (the evidence dir). Every wait is a bounded poll.
 G_SSH=(ssh -q -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5
        -i "$WORK/key" -p 2222 lhpc@127.0.0.1)
@@ -26,19 +27,6 @@ prepare() {
   sudo -n blkid -s PARTUUID -o value "${pl}p2" > "$WORK/partuuid"
   sudo -n umount "$WORK/pboot" "$WORK/proot" "$WORK/droot"; sudo -n losetup -d "$pl" "$dl"
   test -s "$WORK/partuuid"
-}
-
-# The stated fallback when cloud-init does not deliver: the user and key written offline (QB-1's way).
-offline_user() {
-  local pl u gid
-  pl=$(sudo -n losetup -fP --show "$WORK/pios.img"); sudo -n mount "${pl}p2" "$WORK/proot"
-  sudo -n chroot "$WORK/proot" id lhpc > /dev/null 2>&1 || sudo -n chroot "$WORK/proot" useradd -m -s /bin/bash -G sudo lhpc
-  u=$(sudo -n chroot "$WORK/proot" id -u lhpc); gid=$(sudo -n chroot "$WORK/proot" id -g lhpc)
-  sudo -n install -d -m 0700 -o "$u" -g "$gid" "$WORK/proot/home/lhpc/.ssh"
-  sudo -n install -m 0600 -o "$u" -g "$gid" "$WORK/key.pub" "$WORK/proot/home/lhpc/.ssh/authorized_keys"
-  echo 'lhpc ALL=(ALL) NOPASSWD:ALL' | sudo -n tee "$WORK/proot/etc/sudoers.d/010-lane-b" > /dev/null
-  sudo -n chroot "$WORK/proot" systemctl enable ssh
-  sudo -n umount "$WORK/proot"; sudo -n losetup -d "$pl"
 }
 
 boot() {
@@ -89,7 +77,6 @@ stop_writer() { local f=$1 t i r; [ -e "$f" ] || return 0; t=$(cat "$f") || retu
     r=0; if [ "${t#-}" = "$t" ]; then ps -p "$t" > /dev/null || r=$?; else pgrep -g "${t#-}" > /dev/null || r=$?; fi
     case $r in 1) return 0;; 0) sleep 1;; *) echo "$f: the liveness check failed (rc $r)" >&2; return 1;; esac
   done; echo "$f: still runs after 60 s" >&2; return 1; }
-halt() { stop_writer "$WORK/qemu.pid"; }
 
 # Polls until ssh answers; returns 1 at the bound.
 wait_ssh() { local t0; t0=$(date +%s); until g true; do [ $(( $(date +%s) - t0 )) -lt "$1" ] || return 1; sleep 5; done; echo $(( $(date +%s) - t0 )); }

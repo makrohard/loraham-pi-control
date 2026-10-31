@@ -1,5 +1,6 @@
 """The lane-B guest helpers (.github/lane-b/*.sh) as the jobs run them, against a stubbed guest: each must fail
 closed without a VM (the reboot counts only with a new boot id)."""
+import re
 import subprocess
 
 import pytest
@@ -40,7 +41,7 @@ def test_the_reboot_counts_only_with_a_new_boot_id(tmp_path, answers, bound, aft
 
 
 def test_the_reboot_step_reads_the_boot_id_before_and_waits_for_a_new_one():
-    lines = (LANE / "u0b.sh").read_text().splitlines()
+    lines = (LANE / "topic.sh").read_text().splitlines()
     at = [next(i for i, ln in enumerate(lines) if ln.startswith(s)) for s in (
         'b0=$(g cat /proc/sys/kernel/random/boot_id) && [ -n "$b0" ] || fail', "t0=$(date +%s); g 'sudo systemctl reboot'",
         'b1=$(wait_reboot "$BOUND" "$b0") || fail')]
@@ -53,7 +54,6 @@ def _guest_install(tmp_path, frm, block):
     home, bin_ = tmp_path / "home", tmp_path / "bin"
     src = home / "loraham-pi-control" / "src" / "loraham-pi-control"
     (src / ".git").mkdir(parents=True)
-    (src / "bootstrap-deps.sh").write_text("true\n")             # where an earlier form of step 4 read it
     (src / "README.md").write_text("### Manual — clone / venv / bootstrap\n\n```bash\n"
                                    "git clone https://github.com/makrohard/loraham-pi-control.git x\n" + block + "\n```\n")
     bin_.mkdir()
@@ -67,11 +67,59 @@ def _guest_install(tmp_path, frm, block):
     return p, (home / ".local" / "bin" / "lhpc").is_symlink()
 
 
-@pytest.mark.parametrize("frm, block, linked", [
-    ("v0.13.2", "true", True),                                  # a released tag's block lacks the link: the lane adds it
-    ("7da3c7dff23f9bc5ad7dbf61b53dfa857ebd56be", "true", False),   # a topic's block lacks it: its defect stays visible
-])
-def test_the_cli_link_is_added_only_for_a_released_tag(tmp_path, frm, block, linked):
-    p, is_link = _guest_install(tmp_path, frm, block)
-    assert p.returncode == 0, p.stdout + p.stderr
-    assert is_link is linked
+def test_the_lane_adds_no_cli_link_to_the_commits_block(tmp_path):
+    # A commit whose block does not make the link keeps that defect visible: the job's PATH check then fails.
+    p, is_link = _guest_install(tmp_path, "7da3c7dff23f9bc5ad7dbf61b53dfa857ebd56be", "true")
+    assert p.returncode == 0 and not is_link, p.stdout + p.stderr
+
+
+@pytest.mark.parametrize("frm", ["v0.13.2", "7da3c7df", "main"])
+def test_the_install_takes_a_full_commit_sha_only(tmp_path, frm):
+    p, _ = _guest_install(tmp_path, frm, "true")
+    assert p.returncode == 2 and "usage" in p.stderr
+
+
+def test_the_lane_needs_no_state_of_main():
+    # G2-LBS F3: a guard on main's commit stopped every job once main moved. The job's only input is FROM, a commit.
+    text = {p.name: p.read_text() for p in LANE.glob("*.sh")}
+    assert not {n for n, t in text.items() if re.search(r"\b[0-9a-f]{40}\b|origin/main|ls-remote", t)}
+
+
+def _topic(tmp_path, fault):
+    """topic.sh as the job runs it, with the VM steps stubbed and every ssh answer from a stub guest; `fault` names the
+    one observation whose ssh call fails (rc 255)."""
+    ws = tmp_path / "ws"
+    (ws / ".github" / "lane-b").mkdir(parents=True)
+    (ws / ".github" / "scripts").mkdir()
+    for name in ("topic.sh", "guest-install.sh", "sampler.sh"):
+        (ws / ".github" / "lane-b" / name).write_text((LANE / name).read_text())
+    (ws / ".github" / "scripts" / "lane_b.py").write_text((LANE.parent / "scripts" / "lane_b.py").read_text())
+    (ws / ".github" / "lane-b" / "guest.sh").write_text((LANE / "guest.sh").read_text() + f"""
+prepare() {{ :; }}; boot() {{ :; }}; gcp() {{ :; }}; start_samplers() {{ :; }}; collect_samples() {{ :; }}
+wait_ssh() {{ echo 1; }}; wait_up() {{ echo "1 running"; }}; wait_reboot() {{ echo {_B1}; }}
+g() {{ local c="$*" f={fault!r}
+  case "$c" in
+    "uname -m") echo aarch64;; "uname -r") echo 6.12.0-guest;; "cat /etc/os-release") echo VERSION_CODENAME=trixie;;
+    "test -f /etc/rpi-issue"*) echo yes;; "bash guest-install.sh "*) echo t_deps=1; echo t_install=1;;
+    "cat /proc/sys/kernel/random/boot_id") [ "$f" = bootid ] && return 255; echo {_B0};;
+    *"# installs the units"*) [ "$f" = unitsline ] && return 255; echo "lhpc self-update --repair-integration   # installs the units";;
+    *"command -v lhpc"*) [ "$f" = commandv ] && return 255; echo /home/lhpc/.local/bin/lhpc;;
+    *"is-active lhpc-web.service lhpc-nginx.service"*) echo active; echo active; if [ "$f" = isactive ]; then return 255; fi;;
+    *) [ "$f" = "${{c%% *}}" ] && return 255; :;;
+  esac; }}
+""")
+    ev, work = tmp_path / "ev", tmp_path / "work"
+    ev.mkdir(); work.mkdir()
+    return subprocess.run(["bash", str(ws / ".github" / "lane-b" / "topic.sh"), "a" * 40], capture_output=True,
+                          text=True, check=False, env={"PATH": "/usr/bin:/bin", "GITHUB_WORKSPACE": str(ws),
+                                                       "WORK": str(work), "EV": str(ev)})
+
+
+@pytest.mark.parametrize("fault", ["", "bootid", "unitsline", "commandv", "isactive"])
+def test_a_failed_observation_is_never_a_pass(tmp_path, fault):
+    # G2-LBS F5's class in the lane's own job: an ssh call that fails is a failure, whatever it printed first.
+    p = _topic(tmp_path, fault)
+    if fault:
+        assert p.returncode != 0 and "ROW TOPIC: PASS" not in p.stdout, p.stdout + p.stderr
+    else:
+        assert p.returncode == 0 and "ROW TOPIC: PASS" in p.stdout, p.stdout + p.stderr
