@@ -42,7 +42,7 @@ BUDGETS = {
     "service_selfupdate.py": (1932, 22),
     "service_stop.py": (791, 5),  # split-s7: split from service_lifecycle_ops.py
     "service_system.py": (759, 2),
-    "service_webserver.py": (2388, 42),
+    "service_webserver.py": (2389, 42),  # b3-c3: a stack's own listeners in the stack-web port refusal
 }
 
 

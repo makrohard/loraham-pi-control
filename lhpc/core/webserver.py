@@ -104,9 +104,11 @@ def plan_exposure(cfg: WebserverConfig) -> dict:
             "no_auth": no_auth, "cleartext": cleartext}
 
 
-def plan_stack_exposure(swc, console_port: int, other_ports=()) -> dict:
+def plan_stack_exposure(swc, console_port: int, other_ports=(), stack_listeners=None) -> dict:
     """Pure policy evaluation of ONE stack's desired web-UI proxy. Mirrors `plan_exposure`:
-    `problems` refuse the save outright; `danger` selects the confirmation strength."""
+    `problems` refuse the save outright; `danger` selects the confirmation strength.
+    `stack_listeners` {port: [owner]} (listeners.stack_listeners): a stack's own TCP listener
+    is an owner too, named in the refusal."""
     from .config import STACKWEB_MIN_PORT
     problems: list = []
     if not swc.enabled:                          # port 0 = not proxied; nothing to police
@@ -120,6 +122,8 @@ def plan_stack_exposure(swc, console_port: int, other_ports=()) -> dict:
         problems.append(f"port {swc.port} is already the console's port")
     if swc.port in tuple(other_ports):
         problems.append(f"port {swc.port} is already used by another stack's web UI")
+    if (stack_listeners or {}).get(swc.port):
+        problems.append(f"port {swc.port} is already {', '.join(stack_listeners[swc.port])}'s listener")
     # Hard technical constraint, not a preference: a client certificate is presented during the TLS
     # handshake, so a plain-http listener has nothing to verify.
     if swc.scheme == "http" and swc.access_mode != "no-auth":
