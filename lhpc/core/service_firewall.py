@@ -91,8 +91,8 @@ class FirewallOpsMixin:
         return {"id": eid, "proto": "tcp", "family": family, "addr": addr, "port": port,
                 "allow_cidrs": cidrs, "deny": False, "auth": _auth, "loopback": _is_loopback(static_host)}
 
-    def _fw_instances(self, stk):
-        """The stack's instances the candidate renders rows for: until L5 its one instance at slot 0."""
+    def _stack_instances(self, stk):
+        """The stack's instances (firewall rows, web pages): until L5 its one instance at slot 0."""
         return (_commands.SLOT0,)
 
     def _fw_param_int(self, stk, comp, name, band, default):
@@ -137,7 +137,7 @@ class FirewallOpsMixin:
             # get their own band-labelled row (so compatibility mode drops the real per-band port).
             # Each instance of the stack (A §2.5; slot 0 only until L5) gets its own rows.
             bands = (self.stack_bands(stk.id) if hasattr(self, "stack_bands") else ()) or ("",)
-            for inst in self._fw_instances(stk):
+            for inst in self._stack_instances(stk):
                 per_scope = {}
                 for band in bands:
                     sc = self._fw_resolve_scope(stk, comp, ep, band=band, inst=inst)

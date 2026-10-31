@@ -595,9 +595,10 @@ class WebPage:
         return f"#stack-webserver-{self.page_id}"
 
 
-def web_pages(stack: Stack) -> tuple:
+def web_pages(stack: Stack, instances=None) -> tuple:
     """The stack's proxied web pages — one per component that declares a client http/https
-    endpoint (its first such endpoint). Empty for a stack without a web UI.
+    endpoint (its first such endpoint), for each of the stack's `instances` (commands.Instance;
+    None = its one instance at slot 0, as until L5). Empty for a stack without a web UI.
 
     ORDER decides which page keeps the stack id: the components in manifest order, except that
     the stack's MAIN component comes LAST. A stack's "web UI" is the dedicated web component it
@@ -605,27 +606,36 @@ def web_pages(stack: Stack) -> tuple:
 
     `label` is the ONE spelling every stack-external list uses: the stack name for the first
     page, `<stack> · <component>` for any further one (inside the stack's own panel the
-    component name alone suffices — `name`)."""
+    component name alone suffices — `name`). A slot-k instance's page is `<page>@<rid>` (A §2.6), its
+    upstream the instance's own port, its deny list and deny answer the slot-0 page's."""
     out: list = []
     ordered = ([c for c in stack.components if c.id != stack.main]
                + [c for c in stack.components if c.id == stack.main])
-    for comp in ordered:
-        for ep in comp.endpoints:
-            if getattr(ep, "client", False) and ep.scheme in ("http", "https"):
-                first = not out
-                # A main component usually carries the stack's own name; naming its page after
-                # it would read "MeshCore · MeshCore". Its endpoint description says what the
-                # page IS ("openHop repeater dashboard") — use that when the names coincide.
-                shown = (comp.name if comp.name != stack.name
-                         else (getattr(ep, "description", "") or comp.id))
-                out.append(WebPage(
-                    page_id=stack.id if first else f"{stack.id}-{comp.id}",
-                    stack_id=stack.id, component_id=comp.id, name=shown,
-                    label=stack.name if first else f"{stack.name} · {shown}",
-                    address=ep.address, scheme=ep.scheme,
-                    deny_paths=tuple(getattr(ep, "proxy_deny_paths", ()) or ()),
-                    deny_notice=bool(getattr(ep, "proxy_deny_notice", False))))
-                break
+    for inst in instances or (None,):
+        slot_k = inst is not None and inst.slot > 0
+        first_of_instance = True
+        for comp in ordered:
+            for ep in comp.endpoints:
+                if getattr(ep, "client", False) and ep.scheme in ("http", "https"):
+                    first = first_of_instance
+                    first_of_instance = False
+                    # A main component usually carries the stack's own name; naming its page after
+                    # it would read "MeshCore · MeshCore". Its endpoint description says what the
+                    # page IS ("openHop repeater dashboard") — use that when the names coincide.
+                    shown = (comp.name if comp.name != stack.name
+                             else (getattr(ep, "description", "") or comp.id))
+                    page_id = stack.id if first else f"{stack.id}-{comp.id}"
+                    label = stack.name if first else f"{stack.name} · {shown}"
+                    out.append(WebPage(
+                        page_id=f"{page_id}@{inst.rid}" if slot_k else page_id,
+                        stack_id=stack.id, component_id=comp.id, name=shown,
+                        label=f"{label} @{inst.rid}" if slot_k else label,
+                        address=(inst.subst(ep.address_template or ep.address) if slot_k
+                                 else ep.address),
+                        scheme=ep.scheme,
+                        deny_paths=tuple(getattr(ep, "proxy_deny_paths", ()) or ()),
+                        deny_notice=bool(getattr(ep, "proxy_deny_notice", False))))
+                    break
     return tuple(out)
 
 
