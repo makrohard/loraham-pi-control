@@ -258,7 +258,7 @@ class JobsOpsMixin:
                             marker_path=marker_path, marker_text=marker_text,
                             inputs_path=str(inputs[0]) if inputs else "",
                             inputs_text=inputs[1] if inputs else "",
-                            step_timeout=step_timeout,
+                            step_timeout=step_timeout, round_lock_path=round_lock,
                             **({"rev_path": str(_own[0]), "rev_consumed": _own[1]}
                                if _mark and (_own := self._own_rev_source(c)) else {}))
                     except commands.CommandError as exc:
@@ -313,8 +313,8 @@ class JobsOpsMixin:
                 ordered = [bj[pi]] + [j for i, j in enumerate(bj) if i != pi]
                 spawn_fns = [(lambda c=c, st=st, nm=nm: _spawn_build(c, st, nm)) for (c, st, nm) in ordered]
 
-            # ---- primary: spawn + handshake; a blocked primary spawns NO secondaries ----
-            plog, paid, pout = _launch(spawn_fns[0], _adm_stack)
+            round_lock = build_plan.round_lock(self._paths, len(spawn_fns), self._system.fs)  # "" = parallel
+            plog, paid, pout = _launch(spawn_fns[0], _adm_stack)   # primary first; blocked -> NO secondaries
             if plog is None:                        # reserve/spawn/render failed
                 self.prune_logs()
                 return None, "blocked", f"blocked — {pout}"
