@@ -666,7 +666,8 @@ def _is_simple(cmd: str) -> bool:
 
 def _tok(t: str) -> str:
     """Map a `{name}` placeholder to its structured token form."""
-    if t.startswith("{") and t.endswith("}") and t.count("{") == 1 and "/" not in t:
+    if (t.startswith("{") and t.endswith("}") and t.count("{") == 1 and "/" not in t
+            and commands.SLOT0.subst(t) == t):           # an instance token ({port:…}) stays as written
         name = t[1:-1]
         if name == "callsign":
             return "{operator:" + name + "}"
