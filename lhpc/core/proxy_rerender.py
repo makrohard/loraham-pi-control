@@ -112,6 +112,16 @@ def _python(paths: Paths) -> str:
     return py if exists(py) else sys.executable
 
 
+def after_advance(svc) -> tuple[bool, str]:
+    """The steps after a real advance that need the new checkout, on both update paths (the operator
+    `_apply_and_sync` and the one-click helper): the service's unit refresh, then the proxies'
+    re-render (`after_update`). Returns the unit refresh's (ok, detail); the re-render's outcome is
+    the marker's, shown by the banner, and does not change the update's."""
+    units = svc._refresh_units_post_update()
+    after_update(svc._paths)
+    return units
+
+
 def after_update(paths: Paths) -> tuple[bool, str]:
     """Run in the OLD process once the checkout advanced: hand the re-render to the new
     checkout's interpreter. (marker cleared, detail)."""

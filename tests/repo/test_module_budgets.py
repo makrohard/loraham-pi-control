@@ -29,7 +29,7 @@ BUDGETS = {
     "service_boot_restore.py": (687, 2),  # co-19: a start refused before the claim keeps its reason
     "service_build.py": (797, 10),  # split-s5: split from service_lifecycle_ops.py
     "service_daemon_params.py": (545, 13),  # split-s2: split from service_params.py and service_lifecycle_ops.py; co-17: the per-band PA over-current limit (ocp_for_band, set_ocp)
-    "service_firewall.py": (1550, 19),  # b3-c4: candidate rows per instance, slot-k ids, a tick on the base id
+    "service_firewall.py": (1533, 19),
     "service_gps.py": (893, 13),  # split-s3: split from service_params.py and services.py
     "service_hmac.py": (1016, 17),
     "service_jobs.py": (765, 9),  # split-s6: split from service_lifecycle_ops.py
@@ -39,10 +39,10 @@ BUDGETS = {
     "service_params.py": (2485, 39),
     "service_rflog.py": (474, 13),  # split-s1: split from service_lifecycle_ops.py
     "service_secrets.py": (399, 2),
-    "service_selfupdate.py": (1939, 22),  # b3-c6: the proxies' re-render marked before the checkout moves, handed to the new interpreter after
+    "service_selfupdate.py": (1932, 22),
     "service_stop.py": (791, 5),  # split-s7: split from service_lifecycle_ops.py
     "service_system.py": (759, 2),
-    "service_webserver.py": (2391, 42),  # b3-c3: a stack's own listeners in the stack-web port refusal; b3-c6: a proven Apply clears the re-render marker
+    "service_webserver.py": (2388, 42),
 }
 
 

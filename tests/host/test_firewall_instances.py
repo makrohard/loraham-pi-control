@@ -22,8 +22,8 @@ def _svc(tmp_path):
 
 def _with_slot1_on_r2(svc, monkeypatch, stacks=("kiss", "meshtastic")):
     # raising=False: on a code without instances the candidate simply lacks the slot-k rows (the red-before)
-    monkeypatch.setattr(type(svc), "_stack_instances",
-                        lambda self, stk: (commands.SLOT0, commands.Instance(1, "r2"))
+    monkeypatch.setattr(commands, "stack_instances",
+                        lambda stk: (commands.SLOT0, commands.Instance(1, "r2"))
                         if stk.id in stacks else (commands.SLOT0,), raising=False)
 
 

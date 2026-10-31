@@ -598,7 +598,8 @@ class WebPage:
 def web_pages(stack: Stack, instances=None) -> tuple:
     """The stack's proxied web pages — one per component that declares a client http/https
     endpoint (its first such endpoint), for each of the stack's `instances` (commands.Instance;
-    None = its one instance at slot 0, as until L5). Empty for a stack without a web UI.
+    None = `commands.stack_instances`, its one instance at slot 0 until L5). Empty for a stack
+    without a web UI.
 
     ORDER decides which page keeps the stack id: the components in manifest order, except that
     the stack's MAIN component comes LAST. A stack's "web UI" is the dedicated web component it
@@ -608,10 +609,11 @@ def web_pages(stack: Stack, instances=None) -> tuple:
     page, `<stack> · <component>` for any further one (inside the stack's own panel the
     component name alone suffices — `name`). A slot-k instance's page is `<page>@<rid>` (A §2.6), its
     upstream the instance's own port, its deny list and deny answer the slot-0 page's."""
+    from . import commands
     out: list = []
     ordered = ([c for c in stack.components if c.id != stack.main]
                + [c for c in stack.components if c.id == stack.main])
-    for inst in instances or (None,):
+    for inst in commands.stack_instances(stack) if instances is None else instances:
         slot_k = inst is not None and inst.slot > 0
         first_of_instance = True
         for comp in ordered:

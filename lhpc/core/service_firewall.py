@@ -14,7 +14,6 @@ import json
 import os
 import stat
 
-from . import commands as _commands
 from . import firewall as _fw
 from .service_base import ActionResult
 from .snapshot_memo import invalidates_snapshot
@@ -58,15 +57,13 @@ class FirewallOpsMixin:
             _auth = "none"
         band = self._config_band(stk.id, band or "") if hasattr(self, "_config_band") else ""
         static_host, _, static_port = str(ep.address).rpartition(":")
-        slot = inst.slot if inst is not None else 0      # slot k: the slot-0 port (configured or not) + 10k
-        port = self._fw_param_int(stk, comp, meta.port_param, band, static_port) + _commands.PORT_STEP * slot
+        port = _fw.instance_port(self._fw_param_int(stk, comp, meta.port_param, band, static_port), inst)
         bind = self._fw_param_str(stk, comp, meta.bind_param, band, static_host)
         allow = self._fw_param_str(stk, comp, meta.allow_param, band, "")
         cidrs = _split_cidrs(allow)
         # STABLE id: the STATIC manifest port never changes even when the configured port does,
         # so a ticked direct-access checkbox survives a port change (fragile-id fix).
-        # slot k: `<component>-<rid>.tcp-<base>` (A §2.5); a tick on the slot-0 id covers it (firewall_candidate).
-        eid = _safe_id(f"{comp.id}-{inst.rid}.tcp-{static_port}" if slot else f"{comp.id}.tcp-{static_port}")
+        eid = _safe_id(_fw.instance_eid(comp.id, static_port, inst))   # slot k: A §2.5
         if meta.deny:
             # meshtasticd 4403/9443: binds 0.0.0.0 unconditionally, no knob — drop the port on
             # EVERY non-loopback address of BOTH families, regardless of the probe address.
@@ -90,10 +87,6 @@ class FirewallOpsMixin:
         family, addr = _classify_bind(static_host)
         return {"id": eid, "proto": "tcp", "family": family, "addr": addr, "port": port,
                 "allow_cidrs": cidrs, "deny": False, "auth": _auth, "loopback": _is_loopback(static_host)}
-
-    def _stack_instances(self, stk):
-        """The stack's instances (firewall rows, web pages): until L5 its one instance at slot 0."""
-        return (_commands.SLOT0,)
 
     def _fw_param_int(self, stk, comp, name, band, default):
         if not name:
@@ -130,32 +123,10 @@ class FirewallOpsMixin:
         mapped, _unmapped = self._fw_listener_endpoints()
 
         endpoints = []
-        for stk, comp, ep in mapped:
-            # Resolve EACH band and keep DISTINCT scopes — never merge two bands into one row.
-            # If every band yields the same scope (the common case), emit ONE band-agnostic row
-            # (band="") so the model/hash are unchanged; only genuinely-diverging per-band scopes
-            # get their own band-labelled row (so compatibility mode drops the real per-band port).
-            # Each instance of the stack (A §2.5; slot 0 only until L5) gets its own rows.
+        for stk, comp, ep in mapped:                  # rows per instance and band: _fw.endpoint_rows
             bands = (self.stack_bands(stk.id) if hasattr(self, "stack_bands") else ()) or ("",)
-            for inst in self._stack_instances(stk):
-                per_scope = {}
-                for band in bands:
-                    sc = self._fw_resolve_scope(stk, comp, ep, band=band, inst=inst)
-                    if sc["loopback"] and not sc["deny"]:
-                        continue                          # loopback-only, no knob -> nothing to do
-                    stup = (sc["proto"], sc["family"], sc["addr"], sc["port"],
-                            tuple(sorted(sc["allow_cidrs"])), sc["deny"])
-                    per_scope.setdefault(stup, (band, sc))
-                band_agnostic = len(per_scope) <= 1
-                for band, sc in per_scope.values():
-                    key = sc["id"]
-                    endpoints.append(
-                        {"id": key, "proto": sc["proto"], "family": sc["family"],
-                         "addr": sc["addr"], "port": sc["port"], "allow_cidrs": sc["allow_cidrs"],
-                         # a tick on the slot-0 id applies to every instance of that endpoint (A §2.5)
-                         "selected": key in selected or _base_id(key) in selected,
-                         "deny_default": sc["deny"],
-                         "auth": sc.get("auth", "none"), "band": "" if band_agnostic else band})
+            endpoints += _fw.endpoint_rows(stk, bands, lambda b, i, s=stk, c=comp, e=ep:
+                                           self._fw_resolve_scope(s, c, e, band=b, inst=i), selected)
 
         proxy = self._fw_proxy_ingress(cfg,
                                        ap_managed=bool(getattr(fwcfg, "ap_enabled", False)))
@@ -959,7 +930,7 @@ class FirewallOpsMixin:
             runtime_fs.write_marker(self._paths,
                                     self._paths.under(_FW_POSTUPDATE_MARKER), "1")
         except Exception as exc:                       # containment / fs error
-            return f"{type(exc).__name__}: {' '.join(str(exc).split())}"
+            return f"{_FW_POSTUPDATE_MARKER}: {type(exc).__name__}: {' '.join(str(exc).split())}"
         return ""
 
     @invalidates_snapshot
@@ -1517,12 +1488,6 @@ def _norm_cidrs(cidrs, family=None):
             continue
         out.append(net.with_prefixlen)
     return sorted(set(out))
-
-
-def _base_id(eid):
-    """The slot-0 id of an instance row's id: `<component>-<rid>.tcp-<base>` -> `<component>.tcp-<base>`."""
-    import re
-    return re.sub(r"-r[1-9][0-9]?(\.tcp-\d+)$", r"\1", eid)
 
 
 def _safe_id(text):

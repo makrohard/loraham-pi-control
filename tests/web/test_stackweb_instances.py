@@ -14,8 +14,8 @@ def _svc(tmp_path, monkeypatch, slot_k=True):
     (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     if slot_k:     # raising=False: on a code without instances the pages are slot 0's only (the red-before)
-        monkeypatch.setattr(type(svc), "_stack_instances",
-                            lambda self, stk: (commands.SLOT0, commands.Instance(1, "r2"))
+        monkeypatch.setattr(commands, "stack_instances",
+                            lambda stk: (commands.SLOT0, commands.Instance(1, "r2"))
                             if stk.id == "meshcore" else (commands.SLOT0,), raising=False)
     return svc
 

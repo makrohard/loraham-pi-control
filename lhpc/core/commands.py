@@ -82,6 +82,11 @@ class Instance:
 SLOT0 = Instance()
 
 
+def stack_instances(stack) -> tuple:
+    """The stack's instances (its firewall rows, its web pages): until L5 its one instance at slot 0."""
+    return (SLOT0,)
+
+
 def _controller_python() -> str:
     """Absolute path of the interpreter running THIS controller.
 

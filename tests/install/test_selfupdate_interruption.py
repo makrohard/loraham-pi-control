@@ -182,7 +182,7 @@ def test_a_render_marker_that_cannot_be_written_stops_the_update_before_it_moves
         return real(paths, path, *a, **k)
     monkeypatch.setattr(runtime_fs, "write_marker", full_disk)
     res = svc().self_update_apply()
-    assert not res.ok and res.data.get("render_mark_failed")
+    assert not res.ok and res.data.get("fw_mark_failed")   # the one follow-up branch
     assert "state/webserver-render.pending" in res.details[0]
     assert gitrepo.git(work, "rev-parse", "HEAD") == head
     assert selfupdate.read_migration_journal(svc()._paths) == (None, False)

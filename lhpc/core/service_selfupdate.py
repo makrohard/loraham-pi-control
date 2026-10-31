@@ -578,10 +578,9 @@ class SelfUpdateOpsMixin:
         # ProtectHome=read-only and cannot write unit files), so the updater — which caused
         # the drift and has the context — must leave them canonical. Only when they are
         # provably ours; no restart here (the update flow owns that).
-        ok_units, unit_detail = self._refresh_units_post_update()
+        ok_units, unit_detail = proxy_rerender.after_advance(self)   # units, then CO-14's re-render
         res = _dc.replace(res, data={**res.data, "units_refreshed": ok_units,
-                                     "units_refresh_detail": unit_detail,
-                                     "proxies_rerender": proxy_rerender.after_update(self._paths)})
+                                     "units_refresh_detail": unit_detail})
         if not ok_units:
             # VISIBLE, not buried in data: a successful-looking update that left stale
             # units disables boot restore, and the operator has no reason to suspect it.
@@ -767,17 +766,12 @@ class SelfUpdateOpsMixin:
             # The firewall follow-up is recorded BEFORE the checkout moves: an advance whose marker
             # was lost (a stop, a full disk) could otherwise never be reconciled, since the retry
             # finds the checkout current. A marker that cannot be written stops the update here.
-            if (cause := self._fw_mark_post_update()):
+            if (cause := self._fw_mark_post_update() or proxy_rerender.mark(self._paths)):
                 raise _FWAbort(ActionResult(
-                    False, "Could not record the firewall follow-up — nothing changed.",
+                    False, "Could not record the post-update follow-up — nothing changed.",
                     data={"fw_mark_failed": True}, next_commands=["lhpc self-update --apply"],
-                    details=[f"  state/firewall-postupdate.pending could not be written ({cause}); "
+                    details=[f"  a state/ marker could not be written ({cause}); "
                              "fix that, then run the update again"]))
-            if (cause := proxy_rerender.mark(self._paths)):         # CO-14: the proxies' re-render
-                raise _FWAbort(ActionResult(
-                    False, "Could not record the proxies' re-render — nothing changed.",
-                    data={"render_mark_failed": True}, next_commands=["lhpc self-update --apply"],
-                    details=[f"  {cause}; fix that, then run the update again"]))
             intent = self._stamp(new_candidates, from_head)
             hook.update(**{"from": from_head, "to": to_head, "branch": branch, "intent": intent})
             if not intent:
@@ -1202,9 +1196,8 @@ class SelfUpdateOpsMixin:
                         # a one-click update left the OLD units installed: the new version
                         # then reads its own integration as non-canonical, one-click
                         # updating goes away and boot restore is skipped.
-                        ok_u, det_u = self._refresh_units_post_update()
-                        refreshed = {"units_refreshed": ok_u, "units_refresh_detail": det_u,
-                                     "proxies_rerender": proxy_rerender.after_update(self._paths)}
+                        ok_u, det_u = proxy_rerender.after_advance(self)
+                        refreshed = {"units_refreshed": ok_u, "units_refresh_detail": det_u}
                         # `venv-unsynced` is cleared only now, with the units refreshed (as in
                         # `_apply_and_sync`): an interruption in between keeps it recorded.
                         uncleared = self._clear_incomplete_states(

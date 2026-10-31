@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import dataclasses as _dc
 
-from . import listeners as _listeners
 from . import openhop_store as _openhop_store
 from .paths import PathContainmentError
 from .service_base import ActionResult
@@ -177,9 +176,7 @@ class WebserverOpsMixin:
         was promoted, the reload/restart succeeded, and the listener-match gate passed. Fail-soft —
         a policy record that cannot be written must not turn a successful apply into a failure
         (the stale snapshot then keeps the posture conservative, which is the safe direction)."""
-        from . import proxy_rerender
         from . import webserver as _ws
-        proxy_rerender.clear(self._paths)              # CO-14: this release's render is live
         try:
             _ws.record_applied(self._paths, cfg, proxies)
         except Exception:
@@ -581,7 +578,7 @@ class WebserverOpsMixin:
         panel says when the upstream is served (`page_mode_note`)."""
         from .model import web_pages
         s = self.stack(stack_id)
-        return tuple(web_pages(s, self._stack_instances(s))) if s is not None else ()
+        return tuple(web_pages(s)) if s is not None else ()
 
     def page_mode_note(self, page) -> str:
         """One sentence when the page's upstream is NOT served in the saved MeshCore mode (the
@@ -1270,7 +1267,7 @@ class WebserverOpsMixin:
             scheme=current.scheme if scheme is None else scheme,
             access_mode=current.access_mode if access_mode is None else access_mode,
             allowed_cidrs=current.allowed_cidrs if cidrs is None else tuple(cidrs))
-        plan = _ws.plan_stack_exposure(probe, ws.port, used, _listeners.stack_listeners(self))
+        plan = _ws.plan_stack_exposure(probe, ws.port, used, self)
         missing = self._exposure_missing(plan, confirm=confirm, confirm_public=confirm_public,
                                          cidr_flag="--cidr <net>  (e.g. --cidr 192.168.0.0/24)")
         if missing:
@@ -1404,7 +1401,7 @@ class WebserverOpsMixin:
                 for sid, probe in candidates.items():
                     others = saved_other | {c.port for o, c in candidates.items()
                                             if o != sid and c.enabled}
-                    plan = _ws.plan_stack_exposure(probe, ws.port, others, _listeners.stack_listeners(self))
+                    plan = _ws.plan_stack_exposure(probe, ws.port, others, self)
                     missing = self._exposure_missing(
                         plan, confirm=confirm, confirm_public=confirm_public,
                         cidr_flag="--cidr <net>  (e.g. --cidr 192.168.0.0/24)")
