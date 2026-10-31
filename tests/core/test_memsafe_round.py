@@ -7,6 +7,7 @@ lock, unbounded, before it takes any other lock. A box at or above it runs its j
 before. MemTotal does not move while the box runs, so two Builds on one box always decide alike.
 The request returns at once either way: the jobs are spawned detached and wait in their launchers."""
 
+import errno
 import fcntl
 import os
 import subprocess
@@ -66,13 +67,22 @@ class _Commands(dict):
 
 
 def _rendered(tmp_path, monkeypatch, total_kb, target):
-    """The console's Build of `target` on a box whose MemTotal is `total_kb`: each rendered job's
-    (target, lock). The detached spawn is stubbed by a live process the test ends itself."""
+    """The console's Build of `target` on a box whose MemTotal is `total_kb` (None: reading
+    /proc/meminfo raises OSError): each rendered job's (target, lock). The detached spawn is stubbed by
+    a live process the test ends itself."""
     root = tmp_path / "rt"
     svc = ControllerService(system=FakeSystem(commands=_Commands(),
-                                              files={"/proc/meminfo": _meminfo(total_kb)}).system,
+                                              files={"/proc/meminfo": _meminfo(total_kb or 0)}).system,
                             paths=Paths(runtime_root=root))
     assert svc.bootstrap(apply=True).ok
+    if total_kb is None:
+        real_read = svc._system.fs.read_text
+
+        def read_text(path, max_bytes):
+            if path == "/proc/meminfo":
+                raise OSError(5, "Input/output error")
+            return real_read(path, max_bytes)
+        monkeypatch.setattr(svc._system.fs, "read_text", read_text)
     for sp in ("src/openhop-core", "src/openhop-repeater", "src/meshcore-webui", "src/meshcore-cli"):
         (root / sp).mkdir(parents=True)
     seen, real = [], commands.render_build_launcher
@@ -102,6 +112,13 @@ def test_a_small_box_gives_a_single_job_the_lock_too(tmp_path, monkeypatch):
     # across Builds, G1-MEMSAFE-1 F2).
     seen, lock = _rendered(tmp_path, monkeypatch, ZERO, "meshcore-cli")
     assert seen == [("meshcore-cli", lock)]
+
+
+def test_a_build_whose_meminfo_read_raises_is_serial_not_an_error(tmp_path, monkeypatch):
+    # G1-MEMSAFE-2 B1: through the unchanged public path (spawn_web_job), a raising /proc/meminfo
+    # read makes the box serial instead of breaking the Build.
+    seen, lock = _rendered(tmp_path, monkeypatch, None, "meshcore")
+    assert seen == [("meshcore-node", lock), ("meshcore-webui", lock), ("meshcore-cli", lock)]
 
 
 def test_a_large_box_runs_its_round_in_parallel_as_before(tmp_path, monkeypatch):
@@ -189,16 +206,19 @@ def test_two_launchers_on_the_lock_run_their_steps_one_after_the_other(tmp_path,
                 p.wait()
 
 
-def test_a_round_lock_that_cannot_be_taken_for_another_reason_blocks_the_job(tmp_path, monkeypatch):
+@pytest.mark.parametrize("err", [errno.EBADF, errno.ENOLCK, errno.EALREADY, errno.EINPROGRESS],
+                         ids=["EBADF", "ENOLCK", "EALREADY", "EINPROGRESS"])
+def test_a_round_lock_that_cannot_be_taken_for_another_reason_blocks_the_job(tmp_path, monkeypatch, err):
     # N1: only EAGAIN/EWOULDBLOCK means "another job holds it"; any other flock error is a blocked
-    # job (exit 3), never an endless wait.
+    # job (exit 3), never an endless wait. EALREADY and EINPROGRESS are BlockingIOErrors too, and
+    # still not contention.
     from lhpc.core import build_launcher_runtime as blr
     (tmp_path / "rt" / "state" / "locks").mkdir(parents=True)
     real = fcntl.flock
 
     def flock(fd, op):
         if op & fcntl.LOCK_NB:
-            raise OSError(9, "Bad file descriptor")
+            raise OSError(err, os.strerror(err))
         return real(fd, op)
     monkeypatch.setattr(blr.fcntl, "flock", flock)
     spec = {"steps": [{"argv": ["true"], "env_items": []}], "cwd": str(tmp_path),
