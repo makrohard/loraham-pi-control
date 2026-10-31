@@ -21,6 +21,7 @@ blocked, 1 = pkg-config failure, first failing step's own return code otherwise.
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import math
 import os
@@ -284,13 +285,13 @@ def run(spec: dict) -> None:
                     raise SystemExit(3) from None
                 try:
                     fcntl.flock(held[-1].fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:      # EAGAIN/EWOULDBLOCK: another job holds it -> wait
+                except OSError as e:
+                    if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):   # not "another job holds it"
+                        detail[0] = "blocked: round lock failed"
+                        sys.stderr.write(f"round lock failed ({round_name}): {e}\n")
+                        raise SystemExit(3) from None
                     print("waiting for memory: this box runs one build job at a time", flush=True)
                     fcntl.flock(held[-1].fileno(), fcntl.LOCK_EX)
-                except OSError as e:
-                    detail[0] = "blocked: round lock failed"
-                    sys.stderr.write(f"round lock failed ({round_name}): {e}\n")
-                    raise SystemExit(3) from None
             # Index-to-source handoff: hold the INDEX lock, verify NO unresolved journal, THEN
             # take the source lock(s); release the index lock only afterwards.
             if index_name:
