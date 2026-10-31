@@ -66,3 +66,17 @@ def test_the_run_argv_carries_the_listener_tokens_whole():
     webui = next(c for st in load_manifest() for c in st.components if c.id == "meshcore-webui")
     assert webui.process.instance_arg == ("--port", "{port:8788}")
     assert commands.instance_value("{port:8788}", webui, {}, "/rt", "/src", inst=commands.Instance(2, "r1")) == "8808"
+
+
+def test_a_manifest_without_tokens_keeps_no_template(tmp_path):
+    # C2a's claim, kept at head: the shipped manifest with every token written as its slot-0 value
+    # (today's manifest) loads with no template on any param, endpoint or claim.
+    import repo_paths
+    text = (repo_paths.REPO / "lhpc" / "data" / "manifest.example.toml").read_text()
+    text = re.sub(r"\{port(?:_of:[a-z][a-z0-9_-]*)?:(\d+)\}", r"\1", text).replace("{instance_dir}", "")
+    path = tmp_path / "manifest.toml"
+    path.write_text(text)
+    for c in (c for st in load_manifest(path) for c in st.components):
+        assert not any(p.default_template for p in c.run_params), c.id
+        assert not any(e.address_template for e in c.endpoints), c.id
+        assert not any(r.key_template for r in c.resources), c.id

@@ -25,8 +25,8 @@ class _Op:
 
 
 def _argv(tokens, inst=None, params=None):
-    return commands.expand_argv(tokens, _C(), params or {}, _Op(), "/rt", "/src", "",
-                                inst=inst or commands.SLOT0)
+    kw = {} if inst is None else {"inst": inst}     # no instance: today's call, unchanged (slot 0)
+    return commands.expand_argv(tokens, _C(), params or {}, _Op(), "/rt", "/src", "", **kw)
 
 
 @pytest.mark.parametrize("tokens, today", [
@@ -82,6 +82,18 @@ def test_a_post_step_port_follows_the_instance():
     rendered = next(ast.literal_eval(n.value) for n in ast.parse(script).body
                     if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "STEPS")
     assert [s["port"] for s in rendered] == [12343, 12323]   # a literal int stays what it says
+
+
+def test_slot_0_pre_steps_env_and_post_steps_resolve_through_todays_callers():
+    # The callers as every runtime path calls them today (no instance argument) get today's values.
+    pre = commands.normalize_pre_steps([{"kind": "mkdir", "path": "{runtime}/state/{instance_dir}x"}],
+                                       "/rt", "/src")
+    env = commands.build_env([("STATE", "{runtime}/state/{instance_dir}x")], "/rt", "/src")
+    script = commands.render_post_launcher([{"kind": "tcp_wait", "port": "{port:12323}"}], _C(), {},
+                                           _Op(), "/rt", "/src", "")
+    rendered = next(ast.literal_eval(n.value) for n in ast.parse(script).body
+                    if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "STEPS")
+    assert (pre[0][1], env, rendered[0]["port"]) == ("/rt/state/x", {"STATE": "/rt/state/x"}, 12323)
 
 
 def test_pre_steps_and_env_take_the_instance_level():
