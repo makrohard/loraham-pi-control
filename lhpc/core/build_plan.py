@@ -65,27 +65,31 @@ def web_round(ordered: list, is_built) -> tuple[list, bool]:
     return [c for c in ordered if c.id not in providers], False
 
 
-# A console round runs its jobs one at a time while MemAvailable at spawn is below this (kB). It is
-# read once, before any job of the round grows, so it tells a small box (box Z idle ≈ 211 MB) from a
-# large one, not a load. Swap is not counted (zram on the Zero is compressed RAM). One value for
-# every stack and box.
-ROUND_SERIAL_BELOW_KB = 256 * 1024
+# On a box with less RAM than this (MemTotal, kB) every console build or test job runs one at a time:
+# each detached launcher waits for one box-wide lock. MemTotal does not move while the box runs, so
+# the decision is the box's, not the moment's: a Pi Zero 2 W (415 MiB) always serializes, a Pi 5
+# never does. One value for every stack.
+SERIAL_BELOW_TOTAL_KB = 1024 * 1024
 ROUND_LOCK_KEY = "build-round"
 
 
-def serial_round(available_kb: int | None, jobs: int) -> bool:
-    """Whether a console round of `jobs` jobs runs one at a time: more than one job, and
-    MemAvailable below ROUND_SERIAL_BELOW_KB or unreadable (None)."""
-    return jobs > 1 and (available_kb is None or available_kb < ROUND_SERIAL_BELOW_KB)
+def serial_box(total_kb: int | None) -> bool:
+    """Whether this box runs its console jobs one at a time: MemTotal below SERIAL_BELOW_TOTAL_KB,
+    or unknown (None)."""
+    return total_kb is None or total_kb < SERIAL_BELOW_TOTAL_KB
 
 
-def round_lock(paths, jobs: int, fs) -> str:
-    """The lock every job of a serial round holds for its whole run (each launcher waits for it),
-    from one reading of /proc/meminfo; "" when the round runs in parallel."""
+def round_lock(paths, fs) -> str:
+    """The lock a console job holds for its whole run (its launcher waits for it), from MemTotal in
+    /proc/meminfo; "" when the box runs its jobs in parallel. A read that fails, or a file the
+    parser does not accept, counts as unknown: serial."""
     from . import reslock
     from .service_system import parse_meminfo
-    mem = parse_meminfo(fs.read_text("/proc/meminfo", 65536))
-    if not serial_round(mem["available_kb"] if mem else None, jobs):
+    try:
+        mem = parse_meminfo(fs.read_text("/proc/meminfo", 65536))
+    except (OSError, ValueError):
+        mem = None
+    if not serial_box(mem["total_kb"] if mem else None):
         return ""
     return str(reslock.lock_file_path(paths, ROUND_LOCK_KEY))
 

@@ -4,8 +4,8 @@
 
 - LoRaHAM daemon v1.3.1 (660be550, daemon + chat): every start passes the PA over-current limit, `auto` = 140 mA
   with high power, else 100 mA; set per band with `lhpc hardware --ocp`.
-- Console: a stack's Build on a box with less than 256 MiB available (a Pi Zero 2 W) runs its component jobs
-  one at a time instead of all at once, so the console keeps answering during the build.
+- Console: on a box with less than 1 GiB of RAM (a Pi Zero 2 W) the console's build and test jobs run one at a
+  time instead of all at once, so the console keeps answering during a build.
 - Daemon: the binary carries the Meshstick library (`lib/`, pine64 libch341-spi-userspace). Source builds need
   `libusb-1.0-0-dev`, and once `lhpc install daemon` to fetch the pine64 source before `lhpc build daemon`.
 

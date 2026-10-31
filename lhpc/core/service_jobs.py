@@ -313,7 +313,7 @@ class JobsOpsMixin:
                 ordered = [bj[pi]] + [j for i, j in enumerate(bj) if i != pi]
                 spawn_fns = [(lambda c=c, st=st, nm=nm: _spawn_build(c, st, nm)) for (c, st, nm) in ordered]
 
-            round_lock = build_plan.round_lock(self._paths, len(spawn_fns), self._system.fs)  # "" = parallel
+            round_lock = build_plan.round_lock(self._paths, self._system.fs)  # "" = this box runs jobs in parallel
             plog, paid, pout = _launch(spawn_fns[0], _adm_stack)   # primary first; blocked -> NO secondaries
             if plog is None:                        # reserve/spawn/render failed
                 self.prune_logs()
