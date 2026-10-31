@@ -3,6 +3,7 @@ whose digest differs is refused before any boot, and a guest that is not a guest
 kernel, another architecture, no Pi OS userland, not Trixie) fails the job."""
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -221,17 +222,30 @@ def test_no_writer_id_that_names_no_single_writer_is_ever_signalled(tmp_path, pi
     assert not log.exists(), log.read_text()
 
 
-def test_the_runner_sampler_is_a_process_group_the_stop_ends(tmp_path):
+@pytest.mark.parametrize("slow_start", [False, True])
+def test_the_runner_sampler_is_a_process_group_the_stop_ends(tmp_path, slow_start):
     # start_samplers as the job runs it (the guest half stubbed): the pidfile names the sampler's own group, and
-    # stop_writer leaves no process of it behind.
+    # stop_writer leaves no process of it behind. The group exists only once setsid has run, after start_samplers
+    # returned; the sampler's first line (written after that) is the event the check waits for (G1-LBS-2 B3), the
+    # 30 s only the bound of a hang. slow_start: a setsid that starts a second late, the order a busy runner can
+    # give; an immediate group check fails there.
+    path = os.environ["PATH"]
+    if slow_start:
+        stub = tmp_path / "stub"
+        stub.mkdir()
+        (stub / "setsid").write_text(f'#!/bin/bash\nsleep 1\nexec {shutil.which("setsid")} "$@"\n')
+        (stub / "setsid").chmod(0o755)
+        path = f"{stub}:{path}"
     script = f"""set -euo pipefail
 WORK={tmp_path}; EV={tmp_path}; GITHUB_WORKSPACE={repo_paths.REPO}; . {LANE / "guest.sh"}
 g() {{ :; }}; gcp() {{ :; }}
 start_samplers
 t=$(cat {tmp_path}/runner-sampler.pid); [ "${{t#-}}" != "$t" ]
+timeout 30 bash -c 'until [ -s "$1" ]; do sleep 0.1; done' _ {tmp_path}/runner-load.txt
 pgrep -g "${{t#-}}" > /dev/null
 stop_writer {tmp_path}/runner-sampler.pid
 r=0; pgrep -g "${{t#-}}" > /dev/null || r=$?; echo "after=$r"
 """
-    p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False, timeout=90)
+    p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False, timeout=90,
+                       env={**os.environ, "PATH": path})
     assert p.returncode == 0 and "after=1" in p.stdout, p.stdout + p.stderr
