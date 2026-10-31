@@ -127,7 +127,8 @@ def test_a_saved_but_unapplied_proxy_edit_is_not_pushed_live_by_the_update(tmp_p
     assert svc().stack_web_configure("meshcore", cidrs=["192.168.2.0/24"], confirm=True).ok
     svc().self_update_apply_operator()
     assert _deployed(paths) == previous
-    assert proxy_rerender.pending(paths).startswith("the saved webserver settings are not applied")
+    why = proxy_rerender.pending(paths)
+    assert why is not None and why.startswith("the saved webserver settings are not applied")
 
 
 def test_the_hidden_verb_with_nothing_pending_changes_nothing(tmp_path, capsys):
