@@ -222,6 +222,7 @@ def run(spec: dict) -> None:
     lock_names = sorted(spec.get("lock_names") or [])
     shared_names = set(spec.get("shared_lock_names") or []) - set(lock_names)
     index_name = spec.get("index_lock_name") or ""
+    round_name = spec.get("round_lock_name") or ""
     op, target = spec.get("op") or "", spec.get("target") or ""
     # A Build gets the CLI's limits, read here at exec time from the unit's env; a Test keeps its plain
     # timeout. A malformed value fails safe (exit 3), never unlimited. `sample_s` is set by tests only.
@@ -271,6 +272,21 @@ def run(spec: dict) -> None:
         held = []            # file objects held for the whole job lifetime
         idx = None
         try:
+            # A serial console round (build_plan.round_lock): one job at a time, so this one WAITS for
+            # the round lock (no bound) and holds it for its whole run. Taken BEFORE every other lock,
+            # so a waiting job holds nothing another operation needs.
+            if round_name:
+                try:
+                    held.append(_open(round_name))
+                except (PathContainmentError, OSError) as e:
+                    detail[0] = "blocked: round lock unsafe"
+                    sys.stderr.write(f"round lock open failed ({round_name}): {e}\n")
+                    raise SystemExit(3) from None
+                try:
+                    fcntl.flock(held[-1].fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    print("waiting for memory: this box builds one job of the round at a time", flush=True)
+                    fcntl.flock(held[-1].fileno(), fcntl.LOCK_EX)
             # Index-to-source handoff: hold the INDEX lock, verify NO unresolved journal, THEN
             # take the source lock(s); release the index lock only afterwards.
             if index_name:

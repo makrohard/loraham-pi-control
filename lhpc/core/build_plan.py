@@ -65,6 +65,31 @@ def web_round(ordered: list, is_built) -> tuple[list, bool]:
     return [c for c in ordered if c.id not in providers], False
 
 
+# A console round runs its jobs one at a time while MemAvailable at spawn is below this (kB). It is
+# read once, before any job of the round grows, so it tells a small box (box Z idle ≈ 211 MB) from a
+# large one, not a load. Swap is not counted (zram on the Zero is compressed RAM). One value for
+# every stack and box.
+ROUND_SERIAL_BELOW_KB = 256 * 1024
+ROUND_LOCK_KEY = "build-round"
+
+
+def serial_round(available_kb: int | None, jobs: int) -> bool:
+    """Whether a console round of `jobs` jobs runs one at a time: more than one job, and
+    MemAvailable below ROUND_SERIAL_BELOW_KB or unreadable (None)."""
+    return jobs > 1 and (available_kb is None or available_kb < ROUND_SERIAL_BELOW_KB)
+
+
+def round_lock(paths, jobs: int, fs) -> str:
+    """The lock every job of a serial round holds for its whole run (each launcher waits for it),
+    from one reading of /proc/meminfo; "" when the round runs in parallel."""
+    from . import reslock
+    from .service_system import parse_meminfo
+    mem = parse_meminfo(fs.read_text("/proc/meminfo", 65536))
+    if not serial_round(mem["available_kb"] if mem else None, jobs):
+        return ""
+    return str(reslock.lock_file_path(paths, ROUND_LOCK_KEY))
+
+
 def artifact_capable(stack, comp_id: str) -> bool:
     """A binary artifact CAN provide this component: its stack's `[stack.binary]` covers it,
     whatever channel it is on now. Its marker ships inside that artifact and stays static, so a
