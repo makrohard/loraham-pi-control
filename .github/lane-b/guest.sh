@@ -44,18 +44,22 @@ start_samplers() {
   gcp "$GITHUB_WORKSPACE/.github/lane-b/sampler.sh" sampler.sh
   g 'sudo nohup bash sampler.sh > sampler.log 2> sampler.err < /dev/null & true'
   # Its own process group (setsid), so that stop_writer ends it with every child that holds the file open.
+  # The pidfile holds a sentinel from before the launch until the group's id replaces it: a sampler that
+  # runs without its id published leaves the sentinel, which stop_writer refuses ("not a pid"), so the
+  # evidence is never uploaded beside it. A sentinel that cannot be written stops the job before any launch.
+  echo "unpublished" > "$WORK/runner-sampler.pid"
   WORK=$WORK setsid bash -c 'while :; do printf "%s load=%s mem_avail_mb=%s qemu_cpu=%s\n" "$(date -u +%FT%TZ)" "$(cut -d" " -f1-3 /proc/loadavg)" \
       "$(awk "/MemAvailable/{print int(\$2/1024)}" /proc/meminfo)" "$(ps -o %cpu= -p "$(cat "$WORK/qemu.pid")" 2>/dev/null | tr -d " ")"
       sleep 15; done' >> "$EV/runner-load.txt" 2>&1 &
   echo "-$!" > "$WORK/runner-sampler.pid"
 }
 
-# The guest's samples and journal around the install (also after a failure), and the runner sampler stopped.
+# The guest's samples and journal around the install (also after a failure). The runner sampler is stopped by
+# the evidence step's stop_writer.
 collect_samples() {
   g 'sudo pkill -f "bash sampler.sh"; cat sampler.err 2>/dev/null; true' > "$EV/guest/sampler-stop.txt" 2>&1 || true
   g 'sudo journalctl -b --no-pager -o short-iso -u dbus.service -u systemd-logind.service -u polkit.service -p warning; true' > "$EV/guest/journal-warnings.txt" 2>&1 || true
   g 'sudo journalctl -b --no-pager -o short-iso _PID=1 | tail -n 300; true' > "$EV/guest/journal-pid1.txt" 2>&1 || true
-  kill "$(cat "$WORK/runner-sampler.pid" 2>/dev/null)" 2>/dev/null || true
 }
 
 # Diagnostics after a failed units line (the observation, not a fix): the user unit's status and journal, then one

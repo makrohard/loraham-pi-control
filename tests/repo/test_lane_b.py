@@ -249,3 +249,58 @@ r=0; pgrep -g "${{t#-}}" > /dev/null || r=$?; echo "after=$r"
     p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False, timeout=90,
                        env={**os.environ, "PATH": path})
     assert p.returncode == 0 and "after=1" in p.stdout, p.stdout + p.stderr
+
+
+def _samplers_then_evidence(tmp_path, prelude):
+    """start_samplers as the topic job runs it (the guest half stubbed; `prelude` breaks something),
+    then the topic job's evidence step on the same WORK and EV. A setsid shim records the sampler's
+    pid. Returns (start rc, evidence step, sums written, the sampler alive after the step)."""
+    work, ev, stub = tmp_path / "work", tmp_path / "ev", tmp_path / "stub"
+    for d in (work, ev, stub):
+        d.mkdir()
+    (ev / "log.txt").write_text("ok\n")
+    launched = tmp_path / "launched.pid"
+    (stub / "setsid").write_text(f'#!/bin/bash\necho $$ > {launched}\nexec {shutil.which("setsid")} "$@"\n')
+    (stub / "setsid").chmod(0o755)
+    env = {"EV": str(ev), "WORK": str(work), "PATH": f"{stub}:/usr/bin:/bin", "GITHUB_WORKSPACE": str(repo_paths.REPO)}
+    # On exit the script waits for the shim's pid only when it launched a job: a launch is then known
+    # for sure, and no launch is known for sure when there is no job.
+    script = f"""set -euo pipefail
+trap 'if [ -n "$(jobs -p)" ]; then until [ -s {launched} ]; do sleep 0.01; done; fi' EXIT
+. {LANE / "guest.sh"}
+g() {{ :; }}; gcp() {{ :; }}
+{prelude}
+start_samplers
+"""
+    start = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False, env=env)
+    pgid = int(launched.read_text()) if launched.exists() else None
+    try:
+        if pgid is not None:                        # the sampler's first line: it runs, in its group
+            subprocess.run(["timeout", "30", "bash", "-c", 'until [ -s "$1" ]; do sleep 0.1; done', "_",
+                            str(ev / "runner-load.txt")], check=True)
+        step = next(s for s in _jobs()["topic"] if "id: evidence" in s)
+        p = subprocess.run(["bash", "-e", "-c", _run_block(step)], capture_output=True, text=True, check=False,
+                           env=env)
+        alive = pgid is not None and subprocess.run(["pgrep", "-g", str(pgid)], capture_output=True,
+                                                    check=False).returncode == 0
+    finally:
+        if pgid is not None:
+            subprocess.run(["kill", "-9", "--", f"-{pgid}"], capture_output=True, check=False)
+    return start.returncode, p, (ev / "SHA256SUMS").exists(), alive
+
+
+@pytest.mark.parametrize("case, prelude", [
+    # the pidfile cannot be written at all (a dangling link): no file is ever created
+    ("pidfile-unwritable", 'ln -s "$WORK/no/such/dir/x" "$WORK/runner-sampler.pid"'),
+    # the publication after the launch fails (the redirect leaves the file, the write fails)
+    ("publication-fails", 'echo() { case "$1" in -[0-9]*) return 1;; esac; builtin echo "$@"; }'),
+], ids=["pidfile-unwritable", "publication-fails"])
+def test_a_sampler_whose_pidfile_is_not_published_never_runs_beside_an_upload(tmp_path, case, prelude):
+    # G1-LBS-3 B6: the evidence step trusts the pidfile; an absent one means "never started". So a
+    # sampler must never run without a pidfile that names it or blocks the upload: the sentinel is
+    # written before the launch and replaced by the group's id after it.
+    start_rc, p, sums, alive = _samplers_then_evidence(tmp_path, prelude)
+    assert start_rc != 0, case
+    assert not (sums and alive), (case, p.stdout, p.stderr)       # never a live writer under the sums
+    if alive:
+        assert p.returncode == 1 and "evidence: a writer" in p.stdout and not sums, (case, p.stdout, p.stderr)
