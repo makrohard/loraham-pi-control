@@ -2944,6 +2944,11 @@ announce = "[build] the Reticulum wheel the clients install, into {source}/.venv
 argv = [".venv/bin/pip", "install", "-c", ".venv/lhpc-rns-constraint.txt", "--disable-pip-version-check", "{runtime}/src/loraham-rns-interface"]
 announce = "[install] the direct-SPI LoRa interface + loraham-rns-node"
 [[stack.component.build_steps]]
+# The -c steps still read pip's configuration, which can move WHERE they install: the venv must still run the
+# node's wheel, from the venv (rns-wheel.sh check), or the build fails here.
+argv = ["bash", "{asset}/scripts/rns-wheel.sh", "check", ".venv/lhpc-wheel"]
+announce = "[check] {source}/.venv runs the node's Reticulum wheel"
+[[stack.component.build_steps]]
 argv = ["install", "-D", "-m", "0644", "{runtime}/src/loraham-rns-interface/interfaces/LoRaSPIInterface.py", "{runtime}/state/reticulum/interfaces/LoRaSPIInterface.py"]
 [[stack.component.build_steps]]
 argv = [".venv/bin/python", "-c", "import RNS, gpiod, spidev, loraham_rns.interface, loraham_rns.node; print('reticulum venv OK', RNS.__version__)"]
@@ -3344,6 +3349,11 @@ announce = "[install] Reticulum from the node's wheel into {source}/.venv"
 [[stack.component.build_steps]]
 argv = [".venv/bin/pip", "install", "-c", ".venv/lhpc-rns-constraint.txt", "--disable-pip-version-check", "."]
 announce = "[install] NomadNet into {source}/.venv — pip is quiet off-TTY"
+[[stack.component.build_steps]]
+# The -c steps still read pip's configuration, which can move WHERE they install: the venv must still run the
+# node's wheel, from the venv (rns-wheel.sh check), or the build fails here.
+argv = ["bash", "{asset}/scripts/rns-wheel.sh", "check", "{runtime}/src/reticulum/.venv/lhpc-wheel"]
+announce = "[check] {source}/.venv runs the node's Reticulum wheel"
 
 [[stack.component]]
 id = "lxmd"
@@ -3392,6 +3402,11 @@ announce = "[install] Reticulum from the node's wheel into {source}/.venv"
 [[stack.component.build_steps]]
 argv = [".venv/bin/pip", "install", "-c", ".venv/lhpc-rns-constraint.txt", "--disable-pip-version-check", "."]
 announce = "[install] LXMF into {source}/.venv — pip is quiet off-TTY"
+[[stack.component.build_steps]]
+# The -c steps still read pip's configuration, which can move WHERE they install: the venv must still run the
+# node's wheel, from the venv (rns-wheel.sh check), or the build fails here.
+argv = ["bash", "{asset}/scripts/rns-wheel.sh", "check", "{runtime}/src/reticulum/.venv/lhpc-wheel"]
+announce = "[check] {source}/.venv runs the node's Reticulum wheel"
 
 [[stack.component]]
 id = "sideband"
@@ -3470,6 +3485,11 @@ argv = [".venv/bin/pip", "install", "-c", ".venv/lhpc-rns-constraint.txt", "--di
 # drops every .kv layout) survives a rebuild untouched and the app dies at window creation.
 # --no-deps keeps this to the package itself; the step above resolved the dependency tree.
 argv = [".venv/bin/pip", "install", "-c", ".venv/lhpc-rns-constraint.txt", "--disable-pip-version-check", "--force-reinstall", "--no-deps", "sbapp==1.9.2"]
+[[stack.component.build_steps]]
+# The -c steps still read pip's configuration, which can move WHERE they install: the venv must still run the
+# node's wheel, from the venv (rns-wheel.sh check), or the build fails here.
+argv = ["bash", "{asset}/scripts/rns-wheel.sh", "check", "{runtime}/src/reticulum/.venv/lhpc-wheel"]
+announce = "[check] {source}/.venv runs the node's Reticulum wheel"
 
 [[stack.component.build_steps]]
 argv = ["install", "-d", "-m", "0700", "{runtime}/state/sideband/kivy"]
