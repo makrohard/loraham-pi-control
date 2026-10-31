@@ -2,6 +2,7 @@
 #
 # rns-wheel.sh build <wheel dir>     (cwd: the Reticulum node's checkout; .venv is its venv)
 # rns-wheel.sh install <wheel dir>   (cwd: a client's checkout; .venv is its venv)
+# rns-wheel.sh check <wheel dir>     (cwd: the node's or a client's checkout, after its last pip step)
 #
 # The ONE Reticulum wheel the node builds from its checkout and the clients (nomadnet, lxmd,
 # Sideband) install, so every venv runs the node's RNS. The console builds the clients in one
@@ -23,9 +24,15 @@
 # node and of each client runs with `-c` on it, so pip may take RNS from that FILE only: a dependency that wants another
 # RNS (lxmf 1.2.1 requires rns>=1.5.7) makes pip choose an older release of that dependency, or fail the build, and a
 # reinstall a pip configuration forces takes the same file again, never another wheel of the same version.
+#
+# check:   the -c steps still read pip's configuration, so a configuration can move WHERE they install (an [install]
+#          prefix or target with force-reinstall uninstalls the venv's RNS and puts the same wheel elsewhere). Users'
+#          index mirrors are legitimate, so the configuration is not switched off there. Instead the last step of the
+#          node and of each client runs `check`: the venv's own interpreter must import RNS at the wheel's version
+#          from inside that venv, or the step fails, naming what it found.
 set -euo pipefail
 
-usage() { echo "usage: rns-wheel.sh build|install <wheel dir>" >&2; exit 2; }
+usage() { echo "usage: rns-wheel.sh build|install|check <wheel dir>" >&2; exit 2; }
 [ $# -eq 2 ] || usage
 MODE=$1 DIR=$2
 PIP=.venv/bin/pip
@@ -78,6 +85,24 @@ case $MODE in
         ;;
     install)
         install_wheel
+        ;;
+    check)
+        one_wheel
+        "$PY" -I - "$WHEEL" <<'EOF'    # -I: never the checkout's own RNS/ in the cwd
+import pathlib, sys
+want = pathlib.Path(sys.argv[1]).name.split("-")[1]
+venv = pathlib.Path(".venv").resolve()
+try:
+    import RNS
+except ImportError as e:
+    sys.exit(f"rns-wheel: check failed: .venv does not import RNS ({e}); the node's wheel {want} is not installed there")
+got, where = getattr(RNS, "__version__", "?"), pathlib.Path(RNS.__file__).resolve()
+if venv not in where.parents:
+    sys.exit(f"rns-wheel: check failed: RNS {got} runs from {where}, outside {venv} (a pip configuration moved the install)")
+if got != want:
+    sys.exit(f"rns-wheel: check failed: .venv runs RNS {got}, not the node's wheel {want}")
+print(f"rns-wheel: check: .venv runs RNS {got} from {where}")
+EOF
         ;;
     *)
         usage

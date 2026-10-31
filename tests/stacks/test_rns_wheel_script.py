@@ -325,3 +325,66 @@ def test_install_refuses_two_wheels(tmp_path):
     _wheel(wheel_dir, "1.5.6", "NEWER = 1\n")
     r = _run(client, "install", str(wheel_dir))
     assert r.returncode != 0 and "found 2" in r.stderr
+
+
+# ---- G2-RETI-WHEEL-3 B1: a later pip step's configuration can move WHERE it installs --------------------------------
+
+def _client_sequence(comp_id: str):
+    """The manifest's own steps of `comp_id` that run rns-wheel.sh, in order, as (mode, wheel dir template)."""
+    from lhpc.core.manifest import load_manifest
+    comp = next(c for st in load_manifest() for c in st.components if c.id == comp_id)
+    return [tuple(s["argv"][2:4]) for s in comp.build_steps
+            if len(s.get("argv") or []) >= 4 and s["argv"][1].endswith("scripts/rns-wheel.sh")]
+
+
+def _moving_conf(venv_root: Path, index: Path, prefix: Path) -> None:
+    """The venv's own pip.conf: every later install reinstalls, and installs under `prefix`, not the venv."""
+    (venv_root / ".venv" / "pip.conf").write_text(
+        f"[global]\nfind-links = {index}\n[install]\nforce-reinstall = true\nprefix = {prefix}\n")
+
+
+@pytest.mark.slow                # real venvs (ensurepip) and real pip runs
+@pytest.mark.parametrize("comp_id", ["nomadnet", "lxmd", "sideband"])
+@pytest.mark.parametrize("moved", [True, False], ids=["prefix-moves-the-install", "plain"])
+def test_a_client_whose_venv_no_longer_runs_the_node_wheel_fails_its_build(tmp_path, comp_id, moved):
+    """The client's whole sequence as the manifest runs it: the wheel install, the client's own install with `-c` (a
+    package needing rns), then every later step the manifest has that calls rns-wheel.sh. Under a per-venv pip.conf with
+    an [install] prefix and force-reinstall, the client's own install uninstalls the venv's RNS and puts the node's
+    wheel under the prefix: the build must fail, naming it. Without that configuration the same sequence passes."""
+    wheel_dir = _wheel(tmp_path / "node-wheel", "1.5.5", 'NODE = 1\n__version__ = "1.5.5"\n').parent
+    index, prefix = tmp_path / "index", tmp_path / "elsewhere"
+    _dist(index, "clientlike", "1.0", "rns>=1.5.5")
+    client = _client(tmp_path, comp_id)
+    steps = _client_sequence(comp_id)
+    assert steps[0] == ("install", "{runtime}/src/reticulum/.venv/lhpc-wheel"), steps
+    assert _run(client, "install", str(wheel_dir)).returncode == 0
+    if moved:
+        _moving_conf(client, index, prefix)
+    r = _pip(client, "-c", ".venv/lhpc-rns-constraint.txt", "--find-links", str(index), "clientlike")
+    assert r.returncode == 0, r.stderr
+    if moved:                    # the hazard itself: the venv's RNS is gone, the wheel landed under the prefix
+        assert subprocess.run([str(client / ".venv" / "bin" / "python"), "-I", "-c", "import RNS"],
+                              capture_output=True).returncode != 0
+        assert list(prefix.rglob("RNS/__init__.py"))
+    later = [_run(client, mode, str(wheel_dir)) for mode, _d in steps[1:]]
+    failed = [p for p in later if p.returncode != 0]
+    if moved:
+        assert failed and "rns-wheel: check failed" in failed[0].stderr, [p.stderr for p in later]
+    else:
+        assert not failed and later, [p.stderr for p in later]
+
+
+@pytest.mark.slow                # real venvs (ensurepip) and real pip runs
+def test_the_node_whose_venv_no_longer_runs_its_wheel_fails_its_build(tmp_path):
+    """The node's sequence: `build`, its later install with `-c` under a moving pip.conf, then the manifest's later
+    rns-wheel.sh steps of the node: the build fails, naming where RNS went."""
+    index, prefix = tmp_path / "index", tmp_path / "elsewhere"
+    _dist(index, "interfacelike", "1.0", "rns>=1.4.0")
+    node = _node(tmp_path, code='NODE = 1\n__version__ = "1.5.5"\n')
+    steps = _client_sequence("rns")
+    assert steps[0] == ("build", ".venv/lhpc-wheel"), steps
+    assert _run(node, "build", ".venv/lhpc-wheel").returncode == 0
+    _moving_conf(node, index, prefix)
+    assert _pip(node, "-c", ".venv/lhpc-rns-constraint.txt", "interfacelike").returncode == 0
+    later = [_run(node, mode, ".venv/lhpc-wheel") for mode, _d in steps[1:]]
+    assert any(p.returncode != 0 and "rns-wheel: check failed" in p.stderr for p in later), [p.stderr for p in later]
