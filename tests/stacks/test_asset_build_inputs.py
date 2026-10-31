@@ -37,6 +37,11 @@ EXPECTED = {
                        "patches/meshcore-webui-lhpc-guards.patch",
                        "scripts/openhop-apply-patch.sh"),
     "meshchat": ("meshchat-constraints.txt", "meshchat-dist", "scripts/meshchat-assets.sh"),
+    # the Reticulum node builds the one RNS wheel its clients install (rns-wheel.sh)
+    "rns": ("scripts/rns-wheel.sh",),
+    "nomadnet": ("scripts/rns-wheel.sh",),
+    "lxmd": ("scripts/rns-wheel.sh",),
+    "sideband": ("scripts/rns-wheel.sh",),
 }
 
 

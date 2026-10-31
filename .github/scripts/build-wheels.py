@@ -52,6 +52,36 @@ def steps(manifest: Path, baseline: Path) -> list[tuple[str, list[str]]]:
     return out
 
 
+RNS_WHEEL = ["bash", "{asset}/scripts/rns-wheel.sh"]
+RNS_CONSTRAINT = ".venv/lhpc-rns-constraint.txt"
+
+
+def wheel_installs(manifest: Path, baseline: Path) -> dict[str, str]:
+    """{component: the node's wheel dir} of every timed build that runs rns-wheel.sh: `build <dir>` in the
+    node's own checkout, `install <dir>` in a client's. In the build that step writes
+    <checkout>/.venv/lhpc-rns-constraint.txt (`rns @ file://<the wheel>`), and the component's later pip
+    installs run with `-c` on it."""
+    out = {}
+    for comp in _components(manifest, baseline):
+        for step in comp.get("build_steps", ()):
+            argv = [str(a) for a in step.get("argv", ())]
+            if argv[:2] == RNS_WHEEL and len(argv) == 4 and argv[2] == "install":
+                out[comp["id"]] = argv[3]
+            elif argv[:2] == RNS_WHEEL and len(argv) == 4 and argv[2] == "build":
+                out[comp["id"]] = f"{{runtime}}/{comp['source']['path']}/{argv[3]}"
+    return out
+
+
+def _node_wheel(project: Path, scratch: Path) -> Path:
+    """The one wheel `project` (the node's checkout) builds: what rns-wheel.sh installs."""
+    scratch.mkdir(parents=True, exist_ok=True)
+    _run([sys.executable, "-m", "pip", "wheel", "-q", "--no-deps", "-w", str(scratch), str(project)])
+    found = sorted(scratch.glob("rns-*.whl"))
+    if len(found) != 1:
+        raise SystemExit(f"expected one rns wheel from {project}, got {[p.name for p in found]}")
+    return found[0]
+
+
 def _local_projects(args: list[str], cwd: Path) -> list[Path]:
     """The arguments that name a local directory (not an option, not a -c/-r file)."""
     out, skip = [], False
@@ -86,8 +116,10 @@ def fetch(manifest: Path, baseline: Path, mirrors: Path, asset: Path, wheels: Pa
     todo = steps(manifest, baseline)
     # Each step runs from its component's source and may name other pinned sources by path.
     need = {sources[c]["path"] for c, _ in todo}
+    installs = wheel_installs(manifest, baseline)
     need |= {s["path"] for s in sources.values()
-             if any(f"{{runtime}}/{s['path']}" in a for _, args in todo for a in args)}
+             if any(f"{{runtime}}/{s['path']}" in a for _, args in todo for a in args)
+             or any(d.startswith(f"{{runtime}}/{s['path']}/") for d in installs.values())}
     for src in {s["path"]: s for s in sources.values()}.values():
         if src["path"] in need:
             dest = runtime / src["path"]
@@ -96,6 +128,17 @@ def fetch(manifest: Path, baseline: Path, mirrors: Path, asset: Path, wheels: Pa
                             str(dest)], check=True)
             subprocess.run(["git", "-C", str(dest), "-c", "advice.detachedHead=false",
                             "checkout", "--quiet", src["pin_commit"]], check=True)
+    # The build's rns-wheel.sh steps are not pip steps, so they are not replayed; the constraint they write is (a
+    # wheel built here from the node's checkout), so the components' `-c` installs resolve here as they will in the
+    # timed build.
+    built: dict[Path, Path] = {}
+    for component, wheel_dir in installs.items():
+        project = Path(wheel_dir.replace("{runtime}", str(runtime))).parent.parent
+        if project not in built:
+            built[project] = _node_wheel(project, runtime / ".rns-wheel" / str(len(built)))
+        constraint = runtime / sources[component]["path"] / RNS_CONSTRAINT
+        constraint.parent.mkdir(parents=True, exist_ok=True)
+        constraint.write_text(f"rns @ {built[project].resolve().as_uri()}\n")
     seconds: dict[str, float] = {}
     for component, step in todo:
         cwd = runtime / sources[component]["path"]

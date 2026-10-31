@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.6
+
+Fixed
+
+- Reticulum: nomadnet, lxmd and Sideband install and keep the node's RNS (its wheel, no clone), so a console Build no
+  longer exhausts a 512 MB box, and a newer RNS from PyPI no longer replaces it.
+
 ## 0.13.5
 
 - MeshCom-Firmware: 05b842a28 -> 10203967d (v4.40a.spserver-24-g10203967), used by meshcom-firmware
