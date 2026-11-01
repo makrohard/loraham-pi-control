@@ -192,3 +192,11 @@ def test_q2_class_an_old_config_symlink_out_of_the_root_is_unknown_not_an_except
     (outside / "l.toml").write_text('[radio]\nmode = "dual"\n', encoding="utf-8")
     (root / "config" / "local.toml").symlink_to(outside / "l.toml")
     assert rd.old_config_state(resolve_paths({"LHPC_RUNTIME_ROOT": str(root)})) is rd.Tri.UNKNOWN
+
+
+def test_m1_a_directory_where_the_hardware_list_belongs_means_no_banner(tmp_path):
+    """Present (lstat succeeds) but not a file: no banner, whatever local.toml holds; the list is INVALID."""
+    rd = _rd()
+    _cfg(tmp_path, "local.toml", '[radio]\nmode = "dual"\n')
+    (tmp_path / "config" / "radios.toml").mkdir()
+    assert rd.old_config_state(_paths(tmp_path)) is rd.Tri.NO
