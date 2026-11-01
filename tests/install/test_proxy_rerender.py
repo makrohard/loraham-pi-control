@@ -197,3 +197,13 @@ def test_the_apply_needed_banner_stands_when_the_firewall_notice_raises(tmp_path
     monkeypatch.setattr(ControllerService, "webserver_apply_pending", broken)
     page = web(paths=paths).get("/").get_data(as_text=True)
     assert "Apply needed: this release&#39;s proxy configuration is not loaded — test" in page
+
+
+def test_a_marker_that_breaks_the_reader_still_shows_the_generic_banner(tmp_path, web):
+    """B3-D16a: a marker of 65535 '[' makes json.loads raise RecursionError, which pending() does not catch; the
+    page's own except (G1-3 B1) turns it into the banner with its generic reason, never a hidden notice."""
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    paths.under(*proxy_rerender.MARKER).write_text("[" * 65535)
+    page = web(paths=paths).get("/").get_data(as_text=True)
+    assert 'id="ws-render-notice">Apply needed: the update has not re-rendered the stack proxies yet' in " ".join(page.split())
