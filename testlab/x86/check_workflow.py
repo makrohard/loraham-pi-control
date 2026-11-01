@@ -22,6 +22,12 @@ RUNNER = "ubuntu-24.04"
 PREFIX = "testlab-x86"
 SHA_PIN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}")
 BLOCK = {"|", "|-", "|+", ">", ">-", ">+"}
+# The x86_64 guard every job must open with (A13), line by line after the strip.
+GUARD = ('m=$(uname -m) || { echo "::error::uname -m failed"; exit 1; }',
+         'if [ "$m" != x86_64 ]; then',
+         'echo "::error::this workflow runs on x86_64 only; this runner is $m"',
+         "exit 1",
+         "fi")
 
 
 class ParseError(Exception):
@@ -215,6 +221,19 @@ def checks(text: str, w: dict, ref_text: str, ref: dict, ci: dict) -> list:
     missing = [r for r in refs if not (HERE / r).is_file()]
     rows.append(("A11 every testlab/x86 file the workflow names exists", bool(refs) and not missing,
                  f"named {refs}; missing {missing}"))
+
+    # A guard with an `if:`, `continue-on-error` or `uses` could be skipped or ignored: only name + run.
+    unguarded = []
+    for j, job in jobs.items():
+        steps = job.get("steps") if type(job) is dict else None
+        first = steps[0] if type(steps) is list and steps else None
+        body = [line.strip() for line in first.get("run", "").split("\n") if line.strip()] \
+            if type(first) is dict and type(first.get("run")) is str else []
+        if type(first) is not dict or set(first) != {"name", "run"} or tuple(body[:len(GUARD)]) != GUARD \
+                or "continue-on-error" in job:
+            unguarded.append(j)
+    rows.append(("A13 every job's first step is the x86_64 guard (before checkout and any acquisition)",
+                 not unguarded, f"unguarded {unguarded}" if unguarded else f"{len(jobs)} jobs guarded"))
     return rows
 
 

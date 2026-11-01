@@ -40,14 +40,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
       - name: Prove the runner is x86_64 and record its free disk
-        # The lanes run natively on amd64: a wrong label or an emulated runner stops here, before
-        # any acquisition. The free space is recorded because no x86_64 run has been measured.
+        # The FIRST step of every job: the lanes run natively on amd64, so a wrong label or an
+        # emulated runner stops here, before the checkout and any acquisition (check_workflow.py
+        # A13). The free space is recorded because no x86_64 run has been measured.
         run: |
           m=$(uname -m) || { echo "::error::uname -m failed"; exit 1; }
           if [ "$m" != x86_64 ]; then
@@ -55,6 +51,11 @@ jobs:
             exit 1
           fi
           df -h / "$RUNNER_TEMP"
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Acquire the upstream sources the lanes clone (mirrors, transfer backoff)
         # As in testlab.yml, with the amd64 list: mirror-sources.py's list plus the meshtastic and
@@ -164,14 +165,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
-      - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
       - name: Prove the runner is x86_64 and record its free disk
-        # The lanes run natively on amd64: a wrong label or an emulated runner stops here, before
-        # any acquisition. The free space is recorded because no x86_64 run has been measured.
+        # The FIRST step of every job: the lanes run natively on amd64, so a wrong label or an
+        # emulated runner stops here, before the checkout and any acquisition (check_workflow.py
+        # A13). The free space is recorded because no x86_64 run has been measured.
         run: |
           m=$(uname -m) || { echo "::error::uname -m failed"; exit 1; }
           if [ "$m" != x86_64 ]; then
@@ -179,6 +176,11 @@ jobs:
             exit 1
           fi
           df -h / "$RUNNER_TEMP"
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Acquire the upstream sources the lanes clone (mirrors, transfer backoff)
         # As in testlab.yml, with the amd64 list: mirror-sources.py's list plus the meshtastic and
@@ -316,16 +318,10 @@ jobs:
       SLOW_WRITE_IOPS: "120"
       SLOW_READ_IOPS: "1200"
     steps:
-      - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          # Full history and tags: the self-update case updates from the PREVIOUS release tag.
-          fetch-depth: 0
-
       - name: Prove the runner is x86_64 and record its free disk
-        # The lanes run natively on amd64: a wrong label or an emulated runner stops here, before
-        # any acquisition. The free space is recorded because no x86_64 run has been measured.
+        # The FIRST step of every job: the lanes run natively on amd64, so a wrong label or an
+        # emulated runner stops here, before the checkout and any acquisition (check_workflow.py
+        # A13). The free space is recorded because no x86_64 run has been measured.
         run: |
           m=$(uname -m) || { echo "::error::uname -m failed"; exit 1; }
           if [ "$m" != x86_64 ]; then
@@ -333,6 +329,13 @@ jobs:
             exit 1
           fi
           df -h / "$RUNNER_TEMP"
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history and tags: the self-update case updates from the PREVIOUS release tag.
+          fetch-depth: 0
 
       - name: Build the amd64 lab image from THIS commit's Dockerfile
         # testlab/x86/build-image.sh: the Dockerfile of the arm lanes, built natively for amd64 from

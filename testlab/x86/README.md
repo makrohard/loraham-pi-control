@@ -21,7 +21,8 @@ not been dispatched yet; its run time and disk use are unmeasured.
 
 ## How the x86 lanes differ from the arm lanes
 
-- **Runner:** `ubuntu-24.04` (x86_64); each job first stops unless `uname -m` is `x86_64`.
+- **Runner:** `ubuntu-24.04` (x86_64); the first step of each job stops it unless `uname -m` is
+  `x86_64`.
 - **No binary channel:** it is aarch64-only (`lhpc/core/service_binary_channel.py`), so every stack
   a lane installs builds from source, and the meshtastic and meshcom remotes are mirrored too.
 - **Graywolf:** the slow-build lane fetches the amd64 .deb and checks it against the recorded sha256.
@@ -41,4 +42,5 @@ python3 testlab/x86/check_workflow.py
 A1 the runner label, A2 no arm label, A3 the triggers, A4 no secrets, A5 every `uses:` pinned to a
 full sha and copied from `testlab.yml`, A6 the concurrency group, A7 the artifact names, A8 no
 `workflow_call`/`workflow_run` and `needs` only within the file, A9 `contents: read`, A10 the job
-names, A11 the helper files exist, A12 a second parse with PyYAML when it is importable (else NOT RUN).
+names, A11 the helper files exist, A12 a second parse with PyYAML when it is importable (else NOT RUN),
+A13 every job opens with the x86_64 guard, before the checkout and any acquisition.
