@@ -52,7 +52,7 @@ def _fakebin(tmp_path, *, no_sudo=False):
     # early downstream `grep -q` match SIGPIPEs the fake to 141 — reproducing the pipefail inversion
     # that a one-line fake hid. Enabling, disabling or restarting a unit not listed FAILS (exit 1) like
     # a clean image, so a restart of a service that was never installed cannot pass unnoticed.
-    w("systemctl", 'units="${FAKE_SYSTEMCTL_UNITS:-}"\n[ -n "${FAKE_SYSTEMCTL_BROKEN:-}" ] && { echo "Failed to connect to bus: No such file or directory" >&2; exit 1; }\nif [ "$1" = "list-unit-files" ]; then\n  shift\n  pattern=""\n  for a in "$@"; do case "$a" in --*) ;; *) pattern="$a" ;; esac; done\n  if [ -n "$pattern" ]; then\n    for u in $units; do [ "$u" = "$pattern" ] && echo "$u enabled enabled"; done\n    exit 0\n  fi\n  echo "aaa-first-decoy.service enabled enabled"\n  for u in $units; do echo "$u enabled enabled"; done\n  exec seq 1 200000\nfi\nif [ "$1" = "is-enabled" ] || [ "$1" = "is-active" ]; then\n  last=""; for a in "$@"; do case "$a" in --*) ;; *) last="$a" ;; esac; done\n  case " ${FAKE_SYSTEMCTL_DISABLED:-} " in *" $last "*|*" ${last%.service} "*) exit 1 ;; esac\n  case " $units " in *" $last "*|*" $last.service "*) exit 0 ;; esac\n  exit 1\nfi\nif [ "$1" = "disable" ] || [ "$1" = "enable" ] || [ "$1" = "restart" ]; then\n  last=""; for a in "$@"; do last="$a"; done\n  case " ${FAKE_SYSTEMCTL_FAIL:-} " in\n    *" $last "*) echo "Failed to disable unit: $last" >&2; exit 1 ;;\n  esac\n  case " $units " in\n    *" $last.service "*|*" $last "*) exit 0 ;;\n  esac\n  echo "Failed to $1 unit: Unit file $last.service does not exist." >&2\n  exit 1\nfi\nexit 0\n')
+    w("systemctl", 'units="${FAKE_SYSTEMCTL_UNITS:-}"\n[ -n "${FAKE_SYSTEMCTL_BROKEN:-}" ] && { echo "Failed to connect to bus: No such file or directory" >&2; exit 1; }\nif [ "$1" = "list-unit-files" ] && [ -n "${FAKE_SYSTEMCTL_PLAN:-}" ] && [ "$#" -eq 2 ]; then\n  step=$(head -n 1 "$FAKE_SYSTEMCTL_PLAN"); sed -i 1d "$FAKE_SYSTEMCTL_PLAN"; echo "list-unit-files ${step:-ok}" >> "$FAKE_SYSTEMCTL_PLAN.log"\n  case "$step" in\n    timeout) echo "Failed to list unit files: Connection timed out" >&2; exit 1 ;;\n    deny) echo "Failed to list unit files: Access denied" >&2; exit 1 ;;\n    hang) sleep 30 ;;\n  esac\nfi\nif [ "$1" = "list-unit-files" ]; then\n  shift\n  pattern=""\n  for a in "$@"; do case "$a" in --*) ;; *) pattern="$a" ;; esac; done\n  if [ -n "$pattern" ]; then\n    for u in $units; do [ "$u" = "$pattern" ] && echo "$u enabled enabled"; done\n    exit 0\n  fi\n  echo "aaa-first-decoy.service enabled enabled"\n  for u in $units; do echo "$u enabled enabled"; done\n  exec seq 1 200000\nfi\nif [ "$1" = "is-enabled" ] || [ "$1" = "is-active" ]; then\n  last=""; for a in "$@"; do case "$a" in --*) ;; *) last="$a" ;; esac; done\n  case " ${FAKE_SYSTEMCTL_DISABLED:-} " in *" $last "*|*" ${last%.service} "*) exit 1 ;; esac\n  case " $units " in *" $last "*|*" $last.service "*) exit 0 ;; esac\n  exit 1\nfi\nif [ "$1" = "disable" ] || [ "$1" = "enable" ] || [ "$1" = "restart" ]; then\n  last=""; for a in "$@"; do last="$a"; done\n  case " ${FAKE_SYSTEMCTL_FAIL:-} " in\n    *" $last "*) echo "Failed to disable unit: $last" >&2; exit 1 ;;\n  esac\n  case " $units " in\n    *" $last.service "*|*" $last "*) exit 0 ;;\n  esac\n  echo "Failed to $1 unit: Unit file $last.service does not exist." >&2\n  exit 1\nfi\nexit 0\n')
     w("curl", "exit 0\n")
     w("gpg", "cat >/dev/null 2>&1 || true; exit 0\n")
     # install: keyring dirs stay a no-op; the polkit RULE writes (targets under
@@ -163,7 +163,7 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
          systemctl_broken=False, systemctl_disabled="", wifi_iw_fail=False,
          wifi_iw_absent=False, fake_hwclock_absent=False, nm_devs=None, defroute_dev=None,
          chrony_conf=None, gpsd_default=None, lhpc_gps_source=None, runtime_root_env=True,
-         operator_home=None, systemd_running=True, usb_seams=True):
+         operator_home=None, systemd_running=True, usb_seams=True, extra_env=None):
     fb, apt, um = _fakebin(tmp_path, no_sudo=no_sudo)
     if operator_home is not None:
         # The operator's home from `getent passwd` — a tmp dir, never a real user's home.
@@ -259,6 +259,7 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
         env["SUDO_USER"] = sudo_user        # explicit None = a TRUE root login (no SUDO_USER at all)
     if nonroot:
         env["FAKE_UID"] = "1000"            # fake id reports a non-root uid -> the exit-10 refusal
+    env.update(extra_env or {})
     r = subprocess.run(["bash", str(_BOOTSTRAP), *args], env=env, capture_output=True, text=True, timeout=90)
     r.ts = ts            # noqa: B010 - the time-source tmp tree, for the tests below
     r.runtime_root = rt  # noqa: B010
@@ -1284,7 +1285,8 @@ def test_readonly_failclosed_checks_run_before_any_mutation(tmp_path):
     # The real first mutation is the apt-get update COMMAND (newline-bounded — not the dry-run
     # block's echo that merely mentions "sudo apt-get update").
     first_mutation = text.index("\napt-get update\n")
-    for marker in ('exit 3', 'if ! systemctl list-unit-files --no-legend >/dev/null 2>&1; then'):
+    for marker in ('exit 3', '_l1=0; svc_read_retry list-unit-files --no-legend || _l1=$?',
+                   '\nsvc_plumb() {'):
         idx = text.index(marker)
         assert idx < first_mutation, f"{marker!r} is evaluated mid-mutation (after apt)"
     # and the SPI mutation section no longer carries its own exit-3 conflict abort
@@ -1967,3 +1969,103 @@ def test_usb_setup_runs_with_its_seams_unset_and_writes_etc_udev(tmp_path):
         usb_access.udev_rules_text(radio_models.load())
     moved = (tmp_path / "etc-udev.log").read_text().splitlines()
     assert [ln.split()[-1] for ln in moved if ln.split()[0] == "mv"] == ["/etc/udev/rules.d/90-lhpc-usb-radio.rules"]
+
+
+# --- bounded service calls (BOOTSTRAP-RETRY-TABLES-v5): the helper and L1 ---------------------------
+# Fast bounds for every case: one second per pause and read, so a retried call costs seconds, not minutes.
+_FAST = {"SVC_RETRY_PAUSE_S": "1", "SVC_READ_BOUND_S": "2", "SVC_CALL_BOUND_S": "2", "SVC_KILL_GRACE_S": "1"}
+
+
+def _plan(tmp_path, *steps):
+    """The fake systemctl's answers to the unfiltered `list-unit-files` calls, in order (ok when exhausted)."""
+    p = tmp_path / "systemctl.plan"
+    p.write_text("".join(s + "\n" for s in steps))
+    return p
+
+
+def _calls(plan):
+    log = plan.with_name(plan.name + ".log")
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def test_a_timed_out_unit_file_listing_is_retried_and_the_run_goes_on(tmp_path):
+    # Row 10 (L1, T): the listing is idempotent, so a "Connection timed out" is retried after the pause.
+    plan = _plan(tmp_path, "timeout")
+    r, _, apt, _ = _run(tmp_path, _swaparg(), extra_env={**_FAST, "FAKE_SYSTEMCTL_PLAN": str(plan)})
+    assert r.returncode == 0, r.stderr
+    assert _calls(plan)[:2] == ["list-unit-files timeout", "list-unit-files ok"]
+    assert "Connection timed out" in r.stderr and "apt-get install" in apt
+
+
+def test_a_listing_that_keeps_timing_out_fails_closed_after_the_last_attempt(tmp_path):
+    # Row 10 (L1, T, every attempt used): exit 8 as today, the system untouched, the attempts named.
+    plan = _plan(tmp_path, "timeout", "timeout", "timeout")
+    r, _, apt, _ = _run(tmp_path, _swaparg(), extra_env={**_FAST, "SVC_RETRIES": "3", "FAKE_SYSTEMCTL_PLAN": str(plan)})
+    assert r.returncode == 8, r.stderr
+    assert "no answer in 3 attempt(s)" in r.stderr and "Connection timed out" in r.stderr
+    assert _calls(plan) == ["list-unit-files timeout"] * 3
+    assert "apt-get install" not in apt
+
+
+def test_a_refused_listing_fails_at_once_without_a_retry(tmp_path):
+    # Row 11 (L1, O or B): a refusal is not a latency: one attempt, exit 8, untouched.
+    plan = _plan(tmp_path, "deny")
+    r, _, apt, _ = _run(tmp_path, _swaparg(), extra_env={**_FAST, "FAKE_SYSTEMCTL_PLAN": str(plan)})
+    assert r.returncode == 8 and _calls(plan) == ["list-unit-files deny"], r.stderr
+    assert "cannot inspect systemd unit files" in r.stderr and "apt-get install" not in apt
+
+
+def test_a_listing_that_never_answers_is_ended_by_the_outer_bound(tmp_path):
+    # Row 6 / 23 (H): `timeout` ends each attempt (124), counted as a timed-out attempt; the last one fails closed.
+    plan = _plan(tmp_path, "hang", "hang")
+    r, _, apt, _ = _run(tmp_path, _swaparg(), extra_env={**_FAST, "SVC_RETRIES": "2", "FAKE_SYSTEMCTL_PLAN": str(plan)})
+    assert r.returncode == 8, r.stderr
+    assert "no answer in 2 attempt(s)" in r.stderr and "no answer within 2 s" in r.stderr
+    assert "apt-get install" not in apt
+
+
+def test_the_run_bound_stops_further_service_calls(tmp_path):
+    # Row 24: the per-run bound accumulates measured call durations; reached = fail closed (exit 8 at L1).
+    plan = _plan(tmp_path, "hang")
+    r, _, apt, _ = _run(tmp_path, _swaparg(), extra_env={**_FAST, "SVC_SCRIPT_BOUND_S": "1",
+                                                         "FAKE_SYSTEMCTL_PLAN": str(plan)})
+    assert r.returncode == 8, r.stderr
+    assert "bound for service calls (1 s) is reached" in r.stderr and _calls(plan) == ["list-unit-files hang"]
+    assert "apt-get install" not in apt
+
+
+@pytest.mark.parametrize("name, value", [("SVC_RETRIES", "0"), ("SVC_RETRIES", "x"), ("SVC_CALL_BOUND_S", ""),
+                                         ("SVC_READ_BOUND_S", "1234567"), ("SVC_RETRY_PAUSE_S", "-1"),
+                                         ("SVC_SCRIPT_BOUND_S", "１")])
+def test_a_bad_bound_override_is_a_usage_error_before_any_change(tmp_path, name, value):
+    # Section 2: an override that is not 1 to 6 ASCII digits, at least 1, is exit 2, the system untouched.
+    r, _, apt, _ = _run(tmp_path, _swaparg(), extra_env={name: value})
+    assert r.returncode == 2, (r.returncode, r.stderr)
+    assert f"{name} must be 1 to 6 ASCII digits" in r.stderr and "apt-get" not in apt
+
+
+def test_a_bad_override_does_not_reach_a_dry_run(tmp_path):
+    # Section 2: the checks run after --dry-run has been decided; a dry run never gains exit 2 or 12 from them.
+    r, _, _, _ = _run(tmp_path, ["--dry-run"], extra_env={"SVC_RETRIES": "0", "SVC_UPTIME": str(tmp_path / "none")})
+    assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize("content", [None, "", "x 1\n", "12.3.4 0\n", ".5 0\n"])
+def test_an_unreadable_or_malformed_clock_is_exit_12_before_any_change(tmp_path, content):
+    # Rows 23-24: the bounds' clock is checked once at the top; a missing or malformed one is the helper's plumbing.
+    up = tmp_path / "uptime"
+    if content is not None:
+        up.write_text(content)
+    r, _, apt, _ = _run(tmp_path, _swaparg(), extra_env={"SVC_UPTIME": str(up)})
+    assert r.returncode == 12, (r.returncode, r.stderr)
+    assert "the service-call helper cannot run" in r.stderr and "apt-get" not in apt
+
+
+@pytest.mark.parametrize("status", [125, 126, 127])
+def test_timeout_failing_itself_is_exit_12_not_a_refusal(tmp_path, status):
+    # Row 23: 125 (timeout failed) and 126/127 (cannot run) after the presence checks are the helper's own plumbing.
+    fb = tmp_path / "tbin"; fb.mkdir()
+    (fb / "timeout").write_text(f"#!/bin/sh\nexit {status}\n"); (fb / "timeout").chmod(0o755)
+    r, _, apt, _ = _run(tmp_path, _swaparg(), extra_env={"PATH": f"{fb}:{tmp_path / 'fb'}:/usr/bin:/bin"})
+    assert r.returncode == 12, (r.returncode, r.stderr)
+    assert "a systemctl call could not be run" in r.stderr and "apt-get" not in apt

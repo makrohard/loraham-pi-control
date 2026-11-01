@@ -16,6 +16,7 @@ from __future__ import annotations
 import re as _re
 from dataclasses import dataclass
 
+from . import svc_retry_sh
 from .lifecycle import (
     GROUP_MISSING_HINT,
     GROUP_RESTART_CMD,
@@ -896,6 +897,8 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "#             9 systemd unit files could not be inspected, or a packaged service could not",
         "#             be disabled (fail-closed — a competing service may be active) ·",
         "#             10 not running as root (run: sudo bash bootstrap-deps.sh ...) ·",
+        "#             11 the time source did not come up · 12 the service-call helper cannot run",
+        "#             (no `timeout`, no readable /proc/uptime, or its own files) ·",
         "#             13 the USB setup could not write its udev rule or run udevadm.",
         "#             Steps that can legitimately fail on a CLEAN",
         "#             image (no packaged meshtasticd unit) are GUARDED — the script runs under",
@@ -1181,17 +1184,32 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "esac",
         "")
 
+    out(*svc_retry_sh.parent_lines())
     if any(pkg == "nginx" or pkg.startswith("nginx-") for pkg in apt_pkgs) or disable_blocks:
+        _l1_msg = ('\techo "ERROR: cannot inspect systemd unit files (is this a systemd system, and is it'
+                   " reachable?). Bootstrap must check for a competing system nginx.service (and any packaged"
+                   " meshtasticd.service) before it can safely proceed — refusing to continue so the system"
+                   ' stays untouched. Resolve systemd access and re-run." >&2')
         out("# systemd must be queryable NOW (a broken/absent manager aborts BEFORE ~70 packages land,",
             "# not after): the disable steps below need it to find a competing system nginx.service and",
-            "# any packaged meshtasticd.service. Fail CLOSED, up front, system untouched.",
-            "if ! systemctl list-unit-files --no-legend >/dev/null 2>&1; then",
-            '\techo "ERROR: cannot inspect systemd unit files (is this a systemd system, and is it'
-            " reachable?). Bootstrap must check for a competing system nginx.service (and any packaged"
-            " meshtasticd.service) before it can safely proceed — refusing to continue so the system"
-            ' stays untouched. Resolve systemd access and re-run." >&2',
+            "# any packaged meshtasticd.service. Fail CLOSED, up front, system untouched. The listing is",
+            "# idempotent, so a timed-out one is retried within the bounds (L1, rows 10, 11, 29).",
+            "if ! command -v systemctl >/dev/null 2>&1; then",
+            _l1_msg,
             "\texit 8",
             "fi",
+            "_l1=0; svc_read_retry list-unit-files --no-legend || _l1=$?",
+            'case "$_l1" in',
+            "\t0) ;;",
+            '\t12) svc_plumb "a systemctl call could not be run" ;;',
+            '\t3) echo "ERROR: cannot inspect systemd unit files: systemd gave no answer in $SVC_TRIES'
+            ' attempt(s) (last: $SVC_LAST). Refusing to continue so the system stays untouched." >&2; exit 8 ;;',
+            '\t5) echo "ERROR: cannot inspect systemd unit files: the run\'s bound for service calls'
+            ' ($SVC_SCRIPT_BOUND_S s) is reached (last: $SVC_LAST). Refusing to continue." >&2; exit 8 ;;',
+            "\t*)",
+            _l1_msg,
+            "\t\texit 8 ;;",
+            "esac",
             "")
 
     # $OP is needed by the hardware-group grants AND by the power/network-controls rules. With

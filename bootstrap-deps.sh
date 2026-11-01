@@ -36,6 +36,8 @@
 #             9 systemd unit files could not be inspected, or a packaged service could not
 #             be disabled (fail-closed — a competing service may be active) ·
 #             10 not running as root (run: sudo bash bootstrap-deps.sh ...) ·
+#             11 the time source did not come up · 12 the service-call helper cannot run
+#             (no `timeout`, no readable /proc/uptime, or its own files) ·
 #             13 the USB setup could not write its udev rule or run udevadm.
 #             Steps that can legitimately fail on a CLEAN
 #             image (no packaged meshtasticd unit) are GUARDED — the script runs under
@@ -275,13 +277,115 @@ case "$SPI_MODE" in
 		fi ;;
 esac
 
+# --- bounded system-service calls (BOOTSTRAP-RETRY-TABLES-v5) -------------------------------------
+# Each retried systemctl call runs under `timeout`; a call that timed out is retried only after its
+# state was read again; the bounds use the first field of /proc/uptime, never the wall clock (this
+# run restarts chrony). Exit 12 = this helper cannot run (no `timeout`, no clock, its own files).
+SVC_UPTIME="${SVC_UPTIME:-/proc/uptime}"
+svc_plumb() {   # the helper's own failure: exit 12 with the reason
+	echo "ERROR: the service-call helper cannot run: $1. (exit 12)" >&2
+	exit 12
+}
+for _sv in SVC_CALL_BOUND_S:90 SVC_RETRIES:4 SVC_RETRY_PAUSE_S:5 SVC_READ_BOUND_S:60 SVC_KILL_GRACE_S:5 SVC_READS_PER_CHECK_D:2 SVC_READS_PER_CHECK_R:1 SVC_SCRIPT_BOUND_S:1800; do
+	_sn=${_sv%%:*}
+	_sx=${!_sn-${_sv#*:}}
+	case "$_sx" in ''|*[!0123456789]*)
+		echo "ERROR: $_sn must be 1 to 6 ASCII digits, at least 1 (got '$_sx')." >&2; exit 2 ;;
+	esac
+	if [ "${#_sx}" -gt 6 ] || [ "$((10#$_sx))" -lt 1 ]; then
+		echo "ERROR: $_sn must be 1 to 6 ASCII digits, at least 1 (got '$_sx')." >&2; exit 2
+	fi
+	printf -v "$_sn" '%s' "$((10#$_sx))"
+done
+# the totals per call (section 2): D = a disable, R = a restart with its baseline read (SVC_CALL_BOUND_S SVC_RETRIES SVC_RETRY_PAUSE_S SVC_READ_BOUND_S SVC_KILL_GRACE_S SVC_READS_PER_CHECK_D SVC_READS_PER_CHECK_R SVC_SCRIPT_BOUND_S)
+SVC_TOTAL_BOUND_D_S=$(( SVC_RETRIES * ((SVC_CALL_BOUND_S + SVC_KILL_GRACE_S) + SVC_READS_PER_CHECK_D * (SVC_READ_BOUND_S + SVC_KILL_GRACE_S)) + (SVC_RETRIES - 1) * SVC_RETRY_PAUSE_S ))
+SVC_TOTAL_BOUND_R_S=$(( (SVC_READ_BOUND_S + SVC_KILL_GRACE_S) + SVC_RETRIES * ((SVC_CALL_BOUND_S + SVC_KILL_GRACE_S) + SVC_READS_PER_CHECK_R * (SVC_READ_BOUND_S + SVC_KILL_GRACE_S)) + (SVC_RETRIES - 1) * SVC_RETRY_PAUSE_S ))
+command -v timeout >/dev/null 2>&1 || svc_plumb "coreutils' timeout is not installed"
+svc_now() {   # whole seconds of the monotonic clock; status 12 when it cannot be read or is malformed
+	local u='' r=0
+	read -r u _ < "$SVC_UPTIME" || r=$?
+	[ "$r" -eq 0 ] || return 12
+	case "$u" in ''|.*|*.*.*|*[!0123456789.]*) return 12 ;; esac
+	u=${u%%.*}
+	[ -n "$u" ] && [ "${#u}" -le 12 ] || return 12
+	printf '%s\n' "$((10#$u))"
+}
+_st=0; _sx=$(svc_now) || _st=$?
+[ "$_st" -eq 0 ] || svc_plumb "the clock $SVC_UPTIME cannot be read"
+# the run's accounting (the per-run bound) and the stderr buffer: fresh files, made once
+_st=0; SVC_ACCT=$(mktemp) || _st=$?
+[ "$_st" -eq 0 ] || svc_plumb "mktemp failed"
+_st=0; SVC_ERRF=$(mktemp) || _st=$?
+[ "$_st" -eq 0 ] || svc_plumb "mktemp failed"
+printf '0\n' > "$SVC_ACCT" || svc_plumb "the accounting file cannot be written"
+export SVC_ACCT
+svc_acct_add() {   # add $1 s to the run's total: 0 below the bound, 5 at or above it, 12 for a bad file
+	local v='' r=0
+	[ -f "$SVC_ACCT" ] && [ ! -L "$SVC_ACCT" ] || return 12
+	v=$(cat "$SVC_ACCT") || r=$?
+	[ "$r" -eq 0 ] || return 12
+	case "$v" in ''|*[!0123456789]*) return 12 ;; esac
+	[ "${#v}" -le 6 ] || return 12
+	v=$((10#$v + $1))
+	printf '%s\n' "$v" > "$SVC_ACCT" || return 12
+	[ "$v" -lt "$SVC_SCRIPT_BOUND_S" ] || return 5
+}
+svc_attempt() {   # svc_attempt BOUND ARGS...: one bounded systemctl call. Sets SVC_OUT and SVC_LAST (its last
+	# stderr line, or "no answer within BOUND s"). Returns 0 done, 1 refused (an rc that is not a timeout),
+	# 3 timed out (systemd's "Connection timed out", or no answer within BOUND), 5 the run's bound reached,
+	# 12 plumbing (timeout itself failed, or a helper file or the clock).
+	local b=$1 t0 t1 rc=0 a=0
+	shift
+	t0=$(svc_now) || return 12
+	SVC_OUT=$(LC_ALL=C timeout -k "$SVC_KILL_GRACE_S" "$b" systemctl "$@" 2>"$SVC_ERRF") || rc=$?
+	t1=$(svc_now) || return 12
+	SVC_LAST=$(tail -n 1 "$SVC_ERRF") || return 12
+	[ ! -s "$SVC_ERRF" ] || cat "$SVC_ERRF" >&2 || return 12
+	svc_acct_add "$((t1 - t0))" || a=$?
+	[ "$a" -ne 12 ] || return 12
+	case "$rc" in
+		0) return 0 ;;
+		124|137) SVC_LAST="no answer within ${b} s"; [ "$a" -eq 0 ] || return 5; return 3 ;;
+		125|126|127) return 12 ;;
+	esac
+	[ "$a" -eq 0 ] || return 5
+	case "$SVC_LAST" in *'Connection timed out') return 3 ;; esac
+	return 1
+}
+svc_read_retry() {   # svc_read_retry ARGS...: an idempotent read, retried on a timeout within SVC_RETRIES and
+	# SVC_TOTAL_BOUND_D_S. Returns as svc_attempt; SVC_TRIES = the attempts made.
+	local i=1 r t0 now
+	t0=$(svc_now) || return 12
+	while :; do
+		r=0; svc_attempt "$SVC_READ_BOUND_S" "$@" || r=$?
+		SVC_TRIES=$i
+		[ "$r" -eq 3 ] || return "$r"
+		[ "$i" -lt "$SVC_RETRIES" ] || return 3
+		now=$(svc_now) || return 12
+		[ $((now - t0 + SVC_RETRY_PAUSE_S)) -lt "$SVC_TOTAL_BOUND_D_S" ] || return 3
+		sleep "$SVC_RETRY_PAUSE_S" || return 12
+		i=$((i + 1))
+	done
+}
+
 # systemd must be queryable NOW (a broken/absent manager aborts BEFORE ~70 packages land,
 # not after): the disable steps below need it to find a competing system nginx.service and
-# any packaged meshtasticd.service. Fail CLOSED, up front, system untouched.
-if ! systemctl list-unit-files --no-legend >/dev/null 2>&1; then
+# any packaged meshtasticd.service. Fail CLOSED, up front, system untouched. The listing is
+# idempotent, so a timed-out one is retried within the bounds (L1, rows 10, 11, 29).
+if ! command -v systemctl >/dev/null 2>&1; then
 	echo "ERROR: cannot inspect systemd unit files (is this a systemd system, and is it reachable?). Bootstrap must check for a competing system nginx.service (and any packaged meshtasticd.service) before it can safely proceed — refusing to continue so the system stays untouched. Resolve systemd access and re-run." >&2
 	exit 8
 fi
+_l1=0; svc_read_retry list-unit-files --no-legend || _l1=$?
+case "$_l1" in
+	0) ;;
+	12) svc_plumb "a systemctl call could not be run" ;;
+	3) echo "ERROR: cannot inspect systemd unit files: systemd gave no answer in $SVC_TRIES attempt(s) (last: $SVC_LAST). Refusing to continue so the system stays untouched." >&2; exit 8 ;;
+	5) echo "ERROR: cannot inspect systemd unit files: the run's bound for service calls ($SVC_SCRIPT_BOUND_S s) is reached (last: $SVC_LAST). Refusing to continue." >&2; exit 8 ;;
+	*)
+	echo "ERROR: cannot inspect systemd unit files (is this a systemd system, and is it reachable?). Bootstrap must check for a competing system nginx.service (and any packaged meshtasticd.service) before it can safely proceed — refusing to continue so the system stays untouched. Resolve systemd access and re-run." >&2
+		exit 8 ;;
+esac
 
 # Operator for the group grants / power controls: explicit --operator-user, else SUDO_USER
 # when run under sudo, else the invoking user. NEVER grant to root; require a real account.
