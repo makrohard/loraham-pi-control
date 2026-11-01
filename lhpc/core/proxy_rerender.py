@@ -89,7 +89,10 @@ def _nginx_may_run(paths: Paths) -> bool:
             return True
     except (OSError, PathContainmentError):
         return True                                     # cannot tell: fail closed
-    return bool(read_applied(paths))
+    try:
+        return bool(read_applied(paths))
+    except Exception:                                   # e.g. RecursionError from a deeply nested evidence file
+        return True                                     # cannot tell: fail closed, the Apply stays owed (B3-D24)
 
 
 def _missing(paths: Paths) -> tuple[bool, str]:

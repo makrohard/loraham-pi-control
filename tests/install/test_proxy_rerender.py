@@ -329,3 +329,18 @@ def test_a_managed_box_that_never_set_up_nginx_clears_the_marker(tmp_path, monke
     assert proxy_rerender.mark(paths) == ""
     assert main(["_webserver-rerender", "--root", str(tmp_path)]) == 0
     assert proxy_rerender.pending(paths) is None
+
+
+def test_a_webserver_evidence_file_that_breaks_its_reader_keeps_the_marker_owed(tmp_path, capsys):
+    """B3-D24: a deeply nested webserver evidence file makes json.loads raise RecursionError through read_applied. With
+    no deployed config, the may-run test must not let that out of the update (after_update runs in-process, after the
+    advance) or the hidden verb: it counts as may-run, so the marker stays with the owed Apply."""
+    from lhpc.adapters.cli.main import main
+    paths = Paths(runtime_root=tmp_path)
+    paths.under(*webserver.EVIDENCE).parent.mkdir(parents=True, exist_ok=True)
+    paths.under(*webserver.EVIDENCE).write_text("[" * 200000)
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    assert proxy_rerender.mark(paths) == ""
+    assert proxy_rerender.after_update(paths) == (False, MISSING)        # the update's in-process half
+    assert main(["_webserver-rerender", "--root", str(tmp_path)]) == 1   # the new interpreter's half
+    assert proxy_rerender.pending(paths) == MISSING
