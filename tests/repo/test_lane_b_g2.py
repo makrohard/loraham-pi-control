@@ -248,6 +248,22 @@ def test_a_sampler_whose_rename_fails_never_publishes_and_the_evidence_refuses(t
     assert e.returncode == 1 and "not a group published" in e.stderr, (e.stdout, e.stderr)
 
 
+def test_a_partial_publication_left_in_the_temp_file_is_never_taken(tmp_path):
+    # A7 (partial output, then a failure): a partial "grp:12" already sits in the temp file and the rename fails. The
+    # pidfile keeps the sentinel, the launch fails at its bound, and the evidence step refuses: the pidfile changes only
+    # by the rename, so no partial value reaches it. (The sampler's printf is bash's builtin, so a short write itself is
+    # not injected here; the rename is the only path into the pidfile.)
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "runner-sampler.pid.tmp").write_text("grp:12")
+    stub = _stub(tmp_path, mv=f'case "$*" in *runner-sampler.pid.tmp*) exit 1;; esac; exec {shutil.which("mv")} "$@"')
+    p = _start(tmp_path, stub=stub)
+    assert p.returncode != 0, p.stderr
+    assert (work / "runner-sampler.pid").read_text() == "unpublished\n"
+    e = _evidence_step(tmp_path)
+    assert e.returncode == 1 and "not a group published" in e.stderr, (e.stdout, e.stderr)
+
+
 # ---- A21 (LBS-D2): a failed qemu launch uploads only its capture --------------------------------------------------
 
 @pytest.mark.parametrize("job", ["qb1", "topic"])
