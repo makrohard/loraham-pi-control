@@ -412,11 +412,14 @@ def test_the_job_key_reaches_the_user_data_only_as_one_ssh_line(tmp_path, pub, o
 @pytest.mark.parametrize("fn", ["wait_ssh 60", "wait_reboot 60 old", "wait_up 60"])
 @pytest.mark.parametrize("clock", ["exit 1", "echo", "echo garbage"], ids=["fails", "empty", "garbage"])
 def test_a_wait_whose_clock_read_fails_stops_at_once(tmp_path, fn, clock):
-    # B10: a failed, empty or non-numeric clock read stops the wait (never runs to the job limit).
-    stub = _stub(tmp_path, date=clock, sleep="exit 0")
+    # B10: a failed, empty or non-numeric clock read stops the wait at once: before its first poll (no sleep), not
+    # at the poll bound and never at the job limit.
+    polls = tmp_path / "polls"
+    stub = _stub(tmp_path, date=clock, sleep=f"echo x >> {polls}")
     p = subprocess.run(["bash", "-c", f'. {LANE / "guest.sh"}; g() {{ return 1; }}; {fn}'], capture_output=True,
                        text=True, timeout=30, env={"WORK": str(tmp_path), "PATH": f"{stub}:/usr/bin:/bin"})
     assert p.returncode == 1, (p.stdout, p.stderr)
+    assert not polls.exists(), polls.read_text()
 
 
 @pytest.mark.parametrize("fn", ["wait_ssh 60", "wait_reboot 60 old", "wait_up 60"])
