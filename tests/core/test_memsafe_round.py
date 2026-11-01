@@ -66,8 +66,8 @@ class _Commands(dict):
         return CommandResult(3, "inactive\n", "") if argv[0] == "systemctl" else CommandResult(0, "ok\n", "")
 
 
-def _rendered(tmp_path, monkeypatch, total_kb, target):
-    """The console's Build of `target` on a box whose MemTotal is `total_kb` (None: reading
+def _rendered(tmp_path, monkeypatch, total_kb, target, op="build"):
+    """The console's Build (or Test, `op`) of `target` on a box whose MemTotal is `total_kb` (None: reading
     /proc/meminfo raises OSError): each rendered job's (target, lock). The detached spawn is stubbed by
     a live process the test ends itself."""
     root = tmp_path / "rt"
@@ -94,7 +94,7 @@ def _rendered(tmp_path, monkeypatch, total_kb, target):
     child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
     monkeypatch.setattr(Lifecycle, "spawn_job", lambda self, name, argv, cwd, env=None: (f"{name}.log", child.pid))
     try:
-        assert svc.spawn_web_job("build", target)[1] == "pending"
+        assert svc.spawn_web_job(op, target)[1] == "pending"
     finally:
         child.stdin.close()               # the stand-in ends when the test says so
         child.wait()
@@ -112,6 +112,13 @@ def test_a_small_box_gives_a_single_job_the_lock_too(tmp_path, monkeypatch):
     # across Builds, G1-MEMSAFE-1 F2).
     seen, lock = _rendered(tmp_path, monkeypatch, ZERO, "meshcore-cli")
     assert seen == [("meshcore-cli", lock)]
+
+
+def test_a_small_box_gives_a_console_test_job_the_lock(tmp_path, monkeypatch):
+    # The console's Test job takes the same spawn path as a Build (spawn_web_job → _spawn_build →
+    # render_build_launcher with the round lock): on a small box it waits for the one lock too.
+    seen, lock = _rendered(tmp_path, monkeypatch, ZERO, "meshcore-webui", op="test")
+    assert seen == [("meshcore-webui", lock)]
 
 
 def test_a_build_whose_meminfo_read_raises_is_serial_not_an_error(tmp_path, monkeypatch):
