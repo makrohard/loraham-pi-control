@@ -445,11 +445,11 @@ def test_the_marker_is_cleared_only_when_pid_and_evidence_are_both_absent(tmp_pa
 
 # ---- B3-D27: the type sweep: every JSON field the evidence probe reads x every JSON type class (bool, int, float, str,
 # null, list, object) plus the exact value, with the pid file absent and the config missing; only an exact schema 1 with
-# no snapshot (or a null one, B3-D25a J3) clears the marker ----------------------------------------------------------
+# no applied_snapshot key (B3-D25a J3) clears the marker: a null snapshot is UNKNOWN (B3-D28) ----------------------------------------------------------
 
 _T = {"bool": True, "int": 2, "float": 1.0, "str": "1", "null": None, "list": [1], "object": {"v": 1}}
 SWEEP = ([("schema", t, v, False) for t, v in _T.items()] + [("schema", "exact", 1, True)]
-         + [("applied_snapshot", t, v, t == "null") for t, v in
+         + [("applied_snapshot", t, v, False) for t, v in
             {"bool": True, "int": 1, "float": 1.0, "str": "x", "null": None, "list": [], "object": {"v": 1}}.items()]
          + [("applied_snapshot", "exact", _SNAP, False)]
          + [("console", t, v, False) for t, v in {**_T, "list": [], "object": {}}.items() if t != "object"]

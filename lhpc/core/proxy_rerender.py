@@ -94,7 +94,7 @@ def _pid_state(paths: Paths) -> str:
 
 def _evidence_state(paths: Paths) -> str:
     """The webserver evidence's applied record, strictly: "present" (schema 1 with a well-formed applied_snapshot),
-    "absent" (no file, or schema 1 without an applied_snapshot: verified, never applied — webserver.py writes that) or
+    "absent" (no file, or schema 1 without the applied_snapshot key: verified, never applied — webserver.py writes that) or
     "unknown" (unreadable, not JSON, a decode that raises, another schema, a malformed snapshot, over the cap).
     `read_applied` folds every unknown into {}, which reads as "never applied"; this probe does not."""
     from .webserver import EVIDENCE, EVIDENCE_SCHEMA
@@ -111,9 +111,9 @@ def _evidence_state(paths: Paths) -> str:
     schema = data.get("schema") if isinstance(data, dict) else None
     if type(schema) is not int or schema != EVIDENCE_SCHEMA:     # exact type: True == 1 and 1.0 == 1 (B3-D27)
         return "unknown"
-    snap = data.get("applied_snapshot")
-    if snap is None:
+    if "applied_snapshot" not in data:                         # verified, never applied: the product writes this
         return "absent"
+    snap = data["applied_snapshot"]                             # a null is corruption: unknown (B3-D28)
     if isinstance(snap, dict) and isinstance(snap.get("console"), dict) and isinstance(snap.get("proxies"), list):
         return "present"
     return "unknown"
