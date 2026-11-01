@@ -305,11 +305,31 @@ def test_a_stick_on_a_serialless_rows_port_that_reports_a_serial_is_refused(root
 
 
 def test_a_serial_on_the_port_wins_over_a_second_serialless_stick(root):
-    """B-7 before B-4: the row's own port is judged first."""
-    (dev(root, "1-1.3") / "serial").write_text("A1B2C3D4\n")
+    """B-7 before B-4: the row's own port is judged first. The two copies are made before the serial is
+    written, so 1-1.4 and 1-1.5 are two other serial-less sticks of the row's model."""
     add_stick(root, "1-1.4")
     add_stick(root, "1-1.5")
-    assert ua.precheck_serialless(ua.scan(root), STICK, "1-1.3").reason is ua.Reason.SERIAL_ON_SERIALLESS_ROW
+    (dev(root, "1-1.3") / "serial").write_text("A1B2C3D4\n")
+    found = ua.scan(root)
+    assert [(d.port, ua.match(d, STICK), d.serial.state) for d in found.devices if d.port.startswith("1-1.")] == [
+        ("1-1.3", Probe.PRESENT, Probe.PRESENT), ("1-1.4", Probe.PRESENT, Probe.ABSENT),
+        ("1-1.5", Probe.PRESENT, Probe.ABSENT)]
+    assert ua.precheck_serialless(found, STICK, "1-1.3") == ua.Precheck(
+        ua.Outcome.REFUSE, ua.Reason.SERIAL_ON_SERIALLESS_ROW, ("1-1.3",), "A1B2C3D4")
+
+
+@pytest.mark.parametrize("unread", ["idVendor", "devpath", "product"])
+def test_a_serial_on_an_uncertain_stick_on_the_port_stays_uncertain(root, unread):
+    """B-7 needs a stick of the model on the port: a device there whose identity, or the product a row asks
+    for, cannot be read stays UNCERTAIN_DEVICE even though it reports a serial; it is not refused as B-7."""
+    (dev(root, "1-1.3") / "serial").write_text("A1B2C3D4\n")
+    unreadable(dev(root, "1-1.3") / unread)
+    row = model(vid="1a86", pid="5512", product="Meshstick") if unread == "product" else STICK
+    found = ua.scan(root)
+    assert device(root, "1-1.3").serial == ua.Field(Probe.PRESENT, "A1B2C3D4")
+    assert ua.stick_on_port(found, row, "1-1.3") is Probe.UNKNOWN
+    assert ua.precheck_serialless(found, row, "1-1.3") == ua.Precheck(
+        ua.Outcome.UNCERTAIN, ua.Reason.UNCERTAIN_DEVICE, ("1-1.3",))
 
 
 @pytest.mark.parametrize("port", ["1-1.4", "1-1", "2-1"])
@@ -497,6 +517,15 @@ def test_the_rule_turns_stale_when_a_pin_bump_adds_a_usb_row(tmp_path):
         ua.RuleState.CURRENT, ua.RuleState.STALE)
     installed(tmp_path, ua.udev_rules_text(grown).encode())
     assert ua.rule_state(grown, tmp_path) is ua.RuleState.CURRENT
+
+
+@pytest.mark.parametrize("usb", [{"vid": "1A86", "pid": "5512"}, {"vid": "1a86", "pid": 5512}, {"vid": "1a86"}])
+def test_the_rule_state_of_a_model_row_outside_the_form_raises(tmp_path, usb):
+    """D-1..D-4: the doctor's rule probe renders the table first; a USB row outside the form raises
+    UsbTableError naming the row (no state is returned, the file is not judged)."""
+    installed(tmp_path, ua.udev_rules_text(MODELS).encode())
+    with pytest.raises(ua.UsbTableError, match="meshstick-1262"):
+        ua.rule_state({**MODELS, "meshstick-1262": model(**usb)}, tmp_path)
 
 
 @pytest.mark.parametrize("break_it", [unreadable, loop], ids=["eisdir", "eloop"])
