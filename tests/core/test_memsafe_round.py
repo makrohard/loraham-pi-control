@@ -227,3 +227,46 @@ def test_a_round_lock_that_cannot_be_taken_for_another_reason_blocks_the_job(tmp
     with pytest.raises(SystemExit) as e:
         blr.run(spec)
     assert e.value.code == 3
+
+
+def test_a_round_lock_that_cannot_be_opened_blocks_the_job_before_any_step(tmp_path, monkeypatch):
+    # An OSError opening the round lock (not only an unsafe path) is a blocked job: exit 3, the
+    # recorded detail "blocked: round lock unsafe", and no step has run.
+    from lhpc.core import build_launcher_runtime as blr
+    from lhpc.core import jobresult, runtime_fs, webjob_gate
+    (tmp_path / "rt" / "state" / "locks").mkdir(parents=True)
+    real_open = runtime_fs.open_lock
+
+    def open_lock(paths, path):
+        if os.path.basename(str(path)) == LOCK + ".lock":
+            raise OSError(errno.EIO, os.strerror(errno.EIO))
+        return real_open(paths, path)
+    monkeypatch.setattr(runtime_fs, "open_lock", open_lock)
+    monkeypatch.setattr(webjob_gate, "verify_tracked", lambda *a: True)
+    monkeypatch.setattr(jobresult, "mark_gate_passed", lambda *a: True)
+    recorded = []
+    monkeypatch.setattr(jobresult, "terminalize",
+                        lambda paths, log, attempt_id, state, detail="", **kw: recorded.append((state, detail)))
+    ran = tmp_path / "ran.log"
+    spec = {"steps": [{"argv": _log_step(ran, "step"), "env_items": []}], "cwd": str(tmp_path),
+            "runtime_root": str(tmp_path / "rt"), "lock_names": [], "shared_lock_names": [],
+            "index_lock_name": "", "round_lock_name": LOCK + ".lock",
+            "result_name": "build-x.log", "attempt_id": "a1"}
+    with pytest.raises(SystemExit) as e:
+        blr.run(spec)
+    assert e.value.code == 3
+    assert recorded == [("failed", "blocked: round lock unsafe")]
+    assert not ran.exists()
+
+
+@pytest.mark.parametrize("lock_path, name", [("/rt/state/locks/" + LOCK + ".lock", LOCK + ".lock"), ("", "")],
+                         ids=["serial", "parallel"])
+def test_the_rendered_launcher_names_the_round_lock_it_was_given(lock_path, name):
+    # The spawn path's lock reaches the launcher: the rendered spec carries the lock's file name
+    # ("" when the box runs its jobs in parallel), which the launcher opens under state/locks/.
+    import ast
+    script = commands.render_build_launcher([{"argv": ["true"]}], "/rt", "/src", round_lock_path=lock_path)
+    call = script.strip().splitlines()[-1]
+    assert call.startswith("build_launcher_runtime.run(") and call.endswith(")")
+    spec = ast.literal_eval(call[len("build_launcher_runtime.run("):-1])
+    assert spec["round_lock_name"] == name
