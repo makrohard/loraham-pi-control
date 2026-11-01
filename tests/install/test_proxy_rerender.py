@@ -18,6 +18,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 from selfupdate_fakes import WEB_INACTIVE
 from lhpc.core import proxy_rerender, runtime_fs, selfupdate, webserver
 from lhpc.core.paths import Paths
@@ -205,5 +207,17 @@ def test_a_marker_that_breaks_the_reader_still_shows_the_generic_banner(tmp_path
     paths = Paths(runtime_root=tmp_path)
     (tmp_path / "state").mkdir(parents=True, exist_ok=True)
     paths.under(*proxy_rerender.MARKER).write_text("[" * 65535)
+    with pytest.raises(RecursionError):        # the reader itself fails: the page's except is the path under test
+        proxy_rerender.pending(paths)
+    page = web(paths=paths).get("/").get_data(as_text=True)
+    assert 'id="ws-render-notice">Apply needed: the update has not re-rendered the stack proxies yet' in " ".join(page.split())
+
+
+def test_a_marker_that_cannot_be_read_shows_the_generic_banner(tmp_path, web):
+    """pending()'s OSError branch: a marker that is not a regular file (here a directory) is owed with no reason yet;
+    every page shows the banner with its generic reason."""
+    paths = Paths(runtime_root=tmp_path)
+    paths.under(*proxy_rerender.MARKER).mkdir(parents=True)
+    assert proxy_rerender.pending(paths) == ""
     page = web(paths=paths).get("/").get_data(as_text=True)
     assert 'id="ws-render-notice">Apply needed: the update has not re-rendered the stack proxies yet' in " ".join(page.split())

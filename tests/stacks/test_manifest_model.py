@@ -281,6 +281,7 @@ def test_meshcore_cli_wrapped_for_slot_handoff():
 
     webui_run = (root / "lhpc/data/scripts/meshcore-webui-run.sh").read_text()
     assert "MESHCORE_CLI_LOCK" in webui_run and 'state/${inst}meshcore-cli.lock' in webui_run
+    assert 'data="$runtime/state/${inst}meshcore-webui"' in webui_run       # its data follows the instance too
     webui = _index(load_manifest())["meshcore-webui"]
     assert dict(webui.run_env).get("MESHCORE_INSTANCE_DIR") == "{instance_dir}"   # the same instance level
 

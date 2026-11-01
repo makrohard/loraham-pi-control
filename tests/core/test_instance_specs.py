@@ -127,4 +127,5 @@ def test_the_kiss_pty_link_follows_the_instance():
     tnc = next(c for c in SPECS if c.id == "loraham-kiss-tnc")
     for inst in INSTANCES:
         assert all(a in " ".join(_slot_argv(comp, inst)) for a in comp.process.all_args)
+    assert "loraham_kiss" in " ".join(_argv(tnc))            # the TNC names a loraham_kiss file: the check below bites
     assert not all(a in " ".join(_argv(tnc)) for a in comp.process.all_args)

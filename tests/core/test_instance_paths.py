@@ -61,6 +61,13 @@ def _owned_paths():
                 yield comp["id"], key, text
 
 
+def test_the_walk_finds_every_stack_and_component_it_names():
+    # A renamed stack or component would leave the walk silently: each name above must exist.
+    data = tomllib.loads(MANIFEST.read_text())
+    assert PER_RADIO <= {st["id"] for st in data["stack"]}
+    assert SKIP_COMPONENTS <= {c["id"] for st in data["stack"] for c in st.get("component", [])}
+
+
 def test_every_instance_owned_path_follows_its_instance():
     bare = [(cid, key, text) for cid, key, text in _owned_paths() if OWNED.search(text)]
     assert not bare, "paths without {instance_dir}:\n" + "\n".join(f"  {c} {k}: {t}" for c, k, t in bare)
