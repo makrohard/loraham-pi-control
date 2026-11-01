@@ -442,6 +442,7 @@ def test_w7_8_the_rf_log_path_of_a_radio_is_accepted(rid):
     "{runtime}/logs/{x}/rf-daemon.log", "{runtime}/logs/r0/rf-daemon.log", "{runtime}/logs/r100/rf-daemon.log",
     "{runtime}/logs/R1/rf-daemon.log", "{runtime}/logs/r1/rf-daemon.log.bak", "/tmp/logs/r1/rf-daemon.log",
     "{runtime}/logs/rf-daemon-868.log", "", "{runtime}/logs/r1/rf-daemon.log\n",
+    "/rt/logs/r1/rf-daemon.log",                       # the substituted form: the check sees only templates
 ])
 def test_w7_8_any_other_rf_log_path_is_refused(value):
     """W7-8: the named path validator accepts exactly {runtime}/logs/r<1-99>/rf-daemon.log and nothing else."""
