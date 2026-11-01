@@ -206,6 +206,12 @@ def test_a_published_sampler_is_stopped_and_the_evidence_proceeds(tmp_path):
         assert e.returncode == 0, (e.stdout, e.stderr)
         assert subprocess.run(["sha256sum", "-c", "--quiet", "SHA256SUMS"], cwd=tmp_path / "ev",
                               capture_output=True).returncode == 0
+        # the writers as the stop found them, in the evidence and its sums (LBS-D3): records and pidfile bytes
+        w = tmp_path / "ev" / "writers"
+        assert (w / "runner-sampler.pid.state").read_text() == "launching\n"
+        assert re.match(r"0000000\s+g\s+r\s+p\s+:", (w / "runner-sampler.pid.od").read_text())
+        assert (w / "qemu.pid.state").read_text() == "none\n" and (w / "qemu.pid.od").read_text() == "absent\n"
+        assert "./writers/runner-sampler.pid.od" in (tmp_path / "ev" / "SHA256SUMS").read_text()
     finally:
         _kill_group_of(tmp_path / "work" / "runner-sampler.pid")
 
@@ -467,17 +473,63 @@ def _scripts():
                 yield f"lane-b.yml {job}: {s.splitlines()[0]}", _run_block(s)
 
 
+_SEP = re.compile(r"(?:^|;|&&|\|\||!|\b(?:then|do|else|if|elif|while|until)\b|\{|\()\s*$")
+
+
+def _unchecked(code: str) -> list:
+    """The command substitutions of one line of shell that are not a plain assignment at a statement start: each
+    `$(` must open the whole value of `NAME=$(…)`, where NAME= starts a statement (line start, or after ;, &&, ||,
+    then, do, else, if, elif, while, until, `!`, `{` or `(`) and is not the argument of local, export, declare or
+    readonly (whose status masks the substitution's); and no `$(` may sit inside a kept substitution. Arithmetic
+    `$((…))` is not a substitution, unless one sits inside it."""
+    code = re.sub(r"\$\(\((?:(?!\$\()[^()]|\((?:(?!\$\()[^()])*\))*\)\)", "0", code)
+    bad, i = [], 0
+    while (i := code.find("$(", i)) != -1:
+        depth, j = 0, i + 1
+        while j < len(code):
+            depth += {"(": 1, ")": -1}.get(code[j], 0)
+            if depth == 0:
+                break
+            j += 1
+        inner = code[i + 2:j]
+        m = re.search(r"([A-Za-z_][A-Za-z0-9_]*)=$", code[:i])
+        ok = (m is not None and _SEP.search(code[:m.start()]) is not None
+              and not re.search(r"\b(local|export|declare|readonly)\s+(?:[^\s;&|]+\s+)*$", code[:m.start()])
+              and "$(" not in inner)
+        if not ok:
+            bad.append(code[i:j + 1])
+        i = j + 1 if ok else i + 2
+    return bad
+
+
+@pytest.mark.parametrize("line", [
+    '-append "root=PARTUUID=$(cat partuuid) rw rootwait console=ttyAMA0"',      # the old boot argument
+    'echo "kvm=$([ -e /dev/kvm ] && echo present || echo absent)"',            # an argument
+    'ver=$(basename "$(ls -d droot/lib/modules/* | head -1)")',                # nested
+    'local x=$(cat f)',                                                         # local masks the status
+    'python3 lane_b.py identity "$(uname -r)" "$EV/guest"',
+    'echo "boot_s=$(( $(date +%s) - t0 ))"',                                    # inside arithmetic
+])
+def test_the_rule_two_scan_reports_the_forms_the_verdict_named(line):
+    assert _unchecked(line), line
+
+
+@pytest.mark.parametrize("line", ['t0=$(now) || return 1', 'pl=$(sudo -n losetup -fP --show x); dl=$(sudo -n y)',
+                                  'last=$(od -An -c -j "$(( sz - 1 ))" -N 1 "$f") || return 1',
+                                  'if x; then k=$(uname -r); fi', 'b0=$(g cat id) && [ -n "$b0" ] || fail x'])
+def test_the_rule_two_scan_keeps_checked_assignments(line):
+    assert not _unchecked(line), line
+
+
 def test_every_command_substitution_the_lane_runs_is_a_checked_assignment():
-    # LBS-D1 / rule 2: a `$(…)` is used only as `x=$(…)` (whose failure ends the script or is handled on that
-    # line), never as an argument, whose status is lost.
+    # LBS-D1 / rule 2: a `$(…)` is used only as `NAME=$(…)` at a statement start (whose failure ends the script or is
+    # handled on that line), never as an argument, never nested, never under local/export.
     bad = []
     for where, text in _scripts():
         for ln in text.splitlines():
             code = ln.split(" #", 1)[0] if not ln.lstrip().startswith("#") else ""
             if "$(" not in code or any(d in code for d in _DATA):
                 continue
-            stripped = re.sub(r"\$\(\(.*?\)\)", "", code)                 # arithmetic, not a substitution
-            stripped = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*=\$\((?:[^()]|\([^()]*\))*\)", "", stripped)
-            if "$(" in stripped:
+            if _unchecked(code):
                 bad.append(f"{where}: {ln.strip()}")
     assert not bad, "\n".join(bad)

@@ -160,6 +160,13 @@ jobs:
               1) return 0 ;;
               *) echo "redaction: the check itself failed (grep rc $rc)"; return 1 ;;
             esac; }
+          # The writers as the stop finds them (the live proof of their state records and publications, LBS-D3): each
+          # state record and each pidfile byte by byte (od -c), before any stop.
+          mkdir -p "$EV/writers"
+          for w in "$WORK/qemu.pid"; do
+            if [ -e "$w.state" ]; then cp "$w.state" "$EV/writers/" || exit 1; fi
+            if [ -e "$w" ]; then od -c "$w" > "$EV/writers/${w##*/}.od" || exit 1; else echo absent > "$EV/writers/${w##*/}.od"; fi
+          done
           lf=0
           for w in "$WORK/qemu.pid"; do
             r=0; stop_writer "$w" || r=$?
@@ -274,6 +281,13 @@ jobs:
               1) return 0 ;;
               *) echo "redaction: the check itself failed (grep rc $rc)"; return 1 ;;
             esac; }
+          # The writers as the stop finds them (the live proof of their state records and publications, LBS-D3): each
+          # state record and each pidfile byte by byte (od -c), before any stop.
+          mkdir -p "$EV/writers"
+          for w in "$WORK/qemu.pid" "$WORK/runner-sampler.pid"; do
+            if [ -e "$w.state" ]; then cp "$w.state" "$EV/writers/" || exit 1; fi
+            if [ -e "$w" ]; then od -c "$w" > "$EV/writers/${w##*/}.od" || exit 1; else echo absent > "$EV/writers/${w##*/}.od"; fi
+          done
           lf=0
           for w in "$WORK/qemu.pid" "$WORK/runner-sampler.pid"; do
             r=0; stop_writer "$w" || r=$?
