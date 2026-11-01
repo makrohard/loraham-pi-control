@@ -311,9 +311,9 @@ def test_a_serial_on_the_port_wins_over_a_second_serialless_stick(root):
     add_stick(root, "1-1.5")
     (dev(root, "1-1.3") / "serial").write_text("A1B2C3D4\n")
     found = ua.scan(root)
-    assert [(d.port, ua.match(d, STICK), d.serial.state) for d in found.devices if d.port.startswith("1-1.")] == [
-        ("1-1.3", Probe.PRESENT, Probe.PRESENT), ("1-1.4", Probe.PRESENT, Probe.ABSENT),
-        ("1-1.5", Probe.PRESENT, Probe.ABSENT)]
+    sticks = [(d.port, ua.match(d, STICK), d.serial.state) for d in found.devices if ua.match(d, STICK) is not Probe.ABSENT]
+    assert sticks == [("1-1.3", Probe.PRESENT, Probe.PRESENT), ("1-1.4", Probe.PRESENT, Probe.ABSENT),
+                      ("1-1.5", Probe.PRESENT, Probe.ABSENT)]
     assert ua.precheck_serialless(found, STICK, "1-1.3") == ua.Precheck(
         ua.Outcome.REFUSE, ua.Reason.SERIAL_ON_SERIALLESS_ROW, ("1-1.3",), "A1B2C3D4")
 
