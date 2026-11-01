@@ -140,7 +140,9 @@ def test_radio_dir_state_an_escaping_logs_dir_is_unknown(tmp_path):
 
 @pytest.mark.parametrize("exc", [PermissionError, OSError, RuntimeError])
 def test_radio_dir_state_an_unreadable_level_is_unknown_not_absent(tmp_path, monkeypatch, exc):
+    """logs/ is a real directory; only the radio's level below it cannot be judged."""
     import os
+    (tmp_path / "logs").mkdir()                     # the precondition: the lookup must reach the radio's level
     real = os.lstat
 
     def lstat(path, *a, **k):
@@ -148,6 +150,16 @@ def test_radio_dir_state_an_unreadable_level_is_unknown_not_absent(tmp_path, mon
             raise exc("cannot stat")
         return real(path, *a, **k)
     monkeypatch.setattr(os, "lstat", lstat)
+    assert rflog.radio_dir_state(_paths(tmp_path), "r1/rf-daemon.log") == rflog.UNKNOWN
+
+
+def test_radio_dir_state_with_no_logs_dir_at_all_is_absent(tmp_path):
+    """Nothing at logs/: the radio's directory is absent too (a judgement, not an error)."""
+    assert rflog.radio_dir_state(_paths(tmp_path), "r1/rf-daemon.log") == rflog.ABSENT
+
+
+def test_radio_dir_state_a_file_where_logs_belongs_is_unknown(tmp_path):
+    (tmp_path / "logs").write_text("not a directory", encoding="utf-8")
     assert rflog.radio_dir_state(_paths(tmp_path), "r1/rf-daemon.log") == rflog.UNKNOWN
 
 
