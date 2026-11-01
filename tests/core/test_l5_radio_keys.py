@@ -143,3 +143,25 @@ def test_w4_7_a_per_band_stop_never_signals_a_daemon_it_does_not_own(tmp_path):
     assert not res.ok
     assert [(r.component, r.outcome) for r in res.results] == [("loraham-daemon", Outcome.MANUAL_REQUIRED)]
     assert res.results[0].summary.endswith("stop it yourself: kill 4242")
+
+
+def test_w1_11_a_per_band_daemon_stop_of_a_shared_band_is_refused_naming_its_radios(tmp_path):
+    # B4-D39: one daemon per radio, and a radio is not addressed by id yet: stopping "868" alone would stop two.
+    svc = _svc(tmp_path, TWO_868, cmdlines_data={100: ["loraham_daemon", "--radio", "868", "--id", "r1"]})
+    for apply in (False, True):
+        res = svc.stop("daemon", apply=apply, band="868")
+        assert (res.ok, res.summary) == (False, "Cannot stop the daemon of 868 MHz alone: 2 radios share it: "
+                                                "r1 (a), r2 (b)")
+        assert res.next_commands == ["lhpc stack stop daemon"]
+    res = svc.restart("daemon", apply=True, band="868")                # its stop leg would stop both radios
+    assert (res.ok, res.summary) == (False, "Cannot restart the daemon of 868 MHz alone: 2 radios share it: "
+                                            "r1 (a), r2 (b)")
+
+
+@pytest.mark.parametrize("rows,band", [(radios_fixture.RADIOS, "868"), (NO_LIST, "433"),
+                                       ((radios.Radio("r1", "a", "uputronics", "868", ce="ce0"),
+                                         radios.Radio("r2", "b", "uputronics", "868", ce="ce1", enabled=False)), "868")])
+def test_w1_11_one_radio_or_none_keeps_the_per_band_stop(tmp_path, rows, band):
+    svc = _svc(tmp_path, rows)
+    assert svc.band_refusal("daemon", band, "stop") is None
+    assert svc.band_refusal("kiss", "868", "stop") is None           # a client's stop is never this rule's

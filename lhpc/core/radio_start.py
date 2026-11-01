@@ -127,6 +127,25 @@ def verify_identity(svc, rid: str) -> str:
     return radio_daemon.check_bound(status, radio, radio_models.load()[radio.model]) or ""
 
 
+def shared_band_refusal(svc, target: str, band: str, op: str):
+    """W1-11 (B4-D39): a per-band daemon stop on a band of two or more enabled radios is refused, naming them;
+    nothing is signalled. No radio-addressed stop exists before the per-instance stage, so the next command is the
+    whole daemon's. None for any other target, band or list."""
+    from .service_base import ActionResult
+    sid = svc.stack_of(target)
+    stk = svc.stack(sid) if sid else None
+    if stk is None or stk.main != svc.DAEMON_ID or band not in ("433", "868"):
+        return None
+    rows = [r for r in radios.load(svc._paths).radios if r.enabled and r.band == band]
+    if len(rows) < 2:
+        return None
+    names = ", ".join(f"{r.id} ({r.name})" for r in rows)
+    return ActionResult(False, f"Cannot {op} the daemon of {band} MHz alone: {len(rows)} radios share it: {names}",
+                        details=[f"  [blocked] {band} MHz: one daemon per radio; a radio is not addressed by id "
+                                 "before the per-instance stage"],
+                        next_commands=[f"lhpc stack {op} {sid}"])
+
+
 def radio_name(paths, band: str) -> str:
     """A band's radio as a message names it (W4-2): its one enabled radio's id; with two or more, the band and
     every radio sharing its key (B4-D39: "868 (radios r1, r2)"); else the band."""

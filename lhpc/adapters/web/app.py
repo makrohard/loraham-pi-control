@@ -303,6 +303,19 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return {"ws_apply_pending": apply_pending, "ws_render_pending": render_pending}
 
     @app.context_processor
+    def _inject_old_radio_config():
+        # W12 (stage L5): the old `[radio]` table with no hardware list -> a banner on EVERY page, nothing converted.
+        # Tri-state: an unreadable old config is its own notice, never "no old config". Fails closed to a notice.
+        from lhpc.core import radio_daemon
+        try:
+            st = radio_daemon.old_config_state(service._paths)
+        except Exception:
+            st = radio_daemon.Tri.UNKNOWN
+        text = {radio_daemon.Tri.YES: radio_daemon.OLD_CONFIG_TEXT,
+                radio_daemon.Tri.UNKNOWN: radio_daemon.OLD_CONFIG_UNREADABLE}.get(st, "")
+        return {"old_radio_notice": text[:1].upper() + text[1:] if text else ""}
+
+    @app.context_processor
     def _inject_disk_notice():
         # The disk-space warning on EVERY page while the worst filesystem is low or critical: the
         # ONE classifier's level, reason and figure (statvfs only). Fails closed to no notice.

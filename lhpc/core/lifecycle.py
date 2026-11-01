@@ -536,7 +536,7 @@ class Lifecycle:
             return StartLaunch(False, str(log), str(exc))
         status = self._observe_and_record(stack, comp, pid, band, argv,
                                           requested_target=requested_target,
-                                          start_scope=start_scope)
+                                          start_scope=start_scope, rid=inst.rid)
         if status == "ok":
             return StartLaunch(True, str(log))
         # Not owned. Distinguish a clean failure (residual verified gone) from an
@@ -551,7 +551,7 @@ class Lifecycle:
 
     def _observe_and_record(self, stack: Stack, comp: Component, pid: int | None,
                             band: str, intended_argv: list[str], *,
-                            requested_target: str = "", start_scope: str = "") -> str:
+                            requested_target: str = "", start_scope: str = "", rid: str = "") -> str:
         """Observe the launched pid's identity then persist ownership. Returns:
           * "ok"         — identity observed AND a durable ownership record persisted;
           * "ceased"     — could not be owned, but the residual process is verified gone;
@@ -563,7 +563,7 @@ class Lifecycle:
             # so the zero-observation path follows the SAME no-signal-without-identity
             # rule as the normal path.
             ident = self._capture_identity(pid)
-            if self.record_launch(stack, comp, pid, band, ident=ident,
+            if self.record_launch(stack, comp, pid, band, ident=ident, extra={"rid": rid} if rid else None,
                                   requested_target=requested_target,
                                   start_scope=start_scope):
                 return "ok"
@@ -593,7 +593,7 @@ class Lifecycle:
                 if (self._identity_complete(launch_ident) and obs_ident is not None
                         and str(obs_ident.get("starttime")) != str(launch_ident.get("starttime"))):
                     return "unverified"
-                if self.record_launch(stack, comp, pid, band, ident=obs_ident,
+                if self.record_launch(stack, comp, pid, band, ident=obs_ident, extra={"rid": rid} if rid else None,
                                       requested_target=requested_target,
                                       start_scope=start_scope):
                     return "ok"

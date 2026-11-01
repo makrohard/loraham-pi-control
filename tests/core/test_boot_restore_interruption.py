@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import radios_fixture
 
 from interrupts import FAILURES, durable_writes, run_interrupted, tree
 from lhpc.core import boot_restore as br
@@ -61,7 +62,8 @@ def boot(tmp_path, monkeypatch):
     rec = {"launch_id": LAUNCH, "stack": "kiss", "component": "loraham-kiss-tnc", "band": "433",
            "pid": 999999, "role": "", "launched_at": 1000, "version": 1,
            "requested_target": "kiss", "start_scope": "stack", "boot_id": "OLDBOOT",
-           "starttime": "123", "pgid": 999999, "sid": 999999}
+           "starttime": "123", "pgid": 999999, "sid": 999999, "rid": "r1"}   # stage L5: r1's instance
+    radios_fixture.write(tmp_path)
     (tmp_path / "state" / "owned").mkdir(parents=True)
     (tmp_path / "state" / "owned" / f"{LAUNCH}.json").write_text(json.dumps(rec))
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
@@ -98,6 +100,6 @@ def test_an_interrupted_run_is_finished_by_the_next(tmp_path, boot, point, failu
     journal, state = br.load_journal(svc._paths)
     assert state == "valid" and journal["state"] in ("done", "no-plan")
     assert all(i["state"] not in ("pending", "attempting") for i in journal["items"])
-    assert set(tree(tmp_path)) == {"state", "state/owned", "state/locks", "state/boot-restore.json",
+    assert set(tree(tmp_path, skip=("config",))) == {"state", "state/owned", "state/locks", "state/boot-restore.json",
                                    "state/locks/controller-task-admission.lock"}
     assert started == [("kiss", "433")], "the saved stack is started exactly once in total"

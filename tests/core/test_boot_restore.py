@@ -15,6 +15,7 @@ import pytest
 import radios_fixture
 
 from lhpc.core import lifecycle as lifecycle_mod
+from lhpc.core import radios
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -282,13 +283,16 @@ def _v1(pid=999999, stack="kiss", comp="loraham-kiss-tnc", band="433", boot="OLD
     rec = {"launch_id": f"{comp}__{band or 'x'}__{pid}__{nonce}", "stack": stack,
            "component": comp, "band": band, "pid": pid, "role": "", "launched_at": 1000,
            "version": 1, "requested_target": stack, "start_scope": "stack", "boot_id": boot,
-           "starttime": "123", "pgid": pid, "sid": pid}
+           "starttime": "123", "pgid": pid, "sid": pid,
+           **({"rid": radios_fixture.RID[band]} if band in radios_fixture.RID else {})}   # stage L5: its radio
     rec.update(over)
     return rec
 
 
 def _drv(tmp_path, monkeypatch, *, cur_boot="CURBOOT", enabled=True, web=(True, "")):
-    """A driver-ready service: boot id + config switch + web gate under test control."""
+    """A driver-ready service: boot id + config switch + web gate under test control; the r1/r2 hardware list."""
+    if not (tmp_path / "config" / "radios.toml").exists():
+        radios_fixture.write(tmp_path)
     svc = _svc(tmp_path)
     monkeypatch.setattr(sbr, "current_boot_id", lambda: cur_boot)
     monkeypatch.setattr(ControllerService, "_web_integration_proven", lambda self: web)
@@ -1960,3 +1964,61 @@ def test_a_start_refused_before_the_claim_names_its_reason(tmp_path, monkeypatch
                                                              "summary": "Cannot start kiss: busy"}
     st = svc.boot_restore_status()
     assert st["state"] == "truncated" and st["reason"] == "kiss: not attempted — Cannot start kiss: busy"
+
+
+# --- stage L5: items by radio (D14, D15; B4 commit 4) -------------------------------------------
+
+@pytest.mark.parametrize("rid,rows,reason", [
+    (None, None, "a band item from before 0.14.0 (W12: nothing converted)"),          # no rid: 0.13.x record
+    ("R1", None, "a band item from before 0.14.0 (W12: nothing converted)"),          # not a radio id: the same
+    ("r9", None, "radio r9 no longer exists"),
+    ("r1", (radios.Radio("r1", "low", "loraham", "433", enabled=False),
+            radios.Radio("r2", "high", "loraham", "868")), "radio r1 is disabled"),
+])
+def test_a_band_item_is_restored_only_on_its_enabled_radio(tmp_path, monkeypatch, rid, rows, reason):
+    if rows is not None:
+        radios_fixture.write(tmp_path, rows)
+    svc = _drv(tmp_path, monkeypatch)
+    rec = _v1()
+    rec.pop("rid", None)
+    if rid is not None:
+        rec["rid"] = rid
+    _write_record(tmp_path, rec)
+    calls = []
+    monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
+    res = svc.boot_restore_run()
+    assert res.ok and calls == []                                     # nothing started
+    j = _journal_on_disk(tmp_path)
+    assert j["items"] == [] and [(s["stack"], s["reason"]) for s in j["skipped"]] == [("kiss", reason)]
+    assert j["skipped"][0]["evidence_ids"] == [rec["launch_id"]]
+
+
+def test_an_item_on_its_radio_is_restored_with_its_rid(tmp_path, monkeypatch):
+    svc = _drv(tmp_path, monkeypatch)
+    _write_record(tmp_path, _v1())                                    # kiss on 433, r1's instance
+    calls = []
+    monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
+    assert svc.boot_restore_run().ok
+    assert calls == [{"target": "kiss", "band": "433"}]
+    item = _journal_on_disk(tmp_path)["items"][0]
+    assert (item["target"], item["band"], item["rid"]) == ("kiss", "433", "r1")
+
+
+def test_two_main_records_on_two_radios_are_ambiguous(tmp_path, monkeypatch):
+    svc = _drv(tmp_path, monkeypatch)
+    _write_record(tmp_path, _v1())
+    _write_record(tmp_path, _v1(pid=999997, nonce="cd" * 16, rid="r2"))
+    calls = []
+    monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
+    assert svc.boot_restore_run().ok and calls == []
+    reasons = {s["reason"] for s in _journal_on_disk(tmp_path)["skipped"]}
+    assert reasons == {"conflicting main records on different bands or radios"}
+
+
+@pytest.mark.parametrize("value", ["r1", "r99", "r0", "r100", "R1", "r01", " r1", "r1\n", "", None, 1, ["r1"]])
+def test_a_journal_items_rid_is_a_radio_id_or_absent(value):
+    item = br.new_item("i1", "stack", target="kiss", band="433", evidence_ids=("a",))
+    item["rid"] = value
+    ok = isinstance(value, str) and value in ("r1", "r99")
+    assert (br._validate_item(item) == "") is ok
+    assert br.rid_of(value) == (value if ok else "")

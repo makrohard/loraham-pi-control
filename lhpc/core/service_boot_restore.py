@@ -20,7 +20,7 @@ import os
 import time
 from pathlib import Path
 
-from . import boot_restore, known_working, runtime_fs, updater_units
+from . import boot_restore, known_working, radios, runtime_fs, updater_units
 from .boot_restore import Evidence, MarkerView, StackMeta
 from .daemon_control import ALLOWED_BANDS
 from .lifecycle import current_boot_id
@@ -189,6 +189,7 @@ class BootRestoreOpsMixin:
                 launch_id=rec["launch_id"], stack=rec.get("stack", ""),
                 component=rec.get("component", ""), band=rec.get("band", ""),
                 launched_at=float(rec.get("launched_at", 0)),
+                rid=boot_restore.rid_of(rec.get("rid")),
                 start_scope=rec.get("start_scope", ""),
                 requested_target=rec.get("requested_target", "")))
         # OPERATOR STOP INTENT beats leftover evidence (see the section note above). The skipped
@@ -368,6 +369,7 @@ class BootRestoreOpsMixin:
                    {e.stack for e in evidence}}
         plan = boot_restore.derive_plan(evidence, metas, markers, self.DAEMON_STACK_ID)
         plan.skipped.extend(skipped)
+        boot_restore.radio_filter(plan, radios.load(self._paths).radios)      # D14/D15, stage L5
 
         journal = boot_restore.new_journal(boot_id=cur_boot, pid=os.getpid(),
                                            process_start_time=self._own_start_time(),

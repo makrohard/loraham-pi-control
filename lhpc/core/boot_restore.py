@@ -15,6 +15,7 @@ typed ambiguity — never a silent preference, never a fallback to another TX ba
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,11 +41,33 @@ def journal_path(paths: Paths) -> Path:
 
 def new_item(item_id: str, kind: str, *, target: str = "", band: str = "",
              bands: tuple[str, ...] = (), evidence_ids: tuple[str, ...] = (),
-             components: tuple[str, ...] = ()) -> dict:
+             components: tuple[str, ...] = (), rid: str = "") -> dict:
+    """A plan item; `rid` (stage L5) is the radio its stack ran on, absent for a band-less or pre-0.14.0 item."""
     return {"id": item_id, "kind": kind, "target": target, "band": band,
             "bands": list(bands), "evidence_ids": list(evidence_ids),
             "components": list(components),
-            "state": "pending", "result": None, "prune": None}
+            "state": "pending", "result": None, "prune": None, **({"rid": rid} if rid else {})}
+
+
+_RID = re.compile(r"r[1-9][0-9]?")
+
+
+def rid_of(value) -> str:
+    """A record's radio id when it is one (r1..r99), else "" (the record then reads as pre-0.14.0)."""
+    return value if isinstance(value, str) and _RID.fullmatch(value) else ""
+
+
+def radio_filter(plan, rows) -> None:
+    """D14/D15 (stage L5): a pre-0.14.0 band item (no `rid`) is not restored, W12 (nothing converted); an item whose
+    radio is gone or disabled is refused with the reason. Both move to `plan.skipped`, their evidence named."""
+    from . import radio_daemon
+    kept, refused = radio_daemon.restore_plan(plan.items, rows)
+    why = {id(it): r for it, r in refused}
+    for it in plan.items:
+        if not any(it is k for k in kept):
+            plan.skipped.append({"stack": it["target"], "evidence_ids": it["evidence_ids"],
+                                 "reason": why.get(id(it), "a band item from before 0.14.0 (W12: nothing converted)")})
+    plan.items = kept
 
 
 def new_journal(*, boot_id: str, pid: int, process_start_time, items: list[dict]) -> dict:
@@ -64,6 +87,8 @@ def _validate_item(it) -> str:
         return f"unknown item state {it.get('state')!r}"
     if not isinstance(it.get("target"), str) or not isinstance(it.get("band"), str):
         return "item target/band wrong type"
+    if "rid" in it and not rid_of(it["rid"]):
+        return "item rid is not r1..r99"
     bands = it.get("bands")
     if not isinstance(bands, list) or not all(b in ALLOWED_BANDS for b in bands):
         return "item bands invalid"
@@ -198,6 +223,7 @@ class Evidence:
     component: str
     band: str                    # the record's own band ("" for band-less)
     launched_at: float
+    rid: str = ""                # stage L5: the radio the instance ran on ("" for band-less or pre-0.14.0)
     start_scope: str = ""        # "stack" / "component" / "" (never widened)
     requested_target: str = ""
 
@@ -309,9 +335,9 @@ def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
                                  "evidence_ids": ev_ids})
             continue
         bands = {e.band for e in scoped}
-        if len(bands) > 1:
+        if len(bands) > 1 or len({e.rid for e in scoped}) > 1:
             plan.skipped.append({"stack": stack_id,
-                                 "reason": "conflicting main records on different bands",
+                                 "reason": "conflicting main records on different bands or radios",
                                  "evidence_ids": ev_ids})
             continue
         ev0 = scoped[0]
@@ -331,7 +357,7 @@ def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
         orderable.append((order_key, stack_id,
                           new_item(secrets.token_hex(6), "stack", target=stack_id,
                                    band=band, evidence_ids=tuple(ev_ids),
-                                   components=tuple(parts))))
+                                   components=tuple(parts), rid=ev0.rid)))
 
     for _key, _sid, item in sorted(orderable, key=lambda t: (t[0], t[1])):
         plan.items.append(item)

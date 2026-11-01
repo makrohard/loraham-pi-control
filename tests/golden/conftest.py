@@ -496,7 +496,8 @@ def prior_boot(monkeypatch, tmp_path_factory):
         rec = {"launch_id": f"{comp}__{band or 'x'}__{pid}__{'ab' * 16}", "stack": stack,
                "component": comp, "band": band, "pid": pid, "role": "", "launched_at": 1000,
                "version": 1, "requested_target": stack, "start_scope": "stack",
-               "boot_id": "OLDBOOT", "starttime": "123", "pgid": pid, "sid": pid}
+               "boot_id": "OLDBOOT", "starttime": "123", "pgid": pid, "sid": pid,
+               **({"rid": radios_fixture.RID[band]} if band in radios_fixture.RID else {})}   # stage L5 records
         d = Path(root) / "state" / "owned"
         d.mkdir(parents=True, exist_ok=True)
         (d / f"{rec['launch_id']}.json").write_text(json.dumps(rec))

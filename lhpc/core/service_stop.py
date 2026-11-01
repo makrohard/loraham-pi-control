@@ -125,7 +125,7 @@ class StopOpsMixin:
         cascade) so a DIRECT call gets the same coordination as CLI/web. `release_daemon=False`
         is the INTERNAL cascade path: a client stopped as part of a daemon cascade must not itself
         release the daemon (the outer daemon stop is the sole owner of daemon teardown)."""
-        if (_r := self._controller_refusal(target)) is not None:
+        if (_r := self._controller_refusal(target) or self.band_refusal(target, band, "stop")) is not None:
             return _r
         from . import reslock
         if auto_install_ctx is not None:

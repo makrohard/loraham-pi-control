@@ -232,3 +232,14 @@ def test_interactive_launch_is_manual_required(kiss_box, run_op):
     assert run.files == {"added": ["config/files/lorachat.conf", "state/daemon-feed-floor-433",
                                    "state/interactive/chat.show"], "removed": [], "changed": []}
     assert box.owned() == []
+
+
+def test_a_started_client_records_its_radio(kiss_box, run_op):
+    """intended: (stage L5, D14/D15) the TNC's ownership record names r1, the 433 radio it ran on, so a boot
+    restore can tell its instance from a pre-0.14.0 band record."""
+    import json
+    box = kiss_box()
+    run = run_op(box.root, lambda: box.svc.start("kiss", apply=True))
+    assert run.fields["ok"], run.fields
+    recs = [json.loads(p.read_text()) for p in (box.root / "state" / "owned").glob("*.json")]
+    assert {r["component"]: r.get("rid") for r in recs if r.get("role") == ""} == {"loraham-kiss-tnc": "r1"}

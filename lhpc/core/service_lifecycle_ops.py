@@ -69,10 +69,6 @@ def _daemon_presence(cmdlines) -> str:
 
 class LifecycleOpsMixin:
 
-    def _radio_key_of(self, band: str) -> str:
-        """A radio claim's name for `band` in a message (W4-4, B4-D39): its radio's id, or the radios sharing it."""
-        return radio_start.radio_name(self._paths, band)
-
     def _band_limited_running(self, snap, conservative: bool = False):
         """(limited_fn, running_components, running_ids) with each running component's
         `loraham.radio.<band>` claims restricted to the band(s) it ACTUALLY uses — the daemon to
@@ -123,7 +119,7 @@ class LifecycleOpsMixin:
         the band each actually uses). Replaces the raw, band-blind `snap.conflicts` for display."""
         snap = snap if snap is not None else self.build_snapshot()
         _, running, running_ids = self._band_limited_running(snap)
-        return [c for c in resources_mod.interpret_conflicts(running, running_ids, self._radio_key_of) if c.observed]
+        return [c for c in resources_mod.interpret_conflicts(running, running_ids, lambda b: radio_start.radio_name(self._paths, b)) if c.observed]
 
     def observed_conflicts(self, snap=None):
         """PUBLIC read-only band-aware observed resource conflicts — the single source of truth for
@@ -140,7 +136,7 @@ class LifecycleOpsMixin:
         # multi-band owner must be treated as occupying every band it could be on.
         limited, running, running_ids = self._band_limited_running(snap, conservative=True)
         target = limited(comp, {band} if band else set())
-        conflicts = resources_mod.interpret_conflicts([*running, target], running_ids | {comp.id}, self._radio_key_of)
+        conflicts = resources_mod.interpret_conflicts([*running, target], running_ids | {comp.id}, lambda b: radio_start.radio_name(self._paths, b))
         # Advisory conflicts (e.g. the Companion client slot) are shown but never block a start —
         # arbitration is at runtime (the WebUI yields to a running CLI via a lock), so admission
         # must let the start through. observed_conflicts() still reports them for the UI banner.
@@ -397,7 +393,7 @@ class LifecycleOpsMixin:
                 # The radio band a held `loraham.radio.<band>` is on, so a daemon holder can be
                 # stopped (and named) per band; "" for any other resource.
                 rband = resources_mod.radio_band(resource) if resource.startswith("loraham.radio.") else ""
-                name = resources_mod.claim_name(resource, self._radio_key_of)   # W4-2: the radio by its id
+                name = resources_mod.claim_name(resource, lambda b: radio_start.radio_name(self._paths, b))   # W4-2: the radio by its id
                 blockers.append({"resource": name, "holder": holder,
                                  "holder_stack": stack_id, "band": rband})
 
@@ -811,6 +807,8 @@ class LifecycleOpsMixin:
         planned and launched 868, and a daemon preview promised 433 while the launch clamped it to
         868). Returns a refusal or None; a bandless request keeps resolving normally, and plan and
         apply take this same decision because both go through the public entry."""
+        if (op in ("stop", "restart") and (_s := radio_start.shared_band_refusal(self, target, band, op))) or op == "stop":
+            return _s      # W1-11: only a band two radios share refuses a stop or restart's stop leg (a stray stays stoppable)
         if not band:
             return None
         active = self.active_bands()

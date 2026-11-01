@@ -306,14 +306,19 @@ def _order(radios):
     return sorted(radios, key=lambda r: int(r.id[1:]))
 
 
+# W12 (A:201): the one wording of the old-config case, for the start refusal and the console banner alike.
+OLD_CONFIG_TEXT = ("the old [radio] configuration is present and nothing was converted: set up the radios in the "
+                   "hardware list first")
+OLD_CONFIG_UNREADABLE = "the old configuration cannot be read"
+
+
 def _unstartable(state, old_config) -> Target:
     """The W1-8 reason rule, shared by resolve_target and reticulum_rid."""
     if state.kind == radios_mod.ABSENT:
         if old_config is Tri.YES:
-            return _refuse("the old [radio] configuration is present and nothing was converted: set up the radios "
-                           "in the hardware list first", next_command="lhpc hardware")
+            return _refuse(OLD_CONFIG_TEXT, next_command="lhpc hardware")
         if old_config is Tri.UNKNOWN:
-            return _refuse("the old configuration cannot be read", next_command="lhpc hardware")
+            return _refuse(OLD_CONFIG_UNREADABLE, next_command="lhpc hardware")
         return _refuse("no hardware list", next_command="lhpc hardware")
     return _refuse("; ".join(state.reasons) if state.reasons else "the hardware list is invalid")
 
