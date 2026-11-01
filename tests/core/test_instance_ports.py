@@ -53,8 +53,14 @@ def test_slot_k_resolves_its_ports_and_its_radio_level(tokens, slot3_r12):
     assert _argv(tokens, Instance(3, "r12", {"kiss": 1})) == slot3_r12
 
 
-def test_a_saved_port_param_is_taken_as_saved():
-    assert _argv(["{param:kiss_port}"], Instance(3, "r12"), {"kiss_port": "8099"}) == ["--port", "8099"]
+def test_a_saved_port_param_is_the_slot_0_port_and_slot_k_derives_from_it():
+    # A §2.4 (A-r65 :261): a configured port param applies to slot 0; slot k derives from it (+10k), the rule the
+    # firewall rows follow (tests/host/test_firewall_instances.py). argv and process specs take the same port.
+    saved = {"kiss_port": "8099"}
+    assert _argv(["{param:kiss_port}"], params=saved) == ["--port", "8099"]
+    assert _argv(["{param:kiss_port}"], Instance(3, "r12"), saved) == ["--port", "8129"]
+    assert commands.instance_value("{param:kiss_port}", _C(), saved, "/rt", "/src", "",
+                                   inst=Instance(3, "r12")) == "8129"
 
 
 def test_port_of_a_stack_without_an_instance_on_that_radio_is_refused():

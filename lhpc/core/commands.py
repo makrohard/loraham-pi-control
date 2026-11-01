@@ -121,6 +121,19 @@ def _paths_subst(text: str, runtime: str, source: str, band: str, inst: Instance
     return out
 
 
+def _param_raw(p, params, inst: Instance) -> str:
+    """A run param's raw value for one instance. The default is its template, rendered for the instance. A saved
+    value of a slotted port param (its default a whole `{port:B}`) is slot 0's port; slot k derives from it, + 10 per
+    slot (A §2.4), the rule the firewall rows follow (firewall.instance_port)."""
+    saved = (params or {}).get(p.name)
+    if saved is None:
+        return inst.subst(str(p.default_template or p.default))
+    raw = str(saved)
+    if inst.slot and _PORT_RE.fullmatch(p.default_template or str(p.default)) and raw.strip().isdigit():
+        return str(int(raw) + PORT_STEP * inst.slot)
+    return inst.subst(raw)
+
+
 def expand_argv(tokens, comp, params, op, runtime: str, source: str,
                 band: str = "", *, inst: Instance = SLOT0) -> list[str]:
     """Expand an argv token template to a validated argv list (no shell)."""
@@ -142,7 +155,7 @@ def expand_argv(tokens, comp, params, op, runtime: str, source: str,
                 p = by_name.get(name)
                 if p is None:
                     raise CommandError(f"unknown run-param token {tok}")
-                raw = str((params or {}).get(name, p.default_template or p.default))
+                raw = _param_raw(p, params, inst)
                 # A param default may reference operator identity / paths (e.g. chat
                 # `call` defaults to "{callsign}"). Resolve those controller-derived
                 # templates BEFORE validating the value.
@@ -186,7 +199,7 @@ def instance_value(template: str, comp, params, runtime: str, source: str, band:
         p = {x.name: x for x in comp.run_params}.get(name)
         if p is None:
             raise CommandError(f"unknown run-param token {template}")
-        raw = inst.subst(str((params or {}).get(name, p.default_template or p.default))).replace("{runtime}", runtime)
+        raw = _param_raw(p, params, inst).replace("{runtime}", runtime)
         return str(validators.validate_param(p, raw.replace("{source}", source)))
     return _paths_subst(template, runtime, source, band, inst)
 
