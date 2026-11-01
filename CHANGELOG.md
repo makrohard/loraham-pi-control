@@ -1,9 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.13.7
+
+Fixed
 
 - Console: on a box with less than 1 GiB of RAM (a Pi Zero 2 W) the console's build and test jobs run one at a
   time instead of all at once, so the console keeps answering during a build.
+- Reticulum docs: a build whose node or client no longer runs the node's wheel fails at the step after its final
+  pip install (the node has later non-pip steps), as the page now says.
 
 ## 0.13.6
 
