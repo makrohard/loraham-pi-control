@@ -251,8 +251,7 @@ def test_the_hidden_verb_keeps_the_marker_when_the_deployed_config_is_missing(tm
 
 
 def _update_without_nginx(tmp_path, monkeypatch):
-    """A box that never set up nginx (the loopback console: no nginx config, no nginx pid file, no LHPC nginx unit,
-    no recorded Apply) and a checkout whose update advances. Returns (service factory, paths)."""
+    """A box that never set up nginx (the loopback console: no nginx config, no nginx pid file, no recorded Apply) and a checkout whose update advances. Returns (service factory, paths)."""
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     paths = Paths(runtime_root=tmp_path)
     checkout = tmp_path / "checkout"
@@ -274,7 +273,7 @@ def _update_without_nginx(tmp_path, monkeypatch):
 
 
 def test_a_box_that_never_set_up_nginx_is_not_left_with_a_permanent_banner(tmp_path, monkeypatch, web):
-    """B3-D22a: no deployed config, no nginx pid file, no LHPC nginx unit, no recorded Apply (a supported base
+    """B3-D22a: no deployed config, no nginx pid file, no recorded Apply (a supported base
     install): nothing can serve an old config, so the update clears the marker and no page says Apply needed."""
     svc, paths = _update_without_nginx(tmp_path, monkeypatch)
     res = svc().self_update_apply_operator()
@@ -294,12 +293,11 @@ def test_the_hidden_verb_clears_the_marker_on_a_box_that_never_set_up_nginx(tmp_
     assert capsys.readouterr().out.strip().endswith("no deployed nginx config")
 
 
-@pytest.mark.parametrize("signal", ["pid-file", "unit", "applied-record"])
+@pytest.mark.parametrize("signal", ["pid-file", "applied-record"])
 def test_each_sign_that_nginx_may_run_keeps_a_missing_config_owed(tmp_path, monkeypatch, capsys, signal):
-    """B3-D22a: any one sign that an nginx may still serve an old config (its pid file, LHPC's nginx unit, a recorded
-    Apply) keeps a missing deployed config owed; the hidden verb exits 1."""
+    """B3-D22a, B3-D22b: either sign that an nginx may still serve an old config (its pid file, a recorded Apply) keeps
+    a missing deployed config owed; the hidden verb exits 1."""
     from lhpc.adapters.cli.main import main
-    from lhpc.core.updater_units import NGINX_UNIT
     if signal == "applied-record":                  # an applied box whose nginx pid file and config are gone
         _svc, paths, _previous, _fake = _box(tmp_path, monkeypatch, nginx_t=CR(0, "", "ok"))
         paths.under(*webserver.NGINX_PID).unlink()
@@ -307,14 +305,27 @@ def test_each_sign_that_nginx_may_run_keeps_a_missing_config_owed(tmp_path, monk
     else:
         paths = Paths(runtime_root=tmp_path)
         (tmp_path / "state" / "run").mkdir(parents=True)
-        if signal == "pid-file":
-            paths.under(*webserver.NGINX_PID).write_text("4242\n")
-        else:
-            unit = tmp_path.parent / (tmp_path.name + "-home") / ".config" / "systemd" / "user" / NGINX_UNIT
-            unit.parent.mkdir(parents=True)
-            unit.write_text("[Service]\n")
-            monkeypatch.setenv("HOME", str(unit.parents[3]))
+        paths.under(*webserver.NGINX_PID).write_text("4242\n")
     paths.under(*webserver.NGINX_CONF).unlink(missing_ok=True)
     assert proxy_rerender.mark(paths) == ""
     assert main(["_webserver-rerender", "--root", str(tmp_path)]) == 1
     assert proxy_rerender.pending(paths) == MISSING
+
+
+def test_a_managed_box_that_never_set_up_nginx_clears_the_marker(tmp_path, monkeypatch, capsys):
+    """B3-D22b: the managed unit set (written by every update's unit refresh) includes lhpc-nginx.service, so a unit
+    FILE is no sign that nginx runs. A managed box with all units written, no nginx pid file and no recorded Apply:
+    the hidden verb clears the marker and exits 0."""
+    from pathlib import Path as _P
+
+    from lhpc.adapters.cli.main import main
+    from lhpc.core import updater_units
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir(parents=True)
+    user_dir = _P(os.path.expanduser("~")) / ".config" / "systemd" / "user"
+    user_dir.mkdir(parents=True)
+    updater_units.write_set(user_dir, str(tmp_path))
+    assert (user_dir / updater_units.NGINX_UNIT).exists()          # the managed set carries the nginx unit
+    assert proxy_rerender.mark(paths) == ""
+    assert main(["_webserver-rerender", "--root", str(tmp_path)]) == 0
+    assert proxy_rerender.pending(paths) is None

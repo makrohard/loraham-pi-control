@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from os.path import exists, expanduser, join
+from os.path import exists, join
 
 from . import runtime_fs
 from .paths import PathContainmentError, Paths
@@ -74,22 +74,21 @@ def _keep(paths: Paths, why: str) -> tuple[bool, str]:
     return False, why
 
 
-# A running nginx can still serve the old config after its file is gone: owed while nginx may run (B3-D22, B3-D22a).
+# A running nginx can still serve the old config after its file is gone: owed while nginx may run (B3-D22, B3-D22a,
+# B3-D22b).
 _MISSING = "deployed nginx config is missing — Apply the webserver configuration"
 
 
 def _nginx_may_run(paths: Paths) -> bool:
-    """Whether an nginx may still serve an old config: its pid file stands, LHPC's nginx unit is installed, or a
-    webserver Apply was recorded. A box that never set up nginx (the loopback console) has none of these."""
-    from .updater_units import NGINX_UNIT
+    """Whether an nginx may still serve an old config: its pid file stands, or a webserver Apply was recorded. A box
+    that never set up nginx (the loopback console) has neither. An installed nginx unit file is no sign: every update
+    writes the whole managed unit set, lhpc-nginx.service included (B3-D22b)."""
     from .webserver import NGINX_PID, read_applied
     try:
         if runtime_fs.stat_leaf_nofollow(paths, paths.under(*NGINX_PID)) is not None:
             return True
     except (OSError, PathContainmentError):
         return True                                     # cannot tell: fail closed
-    if exists(join(expanduser("~"), ".config", "systemd", "user", NGINX_UNIT)):
-        return True
     return bool(read_applied(paths))
 
 
