@@ -153,6 +153,12 @@ def test_radio_dir_state_an_unreadable_level_is_unknown_not_absent(tmp_path, mon
     assert rflog.radio_dir_state(_paths(tmp_path), "r1/rf-daemon.log") == rflog.UNKNOWN
 
 
+def test_radio_dir_state_a_logs_link_dangling_inside_the_root_is_unknown(tmp_path):
+    """A logs/ link to a missing path inside the root passes containment; it is judged by where it leads."""
+    (tmp_path / "logs").symlink_to(tmp_path / "gone", target_is_directory=True)
+    assert rflog.radio_dir_state(_paths(tmp_path), "r1/rf-daemon.log") == rflog.UNKNOWN
+
+
 def test_radio_dir_state_with_no_logs_dir_at_all_is_absent(tmp_path):
     """Nothing at logs/: the radio's directory is absent too (a judgement, not an error)."""
     assert rflog.radio_dir_state(_paths(tmp_path), "r1/rf-daemon.log") == rflog.ABSENT
