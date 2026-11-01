@@ -38,6 +38,10 @@ CONTENTS = {
 VALUES = {"bool": True, "int": 1, "float": 1.5, "str": "x", "null": None, "list": ["plugdev"],
           "object": {"plugdev": 1}, "deep": [[[[["plugdev"]]]]], "duplicate": ("plugdev", "plugdev"),
           "bytes": b"plugdev", "bom": "\ufeffplugdev"}
+class Text(str):
+    """A str subclass: equal to a str, but not of type str (strict type checks refuse it)."""
+
+
 # The grammar of each identity file (the design table's type axis), held here independently of the library.
 GRAMMAR = {"idVendor": r"[0-9a-f]{4}\n?", "idProduct": r"[0-9a-f]{4}\n?", "busnum": r"[1-9][0-9]{0,2}\n?",
            "devpath": r"[0-9]+(\.[0-9]+)*\n?"}
@@ -221,6 +225,21 @@ def test_a_model_usb_row_outside_the_form_is_refused(root, usb):
         ua.match(device(root, "1-1.3"), model(**usb))
 
 
+@pytest.mark.parametrize("kind", sorted(VALUES))
+def test_a_model_usb_value_that_is_not_a_table_is_refused(root, kind):
+    with pytest.raises(ua.UsbTableError, match="meshstick-1262"):
+        ua.match(device(root, "1-1.3"), dataclasses.replace(STICK, usb=VALUES[kind]))
+
+
+@pytest.mark.parametrize("vid, pid", [("1a86", "7523"), ("1a87", "5512"), ("5512", "1a86")])
+def test_a_device_differing_in_vid_or_pid_is_not_the_stick(root, vid, pid):
+    """A:343: the same vendor's other bridge (1a86:7523) or a swapped pair is not matched."""
+    (dev(root, "1-1.3") / "idVendor").write_text(vid + "\n")
+    (dev(root, "1-1.3") / "idProduct").write_text(pid + "\n")
+    assert ua.match(device(root, "1-1.3"), STICK) is Probe.ABSENT
+    assert ua.precheck_serialless(ua.scan(root), STICK, "1-1.3").reason is ua.Reason.NO_STICK_ON_PORT
+
+
 def test_an_spi_model_is_not_a_usb_model(root):
     with pytest.raises(ua.UsbTableError, match="not a USB model"):
         ua.match(device(root, "1-1.3"), MODELS["loraham"])
@@ -328,6 +347,7 @@ CHR = 0o020000
     (node_stat(CHR | 0o666, gid=0), frozenset({"op"}), 1000, Probe.PRESENT),        # world rw
     (node_stat(CHR | 0o460, uid=1000), frozenset({"plugdev"}), 1000, Probe.ABSENT),  # owner bits decide
     (node_stat(CHR | 0o640), frozenset({"plugdev"}), 1000, Probe.ABSENT),           # group read only
+    (node_stat(CHR | 0o620), frozenset({"plugdev"}), 1000, Probe.ABSENT),           # group write only
     (node_stat(CHR | 0o600), frozenset(), 0, Probe.PRESENT),                         # root owns it
     (node_stat(0o100000 | 0o666), frozenset({"plugdev"}), 1000, Probe.UNKNOWN),     # not a char device
     (node_stat(CHR | 0o660, gid=4242), frozenset({"plugdev"}), 1000, Probe.UNKNOWN),  # gid without a name
@@ -579,6 +599,7 @@ def test_x86_distro_of_the_wrong_type_is_unknown(kind):
     ("x86_64", Probe.ABSENT), ("amd64", Probe.ABSENT), ("aarch64", Probe.PRESENT), ("arm64", Probe.PRESENT),
     ("armv7l", Probe.PRESENT), ("armv6l", Probe.PRESENT), ("riscv64", Probe.UNKNOWN), ("X86_64", Probe.UNKNOWN),
     ("", Probe.UNKNOWN), *[(v, Probe.UNKNOWN) for v in VALUES.values() if v != "x"],
+    (Text("aarch64"), Probe.UNKNOWN), (Text("x86_64"), Probe.UNKNOWN),
 ])
 def test_the_spi_gpio_grant_applies_on_a_pi_and_not_on_x86(machine, expected):
     """X2 proposal: PROCEED without the spi,gpio grant on x86."""
@@ -589,7 +610,8 @@ def test_the_spi_gpio_grant_applies_on_a_pi_and_not_on_x86(machine, expected):
 
 def test_no_existing_module_imports_usb_access():  # rule-1 exception
     """A whole-package negative invariant no driven path proves: no module under lhpc/ imports
-    lhpc.core.usb_access until the stage that wires it. Behavioural twin: the next test."""
+    lhpc.core.usb_access until the stage that wires it. Behavioural twin: the next test. A control: it
+    passes on the parent too, which has no such module."""
     importers = []
     for path in (repo_paths.REPO / "lhpc").rglob("*.py"):
         if path.name == "usb_access.py" and path.parent.name == "core":
@@ -604,6 +626,8 @@ def test_no_existing_module_imports_usb_access():  # rule-1 exception
 
 
 def test_loading_the_cli_web_and_bootstrap_modules_does_not_load_usb_access():
+    """A control, like the previous case: loading the CLI, the service, the bootstrap renderer and the
+    backend probes leaves lhpc.core.usb_access unloaded."""
     code = ("import sys, lhpc.adapters.cli.main, lhpc.core.services, lhpc.core.deps, lhpc.core.probes.backends; "
             "print(sorted(m for m in sys.modules if m.endswith('usb_access')))")
     out = subprocess.run([sys.executable, "-c", code], cwd=repo_paths.REPO, capture_output=True, text=True,
