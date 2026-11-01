@@ -226,7 +226,9 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
     def factory():
         svc = ControllerService(
             system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["meshtasticd"]},
-                              unix_replies={"/tmp/loraconf433.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system,
+                              # Q16: the hardware list resolves 433 to r1, so the fake answers on its socket
+                              unix_replies={"/tmp/loraconf-r1.sock":
+                                            b"STATUS RADIO=READY ID=r1 BOUND=- TXMODE=MANAGED\n"}).system,
             paths=Paths(runtime_root=tmp_path))
         # The band marker a start records — seeded through the product's own recorder, since no
         # public setter exists and a real start needs a radio.

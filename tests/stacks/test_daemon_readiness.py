@@ -56,6 +56,24 @@ def test_verify_band_up_requires_ready(tmp_path):
     assert _svc(tmp_path, b"STATUS RADIO=READY TXMODE=MANAGED\n")._verify_band_up("433") is True
 
 
+@pytest.mark.parametrize("timeout", [0.0, 0.5])
+def test_verify_band_up_reads_the_bands_radio(tmp_path, monkeypatch, timeout):
+    # Stage L5 (W3, W3-6): with a hardware list a band is up when its radio's socket says READY; a READY on the
+    # 0.13.x band socket alone is never read as that radio's. Both branches: the single check and the poll.
+    import time
+
+    import radios_fixture
+    monkeypatch.setattr(ControllerService, "DAEMON_VERIFY_TIMEOUT_S", timeout)
+    monkeypatch.setattr(ControllerService, "DAEMON_VERIFY_POLL_S", 0.25)
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    radios_fixture.write(tmp_path)
+    ready = b"STATUS RADIO=READY ID=r1 BOUND=- TXMODE=MANAGED\n"
+    by_rid = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": ready}).system
+    by_band = FakeSystem(unix_replies={"/tmp/loraconf433.sock": ready}).system
+    assert ControllerService(system=by_rid, paths=Paths(runtime_root=tmp_path))._verify_band_up("433") is True
+    assert ControllerService(system=by_band, paths=Paths(runtime_root=tmp_path))._verify_band_up("433") is False
+
+
 def test_failed_radio_blocks_dependent_launch(short_tmp_path, set_call):
     # meshcom depends on the daemon; a reachable-but-FAILED daemon must block the
     # dependent (no false success, no second daemon instance started).

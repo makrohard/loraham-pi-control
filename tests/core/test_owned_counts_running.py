@@ -6,6 +6,9 @@ import time
 
 import pytest
 
+import radios_fixture
+
+from lhpc.core.commands import Instance
 from lhpc.core.lifecycle import Lifecycle
 from lhpc.core.model import Component, ComponentKind, ProcessSpec, RunState, Stack
 from lhpc.core.outcomes import Outcome
@@ -14,6 +17,7 @@ from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 from lhpc.core.status import StatusProber
 
+R1 = Instance(0, "r1")                                   # 433's radio in radios_fixture
 # The spec names an executable no process here runs: only an ownership record can say "running".
 COMP = Component(id="x-node", name="x", kind=ComponentKind.SERVICE,
                  process=ProcessSpec(exec_name="x-node-binary"))
@@ -63,12 +67,13 @@ def _old_argv(svc, comp):
     from lhpc.core.config import Config
     src = str(svc._paths.resolve_source(comp.source.path))
     argv = commands.expand_argv(comp.run_argv, comp, svc.stack_config(comp.id, "433"),
-                                Config().operator, str(svc._paths.runtime_root), src, "433")
+                                Config().operator, str(svc._paths.runtime_root), src, "433", inst=R1)
     i = argv.index(comp.process.instance_arg[0])
     return argv[:i] + argv[i + 2:]
 
 
 def _box(tmp_path, monkeypatch):
+    radios_fixture.write(tmp_path)                       # stage L5: the TNC is its band's radio's client (r1)
     fake = FakeSystem()
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(ControllerService, "hardware_configured", lambda self: True)
@@ -122,5 +127,5 @@ def test_the_next_start_renders_the_new_argv(tmp_path, monkeypatch):
     res = svc.start("kiss", apply=True, band="433")
     opt, tpl = comp.process.instance_arg
     value = commands.instance_value(tpl, comp, svc.stack_config(comp.id, "433"), str(tmp_path),
-                                    str(svc._paths.resolve_source(comp.source.path)), "433")
+                                    str(svc._paths.resolve_source(comp.source.path)), "433", inst=R1)
     assert spawned and has_instance_token(spawned[0], opt, value), (value, spawned, res.summary)

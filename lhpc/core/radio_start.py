@@ -60,7 +60,14 @@ def daemon_key(svc, band: str) -> str:
     """The key of a band's daemon sockets (daemon_control.conf_socket): the rid of the band's one enabled radio
     when the hardware list resolves the band (stage L5, `loraconf-<rid>.sock`); else the band itself, which
     reaches only a 0.13.x daemon's socket (a start without a hardware list is refused, W1-8)."""
-    t = band_rid(svc, band)
+    return key_for(svc._paths, band)
+
+
+def key_for(paths, band: str) -> str:
+    """daemon_key from the runtime paths alone (the lifecycle has no service)."""
+    if band not in ("433", "868"):
+        return band                                       # a radio id, or a key daemon_control refuses
+    t = radio_daemon.resolve_target(radios.load(paths), radio_models.load(), lambda _r, _m: True, band=band)
     return t.rid if t.outcome == "proceed" else band
 
 
@@ -118,3 +125,16 @@ def verify_identity(svc, rid: str) -> str:
     if radio is None:
         return f"radio {rid} is no longer in the hardware list"
     return radio_daemon.check_bound(status, radio, radio_models.load()[radio.model]) or ""
+
+
+def client_instance(svc, comp, band: str) -> tuple:
+    """(instance, refusal) for a component's start (W3, stage L5): a daemon client — a run param whose value
+    template names `{rid}` — runs as the band's one radio's instance (W1-3/4/5); a refusal when the band has no
+    such radio or two. Any other component keeps slot 0 without a radio."""
+    from . import commands
+    if not any("{rid}" in str(getattr(p, "default", "") or "") for p in getattr(comp, "run_params", ())):
+        return commands.SLOT0, ""
+    t = band_rid(svc, band)
+    if t.outcome != "proceed":
+        return None, f"no radio for its daemon sockets: {t.reason}"
+    return commands.Instance(0, t.rid), ""

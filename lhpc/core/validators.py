@@ -308,7 +308,7 @@ def node_short_name(value, *, field: str = "short node name") -> str:
     return _printable_utf8(str(value).strip(), 4, field, "the short name")
 
 
-_PATH_PLACEHOLDERS = ("{runtime}", "{source}", "{band}")
+_PATH_PLACEHOLDERS = ("{runtime}", "{source}", "{band}", "{rid}")
 
 
 def path_value(value, *, field: str = "path") -> str:

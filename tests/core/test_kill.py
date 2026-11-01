@@ -13,8 +13,9 @@ import time
 from pathlib import Path
 
 import pytest
+import radios_fixture
 
-from lhpc.core import commands, jobs, kill, procident, reslock
+from lhpc.core import commands, jobs, kill, procident, radio_start, reslock
 from lhpc.core.config import Config
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -86,6 +87,7 @@ def procs():
 
 
 def _svc(tmp_path, table):
+    radios_fixture.write(tmp_path)                         # stage L5: a client runs on its band's radio
     return ControllerService(system=FakeSystem(cmdlines_data=table).system,
                              paths=Paths(runtime_root=tmp_path))
 
@@ -94,8 +96,9 @@ def _argv(svc, comp_id, band):
     """The component's real argv on `band` (what its start launches)."""
     comp = next(c for st in svc.stacks() for c in st.components if c.id == comp_id)
     src = str(svc._paths.resolve_source(comp.source.path)) if comp.source else str(svc._paths.runtime_root)
+    inst = radio_start.client_instance(svc, comp, band or comp.band)[0] or commands.SLOT0   # W3: its radio's sockets
     return commands.expand_argv(comp.run_argv, comp, svc.stack_config(comp.id, band),
-                                Config().operator, str(svc._paths.runtime_root), src, band)
+                                Config().operator, str(svc._paths.runtime_root), src, band, inst=inst)
 
 
 def _gone(p):

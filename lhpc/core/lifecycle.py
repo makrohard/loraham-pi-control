@@ -29,7 +29,15 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import commands, procident, progress, runtime_fs, spi_mode, validators
+from . import (
+    commands,
+    procident,
+    progress,
+    radio_start,
+    runtime_fs,
+    spi_mode,
+    validators,
+)
 from .config import Config
 from .jobs import JobResult, JobState, run_job, tail_log
 from .model import Component, Stack
@@ -450,7 +458,7 @@ class Lifecycle:
 
     def start(self, stack: Stack, comp: Component, params: dict | None = None,
               band: str = "", *, requested_target: str = "",
-              start_scope: str = "") -> StartLaunch:
+              start_scope: str = "", inst: commands.Instance = commands.SLOT0) -> StartLaunch:
         """Launch a component detached with NO shell: typed pre-steps run in Python,
         then the target is exec'd directly via Popen(shell=False, cwd, env). The real
         process identity is observed before ownership is recorded (no shell-to-exec
@@ -482,10 +490,11 @@ class Lifecycle:
                 return StartLaunch(False, str(log), why)
         op = self.config.operator
         try:
-            commands.run_pre_steps(comp.pre_steps, runtime, src, band)
-            argv = commands.expand_argv(comp.run_argv, comp, params, op, runtime, src, band)
-            extra = commands.build_env(comp.run_env, runtime, src, band)
-            cwd = commands._paths_subst(comp.run_cwd, runtime, src, band) if comp.run_cwd else src
+            # `inst`: the instance's slot and radio (stage L5: a daemon client's sockets are its radio's, W3)
+            commands.run_pre_steps(comp.pre_steps, runtime, src, band, inst=inst)
+            argv = commands.expand_argv(comp.run_argv, comp, params, op, runtime, src, band, inst=inst)
+            extra = commands.build_env(comp.run_env, runtime, src, band, inst=inst)
+            cwd = commands._paths_subst(comp.run_cwd, runtime, src, band, inst=inst) if comp.run_cwd else src
         except (commands.CommandError, validators.ValidationError) as exc:
             return StartLaunch(False, str(log), f"invalid configuration: {exc}")
         env = {**os.environ, **(extra or {})}
@@ -1624,11 +1633,13 @@ class Lifecycle:
 
     # -- daemon readiness + bounded TX test --------------------------------
 
-    # The daemon's per-band raw data socket (daemon_protocol.h), resolved /run/loraham → /tmp by the
-    # same rule as the CONF socket (`daemon_control.conf_socket`).
+    # The daemon's raw data socket (daemon_protocol.h), resolved /run/loraham → /tmp by the same rule as the CONF
+    # socket (`daemon_control.conf_socket`): the band's radio's `lora-<rid>.sock` at stage L5 (W3), else 0.13.x's.
     def raw_socket(self, band: str) -> str:
         from .daemon_control import _prefer_run_socket
-        return _prefer_run_socket(f"/run/loraham/lora{band}.sock", f"/tmp/lora{band}.sock")
+        key = radio_start.key_for(self.paths, band)
+        name = f"lora-{key}" if key != band else f"lora{band}"
+        return _prefer_run_socket(f"/run/loraham/{name}.sock", f"/tmp/{name}.sock")
 
     def _stats_txok(self, band: str) -> int | None:
         """Read the daemon's TXOK counter through the ONE bounded CONF parser
@@ -1636,7 +1647,7 @@ class Lifecycle:
         fails closed to None rather than being parsed raw (P0.4)."""
         from . import daemon_control
         try:
-            stats = daemon_control._query(self.system, band, b"GET STATS\n", "STATS")
+            stats = daemon_control._query(self.system, radio_start.key_for(self.paths, band), b"GET STATS\n", "STATS")
         except OSError:
             return None
         val = stats.get("TXOK")

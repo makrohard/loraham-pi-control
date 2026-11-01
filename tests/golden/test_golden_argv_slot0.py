@@ -25,8 +25,32 @@ EXCEPTIONS = {
     "meshcom-gps": ["--state", "/rt/state/gps/meshcom"],
     "meshcore-gps": ["--state", "/rt/state/gps/meshcore"],
     "meshtastic-gps": ["--state", "/rt/state/gps/meshtastic"],
-    "loraham-chat": ["--data-socket", "/tmp/lora433.sock", "--conf-socket", "/tmp/loraconf433.sock"],
 }
+# Stage L5 (W3, an I11 difference, A:142): a daemon client's socket pairs are its radio's. They are compared apart
+# from the rest of the argv: each client carries exactly these pairs (on r1), and every other token is the base's.
+SOCKETS = {
+    "loraham-chat": [("--data-socket", "/tmp/lora-r1.sock"), ("--conf-socket", "/tmp/loraconf-r1.sock")],
+    "loraham-kiss-tnc": [("--data-socket", "/tmp/loraf-r1.sock"), ("--conf-socket", "/tmp/loraconf-r1.sock")],
+    "meshcom-bridge": [("--data-socket", "/tmp/loraf-r1.sock"), ("--conf-socket", "/tmp/loraconf-r1.sock")],
+    "loraham-voice": [("--data-socket", "/tmp/lora-r1.sock"), ("--conf-socket", "/tmp/loraconf-r1.sock")],
+    "loraham-voice-cli": [("--data-socket", "/tmp/lora-r1.sock"), ("--conf-socket", "/tmp/loraconf-r1.sock")],
+}
+
+
+def _without_sockets(argv):
+    out, skip = [], False
+    for t in argv:
+        if skip:
+            skip = False
+        elif t in ("--data-socket", "--conf-socket"):
+            skip = True
+        else:
+            out.append(t)
+    return out
+
+
+def _pairs(argv):
+    return [(t, argv[i + 1]) for i, t in enumerate(argv[:-1]) if t in ("--data-socket", "--conf-socket")]
 
 
 def _resolve() -> dict:
@@ -39,8 +63,10 @@ def _resolve() -> dict:
             if not c.run_argv or c.id == svc.DAEMON_ID:
                 continue
             src = str(svc._paths.resolve_source(c.source.path)) if c.source else str(RT)
+            # stage L5 (W3): a daemon client runs as its radio's instance; slot 0 on r1
+            inst = commands.Instance(0, "r1") if any("{rid}" in str(p.default or "") for p in c.run_params) else commands.SLOT0
             argv = commands.expand_argv(c.run_argv, c, svc.stack_config(c.id, c.band),
-                                        Config().operator, str(RT), src, c.band)
+                                        Config().operator, str(RT), src, c.band, inst=inst)
             out[c.id] = ["<python>" if t == python else t.replace(pkg, "<lhpc>") for t in argv]
     return out
 
@@ -54,4 +80,6 @@ def test_slot0_argv_equals_the_base_but_for_the_two_named_exceptions():
     for cid, argv in now.items():
         extra = EXCEPTIONS.get(cid, [])
         assert argv[len(argv) - len(extra):] == extra, cid       # each exception is really there
-        assert argv[:len(argv) - len(extra)] == base[cid], cid    # and nothing else differs
+        rest = argv[:len(argv) - len(extra)]
+        assert _pairs(rest) == SOCKETS.get(cid, []), cid             # the radio's sockets, exactly
+        assert _without_sockets(rest) == _without_sockets(base[cid]), cid   # and nothing else differs

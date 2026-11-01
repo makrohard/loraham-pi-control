@@ -121,6 +121,7 @@ def _golden():
     import importlib.util
     mod = sys.modules.get("golden_conftest")
     if mod is None:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # tests/: the conftest's helpers
         spec = importlib.util.spec_from_file_location("golden_conftest",
                                                       Path(__file__).with_name("conftest.py"))
         mod = importlib.util.module_from_spec(spec)
@@ -185,7 +186,7 @@ def _rebuilt(d):
     from lhpc.core.probes.backends import FakeSystem
     golden = _golden()
     _install(d)
-    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": golden._READY},
+    fake = FakeSystem(unix_replies=golden.radios_fixture.by_radio({"/tmp/loraconf433.sock": golden._READY}),  # L5
                       cmdlines_data={int(k): v for k, v in d["cmdlines"].items()})
     fake.listeners = golden._TncEndpoint(d["root"])
     box = golden.KissBox(Path(d["root"]), fake, None)

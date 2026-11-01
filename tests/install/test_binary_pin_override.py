@@ -158,6 +158,8 @@ def test_only_a_covered_service_blocks_the_start(short_tmp_path, monkeypatch, bi
     from lhpc.core.lifecycle import BUILD_MARKER_TEXT, StartLaunch
     svc = _svc(short_tmp_path, monkeypatch)
     cfgmod.save_hardware_setup(svc._paths, "uputronics")
+    # stage L5 (W1-3): the bandless bridge runs on the one radio that can run it
+    radios_fixture.write(short_tmp_path, (radios.Radio("r1", "low", "uputronics", "433", ce="ce0"),))
     svc._invalidate_config()
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     pins = svc._binary_pins("meshcom")
@@ -195,7 +197,7 @@ def test_only_a_covered_service_blocks_the_start(short_tmp_path, monkeypatch, bi
         assert res[lagging].outcome.value == "blocked"
         assert res[lagging].summary.startswith("installed binary artifact is behind the manifest")
     else:
-        assert spawned == ["meshcom-bridge", "meshcom-qemu"]           # both reached the spawn
+        assert spawned == ["meshcom-bridge", "meshcom-qemu"], r.summary   # both reached the spawn
         assert res["meshcom-qemu"].summary.startswith("start failed: stubbed spawn")
 
 

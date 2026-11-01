@@ -79,6 +79,8 @@ class Instance:
         text = _PORT_OF_RE.sub(port_of, text)
         text = _PORT_RE.sub(lambda m: str(self.port(int(m.group(1)))), text)
         text = text.replace("{instance_suffix}", f"-{self.rid}" if self.slot else "")
+        if self.rid:                                     # stage L5: a daemon client's sockets are its radio's (W3)
+            text = text.replace("{rid}", self.rid)
         return text.replace("{instance_dir}", f"{self.rid}/" if self.slot else "")
 
 
@@ -138,12 +140,14 @@ def _param_raw(p, params, inst: Instance) -> str:
     value of a slotted port param (its default a whole `{port:B}`) is slot 0's port; slot k derives from it, + 10 per
     slot (A §2.4), the rule the firewall rows follow (firewall.instance_port)."""
     saved = (params or {}).get(p.name)
-    if saved is None:
-        return inst.subst(str(p.default_template or p.default))
-    raw = str(saved)
-    if inst.slot and _PORT_RE.fullmatch(p.default_template or str(p.default)) and raw.strip().isdigit():
+    raw = str(p.default_template or p.default) if saved is None else str(saved)
+    if saved is not None and inst.slot and _PORT_RE.fullmatch(p.default_template or str(p.default)) \
+            and raw.strip().isdigit():
         return str(slot_port(int(raw), inst.slot))
-    return inst.subst(raw)
+    raw = inst.subst(raw)
+    if "{rid}" in raw:                               # W3-1: never a socket path without this instance's radio
+        raise CommandError(f"{p.name}: needs this instance's radio (no radio id given)")
+    return raw
 
 
 _RFLOG = re.compile(r"\{runtime\}/logs/r[1-9][0-9]?/rf-daemon\.log")

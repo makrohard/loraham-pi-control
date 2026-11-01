@@ -10,7 +10,7 @@ import signal
 import time
 from pathlib import Path
 
-from . import procident
+from . import procident, radio_start
 from .daemon_control import ALLOWED_BANDS
 from .outcomes import CompResult, Outcome
 from .service_base import ActionResult
@@ -72,9 +72,11 @@ def _targets(svc, stk, band: str, comps) -> tuple[list[dict], list[str]]:
                 src = (str(svc._paths.resolve_source(comp.source.path)) if comp.source
                        else runtime)
                 with contextlib.suppress(Exception):   # an unresolvable value: records only
+                    # stage L5 (W3): a daemon client's instance value names its band's radio, as its start renders it
+                    inst = radio_start.client_instance(svc, comp, cfg_band or comp.band)[0] or commands.SLOT0
                     instance = (opt, commands.instance_value(
                         tpl, comp, svc.stack_config(comp.id, hint), runtime, src,
-                        cfg_band or comp.band))
+                        cfg_band or comp.band, inst=inst))
             if comp.process.instance_arg and instance is None:
                 # The value cannot be resolved, so the matcher cannot scope this component: a process of
                 # its spec that runs is a gap, not a non-target (G2-B2 F3).

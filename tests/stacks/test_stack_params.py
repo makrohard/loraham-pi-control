@@ -640,7 +640,8 @@ def test_qualified_identity_valid_reaches_start_seam(tmp_path, monkeypatch):    
 
 def test_unique_name_stack_stays_bare_no_regression(tmp_path):                   # (7)
     svc = _svc(tmp_path)
-    rows = svc.config_param_fields("voice")                                      # voice: unique names
+    # kiss: unique names (stage L5 gave voice and voice-cli the same two socket params, so voice now scopes them)
+    rows = svc.config_param_fields("kiss")
     assert rows
     for r in rows:
         assert "__" not in r["field"] and "." not in r["key"]                    # bare fields/keys preserved

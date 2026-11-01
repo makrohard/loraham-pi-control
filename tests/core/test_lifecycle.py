@@ -293,6 +293,31 @@ def test_tx_test_confirms_one_frame(tmp_path, monkeypatch):
     assert res.ok and res.txok_before == 0 and res.txok_after == 1
 
 
+def test_tx_test_sends_and_counts_on_the_bands_radio(tmp_path, monkeypatch):
+    # Stage L5 (W3): with a hardware list the one frame goes to 433's radio's data socket and TXOK is read from
+    # that radio's CONF socket; the 0.13.x band sockets are never touched.
+    import radios_fixture
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    radios_fixture.write(tmp_path)
+    seen = []
+
+    class StatefulUnix:
+        txok = 0
+        def request(self, path, payload, timeout, max_bytes):
+            seen.append(("request", path))
+            return f"STATS UPTIME=1 RADIO=READY TXOK={self.txok}\n".encode()
+        def send(self, path, payload, timeout):
+            seen.append(("send", path))
+            self.txok += 1
+
+    system = FakeSystem().system
+    system.unix = StatefulUnix()
+    res = _life(system, tmp_path).run_daemon_tx_test("433", "LHPC TX TEST")
+    assert res.ok and (res.txok_before, res.txok_after) == (0, 1)
+    assert ("send", "/tmp/lora-r1.sock") in seen
+    assert {p for _k, p in seen} == {"/tmp/lora-r1.sock", "/tmp/loraconf-r1.sock"}, seen
+
+
 # --- quiet-step announce preamble + per-step-kind log discoverability ---------------
 
 

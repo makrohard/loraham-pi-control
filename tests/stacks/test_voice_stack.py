@@ -6,6 +6,7 @@ and the start/plan/status surfaces agree about which of the two is real here."""
 from __future__ import annotations
 
 import pytest
+import radios_fixture
 
 from lhpc.core.lifecycle import Lifecycle
 from lhpc.core.outcomes import Outcome
@@ -31,8 +32,9 @@ def _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False, patch_reqs=True
     stays live."""
     STATUS = b"STATUS RADIO=READY TXMODE=DIRECT\n"
     paths = {"/usr/include/gtk-3.0/gtk/gtk.h"} if desktop else set()
-    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": STATUS,
-                                   "/tmp/loraconf868.sock": STATUS},
+    radios_fixture.write(tmp_path)                          # stage L5: voice is its band's radio's client
+    sys = FakeSystem(unix_replies=radios_fixture.by_radio({"/tmp/loraconf433.sock": STATUS,
+                                                           "/tmp/loraconf868.sock": STATUS}),
                      paths=paths).system
     seed_built(tmp_path, "loraham-daemon/loraham_daemon/loraham_daemon", "RadioLib/build/libRadioLib.a",
                 "LoRaHAM_Voice/loraham_voice_cli",

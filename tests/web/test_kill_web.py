@@ -1,5 +1,7 @@
 """T-K5 (A §2.12): the whole-stack Kill shows only on a failed, timed-out or refused stop; the
 component Kill sits beside each component's Stop; the confirm names the processes."""
+import radios_fixture
+
 from lhpc.core import commands
 from lhpc.core.config import Config
 from lhpc.core.services import ControllerService
@@ -8,11 +10,13 @@ from lhpc.core.services import ControllerService
 def _kiss_argv(tmp_path):
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
+    radios_fixture.write(tmp_path)                 # stage L5: the TNC is r1's client, on the web app's root too
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     comp = svc.stack("kiss").component("loraham-kiss-tnc")
     return commands.expand_argv(comp.run_argv, comp, svc.stack_config(comp.id, "433"),
                                 Config().operator, str(tmp_path),
-                                str(svc._paths.resolve_source(comp.source.path)), "433")
+                                str(svc._paths.resolve_source(comp.source.path)), "433",
+                                inst=commands.Instance(0, radios_fixture.RID["433"]))
 
 
 def test_the_component_kill_sits_beside_each_stop_and_no_stack_kill_shows(web):

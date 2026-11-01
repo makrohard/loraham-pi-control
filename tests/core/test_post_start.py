@@ -87,9 +87,10 @@ def _kiss_svc(tmp_path):
     from lhpc.core.probes.backends import FakeSystem, Listener
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
     (tmp_path / "src" / "loraham-kiss-tnc" / "loraham-kiss-tnc").write_text("#bin")  # built
+    radios_fixture.write(tmp_path)                         # stage L5: the TNC is r1's (433) client
     sys = FakeSystem(listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8001, inode=1)],
-                     unix_replies={"/tmp/loraconf433.sock":
-                                   b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system
+                     unix_replies=radios_fixture.by_radio({"/tmp/loraconf433.sock":
+                                                           b"STATUS RADIO=READY TXMODE=MANAGED\n"})).system
     return ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
 
 
@@ -1650,6 +1651,7 @@ def test_poststart_synchronous_required_run_stays_verified(tmp_path, monkeypatch
 def _band_svc(set_call, tmp_path):
     """A service whose lifecycle spawns real processes, so ownership records are genuinely
     verifiable (`_binding_for` demands a live, identity-matching main)."""
+    radios_fixture.write(tmp_path)                         # stage L5: clients run on their band's radio
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     set_call(svc)
     return svc
@@ -1847,7 +1849,8 @@ def test_dependent_not_started_when_daemon_unready(tmp_path):
 
 def _svc_with_daemon(tmp_path, status):
     from lhpc.core.probes.backends import FakeSystem
-    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": status}).system
+    radios_fixture.write(tmp_path)                         # stage L5: the daemon of 433 is r1's
+    sys = FakeSystem(unix_replies=radios_fixture.by_radio({"/tmp/loraconf433.sock": status})).system
     return ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
 
 
@@ -2026,8 +2029,9 @@ def test_running_band_marker_failure_downgrades_to_unverified(tmp_path, monkeypa
     # voice requires the daemon in DIRECT, so the fixture daemon must already report DIRECT
     # for the start to clear the TX-mode gate and reach the running-band marker step.
     DIRECT = b"STATUS RADIO=READY TXMODE=DIRECT\n"
-    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": DIRECT,
-                                   "/tmp/loraconf868.sock": DIRECT}).system
+    radios_fixture.write(tmp_path)                         # stage L5: voice is its band's radio's client
+    sys = FakeSystem(unix_replies=radios_fixture.by_radio({"/tmp/loraconf433.sock": DIRECT,
+                                                           "/tmp/loraconf868.sock": DIRECT})).system
     (tmp_path / "src" / "LoRaHAM_Voice").mkdir(parents=True)
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)

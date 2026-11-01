@@ -1509,8 +1509,12 @@ class LifecycleOpsMixin:
             # required post-start log, and the detached post runner's log all get a
             # copy-pasteable `[log] <comp> -> tail -f <path>` line the moment they exist.
             announcer = self._log_announcer(comp.id, out)
+            inst, why = radio_start.client_instance(self, comp, cfg_band)
+            if why:
+                record(comp, stack, Outcome.BLOCKED, why)
+                continue
             res = life.start(stack, comp, comp_cfg, band=cfg_band,
-                             requested_target=_req_target, start_scope=_req_scope)
+                             requested_target=_req_target, start_scope=_req_scope, inst=inst)
             if res.log_path:
                 announcer(f"start-{comp.id}", res.log_path)
             if not res.ok:
@@ -2783,9 +2787,10 @@ class LifecycleOpsMixin:
         params = dict(self.stack_config(comp.id, band))
         run_over, _file_over = self._materialize_inherited_identity(sid, hint)
         params.update(self._overrides_for_comp(sid, "run", run_over, comp.id))
-        cmd = commands.display_command(comp, op, runtime, src, band, params)
+        inst, _why = radio_start.client_instance(self, comp, band or hint or comp.band)   # W3: the radio's sockets
+        cmd = commands.display_command(comp, op, runtime, src, band, params, inst=inst) if inst else ""
         if not cmd:
-            return "(no run command)"
+            return f"(no run command: {_why})" if _why else "(no run command)"
         cwd = (commands._paths_subst(comp.run_cwd, runtime, src, "")
                if comp.run_cwd else src)
         # Restore the terminal afterwards. A full-screen TUI (NomadNet) puts the tty
@@ -3317,20 +3322,20 @@ class LifecycleOpsMixin:
         """Read-only STATUS/STATS for a band — passive, never touches the radio.
 
         `.channel` is empty by design; ask for channel data explicitly (see below)."""
-        return daemon_control.read_view(self._system, band)
+        return daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
 
     def daemon_channel(self, band: str) -> dict[str, str]:
         """CHANNEL fields WITHOUT a CAD scan — safe to call on a timer."""
-        return daemon_control.read_channel_passive(self._system, band)
+        return daemon_control.read_channel_passive(self._system, radio_start.daemon_key(self, band))
 
     def daemon_channel_scan(self, band: str) -> dict[str, str]:
         """CHANNEL fields WITH a real CAD scan — DESTRUCTIVE to a frame in flight.
 
         Operator-invoked only (`lhpc daemon <band>`, the console's "Scan now"). Never on a timer."""
-        return daemon_control.read_channel_scan(self._system, band)
+        return daemon_control.read_channel_scan(self._system, radio_start.daemon_key(self, band))
 
     def daemon_socket_line(self, band: str) -> str:
         """One raw, bounded, sanitised CONF-socket status line for the live 'View Socket' monitor
         ('' when the band is invalid or the socket is unreachable). Read-only, fail-closed."""
-        return daemon_control.read_socket_line(self._system, band)
+        return daemon_control.read_socket_line(self._system, radio_start.daemon_key(self, band))
 

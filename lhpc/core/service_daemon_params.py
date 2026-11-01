@@ -6,7 +6,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from . import daemon_control, runtime_fs
+from . import daemon_control, radio_start, runtime_fs
 from .paths import PathContainmentError
 from .service_base import ActionResult
 from .snapshot_memo import invalidates_snapshot
@@ -20,18 +20,18 @@ class DaemonParamsMixin:
         malformed/timed-out, is a failure that gates every dependent — never a
         warning-success. Skips the SET only when the mode already matches."""
         want = tx.upper()
-        view = daemon_control.read_view(self._system, band)
+        view = daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
         if not view.ready:
             state = view.radio_state or ("unreachable" if not view.reachable else "unknown")
             return False, f"{band} radio not READY for TX-mode set (RADIO={state})"
         if view.status.get("TXMODE", "").upper() == want:
             return True, f"TXMODE already {want}"
-        ok, _confirmed, detail = daemon_control.apply_set(self._system, band, "TXMODE", tx)
+        ok, _confirmed, detail = daemon_control.apply_set(self._system, radio_start.daemon_key(self, band), "TXMODE", tx)
         if not ok:
             return False, f"SET TXMODE={want} rejected: {detail}"
         waited = 0.0
         while True:                              # bounded read-only readback
-            v = daemon_control.read_view(self._system, band)
+            v = daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
             got = v.status.get("TXMODE", "").upper() if v.reachable else ""
             if got == want:
                 return True, f"SET TXMODE={want} confirmed by readback"
@@ -55,18 +55,18 @@ class DaemonParamsMixin:
         dependent) because the daemon still does LBT at its current value. Skips the SET when
         the value already matches."""
         want = str(want).strip()
-        view = daemon_control.read_view(self._system, band)
+        view = daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
         if not view.ready:
             state = view.radio_state or ("unreachable" if not view.reachable else "unknown")
             return False, f"{band} radio not READY for {key} set (RADIO={state})"
         if self._cadidle_eq(view.status.get(key), want):
             return True, f"{key} already {want}ms"
-        ok, _confirmed, detail = daemon_control.apply_set(self._system, band, key, want)
+        ok, _confirmed, detail = daemon_control.apply_set(self._system, radio_start.daemon_key(self, band), key, want)
         if not ok:
             return False, f"SET {key}={want} rejected: {detail}"
         waited = 0.0
         while True:                              # bounded read-only readback
-            v = daemon_control.read_view(self._system, band)
+            v = daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
             got = v.status.get(key) if v.reachable else None
             if self._cadidle_eq(got, want):
                 return True, f"SET {key}={want}ms confirmed by readback"
@@ -85,7 +85,7 @@ class DaemonParamsMixin:
             return self._apply_tx_mode(band, value)
         if key in ("CADWAIT", "CADIDLE"):
             return self._apply_conf_param(band, key, value)
-        view = daemon_control.read_view(self._system, band)
+        view = daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
         if not view.ready:
             state = view.radio_state or ("unreachable" if not view.reachable else "unknown")
             return False, f"{band} radio not READY for {key} (RADIO={state})"
@@ -95,7 +95,7 @@ class DaemonParamsMixin:
             err = self._live_power_error(band, value, view.status)
             if err:
                 return False, err
-        ok, _confirmed, detail = daemon_control.apply_set(self._system, band, key, value)
+        ok, _confirmed, detail = daemon_control.apply_set(self._system, radio_start.daemon_key(self, band), key, value)
         return ok, detail
 
     def _live_power_error(self, band: str, value: str, status: dict) -> str | None:
@@ -165,7 +165,7 @@ class DaemonParamsMixin:
           mismatch    a sentence when saved and running disagree, else ""
         `view` is an already-read DaemonView (passive STATUS); read here when absent."""
         if view is None:
-            view = daemon_control.read_view(self._system, band)
+            view = daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
         status = view.status if view.reachable else {}
         saved = self.high_power_for_band(band)
         live = daemon_control.high_power_from_status(status) if view.reachable else None
@@ -310,7 +310,7 @@ class DaemonParamsMixin:
             # saved hardware setup (which may have changed since the process started).
             err = daemon_control.validate_set(key, value)              # syntax, union range
             if not err:
-                view = daemon_control.read_view(self._system, band)
+                view = daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
                 err = (self._live_power_error(band, value, view.status) if view.reachable
                        else f"POWER={value}: daemon not serving {band} MHz — a live POWER is "
                             "checked against the running daemon; start it first")
@@ -331,7 +331,7 @@ class DaemonParamsMixin:
                 details=[note, "It does not transmit by itself."],
                 next_commands=[f"lhpc daemon {band} --set {key}={value} --yes"],
                 data={"changes": 1, "confirmable": confirmable})
-        ok, confirmed, detail = daemon_control.apply_set(self._system, band, key, value)
+        ok, confirmed, detail = daemon_control.apply_set(self._system, radio_start.daemon_key(self, band), key, value)
         # Truthful outcome: only a read-back-confirmed SET is "applied"; an unconfirmable
         # radio param that was accepted is "SENT (unconfirmed)", never "applied".
         if not ok:
@@ -377,7 +377,7 @@ class DaemonParamsMixin:
         # high-power switch is explicit authorisation, so knowingly starting the app without it
         # would not be truthful configuration. Every other radio-param failure stays warn-only.
         if str(applies.get("POWER", "")).strip() == "20":
-            view = daemon_control.read_view(self._system, band)
+            view = daemon_control.read_view(self._system, radio_start.daemon_key(self, band))
             err = (self._live_power_error(band, "20", view.status) if view.reachable
                    else f"daemon not serving {band} MHz")
             if err:
@@ -508,7 +508,7 @@ class DaemonParamsMixin:
                     return ActionResult(False, f"Cannot apply {target}'s daemon parameters on {b} MHz: "
                                                f"that band serves {', '.join(others)}",
                                         data={"band": b, "in_use_by": others, "persisted": True})
-                if not daemon_control.read_view(self._system, b).reachable:
+                if not daemon_control.read_view(self._system, radio_start.daemon_key(self, b)).reachable:
                     return ActionResult(False, f"daemon not serving {b} MHz — start it first",
                                         data={"band": b, "persisted": True})
                 applies = self._daemon_param_applies(sid, b)

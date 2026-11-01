@@ -47,6 +47,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import radios_fixture
 
 from lhpc.core import boot_restore, reslock, restart_required
 from lhpc.core import config as cfgmod
@@ -442,7 +443,8 @@ def kiss_box(tmp_path, monkeypatch, set_call):
         root = Path(root or tmp_path)
         (root / "src" / "loraham-kiss-tnc").mkdir(parents=True)
         (root / "src" / "loraham-kiss-tnc" / "loraham-kiss-tnc").write_text("#bin")
-        fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": _READY})
+        radios_fixture.write(root)                           # stage L5: the TNC is the 433 radio r1's client
+        fake = FakeSystem(unix_replies=radios_fixture.by_radio({"/tmp/loraconf433.sock": _READY}))
         fake.listeners = _TncEndpoint(str(root))
         svc = ControllerService(system=fake.system, paths=Paths(runtime_root=root))
         seeded = svc.bootstrap(apply=True)

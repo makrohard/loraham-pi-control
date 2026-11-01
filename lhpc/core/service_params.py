@@ -13,6 +13,7 @@ from . import config_save, daemon_control, listeners, runtime_fs, spi_mode, vali
 from . import meshcore_identity as _meshcore_identity
 from . import meshcore_mode as _meshcore_mode
 from . import openhop_store as _openhop_store
+from . import radio_start as _radio_start
 from . import restart_required as _rr
 from . import reticulum_interfaces as _reticulum_interfaces
 from . import rflog as _rflog
@@ -2120,6 +2121,10 @@ class ParamsConfigMixin:
         # param is `omit_if_empty`, so the key then vanishes rather than being written blank.
         gps_values = self._gps_config_values(target)
 
+        # W3-13: a client's socket keys name its band's radio; unresolved, its daemon dependency refuses the start
+        _rids: dict = {}
+        _rid = lambda b: _rids.setdefault(b, getattr(_radio_start.band_rid(self, b), "rid", "") or "{rid}")  # noqa: E731
+
         def subst(text: str) -> str:
             out = (text.replace("{callsign}", call)
                        .replace("{runtime}", runtime)
@@ -2217,6 +2222,7 @@ class ParamsConfigMixin:
                             target, "run", c.id, _rflog.RF_LOG_PARAM, band)))
                     continue
                 raw = over.get(p.name, stored.get(p.name, p.default))
+                raw = raw.replace("{rid}", _rid(c.band or cfg_band or band)) if isinstance(raw, str) else raw
                 if c.id == _web_client.DAEMON and p.key == "RootPath":     # Track F C3
                     raw = _web_client.current_root(raw, runtime, p.default)
                 try:

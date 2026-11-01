@@ -12,6 +12,7 @@ import re
 import subprocess
 
 import pytest
+import radios_fixture
 
 from lhpc.core import lifecycle as lifecycle_mod
 from lhpc.core.paths import Paths
@@ -244,7 +245,8 @@ def test_direct_component_start_records_component_scope(tmp_path, monkeypatch, s
     # The SAME public operation stamps its original target/scope on every launch it causes;
     # a direct main-component start is scope "component", a stack start scope "stack".
     reply = b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90\n"
-    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})   # daemon already serving
+    radios_fixture.write(tmp_path)                                    # stage L5: the TNC is r1's client
+    fake = FakeSystem(unix_replies=radios_fixture.by_radio({"/tmp/loraconf433.sock": reply}))   # daemon serving
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)       # kiss installed
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     set_call(svc)
@@ -255,7 +257,7 @@ def test_direct_component_start_records_component_scope(tmp_path, monkeypatch, s
     monkeypatch.setattr(
         lifecycle_mod.Lifecycle, "start",
         lambda self, stack, comp, params=None, band="", *, requested_target="",
-               start_scope="":
+               start_scope="", inst=None:
         (captured.setdefault(comp.id, []).append((requested_target, start_scope)) or
          lifecycle_mod.StartLaunch(True, "")))
     assert not svc.start("loraham-kiss-tnc", apply=True).ok  # the stubbed spawn opens no endpoint: unverified
@@ -1021,7 +1023,8 @@ def test_web_log_source_never_aliases(tmp_path):
 def _serving_svc(set_call, tmp_path, monkeypatch, *, hardware=False, sockets=("/tmp/loraconf433.sock",)):
     """A start-capable service: daemon already serving on `sockets`, kiss installed/built."""
     reply = b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90\n"
-    fake = FakeSystem(unix_replies={s: reply for s in sockets})
+    radios_fixture.write(tmp_path)                                    # stage L5: the TNC is its radio's client
+    fake = FakeSystem(unix_replies=radios_fixture.by_radio({s: reply for s in sockets}))
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True, exist_ok=True)
     if hardware:
         (tmp_path / "config").mkdir(parents=True, exist_ok=True)

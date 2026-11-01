@@ -12,9 +12,16 @@ RT, SRC = "/rt", "/rt/src/x"
 SPECS = [c for st in load_manifest() for c in st.components if c.process is not None]
 
 
+def _inst0(comp):
+    """Slot 0's instance as a start renders it (radio_start.client_instance): a daemon client's is its band's radio's
+    (here r1); any other component's has no radio."""
+    rid = any("{rid}" in str(p.default or "") for p in comp.run_params)
+    return commands.Instance(0, "r1") if rid else commands.SLOT0
+
+
 def _argv(comp):
     """The real argv of the process the spec matches, at slot 0 with default params."""
-    argv = commands.expand_argv(comp.run_argv, comp, {}, Config().operator, RT, SRC, comp.band)
+    argv = commands.expand_argv(comp.run_argv, comp, {}, Config().operator, RT, SRC, comp.band, inst=_inst0(comp))
     if comp.id == "meshcore-webui":
         # meshcore-webui-run.sh:68 execs `"$venv/bin/python" -m uvicorn app.main:app --host
         # "$bind" --port "$port"`, with bind/port the wrapper's last two arguments.
@@ -43,7 +50,7 @@ def test_every_spec_carries_an_instance_arg_or_is_named_exempt():
 @pytest.mark.parametrize("comp", [c for c in SPECS if c.process.instance_arg], ids=lambda c: c.id)
 def test_the_instance_token_matches_its_own_slot0_argv_only(comp):
     opt, tpl = comp.process.instance_arg
-    value = commands.instance_value(tpl, comp, {}, RT, SRC, comp.band)
+    value = commands.instance_value(tpl, comp, {}, RT, SRC, comp.band, inst=_inst0(comp))
     argv = _argv(comp)
     assert has_instance_token(argv, opt, value), (opt, value, argv)
     assert matches(comp.process, argv, (opt, value))
@@ -85,8 +92,9 @@ RID_AT_L5 = {"loraham-chat", "loraham-kiss-tnc"}
 L8_MC = {"meshcom-gps-relay"}
 # One stack has at most one instance per radio (I1), so its instances are on distinct radios: slots 1–7 on
 # seven radios whose ids prefix each other (r1/r12, r2/r21, r9/r99), and slot 0 (today's names, any radio).
+# Slot 0 is on its own radio r4 (stage L5: a daemon client's slot 0 names its radio; other components ignore it).
 INSTANCES = [commands.Instance(k, rid) for k, rid in zip(range(1, 8), ("r1", "r12", "r2", "r21", "r9", "r99", "r3"))] \
-    + [commands.SLOT0]
+    + [commands.Instance(0, "r4")]
 
 
 def _slot_argv(comp, inst):
@@ -103,9 +111,10 @@ def test_every_instance_named_spec_is_classified_for_l4():
     assert named == SLOT_FOLLOWING | RID_AT_L5 | L8_MC
 
 
-@pytest.mark.parametrize("comp", [c for c in SPECS if c.id in SLOT_FOLLOWING], ids=lambda c: c.id)
+@pytest.mark.parametrize("comp", [c for c in SPECS if c.id in SLOT_FOLLOWING | RID_AT_L5], ids=lambda c: c.id)
 def test_each_slot_k_token_matches_its_own_instance_only(comp):
-    # every instance's token is in its own argv and in no other instance's: other slots, and r1 vs r12
+    # every instance's token is in its own argv and in no other instance's: other slots, and r1 vs r12; the
+    # rid-named specs (chat, KISS TNC) by their radio's daemon socket since stage L5 (W3)
     opt, tpl = comp.process.instance_arg
     argvs = {(i.slot, i.rid): _slot_argv(comp, i) for i in INSTANCES}
     for i in INSTANCES:
@@ -121,7 +130,7 @@ def test_the_kiss_pty_link_follows_the_instance():
     # and not the TNC (whose config file name also starts with loraham_kiss).
     comp = next(c for c in SPECS if c.id == "loraham-kiss-serial")
     links = {(i.slot, i.rid): next(t for t in _slot_argv(comp, i) if t.startswith("PTY,link=")) for i in INSTANCES}
-    assert links[(0, "")] == f"PTY,link={RT}/state/loraham_kiss,raw,echo=0,waitslave,mode=666"
+    assert links[(0, "r4")] == f"PTY,link={RT}/state/loraham_kiss,raw,echo=0,waitslave,mode=666"
     assert links[(3, "r2")] == f"PTY,link={RT}/state/r2/loraham_kiss,raw,echo=0,waitslave,mode=666"
     assert len(set(links.values())) == len(INSTANCES)
     tnc = next(c for c in SPECS if c.id == "loraham-kiss-tnc")

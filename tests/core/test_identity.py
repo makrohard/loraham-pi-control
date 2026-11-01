@@ -7,6 +7,8 @@ resolution path (`identity_resolution`) that every consumer uses."""
 from __future__ import annotations
 
 import pytest
+import radios_fixture
+
 from lhpc.core import validators as V
 from lhpc.core import restart_required
 from lhpc.core.paths import Paths
@@ -1367,6 +1369,7 @@ def test_the_launch_carries_the_inherited_callsign(tmp_path, monkeypatch):
     # is launched WITH the inherited callsign.
     from lhpc.core.lifecycle import Lifecycle, StartLaunch
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)        # the TNC graywolf runs through
+    radios_fixture.write(tmp_path)                                     # stage L5: the TNC is its radio's client
     svc = _svc(tmp_path)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     monkeypatch.setattr(type(svc), "is_built", lambda self, c: True)
