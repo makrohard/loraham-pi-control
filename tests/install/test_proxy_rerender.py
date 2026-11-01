@@ -344,3 +344,77 @@ def test_a_webserver_evidence_file_that_breaks_its_reader_keeps_the_marker_owed(
     assert proxy_rerender.after_update(paths) == (False, MISSING)        # the update's in-process half
     assert main(["_webserver-rerender", "--root", str(tmp_path)]) == 1   # the new interpreter's half
     assert proxy_rerender.pending(paths) == MISSING
+
+
+# ---- B3-D25: the exhaustive state table (b3-r19/D25-STATE-TABLE): every PID input class x every evidence input class,
+# through both public paths; the marker is cleared only when both are ABSENT ---------------------------------------
+
+_SNAP = {"console": {}, "proxies": []}
+
+
+def _pid(paths, cls):
+    pid = paths.under(*webserver.NGINX_PID)
+    if cls != "P2":
+        pid.parent.mkdir(parents=True, exist_ok=True)
+    if cls == "P3":
+        pid.write_text("4242\n")
+    elif cls == "P4":
+        pid.write_text("not-a-pid\n")
+    elif cls == "P5":
+        pid.write_text("4242\n")
+        pid.chmod(0)
+    elif cls == "P6":
+        pid.mkdir()
+    elif cls == "P7":
+        real = pid.parent / "elsewhere.pid"
+        real.write_text("4242\n")
+        pid.symlink_to(real)
+    elif cls == "P8":                               # the pid file's directory cannot be searched: no stat at all
+        pid.write_text("4242\n")
+        pid.parent.chmod(0)
+
+
+def _evidence(paths, cls):
+    import json as _json
+    ev = paths.under(*webserver.EVIDENCE)
+    ev.parent.mkdir(parents=True, exist_ok=True)
+    body = {"E2": _json.dumps({"schema": 1, "applied_snapshot": _SNAP}),
+            "E3": _json.dumps({"schema": 1}),
+            "E4": _json.dumps({"schema": 1, "applied_snapshot": _SNAP}),
+            "E5": "not json {",
+            "E6": "[" * 200000,
+            "E7": "[1, 2]",
+            "E8": _json.dumps({"schema": 0, "applied_snapshot": _SNAP}),
+            "E9": _json.dumps({"schema": 1, "applied_snapshot": {"console": "x", "proxies": []}}),
+            "E10": _json.dumps({"schema": 1, "pad": "x" * (1 << 20), "applied_snapshot": _SNAP})}.get(cls)
+    if body is not None:
+        ev.write_text(body)
+    if cls == "E4":
+        ev.chmod(0)
+
+
+PID_CLASSES = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"]
+EV_CLASSES = ["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9", "E10"]
+CLEARS = {("P1", "E1"), ("P1", "E3"), ("P2", "E1"), ("P2", "E3")}
+
+
+@pytest.mark.parametrize("ev", EV_CLASSES)
+@pytest.mark.parametrize("pid", PID_CLASSES)
+def test_the_marker_is_cleared_only_when_pid_and_evidence_are_both_absent(tmp_path, capsys, request, pid, ev):
+    """B3-D25: with no deployed nginx config, the update's half (after_update, in-process) and the new interpreter's
+    half (the hidden verb) clear the marker only when the nginx pid file and the webserver evidence are both ABSENT;
+    every PRESENT or UNKNOWN keeps it (the Apply stays owed)."""
+    from lhpc.adapters.cli.main import main
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    request.addfinalizer(lambda: [p.chmod(0o700) for p in (tmp_path / "state" / "run", tmp_path / "state")
+                                  if p.is_dir() and not p.is_symlink()])
+    _pid(paths, pid)
+    _evidence(paths, ev)
+    clears = (pid, ev) in CLEARS
+    assert proxy_rerender.mark(paths) == ""
+    assert proxy_rerender.after_update(paths) == ((True, "no deployed nginx config") if clears else (False, MISSING))
+    assert proxy_rerender.pending(paths) == (None if clears else MISSING)
+    assert proxy_rerender.mark(paths) == ""
+    assert main(["_webserver-rerender", "--root", str(tmp_path)]) == (0 if clears else 1)
+    assert proxy_rerender.pending(paths) == (None if clears else MISSING)

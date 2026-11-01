@@ -74,25 +74,55 @@ def _keep(paths: Paths, why: str) -> tuple[bool, str]:
     return False, why
 
 
-# A running nginx can still serve the old config after its file is gone: owed while nginx may run (B3-D22, B3-D22a,
-# B3-D22b).
+# A running nginx can still serve the old config after its file is gone: owed unless nginx's pid file and the applied
+# record are both proven absent (B3-D22, B3-D22a, B3-D22b, B3-D24, B3-D25).
 _MISSING = "deployed nginx config is missing — Apply the webserver configuration"
 
 
+def _pid_state(paths: Paths) -> str:
+    """nginx's pid file, strictly: "present" (a regular readable file holding a decimal pid), "absent" (ENOENT on the
+    leaf or its directory) or "unknown" (anything else: unreadable, not regular, a symlink, an unsafe parent, no pid)."""
+    from .webserver import NGINX_PID
+    try:
+        raw = runtime_fs.read_text_regular(paths, paths.under(*NGINX_PID), max_bytes=4096)
+    except FileNotFoundError:
+        return "absent"
+    except Exception:
+        return "unknown"
+    return "present" if raw.strip().isdigit() else "unknown"
+
+
+def _evidence_state(paths: Paths) -> str:
+    """The webserver evidence's applied record, strictly: "present" (schema 1 with a well-formed applied_snapshot),
+    "absent" (no file, or schema 1 without an applied_snapshot: verified, never applied — webserver.py writes that) or
+    "unknown" (unreadable, not JSON, a decode that raises, another schema, a malformed snapshot, over the cap).
+    `read_applied` folds every unknown into {}, which reads as "never applied"; this probe does not."""
+    from .webserver import EVIDENCE, EVIDENCE_SCHEMA
+    try:
+        raw = runtime_fs.read_text_regular(paths, paths.under(*EVIDENCE))
+    except FileNotFoundError:
+        return "absent"
+    except Exception:
+        return "unknown"
+    try:
+        data = json.loads(raw)
+    except Exception:                                   # ValueError, or RecursionError from deep nesting
+        return "unknown"
+    if not isinstance(data, dict) or data.get("schema") != EVIDENCE_SCHEMA:
+        return "unknown"
+    snap = data.get("applied_snapshot")
+    if snap is None:
+        return "absent"
+    if isinstance(snap, dict) and isinstance(snap.get("console"), dict) and isinstance(snap.get("proxies"), list):
+        return "present"
+    return "unknown"
+
+
 def _nginx_may_run(paths: Paths) -> bool:
-    """Whether an nginx may still serve an old config: its pid file stands, or a webserver Apply was recorded. A box
-    that never set up nginx (the loopback console) has neither. An installed nginx unit file is no sign: every update
-    writes the whole managed unit set, lhpc-nginx.service included (B3-D22b)."""
-    from .webserver import NGINX_PID, read_applied
-    try:
-        if runtime_fs.stat_leaf_nofollow(paths, paths.under(*NGINX_PID)) is not None:
-            return True
-    except (OSError, PathContainmentError):
-        return True                                     # cannot tell: fail closed
-    try:
-        return bool(read_applied(paths))
-    except Exception:                                   # e.g. RecursionError from a deeply nested evidence file
-        return True                                     # cannot tell: fail closed, the Apply stays owed (B3-D24)
+    """Whether an nginx may still serve an old config. Only when nginx's pid file AND the applied record are both
+    proven absent can nothing serve one (a box that never set up nginx); PRESENT or UNKNOWN keeps the Apply owed
+    (B3-D25). An installed nginx unit file is no sign: every update writes the whole managed unit set (B3-D22b)."""
+    return not (_pid_state(paths) == "absent" and _evidence_state(paths) == "absent")
 
 
 def _missing(paths: Paths) -> tuple[bool, str]:
