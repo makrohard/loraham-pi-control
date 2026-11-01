@@ -1,4 +1,4 @@
-"""T-L5 / T-V2 at the L5 boundary (PROOF r64 :277, A §2.3 :221, A :437; B4-TABLES-v2 row S3).
+"""T-L5 / T-V2 at the L5 boundary (PROOF T-L5; plan A §2.3 process match rule and the L5 stage row; B4-TABLES-v2 row S3).
 
 Every daemon client starts against the `--id` daemon of its radio with its socket arguments: the client's
 resolved argv carries its instance's socket paths, each under its own option, as two whole adjacent tokens.

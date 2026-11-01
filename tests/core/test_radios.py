@@ -387,7 +387,7 @@ def test_q3_a_serial_shorter_than_eight_characters_is_refused():
 
 
 def test_q4_the_serialless_stick_needs_its_port_and_a_serial_stick_has_none():
-    """Q4: the BOUND check after READY compares `port:<stored port>` (A:170-176)."""
+    """Q4: the BOUND check after READY compares `port:<stored port>` (plan A §2.2, F1: the three-way check after READY)."""
     assert _reasons([_stick("r1")])
     assert _reasons([_stick("r1", "ABCDEFGH", port="1-1.3")])
     assert _reasons([_stick("r1", port="1-1.3")]) == []
@@ -444,3 +444,39 @@ def test_q10_a_trailing_newline_is_no_part_of_a_valid_id_or_name(field, value):
 
 def test_q10_a_trailing_newline_is_no_part_of_a_bus_port():
     assert _reasons([_stick("r1", port="1-1.3\n")])
+
+
+# ---- every reader of a file, the same classes (QUALITY rule 6: the inventory of Q2/Q9) ---------------
+# The readers: radios.load (config/radios.toml) and radio_daemon.old_config_state (config/radios.toml by lstat,
+# config/local.toml by read and parse). Each class below is run against each reader that reads that file.
+
+def test_q9_class_a_non_utf8_hardware_list_is_invalid_not_an_exception(tmp_path):
+    rad = _radios()
+    p = tmp_path / "config" / "radios.toml"
+    p.parent.mkdir(parents=True)
+    p.write_bytes(b'[[radio]]\nid = "r1"\nname = "\xff\xfe"\nmodel = "loraham"\nband = "433"\n')
+    assert rad.load(_paths(tmp_path), MODELS).kind == rad.INVALID
+
+
+def test_q13_a_dangling_hardware_list_symlink_is_invalid_not_absent(tmp_path):
+    """Q13 (found by this inventory): a radios.toml that is a symlink to nothing is present but unreadable;
+    reading it as ABSENT ("no hardware list") is the unreadable-vs-absent collision."""
+    rad = _radios()
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "radios.toml").symlink_to(tmp_path / "nowhere.toml")
+    assert rad.load(_paths(tmp_path), MODELS).kind == rad.INVALID
+
+
+def test_q2_class_a_hardware_list_symlink_out_of_the_root_is_invalid_and_never_written(tmp_path):
+    rad = _radios()
+    root, outside = tmp_path / "root", tmp_path / "outside"
+    (root / "config").mkdir(parents=True)
+    outside.mkdir()
+    target = outside / "r.toml"
+    target.write_text('[[radio]]\nid = "r1"\nname = "A"\nmodel = "loraham"\nband = "433"\n', encoding="utf-8")
+    before = target.read_bytes()
+    (root / "config" / "radios.toml").symlink_to(target)
+    paths = resolve_paths({"LHPC_RUNTIME_ROOT": str(root)})
+    assert rad.load(paths, MODELS).kind == rad.INVALID
+    assert rad.save(paths, [_r("r1", "B")], MODELS)
+    assert target.read_bytes() == before

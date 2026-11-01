@@ -1,4 +1,4 @@
-"""OCP per radio after L5 (T-CO9, T-CO10; plan A §2.7 :292-299; B4-TABLES-v2 rows M8, M9; B4-D3a).
+"""OCP per radio after L5 (T-CO9, T-CO10; plan A §2.7, the OCP bullet; B4-TABLES-v2 rows M8, M9; B4-D3a).
 
 The value lives on the radio's row (`ocp_ma`, B4-D3a). LHPC's value is 100, or 140 with high power (W68);
 an explicit legal value wins; the value is checked against the radio's chip family; a carried band value

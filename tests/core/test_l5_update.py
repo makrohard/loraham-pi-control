@@ -1,4 +1,4 @@
-"""The update to L5 (plan A §2.2 :201 W12; B4-TABLES-v2 rows M1, M7, D14, D15; B4-D1, B4-D4).
+"""The update to L5 (plan A §2.2 "Old config", W12; B4-TABLES-v2 rows M1, M7, D14, D15; B4-D1, B4-D4).
 
 Nothing is converted: an old `config/local.toml [radio]` without `config/radios.toml` shows the banner;
 band params are carried at start resolution only (CARRY_BAND_PARAMS, B4-D1), never written; the boot-restore
@@ -154,3 +154,22 @@ def test_m1_a_hardware_list_that_cannot_be_stat_ed_means_no_banner(tmp_path):
     (root / "config").symlink_to(outside, target_is_directory=True)
     rd = _rd()
     assert rd.old_config_state(resolve_paths({"LHPC_RUNTIME_ROOT": str(root)})) is rd.Tri.NO
+
+
+@pytest.mark.parametrize("data", [b"radio = " + b"[" * 1000 + b"]" * 1000 + b"\n", b'[radio]\nmode = "\xff\xfe"\n'],
+                         ids=["deep", "non-utf8"])
+def test_m1_an_old_config_that_cannot_be_parsed_is_unknown_not_an_exception(tmp_path, data):
+    """The Q9 class for the second reader (local.toml): deep nesting and non-UTF-8 bytes are UNKNOWN."""
+    rd = _rd()
+    p = tmp_path / "config" / "local.toml"
+    p.parent.mkdir(parents=True)
+    p.write_bytes(data)
+    assert rd.old_config_state(_paths(tmp_path)) is rd.Tri.UNKNOWN
+
+
+def test_m1_a_dangling_hardware_list_symlink_means_no_banner(tmp_path):
+    """Present (lstat succeeds) though unreadable: no banner; the list itself is INVALID (Q13)."""
+    rd = _rd()
+    _cfg(tmp_path, "local.toml", '[radio]\nmode = "dual"\n')
+    (tmp_path / "config" / "radios.toml").symlink_to(tmp_path / "nowhere.toml")
+    assert rd.old_config_state(_paths(tmp_path)) is rd.Tri.NO
