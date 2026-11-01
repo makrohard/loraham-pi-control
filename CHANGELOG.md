@@ -9,12 +9,8 @@
 
 Fixed
 
-- Console: on a box with less than 1 GiB of RAM (a Pi Zero 2 W) the console's job runner runs its Build and Test
-  jobs one at a time instead of all at once, so the console keeps answering during a build.
 - Reticulum: a console Build of nomadnet, lxmd and Sideband no longer fails with "Failed building wheel
   for rns"; each installs RNS from its own clone of the pinned checkout.
-- Reticulum: nomadnet, lxmd and Sideband install and keep the node's RNS (its wheel, no clone), so a console Build no
-  longer exhausts a 512 MB box, and a newer RNS from PyPI no longer replaces it.
 - Status: where no thread can start (the demo page, a box at its thread limit) a snapshot probes its
   checkouts one after another instead of failing; the demo's own workaround is removed.
 - GPS feed: a stop signal that arrived while the feed was inside its own stop event's lock hung the
@@ -28,9 +24,32 @@ Fixed
 - Docs: after an update from 0.12.10 or older, one venv sync to `requirements.lock` (that release synced
   without it).
 
+## 0.13.7
+
+Fixed
+
+- Console: on a box with less than 1 GiB of RAM (a Pi Zero 2 W) the console's build and test jobs run one at a
+  time instead of all at once, so the console keeps answering during a build.
+- Reticulum docs: a build whose node or client no longer runs the node's wheel fails at the step after its final
+  pip install (the node has later non-pip steps), as the page now says.
+
+## 0.13.6
+
+Fixed
+
+- Reticulum: nomadnet, lxmd and Sideband install and keep the node's RNS (its wheel, no clone), so a console Build no
+  longer exhausts a 512 MB box, and a newer RNS from PyPI no longer replaces it.
+
 ## 0.13.5
 
 - MeshCom-Firmware: 05b842a28 -> 10203967d (v4.40a.spserver-24-g10203967), used by meshcom-firmware
+
+## 0.13.4
+
+Fixed
+
+- Reticulum: a console Build of nomadnet, lxmd and Sideband no longer fails with "Failed building wheel
+  for rns"; each installs RNS from its own clone of the pinned checkout.
 
 ## 0.13.3
 
