@@ -156,3 +156,28 @@ def test_the_hidden_verb_with_nothing_pending_changes_nothing(tmp_path, capsys):
     from lhpc.adapters.cli.main import main
     assert main(["_webserver-rerender", "--root", str(tmp_path)]) == 0
     assert capsys.readouterr().out.strip().endswith("nothing pending")
+
+
+def test_the_hidden_verb_keeps_the_marker_when_the_deployed_config_cannot_be_read(tmp_path, monkeypatch, capsys):
+    """The new interpreter's half (`reconcile`, reached through the hidden verb): a deployed config it cannot read
+    keeps the marker with the cause and exits 1; no Apply runs."""
+    from lhpc.adapters.cli.main import main
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "config" / "nginx").mkdir(parents=True)
+    conf = paths.under(*webserver.NGINX_CONF)
+    conf.write_text("# deployed\n")
+    assert proxy_rerender.mark(paths) == ""
+    real = runtime_fs.read_text_regular
+
+    def denied(paths_, path, *a, **k):
+        if path == conf:
+            raise PermissionError(13, "Permission denied", str(path))
+        return real(paths_, path, *a, **k)
+    monkeypatch.setattr(runtime_fs, "read_text_regular", denied)
+    rc = main(["_webserver-rerender", "--root", str(tmp_path)])
+    monkeypatch.setattr(runtime_fs, "read_text_regular", real)
+    assert rc == 1
+    assert proxy_rerender.pending(paths) == ("the deployed nginx config could not be read (PermissionError) — "
+                                             "Apply the webserver configuration")
+    assert capsys.readouterr().out.strip().endswith("Apply the webserver configuration")
+
