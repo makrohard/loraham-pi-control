@@ -37,6 +37,7 @@ _ID = re.compile(r"r([1-9][0-9]?)")
 _NAME = re.compile(r"[A-Za-z0-9 ._-]{1,12}")
 _PORT = re.compile(r"[0-9]+-[0-9]+(?:\.[0-9]+)*")      # sysfs bus-port, e.g. 1-1.3
 _SERIAL = re.compile(rf"[\x21-\x7a\x7c\x7e]{{{SERIAL_PREFIX},64}}")   # bytes 0x21-0x7E without { and } (Q3, Q5)
+_CANON_INT = re.compile(r"0|-?[1-9][0-9]*")      # a canonical decimal integer: no sign on 0, no leading zero, no "+" (Q12)
 _BASE_KEYS = ("id", "name", "model", "band", "enabled", "ce", "usb_serial", "usb_port")
 _SETTING_KEYS = ("high_power", "txmode", "cadmon", "cadrssi", "ocp_ma")
 _DP_KEYS = tuple(f"dp_{p}" for p in ALL_PARAMS)
@@ -212,10 +213,20 @@ def _setting_errors(txmode, cadmon, cadrssi, ocp, dp, chip, high_power) -> list:
         if why:
             out.append(why)
     for name, value in sorted(dp.items()):
-        why = daemon_control.validate_set(name, value, chip, high_power) if name in ALL_PARAMS else "unknown"
+        why = _dp_error(name, value, chip, high_power)
         if why:
             out.append(f"dp_{name} {value!r}: {why}")
     return out
+
+
+def _dp_error(name, value, chip, high_power) -> str:
+    """One dp value's rule: a known param; an integer param in canonical form (daemon_control.validate_set admits
+    "08" and "-090", Q12); then validate_set's own range and choice rules."""
+    if name not in ALL_PARAMS:
+        return "unknown"
+    if daemon_control.int_range(name, chip) is not None and not _CANON_INT.fullmatch(value):
+        return "not a canonical integer (no leading zero, no + sign, 0 without a sign)"
+    return daemon_control.validate_set(name, value, chip, high_power) or ""
 
 
 def _ocp_error(ocp, chip):
@@ -386,7 +397,7 @@ def radio_settings(radio, model, legacy: dict, legacy_dp: dict, defaults: dict) 
     try:
         cadrssi_i = cadrssi if type(cadrssi) is int else int(daemon_control_int(cadrssi))
     except ValueError:
-        raise ValueError(f"cadrssi from {src_cr}: {cadrssi!r} is not an integer") from None
+        raise ValueError(f"cadrssi from {src_cr}: {cadrssi!r} is not a canonical integer") from None
     hp = _flag(hipower, src_hp)
     errs = [f"{e} (from {src})" for value_args, src in (((str(txmode), None, None), src_tx), ((None, str(cadmon), None), src_cm),
                                                        ((None, None, cadrssi_i), src_cr))
@@ -409,7 +420,7 @@ def radio_settings(radio, model, legacy: dict, legacy_dp: dict, defaults: dict) 
         for name, value in values.items():
             if name in dp or name not in ALL_PARAMS:
                 continue
-            if value == "" or daemon_control.validate_set(name, value, chip, hp):
+            if value == "" or _dp_error(name, value, chip, hp):
                 notes.append(f"dp_{band}_{name}={value!r} of {stack} dropped (empty or not valid for {chip})")
                 continue
             held.setdefault(name, {})[stack] = value
@@ -423,9 +434,9 @@ def radio_settings(radio, model, legacy: dict, legacy_dp: dict, defaults: dict) 
 
 
 def daemon_control_int(value) -> int:
-    """An ASCII decimal integer string (a sign allowed), else ValueError; `int()` alone takes "1_0" and Unicode
-    digits."""
-    if isinstance(value, str) and re.fullmatch(r"[+-]?[0-9]{1,4}", value):
+    """A canonical decimal integer string ("0", "-90"; never "-0", "-090", "+5", "1_0" or Unicode digits; Q12),
+    else ValueError."""
+    if isinstance(value, str) and len(value) <= 5 and _CANON_INT.fullmatch(value):
         return int(value)
     raise ValueError(value)
 
