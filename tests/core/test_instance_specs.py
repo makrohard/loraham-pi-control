@@ -1,6 +1,6 @@
 """T-R5 at L3 (PROOF r16, A §2.3): every process spec names its instance by an exact argv token
 pair, or is in the named exemption table. Each declared token matches its component's own
-resolved slot-0 argv, and not a neighbouring value. Slots 1–7 come at L4, rids at L5."""
+resolved slot-0 argv, and not a neighbouring value. At L4 (below) slots 1–7 too; rids at L5."""
 import pytest
 
 from lhpc.core import commands
@@ -73,3 +73,59 @@ def test_voice_runs_one_instance_per_box(tmp_path, monkeypatch):
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     res = svc.start("voice", apply=True, band="868")
     assert not res.ok and "'voice' is already running on 433 MHz" in res.summary, res.summary
+
+
+# ---- T-R5 at L4: slots 1–7 (A §2.3, Q-B2-5) ---------------------------------------------------------
+# A spec named by a path or a port follows its instance's slot; a spec named by its daemon socket follows the
+# radio id, which comes at L5; MeshCom's GPS relay keeps its relative socket path until its slot-k path changes
+# together with MeshCom's run.sh and QEMU serial (L8-MC, the coordinator's decision).
+SLOT_FOLLOWING = {"graywolf", "meshtastic-gps", "meshtastic", "meshcom-bridge", "meshcom-gps", "meshcom-qemu",
+                  "meshcore-gps", "meshcore-node", "meshcore-webui", "meshcore-cli"}
+RID_AT_L5 = {"loraham-chat", "loraham-kiss-tnc"}
+L8_MC = {"meshcom-gps-relay"}
+# One stack has at most one instance per radio (I1), so its instances are on distinct radios: slots 1–7 on
+# seven radios whose ids prefix each other (r1/r12, r2/r21, r9/r99), and slot 0 (today's names, any radio).
+INSTANCES = [commands.Instance(k, rid) for k, rid in zip(range(1, 8), ("r1", "r12", "r2", "r21", "r9", "r99", "r3"))] \
+    + [commands.SLOT0]
+
+
+def _slot_argv(comp, inst):
+    real = commands.expand_argv
+    try:
+        commands.expand_argv = lambda *a, **kw: real(*a, **{**kw, "inst": inst})
+        return _argv(comp)
+    finally:
+        commands.expand_argv = real
+
+
+def test_every_instance_named_spec_is_classified_for_l4():
+    named = {c.id for c in SPECS if c.process.instance_arg}
+    assert named == SLOT_FOLLOWING | RID_AT_L5 | L8_MC
+
+
+@pytest.mark.parametrize("comp", [c for c in SPECS if c.id in SLOT_FOLLOWING], ids=lambda c: c.id)
+def test_each_slot_k_token_matches_its_own_instance_only(comp):
+    # every instance's token is in its own argv and in no other instance's: other slots, and r1 vs r12
+    opt, tpl = comp.process.instance_arg
+    argvs = {(i.slot, i.rid): _slot_argv(comp, i) for i in INSTANCES}
+    for i in INSTANCES:
+        value = commands.instance_value(tpl, comp, {}, RT, SRC, comp.band, inst=i)
+        assert matches(comp.process, argvs[(i.slot, i.rid)], (opt, value)), (i.slot, i.rid, value)
+        others = [k for k, argv in argvs.items() if k != (i.slot, i.rid) and has_instance_token(argv, opt, value)]
+        assert others == [], (i.slot, i.rid, value, others)
+
+
+def test_the_kiss_pty_link_follows_the_instance():
+    # G1-3 B2: the optional socat PTY link is a path of its instance: slot 0 keeps today's link, every slot k gets
+    # its radio's level, so two instances never share one link; the process match finds each instance's socat
+    # and not the TNC (whose config file name also starts with loraham_kiss).
+    comp = next(c for c in SPECS if c.id == "loraham-kiss-serial")
+    links = {(i.slot, i.rid): next(t for t in _slot_argv(comp, i) if t.startswith("PTY,link=")) for i in INSTANCES}
+    assert links[(0, "")] == f"PTY,link={RT}/state/loraham_kiss,raw,echo=0,waitslave,mode=666"
+    assert links[(3, "r2")] == f"PTY,link={RT}/state/r2/loraham_kiss,raw,echo=0,waitslave,mode=666"
+    assert len(set(links.values())) == len(INSTANCES)
+    tnc = next(c for c in SPECS if c.id == "loraham-kiss-tnc")
+    for inst in INSTANCES:
+        assert all(a in " ".join(_slot_argv(comp, inst)) for a in comp.process.all_args)
+    assert "loraham_kiss" in " ".join(_argv(tnc))            # the TNC names a loraham_kiss file: the check below bites
+    assert not all(a in " ".join(_argv(tnc)) for a in comp.process.all_args)

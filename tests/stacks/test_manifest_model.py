@@ -270,7 +270,7 @@ def test_meshcore_cli_wrapped_for_slot_handoff():
     root = repo_paths.REPO
     cli = _index(load_manifest())["meshcore-cli"]
     assert any(t.endswith("scripts/meshcli-run.sh") for t in cli.run_argv)
-    assert any(t.endswith("state/meshcore-cli.lock") for t in cli.run_argv)
+    assert any(t.endswith("state/{instance_dir}meshcore-cli.lock") for t in cli.run_argv)   # per instance (B3-D17)
 
     wrapper = root / "lhpc/data/scripts/meshcli-run.sh"
     body = wrapper.read_text()
@@ -280,7 +280,10 @@ def test_meshcore_cli_wrapped_for_slot_handoff():
     assert 'exec 9>"$LOCK"' in body and "flock -w 30 9" in body
 
     webui_run = (root / "lhpc/data/scripts/meshcore-webui-run.sh").read_text()
-    assert "MESHCORE_CLI_LOCK" in webui_run and "state/meshcore-cli.lock" in webui_run
+    assert "MESHCORE_CLI_LOCK" in webui_run and 'state/${inst}meshcore-cli.lock' in webui_run
+    assert 'data="$runtime/state/${inst}meshcore-webui"' in webui_run       # its data follows the instance too
+    webui = _index(load_manifest())["meshcore-webui"]
+    assert dict(webui.run_env).get("MESHCORE_INSTANCE_DIR") == "{instance_dir}"   # the same instance level
 
 
 def test_meshcli_wrapper_flock_lease_is_crash_safe(tmp_path):

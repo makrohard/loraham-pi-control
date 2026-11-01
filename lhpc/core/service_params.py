@@ -9,7 +9,7 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import config_save, daemon_control, runtime_fs, spi_mode, validators
+from . import config_save, daemon_control, listeners, runtime_fs, spi_mode, validators
 from . import meshcore_identity as _meshcore_identity
 from . import meshcore_mode as _meshcore_mode
 from . import openhop_store as _openhop_store
@@ -945,7 +945,7 @@ class ParamsConfigMixin:
             allowed=({c.id for c in owner.components if c.source and c.source.remote}
                      if is_stack_target else set()),
             stacks=self.stacks, declarers=lambda pth: [d.id for d in self._path_declarers(pth)])
-        errors += remote_errors
+        errors += remote_errors + listeners.param_conflicts(self, clean_params)   # A §2.4 inventory
         if errors:                                  # reject the whole bundle — zero mutation
             return ActionResult(False, f"Config not saved for '{target}'.", details=errors)
         _ohs_pending = _openhop_store.pending_rows(clean_params)        # gate 2 r1 F3: judged on these

@@ -104,9 +104,12 @@ def plan_exposure(cfg: WebserverConfig) -> dict:
             "no_auth": no_auth, "cleartext": cleartext}
 
 
-def plan_stack_exposure(swc, console_port: int, other_ports=()) -> dict:
-    """Pure policy evaluation of ONE stack's desired web-UI proxy. Mirrors `plan_exposure`:
-    `problems` refuse the save outright; `danger` selects the confirmation strength."""
+def plan_stack_exposure(swc, console_port: int, other_ports=(), listeners_of=None) -> dict:
+    """Policy evaluation of ONE stack's desired web-UI proxy. Mirrors `plan_exposure`:
+    `problems` refuse the save outright; `danger` selects the confirmation strength. Pure, except
+    that with `listeners_of` (a service) it reads that service's stacks' own TCP listeners
+    (listeners.stack_listeners, from the manifest and the saved config; no I/O beyond them): each is
+    an owner too, named in the refusal."""
     from .config import STACKWEB_MIN_PORT
     problems: list = []
     if not swc.enabled:                          # port 0 = not proxied; nothing to police
@@ -120,6 +123,10 @@ def plan_stack_exposure(swc, console_port: int, other_ports=()) -> dict:
         problems.append(f"port {swc.port} is already the console's port")
     if swc.port in tuple(other_ports):
         problems.append(f"port {swc.port} is already used by another stack's web UI")
+    from . import listeners as _listeners
+    owners = _listeners.stack_listeners(listeners_of).get(swc.port) if listeners_of is not None else None
+    if owners:
+        problems.append(f"port {swc.port} is already {', '.join(owners)}'s listener")
     # Hard technical constraint, not a preference: a client certificate is presented during the TLS
     # handshake, so a plain-http listener has nothing to verify.
     if swc.scheme == "http" and swc.access_mode != "no-auth":

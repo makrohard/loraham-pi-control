@@ -10,6 +10,11 @@ entry is either a literal token or a single whole placeholder. Placeholders:
                              and it FAILS the launch when the global is unset — stack
                              identities belong in an identity param, not this token)
     {band}            -> one token (the selected band)
+    {port:BASE}       -> BASE + 10 x the instance's slot (slot 0 = BASE), anywhere in a token
+    {port_of:STACK:BASE} -> the port of STACK's instance on the same radio
+    {instance_dir}    -> "" at slot 0 (today's paths), "<rid>/" at slot k: a per-radio path level
+    {instance_suffix} -> "" at slot 0, "-<rid>" at slot k: a per-radio file name in a shared directory
+                          (/dev/shm, where a per-radio directory could be pre-created by another user)
     {runtime}/{source}  -> may appear INSIDE a literal token to build a path
                           (controller-derived, never user input)
 
@@ -38,6 +43,53 @@ class CommandError(Exception):
     """A command template / step could not be built safely."""
 
 
+SLOTS = range(8)                 # eight instances per stack (A §2.4)
+PORT_STEP = 10
+_RID_RE = re.compile(r"r[1-9][0-9]?")
+_PORT_RE = re.compile(r"\{port:(\d{1,5})\}")
+_PORT_OF_RE = re.compile(r"\{port_of:([a-z][a-z0-9_-]*):(\d{1,5})\}")
+
+
+class Instance:
+    """One stack instance's place: its slot, its radio id and the slots of the other stacks'
+    instances on the same radio (for `{port_of:}`). Slot 0 resolves every template to today's
+    value, whatever the radio; slot k needs a radio id for its names."""
+
+    __slots__ = ("peer_slots", "rid", "slot")
+
+    def __init__(self, slot: int = 0, rid: str = "", peer_slots: dict | None = None):
+        if isinstance(slot, bool) or not isinstance(slot, int) or slot not in SLOTS:
+            raise CommandError(f"instance slot must be 0..{SLOTS[-1]}, got {slot!r}")
+        if (slot or rid) and not _RID_RE.fullmatch(rid or ""):
+            raise CommandError(f"instance radio id must match r1..r99, got {rid!r}")
+        self.slot, self.rid, self.peer_slots = slot, rid, dict(peer_slots or {})
+
+    def port(self, base: int, slot: int | None = None) -> int:
+        slot = self.slot if slot is None else slot
+        if not 1024 <= base <= 65535 - PORT_STEP * SLOTS[-1]:
+            raise CommandError(f"port base {base} leaves 1024..65535 at slot {SLOTS[-1]}")
+        return base + PORT_STEP * slot
+
+    def subst(self, text: str) -> str:
+        def port_of(m):
+            stack = m.group(1)
+            if stack not in self.peer_slots and self.rid:
+                raise CommandError(f"no {stack} instance on radio {self.rid} for {m.group(0)}")
+            return str(self.port(int(m.group(2)), self.peer_slots.get(stack, 0)))
+        text = _PORT_OF_RE.sub(port_of, text)
+        text = _PORT_RE.sub(lambda m: str(self.port(int(m.group(1)))), text)
+        text = text.replace("{instance_suffix}", f"-{self.rid}" if self.slot else "")
+        return text.replace("{instance_dir}", f"{self.rid}/" if self.slot else "")
+
+
+SLOT0 = Instance()
+
+
+def stack_instances(stack) -> tuple:
+    """The stack's instances (its firewall rows, its web pages): until L5 its one instance at slot 0."""
+    return (SLOT0,)
+
+
 def _controller_python() -> str:
     """Absolute path of the interpreter running THIS controller.
 
@@ -61,9 +113,9 @@ def _controller_python() -> str:
     return exe
 
 
-def _paths_subst(text: str, runtime: str, source: str, band: str) -> str:
-    """Substitute ONLY controller-derived paths into a literal token/value."""
-    out = (text.replace("{runtime}", runtime)
+def _paths_subst(text: str, runtime: str, source: str, band: str, inst: Instance = SLOT0) -> str:
+    """Substitute ONLY controller-derived paths and the instance's ports into a literal token/value."""
+    out = (inst.subst(text).replace("{runtime}", runtime)
                .replace("{source}", source)
                .replace("{controller_python}", _controller_python())
                .replace("{band}", band or ""))
@@ -72,8 +124,30 @@ def _paths_subst(text: str, runtime: str, source: str, band: str) -> str:
     return out
 
 
+def slot_port(port: int, slot: int) -> int:
+    """Slot k's port derived from slot 0's (a saved or static port): + 10 per slot (A §2.4). A derived port that
+    leaves 1024..65535 is refused (B3-D15)."""
+    derived = port + PORT_STEP * slot
+    if slot and not 1024 <= derived <= 65535:
+        raise CommandError(f"port {port} at slot {slot} gives {derived}, outside 1024..65535")
+    return derived
+
+
+def _param_raw(p, params, inst: Instance) -> str:
+    """A run param's raw value for one instance. The default is its template, rendered for the instance. A saved
+    value of a slotted port param (its default a whole `{port:B}`) is slot 0's port; slot k derives from it, + 10 per
+    slot (A §2.4), the rule the firewall rows follow (firewall.instance_port)."""
+    saved = (params or {}).get(p.name)
+    if saved is None:
+        return inst.subst(str(p.default_template or p.default))
+    raw = str(saved)
+    if inst.slot and _PORT_RE.fullmatch(p.default_template or str(p.default)) and raw.strip().isdigit():
+        return str(slot_port(int(raw), inst.slot))
+    return inst.subst(raw)
+
+
 def expand_argv(tokens, comp, params, op, runtime: str, source: str,
-                band: str = "") -> list[str]:
+                band: str = "", *, inst: Instance = SLOT0) -> list[str]:
     """Expand an argv token template to a validated argv list (no shell)."""
     by_name = {p.name: p for p in comp.run_params}
     out: list[str] = []
@@ -93,7 +167,7 @@ def expand_argv(tokens, comp, params, op, runtime: str, source: str,
                 p = by_name.get(name)
                 if p is None:
                     raise CommandError(f"unknown run-param token {tok}")
-                raw = str((params or {}).get(name, p.default))
+                raw = _param_raw(p, params, inst)
                 # A param default may reference operator identity / paths (e.g. chat
                 # `call` defaults to "{callsign}"). Resolve those controller-derived
                 # templates BEFORE validating the value.
@@ -101,7 +175,7 @@ def expand_argv(tokens, comp, params, op, runtime: str, source: str,
                 # identity enforcement refuses the start long before this renders, and a
                 # param whose validator requires a value fails typed here, never as a
                 # silently transmitted N0CALL.
-                raw = (raw.replace("{callsign}", op.callsign or "")
+                raw = (inst.subst(raw).replace("{callsign}", op.callsign or "")
                           .replace("{runtime}", runtime).replace("{source}", source))
                 val = validators.validate_param(p, raw)
                 out.extend(emit_param(p, val))
@@ -118,16 +192,17 @@ def expand_argv(tokens, comp, params, op, runtime: str, source: str,
                     out.append(band)
                 continue
             # {runtime}/{source} alone as a whole token -> the path
-            out.append(_paths_subst(tok, runtime, source, band))
+            out.append(_paths_subst(tok, runtime, source, band, inst))
             continue
         # A literal token may embed only controller paths, never a user param.
-        out.append(_paths_subst(tok, runtime, source, band))
+        out.append(_paths_subst(tok, runtime, source, band, inst))
     if not out:
         raise CommandError("empty argv")
     return out
 
 
-def instance_value(template: str, comp, params, runtime: str, source: str, band: str = "") -> str:
+def instance_value(template: str, comp, params, runtime: str, source: str, band: str = "", *,
+                   inst: Instance = SLOT0) -> str:
     """The value of a process spec's `instance_arg` for one instance: `{param:NAME}` is the
     param's validated VALUE (without the option `expand_argv` emits beside it), anything else
     takes the controller paths, as a literal argv token does."""
@@ -136,12 +211,12 @@ def instance_value(template: str, comp, params, runtime: str, source: str, band:
         p = {x.name: x for x in comp.run_params}.get(name)
         if p is None:
             raise CommandError(f"unknown run-param token {template}")
-        raw = str((params or {}).get(name, p.default)).replace("{runtime}", runtime)
+        raw = _param_raw(p, params, inst).replace("{runtime}", runtime)
         return str(validators.validate_param(p, raw.replace("{source}", source)))
-    return _paths_subst(template, runtime, source, band)
+    return _paths_subst(template, runtime, source, band, inst)
 
 
-def build_env(env_items, runtime: str, source: str, band: str = "") -> dict:
+def build_env(env_items, runtime: str, source: str, band: str = "", *, inst: Instance = SLOT0) -> dict:
     """Build an environment dict from typed items. A value of `@file:PATH` reads
     that file's first line (used for the MeshCom HMAC password) — no `$(cat)`.
 
@@ -158,7 +233,7 @@ def build_env(env_items, runtime: str, source: str, band: str = "") -> dict:
             raise CommandError(f"invalid environment variable name: {key!r}")
         v = str(value)
         if v.startswith("@file?:"):
-            path = _paths_subst(v[len("@file?:"):], runtime, source, band)
+            path = _paths_subst(v[len("@file?:"):], runtime, source, band, inst)
             try:
                 lines = runtime_fs.read_secret_text(path).splitlines()
                 env[key] = lines[0].strip() if lines else ""
@@ -169,7 +244,7 @@ def build_env(env_items, runtime: str, source: str, band: str = "") -> dict:
                     f"optional secret file for {key} is unreadable: {exc}") from exc
             continue
         if v.startswith("@file:"):
-            path = _paths_subst(v[len("@file:"):], runtime, source, band)
+            path = _paths_subst(v[len("@file:"):], runtime, source, band, inst)
             try:
                 first = runtime_fs.read_secret_text(path).splitlines()
             except (OSError, ValueError) as exc:     # ValueError: not UTF-8 text
@@ -186,11 +261,12 @@ def build_env(env_items, runtime: str, source: str, band: str = "") -> dict:
             got = os.environ.get(name)
             env[key] = got if got is not None else (default if sep else "")
         else:
-            env[key] = _paths_subst(v, runtime, source, band)
+            env[key] = _paths_subst(v, runtime, source, band, inst)
     return env
 
 
-def normalize_pre_steps(steps, runtime: str, source: str, band: str = "") -> list:
+def normalize_pre_steps(steps, runtime: str, source: str, band: str = "", *,
+                        inst: Instance = SLOT0) -> list:
     """Resolve typed pre-steps into execution-ready tuples (paths substituted) — the ONE
     form consumed by the shared safe engine (`wrapper_runtime.apply_steps`). This is used
     both for an in-process controller start and for serializing a generated wrapper, so a
@@ -200,14 +276,14 @@ def normalize_pre_steps(steps, runtime: str, source: str, band: str = "") -> lis
         k = s.get("kind")
         try:
             if k == "mkdir":
-                out.append(("mkdir", _paths_subst(s["path"], runtime, source, band),
+                out.append(("mkdir", _paths_subst(s["path"], runtime, source, band, inst),
                             str(s.get("mode", ""))))
             elif k == "chmod":
-                out.append(("chmod", _paths_subst(s["path"], runtime, source, band),
+                out.append(("chmod", _paths_subst(s["path"], runtime, source, band, inst),
                             str(s["mode"])))
             elif k == "symlink":
-                out.append(("symlink", _paths_subst(s["src"], runtime, source, band),
-                            _paths_subst(s["dst"], runtime, source, band)))
+                out.append(("symlink", _paths_subst(s["src"], runtime, source, band, inst),
+                            _paths_subst(s["dst"], runtime, source, band, inst)))
             else:
                 raise CommandError(f"unknown pre-step kind: {k!r}")
         except KeyError as exc:
@@ -215,14 +291,14 @@ def normalize_pre_steps(steps, runtime: str, source: str, band: str = "") -> lis
     return out
 
 
-def run_pre_steps(steps, runtime: str, source: str, band: str = "") -> None:
+def run_pre_steps(steps, runtime: str, source: str, band: str = "", *, inst: Instance = SLOT0) -> None:
     """Execute typed controller-owned pre-steps through the SAME execution-time-safe
     engine the generated wrappers use (`wrapper_runtime.apply_steps`) — never a shell.
     Raises CommandError on failure (which blocks the launch)."""
     from . import wrapper_runtime
     from .paths import PathContainmentError, Paths
     try:
-        tuples = normalize_pre_steps(steps, runtime, source, band)
+        tuples = normalize_pre_steps(steps, runtime, source, band, inst=inst)
         wrapper_runtime.apply_steps(Paths(runtime_root=Path(runtime)), tuples)
     except (OSError, ValueError, PathContainmentError) as exc:
         raise CommandError(f"pre-step failed: {exc}") from exc
@@ -278,13 +354,13 @@ def build_step_argv(step: dict, runner, runtime: str, source: str) -> list[str]:
 
 
 def display_command(comp, op, runtime: str, source: str, band: str = "",
-                    params: dict | None = None) -> str:
+                    params: dict | None = None, *, inst: Instance = SLOT0) -> str:
     """Human-readable, shell-quoted rendering of the structured run command — for
     manual wrappers and the dashboard ONLY. Never executed. `params` are the saved
     values a start would use (None = manifest defaults); one a start would refuse
     renders no command."""
     try:
-        argv = expand_argv(comp.run_argv, comp, params, op, runtime, source, band)
+        argv = expand_argv(comp.run_argv, comp, params, op, runtime, source, band, inst=inst)
     except (CommandError, validators.ValidationError):
         return ""
     return " ".join(shlex.quote(a) for a in argv)
@@ -383,7 +459,8 @@ def _gps_token_value(spec: str, gps: dict | None) -> str:
 def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                          band: str = "", binding: dict | None = None, gated: bool = False,
                          result_path: str = "", meta: dict | None = None,
-                         gps: dict | None = None, require_all: bool = False) -> str:
+                         gps: dict | None = None, require_all: bool = False,
+                         inst: Instance = SLOT0) -> str:
     """Serialize typed post-start steps into a self-contained Python launcher that runs them
     detached with no shell: delay / exec(argv) / tcp_wait / tcp_send. `binding` (main pid + start
     time + session/group) ties the runner to one exact main launch — it re-checks that main before
@@ -444,10 +521,10 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
             if "skip_if_empty" in step and not _gps_token_value(step["skip_if_empty"], gps).strip():
                 continue
             argv = expand_argv(_expand_gps_tokens(step["argv"], gps),
-                               comp, params, op, runtime, source, band)
+                               comp, params, op, runtime, source, band, inst=inst)
             exe = shutil.which(argv[0]) or argv[0]
             for cand in step.get("paths", []):
-                c = _paths_subst(cand, runtime, source, band)
+                c = _paths_subst(cand, runtime, source, band, inst)
                 if Path(c).exists():
                     exe = c
                     break
@@ -463,7 +540,7 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                                        else os.path.basename(argv[0]) or "exec")})
         elif kind in ("tcp_wait", "tcp_send"):
             d = {"kind": kind, "host": step.get("host", "127.0.0.1"),
-                 "port": int(step["port"]),
+                 "port": int(inst.subst(str(step["port"]))),
                  "optional": (bool(step.get("optional")) and not step.get("required"))
                              and not require_all}
             if kind == "tcp_wait":
@@ -471,7 +548,7 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                 if step.get("label"):
                     d["label"] = _post_label(step["label"])
             else:
-                d["data"] = _post_data(step.get("data", ""), comp, params, op, runtime, source, band)
+                d["data"] = _post_data(step.get("data", ""), comp, params, op, runtime, source, band, inst)
                 # A slow guest (e.g. QEMU firmware) may open its console port long before it is
                 # ready to process a command. `repeat`/`interval` re-send the line until it lands
                 # (idempotent settings like --setcall); default = send once. `schedule` expresses a
@@ -508,7 +585,7 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                 for fld in ("stop_on", "probe", "probe_stop_on"):
                     if step.get(fld):
                         d[fld] = _post_data(str(step[fld]), comp, params, op, runtime,
-                                            source, band)
+                                            source, band, inst)
                 pv, pe = step.get("probe_value"), step.get("probe_expect")
                 if (pv is None) != (pe is None):
                     raise CommandError("tcp_send: probe_value and probe_expect come as a pair")
@@ -526,7 +603,7 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                         raise CommandError("tcp_send: probe_value needs exactly one capture group")
                     d["probe_value"] = str(pv)          # a pattern: never placeholder-expanded
                     d["probe_expect"] = _post_data(str(pe), comp, params, op, runtime,
-                                                   source, band)
+                                                   source, band, inst)
             resolved.append(d)
         else:
             raise CommandError(f"unknown post-step kind {kind!r}")
@@ -565,12 +642,12 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                   lambda m: fills[m.group(1)], _POST_RUNNER)
 
 
-def _post_data(template: str, comp, params, op, runtime, source, band) -> str:
+def _post_data(template: str, comp, params, op, runtime, source, band, inst: Instance = SLOT0) -> str:
     """Expand a tcp_send data line: literal text with whole {param:…}/{operator:…}
     placeholders replaced by their single validated value."""
     import re
     def repl(m):
-        return " ".join(expand_argv([m.group(0)], comp, params, op, runtime, source, band))
+        return " ".join(expand_argv([m.group(0)], comp, params, op, runtime, source, band, inst=inst))
     return re.sub(r"\{[a-z]+:[a-z_]+\}", repl, template)
 
 

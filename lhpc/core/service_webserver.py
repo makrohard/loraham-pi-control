@@ -1267,7 +1267,7 @@ class WebserverOpsMixin:
             scheme=current.scheme if scheme is None else scheme,
             access_mode=current.access_mode if access_mode is None else access_mode,
             allowed_cidrs=current.allowed_cidrs if cidrs is None else tuple(cidrs))
-        plan = _ws.plan_stack_exposure(probe, ws.port, used)
+        plan = _ws.plan_stack_exposure(probe, ws.port, used, self)
         missing = self._exposure_missing(plan, confirm=confirm, confirm_public=confirm_public,
                                          cidr_flag="--cidr <net>  (e.g. --cidr 192.168.0.0/24)")
         if missing:
@@ -1401,7 +1401,7 @@ class WebserverOpsMixin:
                 for sid, probe in candidates.items():
                     others = saved_other | {c.port for o, c in candidates.items()
                                             if o != sid and c.enabled}
-                    plan = _ws.plan_stack_exposure(probe, ws.port, others)
+                    plan = _ws.plan_stack_exposure(probe, ws.port, others, self)
                     missing = self._exposure_missing(
                         plan, confirm=confirm, confirm_public=confirm_public,
                         cidr_flag="--cidr <net>  (e.g. --cidr 192.168.0.0/24)")

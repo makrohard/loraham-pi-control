@@ -130,6 +130,8 @@ class ResourceClaim:
     # "" = made on any transport; "spi" | "usb": made only when the radio's transport is that one
     # (A §2.3; the daemon's `spi.bus.0` is "spi"). Until L5 every radio is SPI (manifest.py).
     claims_if: str = ""
+    # The manifest's key when it carries instance tokens ({port:…}); `key` is its slot-0 value. "" = none.
+    key_template: str = ""
 
 
 
@@ -248,6 +250,8 @@ class EndpointSpec:
     # backend's own error shape and LHPC's notice, for a dashboard that logs the operator out on a
     # 403 and shows `error` texts (openHop's: docs/openhop-on-lhpc.md).
     proxy_deny_notice: bool = False
+    # The manifest's address when it carries instance tokens; `address` is its slot-0 value. "" = none.
+    address_template: str = ""
 
 
 @dataclass(frozen=True)
@@ -279,6 +283,8 @@ class RunParam:
     validator: str = ""          # named validator for kind="str" (callsign/freq/host/port/band/node)
     group: str = ""              # settings sub-section title; params sharing a group render as their
                                  # own titled block (e.g. "Network exposure") in the config panel
+    # The manifest's default when it carries instance tokens; `default` is its slot-0 value. "" = none.
+    default_template: str = ""
 
 
 def emit_param(p: RunParam, value) -> list[str]:
@@ -336,6 +342,8 @@ class FileParam:
                                  # CONTROLLER-MANAGED secret (vs secret_ref's operator-authored
                                  # secrets.toml). Read at write time only; same invariants as
                                  # secret_ref (hidden, no default, file mode 0600).
+    # The manifest's default when it carries instance tokens; `default` is its slot-0 value. "" = none.
+    default_template: str = ""
 
 
 @dataclass(frozen=True)
@@ -355,6 +363,8 @@ class FileConfig:
     base: str = ""               # base file to update ({runtime}/…, {asset}/…, or relative to the source dir — never absolute)
     apply_cmd: str = ""          # copyable command to apply the generated file ({path})
     params: tuple[FileParam, ...] = ()
+    # The manifest's path when it carries instance tokens; `path` is its slot-0 value. "" = none.
+    path_template: str = ""
 
 
 
@@ -446,6 +456,7 @@ class Component:
     # the controller's safe reader (containment, no-follow, 0600 posture); it must never reach
     # logs, flashes, task markers, ActionResult text, status output or JSON APIs.
     ui_password_file: str = ""
+    ui_password_file_template: str = ""   # with instance tokens; `ui_password_file` is its slot-0 value. "" = none
     ui_password_note: str = ""    # who owns that password and how to change it (shown as-is)
     log_paths: tuple[str, ...] = ()
     start_order: int | None = None
@@ -589,9 +600,11 @@ class WebPage:
         return f"#stack-webserver-{self.page_id}"
 
 
-def web_pages(stack: Stack) -> tuple:
+def web_pages(stack: Stack, instances=None) -> tuple:
     """The stack's proxied web pages — one per component that declares a client http/https
-    endpoint (its first such endpoint). Empty for a stack without a web UI.
+    endpoint (its first such endpoint), for each of the stack's `instances` (commands.Instance;
+    None = `commands.stack_instances`, its one instance at slot 0 until L5). Empty for a stack
+    without a web UI.
 
     ORDER decides which page keeps the stack id: the components in manifest order, except that
     the stack's MAIN component comes LAST. A stack's "web UI" is the dedicated web component it
@@ -599,27 +612,37 @@ def web_pages(stack: Stack) -> tuple:
 
     `label` is the ONE spelling every stack-external list uses: the stack name for the first
     page, `<stack> · <component>` for any further one (inside the stack's own panel the
-    component name alone suffices — `name`)."""
+    component name alone suffices — `name`). A slot-k instance's page is `<page>@<rid>` (A §2.6), its
+    upstream the instance's own port, its deny list and deny answer the slot-0 page's."""
+    from . import commands
     out: list = []
     ordered = ([c for c in stack.components if c.id != stack.main]
                + [c for c in stack.components if c.id == stack.main])
-    for comp in ordered:
-        for ep in comp.endpoints:
-            if getattr(ep, "client", False) and ep.scheme in ("http", "https"):
-                first = not out
-                # A main component usually carries the stack's own name; naming its page after
-                # it would read "MeshCore · MeshCore". Its endpoint description says what the
-                # page IS ("openHop repeater dashboard") — use that when the names coincide.
-                shown = (comp.name if comp.name != stack.name
-                         else (getattr(ep, "description", "") or comp.id))
-                out.append(WebPage(
-                    page_id=stack.id if first else f"{stack.id}-{comp.id}",
-                    stack_id=stack.id, component_id=comp.id, name=shown,
-                    label=stack.name if first else f"{stack.name} · {shown}",
-                    address=ep.address, scheme=ep.scheme,
-                    deny_paths=tuple(getattr(ep, "proxy_deny_paths", ()) or ()),
-                    deny_notice=bool(getattr(ep, "proxy_deny_notice", False))))
-                break
+    for inst in commands.stack_instances(stack) if instances is None else instances:
+        slot_k = inst is not None and inst.slot > 0
+        first_of_instance = True
+        for comp in ordered:
+            for ep in comp.endpoints:
+                if getattr(ep, "client", False) and ep.scheme in ("http", "https"):
+                    first = first_of_instance
+                    first_of_instance = False
+                    # A main component usually carries the stack's own name; naming its page after
+                    # it would read "MeshCore · MeshCore". Its endpoint description says what the
+                    # page IS ("openHop repeater dashboard") — use that when the names coincide.
+                    shown = (comp.name if comp.name != stack.name
+                             else (getattr(ep, "description", "") or comp.id))
+                    page_id = stack.id if first else f"{stack.id}-{comp.id}"
+                    label = stack.name if first else f"{stack.name} · {shown}"
+                    out.append(WebPage(
+                        page_id=f"{page_id}@{inst.rid}" if slot_k else page_id,
+                        stack_id=stack.id, component_id=comp.id, name=shown,
+                        label=f"{label} @{inst.rid}" if slot_k else label,
+                        address=(inst.subst(ep.address_template or ep.address) if slot_k
+                                 else ep.address),
+                        scheme=ep.scheme,
+                        deny_paths=tuple(getattr(ep, "proxy_deny_paths", ()) or ()),
+                        deny_notice=bool(getattr(ep, "proxy_deny_notice", False))))
+                    break
     return tuple(out)
 
 

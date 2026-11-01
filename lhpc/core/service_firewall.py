@@ -39,7 +39,7 @@ class FirewallOpsMixin:
                     (mapped if ep.firewall else unmapped).append((stk, comp, ep))
         return mapped, unmapped
 
-    def _fw_resolve_scope(self, stk, comp, ep, band=None):
+    def _fw_resolve_scope(self, stk, comp, ep, band=None, inst=None):
         """Resolve one endpoint into (endpoint_id, proto, family, addr, port, allow_cidrs,
         deny). Configured port/bind params OVERRIDE the static endpoint address (the MeshCom
         bridge's --port/--bind are the reason the static address is never authoritative). Bind
@@ -57,13 +57,13 @@ class FirewallOpsMixin:
             _auth = "none"
         band = self._config_band(stk.id, band or "") if hasattr(self, "_config_band") else ""
         static_host, _, static_port = str(ep.address).rpartition(":")
-        port = self._fw_param_int(stk, comp, meta.port_param, band, static_port)
+        port = _fw.instance_port(self._fw_param_int(stk, comp, meta.port_param, band, static_port), inst)
         bind = self._fw_param_str(stk, comp, meta.bind_param, band, static_host)
         allow = self._fw_param_str(stk, comp, meta.allow_param, band, "")
         cidrs = _split_cidrs(allow)
         # STABLE id: the STATIC manifest port never changes even when the configured port does,
         # so a ticked direct-access checkbox survives a port change (fragile-id fix).
-        eid = _safe_id(f"{comp.id}.tcp-{static_port}")
+        eid = _safe_id(_fw.instance_eid(comp.id, static_port, inst))   # slot k: A §2.5
         if meta.deny:
             # meshtasticd 4403/9443: binds 0.0.0.0 unconditionally, no knob — drop the port on
             # EVERY non-loopback address of BOTH families, regardless of the probe address.
@@ -123,28 +123,10 @@ class FirewallOpsMixin:
         mapped, _unmapped = self._fw_listener_endpoints()
 
         endpoints = []
-        for stk, comp, ep in mapped:
-            # Resolve EACH band and keep DISTINCT scopes — never merge two bands into one row.
-            # If every band yields the same scope (the common case), emit ONE band-agnostic row
-            # (band="") so the model/hash are unchanged; only genuinely-diverging per-band scopes
-            # get their own band-labelled row (so compatibility mode drops the real per-band port).
+        for stk, comp, ep in mapped:                  # rows per instance and band: _fw.endpoint_rows
             bands = (self.stack_bands(stk.id) if hasattr(self, "stack_bands") else ()) or ("",)
-            per_scope = {}
-            for band in bands:
-                sc = self._fw_resolve_scope(stk, comp, ep, band=band)
-                if sc["loopback"] and not sc["deny"]:
-                    continue                          # loopback-only, no knob -> nothing to do
-                stup = (sc["proto"], sc["family"], sc["addr"], sc["port"],
-                        tuple(sorted(sc["allow_cidrs"])), sc["deny"])
-                per_scope.setdefault(stup, (band, sc))
-            band_agnostic = len(per_scope) <= 1
-            for band, sc in per_scope.values():
-                key = sc["id"]
-                endpoints.append(
-                    {"id": key, "proto": sc["proto"], "family": sc["family"],
-                     "addr": sc["addr"], "port": sc["port"], "allow_cidrs": sc["allow_cidrs"],
-                     "selected": key in selected, "deny_default": sc["deny"],
-                     "auth": sc.get("auth", "none"), "band": "" if band_agnostic else band})
+            endpoints += _fw.endpoint_rows(stk, bands, lambda b, i, s=stk, c=comp, e=ep:
+                                           self._fw_resolve_scope(s, c, e, band=b, inst=i), selected)
 
         proxy = self._fw_proxy_ingress(cfg,
                                        ap_managed=bool(getattr(fwcfg, "ap_enabled", False)))

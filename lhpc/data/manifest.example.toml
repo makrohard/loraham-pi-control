@@ -391,9 +391,9 @@ main = "loraham-chat"
   bin = "loraham_chat"
   # Run from the runtime config dir so the TUI reads the lhpc-seeded lorachat.conf
   # (and its in-app Ctrl-K saves persist there too) — never written into the repo.
-  run = 'cd "{runtime}/config/files" && exec "{source}/loraham_chat" {data_socket} {conf_socket}'
+  run = 'cd "{runtime}/config/files/{instance_dir}" && exec "{source}/loraham_chat" {data_socket} {conf_socket}'
   run_argv = ["{source}/loraham_chat", "{param:data_socket}", "{param:conf_socket}"]
-  run_cwd = "{runtime}/config/files"
+  run_cwd = "{runtime}/config/files/{instance_dir}"
   readiness = "manual"
   note = "Interactive ncurses TUI (needs a real TTY; no headless mode). lhpc seeds lorachat.conf (callsign + TX/RX freq + APRS dest/path) from the Config page; the in-app Ctrl-K menu still works and saves back to it. One daemon client per band: it holds 433 like every daemon-backed stack."
 
@@ -410,9 +410,9 @@ main = "loraham-chat"
     branch = "main"
     local_dir = "LoRaHAM_Daemon"
 
-    # Seeded into {runtime}/config/files/lorachat.conf (KEY=VALUE, split on '=').
+    # Seeded into {runtime}/config/files/{instance_dir}lorachat.conf (KEY=VALUE, split on '=').
     [stack.component.config_file]
-    path = "{runtime}/config/files/lorachat.conf"
+    path = "{runtime}/config/files/{instance_dir}lorachat.conf"
     fmt = "env"
       [[stack.component.config_file.param]]
       name = "call"
@@ -498,11 +498,11 @@ main = "loraham-voice"
   # voice reads loraham_voice.conf from dirname(argv0), NOT the CWD — so we run it
   # via a symlink in the runtime config dir (where lhpc seeds the conf), keeping the
   # conf out of the repo. GUI app: lhpc Start/Stops it; opens on the Pi display.
-  run = 'env DISPLAY="${DISPLAY:-:0}" "{runtime}/config/files/loraham_voice"'
+  run = 'env DISPLAY="${DISPLAY:-:0}" "{runtime}/config/files/{instance_dir}loraham_voice"'
   build_steps = [ { argv = ["gcc", "-o", "loraham_voice", "loraham_voice_v107.c", "{pkgconfig:gtk+-3.0}", "-lcodec2", "-lasound", "-lncurses", "-lpthread", "-lm"], attributable = true } ]
-  pre_steps = [ { kind = "mkdir", path = "{runtime}/config/files" }, { kind = "symlink", src = "{source}/loraham_voice", dst = "{runtime}/config/files/loraham_voice" } ]
-  run_argv = ["{runtime}/config/files/loraham_voice"]
-  run_cwd = "{runtime}/config/files"
+  pre_steps = [ { kind = "mkdir", path = "{runtime}/config/files/{instance_dir}" }, { kind = "symlink", src = "{source}/loraham_voice", dst = "{runtime}/config/files/{instance_dir}loraham_voice" } ]
+  run_argv = ["{runtime}/config/files/{instance_dir}loraham_voice"]
+  run_cwd = "{runtime}/config/files/{instance_dir}"
   run_env = { DISPLAY = "@env:DISPLAY=:0" }
   readiness = "process"
   note = "GTK desktop app (needs a display/X server + an audio capture/playback device). lhpc seeds loraham_voice.conf (callsign, audio devices, per-band radio params); the in-app config dialog still works and saves back to it."
@@ -552,11 +552,11 @@ main = "loraham-voice"
     mode = "exclusive"
     note = "Audio capture/playback device."
 
-    # Seeded into {runtime}/config/files/loraham_voice.conf (KEY=VALUE, split on '=').
+    # Seeded into {runtime}/config/files/{instance_dir}loraham_voice.conf (KEY=VALUE, split on '=').
     # The app keeps both bands' params in one file; active_band selects which is used
     # (0=433, 1=868), defaulted from the band column the app was launched on.
     [stack.component.config_file]
-    path = "{runtime}/config/files/loraham_voice.conf"
+    path = "{runtime}/config/files/{instance_dir}loraham_voice.conf"
     fmt = "env"
       # Display order (Settings): CALL, then the LoRa radio params in the operator's
       # preferred order (freq sf bw cr crc preamble sync power ldro), then the rest. The radio params
@@ -700,9 +700,9 @@ main = "loraham-voice"
   build = "gcc -DNO_GTK -o loraham_voice_cli loraham_voice_v107.c -lcodec2 -lasound -lncurses -lpthread -lm"
   bin = "loraham_voice_cli"
   build_steps = [ { argv = ["gcc", "-DNO_GTK", "-o", "loraham_voice_cli", "loraham_voice_v107.c", "-lcodec2", "-lasound", "-lncurses", "-lpthread", "-lm"], attributable = true } ]
-  pre_steps = [ { kind = "mkdir", path = "{runtime}/config/files" }, { kind = "symlink", src = "{source}/loraham_voice_cli", dst = "{runtime}/config/files/loraham_voice_cli" } ]
-  run_argv = ["{runtime}/config/files/loraham_voice_cli"]
-  run_cwd = "{runtime}/config/files"
+  pre_steps = [ { kind = "mkdir", path = "{runtime}/config/files/{instance_dir}" }, { kind = "symlink", src = "{source}/loraham_voice_cli", dst = "{runtime}/config/files/{instance_dir}loraham_voice_cli" } ]
+  run_argv = ["{runtime}/config/files/{instance_dir}loraham_voice_cli"]
+  run_cwd = "{runtime}/config/files/{instance_dir}"
   note = "Interactive ncurses voice TUI (needs a real TTY + an audio device, NO graphical environment) — start it yourself with the command lhpc shows, locally or over SSH. Space = PTT. Configure via the Voice stack's Config page (shared loraham_voice.conf)."
 
     [[stack.component.require]]
@@ -764,8 +764,8 @@ main = "loraham-kiss-tnc"
   # Explicit run_argv/build_steps + run_cwd so the root binary/script resolve cwd-relative.
   build = "bash build.sh"
   build_steps = [ { argv = ["bash", "build.sh"], attributable = true } ]
-  run = "./loraham-kiss-tnc --config loraham_kiss_tnc.conf.example {kiss_port} {kiss_host} {rx_freq} {tx_freq} {data_socket} {conf_socket} {rx_only} {verbose} {rf_log} --rflog-path {runtime}/logs/rf-kiss.log"
-  run_argv = ["./loraham-kiss-tnc", "--config", "loraham_kiss_tnc.conf.example", "{param:kiss_port}", "{param:kiss_host}", "{param:kiss_bind}", "{param:rx_freq}", "{param:tx_freq}", "{param:data_socket}", "{param:conf_socket}", "{param:rx_only}", "{param:verbose}", "{param:rf_log}", "--rflog-path", "{runtime}/logs/rf-kiss.log"]
+  run = "./loraham-kiss-tnc --config loraham_kiss_tnc.conf.example {kiss_port} {kiss_host} {rx_freq} {tx_freq} {data_socket} {conf_socket} {rx_only} {verbose} {rf_log} --rflog-path {runtime}/logs/{instance_dir}rf-kiss.log"
+  run_argv = ["./loraham-kiss-tnc", "--config", "loraham_kiss_tnc.conf.example", "{param:kiss_port}", "{param:kiss_host}", "{param:kiss_bind}", "{param:rx_freq}", "{param:tx_freq}", "{param:data_socket}", "{param:conf_socket}", "{param:rx_only}", "{param:verbose}", "{param:rf_log}", "--rflog-path", "{runtime}/logs/{instance_dir}rf-kiss.log"]
   run_cwd = "{source}"
   bin = "loraham-kiss-tnc"
   test = "bash run_tests.sh"
@@ -776,7 +776,7 @@ main = "loraham-kiss-tnc"
     name = "kiss_port"
     kind = "int"
     arg = "--kiss-port"
-    default = "8001"
+    default = "{port:8001}"
     min = 1
     max = 65535
     label = "KISS TCP port"
@@ -875,7 +875,7 @@ main = "loraham-kiss-tnc"
 
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:8001"
+    address = "127.0.0.1:{port:8001}"
     ready = true
     role = "listener"
     description = "KISS over TCP"
@@ -886,7 +886,7 @@ main = "loraham-kiss-tnc"
     firewall = { port_param = "kiss_port", bind_param = "kiss_host", allow_param = "kiss_bind", auth = "none" }
 
     [[stack.component.resource]]
-    key = "tcp.port.8001"
+    key = "tcp.port.{port:8001}"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
@@ -905,7 +905,7 @@ main = "loraham-kiss-tnc"
   optional = true
   depends_on = ["loraham-kiss-tnc"]
   start_order = 2
-  run_argv = ["socat", "-d", "-d", "PTY,link={runtime}/state/loraham_kiss,raw,echo=0,waitslave,mode=666", "TCP:127.0.0.1:8001"]
+  run_argv = ["socat", "-d", "-d", "PTY,link={runtime}/state/{instance_dir}loraham_kiss,raw,echo=0,waitslave,mode=666", "TCP:127.0.0.1:{port:8001}"]
   note = "Optional socat PTY <-> KISS/TCP(127.0.0.1:8001) bridge; exposes <runtime>/state/loraham_kiss (in-root; point external tools there). Runs socat DIRECTLY (not the wrapper script, which traps SIGTERM and respawns socat) so lhpc owns the socat process and stops it cleanly. Needs socat."
 
     [stack.component.source]
@@ -920,8 +920,10 @@ main = "loraham-kiss-tnc"
     # `socat` is a general-purpose tool an operator may be running for anything. Matching on the
     # executable alone claimed ANY socat on the box as this component, which then read as
     # RUNNING/DEGRADED and blocked unrelated stack starts ("kiss must be stopped first") with
-    # nothing of ours actually running. The PTY link path is ours and appears in the real argv.
-    all_args = ["state/loraham_kiss"]
+    # nothing of ours actually running. The PTY link path is ours and appears in the real argv: "/loraham_kiss,"
+    # (the link token's leaf and its option comma) matches every instance's link (state/[<rid>/]loraham_kiss) and not
+    # the TNC's loraham_kiss_tnc.conf.example.
+    all_args = ["/loraham_kiss,"]
 
     [[stack.component.require]]
     cmd = "socat"
@@ -929,7 +931,7 @@ main = "loraham-kiss-tnc"
 
     [[stack.component.endpoint]]
     kind = "path"
-    address = "state/loraham_kiss"
+    address = "state/{instance_dir}loraham_kiss"
     role = "provider"
     description = "Serial KISS PTY (socat)"
     client = true
@@ -1003,22 +1005,22 @@ main = "graywolf"
   # under state/. The stack page's Password section shows the stored value (authenticated page,
   # copy button) and the command to edit the file; it never enters a log, a marker or a flash.
   ui_user = "admin"
-  ui_password_file = "state/graywolf/graywolf-admin.txt"
+  ui_password_file = "state/{instance_dir}graywolf/graywolf-admin.txt"
   ui_password_note = "graywolf generates this password itself on first start. LHPC owns the account: it signs in on every start to apply the settings, so if you change the password in the app's own UI, write the new one into that file or the next start will fail."
-  run_argv = ["{runtime}/build/tools/graywolf/usr/bin/graywolf", "-config", "{runtime}/state/graywolf/graywolf.db", "-http", "127.0.0.1:8080"]
+  run_argv = ["{runtime}/build/tools/graywolf/usr/bin/graywolf", "-config", "{runtime}/state/{instance_dir}graywolf/graywolf.db", "-http", "127.0.0.1:{port:8080}"]
   # `-http` is deliberately NOT a param: LHPC never merges a user value into a longer token
   # (host:port is ONE argv token), and the UI is password-authenticated operator surface that
   # belongs on loopback. Reach it through this stack's web proxy, or an SSH tunnel; exposing it
   # directly would need a real bind param.
   note = "Upstream .deb fetched + unpacked into build/tools/graywolf by the build step (rootless, sha256-pinned). Config lives in a SQLite DB, not a file, so every start re-applies the params below through graywolf's REST API (post-start `provision` step). The generated web-UI password is written to <runtime>/state/graywolf/graywolf-admin.txt (0600). Single KISS client: do NOT run loraham-kiss-serial at the same time. RX-only is set on the kiss stack (`lhpc config kiss rx_only on`) — that gates the actual transmitter, not just graywolf's intent."
-  pre_steps = [ { kind = "mkdir", path = "{runtime}/state/graywolf", mode = "700" } ]
+  pre_steps = [ { kind = "mkdir", path = "{runtime}/state/{instance_dir}graywolf", mode = "700" } ]
   # No tcp_wait: its port must be a manifest literal, and the provisioning step below does
   # its own bounded readiness wait against the API it is about to write to.
   post_steps = [
     { kind = "exec", label = "provision", required = true, argv = [
         "{controller_python}", "{asset}/scripts/graywolf-provision.py",
-        "--api-addr", "127.0.0.1:8080",
-        "--state-dir", "{runtime}/state/graywolf",
+        "--api-addr", "127.0.0.1:{port:8080}",
+        "--state-dir", "{runtime}/state/{instance_dir}graywolf",
         "--channel-name", "LoRaHAM KISS",
         "{param:tnc_host}", "{param:tnc_port}", "{param:call}",
         "{param:igate}", "{param:igate_server}", "{param:igate_port}",
@@ -1035,7 +1037,7 @@ main = "graywolf"
     # REQUIRED and unconditional: provisioning is what makes the station work, so a failed
     # push must fail the start instead of leaving graywolf up with an empty config.
     [stack.component.process]
-    instance_arg = ["-config", "{runtime}/state/graywolf/graywolf.db"]   # A §2.3: this instance's exact argv token pair
+    instance_arg = ["-config", "{runtime}/state/{instance_dir}graywolf/graywolf.db"]   # A §2.3: this instance's exact argv token pair
     # The unpacked artifact's basename — LHPC runs build/tools/graywolf/usr/bin/graywolf, never
     # a /usr/bin/graywolf from a system package (there is deliberately no such package). The
     # basename ALONE is not enough: an operator who once installed the .deb by hand still has a
@@ -1044,11 +1046,11 @@ main = "graywolf"
     # copy (so LHPC's provisioning never applies), and stop would target a process LHPC does not
     # own. The config path is ours and appears in the real argv, exactly as kiss-serial does.
     exec_name = "graywolf"
-    all_args = ["state/graywolf/graywolf.db"]
+    all_args = ["graywolf/graywolf.db"]
 
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:8080"
+    address = "127.0.0.1:{port:8080}"
     ready = true
     role = "listener"
     description = "Graywolf web UI"
@@ -1062,14 +1064,14 @@ main = "graywolf"
     firewall = { auth = "password" }
 
     [[stack.component.resource]]
-    key = "tcp.port.8080"
+    key = "tcp.port.{port:8080}"
     kind = "tcp-port"
     mode = "exclusive"
     # The KISS listener belongs to loraham-kiss-tnc; graywolf only dials it. Recorded as a
     # CONSUMER so the dependency is visible without falsely conflicting with the TNC's own
     # exclusive claim on the same port.
     [[stack.component.resource]]
-    key = "tcp.port.8001"
+    key = "tcp.port.{port_of:kiss:8001}"
     kind = "tcp-port"
     mode = "consumer"
 
@@ -1085,7 +1087,7 @@ main = "graywolf"
     name = "tnc_port"
     kind = "int"
     arg = "--tnc-port"
-    default = "8001"
+    default = "{port_of:kiss:8001}"
     min = 1
     max = 65535
     label = "KISS TNC port"
@@ -1195,11 +1197,11 @@ main = "meshtastic"
   # `{controller_python}` is controller-derived (like {runtime}/{source}) — the bridge is
   # lhpc's OWN internal service, so it must run through this controller's interpreter and
   # never whatever python3/lhpc happens to be on PATH.
-  run_argv = ["{controller_python}", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshtastic", "--state", "{runtime}/state/gps/meshtastic"]
+  run_argv = ["{controller_python}", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshtastic", "--state", "{runtime}/state/{instance_dir}gps/meshtastic"]
   note = "Starts automatically when the global position source needs it (see `lhpc gps`) — not a manual choice."
 
     [stack.component.process]
-    instance_arg = ["--state", "{runtime}/state/gps/meshtastic"]   # A §2.3: this instance's exact argv token pair
+    instance_arg = ["--state", "{runtime}/state/{instance_dir}gps/meshtastic"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python3"
     all_args = ["_gps-bridge", "meshtastic"]
 
@@ -1231,8 +1233,8 @@ main = "meshtastic"
   # OBS package is built from the upstream `native-tft` environment and therefore links
   # X11/libinput/xkbcommon (and its Depends drag SDL2 -> PulseAudio/Wayland/Mesa/LLVM) onto a
   # headless rig. We build `native` instead — same upstream source, no display stack.
-  run = "{runtime}/build/tools/meshtasticd/meshtasticd -c {runtime}/config/files/meshtasticd.yaml -d {runtime}/state/meshtasticd"
-  pre_steps = [ { kind = "mkdir", path = "{runtime}/state/meshtasticd/ssl" } ]
+  run = "{runtime}/build/tools/meshtasticd/meshtasticd -c {runtime}/config/files/{instance_dir}meshtasticd.yaml -d {runtime}/state/{instance_dir}meshtasticd"
+  pre_steps = [ { kind = "mkdir", path = "{runtime}/state/{instance_dir}meshtasticd/ssl" } ]
   readiness = "endpoint"
   # THREE managed artifacts, all inside the runtime root: the server-only meshtasticd binary, the
   # browser UI that belongs to the SAME source revision, and the Meshtastic Python CLI.
@@ -1380,7 +1382,7 @@ main = "meshtastic"
     local_dir = "meshtastic-firmware"
 
     [stack.component.process]
-    instance_arg = ["-d", "{runtime}/state/meshtasticd"]   # A §2.3: this instance's exact argv token pair
+    instance_arg = ["-d", "{runtime}/state/{instance_dir}meshtasticd"]   # A §2.3: this instance's exact argv token pair
     exec_name = "meshtasticd"
 
     [[stack.component.require]]
@@ -1440,7 +1442,7 @@ main = "meshtastic"
     # prefs, not the YAML — so it is set via the API after start (see post_steps),
     # not here. This file holds the hardware/web/log config only.
     [stack.component.config_file]
-    path = "{runtime}/config/files/meshtasticd.yaml"
+    path = "{runtime}/config/files/{instance_dir}meshtasticd.yaml"
     fmt = "yaml-update"
     base = "{asset}/bases/meshtasticd.yaml"
       # The GPS device meshtasticd reads. CONTROLLER-OWNED: filled from the resolved global
@@ -1476,7 +1478,7 @@ main = "meshtastic"
       key = "SSLKey"
       section = "Webserver"
       kind = "str"
-      default = "{runtime}/state/meshtasticd/ssl/private_key.pem"
+      default = "{runtime}/state/{instance_dir}meshtasticd/ssl/private_key.pem"
       validator = "path"
       label = "SSL key path (writable, for rootless web)"
       advanced = true
@@ -1485,7 +1487,7 @@ main = "meshtastic"
       key = "SSLCert"
       section = "Webserver"
       kind = "str"
-      default = "{runtime}/state/meshtasticd/ssl/certificate.pem"
+      default = "{runtime}/state/{instance_dir}meshtasticd/ssl/certificate.pem"
       validator = "path"
       label = "SSL cert path (writable, for rootless web)"
       advanced = true
@@ -1591,7 +1593,7 @@ main = "meshtastic"
 
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:4403"
+    address = "127.0.0.1:{port:4403}"
     ready = true
     role = "listener"
     # Managed Firewall DENY-DEFAULT: binds 0.0.0.0 unconditionally with NO auth and no
@@ -1603,7 +1605,7 @@ main = "meshtastic"
     scheme = "tcp"
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:9443"
+    address = "127.0.0.1:{port:9443}"
     # Managed Firewall DENY-DEFAULT (see 4403): the stack web proxy (suggested :8447) is the sanctioned path.
     firewall = { auth = "none", deny = true }
     role = "listener"
@@ -1615,11 +1617,11 @@ main = "meshtastic"
     # with a claim; these were the only two without one, so a future stack wanting 4403/9443
     # would have been admitted with no conflict shown.
     [[stack.component.resource]]
-    key = "tcp.port.4403"
+    key = "tcp.port.{port:4403}"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
-    key = "tcp.port.9443"
+    key = "tcp.port.{port:9443}"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
@@ -1738,7 +1740,7 @@ main = "meshcom-qemu"
   build = "cmake -S . -B build && cmake --build build"
   build_steps = [ { argv = ["cmake", "-S", ".", "-B", "build"] }, { argv = ["cmake", "--build", "build"], attributable = true } ]
   readiness = "endpoint"
-  run = "build/meshcom-loraham-bridge {bind} {port} {backend} {password_file} {ping_interval} {pong_timeout} {rf_log} --rflog-path {runtime}/logs/rf-meshcom.log"
+  run = "build/meshcom-loraham-bridge {bind} {port} {backend} {password_file} {ping_interval} {pong_timeout} {rf_log} --rflog-path {runtime}/logs/{instance_dir}rf-meshcom.log"
   bin = "build/meshcom-loraham-bridge"
   # Deterministic, hardware-free host test: the bridge's own CTest suite (FakeBackend by default —
   # no daemon, no QEMU, no radio). The build step above already compiles the test binaries +
@@ -1758,7 +1760,7 @@ main = "meshcom-qemu"
     name = "port"
     kind = "int"
     arg = "--port"
-    default = "7000"
+    default = "{port:7000}"
     min = 0
     max = 65535
     label = "Control TCP port (= firmware XR_PORT)"
@@ -1835,7 +1837,7 @@ main = "meshcom-qemu"
 
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:7000"
+    address = "127.0.0.1:{port:7000}"
     ready = true
     role = "listener"
     description = "MeshCom firmware client port."
@@ -1844,7 +1846,7 @@ main = "meshcom-qemu"
     firewall = { port_param = "port", bind_param = "bind", auth = "password" }
 
     [[stack.component.resource]]
-    key = "tcp.port.7000"
+    key = "tcp.port.{port:7000}"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
@@ -1877,11 +1879,11 @@ main = "meshcom-qemu"
   tx_capable = false
   optional = true
   start_order = 2
-  run_argv = ["{controller_python}", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshcom", "--state", "{runtime}/state/gps/meshcom"]
+  run_argv = ["{controller_python}", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshcom", "--state", "{runtime}/state/{instance_dir}gps/meshcom"]
   note = "Starts automatically when the global position source needs it (see `lhpc gps`) — not a manual choice."
 
     [stack.component.process]
-    instance_arg = ["--state", "{runtime}/state/gps/meshcom"]   # A §2.3: this instance's exact argv token pair
+    instance_arg = ["--state", "{runtime}/state/{instance_dir}gps/meshcom"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python3"
     all_args = ["_gps-bridge", "meshcom"]
 
@@ -2021,7 +2023,7 @@ main = "meshcom-qemu"
   # --node-image: QEMU runs on the node's own flash image, kept under state/ (outside the checkout and every
   # publish root), so a binary install/update or a rebuild keeps the node's settings and message counter;
   # run.sh carries them into a new build when its partition table is unchanged (finding R21).
-  run = "scripts/run.sh {env} {qemu} --node-image {runtime}/state/meshcom/node-flash.bin"
+  run = "scripts/run.sh {env} {qemu} --node-image {runtime}/state/{instance_dir}meshcom/node-flash.bin"
   state_root = "state/meshcom"       # the node image: kept by update/build/uninstall, removed by clean --purge
   # RX-safe host test (verifies the guest serves the MeshCom web UI + net-console and no radio
   # is active). SELF-SUFFICIENT: when no guest is running, test.sh boots the newest built env
@@ -2052,7 +2054,7 @@ main = "meshcom-qemu"
   # command, so re-send over a window until it lands (idempotent). `skip_if_param` sends NO
   # --setcall for an empty / N0CALL callsign (the structured equivalent of the old shell guard).
   post_steps = [
-    { kind = "tcp_wait", port = 12323, timeout = 180 },
+    { kind = "tcp_wait", port = "{port:12323}", timeout = 180 },
     # ACK-AWARE + IDEMPOTENT (17 blind connects starved the node's heap and killed its web UI):
     # probe `--info` first; `probe_value` captures the node's current call from --info's DISPLAY
     # format `...Call: <N0CALL-1>` and `probe_expect` is ours. Equal -> no send (the call
@@ -2067,7 +2069,7 @@ main = "meshcom-qemu"
     # warm boots), then 15 s, then a 30 s cap: a ~13 min window, which is a clock — a slow probe
     # uses it up and no attempt starts after it. `lhpc stack poststart meshcom` re-runs this
     # against a running stack if the window ever expires.
-    { kind = "tcp_send", port = 12323, label = "callsign", required = true, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_value = "Call: <([^>]*)>", probe_expect = "{param:mc_callsign}", stop_on = "Call:{param:mc_callsign}", schedule = [[8, 8], [6, 15], [22, 30]], skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
+    { kind = "tcp_send", port = "{port:12323}", label = "callsign", required = true, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_value = "Call: <([^>]*)>", probe_expect = "{param:mc_callsign}", stop_on = "Call:{param:mc_callsign}", schedule = [[8, 8], [6, 15], [22, 30]], skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
   ]
 
     # PERSISTED per-stack GPS switch — see the same param on the Meshtastic component. The
@@ -2188,12 +2190,12 @@ main = "meshcom-qemu"
     branch = "main"
 
     [stack.component.process]
-    instance_arg = ["-drive", "file={runtime}/state/meshcom/node-flash.bin,if=mtd,format=raw"]   # A §2.3: this instance's exact argv token pair
+    instance_arg = ["-drive", "file={runtime}/state/{instance_dir}meshcom/node-flash.bin,if=mtd,format=raw"]   # A §2.3: this instance's exact argv token pair
     exec_name = "qemu-system-xtensa"
 
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:18083"
+    address = "127.0.0.1:{port:18083}"
     firewall = { auth = "none" }
     role = "listener"
     description = "MeshCom web UI"
@@ -2201,18 +2203,18 @@ main = "meshcom-qemu"
     scheme = "http"
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:12323"
+    address = "127.0.0.1:{port:12323}"
     firewall = { auth = "none" }
     ready = true
     role = "listener"
     description = "net-console."
 
     [[stack.component.resource]]
-    key = "tcp.port.18083"
+    key = "tcp.port.{port:18083}"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
-    key = "tcp.port.12323"
+    key = "tcp.port.{port:12323}"
     kind = "tcp-port"
     mode = "exclusive"
 
@@ -2268,11 +2270,11 @@ main = "meshcore-node"
   start_order = 0
   # `{controller_python}` is controller-derived — the bridge is lhpc's OWN internal service
   # and must run through this controller's interpreter, never whatever python3 is on PATH.
-  run_argv = ["{controller_python}", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshcore", "--state", "{runtime}/state/gps/meshcore"]
+  run_argv = ["{controller_python}", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshcore", "--state", "{runtime}/state/{instance_dir}gps/meshcore"]
   note = "Starts automatically when the global position source is live (see `lhpc gps`) — not a manual choice."
 
     [stack.component.process]
-    instance_arg = ["--state", "{runtime}/state/gps/meshcore"]   # A §2.3: this instance's exact argv token pair
+    instance_arg = ["--state", "{runtime}/state/{instance_dir}gps/meshcore"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python3"
     all_args = ["_gps-bridge", "meshcore"]
 
@@ -2307,11 +2309,11 @@ main = "meshcore-node"
   # first repeater-mode config generation (see the `dashboard_password` param). Shown on the
   # stack page's Password section (value + edit command); a lax or malformed file shows a reason.
   ui_user = "admin"
-  ui_password_file = "config/secrets/openhop_repeater_admin.txt"
+  ui_password_file = "config/secrets/{instance_dir}openhop_repeater_admin.txt"
   ui_password_note = "LHPC mints this password when a repeater mode first starts; it lives in openHop's own config file (state/openhop/config.yaml). Change it in the openHop dashboard while the repeater runs."
   requires_daemon_tx = "MANAGED"
   start_order = 1
-  run = ".venv/bin/python -m meshcore_host {runtime}/config/files/meshcore.toml"
+  run = ".venv/bin/python -m meshcore_host {runtime}/config/files/{instance_dir}meshcore.toml"
   # Upstream openHop Core test suite, runnable on-device via `lhpc test meshcore-node`.
   test = ".venv/bin/python -m pytest tests/"
   # The build_steps create the in-tree venv, THEN pip-install. The venv
@@ -2347,7 +2349,7 @@ main = "meshcore-node"
     # controller renders it from the lhpc-shipped base, updating just these keys
     # (blank = keep the base/preset default).
     [stack.component.config_file]
-    path = "{runtime}/config/files/meshcore.toml"
+    path = "{runtime}/config/files/{instance_dir}meshcore.toml"
     fmt = "toml-update"
     # 0600: this file carries the node's PRIVATE KEY (see `privatekey` below).
     mode = 0o600
@@ -2432,7 +2434,7 @@ main = "meshcore-node"
       section = "persistence"
       kind = "str"
       hidden = true
-      default = "{runtime}/state/meshcore/companion.db"
+      default = "{runtime}/state/{instance_dir}meshcore/companion.db"
       [[stack.component.config_file.param]]
       name = "txpower"
       key = "txpower"
@@ -2523,7 +2525,7 @@ main = "meshcore-node"
       section = "repeater"
       kind = "str"
       hidden = true
-      default = "{runtime}/state/openhop"
+      default = "{runtime}/state/{instance_dir}openhop"
       # Issue #5, controller-owned, for the host: whether openHop's `gps` section is LHPC's (derived
       # from `use_gps`), the NMEA file LHPC writes for openHop's file source (tmpfs, never the SD
       # card), the chat node key's non-secret handle (derived; the pure repeater removes LHPC's
@@ -2541,7 +2543,7 @@ main = "meshcore-node"
       section = "repeater"
       kind = "str"
       hidden = true
-      default = "/dev/shm/lhpc-meshcore-gps.nmea"
+      default = "/dev/shm/lhpc-meshcore-gps{instance_suffix}.nmea"
       [[stack.component.config_file.param]]
       name = "chat_node_id"
       key = "chat_node_id"
@@ -2554,7 +2556,7 @@ main = "meshcore-node"
       section = "repeater"
       kind = "str"
       hidden = true
-      default = "{runtime}/state/meshcore-cli.lock"
+      default = "{runtime}/state/{instance_dir}meshcore-cli.lock"
       [[stack.component.config_file.param]]
       name = "restart_cmd"
       key = "restart_cmd"
@@ -2599,7 +2601,7 @@ main = "meshcore-node"
       key = "rf_log_path"
       section = "radio"
       kind = "str"
-      default = "{runtime}/logs/rf-meshcore.log"
+      default = "{runtime}/logs/{instance_dir}rf-meshcore.log"
       validator = "path"
       hidden = true
       label = "RF log file (named by lhpc)"
@@ -2629,13 +2631,13 @@ main = "meshcore-node"
     label = "Use the global position source (Position (GPS) card on the Stacks page)"
 
     [stack.component.process]
-    instance_arg = ["meshcore_host", "{runtime}/config/files/meshcore.toml"]   # A §2.3: this instance's exact argv token pair
+    instance_arg = ["meshcore_host", "{runtime}/config/files/{instance_dir}meshcore.toml"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python"
     all_args = ["meshcore_host"]
 
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:5000"
+    address = "127.0.0.1:{port:5000}"
     ready = true
     role = "listener"
     description = "MeshCore companion TCP"
@@ -2667,7 +2669,7 @@ main = "meshcore-node"
     # sub-paths are refused with it.
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:8000"
+    address = "127.0.0.1:{port:8000}"
     ready = true
     role = "listener"
     description = "openHop repeater dashboard"
@@ -2684,11 +2686,11 @@ main = "meshcore-node"
     ]
 
     [[stack.component.resource]]
-    key = "tcp.port.5000"
+    key = "tcp.port.{port:5000}"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
-    key = "tcp.port.8000"
+    key = "tcp.port.{port:8000}"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
@@ -2721,8 +2723,9 @@ main = "meshcore-node"
   # dependency, so it installs and runs on a headless Pi. The backend binds LOOPBACK; LHPC's
   # nginx reverse proxy is the only public path (TLS + optional mTLS + CIDR gate), and the
   # proxy REFUSES the endpoints that would mutate LHPC-owned state (see proxy_deny_paths).
-  run = "{asset}/scripts/meshcore-webui-run.sh {source} {runtime} {asset}/meshcore-webui-dist 127.0.0.1 5000 127.0.0.1 8788"
-  run_argv = ["{asset}/scripts/meshcore-webui-run.sh", "{source}", "{runtime}", "{asset}/meshcore-webui-dist", "127.0.0.1", "5000", "127.0.0.1", "8788"]
+  run = "{asset}/scripts/meshcore-webui-run.sh {source} {runtime} {asset}/meshcore-webui-dist 127.0.0.1 {port:5000} 127.0.0.1 {port:8788}"
+  run_argv = ["{asset}/scripts/meshcore-webui-run.sh", "{source}", "{runtime}", "{asset}/meshcore-webui-dist", "127.0.0.1", "{port:5000}", "127.0.0.1", "{port:8788}"]
+  run_env = { MESHCORE_INSTANCE_DIR = "{instance_dir}" }   # the instance's state level ("" at slot 0) for its data + CLI lock
   # The React frontend is PREBUILT and shipped WITH lhpc as package data ({asset}/
   # meshcore-webui-dist): a Pi Zero 2 W cannot run the Node 20+/Vite build, and LHPC never
   # runs npm at runtime. Only the Python backend is built on the target.
@@ -2755,7 +2758,7 @@ main = "meshcore-node"
   start_note = "Open the MeshCore Web UI via the LHPC Webserver page (enable its proxy for the meshcore stack)."
 
     [stack.component.process]
-    instance_arg = ["--port", "8788"]   # A §2.3: this instance's exact argv token pair
+    instance_arg = ["--port", "{port:8788}"]   # A §2.3: this instance's exact argv token pair
     exec_name = "python"
     all_args = ["uvicorn", "app.main:app"]
 
@@ -2764,7 +2767,7 @@ main = "meshcore-node"
     # the raw backend port is never exposed directly; the sanctioned path is the stack web proxy.
     [[stack.component.endpoint]]
     kind = "tcp"
-    address = "127.0.0.1:8788"
+    address = "127.0.0.1:{port:8788}"
     ready = true
     role = "listener"
     client = true
@@ -2801,7 +2804,7 @@ main = "meshcore-node"
     ]
 
     [[stack.component.resource]]
-    key = "tcp.port.8788"
+    key = "tcp.port.{port:8788}"
     kind = "tcp-port"
     mode = "exclusive"
 
@@ -2846,7 +2849,7 @@ main = "meshcore-node"
   # Wrapped so the CLI OWNS the node's single Companion client slot while it runs: the wrapper
   # creates the lock the WebUI supervisor watches (MESHCORE_CLI_LOCK), runs meshcli, and removes
   # the lock on exit so the WebUI reconnects. run_cwd is {source}, so .venv/bin/meshcli resolves.
-  run = '{asset}/scripts/meshcli-run.sh {runtime}/state/meshcore-cli.lock .venv/bin/meshcli {host} {port} {json} {debug}'
+  run = '{asset}/scripts/meshcli-run.sh {runtime}/state/{instance_dir}meshcore-cli.lock .venv/bin/meshcli {host} {port} {json} {debug}'
   build_steps = [
     { argv = ["python3", "-m", "venv", ".venv"] },
     # Every dependency is pinned by the shipped constraints file, so --prefer-binary cannot change a
@@ -2892,7 +2895,7 @@ main = "meshcore-node"
     name = "port"
     kind = "int"
     arg = "-p"
-    default = "5000"
+    default = "{port:5000}"
     min = 1
     max = 65535
     label = "Companion TCP port"

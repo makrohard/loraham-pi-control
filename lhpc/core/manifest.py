@@ -67,7 +67,8 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             name=p["name"], key=p.get("key", p["name"]), section=p.get("section", ""),
             kind=p.get("kind", "str"),
             choices=tuple(str(c) for c in p.get("choices", [])),
-            default=str(p.get("default", "")), label=p.get("label", ""),
+            default=_slot0(p.get("default", ""))[0], default_template=_slot0(p.get("default", ""))[1],
+            label=p.get("label", ""),
             advanced=p.get("advanced", False), apply_mode=p.get("apply_mode", "restart"),
             min=p.get("min"), max=p.get("max"),
             band_defaults=tuple((str(k), str(v)) for k, v in p.get("band_defaults", {}).items()),
@@ -146,7 +147,8 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
         if mode not in _SECRET_CONFIG_MODES:
             raise ManifestError(f"config_file carrying {which} param {prm.name!r} must be "
                                 f"owner-only (0600 or 0400), got {mode:#o}")
-    return FileConfig(path=path, fmt=fmt, mode=mode,
+    path, path_t = _slot0(path)
+    return FileConfig(path=path, path_template=path_t, fmt=fmt, mode=mode,
                       base=base, apply_cmd=raw.get("apply_cmd", ""),
                       params=params)
 
@@ -215,9 +217,10 @@ def _require_module(value, cid: str) -> str:
 
 def _check_token(cid: str, tok: str, names: set) -> None:
     """Validate one argv token's grammar: a whole placeholder must reference a known
-    param/operator/controller name; a literal may embed only {runtime}/{source}/{band}
-    and must contain no other stray braces."""
-    if tok.startswith("{") and tok.endswith("}") and tok.count("{") == 1:
+    param/operator/controller name; a literal may embed only {runtime}/{source}/{band} and the
+    instance tokens ({port:…}, {port_of:…}, {instance_dir}), and must contain no other stray braces."""
+    instance_free = commands.SLOT0.subst(tok)     # the instance tokens resolve; a bad base raises
+    if tok.startswith("{") and tok.endswith("}") and tok.count("{") == 1 and instance_free == tok:
         inner = tok[1:-1]
         kind, _, name = inner.partition(":")
         if kind == "param":
@@ -237,7 +240,7 @@ def _check_token(cid: str, tok: str, names: set) -> None:
         return
     # `{asset}/...` — a packaged-data path (build steps and run commands both resolve it via
     # commands._asset_token, which validates each path segment). Allow it in literal tokens.
-    stripped = (tok.replace("{runtime}", "").replace("{source}", "").replace("{band}", "")
+    stripped = (instance_free.replace("{runtime}", "").replace("{source}", "").replace("{band}", "")
                    .replace("{controller_python}", "").replace("{asset}", ""))
     if "{" in stripped or "}" in stripped:
         raise ManifestError(f"{cid}: malformed command token {tok!r} (stray brace)")
@@ -665,7 +668,8 @@ def _is_simple(cmd: str) -> bool:
 
 def _tok(t: str) -> str:
     """Map a `{name}` placeholder to its structured token form."""
-    if t.startswith("{") and t.endswith("}") and t.count("{") == 1 and "/" not in t:
+    if (t.startswith("{") and t.endswith("}") and t.count("{") == 1 and "/" not in t
+            and commands.SLOT0.subst(t) == t):           # an instance token ({port:…}) stays as written
         name = t[1:-1]
         if name == "callsign":
             return "{operator:" + name + "}"
@@ -842,7 +846,8 @@ def _parse_component(raw: dict) -> Component:
         secret_files=_secret_files(raw),
         release_repo=raw.get("release_repo", ""),
         ui_user=raw.get("ui_user", ""),
-        ui_password_file=raw.get("ui_password_file", ""),
+        ui_password_file=_slot0(raw.get("ui_password_file", ""))[0],
+        ui_password_file_template=_slot0(raw.get("ui_password_file", ""))[1],
         ui_password_note=str(raw.get("ui_password_note", "") or ""),
         run_argv=tuple(str(t) for t in raw.get("run_argv", [])),
         run_cwd=raw.get("run_cwd", ""),
@@ -905,10 +910,11 @@ def _parse_param(p: dict, cid: str) -> RunParam:
             f"{cid}: param {p.get('name', '?')!r} has unknown key(s) "
             f"{sorted(stray)} — a component-level key placed after a [[…param]] table "
             f"binds to that table; move it above the param tables.")
+    default, default_t = _slot0(p.get("default", ""))
     return RunParam(
         name=p["name"], kind=p.get("kind", "enum"),
         choices=tuple(str(c) for c in p.get("choices", [])),
-        default=str(p.get("default", "")),
+        default=default, default_template=default_t,
         flag=p.get("flag", ""), label=p.get("label", ""),
         min=p.get("min"), max=p.get("max"),
         advanced=p.get("advanced", False),
@@ -927,13 +933,21 @@ TRANSPORTS = ("spi", "usb")
 TRANSPORT_UNTIL_L5 = "spi"
 
 
+def _slot0(text: str) -> tuple[str, str]:
+    """(the slot-0 value, the template or "") of a manifest value that may carry instance tokens:
+    every consumer reads the slot-0 value, which is today's; the template is kept for the other slots."""
+    v = commands.SLOT0.subst(str(text))
+    return v, ("" if v == str(text) else str(text))
+
+
 def _parse_resource(raw: dict) -> ResourceClaim:
     claims_if = raw.get("claims_if")
     if claims_if is not None and claims_if not in TRANSPORTS:
         raise ManifestError(f"resource {raw.get('key')!r}: claims_if must be one of {TRANSPORTS}, "
                             f"got {claims_if!r}")
+    key, key_t = _slot0(raw["key"])
     return ResourceClaim(
-        key=raw["key"],
+        key=key, key_template=key_t,
         kind=ResourceKind(raw["kind"]),
         mode=ResourceMode(raw.get("mode", "exclusive")),
         requirement=raw.get("requirement", ""),
@@ -963,9 +977,10 @@ def _parse_process(raw: dict | None) -> ProcessSpec | None:
 
 
 def _parse_endpoint(raw: dict) -> EndpointSpec:
+    address, address_t = _slot0(raw["address"])
     return EndpointSpec(
         kind=raw["kind"],
-        address=raw["address"],
+        address=address, address_template=address_t,
         role=raw.get("role", "listener"),
         readiness=raw.get("readiness", "none"),
         ready=raw.get("ready", False),

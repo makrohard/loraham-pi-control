@@ -1,0 +1,58 @@
+"""L4: nginx pages per instance (A §2.6; PROOF T-N1, T-N5). Until L5 every stack has its one instance at slot 0 and the
+pages are today's (T-N1: the stack-web suite and its fixtures hold). A slot-k instance (injected, as L5 will assign it)
+gets its own page `<page>@<rid>`, proxied to its own port, with the slot-0 page's deny locations and deny answer."""
+
+from lhpc.core import commands
+from lhpc.core import webserver as ws
+from lhpc.core.paths import Paths
+from lhpc.core.probes.backends import FakeSystem
+from lhpc.core.services import ControllerService
+from lhpc.core.webserver import StackWebProxy
+
+
+def _svc(tmp_path, monkeypatch, slot_k=True):
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    if slot_k:     # raising=False: on a code without instances the pages are slot 0's only (the red-before)
+        monkeypatch.setattr(commands, "stack_instances",
+                            lambda stk: (commands.SLOT0, commands.Instance(1, "r2"))
+                            if stk.id == "meshcore" else (commands.SLOT0,), raising=False)
+    return svc
+
+
+def test_a_slot_k_instance_has_its_own_pages_proxied_to_its_own_ports(tmp_path, monkeypatch):
+    pages = {p.page_id: p for p in _svc(tmp_path, monkeypatch).stack_web_pages("meshcore")}
+    assert {pid: p.address for pid, p in pages.items()} == {
+        "meshcore": "127.0.0.1:8788", "meshcore-meshcore-node": "127.0.0.1:8000",
+        "meshcore@r2": "127.0.0.1:8798", "meshcore-meshcore-node@r2": "127.0.0.1:8010"}
+    assert pages["meshcore@r2"].label == pages["meshcore"].label + " @r2"
+
+
+def test_t_n5_every_instance_page_carries_its_slot0_deny_locations_and_answer(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch)
+    pages = {p.page_id: p for p in svc.stack_web_pages("meshcore")}
+    for base in ("meshcore", "meshcore-meshcore-node"):
+        slot0, slotk = pages[base], pages[f"{base}@r2"]
+        assert (slotk.deny_paths, slotk.deny_notice) == (slot0.deny_paths, slot0.deny_notice) and slot0.deny_paths
+
+    def proxy(page, port):
+        class _SWC:
+            stack_id = page.page_id; enabled = True; remote = False; allowed_cidrs = []
+            scheme = "https"; access_mode = "auth-everywhere"
+        _SWC.port = port
+        return StackWebProxy(_SWC(), page.address, page.scheme, page.deny_paths, page.deny_notice)
+    node0, nodek = pages["meshcore-meshcore-node"], pages["meshcore-meshcore-node@r2"]
+    out = ws.render_nginx_config(svc._paths, svc.config().webserver, [proxy(node0, 8448), proxy(nodek, 8458)])
+    block0 = out.split("# meshcore-meshcore-node web UI")[1].split("# meshcore-meshcore-node@r2 web UI")[0]
+    blockk = out.split("# meshcore-meshcore-node@r2 web UI")[1]
+
+    def deny_lines(block):
+        return [ln.strip() for ln in block.splitlines() if ln.strip().startswith("location ~ ")]
+    assert deny_lines(block0) == deny_lines(blockk) and deny_lines(block0)
+    assert f"return 200 '{ws.DENY_NOTICE_BODY}'" in deny_lines(blockk)[0]
+    assert "server 127.0.0.1:8010" in out and "server 127.0.0.1:8000" in out
+
+
+def test_t_n1_until_l5_the_pages_are_slot_0s(tmp_path, monkeypatch):
+    pages = _svc(tmp_path, monkeypatch, slot_k=False).stack_web_pages("meshcore")
+    assert [p.page_id for p in pages] == ["meshcore", "meshcore-meshcore-node"]

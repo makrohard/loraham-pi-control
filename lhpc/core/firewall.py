@@ -587,3 +587,53 @@ def render_reset_script() -> str:
         'echo "lhpc firewall integration removed — your own firewall configuration is exactly as before"',
     ]
     return "\n".join(lines) + "\n"
+
+
+# ---- candidate rows per instance (A §2.5; until L5 each stack has its one instance at slot 0) ----
+
+def instance_port(port: int, inst) -> int:
+    """An instance's port: the slot-0 port (configured or not) + 10 per slot; refused outside 1024..65535
+    (commands.slot_port, the one rule)."""
+    from .commands import slot_port
+    return slot_port(port, inst.slot if inst is not None else 0)
+
+
+def instance_eid(comp_id: str, static_port, inst) -> str:
+    """The row id: `<component>.tcp-<base>` at slot 0, `<component>-<rid>.tcp-<base>` at slot k."""
+    if inst is not None and inst.slot:
+        return f"{comp_id}-{inst.rid}.tcp-{static_port}"
+    return f"{comp_id}.tcp-{static_port}"
+
+
+def base_id(eid: str) -> str:
+    """The slot-0 id of an instance row's id: `<component>-<rid>.tcp-<base>` -> `<component>.tcp-<base>`."""
+    return re.sub(r"-r[1-9][0-9]?(\.tcp-\d+)$", r"\1", eid)
+
+
+def endpoint_rows(stack, bands, resolve, selected) -> list:
+    """The candidate rows of one endpoint, for each instance of the stack (`commands.stack_instances`).
+    `resolve(band, inst)` is the endpoint's scope. Each band is resolved and DISTINCT scopes are kept,
+    never two bands merged into one row: when every band yields the same scope (the common case) there is
+    ONE band-agnostic row (band=""), so the model and its hash are unchanged; only genuinely diverging
+    per-band scopes get band-labelled rows (so compatibility mode drops the real per-band port). A
+    loopback-only scope without a knob gives no row. A tick on the slot-0 id selects every instance's row."""
+    from . import commands
+    rows = []
+    for inst in commands.stack_instances(stack):
+        per_scope = {}
+        for band in bands:
+            sc = resolve(band, inst)
+            if sc["loopback"] and not sc["deny"]:
+                continue
+            stup = (sc["proto"], sc["family"], sc["addr"], sc["port"],
+                    tuple(sorted(sc["allow_cidrs"])), sc["deny"])
+            per_scope.setdefault(stup, (band, sc))
+        band_agnostic = len(per_scope) <= 1
+        for band, sc in per_scope.values():
+            key = sc["id"]
+            rows.append({"id": key, "proto": sc["proto"], "family": sc["family"],
+                         "addr": sc["addr"], "port": sc["port"], "allow_cidrs": sc["allow_cidrs"],
+                         "selected": key in selected or base_id(key) in selected,
+                         "deny_default": sc["deny"], "auth": sc.get("auth", "none"),
+                         "band": "" if band_agnostic else band})
+    return rows

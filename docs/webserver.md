@@ -164,6 +164,10 @@ lhpc webserver apply
   (MeshChat) and meshcore (`meshcore` = MeshCore Web UI, `meshcore-meshcore-node` = openHop
   repeater dashboard); daemon, kiss, chat and voice have none. A new page is configured only when
   you save its panel or the bulk form.
+- One port, one owner: a page's port and a stack's port setting (e.g. kiss `kiss_port`) are checked
+  against every TCP listener LHPC would run, the console's port included. A save that would share a
+  port, or leave 1024..65535, is refused and names the other owner. The MeshCom bridge's port 0 is
+  refused too: it must equal the firmware's `XR_PORT`.
 
 **Webserver → Stacks WebGUIs** applies one policy (access, scheme, access mode, CIDRs) to
 **every** page in one confirmed action (**LHPC WebGUI** is the console's own). Existing ports
