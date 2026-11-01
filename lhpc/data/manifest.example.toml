@@ -905,7 +905,7 @@ main = "loraham-kiss-tnc"
   optional = true
   depends_on = ["loraham-kiss-tnc"]
   start_order = 2
-  run_argv = ["socat", "-d", "-d", "PTY,link={runtime}/state/loraham_kiss,raw,echo=0,waitslave,mode=666", "TCP:127.0.0.1:{port:8001}"]
+  run_argv = ["socat", "-d", "-d", "PTY,link={runtime}/state/{instance_dir}loraham_kiss,raw,echo=0,waitslave,mode=666", "TCP:127.0.0.1:{port:8001}"]
   note = "Optional socat PTY <-> KISS/TCP(127.0.0.1:8001) bridge; exposes <runtime>/state/loraham_kiss (in-root; point external tools there). Runs socat DIRECTLY (not the wrapper script, which traps SIGTERM and respawns socat) so lhpc owns the socat process and stops it cleanly. Needs socat."
 
     [stack.component.source]
@@ -920,8 +920,10 @@ main = "loraham-kiss-tnc"
     # `socat` is a general-purpose tool an operator may be running for anything. Matching on the
     # executable alone claimed ANY socat on the box as this component, which then read as
     # RUNNING/DEGRADED and blocked unrelated stack starts ("kiss must be stopped first") with
-    # nothing of ours actually running. The PTY link path is ours and appears in the real argv.
-    all_args = ["state/loraham_kiss"]
+    # nothing of ours actually running. The PTY link path is ours and appears in the real argv: "/loraham_kiss,"
+    # (the link token's leaf and its option comma) matches every instance's link (state/[<rid>/]loraham_kiss) and not
+    # the TNC's loraham_kiss_tnc.conf.example.
+    all_args = ["/loraham_kiss,"]
 
     [[stack.component.require]]
     cmd = "socat"

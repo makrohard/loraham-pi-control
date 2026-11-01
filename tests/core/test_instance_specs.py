@@ -113,3 +113,18 @@ def test_each_slot_k_token_matches_its_own_instance_only(comp):
         assert matches(comp.process, argvs[(i.slot, i.rid)], (opt, value)), (i.slot, i.rid, value)
         others = [k for k, argv in argvs.items() if k != (i.slot, i.rid) and has_instance_token(argv, opt, value)]
         assert others == [], (i.slot, i.rid, value, others)
+
+
+def test_the_kiss_pty_link_follows_the_instance():
+    # G1-3 B2: the optional socat PTY link is a path of its instance: slot 0 keeps today's link, every slot k gets
+    # its radio's level, so two instances never share one link; the process match finds each instance's socat
+    # and not the TNC (whose config file name also starts with loraham_kiss).
+    comp = next(c for c in SPECS if c.id == "loraham-kiss-serial")
+    links = {(i.slot, i.rid): next(t for t in _slot_argv(comp, i) if t.startswith("PTY,link=")) for i in INSTANCES}
+    assert links[(0, "")] == f"PTY,link={RT}/state/loraham_kiss,raw,echo=0,waitslave,mode=666"
+    assert links[(3, "r2")] == f"PTY,link={RT}/state/r2/loraham_kiss,raw,echo=0,waitslave,mode=666"
+    assert len(set(links.values())) == len(INSTANCES)
+    tnc = next(c for c in SPECS if c.id == "loraham-kiss-tnc")
+    for inst in INSTANCES:
+        assert all(a in " ".join(_slot_argv(comp, inst)) for a in comp.process.all_args)
+    assert not all(a in " ".join(_argv(tnc)) for a in comp.process.all_args)

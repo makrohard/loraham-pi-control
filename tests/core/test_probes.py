@@ -337,7 +337,8 @@ def test_our_own_kiss_bridge_is_still_matched(tmp_path):
     """The narrowing must not go so far that lhpc stops recognising its own process — then a
     running bridge would read as stopped and a second one could be started on top."""
     comp = _kiss_serial(tmp_path)
-    ours = [a.replace("{runtime}", str(tmp_path)) for a in comp.run_argv]   # its own run line
+    ours = [a.replace("{runtime}", str(tmp_path)).replace("{instance_dir}", "")   # its own run line (slot 0)
+            for a in comp.run_argv]
     assert matches(comp.process, ours) is True
 
 
