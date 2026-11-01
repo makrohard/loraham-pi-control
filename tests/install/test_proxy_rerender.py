@@ -354,6 +354,17 @@ _SNAP = {"console": {}, "proxies": []}
 
 def _pid(paths, cls):
     pid = paths.under(*webserver.NGINX_PID)
+    if cls in ("P7b", "P7c", "P7d"):                # state/run itself is not a plain directory
+        run, root = pid.parent, paths.runtime_root
+        if cls == "P7b":                            # a symlink to a real directory that holds a pid
+            (root / "realrun").mkdir()
+            (root / "realrun" / "nginx.pid").write_text("4242\n")
+            run.symlink_to(root / "realrun")
+        elif cls == "P7c":                          # a dangling symlink
+            run.symlink_to(root / "nowhere")
+        else:                                       # a regular file
+            run.write_text("x")
+        return
     if cls != "P2":
         pid.parent.mkdir(parents=True, exist_ok=True)
     if cls == "P3":
@@ -363,9 +374,11 @@ def _pid(paths, cls):
     elif cls == "P5":
         pid.write_text("4242\n")
         pid.chmod(0)
-    elif cls == "P6":
+    elif cls == "P6a":
         pid.mkdir()
-    elif cls == "P7":
+    elif cls == "P6b":                              # a FIFO: the probe must not block on it
+        os.mkfifo(pid)
+    elif cls == "P7a":                              # a symlink leaf
         real = pid.parent / "elsewhere.pid"
         real.write_text("4242\n")
         pid.symlink_to(real)
@@ -380,21 +393,31 @@ def _evidence(paths, cls):
     ev.parent.mkdir(parents=True, exist_ok=True)
     body = {"E2": _json.dumps({"schema": 1, "applied_snapshot": _SNAP}),
             "E3": _json.dumps({"schema": 1}),
-            "E4": _json.dumps({"schema": 1, "applied_snapshot": _SNAP}),
+            "E4a": _json.dumps({"schema": 1, "applied_snapshot": _SNAP}),
             "E5": "not json {",
             "E6": "[" * 200000,
             "E7": "[1, 2]",
             "E8": _json.dumps({"schema": 0, "applied_snapshot": _SNAP}),
             "E9": _json.dumps({"schema": 1, "applied_snapshot": {"console": "x", "proxies": []}}),
             "E10": _json.dumps({"schema": 1, "pad": "x" * (1 << 20), "applied_snapshot": _SNAP})}.get(cls)
+    if cls == "E4b":                                # a symlink to a valid evidence file
+        good = paths.runtime_root / "good.json"
+        good.write_text(_json.dumps({"schema": 1, "applied_snapshot": _SNAP}))
+        ev.symlink_to(good)
+    elif cls == "E4c":                              # a dangling symlink
+        ev.symlink_to(paths.runtime_root / "nowhere.json")
+    elif cls == "E4d":                              # a directory
+        ev.mkdir()
+    elif cls == "E4e":                              # a FIFO: the probe must not block on it
+        os.mkfifo(ev)
     if body is not None:
         ev.write_text(body)
-    if cls == "E4":
+    if cls == "E4a":
         ev.chmod(0)
 
 
-PID_CLASSES = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"]
-EV_CLASSES = ["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9", "E10"]
+PID_CLASSES = ["P1", "P2", "P3", "P4", "P5", "P6a", "P6b", "P7a", "P7b", "P7c", "P7d", "P8"]
+EV_CLASSES = ["E1", "E2", "E3", "E4a", "E4b", "E4c", "E4d", "E4e", "E5", "E6", "E7", "E8", "E9", "E10"]
 CLEARS = {("P1", "E1"), ("P1", "E3"), ("P2", "E1"), ("P2", "E3")}
 
 
