@@ -582,21 +582,31 @@ def test_stored_setting_and_ap_apply_agree_on_the_candidate(tmp_path, monkeypatc
     assert spawned and AP_UUID in spawned[0]
 
 
+@pytest.mark.parametrize("saved, live_for", [(TODAY, TODAY), ("10.43.0.0/24", None)],
+                         ids=["old-rules-saved-and-live", "candidate-saved-not-live"])
 @pytest.mark.parametrize("profile_addr", ["", "10.42.0.1/24"])
 def test_the_ap_start_refuses_a_candidate_the_live_rules_do_not_cover(tmp_path, monkeypatch,
-                                                                       profile_addr):
-    """C9 (the maintainer's CO-16 ruling: a non-usable AP is a bad bug): the AP rules saved and
-    live cover the OLD subnet 10.42.0.0/24, not the stored candidate 10.43.0.0/24. The switch is
-    REFUSED before anything is modified: no nmcli modify of the AP profile, its address unchanged,
-    no finalize helper spawned, no pending record."""
+                                                                       profile_addr, saved, live_for):
+    """C9 (the maintainer's CO-16 ruling: a non-usable AP is a bad bug): the gate must hold for the
+    stored candidate 10.43.0.0/24 (saved AND live) before anything is modified. Two refusals: the
+    rules saved and live cover only the OLD subnet 10.42.0.0/24; or the rules are saved for the
+    candidate but not live. Either way the switch is REFUSED naming the candidate, and nothing
+    changes: no nmcli modify of the AP profile, its address unchanged, no finalize helper spawned,
+    no pending record, the stored firewall config and the firewall's AP subnet as before."""
     svc, nm, spawned = _ap_box(tmp_path, monkeypatch, local='[network]\nap_cidr = "10.43.0.0/24"\n',
-                               profile_addr=profile_addr, live_for=TODAY)
-    cfgmod.save_firewall_config(svc._paths, ap_enabled=True, ap_interface="wlan0", ap_cidr=TODAY)
+                               profile_addr=profile_addr, live_for=live_for)
+    cfgmod.save_firewall_config(svc._paths, ap_enabled=True, ap_interface="wlan0", ap_cidr=saved)
     svc._invalidate_config()
+    fw_before = cfgmod.load_config(svc._paths).firewall
+    ap_before = svc.firewall_candidate()["ap"]["cidr"]
     res = svc.network_ap_now(apply=True)
     assert not res.ok, "the switch went on while the AP rules do not cover the candidate subnet"
     assert _modified(nm) == [] and nm.addr == profile_addr
     assert spawned == [] and not svc._net_pending_path().exists()
+    svc._invalidate_config()
+    assert cfgmod.load_config(svc._paths).firewall == fw_before, "the refusal changed the firewall config"
+    assert svc.firewall_candidate()["ap"]["cidr"] == ap_before == saved
+    assert "10.43.0.0/24" in " ".join([res.summary, *res.details]), "the refusal does not name the candidate"
 
 
 @pytest.mark.parametrize("cidr, first, address", [
@@ -624,8 +634,8 @@ def test_one_setting_drives_the_profile_firewall_and_hint(tmp_path, monkeypatch,
 
 
 def test_the_open_hint_follows_the_setting(tmp_path, monkeypatch):
-    """C14: the user-visible 10.42.0.1 literals of the AP switch (dev service_network.py:909 and
-    :977) read the setting."""
+    """C14: the user-visible 10.42.0.1 literals of the AP switch
+    (dev:service_network.py:909/:977 at 6c69faa2) read the setting."""
     svc, _, _ = _ap_box(tmp_path, monkeypatch, local='[network]\nap_cidr = "192.168.50.0/24"\n',
                         live_for="192.168.50.0/24")
     dry = svc.network_ap_now(apply=False)
