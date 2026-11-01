@@ -43,4 +43,5 @@ A1 the runner label, A2 no arm label, A3 the triggers, A4 no secrets, A5 every `
 full sha and copied from `testlab.yml`, A6 the concurrency group, A7 the artifact names, A8 no
 `workflow_call`/`workflow_run` and `needs` only within the file, A9 `contents: read`, A10 the job
 names, A11 the helper files exist, A12 a second parse with PyYAML when it is importable (else NOT RUN),
-A13 every job opens with the x86_64 guard, before the checkout and any acquisition.
+A13 every job opens with the x86_64 guard and has no job container or services (so the guard runs
+before the checkout and the workflow's own acquisition steps; the runner fetches the actions first).

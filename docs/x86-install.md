@@ -70,5 +70,6 @@ lhpc install kiss && lhpc build kiss
   the real host (not yet run).
 - **The test-lab lanes on x86_64:** `.github/workflows/testlab-x86.yml` runs the lab's three lanes on
   the `ubuntu-24.04` runner, every stack built from source (never dispatched yet: not yet verified).
-  It is a workflow of its own, outside the gating set (gate: `testlab/x86/check_workflow.py`, A8
-  and A10). Its files: [testlab/x86](../testlab/x86/README.md).
+  It is a workflow of its own, outside the gating set (not yet verified by a gate: the manual check
+  `testlab/x86/check_workflow.py`, A8 and A10, is run by no CI job yet). Its files:
+  [testlab/x86](../testlab/x86/README.md).

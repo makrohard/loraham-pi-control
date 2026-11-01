@@ -42,8 +42,10 @@ jobs:
     steps:
       - name: Prove the runner is x86_64 and record its free disk
         # The FIRST step of every job: the lanes run natively on amd64, so a wrong label or an
-        # emulated runner stops here, before the checkout and any acquisition (check_workflow.py
-        # A13). The free space is recorded because no x86_64 run has been measured.
+        # emulated runner stops here, before the checkout and the workflow's own acquisition steps
+        # (the runner fetches the actions a job uses before its first step; check_workflow.py A13
+        # also refuses a job container or services, which would be pulled before it). The free
+        # space is recorded because no x86_64 run has been measured.
         run: |
           m=$(uname -m) || { echo "::error::uname -m failed"; exit 1; }
           if [ "$m" != x86_64 ]; then
@@ -167,8 +169,10 @@ jobs:
     steps:
       - name: Prove the runner is x86_64 and record its free disk
         # The FIRST step of every job: the lanes run natively on amd64, so a wrong label or an
-        # emulated runner stops here, before the checkout and any acquisition (check_workflow.py
-        # A13). The free space is recorded because no x86_64 run has been measured.
+        # emulated runner stops here, before the checkout and the workflow's own acquisition steps
+        # (the runner fetches the actions a job uses before its first step; check_workflow.py A13
+        # also refuses a job container or services, which would be pulled before it). The free
+        # space is recorded because no x86_64 run has been measured.
         run: |
           m=$(uname -m) || { echo "::error::uname -m failed"; exit 1; }
           if [ "$m" != x86_64 ]; then
@@ -320,8 +324,10 @@ jobs:
     steps:
       - name: Prove the runner is x86_64 and record its free disk
         # The FIRST step of every job: the lanes run natively on amd64, so a wrong label or an
-        # emulated runner stops here, before the checkout and any acquisition (check_workflow.py
-        # A13). The free space is recorded because no x86_64 run has been measured.
+        # emulated runner stops here, before the checkout and the workflow's own acquisition steps
+        # (the runner fetches the actions a job uses before its first step; check_workflow.py A13
+        # also refuses a job container or services, which would be pulled before it). The free
+        # space is recorded because no x86_64 run has been measured.
         run: |
           m=$(uname -m) || { echo "::error::uname -m failed"; exit 1; }
           if [ "$m" != x86_64 ]; then
@@ -356,10 +362,15 @@ jobs:
           . .github/scripts/retry.sh
           mkdir -p srcmirror xfer/graywolf xfer/wheels slowevidence
           timed() {  # timed <what> <argv...>: run it, append its wall time to transfers.toml
-            local what=$1 t0 t1; shift; t0=$(date +%s%N)
-            "$@"; t1=$(date +%s%N)
-            printf '[[transfer]]\nwhat = "%s"\nseconds = %s\n\n' "$what" \
-              "$(awk -v d=$((t1 - t0)) 'BEGIN { printf "%.1f", d / 1e9 }')" >> slowevidence/transfers.toml
+            # Every substitution is checked: a failed clock or awk stops the step instead of
+            # writing an empty seconds value.
+            local what=$1 t0 t1 secs; shift
+            t0=$(date +%s%N) || exit 1
+            "$@"
+            t1=$(date +%s%N) || exit 1
+            secs=$(awk -v d=$((t1 - t0)) 'BEGIN { printf "%.1f", d / 1e9 }') || exit 1
+            [ -n "$secs" ] || exit 1
+            printf '[[transfer]]\nwhat = "%s"\nseconds = %s\n\n' "$what" "$secs" >> slowevidence/transfers.toml
           }
           python3 testlab/x86/amd64-remotes.py lhpc/data/manifest.example.toml > srcmirror/remotes.txt
           while read -r remote; do
@@ -468,7 +479,10 @@ jobs:
           done
           echo "throttled disks: $disks (writable layer: $root)"
           echo "SLOW_IO_FLAGS=$flags" >> "$GITHUB_ENV"
-          echo "SLOW_IO_ROOT_DISK=$(lsblk -dno MAJ:MIN "$root" | tr -d ' ')" >> "$GITHUB_ENV"
+          rootmm=$(lsblk -dno MAJ:MIN "$root") || { echo "::error::lsblk $root failed"; exit 1; }
+          rootmm=${rootmm// /}
+          [ -n "$rootmm" ] || { echo "::error::no MAJ:MIN for $root"; exit 1; }
+          echo "SLOW_IO_ROOT_DISK=$rootmm" >> "$GITHUB_ENV"
 
       # A heredoc lane script, as in release-verify. The container gets the throttle; the lane
       # itself checks that cpu.max, memory.max and io.max are in force and fails if they are not.

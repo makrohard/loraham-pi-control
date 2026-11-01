@@ -34,7 +34,7 @@ class ParseError(Exception):
     pass
 
 
-# ---- a reader for the YAML subset GitHub workflows of this repository use ------------------------
+# ---- a parser for the YAML subset GitHub workflows of this repository use ------------------------
 # Block mappings and sequences, plain or quoted scalars, flow lists of scalars, block scalars and
 # comments. Anything else (anchors, flow mappings, multi-line plain scalars) is a ParseError.
 
@@ -176,7 +176,8 @@ def checks(text: str, w: dict, ref_text: str, ref: dict, ci: dict) -> list:
                and (on["workflow_dispatch"] is None or type(on["workflow_dispatch"]) is dict))
     rows.append(("A3 triggers are exactly workflow_dispatch + push on cons/**", want_on, repr(on)))
 
-    sec = [n for n, line in enumerate(text.split("\n"), 1) if re.search(r"secrets\s*[.\[]", line)]
+    # Any use of the secrets context, outside comments: secrets.X, secrets['X'], toJSON(secrets), ${{ secrets }}.
+    sec = [n for n, line in enumerate(text.split("\n"), 1) if re.search(r"\bsecrets\b", _strip_comment(line))]
     rows.append(("A4 no secrets reference", not sec, f"lines {sec}" if sec else "none"))
 
     uses = _uses_lines(text)
@@ -223,6 +224,7 @@ def checks(text: str, w: dict, ref_text: str, ref: dict, ci: dict) -> list:
                  f"named {refs}; missing {missing}"))
 
     # A guard with an `if:`, `continue-on-error` or `uses` could be skipped or ignored: only name + run.
+    # A job `container:` or `services:` is pulled before the first step, so before the guard: refused.
     unguarded = []
     for j, job in jobs.items():
         steps = job.get("steps") if type(job) is dict else None
@@ -230,15 +232,19 @@ def checks(text: str, w: dict, ref_text: str, ref: dict, ci: dict) -> list:
         body = [line.strip() for line in first.get("run", "").split("\n") if line.strip()] \
             if type(first) is dict and type(first.get("run")) is str else []
         if type(first) is not dict or set(first) != {"name", "run"} or tuple(body[:len(GUARD)]) != GUARD \
-                or "continue-on-error" in job:
+                or "continue-on-error" in job or "container" in job or "services" in job:
             unguarded.append(j)
-    rows.append(("A13 every job's first step is the x86_64 guard (before checkout and any acquisition)",
+    rows.append(("A13 every job's first step is the x86_64 guard; no job container or services",
                  not unguarded, f"unguarded {unguarded}" if unguarded else f"{len(jobs)} jobs guarded"))
     return rows
 
 
+def _get(d, key):
+    return d.get(key) if type(d) is dict else None
+
+
 def yaml_check(text: str, w: dict) -> tuple:
-    """A12: PyYAML's parse agrees with this reader on every asserted field; ('NOT RUN', why) without it."""
+    """A12: PyYAML's parse agrees with this parser on every asserted field; ('NOT RUN', why) without it."""
     try:
         import yaml
     except ImportError:
@@ -250,15 +256,15 @@ def yaml_check(text: str, w: dict) -> tuple:
     if type(y) is not dict or type(y.get("jobs")) is not dict:
         return "FAIL", "PyYAML: not a mapping with jobs"
     on = y.get("on", y.get(True))          # YAML 1.1 reads the bare key on as True
+    mine = w.get("on")
     diffs = []
-    if type(on) is not dict or set(on) != set(w["on"]) or on.get("push") != w["on"].get("push"):
+    if type(on) is not dict or type(mine) is not dict or set(on) != set(mine) or on.get("push") != mine.get("push"):
         diffs.append(f"on {on!r}")
     if y.get("permissions") != w.get("permissions"):
         diffs.append(f"permissions {y.get('permissions')!r}")
-    if (y.get("concurrency") or {}).get("group") != (w.get("concurrency") or {}).get("group"):
+    if _get(y.get("concurrency"), "group") != _get(w.get("concurrency"), "group"):
         diffs.append("concurrency group")
-    if {j: (v or {}).get("runs-on") for j, v in y["jobs"].items()} != \
-            {j: (v or {}).get("runs-on") for j, v in w["jobs"].items()}:
+    if {j: _get(v, "runs-on") for j, v in y["jobs"].items()} != {j: _get(v, "runs-on") for j, v in w["jobs"].items()}:
         diffs.append("runs-on")
     if sorted(map(str, _artifact_names(y))) != sorted(map(str, _artifact_names(w))):
         diffs.append("artifact names")
@@ -277,15 +283,22 @@ def main(argv: list) -> int:
     try:
         text, ref_text, ci_text = (p.read_text(encoding="utf-8") for p in (args.workflow, args.reference, args.ci))
         w, ref, ci = parse(text), parse(ref_text), parse(ci_text)
-    except (OSError, UnicodeDecodeError, ParseError) as exc:
-        print(f"UNKNOWN  cannot check: {type(exc).__name__}: {exc}")
+    except (OSError, UnicodeDecodeError, ParseError, RecursionError) as exc:
+        print(f"UNKNOWN  cannot check: {type(exc).__name__}: {str(exc)[:200]}")
         print("VERDICT  UNKNOWN")
         return 2
-    rows = checks(text, w, ref_text, ref, ci)
+    # Exit 1 is reserved for a FAIL: an input no assertion foresaw is UNKNOWN (exit 2), never a FAIL or a PASS;
+    # any unforeseen shape is reported, with the exception named.
+    try:
+        rows = checks(text, w, ref_text, ref, ci)
+        state, ywhy = yaml_check(text, w)
+    except Exception as exc:
+        print(f"UNKNOWN  cannot check: {type(exc).__name__} while checking: {str(exc)[:200]}")
+        print("VERDICT  UNKNOWN")
+        return 2
     for name, ok, why in rows:
         print(f"{'PASS' if ok else 'FAIL'}  {name}  [{why}]")
-    state, why = yaml_check(text, w)
-    print(f"{state}  A12 PyYAML parse agrees  [{why}]")
+    print(f"{state}  A12 PyYAML parse agrees  [{ywhy}]")
     failed = sum(not ok for _, ok, _ in rows) + (state == "FAIL")
     print(f"VERDICT  {'FAIL' if failed else 'PASS'}  ({len(rows) + 1} assertions, {failed} failed"
           + (", A12 not run" if state == "NOT RUN" else "") + ")")
