@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from lhpc.core import rflog
-from lhpc.core.paths import resolve_paths
+from lhpc.core.paths import Paths, resolve_paths
 
 
 def _daemon():
@@ -114,5 +114,32 @@ def test_list_jobs_lists_no_legacy_file_that_is_not_there():
 
 
 def test_prune_never_deletes_an_rf_log_in_either_form_nor_what_the_rule_keeps():
+    """`prune_targets` judges names relative to logs/, files only: a band file at the top and a radio's log in the
+    nested form `<rid>/rf-daemon.log`. A top-level directory entry such as `r1` is not a log name; the caller
+    (service_jobs' prune) passes only regular `*.log` leaves, so `r1` never reaches it (the next test)."""
     entries = ["r1/rf-daemon.log", "rf-daemon-433.log", "rf-kiss.log", "start-x.log", "junk.log", "r0/rf-daemon.log"]
     assert rflog.prune_targets(entries, lambda n: n == "start-x.log") == ["junk.log", "r0/rf-daemon.log"]
+
+
+def test_the_prune_through_the_service_keeps_every_radios_log_and_the_band_files(tmp_path):
+    """The public path: the service's prune under count pressure deletes old job logs but never `logs/<rid>/`,
+    its `rf-daemon.log`, nor a 0.13.x band file (the caller passes regular top-level `*.log` leaves only)."""
+    import os
+
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    logs = tmp_path / "logs"
+    (logs / "r1").mkdir(parents=True)
+    keep = [logs / "r1" / "rf-daemon.log", logs / "rf-daemon-433.log"]
+    old = 1_000_000_000
+    for p in keep:
+        p.write_bytes(b"rf\n")
+        os.utime(p, (old, old))
+    os.utime(logs / "r1", (old, old))
+    for i in range(svc.LOG_RETENTION + 5):
+        p = logs / f"build-{i:04d}.log"
+        p.write_bytes(b"x\n")
+        os.utime(p, (old + 1000 + i, old + 1000 + i))
+    assert svc.prune_logs() > 0
+    assert (logs / "r1").is_dir() and all(p.exists() for p in keep)

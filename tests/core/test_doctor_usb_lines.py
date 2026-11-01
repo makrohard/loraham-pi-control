@@ -236,6 +236,14 @@ def test_the_doctor_texts_are_format_strings_keyed_by_name():
     assert all(type(k) is str and type(v) is str for k, v in texts.items())
 
 
+def test_every_doctor_text_carries_words_of_its_own():
+    """A template that is a bare field would match any line: the conformance check above needs text in each."""
+    import string
+    for name, template in _uf().DOCTOR_TEXTS.items():
+        literal = "".join(lit for lit, _f, _s, _c in string.Formatter().parse(template))
+        assert sum(ch.isalpha() for ch in literal) >= 3, name
+
+
 def test_d1_a_transport_outside_the_librarys_list_is_an_unknown_transport():
     import dataclasses
     models = dict(MODELS)

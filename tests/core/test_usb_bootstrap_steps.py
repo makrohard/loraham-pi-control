@@ -150,8 +150,10 @@ def test_b4_the_scaffold_block_leaves_the_exit_to_the_scaffold(tmp_path):
 def test_b5_the_effect_of_the_blacklist_is_printed_before_the_modprobe_file_is_written(tmp_path):
     r, _, _ = _run(tmp_path, _block(tmp_path))
     assert "spi_ch341" in r.stdout
-    text = _block(tmp_path)
-    assert text.index("spi_ch341") < text.index("lhpc-usb-radio.conf")
+    lines = _block(tmp_path).splitlines()
+    write = next(i for i, x in enumerate(lines) if "lhpc-usb-radio.conf" in x and ">" in x)
+    said = [i for i, x in enumerate(lines) if "spi_ch341" in x and x.lstrip().startswith(("echo", "printf"))]
+    assert said and said[0] < write          # an output line, not the /sys check, comes before the write
 
 
 def test_b6_a_rerun_rewrites_the_same_bytes_and_exits_0(tmp_path):
