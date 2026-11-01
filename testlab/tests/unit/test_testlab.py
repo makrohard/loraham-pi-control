@@ -350,7 +350,7 @@ def test_resolve_req_path_multiarch(tmp_path, monkeypatch):
 # --- fake daemon protocol conformance ----------------------------------------------------
 
 
-def _spawn_fake_daemon(tmp_path, band="433", radio="READY", air=()):
+def _spawn_fake_daemon(tmp_path, band="433", radio="READY", air=(), rid=""):
     sockdir = tmp_path / "socks"
     sockdir.mkdir(exist_ok=True)
     root = tmp_path / "droot"
@@ -364,14 +364,15 @@ def _spawn_fake_daemon(tmp_path, band="433", radio="READY", air=()):
                LORAHAM_RUNTIME_DIR=str(root / "state" / "loraham"))
     from lhpc_testlab import data_path
     script = str(data_path("loraham-daemon-fake", "loraham_daemon", "loraham_daemon"))
-    proc = subprocess.Popen([sys.executable, script, "--radio", band], env=env)
+    proc = subprocess.Popen([sys.executable, script, "--radio", band, *(["--id", rid] if rid else [])], env=env)
+    conf = sockdir / (f"loraconf-{rid}.sock" if rid else f"loraconf{band}.sock")    # stage L5: the radio's socket
     import time as _t
     deadline = _t.monotonic() + 5
     while _t.monotonic() < deadline:
-        if (sockdir / f"loraconf{band}.sock").exists():
+        if conf.exists():
             break
         _t.sleep(0.05)
-    assert (sockdir / f"loraconf{band}.sock").exists(), "fake daemon did not open its socket"
+    assert conf.exists(), "fake daemon did not open its socket"
     return proc, sockdir, root
 
 
@@ -415,6 +416,38 @@ def test_fake_daemon_conf_lines_satisfy_daemon_control(tmp_path):
     finally:
         proc.terminate()
         proc.wait(timeout=5)
+
+
+@pytest.mark.slow
+def test_fake_daemon_serves_its_radios_sockets_with_an_id(tmp_path):
+    """Stage L5 (0.14.0, REL14-D26): started as lhpc starts a radio's daemon (`--radio 433 --id r1`), the fake
+    serves that radio's three sockets and names itself in STATUS (ID=r1 BOUND=-, the real daemon's contract),
+    which lhpc's start waits for; without --id it keeps the 0.13.x band names (the other cases here)."""
+    import socket as _s
+    proc, sockdir, _root = _spawn_fake_daemon(tmp_path, rid="r1")
+    try:
+        assert sorted(p.name for p in sockdir.iterdir()) == ["lora-r1.sock", "loraconf-r1.sock", "loraf-r1.sock"]
+        c = _s.socket(_s.AF_UNIX)
+        c.settimeout(5)
+        c.connect(str(sockdir / "loraconf-r1.sock"))
+        c.sendall(b"GET STATUS\n")
+        line = c.recv(4096).decode()
+        c.close()
+        head, *tokens = line.split()
+        assert (head, tokens[:3]) == ("STATUS", ["ID=r1", "BOUND=-", "RADIO=READY"]), line
+        assert len({t.split("=")[0] for t in tokens}) == len(tokens)          # no duplicate keys
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+
+
+@pytest.mark.parametrize("rid", ["r0", "r100", "R1", "r01", "x", "r1/..", ""])
+def test_fake_daemon_refuses_an_id_that_is_no_radio_id(tmp_path, rid):
+    from lhpc_testlab import data_path
+    script = str(data_path("loraham-daemon-fake", "loraham_daemon", "loraham_daemon"))
+    out = subprocess.run([sys.executable, script, "--radio", "433", "--id", rid], capture_output=True, text=True,
+                         timeout=10, check=False, env=dict(os.environ, LORAHAM_SOCKET_DIR=str(tmp_path)))
+    assert out.returncode == 2 and "is not r1..r99" in out.stderr and list(tmp_path.iterdir()) == []
 
 
 def _frame(sock):

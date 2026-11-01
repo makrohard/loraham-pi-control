@@ -46,8 +46,8 @@ def _root():
 
 
 class Fake:
-    def __init__(self, band):
-        self.band = band
+    def __init__(self, band, rid=""):
+        self.band, self.rid = band, rid
         self.t0 = time.time()
         self.root = _root()
         self.set_ = {"TXRESULT": "0", "TXQUEUE": "0", "TXMODE": "MANAGED",
@@ -110,7 +110,8 @@ class Fake:
                 "CADWAIT={CADWAIT} CADIDLE={CADIDLE} CADPOLL={CADPOLL} "
                 "CADTXAFTERTIMEOUT={CADTXAFTERTIMEOUT} CADMONITOR={CADMONITOR} "
                 "CADRSSI={CADRSSI} RXREADY=1\n").format(
-            r=self.radio_state(), d=self.done, last=self.last, q=self.seq, **s)
+            r=self.radio_state(), d=self.done, last=self.last, q=self.seq, **s).replace(
+            "STATUS ", f"STATUS ID={self.rid} BOUND=- " if self.rid else "STATUS ", 1)
 
     def stats_line(self):
         return ("STATS UPTIME={} RADIO={} RX={} RXBYTES={} RXDROPS=0 TXOK={} "
@@ -217,12 +218,16 @@ class Conn:
                                             # desync the 3-byte-header framing)
 
 
-def serve(band):
-    fake = Fake(band)
+def serve(band, rid=""):
+    fake = Fake(band, rid)
     sock_dir = os.environ.get("LORAHAM_SOCKET_DIR", "/run/loraham")
     listeners = {}
-    for kind, name in (("raw", f"lora{band}.sock"), ("framed", f"lora{band}f.sock"),
-                       ("conf", f"loraconf{band}.sock")):
+    # stage L5 (0.14.0): a daemon started with `--id <rid>` serves its radio's sockets, as the real daemon does;
+    # without --id the 0.13.x band names
+    names = ((("raw", f"lora-{rid}.sock"), ("framed", f"loraf-{rid}.sock"), ("conf", f"loraconf-{rid}.sock"))
+             if rid else (("raw", f"lora{band}.sock"), ("framed", f"lora{band}f.sock"),
+                          ("conf", f"loraconf{band}.sock")))
+    for kind, name in names:
         path = os.path.join(sock_dir, name)
         try:
             os.unlink(path)
@@ -376,10 +381,15 @@ def main(argv):
     if "--version" in argv:
         print("loraham_daemon testlab-fake (v112-protocol)")
         return 0
-    band = "433"
+    band, rid = "433", ""
     if "--radio" in argv:
         band = argv[argv.index("--radio") + 1]
-    serve(band)
+    if "--id" in argv:
+        rid = argv[argv.index("--id") + 1]
+        if not (len(rid) in (2, 3) and rid[0] == "r" and rid[1:].isdigit() and rid[1] != "0"):
+            print(f"testlab fake loraham_daemon: --id {rid!r} is not r1..r99", file=sys.stderr)
+            return 2
+    serve(band, rid)
     return 0
 
 
