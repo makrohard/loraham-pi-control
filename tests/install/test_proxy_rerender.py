@@ -181,3 +181,19 @@ def test_the_hidden_verb_keeps_the_marker_when_the_deployed_config_cannot_be_rea
                                              "Apply the webserver configuration")
     assert capsys.readouterr().out.strip().endswith("Apply the webserver configuration")
 
+
+
+def test_the_apply_needed_banner_stands_when_the_firewall_notice_raises(tmp_path, monkeypatch, web):
+    """G1-3 B1: the two page-wide notices are read on their own; a failure reading the firewall's deferred-Apply
+    marker must not hide a re-render that is owed."""
+    from lhpc.core.services import ControllerService
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    assert proxy_rerender.mark(paths) == ""
+    proxy_rerender._keep(paths, "this release's proxy configuration is not loaded — test")
+
+    def broken(self):
+        raise RuntimeError("firewall marker unreadable")
+    monkeypatch.setattr(ControllerService, "webserver_apply_pending", broken)
+    page = web(paths=paths).get("/").get_data(as_text=True)
+    assert "Apply needed: this release&#39;s proxy configuration is not loaded — test" in page
