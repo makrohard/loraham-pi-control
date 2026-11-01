@@ -411,3 +411,40 @@ def test_a_dp_value_on_the_row_is_checked_like_todays_override(value, ok):
     text = ('[[radio]]\nid = "r1"\nname = "A"\nmodel = "loraham"\nband = "433"\n'
             f'dp_CADWAIT = "{value}"\n')
     assert (rad.load_text(text, MODELS).kind == rad.VALID) == ok, value
+
+
+# ---- the wiring rows (B4-WIRING-TABLES-v1 d9cc1faa, B4-D14) -----------------------------------------
+
+def test_w4_5_a_013x_stray_without_id_refuses_every_radio_of_its_band():
+    """W4-5: 0.13.x drove the band's SPI HAT, so a daemon without --id may hold any radio of that band."""
+    rd = _rd()
+    stray = [rd.DaemonProc(pid=21, kind="no-id", rid="", band="868", reason="")]
+    for radio in (_r("r1", band="868"), _stick("r2", "ABCDEFGH"), _r("r3", model="waveshare-sx1262", band="868")):
+        why = rd.start_refusal(radio, stray)
+        assert why and "21" in why, radio.id
+    assert rd.start_refusal(_r("r4", band="433"), stray) is None
+
+
+def _daemon_argv_with_rflog(value):
+    params = {"radio": "868", "hw": "loraham", "txmode": "managed", "cadmon": "off", "cadrssi": "-90",
+              "hipower": "off", "ocp": "100", "rf_log": "on", "id": "r12", "usb_serial": "", "rflog_path": value}
+    return commands.expand_argv(DAEMON.run_argv, DAEMON, params, Config().operator, RT, SRC, "868")
+
+
+@pytest.mark.parametrize("rid", ["r1", "r12", "r99"])
+def test_w7_8_the_rf_log_path_of_a_radio_is_accepted(rid):
+    argv = _daemon_argv_with_rflog(f"{{runtime}}/logs/{rid}/rf-daemon.log")
+    assert _pair(argv, "--rflog-path", f"{RT}/logs/{rid}/rf-daemon.log"), argv
+
+
+@pytest.mark.parametrize("value", [
+    "{runtime}/logs/r1/../rf-daemon.log", "{runtime}/logs/../r1/rf-daemon.log", "{runtime}/logs/r1 /rf-daemon.log",
+    "{runtime}/logs/{x}/rf-daemon.log", "{runtime}/logs/r0/rf-daemon.log", "{runtime}/logs/r100/rf-daemon.log",
+    "{runtime}/logs/R1/rf-daemon.log", "{runtime}/logs/r1/rf-daemon.log.bak", "/tmp/logs/r1/rf-daemon.log",
+    "{runtime}/logs/rf-daemon-868.log", "", "{runtime}/logs/r1/rf-daemon.log\n",
+])
+def test_w7_8_any_other_rf_log_path_is_refused(value):
+    """W7-8: the named path validator accepts exactly {runtime}/logs/r<1-99>/rf-daemon.log and nothing else."""
+    from lhpc.core.validators import ValidationError
+    with pytest.raises((commands.CommandError, ValidationError)):
+        _daemon_argv_with_rflog(value)
