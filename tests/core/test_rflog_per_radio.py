@@ -163,6 +163,19 @@ def test_radio_dir_state_a_file_where_logs_belongs_is_unknown(tmp_path):
     assert rflog.radio_dir_state(_paths(tmp_path), "r1/rf-daemon.log") == rflog.UNKNOWN
 
 
+@pytest.mark.parametrize("exc", [PermissionError, OSError, RuntimeError])
+def test_radio_dir_state_an_unreadable_logs_dir_is_unknown_not_absent(tmp_path, monkeypatch, exc):
+    import os
+    real = os.lstat
+
+    def lstat(path, *a, **k):
+        if str(path).endswith("/logs"):
+            raise exc("cannot stat")
+        return real(path, *a, **k)
+    monkeypatch.setattr(os, "lstat", lstat)
+    assert rflog.radio_dir_state(_paths(tmp_path), "r1/rf-daemon.log") == rflog.UNKNOWN
+
+
 def test_radio_dir_state_only_judges_a_radios_job(tmp_path):
     assert rflog.radio_dir_state(_paths(tmp_path), "rf-kiss.log") == rflog.PRESENT
     assert rflog.radio_dir_state(_paths(tmp_path), "rf-daemon-433.log") == rflog.PRESENT
