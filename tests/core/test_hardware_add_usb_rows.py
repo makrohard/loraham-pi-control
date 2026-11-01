@@ -98,7 +98,9 @@ def test_b4_a_stick_held_by_a_rows_serial_prefix_is_refused_naming_it(tmp_path, 
     assert _file(tmp_path) == before
 
 
-def test_b4_a_different_serial_on_the_same_port_is_a_new_stick(tmp_path, monkeypatch):
+def test_b4_a_stick_whose_serial_no_row_holds_is_a_new_stick(tmp_path, monkeypatch):
+    """r4 holds another serial (and no port): a serial-prefix mismatch is not a holder. The port holder of a serial-less
+    row is the code role's test_hardware_add_usb.py row (B4 by port)."""
     from lhpc.core import radios
     held = radios.Radio("r4", "held", STICK, "868", usb_serial="ZZZZZZZZ")
     _env(tmp_path, monkeypatch, [_dev("1-1.4", serial="ABCDEFGH99")], rows=(*_spi(), held))

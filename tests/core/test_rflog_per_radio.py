@@ -118,6 +118,18 @@ def test_radio_dir_state_a_symlink_a_file_or_a_dir_out_of_the_root_is_unknown_ne
     assert rflog.radio_dir_state(p, "r3/rf-daemon.log") == rflog.UNKNOWN
 
 
+@pytest.mark.parametrize("target", ["empty", "missing"])
+def test_radio_dir_state_an_escaping_or_dangling_logs_link_without_the_radio_is_unknown(tmp_path, target):
+    """The class of the escaping logs/ (B5-D21): a logs/ link out of the root whose target has no r1, or that points
+    nowhere, is never ABSENT — containment is judged before the radio's directory is looked up."""
+    root, outside = tmp_path / "root", tmp_path / "outside"
+    root.mkdir()
+    if target == "empty":
+        outside.mkdir()
+    (root / "logs").symlink_to(outside, target_is_directory=True)
+    assert rflog.radio_dir_state(resolve_paths({"LHPC_RUNTIME_ROOT": str(root)}), "r1/rf-daemon.log") == rflog.UNKNOWN
+
+
 def test_radio_dir_state_an_escaping_logs_dir_is_unknown(tmp_path):
     root, outside = tmp_path / "root", tmp_path / "outside"
     root.mkdir()
