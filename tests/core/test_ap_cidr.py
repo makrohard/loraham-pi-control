@@ -561,18 +561,42 @@ def _ap_box(tmp_path, monkeypatch, *, local=None, profile_addr="", live_for):
     return svc, nm, spawned
 
 
+@pytest.mark.parametrize("fw_saved", [None, "10.43.0.0/24"], ids=["fw-unsaved", "fw-saved-candidate"])
 @pytest.mark.parametrize("profile_addr", ["", "10.42.0.1/24"])
-def test_stored_setting_and_ap_apply_agree_on_the_candidate(tmp_path, monkeypatch, profile_addr):
-    """T-NA4 (C2a, behavioural route C2b): network.ap_cidr = 10.43.0.0/24 is stored, then the
-    existing AP apply path runs. Afterwards the AP profile's address and the firewall's AP subnet
-    BOTH lie in the candidate network; an apply that leaves either in 10.42.0.0/24 fails."""
+def test_stored_setting_and_ap_apply_agree_on_the_candidate(tmp_path, monkeypatch, profile_addr,
+                                                            fw_saved):
+    """T-NA4 (C2a, behavioural route C2b; C9's PROCEED case): network.ap_cidr = 10.43.0.0/24 is
+    stored and the firewall's AP rules are live for the CANDIDATE (C9: the gate holds for the new
+    subnet, the firewall first); then the existing AP apply path runs. Afterwards the AP profile's
+    address and the firewall's AP subnet BOTH lie in the candidate network; an apply that leaves
+    either in 10.42.0.0/24 fails."""
     svc, nm, spawned = _ap_box(tmp_path, monkeypatch, local='[network]\nap_cidr = "10.43.0.0/24"\n',
                                profile_addr=profile_addr, live_for="10.43.0.0/24")
+    if fw_saved is not None:
+        cfgmod.save_firewall_config(svc._paths, ap_enabled=True, ap_interface="wlan0", ap_cidr=fw_saved)
+        svc._invalidate_config()
     res = svc.network_ap_now(apply=True)
     assert nm.addr == "10.43.0.1/24", "the AP profile's address is not in the candidate network"
     assert svc.firewall_candidate()["ap"]["cidr"] == "10.43.0.0/24"
     assert res.ok, res.summary
     assert spawned and AP_UUID in spawned[0]
+
+
+@pytest.mark.parametrize("profile_addr", ["", "10.42.0.1/24"])
+def test_the_ap_start_refuses_a_candidate_the_live_rules_do_not_cover(tmp_path, monkeypatch,
+                                                                       profile_addr):
+    """C9 (the maintainer's CO-16 ruling: a non-usable AP is a bad bug): the AP rules saved and
+    live cover the OLD subnet 10.42.0.0/24, not the stored candidate 10.43.0.0/24. The switch is
+    REFUSED before anything is modified: no nmcli modify of the AP profile, its address unchanged,
+    no finalize helper spawned, no pending record."""
+    svc, nm, spawned = _ap_box(tmp_path, monkeypatch, local='[network]\nap_cidr = "10.43.0.0/24"\n',
+                               profile_addr=profile_addr, live_for=TODAY)
+    cfgmod.save_firewall_config(svc._paths, ap_enabled=True, ap_interface="wlan0", ap_cidr=TODAY)
+    svc._invalidate_config()
+    res = svc.network_ap_now(apply=True)
+    assert not res.ok, "the switch went on while the AP rules do not cover the candidate subnet"
+    assert _modified(nm) == [] and nm.addr == profile_addr
+    assert spawned == [] and not svc._net_pending_path().exists()
 
 
 @pytest.mark.parametrize("cidr, first, address", [
@@ -583,7 +607,8 @@ def test_stored_setting_and_ap_apply_agree_on_the_candidate(tmp_path, monkeypatc
 def test_one_setting_drives_the_profile_firewall_and_hint(tmp_path, monkeypatch, cidr, first, address):
     """T-NA2 (C1, consumers 1, 2 and 4): one value renders the AP profile's ipv4.addresses
     (<first host>/<prefix>), the firewall's AP subnet and the "open https://<first host>:8443"
-    hint; nothing names 10.42.0.1."""
+    hint; nothing names 10.42.0.1. The AP rules are live for the candidate (C9's PROCEED case);
+    no firewall AP subnet was saved by hand, so consumer (2) is the setting's default."""
     svc, nm, _ = _ap_box(tmp_path, monkeypatch, local=f'[network]\nap_cidr = "{cidr}"\n',
                          live_for=cidr)
     dry = svc.network_ap_now(apply=False)
@@ -673,34 +698,52 @@ def _cli(argv):
 
 
 @pytest.fixture
-def cli_box(tmp_path, monkeypatch):
+def cli_box(tmp_path, monkeypatch, capsys):
     rt = tmp_path / "rt"
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
     monkeypatch.setenv("LHPC_SYSTEM_PROVIDER", f"{__name__}:_cli_provider")
     monkeypatch.setattr(sys.modules[__name__], "_CLI_NM", [_FakeNm("")])
     assert _cli(["bootstrap", "--yes"]) == 0
+    capsys.readouterr()
     return rt, _CLI_NM[-1]
 
 
+def _refused_cleanly(capsys):
+    """The refusal is the command's own: no traceback and not the generic stored-config failure
+    (main's ConfigError path, which also exits 1). Returns the printed text."""
+    out = capsys.readouterr()
+    text = out.out + out.err
+    assert "Traceback" not in text
+    assert "stored configuration file is unreadable or malformed" not in text
+    return text
+
+
 @pytest.mark.parametrize("value", _REFUSED_VALUES)
-def test_the_network_command_refuses_an_invalid_value(cli_box, value):
+def test_the_network_command_refuses_an_invalid_value(cli_box, capsys, value):
     """N9c (decided: `lhpc network --ap-cidr <CIDR|default> --confirm-phrase <phrase>`): the
-    command parses, refuses an invalid value with exit 1, stores nothing and modifies no
-    profile."""
+    command parses, refuses an invalid value with exit 1 and its own reason (the validator's
+    rule names network.ap_cidr; the phrase literal is not known here, so a refusal naming the
+    confirm phrase first is accepted too), stores nothing and modifies no profile."""
     rt, nm = cli_box
     rc = _cli(["network", "--ap-cidr", value, "--confirm-phrase", _WRONG_PHRASE])
+    text = _refused_cleanly(capsys)
     assert rc == 1
+    assert "network.ap_cidr" in text or "confirm" in text.lower(), text
     assert cfgmod.load_config(Paths(runtime_root=rt)).network.ap_cidr == TODAY
     assert _modified(nm) == []
 
 
 @pytest.mark.parametrize("phrase_args", [[], ["--confirm-phrase", ""], ["--confirm-phrase", _WRONG_PHRASE]],
                          ids=["absent", "empty", "wrong"])
-def test_the_network_command_refuses_without_the_confirm_phrase(cli_box, phrase_args):
+def test_the_network_command_refuses_without_the_confirm_phrase(cli_box, capsys, phrase_args):
     """N9c: a valid value without the confirm phrase (absent, empty or wrong) is refused with
-    exit 1; nothing is stored and no profile is modified."""
+    exit 1 and a reason naming the confirm phrase; nothing is stored and no profile is
+    modified."""
     rt, nm = cli_box
-    assert _cli(["network", "--ap-cidr", "10.43.0.0/24", *phrase_args]) == 1
+    rc = _cli(["network", "--ap-cidr", "10.43.0.0/24", *phrase_args])
+    text = _refused_cleanly(capsys)
+    assert rc == 1
+    assert "confirm" in text.lower(), text
     assert cfgmod.load_config(Paths(runtime_root=rt)).network.ap_cidr == TODAY
     assert _modified(nm) == []
 
