@@ -441,3 +441,45 @@ def test_the_marker_is_cleared_only_when_pid_and_evidence_are_both_absent(tmp_pa
     assert proxy_rerender.mark(paths) == ""
     assert main(["_webserver-rerender", "--root", str(tmp_path)]) == (0 if clears else 1)
     assert proxy_rerender.pending(paths) == (None if clears else MISSING)
+
+
+# ---- B3-D27: the type sweep: every JSON field the evidence probe reads x every JSON type class (bool, int, float, str,
+# null, list, object) plus the exact value, with the pid file absent and the config missing; only an exact schema 1 with
+# no snapshot (or a null one, B3-D25a J3) clears the marker ----------------------------------------------------------
+
+_T = {"bool": True, "int": 2, "float": 1.0, "str": "1", "null": None, "list": [1], "object": {"v": 1}}
+SWEEP = ([("schema", t, v, False) for t, v in _T.items()] + [("schema", "exact", 1, True)]
+         + [("applied_snapshot", t, v, t == "null") for t, v in
+            {"bool": True, "int": 1, "float": 1.0, "str": "x", "null": None, "list": [], "object": {"v": 1}}.items()]
+         + [("applied_snapshot", "exact", _SNAP, False)]
+         + [("console", t, v, False) for t, v in {**_T, "list": [], "object": {}}.items() if t != "object"]
+         + [("console", "exact", {}, False)]
+         + [("proxies", t, v, False) for t, v in {**_T, "list": []}.items() if t != "list"]
+         + [("proxies", "exact", [], False)])
+
+
+def _swept(field, value):
+    if field == "schema":
+        return {"schema": value}
+    if field == "applied_snapshot":
+        return {"schema": 1, "applied_snapshot": value}
+    snap = {"console": {}, "proxies": []}
+    snap[field] = value
+    return {"schema": 1, "applied_snapshot": snap}
+
+
+@pytest.mark.parametrize("field, tclass, value, clears", SWEEP, ids=[f"{f}-{t}" for f, t, _v, _c in SWEEP])
+def test_every_evidence_field_is_read_by_its_exact_type(tmp_path, capsys, field, tclass, value, clears):
+    """B3-D27: True == 1 and 1.0 == 1 in Python, so an equality test let {"schema": true} or {"schema": 1.0} pass as
+    schema 1. Each field the probe reads is now checked by its exact JSON type; any other type is UNKNOWN and keeps the
+    marker. Through after_update and the hidden verb."""
+    import json as _json
+    from lhpc.adapters.cli.main import main
+    paths = Paths(runtime_root=tmp_path)
+    paths.under(*webserver.NGINX_PID).parent.mkdir(parents=True)          # state/run present, no pid file
+    paths.under(*webserver.EVIDENCE).write_text(_json.dumps(_swept(field, value)))
+    assert proxy_rerender.mark(paths) == ""
+    assert proxy_rerender.after_update(paths) == ((True, "no deployed nginx config") if clears else (False, MISSING))
+    assert proxy_rerender.mark(paths) == ""
+    assert main(["_webserver-rerender", "--root", str(tmp_path)]) == (0 if clears else 1)
+    assert proxy_rerender.pending(paths) == (None if clears else MISSING)

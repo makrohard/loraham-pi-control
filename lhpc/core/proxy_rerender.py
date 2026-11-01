@@ -108,7 +108,8 @@ def _evidence_state(paths: Paths) -> str:
         data = json.loads(raw)
     except Exception:                                   # ValueError, or RecursionError from deep nesting
         return "unknown"
-    if not isinstance(data, dict) or data.get("schema") != EVIDENCE_SCHEMA:
+    schema = data.get("schema") if isinstance(data, dict) else None
+    if type(schema) is not int or schema != EVIDENCE_SCHEMA:     # exact type: True == 1 and 1.0 == 1 (B3-D27)
         return "unknown"
     snap = data.get("applied_snapshot")
     if snap is None:
