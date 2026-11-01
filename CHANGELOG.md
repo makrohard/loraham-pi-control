@@ -9,6 +9,8 @@
 
 Fixed
 
+- Console: on a box with less than 1 GiB of RAM (a Pi Zero 2 W) the console's job runner runs its Build and Test
+  jobs one at a time instead of all at once, so the console keeps answering during a build.
 - Reticulum: a console Build of nomadnet, lxmd and Sideband no longer fails with "Failed building wheel
   for rns"; each installs RNS from its own clone of the pinned checkout.
 - Reticulum: nomadnet, lxmd and Sideband install and keep the node's RNS (its wheel, no clone), so a console Build no
