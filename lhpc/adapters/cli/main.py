@@ -644,6 +644,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_gr.add_argument("--root", default="")
     p_gr.add_argument("--nonce", required=True)
 
+    # Internal: the NEW checkout's re-render of the stack proxies after a self-update (CO-14), run
+    # out of process by the update itself. Not for direct use.
+    p_wr = sub.add_parser("_webserver-rerender", help=argparse.SUPPRESS)
+    p_wr.add_argument("--root", required=True, help=argparse.SUPPRESS)
+
     p_help = sub.add_parser("help", help="Detailed help on a topic")
     p_help.add_argument("topic", nargs="?", help="safety | resources | profiles")
 
@@ -1105,6 +1110,15 @@ def _run(argv: list[str] | None = None) -> int:
         if args.command == "_uninstall-guard-claim":
             return _render(svc.controller_uninstall_guard_claim(args.pid, args.nonce, args.start))
         return _render(svc.controller_uninstall_guard_release(args.nonce))
+    if args.command == "_webserver-rerender":
+        from pathlib import Path as _Path
+
+        from lhpc.core import proxy_rerender
+        from lhpc.core.paths import Paths as _Paths
+        ok, detail = proxy_rerender.reconcile(
+            ControllerService(paths=_Paths(runtime_root=_Path(args.root))))
+        print(f"webserver re-render: {detail}")
+        return 0 if ok else 1
     if args.command == "bootstrap":
         return _apply_flow(lambda apply: svc.bootstrap(apply=apply), yes=args.yes)
     if args.command == "install":

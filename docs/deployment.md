@@ -76,6 +76,12 @@ Back up `config/`, `profiles/` and the app data under `state/` first
   fails](operations.md#what-happens-when-an-update-fails). If that record cannot be written, the
   update fails *recovery-required* with the cause and the command to run instead; a record that cannot be read shows as
   *recovery-required*.
+- **Stack proxies re-rendered.** Before the checkout moves the update records
+  `state/webserver-render.pending`; after the unit refresh the new checkout renders the nginx config
+  and compares it with the deployed one. A difference (a stack's deny list, say) is applied as
+  *Webserver → Apply* would; the applied listener policy stays. When the saved webserver settings
+  are not the applied ones, or that Apply fails, every console page shows *Apply needed:* with the
+  reason until a Webserver Apply succeeds.
 - **Updating from 0.12.10 or older:** that release runs the update and syncs the venv without
   `requirements.lock`. After `lhpc self-update --repair-integration`, sync it to the lock once,
   from the runtime root (`cd ~/loraham-pi-control`):

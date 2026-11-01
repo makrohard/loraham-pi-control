@@ -43,6 +43,7 @@ RAW = [(selfupdate, "create_anchor", lambda e: False),   # reports False, never 
 POINTS = [
     ("write_marker", "state/locks/controller-task-admission.owner"),
     ("write_marker", "state/firewall-postupdate.pending"),   # the firewall follow-up, before any move
+    ("write_marker", "state/webserver-render.pending"),      # the proxies' re-render, before any move
     ("selfupdate.create_anchor", "*"),                       # the git anchor of the intent
     ("write_marker", "state/selfupdate-migrate.json"),       # prepared
     ("git.advance", "merge"),                                # the checkout moves
@@ -160,7 +161,30 @@ def test_a_firewall_marker_that_cannot_be_written_stops_the_update_before_it_mov
     monkeypatch.setattr(runtime_fs, "write_marker", full_disk)
     res = svc().self_update_apply()
     assert not res.ok and res.data.get("fw_mark_failed")
+    assert "state/firewall-postupdate.pending" in res.details[0]     # the cause names its marker
     assert res.next_commands == ["lhpc self-update --apply"]
+    assert gitrepo.git(work, "rev-parse", "HEAD") == head
+    assert selfupdate.read_migration_journal(svc()._paths) == (None, False)
+    assert gitrepo.git(work, "for-each-ref", "refs/lhpc") == ""
+
+
+def test_a_render_marker_that_cannot_be_written_stops_the_update_before_it_moves(
+        box, monkeypatch):
+    """The proxies' re-render (CO-14) is recorded before the checkout moves; when it cannot be,
+    the update stops there: nothing moved, no journal, no anchor, and the result says why."""
+    from lhpc.core import runtime_fs
+    svc, work, rt = box
+    head = gitrepo.git(work, "rev-parse", "HEAD")
+    real = runtime_fs.write_marker
+
+    def full_disk(paths, path, *a, **k):
+        if str(path).endswith("webserver-render.pending"):
+            raise OSError(28, "No space left on device")
+        return real(paths, path, *a, **k)
+    monkeypatch.setattr(runtime_fs, "write_marker", full_disk)
+    res = svc().self_update_apply()
+    assert not res.ok and res.data.get("fw_mark_failed")   # the one follow-up branch
+    assert "state/webserver-render.pending" in res.details[0]
     assert gitrepo.git(work, "rev-parse", "HEAD") == head
     assert selfupdate.read_migration_journal(svc()._paths) == (None, False)
     assert gitrepo.git(work, "for-each-ref", "refs/lhpc") == ""

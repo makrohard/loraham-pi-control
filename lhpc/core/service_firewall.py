@@ -930,7 +930,7 @@ class FirewallOpsMixin:
             runtime_fs.write_marker(self._paths,
                                     self._paths.under(_FW_POSTUPDATE_MARKER), "1")
         except Exception as exc:                       # containment / fs error
-            return f"{type(exc).__name__}: {' '.join(str(exc).split())}"
+            return f"{_FW_POSTUPDATE_MARKER}: {type(exc).__name__}: {' '.join(str(exc).split())}"
         return ""
 
     @invalidates_snapshot

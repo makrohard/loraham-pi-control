@@ -47,6 +47,13 @@
         Firewall → Apply &amp; commands</a> and run the lines shown there; the Apply completes on its
         own once the firewall is verified.</p>
     {% endif %}
+    {# CO-14: a self-update left the stack proxies on the previous release's render. #}
+    {% if ws_render_pending is not none %}
+      <p class="depnote depnote-warn" id="ws-render-notice">Apply needed: {{ ws_render_pending
+        or "the update has not re-rendered the stack proxies yet" }}.
+        <a href="{{ url_for('stacks_overview') }}#webserver-row">Open Webserver</a> and press
+        Apply.</p>
+    {% endif %}
     {% block content %}{% endblock %}
   </main>
   <footer class="site-footer">

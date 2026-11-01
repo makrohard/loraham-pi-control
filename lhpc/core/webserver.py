@@ -369,6 +369,8 @@ def record_applied(paths: Paths, cfg: WebserverConfig, stack_webs=()) -> dict:
     """Advance `applied_snapshot` in the evidence file. ONLY the Apply/start path calls this, and
     only once activation is proven. A failed validate/reload/restart, and every standalone
     `verify`, leave the previous snapshot byte-for-byte alone."""
+    from . import proxy_rerender
+    proxy_rerender.clear(paths)                # CO-14: this release's render is what nginx loaded
     ev = read_evidence(paths)
     if not ev:
         return {}                              # no evidence to amend; nothing was proven either
