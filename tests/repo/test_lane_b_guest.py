@@ -73,7 +73,7 @@ def test_the_guest_is_up_only_on_the_status_systemctl_gives_with_that_state(tmp_
 def test_the_reboot_step_reads_the_boot_id_before_and_waits_for_a_new_one():
     lines = (LANE / "topic.sh").read_text().splitlines()
     at = [next(i for i, ln in enumerate(lines) if ln.startswith(s)) for s in (
-        'b0=$(g cat /proc/sys/kernel/random/boot_id) && [ -n "$b0" ] || fail', "t0=$(date +%s); g 'sudo systemctl reboot'",
+        'b0=$(g cat /proc/sys/kernel/random/boot_id) && [ -n "$b0" ] || fail', "t0=$(now); g 'sudo systemctl reboot'",
         'b1=$(wait_reboot "$BOUND" "$b0") || fail')]
     assert at == sorted(at) and at[2] == at[1] + 1
 

@@ -23,28 +23,32 @@ m ssh_to_up_s_state "$up"
 mkdir -p "$EV/guest"
 g uname -m > "$EV/guest/machine"; g uname -r > "$EV/guest/kernel"; g cat /etc/os-release > "$EV/guest/os_release"
 g 'test -f /etc/rpi-issue && echo yes || echo no' > "$EV/guest/rpi_issue"
-python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" identity "$(uname -r)" "$EV/guest"
+hk=$(uname -r) || fail "the runner kernel cannot be read"
+[ -n "$hk" ] || fail "the runner kernel read empty"
+python3 "$GITHUB_WORKSPACE/.github/scripts/lane_b.py" identity "$hk" "$EV/guest"
 
 # README steps 4 and 5 at FROM (the stated reset), then step 6 (reboot), then step 8's units line for a manual install.
 gcp "$LB/guest-install.sh" guest-install.sh
 start_samplers
-t0=$(date +%s); irc=0; g "bash guest-install.sh $FROM" > "$EV/install.txt" 2>&1 || irc=$?
+t0=$(now); irc=0; g "bash guest-install.sh $FROM" > "$EV/install.txt" 2>&1 || irc=$?
 g 'cat sampler.log 2>/dev/null; true' > "$EV/guest/systemctl-samples.txt" 2>&1 || true
 collect_samples
 [ "$irc" -eq 0 ] || fail "the install at $FROM, rc $irc (see install.txt; guest/systemctl-samples.txt, runner-load.txt)"
-m install_s $(( $(date +%s) - t0 )); grep -E '^t_' "$EV/install.txt" | tee -a "$EV/measurements.txt"
+t1=$(now); m install_s $(( t1 - t0 )); grep -E '^t_' "$EV/install.txt" | tee -a "$EV/measurements.txt"
 b0=$(g cat /proc/sys/kernel/random/boot_id) && [ -n "$b0" ] || fail "the boot id before the reboot could not be read"
 # The reboot's own rc says nothing (ssh drops as the guest goes down); a new boot id says it happened.
-t0=$(date +%s); g 'sudo systemctl reboot' || true
+t0=$(now); g 'sudo systemctl reboot' || true
 b1=$(wait_reboot "$BOUND" "$b0") || fail "no new boot id within $BOUND s: the guest did not reboot"
 wait_up "$BOUND" > /dev/null || fail "not up after the reboot"
-m reboot_s $(( $(date +%s) - t0 )); m boot_id_before "$b0"; m boot_id_after "$b1"
+t1=$(now); m reboot_s $(( t1 - t0 )); m boot_id_before "$b0"; m boot_id_after "$b1"
 line=$(g "grep -m1 '# installs the units' ~/loraham-pi-control/src/loraham-pi-control/README.md" | sed 's/ *#.*$//')
 printf '%s\n' "$line" > "$EV/units-line.txt"
 case "$line" in "lhpc self-update --repair-integration"*) ;; *) fail "the README at $FROM has no units line" ;; esac
+[[ $line != *$'\n'* ]] || fail "the units line is not one line"
+q=$(printf %q "$line") || fail "the units line cannot be quoted"
 g 'bash -lc "command -v lhpc"' > "$EV/command-v.txt" 2>&1 || fail "lhpc is not on the login PATH (see command-v.txt)"
-t0=$(date +%s); urc=0; g "bash -lc $(printf %q "$line")" > "$EV/units.txt" 2>&1 || urc=$?
-m units_line_rc "$urc"; m units_line_s "$(( $(date +%s) - t0 ))"
+t0=$(now); urc=0; g "bash -lc $q" > "$EV/units.txt" 2>&1 || urc=$?
+t1=$(now); m units_line_rc "$urc"; m units_line_s "$(( t1 - t0 ))"
 [ "$urc" -eq 0 ] || { observe_nginx; fail "the units line (see units.txt, guest/nginx-*.txt)"; }
 g 'stat -c "%Y %y %n" ~/.config/systemd/user/lhpc-*; systemctl --user cat lhpc-web.service lhpc-nginx.service lhpc-boot-restore.service; true' > "$EV/units-installed.txt" 2>&1
 # Two witnesses, both required: is-active's status (0 only when every named unit is active) and the two printed lines.

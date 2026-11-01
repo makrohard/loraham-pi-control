@@ -81,16 +81,23 @@ def _jobs():
 
 
 def test_an_artifact_uploads_only_after_its_redaction_guard_passed():
-    # A failed redaction check must stop the upload: `if: always()` on the upload ran it anyway.
+    # A failed redaction check must stop the upload: `if: always()` on the upload ran it anyway. Each job has two
+    # uploads: the evidence, only when the evidence step succeeded; the launch-failure capture (LBS-D2), only when the
+    # evidence step set launchfail=1, which it does only after redact() passed on that capture.
     uploaded = 0
     for job, steps in _jobs().items():
-        for up in (s for s in steps if s.startswith("uses: actions/upload-artifact")):
+        ups = [s for s in steps if s.startswith("uses: actions/upload-artifact")]
+        assert len(ups) == 2, job
+        for up in ups:
             uploaded += 1
-            guard = re.search(r"if: always\(\) && steps\.(\w+)\.outcome == 'success'", up)
+            guard = re.search(r"if: always\(\) && steps\.(\w+)\.(outcome == 'success'|outputs\.launchfail == '1')", up)
             assert guard, (job, up.splitlines()[:3])
             owner = [s for s in steps if f"id: {guard.group(1)}" in s]
             assert len(owner) == 1 and "PRIVATE KEY-----|SSHPASS=" in owner[0] and "exit 1" in owner[0], job
-    assert uploaded == 2                                       # QB-1 and the from-topic job
+            if "launchfail" in guard.group(2):
+                block = _run_block(owner[0])
+                assert block.index('redact "$LF" || exit 1') < block.index('echo "launchfail=1" >> "$GITHUB_OUTPUT"'), job
+    assert uploaded == 4                                       # QB-1 and the from-topic job, two each
 
 
 def _run_block(step: str) -> str:
@@ -116,30 +123,36 @@ def test_the_redaction_check_fails_closed(tmp_path, case, rc):
     if case == "an unreadable file":
         (ev / "locked.txt").write_text("x\n")
         (ev / "locked.txt").chmod(0)
+    for w in ("qemu.pid", "runner-sampler.pid"):
+        (work / f"{w}.state").write_text("none\n")
     for job, steps in _jobs().items():
         step = next(s for s in steps if "id: evidence" in s)
         p = subprocess.run(["bash", "-e", "-c", _run_block(step)], capture_output=True, text=True,
-                           env={"EV": str(ev), "WORK": str(work), "PATH": "/usr/bin:/bin",
-                                "GITHUB_WORKSPACE": str(repo_paths.REPO)})
+                           env={"EV": str(ev), "WORK": str(work), "PATH": "/usr/bin:/bin", "LF": str(tmp_path / "lf"),
+                                "GITHUB_OUTPUT": str(tmp_path / "out"), "GITHUB_WORKSPACE": str(repo_paths.REPO)})
         assert p.returncode == rc, (job, case, p.stdout, p.stderr)
 
 
 LANE = repo_paths.REPO / ".github" / "lane-b"
 
 
-def _evidence(tmp_path, writer=None, pidfile_text=None, path_extra=None, kill_log=None):
-    """Each job's evidence step as the runner runs it, with an optional live writer into the evidence (a process
-    group that appends; on TERM it writes `writer` once more and exits) named by runner-sampler.pid. The writer is
-    an orphan, as the job's writers are when the step runs (their starter has exited), so nothing here holds it as
-    an unreaped child. With `kill_log`, the step's shell has `kill` replaced by a recorder (BASH_ENV): no signal is
-    sent, and each call is a line in that file."""
+def _evidence(tmp_path, writer=None, pidfile_text=None, path_extra=None, kill_log=None, jobs=("topic",)):
+    """The evidence step of each job in `jobs` as the runner runs it, with an optional live writer into the evidence
+    (a process group that appends; on TERM it writes `writer` once more and exits) named by runner-sampler.pid as
+    the sampler publishes it ("grp:<id>", state record "launching"). The writer is an orphan, as the job's writers
+    are when the step runs (their starter has exited), so nothing here holds it as an unreaped child. With
+    `pidfile_text`, runner-sampler.pid holds that text under state "launching". qemu.pid's state record is "none".
+    With `kill_log`, the step's shell has `kill` replaced by a recorder (BASH_ENV): no signal is sent, and each call
+    is a line in that file. Only the topic job runs a sampler, so only its evidence step asks for runner-sampler.pid."""
     ev, work = tmp_path / "ev", tmp_path / "work"
     ev.mkdir(exist_ok=True)
     work.mkdir(exist_ok=True)
     (ev / "log.txt").write_text("ok\n")
     results = []
-    for job, steps in _jobs().items():
+    for job, steps in ((j, s) for j, s in _jobs().items() if j in jobs):
         pgid = None
+        (work / "qemu.pid.state").write_text("none\n")
+        (work / "runner-sampler.pid.state").write_text("none\n" if writer is None and pidfile_text is None else "launching\n")
         if writer is not None:
             (ev / "w.txt").unlink(missing_ok=True)
             on_term = f"trap 'echo \"{writer}\" >> {ev}/w.txt; exit 0' TERM"
@@ -149,12 +162,13 @@ def _evidence(tmp_path, writer=None, pidfile_text=None, path_extra=None, kill_lo
             pgid = int(start.stdout)
             while not (ev / "w.txt").exists():
                 pass
-            (work / "runner-sampler.pid").write_text(f"-{pgid}\n")
+            (work / "runner-sampler.pid").write_text(f"grp:{pgid}\n")
         elif pidfile_text is not None:
             (work / "runner-sampler.pid").write_text(pidfile_text)
         step = next(s for s in steps if "id: evidence" in s)
         path = (f"{path_extra}:" if path_extra else "") + "/usr/bin:/bin"
-        env = {"EV": str(ev), "WORK": str(work), "PATH": path, "GITHUB_WORKSPACE": str(repo_paths.REPO)}
+        env = {"EV": str(ev), "WORK": str(work), "PATH": path, "GITHUB_WORKSPACE": str(repo_paths.REPO),
+               "LF": str(tmp_path / "lf"), "GITHUB_OUTPUT": str(tmp_path / "out")}
         if kill_log is not None:
             (tmp_path / "kill-recorder.sh").write_text(f'kill() {{ echo "kill $*" >> {kill_log}; }}\n')
             env["BASH_ENV"] = str(tmp_path / "kill-recorder.sh")
@@ -188,9 +202,11 @@ def test_bytes_a_writer_adds_on_its_way_out_are_still_redaction_checked(tmp_path
 
 
 @pytest.mark.parametrize("pidfile_text, ps_rc, why", [
-    ("\n", None, "not a pid"), ("12-3\n", None, "not a pid"),
-    ("-999999\n", 0, "still runs"),                           # the writer never goes: the bound, then no upload
-    ("-999999\n", 2, "the liveness check failed"),            # the check itself fails: no upload either
+    ("\n", None, "not a group published"), ("12-3\n", None, "not a group published"),
+    ("-999999\n", None, "not a group published"),           # the old parent-side form is never accepted
+    ("unpublished\n", None, "not a group published"),       # the sentinel: launched, nothing published
+    ("grp:999999\n", 0, "still runs"),                       # the writer never goes: the bound, then no upload
+    ("grp:999999\n", 2, "the liveness check failed"),        # the check itself fails: no upload either
 ])
 def test_no_upload_when_a_writer_cannot_be_shown_stopped(tmp_path, pidfile_text, ps_rc, why):
     stub = None
@@ -206,7 +222,8 @@ def test_no_upload_when_a_writer_cannot_be_shown_stopped(tmp_path, pidfile_text,
             (job, p.stdout, p.stderr)
 
 
-@pytest.mark.parametrize("pidfile_text", ["0\n", "-0\n", "1\n", "-1\n", "00\n", "-01\n"])
+@pytest.mark.parametrize("pidfile_text", ["grp:0\n", "grp:-0\n", "grp:1\n", "grp:-1\n", "grp:00\n", "grp:01\n",
+                                          "0\n", "-1\n"])
 def test_no_writer_id_that_names_no_single_writer_is_ever_signalled(tmp_path, pidfile_text):
     # G1-LBS-2 B2: `kill -- 0` is the caller's own group and `kill -- -1` every process it may signal; neither (nor
     # pid 1, nor a zero-padded form) names the writer. Refused before any signal, and no upload.
@@ -217,8 +234,8 @@ def test_no_writer_id_that_names_no_single_writer_is_ever_signalled(tmp_path, pi
     log = tmp_path / "kills"
     _ev, results = _evidence(tmp_path, pidfile_text=pidfile_text, path_extra=stub, kill_log=log)
     for job, p, _alive, sums in results:
-        assert p.returncode == 1 and "evidence: a writer" in p.stdout and "not a pid" in p.stderr and not sums, \
-            (job, p.stdout, p.stderr)
+        assert p.returncode == 1 and "evidence: a writer" in p.stdout and "not a group published" in p.stderr \
+            and not sums, (job, p.stdout, p.stderr)
     assert not log.exists(), log.read_text()
 
 
@@ -238,9 +255,10 @@ def test_the_runner_sampler_is_a_process_group_the_stop_ends(tmp_path, slow_star
         path = f"{stub}:{path}"
     script = f"""set -euo pipefail
 WORK={tmp_path}; EV={tmp_path}; GITHUB_WORKSPACE={repo_paths.REPO}; . {LANE / "guest.sh"}
+echo none > {tmp_path}/runner-sampler.pid.state
 g() {{ :; }}; gcp() {{ :; }}
 start_samplers
-t=$(cat {tmp_path}/runner-sampler.pid); [ "${{t#-}}" != "$t" ]
+t=$(cat {tmp_path}/runner-sampler.pid); [ "${{t#grp:}}" != "$t" ]; t=-${{t#grp:}}
 timeout 30 bash -c 'until [ -s "$1" ]; do sleep 0.1; done' _ {tmp_path}/runner-load.txt
 pgrep -g "${{t#-}}" > /dev/null
 stop_writer {tmp_path}/runner-sampler.pid
@@ -262,7 +280,10 @@ def _samplers_then_evidence(tmp_path, prelude):
     launched = tmp_path / "launched.pid"
     (stub / "setsid").write_text(f'#!/bin/bash\necho $$ > {launched}\nexec {shutil.which("setsid")} "$@"\n')
     (stub / "setsid").chmod(0o755)
-    env = {"EV": str(ev), "WORK": str(work), "PATH": f"{stub}:/usr/bin:/bin", "GITHUB_WORKSPACE": str(repo_paths.REPO)}
+    env = {"EV": str(ev), "WORK": str(work), "PATH": f"{stub}:/usr/bin:/bin", "GITHUB_WORKSPACE": str(repo_paths.REPO),
+           "LF": str(tmp_path / "lf"), "GITHUB_OUTPUT": str(tmp_path / "out")}
+    for w in ("qemu.pid", "runner-sampler.pid"):
+        (work / f"{w}.state").write_text("none\n")
     # On exit the script waits for the shim's pid only when it launched a job: a launch is then known
     # for sure, and no launch is known for sure when there is no job.
     script = f"""set -euo pipefail
@@ -275,7 +296,8 @@ start_samplers
     start = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False, env=env)
     pgid = int(launched.read_text()) if launched.exists() else None
     try:
-        if pgid is not None:                        # the sampler's first line: it runs, in its group
+        published = (work / "runner-sampler.pid").exists() and (work / "runner-sampler.pid").read_text().startswith("grp:")
+        if pgid is not None and published:          # the sampler's first line: it runs, in its group
             subprocess.run(["timeout", "30", "bash", "-c", 'until [ -s "$1" ]; do sleep 0.1; done', "_",
                             str(ev / "runner-load.txt")], check=True)
         step = next(s for s in _jobs()["topic"] if "id: evidence" in s)
@@ -292,13 +314,14 @@ start_samplers
 @pytest.mark.parametrize("case, prelude", [
     # the pidfile cannot be written at all (a dangling link): no file is ever created
     ("pidfile-unwritable", 'ln -s "$WORK/no/such/dir/x" "$WORK/runner-sampler.pid"'),
-    # the publication after the launch fails (the redirect leaves the file, the write fails)
-    ("publication-fails", 'echo() { case "$1" in -[0-9]*) return 1;; esac; builtin echo "$@"; }'),
+    # the sampler's own publication fails (its rename into the pidfile fails): the sentinel stays
+    ("publication-fails", 'mkdir -p "$WORK/stubbin"; printf "#!/bin/bash\\ncase \\"\\$*\\" in *runner-sampler.pid.tmp*) '
+                          'exit 1;; esac\\nexec /usr/bin/mv \\"\\$@\\"\\n" > "$WORK/stubbin/mv"; '
+                          'chmod +x "$WORK/stubbin/mv"; PATH="$WORK/stubbin:$PATH"'),
 ], ids=["pidfile-unwritable", "publication-fails"])
 def test_a_sampler_whose_pidfile_is_not_published_never_runs_beside_an_upload(tmp_path, case, prelude):
-    # G1-LBS-3 B6: the evidence step trusts the pidfile; an absent one means "never started". So a
-    # sampler must never run without a pidfile that names it or blocks the upload: the sentinel is
-    # written before the launch and replaced by the group's id after it.
+    # G1-LBS-3 B6, LANEB-G2-TABLES-v7 A6: a sampler must never run without a pidfile that names it or blocks the
+    # upload: the state record says "launching" and the sentinel stays until the sampler itself publishes its group.
     start_rc, p, sums, alive = _samplers_then_evidence(tmp_path, prelude)
     assert start_rc != 0, case
     assert not (sums and alive), (case, p.stdout, p.stderr)       # never a live writer under the sums

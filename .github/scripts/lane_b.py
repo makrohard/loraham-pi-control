@@ -6,8 +6,11 @@
     lane_b.py active <n> <file>                     `systemctl is-active` printed "active" for all n units
 
 `identity` reads the files the job captured from the guest over ssh: `machine` (uname -m), `kernel`
-(uname -r), `rpi_issue` ("yes" when /etc/rpi-issue exists) and `os_release` (/etc/os-release). Exit 0 when
-every check holds, 1 naming the first that does not, 2 on a usage error.
+(uname -r), `rpi_issue` ("yes" when /etc/rpi-issue exists) and `os_release` (/etc/os-release).
+
+Exit statuses, each with its reason on stderr: 0 every check holds; 1 a check does not hold (the first one named);
+2 plumbing: a usage error, or an input that cannot be read (a missing or unreadable file). 2 is never a pass and
+never reads as the meaningful FAIL 1.
 """
 import hashlib
 import pathlib
@@ -23,7 +26,11 @@ def verify(path: str, algo: str, want: str) -> str:
 
 
 def identity(host_kernel: str, d: pathlib.Path) -> str:
+    if not host_kernel.strip():
+        return "the runner kernel is empty"
     got = {n: (d / n).read_text().strip() for n in ("machine", "kernel", "rpi_issue", "os_release")}
+    if not got["kernel"] or "\n" in got["kernel"]:
+        return f"the guest kernel is not one non-empty line ({got['kernel']!r})"
     codename = dict(line.split("=", 1) for line in got["os_release"].splitlines() if "=" in line)
     for ok, why in ((got["machine"] == "aarch64", f"not aarch64 ({got['machine']})"),
                     (got["kernel"] != host_kernel, f"the runner's own kernel ({got['kernel']})"),
@@ -40,14 +47,18 @@ def active(n: int, path: pathlib.Path) -> str:
 
 
 def main(argv) -> int:
-    if len(argv) == 5 and argv[1] == "verify":
-        why = verify(argv[2], argv[3], argv[4])
-    elif len(argv) == 4 and argv[1] == "identity":
-        why = identity(argv[2], pathlib.Path(argv[3]))
-    elif len(argv) == 4 and argv[1] == "active" and argv[2].isdigit():
-        why = active(int(argv[2]), pathlib.Path(argv[3]))
-    else:
-        print(__doc__, file=sys.stderr)
+    try:
+        if len(argv) == 5 and argv[1] == "verify":
+            why = verify(argv[2], argv[3], argv[4])
+        elif len(argv) == 4 and argv[1] == "identity":
+            why = identity(argv[2], pathlib.Path(argv[3]))
+        elif len(argv) == 4 and argv[1] == "active" and argv[2].isdigit():
+            why = active(int(argv[2]), pathlib.Path(argv[3]))
+        else:
+            print(__doc__, file=sys.stderr)
+            return 2
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        print(f"lane-b: an input cannot be read ({type(exc).__name__}: {exc})", file=sys.stderr)
         return 2
     if why:
         print(f"lane-b: {why}", file=sys.stderr)
