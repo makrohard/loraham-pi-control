@@ -119,8 +119,22 @@ def radio_dir_state(paths, job: str) -> str:
     m = RADIO_JOB.fullmatch(job) if isinstance(job, str) else None
     if not m:
         return PRESENT
+    logs = paths.runtime_root / "logs"
+    try:                                                 # logs/ itself first, before anything is looked up under it
+        top = os.lstat(logs)
+    except FileNotFoundError:
+        return ABSENT
+    except Exception:
+        return UNKNOWN
+    if not stat.S_ISDIR(top.st_mode):                    # a link (or a file): judged by where it leads (B5-D21)
+        try:
+            target = paths.under("logs")
+        except Exception:                                # it escapes the runtime root
+            return UNKNOWN
+        if not os.path.isdir(target):                    # dangling, or not a directory
+            return UNKNOWN
     try:
-        st = os.lstat(paths.runtime_root / "logs" / m.group(1))
+        st = os.lstat(logs / m.group(1))
     except FileNotFoundError:
         return ABSENT
     except Exception:                                    # unreadable (EACCES, ELOOP, ENOTDIR above, …)

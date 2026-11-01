@@ -491,3 +491,23 @@ def test_an_outside_logs_tree_is_unknown(tmp_path):
     root.mkdir()
     (root / "logs").symlink_to(outside, target_is_directory=True)
     assert rflog.radio_dir_state(Paths(runtime_root=root), "r1/rf-daemon.log") == "unknown"
+
+
+@pytest.mark.parametrize("make,state", [
+    # B5-D21: an intermediate logs/ link is judged before anything under it: escaping or dangling is UNKNOWN
+    (lambda root, out: ((out / "elsewhere").mkdir(parents=True),
+                        (root / "logs").symlink_to(out / "elsewhere", target_is_directory=True)), "unknown"),
+    (lambda root, out: (root / "logs").symlink_to(root / "nowhere"), "unknown"),                  # dangling inside
+    (lambda root, out: (root / "logs").symlink_to(out / "nowhere"), "unknown"),                   # dangling outside
+    (lambda root, out: ((root / "real" / "r1").mkdir(parents=True),
+                        (root / "logs").symlink_to(root / "real", target_is_directory=True)), "present"),
+    (lambda root, out: ((root / "real").mkdir(),
+                        (root / "logs").symlink_to(root / "real", target_is_directory=True)), "absent"),
+])
+def test_an_intermediate_logs_link_is_judged_before_the_radio_level(tmp_path, make, state):
+    root, out = tmp_path / "rt", tmp_path / "out"
+    root.mkdir()
+    make(root, out)
+    paths = Paths(runtime_root=root)
+    assert rflog.radio_dir_state(paths, "r1/rf-daemon.log") == state
+    assert rflog.radio_dir_ok(paths, "r1/rf-daemon.log") is (state == "present")
