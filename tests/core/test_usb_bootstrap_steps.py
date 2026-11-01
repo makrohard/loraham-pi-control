@@ -45,7 +45,9 @@ def _fakebin(tmp_path, fail=()):
 def _run(tmp_path, text, *, fail=(), module_loaded=False, prelude='OP=tester\n_GROUPS_FAILED=\n'):
     root = tmp_path / "root"
     for d in ("etc/udev/rules.d", "etc/modprobe.d", "sys/module"):
-        (root / d).mkdir(parents=True, exist_ok=True)
+        q = root / d                     # a path a test planted (a file where a directory belongs) stays as planted
+        if not (q.exists() or q.is_symlink() or any(a.exists() and not a.is_dir() for a in q.parents)):
+            q.mkdir(parents=True)
     if module_loaded:
         (root / "sys" / "module" / "spi_ch341").mkdir(exist_ok=True)
     calls_dir = tmp_path / f"call{len(list(tmp_path.glob('call*')))}"    # fresh fakes per call: `fail` always applies
@@ -135,6 +137,13 @@ def test_b4_the_grant_is_usermod_aG_plugdev_for_the_account(tmp_path):
     assert r.returncode == 0 and "usermod -aG plugdev tester" in calls
 
 
+def test_b4_a_successful_grant_lets_the_standalone_block_exit_0(tmp_path):
+    """INTERFACE-B5-W1-NOTE-2: the last line must not turn a successful grant into a non-zero exit."""
+    r, _, calls = _run(tmp_path, _block(tmp_path, standalone=True))
+    assert r.returncode == 0, r.stderr
+    assert "usermod -aG plugdev tester" in calls
+
+
 def test_b4_a_failed_grant_sets_groups_failed_and_the_standalone_block_exits_7(tmp_path):
     r, _, _ = _run(tmp_path, _block(tmp_path, standalone=True), fail=("usermod",))
     assert r.returncode == 7
@@ -178,6 +187,7 @@ def test_c1_the_scaffold_block_is_the_standalone_block_without_its_last_line(tmp
     scaffold = uf.usb_setup_text("$OP", MODELS).replace('"$OP"', '"tester"').replace("$OP", "tester")
     standalone = uf.usb_setup_text("tester", MODELS, standalone=True)
     body, _, last = standalone.rstrip("\n").rpartition("\n")
-    assert last.strip() == '[ -n "$_GROUPS_FAILED" ] && exit 7'
+    assert uf.GROUPS_EXIT_LINE == '[ -z "$_GROUPS_FAILED" ] || exit 7'      # INTERFACE-B5-W1-NOTE-2 5dda7c12
+    assert last.strip() == uf.GROUPS_EXIT_LINE
     assert scaffold.rstrip("\n") == body.rstrip("\n")
 
