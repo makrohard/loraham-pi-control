@@ -38,14 +38,137 @@ def start_plan(svc, rid: str) -> tuple:
         settings = radios.radio_settings(radio, model, legacy, legacy_dp, defaults)
     except ValueError as exc:
         return None, str(exc), ()
-    procs = []
-    for pid, argv in svc._system.procfs.cmdlines().items():
-        if radio_daemon.daemon_entry(None, "", argv, "", None, "") == radio_daemon.Tri.YES:
-            procs.append(radio_daemon.parse_daemon_proc(pid, argv))
-    refusal = radio_daemon.start_refusal(radio, procs) or ""
+    refusal = radio_daemon.start_refusal(radio, _daemon_procs(svc)) or usb_precheck(radio, model) or ""
     rf_log = svc._resolved_param_value("daemon", "run", svc.DAEMON_ID, rflog.RF_LOG_PARAM, radio.band)
     params = radio_daemon.daemon_params(radio, model, settings, rf_log=rf_log)
     return params, refusal, settings.notes
+
+
+USB_SETUP_HINT = "set up USB access first: the Hardware section's USB setup (a copy-paste command)"
+
+
+def usb_precheck(radio, model) -> str:
+    """Table P (B5): "" when the radio may start, else the refusal. An SPI row always passes; a USB row is checked
+    against the attached sticks and its node's access (usb_flow.start_precheck, which never raises). A node this
+    account cannot open adds the USB setup's pointer (P10)."""
+    from . import usb_access, usb_flow
+    effective, _configured, euid = _groups()
+    v = usb_flow.start_precheck(radio, model, usb_access.scan,
+                                lambda d: usb_access.node_access(d, effective, euid))
+    if v.outcome == "proceed":
+        return ""
+    return f"{radio.id}: {v.reason}" + (f"; {USB_SETUP_HINT}" if v.copybox else "")
+
+
+def _groups() -> tuple:
+    """(effective group names, the account's configured group names, euid) for the USB access checks, the names
+    as frozensets (the library's input type). A group that cannot be named makes that set None, which the library
+    reads as UNKNOWN: never a guessed "no access"."""
+    import grp
+    import os
+    import pwd
+
+    from . import usb_access
+    euid = os.geteuid()
+    try:
+        effective = frozenset(usb_access._group_name(g) for g in {os.getegid(), *os.getgroups()})
+    except (KeyError, OSError):
+        effective = None
+    try:
+        pw = pwd.getpwuid(euid)
+        configured = frozenset({g.gr_name for g in grp.getgrall() if pw.pw_name in g.gr_mem}
+                               | {usb_access._group_name(pw.pw_gid)})
+    except (KeyError, OSError):
+        configured = None
+    return effective, configured, euid
+
+
+def doctor_usb(svc) -> list:
+    """Table D (B5): the doctor's USB host lines for the hardware list's rows (usb_flow.doctor_usb_lines, never
+    raises); [] without a valid list. The hotplug note's start record (Table K) is not written yet, so each USB
+    radio's hotplug line reads unknown (a known gap of the B5 minimum)."""
+    from . import usb_access, usb_flow
+    state = radios.load(svc._paths)
+    if state.kind != radios.VALID:
+        return []
+    models = radio_models.load()
+    effective, configured, euid = _groups()
+    probes = usb_flow.UsbProbes(
+        scan=usb_access.scan, rule_state=lambda: usb_access.rule_state(models),
+        ch341_module=usb_access.ch341_module, ch341_binding=usb_access.ch341_binding,
+        plugdev=lambda: usb_access.plugdev(effective, configured), libusb=usb_access.libusb,
+        node_access=lambda d: usb_access.node_access(d, effective, euid),
+        hotplug_for=lambda rid: usb_access.Probe.UNKNOWN)
+    return usb_flow.doctor_usb_lines(state.radios, models, probes)
+
+
+def _daemon_procs(svc) -> list:
+    """Every daemon process in /proc as radio_daemon reads it (id / no-id / unknown)."""
+    return [radio_daemon.parse_daemon_proc(pid, argv) for pid, argv in svc._system.procfs.cmdlines().items()
+            if radio_daemon.daemon_entry(None, "", argv, "", None, "") == radio_daemon.Tri.YES]
+
+
+def _radio_users(svc, radio) -> list:
+    """The running stacks on `radio`'s band other than the daemon (slot 0: a band's one radio, B4-D39)."""
+    return sorted(s.id for s in svc.stacks() if s.main != svc.DAEMON_ID and svc.stack_running(s.id)
+                  and radio.band in ({svc.running_band(s.id, "")} | {c.band for c in s.components if c.band}))
+
+
+def _account() -> str:
+    import os
+    import pwd
+    try:
+        return pwd.getpwuid(os.geteuid()).pw_name
+    except KeyError:
+        return ""
+
+
+def hardware_view(svc) -> dict:
+    """B5 Hardware section: the hardware list's rows, each with its daemon's state on its own socket and, for a
+    USB row, the sticks it can be bound to (usb_flow.usb_choices); the copybox when a USB row is listed."""
+    from . import daemon_control, usb_access, usb_flow
+    state = radios.load(svc._paths)
+    models = radio_models.load()
+    found = usb_access.scan() if any(models.get(r.model) and models[r.model].transport != "spi"
+                                     for r in state.radios) else None
+    rows = []
+    for r in state.radios:
+        m = models.get(r.model)
+        v = daemon_control.read_view(svc._system, r.id)
+        usb = m is not None and m.transport != "spi"
+        rows.append({"rid": r.id, "name": r.name, "model": r.model, "band": r.band, "enabled": r.enabled,
+                     "transport": m.transport if m else "unknown", "usb_serial": r.usb_serial,
+                     "usb_port": r.usb_port, "reachable": v.reachable, "ready": v.ready,
+                     "choices": usb_flow.usb_choices(found, m) if usb else None})
+    box = usb_flow.copybox(svc._paths, _account(), models) if found is not None else None
+    return {"kind": state.kind, "reasons": list(state.reasons), "rows": rows, "copybox": box}
+
+
+def bind_usb(svc, rid: str, port: str) -> tuple:
+    """B5 U-4…U-7: bind radio `rid` to the stick listed on `port` now; (ok, message, copybox). The save is the
+    hardware list's own (radios.save); while the radio is in use it is refused, and nothing re-binds by itself."""
+    from . import usb_access, usb_flow
+    state = radios.load(svc._paths)
+    old = next((r for r in state.radios if r.id == rid), None)
+    model = radio_models.load().get(old.model) if old else None
+    if old is None or model is None:
+        return False, f"there is no USB radio {rid}", False
+    found = usb_access.scan()
+    choice = next((c for c in usb_flow.usb_choices(found, model).items if c.port == port), None)
+    if choice is None:
+        return False, f"no stick of {model.id} is listed on port {port}", False
+    device = next((d for d in found.devices if d.port == port), None)
+    effective, _configured, euid = _groups()
+    access = usb_access.node_access(device, effective, euid) if device else usb_access.Probe.UNKNOWN
+    owned = frozenset(r["pid"] for r in svc._lifecycle().owned_records(svc.DAEMON_ID)
+                      if svc._lifecycle().verify_owned(r)[0])
+    b = usb_flow.bind_choice(state, rid, choice, _radio_users(svc, old), _daemon_procs(svc), owned, access=access)
+    if b.outcome != "proceed":
+        return False, f"{rid}: {b.reason}", False
+    reasons = radios.save(svc._paths, b.radios)
+    if reasons:
+        return False, f"{rid}: " + "; ".join(reasons), False
+    return True, f"{rid} bound to the stick on port {port}" + (f" ({choice.serial})" if choice.serial else ""), b.copybox
 
 
 def band_rid(svc, band: str) -> radio_daemon.Target:

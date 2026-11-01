@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Hardware — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+<section class="card" id="hardware-section">
+  <header><h2>Hardware: the radios</h2></header>
+  <div class="body">
+    <p class="muted">The hardware list (config/radios.toml) decides which radios launch: one daemon per radio, each
+      on its own sockets. Set it up with <code>lhpc hardware</code>.</p>
+    {% if view.kind != "valid" %}
+      <p class="depnote depnote-warn" id="hardware-list-state">The hardware list is {{ view.kind }}{% if view.reasons %}:
+        {{ view.reasons|join("; ") }}{% endif %}.</p>
+    {% endif %}
+    {% for r in view.rows %}
+      <div class="card radio-card" data-rid="{{ r.rid }}">
+        <header>
+          <h3>{{ r.rid }} — {{ r.name }} <span class="pill">{{ r.model }}, {{ r.band }} MHz, {{ r.transport }}</span>
+            {% if not r.enabled %}<span class="pill">disabled</span>{% endif %}</h3>
+          <span class="badge badge-{{ 'running' if r.ready else ('degraded' if r.reachable else 'stopped') }}">
+            {% if r.ready %}daemon usable (READY){% elif r.reachable %}daemon occupied{% else %}daemon offline{% endif %}</span>
+        </header>
+        {% if r.choices is not none %}
+          <div class="body">
+            <p>Bound to: {% if r.usb_serial %}serial <code>{{ r.usb_serial }}</code>{% elif r.usb_port %}port
+              <code>{{ r.usb_port }}</code> (no serial){% else %}nothing yet{% endif %}</p>
+            {% if r.choices.reason %}<p class="depnote depnote-warn">{{ r.choices.reason }}</p>{% endif %}
+            {% if r.choices.items %}
+              <form method="post" action="{{ url_for('hardware_bind') }}">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="rid" value="{{ r.rid }}">
+                <ul class="usb-choices">
+                {% for c in r.choices.items %}
+                  <li><label><input type="radio" name="port" value="{{ c.port }}"{% if not c.selectable %} disabled{% endif %}>
+                    {{ c.label }}{% if c.why %} — {{ c.why }}{% endif %}</label></li>
+                {% endfor %}
+                </ul>
+                <button type="submit">Bind {{ r.rid }} to the chosen stick</button>
+              </form>
+            {% endif %}
+          </div>
+        {% endif %}
+      </div>
+    {% else %}
+      <p class="muted">No radio in the hardware list.</p>
+    {% endfor %}
+    {% if view.copybox %}
+      <section class="cfgsec" id="usb-setup">
+        <h3>USB setup</h3>
+        {% if view.copybox.state == "ready" %}
+          <p class="muted">Once per box, as root: the udev rule, the spi_ch341 blacklist and the plugdev group for
+            this account. The command checks the file's sha256 before it runs it.</p>
+          <pre class="copybox" id="usb-copybox">{{ view.copybox.line }}</pre>
+        {% else %}
+          <p class="depnote depnote-warn">The USB setup cannot be offered: {{ view.copybox.reason }}</p>
+        {% endif %}
+      </section>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

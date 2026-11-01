@@ -2026,6 +2026,24 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview", open="daemon", cfg="daemon")
                         + "#stack-settings-daemon")
 
+    @app.get("/hardware")
+    def hardware_view():
+        """B5: the Hardware section — each radio of the hardware list, its daemon on its own socket, the USB
+        sticks a USB radio can be bound to, and the USB setup's copybox. No command and no network; with a USB row
+        it (re)writes the setup file the copybox line checks (state/usb-setup/usb-setup.sh, atomic)."""
+        from lhpc.core import radio_start
+        return render_template("hardware.html", view=radio_start.hardware_view(service))
+
+    @app.post("/hardware/bind")
+    def hardware_bind():
+        """B5 U-4…U-7: bind a USB radio to the stick the operator chose; the hardware list's own save checks."""
+        if not _csrf_ok():
+            abort(400)
+        from lhpc.core import radio_start
+        ok, msg, box = radio_start.bind_usb(service, request.form.get("rid", ""), request.form.get("port", ""))
+        flash(msg + (" — run the USB setup below to give this account access" if box else ""), "ok" if ok else "warn")
+        return redirect(url_for("hardware_view") + ("#usb-setup" if box else ""))
+
     @app.post("/hardware")
     def hardware_set():
         if not _csrf_ok():

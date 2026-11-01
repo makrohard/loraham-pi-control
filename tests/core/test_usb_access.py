@@ -767,21 +767,21 @@ def test_an_injected_read_error_is_unknown_never_absent(root, inject, err, read,
 
 # --- no caller yet ---
 
-def test_no_existing_module_imports_usb_access():  # rule-1 exception
-    """A whole-package negative invariant no driven path proves: no module under lhpc/ imports
-    lhpc.core.usb_access until the stage that wires it. Behavioural twin: the next test. A control: it
-    passes on the parent too, which has no such module."""
+def test_only_the_b5_wiring_imports_usb_access():  # rule-1 exception
+    """A whole-package invariant no driven path proves: the B5 minimum wires lhpc.core.usb_access through
+    exactly two modules, usb_flow (its pure consumers) and radio_start (the start pre-check, the doctor, the
+    Hardware section); a relative `from . import usb_access` counts. Behavioural twin: the next test."""
     importers = []
     for path in (repo_paths.REPO / "lhpc").rglob("*.py"):
         if path.name == "usb_access.py" and path.parent.name == "core":
             continue
         for node in ast.walk(ast.parse(path.read_bytes())):
             names = ([a.name for a in node.names] if isinstance(node, ast.Import) else
-                     [f"{node.module}.{a.name}" for a in node.names] if isinstance(node, ast.ImportFrom)
-                     and node.module else [])
+                     [f"{node.module or ''}.{a.name}" for a in node.names] if isinstance(node, ast.ImportFrom)
+                     else [])
             if any("usb_access" in n for n in names):
                 importers.append(str(path.relative_to(repo_paths.REPO)))
-    assert importers == []
+    assert sorted(set(importers)) == ["lhpc/core/radio_start.py", "lhpc/core/usb_flow.py"]
 
 
 def test_loading_the_cli_web_and_bootstrap_modules_does_not_load_usb_access():

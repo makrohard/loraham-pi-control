@@ -75,6 +75,15 @@
             {% if r.daemon.usable %}daemon usable (READY){% elif r.daemon.occupied %}daemon occupied ({{ r.daemon.radio_state or 'not READY' }}){% else %}daemon offline{% endif %}</span>
         </header>
         <div class="body">
+          {% if r.radios %}
+            {# B5: one card per radio of this band (W6-3), each read on its own daemon socket #}
+            <ul class="radio-cards" id="radio-cards-{{ r.band }}">
+            {% for x in r.radios %}
+              <li class="radio-card" data-rid="{{ x.rid }}"><a href="{{ url_for('hardware_view') }}"><strong>{{ x.rid }}</strong></a>
+                {{ x.name }} ({{ x.model }}) — <span class="badge badge-{{ 'running' if x.ready else ('degraded' if x.reachable else 'stopped') }}">{% if x.ready %}daemon usable (READY){% elif x.reachable %}daemon occupied{% else %}daemon offline{% endif %}</span></li>
+            {% endfor %}
+            </ul>
+          {% endif %}
 
           {% if r.daemon.high_power and r.daemon.high_power.warn %}
             {# daemon 1.2.0: keyed on the RUNNING family + permission (STATUS), never the saved
