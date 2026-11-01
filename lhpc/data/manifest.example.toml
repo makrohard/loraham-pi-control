@@ -68,7 +68,7 @@ main = "loraham-daemon"
   # the file is per band and named by lhpc — the daemon never derives a path itself.
   run = "loraham_daemon/loraham_daemon --radio {radio} --hw {hw} --tx-mode {txmode} --cad-monitor {cadmon} --cad-rssi {cadrssi} {hipower} --ocp {ocp} {rf_log} --rflog-path {runtime}/logs/rf-daemon-{band}.log"
   # Structured (shell-free) execution — preferred over `run`/`pre` above.
-  run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "--hw", "{param:hw}", "--tx-mode", "{param:txmode}", "--cad-monitor", "{param:cadmon}", "--cad-rssi", "{param:cadrssi}", "{param:hipower}", "--ocp", "{param:ocp}", "{param:rf_log}", "--rflog-path", "{runtime}/logs/rf-daemon-{band}.log"]
+  run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "--hw", "{param:hw}", "--tx-mode", "{param:txmode}", "--cad-monitor", "{param:cadmon}", "--cad-rssi", "{param:cadrssi}", "{param:hipower}", "--ocp", "{param:ocp}", "{param:rf_log}", "{param:rflog_path}", "{param:id}", "{param:usb_serial}"]
   run_cwd = "{source}"
   # v112 sockets default to /run/loraham (systemd, tmpfiles-provisioned). lhpc runs the daemon DIRECT
   # as a user, so point its sockets at /tmp — the daemon has no /tmp fallback of its own, and all
@@ -108,6 +108,29 @@ main = "loraham-daemon"
     # the chosen hardware setup, and txmode/cadmon/cadrssi from THIS band's tx_<b>/cadmon_<b>/cadrssi_<b>
     # below. They are not shown in generic forms; the defaults only keep a standalone argv preview
     # well-formed (a blank value would orphan its literal flag).
+    # The RF log's path, the radio id and the stick's serial selector: arg-kind, injected at spawn, each rendering
+    # NOTHING when empty. Today's band start passes the band's log path and no id or serial (the argv is unchanged);
+    # the per-radio start (L5, radio_daemon.daemon_params) passes `--id <rid>`, `--usb-serial <first 8>` for a USB
+    # stick with a serial, and `--rflog-path {runtime}/logs/<rid>/rf-daemon.log` (A:288).
+    [[stack.component.param]]
+    name = "rflog_path"
+    kind = "str"
+    arg = "--rflog-path"
+    default = "{runtime}/logs/rf-daemon-{band}.log"
+    validator = "path"
+    label = "RF log path (this process; injected)"
+    [[stack.component.param]]
+    name = "id"
+    kind = "str"
+    arg = "--id"
+    default = ""
+    label = "Radio id (this process; injected, L5)"
+    [[stack.component.param]]
+    name = "usb_serial"
+    kind = "str"
+    arg = "--usb-serial"
+    default = ""
+    label = "USB stick serial selector, first 8 characters (this process; injected, L5)"
     [[stack.component.param]]
     name = "hw"
     kind = "enum"

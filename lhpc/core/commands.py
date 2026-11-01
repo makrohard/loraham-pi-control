@@ -176,7 +176,8 @@ def expand_argv(tokens, comp, params, op, runtime: str, source: str,
                 # param whose validator requires a value fails typed here, never as a
                 # silently transmitted N0CALL.
                 raw = (inst.subst(raw).replace("{callsign}", op.callsign or "")
-                          .replace("{runtime}", runtime).replace("{source}", source))
+                          .replace("{runtime}", runtime).replace("{source}", source)
+                          .replace("{band}", band or ""))
                 val = validators.validate_param(p, raw)
                 out.extend(emit_param(p, val))
                 continue

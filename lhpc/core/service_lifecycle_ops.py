@@ -2144,6 +2144,8 @@ class LifecycleOpsMixin:
                 # band (`{band}` in the run line); the path itself is never a stored value.
                 dparams[_rflog.RF_LOG_PARAM] = self._resolved_param_value(
                     "daemon", "run", self.DAEMON_ID, _rflog.RF_LOG_PARAM, b)
+                # The band start's own log path (today's literal argv token, now an arg-kind param): unchanged.
+                dparams["rflog_path"] = "{runtime}/logs/rf-daemon-" + b + ".log"
                 res = life.start(stack, comp, dparams, band=b,
                                  requested_target=requested_target,
                                  start_scope=start_scope)
