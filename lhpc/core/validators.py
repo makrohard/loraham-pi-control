@@ -426,6 +426,9 @@ _NAMED = {
     "callsign_voice": callsign_voice,
     "callsign_meshcom": callsign_meshcom,
     "path": path_value,
+    # the daemon's RF-log path: its raw template is checked whole in commands.expand_argv (W7-8); the value it then
+    # takes after substitution is a path
+    "rflog": path_value,
     "aprs_filter": aprs_filter,
     "sync": sync_word,
     "text": safe_text,

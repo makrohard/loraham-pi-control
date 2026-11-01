@@ -67,13 +67,16 @@ def test_argv_writers_get_the_switch_and_the_registry_file(tmp_path, surface, ba
     comp = svc.stack(e.owner).component(e.writer)
     # The writer's own declared defaults, so a new required run param cannot break this test.
     base = {p.name: p.default for p in comp.run_params}
+    want = f"/rt/logs/{e.job(band)}"
     if band:
-        base["radio"] = band
+        # stage L5 (W7-8, W7-8a): the daemon's file is its radio's, `{runtime}/logs/<rid>/rf-daemon.log`
+        base.update(radio=band, id="r1", rflog_path="{runtime}/logs/r1/rf-daemon.log")
+        want = f"/rt/logs/{e.radio_job('r1')}"
     for value in ("on", "off"):
         argv = commands.expand_argv(comp.run_argv, comp, {**base, "rf_log": value},
                                     svc.config().operator, "/rt", "/src", band)
         assert argv[argv.index("--rflog") + 1] == value
-        assert argv[argv.index("--rflog-path") + 1] == f"/rt/logs/{e.job(band)}"
+        assert argv[argv.index("--rflog-path") + 1] == want
 
 
 def test_meshtastic_trace_file_is_derived_from_the_switch(tmp_path):

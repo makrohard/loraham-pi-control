@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from htmlq import parse
-from lhpc.core import config as cfgmod, rflog
+from lhpc.core import config as cfgmod, radios, rflog
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -218,6 +218,11 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
     every running stack the registry knows — on its own band only. No file exists yet: the links
     still lead to a page (200), and its viewer data reports no file (the page itself carries no
     structural empty-state marker to assert)."""
+    # Stage L5 (W7-8a): the daemon's links are its radios' files; the hardware list holds r1 (433) and r2 (868).
+    (tmp_path / "config").mkdir(exist_ok=True)
+    (tmp_path / "config" / "radios.toml").write_text(radios.render(
+        (radios.Radio("r1", "low", "loraham", "433"), radios.Radio("r2", "high", "loraham", "868"))))
+
     def factory():
         svc = ControllerService(
             system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["meshtasticd"]},
@@ -233,9 +238,9 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web):
     col868 = doc.within(doc.find("div", **{"data-radio-band": "868"})[0])
     # Every link carries the card's band, so the page opens on it (the stack's running band, not
     # its manifest default).
-    assert len(_links(col433, "loraham-daemon", "rf-daemon-433.log", "433")) == 1
+    assert len(_links(col433, "loraham-daemon", "r1/rf-daemon.log", "433")) == 1
     assert not _links(col433, "meshtastic", "rf-meshtastic.log", "433")
-    assert len(_links(col868, "loraham-daemon", "rf-daemon-868.log", "868")) == 1
+    assert len(_links(col868, "loraham-daemon", "r2/rf-daemon.log", "868")) == 1
     assert len(_links(col868, "meshtastic", "rf-meshtastic.log", "868")) == 1
     assert not _links(col868, "loraham-kiss-tnc", "rf-kiss.log", "868")    # not running
     r = c.get(_links(col868, "meshtastic", "rf-meshtastic.log", "868")[0]["href"])

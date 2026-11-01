@@ -4,18 +4,27 @@ values `set_ocp` accepts, the argv every daemon start carries, and the start tha
 value the band's chip cannot represent. Backed by FakeSystem; the spawn itself is captured."""
 
 import pytest
+import radios_fixture
 
 from lhpc.core import config as cfgmod
 from lhpc.core import daemon_control as dc
+from lhpc.core import radios
 from lhpc.core.lifecycle import Lifecycle, StartLaunch
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
 
+# stage L5: the hardware list that matches each 0.13.x setup (the band's radio of that board)
+_LIST = {"uputronics": (radios.Radio("r1", "low", "uputronics", "433", ce="ce0"),
+                        radios.Radio("r2", "high", "uputronics", "868", ce="ce1")),
+         "waveshare-433": (radios.Radio("r1", "low", "waveshare-sx1262", "433"),)}
+
+
 def _svc(tmp_path, setup="uputronics", stored=None):
     p = Paths(runtime_root=tmp_path)
     cfgmod.save_hardware_setup(p, setup)
+    radios_fixture.write(tmp_path, _LIST[setup])
     if stored is not None:                       # a value written by hand, as an operator could
         path = cfgmod._stack_config_path(p, "daemon")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -131,8 +140,8 @@ def test_an_illegal_stored_value_refuses_the_start_and_sends_no_ocp(tmp_path, mo
     assert svc.ocp_for_band("433") is None
     text, params = _spawned(svc, monkeypatch)
     assert params is None                                 # never spawned, never clamped
-    assert f"[BLOCKED] daemon on 433: ocp_433 = {raw!r}" in text
-    assert "lhpc hardware --ocp 433 auto|MA" in text
+    # stage L5: the radio's start plan refuses the carried legacy value, naming the radio, the value and its key
+    assert f"[BLOCKED] daemon on 433: r1: ocp_ma {raw!r}" in text and "(from legacy ocp_433)" in text
 
 
 # --- T6: saving restarts nothing and marks the restart -----------------------------------------------

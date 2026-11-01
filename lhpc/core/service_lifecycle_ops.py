@@ -16,6 +16,7 @@ from . import (
     daemon_control,
     gps,
     procident,
+    radio_start,
     runtime_fs,
     validators,
 )
@@ -24,7 +25,6 @@ from . import openhop_store as _ohs
 from . import resources as resources_mod
 from . import restart_required as _rr
 from . import reticulum_interfaces as _ri
-from . import rflog as _rflog
 from .daemon_control import ALLOWED_BANDS
 from .model import ComponentKind, ResourceMode, RunState
 from .outcomes import CompResult, Outcome
@@ -2056,7 +2056,7 @@ class LifecycleOpsMixin:
         # (M-1): lhpc never serves an excluded band; it always spawns one process per band. Each needed
         # band is spawned as an explicit `--radio <band>` process below.
         needed, owned = self._daemon_arbitrated_bands(radio)
-        views = {b: daemon_control.read_view(self._system, b) for b in needed}
+        views = {b: daemon_control.read_view(self._system, radio_start.daemon_key(self, b)) for b in needed}
         # Classify each band from CONF readiness AND process topology. A CONF socket that is
         # unreachable does NOT mean the radio is free: an observed daemon PROCESS may still hold it.
         #   READY (retain) | reachable-not-READY (fail) | CONF-down-but-process-claims-it (fail, do
@@ -2115,39 +2115,19 @@ class LifecycleOpsMixin:
             # `--radio <band>` per band. The TX mode is applied LIVE once the socket is up.
             # I5 (A §1): one at a time, each READY or failed before the next; a failure stops no other.
             for b in sorted(absent):
-                dparams = dict(self.stack_config("daemon"))
-                dparams["radio"] = b
-                # v112: one process per band with plain (non band-suffixed) flags. `--hw` comes from
-                # the hardware setup; --tx-mode/--cad-monitor/--cad-rssi carry THIS band's stored value.
-                dparams["hw"] = self.hw_preset_for_band(b)
-                dparams["txmode"] = dparams.get(f"tx_{b}", "managed")
-                dparams["cadmon"] = dparams.get(f"cadmon_{b}", "off")
-                dparams["cadrssi"] = dparams.get(f"cadrssi_{b}", "-90")
-                # The +20 dBm permission: the injected `hipower` is a flag-kind param that emits
-                # the bare `--high-power` when on and NO token when off. ONE source of truth --
-                # `high_power_for_band`, a literal compare against the canonical `on` -- so a
-                # stray or hand-edited stored value can never enable a safety-relevant mode
-                # through the permissive flag emitter (the daemon is skipped by the generic
-                # saved-launch refusal; this is its gate).
-                dparams["hipower"] = "on" if self.high_power_for_band(b) else "off"
-                # The PA over-current limit (daemon 1.3.0 `--ocp`): a saved value this band's chip
-                # cannot represent is refused here, never sent or clamped.
-                ocp = self.ocp_for_band(b)
-                if ocp is None:
-                    lines.append(f"  [BLOCKED] daemon on {b}: ocp_{b} = "
-                                 f"{dparams.get(f'ocp_{b}')!r} is not a PA limit this band's chip "
-                                 f"can represent — set it with: lhpc hardware --ocp {b} auto|MA")
+                # Stage L5: the band's one enabled radio (W1-3/4/5) and its start plan from the hardware list:
+                # --id, --hw from the model, the radio's own settings and RF-log path (W7-1, W7-7, W7-8).
+                t = radio_start.band_rid(self, b)
+                params, refusal, _notes = radio_start.start_plan(self, t.rid) if t.rid else (None, t.reason, ())
+                if params is None or refusal:
+                    lines.append(f"  [BLOCKED] daemon on {b}: {refusal}")
                     failed.add(b)
                     continue
-                dparams["ocp"] = str(ocp)
-                # The RF-log switch is STACK-level (band-less); the file it names is per band, never stored.
-                dparams[_rflog.RF_LOG_PARAM] = self._resolved_param_value(
-                    "daemon", "run", self.DAEMON_ID, _rflog.RF_LOG_PARAM, b)
-                dparams["rflog_path"] = "{runtime}/logs/rf-daemon-" + b + ".log"
+                dparams = {**dict(self.stack_config("daemon")), **params}
                 res = life.start(stack, comp, dparams, band=b,
                                  requested_target=requested_target,
                                  start_scope=start_scope)
-                base = f"start daemon --radio {b}"
+                base = f"start daemon {t.rid} --radio {b}"
                 if not res.ok:
                     lines.append(f"  [fail] {base}: {res.detail}")
                     failed.add(b)
@@ -2157,6 +2137,9 @@ class LifecycleOpsMixin:
                     failed.add(b)
                     lines.append(f"  [fail] {b} CONF socket never came up — the daemon failed "
                                  f"to init on {b} (radio/SPI busy or a stale lock); see its log.")
+                elif why := radio_start.verify_identity(self, t.rid):
+                    failed.add(b)                                         # W3-7: refused, never signalled
+                    lines.append(f"  [fail] daemon {t.rid}: {why}")
         # Apply, once per band that is now READY (retained, or started and verified above; the
         # failed bands were reported above and are skipped).
         for b in needed:
@@ -2199,12 +2182,12 @@ class LifecycleOpsMixin:
         up: the radio inits asynchronously, so we wait for readiness (not mere socket
         reachability). With the timeout disabled (tests) it is a single bounded check."""
         if self.DAEMON_VERIFY_TIMEOUT_S <= 0:
-            return daemon_control.read_view(self._system, band).ready
+            return daemon_control.read_view(self._system, radio_start.daemon_key(self, band)).ready
         waited = 0.0
         while waited < self.DAEMON_VERIFY_TIMEOUT_S:
             time.sleep(self.DAEMON_VERIFY_POLL_S)
             waited += self.DAEMON_VERIFY_POLL_S
-            if daemon_control.read_view(self._system, band).ready:
+            if daemon_control.read_view(self._system, radio_start.daemon_key(self, band)).ready:
                 return True
         return False
 

@@ -12,8 +12,10 @@
     {% if view.hw_setups %}
       <section class="cfgsec">
         <h3>Hardware</h3>
-        <p class="muted">Which physical radio board(s) this box has. This fixes the served band(s) and
-          the <code>--hw</code> preset each radio launches with. Until a real setup is chosen the daemon
+        <p class="depnote" id="hardware-list-notice">The hardware list decides which radios launch. This page's board
+          choice only names the served bands until the Hardware section replaces it.</p>
+        <p class="muted">Which physical radio board(s) this box has. This fixes the served band(s). Until a real
+          setup is chosen the daemon
           refuses to start. Use <strong>Detect</strong> to probe a candidate board (its LED lights while
           the radio initialises).</p>
         {% if not view.hardware_configured %}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import pytest
+import radios_fixture
 
 from lhpc.core.paths import Paths
 from lhpc.core import jobs as jobs_mod
@@ -246,9 +247,10 @@ def test_app_start_brings_up_daemon_when_band_not_served(tmp_path):
     binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
     binp.parent.mkdir(parents=True)       # daemon source present
     binp.write_text("#!/bin/sh\n")        # and its binary is built
+    radios_fixture.write(tmp_path)
     res = _svc(tmp_path).start("kiss", apply=True)
     text = "\n".join(res.details)
-    assert "start daemon --radio 433" in text
+    assert "start daemon r1 --radio 433" in text
 
 
 def test_app_start_uses_running_daemon_when_serving_band(tmp_path):
@@ -275,13 +277,14 @@ def _daemon_svc(tmp_path, replies):
     binp.parent.mkdir(parents=True)
     binp.write_text("#!/bin/sh\nsleep 0.1\n")
     os.chmod(binp, 0o755)
-    return ControllerService(system=FakeSystem(unix_replies=replies).system,
+    radios_fixture.write(tmp_path)                       # stage L5: a band's daemon is its radio's
+    return ControllerService(system=FakeSystem(unix_replies=radios_fixture.by_radio(replies)).system,
                              paths=Paths(runtime_root=tmp_path))
 
 
 def _band_starts(details):
     import re
-    return set(re.findall(r"start daemon --radio (\w+)", "\n".join(details)))
+    return set(re.findall(r"start daemon r[0-9]+ --radio (\w+)", "\n".join(details)))
 
 
 _RDY = b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n"
@@ -319,7 +322,7 @@ def test_dual_band_reachable_not_ready_fails_without_relaunch(tmp_path):
     res = svc.start("daemon", apply=True)
     text = "\n".join(res.details)
     assert not res.ok and "not READY" in text
-    assert "start daemon --radio 433" not in text and "--radio both" not in text
+    assert "start daemon r1 --radio 433" not in text and "--radio both" not in text
 
 
 def _daemon_svc_owned(tmp_path, replies, owner_band):
@@ -329,7 +332,8 @@ def _daemon_svc_owned(tmp_path, replies, owner_band):
     binp.parent.mkdir(parents=True)
     binp.write_text("#!/bin/sh\nsleep 0.1\n")
     os.chmod(binp, 0o755)
-    svc = ControllerService(system=FakeSystem(unix_replies=replies,
+    radios_fixture.write(tmp_path)
+    svc = ControllerService(system=FakeSystem(unix_replies=radios_fixture.by_radio(replies),
                             cmdlines_data={200: ["meshtasticd"]}).system,
                             paths=Paths(runtime_root=tmp_path))
     svc._set_running_band("meshtastic", owner_band)
@@ -344,7 +348,7 @@ def test_daemon_start_skips_band_owned_by_meshtastic(tmp_path):
     text = "\n".join(svc.start("daemon", apply=True).details)
     assert _band_starts([text]) == {"433"}                       # only the FREE band started
     assert "868 owned by meshtastic" in text                     # skip reported
-    assert "start daemon --radio 868" not in text and "--radio both" not in text
+    assert "start daemon r2 --radio 868" not in text and "--radio both" not in text
 
 
 @pytest.mark.needs_session
@@ -916,7 +920,7 @@ def test_dead_conf_433_process_blocks_replacement_daemon(tmp_path):
         paths=Paths(runtime_root=tmp_path))
     res = svc.run_action("start", "daemon", apply=True)
     assert any("still holds the radio" in d and "433" in d for d in res.details)
-    assert not any("start daemon --radio 433" in d for d in res.details)
+    assert not any("start daemon" in d and "--radio 433" in d for d in res.details)
 
 
 def test_dead_conf_868_of_both_blocks_868_daemon_and_direct_stack(tmp_path):

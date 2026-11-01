@@ -3,6 +3,7 @@
 
 import pathlib
 import pytest
+import radios_fixture
 import time
 from lhpc.core.lifecycle import Lifecycle
 from lhpc.core.services import ControllerService
@@ -1811,8 +1812,9 @@ def _built_daemon(tmp_path):
 @pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
 def test_daemon_both_fails_when_one_band_never_comes_up(tmp_path, monkeypatch, real_spawn):
     _built_daemon(tmp_path)
-    # Only 433 answers GET STATUS; 868's CONF socket never comes up.
-    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": STATUS}).system
+    radios_fixture.write(tmp_path)                       # stage L5: r1 (433) answers; r2 (868) never comes up
+    # Only 433's radio answers GET STATUS; 868's CONF socket never comes up.
+    sys = FakeSystem(unix_replies=radios_fixture.by_radio({"/tmp/loraconf433.sock": STATUS})).system
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(type(svc), "_lifecycle",
                         lambda s: _fake_life_factory(real_spawn, s))

@@ -6,8 +6,8 @@ from __future__ import annotations
 import os
 
 from . import meshcore_mode as _meshcore_mode
+from . import radio_start, runtime_fs, validators
 from . import rflog as _rflog
-from . import runtime_fs, validators
 from .model import RunState
 from .paths import PathContainmentError
 from .service_base import ActionResult
@@ -21,7 +21,7 @@ class RflogOpsMixin:
     # ------------------------------------------------------------------
 
     def _rflog_path(self, job: str):
-        return self._paths.under("logs", job)
+        return radio_start.rf_path(self._paths, job)
 
     def _rflog_lock(self, job: str):
         """An exclusive flock per RF job, held across a native roll or a Clear. Two console
@@ -33,7 +33,7 @@ class RflogOpsMixin:
 
         @contextmanager
         def _held():
-            fh = runtime_fs.open_lock(self._paths, self._paths.under("state", "locks", f"rflog-{job}.lock"))
+            fh = runtime_fs.open_lock(self._paths, self._paths.under("state", "locks", f"rflog-{job.replace('/', '-')}.lock"))
             try:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
                 yield
@@ -153,7 +153,7 @@ class RflogOpsMixin:
         out = []
         for e in self._rflog_entries():
             if e.banded:
-                out.append({"label": f"{e.surface} {band}", "target": e.writer, "job": e.job(band)})
+                out.extend(radio_start.daemon_rf_links(self, e, band))
             elif e.surface in up:
                 out.append({"label": e.surface, "target": e.writer, "job": e.job()})
         return out
@@ -166,12 +166,12 @@ class RflogOpsMixin:
         the first active band."""
         e, jband = _rflog.by_job(job)
         stack_band = next((c.band for c in self.stack(e.surface).components if c.band), "")
-        shown = (band if band in self.RADIO_BANDS else "") or jband \
+        shown = (band if band in self.RADIO_BANDS else "") or radio_start.rf_band(self, jband) \
             or self.running_band(e.surface, stack_band) or (self.active_bands() or self.RADIO_BANDS)[0]
         stacks = []
         for x in self._rflog_entries():
             if x.banded:
-                xjob, xband = x.job(shown), shown
+                xjob, xband = radio_start.daemon_rf_job(self, x, shown), shown
             elif shown in self._declared_bands(self.stack(x.surface)):
                 xjob, xband = x.job(), ""
             else:
@@ -180,7 +180,7 @@ class RflogOpsMixin:
                            "label": f"{x.surface} {xband}".strip(), "current": xjob == job})
         # A band pill keeps the shown file, except the daemon's: there it opens that band's file.
         bands = [{"band": b, "current": b == shown, "target": e.writer,
-                  "job": e.job(b) if e.banded else job} for b in self.RADIO_BANDS]
+                  "job": radio_start.daemon_rf_job(self, e, b) if e.banded else job} for b in self.RADIO_BANDS]
         return {"band": shown, "bands": bands, "stacks": stacks}
 
     def _rflog_switch_value(self, e) -> str:

@@ -7,6 +7,9 @@ doctor and boot restore name it while it is in force."""
 import dataclasses
 
 import pytest
+import radios_fixture
+
+from lhpc.core import radios
 
 from lhpc.core import binary_install as bi
 from lhpc.core import binary_receipt as brx
@@ -117,6 +120,8 @@ def test_a_lagging_covered_library_does_not_block_the_start(tmp_path, monkeypatc
     svc = _svc(tmp_path, monkeypatch)
     cfgmod.save_hardware_setup(svc._paths, "uputronics")
     svc._invalidate_config()
+    radios_fixture.write(tmp_path, (radios.Radio("r1", "low", "uputronics", "433", ce="ce0"),
+                                    radios.Radio("r2", "high", "uputronics", "868", ce="ce1")))   # stage L5
     pins = svc._binary_pins("daemon")
     lib = "radiolib"
     assert svc.stack("daemon").component(lib).kind.value == "library"

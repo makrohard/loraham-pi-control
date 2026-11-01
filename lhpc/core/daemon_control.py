@@ -172,11 +172,23 @@ def _prefer_run_socket(run: str, tmp: str) -> str:
         return tmp
 
 
+_RID = re.compile(r"r[1-9][0-9]?")
+
+
+def _valid_key(key) -> bool:
+    """A daemon key: a band 433/868 (a 0.13.x daemon) or a radio id r1..r99 (stage L5), as conf_socket takes."""
+    return is_valid_band(key) or (isinstance(key, str) and _RID.fullmatch(key) is not None)
+
+
 def conf_socket(band: str) -> str:
-    """The daemon CONF socket path for a VALIDATED band. Refuses any band that is not 433/868 so a
-    direct caller can never construct `loraconf<arbitrary>.sock`. Resolves /run/loraham → /tmp."""
+    """The daemon CONF socket path for a VALIDATED key: a radio id r1..r99 (stage L5: that radio's own
+    `loraconf-<rid>.sock`, W3-1) or a band 433/868 (a 0.13.x daemon's `loraconf<band>.sock`, which is never
+    read as any radio's socket, W3-6). Any other key is refused, so a direct caller can never construct an
+    arbitrary path. Each path prefers /run/loraham, else /tmp (W3-3)."""
+    if isinstance(band, str) and _RID.fullmatch(band):
+        return _prefer_run_socket(f"/run/loraham/loraconf-{band}.sock", f"/tmp/loraconf-{band}.sock")
     if not is_valid_band(band):
-        raise InvalidBand(f"invalid band {band!r} (allowed: {', '.join(ALLOWED_BANDS)})")
+        raise InvalidBand(f"invalid band {band!r} (allowed: {', '.join(ALLOWED_BANDS)}, or a radio id r1..r99)")
     return _prefer_run_socket(f"/run/loraham/loraconf{band}.sock", f"/tmp/loraconf{band}.sock")
 
 
@@ -240,7 +252,7 @@ def read_socket_line(system: System, band: str, command: bytes = b"GET STATUS\n"
     socket can never make us return unbounded data, hang, or emit control characters. The band is
     validated (never an arbitrary socket path) and the line is stripped to printable ASCII. Same
     bounds as `_query`."""
-    if not is_valid_band(band):
+    if not _valid_key(band):
         return ""
     if not command.startswith(b"GET "):          # defence in depth: this monitor never writes
         return ""
@@ -271,7 +283,7 @@ def read_view(system: System, band: str) -> DaemonView:
     Deliberately not a `channel=True` flag on this function: a flag makes it easy to reintroduce a
     destructive scan into a generic status read, which is exactly how the defect arose."""
     view = DaemonView(band=band, reachable=False)
-    if not is_valid_band(band):
+    if not _valid_key(band):
         view.error = f"invalid band {band!r}"
         return view
     try:
@@ -297,7 +309,7 @@ def read_channel_passive(system: System, band: str) -> dict[str, str]:
     A daemon older than 1.1.0 answers `ERR UNKNOWN`, which `_query` rejects, so this returns `{}`
     and the display degrades to "?" — deliberately NOT falling back to the scanning form, which
     would silently restore the very defect this exists to remove."""
-    if not is_valid_band(band):
+    if not _valid_key(band):
         return {}
     try:
         return _query(system, band, b"GET CHANNEL NOSCAN\n", "CHANNEL")
@@ -311,7 +323,7 @@ def read_channel_scan(system: System, band: str) -> dict[str, str]:
     DESTRUCTIVE: puts the chip into CAD and can discard a frame that is arriving. Only ever call
     this for a deliberate, operator-invoked measurement (`lhpc daemon <band>`, the console's
     "Scan now" button). Never on a timer."""
-    if not is_valid_band(band):
+    if not _valid_key(band):
         return {}
     try:
         return _query(system, band, b"GET CHANNEL\n", "CHANNEL")
@@ -559,7 +571,7 @@ def apply_set(system: System, band: str, key: str, value: str) -> tuple[bool, bo
     err = validate_set(key, value)
     if err:
         return False, False, err
-    if not is_valid_band(band):
+    if not _valid_key(band):
         return False, False, f"invalid band {band!r}"
     key, value = key.upper(), canonical_value(key, value).upper()   # the validated token, canonical
     sock = conf_socket(band)                     # band already validated above

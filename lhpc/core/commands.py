@@ -146,6 +146,9 @@ def _param_raw(p, params, inst: Instance) -> str:
     return inst.subst(raw)
 
 
+_RFLOG = re.compile(r"\{runtime\}/logs/r[1-9][0-9]?/rf-daemon\.log")
+
+
 def expand_argv(tokens, comp, params, op, runtime: str, source: str,
                 band: str = "", *, inst: Instance = SLOT0) -> list[str]:
     """Expand an argv token template to a validated argv list (no shell)."""
@@ -168,6 +171,11 @@ def expand_argv(tokens, comp, params, op, runtime: str, source: str,
                 if p is None:
                     raise CommandError(f"unknown run-param token {tok}")
                 raw = _param_raw(p, params, inst)
+                # W7-8: the daemon's RF-log path is checked as its raw template, before any substitution, and
+                # only one form passes; there is no default, so an empty value is refused too.
+                if getattr(p, "validator", "") == "rflog" and not _RFLOG.fullmatch(str(raw)):
+                    raise validators.ValidationError(
+                        f"{p.name}: {raw!r} is not {{runtime}}/logs/r<1-99>/rf-daemon.log")
                 # A param default may reference operator identity / paths (e.g. chat
                 # `call` defaults to "{callsign}"). Resolve those controller-derived
                 # templates BEFORE validating the value.

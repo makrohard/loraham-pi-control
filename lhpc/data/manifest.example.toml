@@ -66,8 +66,7 @@ main = "loraham-daemon"
   # `hipower_<band>` switch is on and NOTHING when it is off (daemon 1.2.0: the +20 dBm permission).
   # `{rf_log}` renders `--rflog on|off` (the STACK-level switch, injected per band like the rest);
   # the file is per band and named by lhpc — the daemon never derives a path itself.
-  run = "loraham_daemon/loraham_daemon --radio {radio} --hw {hw} --tx-mode {txmode} --cad-monitor {cadmon} --cad-rssi {cadrssi} {hipower} --ocp {ocp} {rf_log} --rflog-path {runtime}/logs/rf-daemon-{band}.log"
-  # Structured (shell-free) execution — preferred over `run`/`pre` above.
+  # Structured (shell-free) execution (W7-9: the daemon has no `run` shorthand; run_argv is its only command).
   run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "--hw", "{param:hw}", "--tx-mode", "{param:txmode}", "--cad-monitor", "{param:cadmon}", "--cad-rssi", "{param:cadrssi}", "{param:hipower}", "--ocp", "{param:ocp}", "{param:rf_log}", "{param:rflog_path}", "{param:id}", "{param:usb_serial}"]
   run_cwd = "{source}"
   # v112 sockets default to /run/loraham (systemd, tmpfiles-provisioned). lhpc runs the daemon DIRECT
@@ -116,8 +115,7 @@ main = "loraham-daemon"
     name = "rflog_path"
     kind = "str"
     arg = "--rflog-path"
-    default = "{runtime}/logs/rf-daemon-{band}.log"
-    validator = "path"
+    validator = "rflog"
     label = "RF log path (this process; injected)"
     [[stack.component.param]]
     name = "id"

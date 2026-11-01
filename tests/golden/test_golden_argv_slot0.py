@@ -7,7 +7,7 @@ process tokens and nothing else:
 The fixture `argv_slot0_0af1d413.json` was resolved at 0af1d413 with this module's `_resolve`; the
 package's own directory reads `<lhpc>` and the controller's interpreter `<python>`, so neither the
 checkout location nor the venv matters. The daemon's argv
-is built per band at spawn (`_ensure_daemon`), not from `run_argv`, and is outside this table."""
+is built per radio at spawn (`_ensure_daemon`, stage L5), not from defaults, and is outside this table."""
 import json
 from pathlib import Path
 
@@ -36,7 +36,7 @@ def _resolve() -> dict:
     out = {}
     for st in svc.stacks():
         for c in st.components:
-            if not c.run_argv:
+            if not c.run_argv or c.id == svc.DAEMON_ID:
                 continue
             src = str(svc._paths.resolve_source(c.source.path)) if c.source else str(RT)
             argv = commands.expand_argv(c.run_argv, c, svc.stack_config(c.id, c.band),
@@ -48,7 +48,9 @@ def _resolve() -> dict:
 def test_slot0_argv_equals_the_base_but_for_the_two_named_exceptions():
     """intended: slot 0 launches what it launched at the base, plus the two named L3 tokens."""
     base, now = json.loads(GOLDEN.read_text()), _resolve()
-    assert set(now) == set(base)
+    # Stage L5 (W7-8, an I11 difference, A:142): the daemon's argv exists only per radio, with the radio's own
+    # RF-log path `{runtime}/logs/<rid>/rf-daemon.log`; it has no slot-0 form and leaves this table (T-D1 holds it).
+    assert set(now) == set(base) - {"loraham-daemon"}
     for cid, argv in now.items():
         extra = EXCEPTIONS.get(cid, [])
         assert argv[len(argv) - len(extra):] == extra, cid       # each exception is really there

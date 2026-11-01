@@ -167,7 +167,7 @@ def test_hand_edited_stored_value_never_grants_the_permission(tmp_path, raw):
     assert svc.high_power_for_band("433") is False
     comp = svc.stack("daemon").component("loraham-daemon")
     params = {"radio": "433", "hw": "uputronics-ce0", "txmode": "managed", "cadmon": "off",
-              "cadrssi": "-90", "rf_log": "on",
+              "cadrssi": "-90", "rf_log": "on", "id": "r1", "rflog_path": "{runtime}/logs/r1/rf-daemon.log",
               "hipower": "on" if svc.high_power_for_band("433") else "off"}   # the spawn mapping
     argv = commands.expand_argv(comp.run_argv, comp, params, svc.config().operator, "/rt", "/src", "433")
     assert "--high-power" not in argv
@@ -202,7 +202,7 @@ def test_argv_carries_the_bare_flag_only_when_on(tmp_path):
     assert {"hipower", "hipower_433", "hipower_868"} <= names
     op = svc.config().operator
     base = {"radio": "433", "hw": "uputronics-ce0", "txmode": "managed", "cadmon": "off",
-            "cadrssi": "-90", "rf_log": "on"}
+            "cadrssi": "-90", "rf_log": "on", "id": "r1", "rflog_path": "{runtime}/logs/r1/rf-daemon.log"}
     off = commands.expand_argv(comp.run_argv, comp, {**base, "hipower": "off"}, op, "/rt", "/src", "433")
     assert "--high-power" not in off
     on = commands.expand_argv(comp.run_argv, comp, {**base, "hipower": "on"}, op, "/rt", "/src", "433")

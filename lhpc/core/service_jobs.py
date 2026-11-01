@@ -23,10 +23,10 @@ class JobsOpsMixin:
         """
         if job:
             # A web-supplied job selector may name ONLY an approved logs/<name>.log
-            # file: a single path component, .log suffix, contained under logs/, and
+            # file: one path component (or a radio's exact <rid>/rf-daemon.log, W7-8a), .log, under logs/, and
             # never a symlink leaf. Anything else returns empty (no traversal/leak).
             try:
-                name = validators.path_component(job, field="job log")
+                name = job if _rflog.RADIO_JOB.fullmatch(str(job)) else validators.path_component(job, field="job log")
             except validators.ValidationError:
                 return "", []
             if not name.endswith(".log"):
@@ -37,7 +37,7 @@ class JobsOpsMixin:
                 return "", []
             # Don't surface a symlinked/non-regular log path to the UI (the READ itself is
             # already O_NOFOLLOW-safe via runtime_fs.tail; this just refuses the display).
-            if p.is_symlink() or not p.is_file():
+            if p.is_symlink() or not p.is_file() or not _rflog.radio_dir_ok(self._paths, name):
                 return "", []
             from . import runtime_fs
             rf = _rflog.by_job(name)
@@ -537,7 +537,7 @@ class JobsOpsMixin:
             # A registered RF log is persistent by contract (its writer keeps the descriptor
             # open and the file is meant to outlive every job log): it is neither a deletion
             # candidate nor part of the count/byte budget the job logs share.
-            if _rflog.by_job(name) is not None:
+            if not _rflog.prune_targets((name,), lambda _n: False):
                 continue
             # The controller's own logs are capped in place by the console's pass (A1) and held open by
             # their writers: deleting one would leave the writer filling an unlinked file. Like RF logs,

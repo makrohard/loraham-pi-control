@@ -27,6 +27,9 @@ import time
 from dataclasses import dataclass
 
 RF_LOG_PARAM = "rf_log"
+RADIO_FILE = "rf-daemon.log"
+_RID = re.compile(r"r[1-9][0-9]?")
+RADIO_JOB = re.compile(r"(r[1-9][0-9]?)/rf-daemon\.log")
 GROUP = "RF-Logs"
 ON, OFF = "on", "off"
 MAX_BYTES = 5 * 1024 * 1024         # the writers' cap; LHPC applies it to meshtastic itself
@@ -44,6 +47,7 @@ class Entry:
     key: str              # the switch's bundle key on the owner: run `rf_log` / file `file_rf_log`
     jobs: tuple           # ((band, job), …) — band "" for a single file
     native: bool = False  # the process's own trace (meshtasticd): LHPC rolls it opportunistically
+    per_radio: bool = False  # stage L5: the file is the radio's, `<rid>/rf-daemon.log` (W7-8a); `jobs` stay legacy
     decoder: str = ""     # the offline decoder that can open this log's encrypted payloads ("" = plaintext)
 
     @property
@@ -57,14 +61,21 @@ class Entry:
                 return j
         return None
 
+    def radio_job(self, rid) -> str | None:
+        """The radio's own job `<rid>/rf-daemon.log` (W7-8a, B4-D23), only for r1..r99 and a per-radio entry."""
+        if self.per_radio and isinstance(rid, str) and _RID.fullmatch(rid):
+            return f"{rid}/{RADIO_FILE}"
+        return None
+
     @property
     def banded(self) -> bool:
         return any(b for b, _j in self.jobs)
 
 
 REGISTRY: tuple[Entry, ...] = (
+    # the band files are the 0.13.x daemon's, kept read-only while they exist (I11); the live files are per radio
     Entry("daemon", "daemon", "loraham-daemon", "rf_log",
-          (("433", "rf-daemon-433.log"), ("868", "rf-daemon-868.log"))),
+          (("433", "rf-daemon-433.log"), ("868", "rf-daemon-868.log")), per_radio=True),
     Entry("graywolf", "kiss", "loraham-kiss-tnc", "rf_log", (("", "rf-kiss.log"),)),
     Entry("meshcom", "meshcom", "meshcom-bridge", "rf_log", (("", "rf-meshcom.log"),)),
     Entry("meshtastic", "meshtastic", "meshtastic", "rf_log", (("", "rf-meshtastic.log"),),
@@ -81,12 +92,31 @@ def entry(surface: str) -> Entry | None:
 
 
 def by_job(job: str) -> tuple[Entry, str] | None:
-    """(entry, band) for a registered job, else None — the viewer/Clear authorization."""
+    """(entry, band) for a registered job, (entry, rid) for a radio's own `<rid>/rf-daemon.log` (a fullmatch, one
+    level under logs/, W7-8a), else None — the viewer/Clear authorization."""
     for e in REGISTRY:
         for band, j in e.jobs:
             if j == job:
                 return e, band
+    m = RADIO_JOB.fullmatch(job) if isinstance(job, str) else None
+    if m:
+        e = next((x for x in REGISTRY if x.per_radio), None)
+        if e is not None:
+            return e, m.group(1)
     return None
+
+
+def radio_dir_ok(paths, job: str) -> bool:
+    """A radio job's directory `logs/<rid>` is a real directory, never a symlink (the viewer's leaf read is
+    O_NOFOLLOW; this covers the level above it). True for every other job."""
+    m = RADIO_JOB.fullmatch(job) if isinstance(job, str) else None
+    if not m:
+        return True
+    try:
+        d = paths.under("logs", m.group(1))
+        return not d.is_symlink() and d.is_dir()
+    except Exception:                                    # a containment refusal or an OSError: not ok
+        return False
 
 
 def resolve_job(surface: str, band: str = "") -> tuple[Entry, str]:
@@ -231,3 +261,30 @@ def parse_line(line: str) -> dict:
 
 def parse_lines(lines) -> list:
     return [parse_line(ln) for ln in lines]
+
+
+@dataclass(frozen=True)
+class Job:
+    key: str              # the radio id, or the band of a 0.13.x band file
+    job: str              # the job under logs/
+    label: str
+    readonly: bool        # True for a 0.13.x band file: shown while it exists, never written again (I11)
+
+
+def list_jobs(radios, logs_dir_entries) -> tuple:
+    """The daemon's RF-log jobs to list (W7-8a, B4-D23/D24): one per enabled radio, in numeric id order
+    ("daemon r1 (433)"), then each 0.13.x `rf-daemon-<band>.log` that exists among `logs_dir_entries` (the names
+    in logs/), flagged read-only. Pure: the caller reads the directory and the hardware list."""
+    e = next(x for x in REGISTRY if x.per_radio)
+    names = set(logs_dir_entries)
+    out = [Job(r.id, e.radio_job(r.id), f"{e.surface} {r.id} ({r.band})", False)
+           for r in sorted(radios, key=lambda r: int(r.id[1:])) if r.enabled and e.radio_job(r.id)]
+    out += [Job(band, job, f"{e.surface} {band} (0.13.x, read-only)", True) for band, job in e.jobs if job in names]
+    return tuple(out)
+
+
+def prune_targets(entries, keep_rule) -> list:
+    """The names among `entries` a job-log prune may delete: never a registered RF log in either form (a band
+    file or a radio's `<rid>/rf-daemon.log`, which is persistent by contract), and never what `keep_rule(name)`
+    keeps. Pure; the caller deletes."""
+    return [n for n in entries if by_job(n) is None and not keep_rule(n)]

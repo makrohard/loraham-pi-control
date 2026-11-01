@@ -402,3 +402,65 @@ def test_clear_and_roll_share_the_lock(tmp_path):
     fh.close()                                             # release
     assert done.wait(5) and result["r"].ok
     assert p.read_text() == "" and not (tmp_path / "logs" / "rf-meshcore.log.1").exists()
+
+
+# --- W7-8a (B4-D23, B4-D24): the daemon's RF log per radio ---------------------------------------------
+
+def _one_radio(tmp_path):
+    from lhpc.core import radios
+    (tmp_path / "config").mkdir(exist_ok=True)
+    (tmp_path / "config" / "radios.toml").write_text(radios.render((radios.Radio("r1", "low", "loraham", "868"),)))
+
+
+def test_a_radios_rf_log_is_read_from_its_own_directory(tmp_path):
+    _one_radio(tmp_path)
+    svc = _svc(tmp_path)
+    d = tmp_path / "logs" / "r1"
+    d.mkdir(parents=True)
+    (d / "rf-daemon.log").write_text("hello\n")
+    path, raw = svc.log_tail("loraham-daemon", 10, job="r1/rf-daemon.log")
+    assert path == str(d / "rf-daemon.log") and "hello" in raw
+
+
+def test_a_symlinked_radio_directory_is_never_read(tmp_path):
+    # W7-8a: the leaf read is O_NOFOLLOW; a symlinked logs/r1 (the level above it) is refused as well.
+    _one_radio(tmp_path)
+    svc = _svc(tmp_path)
+    real = tmp_path / "elsewhere"
+    real.mkdir()
+    (real / "rf-daemon.log").write_text("secret\n")
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    (tmp_path / "logs" / "r1").symlink_to(real, target_is_directory=True)
+    path, raw = svc.log_tail("loraham-daemon", 10, job="r1/rf-daemon.log")
+    assert (path, raw) == ("", [])                       # neither the content nor the path is surfaced
+
+
+@pytest.mark.parametrize("job", ["r0/rf-daemon.log", "r1/../x", "../rf-daemon.log", "r1/rf-daemon.log.1/x",
+                                 "R1/rf-daemon.log", "r1/rf-daemon.log "])
+def test_only_the_radio_form_is_an_rf_log(job):
+    assert rflog.by_job(job) is None
+
+
+def test_the_listing_has_one_entry_per_enabled_radio_and_the_old_band_files_read_only():
+    from lhpc.core import radios
+    rows = (radios.Radio("r12", "c", "loraham", "868"), radios.Radio("r2", "b", "loraham", "433"),
+            radios.Radio("r3", "d", "loraham", "868", enabled=False))
+    jobs = rflog.list_jobs(rows, ["rf-daemon-868.log", "other.log"])
+    assert [(j.job, j.readonly) for j in jobs] == [("r2/rf-daemon.log", False), ("r12/rf-daemon.log", False),
+                                                    ("rf-daemon-868.log", True)]
+    assert jobs[0].label == "daemon r2 (433)"
+
+
+def test_a_prune_never_takes_an_rf_log_of_either_form():
+    names = ["build-x.log", "rf-daemon-868.log", "r1/rf-daemon.log", "keep.log"]
+    assert rflog.prune_targets(names, lambda n: n == "keep.log") == ["build-x.log"]
+
+
+def test_the_job_selector_takes_no_other_nested_name(tmp_path):
+    # W7-8a: only a radio's exact `<rid>/rf-daemon.log` may name a subdirectory; any other nested job is refused.
+    _one_radio(tmp_path)
+    svc = _svc(tmp_path)
+    for sub, name in (("sub", "a.log"), ("r1", "other.log"), ("r1", "rf-daemon.log.1")):
+        (tmp_path / "logs" / sub).mkdir(parents=True, exist_ok=True)
+        (tmp_path / "logs" / sub / name).write_text("hidden\n")
+        assert svc.log_tail("loraham-daemon", 10, job=f"{sub}/{name}") == ("", [])

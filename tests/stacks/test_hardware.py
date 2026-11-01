@@ -8,8 +8,9 @@ from __future__ import annotations
 import os
 
 import pytest
+import radios_fixture
 
-from lhpc.core import commands, config
+from lhpc.core import commands, config, radios
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult, FakeSystem
 from lhpc.core.probes.hardware import ProbeResult, probe_radio
@@ -44,7 +45,7 @@ def _daemon_svc(tmp_path, unix_replies, cmdlines=None):
 
 def _band_starts(details):
     import re
-    return set(re.findall(r"start daemon --radio (\w+)", "\n".join(details)))
+    return set(re.findall(r"start daemon r[0-9]+ --radio (\w+)", "\n".join(details)))
 
 
 # ---- config: catalog + fresh-install default ----------------------------------------------------
@@ -108,7 +109,8 @@ def test_daemon_argv_is_v112_shape_no_suffixed_flags(tmp_path):
     svc = _svc(tmp_path)
     comp = svc.stack("daemon").component("loraham-daemon")
     op = svc.config().operator
-    params = {"radio": "433", "hw": "loraham", "txmode": "direct", "cadmon": "on", "cadrssi": "-95"}
+    params = {"radio": "433", "hw": "loraham", "txmode": "direct", "cadmon": "on", "cadrssi": "-95",
+              "id": "r1", "rflog_path": "{runtime}/logs/r1/rf-daemon.log"}      # stage L5: the radio's own
     argv = commands.expand_argv(comp.run_argv, comp, params, op, "/rt", "/src", "433")
     assert argv[argv.index("--radio") + 1] == "433"
     assert argv[argv.index("--hw") + 1] == "loraham"
@@ -182,6 +184,7 @@ def test_daemon_serve_bands_never_both(tmp_path):
 def test_dual_setup_spawns_two_single_band_processes(tmp_path):
     svc = _daemon_svc(tmp_path, {})
     _setup(svc, "loraham")
+    radios_fixture.write(tmp_path)                                  # stage L5: r1 on 433, r2 on 868
     res = svc.start("daemon", apply=True)
     assert _band_starts(res.details) == {"433", "868"}
     assert "--radio both" not in "\n".join(res.details)
@@ -191,6 +194,7 @@ def test_dual_setup_spawns_two_single_band_processes(tmp_path):
 def test_single_setup_starts_only_the_active_band(tmp_path):
     svc = _daemon_svc(tmp_path, {})
     _setup(svc, "uputronics-433")
+    radios_fixture.write(tmp_path, (radios.Radio("r1", "low", "uputronics", "433", ce="ce0"),))
     res = svc.start("daemon", apply=True)
     assert _band_starts(res.details) == {"433"}
     assert "--radio both" not in "\n".join(res.details)

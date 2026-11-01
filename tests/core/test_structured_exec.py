@@ -48,7 +48,8 @@ def test_migrated_daemon_run_is_structured_no_shell(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     comp = svc.stack("daemon").component("loraham-daemon")
     assert comp.run_argv and comp.readiness == "daemon-band"
-    argv = commands.expand_argv(comp.run_argv, comp, {"radio": "433"},
+    argv = commands.expand_argv(comp.run_argv, comp, {"radio": "433", "id": "r1",                # stage L5: the radio's
+                                                       "rflog_path": "{runtime}/logs/r1/rf-daemon.log"},  # own RF log
                                 OperatorConfig(), str(tmp_path), str(tmp_path))
     assert "/bin/sh" not in argv and "sh" != argv[0]
     assert argv[:3] == ["loraham_daemon/loraham_daemon", "--radio", "433"]
@@ -157,7 +158,7 @@ def test_started_process_argv_is_not_a_shell(tmp_path, real_spawn):
                      FakeSystem().system, spawn=spy)
     life.OBSERVE_TIMEOUT_S = 0.0
     res = life.start(Stack(id="daemon", name="d", main="loraham-daemon"), daemon,
-                     {"radio": "433"})
+                     {"radio": "433", "id": "r1", "rflog_path": "{runtime}/logs/r1/rf-daemon.log"})
     assert res.ok
     assert captured["argv"][0] == "loraham_daemon/loraham_daemon"
     assert "/bin/sh" not in captured["argv"] and "-c" not in captured["argv"][:1]
