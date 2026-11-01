@@ -2309,7 +2309,7 @@ main = "meshcore-node"
   # first repeater-mode config generation (see the `dashboard_password` param). Shown on the
   # stack page's Password section (value + edit command); a lax or malformed file shows a reason.
   ui_user = "admin"
-  ui_password_file = "config/secrets/openhop_repeater_admin.txt"
+  ui_password_file = "config/secrets/{instance_dir}openhop_repeater_admin.txt"
   ui_password_note = "LHPC mints this password when a repeater mode first starts; it lives in openHop's own config file (state/openhop/config.yaml). Change it in the openHop dashboard while the repeater runs."
   requires_daemon_tx = "MANAGED"
   start_order = 1
@@ -2543,7 +2543,7 @@ main = "meshcore-node"
       section = "repeater"
       kind = "str"
       hidden = true
-      default = "/dev/shm/lhpc-meshcore-gps.nmea"
+      default = "/dev/shm/{instance_dir}lhpc-meshcore-gps.nmea"
       [[stack.component.config_file.param]]
       name = "chat_node_id"
       key = "chat_node_id"

@@ -1,11 +1,13 @@
-"""B3-D17 (A §2.3 :251): every path an instance owns follows its instance. For every component of a stack that runs per
-radio, every string of the shipped manifest that names a path under the runtime's state/, logs/ or config/files/ —
-run lines, argv, pre-steps, environment, config files and their params, param defaults, endpoint addresses, the UI
-password file — carries {instance_dir} right after that directory: slot 0 renders today's path, every slot k a path of
-its own. And no value the loader hands to a consumer keeps the token unrendered.
+"""B3-D17, B3-D17a (A-r65 §2.3, §2.4): every path an instance owns follows its instance. For every component of a stack
+that runs per radio, every string of the shipped manifest that names a path under the runtime's state/, logs/,
+config/files/ or config/secrets/, or a file under /dev/shm (MeshCore's gps_file) — run lines, argv, pre-steps,
+environment, config files and their params, param defaults, endpoint addresses, the UI password file — carries
+{instance_dir} right after that directory: slot 0 renders today's path, every slot k a path of its own. And no value
+the loader hands to a consumer keeps the token unrendered.
 
-Out of scope, named: the daemon (one per radio from L5, named by the radio id), the Reticulum stack (one node, A §2.4),
-a stack's `state_root` (the stack's purge root), and meshcom-gps-relay's relative socket (L8-MC)."""
+Out of scope, named: the daemon (one per radio from L5, named by the radio id; its /tmp sockets with it), the Reticulum
+stack (one node, A-r65 §2.4), a stack's `state_root` (the stack's purge root), build-time fields (`build`,
+`build_steps`: one build per stack, e.g. meshcom-qemu's xr_pw), and meshcom-gps-relay's relative socket (L8-MC)."""
 
 import re
 
@@ -22,13 +24,15 @@ except ModuleNotFoundError:          # Python 3.10
 
 MANIFEST = repo_paths.REPO / "lhpc" / "data" / "manifest.example.toml"
 PER_RADIO = {"chat", "voice", "kiss", "graywolf", "meshtastic", "meshcom", "meshcore"}
-SKIP_KEYS = {"state_root", "note", "purpose", "description", "label", "ui_password_note"}
+SKIP_KEYS = {"state_root", "note", "purpose", "description", "label", "ui_password_note", "build", "build_steps"}
 SKIP_COMPONENTS = {"meshcom-gps-relay"}
-# An instance-owned location: the runtime's state/, logs/ or config/files/ (absolute through {runtime}, or relative to
-# the runtime root as endpoint addresses and the UI password file are), followed by a name — or config/files itself as a
-# directory (a working directory, a mkdir).
-WHERE = r"(?:\{runtime\}/|(?<![\w/{]))(?:(?:state|logs|config/files)/(?=[\w.{-])|config/files(?=[\"' ]|$))"
-OWNED = re.compile(WHERE + r"(?!\{instance_dir\})")
+# An instance-owned location: the runtime's state/, logs/, config/files/ or config/secrets/ (absolute through
+# {runtime}, or relative to the runtime root as endpoint addresses and the UI password file are), followed by a name —
+# or config/files itself as a directory (a working directory, a mkdir) — or a file under /dev/shm (a whole value:
+# MeshCore's gps_file).
+WHERE = (r"(?:\{runtime\}/|(?<![\w/{]))(?:(?:state|logs|config/files|config/secrets)/(?=[\w.{-])|config/files(?=[\"' ]|$))"
+         r"|^/dev/shm/")
+OWNED = re.compile(r"(?:" + WHERE + r")(?!\{instance_dir\})")
 INSTANCES = [commands.SLOT0] + [commands.Instance(k, rid) for k, rid in zip(range(1, 8),
                                                                            ("r1", "r12", "r2", "r21", "r9", "r99", "r3"))]
 
