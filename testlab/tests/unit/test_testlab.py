@@ -898,8 +898,14 @@ def test_simulated_reboot_kills_owned_groups_and_runs_boot_restore(tmp_path, mon
 
 def _owned_group_with_descendant(tmp_path, boot1):
     """A group leader (`sh`, setsid) with a descendant (`sleep`) in its group, recorded as a stack
-    start records it: (leader Popen, descendant pid, launch id)."""
-    from lhpc.core import procident
+    start records it at stage L5 (0.14.0): the TNC as radio r1's instance, r1 the lab's 433 radio in its hardware
+    list, so boot restore keeps the item (a band record without a radio id is pre-0.14.0 evidence, D14).
+    Returns (leader Popen, descendant pid, launch id)."""
+    from lhpc.core import procident, radios
+    cfg = tmp_path / "config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    if not (cfg / "radios.toml").exists():
+        (cfg / "radios.toml").write_text(radios.render((radios.Radio("r1", "low", "loraham", "433"),)))
     proc = subprocess.Popen(["sh", "-c", "sleep 300 & echo $!; wait"], preexec_fn=os.setsid,
                             stdout=subprocess.PIPE, text=True)
     child = int(proc.stdout.readline())
@@ -911,7 +917,7 @@ def _owned_group_with_descendant(tmp_path, boot1):
     (owned / f"{launch_id}.json").write_text(json.dumps({   # what a stack start records
         **ident, "version": 1, "launch_id": launch_id, "stack": "kiss",
         "component": "loraham-kiss-tnc", "requested_target": "kiss", "start_scope": "stack",
-        "band": "", "pid": proc.pid, "role": "", "launched_at": 1, "boot_id": boot1}))
+        "band": "", "rid": "r1", "pid": proc.pid, "role": "", "launched_at": 1, "boot_id": boot1}))
     return proc, child, launch_id
 
 
