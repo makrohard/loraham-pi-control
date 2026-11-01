@@ -1,0 +1,590 @@
+# The test-lab lanes on x86_64 (amd64): the three lanes of testlab.yml (testlab, release-verify,
+# slow-build) on the hosted ubuntu-24.04 runner, inside a lab image built natively for amd64 from
+# THIS commit's devcontainer Dockerfile (testlab/x86/build-image.sh). There is no binary channel on
+# x86_64 (it is aarch64-only), so every stack a lane installs is built from source here, and the
+# mirrors include meshtastic and meshcom (testlab/x86/amd64-remotes.py).
+#
+# NON-GATING until it is added to the gating set: a workflow of its own, never called by another
+# and calling none; its jobs end in -x86, so no required check named after a job of testlab.yml or
+# ci.yml can be met or blocked by it. It runs on a push to a topic branch (cons/**) and on
+# dispatch, never on main or dev. release-verify-x86 and slow-build-x86 run on dispatch with
+# release_verify=true only.
+#
+# Known at its base: on x86_64 the lab reset installs neither meshcom nor meshtastic, the meshcom
+# start leg skips, the release lane's first case expects an aarch64 binary target and the
+# slow-build lane expects meshtastic on the binary channel. Those switches live in the lab package
+# and its tests, not here. Never dispatched yet: its run time and disk use are unmeasured.
+name: testlab-x86
+
+on:
+  push:
+    branches: ['cons/**']
+  workflow_dispatch:
+    inputs:
+      release_verify:
+        description: "also run the release-verification and slow-build lanes on x86_64"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# As in testlab.yml: only a newer push to a topic branch (cons/*) cancels its superseded run.
+concurrency:
+  group: testlab-x86-${{ github.ref }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/cons/') }}
+
+jobs:
+  testlab-x86:
+    name: testlab-x86
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Prove the runner is x86_64 and record its free disk
+        # The lanes run natively on amd64: a wrong label or an emulated runner stops here, before
+        # any acquisition. The free space is recorded because no x86_64 run has been measured.
+        run: |
+          m=$(uname -m) || { echo "::error::uname -m failed"; exit 1; }
+          if [ "$m" != x86_64 ]; then
+            echo "::error::this workflow runs on x86_64 only; this runner is $m"
+            exit 1
+          fi
+          df -h / "$RUNNER_TEMP"
+
+      - name: Acquire the upstream sources the lanes clone (mirrors, transfer backoff)
+        # As in testlab.yml, with the amd64 list: mirror-sources.py's list plus the meshtastic and
+        # meshcom remotes, which build from source on x86_64 (testlab/x86/amd64-remotes.py).
+        run: |
+          . .github/scripts/retry.sh
+          mkdir -p srcmirror
+          python3 testlab/x86/amd64-remotes.py lhpc/data/manifest.example.toml > srcmirror/remotes.txt
+          while read -r remote; do
+            dir="srcmirror/$(python3 .github/scripts/mirror-sources.py name "$remote")"
+            backoff sh -c 'rm -rf "$1" && git clone --quiet --mirror "$2" "$1"' _ "$dir" "$remote"
+          done < srcmirror/remotes.txt
+          python3 .github/scripts/mirror-sources.py config srcmirror/remotes.txt /srcmirror > srcmirror/gitconfig
+
+      - name: Build the amd64 lab image from THIS commit's Dockerfile
+        # testlab/x86/build-image.sh: the Dockerfile of the arm lanes, built natively for amd64 from
+        # a base pulled once and recorded by digest; the record is part of the evidence.
+        run: |
+          IMG=lhpc-testlab-x86:ci
+          bash testlab/x86/build-image.sh "$IMG" labevidence/x86-image.txt
+          echo "IMG=$IMG" >> "$GITHUB_ENV"
+
+      - name: Prove the mirror is complete (no network)
+        run: |
+          docker run --rm --network none -v "$PWD/srcmirror":/srcmirror:ro \
+            -v "$PWD/.github/scripts":/scripts:ro "$IMG" python3 /scripts/mirror-sources.py verify /srcmirror
+
+      - name: Run the lab lanes in the image
+        # Root copies the checkout in and DROPS to the unprivileged lab user — the
+        # same privilege boundary users get (uid mapping of -v mounts is not assumed).
+        run: |
+          docker run --rm --user root -v "$PWD":/repo:ro \
+            -v "$PWD/srcmirror":/srcmirror:ro -v lhpc_x86_lab_tmp:/tmp \
+            "$IMG" bash -lc '
+              set -e
+              cp -r /repo /tmp/repo && chown -R lhpclab /tmp/repo
+              su lhpclab -c "
+                set -e
+                cd /tmp/repo
+                export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build
+                # Clones resolve to the mirrors. A file in HOME, because the product runner
+                # forwards HOME to git and drops GIT_CONFIG_GLOBAL (mirror-sources.py).
+                cp /srcmirror/gitconfig ~/.gitconfig
+                python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
+                # Sourced from the COPY inside the container: a helper sourced in the host shell
+                # does not survive docker run, let alone the su below.
+                . /tmp/repo/.github/scripts/retry.sh
+                backoff pip install -q -e .            # the product
+                python3 .github/scripts/mirror-sources.py resolved /srcmirror
+                backoff pip install -q -e ./testlab    # the SEPARATE lab package
+                backoff pip install -q pytest playwright
+                backoff python -m playwright install chromium
+                # A virtual display for the ACCEPTANCE lane only: voice and sideband are
+                # GTK/Kivy programs, and without one the lab would skip starting them
+                # instead of proving they start. The browser lane below runs with no
+                # DISPLAY at all — headless Chromium needs no desktop.
+                (Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &)
+                # Its socket, before the lanes rely on it (60 x 0.5 s).
+                n=0; until [ -S /tmp/.X11-unix/X99 ] || [ \$n -ge 60 ]; do sleep 0.5; n=\$((n+1)); done
+                [ -S /tmp/.X11-unix/X99 ] || { echo Xvfb did not open its socket; exit 1; }
+                python -m pytest testlab/tests/unit -q
+                # LHPC_CHAIN_HEAVY=1 as on the arm runner. At this base the meshcom START leg
+                # skips on x86_64 (it expects the aarch64 binary), so it is not proved here yet.
+                DISPLAY=:99 LHPC_ACCEPTANCE=1 LHPC_CHAIN_HEAVY=1 \
+                  python -m pytest testlab/tests/acceptance -q -rs
+                LHPC_BROWSER=1 python -m pytest testlab/tests/browser -q -rs"'
+
+      - name: Collect the lab's own logs (also on failure)
+        # Without this a red lane leaves nothing behind: the runtime roots live inside the
+        # container's /tmp volume, and the pytest tail alone never says WHICH build or start
+        # failed. Named per job — two jobs uploading `testlab-logs` would collide.
+        if: always()
+        run: |
+          mkdir -p labevidence
+          docker run --rm --user root -v lhpc_x86_lab_tmp:/tmp -v "$PWD/labevidence":/out \
+            "${IMG:-lhpc-testlab-x86:ci}" bash -lc '
+              set +e
+              find /tmp -maxdepth 6 \( -type d -name logs -o -type d -name testlab \) \
+                   -not -path "*/site-packages/*" -print0 \
+                | while IFS= read -r -d "" d; do
+                    dest="/out/$(echo "${d#/tmp/}" | tr "/" "_")"
+                    mkdir -p "$dest" && cp -r "$d"/. "$dest"/ 2>/dev/null
+                  done
+              chmod -R a+rX /out 2>/dev/null; true' || true
+          du -sh labevidence 2>/dev/null || true
+
+      - name: Record the free disk after the lanes (also on failure)
+        if: always()
+        run: df -h / "$RUNNER_TEMP" || true
+
+      - name: Upload the lab logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: testlab-x86-logs-testlab
+          path: labevidence/**
+          if-no-files-found: warn
+          retention-days: 14
+
+  release-verify-x86:
+    # The release-verification lane of testlab.yml on x86_64: every stack installed on its default
+    # channel, which on x86_64 is always the manifest pin (source), built, started and proved.
+    # Dispatch with release_verify=true only. 180 min, not 90: meshcom and meshtastic build from
+    # source here, and that run time is unmeasured.
+    name: release-verify-x86
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_verify }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Prove the runner is x86_64 and record its free disk
+        # The lanes run natively on amd64: a wrong label or an emulated runner stops here, before
+        # any acquisition. The free space is recorded because no x86_64 run has been measured.
+        run: |
+          m=$(uname -m) || { echo "::error::uname -m failed"; exit 1; }
+          if [ "$m" != x86_64 ]; then
+            echo "::error::this workflow runs on x86_64 only; this runner is $m"
+            exit 1
+          fi
+          df -h / "$RUNNER_TEMP"
+
+      - name: Acquire the upstream sources the lanes clone (mirrors, transfer backoff)
+        # As in testlab.yml, with the amd64 list: mirror-sources.py's list plus the meshtastic and
+        # meshcom remotes, which build from source on x86_64 (testlab/x86/amd64-remotes.py).
+        run: |
+          . .github/scripts/retry.sh
+          mkdir -p srcmirror
+          python3 testlab/x86/amd64-remotes.py lhpc/data/manifest.example.toml > srcmirror/remotes.txt
+          while read -r remote; do
+            dir="srcmirror/$(python3 .github/scripts/mirror-sources.py name "$remote")"
+            backoff sh -c 'rm -rf "$1" && git clone --quiet --mirror "$2" "$1"' _ "$dir" "$remote"
+          done < srcmirror/remotes.txt
+          python3 .github/scripts/mirror-sources.py config srcmirror/remotes.txt /srcmirror > srcmirror/gitconfig
+
+      - name: Build the amd64 lab image from THIS commit's Dockerfile
+        # testlab/x86/build-image.sh: the Dockerfile of the arm lanes, built natively for amd64 from
+        # a base pulled once and recorded by digest; the record is part of the evidence.
+        run: |
+          IMG=lhpc-testlab-x86:ci
+          bash testlab/x86/build-image.sh "$IMG" releaseevidence/x86-image.txt
+          echo "IMG=$IMG" >> "$GITHUB_ENV"
+
+      - name: Prove the mirror is complete (no network)
+        run: |
+          docker run --rm --network none -v "$PWD/srcmirror":/srcmirror:ro \
+            -v "$PWD/.github/scripts":/scripts:ro "$IMG" python3 /scripts/mirror-sources.py verify /srcmirror
+
+      # The lane's script is written to a FILE and run, never nested inside quoted strings.
+      # It was nested twice before, and both times a quote in a COMMENT broke it: an apostrophe
+      # ended the outer single-quoted string and the job died, and a double quote ended the
+      # inner one, so a truncated script installed the venv, exited 0 and never ran pytest at
+      # all — a green lane that proved nothing. A heredoc has no such edge.
+      #
+      # No Xvfb is started here: the release lane OWNS its display (testlab/tests/release/
+      # conftest.py), because one case must run with no graphical environment to prove the Voice
+      # terminal variant through the production start path.
+      - name: Release verification
+        run: |
+          mkdir -p releaseevidence
+          cat > lane.sh <<'LANE'
+          set -e
+          cd /tmp/repo
+          export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build
+          # Clones resolve to the mirrors. A file in HOME, because the product runner forwards
+          # HOME to git and drops GIT_CONFIG_GLOBAL (mirror-sources.py).
+          cp /srcmirror/gitconfig ~/.gitconfig
+          python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
+          . /tmp/repo/.github/scripts/retry.sh
+          backoff pip install -q -e .
+          python3 .github/scripts/mirror-sources.py resolved /srcmirror
+          backoff pip install -q -e ./testlab
+          backoff pip install -q pytest
+          # -x: STOP AT THE FIRST FAILURE. The lane chains stacks over one radio pair, so a
+          # case that fails leaves the run in a state later cases cannot be judged in — and the
+          # automated release reads this JUnit to decide which stack to freeze. Continuing
+          # produced both wrong answers: a cleaned-up failure was followed by an unmarked
+          # prerequisite failure, which made the consumer refuse a genuine freeze; and a failed
+          # cleanup was followed by an innocent stack earning its own valid marker. Stopping
+          # here bounds the run to its FIRST genuine regression. An aborted run can never
+          # satisfy the publication gate anyway: that requires every required case to have
+          # passed. Cleanup still runs (fixture teardown is unaffected by -x) and a failed stop
+          # still surfaces as its own teardown error.
+          DISPLAY=:99 LHPC_RELEASE_VERIFY=1 LHPC_CHAIN_HEAVY=1 \
+            python -m pytest testlab/tests/release -q -rs -x \
+              --junitxml=/out/junit-release.xml
+          LANE
+          docker run --rm --user root -v "$PWD":/repo:ro -v "$PWD/srcmirror":/srcmirror:ro \
+            -v lhpc_x86_release_tmp:/tmp -v "$PWD/releaseevidence":/out \
+            "$IMG" bash -lc '
+              set -e
+              cp -r /repo /tmp/repo && chown -R lhpclab /tmp/repo && chmod a+w /out
+              install -m 0755 /repo/lane.sh /tmp/lane.sh
+              su lhpclab -c /tmp/lane.sh
+            '
+          test -s releaseevidence/junit-release.xml \
+            || { echo "::error::the lane produced no JUnit — it did not run"; exit 1; }
+
+      - name: Collect the lab's own logs (also on failure)
+        if: always()
+        run: |
+          docker run --rm --user root -v lhpc_x86_release_tmp:/tmp -v "$PWD/releaseevidence":/out \
+            "${IMG:-lhpc-testlab-x86:ci}" bash -lc '
+              set +e
+              find /tmp -maxdepth 7 \( -type d -name logs -o -type d -name testlab \
+                   -o -name "versions.txt" \) -not -path "*/site-packages/*" -print0 \
+                | while IFS= read -r -d "" d; do
+                    dest="/out/$(echo "${d#/tmp/}" | tr "/" "_")"
+                    if [ -d "$d" ]; then mkdir -p "$dest" && cp -r "$d"/. "$dest"/ 2>/dev/null
+                    else cp "$d" "$dest" 2>/dev/null; fi
+                  done
+              chmod -R a+rX /out 2>/dev/null; true' || true
+          du -sh releaseevidence 2>/dev/null || true
+
+      - name: Record the free disk after the lanes (also on failure)
+        if: always()
+        run: df -h / "$RUNNER_TEMP" || true
+
+      - name: Upload the release evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: testlab-x86-logs-release-verify
+          path: releaseevidence/**
+          if-no-files-found: warn
+          retention-days: 14
+
+  slow-build-x86:
+    # The slow-build lane of testlab.yml on x86_64: the same throttle and the same budgets, after
+    # testlab-x86 passed. Dispatch with release_verify=true only.
+    name: slow-build-x86
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_verify }}
+    needs: testlab-x86
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      # The throttle. Measured: the Zero's calibration (row A, 2026-10-03) is cpu 99.7 s,
+      # io 489.8 s, mem 110.1 s; this container at --cpus 0.5, --memory 416m and no disk
+      # throttle took cpu 57.8, io 31.4, mem 12.2 (testlab run 37148794385): faster on all three.
+      # CPU — the cpu part is CPU-time bound and scales with the quota: 0.5 x 57.8 / 99.7 =
+      # 0.29 CPUs matches the Zero; 0.25 leaves ~15 %.
+      SLOW_CPUS: "0.25"
+      # Memory — what a Zero 2 W leaves free; the rest of the 700 MB mem part swaps (the Zero
+      # swaps into zram). --memory-swap is memory + 768 MiB swap.
+      SLOW_MEM: "416m"
+      SLOW_SWAP: "1184m"
+      # Disk — on every disk behind Docker's storage and swap. The io part is 65536 fsync'd
+      # 4 KiB files: 489.8 s on the Zero's SD card, ~134 synced files/s. On a journaled ext4
+      # each synced file costs ~1.2 writes charged to the container (measured), so 120 write
+      # IOPS gives ~100 files/s, ~650 s. Reads also pace the mem part, whose swap-ins hit
+      # the disk (the Zero swaps into zram instead): measured 608 s at 300 read IOPS, 186 s at
+      # 1000, 97 s at 2000; 1200 keeps it above the Zero's 110 s. These are local measurements
+      # (x86, cgroup v1, not the arm runner); the calibration case
+      # of every run is the proof on the runner. They are the arm job's numbers, unchanged: on this
+      # amd64 runner the calibration is unmeasured.
+      SLOW_WRITE_IOPS: "120"
+      SLOW_READ_IOPS: "1200"
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history and tags: the self-update case updates from the PREVIOUS release tag.
+          fetch-depth: 0
+
+      - name: Prove the runner is x86_64 and record its free disk
+        # The lanes run natively on amd64: a wrong label or an emulated runner stops here, before
+        # any acquisition. The free space is recorded because no x86_64 run has been measured.
+        run: |
+          m=$(uname -m) || { echo "::error::uname -m failed"; exit 1; }
+          if [ "$m" != x86_64 ]; then
+            echo "::error::this workflow runs on x86_64 only; this runner is $m"
+            exit 1
+          fi
+          df -h / "$RUNNER_TEMP"
+
+      - name: Build the amd64 lab image from THIS commit's Dockerfile
+        # testlab/x86/build-image.sh: the Dockerfile of the arm lanes, built natively for amd64 from
+        # a base pulled once and recorded by digest; the record is part of the evidence.
+        run: |
+          IMG=lhpc-testlab-x86:ci
+          bash testlab/x86/build-image.sh "$IMG" slowevidence/x86-image.txt
+          echo "IMG=$IMG" >> "$GITHUB_ENV"
+
+      - name: Acquire the timed operations' transfers (timed, recorded, never judged)
+        # Decision (a): a timed operation's transfer is measured as its own number and never
+        # fails a budget. The git sources (mirrors), the pinned Graywolf .deb with its
+        # checksums.txt, and the wheels of the Meshtastic CLI venv, of the self-update's pip
+        # sync and of every timed build's pip install are fetched here with the transfer
+        # backoff, each timed into transfers.toml; the lane then times those operations
+        # against these local copies. Still inside a timed build: the graywolf build's .deb.
+        run: |
+          . .github/scripts/retry.sh
+          mkdir -p srcmirror xfer/graywolf xfer/wheels slowevidence
+          timed() {  # timed <what> <argv...>: run it, append its wall time to transfers.toml
+            local what=$1 t0 t1; shift; t0=$(date +%s%N)
+            "$@"; t1=$(date +%s%N)
+            printf '[[transfer]]\nwhat = "%s"\nseconds = %s\n\n' "$what" \
+              "$(awk -v d=$((t1 - t0)) 'BEGIN { printf "%.1f", d / 1e9 }')" >> slowevidence/transfers.toml
+          }
+          python3 testlab/x86/amd64-remotes.py lhpc/data/manifest.example.toml > srcmirror/remotes.txt
+          while read -r remote; do
+            dir="srcmirror/$(python3 .github/scripts/mirror-sources.py name "$remote")"
+            timed "clone $remote" backoff sh -c 'rm -rf "$1" && git clone --quiet --mirror "$2" "$1"' _ "$dir" "$remote"
+          done < srcmirror/remotes.txt
+          python3 .github/scripts/mirror-sources.py config srcmirror/remotes.txt /srcmirror > srcmirror/gitconfig
+          gw=$(python3 .github/scripts/mirror-sources.py graywolf-version lhpc/data/manifest.example.toml) || exit 1
+          # The amd64 .deb, checked here against the sha256 graywolf-fetch.sh records for it: an
+          # unrecorded version stops before the download, a mismatch right after it.
+          want=$(bash testlab/x86/graywolf-amd64-sha256.sh "$gw") || exit 1
+          base=https://github.com/chrissnell/graywolf/releases/download/v$gw
+          mkdir -p "xfer/graywolf/v$gw"
+          for f in "graywolf_${gw}_amd64.deb" checksums.txt; do
+            timed "graywolf $f" backoff curl -fsSL -o "xfer/graywolf/v$gw/$f" "$base/$f"
+          done
+          echo "$want  xfer/graywolf/v$gw/graywolf_${gw}_amd64.deb" | sha256sum -c -
+          # In the lab image (the Python of the lane), as root: xfer/ belongs to the runner user.
+          cli=$(python3 .github/scripts/mirror-sources.py cli-requirements lhpc/data/manifest.example.toml) || exit 1
+          # The self-update sync installs requirements.lock with no index: these wheels are the files the
+          # lock names, hash-checked. The download below resolves the newest versions, which drift from it.
+          timed "wheels: requirements.lock" docker run --rm --user root \
+            -e PIP_ROOT_USER_ACTION=ignore -v "$PWD":/repo:ro -v "$PWD/xfer":/xfer "$IMG" bash -lc \
+            ". /repo/.github/scripts/retry.sh && backoff python3 -m pip download -q --require-hashes --no-deps -r /repo/requirements.lock -d /xfer/wheels"
+          timed "wheels: $cli setuptools>=68 ./ (this checkout)" docker run --rm --user root \
+            -e PIP_ROOT_USER_ACTION=ignore -v "$PWD":/repo:ro -v "$PWD/xfer":/xfer "$IMG" bash -lc \
+            ". /repo/.github/scripts/retry.sh && cp -r /repo /tmp/src && backoff python3 -m pip download -q -d /xfer/wheels $cli 'setuptools>=68' /tmp/src"
+          # The pip install of every timed build (build-wheels.py times each component itself).
+          # Both fetch from a COPY of the checkout: setuptools writes egg-info into a source tree
+          # it builds, and /repo is mounted read-only.
+          docker run --rm --user root -e PIP_ROOT_USER_ACTION=ignore -v "$PWD":/repo:ro \
+            -v "$PWD/srcmirror":/srcmirror:ro -v "$PWD/xfer":/xfer -v "$PWD/slowevidence":/out \
+            "$IMG" bash -lc "cp -r /repo /tmp/src && python3 /tmp/src/.github/scripts/build-wheels.py fetch \
+              /tmp/src/lhpc/data/manifest.example.toml /tmp/src/tests/data/slow-target-builds.toml \
+              /srcmirror /tmp/src/lhpc/data /xfer/wheels /out/transfers.toml"
+          cat slowevidence/transfers.toml
+
+      # io.max takes whole disks. REQUIRED: the disk behind the container's writable layer,
+      # where the calibration work dir under the lab user's home lives, and the disk behind
+      # Docker's storage, which holds the /tmp volume. The writable layer is measured, not
+      # assumed: a container from the lab image reports its root mount, and the overlay's
+      # upperdir (a host path) is where a container's writes land; a root that is not an overlay
+      # stops the job. Each disk resolves (as root: Docker's directories are root-only), or the
+      # job STOPS here, before any measurement. The upperdir is resolved while that container
+      # lives. `sudo -n` never prompts: the workflow grants no sudo, it relies on the hosted
+      # ubuntu-24.04 runner's passwordless sudo; without it the required disks do not
+      # resolve and the job stops. An active swap area's disk is throttled too, or skipped with
+      # a notice. The lane re-checks io.max for the writable layer's disk (SLOW_IO_ROOT_DISK)
+      # and the work dir's, and records nothing unless each is throttled.
+      - name: Resolve the disks to throttle
+        run: |
+          # The whole disk behind a path or block device, as /dev/NAME; non-zero, naming the
+          # path, when it cannot be resolved.
+          disk_of() {
+            local mm d
+            if [ -b "$1" ]; then mm=$(lsblk -dno MAJ:MIN "$1" 2>/dev/null | tr -d ' ')
+            else mm=$(sudo -n findmnt -n -o MAJ:MIN --target "$1" 2>/dev/null | head -1 | tr -d ' '); fi
+            if [ -z "$mm" ] || [ ! -e "/sys/dev/block/$mm" ]; then
+              echo "disk_of: backing device of $1 could not be resolved (MAJ:MIN ${mm:-none})" >&2
+              return 1
+            fi
+            d=$(readlink -f "/sys/dev/block/$mm")
+            [ -e "$d/partition" ] && d=$(dirname "$d")
+            echo "/dev/$(basename "$d")"
+          }
+          cat /proc/swaps
+          lsblk
+          storage=$(docker info -f '{{.DockerRootDir}}')
+          # The upperdir exists only while its container does (`--rm` deletes it at exit, and
+          # findmnt resolves no missing path), so a container is kept alive until every
+          # required disk has resolved, and removed on every way out of the step.
+          # The trap exists before the container: `docker run -d` can print an id and still fail.
+          cid= rc=0
+          trap '[ -z "$cid" ] || docker rm -f "$cid" >/dev/null 2>&1; true' EXIT
+          cid=$(docker run -d "$IMG" sleep 300) || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::STOP: the probe container did not start (docker run rc $rc)"
+            exit 1
+          fi
+          layer=$(docker exec "$cid" cat /proc/self/mountinfo \
+            | awk '$5 == "/"' | sed -n 's/.* - overlay .*[ ,]upperdir=\([^,]*\).*/\1/p')
+          if [ -z "$layer" ]; then
+            echo "::error::STOP: the lab container's root is not an overlay with an upperdir — its writable layer's disk cannot be measured"
+            exit 1
+          fi
+          echo "writable layer (measured): $layer"
+          disks=
+          for path in "$layer" "$storage"; do
+            d=$(disk_of "$path") && test -b "$d" || {
+              echo "::error::STOP: backing device of $path could not be resolved — the throttle cannot be applied"
+              exit 1
+            }
+            [ "$path" = "$layer" ] && root=$d
+            disks="$disks $d"
+          done
+          docker rm -f "$cid" >/dev/null
+          trap - EXIT
+          while read -r swap _; do
+            if d=$(disk_of "$swap") && test -b "$d"; then disks="$disks $d"
+            else echo "::notice::swap $swap: its disk could not be resolved — not throttled"; fi
+          done < <(tail -n +2 /proc/swaps)
+          disks=$(printf '%s\n' $disks | sort -u | xargs)
+          flags=
+          for d in $disks; do
+            flags="$flags --device-write-iops $d:$SLOW_WRITE_IOPS --device-read-iops $d:$SLOW_READ_IOPS"
+          done
+          echo "throttled disks: $disks (writable layer: $root)"
+          echo "SLOW_IO_FLAGS=$flags" >> "$GITHUB_ENV"
+          echo "SLOW_IO_ROOT_DISK=$(lsblk -dno MAJ:MIN "$root" | tr -d ' ')" >> "$GITHUB_ENV"
+
+      # A heredoc lane script, as in release-verify. The container gets the throttle; the lane
+      # itself checks that cpu.max, memory.max and io.max are in force and fails if they are not.
+      - name: Slow-target build
+        run: |
+          mkdir -p slowevidence
+          cat > lane.sh <<'LANE'
+          set -e
+          cd /tmp/repo
+          export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build
+          python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
+          . /tmp/repo/.github/scripts/retry.sh
+          backoff pip install -q -e .
+          backoff pip install -q -e ./testlab
+          backoff pip install -q pytest
+          # The timed operations take their transfers from the copies acquired above (decision a):
+          # the clones through ~/.gitconfig (HOME reaches the product runner, GIT_CONFIG_GLOBAL
+          # does not; mirror-sources.py), the fetch through its URL, the pip operations through
+          # a pip.conf the lane writes for them (LHPC_SLOW_BUILD_WHEELS).
+          cp /srcmirror/gitconfig ~/.gitconfig
+          python3 .github/scripts/mirror-sources.py resolved /srcmirror
+          export GRAYWOLF_BASE_URL=file:///xfer/graywolf
+          # No -x: the budget case needs every measurement the run could make.
+          LHPC_SLOW_BUILD=1 LHPC_SLOW_BUILD_OUT=/out LHPC_SLOW_BUILD_WHEELS=/xfer/wheels \
+            python -m pytest testlab/tests/slowbuild -q -rs \
+              --junitxml=/out/junit-slow-build.xml
+          LANE
+          # shellcheck disable=SC2086  # SLOW_IO_FLAGS is a word list by design
+          docker run --rm --user root \
+            --cpus="$SLOW_CPUS" --memory="$SLOW_MEM" --memory-swap="$SLOW_SWAP" $SLOW_IO_FLAGS \
+            -e SLOW_CPUS -e SLOW_MEM -e SLOW_WRITE_IOPS -e SLOW_READ_IOPS -e SLOW_IO_ROOT_DISK \
+            -e LHPC_SLOW_BUILD_RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -v "$PWD":/repo:ro -v lhpc_x86_slow_tmp:/tmp -v "$PWD/slowevidence":/out \
+            -v "$PWD/srcmirror":/srcmirror:ro -v "$PWD/xfer":/xfer:ro \
+            "$IMG" bash -lc '
+              set -e
+              cp -r /repo /tmp/repo && chown -R lhpclab /tmp/repo && chmod a+w /out
+              install -m 0755 /repo/lane.sh /tmp/lane.sh
+              su lhpclab -c "SLOW_CPUS=$SLOW_CPUS SLOW_MEM=$SLOW_MEM SLOW_WRITE_IOPS=$SLOW_WRITE_IOPS SLOW_READ_IOPS=$SLOW_READ_IOPS SLOW_IO_ROOT_DISK=$SLOW_IO_ROOT_DISK LHPC_SLOW_BUILD_RUN_URL=$LHPC_SLOW_BUILD_RUN_URL /tmp/lane.sh"
+            '
+          test -s slowevidence/junit-slow-build.xml \
+            || { echo "::error::the lane produced no JUnit — it did not run"; exit 1; }
+          # A skip is not a pass: env, every stack and the self-update case must have run and
+          # passed. Calibrated and budget too, except in the bootstrap state (the baseline holds
+          # no measured entry yet), where each may skip with its named bootstrap reason only.
+          python3 - slowevidence/junit-slow-build.xml tests/data/slow-target-builds.toml <<'PY'
+          import sys
+          import tomllib
+          import xml.etree.ElementTree as ET
+          cases = {c.get("name"): c for c in ET.parse(sys.argv[1]).iter("testcase")}
+          with open(sys.argv[2], "rb") as f:
+              boot = not tomllib.load(f).get("measured")
+          def state(name):
+              if name not in cases:
+                  return "missing", ""
+              for tag in ("failure", "error", "skipped"):
+                  el = cases[name].find(tag)
+                  if el is not None:
+                      return tag, el.get("message") or ""
+              return "passed", ""
+          rowc = sorted(n for n in cases if n.startswith("test_slow_build_stack["))
+          need = ["test_slow_build_env", *rowc, "test_slow_build_selfupdate",
+                  "test_slow_build_calibrated", "test_slow_build_budget"]
+          bad = [] if rowc else ["test_slow_build_stack[*] (missing)"]
+          for n in need:
+              st, msg = state(n)
+              if st == "passed" or (boot and st == "skipped" and "bootstrap: no row A yet" in msg
+                                    and n in ("test_slow_build_calibrated",
+                                              "test_slow_build_budget")):
+                  continue
+              bad.append(f"{n} ({st})")
+          if bad:
+              print("::error::not passed (missing, skipped or failed): " + ", ".join(bad))
+              sys.exit(1)
+          if boot:
+              print("::warning::bootstrap: no row A yet — the Zero baseline is unmeasured; "
+                    "row C judged this run only")
+          PY
+
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f slowevidence/slow-build-summary.md ]; then
+            cat slowevidence/slow-build-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # The upload is a transfer after the verdict (class A): it is tried twice, and neither
+      # attempt can turn the job red. Run 38822953533 measured everything green, then went red
+      # on `CreateArtifact: … ETIMEDOUT` alone. A job whose evidence could not be uploaded says
+      # so in a warning and in its summary.
+      - name: Upload the slow-build evidence
+        id: upload
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: testlab-x86-slow-build-evidence
+          path: slowevidence/**
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Wait before the second upload attempt
+        if: always() && steps.upload.outcome == 'failure'
+        run: sleep 120
+
+      - name: Upload the slow-build evidence (second attempt)
+        id: upload2
+        if: always() && steps.upload.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: testlab-x86-slow-build-evidence
+          path: slowevidence/**
+          if-no-files-found: warn
+          retention-days: 90
+          overwrite: true
+
+      - name: Report an evidence upload that failed twice
+        if: always() && steps.upload.outcome == 'failure' && steps.upload2.outcome == 'failure'
+        run: |
+          echo "::warning::the x86 slow-build evidence could not be uploaded (two attempts); the verdict above stands"
+          echo "**Evidence upload failed twice: no testlab-x86-slow-build-evidence artifact for this run.**" >> "$GITHUB_STEP_SUMMARY"
