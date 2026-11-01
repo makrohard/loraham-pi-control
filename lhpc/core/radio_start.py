@@ -171,6 +171,36 @@ def bind_usb(svc, rid: str, port: str) -> tuple:
     return True, f"{rid} bound to the stick on port {port}" + (f" ({choice.serial})" if choice.serial else ""), b.copybox
 
 
+def setup_radios(paths, setup_id: str) -> tuple:
+    """0.14.0 (REL14-D2 A): an explicit `lhpc hardware <setup>` also writes the hardware list when there is none:
+    one row per band of the catalog setup in band order, each the model whose variant runs that band's preset. It
+    runs BEFORE the setup itself is saved; a refused save changes nothing. A list that exists in any state (valid,
+    invalid, unreadable, a dangling link) is never touched, and the setup is still saved: it names the served bands
+    (B4-D26). `unset` writes no list. (ok, line)."""
+    setup = cfgmod.HW_SETUPS.get(setup_id)
+    try:
+        present = radios.exists_at_all(radios.path(paths))
+    except Exception:                                    # a path refusal: never read as "absent"
+        present = True
+    if present:
+        return True, "hardware list: exists, not changed (config/radios.toml decides which radios launch)"
+    if setup is None or not setup[1]:
+        return True, "hardware list: stays absent (no radio in this setup)"
+    models, rows = radio_models.load(), []
+    for band, preset in sorted(setup[1].items()):
+        hit = [(m, v) for m in models.values() for v in m.variants if v.preset == preset and v.band in ("", band)]
+        if len(hit) != 1:
+            return False, f"hardware list: not written (preset {preset} on {band} MHz names {len(hit)} model variants)"
+        m, v = hit[0]
+        several = len([x for x in m.variants if x.band in ("", band)]) > 1
+        name = f"{m.short} {band}"                   # the band's own name (default_name follows the model's bands)
+        rows.append(radios.Radio(radios.next_id(rows), name, m.id, band, ce=v.key if several else ""))
+    reasons = radios.save(paths, rows, models)
+    if reasons:
+        return False, "hardware list: not written: " + "; ".join(reasons)
+    return True, "hardware list written: " + ", ".join(f"{r.id} {r.name!r} ({r.model}, {r.band} MHz)" for r in rows)
+
+
 def band_rid(svc, band: str) -> radio_daemon.Target:
     """W1-3/4/5 for the daemon (every radio runs it): the one enabled radio of `band`, or a refusal naming why
     (none, or two or more). A fresh load of the hardware list (W1-10)."""

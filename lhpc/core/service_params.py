@@ -1371,10 +1371,8 @@ class ParamsConfigMixin:
 
     @invalidates_snapshot
     def set_hardware_setup(self, setup_id: str | None = None) -> ActionResult:
-        """Set the radio HARDWARE setup (`[radio].hardware` in local.toml) — e.g. 'loraham',
-        'uputronics', 'waveshare-433'. No arg reports the current setup + served bands. 'unset' means
-        no hardware is configured: the daemon refuses to start until a real setup is chosen. The setup
-        fixes which band(s) are served and the daemon `--hw` preset each one launches with."""
+        """Set the radio HARDWARE setup (`[radio].hardware`, e.g. 'loraham'); no arg reports it. 0.14.0: when there is
+        no hardware list it is written first from the setup (radio_start.setup_radios); an existing list refuses."""
         from . import config as _config
         setups = dict(self.hw_setups())
         if setup_id is None:
@@ -1385,13 +1383,15 @@ class ParamsConfigMixin:
         if setup_id not in setups:
             return ActionResult(False, f"unknown hardware setup {setup_id!r}",
                                 details=["  choose from: " + ", ".join(setups)])
+        rows_ok, rows_line = _radio_start.setup_radios(self._paths, setup_id)     # 0.14.0: the hardware list first
+        if not rows_ok:
+            return ActionResult(False, f"hardware setup not set: {rows_line}")
         try:
             _config.save_hardware_setup(self._paths, setup_id)
         except (OSError, _config.ConfigError) as exc:
-            return ActionResult(False, f"could not save hardware setup: {exc}")
+            return ActionResult(False, f"could not save hardware setup: {exc}", details=[f"  {rows_line}"])
         self._invalidate_config()
-        return ActionResult(True, f"hardware setup set to {setup_id}",
-                            details=[f"  served band(s): {', '.join(self.active_bands()) or '(none)'}"])
+        return ActionResult(True, f"hardware setup set to {setup_id}", details=[f"  served band(s): {', '.join(self.active_bands()) or '(none)'}", f"  {rows_line}"])
 
     def meshcore_identity_candidates(self) -> tuple:
         """Files that may already hold the MeshCore identity, newest-authority first.
