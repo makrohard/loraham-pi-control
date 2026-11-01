@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.14.0
 
+- Radios: the hardware list (config/radios.toml) decides which radios launch, one daemon each with its own
+  sockets, `--id` and RF log; `lhpc hardware <setup>` writes it. An old `[radio]` setup is not converted.
+- USB radios (Meshstick, 868 MHz): the console's Hardware section adds and binds a stick and offers the USB
+  setup as one command; a start is refused by name when the stick or its access is missing.
 - LoRaHAM daemon v1.3.1 (660be550, daemon + chat): every start passes the PA over-current limit, `auto` = 140 mA
   with high power, else 100 mA; set per band with `lhpc hardware --ocp`.
 - Daemon: the binary carries the Meshstick library (`lib/`, pine64 libch341-spi-userspace). Source builds need
