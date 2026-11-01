@@ -2874,6 +2874,17 @@ def test_a_blocked_or_pending_spawn_flashes_and_returns(tmp_path, monkeypatch, w
     assert "admission not yet confirmed" in c.get("/").get_data(as_text=True)
 
 
+def test_a_pending_build_flashes_admission_not_yet_confirmed(monkeypatch, web, csrf):
+    # The Build page's own flash for a spawn whose admission is pending (the start page's twin is the test above).
+    monkeypatch.setattr(ControllerService, "install_dep_gate", lambda self, target: {"block": [], "warn": []})
+    monkeypatch.setattr(ControllerService, "spawn_web_job",
+                        lambda self, op, target, source="pinned": ("build-kiss.log", "pending", ""))
+    c = web()
+    r = c.post("/action", data={"_csrf": csrf(c), "op": "build", "target": "kiss", "source": "pinned",
+                                "confirmed": "yes"}, follow_redirects=True)
+    assert "build starting — admission not yet confirmed" in r.get_data(as_text=True)
+
+
 def test_the_dashboard_lists_the_meshtastic_cli_with_its_launch_line(tmp_path, monkeypatch, web):
     from lhpc.core import config as _cfg
     from lhpc.core.model import RunState
