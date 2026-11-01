@@ -74,7 +74,13 @@ def _keep(paths: Paths, why: str) -> tuple[bool, str]:
     return False, why
 
 
+def _unreadable(exc: Exception) -> str:
+    return f"the deployed nginx config could not be read ({type(exc).__name__}) — Apply the webserver configuration"
+
+
 def _deployed(paths: Paths) -> str | None:
+    """The deployed nginx config, or None when there is none. Any other read error is the caller's: it keeps the
+    marker with the cause (`_unreadable`), so the update's own result stands."""
     from .webserver import NGINX_CONF
     try:
         return runtime_fs.read_text_regular(paths, paths.under(*NGINX_CONF))
@@ -88,7 +94,10 @@ def reconcile(svc) -> tuple[bool, str]:
     paths = svc._paths
     if pending(paths) is None:
         return True, "nothing pending"
-    deployed = _deployed(paths)
+    try:
+        deployed = _deployed(paths)
+    except (OSError, PathContainmentError) as exc:
+        return _keep(paths, _unreadable(exc))
     if deployed is None:
         clear(paths)                                    # nothing deployed: the first Apply renders fresh
         return True, "no deployed nginx config"
@@ -127,7 +136,11 @@ def after_update(paths: Paths) -> tuple[bool, str]:
     checkout's interpreter. (marker cleared, detail)."""
     if pending(paths) is None:
         return True, "nothing pending"
-    if _deployed(paths) is None:
+    try:
+        deployed = _deployed(paths)
+    except (OSError, PathContainmentError) as exc:
+        return _keep(paths, _unreadable(exc))
+    if deployed is None:
         clear(paths)
         return True, "no deployed nginx config"
     argv = [_python(paths), "-m", "lhpc", "_webserver-rerender", "--root", str(paths.runtime_root)]

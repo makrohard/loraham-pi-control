@@ -131,6 +131,27 @@ def test_a_saved_but_unapplied_proxy_edit_is_not_pushed_live_by_the_update(tmp_p
     assert why is not None and why.startswith("the saved webserver settings are not applied")
 
 
+def test_an_unreadable_deployed_config_keeps_the_marker_and_the_update_still_reports(tmp_path, monkeypatch):
+    """The deployed nginx config cannot be read (a permission error, after the checkout moved): the update still
+    returns its result, the marker stays with the cause, and nothing else is touched."""
+    svc, paths, previous, _fake = _box(tmp_path, monkeypatch, nginx_t=CR(0, "", "ok"))
+    real = runtime_fs.read_text_regular
+    conf = paths.under(*webserver.NGINX_CONF)
+
+    def denied(paths_, path, *a, **k):
+        if path == conf:
+            raise PermissionError(13, "Permission denied", str(path))
+        return real(paths_, path, *a, **k)
+    monkeypatch.setattr(runtime_fs, "read_text_regular", denied)
+    res = svc().self_update_apply_operator()
+    monkeypatch.setattr(runtime_fs, "read_text_regular", real)
+    assert res.data.get("update_applied"), res.summary
+    why = proxy_rerender.pending(paths)
+    assert why == ("the deployed nginx config could not be read (PermissionError) — Apply the webserver "
+                   "configuration")
+    assert _deployed(paths) == previous
+
+
 def test_the_hidden_verb_with_nothing_pending_changes_nothing(tmp_path, capsys):
     from lhpc.adapters.cli.main import main
     assert main(["_webserver-rerender", "--root", str(tmp_path)]) == 0
