@@ -363,15 +363,16 @@ def radio_settings(radio, model, legacy: dict, legacy_dp: dict, defaults: dict) 
     is never silently replaced)."""
     band, chip, notes = radio.band, model.chip, []
 
-    def legacy_or_default(row_value, key, default):
+    # (the legacy band key's prefix, the `defaults` key = the manifest param name): every pair named once (Q11)
+    def legacy_or_default(row_value, prefix, default_key):
         if row_value is not None:
             return row_value, "row"
-        if CARRY_BAND_PARAMS and f"{key}_{band}" in legacy:
-            return legacy[f"{key}_{band}"], f"legacy {key}_{band}"
-        return defaults[key], "default"
-    txmode, src_tx = legacy_or_default(radio.txmode, "tx", "managed")
-    cadmon, src_cm = legacy_or_default(radio.cadmon, "cadmon", "off")
-    cadrssi, src_cr = legacy_or_default(radio.cadrssi, "cadrssi", "-90")
+        if CARRY_BAND_PARAMS and f"{prefix}_{band}" in legacy:
+            return legacy[f"{prefix}_{band}"], f"legacy {prefix}_{band}"
+        return defaults[default_key], "default"
+    txmode, src_tx = legacy_or_default(radio.txmode, "tx", "txmode")
+    cadmon, src_cm = legacy_or_default(radio.cadmon, "cadmon", "cadmon")
+    cadrssi, src_cr = legacy_or_default(radio.cadrssi, "cadrssi", "cadrssi")
     if radio.high_power is not None:
         hipower, src_hp = radio.high_power, "row"
     elif CARRY_BAND_PARAMS and f"hipower_{band}" in legacy:
