@@ -1512,7 +1512,7 @@ class LifecycleOpsMixin:
             # required post-start log, and the detached post runner's log all get a
             # copy-pasteable `[log] <comp> -> tail -f <path>` line the moment they exist.
             announcer = self._log_announcer(comp.id, out)
-            inst, why = radio_start.client_instance(self, comp, cfg_band)
+            inst, why = radio_start.client_instance(self, comp, cfg_band or comp.band)   # a fixed-band client: its band
             if why:
                 record(comp, stack, Outcome.BLOCKED, why)
                 continue

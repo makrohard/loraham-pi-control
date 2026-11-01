@@ -108,3 +108,24 @@ def test_a_config_file_client_names_its_bands_radio(tmp_path):
     toml = (tmp_path / "config" / "files" / "meshcore.toml").read_text()
     assert 'data_socket = "/tmp/loraf-r2.sock"' in toml and 'config_socket = "/tmp/loraconf-r2.sock"' in toml, toml
     assert "-r1.sock" not in toml and "{rid}" not in toml
+
+
+def test_a_fixed_band_client_starts_on_its_bands_radio_beside_the_other_band(tmp_path, monkeypatch):
+    # REL14-D28: MeshCom is not band-switchable (no stack band), its bridge a 433 client. On a list with a radio
+    # per band the bridge runs as r1's instance; it is never refused as "2 radios … name one".
+    svc = _svc(tmp_path, radios_fixture.RADIOS)
+    assert svc.set_operator_identity(callsign="XX0XXA").ok          # MeshCom is licensed
+    monkeypatch.setattr(ControllerService, "hardware_configured", lambda self: True)
+    monkeypatch.setattr(ControllerService, "_ensure_daemon", lambda self, *a, **k: ([], True, ""))
+    for name in ("is_built", "_source_present"):
+        monkeypatch.setattr(ControllerService, name, lambda self, c: True)
+    monkeypatch.setattr(ControllerService, "binary_behind", lambda self, c: "")
+    monkeypatch.setattr(ControllerService, "start_blocking_requirements", lambda self, comp: [])
+    launched = []
+    from lhpc.core.lifecycle import StartLaunch
+    monkeypatch.setattr(Lifecycle, "start", lambda self, s, c, *a, **k: launched.append((c.id, k.get("inst")))
+                        or StartLaunch(True, ""))
+    res = svc.start("meshcom", apply=True)
+    bridge = [inst for cid, inst in launched if cid == "meshcom-bridge"]
+    assert bridge and (bridge[0].slot, bridge[0].rid) == (0, "r1"), (res.summary, [r.summary for r in res.results])
+    assert not any("name one" in r.summary for r in res.results)

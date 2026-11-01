@@ -158,8 +158,9 @@ def test_only_a_covered_service_blocks_the_start(short_tmp_path, monkeypatch, bi
     from lhpc.core.lifecycle import BUILD_MARKER_TEXT, StartLaunch
     svc = _svc(short_tmp_path, monkeypatch)
     cfgmod.save_hardware_setup(svc._paths, "uputronics")
-    # stage L5 (W1-3): the bandless bridge runs on the one radio that can run it
-    radios_fixture.write(short_tmp_path, (radios.Radio("r1", "low", "uputronics", "433", ce="ce0"),))
+    # stage L5: a dual-band box's hardware list; the bridge is a 433 client, so it runs on r1 (REL14-D28)
+    radios_fixture.write(short_tmp_path, (radios.Radio("r1", "low", "uputronics", "433", ce="ce0"),
+                                          radios.Radio("r2", "high", "uputronics", "868", ce="ce1")))
     svc._invalidate_config()
     assert svc.set_operator_identity(callsign="XX0XXA").ok
     pins = svc._binary_pins("meshcom")
