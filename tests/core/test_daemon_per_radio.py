@@ -492,6 +492,13 @@ def test_w1_2_an_unknown_or_malformed_rid_refuses_never_falling_back_to_a_band(r
     assert _refuses(_target(_state(*_two_868()), rid=rid))
 
 
+def test_w1_2_each_refusal_says_its_own_why():
+    """W1-2: REFUSE naming the rid and why (unknown / disabled / not r1..r99): three different reasons."""
+    st = _state(_r("r1", band="868", enabled=False), _two_868()[1])
+    reasons = {_target(st, rid=rid).reason.replace(rid, "<rid>") for rid in ("r1", "r9", "r0")}
+    assert len(reasons) == 3                          # the why differs, not only the rid it names
+
+
 def test_w1_2_a_disabled_rid_refuses():
     assert _refuses(_target(_state(_r("r1", band="868", enabled=False), _two_868()[1]), rid="r1"))
 
@@ -531,7 +538,8 @@ def test_w1_3_one_radio_of_the_band_proceeds_naming_it():
 
 
 def test_w1_4_no_radio_of_the_band_refuses():
-    assert _refuses(_target(_state(_r("r1", band="433")), band="868"))
+    t = _target(_state(_r("r1", band="433")), band="868")
+    assert _refuses(t) and "no enabled radio on 868 MHz" in t.reason          # the text W1-4 fixes
     assert _refuses(_target(_state(_r("r1", band="868", enabled=False)), band="868"))
 
 
@@ -574,13 +582,16 @@ def test_w1_6e_a_running_rid_that_is_no_candidate_is_ignored():
 @pytest.mark.parametrize("kw", [{"rid": 1}, {"band": 868}, {"running": "r1"}, {"running": {"r1": 1}},
                                 {"running": ("r1", 2)}, {"fallback_rid": 2}, {"old_config": "yes"}])
 def test_resolve_target_type_checks_refuse_never_raise(kw):
-    assert _refuses(_target(_state(*_two_868()), **kw))
+    """One radio: the bare call would proceed, so each refusal comes from the type check itself."""
+    one = _state(_two_868()[1])
+    assert _proceeds(_target(one), "r2")
+    assert _refuses(_target(one, **kw))
 
 
 @pytest.mark.parametrize("kw", [{"state": None}, {"models": []}, {"can_run": None}])
 def test_resolve_target_caller_built_inputs_refuse_never_raise(kw):
     rd = _rd()
-    args = {"state": _state(*_two_868()), "models": MODELS, "can_run": _always}
+    args = {"state": _state(_two_868()[1]), "models": MODELS, "can_run": _always}
     args.update(kw)
     t = rd.resolve_target(args["state"], args["models"], args["can_run"])
     assert _refuses(t)
