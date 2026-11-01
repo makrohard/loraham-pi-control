@@ -121,6 +121,15 @@ def _paths_subst(text: str, runtime: str, source: str, band: str, inst: Instance
     return out
 
 
+def slot_port(port: int, slot: int) -> int:
+    """Slot k's port derived from slot 0's (a saved or static port): + 10 per slot (A §2.4). A derived port that
+    leaves 1024..65535 is refused (B3-D15)."""
+    derived = port + PORT_STEP * slot
+    if slot and not 1024 <= derived <= 65535:
+        raise CommandError(f"port {port} at slot {slot} gives {derived}, outside 1024..65535")
+    return derived
+
+
 def _param_raw(p, params, inst: Instance) -> str:
     """A run param's raw value for one instance. The default is its template, rendered for the instance. A saved
     value of a slotted port param (its default a whole `{port:B}`) is slot 0's port; slot k derives from it, + 10 per
@@ -130,7 +139,7 @@ def _param_raw(p, params, inst: Instance) -> str:
         return inst.subst(str(p.default_template or p.default))
     raw = str(saved)
     if inst.slot and _PORT_RE.fullmatch(p.default_template or str(p.default)) and raw.strip().isdigit():
-        return str(int(raw) + PORT_STEP * inst.slot)
+        return str(slot_port(int(raw), inst.slot))
     return inst.subst(raw)
 
 

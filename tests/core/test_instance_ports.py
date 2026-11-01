@@ -108,3 +108,20 @@ def test_pre_steps_and_env_take_the_instance_level():
     env = commands.build_env([("STATE", "{runtime}/state/{instance_dir}x")], "/rt", "/src",
                              inst=Instance(1, "r2"))
     assert pre[0][1] == "/rt/state/r2/x" and env == {"STATE": "/rt/state/r2/x"}
+
+
+
+def test_a_saved_port_whose_slot_k_port_leaves_the_range_is_refused_in_argv():
+    # B3-D15: slot k = saved + 10k; a derived port above 65535 is refused with an error naming the slot (before,
+    # the param validator refused the derived value as "above maximum 65535", without the slot or the saved port).
+    with pytest.raises(CommandError, match="65530 at slot 1 gives 65540"):
+        _argv(["{param:kiss_port}"], Instance(1, "r2"), {"kiss_port": "65530"})
+    assert _argv(["{param:kiss_port}"], Instance(1, "r2"), {"kiss_port": "65525"}) == ["--port", "65535"]
+
+
+def test_a_slot_k_firewall_port_that_leaves_the_range_is_refused():
+    # B3-D15, the firewall rows: the same rule refuses the derived port instead of writing a port above 65535.
+    from lhpc.core import firewall
+    with pytest.raises(CommandError, match="65530 at slot 1 gives 65540"):
+        firewall.instance_port(65530, Instance(1, "r2"))
+    assert firewall.instance_port(65530, commands.SLOT0) == 65530
