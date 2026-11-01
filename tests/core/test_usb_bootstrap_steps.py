@@ -128,15 +128,19 @@ def test_b3_an_unreadable_sys_module_exits_13(tmp_path):
 
 # ---- B-4: the plugdev grant ----------------------------------------------------------------------
 
+def test_b4_the_grant_is_usermod_aG_plugdev_for_the_account(tmp_path):
+    """INTERFACE-B5-W1-NOTE-1 §5: today's grant tool."""
+    r, _, calls = _run(tmp_path, _block(tmp_path))
+    assert r.returncode == 0 and "usermod -aG plugdev tester" in calls
+
+
 def test_b4_a_failed_grant_sets_groups_failed_and_the_standalone_block_exits_7(tmp_path):
-    fail = ("usermod", "gpasswd", "adduser")
-    r, _, _ = _run(tmp_path, _block(tmp_path, standalone=True), fail=fail)
+    r, _, _ = _run(tmp_path, _block(tmp_path, standalone=True), fail=("usermod",))
     assert r.returncode == 7
 
 
 def test_b4_the_scaffold_block_leaves_the_exit_to_the_scaffold(tmp_path):
-    fail = ("usermod", "gpasswd", "adduser")
-    r, _, _ = _run(tmp_path, _block(tmp_path) + '\necho "groups_failed=[$_GROUPS_FAILED]"\n', fail=fail)
+    r, _, _ = _run(tmp_path, _block(tmp_path) + '\necho "groups_failed=[$_GROUPS_FAILED]"\n', fail=("usermod",))
     assert r.returncode == 0
     assert "groups_failed=[]" not in r.stdout
 

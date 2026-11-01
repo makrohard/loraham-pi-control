@@ -9,6 +9,8 @@ import hashlib
 import shlex
 import stat
 
+import pytest
+
 from lhpc.core import radio_models
 from lhpc.core.paths import resolve_paths
 
@@ -84,3 +86,14 @@ def test_c3_a_runtime_path_out_of_the_root_shows_no_copybox(tmp_path):
     assert box.state == "refused" and box.line == ""
     assert not list(outside.rglob("usb-setup.sh"))
 
+
+
+@pytest.mark.parametrize("user", ["a b", "Root", "root", "1abc", "x;rm", "a" * 33, "é", "", "$(id)"])
+def test_an_account_outside_the_rule_is_refused_and_nothing_is_written(tmp_path, user):
+    """INTERFACE-B5-W1-NOTE-1 §2: refused, empty path/sha256/line, no file written or rewritten."""
+    f = _file(tmp_path)
+    f.parent.mkdir(parents=True)
+    f.write_text("an existing file\n", encoding="utf-8")
+    box = _uf().copybox(_paths(tmp_path), user, MODELS)
+    assert box.state == "refused" and box.path == "" and box.sha256 == "" and box.line == "" and box.reason
+    assert f.read_text(encoding="utf-8") == "an existing file\n"

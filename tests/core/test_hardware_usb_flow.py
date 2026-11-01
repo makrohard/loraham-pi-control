@@ -142,3 +142,20 @@ def test_an_unselectable_choice_or_an_unknown_radio_is_refused():
     assert _bind(st, "r1", _choice("1-1.3", selectable=False)).outcome == "refuse"
     assert _bind(st, "r9", _choice("1-1.3")).outcome == "refuse"
 
+
+
+# ---- U-5: node access of the chosen stick (INTERFACE-B5-W1-NOTE-1 §1) ---------------------------------
+
+@pytest.mark.parametrize("access,copybox", [("ABSENT", True), ("PRESENT", False), ("UNKNOWN", False)])
+def test_u5_no_access_still_binds_and_offers_the_copybox(access, copybox):
+    P = _ua().Probe
+    b = _uf().bind_choice(_state(_r("r1", usb_port="1-1.2")), "r1", _choice("1-1.3"), (), (), frozenset(),
+                          access=getattr(P, access))
+    assert b.outcome == "proceed" and b.copybox is copybox
+
+
+@pytest.mark.parametrize("access", ["absent", None, True, 0])
+def test_u5_an_access_value_that_is_no_probe_refuses(access):
+    b = _uf().bind_choice(_state(_r("r1", usb_port="1-1.2")), "r1", _choice("1-1.3"), (), (), frozenset(),
+                          access=access)
+    assert b.outcome == "refuse" and b.reason

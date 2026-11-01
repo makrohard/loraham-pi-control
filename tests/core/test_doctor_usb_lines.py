@@ -188,3 +188,57 @@ def test_d6_detect_is_allowed_only_with_libusb_present():
     for state in (ua.Probe.ABSENT, ua.Probe.UNKNOWN):
         v = uf.detect_allowed(ua.Library(state, "cannot load libusb-1.0.so.0"))
         assert v.outcome == "refuse" and "cannot load libusb-1.0.so.0" in v.reason
+
+
+# ---- the line templates (INTERFACE-B5-W1-NOTE-1 §3, §4) ------------------------------------------------
+
+def _template_regexes():
+    import re
+    import string
+    out = []
+    for template in _uf().DOCTOR_TEXTS.values():
+        parts = []
+        for literal, field, _spec, _conv in string.Formatter().parse(template):
+            parts.append(re.escape(literal))
+            if field is not None:
+                parts.append(".+?")
+        out.append(re.compile("".join(parts) + r"\Z", re.DOTALL))
+    return out
+
+
+def _all_states_lines():
+    ua = _ua()
+    rows = [_r("r1", usb_serial="ABCDEFGH"), _r("r2", usb_port="1-1.3"), _r("r3", model="loraham", band="433"),
+            _r("r4", model="no-such-model")]
+    out = []
+    for rule in ua.RuleState:
+        for m in ua.Membership:
+            out += _lines(rows, rule_state=lambda rule=rule: rule, plugdev=lambda m=m: m,
+                          scan=lambda: _scan(_dev("1-1.3"), _dev("1-1.4", serial="ABCDEFGH1")))
+    for probe in ua.Probe:
+        out += _lines(rows, ch341_module=lambda probe=probe: probe, hotplug_for=lambda rid, probe=probe: probe,
+                      node_access=lambda device, probe=probe: probe,
+                      libusb=lambda probe=probe: ua.Library(probe, "detail"))
+    return out
+
+
+def test_every_doctor_line_is_one_of_the_doctor_texts():
+    """Every line the function prints renders a template of DOCTOR_TEXTS (no text outside the constants)."""
+    regexes = _template_regexes()
+    assert regexes
+    for line in _all_states_lines():
+        assert any(rx.match(line) for rx in regexes), line
+
+
+def test_the_doctor_texts_are_format_strings_keyed_by_name():
+    texts = _uf().DOCTOR_TEXTS
+    assert isinstance(texts, dict) and texts
+    assert all(type(k) is str and type(v) is str for k, v in texts.items())
+
+
+def test_d1_a_transport_outside_the_librarys_list_is_an_unknown_transport():
+    import dataclasses
+    models = dict(MODELS)
+    models["odd-bus"] = dataclasses.replace(MODELS["loraham"], id="odd-bus", transport="i2c")
+    lines = _uf().doctor_usb_lines([_r("r5", model="odd-bus", band="433")], models, _probes())
+    assert "unknown transport on r5" in lines
