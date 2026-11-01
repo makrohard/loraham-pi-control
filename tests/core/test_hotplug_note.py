@@ -138,3 +138,20 @@ def test_k7_an_offset_beyond_the_log_is_unknown(tmp_path):
     log = _start(tmp_path, before="x" * 100, after=f"{ACTIVE}\n")
     log.write_text(f"{ACTIVE}\n", encoding="utf-8")
     assert _uf().hotplug_note(log, RUN) is _probe().UNKNOWN
+
+
+# ---- rows the B5 mutation sweep showed open (B39, B43) --------------------------------------------------
+
+def test_offset_record_refuses_a_boot_id_of_a_str_subclass():
+    class Text(str):
+        pass
+    with pytest.raises(ValueError):
+        _uf().offset_record(1, 1, 1, Text(BOOT))
+
+
+@pytest.mark.parametrize("line", ["", "garbage\n", f"0 1 2 {BOOT}", None, b"0 1 2 x\n"])
+def test_write_offset_record_of_a_line_not_of_the_form_is_unknown_and_writes_nothing(tmp_path, line):
+    log = tmp_path / "start.log"
+    log.write_text("", encoding="utf-8")
+    assert _uf().write_offset_record(log, line) is _probe().UNKNOWN
+    assert not (tmp_path / "start.log.offset").exists()

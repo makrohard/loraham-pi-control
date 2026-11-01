@@ -159,3 +159,31 @@ def test_u5_an_access_value_that_is_no_probe_refuses(access):
     b = _uf().bind_choice(_state(_r("r1", usb_port="1-1.2")), "r1", _choice("1-1.3"), (), (), frozenset(),
                           access=access)
     assert b.outcome == "refuse" and b.reason
+
+
+# ---- rows the B5 mutation sweep showed open (B59, B60, B64, B69) ------------------------------------------
+
+def test_u2_a_readable_listing_says_present_even_with_no_match():
+    P = _ua().Probe
+    assert _choices(_scan(_dev("1-1.2", serial="ABCDEFGH12"))).listing is P.PRESENT
+    assert _choices(_scan()).listing is P.PRESENT
+
+
+def test_u1_a_model_row_that_is_not_usable_offers_no_choice_and_reads_unknown():
+    import dataclasses
+    bad = dataclasses.replace(MODELS[STICK], usb={"vid": "XYZ1", "pid": "5512"})
+    c = _uf().usb_choices(_scan(_dev("1-1.2")), bad)
+    assert c.listing is _ua().Probe.UNKNOWN and c.items == () and c.reason
+
+
+def test_bind_on_a_hardware_list_that_is_not_valid_is_refused():
+    rad = _rad()
+    st = rad.State(rad.INVALID, radios=(_r("r1", usb_port="1-1.2"),), reasons=("r1: broken",))
+    b = _bind(st, "r1", _choice("1-1.3"))
+    assert b.outcome == "refuse" and b.reason and b.radios == ()
+
+
+@pytest.mark.parametrize("users", ["meshtastic@r1", None, (1,)])
+def test_bind_with_users_that_are_no_list_of_names_is_refused_not_raised(users):
+    b = _bind(_state(_r("r1", usb_port="1-1.2")), "r1", _choice("1-1.3"), users=users)
+    assert b.outcome == "refuse" and b.reason

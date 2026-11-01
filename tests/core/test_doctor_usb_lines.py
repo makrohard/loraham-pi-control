@@ -251,3 +251,46 @@ def test_d1_a_transport_outside_the_librarys_list_is_an_unknown_transport():
     models["odd-bus"] = dataclasses.replace(MODELS["loraham"], id="odd-bus", transport="i2c")
     lines = _uf().doctor_usb_lines([_r("r5", model="odd-bus", band="433")], models, _probes())
     assert "unknown transport on r5" in lines
+
+
+# ---- rows the B5 mutation sweep showed open (B17, B18, B19, B23, B24, B33) ------------------------------
+
+def test_d8_each_presence_state_gives_its_own_line_naming_the_radio():
+    ua = _ua()
+    rows = [_r("r2", usb_port="1-1.3")]
+    present = _lines(rows, scan=lambda: _scan(_dev("1-1.3")))
+    absent = _lines(rows, scan=lambda: _scan(_dev("1-1.9")))
+    unknown = _lines(rows, scan=lambda: _scan(listing=ua.Probe.UNKNOWN))
+    for lines in (present, absent, unknown):
+        assert any("r2" in x for x in lines)
+    assert len({tuple(present), tuple(absent), tuple(unknown)}) == 3
+    assert any("1-1.3" in x and "r2" in x for x in present)
+    texts = _uf().DOCTOR_TEXTS                  # keys and texts quoted from usb_flow.py at c901b0a7 (rendered by the call)
+    assert texts["presence_absent"].format(rid="r2") in absent
+    assert not any(x == texts["presence_absent"].format(rid="r2") for x in unknown)
+
+
+def test_d3_an_unreadable_device_gets_a_line_naming_its_port_and_a_foreign_one_none():
+    ua = _ua()
+    rows = [_r("r1", usb_serial="ABCDEFGH")]
+    unreadable = _lines(rows, scan=lambda: _scan(_dev("1-1.7", vid=ua.Probe.UNKNOWN)))
+    foreign = _lines(rows, scan=lambda: _scan(_dev("1-1.7", vid="0bda")))
+    assert any("1-1.7" in x for x in unreadable)
+    assert not any("1-1.7" in x for x in foreign)
+
+
+def test_d8_a_serialless_presence_carries_the_port_only_when_present():
+    P = _ua().Probe
+    here = _presence(_r("r1", usb_port="1-1.3"), _scan(_dev("1-1.3")))
+    gone = _presence(_r("r1", usb_port="1-1.3"), _scan(_dev("1-1.2")))
+    assert (here.state, here.port) == (P.PRESENT, "1-1.3")
+    assert gone.state is P.ABSENT and not gone.port
+    assert not gone.note                        # ABSENT is a judgement, not an excuse
+    lost = _presence(_r("r1", usb_port="1-1.3"), _scan(listing=P.UNKNOWN))
+    assert lost.state is P.UNKNOWN and lost.note and not lost.port
+
+
+@pytest.mark.parametrize("library", [None, "PRESENT", True, ("present", "libusb")])
+def test_d6_a_library_state_that_is_no_library_refuses(library):
+    v = _uf().detect_allowed(library)
+    assert v.outcome == "refuse" and v.reason

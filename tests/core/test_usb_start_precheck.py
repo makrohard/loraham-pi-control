@@ -180,3 +180,16 @@ def test_bound_text_writes_bytes_outside_0x21_0x7e_and_percent_as_upper_hex(seri
 
 def test_bound_text_caps_the_input_at_64_bytes():
     assert _uf().bound_text("A" * 70) == "A" * 64
+
+
+# ---- rows the B5 mutation sweep showed open (B03, B06) ------------------------------------------------
+
+def test_p8_a_model_of_an_unknown_transport_refuses_naming_the_radio():
+    v = _check(_r("r7"), model=dataclasses.replace(MODELS[STICK], transport="i2c"))
+    assert _refuses(v) and "r7" in v.reason
+
+
+@pytest.mark.parametrize("answer", ["absent", None, True, 0, "PRESENT"])
+def test_p9_an_access_answer_that_is_no_probe_refuses(answer):
+    v = _check(_r("r1", usb_port="1-1.3"), _scan(_dev("1-1.3")), access_fn=lambda device: answer)
+    assert _refuses(v)
