@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import errno
 import os
 import re
 import shutil
 import subprocess
 import sys
 from collections.abc import Hashable
+from pathlib import Path
 
 import pytest
 import repo_paths
@@ -52,6 +54,31 @@ def root(tmp_path):
     tree = tmp_path / "sys"
     shutil.copytree(FIXTURE, tree, symlinks=True)
     return tree
+
+
+@pytest.fixture
+def inject(monkeypatch):
+    """Make the library's reads of chosen paths fail with an errno (EACCES, EIO) without a permission change:
+    Path.read_bytes, os.listdir, os.stat and os.readlink raise for those paths and pass every other path on."""
+    failing = {}
+
+    def wrap(fn):
+        def call(path, *args, **kwargs):
+            err = failing.get(os.fspath(path))
+            if err is not None:
+                raise OSError(err, os.strerror(err), os.fspath(path))
+            return fn(path, *args, **kwargs)
+        return call
+    for name in ("listdir", "stat", "readlink"):
+        monkeypatch.setattr(os, name, wrap(getattr(os, name)))
+    monkeypatch.setattr(Path, "read_bytes", wrap(Path.read_bytes))
+
+    def fail(path, err):
+        failing[os.fspath(path)] = err
+    return fail
+
+
+ERRNOS = pytest.mark.parametrize("err", [errno.EACCES, errno.EIO], ids=["eacces", "eio"])
 
 
 def dev(root, port):
@@ -247,14 +274,42 @@ def test_an_spi_model_is_not_a_usb_model(root):
 
 # --- start pre-check of a serial-less row (U1, U2, U3, U5) ---
 
-@pytest.mark.parametrize("serial", [None, "unreadable"])
-def test_a_serialless_stick_on_its_port_proceeds_to_the_daemon(root, serial):
-    """U2: no sysfs serial (absent or unreadable) is passed on to the daemon's check, never refused."""
-    if serial == "unreadable":
-        unreadable(dev(root, "1-1.3") / "serial")
+@pytest.mark.parametrize("serial, state", [
+    ("absent", Probe.ABSENT), ("eisdir", Probe.UNKNOWN), ("eacces", Probe.UNKNOWN), ("eio", Probe.UNKNOWN),
+    ("empty", Probe.UNKNOWN), ("newline-only", Probe.UNKNOWN), ("latin1", Probe.UNKNOWN), ("nul", Probe.UNKNOWN),
+])
+def test_a_serialless_stick_on_its_port_proceeds_to_the_daemon(root, inject, serial, state):
+    """U2, A9: a serial file that is absent (ABSENT) or unreadable (UNKNOWN) is no serial reported; the start is
+    passed on to the daemon's check, never refused on that alone."""
+    path = dev(root, "1-1.3") / "serial"
+    if serial == "eisdir":
+        unreadable(path)
+    elif serial in ("eacces", "eio"):
+        path.write_text("A1B2C3D4\n")
+        inject(path, errno.EACCES if serial == "eacces" else errno.EIO)
+    elif serial != "absent":
+        path.write_bytes({"empty": b"", "newline-only": b"\n", "latin1": b"\xff\xfe\n", "nul": b"A1\x00\n"}[serial])
+    assert device(root, "1-1.3").serial == ua.Field(state)
     assert ua.precheck_serialless(ua.scan(root), STICK, "1-1.3") == ua.Precheck(
         ua.Outcome.PROCEED, ua.Reason.STICK_ON_PORT, ("1-1.3",))
     assert ua.stick_on_port(ua.scan(root), STICK, "1-1.3") is Probe.PRESENT
+
+
+@pytest.mark.parametrize("serial", ["A1B2C3D4E5", "A1B2C3D4E5\n", " \n", "\t\n", "x", "Zähler-1\n"])
+def test_a_stick_on_a_serialless_rows_port_that_reports_a_serial_is_refused(root, serial):
+    """A §2.11 F2 ("must exist and report no serial"), decision B4-D12: refused naming the port and the serial
+    seen, so the row is re-bound by serial; never PROCEED, never re-bound here. Whitespace is a serial too."""
+    (dev(root, "1-1.3") / "serial").write_text(serial)
+    assert ua.precheck_serialless(ua.scan(root), STICK, "1-1.3") == ua.Precheck(
+        ua.Outcome.REFUSE, ua.Reason.SERIAL_ON_SERIALLESS_ROW, ("1-1.3",), serial.removesuffix("\n"))
+
+
+def test_a_serial_on_the_port_wins_over_a_second_serialless_stick(root):
+    """B-7 before B-4: the row's own port is judged first."""
+    (dev(root, "1-1.3") / "serial").write_text("A1B2C3D4\n")
+    add_stick(root, "1-1.4")
+    add_stick(root, "1-1.5")
+    assert ua.precheck_serialless(ua.scan(root), STICK, "1-1.3").reason is ua.Reason.SERIAL_ON_SERIALLESS_ROW
 
 
 @pytest.mark.parametrize("port", ["1-1.4", "1-1", "2-1"])
@@ -604,6 +659,81 @@ def test_x86_distro_of_the_wrong_type_is_unknown(kind):
 def test_the_spi_gpio_grant_applies_on_a_pi_and_not_on_x86(machine, expected):
     """X2 proposal: PROCEED without the spi,gpio grant on x86."""
     assert ua.spi_gpio_grant(machine) is expected
+
+
+# --- injected read errors (Table G) ---
+
+def _identity(root, fail, err):
+    fail(dev(root, "1-1.3") / "idVendor", err)
+    stick = device(root, "1-1.3")
+    return stick.vid.state, stick.identity, ua.match(stick, STICK)
+
+
+def _product(root, fail, err):
+    (dev(root, "1-1.3") / "product").write_text("Meshstick\n")
+    fail(dev(root, "1-1.3") / "product", err)
+    stick = device(root, "1-1.3")
+    return stick.product.state, ua.match(stick, model(vid="1a86", pid="5512", product="Meshstick"))
+
+
+def _serial(root, fail, err):
+    (dev(root, "1-1.3") / "serial").write_text("A1B2C3D4\n")
+    fail(dev(root, "1-1.3") / "serial", err)
+    return device(root, "1-1.3").serial.state, ua.precheck_serialless(ua.scan(root), STICK, "1-1.3").outcome
+
+
+def _listing(root, fail, err):
+    fail(root.joinpath(*DEVICES), err)
+    return ua.scan(root).listing, ua.stick_on_port(ua.scan(root), STICK, "1-1.3")
+
+
+def _node(root, fail, err):
+    def stat_node(path):
+        raise OSError(err, os.strerror(err), os.fspath(path))
+    return (ua.node_access(device(root, "1-1.3"), frozenset({"plugdev"}), 1000, dev_root=root / "dev",
+                           stat_node=stat_node),)
+
+
+def _rule(root, fail, err):
+    path = installed(root, ua.udev_rules_text(MODELS).encode())
+    fail(path, err)
+    return (ua.rule_state(MODELS, root),)
+
+
+def _module(root, fail, err):
+    fail(root / "module" / "spi_ch341", err)
+    return (ua.ch341_module(root),)
+
+
+def _module_dir(root, fail, err):
+    shutil.rmtree(root / "module" / "spi_ch341")
+    fail(root / "module", err)
+    return (ua.ch341_module(root),)
+
+
+def _iface(root, fail, err):
+    fail(iface(root), err)
+    return (ua.ch341_binding("1-1.3", root),)
+
+
+def _driver(root, fail, err):
+    fail(iface(root) / "driver", err)
+    return (ua.ch341_binding("1-1.3", root),)
+
+
+U = Probe.UNKNOWN
+
+
+@ERRNOS
+@pytest.mark.parametrize("read, expected", [
+    (_identity, (U, U, U)), (_product, (U, U)), (_serial, (U, ua.Outcome.PROCEED)), (_listing, (U, U)),
+    (_node, (U,)), (_rule, (ua.RuleState.UNKNOWN,)), (_module, (U,)), (_module_dir, (U,)),
+    (_iface, (ua.Binding(U),)), (_driver, (ua.Binding(U),)),
+], ids=lambda v: v.__name__.strip("_") if callable(v) else "")
+def test_an_injected_read_error_is_unknown_never_absent(root, inject, err, read, expected):
+    """Table G, U1, U6: EACCES or EIO on each read the library makes, injected (no permission change), is
+    UNKNOWN; it is never ABSENT, never "not matched", never "no access"."""
+    assert read(root, inject, err) == expected
 
 
 # --- no caller yet ---

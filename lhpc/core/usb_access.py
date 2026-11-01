@@ -73,6 +73,7 @@ class Reason(enum.Enum):
     BAD_PORT = "bad-port"
     LISTING_UNKNOWN = "listing-unknown"
     NO_STICK_ON_PORT = "no-stick-on-port"
+    SERIAL_ON_SERIALLESS_ROW = "serial-on-serialless-row"
     SECOND_SERIALLESS = "second-serialless"
     UNCERTAIN_DEVICE = "uncertain-device"
 
@@ -116,6 +117,7 @@ class Precheck:
     outcome: Outcome
     reason: Reason
     ports: tuple
+    serial: str = ""         # SERIAL_ON_SERIALLESS_ROW: the sysfs serial the stick on the port reports
 
 
 @dataclass(frozen=True)
@@ -232,8 +234,10 @@ def stick_on_port(found: Scan, model, port) -> Probe:
 
 def precheck_serialless(found: Scan, model, port) -> Precheck:
     """The start pre-check of a serial-less radio row on its stored `port` (A:177-178): REFUSE when no stick
-    of the model is there or a second stick without a sysfs serial is attached, naming the ports; UNCERTAIN
-    when a device cannot be read (it may be a second stick); else PROCEED to the daemon's own check."""
+    of the model is there, when the stick there reports a sysfs serial (the row must be re-bound by that
+    serial; nothing re-binds it here), or when a second stick without a sysfs serial is attached, naming the
+    ports; UNCERTAIN when a device cannot be read (it may be a second stick); else PROCEED to the daemon's
+    own check. A serial file that is absent or unreadable is no serial reported."""
     on_port = stick_on_port(found, model, port)
     if not _port_ok(port):
         return Precheck(Outcome.UNCERTAIN, Reason.BAD_PORT, ())
@@ -241,6 +245,9 @@ def precheck_serialless(found: Scan, model, port) -> Precheck:
         return Precheck(Outcome.UNCERTAIN, Reason.LISTING_UNKNOWN, ())
     if on_port is Probe.ABSENT:
         return Precheck(Outcome.REFUSE, Reason.NO_STICK_ON_PORT, (port,))
+    here = next(d for d in found.devices if d.port == port)
+    if on_port is Probe.PRESENT and here.serial.state is Probe.PRESENT:
+        return Precheck(Outcome.REFUSE, Reason.SERIAL_ON_SERIALLESS_ROW, (port,), here.serial.value)
     judged = [(d, match(d, model)) for d in found.devices]
     serialless = tuple(d.port for d, m in judged if m is Probe.PRESENT and d.serial.state is not Probe.PRESENT)
     if len(serialless) > 1:
