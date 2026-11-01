@@ -156,7 +156,7 @@ def test_m1_a_hardware_list_that_cannot_be_stat_ed_means_no_banner(tmp_path):
     assert rd.old_config_state(resolve_paths({"LHPC_RUNTIME_ROOT": str(root)})) is rd.Tri.NO
 
 
-@pytest.mark.parametrize("data", [b"radio = " + b"[" * 1000 + b"]" * 1000 + b"\n", b'[radio]\nmode = "\xff\xfe"\n'],
+@pytest.mark.parametrize("data", [b"radio = " + b"[" * 1000 + b"]" * 1000 + b"\n", b'# \xff\xfe\n[radio]\nmode = "dual"\n'],
                          ids=["deep", "non-utf8"])
 def test_m1_an_old_config_that_cannot_be_parsed_is_unknown_not_an_exception(tmp_path, data):
     """The Q9 class for the second reader (local.toml): deep nesting and non-UTF-8 bytes are UNKNOWN."""
@@ -173,3 +173,22 @@ def test_m1_a_dangling_hardware_list_symlink_means_no_banner(tmp_path):
     _cfg(tmp_path, "local.toml", '[radio]\nmode = "dual"\n')
     (tmp_path / "config" / "radios.toml").symlink_to(tmp_path / "nowhere.toml")
     assert rd.old_config_state(_paths(tmp_path)) is rd.Tri.NO
+
+
+def test_q14_a_dangling_old_config_symlink_is_unknown_not_absent(tmp_path):
+    """Q14 (found by the inventory): a local.toml that is a symlink to nothing is present but unreadable:
+    UNKNOWN, never NO (NO is "a fresh box": a W12 banner could then be missed)."""
+    rd = _rd()
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "local.toml").symlink_to(tmp_path / "nowhere.toml")
+    assert rd.old_config_state(_paths(tmp_path)) is rd.Tri.UNKNOWN
+
+
+def test_q2_class_an_old_config_symlink_out_of_the_root_is_unknown_not_an_exception(tmp_path):
+    rd = _rd()
+    root, outside = tmp_path / "root", tmp_path / "outside"
+    (root / "config").mkdir(parents=True)
+    outside.mkdir()
+    (outside / "l.toml").write_text('[radio]\nmode = "dual"\n', encoding="utf-8")
+    (root / "config" / "local.toml").symlink_to(outside / "l.toml")
+    assert rd.old_config_state(resolve_paths({"LHPC_RUNTIME_ROOT": str(root)})) is rd.Tri.UNKNOWN

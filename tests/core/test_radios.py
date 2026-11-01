@@ -454,7 +454,8 @@ def test_q9_class_a_non_utf8_hardware_list_is_invalid_not_an_exception(tmp_path)
     rad = _radios()
     p = tmp_path / "config" / "radios.toml"
     p.parent.mkdir(parents=True)
-    p.write_bytes(b'[[radio]]\nid = "r1"\nname = "\xff\xfe"\nmodel = "loraham"\nband = "433"\n')
+    # the bytes sit in a comment: a lenient decode (errors="replace") would load this list as VALID
+    p.write_bytes(b'# \xff\xfe\n[[radio]]\nid = "r1"\nname = "A"\nmodel = "loraham"\nband = "433"\n')
     assert rad.load(_paths(tmp_path), MODELS).kind == rad.INVALID
 
 
