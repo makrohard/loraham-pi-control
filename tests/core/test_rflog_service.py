@@ -464,3 +464,30 @@ def test_the_job_selector_takes_no_other_nested_name(tmp_path):
         (tmp_path / "logs" / sub).mkdir(parents=True, exist_ok=True)
         (tmp_path / "logs" / sub / name).write_text("hidden\n")
         assert svc.log_tail("loraham-daemon", 10, job=f"{sub}/{name}") == ("", [])
+
+
+@pytest.mark.parametrize("make,state", [
+    (lambda root: (root / "logs" / "r1").mkdir(parents=True), "present"),
+    (lambda root: (root / "logs").mkdir(), "absent"),
+    (lambda root: None, "absent"),                                                    # no logs/ at all
+    (lambda root: ((root / "logs").mkdir(), (root / "logs" / "r1").write_text("x")), "unknown"),   # a file
+    (lambda root: ((root / "logs").mkdir(), (root / "real").mkdir(),
+                   (root / "logs" / "r1").symlink_to(root / "real", target_is_directory=True)), "unknown"),
+    (lambda root: ((root / "logs").mkdir(), (root / "logs" / "r1").symlink_to(root / "gone")), "unknown"),
+    (lambda root: (root / "logs").write_text("x"), "unknown"),                        # logs/ is a file: ENOTDIR
+])
+def test_a_radio_log_directory_is_present_absent_or_unknown(tmp_path, make, state):
+    # B4-D34 n9: absent, unreadable and wrong are three answers; only PRESENT is listed or read.
+    make(tmp_path)
+    paths = Paths(runtime_root=tmp_path)
+    assert rflog.radio_dir_state(paths, "r1/rf-daemon.log") == state
+    assert rflog.radio_dir_ok(paths, "r1/rf-daemon.log") is (state == "present")
+    assert rflog.radio_dir_state(paths, "rf-kiss.log") == "present"                   # no radio level to check
+
+
+def test_an_outside_logs_tree_is_unknown(tmp_path):
+    root, outside = tmp_path / "rt", tmp_path / "outside"
+    (outside / "r1").mkdir(parents=True)
+    root.mkdir()
+    (root / "logs").symlink_to(outside, target_is_directory=True)
+    assert rflog.radio_dir_state(Paths(runtime_root=root), "r1/rf-daemon.log") == "unknown"

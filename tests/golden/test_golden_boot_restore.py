@@ -16,8 +16,8 @@ import pytest
 pytestmark = pytest.mark.needs_session
 
 EVIDENCE = "state/owned/loraham-kiss-tnc__433__<pid>__<nonce>.json"
-START_LOCKS = ["config-stable", "lock:source-txn-index", "lock:claim.loraham.daemon-socket.433",
-               "lock:claim.loraham.radio.433", "lock:claim.tcp.port.8001", "lock:lifecycle.kiss",
+START_LOCKS = ["config-stable", "lock:source-txn-index", "lock:claim.loraham.daemon-socket.r1",
+               "lock:claim.loraham.radio.r1", "lock:claim.tcp.port.8001", "lock:lifecycle.kiss",
                "lock:source.src/loraham-daemon", "lock:source.src/loraham-kiss-tnc",
                "recheck:start", "recheck:identity"]
 DRIVER = ["admission", "lock:controller-task-admission"]

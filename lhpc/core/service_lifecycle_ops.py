@@ -69,6 +69,10 @@ def _daemon_presence(cmdlines) -> str:
 
 class LifecycleOpsMixin:
 
+    def _radio_key_of(self, band: str) -> str:
+        """A radio claim's name for `band` in a message (W4-4, B4-D39): its radio's id, or the radios sharing it."""
+        return radio_start.radio_name(self._paths, band)
+
     def _band_limited_running(self, snap, conservative: bool = False):
         """(limited_fn, running_components, running_ids) with each running component's
         `loraham.radio.<band>` claims restricted to the band(s) it ACTUALLY uses — the daemon to
@@ -119,7 +123,7 @@ class LifecycleOpsMixin:
         the band each actually uses). Replaces the raw, band-blind `snap.conflicts` for display."""
         snap = snap if snap is not None else self.build_snapshot()
         _, running, running_ids = self._band_limited_running(snap)
-        return [c for c in resources_mod.interpret_conflicts(running, running_ids) if c.observed]
+        return [c for c in resources_mod.interpret_conflicts(running, running_ids, self._radio_key_of) if c.observed]
 
     def observed_conflicts(self, snap=None):
         """PUBLIC read-only band-aware observed resource conflicts — the single source of truth for
@@ -136,7 +140,7 @@ class LifecycleOpsMixin:
         # multi-band owner must be treated as occupying every band it could be on.
         limited, running, running_ids = self._band_limited_running(snap, conservative=True)
         target = limited(comp, {band} if band else set())
-        conflicts = resources_mod.interpret_conflicts([*running, target], running_ids | {comp.id})
+        conflicts = resources_mod.interpret_conflicts([*running, target], running_ids | {comp.id}, self._radio_key_of)
         # Advisory conflicts (e.g. the Companion client slot) are shown but never block a start —
         # arbitration is at runtime (the WebUI yields to a running CLI via a lock), so admission
         # must let the start through. observed_conflicts() still reports them for the UI banner.
@@ -371,7 +375,7 @@ class LifecycleOpsMixin:
                         and not r.key.startswith("loraham.radio.")):
                     claims[r.key] = c.id
         for b in needed_bands:
-            claims.setdefault(f"loraham.radio.{b}", target)
+            claims.setdefault(resources_mod.radio_claim(b), target)
         # The GPS receiver is a DYNAMIC claim (which device, if any, comes from the resolved
         # plan — not from a static manifest resource). It must be in the CONFLICT set and not
         # only the lock set: the lock is released when the start completes, so locks alone let
@@ -392,8 +396,9 @@ class LifecycleOpsMixin:
                 seen.add(key)
                 # The radio band a held `loraham.radio.<band>` is on, so a daemon holder can be
                 # stopped (and named) per band; "" for any other resource.
-                rband = resource.rsplit(".", 1)[-1] if resource.startswith("loraham.radio.") else ""
-                blockers.append({"resource": resource, "holder": holder,
+                rband = resources_mod.radio_band(resource) if resource.startswith("loraham.radio.") else ""
+                name = resources_mod.claim_name(resource, self._radio_key_of)   # W4-2: the radio by its id
+                blockers.append({"resource": name, "holder": holder,
                                  "holder_stack": stack_id, "band": rband})
 
         for ss in snap.stacks:
@@ -430,9 +435,9 @@ class LifecycleOpsMixin:
                     if r.advisory or r.mode not in (ResourceMode.EXCLUSIVE, ResourceMode.PROVIDER):
                         continue
                     if r.key.startswith("loraham.radio."):
-                        rb = r.key.rsplit(".", 1)[-1]
-                        if rb in active and r.key in claims:
-                            add(sid, c.id, r.key)
+                        rb = resources_mod.radio_band(r.key)
+                        if rb in active and resources_mod.radio_claim(rb) in claims:
+                            add(sid, c.id, resources_mod.radio_claim(rb))
                     elif r.key in claims:
                         add(sid, c.id, r.key)
                 # same-frequency rule: another APP stack competing for a band we need. Exclude the
@@ -593,7 +598,7 @@ class LifecycleOpsMixin:
         runtime_dir = str(self._paths.runtime_root / "state" / "loraham")
         try:
             with self._keys_guard("hardware-probe", "daemon",
-                                  ["lifecycle.daemon", f"claim.loraham.radio.{band}"]):
+                                  ["lifecycle.daemon", "claim." + radio_start.claim_key(self._paths, band)]):
                 owner = self._direct_radio_owners({band}).get(band)
                 if owner:
                     return hwprobe.ProbeResult(
@@ -1988,7 +1993,7 @@ class LifecycleOpsMixin:
                     active = {c.band} if c.band else set()
                 for r in c.resources:
                     if r.mode == ResourceMode.EXCLUSIVE and r.key.startswith("loraham.radio."):
-                        rb = r.key.rsplit(".", 1)[-1]
+                        rb = resources_mod.radio_band(r.key)
                         if rb in want and rb in active and rb not in owners:
                             owners[rb] = c.id
         return owners
@@ -3167,7 +3172,7 @@ class LifecycleOpsMixin:
                 (running if is_up else startable).append(entry)
             out.append({
                 "band": band,
-                "stray": False, "shared_with": [],
+                "stray": False, "shared_with": [], "radios": radio_start.band_radios(self, band),   # W6-3
                 "daemon": {
                     "reachable": dv.reachable,     # CONF socket answered (daemon live)
                     # OCCUPIED: reachable — the daemon may physically hold the radio/SPI even
@@ -3223,7 +3228,7 @@ class LifecycleOpsMixin:
             shared_with = sorted(b for b, pids in active_pids.items()
                                  if pids & set(self._daemon_pids_for_band(band)))
             out.append({
-                "band": band, "stray": True, "shared_with": shared_with,
+                "band": band, "stray": True, "shared_with": shared_with, "radios": [],
                 "daemon": {
                     "reachable": dv.reachable, "occupied": dv.reachable, "ready": dv.ready,
                     "usable": dv.ready, "radio_state": dv.radio_state or None,

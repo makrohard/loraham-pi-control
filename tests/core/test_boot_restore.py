@@ -1045,7 +1045,7 @@ def test_daemon_all_active_start_locks_every_band(tmp_path, monkeypatch, set_cal
     assert set(svc.active_bands()) == {"433", "868"}      # precondition: dual-band hardware
     assert svc._operation_bands("daemon", "", "", "start") == {"433", "868"}
     keys = svc._operation_resource_keys("daemon", "", "", "start")
-    assert {"loraham.radio.433", "loraham.radio.868"} <= set(keys)
+    assert {"loraham.radio.r1", "loraham.radio.r2"} <= set(keys)       # stage L5 (W4-4): by the radios' ids
 
 
 def test_start_feed_clear_scoped_to_operation_bands(tmp_path, monkeypatch, set_call):

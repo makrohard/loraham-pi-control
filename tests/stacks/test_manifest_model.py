@@ -10,6 +10,7 @@ import contextlib
 
 from lhpc.core.manifest import load_manifest
 from lhpc.core.model import ResourceMode
+from lhpc.core.resources import radio_claim
 
 import repo_paths
 
@@ -29,7 +30,8 @@ def test_single_daemon_with_radio_run_param():
     assert not any(p.name == "debug" for p in d.run_params)
     # Provides both band sockets/radios.
     provided = {r.key for r in d.resources if r.mode is ResourceMode.PROVIDER}
-    assert {"loraham.daemon-socket.433", "loraham.daemon-socket.868"} <= provided
+    sock = "loraham.daemon-socket."
+    assert {radio_claim("433", sock), radio_claim("868", sock)} <= provided
 
 
 def test_daemon_spi_is_cooperative():
@@ -87,7 +89,7 @@ def test_provider_consumer_socket_roles():
     comps = _index(load_manifest())
     # daemon provides 433 socket; bridge consumes it.
     bridge = comps["meshcom-bridge"]
-    consumed = [r for r in bridge.resources if r.key == "loraham.daemon-socket.433"]
+    consumed = [r for r in bridge.resources if r.key == radio_claim("433", "loraham.daemon-socket.")]
     assert consumed and consumed[0].mode is ResourceMode.CONSUMER
 
 
@@ -112,7 +114,7 @@ def test_meshtastic_is_rootless_multiband():
     assert not m.units                          # no systemd — lhpc runs it directly
     assert m.run_argv[0].endswith("/meshtasticd") and "-c" in m.run_argv and "-d" in m.run_argv   # rootless
     keys = {r.key for r in m.resources}
-    assert {"loraham.radio.433", "loraham.radio.868"} <= keys    # conflicts with daemon
+    assert {radio_claim("433"), radio_claim("868")} <= keys    # conflicts with daemon
     # per-band Lora pins come from band_defaults on the config-file params
     fp = {p.name: p for p in m.config_file.params}
     assert dict(fp["cs"].band_defaults) == {"433": "8", "868": "7"}
@@ -151,7 +153,7 @@ def test_meshcore_daemon_backed_does_not_claim_direct_spi():
     assert "loraham-daemon" in node.depends_on       # auto-starts the daemon on 868
     # Daemon-backed: consumes the 868 socket, requires a profile, claims NO SPI.
     keys = {r.key: r.mode for r in node.resources}
-    assert keys["loraham.daemon-socket.868"] is ResourceMode.CONSUMER
+    assert keys[radio_claim("868", "loraham.daemon-socket.")] is ResourceMode.CONSUMER
     assert "spi.bus.0" not in keys
 
 

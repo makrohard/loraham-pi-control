@@ -35,6 +35,7 @@ from .probes.source import SourceProbe, probe_source
 _NA_SOURCE = SourceProbe(state=SourceState.NOT_APPLICABLE)
 SOURCE_WORKERS = 4      # checkouts probed at a time when a snapshot misses the source cache
 from . import meshcore_mode as _meshcore_mode
+from . import radio_start as _radio_start
 from . import resources as resources_mod
 from .probes.systemd import UnitState, probe_unit
 from .probes.unixsock import probe_daemon_status, probe_socket
@@ -166,7 +167,8 @@ class StatusProber:
 
         running = {cid for cid, s in index.items()
                    if s.run_state in (RunState.RUNNING, RunState.DEGRADED)}
-        snap.conflicts = resources_mod.interpret_conflicts(all_components, running)
+        snap.conflicts = resources_mod.interpret_conflicts(
+            all_components, running, lambda b: _radio_start.radio_name(self._paths, b))   # W4-4: radios by id
         return snap
 
     # -- single component --------------------------------------------------
@@ -359,7 +361,7 @@ class StatusProber:
     ) -> tuple[list[EndpointObservation], bool, bool, bool]:
         observations: list[EndpointObservation] = []
         expected_present: list[bool] = []
-        for spec in _meshcore_mode.expected_endpoints(comp, self._meshcore_mode):
+        for spec in _radio_start.radio_endpoints(self._paths, _meshcore_mode.expected_endpoints(comp, self._meshcore_mode)):
             obs = EndpointObservation(spec=spec)
             if spec.kind == "tcp":
                 # Use the ONE host/family-aware matcher (not a port-only check): a listener

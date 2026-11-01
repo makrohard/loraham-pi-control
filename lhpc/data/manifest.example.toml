@@ -286,16 +286,10 @@ main = "loraham-daemon"
     # bands are live depends on the chosen --radio). Readiness is used by the monitor.
     [[stack.component.endpoint]]
     kind = "unix"
-    address = "/tmp/loraconf433.sock"
+    address = "/tmp/loraconf-{rid}.sock"
     role = "data"
     readiness = "daemon-status"
-    description = "433 CONF/status socket."
-    [[stack.component.endpoint]]
-    kind = "unix"
-    address = "/tmp/loraconf868.sock"
-    role = "data"
-    readiness = "daemon-status"
-    description = "868 CONF/status socket."
+    description = "Each enabled radio's CONF/status socket (stage L5: one per row of the hardware list)."
 
     [[stack.component.resource]]
     key = "spi.bus.0"
@@ -304,20 +298,20 @@ main = "loraham-daemon"
     claims_if = "spi"
     note = "Shared SPI bus; serialized via spi0.lock in LORAHAM_RUNTIME_DIR, and with kernel chip selects also by the kernel. Different modules use different CS."
     [[stack.component.resource]]
-    key = "loraham.radio.433"
+    key = "loraham.radio.{radio:433}"
     kind = "radio-band"
     mode = "provider"
     [[stack.component.resource]]
-    key = "loraham.radio.868"
+    key = "loraham.radio.{radio:868}"
     kind = "radio-band"
     mode = "provider"
     note = "Only claimed when --radio is 868; conflicts with meshtasticd on 868."
     [[stack.component.resource]]
-    key = "loraham.daemon-socket.433"
+    key = "loraham.daemon-socket.{radio:433}"
     kind = "daemon-socket"
     mode = "provider"
     [[stack.component.resource]]
-    key = "loraham.daemon-socket.868"
+    key = "loraham.daemon-socket.{radio:868}"
     kind = "daemon-socket"
     mode = "provider"
 
@@ -947,7 +941,7 @@ main = "loraham-kiss-tnc"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
-    key = "loraham.daemon-socket.433"
+    key = "loraham.daemon-socket.{radio:433}"
     kind = "daemon-socket"
     mode = "consumer"
 
@@ -1682,12 +1676,12 @@ main = "meshtastic"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
-    key = "loraham.radio.868"
+    key = "loraham.radio.{radio:868}"
     kind = "radio-band"
     mode = "exclusive"
     note = "Owns the RF95 -> conflicts with the LoRaHAM daemon (shared SPI radio)."
     [[stack.component.resource]]
-    key = "loraham.radio.433"
+    key = "loraham.radio.{radio:433}"
     kind = "radio-band"
     mode = "exclusive"
     [[stack.component.resource]]
@@ -1926,7 +1920,7 @@ main = "meshcom-qemu"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
-    key = "loraham.daemon-socket.433"
+    key = "loraham.daemon-socket.{radio:433}"
     kind = "daemon-socket"
     mode = "consumer"
     [[stack.component.resource]]
@@ -2789,7 +2783,7 @@ main = "meshcore-node"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
-    key = "loraham.daemon-socket.868"
+    key = "loraham.daemon-socket.{radio:868}"
     kind = "daemon-socket"
     mode = "consumer"
     [[stack.component.resource]]
@@ -3174,12 +3168,12 @@ allow_param = "rns_allow"
 auth = "none"
 
 [[stack.component.resource]]
-key = "loraham.radio.868"
+key = "loraham.radio.{radio:868}"
 kind = "radio-band"
 mode = "exclusive"
 note = "Owns the radio for this band — conflicts with the daemon and meshtastic on 868."
 [[stack.component.resource]]
-key = "loraham.radio.433"
+key = "loraham.radio.{radio:433}"
 kind = "radio-band"
 mode = "exclusive"
 [[stack.component.resource]]

@@ -185,10 +185,11 @@ class AdmissionOpsMixin:
         # (meshtastic, reticulum) drives the hardware itself and never touches one — adding the
         # key for it would invent a conflict with every daemon client on the same band.
         serves_daemon = any(c.id == self.DAEMON_ID for _, c in order)
+        from . import radio_start  # stage L5 (W4-4): each band's radio by its id
         for b in self._operation_bands(target, band, radio, op):
-            keys.add(f"loraham.radio.{b}")
+            keys.add(radio_start.claim_key(self._paths, b))
             if serves_daemon:
-                keys.add(f"loraham.daemon-socket.{b}")
+                keys.add(radio_start.claim_key(self._paths, b, "loraham.daemon-socket."))
         # The GPS receiver is a DYNAMIC exclusive claim: which device (if any) a stack opens
         # comes from the resolved global plan, not from a static manifest resource. Without
         # this, two stacks configured for direct NMEA would both open the same receiver — two

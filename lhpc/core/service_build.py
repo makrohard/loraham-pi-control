@@ -6,7 +6,7 @@ from __future__ import annotations
 import contextlib
 from pathlib import Path
 
-from . import web_client
+from . import radio_start, web_client
 from .lifecycle import GUI_MISSING_HINT
 from .paths import PathContainmentError
 from .service_base import (
@@ -493,7 +493,7 @@ class BuildOpsMixin:
         # An app stack's TX test also holds each band's `claim.loraham.radio.<band>` (lock order #2,
         # after admission) and re-checks under it: a start taking one of those bands after the check
         # above waits for the frames or is refused, never transmitted over.
-        claims = [f"claim.loraham.radio.{b}" for b in bands] if app_target else []
+        claims = ["claim." + radio_start.claim_key(self._paths, b) for b in bands] if app_target else []   # W4-4
         try:
             with self._admission_guard("tx-test", target), self._keys_guard("tx-test", target, claims):
                 if app_target and (refused := self._tx_band_conflict(target, bands)):

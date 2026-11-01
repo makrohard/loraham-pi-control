@@ -106,17 +106,37 @@ def by_job(job: str) -> tuple[Entry, str] | None:
     return None
 
 
-def radio_dir_ok(paths, job: str) -> bool:
-    """A radio job's directory `logs/<rid>` is a real directory, never a symlink (the viewer's leaf read is
-    O_NOFOLLOW; this covers the level above it). True for every other job."""
+PRESENT, ABSENT, UNKNOWN = "present", "absent", "unknown"
+
+
+def radio_dir_state(paths, job: str) -> str:
+    """B4-D34 n9: a radio job's directory `logs/<rid>` is PRESENT (a real directory, never a symlink: the
+    viewer's leaf read is O_NOFOLLOW, this covers the level above it), ABSENT (nothing there), or UNKNOWN (a
+    symlink, a file, a containment refusal or any other error — never read as absent). PRESENT for every other
+    job, which has no such level."""
+    import os
+    import stat
     m = RADIO_JOB.fullmatch(job) if isinstance(job, str) else None
     if not m:
-        return True
+        return PRESENT
     try:
-        d = paths.under("logs", m.group(1))
-        return not d.is_symlink() and d.is_dir()
-    except Exception:                                    # a containment refusal or an OSError: not ok
-        return False
+        st = os.lstat(paths.runtime_root / "logs" / m.group(1))
+    except FileNotFoundError:
+        return ABSENT
+    except Exception:                                    # unreadable (EACCES, ELOOP, ENOTDIR above, …)
+        return UNKNOWN
+    if not stat.S_ISDIR(st.st_mode):
+        return UNKNOWN                                   # a symlink or a file is never this radio's directory
+    try:
+        paths.under("logs", m.group(1))                  # and it stays inside the runtime root
+    except Exception:
+        return UNKNOWN
+    return PRESENT
+
+
+def radio_dir_ok(paths, job: str) -> bool:
+    """Only a PRESENT directory is listed or read (radio_dir_state)."""
+    return radio_dir_state(paths, job) == PRESENT
 
 
 def resolve_job(surface: str, band: str = "") -> tuple[Entry, str]:

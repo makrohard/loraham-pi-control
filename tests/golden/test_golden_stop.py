@@ -13,7 +13,7 @@ from lhpc.core.lifecycle import Lifecycle
 
 pytestmark = pytest.mark.needs_session
 
-STOP_LOCKS = ["lock:claim.loraham.daemon-socket.433", "lock:claim.loraham.radio.433",
+STOP_LOCKS = ["lock:claim.loraham.daemon-socket.r1", "lock:claim.loraham.radio.r1",
               "lock:claim.tcp.port.8001", "lock:lifecycle.kiss"]
 SIGNAL = ["mutate:signal:loraham-kiss-serial", "mutate:signal:loraham-kiss-tnc"]
 RELEASE_DAEMON = ["lock:claim.audio.default", "lock:claim.tcp.port.12323",
@@ -90,8 +90,8 @@ def test_unowned_process_is_manual_required(kiss_box, run_op):
         "outcomes": [("loraham-kiss-serial", "already_stopped"),
                      ("loraham-kiss-tnc", "manual_required")]}
     assert run.phases == [
-        "lock:claim.loraham.daemon-socket.433", "lock:claim.loraham.daemon-socket.868",
-        "lock:claim.loraham.radio.433", "lock:claim.loraham.radio.868",
+        "lock:claim.loraham.daemon-socket.r1", "lock:claim.loraham.daemon-socket.r2",
+        "lock:claim.loraham.radio.r1", "lock:claim.loraham.radio.r2",
         "lock:claim.tcp.port.8001", "lock:lifecycle.kiss"] + SIGNAL
     assert run.files == {"added": [], "removed": [], "changed": []}
 

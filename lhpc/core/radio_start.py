@@ -127,6 +127,49 @@ def verify_identity(svc, rid: str) -> str:
     return radio_daemon.check_bound(status, radio, radio_models.load()[radio.model]) or ""
 
 
+def radio_name(paths, band: str) -> str:
+    """A band's radio as a message names it (W4-2): its one enabled radio's id; with two or more, the band and
+    every radio sharing its key (B4-D39: "868 (radios r1, r2)"); else the band."""
+    key = key_for(paths, band)
+    rids = [r.id for r in radios.load(paths).radios if r.enabled and r.band == band] if key == band else []
+    return f"{band} (radios {', '.join(rids)})" if len(rids) > 1 else key
+
+
+def claim_key(paths, band: str, prefix: str = "loraham.radio.") -> str:
+    """The radio claim key of `band` by name (W4-4): its one enabled radio's id, else the band (key_for)."""
+    return f"{prefix}{key_for(paths, band)}"
+
+
+def chip_family(svc, band: str):
+    """W5-2: the chip family of `band`'s one enabled radio, from its row's model variant (the preset its daemon
+    runs with); None when the hardware list does not resolve the band to one radio (0.13.x: the band's preset)."""
+    t = band_rid(svc, band)
+    row = next((r for r in radios.load(svc._paths).radios if r.id == t.rid), None) if t.outcome == "proceed" else None
+    model = radio_models.load().get(row.model) if row else None
+    v = radios.variant(row, model) if model else None
+    return None if row is None else cfgmod.hw_preset_family(v.preset if v else "")
+
+
+def band_radios(svc, band: str) -> list:
+    """W6-2/W6-3: every enabled radio of `band` in list order, each with its own daemon's view (its rid's CONF
+    socket), so two radios of one band are two entries, never one band view; [] without a valid list."""
+    from . import daemon_control
+    out = []
+    for r in (r for r in radios.load(svc._paths).radios if r.enabled and r.band == band):
+        v = daemon_control.read_view(svc._system, r.id)
+        out.append({"rid": r.id, "name": r.name, "model": r.model, "reachable": v.reachable, "ready": v.ready})
+    return out
+
+
+def radio_endpoints(paths, specs) -> list:
+    """Each `{rid}` endpoint once per enabled radio of the hardware list (W6-2: two radios of one band are two
+    entries); none without a valid list. Every other endpoint passes through unchanged."""
+    import dataclasses
+    rids = [r.id for r in radios.load(paths).radios if r.enabled]
+    return [dataclasses.replace(s, address=s.address.replace("{rid}", rid))
+            for s in specs for rid in (rids if "{rid}" in s.address else ("",))]
+
+
 def client_instance(svc, comp, band: str) -> tuple:
     """(instance, refusal) for a component's start (W3, stage L5): a daemon client — a run param whose value
     template names `{rid}` — runs as the band's one radio's instance (W1-3/4/5); a refusal when the band has no

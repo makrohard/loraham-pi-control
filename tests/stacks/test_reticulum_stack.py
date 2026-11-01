@@ -21,6 +21,7 @@ from lhpc.core import reticulum_interfaces as ri
 from lhpc.core.config import update_ini
 from lhpc.core.manifest import ManifestError, load_manifest
 from lhpc.core.model import ResourceMode
+from lhpc.core.resources import radio_claim
 
 
 def _stack():
@@ -53,8 +54,8 @@ def test_clients_depend_on_the_node_so_they_cannot_own_the_radio():
 
 def test_radio_is_exclusive_but_the_spi_bus_is_cooperative():
     res = {r.key: r.mode for r in _comp("rns").resources}
-    assert res["loraham.radio.868"] is ResourceMode.EXCLUSIVE
-    assert res["loraham.radio.433"] is ResourceMode.EXCLUSIVE
+    assert res[radio_claim("868")] is ResourceMode.EXCLUSIVE
+    assert res[radio_claim("433")] is ResourceMode.EXCLUSIVE
     # Cooperative is only honest because the driver takes the daemon's spi0.lock.
     assert res["spi.bus.0"] is ResourceMode.COOPERATIVE
 

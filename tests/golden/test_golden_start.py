@@ -18,7 +18,7 @@ pytestmark = pytest.mark.needs_session
 
 KISS_LOCKS = [
     "admission", "lock:controller-task-admission", "config-stable", "lock:source-txn-index",
-    "lock:claim.loraham.daemon-socket.433", "lock:claim.loraham.radio.433",
+    "lock:claim.loraham.daemon-socket.r1", "lock:claim.loraham.radio.r1",
     "lock:claim.tcp.port.8001", "lock:lifecycle.kiss", "lock:source.src/loraham-daemon",
     "lock:source.src/loraham-kiss-tnc",
 ]
@@ -81,7 +81,7 @@ def test_refused_missing_callsign(kiss_box, run_op):
     assert run.res.data["enforce_fields"]
     assert run.phases == [
         "admission", "lock:controller-task-admission", "config-stable", "lock:source-txn-index",
-        "lock:claim.loraham.daemon-socket.433", "lock:claim.loraham.radio.433",
+        "lock:claim.loraham.daemon-socket.r1", "lock:claim.loraham.radio.r1",
         "lock:lifecycle.chat", "lock:source.src/loraham-daemon", "lock:source.src/LoRaHAM_Daemon",
         "recheck:start", "recheck:identity"]
     assert run.files == NOTHING
@@ -129,7 +129,7 @@ def test_refused_by_band_owner(kiss_box, run_op):
     box = kiss_box()
     box.fake.cmdlines_data[300] = ["meshtasticd"]
     plan = run_op(box.root, lambda: box.svc.start("kiss"))
-    assert plan.fields == {**PLAN, "heads": PLAN["heads"] + ["[conflict] loraham.radio.433",
+    assert plan.fields == {**PLAN, "heads": PLAN["heads"] + ["[conflict] loraham.radio.r1",
                                                              "[conflict] radio"]}
     assert [b["holder_stack"] for b in plan.res.data["blockers"]] == ["meshtastic", "meshtastic"]
     run = run_op(box.root, lambda: box.svc.start("kiss", apply=True))

@@ -16,8 +16,8 @@ from lhpc.core.service_base import ActionResult
 pytestmark = pytest.mark.needs_session
 
 LOCKS = ["admission", "lock:controller-task-admission", "config-stable", "recheck:identity",
-         "lock:source-txn-index", "lock:claim.loraham.daemon-socket.433",
-         "lock:claim.loraham.radio.433", "lock:claim.tcp.port.8001", "lock:lifecycle.kiss",
+         "lock:source-txn-index", "lock:claim.loraham.daemon-socket.r1",
+         "lock:claim.loraham.radio.r1", "lock:claim.tcp.port.8001", "lock:lifecycle.kiss",
          "lock:source.src/loraham-daemon", "lock:source.src/loraham-kiss-tnc"]
 STOP_LEG = ["mutate:signal:loraham-kiss-serial", "mutate:signal:loraham-kiss-tnc",
             "lock:claim.audio.default", "lock:claim.tcp.port.12323", "lock:claim.tcp.port.18083",

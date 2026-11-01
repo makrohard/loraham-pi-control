@@ -229,13 +229,13 @@ class DaemonParamsMixin:
 
     def chip_family_for_band(self, band: str) -> str:
         """Chip family of the board serving `band` ("sx127x" / "sx1262"), or "" when no hardware
-        is configured or the preset is unknown.
-
+        is configured or the preset is unknown; at stage L5 the band's radio row's model (W5-2).
         The accepted POWER range depends on it: daemon 1.0.0 enforces 2..17 on SX127x (below 2
         RadioLib drives RFO instead of PA_BOOST, and 18..20 are refused) against 0..20 on SX1262.
         "" deliberately narrows nothing — see `daemon_control.int_range`."""
         from . import config as cfgmod
-        return cfgmod.hw_preset_family(self.hw_preset_for_band(band))
+        fam = radio_start.chip_family(self, band)
+        return fam if fam is not None else cfgmod.hw_preset_family(self.hw_preset_for_band(band))
 
     def _daemon_feed_source(self, band: str) -> Path | None:
         """The SINGLE feed source log for a band, or None: the per-band log
@@ -495,7 +495,7 @@ class DaemonParamsMixin:
         if not (is_daemon or self.stack_running(sid)):
             return ActionResult(False, f"Apply live is only available while {target} is running")
         b = self._effective_daemon_band(target, band)
-        keys = [f"lifecycle.{sid}", f"claim.loraham.radio.{b}"]   # serialize vs start/stop on band
+        keys = [f"lifecycle.{sid}", "claim." + radio_start.claim_key(self._paths, b)]   # vs start/stop on its radio
         try:
             with self._keys_guard("apply", target, keys):        # re-entrant per thread
                 # Re-checked under the band's claim, held until the last SET: a start that takes the
