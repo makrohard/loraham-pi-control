@@ -221,3 +221,30 @@ def test_a_marker_that_cannot_be_read_shows_the_generic_banner(tmp_path, web):
     assert proxy_rerender.pending(paths) == ""
     page = web(paths=paths).get("/").get_data(as_text=True)
     assert 'id="ws-render-notice">Apply needed: the update has not re-rendered the stack proxies yet' in " ".join(page.split())
+
+
+MISSING = "deployed nginx config is missing — Apply the webserver configuration"
+
+
+def test_a_missing_deployed_config_keeps_the_marker_while_nginx_still_runs(tmp_path, monkeypatch):
+    """B3-D22: the deployed nginx config is gone but nginx still runs (its pid file stands): a running nginx can still
+    serve the old config, so the update keeps the marker with an owed Apply, runs no Apply, and still reports."""
+    svc, paths, _previous, _fake = _box(tmp_path, monkeypatch, nginx_t=CR(0, "", "ok"))
+    paths.under(*webserver.NGINX_CONF).unlink()
+    assert paths.under(*webserver.NGINX_PID).exists()           # nginx still running
+    res = svc().self_update_apply_operator()
+    assert res.data.get("update_applied"), res.summary
+    assert proxy_rerender.pending(paths) == MISSING
+    assert not paths.under(*webserver.NGINX_CONF).exists()      # no Apply ran
+
+
+def test_the_hidden_verb_keeps_the_marker_when_the_deployed_config_is_missing(tmp_path, monkeypatch, capsys):
+    """B3-D22, the new interpreter's half (`reconcile`, through the hidden verb): a missing deployed config keeps
+    the marker with an owed Apply and exits 1."""
+    from lhpc.adapters.cli.main import main
+    _svc, paths, _previous, _fake = _box(tmp_path, monkeypatch, nginx_t=CR(0, "", "ok"))
+    paths.under(*webserver.NGINX_CONF).unlink()
+    assert proxy_rerender.mark(paths) == ""
+    assert main(["_webserver-rerender", "--root", str(tmp_path)]) == 1
+    assert proxy_rerender.pending(paths) == MISSING
+    assert capsys.readouterr().out.strip().endswith(MISSING)

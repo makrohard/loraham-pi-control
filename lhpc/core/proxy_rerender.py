@@ -74,6 +74,10 @@ def _keep(paths: Paths, why: str) -> tuple[bool, str]:
     return False, why
 
 
+# A running nginx can still serve the old config after its file is gone: owed, never cleared (B3-D22).
+_MISSING = "deployed nginx config is missing — Apply the webserver configuration"
+
+
 def _unreadable(exc: Exception) -> str:
     return f"the deployed nginx config could not be read ({type(exc).__name__}) — Apply the webserver configuration"
 
@@ -99,8 +103,7 @@ def reconcile(svc) -> tuple[bool, str]:
     except (OSError, PathContainmentError) as exc:
         return _keep(paths, _unreadable(exc))
     if deployed is None:
-        clear(paths)                                    # nothing deployed: the first Apply renders fresh
-        return True, "no deployed nginx config"
+        return _keep(paths, _MISSING)
     fresh = _ws.render_nginx_config(paths, svc.config().webserver, svc._stack_web_proxies())
     if fresh == deployed:
         clear(paths)
@@ -141,8 +144,7 @@ def after_update(paths: Paths) -> tuple[bool, str]:
     except (OSError, PathContainmentError) as exc:
         return _keep(paths, _unreadable(exc))
     if deployed is None:
-        clear(paths)
-        return True, "no deployed nginx config"
+        return _keep(paths, _MISSING)
     argv = [_python(paths), "-m", "lhpc", "_webserver-rerender", "--root", str(paths.runtime_root)]
     try:
         run = subprocess.run(argv, capture_output=True, text=True, timeout=_TIMEOUT_S, check=False)
