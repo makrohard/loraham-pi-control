@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from . import (
+    commands,
     power,
     provenance,
     restart_required,
@@ -2630,10 +2631,10 @@ class MaintenanceOpsMixin:
                             if c.config_file and c.config_file.path.startswith(gen_prefix)
                             and "/" not in c.config_file.path[len(gen_prefix):]})
         # The links a component's pre_steps publish there (voice's launcher links).
-        link_files = sorted({st["dst"][len(gen_prefix):] for c in stack.components
-                             for st in c.pre_steps if st.get("kind") == "symlink"
-                             and str(st.get("dst", "")).startswith(gen_prefix)
-                             and "/" not in st["dst"][len(gen_prefix):]})
+        link_dsts = [commands.SLOT0.subst(str(st.get("dst", ""))) for c in stack.components   # slot 0's names
+                     for st in c.pre_steps if st.get("kind") == "symlink"]
+        link_files = sorted({d[len(gen_prefix):] for d in link_dsts
+                             if d.startswith(gen_prefix) and "/" not in d[len(gen_prefix):]})
         log_prefixes = tuple({f"install-{sid}"} | {f"{op}-{cid}" for op in ("build", "test",
                              "start", "post") for cid in comp_ids}
                              | {f"web-{op}-{t}" for op in ("start", "restart") for t in comp_ids | {sid}})

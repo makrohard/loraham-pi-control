@@ -342,6 +342,8 @@ class FileParam:
                                  # CONTROLLER-MANAGED secret (vs secret_ref's operator-authored
                                  # secrets.toml). Read at write time only; same invariants as
                                  # secret_ref (hidden, no default, file mode 0600).
+    # The manifest's default when it carries instance tokens; `default` is its slot-0 value. "" = none.
+    default_template: str = ""
 
 
 @dataclass(frozen=True)
@@ -361,6 +363,8 @@ class FileConfig:
     base: str = ""               # base file to update ({runtime}/…, {asset}/…, or relative to the source dir — never absolute)
     apply_cmd: str = ""          # copyable command to apply the generated file ({path})
     params: tuple[FileParam, ...] = ()
+    # The manifest's path when it carries instance tokens; `path` is its slot-0 value. "" = none.
+    path_template: str = ""
 
 
 
@@ -452,6 +456,7 @@ class Component:
     # the controller's safe reader (containment, no-follow, 0600 posture); it must never reach
     # logs, flashes, task markers, ActionResult text, status output or JSON APIs.
     ui_password_file: str = ""
+    ui_password_file_template: str = ""   # with instance tokens; `ui_password_file` is its slot-0 value. "" = none
     ui_password_note: str = ""    # who owns that password and how to change it (shown as-is)
     log_paths: tuple[str, ...] = ()
     start_order: int | None = None

@@ -67,7 +67,8 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             name=p["name"], key=p.get("key", p["name"]), section=p.get("section", ""),
             kind=p.get("kind", "str"),
             choices=tuple(str(c) for c in p.get("choices", [])),
-            default=str(p.get("default", "")), label=p.get("label", ""),
+            default=_slot0(p.get("default", ""))[0], default_template=_slot0(p.get("default", ""))[1],
+            label=p.get("label", ""),
             advanced=p.get("advanced", False), apply_mode=p.get("apply_mode", "restart"),
             min=p.get("min"), max=p.get("max"),
             band_defaults=tuple((str(k), str(v)) for k, v in p.get("band_defaults", {}).items()),
@@ -146,7 +147,8 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
         if mode not in _SECRET_CONFIG_MODES:
             raise ManifestError(f"config_file carrying {which} param {prm.name!r} must be "
                                 f"owner-only (0600 or 0400), got {mode:#o}")
-    return FileConfig(path=path, fmt=fmt, mode=mode,
+    path, path_t = _slot0(path)
+    return FileConfig(path=path, path_template=path_t, fmt=fmt, mode=mode,
                       base=base, apply_cmd=raw.get("apply_cmd", ""),
                       params=params)
 
@@ -844,7 +846,8 @@ def _parse_component(raw: dict) -> Component:
         secret_files=_secret_files(raw),
         release_repo=raw.get("release_repo", ""),
         ui_user=raw.get("ui_user", ""),
-        ui_password_file=raw.get("ui_password_file", ""),
+        ui_password_file=_slot0(raw.get("ui_password_file", ""))[0],
+        ui_password_file_template=_slot0(raw.get("ui_password_file", ""))[1],
         ui_password_note=str(raw.get("ui_password_note", "") or ""),
         run_argv=tuple(str(t) for t in raw.get("run_argv", [])),
         run_cwd=raw.get("run_cwd", ""),

@@ -10,7 +10,10 @@ set -eu
 src="$1"; runtime="$2"; static="$3"; mc_host="$4"; mc_port="$5"; bind="$6"; port="$7"
 venv="$src/backend/.venv"
 secrets="$runtime/config/secrets"
-data="$runtime/state/meshcore-webui"
+# The instance's level under state/ (LHPC passes MESHCORE_INSTANCE_DIR: "" at slot 0, "<rid>/" at slot k), so each
+# instance keeps its own data and pairs with its own meshcore-cli lock.
+inst="${MESHCORE_INSTANCE_DIR:-}"
+data="$runtime/state/${inst}meshcore-webui"
 # Restrictive umask for everything this launcher creates (key + state dirs).
 umask 077
 mkdir -p "$data/tiles"
@@ -61,7 +64,7 @@ export MESHCORE_WEBUI_TILE_CACHE_DIR="$data/tiles"
 # The node serves ONE Companion client at a time. While an interactive meshcore-cli owns the
 # slot it holds this lock (created by meshcli-run.sh); the reconnect supervisor waits on it so
 # the WebUI yields the slot instead of evicting the CLI. Path matches the meshcore-cli run.
-export MESHCORE_CLI_LOCK="$runtime/state/meshcore-cli.lock"
+export MESHCORE_CLI_LOCK="$runtime/state/${inst}meshcore-cli.lock"
 # No external elevation calls by default on a headless node; keep the SSRF-guarded default
 # but the operator can override. Bind LOOPBACK — the LHPC proxy is the only public path.
 cd "$src/backend"

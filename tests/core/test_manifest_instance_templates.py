@@ -28,16 +28,17 @@ TEMPLATED = {
 
 
 def _templated():
+    # The port templates ({port:}/{port_of:}); per-instance paths ({instance_dir}) are tests/core/test_instance_paths.py's.
     out = {}
     for c in (c for st in load_manifest() for c in st.components):
         for p in c.run_params:
-            if p.default_template:
+            if "{port" in p.default_template:
                 out[(c.id, "param", p.default)] = p.default_template
         for e in c.endpoints:
-            if e.address_template:
+            if "{port" in e.address_template:
                 out[(c.id, "address", e.address)] = e.address_template
         for r in c.resources:
-            if r.key_template:
+            if "{port" in r.key_template:
                 out[(c.id, "key", r.key)] = r.key_template
     return out
 
