@@ -237,10 +237,13 @@ def old_config_state(paths) -> Tri:
         pass
     except (OSError, PathContainmentError):
         return Tri.NO                                   # present but unreadable: load's "invalid", not this banner
+    lp = None
     try:
-        text = paths.under("config", "local.toml").read_text(encoding="utf-8")
+        lp = paths.under("config", "local.toml")
+        text = lp.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return Tri.NO
+        # Q14: a path that exists (a dangling symlink too) but cannot be read is unreadable, never "a fresh box"
+        return Tri.UNKNOWN if lp is None or radios_mod.exists_at_all(lp) else Tri.NO
     except (OSError, UnicodeDecodeError, PathContainmentError):
         return Tri.UNKNOWN
     try:
@@ -271,3 +274,204 @@ def restore_plan(items: list, radios) -> tuple:
         else:
             kept.append(it)
     return kept, refused
+
+
+# --- the wiring's pure decisions (INTERFACE-B4-W5 b2beded0; B4-WIRING-TABLES-v1 d9cc1faa) ------------------------
+
+@dataclass(frozen=True)
+class Target:
+    outcome: str                    # "proceed" | "refuse"
+    rid: str                        # the chosen rid when "proceed"; "" when "refuse"
+    reason: str                     # "" when an explicit rid proceeds; else why (incl. the chosen rid)
+    candidates: tuple = ()          # the rids considered, radio order
+    next_command: str = ""
+
+
+@dataclass(frozen=True)
+class StopPlan:
+    signal: tuple                   # pids to signal: only verified own `--id <rid>` processes
+    named: tuple                    # ((pid, reason), …): present, related, NOT signalled
+    ok: bool                        # False when anything is named
+
+
+_KINDS = ("id", "no-id", "unknown")
+_LOCKED_FIELDS = ("model", "band", "ce", "usb_serial", "usb_port")
+
+
+def _refuse(reason: str, candidates=(), next_command: str = "") -> Target:
+    return Target("refuse", "", reason, tuple(candidates), next_command)
+
+
+def _order(radios):
+    return sorted(radios, key=lambda r: int(r.id[1:]))
+
+
+def _unstartable(state, old_config) -> Target:
+    """The W1-8 reason rule, shared by resolve_target and reticulum_rid."""
+    if state.kind == radios_mod.ABSENT:
+        if old_config is Tri.YES:
+            return _refuse("the old [radio] configuration is present and nothing was converted: set up the radios "
+                           "in the hardware list first", next_command="lhpc hardware")
+        if old_config is Tri.UNKNOWN:
+            return _refuse("the old configuration cannot be read", next_command="lhpc hardware")
+        return _refuse("no hardware list", next_command="lhpc hardware")
+    return _refuse("; ".join(state.reasons) if state.reasons else "the hardware list is invalid")
+
+
+def _given(x):
+    """None and "" mean "not given" (INTERFACE-B4-W5 §4.4); returns (given, ok-type)."""
+    if x is None or (x == "" and type(x) is str):
+        return False, True
+    return True, type(x) is str
+
+
+def _runnable(radio, models, can_run):
+    """True / False, or None when it cannot be told (the model is missing, or can_run raised)."""
+    m = models.get(radio.model)
+    if m is None:
+        return None
+    try:
+        return bool(can_run(radio, m))
+    except Exception:                                    # "cannot tell", never propagated
+        return None
+
+
+def _pick(cands, scope: str, stack_hint: str = "<stack>") -> Target:
+    ids = tuple(r.id for r in cands)
+    if len(cands) == 1:
+        return Target("proceed", cands[0].id, f"the only enabled radio {scope}: {cands[0].id}", ids)
+    if not cands:
+        return _refuse(f"no enabled radio {scope}", ids, "lhpc hardware")
+    named = ", ".join(f"{r.id} ({r.name})" for r in cands)
+    return _refuse(f"{len(cands)} radios can run it {scope}: {named}; name one", ids, f"{stack_hint}@<rid>")
+
+
+def resolve_target(state, models, can_run, *, rid=None, band=None, running=(), fallback_rid=None,
+                   old_config=Tri.NO) -> Target:
+    """Which radio a radio-stack verb acts on (W1-1…W1-6, W1-8…W1-11). Never raises; never first-wins."""
+    if not isinstance(state, radios_mod.State):
+        return _refuse("state is not a hardware-list state")
+    if not isinstance(models, dict):
+        return _refuse("models is not a dict")
+    if not callable(can_run):
+        return _refuse("can_run is not callable")
+    if not isinstance(old_config, Tri):
+        return _refuse(f"old_config {old_config!r} is not a Tri")
+    rid_given, rid_ok = _given(rid)
+    band_given, band_ok = _given(band)
+    fb_given, fb_ok = _given(fallback_rid)
+    if not (rid_ok and band_ok and fb_ok):
+        return _refuse("rid, band and fallback_rid must be strings")
+    if not (isinstance(running, (tuple, list)) and all(type(x) is str for x in running)):
+        return _refuse("running must be a tuple or list of rids")
+    if not state.startable:
+        return _unstartable(state, old_config)
+    by_id = {r.id: r for r in state.radios}
+    if rid_given:
+        if not _RID.fullmatch(rid):
+            return _refuse(f"{rid!r} is not r1..r99")
+        r = by_id.get(rid)
+        if r is None:
+            return _refuse(f"{rid} is unknown")
+        if not r.enabled:
+            return _refuse(f"{rid} is disabled")
+        ok = _runnable(r, models, can_run)
+        if ok is None:
+            return _refuse(f"{rid}: cannot tell whether the stack can run on it")
+        if not ok:
+            return _refuse(f"{rid}: the stack cannot run on {r.model}")
+        if band_given and r.band != band:
+            return _refuse(f"{rid} is on {r.band} MHz, not {band} MHz")
+        return Target("proceed", rid, "", (rid,))
+    if band_given and band not in _BANDS:
+        return _refuse(f"{band!r} is not 433 or 868")
+    scope = [r for r in _order(state.radios) if r.enabled and (not band_given or r.band == band)]
+    cands = []
+    for r in scope:
+        ok = _runnable(r, models, can_run)
+        if ok is None:
+            return _refuse(f"{r.id}: cannot tell whether the stack can run on it", tuple(x.id for x in scope))
+        if ok:
+            cands.append(r)
+    where = f"on {band} MHz" if band_given else "for this stack"
+    if band_given:
+        return _pick(cands, where)
+    ids = [r.id for r in cands]
+    live = [x for x in running if x in ids]
+    notes = [f"{x} is not a candidate (ignored)" for x in running if x not in ids]
+    if len(set(live)) == 1:
+        return Target("proceed", live[0], "; ".join([f"the running instance is on {live[0]}", *notes]), tuple(ids))
+    if fb_given and fallback_rid in ids:
+        return Target("proceed", fallback_rid, f"{fallback_rid} kept from the interactive marker", tuple(ids))
+    if fb_given:
+        notes.append(f"the interactive marker's {fallback_rid} is not a candidate (ignored)")
+    t = _pick(cands, where)
+    return Target(t.outcome, t.rid, "; ".join([t.reason, *notes]), t.candidates, t.next_command)
+
+
+def stop_targets(rid, procs, owned_pids) -> StopPlan:
+    """What a per-rid stop signals (W4-7): only a verified own `--id <rid>` process; the rest is named."""
+    if not (isinstance(rid, str) and _RID.fullmatch(rid)):
+        raise ValueError(f"{rid!r} is not r1..r99")
+    owned = {p for p in owned_pids if type(p) is int}
+    signal, named = [], []
+    for p in procs:
+        if not isinstance(p, DaemonProc) or p.kind not in _KINDS:
+            named.append((getattr(p, "pid", None), "unrecognised process entry"))
+            continue
+        if p.kind == "unknown":
+            named.append((p.pid, f"a daemon process cannot be identified: {p.reason}"))
+        elif p.kind == "id" and p.rid == rid:
+            if type(p.pid) is int and p.pid in owned:
+                signal.append(p.pid)
+            else:
+                named.append((p.pid, f"an unverified process claims {rid}"))
+    return StopPlan(tuple(signal), tuple(named), not named)
+
+
+def reticulum_rid(state, models, band, *, old_config=Tri.NO) -> Target:
+    """The one enabled SPI radio of `band` that Reticulum's direct-SPI interface claims (W4-9, W1-8)."""
+    if not isinstance(old_config, Tri):
+        return _refuse(f"old_config {old_config!r} is not a Tri")
+    if not isinstance(state, radios_mod.State):
+        return _refuse("state is not a hardware-list state")
+    if not isinstance(models, dict):
+        return _refuse("models is not a dict")
+    if not state.startable:
+        return _unstartable(state, old_config)
+    if not (type(band) is str and band in _BANDS):
+        return _refuse(f"{band!r} is not 433 or 868")
+    scope = [r for r in _order(state.radios) if r.enabled and r.band == band]
+    for r in scope:
+        if r.model not in models:
+            return _refuse(f"{r.id}: model {r.model} is unknown", tuple(x.id for x in scope))
+    spi = [r for r in scope if models[r.model].transport == "spi"]
+    usb = [r.id for r in scope if models[r.model].transport != "spi"]
+    if not spi and usb:
+        return _refuse(f"Reticulum drives SPI radios only; {band} MHz has only USB radios: {', '.join(usb)}",
+                       tuple(usb), "lhpc hardware")
+    return _pick(spi, f"on {band} MHz", "reticulum")
+
+
+def settings_save_refusals(old, new, users, procs=(), owned_pids=frozenset()) -> list:
+    """Why an edit of one radio's row may not be saved now (W5-8, H3, H4); [] = save, effective at the next start."""
+    if old.id != new.id:
+        raise ValueError(f"the edit changes the id {old.id} -> {new.id}")
+    if not isinstance(users, (tuple, list)) or not all(type(u) is str for u in users):
+        raise ValueError("users must be a tuple or list of names")
+    if not isinstance(procs, (tuple, list)):
+        raise ValueError("procs must be a tuple or list")  # noqa: TRY004 - the save caller maps ValueError (W5)
+    owned = {p for p in owned_pids if type(p) is int}
+    blockers = [f"used by {u} — stop it?" for u in users]
+    for p in procs:
+        if not isinstance(p, DaemonProc) or p.kind not in _KINDS:
+            raise ValueError(f"unrecognised process entry {p!r}")
+        if p.kind == "id" and p.rid == old.id:
+            who = f"daemon@{old.id}" if type(p.pid) is int and p.pid in owned else f"an unverified process claiming {old.id}"
+            blockers.append(f"used by {who} (pid {p.pid}) — stop it?")
+        elif p.kind == "no-id" and p.band == old.band:
+            blockers.append(f"used by a daemon without --id on {old.band} MHz (pid {p.pid}) — stop it?")
+        elif p.kind == "unknown":
+            blockers.append(f"used by an unidentified daemon process (pid {p.pid}) — stop it?")
+    changed = [f for f in _LOCKED_FIELDS if getattr(old, f) != getattr(new, f)]
+    return blockers if changed and blockers else []

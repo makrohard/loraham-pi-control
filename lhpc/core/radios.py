@@ -96,12 +96,27 @@ def path(paths):
     return paths.under(*FILE)
 
 
+def exists_at_all(p) -> bool:
+    """Whether anything sits at `p` (a dangling symlink too), by lstat; an lstat that fails for any reason other than
+    a missing entry counts as present, so a read failure behind it is never taken for absence (Q13, Q14)."""
+    try:
+        os.lstat(p)
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+
+
 def load(paths, models: dict | None = None) -> State:
     """The hardware list's state; never raises for the file's content or its path (Q2)."""
+    p = None
     try:
         p = path(paths)
         text = p.read_text(encoding="utf-8")
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
+        if p is None or exists_at_all(p):                             # Q13: a path that exists but cannot be read is not absent
+            return State(INVALID, reasons=(f"{FILE[-1]} cannot be read ({type(exc).__name__}: {exc})",))
         return State(ABSENT)
     except (OSError, UnicodeDecodeError, PathContainmentError) as exc:
         return State(INVALID, reasons=(f"{FILE[-1]} cannot be read ({type(exc).__name__}: {exc})",))
