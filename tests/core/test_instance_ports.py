@@ -33,6 +33,7 @@ def _argv(tokens, inst=None, params=None):
     (["--port", "{port:8798}"], ["--port", "8798"]),
     (["-http", "127.0.0.1:{port:8080}"], ["-http", "127.0.0.1:8080"]),
     (["{runtime}/state/{instance_dir}meshcore"], ["/rt/state/meshcore"]),
+    (["/dev/shm/lhpc-meshcore-gps{instance_suffix}.nmea"], ["/dev/shm/lhpc-meshcore-gps.nmea"]),
     (["{param:kiss_port}"], ["--port", "8001"]),
     (["--tnc", "127.0.0.1:{port_of:kiss:8001}"], ["--tnc", "127.0.0.1:8001"]),
 ])
@@ -46,6 +47,7 @@ def test_slot_0_resolves_every_template_to_today(tokens, today):
     (["--port", "{port:8798}"], ["--port", "8828"]),
     (["-http", "127.0.0.1:{port:8080}"], ["-http", "127.0.0.1:8110"]),
     (["{runtime}/state/{instance_dir}meshcore"], ["/rt/state/r12/meshcore"]),
+    (["/dev/shm/lhpc-meshcore-gps{instance_suffix}.nmea"], ["/dev/shm/lhpc-meshcore-gps-r12.nmea"]),   # B3-D21a
     (["{param:kiss_port}"], ["--port", "8031"]),           # a param default follows the instance
     (["--tnc", "127.0.0.1:{port_of:kiss:8001}"], ["--tnc", "127.0.0.1:8011"]),   # kiss is slot 1 there
 ])

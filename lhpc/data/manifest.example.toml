@@ -2543,7 +2543,7 @@ main = "meshcore-node"
       section = "repeater"
       kind = "str"
       hidden = true
-      default = "/dev/shm/{instance_dir}lhpc-meshcore-gps.nmea"
+      default = "/dev/shm/lhpc-meshcore-gps{instance_suffix}.nmea"
       [[stack.component.config_file.param]]
       name = "chat_node_id"
       key = "chat_node_id"

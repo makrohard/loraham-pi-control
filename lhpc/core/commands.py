@@ -13,6 +13,8 @@ entry is either a literal token or a single whole placeholder. Placeholders:
     {port:BASE}       -> BASE + 10 x the instance's slot (slot 0 = BASE), anywhere in a token
     {port_of:STACK:BASE} -> the port of STACK's instance on the same radio
     {instance_dir}    -> "" at slot 0 (today's paths), "<rid>/" at slot k: a per-radio path level
+    {instance_suffix} -> "" at slot 0, "-<rid>" at slot k: a per-radio file name in a shared directory
+                          (/dev/shm, where a per-radio directory could be pre-created by another user)
     {runtime}/{source}  -> may appear INSIDE a literal token to build a path
                           (controller-derived, never user input)
 
@@ -76,6 +78,7 @@ class Instance:
             return str(self.port(int(m.group(2)), self.peer_slots.get(stack, 0)))
         text = _PORT_OF_RE.sub(port_of, text)
         text = _PORT_RE.sub(lambda m: str(self.port(int(m.group(1)))), text)
+        text = text.replace("{instance_suffix}", f"-{self.rid}" if self.slot else "")
         return text.replace("{instance_dir}", f"{self.rid}/" if self.slot else "")
 
 
