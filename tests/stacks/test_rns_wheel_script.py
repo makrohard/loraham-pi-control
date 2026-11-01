@@ -375,16 +375,81 @@ def test_a_client_whose_venv_no_longer_runs_the_node_wheel_fails_its_build(tmp_p
 
 
 @pytest.mark.slow                # real venvs (ensurepip) and real pip runs
-def test_the_node_whose_venv_no_longer_runs_its_wheel_fails_its_build(tmp_path):
-    """The node's sequence: `build`, its later install with `-c` under a moving pip.conf, then the manifest's later
-    rns-wheel.sh steps of the node: the build fails, naming where RNS went."""
+@pytest.mark.parametrize("moved", [True, False], ids=["prefix-moves-the-install", "plain"])
+def test_the_node_whose_venv_no_longer_runs_its_wheel_fails_its_build(tmp_path, moved):
+    """The node's sequence: `build`, its later install with `-c` (under a moving pip.conf, or plain), then the
+    manifest's later rns-wheel.sh steps of the node. Moved: the venv's RNS is gone, the wheel sits under the prefix, and
+    the build fails naming it. Plain: the same sequence passes."""
     index, prefix = tmp_path / "index", tmp_path / "elsewhere"
     _dist(index, "interfacelike", "1.0", "rns>=1.4.0")
     node = _node(tmp_path, code='NODE = 1\n__version__ = "1.5.5"\n')
     steps = _client_sequence("rns")
     assert steps[0] == ("build", ".venv/lhpc-wheel"), steps
     assert _run(node, "build", ".venv/lhpc-wheel").returncode == 0
-    _moving_conf(node, index, prefix)
-    assert _pip(node, "-c", ".venv/lhpc-rns-constraint.txt", "interfacelike").returncode == 0
+    if moved:
+        _moving_conf(node, index, prefix)
+    r = _pip(node, "-c", ".venv/lhpc-rns-constraint.txt", "--find-links", str(index), "interfacelike")
+    assert r.returncode == 0, r.stderr
+    if moved:                    # the hazard itself: the venv's RNS is gone, the wheel landed under the prefix
+        assert subprocess.run([str(node / ".venv" / "bin" / "python"), "-I", "-c", "import RNS"],
+                              capture_output=True).returncode != 0
+        assert list(prefix.rglob("RNS/__init__.py"))
     later = [_run(node, mode, ".venv/lhpc-wheel") for mode, _d in steps[1:]]
-    assert any(p.returncode != 0 and "rns-wheel: check failed" in p.stderr for p in later), [p.stderr for p in later]
+    failed = [p for p in later if p.returncode != 0]
+    if moved:
+        assert failed and "rns-wheel: check failed" in failed[0].stderr, [p.stderr for p in later]
+    else:
+        assert not failed and later, [p.stderr for p in later]
+
+
+# ---- G2-RETI-WHEEL-5 N3: the check's place in each component's whole recipe ----------------------------------------
+
+NODE_WHEEL = ".venv/lhpc-wheel"
+CLIENT_WHEEL = "{runtime}/src/reticulum/.venv/lhpc-wheel"
+
+
+def _steps(comp_id: str) -> list:
+    from lhpc.core.manifest import load_manifest
+    comp = next(c for st in load_manifest() for c in st.components if c.id == comp_id)
+    return [list(s.get("argv") or []) for s in comp.build_steps]
+
+
+def test_a_pip_install_is_recognised_in_both_forms():
+    assert _is_pip_install([".venv/bin/pip", "install", "x"]) and _is_pip_install([".venv/bin/pip3", "install", "x"])
+    assert _is_pip_install([".venv/bin/python", "-m", "pip", "install", "x"])
+    assert _is_pip_install(["python3", "-m", "pip", "install", "-c", ".venv/lhpc-rns-constraint.txt", "x"])
+    assert not _is_pip_install([".venv/bin/pip", "list"]) and not _is_pip_install([".venv/bin/python", "-c", "pass"])
+    assert not _is_pip_install(["install", "-D", "a", "b"]) and not _is_pip_install([])
+
+
+def _is_pip_install(argv: list) -> bool:
+    """A pip install in either form the manifest could use: `<venv>/bin/pip install …` or `<python> -m pip install …`."""
+    exe = argv[0].rsplit("/", 1)[-1] if argv else ""
+    if exe.startswith("pip"):
+        return argv[1:2] == ["install"]
+    return exe.startswith("python") and argv[1:4] == ["-m", "pip", "install"]
+
+
+def _constrained(argv: list) -> bool:
+    return "-c" in argv and argv[argv.index("-c") + 1:argv.index("-c") + 2] == [".venv/lhpc-rns-constraint.txt"]
+
+
+def _wheel_step(argv: list, mode: str) -> bool:
+    return len(argv) >= 4 and argv[1].endswith("scripts/rns-wheel.sh") and argv[2] == mode
+
+
+@pytest.mark.parametrize("comp_id, first, wheel", [("rns", "build", NODE_WHEEL), ("nomadnet", "install", CLIENT_WHEEL),
+                                                   ("lxmd", "install", CLIENT_WHEEL), ("sideband", "install", CLIENT_WHEEL)])
+def test_each_component_checks_its_wheel_once_after_its_final_pip_install(comp_id, first, wheel):
+    """The whole recipe, not the filtered rns-wheel.sh steps: exactly one `check`, on the same wheel directory the
+    component's `build`/`install` step used, placed RIGHT AFTER the last pip install of the component (or that wheel
+    step, which installs with pip itself): nothing runs between them; every pip install after the wheel step is held to
+    its constraint."""
+    steps = _steps(comp_id)
+    checks = [i for i, a in enumerate(steps) if _wheel_step(a, "check")]
+    firsts = [i for i, a in enumerate(steps) if _wheel_step(a, first)]
+    pips = [i for i, a in enumerate(steps) if _is_pip_install(a)]
+    assert len(checks) == 1 and len(firsts) == 1, steps
+    assert steps[checks[0]][3] == steps[firsts[0]][3] == wheel, steps
+    assert checks[0] == max(pips + firsts) + 1, steps
+    assert all(_constrained(a) for i, a in enumerate(steps) if _is_pip_install(a) and i > firsts[0]), steps
