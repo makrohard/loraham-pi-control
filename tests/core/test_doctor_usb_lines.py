@@ -225,8 +225,9 @@ def _all_states_lines():
 def test_every_doctor_line_is_one_of_the_doctor_texts():
     """Every line the function prints renders a template of DOCTOR_TEXTS (no text outside the constants)."""
     regexes = _template_regexes()
-    assert regexes
-    for line in _all_states_lines():
+    lines = _all_states_lines()
+    assert regexes and lines
+    for line in lines:
         assert any(rx.match(line) for rx in regexes), line
 
 

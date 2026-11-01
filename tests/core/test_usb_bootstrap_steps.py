@@ -32,7 +32,7 @@ def _ua():
 def _fakebin(tmp_path, fail=()):
     """udevadm, modprobe, usermod, gpasswd, adduser: each logs its argv and exits 1 if named in `fail`."""
     b = tmp_path / "bin"
-    b.mkdir()
+    b.mkdir(parents=True)
     log = tmp_path / "calls.log"
     for name in ("udevadm", "modprobe", "usermod", "gpasswd", "adduser", "id", "getent"):
         rc = 1 if name in fail else 0
@@ -48,7 +48,8 @@ def _run(tmp_path, text, *, fail=(), module_loaded=False, prelude='OP=tester\n_G
         (root / d).mkdir(parents=True, exist_ok=True)
     if module_loaded:
         (root / "sys" / "module" / "spi_ch341").mkdir(exist_ok=True)
-    b, log = _fakebin(tmp_path, fail) if not (tmp_path / "bin").exists() else (tmp_path / "bin", tmp_path / "calls.log")
+    calls_dir = tmp_path / f"call{len(list(tmp_path.glob('call*')))}"    # fresh fakes per call: `fail` always applies
+    b, log = _fakebin(calls_dir, fail)
     script = tmp_path / "block.sh"
     script.write_text(prelude + text, encoding="utf-8")
     env = {"PATH": f"{b}:/usr/bin:/bin", "HOME": str(tmp_path), "LC_ALL": "C"}

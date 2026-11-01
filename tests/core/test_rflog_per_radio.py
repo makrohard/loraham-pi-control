@@ -116,14 +116,16 @@ def test_list_jobs_lists_no_legacy_file_that_is_not_there():
 def test_prune_never_deletes_an_rf_log_in_either_form_nor_what_the_rule_keeps():
     """`prune_targets` judges names relative to logs/, files only: a band file at the top and a radio's log in the
     nested form `<rid>/rf-daemon.log`. A top-level directory entry such as `r1` is not a log name; the caller
-    (service_jobs' prune) passes only regular `*.log` leaves, so `r1` never reaches it (the next test)."""
+    (service_jobs' prune) passes only non-symlink top-level names ending `.log`, so `r1` never reaches it."""
     entries = ["r1/rf-daemon.log", "rf-daemon-433.log", "rf-kiss.log", "start-x.log", "junk.log", "r0/rf-daemon.log"]
     assert rflog.prune_targets(entries, lambda n: n == "start-x.log") == ["junk.log", "r0/rf-daemon.log"]
 
 
 def test_the_prune_through_the_service_keeps_every_radios_log_and_the_band_files(tmp_path):
-    """The public path: the service's prune under count pressure deletes old job logs but never `logs/<rid>/`,
-    its `rf-daemon.log`, nor a 0.13.x band file (the caller passes regular top-level `*.log` leaves only)."""
+    """The public path: the service's prune under count pressure deletes old job logs but never a 0.13.x band file.
+    Its caller filters non-symlink top-level names ending `.log` through prune_targets, then keeps regular files
+    only. `logs/<rid>/` and its `rf-daemon.log` survive because the listing is one level (not recursive); this test
+    shows they survive, not which rule keeps them."""
     import os
 
     from lhpc.core.probes.backends import FakeSystem
