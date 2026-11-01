@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from os.path import exists, join
+from os.path import exists, expanduser, join
 
 from . import runtime_fs
 from .paths import PathContainmentError, Paths
@@ -74,8 +74,30 @@ def _keep(paths: Paths, why: str) -> tuple[bool, str]:
     return False, why
 
 
-# A running nginx can still serve the old config after its file is gone: owed, never cleared (B3-D22).
+# A running nginx can still serve the old config after its file is gone: owed while nginx may run (B3-D22, B3-D22a).
 _MISSING = "deployed nginx config is missing — Apply the webserver configuration"
+
+
+def _nginx_may_run(paths: Paths) -> bool:
+    """Whether an nginx may still serve an old config: its pid file stands, LHPC's nginx unit is installed, or a
+    webserver Apply was recorded. A box that never set up nginx (the loopback console) has none of these."""
+    from .updater_units import NGINX_UNIT
+    from .webserver import NGINX_PID, read_applied
+    try:
+        if runtime_fs.stat_leaf_nofollow(paths, paths.under(*NGINX_PID)) is not None:
+            return True
+    except (OSError, PathContainmentError):
+        return True                                     # cannot tell: fail closed
+    if exists(join(expanduser("~"), ".config", "systemd", "user", NGINX_UNIT)):
+        return True
+    return bool(read_applied(paths))
+
+
+def _missing(paths: Paths) -> tuple[bool, str]:
+    if _nginx_may_run(paths):
+        return _keep(paths, _MISSING)
+    clear(paths)                                        # no nginx was ever set up: the first Apply renders fresh
+    return True, "no deployed nginx config"
 
 
 def _unreadable(exc: Exception) -> str:
@@ -103,7 +125,7 @@ def reconcile(svc) -> tuple[bool, str]:
     except (OSError, PathContainmentError) as exc:
         return _keep(paths, _unreadable(exc))
     if deployed is None:
-        return _keep(paths, _MISSING)
+        return _missing(paths)
     fresh = _ws.render_nginx_config(paths, svc.config().webserver, svc._stack_web_proxies())
     if fresh == deployed:
         clear(paths)
@@ -144,7 +166,7 @@ def after_update(paths: Paths) -> tuple[bool, str]:
     except (OSError, PathContainmentError) as exc:
         return _keep(paths, _unreadable(exc))
     if deployed is None:
-        return _keep(paths, _MISSING)
+        return _missing(paths)
     argv = [_python(paths), "-m", "lhpc", "_webserver-rerender", "--root", str(paths.runtime_root)]
     try:
         run = subprocess.run(argv, capture_output=True, text=True, timeout=_TIMEOUT_S, check=False)

@@ -248,3 +248,73 @@ def test_the_hidden_verb_keeps_the_marker_when_the_deployed_config_is_missing(tm
     assert main(["_webserver-rerender", "--root", str(tmp_path)]) == 1
     assert proxy_rerender.pending(paths) == MISSING
     assert capsys.readouterr().out.strip().endswith(MISSING)
+
+
+def _update_without_nginx(tmp_path, monkeypatch):
+    """A box that never set up nginx (the loopback console: no nginx config, no nginx pid file, no LHPC nginx unit,
+    no recorded Apply) and a checkout whose update advances. Returns (service factory, paths)."""
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    paths = Paths(runtime_root=tmp_path)
+    checkout = tmp_path / "checkout"
+    (checkout / "lhpc").mkdir(parents=True)
+    (checkout / "lhpc" / "version.py").write_text(f'__version__ = "{selfupdate.__version__}"\n')
+    monkeypatch.setattr(selfupdate, "repo_root", staticmethod(lambda: checkout))
+    rows = {tuple(a): CR(0, "", "") for a in selfupdate.venv_sync_argvs(sys.executable, checkout)}
+    rows.update(WEB_INACTIVE)
+    fake = FakeSystem(commands=rows, listeners=list(_LISTENERS))
+
+    def advance(system, paths_, *, force=False, branch="", before_mutation=None):
+        if before_mutation is not None:
+            before_mutation("a" * 40, "b" * 40, "main", False)
+        return {"ok": True, "deps_changed": False, "new_head_short": "bbbbbbb",
+                "new_version": selfupdate.__version__, "message": selfupdate.APPLIED_RESTART_MESSAGE}
+    monkeypatch.setattr(selfupdate, "apply_update", advance)
+    monkeypatch.setattr(ControllerService, "_refresh_units_post_update", lambda self: (True, "units canonical"))
+    return (lambda: ControllerService(system=fake.system, paths=paths)), paths
+
+
+def test_a_box_that_never_set_up_nginx_is_not_left_with_a_permanent_banner(tmp_path, monkeypatch, web):
+    """B3-D22a: no deployed config, no nginx pid file, no LHPC nginx unit, no recorded Apply (a supported base
+    install): nothing can serve an old config, so the update clears the marker and no page says Apply needed."""
+    svc, paths = _update_without_nginx(tmp_path, monkeypatch)
+    res = svc().self_update_apply_operator()
+    assert res.data.get("update_applied"), res.summary
+    assert proxy_rerender.pending(paths) is None
+    page = web(paths=paths).get("/").get_data(as_text=True)
+    assert 'id="ws-render-notice"' not in page
+
+
+def test_the_hidden_verb_clears_the_marker_on_a_box_that_never_set_up_nginx(tmp_path, capsys):
+    from lhpc.adapters.cli.main import main
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir(parents=True)
+    assert proxy_rerender.mark(paths) == ""
+    assert main(["_webserver-rerender", "--root", str(tmp_path)]) == 0
+    assert proxy_rerender.pending(paths) is None
+    assert capsys.readouterr().out.strip().endswith("no deployed nginx config")
+
+
+@pytest.mark.parametrize("signal", ["pid-file", "unit", "applied-record"])
+def test_each_sign_that_nginx_may_run_keeps_a_missing_config_owed(tmp_path, monkeypatch, capsys, signal):
+    """B3-D22a: any one sign that an nginx may still serve an old config (its pid file, LHPC's nginx unit, a recorded
+    Apply) keeps a missing deployed config owed; the hidden verb exits 1."""
+    from lhpc.adapters.cli.main import main
+    from lhpc.core.updater_units import NGINX_UNIT
+    if signal == "applied-record":                  # an applied box whose nginx pid file and config are gone
+        _svc, paths, _previous, _fake = _box(tmp_path, monkeypatch, nginx_t=CR(0, "", "ok"))
+        paths.under(*webserver.NGINX_PID).unlink()
+        assert webserver.read_applied(paths)
+    else:
+        paths = Paths(runtime_root=tmp_path)
+        (tmp_path / "state" / "run").mkdir(parents=True)
+        if signal == "pid-file":
+            paths.under(*webserver.NGINX_PID).write_text("4242\n")
+        else:
+            unit = tmp_path.parent / (tmp_path.name + "-home") / ".config" / "systemd" / "user" / NGINX_UNIT
+            unit.parent.mkdir(parents=True)
+            unit.write_text("[Service]\n")
+            monkeypatch.setenv("HOME", str(unit.parents[3]))
+    paths.under(*webserver.NGINX_CONF).unlink(missing_ok=True)
+    assert proxy_rerender.mark(paths) == ""
+    assert main(["_webserver-rerender", "--root", str(tmp_path)]) == 1
+    assert proxy_rerender.pending(paths) == MISSING
