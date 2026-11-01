@@ -301,8 +301,11 @@ start synchronously.
 
 **A web Build on a small box builds one job at a time.** A stack's Build starts one detached job per
 component. On a box with less than 1 GiB of RAM (`MemTotal`; a Pi Zero 2 W has 415 MiB) every
-build or test job the console starts waits until no other one runs (its log says `waiting for
-memory`), across Builds too; a box with more (a Pi 5) runs them side by side. Swap is not counted:
+Build or Test job of the console's job runner (a stack's Build or Test, and the build an Update
+starts) waits until no other one runs (its log says `waiting for memory`), across Builds too; a box
+with more (a Pi 5) runs them side by side. Three operations do not wait: auto-install ("Install and
+Build all Stacks") and HMAC apply build in their own process, and an Update of the Meshtastic web
+client fetches its release inside the page's request. Swap is not counted:
 zram is itself compressed RAM, and once it is full a swap file on the SD card thrashes the box until
 the console stops answering, which is what parallel jobs did on the Zero. The page still returns at
 once.
