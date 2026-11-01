@@ -2044,6 +2044,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         flash(msg + (" — run the USB setup below to give this account access" if box else ""), "ok" if ok else "warn")
         return redirect(url_for("hardware_view") + ("#usb-setup" if box else ""))
 
+    @app.post("/hardware/add")
+    def hardware_add():
+        """0.14.0 B: add a listed USB stick as a new radio of the hardware list (its own save checks)."""
+        if not _csrf_ok():
+            abort(400)
+        from lhpc.core import radio_start
+        ok, msg, box = radio_start.add_usb(service, request.form.get("model", ""), request.form.get("port", ""))
+        flash(msg + (" — run the USB setup below to give this account access" if box else ""), "ok" if ok else "warn")
+        return redirect(url_for("hardware_view") + ("#usb-setup" if box else ""))
+
     @app.post("/hardware")
     def hardware_set():
         if not _csrf_ok():

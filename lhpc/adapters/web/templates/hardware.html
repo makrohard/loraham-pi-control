@@ -42,6 +42,23 @@
     {% else %}
       <p class="muted">No radio in the hardware list.</p>
     {% endfor %}
+    {% if view.kind == "valid" and view.addable %}
+      <section class="cfgsec" id="usb-add">
+        <h3>Add a USB radio</h3>
+        <p class="muted">A stick of a known USB model that no radio holds yet: add it as a new radio of the list.</p>
+        <ul class="usb-addable">
+        {% for model_id, c in view.addable %}
+          <li data-add-port="{{ c.port }}">{{ c.label }} ({{ model_id }})
+            <form method="post" action="{{ url_for('hardware_add') }}" class="inline">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="model" value="{{ model_id }}">
+              <input type="hidden" name="port" value="{{ c.port }}">
+              <button type="submit">Add as a new radio</button>
+            </form></li>
+        {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
     {% if view.copybox %}
       <section class="cfgsec" id="usb-setup">
         <h3>USB setup</h3>

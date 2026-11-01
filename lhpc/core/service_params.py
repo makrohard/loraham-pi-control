@@ -1372,7 +1372,7 @@ class ParamsConfigMixin:
     @invalidates_snapshot
     def set_hardware_setup(self, setup_id: str | None = None) -> ActionResult:
         """Set the radio HARDWARE setup (`[radio].hardware`, e.g. 'loraham'); no arg reports it. 0.14.0: when there is
-        no hardware list it is written first from the setup (radio_start.setup_radios); an existing list refuses."""
+        no hardware list it is written first from the setup (radio_start.setup_radios); an existing one is kept."""
         from . import config as _config
         setups = dict(self.hw_setups())
         if setup_id is None:

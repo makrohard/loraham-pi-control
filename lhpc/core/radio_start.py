@@ -129,8 +129,7 @@ def hardware_view(svc) -> dict:
     from . import daemon_control, usb_access, usb_flow
     state = radios.load(svc._paths)
     models = radio_models.load()
-    found = usb_access.scan() if any(models.get(r.model) and models[r.model].transport != "spi"
-                                     for r in state.radios) else None
+    found = usb_access.scan()                       # the sticks to bind, and (B) to add as new USB radios
     rows = []
     for r in state.radios:
         m = models.get(r.model)
@@ -140,8 +139,65 @@ def hardware_view(svc) -> dict:
                      "transport": m.transport if m else "unknown", "usb_serial": r.usb_serial,
                      "usb_port": r.usb_port, "reachable": v.reachable, "ready": v.ready,
                      "choices": usb_flow.usb_choices(found, m) if usb else None})
-    box = usb_flow.copybox(svc._paths, _account(), models) if found is not None else None
-    return {"kind": state.kind, "reasons": list(state.reasons), "rows": rows, "copybox": box}
+    addable = [(m.id, c) for m in models.values() if m.transport != "spi"
+               for c in usb_flow.usb_choices(found, m).items if c.selectable and not _holder(state.radios, c)]
+    box = usb_flow.copybox(svc._paths, _account(), models) if any(r["choices"] is not None for r in rows) else None
+    return {"kind": state.kind, "reasons": list(state.reasons), "rows": rows, "addable": addable, "copybox": box}
+
+
+def _holder(rows, choice) -> str:
+    """The row that already holds a listed stick: by the serial's first 8 characters, else a serial-less row on
+    its port (B4); "" when none."""
+    for r in rows:
+        if choice.serial and r.usb_serial[:radios.SERIAL_PREFIX] == choice.serial[:radios.SERIAL_PREFIX]:
+            return r.id
+        if not choice.serial and not r.usb_serial and r.usb_port == choice.port:
+            return r.id
+    return ""
+
+
+def add_usb(svc, model_id: str, port: str) -> tuple:
+    """0.14.0 B (REL14-D2, DESIGN-AB-v2 §2): add the stick listed on `port` as a new USB radio: the lowest free id,
+    the model's only band, the stick's serial (else its port), named `<short> <band>`. Fail-closed: no list, an
+    invalid one, an unknown model, a stick not listed or held by a row, no free id, or the list's own save checks
+    refuse it. (ok, message, copybox) — copybox when this account cannot open the stick's node."""
+    from . import usb_access, usb_flow
+    state = radios.load(svc._paths)
+    if state.kind == radios.ABSENT:
+        return False, "there is no hardware list: set it up first (lhpc hardware <setup>)", False
+    if state.kind != radios.VALID:
+        return False, "the hardware list is not valid: " + "; ".join(state.reasons), False
+    models = radio_models.load()
+    m = models.get(model_id) if isinstance(model_id, str) else None
+    if m is None or m.transport == "spi":
+        return False, f"unknown USB model {model_id!r}", False
+    found = usb_access.scan()
+    choice = next((c for c in usb_flow.usb_choices(found, m).items if c.port == port), None)
+    if choice is None:
+        return False, f"no stick of {m.id} is listed on port {port}", False
+    if not choice.selectable:
+        return False, f"the stick on port {port} cannot be added: {choice.why}", False
+    if holder := _holder(state.radios, choice):
+        return False, f"the stick on port {port} is already {holder}'s: re-bind {holder} in its card instead", False
+    if len(m.bands) != 1:
+        return False, f"{m.id} runs {len(m.bands)} bands; adding it needs a band choice", False
+    try:
+        rid = radios.next_id(state.radios)
+    except ValueError as exc:
+        return False, str(exc), False
+    band = m.bands[0]
+    name = f"{m.short} {band}"
+    if any(r.name.casefold() == name.casefold() for r in state.radios):
+        name = radios.default_name(state.radios, m)
+    row = radios.Radio(rid, name, m.id, band, usb_serial=choice.serial, usb_port="" if choice.serial else port)
+    reasons = radios.save(svc._paths, (*state.radios, row), models)
+    if reasons:
+        return False, "; ".join(reasons), False
+    device = next((d for d in found.devices if d.port == port), None)
+    effective, _configured, euid = _groups()
+    access = usb_access.node_access(device, effective, euid) if device else usb_access.Probe.UNKNOWN
+    return True, f"{rid} added: {m.id} on {band} MHz, " + (f"serial {choice.serial}" if choice.serial
+                                                          else f"port {port} (no serial)"), access is usb_access.Probe.ABSENT
 
 
 def bind_usb(svc, rid: str, port: str) -> tuple:
