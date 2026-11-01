@@ -161,6 +161,7 @@ def test_a_firewall_marker_that_cannot_be_written_stops_the_update_before_it_mov
     monkeypatch.setattr(runtime_fs, "write_marker", full_disk)
     res = svc().self_update_apply()
     assert not res.ok and res.data.get("fw_mark_failed")
+    assert "state/firewall-postupdate.pending" in res.details[0]     # the cause names its marker
     assert res.next_commands == ["lhpc self-update --apply"]
     assert gitrepo.git(work, "rev-parse", "HEAD") == head
     assert selfupdate.read_migration_journal(svc()._paths) == (None, False)

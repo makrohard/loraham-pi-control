@@ -105,10 +105,11 @@ def plan_exposure(cfg: WebserverConfig) -> dict:
 
 
 def plan_stack_exposure(swc, console_port: int, other_ports=(), listeners_of=None) -> dict:
-    """Pure policy evaluation of ONE stack's desired web-UI proxy. Mirrors `plan_exposure`:
-    `problems` refuse the save outright; `danger` selects the confirmation strength.
-    `listeners_of` (a service): its stacks' own TCP listeners (listeners.stack_listeners) are owners
-    too, named in the refusal."""
+    """Policy evaluation of ONE stack's desired web-UI proxy. Mirrors `plan_exposure`:
+    `problems` refuse the save outright; `danger` selects the confirmation strength. Pure, except
+    that with `listeners_of` (a service) it reads that service's stacks' own TCP listeners
+    (listeners.stack_listeners, from the manifest and the saved config; no I/O beyond them): each is
+    an owner too, named in the refusal."""
     from .config import STACKWEB_MIN_PORT
     problems: list = []
     if not swc.enabled:                          # port 0 = not proxied; nothing to police
