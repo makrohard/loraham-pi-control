@@ -163,6 +163,21 @@ def test_the_release_on_a_client_stop_sees_the_radios_daemon(tmp_path, monkeypat
     _no_band_socket(fake)
 
 
+# ---- a band with one enabled radio and a disabled one: the enabled radio's socket ------------------------
+
+def test_a_disabled_second_radio_of_the_band_leaves_the_enabled_ones_socket(tmp_path):
+    from lhpc.core import radios
+    svc, fake = _svc(tmp_path)
+    rows = (radios.Radio("r2", "high", "uputronics", "868", ce="ce1"),     # a valid list: r3 takes the free ce0
+            radios.Radio("r3", "spare", "uputronics", "868", ce="ce0", enabled=False))
+    (tmp_path / "config" / "radios.toml").write_text(radios.render(rows))
+    assert radios.load(svc._paths).kind == radios.VALID          # an invalid list would keep the band key
+    view = svc.daemon_view("868")
+    assert view.reachable and view.status.get("ID") == "r2", view.error
+    assert "/tmp/loraconf-r3.sock" not in fake.asked
+    _no_band_socket(fake)
+
+
 # ---- without a hardware list: the 0.13.x band socket ---------------------------------------------------
 
 def test_without_a_hardware_list_the_band_socket_is_read(tmp_path):

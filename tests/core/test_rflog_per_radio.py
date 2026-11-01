@@ -98,6 +98,56 @@ def test_radio_dir_ok_does_not_judge_other_jobs(tmp_path):
     assert rflog.radio_dir_ok(_paths(tmp_path), "rf-kiss.log") is True
 
 
+# ---- the tri-state behind it (B4-D34 n9): absent, unknown and present are three answers ------------------
+
+def test_radio_dir_state_names_a_real_directory_present_and_nothing_there_absent(tmp_path):
+    (tmp_path / "logs" / "r1").mkdir(parents=True)
+    p = _paths(tmp_path)
+    assert rflog.radio_dir_state(p, "r1/rf-daemon.log") == rflog.PRESENT
+    assert rflog.radio_dir_state(p, "r4/rf-daemon.log") == rflog.ABSENT
+
+
+def test_radio_dir_state_a_symlink_a_file_or_a_dir_out_of_the_root_is_unknown_never_absent(tmp_path):
+    root, outside = tmp_path / "root", tmp_path / "outside"
+    (root / "logs").mkdir(parents=True)
+    (outside / "r9").mkdir(parents=True)
+    (root / "logs" / "r2").symlink_to(outside / "r9", target_is_directory=True)
+    (root / "logs" / "r3").write_text("not a directory", encoding="utf-8")
+    p = resolve_paths({"LHPC_RUNTIME_ROOT": str(root)})
+    assert rflog.radio_dir_state(p, "r2/rf-daemon.log") == rflog.UNKNOWN
+    assert rflog.radio_dir_state(p, "r3/rf-daemon.log") == rflog.UNKNOWN
+
+
+def test_radio_dir_state_an_escaping_logs_dir_is_unknown(tmp_path):
+    root, outside = tmp_path / "root", tmp_path / "outside"
+    root.mkdir()
+    (outside / "r1").mkdir(parents=True)
+    (root / "logs").symlink_to(outside, target_is_directory=True)
+    assert rflog.radio_dir_state(resolve_paths({"LHPC_RUNTIME_ROOT": str(root)}), "r1/rf-daemon.log") == rflog.UNKNOWN
+
+
+@pytest.mark.parametrize("exc", [PermissionError, OSError, RuntimeError])
+def test_radio_dir_state_an_unreadable_level_is_unknown_not_absent(tmp_path, monkeypatch, exc):
+    import os
+    real = os.lstat
+
+    def lstat(path, *a, **k):
+        if str(path).endswith("/logs/r1"):
+            raise exc("cannot stat")
+        return real(path, *a, **k)
+    monkeypatch.setattr(os, "lstat", lstat)
+    assert rflog.radio_dir_state(_paths(tmp_path), "r1/rf-daemon.log") == rflog.UNKNOWN
+
+
+def test_radio_dir_state_only_judges_a_radios_job(tmp_path):
+    assert rflog.radio_dir_state(_paths(tmp_path), "rf-kiss.log") == rflog.PRESENT
+    assert rflog.radio_dir_state(_paths(tmp_path), "rf-daemon-433.log") == rflog.PRESENT
+
+
+def test_the_three_states_are_distinct():
+    assert len({rflog.PRESENT, rflog.ABSENT, rflog.UNKNOWN}) == 3
+
+
 # ---- the viewer's list and the prune ---------------------------------------------------------------
 
 def test_list_jobs_one_per_enabled_radio_in_id_order_then_the_legacy_files_read_only():
