@@ -303,9 +303,10 @@ start synchronously.
 component. On a box with less than 1 GiB of RAM (`MemTotal`; a Pi Zero 2 W has 415 MiB) every
 Build or Test job of the console's job runner (a stack's Build or Test, and the build an Update
 starts) waits until no other one runs (its log says `waiting for memory`), across Builds too; a box
-with more (a Pi 5) runs them side by side. Three operations do not wait: auto-install ("Install and
-Build all Stacks") and HMAC apply build in their own process, and an Update of the Meshtastic web
-client fetches its release inside the page's request. Swap is not counted:
+with more (a Pi 5) runs them side by side. Work outside those jobs does not wait: auto-install
+("Install and Build all Stacks") and HMAC apply build in their own process, and the Meshtastic web
+client's release fetch (its Update, and a binary Install of Meshtastic) runs inside that request or
+install. Swap is not counted:
 zram is itself compressed RAM, and once it is full a swap file on the SD card thrashes the box until
 the console stops answering, which is what parallel jobs did on the Zero. The page still returns at
 once.
