@@ -125,8 +125,8 @@ shared instance at each bump.
 **Versions.** lxmd, nomadnet and Sideband install RNS from the `src/reticulum` checkout, so they run
 the node's Reticulum; a moved pin marks them for a rebuild. They install the wheel the node
 builds from its checkout, and their own installs (and the node's later one) are held to that wheel
-file (a pip configuration may still move where pip installs; the build then fails at its last step,
-which checks that the venv runs that wheel from the venv): nomadnet and Sideband take LXMF 1.2.0 from PyPI (1.2.1 needs a newer RNS), and lxmd runs the
+file (a pip configuration may still move where pip installs; the build then fails at the step after
+its final pip install, which checks that the venv runs that wheel from the venv): nomadnet and Sideband take LXMF 1.2.0 from PyPI (1.2.1 needs a newer RNS), and lxmd runs the
 `src/lxmf` checkout (1.2.0).
 MeshChat installs its own pinned LXMF and RNS from `meshchat-constraints.txt`.
 `lhpc status --versions` shows each client's `rns`/`lxmf` and names a package that differs.
