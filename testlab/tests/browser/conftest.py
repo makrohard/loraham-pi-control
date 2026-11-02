@@ -91,6 +91,8 @@ def seeded_rf_logs(lab):
              'tnc2="G0ABC>APRS:hello" hex=112233 ascii="..."')
     (logs / "rf-kiss.log.1").write_text(older + "\n")
     (logs / "rf-kiss.log").write_text(newer + "\n")
+    (logs / "r2").mkdir(exist_ok=True)                   # stage L5: the 868 radio's own daemon RF log (W7-8a)
+    (logs / "r2" / "rf-daemon.log").write_text(newer + "\n")
     (logs / "rf-meshtastic.log").write_text(
         '{"timestamp":1789228997,"rssi":-67,"snr":11.25,"from":1,"to":4294967295,'
         '"size":4,"bytes":"01020304"}\n')

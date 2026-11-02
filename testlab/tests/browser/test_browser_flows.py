@@ -407,10 +407,11 @@ def test_the_band_row_leads_to_the_stack_row_of_that_band(page, seeded_rf_logs):
     assert page.locator("nav.rfbands a[aria-current=page]").inner_text() == "868"
     assert page.locator("nav.rfswitch a[aria-current=page]").inner_text() == "graywolf"
     page.locator("nav.rfswitch a", has_text="daemon 868").click()
-    page.wait_for_url(_at("/logs/loraham-daemon", job="rf-daemon-868.log"), timeout=15000)
+    # stage L5 (W7-8a): 868 is r2 in the lab's hardware list, so the band's daemon log is r2's own file
+    page.wait_for_url(_at("/logs/loraham-daemon", job="r2/rf-daemon.log", band="868"), timeout=15000)
     assert page.locator("nav.rfbands a[aria-current=page]").inner_text() == "868"
     assert page.locator("nav.rfswitch a[aria-current=page]").inner_text() == "daemon 868"
-    assert page.locator("#log-card").get_attribute("data-job") == "rf-daemon-868.log"
+    assert page.locator("#log-card").get_attribute("data-job") == "r2/rf-daemon.log"
 
 
 def test_the_bottom_forms_switch_one_stack_and_every_stack(page, seeded_rf_logs):
