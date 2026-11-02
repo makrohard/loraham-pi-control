@@ -2022,3 +2022,24 @@ def test_a_journal_items_rid_is_a_radio_id_or_absent(value):
     ok = isinstance(value, str) and value in ("r1", "r99")
     assert (br._validate_item(item) == "") is ok
     assert br.rid_of(value) == (value if ok else "")
+
+
+@pytest.mark.parametrize("rows,reason", [
+    ((radios.Radio("r1", "low", "loraham", "868"), radios.Radio("r2", "high", "loraham", "433")),
+     "radio r1 is on 868 MHz now, not 433 MHz"),
+    ((radios.Radio("r1", "low", "loraham", "433"), radios.Radio("r2", "hat", "waveshare-sx1262", "433")),
+     "433 MHz has 2 enabled radios now (r1, r2)"),
+], ids=["the-radio-moved-band", "the-band-is-shared"])
+def test_an_item_is_restored_only_when_its_band_resolves_to_its_radio(tmp_path, monkeypatch, rows, reason):
+    # G2-0.14.0-1 item 3: the saved rid exists and is enabled, but its band no longer resolves to it; a band-addressed
+    # start would launch the client on another radio (r2), so the item is refused, naming why.
+    radios_fixture.write(tmp_path, rows)
+    svc = _drv(tmp_path, monkeypatch)
+    rec = _v1()                                                       # kiss on 433, r1's instance
+    _write_record(tmp_path, rec)
+    calls = []
+    monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
+    res = svc.boot_restore_run()
+    assert res.ok and calls == []                                     # nothing started on another radio
+    j = _journal_on_disk(tmp_path)
+    assert j["items"] == [] and [(s["stack"], s["reason"]) for s in j["skipped"]] == [("kiss", reason)]

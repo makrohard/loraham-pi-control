@@ -256,7 +256,8 @@ def old_config_state(paths) -> Tri:
 def restore_plan(items: list, radios) -> tuple:
     """(kept, refused) of boot-restore items (D14, D15): a pre-0.14.0 band item without `rid` is dropped silently
     (W12); a band-less item without `rid` is kept; an item whose radio is gone or disabled is refused with its
-    reason; the rest are kept in order."""
+    reason; a band item is kept only when its band's enabled radios are exactly its radio (G2-0.14.0-1 item 3: the
+    restore starts by band, which would otherwise launch on another radio); the rest are kept in order."""
     by_id = {r.id: r for r in radios}
     kept, refused = [], []
     for it in items:
@@ -271,6 +272,9 @@ def restore_plan(items: list, radios) -> tuple:
             refused.append((it, f"radio {rid} no longer exists"))
         elif not r.enabled:
             refused.append((it, f"radio {rid} is disabled"))
+        elif (band := it.get("band")) and (on := [x.id for x in radios if x.enabled and x.band == band]) != [rid]:
+            refused.append((it, f"radio {rid} is on {r.band} MHz now, not {band} MHz" if r.band != band
+                            else f"{band} MHz has {len(on)} enabled radios now ({', '.join(on)})"))
         else:
             kept.append(it)
     return kept, refused
