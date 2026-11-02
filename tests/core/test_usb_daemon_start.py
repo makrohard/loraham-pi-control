@@ -42,7 +42,6 @@ def test_a_usb_radios_daemon_start_reaches_the_launch_with_its_preset(tmp_path, 
 def test_a_shared_band_refuses_the_daemon_start_naming_the_list_not_rid_addressing(tmp_path, monkeypatch):
     # PKT-D20 item 5 (found by the read): the board's r2 and an added stick r3 on 868 start no 868 daemon; the
     # refusal names both radios and its next step is the hardware list, not the `<stack>@<rid>` form 0.14.0 lacks.
-    from lhpc.core import radio_start
     radios_fixture.write(tmp_path, (radios.Radio("r1", "low", "loraham", "433"),
                                     radios.Radio("r2", "high", "loraham", "868"),
                                     radios.Radio("r3", "stick", "meshstick-1262", "868", usb_port="1-1.3")))
