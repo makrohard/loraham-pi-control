@@ -345,8 +345,8 @@ class DaemonParamsMixin:
                             data={"confirmed": confirmed})
 
     def _daemon_param_applies(self, stack_id: str, band: str) -> dict:
-        """The daemon params lhpc APPLIES for this stack+band — the effective value (source
-        default merged with the persisted operator override) of EVERY param that has one. Applied
+        """The daemon params lhpc APPLIES for this stack+band — the effective value (the radio's row dp_* over the
+        persisted override over the source default; W5-6) of EVERY param that has one. Applied
         ONCE after the daemon is up and before the stack's own components start; the app then
         overwrites the radio params it owns.
         Ordered radio-first. Empty for non-daemon stacks."""
@@ -355,7 +355,7 @@ class DaemonParamsMixin:
             return {}
         if band not in daemon_control.ALLOWED_BANDS:
             return {}
-        ov = self._daemon_param_overrides(stack_id, band)          # persisted config overrides
+        ov = {**self._daemon_param_overrides(stack_id, band), **radio_start.row_dp(self, band)}   # the row wins
         out: dict[str, str] = {}
         for name in daemon_params.ALL_PARAMS:
             eff = ov.get(name) or daemon_params.default_value(stack_id, band, name)

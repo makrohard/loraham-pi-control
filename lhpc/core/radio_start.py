@@ -27,6 +27,20 @@ def start_plan(svc, rid: str) -> tuple:
     if not radio.enabled:
         return None, f"radio {rid} is disabled", ()
     model = radio_models.load()[radio.model]
+    try:
+        settings = _settings(svc, radio, model)
+    except ValueError as exc:
+        return None, str(exc), ()
+    refusal = (radio_daemon.start_refusal(radio, _daemon_procs(svc)) or usb_precheck(radio, model)
+               or ensure_rf_dir(svc, radio.id) or "")
+    rf_log = svc._resolved_param_value("daemon", "run", svc.DAEMON_ID, rflog.RF_LOG_PARAM, radio.band)
+    params = radio_daemon.daemon_params(radio, model, settings, rf_log=rf_log)
+    return params, refusal, settings.notes
+
+
+def _settings(svc, radio, model):
+    """The radio's resolved settings (radios.radio_settings) from its row, the daemon's old band params and the
+    client stacks' old `dp_<band>_<PARAM>` values; ValueError as radio_settings raises it."""
     legacy = {k: str(v) for k, v in svc.stack_config("daemon").items()}
     legacy_dp = {}
     for sid in _dp.CLIENT_STACKS:
@@ -36,15 +50,22 @@ def start_plan(svc, rid: str) -> tuple:
         if vals:
             legacy_dp[sid] = vals
     defaults = {"txmode": "managed", "cadmon": "off", "cadrssi": "-90", "hipower": "off"}   # manifest defaults
+    return radios.radio_settings(radio, model, legacy, legacy_dp, defaults)
+
+
+def row_dp(svc, band: str) -> dict:
+    """W5-6/W5-7 (G2-0.14.0-1 item 1): the daemon params of `band`'s one enabled radio — its row's `dp_*` and the old
+    client values every holding stack agrees on — which its daemon gets after READY and on Apply. {} when the list
+    does not resolve the band to one radio, or its settings do not resolve (that radio's start is refused)."""
+    t = band_rid(svc, band)
+    row = next((r for r in radios.load(svc._paths).radios if r.id == t.rid), None) if t.outcome == "proceed" else None
+    model = radio_models.load().get(row.model) if row else None
+    if model is None:
+        return {}
     try:
-        settings = radios.radio_settings(radio, model, legacy, legacy_dp, defaults)
-    except ValueError as exc:
-        return None, str(exc), ()
-    refusal = (radio_daemon.start_refusal(radio, _daemon_procs(svc)) or usb_precheck(radio, model)
-               or ensure_rf_dir(svc, radio.id) or "")
-    rf_log = svc._resolved_param_value("daemon", "run", svc.DAEMON_ID, rflog.RF_LOG_PARAM, radio.band)
-    params = radio_daemon.daemon_params(radio, model, settings, rf_log=rf_log)
-    return params, refusal, settings.notes
+        return dict(_settings(svc, row, model).dp)
+    except ValueError:
+        return {}
 
 
 def ensure_rf_dir(svc, rid: str) -> str:
