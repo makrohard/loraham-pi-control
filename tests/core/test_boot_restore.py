@@ -2043,3 +2043,16 @@ def test_an_item_is_restored_only_when_its_band_resolves_to_its_radio(tmp_path, 
     assert res.ok and calls == []                                     # nothing started on another radio
     j = _journal_on_disk(tmp_path)
     assert j["items"] == [] and [(s["stack"], s["reason"]) for s in j["skipped"]] == [("kiss", reason)]
+
+
+def test_a_disabled_second_radio_of_the_band_does_not_block_the_restore(tmp_path, monkeypatch):
+    # G2-0.14.0-1 item 3 (its mutation check): only the band's ENABLED radios count; a disabled r2 on 433 leaves r1 the
+    # band's one radio, so the saved kiss/433/r1 is restored on r1.
+    radios_fixture.write(tmp_path, (radios.Radio("r1", "low", "loraham", "433"),
+                                    radios.Radio("r2", "hat", "waveshare-sx1262", "433", enabled=False)))
+    svc = _drv(tmp_path, monkeypatch)
+    _write_record(tmp_path, _v1())                                    # kiss on 433, r1's instance
+    calls = []
+    monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
+    assert svc.boot_restore_run().ok
+    assert calls == [{"target": "kiss", "band": "433"}]
