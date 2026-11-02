@@ -492,6 +492,34 @@ def _harden_box(root: Path, checkout: Path) -> None:
         d.chmod(0o700)
 
 
+# Release-1's own lab overlay (REL14-D60): the lab reset above runs THIS commit's code, so its overlay
+# (state/testlab/manifest.toml, which release-1's lab provider hands the service as its manifest) is
+# this commit's manifest; release-1's parser then judges a syntax it never shipped (0.13.7 has no
+# `{instance_dir}`). A box of that release has its own manifest: re-render the overlay with
+# release-1's interpreter and lab, from the same fake-source commits the reset materialized.
+_RELEASE1_OVERLAY = """\
+import subprocess, sys
+from pathlib import Path
+from lhpc.core.paths import Paths
+from lhpc_testlab import manifest_overlay
+paths = Paths(runtime_root=Path(sys.argv[1]))
+adopt = paths.under("state", "testlab", "adopt")
+commits = {n: subprocess.run(["git", "-C", str(adopt / n), "rev-parse", "HEAD"], check=True,
+                             capture_output=True, text=True).stdout.strip()
+           for n in manifest_overlay.RETARGETS.values()}
+print(manifest_overlay.generate(paths, commits))
+"""
+
+
+def _release1_overlay(python: Path, root: Path, env: dict) -> Path:
+    """The overlay rendered by release-1's own code (its manifest), returned as written."""
+    # cwd=root: `python -c` puts the cwd first on sys.path, and the lane's cwd is THIS commit's checkout.
+    r = subprocess.run([str(python), "-c", _RELEASE1_OVERLAY, str(root)], env=env, cwd=str(root),
+                       capture_output=True, text=True, timeout=HARNESS_S, check=False)
+    assert r.returncode == 0, f"release-1's overlay render failed (rc {r.returncode}): {r.stderr[-800:]}"
+    return Path(r.stdout.strip().splitlines()[-1])
+
+
 def test_slow_build_selfupdate(tmp_path):
     """L3 + L4: a one-click self-update from the previous release tag to this commit — the
     helper body (`lhpc self-update --run-service`) timed whole, its pip sync from its own line.
@@ -524,6 +552,7 @@ def test_slow_build_selfupdate(tmp_path):
     for target in (co, co / "testlab"):          # release-1 and its own lab provider
         subprocess.run([*pip, "-e", str(target)], check=True, timeout=HARNESS_S)
     _install_units(venv / "bin" / "python", root, env)
+    _release1_overlay(venv / "bin" / "python", root, env)
     (root / "state" / "selfupdate.request").write_text("normal\n")
     if WHEELS:
         env = _offline(_local_pip(env, tmp_path / "pipconf"))
